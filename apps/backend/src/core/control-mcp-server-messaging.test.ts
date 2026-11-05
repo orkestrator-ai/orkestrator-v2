@@ -400,6 +400,48 @@ describe("Orkestrator control MCP server", () => {
     expect(routine.body.result?.structuredContent).not.toHaveProperty("deliverNow");
   });
 
+  test("coordinator send_message whose delegation did not open warns that no wake will come, and is still sent", async () => {
+    const note =
+      "The message was sent, but no delegation was opened, so you will not be woken when the worker answers. Why: the coordinator workflow store is full.";
+    overrides.set("get_project_coordinator", () => ({
+      workspace: {
+        id: "coordinator-1",
+        lifecycleState: "ready",
+        conversations: [
+          { id: "conversation-1", tabId: "coordinator-tab", mailboxIncarnationId: "incarnation-1" },
+        ],
+      },
+    }));
+    overrides.set("send_coordinator_agent_mail", (args) => ({
+      id: "message-1",
+      requestId: args.requestId,
+      placement: "pending-inject",
+      coordinatorDelegationOpened: false,
+      delegationNote: note,
+    }));
+    const credential = server.issueCoordinatorCredential({
+      role: "coordinator",
+      projectId: "project-1",
+      coordinatorId: "coordinator-1",
+      conversationId: "conversation-1",
+      mailboxIncarnationId: "incarnation-1",
+      capabilities: ["mail"],
+    });
+    const sent = await rpc(credential.url, credential.token, "tools/call", {
+      name: "send_message",
+      arguments: { requestId: "store-full-1", toEnvironmentId: "env-1", body: "Go." },
+    });
+    expect(sent.body.result?.isError).not.toBe(true);
+    expect(sent.body.result?.structuredContent).toMatchObject({
+      warning: note,
+      message: { id: "message-1", placement: "pending-inject" },
+    });
+    expect(sent.body.result?.structuredContent?.message).not.toHaveProperty("delegationNote");
+    // No wake was promised, so nothing tells the coordinator to wait for one.
+    expect(sent.body.result?.structuredContent).not.toHaveProperty("wake");
+    expect(sent.body.result?.structuredContent).not.toHaveProperty("delivery");
+  });
+
   test("coordinator send_message to the project home forwards the reason and reports a held message or a warning", async () => {
     overrides.set("get_project_coordinator", () => ({
       workspace: {

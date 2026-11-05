@@ -114,6 +114,16 @@ export interface NodeServiceOptions {
    * the origins it is served on. Handed to the new command node on a handover.
    */
   selfAccess?: () => Promise<{ token: string | null; origins: string[] }>;
+  /**
+   * Nodes this command node no longer controls: the user forgot them, or a
+   * handover gave them to another command node. Called after the registry
+   * write, so the coordinator can close the work it was waiting on there
+   * (`CoordinatorService.nodesReleased`). Must not throw.
+   */
+  onNodesReleased?: (
+    nodes: ReadonlyArray<{ nodeId: string; name: string }>,
+    reason: "forgotten" | "handed-over",
+  ) => void;
 }
 
 export type DesktopConnectionImport = NodeImportEntry;
@@ -774,6 +784,7 @@ export class NodeService {
       };
     });
     if (!removed) return { forgotten: false, detached: false };
+    this.options.onNodesReleased?.([releasedNode(removed)], "forgotten");
     const detached = await this.detachTombstone(removed.nodeId);
     return { forgotten: true, detached };
   }
@@ -1166,10 +1177,16 @@ export class NodeService {
             })),
           ],
         },
-        result: attached.map((node) => node.nodeId),
+        result: {
+          attachedIds: attached.map((node) => node.nodeId),
+          released: [pending.target, ...forgotten].map(releasedNode),
+        },
       };
     });
-    for (const nodeId of detaching) void this.detachTombstone(nodeId);
+    // The target left this registry when the handover began; it and the
+    // machines it took are no longer controlled from here.
+    this.options.onNodesReleased?.(detaching.released, "handed-over");
+    for (const nodeId of detaching.attachedIds) void this.detachTombstone(nodeId);
     return {
       targetNodeId: target.nodeId,
       transferred: accepted.imported,
@@ -1367,6 +1384,19 @@ export class NodeService {
     if (!isBackendId(identity.instanceId)) throw new Error("This backend has no valid identity.");
     this.selfId = identity.instanceId;
     return this.selfId;
+  }
+
+  /**
+   * Every node this command node still controls or is handing over: what a
+   * record naming any other node can no longer reach. A forgotten node whose
+   * detach is pending is not in it.
+   */
+  async registeredNodeIds(): Promise<Set<string>> {
+    const registry = await this.currentRegistry();
+    return new Set<string>([
+      ...registry.nodes.map((node) => node.nodeId),
+      ...(registry.pendingHandover ? [registry.pendingHandover.target.nodeId] : []),
+    ]);
   }
 
   private async currentRegistry(): Promise<NodeRegistry> {
@@ -1778,6 +1808,10 @@ export class NodeService {
 }
 
 /** A registry entry as the new command node receives it. */
+function releasedNode(node: NodeRecord): { nodeId: string; name: string } {
+  return { nodeId: node.nodeId, name: node.profileCache?.displayName ?? node.fallbackName };
+}
+
 function handoverEntry(node: NodeRecord): NodeImportEntry {
   const routes = remoteRoutes(node.routes);
   const entry: NodeImportEntry = {

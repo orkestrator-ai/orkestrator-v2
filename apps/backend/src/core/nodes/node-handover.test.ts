@@ -103,6 +103,36 @@ describe("handing command to another node", () => {
     expect(await controllersOf(hp)).toEqual(["bk_mini"]);
   });
 
+  test("the target and the machines it takes are released as handed over", async () => {
+    const network = new TestNodeNetwork();
+    const released: Array<{ nodeIds: string[]; reason: string }> = [];
+    const desktop = await network.add("desktop", {
+      forceRegistration: true,
+      extra: {
+        selfAccess: async () => ({ token: "token-desktop-secret", origins: [] }),
+        onNodesReleased: (nodes, reason) =>
+          released.push({ nodeIds: nodes.map((node) => node.nodeId).sort(), reason }),
+      },
+    });
+    const mini = await addCommandable(network, "mini");
+    const gram = await network.add("gram");
+    const hp = await network.add("hp");
+    await attach(desktop, mini);
+    await attach(desktop, gram);
+    await attach(desktop, hp);
+
+    await desktop.service.handOverCommand({
+      nodeId: id(mini),
+      nodeIds: [id(gram)],
+      includeSelf: false,
+      entries: [],
+    });
+    await settle(60);
+    expect(released).toEqual([{ nodeIds: ["bk_gram", "bk_mini"], reason: "handed-over" }]);
+    // The machine left behind is still controlled here.
+    expect([...(await desktop.service.registeredNodeIds())]).toEqual(["bk_hp"]);
+  });
+
   test("command can be handed back, and only the chosen machines move", async () => {
     const network = new TestNodeNetwork();
     const desktop = await addCommandable(network, "desktop");

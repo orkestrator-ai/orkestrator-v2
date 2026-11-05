@@ -38,6 +38,7 @@ import {
 } from "./coordinator-status-wakes.js";
 import { agentMessagingEnabled } from "./coordinator-context-reads.js";
 import { CoordinatorNoticeRouter } from "./coordinator-notice-router.js";
+import { CoordinatorNodeReleases } from "./coordinator-node-release.js";
 import {
   decideDelegation,
   type DelegationDecision,
@@ -116,6 +117,8 @@ export interface CoordinatorDelegationOptions {
    * iterations, and that idle is the loop's, not the worker's answer.
    */
   workerGoal?: (environmentId: string, tabId: string) => Promise<NativeAgentGoal | undefined>;
+  /** Overrides `NODE_OFFLINE_NOTICE_MS` (`coordinator-node-release.ts`); for tests. */
+  nodeOfflineNoticeMs?: number;
 }
 
 export function sanitizeCoordinatorError(value: unknown): string {
@@ -238,6 +241,11 @@ export class CoordinatorService {
    * only restarts the count.
    */
   private readonly delegationWakeFailures = new Map<string, { attempts: number; since: number }>();
+  /**
+   * Work on nodes that left this registry, and the per-node offline clock
+   * beside the maps above (`coordinator-node-release.ts`).
+   */
+  private readonly nodeReleases: CoordinatorNodeReleases;
 
   constructor(
     private readonly storage: StorageService,
@@ -269,6 +277,19 @@ export class CoordinatorService {
       ...(options.gitHubCli ? { gitHubCli: options.gitHubCli } : {}),
       ...(options.coalesceMs !== undefined ? { coalesceMs: options.coalesceMs } : {}),
     });
+    this.nodeReleases = new CoordinatorNodeReleases({
+      storage,
+      mainAddress: async (coordinatorId) => {
+        const owner = await storage.coordinators.getCoordinatorWorkspaceById(coordinatorId);
+        if (!owner) return null;
+        const { workspace, main } = await this.ensureMainConversation(owner.projectId);
+        return { environmentId: coordinatorRuntimeId(workspace.id, main.id), tabId: main.tabId };
+      },
+      nodeName: (nodeId) => this.remote?.nodeName(nodeId) ?? Promise.resolve(nodeId),
+      ...(options.nodeOfflineNoticeMs !== undefined
+        ? { offlineNoticeMs: options.nodeOfflineNoticeMs }
+        : {}),
+    });
     // Mail to "coordinator", or to a conversation that has since closed, finds
     // the current main through here, which starts one if there is none.
     this.storage.setCoordinatorMailResolver?.((projectId) => this.mainMailAddress(projectId));
@@ -278,6 +299,45 @@ export class CoordinatorService {
   setRemoteAccess(remote: CoordinatorRemoteAccess): void {
     this.remote = remote;
     this.statusWakes.setRemoteAccess(remote);
+  }
+
+  /**
+   * Nodes this command node no longer controls (`NodeService`'s
+   * `onNodesReleased`): forgotten, or handed to another command node. Their
+   * open delegations close as `stopped`, their workflows are marked reported,
+   * and each coordinator with work there hears one notice, so nothing waits
+   * on a node that cannot answer here and its records become clearable.
+   */
+  async nodesReleased(
+    nodes: ReadonlyArray<{ nodeId: string; name?: string }>,
+    reason: "forgotten" | "handed-over",
+  ): Promise<void> {
+    for (const node of nodes) {
+      // Never throws: the registry change already happened. The sweep's
+      // registry check releases whatever this could not.
+      const closed = await this.nodeReleases
+        .release(node.nodeId, reason, node.name)
+        .catch((error: unknown) => {
+          log.warn("node-release.failed", { error: formatLogError(error, { stack: false }) });
+          return [];
+        });
+      for (const id of closed) {
+        this.remoteAskedAt.delete(id);
+        this.remoteSeenWorking.delete(id);
+        this.backgroundWorkSince.delete(id);
+      }
+    }
+  }
+
+  /**
+   * The sweep's half of node release: records naming a node the registry no
+   * longer holds (forgotten before release existed, or a release interrupted
+   * by a restart) are released, and any notice still owed is sent.
+   */
+  private async reconcileReleasedNodes(): Promise<void> {
+    const registered = await this.remote?.registeredNodeIds?.();
+    if (registered) await this.nodeReleases.releaseUnregistered(registered);
+    else await this.nodeReleases.deliverNotices();
   }
 
   /**
@@ -627,6 +687,7 @@ export class CoordinatorService {
       workflows: await this.storage.coordinators.listCoordinatorWorkflowAssociations(
         workspace.projectId,
       ),
+      workflowStore: await this.storage.coordinators.getCoordinatorWorkflowStoreState(),
     };
   }
 
@@ -1177,6 +1238,12 @@ export class CoordinatorService {
    * from the environment record and a missed hook is a silent hang.
    */
   async reconcileWorkerDelegations(): Promise<void> {
+    await this.reconcileReleasedNodes().catch((error: unknown) => {
+      log.throttled("warn", "node-release.reconcile-failed", {
+        error,
+        fields: () => ({ error: formatLogError(error, { stack: false }) }),
+      });
+    });
     for (const workspace of await this.storage.coordinators.listCoordinatorWorkspaces()) {
       const main = coordinatorMainConversation(workspace);
       if (!main) continue;
@@ -1296,6 +1363,12 @@ export class CoordinatorService {
     const state = await this.remote
       .workerState(association.nodeId, association.resourceId, delegation.workerTabId)
       .catch(() => "unavailable" as const);
+    // The delegation stays open however long the node is silent; its clock only decides a notice.
+    await this.nodeReleases
+      .noteRead(association.nodeId, state !== "unavailable")
+      .catch((error: unknown) => {
+        log.warn("node-offline.check-failed", { error: formatLogError(error, { stack: false }) });
+      });
     if (state === "unavailable" || this.remoteAskedAt.get(association.id) !== requestGeneration)
       return;
     const askedAt = Math.max(Date.parse(delegation.requestedAt) || 0, requestGeneration?.at ?? 0);

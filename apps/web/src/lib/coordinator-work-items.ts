@@ -366,6 +366,8 @@ function workerItem(
   );
   const latestDelegation = delegations.at(-1);
   const outcome = associations.find((association) => association.workerOutcome)?.workerOutcome;
+  // Its machine was forgotten or handed over: nothing about it can be read from here.
+  const release = associations.find((association) => association.nodeRelease)?.nodeRelease;
   const createdAt = Math.min(
     ...associations.map((association) => time(association.createdAt) ?? 0),
   );
@@ -391,6 +393,10 @@ function workerItem(
   if (deleted) {
     bucket = "finished";
     stage = "Environment deleted";
+  } else if (release) {
+    bucket = "finished";
+    stage =
+      release.reason === "handed-over" ? "Worker · handed over" : "Worker · machine forgotten";
   } else if (needsYou) {
     bucket = "needs-you";
     stage = "Worker · waiting for you";
@@ -438,6 +444,7 @@ function workerItem(
   let target: CoordinatorWorkTarget | null = null;
   let unavailableReason: string | undefined;
   if (deleted) unavailableReason = "The environment was deleted.";
+  else if (release) unavailableReason = "Its machine is no longer controlled here.";
   else if (first.nodeId) {
     target = remoteTarget(
       first.nodeId,
@@ -463,15 +470,16 @@ function workerItem(
   const summary = latestDelegation?.request?.summary;
   const selection = selectionOf(delegations);
   // A tab already told to stop has nothing more to ask of it.
-  const stoppable = deleted
-    ? []
-    : Array.from(
-        new Set(
-          running
-            .filter((delegation) => !delegation.stopRequestedAt)
-            .map((delegation) => delegation.workerTabId),
-        ),
-      );
+  const stoppable =
+    deleted || release
+      ? []
+      : Array.from(
+          new Set(
+            running
+              .filter((delegation) => !delegation.stopRequestedAt)
+              .map((delegation) => delegation.workerTabId),
+          ),
+        );
   return {
     key: `worker:${first.nodeId ?? ""}:${environmentId}`,
     associationIds: associations.map((association) => association.id),

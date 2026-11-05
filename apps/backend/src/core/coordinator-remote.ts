@@ -87,4 +87,9 @@ export interface CoordinatorRemoteAccess {
   nodeName(nodeId: string): Promise<string>;
   /** True only after a complete outbox drain, including coalesced follow-ups. */
   collectMail?(nodeId: string): Promise<boolean>;
+  /**
+   * Every node this command node still controls. A record naming any other
+   * node is released on the sweep (`coordinator-node-release.ts`).
+   */
+  registeredNodeIds?(): Promise<ReadonlySet<string>>;
 }

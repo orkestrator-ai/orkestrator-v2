@@ -235,6 +235,34 @@ describe("deriveCoordinatorWorkItems", () => {
     expect(items.map((item) => item.name).sort()).toEqual(["env first", "env second"]);
   });
 
+  test("a worker on a forgotten or handed-over machine is finished and says why, with no Stop or Open", () => {
+    for (const [reason, stage] of [
+      ["forgotten", "Worker · machine forgotten"],
+      ["handed-over", "Worker · handed over"],
+      ["unregistered", "Worker · machine forgotten"],
+    ] as const) {
+      const [worker] = deriveCoordinatorWorkItems(
+        sources({
+          workflows: [
+            delegated(
+              "remote-worker",
+              "stopped",
+              { completedAt: at(-1000), wokenAt: at(-1000) },
+              { nodeId: "node-b", nodeRelease: { at: at(-1000), reason } },
+            ),
+          ],
+        }),
+      );
+      expect(worker).toMatchObject({
+        bucket: "finished",
+        stage,
+        target: null,
+        unavailableReason: "Its machine is no longer controlled here.",
+      });
+      expect(worker).not.toHaveProperty("stop");
+    }
+  });
+
   test("names work on another node with its machine and opens it there", () => {
     const items = deriveCoordinatorWorkItems(
       sources({

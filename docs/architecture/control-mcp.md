@@ -205,6 +205,17 @@ be read is confirmed rather than run. `confirmation-required` is an adapter
 code, not a public error: the CLI expresses the same intent with explicit
 flags (`--github-private`, `--discard`, `--yes`).
 
+**Confirmation is not a human-approval boundary.** Nothing binds a token to a
+person: the first call returns it, so whoever holds the credential can make the
+second call too, and an agent with an operator credential can complete the
+whole flow alone. A token proves that the caller repeated the same intent within
+120 s, which catches a mistaken or changed call, and on a voice client it gives
+a person the chance to hear the description. It gives no assurance against an
+agent. The backend cannot tell an agent from a person on one credential, so what
+limits an agent is which credential it holds. Coordinators hold no operator
+credential, and what only the user may decide goes through a user-approved node
+action request (`resolve_node_action_request`, which a coordinator cannot call).
+
 ## Authority
 
 Every operator credential dispatches under its own authority,
@@ -502,12 +513,14 @@ credential and stops that conversation's bridge. A backend restart reaps the
 old bridge and issues a new credential on reattachment.
 
 A coordinator's `tools/list` is filtered by its capabilities the same way
-its `tools/call` is refused, so a side agent (`discovery` and `mail`) no
-longer sees launch or workflow tools it could never call.
+its `tools/call` is refused, so a side agent (`discovery`, `mail` and
+`schedules`) no longer sees launch or workflow tools it could never call.
 
 Coordinator calls are checked again at the command boundary. Discovery is
 limited to the bound project, environment and workflow mutations must target a
-disposable worker in that project, and the credential cannot dispatch arbitrary
+disposable worker in that project (one this coordinator created, unless the
+project allows others: see
+[Which environments a coordinator may act on](coordinator.md#which-environments-a-coordinator-may-act-on)), and the credential cannot dispatch arbitrary
 backend commands, change application settings, merge/delete the root checkout,
 or mint credentials. Repository branch switching and synchronization are UI-only
 backend actions and are not MCP tools.

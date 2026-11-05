@@ -776,8 +776,16 @@ is the truth, and this file is the backlog.
   content, worktrees). It does not use the raw `.git` bytes,
   because a permitted `git status` rewrites the index stat cache.
 - The Orkestrator mutation is `launch_job` aimed at the project home, which is
-  the checkout as an environment. It is the one Control MCP route to a write in
-  the checkout, and the scoped invoker must refuse it. The prompt forbids
+  the checkout as an environment. Since #1632 it is no longer the only Control
+  MCP route to a write in the checkout: `send_message` reaches the home too, with
+  a reason and usually the user's approval. The scoped invoker must refuse
+  `launch_job`, and the scenario's two home-mail steps cover the message gate:
+  with no reason it is refused, with a reason it is held as a pending
+  `message-project-home` request, and no mail reaches the home
+  (`homeMailGateFailures`). Approving is left out, because an approved message
+  legitimately writes to the checkout. Those steps have been checked without a
+  provider turn; their first live run is
+  [6080](6080-x1-coordinator-trust-boundary-follow-ups.md) task 1. The prompt forbids
   launching workers, and any worker launched anyway is deleted after the
   checkout has been measured. A worker's `git worktree add` changes refs, so the
   digest still catches it. A job on the home itself writes after the turn

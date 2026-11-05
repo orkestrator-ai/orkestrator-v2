@@ -16,7 +16,7 @@ Create several environments per repository. A **container** environment runs in 
 
 The Coordinator is not a disposable workspace whose `worktreePath` happens to be the project root. Existing environment delete, merge and cleanup paths assume they own that workspace; routing the checkout through them would risk modifying or deleting the user’s repository. Coordinator runtime, transcripts and generated configuration live under application data. Opening Coordinator does not run project setup scripts, install dependencies, or load repository hooks.
 
-Delegation cannot target the **project home** environment (the writable record for the canonical checkout). Side agents receive Control MCP credentials with only `discovery` and `mail`; they cannot launch environments or jobs. Agent mail is bounded, idempotent, and routed: a side agent may message only the main coordinator; cross-project and external mail is stored and never auto-injected.
+Delegation cannot target the **project home** environment (the writable record for the canonical checkout). A coordinator sends work only to environments it created, unless the project allows others. Side agents receive Control MCP credentials with only `discovery`, `mail` and `schedules`; they cannot launch environments or jobs. Agent mail is bounded, idempotent, and routed: a side agent may message only the main coordinator; cross-project and external mail is stored and never auto-injected.
 
 Closing a tab stops owned work and denies parked approvals. It retains the conversation. It never calls Claude `deleteSession`, Codex `thread/delete`, or OpenCode `session.delete`.
 

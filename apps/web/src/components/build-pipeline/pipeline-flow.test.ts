@@ -9,7 +9,10 @@ import {
   pipelineFlowModel,
   pipelineReviewPassNodes,
   pipelineReviewerStartFailures,
+  pipelineRestartableReviewerId,
+  pipelineReviewWorktreeChanged,
   pipelineSkipAction,
+  pipelineStoppableReviewerId,
   type PipelineFlowModel,
 } from "./pipeline-flow";
 import { pipelineNodeView } from "./PipelineFlowGraph";
@@ -1571,6 +1574,114 @@ describe("pipelineFlowLayout", () => {
     expect(c2.y).toBeGreaterThan(c1.y + c1.height);
     expect(Math.abs(centre("a") - (c1.y + c2.y + c2.height) / 2)).toBeLessThanOrEqual(1);
     expect(geometry.height).toBeGreaterThanOrEqual(c2.y + c2.height);
+  });
+});
+
+describe("pipelineStoppableReviewerId", () => {
+  const record = (id: string, status: ReviewerRecord["status"]): ReviewerRecord => ({
+    id,
+    agent: "claude",
+    model: "opus",
+    status,
+  });
+  const panel = (overrides: Partial<BuildPipeline> = {}) =>
+    build({
+      phase: "reviewing",
+      reviewers: PANEL,
+      reviewFanout: {
+        reviewers: [
+          record("queued", "pending"),
+          record("working", "running"),
+          record("done", "completed"),
+          record("failed", "failed"),
+          record("stopped", "cancelled"),
+        ],
+      },
+      ...overrides,
+    });
+  const stoppable = (pipeline: ReturnType<typeof build>) =>
+    pipelineFlowModel(pipeline).nodes.flatMap((node) => {
+      const id = pipelineStoppableReviewerId(pipeline, node);
+      return id ? [id] : [];
+    });
+
+  test("offers only the reviewers that can still report, in a running review", () => {
+    expect(stoppable(panel())).toEqual(["queued", "working"]);
+  });
+
+  test("offers nothing once the review is not running", () => {
+    expect(stoppable(panel({ phase: "paused", pausedFromPhase: "reviewing" }))).toEqual([]);
+    expect(
+      stoppable(
+        panel({
+          phase: "failed",
+          failureContext: { phase: "reviewing", kind: "stage-transition" },
+        }),
+      ),
+    ).toEqual([]);
+  });
+});
+
+describe("pipelineRestartableReviewerId", () => {
+  const record = (id: string, status: ReviewerRecord["status"]): ReviewerRecord => ({
+    id,
+    agent: "claude",
+    model: "opus",
+    status,
+  });
+  const restartable = (pipeline: BuildPipeline) =>
+    pipelineFlowModel(pipeline).nodes.flatMap((node) => {
+      const id = pipelineRestartableReviewerId(pipeline, node);
+      return id ? [id] : [];
+    });
+
+  test("offers every live reviewer but a queued or failed one", () => {
+    const pipeline = build({
+      phase: "reviewing",
+      reviewers: PANEL,
+      reviewFanout: {
+        reviewers: [
+          record("queued", "pending"),
+          record("working", "running"),
+          record("done", "completed"),
+          record("failed", "failed"),
+          record("stopped", "cancelled"),
+        ],
+      },
+    });
+    expect(restartable(pipeline)).toEqual(["working", "done", "stopped"]);
+  });
+
+  test("a retired pass of the current round offers its sessions, an earlier round does not", () => {
+    const sessions = [session("build", "work", 0), reviewer(0, "first", 60)];
+    const packaged = {
+      reviewers: PANEL,
+      reviewPackage: { headRef: "a".repeat(40) } as BuildPipeline["reviewPackage"],
+      sessions,
+      phase: "verifying" as const,
+    };
+    expect(restartable(build(packaged))).toEqual(["first"]);
+    expect(restartable(build({ ...packaged, iteration: 1 }))).toEqual([]);
+    expect(restartable(build({ ...packaged, reviewPackage: undefined }))).toEqual([]);
+  });
+});
+
+describe("pipelineReviewWorktreeChanged", () => {
+  test("reads the live pass, then the newest review of the round", () => {
+    expect(pipelineReviewWorktreeChanged(build({ phase: "reviewing" }))).toBe(false);
+    expect(
+      pipelineReviewWorktreeChanged(
+        build({ phase: "reviewing", reviewFanout: { reviewers: [], snapshotStale: true } }),
+      ),
+    ).toBe(true);
+    const changed = session("review", "merge", 60, {
+      label: "Consolidation",
+      reviewWorktreeChanged: true,
+    });
+    expect(pipelineReviewWorktreeChanged(build({ sessions: [changed] }))).toBe(true);
+    // A later review of the round that left the worktree alone clears the warning.
+    const clean = session("review", "merge-2", 90, { label: "Consolidation" });
+    expect(pipelineReviewWorktreeChanged(build({ sessions: [changed, clean] }))).toBe(false);
   });
 });
 

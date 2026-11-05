@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
-import { FileText, Hammer } from "lucide-react";
+import { FileText, Hammer, StickyNote } from "lucide-react";
 import {
   hasKeyInformation,
   type BuildPipelineKeyInformation,
 } from "@orkestrator/protocol/build-pipeline-key-information";
+import { pipelineFollowUps } from "@orkestrator/protocol/build-pipeline-notes";
 import { Button } from "@/components/ui/button";
 import { hydrateBuildPipeline } from "@/lib/build-pipeline-persistence";
 import { cn } from "@/lib/utils";
@@ -29,6 +30,7 @@ import {
   verificationVerdict,
   WorkDoneList,
 } from "./key-information-tab-sections";
+import { PipelineNeedsALook } from "./PipelineNeedsALook";
 
 interface SectionEntry {
   key: string;
@@ -59,10 +61,15 @@ const TILE_TONE: Record<SummaryTile["tone"], string> = {
  * header panel shows, laid out for reading and reviewing on a full pane.
  *
  * The tab keeps only the pipeline id; the brief is read from the pipeline
- * record in the store, so every backend update re-renders it in place.
+ * record in the store, so every backend update re-renders it in place. Its
+ * notes view is the Notes step on a full pane: the same brief, led by what
+ * needs a look.
  */
 export function PipelineKeyInformationTab({ data }: { data: KeyInformationTabData }) {
   const pipeline = useBuildPipelineStore((state) => state.pipelines.get(data.pipelineId));
+  const notes = data.view === "notes";
+  const subject = notes ? "notes" : "key information";
+  const Icon = notes ? StickyNote : FileText;
   const scrollRef = useRef<HTMLDivElement>(null);
   const [attempt, setAttempt] = useState(0);
   const [hydration, setHydration] = useState<{
@@ -111,10 +118,10 @@ export function PipelineKeyInformationTab({ data }: { data: KeyInformationTabDat
       <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center text-sm text-muted-foreground">
         <p role={status === "error" ? "alert" : "status"}>
           {status === "error"
-            ? "Could not load key information."
+            ? `Could not load ${subject}.`
             : status === "missing"
               ? "This pipeline is no longer available."
-              : "Loading key information…"}
+              : `Loading ${subject}…`}
         </p>
         {status === "error" ? (
           <Button variant="outline" size="sm" onClick={() => setAttempt((value) => value + 1)}>
@@ -140,12 +147,13 @@ export function PipelineKeyInformationTab({ data }: { data: KeyInformationTabDat
     >
       <header className="flex shrink-0 items-center gap-3 border-b border-border/40 bg-zinc-900/40 px-4 py-3 @3xl:px-6">
         <span className="flex size-8 shrink-0 items-center justify-center rounded-md border border-amber-500/30 bg-amber-500/10">
-          <FileText aria-hidden className="size-4 text-amber-400" />
+          <Icon aria-hidden className="size-4 text-amber-400" />
         </span>
         <div className="min-w-0 flex-1">
           <h1 className="truncate text-sm font-medium">{pipeline.taskTitle}</h1>
           <div className="mt-0.5 truncate text-xs text-muted-foreground">
-            Key information · {keyInformationUpdatedLine(pipeline.keyInformation)}
+            {notes ? "Notes" : "Key information"} ·{" "}
+            {keyInformationUpdatedLine(pipeline.keyInformation)}
           </div>
         </div>
         {buildTab ? (
@@ -163,6 +171,7 @@ export function PipelineKeyInformationTab({ data }: { data: KeyInformationTabDat
         ) : null}
       </header>
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
+        {notes ? <PipelineNeedsALook followUps={pipelineFollowUps(pipeline)} /> : null}
         <KeyInformationDocument keyInformation={pipeline.keyInformation} scrollRef={scrollRef} />
       </div>
     </div>

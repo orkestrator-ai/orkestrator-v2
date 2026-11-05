@@ -85,6 +85,8 @@ describe("mediaStreamFailure", () => {
   test("maps backend refusals to shown states and transport gaps to the base64 fallback", () => {
     expect(mediaStreamFailure(structured("renderer_unavailable"))).toBe("fallback");
     expect(mediaStreamFailure(structured("capacity_exceeded"))).toBe("fallback");
+    // A backend that predates environment-less streams refuses the request shape.
+    expect(mediaStreamFailure(structured("invalid_input"))).toBe("fallback");
     expect(
       mediaStreamFailure(new Error("Unknown backend command: transcript_media_open_stream")),
     ).toBe("fallback");

@@ -1,3 +1,5 @@
+import { pipelineWorkerTabId } from "@orkestrator/protocol/pipeline-worker-mail";
+import { pipelineWorkerTabForResultKey } from "./pipeline-worker-identity.js";
 import {
   CODEX_SERVER_OVERLOADED_MESSAGE,
   capacityRetriesExhaustedError,
@@ -10809,10 +10811,11 @@ test("Multi Review prepares and consolidates with its review model before openin
       expect(commands.filter((entry) => entry.command === "generate_review_package")).toHaveLength(
         1,
       );
-      // A live checkout change must not invalidate the immutable evidence after preparation.
+      // A live checkout change must not invalidate the immutable evidence after
+      // preparation: pin the review, record sealing paths, then check for movement.
       expect(
         commands.filter((entry) => entry.command === "get_environment_uncommitted_paths"),
-      ).toHaveLength(1);
+      ).toHaveLength(3);
       // One verification per phase — fan-out admission and consolidation —
       // independent of how many reviewers the panel has.
       expect(commands.filter((entry) => entry.command === "verify_review_package")).toHaveLength(2);
@@ -12962,5 +12965,482 @@ test("Multi Review reports initial send refusal after allocation while peers con
       });
       expect(current.reviewers[1]!.providerSessionId).toBeDefined();
     },
+  );
+});
+
+test("MultiReviewService denies a late result from a stopped reviewer", async () => {
+  const provider = new Provider();
+  provider.statusOverrides.set("session-1", "running");
+  await withService(
+    "env-stop-closes-slot",
+    provider,
+    async ({ service, start, snapshot, workflowResults }) => {
+      const started = await start([{ agent: "claude", model: "opus" }]);
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.reviewers[0]?.dispatchState === "sent";
+      });
+      const reviewer = (await snapshot(started.id))!.reviewers[0]!;
+      expect(reviewer.resultTransport).toBe("tool-v1");
+
+      await service.stopReviewer(started.id, reviewer.id);
+
+      expect(
+        await workflowResults!.status(
+          { environmentId: "env-stop-closes-slot", projectId: "project-1" },
+          reviewer.requestId!,
+        ),
+      ).toMatchObject({ lifecycle: "superseded" });
+    },
+    { toolMode: true },
+  );
+});
+
+test("MultiReviewService skip stops the reviewers still working and consolidates the rest", async () => {
+  const provider = new Provider();
+  provider.statusOverrides.set("session-2", "running");
+  await withService("env-skip-review", provider, async ({ service, start, snapshot }) => {
+    const started = await start([
+      { agent: "claude", model: "opus" },
+      { agent: "claude", model: "sonnet" },
+    ]);
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      const reviewers = (await snapshot(started.id))?.reviewers;
+      return reviewers?.[0]?.status === "completed" && reviewers[1]?.status === "running";
+    });
+
+    const skipped = await service.skipStep(started.id, "review");
+
+    expect(skipped.reviewers.map((reviewer) => reviewer.status)).toEqual([
+      "completed",
+      "cancelled",
+    ]);
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.phase === "ready";
+    });
+    await expect(service.skipStep(started.id, "review")).rejects.toThrow("not running");
+    await expect(service.skipStep(started.id, "fix")).rejects.toThrow("not running");
+  });
+});
+
+test("MultiReviewService restarts one reviewer on another model, keeping its focus", async () => {
+  const provider = new Provider();
+  provider.statusOverrides.set("session-1", "running");
+  provider.statusOverrides.set("session-2", "running");
+  await withService("env-restart-reviewer-in", provider, async ({ service, start, snapshot }) => {
+    const lens = { label: "Security", instruction: "Look for injection." };
+    const started = await start([
+      { agent: "claude", model: "opus", lens },
+      { agent: "claude", model: "sonnet" },
+    ]);
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.reviewers.every((r) => r.status === "running") === true;
+    });
+    const before = (await snapshot(started.id))!.reviewers;
+
+    const restarted = await service.restartReviewer(started.id, before[0]!.id, {
+      agent: "claude",
+      model: "haiku",
+    });
+
+    expect(restarted.reviewers[0]).toMatchObject({ model: "haiku", status: "pending", lens });
+    expect(restarted.reviewers[1]!.providerSessionId).toBe(before[1]!.providerSessionId);
+  });
+});
+
+function rewindGit(head: { value: string }, options: { pushed?: number } = {}) {
+  const calls: string[][] = [];
+  const git = async (_environmentId: string, args: string[]): Promise<string> => {
+    calls.push(args);
+    if (args[0] === "rev-parse" && args[1] === "HEAD") return `${head.value}\n`;
+    if (args[0] === "rev-parse" && args.includes("--abbrev-ref")) {
+      if (options.pushed === undefined) throw new Error("no upstream");
+      return "origin/change\n";
+    }
+    if (args[0] === "rev-parse") throw new Error("no backup");
+    if (args[0] === "status") return "";
+    if (args[0] === "rev-list" && args[2]?.startsWith("HEAD..")) return "0\n";
+    if (args[0] === "rev-list" && args[2]?.endsWith("..@{upstream}")) {
+      return `${options.pushed ?? 0}\n`;
+    }
+    if (args[0] === "rev-list") return "1\n";
+    if (args[0] === "log") return `${"c".repeat(40)}\tfix: dropped\n`;
+    if (args[0] === "reset") head.value = args[2]!;
+    return "";
+  };
+  return { git, calls };
+}
+
+test("MultiReviewService rewinds code to preparation's starting commit and restarts it", async () => {
+  const provider = new Provider();
+  const head = { value: "" };
+  const { git, calls } = rewindGit(head);
+  await withService(
+    "env-rewind-prepare",
+    provider,
+    async ({ service, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+      const ready = (await snapshot(started.id))!;
+      const target = ready.reviewWorktreeSnapshot!.head;
+      expect((await service.previewCodeRewind(started.id, "fix")).blocked).toContain(
+        "has not started",
+      );
+      await expect(service.rewindCode(started.id, "fix", target)).rejects.toThrow(
+        "has not started",
+      );
+      expect(calls.some((args) => args[0] === "reset")).toBe(false);
+      head.value = target;
+      const preview = await service.previewCodeRewind(started.id, "prepare");
+      expect(preview.blocked).toBeUndefined();
+      expect(preview.targetCommit).toBe(target);
+
+      await expect(service.rewindCode(started.id, "prepare", "f".repeat(40))).rejects.toThrow(
+        "The branch moved",
+      );
+      expect(calls.some((args) => args[0] === "reset")).toBe(false);
+
+      const rewound = await service.rewindCode(started.id, "prepare", preview.head!);
+
+      expect(calls).toContainEqual(["reset", "--hard", target]);
+      expect(calls.some((args) => args[0] === "update-ref")).toBe(true);
+      expect(rewound.phase).toBe("preparing");
+    },
+    { packageFlow: true, serviceOptions: { environmentGit: git } },
+  );
+});
+
+test("MultiReviewService refuses a code rewind while running, or over pushed commits", async () => {
+  const provider = new Provider();
+  provider.statusOverrides.set("session-1", "running");
+  const head = { value: "" };
+  await withService(
+    "env-rewind-refused",
+    provider,
+    async ({ service, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.reviewWorktreeSnapshot !== undefined;
+      });
+      const preview = await service.previewCodeRewind(started.id, "prepare");
+      expect(preview.blocked).toContain("A running step");
+      await expect(service.rewindCode(started.id, "prepare", "a".repeat(40))).rejects.toThrow(
+        "A running step",
+      );
+      provider.statusOverrides.clear();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+      expect((await service.previewCodeRewind(started.id, "prepare")).blocked).toContain(
+        "cannot force-push",
+      );
+    },
+    { packageFlow: true, serviceOptions: { environmentGit: rewindGit(head, { pushed: 2 }).git } },
+  );
+});
+
+test("MultiReviewService refuses a code rewind without a Git port", async () => {
+  await withService("env-rewind-no-git", new Provider(), async ({ service, start }) => {
+    const started = await start();
+    await expect(service.rewindCode(started.id, "prepare", "a".repeat(40))).rejects.toThrow(
+      "not available",
+    );
+  });
+});
+
+test("MultiReviewService marks a review stale when the worktree moves, and stops nothing", async () => {
+  const provider = new Provider();
+  let moved = false;
+  await withService(
+    "env-review-worktree-changed",
+    provider,
+    async ({ service, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+      const ready = (await snapshot(started.id))!;
+      expect(ready.reviewWorktreeChanged).toBe(true);
+      expect(ready.reviewSnapshotStale).toBeUndefined();
+      expect(ready.error).toBeUndefined();
+    },
+    {
+      packageFlow: true,
+      invoke: async <T>(command: string, args?: Record<string, unknown>) => {
+        if (moved && command === "get_environment_uncommitted_paths") {
+          return { head: "9".repeat(40), paths: [], fingerprint: "b".repeat(64) } as T;
+        }
+        // A reviewer commits as soon as the package is sealed.
+        if (command === "generate_review_package") moved = true;
+        return stableReviewInvoker<T>(command, args);
+      },
+    },
+  );
+});
+
+test("MultiReviewService reviewers are mail workers while they review", async () => {
+  const provider = new Provider();
+  provider.statusOverrides.set("session-1", "running");
+  await withService(
+    "env-reviewer-mail",
+    provider,
+    async ({ service, storage, start, snapshot }) => {
+      const started = await start([{ agent: "claude", model: "opus" }]);
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.reviewers[0]?.status === "running";
+      });
+      const reviewer = (await snapshot(started.id))!.reviewers[0]!;
+      const address = pipelineWorkerTabId(reviewer.sessionKey!);
+
+      const [entry] = await storage.listMultiReviewWorkers("env-reviewer-mail");
+      expect(entry?.workers.map((worker) => worker.address)).toEqual([address]);
+      expect(await service.workerMail.state("env-reviewer-mail", address)).toBe("running");
+      expect(
+        await service.workerMail.state("env-reviewer-mail", "pipeline-worker:other"),
+      ).toBeNull();
+      expect(
+        await pipelineWorkerTabForResultKey(
+          storage,
+          { environmentId: "env-reviewer-mail", projectId: "project-1" },
+          reviewer.requestId!,
+        ),
+      ).toBe(address);
+
+      // The turn ends with mail queued: the mail becomes the reviewer's next turn,
+      // under a new result key, before any result is accepted.
+      const settled: string[] = [];
+      let claims = 0;
+      service.setWorkerMailbox({
+        claim: async (_environmentId, tabId) => {
+          expect(tabId).toBe(address);
+          claims += 1;
+          return claims === 1
+            ? { text: "Check the migration too." + "x".repeat(5000), messageIds: ["m1"] }
+            : null;
+        },
+        settle: async (_environmentId, _tabId, _messageIds, outcome) => {
+          settled.push(outcome);
+        },
+      });
+      provider.statusOverrides.clear();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return settled.length > 0;
+      });
+      expect(settled).toEqual(["accepted"]);
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return [...provider.sends.values()].some((sent) =>
+          sent.prompt.includes("Check the migration too."),
+        );
+      });
+      expect(isMultiReviewWorkflow((await snapshot(started.id))!)).toBe(true);
+      const transcript = await service.workerTranscript({
+        environmentId: "env-reviewer-mail",
+        tabId: address,
+        limit: 1,
+      });
+      expect(transcript?.workflowId).toBe(started.id);
+      const after = (await snapshot(started.id))!.reviewers[0]!;
+      expect(after.requestId).not.toBe(reviewer.requestId);
+
+      await service.cancel(started.id);
+      expect(await storage.listMultiReviewWorkers("env-reviewer-mail")).toEqual([]);
+    },
+  );
+});
+
+test("MultiReviewService skips normal interactive Address Findings without a result", async () => {
+  await withService(
+    "env-skip-interactive",
+    new Provider(),
+    async ({ service, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+      await service.address(started.id);
+      expect((await snapshot(started.id))?.phase).toBe("interactive");
+      const skipped = await service.skipStep(started.id, "fix");
+      expect(skipped.phase).toBe("ready");
+      expect(skipped.fixResult).toBeUndefined();
+      expect(skipped.addressPromptPending).toBeUndefined();
+      expect(skipped.fixSession?.status).not.toBe("running");
+    },
+  );
+});
+
+test("MultiReviewService refused skip keeps a supervised controller", async () => {
+  const provider = new Provider();
+  provider.statusOverrides.set("session-1", "running");
+  await withService("env-skip-claim", provider, async ({ service, storage, start }) => {
+    const started = await start();
+    await service.advanceNow(started.id);
+    await expect(service.skipStep(started.id, "fix")).rejects.toThrow("not running");
+    expect(
+      (await storage.claimMultiReviewController(started.id, "other-owner", 15000)).granted,
+    ).toBe(false);
+  });
+});
+
+test("MultiReviewService recovers reset after restart persistence fails exactly once", async () => {
+  const provider = new Provider();
+  const head = { value: "" };
+  const base = rewindGit(head);
+  const refs = new Map<string, string>();
+  const git: typeof base.git = async (env, args) => {
+    if (args[0] === "update-ref") refs.set(args[1]!, args[2]!);
+    if (args[0] === "rev-parse" && refs.has(args[1]!)) return refs.get(args[1]!)!;
+    return base.git(env, args);
+  };
+  const invoke = async <T>(command: string, args?: Record<string, unknown>): Promise<T> => {
+    const result = await stableReviewInvoker<T>(command, args);
+    return command === "get_environment_uncommitted_paths" && head.value
+      ? ({ ...result, head: head.value } as T)
+      : result;
+  };
+  await withService(
+    "env-rewind-recovery",
+    provider,
+    async ({ service, storage, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+      head.value = "a".repeat(40);
+      const save = storage.saveMultiReviewWorkflow.bind(storage);
+      storage.saveMultiReviewWorkflow = (async (...args: Parameters<typeof save>) => {
+        const value = args[3] as MultiReviewWorkflow;
+        if (value.phase === "preparing" && !value.pendingCodeRewind)
+          throw new Error("restart save failed");
+        return save(...args);
+      }) as typeof save;
+      try {
+        await expect(service.rewindCode(started.id, "prepare", head.value)).rejects.toThrow(
+          "restart save failed",
+        );
+      } finally {
+        storage.saveMultiReviewWorkflow = save;
+      }
+      expect((await snapshot(started.id))?.pendingCodeRewind?.from).toBe("a".repeat(40));
+      await service.shutdown();
+      const recovered = new MultiReviewService(storage, invoke, {
+        autoAdvance: false,
+        provider: async () => provider,
+        environmentGit: git,
+      });
+      try {
+        await recovered.advanceNow(started.id);
+        expect((await snapshot(started.id))?.pendingCodeRewind).toBeUndefined();
+        expect(["preparing", "reviewing"]).toContain((await snapshot(started.id))!.phase);
+        expect((await snapshot(started.id))?.reviewWorktreeSnapshot?.head).toBe(REVIEW_HEAD);
+        expect(base.calls.filter((args) => args[0] === "reset")).toHaveLength(1);
+      } finally {
+        await recovered.shutdown();
+      }
+    },
+    { packageFlow: true, invoke, serviceOptions: { environmentGit: git } },
+  );
+});
+
+test("MultiReviewService uses package-sealing paths as the stale baseline", async () => {
+  let sealed = false;
+  await withService(
+    "env-preparation-leftovers",
+    new Provider(),
+    async ({ service, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+      expect((await snapshot(started.id))?.reviewPackagePaths).toEqual(["preparation.txt"]);
+      expect((await snapshot(started.id))?.reviewWorktreeChanged).toBeUndefined();
+    },
+    {
+      packageFlow: true,
+      invoke: async <T>(command: string, args?: Record<string, unknown>) => {
+        if (command === "generate_review_package") sealed = true;
+        const result = await stableReviewInvoker<T>(command, args);
+        if (sealed && command === "get_environment_uncommitted_paths") {
+          return { ...result, paths: ["preparation.txt"] } as T;
+        }
+        return result;
+      },
+    },
+  );
+});
+
+test("MultiReviewService refuses rewind for a running paused session or sibling review", async () => {
+  const head = { value: "a".repeat(40) };
+  const { git, calls } = rewindGit(head);
+  await withService(
+    "env-rewind-sibling",
+    new Provider(),
+    async ({ service, storage, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+      const ready = (await snapshot(started.id))!;
+      const sibling = { ...ready, id: "sibling-review", phase: "preparing" as const };
+      await storage.saveMultiReviewWorkflow(sibling.id, sibling.environmentId, 1, sibling);
+      expect((await service.previewCodeRewind(started.id, "prepare")).blocked).toContain(
+        "Another Multi Review",
+      );
+      await expect(service.rewindCode(started.id, "prepare", head.value)).rejects.toThrow(
+        "Another Multi Review",
+      );
+      expect(calls.some((args) => args[0] === "reset")).toBe(false);
+      const { multiReviewRewindStateBlocker } = await import("./multi-review-code-rewind.js");
+      expect(
+        multiReviewRewindStateBlocker({
+          ...ready,
+          phase: "paused",
+          pausedStep: "prepare",
+          reviewSession: { ...ready.fixSession!, status: "running" },
+        }),
+      ).toContain("still running");
+    },
+    { packageFlow: true, serviceOptions: { environmentGit: git } },
+  );
+});
+
+test("MultiReviewService rewinds an attempted Address Findings step to the package head", async () => {
+  const head = { value: REVIEW_HEAD };
+  const { git, calls } = rewindGit(head);
+  await withService(
+    "env-rewind-fix",
+    new Provider(),
+    async ({ service, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+      await service.address(started.id);
+      const preview = await service.previewCodeRewind(started.id, "fix");
+      expect(preview.blocked).toBeUndefined();
+      expect(preview.targetCommit).toBe((await snapshot(started.id))?.reviewPackage?.headRef);
+      const restarted = await service.rewindCode(started.id, "fix", head.value);
+      expect(restarted.phase).toBe("interactive");
+      expect(restarted.fixResult).toBeUndefined();
+      expect(restarted.pendingCodeRewind).toBeUndefined();
+      expect(calls).toContainEqual(["reset", "--hard", preview.targetCommit!]);
+    },
+    { packageFlow: true, serviceOptions: { environmentGit: git } },
   );
 });

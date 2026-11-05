@@ -25,6 +25,7 @@
  * the graph, recovery opening the next stage, goes through the
  * `BuildPipelineStageDispatch` port wired here.
  */
+import type { ProvisionalFindingSink } from "./review-provisional-findings.js";
 import type { DeliveryPolicy } from "@orkestrator/protocol/ticket-sections";
 import type {
   BuildPipelineCodeRewindPreview,
@@ -265,6 +266,19 @@ export class BuildPipelineService implements KeyedWorkflowOwner {
 
   retryReviewer(pipelineId: string, reviewerId: string): Promise<BuildPipeline> {
     return this.lifecycle.retryReviewer(pipelineId, reviewerId);
+  }
+
+  /** Where live reviewers' `report_finding` calls reach this pipeline's panels. */
+  provisionalFindingSink(): ProvisionalFindingSink {
+    return this.context.provisionalFindings;
+  }
+
+  restartReviewer(pipelineId: string, reviewerId: string): Promise<BuildPipeline> {
+    return this.lifecycle.restartReviewer(pipelineId, reviewerId);
+  }
+
+  stopReviewer(pipelineId: string, reviewerId: string): Promise<BuildPipeline> {
+    return this.lifecycle.stopReviewer(pipelineId, reviewerId);
   }
 
   retryInteractionFailure(pipelineId: string): Promise<BuildPipeline> {

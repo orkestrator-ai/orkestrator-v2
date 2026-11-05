@@ -1,16 +1,8 @@
+import { flushSync } from "react-dom";
 import { HumanPromptBanner } from "@/components/chat/HumanPromptBanner";
 import { useHumanPrompts } from "@/hooks/useUserCommands";
 import { useEffect, useMemo, useState } from "react";
-import {
-  AlertCircle,
-  GitBranch,
-  Loader2,
-  Pause,
-  Play,
-  Plus,
-  MessagesSquare,
-  RotateCcw,
-} from "lucide-react";
+import { AlertCircle, GitBranch, Loader2, Pause, Play, Plus, RotateCcw } from "lucide-react";
 import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
 import { useCoordinatorActions } from "./useCoordinatorActions";
 import { useCoordinatorActiveTurn } from "./useCoordinatorActiveTurn";
@@ -23,23 +15,19 @@ import { CoordinatorConversationPane } from "./CoordinatorConversationPane";
 import { CoordinatorToolbar } from "./CoordinatorToolbar";
 import { CoordinatorWorkPanel } from "./CoordinatorWorkPanel";
 import { openCoordinatorWorkTarget } from "@/lib/coordinator-work-navigation";
+import { useCoordinatorPaneLayoutStore } from "@/stores/coordinatorPaneLayoutStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import { CoordinatorBanner } from "./CoordinatorPanelNotices";
-import {
-  AGENT_PLATFORM_LABELS,
-  AGENT_PLATFORMS,
-  type AgentPlatform,
-} from "@orkestrator/protocol/agent-platforms";
-import { TAB_ICON_CLASS } from "@/components/pane-layout/TabShell";
-import { CoordinatorPaneTree, SortableCoordinatorTab } from "./CoordinatorPaneTree";
+import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import { CoordinatorPaneTree } from "./CoordinatorPaneTree";
+import { CoordinatorConversationTab } from "./CoordinatorConversationTab";
 import { isCoordinatorTurnPhaseActive } from "@/lib/coordinator-active-turn";
 import {
   collectCoordinatorLeaves,
   focusCoordinatorPane,
   focusedCoordinatorConversationId,
 } from "@/lib/coordinator-pane-layout";
-import { AgentPlatformIcon } from "@/components/icons/AgentIcons";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -52,7 +40,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import * as backend from "@/lib/backend";
-import { cn, createSessionKey } from "@/lib/utils";
+import { createSessionKey } from "@/lib/utils";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { useNativeComposeStore } from "@/stores/nativeComposeStore";
 import { useActiveCoordinatorConversationStore } from "@/stores/activeCoordinatorConversationStore";
@@ -87,9 +75,14 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
     conversationBusy,
   } = useCoordinatorActions();
   // Closing the main conversation is confirmed; side agents close at once.
-  const [pendingMainClose, setPendingMainClose] = useState<{ id: string; title: string } | null>(
-    null,
-  );
+  // Change agent is the same close, followed by a new, unassigned main.
+  const [pendingMainClose, setPendingMainClose] = useState<{
+    id: string;
+    title: string;
+    paneId: string;
+    changeAgent: boolean;
+  } | null>(null);
+  const [replacement, setReplacement] = useState<{ projectId: string; id: string } | null>(null);
   const error = actionError ?? loadError;
 
   const { runGit, prepareSwitch, confirmUpstreamMerge } = useCoordinatorGitActions({
@@ -110,7 +103,13 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
       ),
     [snapshot],
   );
-  const conversationIds = useMemo(() => conversations.map((item) => item.id), [conversations]);
+  const conversationIds = useMemo(() => {
+    const ids = conversations.map((item) => item.id);
+    if (replacement?.projectId === projectId && !ids.includes(replacement.id)) {
+      ids.push(replacement.id);
+    }
+    return ids;
+  }, [conversations, projectId, replacement]);
   const {
     layout,
     backendSelectedId,
@@ -297,7 +296,10 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
         role="tabpanel"
         className="grid h-full place-items-center"
       >
-        <Loader2 className="size-6 animate-spin text-muted-foreground" />
+        <div role="status">
+          <Loader2 className="size-6 animate-spin text-muted-foreground" aria-hidden="true" />
+          <span className="sr-only">Loading coordinator</span>
+        </div>
       </div>
     );
   }
@@ -323,7 +325,12 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
   }
 
   const conversationById = new Map(conversations.map((item) => [item.id, item]));
-  const createConversation = () => {
+  /**
+   * Opens a conversation: the main when none is open, else a side agent.
+   * `replacingMain` closes that main first, so the new one is a fresh,
+   * unassigned main whose composer offers every qualified platform.
+   */
+  const createConversation = (replacingMain?: string) => {
     // Empty, unassigned side agents close as the new one opens, so unused
     // composers cannot use up the open-conversation limit.
     const closeUnused = unusedCoordinatorConversationIds(
@@ -334,16 +341,97 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
     void runAction(
       "conversation",
       async () => {
-        const createdSnapshot = await backend.createCoordinatorConversation(
-          projectId,
-          undefined,
-          closeUnused,
-        );
-        setSnapshot(createdSnapshot);
+        const originalPane =
+          replacingMain && layout
+            ? collectCoordinatorLeaves(layout.root).find((pane) =>
+                pane.conversationIds.includes(replacingMain),
+              )
+            : null;
+        const originalIndex = originalPane?.conversationIds.indexOf(replacingMain!) ?? 0;
+        let closedSnapshot = null;
+        let createdSnapshot;
+        setReplacement(replacingMain ? { projectId, id: replacingMain } : null);
+        try {
+          closedSnapshot = replacingMain
+            ? await backend.closeCoordinatorConversation(projectId, replacingMain)
+            : null;
+          createdSnapshot = await backend.createCoordinatorConversation(
+            projectId,
+            undefined,
+            closeUnused,
+          );
+        } catch (cause) {
+          // Closing succeeded even though creation failed; never leave a
+          // closed conversation visible as though it were still usable.
+          if (closedSnapshot) setSnapshot(closedSnapshot);
+          setReplacement(null);
+          throw cause;
+        }
+        if (replacingMain) {
+          // Mail can ensure a main between close and create. In that case
+          // create returns a side: keep it, but replacement and focus belong
+          // to the actual main, never to the API's selected side.
+          const main = createdSnapshot.workspace.conversations.find(
+            (item) => item.role === "main" && !item.closedAt,
+          );
+          if (!main) {
+            setSnapshot(createdSnapshot);
+            setReplacement(null);
+            throw new Error("No open main conversation after changing agent");
+          }
+          createdSnapshot = {
+            ...createdSnapshot,
+            workspace: { ...createdSnapshot.workspace, selectedConversationId: main.id },
+          };
+        }
+        // Read after the requests, before publishing the new open set can
+        // reconcile away the placeholder. Keep moves and divider edits made
+        // while the backend was busy.
+        const latestLayout = useCoordinatorPaneLayoutStore.getState().entries[projectId]?.layout;
+        const replacementLayout =
+          replacingMain && latestLayout ? structuredClone(latestLayout) : null;
+        const replacementId = createdSnapshot.workspace.selectedConversationId;
+        if (replacementLayout && replacementId) {
+          const panes = collectCoordinatorLeaves(replacementLayout.root);
+          const target =
+            panes.find((pane) => pane.conversationIds.includes(replacingMain!)) ??
+            panes.find((pane) => pane.id === originalPane?.id) ??
+            panes.find((pane) => pane.id === replacementLayout.activePaneId) ??
+            panes[0];
+          if (target) {
+            // A newer snapshot may already have inserted the new ID.
+            for (const pane of panes) {
+              pane.conversationIds = pane.conversationIds.filter((id) => id !== replacementId);
+            }
+            const index = target.conversationIds.indexOf(replacingMain!);
+            if (index >= 0) target.conversationIds[index] = replacementId;
+            else
+              target.conversationIds.splice(
+                Math.min(originalIndex, target.conversationIds.length),
+                0,
+                replacementId,
+              );
+            target.activeConversationId = replacementId;
+            replacementLayout.activePaneId = target.id;
+          }
+        }
+        // Publish the open set before the external layout store: a store
+        // notification can synchronously render and reconcile the new ID.
+        flushSync(() => {
+          setSnapshot(createdSnapshot);
+          setReplacement(null);
+        });
+        if (replacementLayout && replacementId) {
+          useCoordinatorPaneLayoutStore.getState().setLayout(projectId, replacementLayout);
+        }
         const createdId = createdSnapshot.workspace.selectedConversationId;
-        if (createdId && selectionPending()) selectConversation(createdId);
+        if (createdId && (replacingMain || selectionPending())) selectConversation(createdId);
       },
-      { failureMessage: "Could not create conversation" },
+      {
+        failureMessage: replacingMain
+          ? "Could not change the coordinator's agent"
+          : "Could not create conversation",
+      },
     );
   };
   const paused = snapshot.workspace.lifecycleState === "paused";
@@ -451,65 +539,32 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
                 renderTab={(id, pane, paneFocused) => {
                   const item = conversationById.get(id);
                   if (!item) return null;
+                  const requestMainClose = (changeAgent: boolean) =>
+                    setPendingMainClose({
+                      id: item.id,
+                      title: item.title,
+                      paneId: pane.id,
+                      changeAgent,
+                    });
                   return (
-                    <SortableCoordinatorTab
+                    <CoordinatorConversationTab
                       key={id}
-                      conversationId={id}
-                      paneId={pane.id}
-                      isActive={pane.activeConversationId === id}
-                      isFocused={paneFocused}
-                      onClick={(event) => {
-                        // Selecting is the whole action; the pane's own focus
-                        // handler would only repeat it with the previous tab.
-                        event.stopPropagation();
+                      conversation={item}
+                      pane={pane}
+                      layout={layout}
+                      paneFocused={paneFocused}
+                      markMain={conversations.length > 1}
+                      conversationBusy={conversationBusy}
+                      onSelect={() => {
                         updateLayout((current) => focusCoordinatorPane(current, pane.id, id));
                         selectConversation(id);
                       }}
-                      closeLabel={
-                        item.role === "main"
-                          ? `Close ${item.title}. The next message for the coordinator starts a new one with the default agent.`
-                          : `Close ${item.title}`
+                      onClose={() =>
+                        item.role === "main" ? requestMainClose(false) : closeConversation(item.id)
                       }
-                      onClose={() => {
-                        if (item.role === "main") {
-                          setPendingMainClose({ id: item.id, title: item.title });
-                          return;
-                        }
-                        closeConversation(item.id);
-                      }}
-                    >
-                      <button
-                        type="button"
-                        className="flex max-w-44 items-center gap-1.5"
-                        // The badge is part of what identifies the tab, so it belongs in
-                        // the accessible name rather than being read as loose text after it.
-                        aria-label={
-                          item.agent
-                            ? `${item.title}, ${AGENT_PLATFORM_LABELS[item.agent]}`
-                            : `${item.title}, no agent chosen yet`
-                        }
-                      >
-                        {/* Which agent a conversation belongs to is fixed at its first
-                        prompt and cannot be changed afterwards, so the tab strip is
-                        where that has to be legible: the brand mark once assigned,
-                        and an explicit prompt while it is not. */}
-                        {item.agent ? (
-                          <AgentPlatformIcon
-                            platform={item.agent}
-                            accent
-                            className={TAB_ICON_CLASS}
-                          />
-                        ) : (
-                          <MessagesSquare className={cn(TAB_ICON_CLASS, "text-muted-foreground")} />
-                        )}
-                        <span className="truncate">{item.title}</span>
-                        {item.agent ? null : (
-                          <span className="shrink-0 text-[10px] text-muted-foreground">
-                            Choose agent
-                          </span>
-                        )}
-                      </button>
-                    </SortableCoordinatorTab>
+                      onChangeAgent={() => requestMainClose(true)}
+                      onLayoutChange={changeLayout}
+                    />
                   );
                 }}
                 renderStripActions={(pane) => (
@@ -525,9 +580,11 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
                       updateLayout((current) => focusCoordinatorPane(current, pane.id));
                       createConversation();
                     }}
+                    title={newConversationLabel}
                   >
                     <Plus className="size-3.5" />
-                    {newConversationLabel}
+                    {/* The strip scrolls, so on a phone the action is its icon. */}
+                    <span className="max-sm:sr-only">{newConversationLabel}</span>
                   </Button>
                 )}
                 renderContent={(pane, paneFocused) => {
@@ -547,7 +604,7 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
                       confirmUpstreamMerge={confirmUpstreamMerge}
                       conversationBusy={conversationBusy}
                       newConversationLabel={newConversationLabel}
-                      onCreateConversation={createConversation}
+                      onCreateConversation={() => createConversation()}
                       onRetry={() => void load()}
                     />
                   );
@@ -574,10 +631,19 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
         >
           <AlertDialogContent>
             <AlertDialogHeader>
-              <AlertDialogTitle>Close the main conversation?</AlertDialogTitle>
+              <AlertDialogTitle>
+                {pendingMainClose?.changeAgent
+                  ? "Change the coordinator's agent?"
+                  : "Close the main conversation?"}
+              </AlertDialogTitle>
               <AlertDialogDescription>
-                {pendingMainClose?.title ?? "The main conversation"} will close. The next message to
-                the coordinator starts a new main conversation with the default agent.
+                {pendingMainClose?.changeAgent
+                  ? `${pendingMainClose.title} will close and a new main conversation opens, where you choose its agent. Open delegations move to the new main. A report that arrives before you choose starts it with the default agent.`
+                  : `${pendingMainClose?.title ?? "The main conversation"} will close. The next message to the coordinator starts a new main conversation with the default agent, and open delegations move to it.${
+                      pendingMainClose && conversationById.get(pendingMainClose.id)?.agent
+                        ? " To choose the agent yourself, use Change agent instead."
+                        : ""
+                    }`}
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
@@ -586,10 +652,17 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
                 onClick={() => {
                   const target = pendingMainClose;
                   setPendingMainClose(null);
-                  if (target) closeConversation(target.id);
+                  if (!target) return;
+                  if (!target.changeAgent) {
+                    closeConversation(target.id);
+                    return;
+                  }
+                  // The next main joins the group the old one was in.
+                  updateLayout((current) => focusCoordinatorPane(current, target.paneId));
+                  createConversation(target.id);
                 }}
               >
-                Close conversation
+                {pendingMainClose?.changeAgent ? "Change agent" : "Close conversation"}
               </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>

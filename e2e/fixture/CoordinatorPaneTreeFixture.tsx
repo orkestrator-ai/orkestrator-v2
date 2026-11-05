@@ -1,9 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { VirtuosoHandle } from "react-virtuoso";
-import {
-  CoordinatorPaneTree,
-  SortableCoordinatorTab,
-} from "../../apps/web/src/components/projects/CoordinatorPaneTree";
+import { CoordinatorPaneTree } from "../../apps/web/src/components/projects/CoordinatorPaneTree";
+import { CoordinatorConversationTab } from "../../apps/web/src/components/projects/CoordinatorConversationTab";
 import { NativeChatShell } from "../../apps/web/src/components/chat/NativeChatShell";
 import { NativeComposeBar } from "../../apps/web/src/components/chat/NativeComposeBar";
 import type { MentionableInputRef } from "../../apps/web/src/components/chat/MentionableInput";
@@ -94,12 +92,14 @@ export function CoordinatorPaneTreeFixture() {
       reconcileCoordinatorLayout(null, Object.keys(TITLES))
     );
   });
+  const [busy, setBusy] = useState(false);
   const selected = focusedCoordinatorConversationId(layout);
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(layout));
   }, [layout]);
   return (
     <main className="flex h-screen w-screen flex-col bg-background text-foreground">
+      <button onClick={() => setBusy((value) => !value)}>Toggle conversation busy</button>
       <output aria-label="Selected conversation">{selected}</output>
       <div className="min-h-0 flex-1">
         <CoordinatorPaneTree
@@ -108,19 +108,28 @@ export function CoordinatorPaneTreeFixture() {
           onFocusPane={(paneId) => setLayout((current) => focusCoordinatorPane(current, paneId))}
           conversationLabel={(id) => TITLES[id] ?? id}
           renderTab={(id, pane, isFocused) => (
-            <SortableCoordinatorTab
+            <CoordinatorConversationTab
               key={id}
-              conversationId={id}
-              paneId={pane.id}
-              isActive={pane.activeConversationId === id}
-              isFocused={isFocused}
-              onClick={(event) => {
-                event.stopPropagation();
-                setLayout((current) => focusCoordinatorPane(current, pane.id, id));
+              conversation={{
+                id,
+                tabId: id,
+                logicalSessionKey: id,
+                title: TITLES[id] ?? id,
+                role: id === "main" ? "main" : "side",
+                agent: "codex",
+                createdAt: new Date(0).toISOString(),
+                mailboxIncarnationId: id,
               }}
-            >
-              {TITLES[id]}
-            </SortableCoordinatorTab>
+              pane={pane}
+              layout={layout}
+              paneFocused={isFocused}
+              markMain={false}
+              conversationBusy={busy}
+              onSelect={() => setLayout((current) => focusCoordinatorPane(current, pane.id, id))}
+              onClose={() => {}}
+              onChangeAgent={() => {}}
+              onLayoutChange={(change) => setLayout((current) => change(current))}
+            />
           )}
           renderStripActions={() => null}
           renderContent={(pane, focused) =>

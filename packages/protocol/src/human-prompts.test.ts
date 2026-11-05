@@ -229,6 +229,18 @@ describe("normalizeRemoteHumanPromptEntry", () => {
     },
   };
 
+  test("keeps a sign-in URL at the limit and rejects an overlong one without truncation", () => {
+    const base = "https://github.com/login/device?state=";
+    const url = base + "a".repeat(2048 - base.length);
+    expect(
+      normalizeRemoteHumanPromptEntry({ ...entry, prompt: { ...entry.prompt, url } })?.prompt.url,
+    ).toBe(url);
+    expect(
+      normalizeRemoteHumanPromptEntry({ ...entry, prompt: { ...entry.prompt, url: url + "a" } })
+        ?.prompt.url,
+    ).toBeUndefined();
+  });
+
   test("keeps a well-formed entry as it was sent", () => {
     expect(normalizeRemoteHumanPromptEntry(entry)).toEqual(entry as never);
   });

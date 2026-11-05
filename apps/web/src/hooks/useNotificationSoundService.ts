@@ -15,6 +15,7 @@ import {
   coordinatorConversationTab,
   useActiveCoordinatorConversationStore,
 } from "@/stores/activeCoordinatorConversationStore";
+import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { useUIStore } from "@/stores/uiStore";
 import { useVisibleEnvironmentId } from "./useVisibleEnvironmentId";
 import {
@@ -30,6 +31,7 @@ export const ATTENTION_COALESCE_MS = 500;
 /** This project's coordinator page is what the user is looking at right now. */
 function coordinatorOnScreen(projectId: string): boolean {
   if (typeof document !== "undefined" && document.visibilityState !== "visible") return false;
+  if (useRemoteWorkspaceStore.getState().active !== null) return false;
   const { selectedProjectId, projectBoardTab } = useUIStore.getState();
   const conversation = useActiveCoordinatorConversationStore.getState().active;
   return (

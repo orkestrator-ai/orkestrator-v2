@@ -339,6 +339,7 @@ const HUMAN_PROMPT_SOURCES: ReadonlySet<unknown> = new Set<HumanPromptSource>([
 const MAX_ENTRY_ID = 256;
 const MAX_ENTRY_COMMAND = 500;
 const MAX_ENTRY_CODE = 64;
+const MAX_ENTRY_URL = 2048;
 const MAX_ENTRY_KEY = 4096;
 
 function boundedEntryText(value: unknown, max: number): string | undefined {
@@ -377,7 +378,10 @@ export function normalizeRemoteHumanPromptEntry(value: unknown): HumanPromptEntr
     !HUMAN_PROMPT_SOURCES.has(entry.source)
   )
     return null;
-  const url = typeof fields.url === "string" && isSignInLink(fields.url) ? fields.url : undefined;
+  const url =
+    typeof fields.url === "string" && fields.url.length <= MAX_ENTRY_URL && isSignInLink(fields.url)
+      ? fields.url
+      : undefined;
   const code = boundedEntryText(fields.code, MAX_ENTRY_CODE);
   const command = boundedEntryText(entry.command, MAX_ENTRY_COMMAND);
   return {

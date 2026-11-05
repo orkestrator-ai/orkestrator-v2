@@ -10,6 +10,7 @@ import { listen as nativeListen } from "@/lib/native/events";
 import * as realNotificationSounds from "@/lib/notification-sounds";
 import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
+import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { useUIStore } from "@/stores/uiStore";
 import type { Environment } from "@/types";
 
@@ -37,6 +38,7 @@ function environment(id: string, hasUnreadWork: boolean): Environment {
 }
 
 beforeEach(() => {
+  useRemoteWorkspaceStore.setState({ active: null });
   playConfiguredNotificationSound.mockReset();
   playConfiguredNotificationSound.mockResolvedValue(true);
   primeNotificationSounds.mockReset();
@@ -119,6 +121,18 @@ describe("when a coordinator is woken for its worker", () => {
     expect(playConfiguredNotificationSound).not.toHaveBeenCalled();
     deliver(wake("w2", "project-2"));
     expect(playConfiguredNotificationSound).toHaveBeenCalledTimes(1);
+  });
+
+  test("sounds when a remote workspace covers the selected coordinator", async () => {
+    showCoordinator();
+    await mounted();
+    act(() =>
+      useRemoteWorkspaceStore.setState({
+        active: { nodeId: "bk_leaf", projectId: "remote-project", environmentId: "remote-env" },
+      }),
+    );
+    deliver(wake("remote-covered"));
+    expect(playConfiguredNotificationSound).toHaveBeenCalledWith("coordinator-report");
   });
 
   test("sounds when the user has left the page, even with the coordinator selected", async () => {

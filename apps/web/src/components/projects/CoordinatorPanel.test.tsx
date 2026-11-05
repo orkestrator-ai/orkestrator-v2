@@ -47,6 +47,10 @@ import { resetNativeAgentSyncCapabilityForTests } from "@/hooks/useNativeAgentSe
 import * as paneTree from "./CoordinatorPaneTree";
 import { createSessionKey } from "@/lib/utils";
 
+import { portalStore } from "@/lib/portal/portal-store";
+import * as nodeEvents from "@/lib/federation/node-events";
+import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
+
 const backendSnapshot = { ...realBackend };
 const nativeAgentSnapshot = { ...realNativeAgent };
 let useRealAgentTab = false;
@@ -2060,6 +2064,73 @@ describe("CoordinatorPanel", () => {
         },
         { environmentId: "worker-env", tabId: "worker-tab" },
       ]);
+    });
+
+    test("remote prompt Open targets its node, project, environment and tab and disconnect removes it", async () => {
+      const priorPortal = portalStore.getState();
+      const priorRemote = useRemoteWorkspaceStore.getState();
+      const node = {
+        nodeId: "bk_leaf",
+        available: true,
+        loadedAt: 1,
+        view: { displayName: "Build box" },
+        environments: [
+          {
+            ref: { backendId: "bk_leaf", environmentId: "worker-env" },
+            projectId: "leaf-project",
+            name: "remote-api",
+            status: "running",
+          },
+        ],
+      };
+      const invoke = spyOn(portalStore, "invokeOnNode").mockResolvedValue({
+        prompts: [
+          {
+            id: "remote-prompt",
+            environmentId: "worker-env",
+            tabId: "worker-tab",
+            source: "agent-tool",
+            since: new Date().toISOString(),
+            prompt: {
+              kind: "secret",
+              wantsEnter: false,
+              text: "Remote password:",
+              key: "remote-secret",
+            },
+          },
+        ],
+      });
+      const subscribe = spyOn(nodeEvents, "subscribeNodeEvents").mockReturnValue(() => {});
+      portalStore.store.setState({ selfId: "bk_cmd" as never, nodes: [node] as never });
+      ensuredSnapshot = { ...snapshot, workflows: [{ ...running, nodeId: "bk_leaf" }] };
+      try {
+        render(<CoordinatorPanel projectId="project-1" />);
+        const open = await screen.findByRole("button", { name: "Open remote-api on Build box" });
+        expect(invoke).toHaveBeenCalledWith("bk_leaf", "list_human_prompts", {
+          environmentIds: ["worker-env"],
+        });
+        fireEvent.click(open);
+        expect(useRemoteWorkspaceStore.getState().active).toMatchObject({
+          nodeId: "bk_leaf",
+          projectId: "leaf-project",
+          environmentId: "worker-env",
+        });
+        expect(
+          useRemoteWorkspaceStore.getState().requests["bk_leaf"]?.request.workTarget,
+        ).toMatchObject({
+          environmentId: "worker-env",
+          tabId: "worker-tab",
+        });
+        act(() => portalStore.store.setState({ nodes: [{ ...node, available: false }] as never }));
+        await waitFor(() => expect(screen.queryByText(/Remote password:/)).toBeNull());
+        expect(screen.queryByRole("button", { name: "Open remote-api on Build box" })).toBeNull();
+      } finally {
+        cleanup();
+        invoke.mockRestore();
+        subscribe.mockRestore();
+        portalStore.store.setState(priorPortal, true);
+        useRemoteWorkspaceStore.setState(priorRemote, true);
+      }
     });
 
     test("the prompt banner's Open goes to the waiting worker's tab", async () => {

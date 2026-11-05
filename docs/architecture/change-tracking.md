@@ -125,7 +125,7 @@ Backend services (one composition root, `service.ts`):
 
 | Service | File | Role |
 | --- | --- | --- |
-| `ChangeLedger` | `change-ledger.ts`, schema `ledger-schema.ts` (storage migration 4) | Indexed rows, fences, selections, outbox |
+| `ChangeLedger` | `change-ledger.ts`, schema and file `ledger-schema.ts` (`change-tracking.sqlite`; storage migration 4 created the tables, migration 7 moved them out of `orkestrator.sqlite`) | Indexed rows, fences, selections, outbox |
 | `ObjectStore` | `object-store.ts`, `manifest-cache.ts` | Content-addressed Git-format objects under `<dataDir>/change-tracking/objects`, staged writes, parsed-manifest cache |
 | capture | `capture.ts` | Raw-byte capture with stability rechecks (host and container executors) |
 | DiffEngine | `snapshot-diff.ts` | Manifest comparison and body rendering |
@@ -486,15 +486,29 @@ pages in 128-page steps, whoever freed them. Existing databases created
 without incremental auto-vacuum reuse freed pages but do not physically shrink;
 backup headroom is calculated from live pages rather than allocated file size.
 
-Backups must include both `orkestrator.sqlite` and
-`<dataDir>/change-tracking/` (objects and evidence bodies); metadata alone
-cannot serve historical bodies.
+The ledger lives in its own database, `change-tracking.sqlite`, beside
+`orkestrator.sqlite`, with the same settings (WAL, full sync, secure delete)
+and its own schema version. Nothing joins or writes across the two files.
+Hourly snapshots copy `orkestrator.sqlite` only, so a small app-store change no
+longer copies the ledger. The ledger has its own best-effort snapshots in
+`<dataDir>/backups/`: `change-tracking-daily-<stamp>.sqlite` once a day when it
+changed (the newest two kept, and the first to give way to the 16 GiB
+budget), and `change-tracking-pre-migration-v<from>-<stamp>.sqlite` before its
+schema migrates. See [storage.md, Snapshots](storage.md#snapshots) for
+rotation and restore. The retention pass runs `PRAGMA optimize` on the ledger
+after it returns free pages.
+
+Neither snapshot holds `<dataDir>/change-tracking/` (objects and evidence
+bodies), and metadata alone cannot serve historical bodies, so a full backup
+of change history needs that directory as well as `change-tracking.sqlite`.
+A ledger restored without it, or older than the app database, answers the
+bodies and measurements it lacks as expired or not retained.
 
 ## Operator runbook
 
 - **Identify an owner**: `changes_get_diagnostics` lists active owners, open
   windows, active turns and publisher counters (no paths or contents).
-- **Inspect a capture failure**: query `change_capture_attempts` by id
+- **Inspect a capture failure**: query `change_capture_attempts` in `change-tracking.sqlite` by id
   (`status`, `error_code`, `purpose`); reasons are finite codes.
 - **Pause new tracking**: set the policy `restoreEnabled: false` and/or
   `strictCheckpoints: false`; environment scans continue independently.

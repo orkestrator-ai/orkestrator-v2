@@ -150,12 +150,16 @@ export function useFederatedEnvironmentActions(
           environmentId: fork.environmentId,
           title: fork.name,
         });
-        await run(`Start fork ${fork.name}`, () =>
-          startFederatedEnvironment(portal, {
+        // Still inside the Fork claim, so this must not go through `run`: the
+        // row's key is taken and a second claim would drop the start.
+        try {
+          await startFederatedEnvironment(portal, {
             backendId: ref.backendId,
             environmentId: fork.environmentId,
-          }),
-        );
+          });
+        } catch (error) {
+          reportFederatedActionError(`Start fork ${fork.name}`, machine.name, error);
+        }
       });
     },
     remove: () => {

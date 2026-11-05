@@ -122,4 +122,4 @@ A worktree with more than 256 ignored `node_modules` or a plan of over 1,024 wat
 
 ## Replaces
 
-Batch E7's report file in `docs/reports/efficiency-logging-database/`, deleted with this work; the last commit holding it is the base, `e198fd4a7`.
+Batch E7's report file in `docs/reports/efficiency-logging-database/`, deleted with this work; `e198fd4a7` holds it.

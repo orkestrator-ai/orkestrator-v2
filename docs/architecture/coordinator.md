@@ -481,8 +481,17 @@ delegation. Any agent reaches it at the mail address `"coordinator"`
 main right now; an address of a conversation that has since closed is
 redirected there too.
 
-Closing the main tab is how its provider is changed. Nothing reopens it on its
-own until it is needed: the next agent mail to the coordinator, or a worker's
+A conversation's provider is fixed once it has a session, so changing the
+coordinator's agent means a new main conversation. **Change agent**, a button
+on the assigned main tab and an item in its tab menu, does that after a
+confirmation: it closes the main, then opens a fresh, unassigned main in the
+same tab group (`createConversation` with no main open), whose composer offers
+every qualified platform. If agent mail arrives before the user picks one, that
+new main is given the default agent as described below. Once side agents are
+open, the main tab shows a **Main** label, also in its accessible name.
+
+Closing the main tab without Change agent asks first, and nothing reopens it on
+its own until it is needed: the next agent mail to the coordinator, or a worker's
 delegation wake, starts a new main with the repository's default agent
 (`CoordinatorService.ensureMainConversation`) and moves onto it the work the
 closed one still owed a report for (open delegations, unreported workflows).
@@ -531,7 +540,17 @@ drag a tab onto another group's strip to move it, or onto a pane edge to open
 a new group beside or below it, so a side agent can sit next to the main
 coordinator. Dividers resize, and a group closes when its last tab leaves.
 Each group has its own **New side agent** action, and a new conversation
-joins whichever group is focused.
+joins whichever group is focused. On a phone the action shows only its icon,
+because the strip scrolls.
+
+Each strip is a `tablist` of `role="tab"` buttons; the draggable shell around
+a tab takes no role or tab stop of its own, and each group's content is the
+`tabpanel` its front tab labels. Arrow keys, Home and End move between a
+strip's tabs, Enter or Space selects one. The keyboard drag sensor is left out
+because it claims Enter and Space, so moving a tab without a pointer goes
+through the tab's menu (right-click, the context-menu key or Shift+F10): **Move
+to new group** and **Move to group N** call the same layout functions a drop
+does (`splitCoordinatorPaneAtEdge`, `moveCoordinatorConversation`).
 
 The arrangement is presentation, edited by the renderer
 (`apps/web/src/lib/coordinator-pane-layout.ts`) and stored by the backend per
@@ -546,7 +565,12 @@ without the capability the layout stays in that copy. It never opens or closes a
 conversation; on every snapshot it is reconciled against the backend's open set,
 dropping closed conversations and placing new ones. Focusing a group selects its front
 conversation (`selectCoordinatorConversation`), and a selection made elsewhere
-brings that conversation to the front of its group. Only each group's front
+brings that conversation to the front of its group. A press or focus inside a
+tab strip does not focus the group first: a tab selects itself, so a click on a
+tab in another group writes one selection rather than the group's front tab
+and then the clicked one, and every finished drag focuses the group the tab
+landed in or started from (`coordinatorDragEndChange`), since a drag does not
+click. Only each group's front
 conversation is mounted.
 
 ## Activity indicator

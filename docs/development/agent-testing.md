@@ -128,7 +128,8 @@ for module loads, because the browser's network path is what they test.
 uses neither, or creates a context it does not route.
 
 Both full browser tasks (`test:agent:browser` and its isolated variant) build
-the packaged CLI first (`build:cli`), because `cli-ui.spec.ts` drives
+the packaged CLI first (`build:cli:test`, which sets no build commit and so
+keeps its Turbo cache across commits), because `cli-ui.spec.ts` drives
 `packages/cli/dist`.
 
 Both commands and their workspace-exclusive resources are registered in
@@ -812,7 +813,7 @@ does not need a packaged build.
 mise run package:linux:unpacked
 
 # Build release/packaged-test/linux-unpacked/ (bun install, download:bun,
-# build:all, electron-builder --linux --dir with
+# build:all:test, electron-builder --linux --dir with
 # electron-builder.packaged-test.config.ts). Installs nothing.
 mise run package:linux:unpacked:test
 

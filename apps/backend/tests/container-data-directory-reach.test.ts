@@ -185,13 +185,13 @@ function expectNoBindReaches(sources: string[], dataDir: string): void {
 }
 
 describe("a container's reach into the data directory", () => {
-  test.each([
-    [
-      "a staged-inputs image",
-      { "git-mirror": 1, "network-policy": 3, "network-refresh": 1, "staged-inputs": 2 },
-    ],
-    ["an older image", { "git-mirror": 1, "network-policy": 2 }],
-  ] as const)("%s binds nothing holding the stored secrets", async (_label, capabilities) => {
+  test("a staged-inputs image binds nothing holding the stored secrets", async () => {
+    const capabilities = {
+      "git-mirror": 1,
+      "network-policy": 3,
+      "network-refresh": 1,
+      "staged-inputs": 2,
+    };
     const { dataDir, tar, create } = await fixture(capabilities);
     await withDockerScript(fakeDocker(tar), async (log) => {
       await create();
@@ -207,46 +207,28 @@ describe("a container's reach into the data directory", () => {
     });
   });
 
-  test("an older image binds isolated agent homes and forwards only the selected API keys", async () => {
-    const { dataDir, agentHome, tar, create } = await fixture(
-      { "git-mirror": 1, "network-policy": 2 },
-      { legacyCredentials: true },
-    );
-    const script = fakeDocker(tar).replace(
-      "  create) printf",
-      `  create)
-[ "$ANTHROPIC_API_KEY" = "${FAKE_ANTHROPIC_KEY}" ] && echo anthropic-key-forwarded >> "$FAKE_DOCKER_LOG"
-[ "$CURSOR_API_KEY" = "${FAKE_CURSOR_KEY}" ] && echo cursor-key-forwarded >> "$FAKE_DOCKER_LOG"
-printf`,
-    );
-    await withDockerScript(script, async (log) => {
-      await create();
-      const docker = await log.read();
-      const line = docker.split("\n").find((entry) => entry.startsWith("create --name"));
-      expect(line).toBeDefined();
-      for (const [source, target] of [
-        [".claude", "/claude-config"],
-        [".claude.json", "/claude-config.json"],
-        [".codex", "/codex-home"],
-        [".grok", "/grok-home"],
-        [".config/grok", "/grok-config"],
-        [".pi", "/pi-config"],
-        [".config/opencode", "/opencode-config"],
-        [".local/share/opencode", "/opencode-data"],
-        [".local/state/opencode/model.json", "/opencode-state/model.json"],
-      ]) {
-        expect(line).toContain(`-v ${path.join(agentHome, source!)}:${target}:ro`);
-      }
-      expect(line).toContain("-e ANTHROPIC_API_KEY ");
-      expect(line).toContain("-e CURSOR_API_KEY ");
-      expect(docker).toContain("anthropic-key-forwarded");
-      expect(docker).toContain("cursor-key-forwarded");
-      expect(docker).not.toContain(FAKE_ANTHROPIC_KEY);
-      expect(docker).not.toContain(FAKE_CURSOR_KEY);
-      expect(docker).not.toContain(FAKE_STORED_SECRET);
-      expectNoBindReaches(bindSources(line!), dataDir);
-    });
-  });
+  test.each([false, true])(
+    "an older image is refused before binding secrets (credentials: %s)",
+    async (legacyCredentials) => {
+      const { dataDir, agentHome, tar, create } = await fixture(
+        { "git-mirror": 1, "network-policy": 2 },
+        { legacyCredentials },
+      );
+      await withDockerScript(fakeDocker(tar), async (log) => {
+        await expect(create()).rejects.toMatchObject({ code: "capability-unavailable" });
+        const docker = await log.read();
+        // Manifest inspection can create a probe; no environment may be created.
+        expect(docker.split("\n").some((line) => line.startsWith("create --name"))).toBe(false);
+        expect(docker).not.toContain(`-v ${agentHome}`);
+        expect(docker).not.toContain(`-v ${dataDir}`);
+        expect(docker).not.toContain("-e ANTHROPIC_API_KEY");
+        expect(docker).not.toContain("-e CURSOR_API_KEY");
+        expect(docker).not.toContain(FAKE_ANTHROPIC_KEY);
+        expect(docker).not.toContain(FAKE_CURSOR_KEY);
+        expect(docker).not.toContain(FAKE_STORED_SECRET);
+      });
+    },
+  );
 
   test("the staged Anthropic key is an owner-only copy, kept out of docker's arguments", async () => {
     const { dataDir, tar, create } = await fixture(

@@ -19,7 +19,6 @@ A batch file combines several reports as numbered parts and takes the rating of 
 | 3 | [0170-l15-agent-tools-bind-address.md](0170-l15-agent-tools-bind-address.md) | Medium | No | L15: agent-tools server on `0.0.0.0` | The server is token-protected, so the wider bind adds reach for a leaked token rather than a direct way in. |
 | 4 | [0020-m1-isolated-preview-default.md](0020-m1-isolated-preview-default.md) | Low | No | M1: legacy route retirement, and the two-machine run the default flip went ahead without | The sandbox header already closes the top-level path. The default is flipped; retirement waits on the support window in todo 0042. |
 | 5 | [0110-l18-dependency-advisories.md](0110-l18-dependency-advisories.md) | Low | No | L18: `undici`, `postcss-selector-parser`, Electron 45.x | The advisories are already accepted and blocked upstream in todo 0032. |
-| 6 | [0160-l12-descriptor-process-binding.md](0160-l12-descriptor-process-binding.md) | Low | No | L12: pid reuse by the same user | It needs a crashed backend, pid reuse and a co-tenant on the old port all at once. |
 
 ## Parallel running
 
@@ -47,7 +46,6 @@ These still follow the lane and conflict rules above.
 | --- | --- | --- | --- | --- | --- |
 | S-0100 | [Egress SNI and DNS](0100-m12-egress-sni-and-dns.md) | `0100` | Containers, 1 of 3 | None | None |
 | S-0170 | [Agent-tools bind address](0170-l15-agent-tools-bind-address.md) | `0170` | Containers, 2 of 3 | None | None |
-| S-0160 | [Descriptor process binding](0160-l12-descriptor-process-binding.md) | `0160` | Gateway, 2 of 2 | None | None |
 
 ### Not ready to start
 
@@ -60,7 +58,7 @@ When one of these becomes ready, it joins the lane shown.
 
 ## Status of every finding
 
-36 done, 13 partly done, 4 open, 12 no action.
+37 done, 12 partly done, 4 open, 12 no action.
 
 | Finding | Disposition | Evidence |
 | --- | --- | --- |
@@ -93,7 +91,7 @@ When one of these becomes ready, it joins the lane shown.
 | L9 | Done | `apps/backend/src/core/commands-files.ts:991`, `apps/backend/src/core/git-fsmonitor.ts:22`; commit `abe48fb37` |
 | L10 | Done | `apps/backend/src/gateway-host-policy.ts`, `apps/backend/src/gateway-credential-throttle.ts`, `apps/backend/tests/gateway-host-policy.test.ts`, `apps/backend/tests/gateway-credential-throttle.test.ts` |
 | L11 | Done | `apps/backend/src/gateway-bind-policy.ts:33-46`, `apps/backend/src/main.ts:144`; commit `129cb2d32` |
-| L12 | Partly done | `packages/cli/src/client/targets.ts:130-146`, `:215-222` (commit `b88623136`); remainder in [0160-l12-descriptor-process-binding.md](0160-l12-descriptor-process-binding.md) |
+| L12 | Done | Descriptor ownership and permissions: `readDescriptor` and `descriptorTrustRefusal` in `packages/cli/src/client/targets.ts` (commit `b88623136`). Same-user pid reuse: `descriptorProcessRefusal` (same file) compares the pid's start time, read by `packages/cli/src/client/process-start.ts`, with the descriptor's `startedAt` before any token is read; `packages/cli/tests/client-descriptor-process.test.ts`. A real-Mac run of the `ps` path is [todo 6220](../../todo/cli-and-slash-commands/6220-descriptor-start-time-macos-live-run.md) |
 | L13 | Done | `apps/web/src/lib/chat/file-url.ts:68-73`; commit `5c760e3c8` |
 | L14 | Done | `apps/backend/src/preview-relay-supervisor.ts:24`, `:355-373`, `:381-382`; commit `6cdd8115e` |
 | L15 | Open | `apps/backend/src/core/index.ts:536`, `apps/backend/src/core/agent-tools.ts:977`; [0170-l15-agent-tools-bind-address.md](0170-l15-agent-tools-bind-address.md) |
@@ -128,4 +126,4 @@ When one of these becomes ready, it joins the lane shown.
 | §9 step 6 (M4, M5, L1) | Done | See M4, M5 and L1 |
 | §9 step 7 (M6, M7, L3, L4) | Done | See M6, M7, L3 and L4 |
 | §9 step 8 (H5, M8, M9) | Done | See H5, M8 and M9; what only a running install can answer is in [todo 5860](../../todo/containers-and-environments/5860-legacy-host-mounts-live-evidence.md) |
-| §9 step 9 (L18, remaining Low and Info) | Partly done | [0110-l18-dependency-advisories.md](0110-l18-dependency-advisories.md) to [0160-l12-descriptor-process-binding.md](0160-l12-descriptor-process-binding.md); I5 is partly done (see I5) |
+| §9 step 9 (L18, remaining Low and Info) | Partly done | [0110-l18-dependency-advisories.md](0110-l18-dependency-advisories.md); L12 is done (see L12); I5 is partly done (see I5) |

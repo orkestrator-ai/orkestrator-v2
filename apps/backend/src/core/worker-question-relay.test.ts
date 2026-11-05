@@ -141,8 +141,9 @@ beforeEach(async () => {
     nativeAgents: { sessionPendingInteractions: async () => pending },
   } as unknown as CommandContext;
   commands = createCommandRegistry();
-  commands.set("get_native_agent_projection", (async () => ({
-    interactions: pending,
+  commands.set("get_native_agent_session_state_update", (async () => ({
+    status: "snapshot",
+    value: { interactions: pending },
   })) as CommandHandler);
   commands.set("resolve_native_agent_interaction", resolve as unknown as CommandHandler);
   commands.set("get_node_status", (async () => ({ nodeId: "bk_self" })) as CommandHandler);
@@ -263,6 +264,21 @@ describe("answer_project_worker_question", () => {
     answers: [{ questionId: "db", freeText: "Postgres 16" }],
     ...overrides,
   });
+
+  for (const status of ["missing", "unavailable"] as const) {
+    test(`${status} session state refuses proposals without creating an approval`, async () => {
+      const create = mock(async () => ({ requestId: "approval-1" }));
+      commands.set("create_node_action_request", create as unknown as CommandHandler);
+      commands.set("get_native_agent_session_state_update", (async () => ({
+        status,
+      })) as CommandHandler);
+      await expect(
+        call("request_coordinator_worker_answer", { input: proposal() }),
+      ).rejects.toThrow("no pending interaction");
+      expect(create).not.toHaveBeenCalled();
+      expect(resolve).not.toHaveBeenCalled();
+    });
+  }
 
   test("answers the pending revision through the worker tab's own resolve command", async () => {
     expect(await call("answer_project_worker_question", approved())).toEqual({

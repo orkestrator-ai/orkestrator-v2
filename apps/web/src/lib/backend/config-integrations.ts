@@ -1,3 +1,8 @@
+import type {
+  DatabaseStats,
+  DiagnosticsBundleChunk,
+  DiagnosticsBundlePlan,
+} from "@orkestrator/protocol/backend-diagnostics";
 import { invoke } from "@/lib/native/backend";
 import type {
   ControlMcpCredentialSummary,
@@ -436,6 +441,28 @@ export async function getLogStorageStats(machine?: AccountMachine): Promise<LogS
 
 export async function cleanupLogs(machine?: AccountMachine): Promise<LogStorageStats> {
   return machineInvoke<LogStorageStats>(machine, "cleanup_logs");
+}
+
+export async function getDatabaseStats(machine?: AccountMachine): Promise<DatabaseStats> {
+  return machineInvoke<DatabaseStats>(machine, "get_database_stats");
+}
+
+/** Builds the bundle on the backend and answers with the manifest of exactly that bundle. */
+export async function planDiagnosticsBundle(
+  machine?: AccountMachine,
+): Promise<DiagnosticsBundlePlan> {
+  return machineInvoke<DiagnosticsBundlePlan>(machine, "plan_diagnostics_bundle");
+}
+
+export async function readDiagnosticsBundle(
+  planId: string,
+  offset: number,
+  machine?: AccountMachine,
+): Promise<DiagnosticsBundleChunk> {
+  return machineInvoke<DiagnosticsBundleChunk>(machine, "read_diagnostics_bundle", {
+    planId,
+    offset,
+  });
 }
 
 // --- Linear Commands ---

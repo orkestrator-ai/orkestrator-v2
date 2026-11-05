@@ -7,8 +7,10 @@ import {
   NATIVE_DISPLAY_TAIL_MAX_SESSIONS,
   NATIVE_DISPLAY_TAIL_MAX_TOTAL_BYTES,
   isNativeAgentDisplayTail,
+  preparedDisplayTailPayload,
   type NativeAgentDisplayTail,
 } from "./native-agent-display-tails.js";
+import { deepFreeze } from "./storage-frozen-snapshot.js";
 import type { StorageDatabase } from "./storage-database.js";
 
 /**
@@ -29,7 +31,8 @@ import type { StorageDatabase } from "./storage-database.js";
  *   `position` set past every stored position (a write sequence, so position
  *   order is least-recently-written first). A failure rolls everything back.
  * - get: the store revision, then one keyed read, validated (size, schema,
- *   checksum). The row owner (the tail's environment, which
+ *   checksum). Tails are handed out deep-frozen and shared with the decoded
+ *   cache: a caller that needs to change one derives a new object. The row owner (the tail's environment, which
  *   `deleteByEnvironment` deletes by) is derived from the value by the store
  *   layout on every write, so it always matches the tail served. Decoded
  *   tails are cached in memory, bounded, and trusted only while the store
@@ -199,10 +202,11 @@ export class NativeAgentDisplayTailStore {
     }
     if (lookup.kind === "current" && cached) {
       this.counters.decodedCacheHits += 1;
-      // Refresh recency, and hand out a copy: callers own what they receive.
+      // Refresh recency. Cached tails are deep-frozen, so every caller can
+      // share one without copying it.
       this.decoded.delete(key);
       this.decoded.set(key, cached);
-      return structuredClone(cached.tail);
+      return cached.tail;
     }
     this.forgetDecoded(key);
     if (lookup.kind !== "row") return null;
@@ -217,8 +221,9 @@ export class NativeAgentDisplayTailStore {
       return null;
     }
     if (!isNativeAgentDisplayTail(tail)) return null;
+    deepFreeze(tail);
     this.rememberDecoded(key, { revision: lookup.revision, tail, bytes });
-    return structuredClone(tail);
+    return tail;
   }
 
   async put(
@@ -228,8 +233,11 @@ export class NativeAgentDisplayTailStore {
   ): Promise<boolean> {
     void this.cleanupLegacy();
     const fence = options.fence ?? this.captureFence();
-    const payload = JSON.stringify(tail);
-    const bytes = Buffer.byteLength(payload, "utf8");
+    // A tail from `createNativeAgentDisplayTail` arrives already serialized
+    // (and frozen); anything else is serialized here.
+    const prepared = preparedDisplayTailPayload(tail);
+    const payload = prepared?.payload ?? JSON.stringify(tail);
+    const bytes = prepared?.bytes ?? Buffer.byteLength(payload, "utf8");
     if (bytes > NATIVE_DISPLAY_TAIL_MAX_BYTES) return false;
     // Synchronous from here to the commit: a deletion in this process cannot
     // interleave between the fence check and the write.
@@ -255,7 +263,8 @@ export class NativeAgentDisplayTailStore {
     for (const evicted of committed.evicted) this.forgetDecoded(evicted);
     this.rememberDecoded(key, {
       revision: committed.revision,
-      tail: structuredClone(tail),
+      // A prepared tail is frozen already; another caller keeps its own object.
+      tail: prepared ? tail : deepFreeze(structuredClone(tail)),
       bytes,
     });
     return true;

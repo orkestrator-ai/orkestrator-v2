@@ -16,6 +16,11 @@ import {
 } from "@orkestrator/protocol/node/runtime-profile-status";
 import { assertPrivateFile, CliConfigStore, type SavedConnection } from "./config.js";
 import { CliError } from "./errors.js";
+import {
+  readLinuxProcessIdentity,
+  readProcessStartTime,
+  type ProcessStartReader,
+} from "./process-start.js";
 
 /**
  * A concrete backend the client will talk to. Resolution is explicit:
@@ -221,18 +226,82 @@ export function processIsAlive(pid: number): boolean {
   }
 }
 
-function descriptorTarget(
+/**
+ * How far the descriptor's pid may have started before its `startedAt`. The
+ * backend writes `startedAt` once it is serving, after opening its store and
+ * starting its listeners, so the process legitimately predates it by however
+ * long that boot took. A pid reused after the backend exited can only have
+ * started later, so this bound costs nothing against reuse; it refuses a pid
+ * that names some much older process instead (a descriptor written in another
+ * pid namespace, for instance).
+ */
+export const DESCRIPTOR_START_BEFORE_TOLERANCE_MS = 60 * 60 * 1000;
+
+/**
+ * How far the pid's process may appear to have started after `startedAt`.
+ * A genuine backend started before writing it, so this only absorbs
+ * measurement: `/proc/stat`'s boot time and `ps -o lstart` both have
+ * one-second resolution, and a small wall-clock correction between the write
+ * and the check shifts one reading against the other. A reused pid would have
+ * to belong to a process started within this window after the backend wrote
+ * its descriptor, which needs the backend to die and the pid space to wrap in
+ * that time.
+ */
+export const DESCRIPTOR_START_AFTER_TOLERANCE_MS = 30 * 1000;
+
+/**
+ * Why the process holding `descriptor.pid` is not the backend that wrote the
+ * descriptor, or null when it is; the reason completes "The backend …".
+ * Checked before any token is read or sent: a stale descriptor whose pid now
+ * belongs to another process of this user would otherwise send the token to
+ * whoever took over the old port. A start time that cannot be read is refused
+ * rather than trusted, since nothing then ties the pid to the backend.
+ */
+export async function descriptorProcessRefusal(
+  descriptor: Pick<BackendInstanceDescriptor, "pid" | "startedAt" | "processIdentity">,
+  readStart: ProcessStartReader = readProcessStartTime,
+  alive: (pid: number) => boolean = processIsAlive,
+): Promise<string | null> {
+  if (!alive(descriptor.pid)) return "is not running as your user (its descriptor is stale)";
+  if (process.platform === "linux" && readStart === readProcessStartTime) {
+    if (!descriptor.processIdentity) {
+      return "cannot be confirmed: restart an upgraded backend to publish its Linux process identity";
+    }
+    const identity = await readLinuxProcessIdentity(descriptor.pid);
+    if (identity === null)
+      return "cannot be confirmed: its Linux process identity could not be read";
+    return identity === descriptor.processIdentity
+      ? null
+      : "is not running: its process identity changed (its descriptor is stale)";
+  }
+  const startedAt = Date.parse(descriptor.startedAt);
+  if (!Number.isFinite(startedAt)) {
+    return "cannot be confirmed: its descriptor has no valid start time";
+  }
+  const actual = await readStart(descriptor.pid);
+  if (actual === null) {
+    return `cannot be confirmed: the start time of process ${descriptor.pid} could not be read`;
+  }
+  if (
+    actual > startedAt + DESCRIPTOR_START_AFTER_TOLERANCE_MS ||
+    actual < startedAt - DESCRIPTOR_START_BEFORE_TOLERANCE_MS
+  ) {
+    return `is not running: pid ${descriptor.pid} belongs to a process started at ${new Date(actual).toISOString()}, but the backend started at ${new Date(startedAt).toISOString()} (its descriptor is stale)`;
+  }
+  return null;
+}
+
+async function descriptorTarget(
   name: string,
   kind: PublicConnectionIdentity["kind"],
   descriptor: BackendInstanceDescriptor,
   expectedInstallationId: string | undefined,
   refresh: () => Promise<ResolvedTarget>,
-): ResolvedTarget {
-  if (!processIsAlive(descriptor.pid)) {
-    throw new CliError(
-      "connection-failed",
-      `The backend for ${kind} '${name}' is not running as your user (its descriptor is stale)`,
-    );
+  readStart: ProcessStartReader,
+): Promise<ResolvedTarget> {
+  const refusal = await descriptorProcessRefusal(descriptor, readStart);
+  if (refusal) {
+    throw new CliError("connection-failed", `The backend for ${kind} '${name}' ${refusal}`);
   }
   if (expectedInstallationId && descriptor.installationId !== expectedInstallationId) {
     throw new CliError(
@@ -252,7 +321,12 @@ function descriptorTarget(
     },
     baseUrl,
     // The service's own auth file is created mode 0600 by the backend.
-    readToken: () => readTokenFile(descriptor.authFile, true),
+    readToken: async () => {
+      const refusal = await descriptorProcessRefusal(descriptor, readStart);
+      if (refusal)
+        throw new CliError("connection-failed", `The backend for ${kind} '${name}' ${refusal}`);
+      return readTokenFile(descriptor.authFile, true);
+    },
     expectedInstallationId: descriptor.installationId,
     descriptorGeneration: descriptor.generation,
     refresh,
@@ -288,11 +362,17 @@ export async function resolveTarget(
 export async function resolveSavedConnection(
   name: string,
   saved: SavedConnection,
+  readStart: ProcessStartReader = readProcessStartTime,
 ): Promise<ResolvedTarget> {
   if (saved.kind === "descriptor") {
     const descriptor = await readDescriptor(saved.descriptorPath);
-    return descriptorTarget(name, "connection", descriptor, saved.installationId, () =>
-      resolveSavedConnection(name, saved),
+    return descriptorTarget(
+      name,
+      "connection",
+      descriptor,
+      saved.installationId,
+      () => resolveSavedConnection(name, saved, readStart),
+      readStart,
     );
   }
   const baseUrl = normalizeBaseUrl(saved.url);
@@ -316,6 +396,7 @@ export async function resolveSavedConnection(
 export async function resolveProfile(
   profileName: string,
   env: Record<string, string | undefined>,
+  readStart: ProcessStartReader = readProcessStartTime,
 ): Promise<ResolvedTarget> {
   let located: ReturnType<typeof runtimeProfileStatusPath>;
   try {
@@ -351,7 +432,7 @@ export async function resolveProfile(
       `Profile '${located.id}' reports ready but its backend is not running (stale status)`,
     );
   }
-  const refresh = () => resolveProfile(profileName, env);
+  const refresh = () => resolveProfile(profileName, env, readStart);
   if (manifest.dataDir) {
     const descriptorFile = path.join(manifest.dataDir, BACKEND_INSTANCE_DESCRIPTOR_FILE);
     // A missing descriptor means a backend that predates it; a refused one
@@ -367,7 +448,7 @@ export async function resolveProfile(
           `Profile '${located.id}' has a descriptor from a different backend process`,
         );
       }
-      return descriptorTarget(located.id, "profile", descriptor, undefined, refresh);
+      return descriptorTarget(located.id, "profile", descriptor, undefined, refresh, readStart);
     }
   }
   // Backends that predate the instance descriptor: the manifest's own

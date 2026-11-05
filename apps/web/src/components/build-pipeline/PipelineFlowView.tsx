@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -251,8 +252,8 @@ export function PipelineFlowView({
   const now = useSyncExternalStore(subscribeDisplayClock, displayClock.getSnapshot);
 
   // The running step, else the last step reached; a node the user picked
-  // wins while it exists. Notes is opened by hand: it never runs, so there is
-  // nothing in it to follow.
+  // wins while it exists. Notes counts as reached only once the run completes,
+  // so a finished run lands on it and an unfinished one never does.
   const columnOf = new Map<string, number>();
   model.columns.forEach((column, index) => {
     for (const id of column.nodeIds) columnOf.set(id, index);
@@ -265,7 +266,7 @@ export function PipelineFlowView({
     pendingRetry?.id ??
     defaultFlowSelection(
       model.nodes
-        .filter((node) => !node.session?.superseded && !node.superseded && node.kind !== "notes")
+        .filter((node) => !node.session?.superseded && !node.superseded)
         .map((node) => ({
           id: node.id,
           state: node.placeholder ? "not-started" : node.state,
@@ -278,6 +279,33 @@ export function PipelineFlowView({
     model.nodes.find((node) => node.id === pinnedId) ??
     model.nodes.find((node) => node.id === followed) ??
     model.nodes[0];
+  // This view survives graph collapse. A tab reopen still starts a new arrival.
+  const followsNotes = selected?.kind === "notes" && selected.id !== pinnedId;
+  const [landedViewKey, setLandedViewKey] = useState<string | null>(null);
+  if (landedViewKey !== null && (!followsNotes || landedViewKey !== viewKey)) {
+    setLandedViewKey(null);
+  }
+  const graphContainerRef = useRef<HTMLDivElement>(null);
+  const expandedScrollTop = useRef<number | null>(null);
+  useLayoutEffect(() => {
+    if (collapsed || expandedScrollTop.current === null) return;
+    const graph = graphContainerRef.current;
+    const scroller = graph?.closest<HTMLElement>('[data-testid="pipeline-flow-scroll"]');
+    if (!graph || !scroller) return;
+    const restore = () => {
+      const top = expandedScrollTop.current;
+      if (top === null || scroller.scrollHeight - scroller.clientHeight < top) return;
+      scroller.scrollTop = top;
+      expandedScrollTop.current = null;
+      observer.disconnect();
+    };
+    // Expansion mounts an unmeasured graph first. Wait for its real height
+    // before restoring an offset the collapsed inspector may have clamped.
+    const observer = new ResizeObserver(restore);
+    observer.observe(graph);
+    restore();
+    return () => observer.disconnect();
+  }, [collapsed]);
   const selectedSessionId = selected?.session?.sdkSessionId ?? null;
   // The shell's info pane reads which stage session is on screen.
   useEffect(() => {
@@ -642,7 +670,14 @@ export function PipelineFlowView({
     type: "button",
     "aria-expanded": !collapsed,
     "aria-controls": graphId,
-    onClick: () => setCollapsed(viewKey, !collapsed),
+    onClick: () => {
+      if (!collapsed) {
+        expandedScrollTop.current =
+          graphContainerRef.current?.closest<HTMLElement>('[data-testid="pipeline-flow-scroll"]')
+            ?.scrollTop ?? null;
+      }
+      setCollapsed(viewKey, !collapsed);
+    },
   } as const;
   const progress = (
     <span
@@ -704,7 +739,12 @@ export function PipelineFlowView({
               ) : null}
             </div>
           )}
-          <div id={graphId} hidden={collapsed} className={cn(collapsed && "hidden")}>
+          <div
+            ref={graphContainerRef}
+            id={graphId}
+            hidden={collapsed}
+            className={cn(collapsed && "hidden")}
+          >
             {collapsed ? null : (
               <PipelineFlowGraph
                 model={model}
@@ -716,6 +756,8 @@ export function PipelineFlowView({
                 layout={layout}
                 fullscreenContainer={tabRoot}
                 isActive={isActive}
+                landOnSelection={followsNotes && landedViewKey !== viewKey}
+                onSelectionLanded={() => setLandedViewKey(viewKey)}
               />
             )}
           </div>

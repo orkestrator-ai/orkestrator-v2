@@ -15,14 +15,14 @@ Analysed 2026-11-05 against `main` at `69a3b4ca5`. Carried from part `0910` task
 
 **Context.** The measurement row cap (2,000 rows per measurement) and prompt pruning are built, and E5 moved the ledger into `change-tracking.sqlite`, so the ledger and the app stores no longer share a page cache. Each backend still opens several connections to `orkestrator.sqlite` (`openBackendDatabase`, `storage-stores.ts`).
 
-**Investigation.** None of the three PRAGMAs appears in `apps/backend/src` or `packages/protocol/src`. The report's recommendation was to change them only with a measured read problem. No read problem has been measured: that needs a real profile's read latencies, which [0810](../../reports/efficiency-logging-database/0750-e15-health-and-diagnostics.md#0810-database-observability) (database observability) would provide, and no generated workload stands in for real read patterns.
+**Investigation.** None of the three PRAGMAs appears in `apps/backend/src` or `packages/protocol/src`. The report's recommendation was to change them only with a measured read problem. No read problem has been measured: that needs a real profile's read latencies. [Database observability](../../architecture/storage.md#size-waits-and-what-fills-the-file) (E15 part `0810`) reports sizes, lease waits and `SQLITE_BUSY` counts but no read latency, and no generated workload stands in for real read patterns.
 
 **Decisions.**
 
 - **How to measure?**
-  - **Use 0810's database waits and timings once built, on a busy real profile (recommended).**
-    - Pros: real read patterns; no separate instrumentation.
-    - Cons: waits on 0810 and a real session.
+  - **Use the database waits E15 added, plus read timings added for this, on a busy real profile (recommended).**
+    - Pros: real read patterns.
+    - Cons: the read timings are not built yet, and it needs a real session.
   - **Time the hot reads (environment list, transcript pages, diff pages) on a generated large profile.**
     - Pros: no real turn needed.
     - Cons: a generated profile's cache behaviour says little about a real one's.

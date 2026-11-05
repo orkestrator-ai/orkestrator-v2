@@ -1,5 +1,9 @@
 import { openMachineWorkspace } from "@/lib/federation/open-workspace";
-import { useState } from "react";
+import {
+  claimSidebarAction,
+  releaseSidebarAction,
+  useSidebarActionStore,
+} from "@/stores/sidebarActionStore";
 import { toast } from "sonner";
 import { FEDERATED_LINK_PARAM, encodeResourceLink } from "@orkestrator/protocol/federation";
 import { isMachineWritable, type MachineView } from "@/lib/federation/aggregate";
@@ -32,6 +36,23 @@ export interface FederatedEnvironmentActions {
   remove: () => void;
 }
 
+/** A write to another machine failed, or its answer was lost and it may have run. */
+export function reportFederatedActionError(
+  label: string,
+  machineName: string,
+  error: unknown,
+): void {
+  if (error instanceof OutcomeUnknownError) {
+    toast.warning(`${label}: outcome unknown on ${machineName}`, {
+      description: error.message,
+    });
+  } else {
+    toast.error(`${label} failed on ${machineName}`, {
+      description: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
 /**
  * Actions on one environment of a (possibly other) machine. Every action
  * carries the row's captured reference, so a confirmation always names — and
@@ -43,7 +64,7 @@ export function useFederatedEnvironmentActions(
 ): FederatedEnvironmentActions {
   const { portal } = useFederation();
   const selectProjectAndEnvironment = useUIStore((state) => state.selectProjectAndEnvironment);
-  const [busy, setBusy] = useState(false);
+  const busy = useSidebarActionStore((state) => state.pending.has(environment.key));
 
   const open = () => {
     if (machine.bound) {
@@ -59,21 +80,13 @@ export function useFederatedEnvironmentActions(
   };
 
   const run = async (label: string, action: () => Promise<void>) => {
-    setBusy(true);
+    if (!claimSidebarAction(environment.key)) return;
     try {
       await action();
     } catch (error) {
-      if (error instanceof OutcomeUnknownError) {
-        toast.warning(`${label}: outcome unknown on ${machine.name}`, {
-          description: error.message,
-        });
-      } else {
-        toast.error(`${label} failed on ${machine.name}`, {
-          description: error instanceof Error ? error.message : String(error),
-        });
-      }
+      reportFederatedActionError(label, machine.name, error);
     } finally {
-      setBusy(false);
+      releaseSidebarAction(environment.key);
     }
   };
 

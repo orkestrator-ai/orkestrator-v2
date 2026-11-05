@@ -495,7 +495,11 @@ describe("keyInformationInstruction", () => {
 
   test("asks Build, Fix, Address and Verify to keep the brief, and no other stage", () => {
     expect(keyInformationInstruction("build")).toContain("`framing`");
-    expect(keyInformationInstruction("build")).toContain("`summary` (one paragraph");
+    expect(keyInformationInstruction("build")).toContain("`summary` (the change as a whole");
+    expect(keyInformationInstruction("build")).toContain(
+      "short paragraphs separated by a blank line",
+    );
+    expect(keyInformationInstruction("build")).toContain("never one long block");
     expect(keyInformationInstruction("build")).toContain("plain language");
     expect(keyInformationInstruction("fix")).toContain("`summary`");
     expect(keyInformationInstruction("address")).toContain("`summary`");

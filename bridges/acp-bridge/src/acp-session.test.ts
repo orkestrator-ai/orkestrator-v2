@@ -11,6 +11,24 @@ import {
 } from "./acp-test-harness.js";
 
 describe("ACP bridge", () => {
+  test("keeps provider session-list error text out of the response and logs", async () => {
+    const providerError =
+      "Cannot read /private/provider/history/session.jsonl: private session text";
+    const bridge = await spawnBridge({ env: { FAKE_ACP_LIST_ERROR: providerError } });
+    let output = "";
+    bridge.child.stdout.on("data", (chunk: Buffer) => (output += chunk.toString()));
+    bridge.child.stderr.on("data", (chunk: Buffer) => (output += chunk.toString()));
+    const response = await nativeFetch(`${bridge.base}/session/list`, { headers: bridge.headers });
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ error: "Failed to read session history" });
+    await waitFor(
+      async () => output,
+      (value) => value.includes("http.route-failed"),
+    );
+    expect(output).not.toContain(providerError);
+    expect(output).not.toContain("/private/provider/history");
+  });
+
   test("reports an ACP agent without session listing instead of showing an empty history", async () => {
     const bridge = await spawnBridge({ env: { FAKE_ACP_NO_LIST_SESSION: "1" } });
     const response = await nativeFetch(`${bridge.base}/session/list`, { headers: bridge.headers });

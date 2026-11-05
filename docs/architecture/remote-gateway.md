@@ -201,6 +201,14 @@ tag for another route is not sent upstream. Reloads of a previewed dev server
 then revalidate instead of downloading, rewriting and compressing every
 module again.
 
+A static file with no precompressed sibling is compressed on the fly, up to
+`MAX_STATIC_FALLBACK_SOURCE_BYTES`. Its tags depend only on the source file and
+the coding, so a revalidation is compared with them before anything is
+compressed (`heldStaticFallbackEncoding` in `apps/backend/src/gateway-proxy.ts`).
+A match answers `304` with the variant the client holds and no coded
+`Content-Length`, which only compressing would tell us. `If-None-Match: *` and
+`If-Modified-Since` alone name no variant, so they still compress first.
+
 Streaming gzip contexts are shared by direct and proxied streams and capped at
 `MAX_CONCURRENT_STREAMING_COMPRESSIONS` (8); a stream that finds the pool full
 continues in identity and counts as declined. A browser holds two event
@@ -326,6 +334,19 @@ live runs still to do, are in
 `apps/backend/scripts/sse-route-probe.ts` measures whether a route holds or
 changes a gzip stream; the steps for a real tailnet are in the to-do.
 
+A second cause gives the same empty 502: more new connections than the accept
+queue holds (`kern.ipc.somaxconn`, 128 on macOS) arriving during even a 10 ms
+event-loop stall. The kernel resets the rest, and Serve logs `dial tcp ...
+connect: connection reset by peer`. To name the sender, the gateway counts new
+connections and requests per second (`apps/backend/src/gateway-traffic-summary.ts`).
+When a second holds 100 or more of either, it writes one `[gateway]
+traffic.burst` warning per burst, at most one every 30 s, with the top sources,
+route classes, client families, listeners and invoke command names. The source
+is `X-Forwarded-For`, which Serve sets to the sending device's tailnet address,
+believed only on a loopback connection and only as an IP literal; map it to a
+device with `tailscale status`. Connections the kernel reset never reach the
+gateway, so the counts cover what got through.
+
 ## Loopback client gateway (SSH forwarding target)
 
 A desktop client can reach a backend on another machine through a managed SSH
@@ -383,8 +404,9 @@ the installation identity.
 
 `GET /__orkestrator/hello` is the authenticated handshake on every listener
 (contract: `packages/protocol/src/backend-profile.ts`). It returns the
-installation identity, the generation, the app version, the client API range,
-capabilities, the profile and `endpointRole`. It never includes data paths,
+installation identity, the generation, the app version, the build commit when
+the build has one, the client API range, capabilities, the profile and
+`endpointRole`. It never includes data paths,
 the auth file, the token or the process ID.
 
 ## Vercel-hosted public client

@@ -21,6 +21,8 @@ interface Encoding {
 }
 
 const encodings = new WeakMap<object, Encoding>();
+/** `valueFingerprint` per object; lives exactly as long as its row, like `encodings`. */
+const fingerprints = new WeakMap<object, string>();
 
 /** The JSON of an immutable projected value, computed at most once per object. */
 export function encodedValue(value: unknown): Encoding {
@@ -60,9 +62,40 @@ export function sameEncoding(left: unknown, right: unknown): boolean {
   return left === right || encodedValue(left).json === encodedValue(right).json;
 }
 
-/** Short content fingerprint of one projected value. */
+/** The memoized JSON of a value, if something already encoded it; never encodes. */
+export function memoizedEncoding(value: unknown): string | undefined {
+  return value !== null && typeof value === "object" ? encodings.get(value)?.json : undefined;
+}
+
+/** Short content fingerprint of one projected value, computed at most once per object. */
 export function valueFingerprint(value: unknown): string {
-  return createHash("sha256").update(encodedValue(value).json).digest("hex").slice(0, 24);
+  if (value === null || typeof value !== "object") return fingerprintOf(encodedValue(value).json);
+  let fingerprint = fingerprints.get(value);
+  if (fingerprint === undefined) {
+    fingerprint = fingerprintOf(encodedValue(value).json);
+    fingerprints.set(value, fingerprint);
+  }
+  return fingerprint;
+}
+
+function fingerprintOf(json: string): string {
+  return createHash("sha256").update(json).digest("hex").slice(0, 24);
+}
+
+/**
+ * Feed each value's memoized fingerprint into a digest. A read that changed
+ * one row hashes that row's bytes once (for its fingerprint) and a short
+ * fixed-length string for every other row, instead of every row's JSON.
+ * Fingerprints keep 96 bits: ample for telling a changed view from an
+ * unchanged one.
+ */
+export function updateHashWithFingerprints(hash: Hash, values: readonly unknown[]): Hash {
+  hash.update(String(values.length));
+  for (const value of values) {
+    hash.update("\0");
+    hash.update(valueFingerprint(value));
+  }
+  return hash;
 }
 
 function messageId(value: unknown): string | undefined {
@@ -123,18 +156,23 @@ export function tailDeletions(
 }
 
 /**
- * Encoded bytes of an object whose `messages` array is measured through the
- * memo; every other field is serialized once. Used for budgets and for
- * choosing between a delta and a snapshot, where one byte of framing drift is
- * immaterial but a full re-serialization of the window is not.
+ * Encoded bytes of an object whose `messages` and `revisedMessages` arrays are
+ * measured through the memo; every other field is serialized once. Used for
+ * budgets and for choosing between a delta and a snapshot, where one byte of
+ * framing drift is immaterial but a full re-serialization of the window is
+ * not. The framing allowance counts a separating comma for each array, so the
+ * result never undercounts: at most it is one byte over.
  */
-export function encodedBytesWithMessages<T extends { messages: readonly unknown[] }>(
-  value: T,
-): number {
-  const { messages, ...rest } = value;
-  return (
-    Buffer.byteLength(JSON.stringify(rest)) + encodedArrayBytes(messages) + '"messages":,'.length
-  );
+export function encodedBytesWithMessages<
+  T extends { messages: readonly unknown[]; revisedMessages?: readonly unknown[] },
+>(value: T): number {
+  const { messages, revisedMessages, ...rest } = value;
+  let bytes =
+    Buffer.byteLength(JSON.stringify(rest)) + encodedArrayBytes(messages) + '"messages":,'.length;
+  if (revisedMessages !== undefined) {
+    bytes += encodedArrayBytes(revisedMessages) + '"revisedMessages":,'.length;
+  }
+  return bytes;
 }
 
 /** Digest of an object with a `messages` array, hashing messages through the memo. */
@@ -145,4 +183,57 @@ export function digestWithMessages<T extends { messages: readonly unknown[] }>(
   const { messages, ...rest } = value;
   const hash = createHash("sha256").update(prefix).update("\0").update(JSON.stringify(rest));
   return updateHashWithValues(hash, messages).digest("base64url").slice(0, 43);
+}
+
+/** Containers deeper than this are serialized whole rather than walked. */
+const MAX_SPLICE_DEPTH = 8;
+const spliceableResults = new WeakSet<object>();
+
+/**
+ * Mark a command result whose rows were already encoded on the way to it, so
+ * the gateway writes it with {@link spliceEncodedJson} instead of serializing
+ * those rows again. The value is untouched: every caller that is not the
+ * gateway (the CLI, coordinator tools, tests) receives the same plain object.
+ */
+export function markSpliceableResult<T>(value: T): T {
+  if (value !== null && typeof value === "object") spliceableResults.add(value);
+  return value;
+}
+
+export function isSpliceableResult(value: unknown): boolean {
+  return value !== null && typeof value === "object" && spliceableResults.has(value);
+}
+
+/**
+ * The same JSON as `JSON.stringify(value)`, with each array element that was
+ * already encoded (a projected row, a patch) copied from the memo rather than
+ * serialized again. Only plain objects and arrays are walked, and only to a
+ * fixed depth; anything else (a class instance, a `toJSON`, a deep subtree)
+ * goes through `JSON.stringify` whole, so the output cannot differ from it.
+ */
+export function spliceEncodedJson(value: unknown): string | undefined {
+  return splicedJson(value, 0);
+}
+
+function splicedJson(value: unknown, depth: number): string | undefined {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (depth >= MAX_SPLICE_DEPTH || typeof (value as { toJSON?: unknown }).toJSON === "function") {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    const elements: string[] = [];
+    for (let index = 0; index < value.length; index += 1) {
+      const element: unknown = value[index];
+      elements.push(memoizedEncoding(element) ?? splicedJson(element, depth + 1) ?? "null");
+    }
+    return `[${elements.join(",")}]`;
+  }
+  const prototype = Object.getPrototypeOf(value) as unknown;
+  if (prototype !== Object.prototype && prototype !== null) return JSON.stringify(value);
+  const fields: string[] = [];
+  for (const key of Object.keys(value)) {
+    const json = splicedJson((value as Record<string, unknown>)[key], depth + 1);
+    if (json !== undefined) fields.push(`${JSON.stringify(key)}:${json}`);
+  }
+  return `{${fields.join(",")}}`;
 }

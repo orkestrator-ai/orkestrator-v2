@@ -508,11 +508,12 @@ describe("HTTP bridge provider", () => {
         connection,
       );
 
-      // A bare "HTTP 410" tells the user nothing actionable; the bridge's own
-      // explanation has to survive the hop.
-      await expect(provider.listResumableSessions?.()).rejects.toThrow(
-        `${agent} cannot list resumable ACP sessions`,
-      );
+      // Preserve the exact reason without a prefix, and keep semantic 4xx
+      // failures as plain Errors rather than transient reconnect failures.
+      const failure = await provider.listResumableSessions!().catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(Error);
+      expect((failure as Error).constructor).toBe(Error);
+      expect((failure as Error).message).toBe(`${agent} cannot list resumable ACP sessions`);
     });
   }
 

@@ -24,13 +24,22 @@ let projectId: string;
 let mainRuntimeId: string;
 let mainConversationId: string;
 
-const getProjection = mock(async (): Promise<{ turn: { phase: string } } | null> => null);
+type StateUpdate =
+  | { status: "snapshot"; value: { turn: { phase: string } } }
+  | { status: "missing" }
+  | { status: "unavailable"; error: string };
+const missing: StateUpdate = { status: "missing" };
+const getSessionStateUpdate = mock(async (): Promise<StateUpdate> => missing);
+const getProjection = mock(async () => {
+  throw new Error("a turn check reads session state, not a projection");
+});
 const hasActiveCheckoutWork = mock(async () => false);
 
 const nativeAgents = () =>
   ({
     hasActiveCheckoutWork,
     getProjection,
+    getSessionStateUpdate,
     sessionTurnActivitySnapshot: (environmentId: string) =>
       observed.get(environmentId) ?? "unknown",
   }) as unknown as CoordinatorCheckoutTurnSources["nativeAgents"];
@@ -46,8 +55,9 @@ beforeEach(async () => {
   }));
   commands = createCommandRegistry();
   observed = new Map();
-  getProjection.mockReset();
-  getProjection.mockImplementation(async () => null);
+  getProjection.mockClear();
+  getSessionStateUpdate.mockReset();
+  getSessionStateUpdate.mockImplementation(async () => missing);
   hasActiveCheckoutWork.mockReset();
   hasActiveCheckoutWork.mockImplementation(async () => false);
 
@@ -126,24 +136,51 @@ describe("findCoordinatorCheckoutTurn", () => {
           confirmWithProjections,
         }),
       ).rejects.toThrow("Home activity unavailable");
-      expect(getProjection).not.toHaveBeenCalled();
+      expect(getSessionStateUpdate).not.toHaveBeenCalled();
     },
   );
 
-  test("only a mutation's admission reads projections", async () => {
-    getProjection.mockImplementation(async () => ({ turn: { phase: "recovering" } }));
+  test("only a mutation's admission reads session state", async () => {
+    getSessionStateUpdate.mockImplementation(async () => ({
+      status: "snapshot",
+      value: { turn: { phase: "recovering" } },
+    }));
     expect(await read(false)).toBeNull();
-    expect(getProjection).not.toHaveBeenCalled();
+    expect(getSessionStateUpdate).not.toHaveBeenCalled();
 
     expect(await read(true)).toEqual({
       kind: "conversation",
       conversationId: mainConversationId,
     });
-    expect(getProjection).toHaveBeenCalledTimes(1);
+    expect(getSessionStateUpdate).toHaveBeenCalledTimes(1);
+    expect(getSessionStateUpdate.mock.calls[0]).toEqual([
+      expect.objectContaining({ viewVersion: 1, forceSnapshot: true }),
+    ] as never);
+    expect(getProjection).not.toHaveBeenCalled();
   });
 
-  test("a failed projection read is not a turn", async () => {
-    getProjection.mockImplementation(async () => {
+  test("an idle or missing session is not a turn", async () => {
+    expect(await read(true)).toBeNull();
+    getSessionStateUpdate.mockImplementation(async () => ({
+      status: "snapshot",
+      value: { turn: { phase: "idle" } },
+    }));
+    expect(await read(true)).toBeNull();
+  });
+
+  test("a session that cannot be read counts as busy, as its error view did", async () => {
+    getSessionStateUpdate.mockImplementation(async () => ({
+      status: "unavailable",
+      error: "bridge gone",
+    }));
+    expect(await read(true)).toEqual({
+      kind: "conversation",
+      conversationId: mainConversationId,
+    });
+  });
+
+  test("a failed state read is not a turn", async () => {
+    getSessionStateUpdate.mockImplementation(async () => {
       throw new Error("bridge gone");
     });
     expect(await read(true)).toBeNull();
@@ -157,7 +194,7 @@ describe(COORDINATOR_CHECKOUT_TURN_COMMAND, () => {
       ...context,
     } as CommandContext);
 
-  test("answers from the observer without reading a projection", async () => {
+  test("answers from the observer without reading session state", async () => {
     observed.set(mainRuntimeId, "working");
     expect(await ask({ nativeAgents: nativeAgents() as never })).toEqual({
       kind: "conversation",
@@ -165,7 +202,7 @@ describe(COORDINATOR_CHECKOUT_TURN_COMMAND, () => {
     });
     observed.set(mainRuntimeId, "idle");
     expect(await ask({ nativeAgents: nativeAgents() as never })).toBeNull();
-    expect(getProjection).not.toHaveBeenCalled();
+    expect(getSessionStateUpdate).not.toHaveBeenCalled();
   });
 
   test("answers no turn without a native agent service", async () => {

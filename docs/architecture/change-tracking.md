@@ -139,7 +139,7 @@ Backend services (one composition root, `service.ts`):
 | `DiffBodyService` | `diff-bodies.ts` | Immutable bodies, live detail resolution |
 | `ChangeHandoffSerializer` | `handoff.ts` | Agent handoff text |
 | `ChangeRestoreService` | `restore.ts` | Conditional restore |
-| `ChangeRetentionService` | `retention.ts`, `reachability-cache.ts` | Reachability GC, quotas, per-manifest object ids between passes |
+| `ChangeRetentionService` | `retention.ts`, `reachability-cache.ts`, `ledger-retirement.ts` | Reachability GC, quotas, per-manifest object ids between passes, environment purges and age-based ledger retention |
 | `ChangeTrackingPolicyRegistry` | `policy-registry.ts` | Every budget and cadence |
 | shared physical work | `shared-physical-work.ts` | Alias scan joins, refcounted watchers |
 | `GitScopeService` | `git-scopes.ts` | `uncommitted-net`, `committed-net`, `staged`, `unstaged`, `commit`, `pull-request` |
@@ -220,6 +220,15 @@ writer placed first has its fence renewed at the rename.
 Still on the event loop: `confinedRead` and two SHA-1 passes over a large file
 (about 5 to 7 ms each at 16 MiB), and the JSON work on a large manifest.
 
+Evidence bodies (`EvidenceBodyStore.put`) follow the same rules without a
+batch, because ingestion stores bodies one at a time: the temporary is synced
+before its rename and the fan-out directory (and any parent `mkdir` created)
+after it, both awaited off the event loop, before `put` resolves. Only then does
+ingestion commit the ledger row and acknowledge, which lets the bridge release
+its copy. Directory syncs are store-wide, so concurrent puts share one, and
+adopting a body whose directory sync is pending or failed waits for, or retries,
+that sync. A failed sync rejects the put, so the frame is not acknowledged.
+
 ## Manifest cache
 
 `readManifest` reads through `ObjectStore.manifests`: one LRU per store of parsed
@@ -244,7 +253,9 @@ first capture. `findManifestEntry` binary-searches on that order for diff pages
 and restore; UTF-16 string order differs for astral paths. The whitespace-ignore
 view renders each file once, with `ignoreWhitespace` passed to
 `renderSnapshotBodies`, so when a diff limit is reached the file names the limit
-of the diff it actually shows.
+of the diff it actually shows. It renders the whole page in one call, as the
+normal view does, so the page's `maxBatchBytes` bounds both views and later
+files on a large page show `changes.body.batch-limit`.
 
 ## Evidence pipeline
 
@@ -504,6 +515,87 @@ of change history needs that directory as well as `change-tracking.sqlite`.
 A ledger restored without it, or older than the app database, answers the
 bodies and measurements it lacks as expired or not retained.
 
+### Deleting an environment
+
+`deleteEnvironment` calls `ChangeTrackingService.environmentDeleted`, which never
+deletes a ledger row itself, so a delete does not hold the write lock for a large
+ledger. It tombstones the worktrees only that environment's rows name, records
+a durable `purge-env:<id>` entry and asks for a pass in 30 seconds. From then on
+the service drops the environment's late scans, evidence pulls and turn starts
+(`removed` still reaches clients); a restart reloads that list from the entries.
+
+The pass deletes the environment's bindings, frames, operations, evidence,
+chunks, gaps, turn boundaries, segments, windows, measurements, selections,
+references, restore records and its `conv:`, `fork:`, `opturn:`, `turnops:` and
+`pturn:` keys, at most 256 rows per transaction, yielding between them. It deletes
+rows and references only: the sweeps then take the snapshots, objects and evidence
+bodies nothing names any more. So content another environment still names stays,
+and a checkout another environment uses is not tombstoned. An entry stays until
+the orphan grace has passed, so a late write that was already under way when the
+environment was deleted is found by the next pass. Content can therefore outlive a
+delete by up to an hour past its own grace fence.
+
+A measurement a restore or reader still needs (an unexpired token, an `applying`
+operation, a pinned read) defers that environment's whole purge to a later pass;
+tokens last five minutes. The sweep also keeps those measurements' endpoints
+whatever released their references, so quota pressure cannot take them either.
+
+A tombstone also retires the row's identity key, so a new environment at a kept
+checkout (same path, inode and birth time) gets a fresh row instead of colliding
+with it. Source keys of evidence cursors name no environment, so a purge removes
+only the cursors of sources this process saw; the rest age out with the window.
+
+`retention-deletion.test.ts` proves these boundaries. Removing a project does not
+touch any of this directly; what happens to a removed project's own stores is
+[5820](../todo/cross-cutting/5820-removed-project-kanban-notes-plans.md).
+
+### Age-based retention
+
+`archivedBodyRetentionDays` (90) is the one window, measured from `finished_at`.
+Past it a terminal turn loses its measurements, selections, references, capture
+attempts and `turnops:` and `pturn:` keys, oldest first from a durable cursor
+(`retention:turn-cursor`), so a pass never walks a retired turn again. Its boundary
+row stays, because ordinals and the thread's history list read it. `getHistory`
+lists the turn with a null measurement, and its view answers `unavailable` with
+`changes.reason.history-expired`; an older renderer shows that reason's generic
+fallback. A restore that holds a turn ends the walk until a later pass.
+
+An operation has no time of its own, so frames set its age: they are deleted
+oldest first (row order is age order, so no index is needed), and the newest
+sequence deleted (`retention:expired-seq`) says which operations have had no frame
+inside the window. Such an operation goes with its evidence, chunks, windows,
+measurements and selections, unless its turn is still retained. Provider turn
+diffs age the same way, by their newest evidence. A transcript row whose operation
+has gone reads as an untracked call. Capture attempts, gaps, restore tokens and
+finished restore operations, cursors with nothing left to acknowledge and bindings
+with nothing left under them go once they are past the window too.
+
+A closed segment goes with its baseline pin once none of its turns is retained. An
+open segment stays whatever its age, because its thread can take another turn and
+thread-net would otherwise lose its baseline, so a very long-lived thread holds a
+baseline for as long as its environment lives. Finished boundaries are not pruned
+until a measured table size justifies a policy
+([5821](../todo/cross-cutting/5821-ledger-retention-live-evidence.md)).
+
+Evidence bodies are swept like objects: `EvidenceBodyStore.sweep` walks without the
+store lock, and the mtime read under the lock decides. Adopting a stored body
+renews its fence, and `retainBodies` fetches it again if it has gone. Reachability
+comes from `change_evidence` and `change_evidence_chunks`, a page at a time. A
+frame's `raw` slice has no row naming it, so it goes at the grace; no producer
+sends one today and nothing reads one.
+
+A pass works through at most 4,096 batches, so a first run on an old ledger takes
+several passes. Each transaction is bounded (256 rows, 32 snapshots, 16 quota
+releases, one page of diff identities) and followed by a yield. The indexes behind
+purges and the age walk (`change_turn_boundaries_environment`,
+`change_thread_segments_environment`, `change_turn_boundaries_age`) are created on
+first use without a schema version, as `store_rows_position` is
+([storage](storage.md#stores-and-layouts)), so an older build still opens the ledger.
+
+Backups must include both `orkestrator.sqlite` and
+`<dataDir>/change-tracking/` (objects and evidence bodies); metadata alone
+cannot serve historical bodies.
+
 ## Operator runbook
 
 - **Identify an owner**: `changes_get_diagnostics` lists active owners, open
@@ -666,3 +758,7 @@ Recorded so no capability is advertised beyond what is implemented:
   paths `git-filter-unsupported`.
 - Two live identities whose counts are equal share one measurement row; the
   identity id hashes the endpoint blobs, so bodies never mix.
+- A thread segment's recorded edit activity (`operation-volume`) is summed from
+  the operations still retained, so a thread older than the archive window reports
+  only its recent activity once it next publishes one. Its net result is
+  unaffected, because that comes from the pinned baseline.

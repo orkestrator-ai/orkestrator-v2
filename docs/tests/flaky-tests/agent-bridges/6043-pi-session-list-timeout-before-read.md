@@ -1,6 +1,6 @@
 # Pi session-list timeout can precede the read
 
-- **ID:** 5105
+- **ID:** 6043
 - **Status:** open
 - **Observed:** 2026-11-05
 - **Test:** `the resumable session list > a timeout is reported, not an empty history, and stops the read`

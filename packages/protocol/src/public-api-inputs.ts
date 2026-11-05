@@ -1933,6 +1933,33 @@ export const PUBLIC_ACTION_INPUTS: Readonly<Record<PublicActionName, PublicActio
       ),
       examples: [{ operationId: "op-1", tailBytes: 4096 }],
     },
+    "diagnostics.plan": {
+      capability: "host",
+      confirmation: "never",
+      input: schema({}),
+      examples: [{}],
+    },
+    "diagnostics.read": {
+      capability: "host",
+      confirmation: "never",
+      input: schema(
+        {
+          planId: {
+            type: "string",
+            minLength: 1,
+            maxLength: 64,
+            description: "planId from diagnostics.plan; refused once the plan has expired.",
+          },
+          offset: {
+            type: "integer",
+            minimum: 0,
+            description: "nextOffset from the previous piece. Default 0.",
+          },
+        },
+        ["planId"],
+      ),
+      examples: [{ planId: "00000000-0000-4000-8000-000000000000", offset: 0 }],
+    },
     "host.status": {
       capability: "host",
       confirmation: "never",

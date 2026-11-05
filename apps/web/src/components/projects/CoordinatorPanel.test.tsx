@@ -961,7 +961,7 @@ describe("CoordinatorPanel", () => {
       fireEvent.click(screen.getByRole("button", { name: "Assign claude" }));
       await waitFor(() => expect(assignAgent).toHaveBeenCalledTimes(1));
       expect(syncGit).not.toHaveBeenCalled();
-      expect(screen.queryByText(/commits? behind/)).toBeNull();
+      expect(screen.queryByText(/commits? behind/) === null).toBe(true);
       expect(mergeDialog() === null).toBe(true);
     });
 

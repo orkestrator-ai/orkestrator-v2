@@ -94,14 +94,51 @@ describe("NativeAgentDisplayTailStore", () => {
     expect(await store.get("key-1")).toEqual(value);
     expect(await store.get("key-1")).toEqual(value);
     expect(store.stats()).toMatchObject({ rowReads: 0, decodes: 0, decodedCacheHits: 2 });
-    // Callers own what they receive.
-    (await store.get("key-1"))!.messages.length = 0;
+    // Every caller shares one deep-frozen tail: a write throws rather than
+    // reaching the cache, and a hit hands it out without copying.
+    const shared = (await store.get("key-1"))!;
+    expect(Object.isFrozen(shared.messages)).toBe(true);
+    expect(Object.isFrozen(shared.messages[0])).toBe(true);
+    expect(() => {
+      shared.messages.length = 0;
+    }).toThrow(TypeError);
+    expect(await store.get("key-1")).toBe(shared);
     expect(await store.get("key-1")).toEqual(value);
+    // A tail `createNativeAgentDisplayTail` built is frozen already, so the
+    // cache holds that very object rather than a clone.
+    expect(shared).toBe(value);
     // A cold store (restart) reads and validates exactly that one row.
     const cold = storeIn(dataDir);
     expect(await cold.get("key-1")).toEqual(value);
     expect(await cold.get("key-missing")).toBeNull();
     expect(cold.stats()).toMatchObject({ rowReads: 1, decodes: 1 });
+  });
+
+  test("writes a prepared tail's own payload and freezes a copy of any other tail", async () => {
+    const dataDir = await dataDirectory();
+    const store = storeIn(dataDir);
+    const prepared = tail(1);
+    const stringify = spyOn(JSON, "stringify");
+    try {
+      expect(await store.put("key-1", prepared)).toBe(true);
+      // Measured and stored from the payload `createNativeAgentDisplayTail` made.
+      expect(stringify).not.toHaveBeenCalled();
+    } finally {
+      stringify.mockRestore();
+    }
+    expect(store.stats().bytesWritten).toBe(Buffer.byteLength(JSON.stringify(prepared)));
+    expect(await storeIn(dataDir).get("key-1")).toEqual(prepared);
+
+    // A tail built some other way stays the caller's: the cache freezes a copy.
+    const plain = structuredClone(tail(2));
+    expect(await store.put("key-2", plain)).toBe(true);
+    const served = (await store.get("key-2"))!;
+    expect(served).not.toBe(plain);
+    expect(served).toEqual(plain);
+    expect(Object.isFrozen(served.messages[0])).toBe(true);
+    expect(Object.isFrozen(plain)).toBe(false);
+    plain.messages.length = 0;
+    expect((await store.get("key-2"))!.messages).toHaveLength(1);
   });
 
   test("updates and cold-reads one key by reading one row at 1, 32, and 128 records", async () => {

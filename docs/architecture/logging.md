@@ -401,6 +401,7 @@ along. The `source` a relay adds is kept only as a known provider plus an enviro
 | `storage` | `snapshot.integrity-failed` | none | A snapshot failed its integrity check. |
 | `event-loop` | `stalled` | `lagMs`, `intervalMs` | A stall of 10 seconds or more: only at `error`, not the routine `warn`. |
 | `desktop` | `main-thread.stalled` | `lagMs`, `intervalMs` | The same, for the main process. |
+| `backend` | `previous-run` | `outcome`, `ranForMs`, `lastSeenAgoMs` | This start read how the previous run ended, from the [health summary](#health-summary-and-the-clean-exit-marker). |
 | `logging` | `essential.started` | `owner` | This process began writing the file. |
 | `logging` | `essential.stopped` | `owner` | It stopped, in an orderly exit. |
 | `logging` | `entries.dropped` | `entries`, `bytes`, `reason` | Entries were lost; see below. |
@@ -527,9 +528,106 @@ unexplained beyond its exit signal.
 ### Reading it
 
 Each line is a record `parseLogRecordLine` reads, so `jq` works on the file. **Open log
-folder** in Settings → Debug shows it, as `essential/`. Later work may read it (a
-diagnostics export) or write to it (renderer diagnostics); neither is decided, and
-renderer lines do not reach it today.
+folder** in Settings → Debug shows it, as `essential/`. The bug report prompt points
+agents at it first, and [the diagnostics bundle](#the-diagnostics-bundle) carries it.
+Later work may write to it (renderer diagnostics), which is not decided, and renderer
+lines do not reach it today.
+
+## Health summary and the clean exit marker
+
+Every in-memory metric resets when the backend restarts, so "is it leaking?", "why did
+it restart?" and "which job burns CPU?" had no answer afterwards.
+`apps/backend/src/core/health-summary.ts` keeps a rolling record in the `health-summary`
+store, one row each:
+
+| Row | When | Holds |
+| --- | --- | --- |
+| `sample` | Every 5 minutes, from one plain timer | Memory, CPU, event-loop stalls, database and backup sizes, and the 8 recurring job kinds with the most run time |
+| `started` | When the backend's background work starts | Pid and start time |
+| `clean-exit` | The last shutdown step, before the database closes, and only if the drain succeeded | Pid and start time |
+
+Rows hold numbers and job kinds only. A backend's identity is its pid and start time, so
+a row needs no string to say whose it is. The store keeps the newest 2,016 rows (seven
+days at one backend), pruned in the write's own transaction. Backends sharing a directory
+each write their own rows under that one bound, so two halve the history. The sample is
+not a recurring job, so it does not appear in the figures it reports, and health rows do
+not count as content for [the hourly snapshot](storage.md#snapshots): an idle machine does
+not take a copy because a sample landed.
+An older backend after a downgrade neither reads nor writes the store, so the rows stay
+until a later backend prunes them.
+
+The next start reads the rows and writes one `backend` `previous-run` line, which the
+[essential log](#the-essential-event-log) keeps: `outcome` is `clean` or `crashed`, at
+`info` and `warn`, with `ranForMs` and `lastSeenAgoMs`. No earlier run means no line.
+A run with no `clean-exit` reads as crashed, which is right for a kill or a power loss and
+is also what a shutdown failing late looks like. Another backend still running in the
+directory is skipped rather than reported: its pid answers and its last row is under ten
+minutes old, and the two together cover a reused pid.
+
+**What `process.memoryUsage` says under Bun 1.4.4.** Measured with 2 million objects, a
+200 MiB `Buffer` and 100 MiB in an in-memory SQLite database:
+
+| Field | Behaviour | Kept? |
+| --- | --- | --- |
+| `rss` | Follows objects, `Buffer`s and SQLite's own memory. The one a leak shows in | Yes |
+| `heapUsed`, `heapTotal` | From JavaScriptCore. `heapUsed` can exceed `heapTotal`, and it includes `Buffer` bytes after a collection | Yes, as trends |
+| `external` | Followed the `Buffer` only after a garbage collection | Yes, as a trend |
+| `arrayBuffers` | Stayed 0 with 200 MiB held in a `Buffer` | No |
+
+SQLite's memory appears only in `rss`. This was measured on Linux; macOS was not run.
+
+## The diagnostics bundle
+
+A local `.tar.gz` someone can read and then attach to a report, from **Settings → Debug →
+Export diagnostics** or `orkestrator diagnostics export`. Nothing uploads it. The code is
+`apps/backend/src/core/diagnostics-bundle.ts` (building and holding it),
+`diagnostics-redaction.ts` (the pass every file goes through) and `diagnostics-sources.ts`
+(what it holds).
+
+| File | Holds |
+| --- | --- |
+| `manifest.json` | Every file with its size, SHA-256, description and redaction count; what is absent and why; the notice below |
+| `metrics.json` | What `/__orkestrator/metrics` answers, read in-process |
+| `health-summary.json` | The rows above |
+| `database.json` | Size, free pages, backups, retention and top tables of both databases; lease waits |
+| `change-tracking.json`, `progressive-reads.json`, `artifact-metrics.json` | Those services' counters |
+| `log-policy.json` | Whether logs are saved and the levels in force: names and levels only |
+| `log-storage.json` | Log sizes and counts |
+| `logs/essential/*` | The essential log |
+| `logs/debug/*` | With **Save Logs to Disk** on: the newest 8 MiB across the daily log files, from a line start |
+
+**The manifest is what is written.** A plan builds the whole archive in the backend's
+memory and answers with the same `manifest.json` that is inside it. Reading a plan returns
+those bytes, piece by piece, and the client checks they add up before saving. A plan lasts
+15 minutes, at most two are held, and nothing reaches the backend's disk. Both steps are
+reads, on the command `plan_diagnostics_bundle`/`read_diagnostics_bundle` and the public
+actions `diagnostics.plan`/`diagnostics.read`; a workspace client is refused them.
+
+**The bundle must not carry a credential, and redaction is not a proof.** Assume a log can
+hold one: a real GitHub token has been found in validation logs. Every file goes through
+`DiagnosticsRedactor`, built on the rules in `bridge-output-redaction.ts`, which removes:
+
+- GitHub, Anthropic, OpenAI, GitLab, npm, Slack, AWS and Google keys by shape, and JWTs,
+  without the word boundary those rules otherwise use, so a prefix cannot hide one;
+- `Bearer`, `Basic` and `Token` values of any length, and `Cookie` headers;
+- values after a secret-looking key, including JSON-escaped ones. A log record is also
+  decoded and redacted field by field, so its escaping hides nothing;
+- private key blocks, URL userinfo and query credentials, and email addresses;
+- any run of 40 or more letters, digits and `_+=-` with both a letter and a digit, which
+  also removes a long hash on purpose;
+- home directories on Linux, macOS and Windows, this machine's data directory, user name
+  and host name.
+
+A file that still matches `containsCredentialShape` after that is left out and named as
+absent, never written. A line is cut only after redaction, and a tail starts at a line
+start, so no cut can halve a credential into something the rules miss. What remains can
+still include file names under a home directory, project names and anything with no
+recognisable shape, so the manifest's notice says redaction is not a proof and to read the
+files before sharing them. `diagnostics-bundle.test.ts` holds this to fixture logs with
+tokens in each format, a `Bearer` header and home paths, reading the written archive.
+
+Container server logs are not collected: each read is a `docker exec`, and they are raw
+provider lines ([6143](../todo/cross-cutting/6143-diagnostics-bundle-container-logs.md)).
 
 ## Command failures
 
@@ -726,7 +824,7 @@ Text is the default: one line per entry, in the old `[tag] message` shape.
 ```
 
 - Every entry is one line in either format. Newlines, control characters and
-  U+2028/9 in a value are escaped, because Node's readline ends a line at those.
+  U+2028/9 in a value are escaped, because Bun's readline ends a line at those (Node's does not).
 - In JSON mode the saved log file is JSON lines throughout. A console call that
   did not come from the logger is wrapped as `{"orklog":1,"ts","level","message"}`
   with no area or event, and an entry over the 64 KiB bound becomes a shortened
@@ -943,8 +1041,21 @@ own backpressure and no ordering against stdout and stderr.
 The relay carries the [essential log](#the-essential-event-log) too, and its
 `essentialOnly` entries are the one thing it does not write to the normal log.
 
-The rest of the relay work (a line length bound, skipping the relay when nothing
-consumes it) is undecided and not built.
+**Lines are bounded.** The relay reads stdout and stderr through
+`forEachBoundedLine` (`packages/protocol/src/node/bounded-line-splitter.ts`), the
+same splitter the [bridge hop](#the-bridge-hop) uses, in place of `readline`, which
+held a whole line however long it grew. A line over 64 KiB (the file writer's
+per-entry bound) is passed on in 64 KiB pieces rather than held or dropped; a record
+cut that way stays as `[Backend]` text. Lines end where Node's `readline` ended them:
+at `\n`, `\r\n` and a lone `\r`. UTF-8 is decoded across chunk boundaries.
+
+**The relay runs even when nothing reads it.** With Save Logs to Disk off in a
+packaged app, every backend line is still parsed and written to a stdout nobody
+reads. It stays that way: it costs about 1–2.5 µs of CPU a line under Node
+(measured 2026-11-05 on macOS, 100,000 relayed record and raw lines with stdout at
+`/dev/null`), so the 12.5k lines a day one machine logged cost tens of milliseconds
+a day. The policy hint and the ready message arrive on the same lines, so a skip
+would not be a one-line change either.
 
 `writeProcessOutputLine` is how raw text enters the log. Only a stdio relay may
 call it: it bypasses levels because such text has none.
@@ -982,7 +1093,11 @@ flowchart LR
   environment.
   A bridge whose output nobody reads as records (one started by hand, or a model
   catalogue probe) stays on the format its environment asks for.
-- **Redaction runs before and after decoding.** Raw output is scrubbed per chunk.
+- **Redaction runs before and after decoding.** Raw output is scrubbed per bounded
+  line. A constant-size continuation flag carries a pending credential introducer (such as `password:` or `Bearer`)
+  across line endings and blank lines. The next value is scrubbed using the
+  shared assignment rule, conservatively including values of six or seven
+  characters after an auth scheme.
   Recognized records then have every decoded string scrubbed, including formatted
   errors, stack frames and causes, because JSON escaping can hide credential syntax.
   If the raw pass breaks a record's JSON, the line is kept as plain output.
@@ -990,7 +1105,9 @@ flowchart LR
   it, overriding anything the bridge claimed, and puts it first so a record already
   at the field limit keeps it through the next relay.
 - **Each line is its own entry.** A chunk used to be one call, so only its first
-  line carried the prefix. Every line of a stack now has it.
+  line carried the prefix. Every line of a stack now has it. Lines are split by
+  the bounded splitter the Electron relay uses, so a line over 64 KiB arrives in
+  64 KiB pieces, and a token cut at that boundary is not redacted.
 - **Nothing is lost.** Unstructured output, and a record from another build naming an
   area or event this one does not list, stay captured as text. The hop never filters.
 - **Ordering.** stdout and stderr are read separately, as before, so an `info` and a

@@ -11,13 +11,17 @@ import {
   type NativeAgentMessagePatch,
 } from "@orkestrator/protocol/native-agent-transcript-patch";
 import type { NativeAgentTranscriptDelta } from "@orkestrator/protocol/native-agent";
-import { encodedValue } from "./native-agent-projection-encoding.js";
+import { encodedArrayBytes, encodedValue } from "./native-agent-projection-encoding.js";
 
 const encode = (value: unknown) => encodedValue(value).json;
 
-/** Encoded bytes of a patch list, as it will appear in the response. */
+/**
+ * Encoded bytes of a patch list, as it will appear in the response. Patches
+ * are immutable once built, so each is serialized once: here, for the size
+ * comparison below, and for the response the gateway splices.
+ */
 export function encodedPatchBytes(patches: readonly NativeAgentMessagePatch[]): number {
-  return Buffer.byteLength(JSON.stringify(patches));
+  return encodedArrayBytes(patches);
 }
 
 /**
@@ -40,7 +44,7 @@ export function patchTranscriptDelta(
     const previous = typeof id === "string" ? previousById.get(id) : undefined;
     const patch =
       previous === undefined ? undefined : buildNativeAgentMessagePatch(previous, message, encode);
-    if (patch && Buffer.byteLength(JSON.stringify(patch)) < encodedValue(message).bytes) {
+    if (patch && encodedValue(patch).bytes < encodedValue(message).bytes) {
       patches.push(patch);
     } else {
       upserts.push(message);

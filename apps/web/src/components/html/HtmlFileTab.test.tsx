@@ -82,7 +82,7 @@ describe("HtmlFileTab", () => {
     expect(frame().getAttribute("referrerpolicy")).toBe("no-referrer");
     expect(frame().getAttribute("srcdoc")).toContain("<h1>Original</h1>");
     expect(frame().getAttribute("srcdoc")).toContain("Content-Security-Policy");
-    expect(screen.queryByRole("textbox")).toBeNull();
+    expect(screen.queryByRole("textbox") === null).toBe(true);
   });
 
   test("Raw shows the source, and raw edits reach the store and the rendered page", async () => {
@@ -91,7 +91,7 @@ describe("HtmlFileTab", () => {
     selectMode("Raw");
     const editor = await screen.findByRole("textbox", { name: "Monaco html" });
     expect((editor as HTMLTextAreaElement).value).toBe(HTML);
-    expect(screen.queryByTitle("Rendered view of docs/report.html")).toBeNull();
+    expect(screen.queryByTitle("Rendered view of docs/report.html") === null).toBe(true);
 
     fireEvent.change(editor, { target: { value: "<h1>Edited</h1>" } });
     expect(useFileDirtyStore.getState().getContent(TAB_ID)).toBe("<h1>Edited</h1>");
@@ -148,7 +148,7 @@ describe("HtmlFileTab", () => {
 
     selectMode("Raw");
     await screen.findByRole("textbox", { name: "Monaco html" });
-    expect(screen.queryByText(notice)).toBeNull();
+    expect(screen.queryByText(notice) === null).toBe(true);
   });
 
   test("the panel divider can be dragged across the iframe", async () => {
@@ -162,6 +162,6 @@ describe("HtmlFileTab", () => {
   test("shows no notice for a self-contained page", () => {
     render(renderTab());
 
-    expect(screen.queryByText(/does not run scripts/)).toBeNull();
+    expect(screen.queryByText(/does not run scripts/) === null).toBe(true);
   });
 });

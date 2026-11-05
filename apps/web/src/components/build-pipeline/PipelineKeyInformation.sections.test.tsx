@@ -99,9 +99,9 @@ describe("Key information panel section list", () => {
       const statement = within(scroller).getByRole("region", { name: title });
       expect(within(scroller).getAllByRole("region")[0]).toBe(statement);
       expect(within(statement).getByText(legacy.statement!)).toBeTruthy();
-      expect(within(scroller).queryByRole("region", { name: "Summary" })).toBeNull();
+      expect(within(scroller).queryByRole("region", { name: "Summary" }) === null).toBe(true);
       expect(within(nav).getAllByRole("button")[0]!.textContent).toBe(title);
-      expect(within(nav).queryByRole("button", { name: "Summary" })).toBeNull();
+      expect(within(nav).queryByRole("button", { name: "Summary" }) === null).toBe(true);
       expect(current(nav)).toBe(title);
     },
   );
@@ -119,7 +119,7 @@ describe("Key information panel section list", () => {
     expect(regions).toHaveLength(1);
     expect(regions[0]).toBe(within(scroller).getByRole("region", { name: "Summary" }));
     expect(within(regions[0]!).getByText(summary)).toBeTruthy();
-    expect(screen.queryByText(/Nothing has been recorded yet/)).toBeNull();
+    expect(screen.queryByText(/Nothing has been recorded yet/) === null).toBe(true);
     expect(
       within(nav)
         .getAllByRole("button")

@@ -654,7 +654,7 @@ Done on 2026-11-05 (ST-21, batch E-0580), re-checked first against `main` at `54
 Done on 2026-11-04 (ST-5, ST-6), re-checked first against `main` at `a8bdce444`, on which #1734's `capture.ts` and `object-store.ts` had moved the report's lines. Both findings still applied.
 
 - ST-5: `readManifest` reads through a per-store LRU of deep-frozen parsed manifests (`manifest-cache.ts`; 32 entries, 128 MiB estimated), `findManifestEntry` binary-searches on path bytes for diff pages and restore, and `renderSnapshotBodies` takes `ignoreWhitespace`, so that view renders once. Tests: `manifest-cache.test.ts`, `diff-bodies-lookup.test.ts`.
-- ST-6: `ObjectStore.batch()` stages each object as a temporary file, deflating inputs from 16 KiB through the thread pool, and a flush fsyncs the temporaries off the loop, renames them, then fsyncs the directories with unsynced names. Tests: `object-store-write-path.test.ts`. [change-tracking.md](../../architecture/change-tracking.md) "Object writes and durability" and "Manifest cache".
+- ST-6: `ObjectStore.batch()` stages each object as a temporary file, deflating inputs from 16 KiB through the thread pool, and a flush fsyncs the temporaries off the loop, renames them, then fsyncs the directories with unsynced names. Tests: `object-store-write-path.test.ts`. The evidence body store's per-body `fsyncSync` followed on 2026-11-05 (to-do 4761, deleted): `EvidenceBodyStore.put` awaits a file sync before the rename and a directory sync before it resolves (`evidence-body-store.test.ts`). [change-tracking.md](../../architecture/change-tracking.md) "Object writes and durability" and "Manifest cache".
 
 Done on 2026-11-05 (ST-20), re-checked first against `main` at `69a3b4ca5`; all three tasks of report part 0550 still applied. `ObjectStore.sweep` walks without the store lock and re-`lstat`s and removes candidates under it, 64 per hold; the store keeps its byte count across sweeps and retention reads it through `currentBytes()`; retention reads each manifest once per pass and keeps the object ids each manifest names between passes in `ReachabilityCache` (4,096 manifests, 32 MiB). The parsed-manifest cache had served 8 of 400 manifests per pass on the new `--only=retention` fixture. Tests: `retention-store-walks.test.ts`. [change-tracking.md](../../architecture/change-tracking.md) "Retention and backup" and "Benchmarks". Live sizing: [5361](5361-retention-pass-on-a-large-real-store.md).
 
@@ -874,7 +874,7 @@ A micro-benchmark over 10,000 small files two directories deep (5 rounds, median
   - **Copy on every read.**
     - Pros: no freezing.
     - Cons: costs about what the cache saves.
-- **Should the whitespace view share the page's batch budget once it renders once (ST-5)?** Not done: [4760](4760-whitespace-view-skips-batch-budget.md).
+- **Should the whitespace view share the page's batch budget once it renders once (ST-5)?** Kept per file here; shared on 2026-11-05 by to-do 4760 (deleted): the view renders the page in one `renderSnapshotBodies` call, so later files on a large page show `changes.body.batch-limit` (`diff-bodies-lookup.test.ts`).
   - **Keep one budget per file for now (recommended).**
     - Pros: a client sees the same bodies as before, apart from a limit now being named by the diff shown.
     - Cons: the view stays unbounded across a page.

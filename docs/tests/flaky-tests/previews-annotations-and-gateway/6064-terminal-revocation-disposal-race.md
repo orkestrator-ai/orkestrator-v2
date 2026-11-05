@@ -1,6 +1,6 @@
 # Terminal revocation assertions race server socket disposal
 
-- **ID:** 5702
+- **ID:** 6064
 - **Status:** resolved
 - **Date observed:** 2026-11-05
 - **Tests:** `gateway terminal WebSocket > refuses queued input and resize after real browser session revocation` and `gateway terminal WebSocket > refuses queued input and resize after real client grant expiry`

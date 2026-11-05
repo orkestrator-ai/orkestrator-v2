@@ -2,13 +2,12 @@ import { existsSync, promises as fs } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { spawn } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
 import type { CommandContext } from "./commands.js";
 import { ORKESTRATOR_AGENT_MCP_SERVER_NAME, type AgentToolConnection } from "./agent-tools.js";
 import type { Environment } from "./models.js";
 import type { JsonRecord } from "./storage.js";
-import { runCommand } from "./shell.js";
+import { CommandFailedError, runCommand, runCommandBuffer } from "./shell.js";
 import { TranscriptTaskTracker } from "./claude-transcript-tasks.js";
 import type { TaskListSnapshot } from "@orkestrator/protocol/task-list";
 import {
@@ -402,6 +401,12 @@ export function countNewlines(buffer: Buffer): number {
   return count;
 }
 
+/**
+ * Above `runCommand`'s default because the first container read of a transcript
+ * tail starts at offset 0, and a long session's transcript can pass that default.
+ */
+const TMUX_EXEC_MAX_OUTPUT_BYTES = 1024 * 1024 * 1024;
+
 /** Like {@link ExecOutput}, but with stdout still in bytes. */
 export type RawExecOutput = {
   status: number;
@@ -412,7 +417,13 @@ export type RawExecOutput = {
 export async function execWithOutput(
   command: string,
   args: string[],
-  options: { cwd?: string; env?: NodeJS.ProcessEnv; stdin?: string; timeoutMs?: number } = {},
+  options: {
+    cwd?: string;
+    env?: NodeJS.ProcessEnv;
+    stdin?: string;
+    timeoutMs?: number;
+    waitForDescendants?: boolean;
+  } = {},
 ): Promise<ExecOutput> {
   const raw = await execWithRawOutput(command, args, options);
   return { status: raw.status, stdout: raw.stdout.toString(), stderr: raw.stderr };
@@ -428,46 +439,43 @@ export async function execWithOutput(
 export async function execWithRawOutput(
   command: string,
   args: string[],
-  options: { cwd?: string; env?: NodeJS.ProcessEnv; stdin?: string; timeoutMs?: number } = {},
+  options: {
+    cwd?: string;
+    env?: NodeJS.ProcessEnv;
+    stdin?: string;
+    timeoutMs?: number;
+    maxOutputBytes?: number;
+    waitForDescendants?: boolean;
+  } = {},
 ): Promise<RawExecOutput> {
-  return await new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
+  try {
+    const { stdout, stderr } = await runCommandBuffer(command, args, {
       cwd: options.cwd,
       env: options.env,
-      stdio: ["pipe", "pipe", "pipe"],
+      stdin: options.stdin,
+      // Arbitrary launchers can leave helpers writing after their leader exits.
+      // Bound group waiting by default rather than returning incomplete success.
+      timeoutMs: options.timeoutMs ?? 60_000,
+      waitForDescendants: options.waitForDescendants ?? true,
+      maxOutputBytes: options.maxOutputBytes ?? TMUX_EXEC_MAX_OUTPUT_BYTES,
     });
-    const stdout: Buffer[] = [];
-    const stderr: Buffer[] = [];
-    let timedOut = false;
-
-    const timeout = options.timeoutMs
-      ? setTimeout(() => {
-          timedOut = true;
-          child.kill("SIGKILL");
-        }, options.timeoutMs)
-      : undefined;
-
-    child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
-    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
-    child.once("error", (error) => {
-      if (timeout) clearTimeout(timeout);
-      reject(error);
-    });
-    child.once("close", (code) => {
-      if (timeout) clearTimeout(timeout);
-      const stderrText = Buffer.concat(stderr).toString();
-      resolve({
-        status: timedOut ? -1 : (code ?? -1),
-        stdout: Buffer.concat(stdout),
-        stderr: timedOut ? `${stderrText}\nCommand timed out`.trim() : stderrText,
-      });
-    });
-
-    if (options.stdin !== undefined) {
-      child.stdin.write(options.stdin);
+    return { status: 0, stdout, stderr: stderr.toString() };
+  } catch (error) {
+    // Only a command that ran has a status. A status over truncated output would
+    // let a reader that ignores it, such as the transcript tail, skip bytes.
+    if (
+      !(error instanceof CommandFailedError) ||
+      error.executableMissing ||
+      error.outputLimitExceeded
+    ) {
+      throw error;
     }
-    child.stdin.end();
-  });
+    return {
+      status: error.timedOut ? -1 : (error.exitCode ?? -1),
+      stdout: error.stdoutBytes,
+      stderr: error.timedOut ? `${error.stderr}\nCommand timed out`.trim() : error.stderr,
+    };
+  }
 }
 
 /** Everything one poll tick needs from the filesystem, gathered in one round trip. */
@@ -931,7 +939,6 @@ export {
   createHash,
   randomBytes,
   randomUUID,
-  spawn,
   delay,
   ORKESTRATOR_AGENT_MCP_SERVER_NAME,
   runCommand,

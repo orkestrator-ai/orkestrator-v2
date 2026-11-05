@@ -16,8 +16,20 @@ import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { ViewRevisionStamp } from "@orkestrator/protocol/view-sync";
 import { invoke } from "@/lib/native/backend";
 
+/**
+ * `keepConversationErrors`: this panel offers Retry for a conversation that
+ * failed to start, so opening it must not clear the failure. An older backend
+ * ignores the argument.
+ */
 export const ensureProjectCoordinator = (projectId: string): Promise<CoordinatorSnapshot> =>
-  invoke("ensure_project_coordinator", { projectId });
+  invoke("ensure_project_coordinator", { projectId, keepConversationErrors: true });
+
+/** Clears a conversation's startup failure so its pane can connect again. */
+export const retryCoordinatorConversation = (
+  projectId: string,
+  conversationId: string,
+): Promise<CoordinatorSnapshot> =>
+  invoke("retry_coordinator_conversation", { projectId, conversationId });
 
 export const getProjectCoordinator = (projectId: string): Promise<CoordinatorSnapshot | null> =>
   invoke("get_project_coordinator", { projectId });

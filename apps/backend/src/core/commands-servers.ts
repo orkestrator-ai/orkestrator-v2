@@ -1410,11 +1410,14 @@ async function startLocalServerAttempt(
                 ...workspace,
                 conversations: workspace.conversations.map((conversation) =>
                   conversation.id === coordinatorConversationId
-                    ? { ...conversation, bridgePort: port, bridgePid: child.pid }
+                    ? {
+                        ...conversation,
+                        bridgePort: port,
+                        bridgePid: child.pid,
+                        startupError: undefined,
+                      }
                     : conversation,
                 ),
-                lifecycleState: "ready",
-                lastStartupError: undefined,
                 updatedAt: new Date().toISOString(),
               }
             : workspace,
@@ -1442,6 +1445,12 @@ async function startLocalServerAttempt(
       if (selectedConversation) {
         context.controlMcp?.revokeCoordinatorCredentials(coordinatorId, selectedConversation.id);
       }
+      // A start that shutdown cut short says nothing about the conversation, and
+      // the record would refuse it after the next launch. Only this conversation
+      // is marked: the workspace, and every other conversation, stay as they are.
+      const startupError = localServers.isShuttingDown()
+        ? undefined
+        : sanitizeCoordinatorError(error);
       await context.storage.coordinators
         .mutateCoordinatorWorkspace(environment.projectId, (workspace) =>
           workspace && workspace.id === coordinatorId
@@ -1449,11 +1458,9 @@ async function startLocalServerAttempt(
                 ...workspace,
                 conversations: workspace.conversations.map((conversation) =>
                   conversation.id === coordinatorConversationId
-                    ? { ...conversation, bridgePort: undefined, bridgePid: undefined }
+                    ? { ...conversation, bridgePort: undefined, bridgePid: undefined, startupError }
                     : conversation,
                 ),
-                lifecycleState: "error",
-                lastStartupError: sanitizeCoordinatorError(error),
                 updatedAt: new Date().toISOString(),
               }
             : workspace,

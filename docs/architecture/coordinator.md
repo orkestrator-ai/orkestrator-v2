@@ -49,9 +49,57 @@ never shows it. Records with the older `coordinator-<id>:<conversation>` key
 migrate when read.
 
 One workspace is persisted per project: conversations, selected tab, immutable
-`coordinator-read-only` execution policy, repository-context revision, lifecycle
-state, and sanitized last startup error. Workflow associations are stored
-separately so their lifetime is independent of an open chat tab.
+`coordinator-read-only` execution policy, repository-context revision and
+lifecycle state. Each conversation holds its own sanitized startup error.
+Workflow associations are stored separately so their lifetime is independent of
+an open chat tab.
+
+### When a conversation fails to start
+
+Each conversation has its own bridge, so a failed start belongs to that
+conversation. `startLocalServerUnlocked` writes `startupError` on it and leaves
+the workspace alone. A start that backend shutdown cut short records nothing.
+
+While `startupError` is set (`coordinatorConversationRunnable` answers false),
+that conversation has no runtime: `resolveCoordinatorRuntime` answers
+`startup-failed`, Control MCP refuses its credential with 409, its mail waits
+(`environment_unready`), it cannot send mail, and the registry and mailbox
+directory list it as stopped. Every other conversation carries on, because
+none of those checks look past the conversation they were asked about.
+
+**When the main fails**, the same rule applies. Its credential and mail are
+refused, so mail from workers, side agents and status wakes waits in its
+mailbox. Side agents keep running, but no new delegation starts, because only
+the main delegates. Retry delivers the waiting mail once its bridge is up.
+Closing the failed main works as any close does: the next mail starts a new
+main with the default agent, and open delegations move to it.
+
+**No failure is workspace-wide any more.** A new backend never writes
+`lifecycleState: "error"`. The value stays readable for a record an older
+backend stored, which `ensure` recovers when the panel opens, and for a client
+connected to such a backend, which keeps its toolbar banner
+([version-compatibility.md](version-compatibility.md#register)). A missing
+checkout or a disabled Control MCP is reported as itself, not as a failed start.
+
+The pane shows the failure above its transcript, naming the conversation, with
+**Retry**, **Close conversation** and **Copy error**. Retry
+(`retry_coordinator_conversation`) only clears the error: the pane then
+connects, and connecting is what starts the bridge. A second failure records
+itself again. Opening the panel does not clear the error, so a reload cannot
+hide it.
+
+### Reading while paused or after a failed start
+
+A paused coordinator, or a conversation that failed to start, can be read but
+not run. `sendingHeldReason` on the tab holds sending and tells
+`useNativeAgentSession` not to establish a session: it never calls adopt or
+ensure, both of which resolve a provider, and that is what starts a bridge. It
+still reads, and the backend answers those reads from saved data without
+resolving a provider (`heldCoordinatorConversation`): the transcript from the
+display tail or a cached view, the session state from the session record
+(`idle`, nothing parked), and discovery as `missing`. Enter in the composer
+says why nothing was sent and keeps the draft. Resume or Retry connects the
+same pane without a remount.
 
 ### Workflow record limit and cleanup
 
@@ -706,7 +754,7 @@ capability profile is rated by exactly the same rules as a coordinator.
 | `provider-configured` | The SDK is told to deny, and exposes no way to verify it | OpenCode, Cursor; Claude where the command sandbox cannot run commands (Windows; Linux without `bwrap` or `socat`, or whose policy refuses the nested namespace, such as Ubuntu's AppArmor `bwrap-userns-restrict`) |
 | `advisory` | The agent is asked to request permission first; a tool that does not ask is not stopped | Grok |
 
-**Settings → Agent platforms → Coordinator safety level** chooses the weakest
+**Settings → Coordinator → Coordinator safety level** chooses the weakest
 tier this installation will offer. It defaults to `provider-configured`:
 `enforced` and `provider-configured` platforms are offered, and `advisory`
 stays opt-in.
@@ -793,7 +841,7 @@ the network off. So a `network` denial (`nativeAgentPolicyDeniesNetwork`)
 covers hosted tools as well as commands, and each bridge removes them in its
 provider's own terms.
 
-**Settings → Agent platforms → Coordinator web research** reopens one part of
+**Settings → Coordinator → Coordinator web research** reopens one part of
 that on purpose. Commands stay off the network and hosted page fetches stay
 off in every mode, because a URL the agent opens can carry data out to
 whoever owns the page:

@@ -45,7 +45,7 @@ This index only changes when a branch merges, so it can't show what is running n
 | E9 | [Transcript reads](0110-e9-transcript-reads.md) | `0150`, `0200`, `0110` | Transcript, 1 of 4 | E1 (Baseline run) | None |
 | E10 | [Conditional reads and deltas](0160-e10-conditional-reads-and-deltas.md) | `0160`, `0180`, `0190` | Transcript, 2 of 4 | E1 (Baseline run) | None |
 | E11 | [Projection hashing](0210-e11-projection-hashing.md) | `0210`, `0220`, `0320`, `0330`, `0340`, `0345`, `0350`, `0380` | Transcript, 3 of 4 | None | None |
-| E12 | [Renderer store](0510-e12-renderer-store.md) | `0510`, `0590`, `0640` | Transcript, 4 of 4 | None | C6 (Errors and dead ends) |
+| E12 | [Renderer store](0510-e12-renderer-store.md) | `0510`, `0590`, `0640` | Transcript, 4 of 4 | None | None |
 | E26 | [Local desktop transport](0400-e26-local-desktop-transport.md) | `0400`, `0860` | Desktop, 1 of 1 | E1 (Baseline run) | None |
 | E24 | [Gateway static and preview](0310-e24-gateway-static-and-preview.md) | `0310`, `0365` | Gateway, 1 of 2 | None | None |
 | E15 | [Health and diagnostics](0750-e15-health-and-diagnostics.md) | `0750`, `0820`, `0810`, `0880`, `0780` | Logging and diagnostics, 1 of 2 | None | None |

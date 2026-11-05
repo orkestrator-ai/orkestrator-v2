@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { coordinatorConversationRunnable } from "@orkestrator/protocol/coordinator";
 import type { CoordinatorSurfaceAction } from "@orkestrator/protocol/coordinator-surfaces";
 import type { CommandContext } from "./commands-context.js";
 
@@ -50,8 +51,12 @@ export async function requireCoordinatorConversation(
   if (
     !workspace ||
     workspace.projectId !== projectId ||
-    workspace.lifecycleState !== "ready" ||
-    !workspace.conversations.some((item) => item.id === conversationId && !item.closedAt)
+    !workspace.conversations.some(
+      (item) =>
+        item.id === conversationId &&
+        !item.closedAt &&
+        coordinatorConversationRunnable(workspace, item),
+    )
   )
     throw new Error("Coordinator identity is unavailable");
 }

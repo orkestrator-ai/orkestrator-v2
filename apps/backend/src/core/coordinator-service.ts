@@ -15,6 +15,7 @@ import {
   type CoordinatorWorkspace,
 } from "@orkestrator/protocol/coordinator";
 import { resolveDefaultAgent } from "@orkestrator/protocol/agent-settings";
+import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import {
   firstEnabledAgentPlatform,
   normalizeAgentPlatforms,
@@ -545,25 +546,39 @@ export class CoordinatorService {
     });
   }
 
-  async ensure(projectId: string): Promise<CoordinatorSnapshot> {
+  /**
+   * `clearConversationErrors` serves a renderer that predates per-conversation
+   * failures: its panel has no Retry for one, and opening the panel is the only
+   * recovery it knows (version-compatibility.md).
+   */
+  async ensure(
+    projectId: string,
+    options: { clearConversationErrors?: boolean } = {},
+  ): Promise<CoordinatorSnapshot> {
     return this.serialize(projectId, async () => {
       const projectPath = await this.canonicalProjectPath(projectId);
       const before = await this.storage.coordinators.getCoordinatorWorkspace(projectId);
-      // A workspace only reaches `error` through a real startup failure now
-      // that an unqualified default no longer produces one: a fresh
-      // conversation has no provider until the user picks one. Retry therefore
-      // means "try that same conversation again", and never silently rewrites
-      // which platform a conversation belongs to.
+      // A workspace only reaches `error` as a record an older backend stored:
+      // startup failures now mark the conversation that failed. Recovering it
+      // never rewrites which platform a conversation belongs to.
       const canRecoverError = before?.lifecycleState === "error";
+      const clearErrors =
+        options.clearConversationErrors === true &&
+        before?.conversations.some((item) => item.startupError) === true;
+      if (clearErrors)
+        compatibilityPathUsage.record("coordinator-ensure.conversation-errors-cleared");
       const workspace = await this.storage.coordinators.mutateCoordinatorWorkspace(
         projectId,
         (current) => {
           if (current) {
-            if (!canRecoverError || current.id !== before?.id) return current;
+            if ((!canRecoverError && !clearErrors) || current.id !== before?.id) return current;
             return {
               ...current,
-              lifecycleState: "ready",
+              ...(canRecoverError ? { lifecycleState: "ready" as const } : {}),
               lastStartupError: undefined,
+              conversations: clearErrors
+                ? current.conversations.map((item) => ({ ...item, startupError: undefined }))
+                : current.conversations,
               updatedAt: new Date().toISOString(),
             };
           }
@@ -884,17 +899,27 @@ export class CoordinatorService {
     return this.snapshot(workspace, projectPath);
   }
 
-  async recordStartupError(projectId: string, error: unknown): Promise<void> {
-    await this.storage.coordinators.mutateCoordinatorWorkspace(projectId, (current) =>
-      current
-        ? {
-            ...current,
-            lifecycleState: "error",
-            lastStartupError: sanitizeCoordinatorError(error),
-            updatedAt: new Date().toISOString(),
-          }
-        : null,
-    );
+  /**
+   * Retry after this conversation's bridge failed to start: clear its error so
+   * the pane connects again, which is what starts the bridge. It starts nothing
+   * itself, and a paused coordinator stays paused.
+   */
+  async retryConversation(projectId: string, conversationId: string): Promise<CoordinatorSnapshot> {
+    const projectPath = await this.canonicalProjectPath(projectId);
+    const workspace = await this.mutateSerialized(projectId, (current) => {
+      if (!current) throw new Error("Coordinator workspace was not found");
+      const target = current.conversations.find((item) => item.id === conversationId);
+      if (!target || target.closedAt) throw new Error("Coordinator conversation was not found");
+      return {
+        ...current,
+        conversations: current.conversations.map((item) =>
+          item.id === conversationId ? { ...item, startupError: undefined } : item,
+        ),
+        updatedAt: new Date().toISOString(),
+      };
+    });
+    if (!workspace) throw new Error("Coordinator workspace was not found");
+    return this.snapshot(workspace, projectPath);
   }
 
   async removeProject(projectId: string): Promise<void> {

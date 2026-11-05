@@ -30,6 +30,7 @@ import {
 } from "@orkestrator/protocol/pipeline-worker-mail";
 import { paneLayoutLeaves } from "./storage-shared.js";
 import {
+  coordinatorConversationRunnable,
   coordinatorMainConversation,
   coordinatorRuntimeId,
   type CoordinatorWorkflowAssociation,
@@ -580,7 +581,9 @@ export class AgentMailboxDirectory {
           projectName: project.name,
           environmentId,
           environmentName: "Coordinator",
-          environmentStatus: workspace.lifecycleState === "ready" ? "running" : "stopped",
+          environmentStatus: coordinatorConversationRunnable(workspace, conversation)
+            ? "running"
+            : "stopped",
           tabId: conversation.tabId,
           tabType: "agent-native",
           title: conversation.title,

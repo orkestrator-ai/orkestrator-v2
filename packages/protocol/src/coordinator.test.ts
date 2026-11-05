@@ -5,6 +5,7 @@ import {
   COORDINATOR_CONTEXT_CLOSE_TAG,
   COORDINATOR_CONTEXT_OPEN_TAG,
   coordinatorConversationIdFromRuntimeId,
+  coordinatorConversationRunnable,
   coordinatorConversationSessionKey,
   coordinatorIdFromRuntimeId,
   COORDINATOR_DELEGATION_SUMMARY_MAX,
@@ -285,4 +286,15 @@ test("coordinator sandbox launch authority fails closed unless explicitly unavai
   expect(
     coordinatorCommandSandboxFromEnv({ [COORDINATOR_COMMAND_SANDBOX_ENV]: "unavailable" }),
   ).toBe("unavailable");
+});
+
+describe("coordinatorConversationRunnable", () => {
+  test("needs a ready workspace and no startup error of its own", () => {
+    expect(coordinatorConversationRunnable({ lifecycleState: "ready" }, {})).toBe(true);
+    expect(
+      coordinatorConversationRunnable({ lifecycleState: "ready" }, { startupError: "failed" }),
+    ).toBe(false);
+    expect(coordinatorConversationRunnable({ lifecycleState: "paused" }, {})).toBe(false);
+    expect(coordinatorConversationRunnable({ lifecycleState: "error" }, {})).toBe(false);
+  });
 });

@@ -2,7 +2,12 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { containerDeleteFileCommand, deleteLocalFile } from "./commands-files.js";
+import {
+  containerDeleteFileCommand,
+  containerRevertFileCommand,
+  deleteLocalFile,
+  revertLocalFile,
+} from "./commands-files.js";
 import { runCommand } from "./shell.js";
 
 const roots: string[] = [];
@@ -54,8 +59,8 @@ async function stagedDeletions(root: string): Promise<string> {
 }
 
 /** Runs the container delete script against a host directory standing in for /workspace. */
-function runContainerDelete(root: string, target: string) {
-  const script = containerDeleteFileCommand(target).replaceAll("/workspace", root);
+function runContainerScript(root: string, command: string) {
+  const script = command.replaceAll("/workspace", root);
   const result = Bun.spawnSync(["bash", "-c", script], {
     env: {
       ...process.env,
@@ -99,17 +104,17 @@ describe("deleting a folder from a local worktree", () => {
     expect(existsSync(path.join(root, "docs", "nested", "deep.md"))).toBe(true);
   });
 
-  test("reports a folder that keeps a nested Git repository instead of claiming success", async () => {
+  test("refuses a nested repository before removing any folder contents", async () => {
     const root = await createRepositoryWithFolder();
     await addNestedRepository(root, "docs/vendor");
 
     await expect(deleteLocalFile(root, "docs")).rejects.toThrow(
-      "docs was not fully deleted: it contains a nested Git repository",
+      "Cannot delete docs: nested Git repository at docs/vendor",
     );
 
     // The nested repository and its history are left alone.
     expect(existsSync(path.join(root, "docs", "vendor", ".git"))).toBe(true);
-    expect(existsSync(path.join(root, "docs", "tracked.md"))).toBe(false);
+    await expectFolderIntact(root);
   });
 
   test("refuses the workspace root and Git metadata", async () => {
@@ -125,23 +130,137 @@ describe("deleting a folder from a container workspace", () => {
   test("the delete script removes the whole folder and stages tracked deletions", async () => {
     const root = await createRepositoryWithFolder();
 
-    expect(runContainerDelete(root, "docs")).toMatchObject({ exitCode: 0 });
+    expect(runContainerScript(root, containerDeleteFileCommand("docs"))).toMatchObject({
+      exitCode: 0,
+    });
 
     expect(existsSync(path.join(root, "docs"))).toBe(false);
     expect(existsSync(path.join(root, "keep.txt"))).toBe(true);
     expect(await stagedDeletions(root)).toBe("D\tdocs/nested/deep.md\nD\tdocs/tracked.md");
   });
 
-  test("the delete script fails when a nested Git repository survives", async () => {
+  test("the delete script refuses a nested repository before mutation", async () => {
     const root = await createRepositoryWithFolder();
     await addNestedRepository(root, "docs/vendor");
 
-    const result = runContainerDelete(root, "docs");
+    const result = runContainerScript(root, containerDeleteFileCommand("docs"));
 
     expect(result.exitCode).not.toBe(0);
-    expect(result.stderr).toContain(
-      "docs was not fully deleted: it contains a nested Git repository",
-    );
+    expect(result.stderr).toContain("Cannot delete docs: nested Git repository at docs/vendor");
     expect(existsSync(path.join(root, "docs", "vendor", ".git"))).toBe(true);
+    await expectFolderIntact(root);
   });
 });
+
+async function expectFolderIntact(root: string): Promise<void> {
+  for (const file of [
+    "docs/tracked.md",
+    "docs/nested/deep.md",
+    "docs/untracked.md",
+    "docs/nested/ignored.log",
+  ]) {
+    expect(existsSync(path.join(root, file))).toBe(true);
+  }
+  expect(await stagedDeletions(root)).toBe("");
+}
+
+for (const mode of ["local", "container"] as const) {
+  describe(`${mode} removal safety and shared revert behavior`, () => {
+    const remove = async (root: string, target: string) => {
+      if (mode === "local") return deleteLocalFile(root, target);
+      const result = runContainerScript(root, containerDeleteFileCommand(target));
+      if (result.exitCode !== 0) throw new Error(result.stderr);
+    };
+    const revert = async (root: string, target: string) => {
+      if (mode === "local")
+        return revertLocalFile(root, target, "main", { ensureFetched: async () => {} });
+      const result = runContainerScript(root, containerRevertFileCommand(target, "main"));
+      if (result.exitCode !== 0) throw new Error(result.stderr);
+    };
+
+    for (const target of ["scratch*", "scratch[ab]", ":(exclude)keep"]) {
+      test(`deletes the literal folder ${target} and preserves every sibling`, async () => {
+        const root = await createRepositoryWithFolder();
+        const folders = [target, "scratch-backup", "scratcha", "other"];
+        for (const folder of folders) {
+          await fs.mkdir(path.join(root, folder));
+          await fs.writeFile(path.join(root, folder, "tracked.txt"), "tracked");
+        }
+        await git(root, "add", ".");
+        await git(root, "commit", "-m", "literal paths");
+        for (const folder of folders) {
+          await fs.writeFile(path.join(root, folder, "untracked.txt"), "untracked");
+          await fs.writeFile(path.join(root, folder, "ignored.log"), "ignored");
+        }
+        await remove(root, target);
+        expect(existsSync(path.join(root, target))).toBe(false);
+        for (const folder of folders.slice(1)) {
+          for (const file of ["tracked.txt", "untracked.txt", "ignored.log"]) {
+            expect(await fs.readFile(path.join(root, folder, file), "utf8")).toBe(
+              file.split(".")[0]!,
+            );
+          }
+        }
+        expect((await git(root, "diff", "--cached", "--name-only", "-z")).stdout).toBe(
+          `${target}/tracked.txt\0`,
+        );
+      });
+    }
+
+    for (const kind of ["worktree", "bare"] as const) {
+      test(`preflights a ${kind} repository before removing tracked, untracked or ignored data`, async () => {
+        const root = await createRepositoryWithFolder();
+        if (kind === "bare") {
+          await git(root, "init", "--bare", "docs/vendor");
+        } else {
+          await git(root, "worktree", "add", "--detach", "docs/vendor", "HEAD");
+        }
+        await expect(remove(root, "docs")).rejects.toThrow("nested Git repository at docs/vendor");
+        await expectFolderIntact(root);
+      });
+    }
+
+    test("does not follow a symlink into a sibling repository", async () => {
+      const root = await createRepositoryWithFolder();
+      await addNestedRepository(root, "sibling");
+      await fs.symlink("../sibling", path.join(root, "docs", "link"));
+      await remove(root, "docs");
+      expect(existsSync(path.join(root, "docs"))).toBe(false);
+      expect(existsSync(path.join(root, "sibling", "inner.txt"))).toBe(true);
+    });
+
+    test("revert removes a newly added folder missing from the base", async () => {
+      const root = await createRepositoryWithFolder();
+      await fs.mkdir(path.join(root, "added"));
+      await fs.writeFile(path.join(root, "added", "tracked.txt"), "added");
+      await git(root, "add", "added");
+      await fs.writeFile(path.join(root, "added", "untracked.txt"), "untracked");
+      await fs.writeFile(path.join(root, "added", "ignored.log"), "ignored");
+      await revert(root, "added");
+      expect(existsSync(path.join(root, "added"))).toBe(false);
+      expect(await stagedDeletions(root)).toBe("");
+      expect(existsSync(path.join(root, "docs", "tracked.md"))).toBe(true);
+    });
+
+    test("revert restores a tracked file from the base", async () => {
+      const root = await createRepositoryWithFolder();
+      await fs.writeFile(path.join(root, "docs", "tracked.md"), "modified");
+      await git(root, "add", "docs/tracked.md");
+      await revert(root, "docs/tracked.md");
+      expect(await fs.readFile(path.join(root, "docs", "tracked.md"), "utf8")).toBe("tracked\n");
+      expect(await stagedDeletions(root)).toBe("");
+    });
+
+    test("revert refuses a newly added folder containing a nested repository without mutation", async () => {
+      const root = await createRepositoryWithFolder();
+      await addNestedRepository(root, "added/vendor");
+      await fs.writeFile(path.join(root, "added", "tracked.txt"), "added");
+      await git(root, "add", "added/tracked.txt");
+      await fs.writeFile(path.join(root, "added", "ignored.log"), "ignored");
+      await expect(revert(root, "added")).rejects.toThrow("nested Git repository at added/vendor");
+      expect(await fs.readFile(path.join(root, "added", "tracked.txt"), "utf8")).toBe("added");
+      expect(existsSync(path.join(root, "added", "ignored.log"))).toBe(true);
+      expect(await stagedDeletions(root)).toBe("A\tadded/tracked.txt");
+    });
+  });
+}

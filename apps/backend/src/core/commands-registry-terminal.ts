@@ -1008,15 +1008,15 @@ export function registerTerminalCommands(
   register("delete_local_file", async ({ environmentId, filePath }, context) => {
     const id = asString(environmentId, "environmentId");
     return withLocalFileMutation(context, id, async (environment) => {
-      const result = await deleteLocalFile(
-        environment.worktreePath!,
-        asString(filePath, "filePath"),
-      );
-      context.runtime.diffStats.service.invalidateChanges({
-        worktreePath: environment.worktreePath!,
-      });
-      context.runtime.diffStats.service.refresh(id);
-      return result;
+      try {
+        return await deleteLocalFile(environment.worktreePath!, asString(filePath, "filePath"));
+      } finally {
+        // A failed recursive removal can still have changed files or the index.
+        context.runtime.diffStats.service.invalidateChanges({
+          worktreePath: environment.worktreePath!,
+        });
+        context.runtime.diffStats.service.refresh(id);
+      }
     });
   });
   register(
@@ -1372,10 +1372,13 @@ export function registerTerminalCommands(
     );
     const id = environment.containerId!;
     const target = validateWorkspaceMutationPath(asString(filePath, "filePath"));
-    await dockerExec(id, containerDeleteFileCommand(target));
-    context.runtime.diffStats.service.invalidateChanges({ containerId: id });
-    context.runtime.diffStats.service.refresh(environmentIdString);
-    return target;
+    try {
+      await dockerExec(id, containerDeleteFileCommand(target));
+      return target;
+    } finally {
+      context.runtime.diffStats.service.invalidateChanges({ containerId: id });
+      context.runtime.diffStats.service.refresh(environmentIdString);
+    }
   });
   register(
     "move_container_file",

@@ -884,13 +884,19 @@ export function useFilesPanel() {
           }
         }
 
-        if (completedPaths.length > 0) {
-          if (options.target === "folder") {
+        if (completedPaths.length > 0 || options.target === "folder") {
+          if (
+            options.target === "folder" &&
+            activeSnapshotKeyRef.current === environmentSnapshotKey &&
+            useFilesPanelStore.getState().fileSubtreeKey === environmentSnapshotKey
+          ) {
             // Forget the deleted branch's expanded subtrees so a stale read of
             // it cannot be merged back into the refreshed tree.
             const { setFolderExpanded } = useFilesPanelStore.getState();
             for (const path of completedPaths) setFolderExpanded(path, false);
           }
+          // A rejected recursive operation may already have changed the tree
+          // or index (for example an I/O failure after git rm).
           await refreshAllFilesData();
         }
 
@@ -929,6 +935,7 @@ export function useFilesPanel() {
       worktreePath,
       containerId,
       refreshAllFilesData,
+      environmentSnapshotKey,
     ],
   );
 

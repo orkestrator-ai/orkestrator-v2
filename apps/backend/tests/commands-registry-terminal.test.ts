@@ -928,6 +928,62 @@ describe("Electron backend command registry", () => {
     expect(await gitOutput(worktree, ["status", "--porcelain"])).toBe("");
   });
 
+  test("invalidates local snapshots even when recursive deletion rejects", async () => {
+    // Preflight rejects before Git runs; this registry test needs only a workspace.
+    const worktree = await createTempDir("ork-delete-invalidation-");
+    await fs.mkdir(path.join(worktree, "docs/vendor/.git"), { recursive: true });
+    const environment = createEnvironment({ worktreePath: worktree });
+    const { context } = createContext(environment);
+    const invalidate = spyOn(
+      context.runtime.diffStats.service,
+      "invalidateChanges",
+    ).mockImplementation(() => {});
+    const refresh = spyOn(context.runtime.diffStats.service, "refresh").mockImplementation(
+      () => {},
+    );
+    await expect(
+      createCommandRegistry().get("delete_local_file")?.(
+        { environmentId: environment.id, filePath: "docs" },
+        context,
+      ),
+    ).rejects.toThrow("nested Git repository at docs/vendor");
+    expect(invalidate).toHaveBeenCalledWith({ worktreePath: worktree });
+    expect(refresh).toHaveBeenCalledWith(environment.id);
+  });
+
+  test("invalidates container snapshots even when a recursive operation fails", async () => {
+    const environment = createEnvironment({
+      id: "env-delete-failure",
+      environmentType: "containerized",
+      containerId: "container-1",
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const invalidate = spyOn(
+      context.runtime.diffStats.service,
+      "invalidateChanges",
+    ).mockImplementation(() => {});
+    const refresh = spyOn(context.runtime.diffStats.service, "refresh").mockImplementation(
+      () => {},
+    );
+    await withFakeDocker(
+      `#!/bin/sh
+printf 'removal failed after git rm' >&2
+exit 1
+`,
+      async () => {
+        await expect(
+          createCommandRegistry().get("delete_container_file")?.(
+            { environmentId: environment.id, filePath: "docs" },
+            context,
+          ),
+        ).rejects.toThrow("removal failed after git rm");
+      },
+    );
+    expect(invalidate).toHaveBeenCalledWith({ containerId: "container-1" });
+    expect(refresh).toHaveBeenCalledWith(environment.id);
+  });
+
   test("deletes local files and stages tracked deletions for the next commit", async () => {
     const { worktree } = await createGitWorktreeWithOrigin();
     await fs.writeFile(path.join(worktree, "untracked.txt"), "untracked\n");
@@ -1881,8 +1937,10 @@ exit 0
         expect(dockerExec).toContain(
           'git restore --source="$base" --staged --worktree -- "$candidate"',
         );
-        expect(dockerExec).toContain('git rm -r -f --ignore-unmatch -- "$candidate"');
-        expect(dockerExec).toContain('git clean -f -d -x -- "$candidate"');
+        expect(dockerExec).toContain(
+          'git --literal-pathspecs rm -r -f --ignore-unmatch -- "$candidate"',
+        );
+        expect(dockerExec).toContain('git --literal-pathspecs clean -f -d -x -- "$candidate"');
         expect(dockerExec).toContain("Symlink ancestor is not allowed");
         expect(dockerExec).toContain("renameat2");
         expect(dockerExec).toContain("bun -e");

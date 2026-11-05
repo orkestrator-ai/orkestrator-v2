@@ -1,3 +1,4 @@
+import { coordinatorLaunchOverrides } from "@orkestrator/protocol/coordinator-launch-overrides";
 import { describe, expect, test } from "bun:test";
 import type { CoordinatorWorkflowAssociation } from "@orkestrator/protocol/coordinator";
 
@@ -235,6 +236,28 @@ describe("selectCoordinatorWorkflowsToClear", () => {
     );
   });
 
+  test("keeps the newest source-stating launch by request time, including default launches", () => {
+    const row = (id: string, requestedAt: string, source?: "requested" | "default") =>
+      finished(id, {
+        kind: "environment",
+        resourceId: "live",
+        delegation: {
+          workerTabId: "job-tab",
+          requestedAt,
+          state: "completed",
+          wokenAt: OLD,
+          ...(source ? { request: { source } } : {}),
+        },
+      });
+    const rows = [
+      row("latest-launch", "2026-10-03T00:00:00.000Z", "default"),
+      row("older-launch", OLD, "requested"),
+      row("follow-up", "2026-10-04T00:00:00.000Z"),
+    ];
+    expect(select(rows, { environments: ["live"] })).toEqual(new Set(["older-launch"]));
+    expect(select(rows)).toEqual(new Set(rows.map((row) => row.id)));
+  });
+
   test("keeps anything created inside the replay window", () => {
     const workflows = [
       finished("recent", { createdAt: minutesAgo(60), terminalNotifiedAt: minutesAgo(30) }),
@@ -352,6 +375,44 @@ describe("coordinator workflow store cleanup", () => {
         ids.has(`history-${String(COORDINATOR_WORKFLOW_CLEANUP_BATCH).padStart(4, "0")}`),
       ).toBe(true);
       expect(ids.has("new")).toBe(true);
+    });
+  });
+
+  test("a job launch override survives capacity cleanup after a newer follow-up", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      const project = await storage.addProject(createProject("https://example.invalid/repo.git"));
+      const environment = await storage.addEnvironment(createEnvironment(project.id));
+      const launch = finished("job-launch", {
+        kind: "environment",
+        resourceId: environment.id,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        delegation: {
+          workerTabId: "job-tab",
+          requestedAt: "2026-01-01T00:00:00.000Z",
+          state: "completed",
+          wokenAt: OLD,
+          request: { source: "requested", model: "opus" },
+        },
+      });
+      const followUp = {
+        ...launch,
+        id: "follow-up",
+        requestId: "follow-up",
+        delegation: { ...launch.delegation!, requestedAt: OLD, request: undefined },
+      };
+      seedWorkflows(dataDir, [
+        launch,
+        followUp,
+        ...history(MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS - 2),
+      ]);
+      await storage.coordinators.saveCoordinatorWorkflowAssociation(fresh("new"));
+      const after = storedWorkflows(dataDir);
+      expect(after.some((row) => row.id === "job-launch")).toBe(true);
+      expect(after.some((row) => row.id === "follow-up")).toBe(true);
+      expect(after.some((row) => row.id === "history-0000")).toBe(false);
+      expect(coordinatorLaunchOverrides(after)).toEqual([
+        { environmentId: environment.id, tabId: "job-tab", model: "opus" },
+      ]);
     });
   });
 

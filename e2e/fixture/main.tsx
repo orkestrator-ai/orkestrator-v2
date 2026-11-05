@@ -180,6 +180,9 @@ const CoordinatorExplanationsFixture = lazy(async () => ({
 const CoordinatorActivityFixture = lazy(async () => ({
   default: (await import("./CoordinatorActivityFixture")).CoordinatorActivityFixture,
 }));
+const TabLaunchOverrideFixture = lazy(async () => ({
+  default: (await import("./TabLaunchOverrideFixture")).TabLaunchOverrideFixture,
+}));
 
 const PipelineWorkerMailFixture = lazy(async () => ({
   default: (await import("./PipelineWorkerMailFixture")).PipelineWorkerMailFixture,
@@ -1893,6 +1896,13 @@ function fixtureForPath() {
     return (
       <Suspense fallback={null}>
         <CoordinatorActivityFixture />
+      </Suspense>
+    );
+  }
+  if (window.location.pathname === "/tab-launch-override") {
+    return (
+      <Suspense fallback={null}>
+        <TabLaunchOverrideFixture />
       </Suspense>
     );
   }

@@ -237,6 +237,80 @@ describe("the sweep's global work", () => {
     }
   });
 
+  test("delivers owed wakes across workspaces and measures their extra repair syncs", async () => {
+    const world = await create();
+    const owners = [await own(world), await addProject(world, "owed-second")];
+    const workers = [];
+    for (const owner of owners) {
+      for (let index = 0; index < 2; index++) {
+        const worker = await addWorker(world, owner, `owed-${index}`);
+        await report(world, owner, worker, `Report ${index}`);
+        await world.storage.coordinators.closeCoordinatorDelegation(
+          worker.associationId,
+          "completed",
+        );
+        workers.push(worker);
+      }
+    }
+    await world.mail.shutdown();
+    const sync = countCalls(world.storage, "synchronizeAgentMailboxes");
+    try {
+      await world.coordinator.reconcileWorkerDelegations();
+      // The global repair is once; each wake still performs its own lifecycle
+      // repair, tracked separately in follow-up 6660 task 2.
+      expect(sync).toHaveBeenCalledTimes(1 + workers.length);
+    } finally {
+      sync.mockRestore();
+    }
+    for (const worker of workers) {
+      expect((await delegationOf(world, worker.associationId)).wokenAt).toBeString();
+    }
+    for (const owner of owners) {
+      const messages = await inbox(world, owner.main);
+      expect(messages).toHaveLength(2);
+      expect(messages.every((message) => message.placement !== "inject-held")).toBe(true);
+    }
+  });
+
+  test("remote re-check sees a follow-up committed during mail collection", async () => {
+    const world = await create();
+    const owner = await own(world);
+    const id = "remote-revision";
+    await world.storage.coordinators.saveCoordinatorWorkflowAssociation({
+      id,
+      projectId: owner.projectId,
+      coordinatorId: owner.coordinatorId,
+      conversationId: owner.main.conversationId!,
+      kind: "environment",
+      resourceId: "leaf-env",
+      nodeId: "leaf",
+      requestId: id,
+      createdAt: new Date().toISOString(),
+      delegation: {
+        requestedAt: new Date(0).toISOString(),
+        workerTabId: "worker",
+        state: "running",
+      },
+    });
+    world.coordinator.setRemoteAccess({
+      workerState: async () => ({ environment: "running", tab: "idle" }),
+      collectMail: async () => {
+        await world.storage.coordinators.updateCoordinatorWorkflowAssociation(id, (current) => {
+          current.delegation!.requestedAt = new Date(Date.now() + 60_000).toISOString();
+          return true;
+        });
+        return true;
+      },
+      lastAssistantExcerpt: async () => undefined,
+      workflow: async () => "unavailable",
+      environmentPr: async () => ({}),
+      nodeName: async () => "Leaf",
+    });
+    await world.coordinator.reconcileWorkerDelegations();
+    expect((await delegationOf(world, id)).state).toBe("running");
+    expect(await inbox(world, owner.main)).toHaveLength(0);
+  });
+
   test("re-checks a delegation against a fresh read once the store has changed", async () => {
     const world = await create();
     const owner = await own(world);
@@ -310,6 +384,8 @@ describe("a coordinator read", () => {
   test("repairs nothing and writes nothing; the sweep still does the repair", async () => {
     const world = await create();
     const { owner, worker } = await pendingRepair(world);
+    // Isolate reads from the independent mail delivery service.
+    await world.mail.shutdown();
     const commands = createCommandRegistry();
     const context = { storage: world.storage, coordinators: world.coordinator } as CommandContext;
     const announced: string[] = [];
@@ -344,6 +420,16 @@ describe("a coordinator read", () => {
     expect(adopted.conversationId).toBe(owner.main.conversationId);
   });
 
+  test("a new unassigned side has a mailbox before any read or assignment", async () => {
+    const world = await create();
+    const snapshot = await world.coordinator.createConversation(world.projectId);
+    const side = snapshot.workspace.conversations.find(
+      (item) => item.role === "side" && !item.closedAt,
+    )!;
+    expect(side.agent).toBeUndefined();
+    expect(await inbox(world, actor(snapshot.workspace.id, side))).toEqual([]);
+  });
+
   test("closing a side conversation still moves its open work to the main at once", async () => {
     const world = await create();
     const owner = await own(world);
@@ -371,6 +457,33 @@ describe("a main opened after the last one closed", () => {
     const moved = await inbox(world, actor(snapshot.workspace.id, main));
     expect(moved.map((message) => message.body)).toEqual(["The report."]);
     expect(moved[0]!.placement).toBe("inject-held");
+  });
+
+  test("a failed replacement-main repair cannot turn a held report into a silent-worker notice", async () => {
+    const world = await create();
+    const owner = await own(world);
+    const worker = await addWorker(world, owner, "worker");
+    await report(world, owner, worker, "Recovered report.");
+    await world.closeMain();
+    const sync = spyOn(world.storage, "synchronizeAgentMailboxes").mockRejectedValueOnce(
+      new Error("temporary mailbox failure"),
+    );
+    let snapshot;
+    try {
+      snapshot = await world.coordinator.createConversation(world.projectId);
+    } finally {
+      sync.mockRestore();
+    }
+    await world.coordinator.settleWorkerDelegations({
+      environmentId: worker.environmentId,
+      tabId: worker.tabId,
+      state: "completed",
+    });
+    const main = coordinatorMainConversation(snapshot.workspace)!;
+    const messages = await inbox(world, actor(snapshot.workspace.id, main));
+    expect(messages.map((message) => message.body)).toEqual(["Recovered report."]);
+    expect(messages[0]!.placement).not.toBe("inject-held");
+    expect((await delegationOf(world, worker.associationId)).wakeKind).toBe("report");
   });
 
   test("from a wake takes over the held report", async () => {

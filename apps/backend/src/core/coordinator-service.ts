@@ -781,6 +781,10 @@ export class CoordinatorService {
           error: formatLogError(error, { stack: false }),
         });
       });
+    } else {
+      // Side conversations need a mailbox immediately too; snapshots no longer
+      // perform this synchronization as a side effect.
+      await this.storage.synchronizeAgentMailboxes();
     }
     return this.snapshot(created.workspace, created.projectPath);
   }
@@ -1226,8 +1230,8 @@ export class CoordinatorService {
   /**
    * The wake a delegation closing now owes, read as the wake pass would read
    * it: a report when the worker's report is held in the open main's inbox,
-   * otherwise a notice. Undefined with no main open, which leaves the choice
-   * to the wake pass once a main has taken the delegation and its mail over.
+   * otherwise a notice if no closed main may still own mail. Undefined leaves
+   * the choice to the wake pass after the main takes over the mail.
    *
    * Runs under the coordinator store lock, so the main cannot close between
    * this read and the close it is written with. A report the worker sends
@@ -1249,7 +1253,13 @@ export class CoordinatorService {
       association.resourceId,
       delegation.workerTabId,
     );
-    return held ? "report" : "notice";
+    // A negative lookup is inconclusive while an earlier main may still own
+    // mail (for example after a failed replacement-main repair). Delivery
+    // reconciles that mail before durably selecting a notice.
+    if (held) return "report";
+    return owner.conversations.some((item) => item.role === "main" && item.closedAt)
+      ? undefined
+      : "notice";
   }
 
   /** Announce, once, a close whose wake did not announce it. */
@@ -1421,6 +1431,9 @@ export class CoordinatorService {
         if (this.remoteAskedAt.get(association.id) !== requestGeneration) return;
         const current = await currentOpen(association.id);
         if (!current) return;
+        // Remote observations belong to the request read before collection.
+        // A persisted follow-up invalidates them even without a local token.
+        if (current.delegation?.requestedAt !== delegation.requestedAt) return;
         const decision = await this.decide(current, gathered, {
           asked,
           backgroundWorkPending: state.backgroundWorkPending === true,

@@ -35,6 +35,16 @@ if [ ! -d /etc/orkestrator/trusted-network ]; then
     chmod 0700 "$trusted"
     mv -T "$trusted" /etc/orkestrator/trusted-network
 fi
+# Name checks (SNI, Host, DNS; orkestrator-egress-filter) are recorded once,
+# like the policy: a gateway keeps the shape it was created with. The backend
+# switches them off for new gateways with ORKESTRATOR_EGRESS_FILTER=off.
+if [ ! -e /etc/orkestrator/egress-filter ]; then
+    case "${ORKESTRATOR_EGRESS_FILTER:-on}" in
+        off) egress_filter=off ;;
+        *) egress_filter=on ;;
+    esac
+    (umask 022 && printf '%s\n' "$egress_filter" > /etc/orkestrator/egress-filter)
+fi
 if ! /usr/local/bin/init-firewall.sh; then
     # init-firewall.sh closes the namespace and reports `failed` itself; a
     # script that is missing or died before its trap did neither.

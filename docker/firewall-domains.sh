@@ -66,6 +66,92 @@ ork_dig() {
     done < <(awk '$1 == "nameserver" { print $2 }' "$ORK_RESOLV_CONF")
     return 1
 }
+# Name checks (orkestrator-egress-filter): an egress gateway on network
+# policy 3 also checks the name a connection asks for (TLS SNI, HTTP Host)
+# and answers DNS only for allowlisted names. The gateway records whether
+# they run once, at its first boot (`egress-filter`, `on` unless the backend
+# created it with ORKESTRATOR_EGRESS_FILTER=off), so a restart keeps the shape
+# the gateway was created with. The daemon's sockets carry ORK_FILTER_MARK,
+# which the workload cannot set: only marked packets pass the marked ACCEPT
+# rules and escape the redirects.
+ORK_FILTER_BIN=/usr/local/bin/orkestrator-egress-filter
+ORK_FILTER_RECORD="$ORK_POLICY_DIR/egress-filter"
+ORK_FILTER_MARK=0x6f726b
+# Ports the daemon listens on in the shared namespace; a workload cannot
+# listen on them itself. Inbound connections from outside reach them only if
+# the environment publishes them, and the daemon refuses any connection that
+# was not redirected.
+ORK_FILTER_PROXY_PORT=31443
+ORK_FILTER_DNS_PORT=31453
+ORK_FILTER_NAMES="$ORK_STATUS_DIR/egress-names"
+ORK_FILTER_READY="$ORK_STATUS_DIR/egress-filter.ready"
+ORK_FILTER_PID="$ORK_STATUS_DIR/egress-filter.pid"
+
+# The name checks' state for this namespace: `enforced` when they run, `off`
+# for a gateway created with them switched off, `unavailable` for anything
+# else (an in-container firewall, or a policy before 3).
+ork_filter_state() {
+    local record=""
+    if [ ! -d "$ORK_POLICY_DIR/trusted-network" ] || [ ! -f "$ORK_FILTER_RECORD" ] \
+        || [ "$(ork_recorded_policy)" != 3 ]; then
+        echo unavailable
+        return
+    fi
+    IFS= read -r record < "$ORK_FILTER_RECORD" || true
+    if [ "$record" = off ]; then echo off; else echo enforced; fi
+}
+
+# Writes the names the daemon allows, one `name protocol:port` per line, for
+# a comma-separated policy 3 domain list; the daemon rereads it within a
+# second. Runs in a subshell, so the caller's domain globals are untouched.
+ork_write_filter_names() {
+    local csv="$1" tmp="$ORK_FILTER_NAMES.tmp.$$"
+    mkdir -p "$ORK_STATUS_DIR" || return 1
+    (
+        ork_split_domains "$csv"
+        ork_group_entries
+        for domain in "${ORK_DOMAIN_LIST[@]}"; do
+            [ "${#domain}" -le 253 ] && [[ "$domain" =~ $ORK_DOMAIN ]] || continue
+            while IFS= read -r spec; do
+                if [ -n "$spec" ]; then printf '%s %s\n' "$domain" "$spec"; fi
+            done <<< "${ORK_DOMAIN_PORTS[$domain]}"
+        done
+        true
+    ) > "$tmp" || { rm -f "$tmp"; return 1; }
+    chmod 0644 "$tmp" && mv -f "$tmp" "$ORK_FILTER_NAMES"
+}
+
+# Whether the daemon's supervisor recorded at start is still that process.
+ork_filter_running() {
+    local pid=""
+    IFS= read -r pid < "$ORK_FILTER_PID" 2>/dev/null || return 1
+    [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+    tr '\0' ' ' 2>/dev/null < "/proc/$pid/cmdline" | grep -q -- "$ORK_FILTER_BIN"
+}
+
+# Starts the daemon under its own supervisor, detached from the caller's
+# locks, and waits until its worker listens. The redirects send traffic to
+# it only once they are installed, so a daemon that never starts leaves the
+# namespace closed rather than open.
+ork_start_filter() {
+    rm -f "$ORK_FILTER_READY"
+    # Started from a subshell, so it is not a job of the caller: the caller's
+    # `wait` (ork_resolve_all) must never wait for the daemon.
+    (
+        setsid env -i PATH="$PATH" /usr/bin/perl -- "$ORK_FILTER_BIN" --supervise \
+            --names "$ORK_FILTER_NAMES" --resolv "$ORK_RESOLV_CONF" --mark "$ORK_FILTER_MARK" \
+            --proxy-port "$ORK_FILTER_PROXY_PORT" --dns-port "$ORK_FILTER_DNS_PORT" \
+            --ready "$ORK_FILTER_READY" </dev/null >/dev/null 2>&1 8>&- 9>&- &
+        printf '%s\n' "$!" > "$ORK_FILTER_PID"
+    )
+    local attempt
+    for attempt in $(seq 1 100); do
+        [ -s "$ORK_FILTER_READY" ] && return 0
+        sleep 0.1
+    done
+    return 1
+}
+
 ork_host_addresses() {
     if [ -d "$ORK_POLICY_DIR/trusted-network" ]; then
         cat "$ORK_POLICY_DIR/trusted-network/host-addresses"

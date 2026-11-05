@@ -44,8 +44,18 @@ import { commandChangeJournalPath, workingDirectory } from "./config.js";
 import { catalogReadFailed, refreshModels } from "./models.js";
 import { dispatchPrompt } from "./prompt.js";
 import { setModelRuntimeFactoryForTests } from "./runtime.js";
+import { RESUME_FELL_BACK_NOTICE } from "./translate.js";
 import { clientSessionKeys, sessionCreations, sessions, type SessionState } from "./state.js";
 import { settlePersistenceForTests } from "./persistence.js";
+
+/** The status rows a resume fallback left in the rendered transcript. */
+function resumeFallbackRows(state: SessionState) {
+  return state.messages.filter((message) =>
+    message.parts.some(
+      (part) => part.type === "status" && part.content === RESUME_FELL_BACK_NOTICE,
+    ),
+  );
+}
 
 let sessionDirectory: string;
 let previousSessionDirectory: string | undefined;
@@ -832,6 +842,14 @@ describe("Pi SDK lifecycle", () => {
       ]);
       expect(JSON.stringify(records)).not.toContain("SENTINEL-SESSION-FILE");
       expect(JSON.stringify(records)).not.toContain("cannot open");
+      // The user is told too, in fixed words that carry none of Pi's error.
+      const [notice] = resumeFallbackRows(state);
+      expect(notice).toMatchObject({
+        role: "assistant",
+        parts: [{ type: "status", severity: "warning" }],
+      });
+      expect(JSON.stringify(state.messages)).not.toContain("cannot open");
+      expect(state.currentAssistantMessageId).toBeUndefined();
     } finally {
       open.mockRestore();
       logs.restore();
@@ -847,6 +865,7 @@ describe("Pi SDK lifecycle", () => {
     try {
       expect(sessionManagerFor(state).getSessionFile()).toBe(sessionFile);
       expect(logs.records()).toEqual([]);
+      expect(state.messages).toEqual([]);
     } finally {
       logs.restore();
     }
@@ -880,6 +899,10 @@ describe("Pi SDK lifecycle", () => {
       ]);
       expect(JSON.stringify(logs.records())).not.toContain(sessionDirectory);
       expect(JSON.stringify(logs.records())).not.toContain("SENTINEL");
+      // Below the conversation the model no longer has, as its own row.
+      expect(state.messages.map((message) => message.id)[0]).toBe("prior-message");
+      expect(resumeFallbackRows(state)).toHaveLength(1);
+      expect(state.messages.at(-1)).toBe(resumeFallbackRows(state)[0]);
     } finally {
       logs.restore();
     }
@@ -904,6 +927,7 @@ describe("Pi SDK lifecycle", () => {
     try {
       expect(sessionManagerFor(state).getSessionId()).toBe("reopens");
       expect(logs.records()).toEqual([]);
+      expect(resumeFallbackRows(state)).toEqual([]);
     } finally {
       logs.restore();
     }

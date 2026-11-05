@@ -77,7 +77,7 @@ afterEach(async () => {
 });
 
 describe("the change-tracking ledger's snapshots (report 0760)", () => {
-  test("a daily copy of change-tracking.sqlite, sound, private and only when the ledger changed", async () => {
+  test("a daily copy of change-tracking.sqlite, sound, private at each daily interval", async () => {
     const directory = await dataDir();
     const main = opened(openBackendDatabase(directory));
     const ledger = opened(openChangeLedgerDatabase(directory));
@@ -101,7 +101,7 @@ describe("the change-tracking ledger's snapshots (report 0760)", () => {
     }
     expect(listStorageSnapshots(directory).map((entry) => entry.kind)).toEqual(["ledger"]);
 
-    // Within the day: nothing. A day on but unchanged: nothing.
+    // Within the day: nothing. Each elapsed day creates a recovery point.
     const options = { copy: copyInProcess };
     setMarker(ledger, "SECOND-LEDGER-STATE");
     expect(
@@ -116,7 +116,31 @@ describe("the change-tracking ledger's snapshots (report 0760)", () => {
     expect(second).not.toBeNull();
     expect(
       await takeLedgerSnapshotIfDue(main, directory, () => T0 + 2 * LEDGER_INTERVAL_MS, options),
-    ).toBeNull();
+    ).not.toBeNull();
+  });
+
+  test("binding-only edits are captured by the next daily copy", async () => {
+    const directory = await dataDir();
+    const main = opened(openBackendDatabase(directory));
+    const ledger = opened(openChangeLedgerDatabase(directory));
+    const options = { copy: copyInProcess };
+    await takeLedgerSnapshotIfDue(main, directory, () => T0, options);
+    ledger.db.exec(
+      "INSERT INTO change_bindings VALUES ('b', 'source', 'env', 'codex', 'thread', NULL, 'now')",
+    );
+    const file = await takeLedgerSnapshotIfDue(
+      main,
+      directory,
+      () => T0 + LEDGER_INTERVAL_MS,
+      options,
+    );
+    expect(file).not.toBeNull();
+    const copy = new Database(file!, { readonly: true });
+    try {
+      expect(copy.query("SELECT id FROM change_bindings").all()).toEqual([{ id: "b" }]);
+    } finally {
+      copy.close();
+    }
   });
 
   test("no ledger file, no ledger copy", async () => {
@@ -264,7 +288,8 @@ describe("database upkeep (reports 0760 and 0910)", () => {
         throw Object.assign(new Error("PRIVATE"), { code: "SQLITE_IOERR" });
       });
       await runDatabaseUpkeep(main);
-      expect(logs.records().some((row) => row.event === "optimize.failed")).toBe(true);
+      expect(logs.records().some((row) => row.event === "upkeep.vacuum-failed")).toBe(true);
+      expect(logs.records().some((row) => row.event === "optimize.failed")).toBe(false);
       expect(JSON.stringify(logs.records())).not.toContain("PRIVATE");
     } finally {
       release.mockRestore();

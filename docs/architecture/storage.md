@@ -503,8 +503,8 @@ and its own, daily, best-effort copies (below):
   ages out.
 - `change-tracking-daily-<stamp>.sqlite` copies `change-tracking.sqlite`, by
   the same check, after the hourly one and under the same lease: when the
-  newest is a day old and the ledger changed since it (its schema version,
-  ingestion sequence and AUTOINCREMENT counters). Same child-process copy and
+  newest is a day old. Each due interval creates a recovery point, including
+  ownership and binding-only edits; no ingestion fingerprint gates it. Same child-process copy and
   `quick_check`; its own backoff file, `backups/.ledger-backoff.json`. The
   newest two are kept. They are best effort: they give way first to the 16 GiB
   budget, and a copy that would not fit beside every other snapshot is skipped

@@ -163,7 +163,7 @@ export class ChangeRetentionService {
     while (true) {
       const left = ledger.releaseFreePages(RELEASE_PAGES_PER_STEP);
       // Stop once nothing is left or a step makes no progress (a busy writer).
-      if (left === 0 || left >= previous) break;
+      if (left <= 0 || left >= previous) break;
       previous = left;
       await yieldToEventLoop();
     }

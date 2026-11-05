@@ -1,3 +1,8 @@
+import {
+  snapshotQualificationLedger,
+  classifyQualificationChanges,
+  LEDGER_MOVE_CHANGES,
+} from "../../../../../scripts/qualification-ledger.js";
 import { afterEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { existsSync, promises as fs } from "node:fs";
@@ -227,4 +232,34 @@ describe("the change ledger's own file (report 0760)", () => {
     raw.close();
     expect(() => openChangeLedgerDatabase(directory)).toThrow(StorageDatabaseVersionError);
   });
+});
+
+test("qualification accepts the actual schema-6 to schema-7 move and rejects ledger loss", async () => {
+  const directory = await dataDir();
+  const old = openBeforeMove(directory);
+  seedLedger(old.db, 3);
+  const before = snapshotQualificationLedger(old.path, true);
+  old.close();
+  const main = openBackendDatabase(directory);
+  open.push(main);
+  const file = path.join(directory, CHANGE_LEDGER_DATABASE_FILE);
+  const differences = () => {
+    const after = snapshotQualificationLedger(file);
+    return classifyQualificationChanges(
+      [...new Set([...Object.keys(before), ...Object.keys(after)])]
+        .filter((key) => before[key] !== after[key])
+        .map((key) => `${!(key in before) ? "+" : !(key in after) ? "-" : "~"} ${key}`),
+      LEDGER_MOVE_CHANGES,
+    );
+  };
+  expect(differences().unexplained).toEqual([]);
+  const ledger = new Database(file);
+  try {
+    ledger.exec("UPDATE change_bindings SET conversation_id='altered'");
+    expect(differences().unexplained.length).toBeGreaterThan(0);
+    ledger.exec("UPDATE change_bindings SET conversation_id='c1'; DELETE FROM change_outbox");
+    expect(differences().unexplained.length).toBeGreaterThan(0);
+  } finally {
+    ledger.close();
+  }
 });

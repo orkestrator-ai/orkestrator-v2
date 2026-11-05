@@ -3,7 +3,11 @@ import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { snapshotQualificationLedger } from "../../scripts/qualification-ledger.js";
+import {
+  snapshotQualificationLedger,
+  classifyQualificationChanges,
+  LEDGER_MOVE_CHANGES,
+} from "../../scripts/qualification-ledger.js";
 
 test("qualification detects changed, deleted or missing ledger rows, schema, version and counters", () => {
   const dir = mkdtempSync(path.join(tmpdir(), "qualification-ledger-"));
@@ -35,6 +39,50 @@ test("qualification detects changed, deleted or missing ledger rows, schema, ver
     expect(snapshotQualificationLedger(path.join(dir, "missing.sqlite"))).not.toEqual(before);
   } finally {
     db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("schema-6 embedded rows survive schema-7 move, but missing or altered rows fail classification", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "qualification-move-"));
+  const oldFile = path.join(dir, "old.sqlite");
+  const newFile = path.join(dir, "new.sqlite");
+  const old = new Database(oldFile);
+  const moved = new Database(newFile);
+  try {
+    const sql =
+      "CREATE TABLE change_entries (id INTEGER PRIMARY KEY AUTOINCREMENT, value TEXT); INSERT INTO change_entries(value) VALUES ('kept'), ('deleted'); DELETE FROM change_entries WHERE id=2";
+    old.exec(sql + "; PRAGMA user_version=6");
+    moved.exec(sql + "; PRAGMA user_version=1");
+    const before = snapshotQualificationLedger(oldFile, true);
+    const classify = () => {
+      const after = snapshotQualificationLedger(newFile);
+      const changes = [...new Set([...Object.keys(before), ...Object.keys(after)])]
+        .filter((key) => before[key] !== after[key])
+        .map((key) => `${!(key in before) ? "+" : !(key in after) ? "-" : "~"} ${key}`);
+      return classifyQualificationChanges(changes, LEDGER_MOVE_CHANGES);
+    };
+    expect(classify().unexplained).toEqual([]);
+    expect(classify().explained).toHaveLength(2);
+    for (const edit of [
+      "UPDATE change_entries SET value='changed'",
+      "DELETE FROM change_entries",
+      "UPDATE sqlite_sequence SET seq=1",
+    ]) {
+      moved.exec("BEGIN");
+      moved.exec(edit);
+      moved.exec("COMMIT");
+      expect(classify().unexplained.length).toBeGreaterThan(0);
+      moved.exec(
+        "DELETE FROM change_entries; INSERT INTO change_entries VALUES (1, 'kept'); UPDATE sqlite_sequence SET seq=2",
+      );
+    }
+    moved.close();
+    rmSync(newFile);
+    expect(classify().unexplained.length).toBeGreaterThan(0);
+  } finally {
+    old.close();
+    moved.close();
     rmSync(dir, { recursive: true, force: true });
   }
 });

@@ -58,6 +58,7 @@ export const STORAGE_LOG_AREAS = defineLogAreas({
         "Deleted-content page reclamation failed; the checkpoint is attempted independently.",
       "scrub.checkpoint-failed":
         "Deleted content could not be scrubbed from the WAL yet because the truncating checkpoint failed or a reader held an older snapshot; it is retried without waiting until it succeeds.",
+      "upkeep.vacuum-failed": "Periodic page reclamation failed; the next upkeep pass retries.",
       "optimize.failed":
         "Refreshing the query planner's statistics failed; queries still run and the next check retries.",
       "ledger.moved":

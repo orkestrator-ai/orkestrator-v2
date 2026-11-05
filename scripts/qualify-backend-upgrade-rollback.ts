@@ -52,7 +52,11 @@
  * Exits 0 when every assertion held, 1 when one did not, 2 on setup errors.
  */
 import { Database } from "bun:sqlite";
-import { snapshotQualificationLedger } from "./qualification-ledger.js";
+import {
+  snapshotQualificationLedger,
+  classifyQualificationChanges as classify,
+  LEDGER_MOVE_CHANGES,
+} from "./qualification-ledger.js";
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
@@ -521,9 +525,11 @@ function readDatabase(): {
         "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name",
       )
       .all()) {
+      if (name.startsWith("change_")) continue;
       for (const row of database
         .query<Record<string, unknown>, []>(`SELECT * FROM "${name}"`)
         .all()) {
+        if (name === "sqlite_sequence" && String(row.name).startsWith("change_")) continue;
         const key =
           name === "store_rows"
             ? `${row.store}/${row.collection}/${row.key}`
@@ -570,7 +576,14 @@ function readDatabase(): {
         .map((entry) => entry.sql ?? "")
         .join("\n"),
     );
-    Object.assign(rows, snapshotQualificationLedger(path.join(copy, "change-tracking.sqlite")));
+    const ledgerFile = path.join(copy, "change-tracking.sqlite");
+    Object.assign(
+      rows,
+      snapshotQualificationLedger(
+        existsSync(ledgerFile) ? ledgerFile : path.join(copy, "orkestrator.sqlite"),
+        !existsSync(ledgerFile),
+      ),
+    );
   } finally {
     database.close();
     rmSync(copy, { recursive: true, force: true });
@@ -779,6 +792,7 @@ const EXPECTED_ROW_CHANGES: Expected[] = [
  * "Migrations"). Reported as a migration, never folded into bookkeeping.
  */
 const STORE_MIGRATION_CHANGES: Expected[] = [
+  ...LEDGER_MOVE_CHANGES,
   {
     pattern: /^backups\/pre-migration-v\d+-[^/]+\.sqlite$/,
     reason: "snapshot taken before the store migration",
@@ -790,21 +804,6 @@ const STORE_MIGRATION_CHANGES: Expected[] = [
   },
   { pattern: /^stores:host-maintenance$/, reason: "host-maintenance store of the newer backend" },
 ];
-
-function classify(changes: string[], expected: Expected[]) {
-  const explained: string[] = [];
-  const unexplained: string[] = [];
-  for (const change of changes) {
-    const rule = expected.find(
-      (entry) =>
-        (!entry.changes || entry.changes.includes(change[0]!)) &&
-        entry.pattern.test(change.replace(/^[+~-] /, "")),
-    );
-    if (rule) explained.push(`${change} — ${rule.reason}`);
-    else unexplained.push(change);
-  }
-  return { explained, unexplained };
-}
 
 function compare(
   label: string,

@@ -661,39 +661,6 @@ export async function takeHourlySnapshotIfDue(
   }
 }
 
-/**
- * Identifies the ledger's content cheaply: its schema version, its ingestion
- * sequence and other meta, and its AUTOINCREMENT counters (every outbox event
- * moves one). Pruning alone does not count as a change. `null` when it cannot
- * be read.
- */
-function ledgerFingerprint(file: string): string | null {
-  try {
-    const db = new Database(file, { readonly: true });
-    try {
-      const hash = createHash("sha256");
-      const { user_version } = db.query("PRAGMA user_version").get() as { user_version: number };
-      hash.update(`schema\0${user_version}`);
-      const meta = db
-        .query("SELECT key, value FROM change_ledger_meta ORDER BY key")
-        .all() as Array<{ key: string; value: string }>;
-      for (const { key, value } of meta) hash.update(`\0meta\0${key}\0${value}`);
-      const counters = db
-        .query("SELECT name, seq FROM sqlite_sequence ORDER BY name")
-        .all() as Array<{
-        name: string;
-        seq: number;
-      }>;
-      for (const { name, seq } of counters) hash.update(`\0seq\0${name}\0${seq}`);
-      return hash.digest("hex");
-    } finally {
-      db.close();
-    }
-  } catch {
-    return null;
-  }
-}
-
 function fileBytes(file: string): number {
   try {
     return fs.statSync(file).size;
@@ -704,8 +671,8 @@ function fileBytes(file: string): number {
 
 /**
  * Takes a snapshot of the change-tracking ledger (`change-tracking.sqlite`) if
- * the newest is at least {@link LEDGER_INTERVAL_MS} old and the ledger changed
- * since it, then purges. Best effort: it holds the same lease as the hourly
+ * the newest is at least {@link LEDGER_INTERVAL_MS} old, then purges. Every due
+ * interval copies all writes, including ownership and binding-only changes. Best effort: it holds the same lease as the hourly
  * snapshot (in the main database, so one copy runs at a time across backends),
  * copies in a child process the same way, never throws, and backs off on its
  * own after a failure. A copy that would not fit the snapshot budget beside
@@ -738,8 +705,6 @@ export async function takeLedgerSnapshotIfDue(
     const newest = snapshots.find((entry) => entry.kind === "ledger");
     if (newest) {
       if (at - newest.takenAt < LEDGER_INTERVAL_MS) return null;
-      const current = ledgerFingerprint(source);
-      if (current !== null && ledgerFingerprint(newest.file) === current) return null;
     }
     const backoff = readBackoff(directory, LEDGER_BACKOFF_FILE);
     if (backoff && at < backoff.retryAt) return null;
@@ -812,7 +777,11 @@ const UPKEEP_RELEASE_STEPS = 256;
 export async function runDatabaseUpkeep(database: StorageDatabase): Promise<void> {
   try {
     if (database.isClosed()) return;
-    database.optimize();
+    try {
+      database.optimize();
+    } catch (error) {
+      log.warn("optimize.failed", { error: formatLogError(error, { message: false }) });
+    }
     let previous = Number.POSITIVE_INFINITY;
     for (let step = 0; step < UPKEEP_RELEASE_STEPS; step += 1) {
       if (database.isClosed()) return;
@@ -823,6 +792,6 @@ export async function runDatabaseUpkeep(database: StorageDatabase): Promise<void
       await new Promise<void>((resolve) => setImmediate(resolve));
     }
   } catch (error) {
-    log.warn("optimize.failed", { error: formatLogError(error, { message: false }) });
+    log.warn("upkeep.vacuum-failed", { error: formatLogError(error, { message: false }) });
   }
 }

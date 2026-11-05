@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import { Fragment, useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { FileText, Hammer, StickyNote } from "lucide-react";
 import {
   hasKeyInformation,
@@ -62,8 +62,8 @@ const TILE_TONE: Record<SummaryTile["tone"], string> = {
  *
  * The tab keeps only the pipeline id; the brief is read from the pipeline
  * record in the store, so every backend update re-renders it in place. Its
- * notes view is the Notes step on a full pane: the same brief, led by what
- * needs a look.
+ * notes view is the Notes step on a full pane: the same brief, with what
+ * needs a look under the summary.
  */
 export function PipelineKeyInformationTab({ data }: { data: KeyInformationTabData }) {
   const pipeline = useBuildPipelineStore((state) => state.pipelines.get(data.pipelineId));
@@ -171,42 +171,60 @@ export function PipelineKeyInformationTab({ data }: { data: KeyInformationTabDat
         ) : null}
       </header>
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
-        {notes ? <PipelineNeedsALook followUps={pipelineFollowUps(pipeline)} /> : null}
-        <KeyInformationDocument keyInformation={pipeline.keyInformation} scrollRef={scrollRef} />
+        <KeyInformationDocument
+          keyInformation={pipeline.keyInformation}
+          scrollRef={scrollRef}
+          afterSummary={
+            notes ? <PipelineNeedsALook followUps={pipelineFollowUps(pipeline)} /> : undefined
+          }
+        />
       </div>
     </div>
   );
 }
 
-/** The whole brief, or a note that nothing is recorded yet. Also read by the Notes step. */
+/**
+ * The whole brief, or a note that nothing is recorded yet. Also read by the
+ * Notes step, which places `afterSummary` under the summary; a brief with no
+ * summary shows it ahead of its sections.
+ */
 export function KeyInformationDocument({
   keyInformation: info,
   scrollRef,
+  afterSummary,
 }: {
   keyInformation: BuildPipelineKeyInformation | undefined;
   scrollRef: RefObject<HTMLDivElement | null>;
+  afterSummary?: ReactNode;
 }) {
   if (!info || !hasKeyInformation(info)) {
     return (
-      <div className="mx-auto flex max-w-md flex-col items-center gap-2 px-6 py-16 text-center">
-        <FileText aria-hidden className="size-8 text-muted-foreground/60" />
-        <p className="text-sm text-foreground">Nothing has been recorded yet</p>
-        <p className="text-xs leading-5 text-muted-foreground">
-          The Build stage fills this in as it works, and the Address and Verify stages add the
-          review issues and verification results. This tab updates as they write.
-        </p>
-      </div>
+      <>
+        {afterSummary ? (
+          <div className="mx-auto w-full max-w-7xl px-4 pt-4 @3xl:px-8">{afterSummary}</div>
+        ) : null}
+        <div className="mx-auto flex max-w-md flex-col items-center gap-2 px-6 py-16 text-center">
+          <FileText aria-hidden className="size-8 text-muted-foreground/60" />
+          <p className="text-sm text-foreground">Nothing has been recorded yet</p>
+          <p className="text-xs leading-5 text-muted-foreground">
+            The Build stage fills this in as it works, and the Address and Verify stages add the
+            review issues and verification results. This tab updates as they write.
+          </p>
+        </div>
+      </>
     );
   }
-  return <KeyInformationContents info={info} scrollRef={scrollRef} />;
+  return <KeyInformationContents info={info} scrollRef={scrollRef} afterSummary={afterSummary} />;
 }
 
 function KeyInformationContents({
   info,
   scrollRef,
+  afterSummary,
 }: {
   info: BuildPipelineKeyInformation;
   scrollRef: RefObject<HTMLDivElement | null>;
+  afterSummary?: ReactNode;
 }) {
   const navRef = useRef<HTMLUListElement>(null);
   const tests = countTests(info.tests);
@@ -427,6 +445,7 @@ function KeyInformationContents({
             ))}
           </div>
         ) : null}
+        {info.summary ? null : afterSummary}
         {sections.map((section, index) => {
           if (paired.has(section.key)) {
             if (index !== firstPairedIndex) return null;
@@ -449,14 +468,12 @@ function KeyInformationContents({
             );
           }
           return (
-            <TabSection
-              key={section.key}
-              id={sectionId(section.key)}
-              title={section.title}
-              meta={section.meta}
-            >
-              {section.body}
-            </TabSection>
+            <Fragment key={section.key}>
+              <TabSection id={sectionId(section.key)} title={section.title} meta={section.meta}>
+                {section.body}
+              </TabSection>
+              {section.key === "summary" ? afterSummary : null}
+            </Fragment>
           );
         })}
       </div>
@@ -466,7 +483,7 @@ function KeyInformationContents({
 
 function LeadProse({ text }: { text: string }) {
   return (
-    <div className="rounded-lg border-l-2 border-amber-400/60 bg-muted/15 px-4 py-3">
+    <div className="rounded-lg border-l-2 border-blue-400/60 bg-muted/15 px-4 py-3">
       <TabProse text={text} lead />
     </div>
   );

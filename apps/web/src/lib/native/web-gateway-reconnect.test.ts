@@ -689,7 +689,7 @@ describe("gateway terminal fallback reconnect backoff", () => {
     stopMain();
   });
 
-  test("each direct terminal stream keeps its own ladder, and re-listening starts a fresh one at once", async () => {
+  test("a direct client carries every terminal on one fetch stream with one ladder", async () => {
     const requests: string[] = [];
     globalThis.fetch = mock(async (input) => {
       const url = new URL(String(input));
@@ -700,33 +700,37 @@ describe("gateway terminal fallback reconnect backoff", () => {
     const api = createBrowserGatewayApi({
       ...DIRECT,
       eventReconnectDelayMs: 100,
+      eventReconnectMaxDelayMs: 800,
       eventReconnectRandom: TOP_OF_RANGE,
     });
-    const requestsFor = (event: string) => requests.filter((value) => value === event).length;
 
     const stopA = api.listen("terminal-output-a", () => undefined);
-    await until(() => timers.pendingDelays().length === 1, "terminal a did not schedule a retry");
+    await until(() => timers.pendingDelays()[0] === 100, "terminal a did not schedule a retry");
     timers.fire(100);
     await until(() => timers.pendingDelays()[0] === 200, "terminal a did not back off");
     timers.fire(200);
     await until(() => timers.pendingDelays()[0] === 400, "terminal a did not back off again");
+    expect(requests).toEqual(["terminal-output-a", "terminal-output-a", "terminal-output-a"]);
 
-    // Another terminal is its own owner: a's outage history does not slow it.
+    // A new terminal has no output until the stream carries it, so the one
+    // stream is rebuilt for both at once, and keeps climbing the same ladder.
     const stopB = api.listen("terminal-output-b", () => undefined);
-    await until(() => timers.pendingDelays().length === 2, "terminal b did not schedule a retry");
-    expect(timers.pendingDelays().sort((a, b) => a - b)).toEqual([100, 400]);
+    await until(() => timers.pendingDelays()[0] === 800, "the rebuilt stream did not back off");
+    expect(timers.pendingDelays()).toEqual([800]);
+    expect(requests.at(-1)).toBe("terminal-output-a,terminal-output-b");
 
-    // The user's Reconnect re-listens: one attempt now, then a fresh ladder.
+    // The user's Reconnect re-listens: a new stream object, so a rebuild now.
     stopA();
-    expect(timers.pendingDelays()).toEqual([100]);
     const stopAgain = api.listen("terminal-output-a", () => undefined);
-    expect(requestsFor("terminal-output-a")).toBe(4);
-    await until(() => timers.pendingDelays().length === 2, "re-listened a did not schedule");
-    expect(timers.pendingDelays()).toEqual([100, 100]);
-    expect(requestsFor("main")).toBe(0);
+    await until(() => requests.length === 5, "re-listened a did not rebuild the stream");
+    expect(requests.at(-1)).toBe("terminal-output-a,terminal-output-b");
+    await until(() => timers.pendingDelays().length === 1, "the rebuild did not schedule");
+    expect(timers.pendingDelays()).toEqual([800]);
+    expect(requests).not.toContain("main");
 
     stopAgain();
     stopB();
+    await flushMicrotasks();
     expect(timers.pendingDelays()).toEqual([]);
   });
 
@@ -812,7 +816,7 @@ describe("gateway terminal fallback reconnect backoff", () => {
     stop();
   });
 
-  test("the main stream reopening retries waiting direct terminal streams at once, keeping their ladders", async () => {
+  test("the main stream reopening retries a waiting direct terminal stream at once, keeping its ladder", async () => {
     let mainAttempts = 0;
     let terminalRequests = 0;
     globalThis.fetch = mock(async (input) => {
@@ -890,8 +894,10 @@ describe("gateway streams waiting out a backoff when the tab or network comes ba
     expect(timers.pendingDelays()).toEqual([100, 100]);
 
     setVisibility("visible");
-    expect(counts).toEqual({ main: 2, terminal: 2 });
+    expect(counts.main).toBe(2);
     expect(timers.pendingDelays()).toEqual([]);
+    // The shared terminal stream rebuilds on the next microtask.
+    await until(() => counts.terminal === 2, "the terminal stream did not retry");
 
     // Both early attempts failed, so each waits for its next step.
     await until(() => timers.pendingDelays().length === 2, "the early attempts did not reschedule");

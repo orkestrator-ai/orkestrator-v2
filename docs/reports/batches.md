@@ -66,7 +66,6 @@ Worked out on 2026-11-03 against `main` at `a44641cbc`, from the 167 work files 
 
 These batches don't share a protected area. They only have to respect the conflicts below.
 
-- **C-0410 (Leaf-mode gate):** coordinator `0410`
 - **E1 (Baseline run):** the baseline task in `0150`, `0160`, `0180`, `0190` and `0400`, in efficiency-logging-database
 - **S-0230 (Preview publication domain):** security `0230`
 - **S-0270 (iOS app review):** security `0270`

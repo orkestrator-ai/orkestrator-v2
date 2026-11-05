@@ -132,7 +132,8 @@ export function CoordinatorConversationTab({
           ? `Close ${item.title}. The next message for the coordinator starts a new one with the default agent.`
           : `Close ${item.title}`
       }
-      onClose={conversationBusy ? undefined : onClose}
+      onClose={onClose}
+      closeDisabled={conversationBusy}
     >
       <button
         ref={tabRef}

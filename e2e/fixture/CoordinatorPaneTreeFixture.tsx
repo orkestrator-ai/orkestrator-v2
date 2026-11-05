@@ -92,12 +92,14 @@ export function CoordinatorPaneTreeFixture() {
       reconcileCoordinatorLayout(null, Object.keys(TITLES))
     );
   });
+  const [busy, setBusy] = useState(false);
   const selected = focusedCoordinatorConversationId(layout);
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(layout));
   }, [layout]);
   return (
     <main className="flex h-screen w-screen flex-col bg-background text-foreground">
+      <button onClick={() => setBusy((value) => !value)}>Toggle conversation busy</button>
       <output aria-label="Selected conversation">{selected}</output>
       <div className="min-h-0 flex-1">
         <CoordinatorPaneTree
@@ -122,7 +124,7 @@ export function CoordinatorPaneTreeFixture() {
               layout={layout}
               paneFocused={isFocused}
               markMain={false}
-              conversationBusy={false}
+              conversationBusy={busy}
               onSelect={() => setLayout((current) => focusCoordinatorPane(current, pane.id, id))}
               onClose={() => {}}
               onChangeAgent={() => {}}

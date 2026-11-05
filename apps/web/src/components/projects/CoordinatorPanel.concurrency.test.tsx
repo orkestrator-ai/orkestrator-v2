@@ -450,7 +450,9 @@ describe("Git and conversation actions", () => {
     closeConversation.mockImplementationOnce(() => first.promise);
     fireEvent.click(screen.getByRole("button", { name: "Close Side 1" }));
     await waitFor(() => expect(closeConversation).toHaveBeenCalledTimes(1));
-    expect(screen.queryByRole("button", { name: "Close Side 2" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Close Side 2" }).getAttribute("aria-disabled")).toBe(
+      "true",
+    );
     expect(newSideAgent().disabled).toBe(true);
 
     await act(async () => first.resolve(ensuredSnapshot));

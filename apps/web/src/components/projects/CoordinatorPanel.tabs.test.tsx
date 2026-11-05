@@ -152,7 +152,10 @@ const pause = mock(async (): Promise<CoordinatorSnapshot> => {
 const resume = mock(async (): Promise<CoordinatorSnapshot> => ensuredSnapshot);
 const closeConversation = mock(async (): Promise<CoordinatorSnapshot> => ensuredSnapshot);
 const createConversation = mock(async (): Promise<CoordinatorSnapshot> => ensuredSnapshot);
-const select = mock(async (): Promise<CoordinatorSnapshot> => ensuredSnapshot);
+const select = mock(
+  async (_projectId: string, _conversationId: string): Promise<CoordinatorSnapshot> =>
+    ensuredSnapshot,
+);
 const assignAgent = mock(async () => ensuredSnapshot);
 const dispatchIntent = mock(
   async (input: Parameters<typeof realBackend.dispatchNativeAgentIntent>[0]) => ({
@@ -253,6 +256,7 @@ describe("CoordinatorPanel tab strip", () => {
     for (const fn of [ensure, getCoordinatorView, getGit, fetchGit, select, assignAgent]) {
       fn.mockClear();
     }
+    select.mockImplementation(async () => ensuredSnapshot);
     pause.mockClear();
     resume.mockClear();
     closeConversation.mockClear();
@@ -369,7 +373,7 @@ describe("CoordinatorPanel tab strip", () => {
     expect(screen.queryByRole("button", { name: "Change agent" }) === null).toBe(true);
   });
 
-  for (const failure of [null, "close", "create"] as const) {
+  for (const failure of [null, "close", "create", "mail"] as const) {
     test(`split replacement preserves its group and handles ${failure ?? "delayed success"}`, async () => {
       ensuredSnapshot = withWorkspace({ conversations: [mainConversation, sideConversation] });
       const single = reconcileCoordinatorLayout(null, ["conversation-1", "side-1"]);
@@ -417,8 +421,12 @@ describe("CoordinatorPanel tab strip", () => {
       }
       await waitFor(() => expect(createConversation).toHaveBeenCalledTimes(1));
       // All shell close actions share the conversation busy gate.
-      expect(screen.queryByRole("button", { name: "Close Side 1" })).toBeNull();
-      expect(screen.queryByRole("button", { name: /^Close Coordinator\./ })).toBeNull();
+      expect(
+        screen.getByRole("button", { name: "Close Side 1" }).getAttribute("aria-disabled"),
+      ).toBe("true");
+      expect(
+        screen.getByRole("button", { name: /^Close Coordinator\./ }).getAttribute("aria-disabled"),
+      ).toBe("true");
       expect(collectCoordinatorLeaves(storedLayout().root)).toHaveLength(2);
       // The background view can publish the successful close before the
       // delayed creation response. Its reconciliation must retain the slot.
@@ -477,20 +485,42 @@ describe("CoordinatorPanel tab strip", () => {
             ...mainConversation,
             id: "main-2",
             tabId: "main-2",
-            agent: undefined,
+            agent: failure === "mail" ? "codex" : undefined,
           },
+          ...(failure === "mail"
+            ? [{ ...sideConversation, id: "side-raced", tabId: "side-raced", title: "Raced side" }]
+            : []),
         ],
-        selectedConversationId: "main-2",
+        selectedConversationId: failure === "mail" ? "side-raced" : "main-2",
       });
       ensuredSnapshot = created;
+      select.mockImplementation(async (_projectId: string, conversationId: string) => {
+        ensuredSnapshot = withWorkspace({
+          ...created.workspace,
+          selectedConversationId: conversationId,
+        });
+        return ensuredSnapshot;
+      });
       await act(async () => resolveCreate(created));
-      await screen.findByRole("tab", { name: "Coordinator, main, no agent chosen yet" });
+      const replacementTab = await screen.findByRole("tab", {
+        name:
+          failure === "mail"
+            ? "Coordinator, main, Codex"
+            : "Coordinator, main, no agent chosen yet",
+      });
+      await waitFor(() => expect(replacementTab.getAttribute("aria-selected")).toBe("true"));
+      if (failure === "mail") {
+        expect(select).toHaveBeenLastCalledWith("project-1", "main-2");
+        expect(
+          screen.getByRole("tab", { name: "Raced side, Codex" }).getAttribute("aria-selected"),
+        ).toBe("false");
+      }
       await waitFor(() => {
         const leaves = collectCoordinatorLeaves(storedLayout().root);
         expect(leaves).toHaveLength(2);
-        expect(leaves.find((pane) => pane.id === originalMainPane)!.conversationIds).toEqual([
+        expect(leaves.find((pane) => pane.id === originalMainPane)!.conversationIds[0]).toBe(
           "main-2",
-        ]);
+        );
         expect(storedLayout().activePaneId).toBe(originalMainPane);
         expect(leaves.find((pane) => pane.conversationIds.includes("side-1"))!.id).toBe(
           editedSidePane,

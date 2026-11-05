@@ -367,6 +367,23 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
           setReplacement(null);
           throw cause;
         }
+        if (replacingMain) {
+          // Mail can ensure a main between close and create. In that case
+          // create returns a side: keep it, but replacement and focus belong
+          // to the actual main, never to the API's selected side.
+          const main = createdSnapshot.workspace.conversations.find(
+            (item) => item.role === "main" && !item.closedAt,
+          );
+          if (!main) {
+            setSnapshot(createdSnapshot);
+            setReplacement(null);
+            throw new Error("No open main conversation after changing agent");
+          }
+          createdSnapshot = {
+            ...createdSnapshot,
+            workspace: { ...createdSnapshot.workspace, selectedConversationId: main.id },
+          };
+        }
         // Read after the requests, before publishing the new open set can
         // reconcile away the placeholder. Keep moves and divider edits made
         // while the backend was busy.

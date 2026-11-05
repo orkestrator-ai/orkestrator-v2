@@ -283,3 +283,28 @@ test("Change agent is visible without hovering the main tab", async ({ page }, t
     path: `output/visual-previews/c8/round2-after-${testInfo.project.name}.png`,
   });
 });
+
+test("busy close controls keep their width and focus", async ({ page }, testInfo) => {
+  await page.goto("/coordinator-pane-tree");
+  const close = page.getByRole("button", { name: "Close Side 1", exact: true });
+  const tab = page.getByRole("tab", { name: "Side 1, Codex", exact: true }).locator("..");
+  await close.focus();
+  const before = (await tab.boundingBox())!;
+  await page.screenshot({
+    path: `output/visual-previews/close-before-${testInfo.project.name}.png`,
+  });
+  // Programmatic activation keeps focus on the close control while state changes.
+  await page
+    .getByRole("button", { name: "Toggle conversation busy" })
+    .evaluate((button: HTMLButtonElement) => button.click());
+  await expect(close).toHaveAttribute("aria-disabled", "true");
+  await expect(close).toBeFocused();
+  expect((await tab.boundingBox())!.width).toBe(before.width);
+  await close.press("Enter");
+  await expect(close).toBeFocused();
+  await page.screenshot({ path: `output/visual-previews/close-busy-${testInfo.project.name}.png` });
+  await page
+    .getByRole("button", { name: "Toggle conversation busy" })
+    .evaluate((button: HTMLButtonElement) => button.click());
+  await expect(close).not.toHaveAttribute("aria-disabled", "true");
+});

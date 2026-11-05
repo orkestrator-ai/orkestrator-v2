@@ -19,7 +19,6 @@ titles beside Codex's own index.
 | `src/app-server-runtime.ts`             | Session surface for the app-server engine          |
 | `src/app-server-runtime-context.ts`     | State shared by the runtime's collaborators        |
 | `src/app-server-runtime-rows.ts`        | A turn's assistant rows: open, render, publish     |
-| `src/event-ring.ts`                     | Bounded SSE replay buffer + cursor parsing         |
 | `src/app-server/process-supervisor.ts`  | Child lifecycle, generations, restart policy       |
 | `src/app-server/jsonl-rpc-client.ts`    | Transport; must never await consumer work          |
 | `src/app-server/approvals.ts`           | Approval descriptors + per-method response mapping |

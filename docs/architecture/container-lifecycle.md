@@ -1309,8 +1309,8 @@ not keep answering for a container that just ended. A memory update below curren
 
 | Resource | Bound | Where |
 | --- | --- | --- |
-| Container stdout/stderr | `local` driver, 10 MiB × 3 (new runtimes, when the daemon offers `local`) | `logDriverArguments` |
-| Bridge/server output | 5 MiB × 3 per file, lines cut at the file size | `orkestrator-log-writer` |
+| Container stdout/stderr | `local` driver, else `json-file`, 10 MiB × 3 (new runtimes) | `logDriverArguments` |
+| Bridge/server output | 5 MiB × 3 per file, lines cut at the file size; 5 MiB, no rotation, without Perl or the writer | `orkestrator-log-writer` / `boundedBackgroundLaunch` |
 | Previous run's bridge/server log | One file, up to 5 MiB, the active file at the last relaunch | `keepPreviousLogCommand` |
 | Startup failure tail, `get_*_server_log` | 64 KiB and 200 lines | `boundedTailCommand` / `boundDiagnosticTail` |
 | `get_container_logs` | ≤ 2,000 lines and 512 KiB | registry |
@@ -1320,7 +1320,9 @@ not keep answering for a container that just ended. A memory update below curren
 
 Bridges and the OpenCode server start through `boundedBackgroundLaunch`: when
 the image ships the writer, `setsid sh -c '<cmd> 2>&1 | orkestrator-log-writer
-<file>'`, otherwise the plain redirect. The writer owns the open file, so
+<file>'`. An image without the writer keeps the first 5 MiB through
+`head -c` and drains the rest with `cat >/dev/null`, so its producer never
+writes into a closed pipe; until 2026-11 it was an unbounded redirect. The writer owns the open file, so
 rotation cannot lose writes behind a still-writing process; it only writes a
 local file and drains its input to end of file, so it never blocks or
 SIGPIPEs its producer, even when it cannot open or write the file. Each line
@@ -1335,6 +1337,26 @@ output whatever `stdbuf` asks, and mawk exited when the file could not be
 opened. Only a line still waiting for its newline is held, and at most 64 KiB
 of it before it is split, so output without newlines stays bounded. An image
 built before the rewrite keeps the old behaviour until it is rebuilt.
+
+The writer drops output rather than block: a failed open or write loses that
+output, and a failed rotation loses the line that needed it. It counts the lost
+lines and starts its next successful write with `[orkestrator-log-writer]
+dropped N lines`, so a gap (a full disk, say) shows in the log itself; if the
+file never becomes writable again, the marker never appears. Its size
+accounting is not wound back for lost lines, so the next rotation, which frees
+the oldest file, comes sooner rather than later. A custom image without Perl
+appends up to 5 MiB less what the file already holds, drains the rest, and at
+end of input appends `[orkestrator-log-writer] dropped at least N bytes past
+<max>`. The notice has a fixed 128-byte allowance beyond the data cap; once
+the file exceeds the cap, later runs drain without appending another notice.
+These reach a container only when it is rebuilt.
+
+Container stdout/stderr uses Docker's `local` driver where the daemon lists it,
+else `json-file` with the same 10 MiB × 3 bounds, which overrides a daemon's
+own default driver (`journald`, say) for these containers only. A daemon that
+lists neither keeps its default and is warned about once per backend
+(`docker` `log-driver.unbounded`); an empty list means the capacity probe
+failed, so no driver is named rather than risk a failed create.
 
 ### The previous run
 
@@ -1366,8 +1388,10 @@ first, which moves the log to its `.prev.log` name:
 `get_*_server_log` takes an optional `previous: true` to read that file, under the
 same 64 KiB and 200 line bounds and the same redaction. Only an explicit `true`
 selects it, a call without it reads the active log as before, and no previous log
-reads as empty. The web client's getters do not pass it, and it has none for Cursor,
-Grok or Pi; a diagnostics export is the likely first consumer.
+reads as empty. The web client reads any of the six through
+`getContainerServerLog(provider, containerId, { previous })`
+(`apps/web/src/lib/backend/docker-skills.ts`); nothing in the UI calls it yet, and a
+diagnostics export is the likely first consumer.
 
 `open_container_logs` / `read_container_logs` / `close_container_logs` share
 one `docker logs -f` per container among subscribers; a read renews the lease,
@@ -1551,6 +1575,30 @@ need it once cloned.
   second environment is the first to benefit. There is no timer: an idle project
   makes no network requests. Only branches are fetched: clones use `--no-tags`, and
   `refs/pull/*` can dwarf a repository.
+- **Seed.** A build, not an update, starts from the host checkout at
+  `project.localPath` when it has one (`seedMirror`), so the build downloads only
+  what the checkout lacks. The checkout can hold unpushed work, and its refs and
+  config are shaped by whatever ran in it, so it decides nothing:
+  - It is read only by a fetch of its `refs/remotes/*`, through `upload-pack`,
+    which restricts what a repository's config and hooks can run. Local branches
+    stay behind. `GIT_ALLOW_PROTOCOL=file` and `GIT_NO_LAZY_FETCH=1` stop an older
+    Git following a partial clone's promisor. Objects are hashed on the way in,
+    and the fetch checks each ref's whole history.
+  - That goes into a quarantine, `.building-*/seed.git`, outside the mount. The
+    remote is then fetched into it, so the remote says which branches exist and
+    where they point, and sends what it finds missing. A ref it does not recognise
+    only wastes a negotiation round.
+  - The mirror fetches `refs/heads/*` from the quarantine, so it receives what the
+    remote's branches reach and no other ref or object.
+
+  Anything else (no checkout, an unusable, damaged, shallow or partial one, more
+  in it than the size limit, or too little disk for the quarantine) discards the
+  seed and downloads as before. A remote that cannot be reached fails the build:
+  a checkout never makes a mirror on its own. The seed reads the checkout as the
+  backend's user, so what `upload-pack` still allows is the remaining exposure:
+  Git calls its attack surface large. A host agent running as that user gains
+  nothing from it, and a container is not given the checkout: it gets a clone
+  and copied seed files, not a bind of `localPath`.
 - **Writers.** One refresh per mirror in a backend; a launch during a refresh joins
   it. A second backend on the same data directory holds no writer lease, so it
   creates no containers. Readers need no lock: Git publishes a pack before the refs
@@ -1589,6 +1637,25 @@ real repositories), `project-git-mirror.integration.test.ts` (build, refresh,
 credentials, concurrency, removal) and, in real containers,
 `project-git-mirror-docker.test.ts` (read-only mount, foreign owner, removal, a
 restart with the source gone).
+
+Not yet qualified:
+
+- A real rootless daemon. The mirror is world-readable inside an owner-only
+  directory for that case, and a clone as `--user 12345` passes, but the mount was
+  not run under rootless Docker, where a daemon recreating a removed source does
+  so as the host user rather than root.
+- Docker Desktop. Bind mounts there go through its file sharing, so the clone time
+  is likely to differ, and whether the data directory is shared by default was not
+  checked.
+- A restricted network. The measurements used the default bridge with
+  `NETWORK_MODE=full`. The clone still reaches the remote for its refs, through the
+  same allowlist as before, but this was not run behind a firewall.
+- A real-stack `dev:test` profile with a freshly built image. The live test binds
+  this checkout's script over an older image's copy and calls the mirror functions
+  directly, so the image's own capability probe and `createDockerContainer` were
+  not run together against real Docker.
+- A seed against a real network remote. It was measured against a local bare clone
+  (see [disk-usage.md](../development/disk-usage.md#project-git-mirrors)).
 
 ## Container lifecycle events
 

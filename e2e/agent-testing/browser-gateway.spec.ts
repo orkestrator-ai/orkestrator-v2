@@ -4,6 +4,8 @@ import {
   type ReviewValidationRun,
 } from "@orkestrator/protocol/review-workflow";
 import { createHash } from "node:crypto";
+// Not `./browser-test`: this file is the suite's direct check that the gateway
+// serves the renderer's modules through a real browser's network stack.
 import { expect, test, type Page } from "@playwright/test";
 import { spawnSync } from "node:child_process";
 import { promises as fs } from "node:fs";

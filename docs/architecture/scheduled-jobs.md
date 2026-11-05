@@ -150,6 +150,14 @@ after now.
   the registry writer lease (`registry-writer-lease.ts`), the same
   single-writer guard container reconciliation uses. Any backend may create
   and edit schedules; the writer picks the change up within one safety tick.
+  `list_scheduled_jobs` answers whether this backend fires in `scheduler`
+  (`{ firing: true }`, or `firing: false` with `writer-lease-lost`,
+  `another-backend` or `newer-data-directory`), and Settings → Schedules
+  shows a notice from `schedulerPausedMessage` when it does not and there are
+  schedules. A lost lease is final until a restart; losing it announces a
+  `scheduled-job` change, so an open Settings view rereads. The field is
+  additive: a renderer that predates it ignores it, and a backend that
+  predates it sends none, which reads as no known pause.
 - **One fire per schedule at a time.** A running fire or pending busy retry blocks the next slot
   until it settles.
 - **Request keys make re-runs replays.** Every dispatch carries the request

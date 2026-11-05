@@ -10,17 +10,43 @@
  * Kept free of imports so any module can resolve it without a cycle.
  */
 
-// Per backend but still module state: the binary comes from the backend's data
-// directory and gh channel, so a second backend overwrites the first's choice.
-// Not moved yet (docs/todo/backend-structure/1070-backend-module-state-beyond-0390.md).
-let managedGitHubCli: string | undefined;
+/**
+ * One backend's `gh`: the pinned copy from its toolchain, or the newest
+ * release under its data directory when the gh channel follows upstream.
+ * Held on `BackendRuntime.gitHubCli`, so two backends in one process never
+ * run each other's binary (docs/architecture/backend-runtime.md).
+ */
+export class GitHubCliSelection {
+  private pinnedExecutable: string | undefined;
+  private selected: string | undefined;
 
-/** Set once at startup from the backend's activated toolchain. */
-export function setManagedGitHubCli(executable: string | undefined): void {
-  managedGitHubCli = executable;
+  /** Records the toolchain's pinned `gh` at startup and selects it. */
+  pin(executable: string | undefined): void {
+    this.pinnedExecutable = executable;
+    this.selected = executable;
+  }
+
+  /** The toolchain's pinned `gh`; undefined when the toolchain has none. */
+  get pinned(): string | undefined {
+    return this.pinnedExecutable;
+  }
+
+  /** Follows the gh channel: a downloaded release, or the pin again. */
+  select(executable: string | undefined): void {
+    this.selected = executable;
+  }
+
+  /** The managed `gh` in use; undefined when `gh` comes from PATH. */
+  managed(): string | undefined {
+    return this.selected;
+  }
 }
 
-/** The `gh` to run on the backend host. */
-export function gitHubCli(): string {
-  return managedGitHubCli ?? "gh";
+/**
+ * The `gh` to run on the backend host. Absent a selection (a fixture with no
+ * runtime), `gh` comes from PATH, as `gitHubCliEnv` without a source uses the
+ * host login.
+ */
+export function gitHubCli(selection: GitHubCliSelection | undefined): string {
+  return selection?.managed() ?? "gh";
 }

@@ -58,6 +58,47 @@ describe("capture images across IPC", () => {
     expect(await capture.readPendingCapture("c")).toBeNull();
   });
 
+  test("a region crop's bytes become the data URL the renderer reads", async () => {
+    const sourceRect = { x: 1, y: 2, width: 3, height: 4 };
+    const invoke = mock(async () => ({
+      descriptor: { captureId: "c" },
+      capture: {},
+      imageBytes: null,
+      regionCrop: { imageBytes: png, width: 3, height: 4, sourceRect },
+    }));
+    const capture = createBrowserPreviewCaptureApi({ invoke, on: () => undefined } as never);
+    const pending = await capture.readPendingCapture("c");
+    expect(pending?.regionCrop).toEqual({
+      imageDataUrl: dataUrl,
+      width: 3,
+      height: 4,
+      sourceRect,
+    });
+  });
+
+  test("a region capture with no crop keeps null, and any other capture has no crop", async () => {
+    const invoke = mock(async (): Promise<unknown> => ({ imageBytes: null, regionCrop: null }));
+    const capture = createBrowserPreviewCaptureApi({ invoke, on: () => undefined } as never);
+    expect((await capture.readPendingCapture("c"))?.regionCrop).toBeNull();
+    invoke.mockImplementation(async () => ({ imageBytes: null }));
+    const pending = await capture.readPendingCapture("c");
+    expect(pending && "regionCrop" in pending).toBe(false);
+  });
+
+  test("every base64 padding length round-trips through both conversions", async () => {
+    for (const length of [1, 2, 3, 4]) {
+      const bytes = png.subarray(0, length);
+      const url = `data:image/png;base64,${Buffer.from(bytes).toString("base64")}`;
+      const invoke = mock(async (..._args: unknown[]) => ({ imageBytes: bytes }));
+      const capture = createBrowserPreviewCaptureApi({ invoke, on: () => undefined } as never);
+      expect((await capture.readPendingCapture("c"))?.imageDataUrl).toBe(url);
+      invoke.mockClear();
+      await capture.replacePendingCaptureImage("c", { imageDataUrl: url, manualRegions: 0 });
+      const sent = invoke.mock.calls[0]![2] as { imageBytes: Uint8Array };
+      expect(Array.from(sent.imageBytes)).toEqual(Array.from(bytes));
+    }
+  });
+
   test("a redacted image goes to main as bytes; anything malformed is main's to refuse", async () => {
     const invoke = mock(async (..._args: unknown[]) => ({}));
     const capture = createBrowserPreviewCaptureApi({ invoke, on: () => undefined } as never);

@@ -15,11 +15,13 @@ Items already owned elsewhere stay there and are not repeated: compression and
 WebSocket deflate (GW-2, GW-7) in
 [0052](../transcripts-and-observation/0052-remote-client-bandwidth.md), joined
 history pages (TX-10) in 0232, recurring-work live evidence in
-[0048](../transcripts-and-observation/0048-recurring-work-qualification.md),
-container resource budgets in
-[0022](../containers-and-environments/0022-container-resource-budgets-and-performance.md)
-and Multi Review drift checks (BG-10) in
-[0027](../coordinator-and-multi-review/0027-multi-review-scale-and-cost.md).
+[0048](../transcripts-and-observation/0048-recurring-work-qualification.md)
+and container resource budgets in
+[0022](../containers-and-environments/0022-container-resource-budgets-and-performance.md).
+Multi Review drift checks (BG-10), once listed here as owned by
+[0027](../coordinator-and-multi-review/0027-multi-review-scale-and-cost.md),
+which had no task for them, were done on 2026-11-05: snapshot mode checks
+the worktree once per admission pass, as package mode already did.
 
 The maintainer's decisions of 2026-11-01 are recorded in the task each one
 governs, marked "Decided".
@@ -31,8 +33,8 @@ governs, marked "Decided".
 3. **Renderer re-renders and refetches**: WEB-6, WEB-7, WEB-9 to WEB-14 and WEB-16 to WEB-19, plus WEB-2's narrower subscriptions. Status: done (2026-11-04; WEB-2, WEB-3, WEB-4, WEB-5, WEB-8, WEB-15 and GW-13 earlier; WEB-7 and WEB-17 on 2026-11-03; WEB-2's third fix, WEB-6, WEB-9, WEB-10 and WEB-11, then WEB-12 to WEB-14, WEB-16, WEB-18 and WEB-19 on 2026-11-04; a React Profiler run stays with task 1).
 4. **Live agent view requests**: discovery out of the 500 ms round, a combined read, then bridge state ETags and transcript deltas (WEB-1, GW-1, GW-3, TX-5, TX-6). Status: open (WEB-1 and GW-1 done 2026-11-04, a visible running tab from 3 requests per round to 1.04; GW-3 done 2026-11-05; TX-5 and TX-6 open).
 5. **Transcript pipeline**: delta-base ring, unlimited post-dispatch reads, memoised fingerprints and the smaller items (TX-1 to TX-3, TX-7 to TX-9, TX-11 to TX-18). Status: open (TX-1 and TX-2 done 2026-11-04, focused tests only; live before-and-after numbers stay with task 1; TX-3, TX-7 to TX-9 and TX-11 to TX-18 open).
-6. **Bridge hot paths**: Codex config reads, cached transcript measurement, tool-card fast paths, Claude part identity, stream framing and shared helpers (BR-2, BR-4 to BR-16). Status: open (BR-1 and BR-3 done, without new tests; BR-4 to BR-6 and the transcript half of BR-15 done 2026-11-02; BR-2, BR-8, BR-9 and BR-11 done 2026-11-03; BR-7, BR-10, BR-12 to BR-14 and BR-16 done 2026-11-04; BR-15's SSE replay rings open).
-7. **Change tracking and git scans**: stamp short-circuit, count memo, manifest cache, off-loop zlib and the git scan costs (ST-1 to ST-6, ST-13 to ST-21). Status: open (ST-1, ST-2 and ST-4 done on 2026-11-02; ST-3, ST-14, ST-15, ST-16 and ST-18 done 2026-11-04, warm capture over 10,000 files with one changed from 681–797 ms to 211–319 ms p50, and a warm local diff scan from 7 git processes and every untracked file read to 4 and none; ST-2's directory-handle cache deliberately not done; ST-16's dropping of hints under ignored directories not done; ST-5 and ST-6 done 2026-11-04, longest event-loop stall during a capture storing a 16 MiB blob from 107–143 ms to 12–13 ms p50 and a cold durable capture of 1,000 files from 3.3–4.1 s to 0.6–1.1 s; ST-13, ST-17 and ST-19 to ST-21 open).
+6. **Bridge hot paths**: Codex config reads, cached transcript measurement, tool-card fast paths, Claude part identity, stream framing and shared helpers (BR-2, BR-4 to BR-16). Status: done (BR-1 and BR-3 done, without new tests; BR-4 to BR-6 and the transcript half of BR-15 done 2026-11-02; BR-2, BR-8, BR-9 and BR-11 done 2026-11-03; BR-7, BR-10, BR-12 to BR-14 and BR-16 done 2026-11-04; BR-15's SSE replay rings done 2026-11-05).
+7. **Change tracking and git scans**: stamp short-circuit, count memo, manifest cache, off-loop zlib and the git scan costs (ST-1 to ST-6, ST-13 to ST-21). Status: open (ST-1, ST-2 and ST-4 done on 2026-11-02; ST-3, ST-14, ST-15, ST-16 and ST-18 done 2026-11-04, warm capture over 10,000 files with one changed from 681–797 ms to 211–319 ms p50, and a warm local diff scan from 7 git processes and every untracked file read to 4 and none; ST-2's directory-handle cache deliberately not done; ST-17 done 2026-11-04 on Linux, a proved ignored `node_modules` taking no watches (4,672 to 170 on `watch-nm-4k`) and on macOS its events dropped on arrival; what is left of ST-16 and ST-17 is [5060](5060-worktree-watch-leftovers.md), which also has the outcome of every task in batch E7; ST-5 and ST-6 done 2026-11-04, longest event-loop stall during a capture storing a 16 MiB blob from 107–143 ms to 12–13 ms p50 and a cold durable capture of 1,000 files from 3.3–4.1 s to 0.6–1.1 s; ST-20 done 2026-11-05, a second hourly retention pass over 400 snapshots of 2,000 files from 565 ms to 87 ms and a put during a sweep from about 400 ms to 1–2 ms, live sizing in [5361](5361-retention-pass-on-a-large-real-store.md); ST-13, ST-19 and ST-21 open).
 8. **tmux and container polling**: the rest of BG-1, BG-2 and BG-8, plus BG-7, BG-14 and BG-15. Status: open (BG-1, BG-2, BG-7 and BG-8 done 2026-11-03, image proven locally; BG-14 done 2026-11-04, its remaining live evidence in [5120](../transcripts-and-observation/5120-tmux-transcript-reopen-live-evidence.md); BG-15 open).
 9. **PR monitor cost**: batched queries, then activity backoff (BG-6, BG-13). Status: done (2026-11-03; live before-and-after numbers stay with task 1).
 10. **Other background jobs**: the rest of BG-3, plus BG-9, BG-11 and BG-12. Status: done (2026-11-02; live before-and-after numbers stay with task 1).
@@ -40,7 +42,7 @@ governs, marked "Decided".
 12. **Local desktop transport**: local windows on the filtered gateway transport, and the IPC payload costs (DK-1, DK-2, DK-5, DK-6). Status: done (DK-1, DK-2 and DK-5 on 2026-11-04 behind a setting that is off by default; DK-6 fixed on 2026-11-04 by tunnel v2, [4500](4500-preview-tunnel-one-socket-per-connection.md); the default flip is [4501](4501-local-window-transport-default.md)).
 13. **Toolchain startup and downloads**: stamp-based verification and resumable downloads (DK-3, DK-4). Status: done (2026-11-03; Electron launch-to-ready 10.2–13.8 s before, 1.6–1.9 s after; a cold-cache run still needs live evidence).
 14. **Docker image size**: layer order, the second Bun, npm caches, the leftover apt layer and the second Claude binary (DK-7 to DK-11). Status: open (DK-7, DK-8, DK-9 and DK-11 done 2026-11-02; amd64 image smoke and Docker qualification passed; DK-10 left for a maintainer decision).
-15. **Container data transfer**: in-volume clone move, a per-project mirror, agent-home input stamps and same-device moves (DK-12 to DK-15). Status: done (2026-11-04; follow-ups in [4820](../containers-and-environments/4820-project-git-mirror-follow-ups.md)).
+15. **Container data transfer**: in-volume clone move, a per-project mirror, agent-home input stamps and same-device moves (DK-12 to DK-15). Status: done (2026-11-04; its follow-ups done 2026-11-05).
 16. **CLI and logging**: conditional `--follow` reads, transport buffering and the log sink (DK-16 to DK-18). Status: done (DK-16 and DK-17 done 2026-11-03; DK-18, the log sink, done 2026-11-04).
 
 ### 1. Baseline and before-and-after numbers
@@ -326,7 +328,7 @@ The first pass after opening find still reads every row once (179–1,197 ms at 
 
 **Real stack.** On a credential-free `dev:test` profile (`web9-lazy-bundles`, since stopped and reset), which serves the Vite dev renderer rather than the production bundle: launch and opening the mail panel requested no xterm, `PersistentTerminal`, `AgentNativeTab`, `ProjectWorkspace` or `MessageMarkdown` module. The project board then loaded its own code and showed the coordinator. A terminal tab took input, showed its output again after a reload and re-selecting the environment, and closing a second terminal disposed it. The bug report sheet opened with no failure surface. No page error throughout. Not exercised live: rendering a mail body, the failed-setup overlay and the files panel's pull request tabs, which unit tests cover; a real agent turn, as the profile had no credentials; and a real mobile WebView (see "Needs verification").
 
-**Terminal links after the factory change.** Both callers outside the app that create a terminal through the store now pass `createXtermTerminal`. `e2e/TerminalLinks.spec.ts` passed 14 of 14 in mobile and desktop Chromium, and the Electron test "a remote terminal link opens the native localhost forward in a separate browser" (`service-preview-electron.spec.ts`, its own disposable profile) passed, 1 expected, 0 skipped. The 48 design tests that fail in this branch's default suite all come from `design-frame-source.ts` on `main` throwing `Invalid URL` under Happy DOM's `about:blank`, a file this work does not touch; see [4521](../design-canvas/4521-design-frame-source-about-blank.md).
+**Terminal links after the factory change.** Both callers outside the app that create a terminal through the store now pass `createXtermTerminal`. `e2e/TerminalLinks.spec.ts` passed 14 of 14 in mobile and desktop Chromium, and the Electron test "a remote terminal link opens the native localhost forward in a separate browser" (`service-preview-electron.spec.ts`, its own disposable profile) passed, 1 expected, 0 skipped. The 48 design tests that fail in this branch's default suite all come from `design-frame-source.ts` on `main` throwing `Invalid URL` under Happy DOM's `about:blank`, a file this work does not touch; `main` has since fixed it (#1752).
 
 **Decisions.**
 
@@ -566,7 +568,9 @@ Done 2026-11-04 (against `main` at `96ee1eb3`), the remainder apart from the SSE
 - BR-14, Pi. `encodeStateWithinBudget` encodes each record once and splices them into the envelope with exact byte accounting; shedding re-encodes only the records it trims. Tests: `persistence.test.ts` (300 random states and budgets against a verbatim copy of the old code, byte for byte; forty 1 MB sessions encode under 80 MiB in all, where the old code encoded about 810 MB).
 - BR-16, ACP. The replay is removed: `reconcileCursorToolMetadata`, its scheduler, collector and join, the session fields, constants and `ACP_MAX_LIVE_CURSOR_TOOL_REPLAYS`, and the provider labels in `acp-errors.ts` and `session-config.ts`. No launch reaches it: `commands-servers.ts` handles `cursor` in its own branch and only Grok falls through to `ACP_PROVIDER = kind`, `host-model-catalog-refresh.ts` does the same, and the container entrypoint (`commands-registry-servers.ts:585`) exports `ACP_PROVIDER=grok`. The harness moved to a neutral `acp-fixture` id; the expectations that changed for it changed only in that name. Test: `acp-context.test.ts` ("a turn's generic tool calls spawn no replay child"), with the provider id set to `cursor` by hand. On the old code it sees a second child. The `cursor/*` method handlers are not provider-gated and stayed: [4540](../agent-engines/4540-acp-bridge-cursor-extension-leftovers.md).
 
-**Investigation.** Not re-checked since the report: BR-15's SSE replay rings (Codex `event-ring.ts`, Claude `routes/events.ts`).
+Done 2026-11-05 (E-0360, against `main` at `69a3b4ca5`, where the finding still held): BR-15's SSE replay rings. Codex's `EventRing` moved to `packages/protocol/src/node/event-ring.ts`, and Claude's replay buffer (`bridges/claude-bridge/src/routes/events.ts`) is built on it. A full `message.updated` now collapses the message's earlier snapshots and patches on Claude, replayed as `bridge.cursor`; observation replays are unchanged. Claude frames carry their data byte count, so no subscriber measures a frame again. Tests: `packages/protocol/src/node/event-ring.test.ts` and `bridges/claude-bridge/src/routes/events.test.ts`; the closing check is in the efficiency index.
+
+**Investigation.** BR-15's SSE replay rings were re-checked against `69a3b4ca5` before the 2026-11-05 fix; the finding still held.
 
 What the 2026-11-04 fixes do not remove. A Pi history too large to parse within 30 s now reports a timeout on every attempt instead of showing an empty list; it never fills the cache, because Pi does not export its per-file step. An ordinary Pi state write still encodes every session once: only the repeated encoding while shedding went away. Nothing was measured on real workloads (task 1); the BR-12 and BR-14 figures come from the tests' own fixtures.
 
@@ -598,8 +602,8 @@ What BR-5 does not remove: Pi resends a running tool's whole accumulated output 
   - **Converge on one policy.**
     - Pros: simpler.
     - Cons: changes transcript text in one or two bridges, which this task must not do.
-- **Should the SSE replay rings move as part of BR-15?** Open.
-  - **Separately, after BR-7 (recommended).**
+- **Should the SSE replay rings move as part of BR-15?** Done 2026-11-05 with the first option.
+  - **Separately, after BR-7 (recommended, taken).**
     - Pros: Claude's ring adopting Codex's superseded-frame collapse changes what a reconnecting client is replayed, which needs its own replay tests; the transcript helpers did not depend on it.
     - Cons: BR-15 stays half open.
   - **Move Codex's `event-ring.ts` into protocol now and point Claude at it.**
@@ -647,6 +651,8 @@ Done on 2026-11-04 (ST-5, ST-6), re-checked first against `main` at `a8bdce444`,
 - ST-5: `readManifest` reads through a per-store LRU of deep-frozen parsed manifests (`manifest-cache.ts`; 32 entries, 128 MiB estimated), `findManifestEntry` binary-searches on path bytes for diff pages and restore, and `renderSnapshotBodies` takes `ignoreWhitespace`, so that view renders once. Tests: `manifest-cache.test.ts`, `diff-bodies-lookup.test.ts`.
 - ST-6: `ObjectStore.batch()` stages each object as a temporary file, deflating inputs from 16 KiB through the thread pool, and a flush fsyncs the temporaries off the loop, renames them, then fsyncs the directories with unsynced names. Tests: `object-store-write-path.test.ts`. [change-tracking.md](../../architecture/change-tracking.md) "Object writes and durability" and "Manifest cache".
 
+Done on 2026-11-05 (ST-20), re-checked first against `main` at `69a3b4ca5`; all three tasks of report part 0550 still applied. `ObjectStore.sweep` walks without the store lock and re-`lstat`s and removes candidates under it, 64 per hold; the store keeps its byte count across sweeps and retention reads it through `currentBytes()`; retention reads each manifest once per pass and keeps the object ids each manifest names between passes in `ReachabilityCache` (4,096 manifests, 32 MiB). The parsed-manifest cache had served 8 of 400 manifests per pass on the new `--only=retention` fixture. Tests: `retention-store-walks.test.ts`. [change-tracking.md](../../architecture/change-tracking.md) "Retention and backup" and "Benchmarks". Live sizing: [5361](5361-retention-pass-on-a-large-real-store.md).
+
 `TMPDIR=<a directory on the btrfs disk> bun scripts/benchmark-change-tracking.ts --only=large-blob,durable-cold,manifest --runs=7` and `--only=capture,assets,long-turn --sizes=1000,10000 --runs=10`, three interleaved runs each of `a8bdce444` and this code, on the shared build host, btrfs, load average 3 to 18, Bun 1.4.4:
 
 | Workload | Before | After |
@@ -665,6 +671,8 @@ Done on 2026-11-04 (ST-5, ST-6), re-checked first against `main` at `a8bdce444`,
 The large file's capture takes longer in total, because compression now runs in chunks through the thread pool, while the rest of the backend keeps running. The first read of a manifest costs more because it freezes every entry; a repeat read repays that after about three reads. The non-durable rows show warm captures did not regress; the differences are within the load's noise. The remaining stall on the large file is its read and two SHA-1 passes, about 5 to 7 ms each. `object-store-write-path.test.ts` also compares the stall during a real 16 MiB put and capture against `deflateSync`'s in the same process.
 
 Also done on 2026-11-04: ST-14 (one `git diff --raw --numstat -z -M` per scan on local, container and Git-scope paths, the base's commit reused, the exclude file ensured once per worktree or container), ST-15 (a per-worktree count cache keyed by stat stamp with the settle-window rule, and bounded concurrency in `git-scopes.ts`) and ST-18 (scope demand lasts `gitScopeDemandTtlMs` from the last read; expiry sends a `reset` event so an open view reads again). Tests: `git-diff-summary.test.ts`, `local-git-scan-caches.test.ts`, `commands-files-local-scan.test.ts`, `git-scopes.test.ts` "Git scope demand". [git-scan-caches.md](../../architecture/git-scan-caches.md) has the design and [change-tracking.md](../../architecture/change-tracking.md) the demand rule.
+
+Done on 2026-11-04 (ST-17 and the rest of ST-16), re-checked first against `main` at `e198fd4a7`; the batch's report file was deleted with this work, and [5060](5060-worktree-watch-leftovers.md) holds its last outcomes and what is left. `startWorktreeWatcher` leaves out a `node_modules` Git proves ignored and free of tracked files. On Linux the subtree takes no watches. On macOS one recursive root stays and events under the subtree are dropped on arrival. Either way an install there starts no scan. Tests: `worktree-watch-plan.test.ts`, `worktree-watcher-split.test.ts` and, on both platforms, `worktree-watcher-real.test.ts`. `worktree-snapshots-git.test.ts` passes on Linux and on arktech-mini after repeating mutations to tolerate lost or delayed macOS events (resolved flake [5061](../../tests/flaky-tests/environments-and-containers/5061-real-git-owner-saturated-fseventsd.md)). [git-scan-caches.md](../../architecture/git-scan-caches.md#what-the-worktree-watch-leaves-out) has the design and the numbers.
 
 **Grace-window reasoning (ST-3).** An object's mtime is the orphan fence: `sweep` deletes an unreachable object only when its mtime is more than `orphanGraceMs` old (1 h), and that fence is the only thing protecting an object a capture has adopted but no ledger row names yet. A sweep's reachable set can also be stale, because it is built before the sweep takes the store lock. So a reused object needs to stay undeletable until the capture has committed and a later sweep can see the commit. Skipping the renewal below half the grace leaves at least the other half (30 min) for that, against capture deadlines of 10 to 30 s plus the sweep's walk of the ledger. Without the skip the same assumption held with a full hour; the margin shrinks, the assumption does not change. Past half the grace the object is renewed as before, under the store lock, so the renewal can never land between a sweep's `lstat` and its `rm`.
 
@@ -868,13 +876,36 @@ A micro-benchmark over 10,000 small files two directories deep (5 rounds, median
   - **Share the budget.**
     - Pros: the same bound as the normal view.
     - Cons: a visible change the ticket did not ask for.
-- **Should ST-16 also drop hints whose paths are all under ignored directories, as the report suggests?** Not done.
-  - **Leave them counting; the gap bounds their cost (recommended).**
-    - Pros: `classifyWorktreeChange` already records why: a build directory can hold tracked or visible untracked files, so a path's location does not prove the file list is unchanged.
-    - Cons: an install still costs a scan every 2 s or so while it runs.
-  - **Filter hints against the worktree's ignore rules.**
+- **Should ST-16 also drop hints whose paths are all under ignored directories, as the report suggests?** Done 2026-11-04 for `node_modules` only; the rest is [5060](5060-worktree-watch-leftovers.md), task 2.
+  - **Leave out a `node_modules` Git proves ignored and free of tracked files, per plan rather than per burst; leave other ignored directories to the gap (recommended).**
+    - Pros: an install starts no scan; dropped events do not count towards an overflow; Git's answer is read once per settled change to the index or a `.gitignore`, not per burst, which answers the report's objection to `check-ignore`; the tree view skips `node_modules`, so nothing visible goes stale.
+    - Cons: a build in `dist` still costs a scan every 2 s or so; two more git processes per plan.
+  - **Leave them all counting; the gap bounds their cost (the report's recommendation, and this task's earlier decision).**
+    - Pros: no new state. `classifyWorktreeChange` records why a location alone is not proof: a build directory can hold tracked or visible untracked files.
+    - Cons: an install still costs a scan every 2 s or so while it runs, though once ST-17 stops watching the subtree on Linux no hint exists to count.
+  - **Filter hints against the worktree's ignore rules for every ignored directory.**
     - Pros: no scans at all for writes that truly are ignored.
     - Cons: needs an ignore matcher kept current per worktree, and a wrong answer freezes the counts until the two-minute safety scan.
+- **Which subtrees may a watch leave out (ST-17)?** Done as recommended.
+  - **Only `node_modules`, when `ls-files --directory` and `check-ignore` prove it (recommended).**
+    - Pros: it is over 97% of this worktree's directories; the tree view hides it at every depth, so no view depends on its events; a tracked file inside keeps it watched.
+    - Cons: `dist`, `.turbo` and `target` stay watched.
+  - **Every directory Git proves ignored, as the report says.**
+    - Pros: the fewest watches.
+    - Cons: the tree view shows those directories and a watched tree is trusted until a hint, so the Files panel would go stale for up to the two-minute safety scan.
+  - **The name alone, with no Git process.**
+    - Pros: no process.
+    - Cons: a tracked file under `node_modules` would be seen only by the safety scan, which the ticket's constraint rules out.
+- **What does the watch look like (ST-17)?** The report's recommendation on Linux; re-check showed it does not fit macOS.
+  - **Linux: non-recursive on the root and each ancestor of a left-out subtree, recursive on every other child. macOS: one recursive root, dropping events on arrival (chosen).**
+    - Pros: each platform pays only what it charges: 4,672 to 170 inotify watches on Linux, no extra stall on macOS; nested `node_modules` are covered, which a top-level-only split would not be.
+    - Cons: two behaviours to test; on macOS events still reach JavaScript.
+  - **One recursive watch per top-level entry plus a non-recursive root, on every platform (the report's recommendation).**
+    - Pros: one behaviour.
+    - Cons: on arktech-mini 20 recursive watches blocked the JS thread for 19,836 ms to start, against 2 ms for one; in a monorepo it still watches every nested `node_modules`.
+  - **Keep the recursive root on every platform.**
+    - Pros: complete and simple.
+    - Cons: Bun on Linux takes one inotify watch per directory and walks all of `node_modules`; measured 4,672 on `watch-nm-4k`.
 - **What ends a Git scope's demand (ST-18)?** Done as recommended.
   - **A TTL since the last read, and at expiry a `reset` event that makes any open view read again (recommended).**
     - Pros: no new protocol, client change or bookkeeping across reconnects, since the event and its handling already exist; with nothing open a scope costs nothing after one event; an open view stays correct for one extra read per TTL under activity; a lost event is recovered by the resync read.
@@ -903,7 +934,7 @@ A micro-benchmark over 10,000 small files two directories deep (5 rounds, median
   - **Remember the file and its stamp, and compare one `stat` per scan (recommended).**
     - Pros: no process and no read after the first scan; a file rewritten or removed by something else is repaired on the next scan.
     - Cons: one `stat` per scan; an extra `stat` and read beside each ensure.
-  - **A bounded set of ensured worktrees, as `0420-e7-diff-scans.md` recommended.**
+  - **A bounded set of ensured worktrees, as batch E7's report recommended.**
     - Pros: no system call at all.
     - Cons: an exclude file edited away is not restored until a restart. `commands-integration.test.ts` already requires that repair.
 - **Container wire format (ST-14)?** Done as recommended.
@@ -1252,7 +1283,21 @@ Re-checked and built 2026-11-04 on branch `desktop-window-transport-e6e965c2f004
 
 These count events and serialisations. Electron main's CPU, the baseline [0400](../../reports/efficiency-logging-database/0400-e26-local-desktop-transport.md) recommends, was not measured.
 
-**DK-5 (fixed for full images, 2026-11-04).** A spooled capture image now crosses IPC as bytes in both directions (`BrowserPreviewPendingCaptureWire`, `imageBytes`), at its PNG size rather than a third larger, and main no longer base64-encodes it to read it. The preload makes and parses the data URLs, so `BrowserPreviewCaptureApi` and its consumers did not change. A region crop still crosses as a data URL. "Up to 12 PNG encodes" is the loop's safety cap: a screenshot whose size follows its area settled in two encodes at 2.2, 4 and 8 bytes a pixel, so the loop was left alone. Tests: `preload-api.test.ts` ("capture images across IPC"), `browser-preview-capture-store.test.ts`, `browser-preview-capture-image.test.ts`; `web-annotations-electron.spec.ts` still passes through a real window.
+**DK-5 (fixed for full images, 2026-11-04).** A spooled capture image now crosses IPC as bytes in both directions (`BrowserPreviewPendingCaptureWire`, `imageBytes`), at its PNG size rather than a third larger, and main no longer base64-encodes it to read it. The preload makes and parses the data URLs, so `BrowserPreviewCaptureApi` and its consumers did not change. "Up to 12 PNG encodes" is the loop's safety cap: a screenshot whose size follows its area settled in two encodes at 2.2, 4 and 8 bytes a pixel, so the loop was left alone. Tests: `preload-api.test.ts` ("capture images across IPC"), `browser-preview-capture-store.test.ts`, `browser-preview-capture-image.test.ts`; `web-annotations-electron.spec.ts` still passes through a real window.
+
+**DK-5 (region crops, stall measured, 2026-11-05).** Based on `main` at `69a3b4ca5`. Region crops now cross as bytes too (`BrowserPreviewRegionCropWire`), and `boundedScreenshotPng` and `cropPng` encode with `toPNG`, so main no longer base64-encodes a capture on any production path. Measuring showed the 2026-11-04 bytes had moved the cost to the renderer and made it larger: the preload's binary string and `btoa` blocked the renderer for 197 ms on a 7.64 MiB capture, and `atob` plus `Uint8Array.from` for 367 ms on the way back. The preload now uses `Uint8Array.toBase64` and `fromBase64`. No custom scheme was added: with native base64 the renderer stays near its idle floor up to 7.64 MiB of the 8 MiB limit, so the condition for one, a capture shown to stall the UI, is not met.
+
+One run of a throwaway harness in real Electron 45 (Chromium 156, macOS arm64) in a hidden sandboxed window, using the real `boundedScreenshotPng`, `cropPng` and `createBrowserPreviewCaptureApi`, with a 640x400 crop in each read. Pages were synthetic: a table-and-sidebar UI and a noisy gradient, taken with `capturePage`; the noise cases are bitmaps, as the hardest PNGs near the limit. Medians of 7 to 15 reads, in ms. A gap is the longest time between heartbeats on that thread, so it is the stall; a timer's floor there is about 5 ms in the renderer and 9 ms in main. Read time is elapsed, not blocking, and varies between runs.
+
+| Capture (stored size, PNG) | Encodes | Renderer gap on read: data URL / JS base64 / native | Read time: data URL / JS base64 / native | Renderer gap sending a redaction: JS / native | Main gap on read, with crop | Main PNG encode at capture |
+| --- | --- | --- | --- | --- | --- | --- |
+| UI 1280x800 @1x (1280x800, 0.15 MiB) | 1 | 5.2 / 8 / 5.2 | 10.8 / 16.5 / 10.6 | 9 / 5.3 | 8.6 | 23 |
+| UI 1280x800 @2x (2000x1250, 0.51 MiB) | 1 | 5.2 / 16 / 5.2 | 25.3 / 36.7 / 23.5 | 23.8 / 5.2 | 22.3 | 68 |
+| Noisy gradient @2x (2000x1250, 3.88 MiB) | 1 | 6.8 / 99.8 / 6.2 | 88.5 / 187.2 / 76.6 | 181.6 / 5.1 | 63.8 | 342 |
+| Noise near the limit (2000x1330, 7.64 MiB) | 1 | 7.9 / 197.4 / 9 | 71.2 / 276.8 / 157 | 367.4 / 5.5 | 31.8 | 171 |
+| Noise over the limit (2000x2000 to 1535x1535, 6.64 MiB) | 2 | 6.2 / 174 / 10 | 120.3 / 294.8 / 101.3 | 317.9 / 5.1 | 46.4 | 156 |
+
+`toPNG` returned the same bytes as `toDataURL` for all five sources. Dropping base64 saves main 30 to 60 ms per encode on the larger captures. What remains on main is the PNG work itself, which no IPC transport changes: [5540](../previews-and-annotations/5540-capture-png-work-on-main.md). Tests: `preload-api.test.ts`, `browser-preview-capture-image.test.ts`, `browser-preview-capture-flow.test.ts` ("a region crop across IPC"), `main-ipc.test.ts`; `web-annotations-electron.spec.ts` ("text, region, and page modes", "capture pixels stay on the target") passes through a real window.
 
 **DK-6 (fixed, 2026-11-04).** Re-checked first: `openPreviewTunnel` opened one WebSocket, with HELLO and OPEN, per upstream connection. The pool (`preview-transport-manager.ts`, in since 2026-09-23, so before the report) reused an idle connection for 2 s and kept up to six, which spared sequential requests but not parallel ones, upgrades, or requests after an idle gap. It is not an IPC cost: these sockets run from Electron main to the backend. Fixed as the report proposes, by multiplexing: tunnel v2 (`orkestrator.preview-tunnel.v2`, contract in `packages/protocol/src/preview-tunnel-mux.ts`) carries every upstream connection of an attachment as a stream on one authenticated WebSocket, with per-stream credit so a stopped reader stalls only its own stream. The desktop's `PreviewTunnelConnector` (`preview-tunnel-session.ts`) keeps that session; the backend's `preview-tunnel-mux-server.ts` serves it beside v1. Attachments advertise v2 (`multiplexSubprotocol`), so a desktop on an older backend keeps v1, and an older desktop on this backend still gets v1 (counted as `preview.tunnel-v1` in the [version-compatibility register](../../architecture/version-compatibility.md#register)). Details and decisions are in [4500](4500-preview-tunnel-one-socket-per-connection.md).
 
@@ -1465,7 +1510,7 @@ Done 2026-11-04 against `main` at `96ee1eb3`:
 
 Done 2026-11-04 against `main` at `a8bdce44`:
 
-- DK-13: a new container environment clones from a per-project bare mirror (`git clone --no-tags --reference <mirror> --dissociate <url>`), bound read-only, and falls back to the old clone on any problem with it (`git-mirror=1`). `apps/backend/src/core/project-git-mirror.ts` builds, refreshes, bounds and removes the mirror; `clone_from_git_mirror` in `docker/workspace-setup.sh` uses it. Tests: `tests/unit/workspace-setup-git-mirror.test.ts`, `apps/backend/tests/project-git-mirror.integration.test.ts`, `project-git-mirror-create.test.ts`, `project-git-mirror-docker.test.ts`. `docs/architecture/container-lifecycle.md` ("Project Git mirror") and `docs/development/disk-usage.md` ("Project Git mirrors") describe it. Follow-ups: [4820](../containers-and-environments/4820-project-git-mirror-follow-ups.md).
+- DK-13: a new container environment clones from a per-project bare mirror (`git clone --no-tags --reference <mirror> --dissociate <url>`), bound read-only, and falls back to the old clone on any problem with it (`git-mirror=1`). `apps/backend/src/core/project-git-mirror.ts` builds, refreshes, bounds and removes the mirror; `clone_from_git_mirror` in `docker/workspace-setup.sh` uses it. Tests: `tests/unit/workspace-setup-git-mirror.test.ts`, `apps/backend/tests/project-git-mirror.integration.test.ts`, `project-git-mirror-create.test.ts`, `project-git-mirror-docker.test.ts`. `docs/architecture/container-lifecycle.md` ("Project Git mirror") and `docs/development/disk-usage.md` ("Project Git mirrors") describe it.
 
 **Investigation.** Re-checked on 2026-11-02: DK-12 and DK-15 were still as the report describes. A same-disk worktree without submodules already moved by rename (`git worktree move`); the copy happened only for worktrees with submodules, which git refuses to move.
 
@@ -1559,7 +1604,7 @@ The DK-12 numbers came from a throwaway script that runs the old and new steps o
 - **DK-13: when does it refresh?** (decided 2026-11-04)
   - **In the background on each container creation, at most every 15 minutes per project, never waited for (taken).**
     - Pros: a launch is never delayed or blocked, an idle project makes no requests, and staleness only costs the difference. Git publishes a pack before the refs that reach it, so a clone may read during a refresh.
-    - Cons: the first environment pays its clone and the mirror's own download; the second is the first to benefit. [4820](../containers-and-environments/4820-project-git-mirror-follow-ups.md) task 1 can seed the first mirror from the host checkout.
+    - Cons: the first environment pays its clone and the mirror's own download; the second is the first to benefit. A build now seeds from the host checkout where it can, which saves that download.
   - **Wait for the first build, then clone from it.**
     - Pros: one download rather than two for a new project.
     - Cons: delays the first environment by a whole clone, and a slow or failing remote would hold up a launch, which the ticket forbids.
@@ -1900,6 +1945,13 @@ Made on 2026-11-03.
 - **BR-13, order across keys.** A key's backlog now drains before the next key's starts, where promise chains interleaved them. Keys were already independent: account proof compares its own `sequence` because of that, and the engine's "a start delayed on another queue" tests cover it.
 - **BR-14, no fragment cache.** Followed the recommended option: no per-session cache of clean records. As with ACP's BR-1 remainder, a missed revision would write stale state, and writes only happen at turn and request edges.
 - **BR-16, how far it goes.** Removed what the report names and what only it used. The `cursor/*` handlers stayed because they are gated by method, not provider, so this change's evidence does not cover them.
+
+### Task 6: BR-15's SSE replay rings (2026-11-05)
+
+- **What a Claude snapshot collapses.** Every earlier `message.updated` and `message.patched` frame for the same session and message, not only the previous snapshot as on Codex. Codex's first-match scan would have left the patches since the last snapshot, and a client replayed them after a collapsed base would apply them to a message it never received. The shared ring's scan therefore continues past a replaced entry and stops at one already collapsed; Codex's output is unchanged.
+- **Observation replays.** `?observe=1` replays keep one content-free frame per revision under the original type, collapsed or not, so the backend's observer reads exactly what it read before. Full-mode replays send `bridge.cursor` for a collapsed frame, the frame Codex already sends.
+- **Revisions from Claude's emitter.** The ring takes them through `appendAt` and `advanceTo` instead of numbering events itself, so a ring revision is the cursor the client holds. A jump past the next revision drops what is retained, since those frames could no longer be replayed as a dense range; `advance` does the same, which changes nothing for Codex because it only advances an emptied ring.
+- **Where the ring lives.** `packages/protocol/src/node/event-ring.ts`, beside the transcript helpers BR-15 already moved, although the code itself needs nothing from Node.
 
 ### Task 7: stat-stamp settle window
 
@@ -2318,9 +2370,9 @@ browser and real-stack suites were not run.
   not in a container. ST-18's open-view path is proved at the backend and by the
   renderer's existing `reset` test, not in a live browser session.
 
-- DK-13 on a real rootless daemon and on Docker Desktop: only Docker Engine 29.9.2, rootful, was run. A foreign uid reading the mirror (`--user 12345`) stands in for a rootless workload user. See [4820](../containers-and-environments/4820-project-git-mirror-follow-ups.md).
+- DK-13 on a real rootless daemon and on Docker Desktop: only Docker Engine 29.9.2, rootful, was run. A foreign uid reading the mirror (`--user 12345`) stands in for a rootless workload user. See [what is not yet qualified](../../architecture/container-lifecycle.md#project-git-mirror).
 
-- WEB-12, WEB-13 and WEB-18 with `localWindowGatewayTransport` on and off in a real Electron window: `local-gateway-transport-electron.spec.ts` was not run, because this host has no disposable display (`xvfb-run`). From code, the polls and the new reads all go through the same `invoke`, and neither the gateway nor the relay filters commands by name; the Chromium run exercised the gateway path only.
+- WEB-12, WEB-13 and WEB-18 with `localWindowGatewayTransport` on and off in a real Electron window: `local-gateway-transport-electron.spec.ts` was not run, because this host has no disposable display (`xvfb-run`). From code, the polls and the new reads all go through the same `invoke`, and neither the gateway nor the relay filters commands by name; the Chromium run exercised the gateway path only. Tracked in [5460](5460-renderer-polling-live-evidence.md) task 3, with E23's other live-evidence items.
 - WEB-19 timings in Chromium: answered 2026-11-05 by E22's closing check (`docs/reports/efficiency-logging-database/0000-index.md`). With React's development build and a `<Profiler>` around a rich `MessageMarkdown`, the median per update at 30 KB was 27.1 ms for a full render and 5.5 ms for the live path (5 KB: 4.8 and 1.3 ms). Production React in Chromium was not measured.
 - WEB-11 on a real mobile WebView and over a slow remote link: that a socket left dead in the background gets no pong and is replaced, and that 2.5 s is long enough for a healthy pong. Only fake-socket client tests and the real gateway's ping handling in a backend test have run. Tracked in [5080](5080-terminal-websocket-live-evidence.md).
 - GW-16 past loopback Chromium: the input-results subprotocol through the Tailscale Serve route, a command-node relay in a browser, WebKit and a mobile WebView. Tracked in [5080](5080-terminal-websocket-live-evidence.md).
@@ -2380,6 +2432,22 @@ Verification named four desktop failures. None of them came from a gateway chang
 **Revoked-access recovery (three cases in `preview-transport-manager.test.ts`).** A real bug in tunnel v2: a pooled stream stayed reusable between the session `error` frame and the close frame, so a request after a revocation got a 502. Fixed in `PreviewTunnelSession`; the choice is recorded in [4500](4500-preview-tunnel-one-socket-per-connection.md).
 
 **Node pull-mode receive window (`preview-tunnel-session.test.ts`).** On Node 26.7.0 `read()` with no size returned one 64 KiB chunk of the four buffered, where the test expected all of them. The credit logic was correct, so the test now drains the stream until `read()` returns null. Only Node 26.7.0 is installed on the host, so the test was not run on an older Node.
+
+### Task 7: how the watch plan degrades and when it reads Git again (ST-17, 2026-11-04)
+
+Anything that cannot be planned watches the whole worktree: no answer from Git, more than 256 left-out subtrees, more than 1,024 watches, or a directory name that did not decode (`fs` could not reopen it). Too many events are a cost; too few would be a wrong count. Git is asked again on a settled burst touching the index or a `.gitignore`, and at once when a `node_modules` appears, so it is left out before an install enters it. `.git/info/exclude` and global ignore files do not ask again: a linked worktree's `info/exclude` is outside anything watched, and watching it for a change that almost never happens was not worth a watch per environment.
+
+### Task 7: a watcher with an injected `startWatch` has no plan unless given one (ST-17, 2026-11-04)
+
+A test that injects `startWatch` almost always emits on a fake, so a default plan would start Git against a path like `/wt` and swap the fake's root. `plan` defaults to `null` in that case and a test that wants one passes `worktreeWatchPlanIo`, as `worktree-snapshots-git.test.ts` does.
+
+### Task 7: the real-watch tests' deadlines (ST-17, 2026-11-04)
+
+`worktree-watcher-real.test.ts` keeps writing distinct files for up to 90 s and asserts an absence only against a later delivered event. On arktech-mini the first event has taken 35 s to arrive, so a shorter deadline measured `fseventsd` rather than the watcher. It is in the slow tier for that reason. `worktree-snapshots-git.test.ts` does the same on macOS since a side-by-side run showed the host losing events for Bun and Node alike (flake 5061).
+
+### Task 7: review follow-up status (2026-11-05)
+
+Corrected the ST-17 status to the recorded passing macOS service runs in resolved flake 5061. Healthy-host single-write delivery remains in 5060; these runs do not establish it.
 
 ### Task 11: GW-16 cumulative input results (2026-11-04)
 

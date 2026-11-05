@@ -1,10 +1,11 @@
 /**
  * Exercises `/event/subscribe` over real HTTP.
  *
- * The unit tests in `event-ring.test.ts` cover the buffer; this covers the parts
- * only the endpoint can get wrong — the `id:` framing, the cursor handshake, and
- * the subscribe-then-replay ordering that stops an event emitted mid-handshake
- * from falling into the gap between the replay and the live stream.
+ * The unit tests in `packages/protocol/src/node/event-ring.test.ts` cover the
+ * buffer; this covers the parts only the endpoint can get wrong — the `id:`
+ * framing, the cursor handshake, and the subscribe-then-replay ordering that
+ * stops an event emitted mid-handshake from falling into the gap between the
+ * replay and the live stream.
  */
 import { beforeAll, describe, expect, test } from "bun:test";
 import { TransformStream } from "node:stream/web";

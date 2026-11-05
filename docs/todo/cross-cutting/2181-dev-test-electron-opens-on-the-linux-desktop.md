@@ -133,7 +133,7 @@ browser previews, so they get the fix too.
 
 ### Task 1: surviving network churn in the headless check
 
-The spec fetches scripts and styles with `route.fetch()`, and retries its navigation with a new single-use login link, rather than relying on a quiet host. Its `/proc` assertions run first and are not retried. That keeps the proof independent of other builds' Docker work, which failed the previous version every time when reproduced. Only this spec changed: applying it across the suite changes what those journeys exercise, so that choice is left to [4222](4222-browser-failures-left-after-headless-qualification.md) task 3. Retries for the whole browser config were not used, since they would also pass real intermittent failures.
+The spec fetches scripts and styles with `route.fetch()`, and retries its navigation with a new single-use login link, rather than relying on a quiet host. Its `/proc` assertions run first and are not retried. That keeps the proof independent of other builds' Docker work, which failed the previous version every time when reproduced. Only this spec changed: applying it across the suite changes what those journeys exercise, so that choice was left to [4222](4222-browser-failures-left-after-headless-qualification.md) task 3, which has since applied it to the whole browser suite through `e2e/agent-testing/browser-test.ts`. Retries for the whole browser config were not used, since they would also pass real intermittent failures.
 
 ### Task 1: the runner's test budget
 
@@ -220,7 +220,7 @@ budget; the run before it hit the budget and was stopped. Reading each saved tra
 | `a headless profile's Electron…` | Host network churn aborted its module loads (flake [2340](../../tests/flaky-tests/aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md)); its `/proc` checks had already passed | Modules fetched outside Chromium; a retried navigation with a new login link | Under bridge churn: previous spec 0 of 3, repaired spec 3 of 3 in 8 s |
 | `capped file tree…` | A 5 s assertion ended while the page took 17 s to handle a response (flake [2930](../../tests/flaky-tests/previews-annotations-and-gateway/2930-capped-file-tree-exceeds-test-budget.md)) | 240 s test budget, 30 s tree assertions | 3 of 3 at 81–84 s |
 | `a lost terminal write…` | Expected `before-X` as one run of text, which `nvim` need not draw ([4222](4222-browser-failures-left-after-headless-qualification.md)) | Checks `X` after `before-`; the saved buffer stays the precise check | 5 of 5 |
-| `design-canvas.spec.ts:16`, `graph-designer.spec.ts:239`, `graph-run-view.spec.ts:48` | Host network churn, with 82, 119 and 133 aborted requests in their traces (2340) | None here: nothing is wrong with these cases. A run now prints which failed cases have this error. Handling it across the suite is [4222](4222-browser-failures-left-after-headless-qualification.md) task 3 | Not rerun |
+| `design-canvas.spec.ts:16`, `graph-designer.spec.ts:239`, `graph-run-view.spec.ts:48` | Host network churn, with 82, 119 and 133 aborted requests in their traces (2340) | None here: nothing is wrong with these cases. A run now prints which failed cases have this error. Handled across the suite since by [4222](4222-browser-failures-left-after-headless-qualification.md) task 3 (`e2e/agent-testing/browser-test.ts`) | Not rerun |
 
 The runner's test budget went from 15 to 25 minutes, because a run cut off at the limit
 reports nothing for the cases it never reached. These were focused runs; the whole
@@ -234,7 +234,7 @@ alone, so they are not load flakes. `AgentsMdApproval.spec.ts` and
 `SettingsMachineRouting.spec.ts` fail only with the agent shell's inherited
 `NODE_ENV=production` and pass with it unset, which `mise run test:browser` now does.
 The two Multi Review layout assertions fail either way, with no change on this
-branch to anything they load; see [4222](4222-browser-failures-left-after-headless-qualification.md).
+branch to anything they load. [4222](4222-browser-failures-left-after-headless-qualification.md) found the fixture at fault (host font metrics) and fixed it.
 
 ## Needs verification
 

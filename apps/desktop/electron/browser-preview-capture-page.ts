@@ -41,7 +41,7 @@ export interface CaptureImageLike {
     height: number;
     quality?: "good" | "better" | "best";
   }): CaptureImageLike;
-  toDataURL(options?: { scaleFactor: number }): string;
+  toPNG(options?: { scaleFactor: number }): Buffer;
   toBitmap?(options?: { scaleFactor: number }): Buffer;
   /** Electron `NativeImage.crop`; used for region crops. */
   crop?(rect: { x: number; y: number; width: number; height: number }): CaptureImageLike;

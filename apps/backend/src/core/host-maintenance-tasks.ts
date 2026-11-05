@@ -13,7 +13,6 @@ import {
   resetImageManifestCache,
   resolveDockerImage,
 } from "./docker-image.js";
-import { setManagedGitHubCli } from "./github-cli-binary.js";
 import { HostMaintenanceError, type HostMaintenanceService } from "./host-maintenance.js";
 import { readImageStatus, releaseImageReference } from "./host-maintenance-readers.js";
 import { runCommand } from "./shell.js";
@@ -280,16 +279,16 @@ export async function installedLatestGh(dataDir: string): Promise<string | null>
 export async function applyGhChannel(
   context: CommandContext,
   channel: "pinned" | "latest",
-  pinned: string | undefined,
 ): Promise<void> {
+  const selection = context.runtime.gitHubCli;
   if (channel === "latest") {
     const latest = await installedLatestGh(context.storage.getDataDir());
     if (latest) {
-      setManagedGitHubCli(latest);
+      selection.select(latest);
       return;
     }
   }
-  setManagedGitHubCli(pinned);
+  selection.select(selection.pinned);
 }
 
 async function installLatestGh(
@@ -372,19 +371,20 @@ async function installLatestGh(
 export function startGhUpdate(
   context: CommandContext,
   channel: "pinned" | "latest",
-  options: { pinned: string | undefined; fetchImpl?: typeof fetch },
+  options: { fetchImpl?: typeof fetch } = {},
 ) {
   const service = serviceOf(context);
   const dataDir = context.storage.getDataDir();
+  const selection = context.runtime.gitHubCli;
   return background(service, "gh-update", `Switching gh to ${channel}`, async (stage) => {
     if (channel === "pinned") {
       service.setGhChannel("pinned");
-      setManagedGitHubCli(options.pinned);
-      return { channel, executable: options.pinned ? "managed" : "path" };
+      selection.select(selection.pinned);
+      return { channel, executable: selection.pinned ? "managed" : "path" };
     }
     const { version } = await installLatestGh(dataDir, stage, options.fetchImpl);
     service.setGhChannel("latest");
-    await applyGhChannel(context, "latest", options.pinned);
+    await applyGhChannel(context, "latest");
     return { channel, version };
   });
 }

@@ -54,6 +54,7 @@ import {
   type BridgeCompactionPart,
   type BridgeImagePart,
   type BridgeProgressPart,
+  type BridgeStatusPart,
   type BridgeTextPart,
   type BridgeToolPart,
   type JsonObject,
@@ -1002,6 +1003,44 @@ function endAssistantStep(state: SessionState): void {
   const last = state.messages.at(-1);
   if (last && last.id === state.currentAssistantMessageId && last.parts.length === 0) return;
   state.currentAssistantMessageId = undefined;
+}
+
+/** The transcript's note that a resume fell back. Fixed text, never the SDK's error. */
+export const RESUME_FELL_BACK_NOTICE =
+  "Could not resume the previous Cursor conversation, so a new one was started. The agent does not remember the earlier messages.";
+
+/**
+ * Tell the user, in the transcript, that the agent forgot the conversation.
+ *
+ * Written where `session.resume-fell-back` is logged. An attach runs before a
+ * turn records anything, so this is its own row between turns and never a
+ * turn's row: the agent did not say it. It rides in the rendered transcript
+ * the state file keeps, and the prompt's persistence barrier publishes it with
+ * the replacement agent's id, so a reload or a restart still shows it.
+ */
+export function appendResumeFallbackNotice(state: SessionState): void {
+  closeTextParts(state, undefined);
+  state.currentAssistantMessageId = undefined;
+  const messageId = randomBytes(12).toString("hex");
+  const createdAt = new Date().toISOString();
+  const part: BridgeStatusPart = {
+    type: "status",
+    content: RESUME_FELL_BACK_NOTICE,
+    severity: "warning",
+    sourcePartId: `${messageId}:0`,
+    sourceMessageId: messageId,
+    createdAt,
+  };
+  const message: BridgeMessage = {
+    id: messageId,
+    role: "assistant",
+    content: RESUME_FELL_BACK_NOTICE,
+    parts: [part],
+    createdAt,
+  };
+  state.messages.push(message);
+  chargeNewEntry(state, message);
+  rowChanged(state, message);
 }
 
 /**

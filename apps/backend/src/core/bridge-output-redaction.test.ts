@@ -58,11 +58,11 @@ describe("bridge output redaction", () => {
     const written: string[] = [];
     const forward = createBridgeOutputForwarder((text) => written.push(text), 16);
     forward.push("x".repeat(20));
-    expect(written).toEqual(["x".repeat(20)]);
+    expect(written).toEqual(["x".repeat(16)]);
     forward.push("tail");
     expect(written).toHaveLength(1);
     forward.flush();
-    expect(written).toEqual(["x".repeat(20), "tail"]);
+    expect(written).toEqual(["x".repeat(16), "xxxxtail"]);
     forward.flush();
     expect(written).toHaveLength(2);
   });

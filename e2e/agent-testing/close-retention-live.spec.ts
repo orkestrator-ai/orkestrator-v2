@@ -25,7 +25,7 @@
  * or its login is missing. Anything else fails. Real turns cost tokens; this
  * spec runs only when asked for.
  */
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page } from "./browser-test";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";

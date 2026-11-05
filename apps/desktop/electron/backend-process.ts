@@ -589,6 +589,8 @@ export class BackendHttpClient {
    * main stream is left alone.
    */
   setRelayedEvents(events: readonly string[]): void {
+    // A late window update must not restart streams after backend exit or shutdown.
+    if (!this.listener) return;
     const wanted = new Set(events);
     for (const event of Array.from(this.relayedEventNames)) {
       if (wanted.has(event)) continue;

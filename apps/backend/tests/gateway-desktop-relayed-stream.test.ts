@@ -479,6 +479,10 @@ describe("a realm's portal and a local window on the relay", () => {
     const onPortal = await watch(realm.portal, LEAF_EVENT);
     await waitForFilter(gateway, [LEAF_EVENT], "The stream never opened");
     await waitUntil(() => resyncs(onWindow.frames).length === 1, "No first announcement");
+    // The portal can join after the first announcement has already reached
+    // the window. Reconnect must add no resync to either observer's baseline.
+    const windowResyncs = resyncs(onWindow.frames).length;
+    const portalResyncs = resyncs(onPortal.frames).length;
 
     await dropFilteredStream(gateway);
     emitRelayed(gateway, LEAF, "missed");
@@ -490,8 +494,8 @@ describe("a realm's portal and a local window on the relay", () => {
 
     expect(eventIds(onWindow.frames)).toEqual(["missed"]);
     expect(eventIds(onPortal.frames)).toEqual(["missed"]);
-    expect(resyncs(onWindow.frames)).toHaveLength(1);
-    expect(resyncs(onPortal.frames)).toHaveLength(1);
+    expect(resyncs(onWindow.frames)).toHaveLength(windowResyncs);
+    expect(resyncs(onPortal.frames)).toHaveLength(portalResyncs);
   });
 
   test("a gap the ring cannot cover reaches both as a resync", async () => {

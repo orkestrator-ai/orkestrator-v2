@@ -1,6 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
 import {
   DesktopWindowContexts,
+  createDesktopRelayedLifecycle,
   type DesktopWindowConnections,
   type DesktopWindowContextRecord,
 } from "../electron/desktop-window-contexts";
@@ -249,6 +250,47 @@ describe("the per-node relayed events renderers listen to", () => {
     h.windows.relayBackendEvent("local", "relayed-node-event", frame);
     expect(window.sent).toEqual([["orkestrator:event", "relayed-node-event", frame]]);
     expect(realm.sent).toEqual([[PORTAL_EVENT_CHANNEL, "relayed-node-event", frame]]);
+  });
+
+  test("main's realm teardown drops its portal filter and preserves the parent's", async () => {
+    const h = harness();
+    h.windows.register(h.context(1, "local").value);
+    h.realms.set(3, h.context(3, "workspace:leaf", { portal: "local" }).value);
+    await listen(h, 1, LEAF_EVENT);
+    await listen(h, 3, OTHER_EVENT, "portal");
+    const lifecycle = createDesktopRelayedLifecycle(
+      h.windows,
+      {
+        unregister: (id) => {
+          h.realms.delete(id);
+        },
+      },
+      h.publishConnectionLists,
+    );
+    h.connectionManager.setRelayedEvents.mockClear();
+    lifecycle.unregisterRealm({ webContents: { id: 3 } });
+    expect(h.realms.has(3)).toBe(false);
+    expect(filters(h)).toEqual([["local", [LEAF_EVENT]]]);
+  });
+
+  test("main's connection state callback reconciles scopes before publishing", async () => {
+    const h = harness();
+    const window = h.context(1, "local");
+    h.windows.register(window.value);
+    await listen(h, 1, LEAF_EVENT);
+    h.connectionManager.setRelayedEvents.mockClear();
+    const publish = mock(() => {
+      expect(filters(h)).toEqual([
+        ["local", []],
+        ["remote", [LEAF_EVENT]],
+      ]);
+    });
+    const lifecycle = createDesktopRelayedLifecycle(h.windows, { unregister() {} }, publish);
+    // A connection-owner update, without useConnection/followConnection doing
+    // the reconciliation for us. This is the callback main passes to the manager.
+    h.routes.set(window.value.scope, "remote");
+    lifecycle.onStateChange();
+    expect(publish).toHaveBeenCalledTimes(1);
   });
 
   test("a new document's reset drops only that channel's listens", async () => {

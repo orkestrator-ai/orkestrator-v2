@@ -352,3 +352,24 @@ export class DesktopWindowContexts<T extends DesktopWindowContextRecord> {
     return list;
   }
 }
+
+/** Lifecycle callbacks shared by main's realm and connection owners. */
+export function createDesktopRelayedLifecycle(
+  windows: Pick<
+    DesktopWindowContexts<DesktopWindowContextRecord>,
+    "dropRelayedListens" | "syncRelayedEvents"
+  >,
+  realms: { unregister(id: number): void },
+  publish: () => void,
+) {
+  return {
+    unregisterRealm(record: { webContents: { id: number } }): void {
+      realms.unregister(record.webContents.id);
+      windows.dropRelayedListens(record.webContents.id);
+    },
+    onStateChange(): void {
+      windows.syncRelayedEvents();
+      publish();
+    },
+  };
+}

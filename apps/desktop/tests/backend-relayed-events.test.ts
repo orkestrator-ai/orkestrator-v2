@@ -224,7 +224,19 @@ describe("the desktop client's relayed stream", () => {
     await quietPeriod();
     const count = gateway.relayed().length;
     expect(gateway.relayed().every((stream) => stream.aborted())).toBe(true);
+    // A window can still narrow its union after an unexpected local backend exit.
+    client.setRelayedEvents([OTHER_EVENT]);
+    client.setRelayedEvents([LEAF_EVENT, OTHER_EVENT]);
+    client.setRelayedEvents([]);
     await quietPeriod();
     expect(gateway.relayed()).toHaveLength(count);
+
+    // A new listening lifecycle accepts filters again, without stale names.
+    client.listen(() => undefined);
+    client.setRelayedEvents([OTHER_EVENT]);
+    await client.relayedEventReady(OTHER_EVENT);
+    expect(gateway.relayed()).toHaveLength(count + 1);
+    expect(gateway.relayed()[count]!.url.searchParams.get("includeEvents")).toBe(OTHER_EVENT);
+    client.stopListening();
   });
 });

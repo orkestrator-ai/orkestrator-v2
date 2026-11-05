@@ -191,7 +191,11 @@ import { ArtifactHostManager } from "./artifact-host-manager.js";
 import { reportArtifactHostDiagnostics, reportMainThreadStall } from "./diagnostic-logging.js";
 import { ARTIFACT_SHELL_SCHEME_PRIVILEGES } from "./artifact-host-shell.js";
 import { ARTIFACT_HOST_CHANNELS } from "@orkestrator/protocol/artifact-host-ipc";
-import { DesktopWindowContexts, emitToContents } from "./desktop-window-contexts.js";
+import {
+  DesktopWindowContexts,
+  createDesktopRelayedLifecycle,
+  emitToContents,
+} from "./desktop-window-contexts.js";
 import { readLocalWindowGatewayTransport } from "./local-window-transport.js";
 import { installSocketTypeOfServiceGuard } from "./socket-tos-guard.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
@@ -336,6 +340,9 @@ const desktopWindows = new DesktopWindowContexts<DesktopWindowContext>({
   menuChanged: () => createMenu(),
   logger: previewLog,
 });
+const relayedLifecycle = createDesktopRelayedLifecycle(desktopWindows, realmContexts, () =>
+  scheduleConnectionListPublish(),
+);
 const windowContexts = desktopWindows.windows;
 const installRealmRequestAuth = createRealmRequestAuthInstaller(
   (id) => realmContexts.get(id)?.scope,
@@ -1127,7 +1134,7 @@ function createWorkspaceViews(): WorkspaceViews {
         rendererUrl(),
       ),
     register: (record, parentWindow) => registerRealm(record, parentWindow.webContents.id),
-    unregister: (record) => unregisterRealm(record),
+    unregister: relayedLifecycle.unregisterRealm,
   });
 }
 
@@ -1171,11 +1178,6 @@ function registerRealm(record: WorkspaceViewRecord, parentWebContentsId: number)
     // As for a window: reconcile after every document load.
     emitToContents(contents, "native-event-stream-connected", undefined);
   });
-}
-
-function unregisterRealm(record: WorkspaceViewRecord): void {
-  realmContexts.unregister(record.webContents.id);
-  desktopWindows.dropRelayedListens(record.webContents.id);
 }
 
 /** A window's command node changed: its realms belonged to the previous one. */
@@ -1609,10 +1611,7 @@ async function startApplication(): Promise<void> {
     onEvent: () => undefined,
     onConnectionEvent: (connectionId, event, payload) =>
       desktopWindows.relayBackendEvent(connectionId, event, payload),
-    onStateChange: () => {
-      desktopWindows.syncRelayedEvents();
-      scheduleConnectionListPublish();
-    },
+    onStateChange: relayedLifecycle.onStateChange,
   });
   await connectionManager.initialize();
   if (backend) await backend.invoke("get_config");

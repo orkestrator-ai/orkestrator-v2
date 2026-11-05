@@ -1,3 +1,4 @@
+import { fetchModulesOutsideChromium } from "./browser-test";
 import { closeElectronWithin } from "./design-electron-cleanup";
 import { expect, test } from "./electron-fixtures";
 import { ownProcessGroup, stopProcessGroup } from "../process-cleanup";
@@ -118,12 +119,17 @@ test("a leaf's workspace opens in the window's central region without moving or 
         ELECTRON_DEV: "1",
         VITE_DEV_SERVER_URL: rendererUrl,
         ORKESTRATOR_RUNTIME_PROFILE_FILE: profilePath,
+        ORKESTRATOR_HOST_REACHABILITY_CHECK: "off",
       },
     });
     recordElectronDiagnostics(app);
     const electronApp = app;
     dismissStartupDialogs(electronApp);
+    await fetchModulesOutsideChromium(electronApp.context());
     const window = await electronApp.firstWindow();
+    // Wait for main's initial loadURL before replacing the possibly partial document.
+    await window.waitForURL((url) => url.protocol === "http:");
+    await window.reload();
     window.setDefaultTimeout(20_000);
     // The backend's boot-time reachability probe creates a Docker network, and
     // Chromium aborts the dev server's module loads on that interface change

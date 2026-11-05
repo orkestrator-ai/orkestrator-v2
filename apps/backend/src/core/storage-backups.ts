@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { StorageDatabase } from "./storage-database.js";
+import { CHANGE_LEDGER_DATABASE_FILE, type StorageDatabase } from "./storage-database.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("storage");
@@ -26,6 +26,21 @@ const log = createLogger("storage");
  *   so does one a day as it ages ({@link retainedHourlySnapshots}), so there is
  *   always a copy about a day old and one about {@link OLDEST_DAILY_AGE_MS} old.
  *
+ * The change-tracking ledger has its own file, `change-tracking.sqlite`, so
+ * hourly snapshots no longer copy it. It is copied separately and as best
+ * effort:
+ *
+ * - `change-tracking-daily-<stamp>.sqlite`, taken by the same check when the
+ *   newest is at least {@link LEDGER_INTERVAL_MS} old and the ledger changed
+ *   since it. The newest {@link KEEP_LEDGER} stay. These give way first to the
+ *   snapshot budget, and one that does not fit beside the others is skipped.
+ * - `change-tracking-pre-migration-v<from>-<stamp>.sqlite`, before the ledger
+ *   file's own schema is migrated. The newest {@link KEEP_PRE_MIGRATION} stay.
+ *
+ * Neither holds `<dataDir>/change-tracking/` (objects and evidence bodies), so
+ * a restored ledger can name bodies that are gone; readers report those as
+ * expired.
+ *
  * Every snapshot older than {@link MAX_BACKUP_AGE_MS} is deleted regardless.
  * That bound is also the privacy cost: content deleted from the live database
  * can survive in a snapshot until it ages out.
@@ -39,8 +54,10 @@ const log = createLogger("storage");
  * at every check. Temporary copies that an interrupted process left behind
  * are removed ({@link removeStaleBackupTemporaries}).
  *
- * Restore: stop the app, replace `orkestrator.sqlite` with a snapshot and
- * delete `orkestrator.sqlite-wal` and `-shm`.
+ * Restore: stop the app, replace `orkestrator.sqlite` with an hourly or
+ * pre-migration snapshot and delete `orkestrator.sqlite-wal` and `-shm`. The
+ * ledger is restored the same way, separately: `change-tracking.sqlite` from a
+ * `change-tracking-*` snapshot, deleting its `-wal` and `-shm`.
  */
 
 export const BACKUP_DIRECTORY = "backups";
@@ -54,6 +71,9 @@ export const DAILY_SPACING_MS = DAY_MS;
 /** The oldest daily copy kept: the youngest at least this old. */
 export const OLDEST_DAILY_AGE_MS = 3 * DAY_MS;
 export const KEEP_PRE_MIGRATION = 2;
+/** Spacing of the change-tracking ledger's snapshots. */
+export const LEDGER_INTERVAL_MS = DAY_MS;
+export const KEEP_LEDGER = 2;
 export const MAX_BACKUP_AGE_MS = 7 * DAY_MS;
 /** Off the start-up path, so a restart does not start a copy straight away. */
 export const BACKUP_FIRST_CHECK_DELAY_MS = 10 * 60 * 1000;
@@ -75,12 +95,14 @@ export const STALE_TEMPORARY_MS = HOURLY_INTERVAL_MS;
 const COPY_TIMEOUT_MS = 2 * HOURLY_INTERVAL_MS;
 /** Consecutive failures and the earliest next attempt, kept across restarts. */
 const BACKOFF_FILE = ".hourly-backoff.json";
+/** The same for the ledger's copies, so neither kind's failures delay the other. */
+const LEDGER_BACKOFF_FILE = ".ledger-backoff.json";
 
 const SNAPSHOT =
-  /^(hourly|pre-migration-v\d+)-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z)\.sqlite$/;
+  /^(hourly|pre-migration-v\d+|change-tracking-daily|change-tracking-pre-migration-v\d+)-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z)\.sqlite$/;
 /** `.<name>.<pid>.tmp`, and the journal, WAL and shared memory SQLite puts beside it. */
 const TEMPORARY =
-  /^\.(?:hourly|pre-migration-v\d+)-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z\.(\d+)\.tmp(?:-journal|-wal|-shm)?$/;
+  /^\.(?:hourly|pre-migration-v\d+|change-tracking-daily|change-tracking-pre-migration-v\d+)-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z\.(\d+)\.tmp(?:-journal|-wal|-shm)?$/;
 const TEMPORARY_SIDECARS = ["-journal", "-wal", "-shm"] as const;
 
 function stampOf(now: number): string {
@@ -101,8 +123,16 @@ function backupDirectory(dataDir: string): string {
 
 export interface StorageSnapshot {
   file: string;
-  kind: "hourly" | "pre-migration";
+  /** `ledger` and `ledger-pre-migration` copy `change-tracking.sqlite`; the others the main file. */
+  kind: "hourly" | "pre-migration" | "ledger" | "ledger-pre-migration";
   takenAt: number;
+}
+
+function snapshotKind(prefix: string): StorageSnapshot["kind"] {
+  if (prefix === "hourly") return "hourly";
+  if (prefix === "change-tracking-daily") return "ledger";
+  if (prefix.startsWith("change-tracking-pre-migration")) return "ledger-pre-migration";
+  return "pre-migration";
 }
 
 export function listStorageSnapshots(dataDir: string): StorageSnapshot[] {
@@ -120,7 +150,7 @@ export function listStorageSnapshots(dataDir: string): StorageSnapshot[] {
     if (!Number.isFinite(takenAt)) continue;
     snapshots.push({
       file: path.join(dataDir, BACKUP_DIRECTORY, entry),
-      kind: match[1] === "hourly" ? "hourly" : "pre-migration",
+      kind: snapshotKind(match[1]!),
       takenAt,
     });
   }
@@ -353,10 +383,12 @@ function snapshotBytes(entry: StorageSnapshot): number {
 }
 
 /**
- * Deletes the oldest hourly snapshots until every snapshot together, plus
- * `incomingBytes` for a copy about to be taken, fits {@link MAX_BACKUP_BYTES}.
- * The newest hourly snapshot always stays (until a newer one replaces it), as
- * do pre-migration ones, which have their own count bound.
+ * Deletes snapshots until every snapshot together, plus `incomingBytes` for a
+ * copy about to be taken, fits {@link MAX_BACKUP_BYTES}. The newest hourly
+ * snapshot always stays (until a newer one replaces it), as do pre-migration
+ * ones, which have their own count bound. Then the other hourly snapshots,
+ * newest first; the ledger's daily copies, which are best effort, give way
+ * first.
  */
 export function enforceBackupBudget(
   dataDir: string,
@@ -365,19 +397,26 @@ export function enforceBackupBudget(
 ): void {
   const snapshots = listStorageSnapshots(dataDir);
   let total = incomingBytes;
-  for (const entry of snapshots) if (entry.kind === "pre-migration") total += snapshotBytes(entry);
-  let over = false;
-  const hourly = snapshots.filter((entry) => entry.kind === "hourly");
-  hourly.forEach((entry, index) => {
-    const bytes = snapshotBytes(entry);
-    if (!over && (index === 0 || total + bytes <= maxBytes)) {
-      total += bytes;
-      return;
-    }
-    // Once one does not fit, every older one goes too: the oldest give way.
-    over = true;
-    fs.rmSync(entry.file, { force: true });
-  });
+  for (const entry of snapshots) if (isPreMigration(entry)) total += snapshotBytes(entry);
+  for (const kind of ["hourly", "ledger"] as const) {
+    let over = false;
+    snapshots
+      .filter((entry) => entry.kind === kind)
+      .forEach((entry, index) => {
+        const bytes = snapshotBytes(entry);
+        if (!over && ((kind === "hourly" && index === 0) || total + bytes <= maxBytes)) {
+          total += bytes;
+          return;
+        }
+        // Once one does not fit, every older one goes too: the oldest give way.
+        over = true;
+        fs.rmSync(entry.file, { force: true });
+      });
+  }
+}
+
+function isPreMigration(entry: StorageSnapshot): boolean {
+  return entry.kind === "pre-migration" || entry.kind === "ledger-pre-migration";
 }
 
 interface BackupBackoff {
@@ -393,11 +432,9 @@ export function failureBackoffMs(failures: number): number {
   );
 }
 
-function readBackoff(directory: string): BackupBackoff | null {
+function readBackoff(directory: string, file = BACKOFF_FILE): BackupBackoff | null {
   try {
-    const value = JSON.parse(
-      fs.readFileSync(path.join(directory, BACKOFF_FILE), "utf8"),
-    ) as unknown;
+    const value = JSON.parse(fs.readFileSync(path.join(directory, file), "utf8")) as unknown;
     if (
       typeof value === "object" &&
       value !== null &&
@@ -412,19 +449,19 @@ function readBackoff(directory: string): BackupBackoff | null {
   return null;
 }
 
-function recordFailure(directory: string, at: number): BackupBackoff {
-  const failures = (readBackoff(directory)?.failures ?? 0) + 1;
+function recordFailure(directory: string, at: number, file = BACKOFF_FILE): BackupBackoff {
+  const failures = (readBackoff(directory, file)?.failures ?? 0) + 1;
   const backoff = { failures, retryAt: at + failureBackoffMs(failures) };
   try {
-    fs.writeFileSync(path.join(directory, BACKOFF_FILE), JSON.stringify(backoff), { mode: 0o600 });
+    fs.writeFileSync(path.join(directory, file), JSON.stringify(backoff), { mode: 0o600 });
   } catch {
     // Not recorded: the next check simply tries again.
   }
   return backoff;
 }
 
-function clearBackoff(directory: string): void {
-  fs.rmSync(path.join(directory, BACKOFF_FILE), { force: true });
+function clearBackoff(directory: string, file = BACKOFF_FILE): void {
+  fs.rmSync(path.join(directory, file), { force: true });
 }
 
 /**
@@ -465,9 +502,13 @@ export function purgeStorageSnapshots(dataDir: string, now = Date.now()): void {
     snapshots.filter((entry) => entry.kind === "hourly"),
     now,
   );
-  for (const entry of snapshots
-    .filter((entry) => entry.kind === "pre-migration")
-    .slice(0, KEEP_PRE_MIGRATION)) {
+  const newest = (kind: StorageSnapshot["kind"], count: number) =>
+    snapshots.filter((entry) => entry.kind === kind).slice(0, count);
+  for (const entry of [
+    ...newest("pre-migration", KEEP_PRE_MIGRATION),
+    ...newest("ledger-pre-migration", KEEP_PRE_MIGRATION),
+    ...newest("ledger", KEEP_LEDGER),
+  ]) {
     kept.add(entry);
   }
   for (const entry of snapshots) {
@@ -521,11 +562,12 @@ export function snapshotBeforeMigration(
   dataDir: string,
   from: number,
   now = Date.now(),
+  prefix: "pre-migration" | "change-tracking-pre-migration" = "pre-migration",
 ): void {
   removeStaleBackupTemporaries(dataDir, now);
   // A migration must not run without its safety copy: a failure here aborts
   // the open rather than migrating unprotected.
-  const file = snapshot(database, dataDir, `pre-migration-v${from}-${stampOf(now)}`);
+  const file = snapshot(database, dataDir, `${prefix}-v${from}-${stampOf(now)}`);
   if (!file) throw new Error("Could not take a sound database snapshot before migrating");
   purgeStorageSnapshots(dataDir, now);
 }
@@ -616,5 +658,171 @@ export async function takeHourlySnapshotIfDue(
     return null;
   } finally {
     await release?.().catch(() => undefined);
+  }
+}
+
+/**
+ * Identifies the ledger's content cheaply: its schema version, its ingestion
+ * sequence and other meta, and its AUTOINCREMENT counters (every outbox event
+ * moves one). Pruning alone does not count as a change. `null` when it cannot
+ * be read.
+ */
+function ledgerFingerprint(file: string): string | null {
+  try {
+    const db = new Database(file, { readonly: true });
+    try {
+      const hash = createHash("sha256");
+      const { user_version } = db.query("PRAGMA user_version").get() as { user_version: number };
+      hash.update(`schema\0${user_version}`);
+      const meta = db
+        .query("SELECT key, value FROM change_ledger_meta ORDER BY key")
+        .all() as Array<{ key: string; value: string }>;
+      for (const { key, value } of meta) hash.update(`\0meta\0${key}\0${value}`);
+      const counters = db
+        .query("SELECT name, seq FROM sqlite_sequence ORDER BY name")
+        .all() as Array<{
+        name: string;
+        seq: number;
+      }>;
+      for (const { name, seq } of counters) hash.update(`\0seq\0${name}\0${seq}`);
+      return hash.digest("hex");
+    } finally {
+      db.close();
+    }
+  } catch {
+    return null;
+  }
+}
+
+function fileBytes(file: string): number {
+  try {
+    return fs.statSync(file).size;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Takes a snapshot of the change-tracking ledger (`change-tracking.sqlite`) if
+ * the newest is at least {@link LEDGER_INTERVAL_MS} old and the ledger changed
+ * since it, then purges. Best effort: it holds the same lease as the hourly
+ * snapshot (in the main database, so one copy runs at a time across backends),
+ * copies in a child process the same way, never throws, and backs off on its
+ * own after a failure. A copy that would not fit the snapshot budget beside
+ * every other snapshot is skipped rather than displacing one.
+ */
+export async function takeLedgerSnapshotIfDue(
+  database: StorageDatabase,
+  dataDir: string,
+  now: () => number = Date.now,
+  options: HourlySnapshotOptions = {},
+): Promise<string | null> {
+  const source = path.join(dataDir, CHANGE_LEDGER_DATABASE_FILE);
+  if (!fs.existsSync(source)) return null;
+  const copy = options.copy ?? copyDatabaseInChildProcess;
+  const availableBytes = options.availableBytes ?? availableDiskBytes;
+  const maxBytes = options.maxBytes ?? MAX_BACKUP_BYTES;
+  let release: (() => Promise<void>) | undefined;
+  let directory: string | undefined;
+  try {
+    release = await database.acquireLease("storage-backup", "database backup", {
+      acquireTimeoutMs: 5_000,
+      staleMs: 120_000,
+    });
+    const at = now();
+    directory = backupDirectory(dataDir);
+    removeStaleBackupTemporaries(dataDir, at);
+    purgeStorageSnapshots(dataDir, at);
+    enforceBackupBudget(dataDir, 0, maxBytes);
+    const snapshots = listStorageSnapshots(dataDir);
+    const newest = snapshots.find((entry) => entry.kind === "ledger");
+    if (newest) {
+      if (at - newest.takenAt < LEDGER_INTERVAL_MS) return null;
+      const current = ledgerFingerprint(source);
+      if (current !== null && ledgerFingerprint(newest.file) === current) return null;
+    }
+    const backoff = readBackoff(directory, LEDGER_BACKOFF_FILE);
+    if (backoff && at < backoff.retryAt) return null;
+
+    // The copy is compact, so the file plus its WAL is an upper bound.
+    const bytes = fileBytes(source) + fileBytes(`${source}-wal`);
+    const available = availableBytes(directory);
+    // Every other snapshot stays; the ledger copies this one replaces may go.
+    const kept = snapshots
+      .filter((entry) => entry.kind !== "ledger")
+      .reduce((sum, entry) => sum + snapshotBytes(entry), 0);
+    if (available < requiredFreeBytes(bytes) || kept + bytes > maxBytes) {
+      const { retryAt } = recordFailure(directory, at, LEDGER_BACKOFF_FILE);
+      log.warn("snapshot.ledger-skipped", {
+        availableBytes: available,
+        requiredBytes: requiredFreeBytes(bytes),
+        ledgerBytes: bytes,
+        budgetBytes: maxBytes - kept,
+        retryAt: new Date(retryAt).toISOString(),
+      });
+      return null;
+    }
+
+    const name = `change-tracking-daily-${stampOf(at)}`;
+    const target = path.join(directory, `${name}.sqlite`);
+    const temporary = temporaryFor(directory, name);
+    removeTemporary(temporary);
+    try {
+      if (!(await copy(source, temporary))) {
+        recordFailure(directory, at, LEDGER_BACKOFF_FILE);
+        log.warn("snapshot.integrity-failed");
+        return null;
+      }
+      fs.renameSync(temporary, target);
+    } finally {
+      removeTemporary(temporary);
+    }
+    clearBackoff(directory, LEDGER_BACKOFF_FILE);
+    purgeStorageSnapshots(dataDir, at);
+    enforceBackupBudget(dataDir, 0, maxBytes);
+    return target;
+  } catch (error) {
+    const backoff = directory ? recordFailure(directory, now(), LEDGER_BACKOFF_FILE) : null;
+    log.warn("snapshot.ledger-failed", {
+      retryAt: backoff ? new Date(backoff.retryAt).toISOString() : null,
+      error: formatLogError(error),
+    });
+    return null;
+  } finally {
+    await release?.().catch(() => undefined);
+  }
+}
+
+/**
+ * Free pages {@link runDatabaseUpkeep} returns per step (4 KiB pages: 4 MiB).
+ * Measured at about 30 ms a step on a 666 MB database, so the event loop is
+ * free between short steps.
+ */
+const UPKEEP_RELEASE_PAGES = 1024;
+/** Steps per check, so one check returns at most 1 GiB. */
+const UPKEEP_RELEASE_STEPS = 256;
+
+/**
+ * Periodic upkeep of the main database, run by the snapshot check after its
+ * copies: refreshes planner statistics ({@link StorageDatabase.optimize}) and
+ * returns free pages to the filesystem in bounded steps, yielding between
+ * them. Moving the ledger out (storage migration 7) leaves its old pages free
+ * in `orkestrator.sqlite`; this is what gives that space back. Never throws.
+ */
+export async function runDatabaseUpkeep(database: StorageDatabase): Promise<void> {
+  try {
+    if (database.isClosed()) return;
+    database.optimize();
+    let previous = Number.POSITIVE_INFINITY;
+    for (let step = 0; step < UPKEEP_RELEASE_STEPS; step += 1) {
+      if (database.isClosed()) return;
+      const left = database.releaseFreePages(UPKEEP_RELEASE_PAGES);
+      // Stop once nothing is left or a step makes no progress (a busy writer).
+      if (left === 0 || left >= previous) return;
+      previous = left;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+  } catch (error) {
+    log.warn("optimize.failed", { error: formatLogError(error, { message: false }) });
   }
 }

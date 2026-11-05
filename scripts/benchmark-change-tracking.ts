@@ -53,7 +53,10 @@ import { CHANGE_TRACKING_POLICY_V1 } from "../apps/backend/src/core/change-track
 import { compareManifests } from "../apps/backend/src/core/change-tracking/snapshot-diff";
 import { SharedScanQueue } from "../apps/backend/src/core/change-tracking/shared-physical-work";
 import { ChangeTrackingService } from "../apps/backend/src/core/change-tracking/service";
-import { openBackendDatabase } from "../apps/backend/src/core/storage-stores";
+import {
+  CHANGE_LEDGER_DATABASE_FILE,
+  openChangeLedgerDatabase,
+} from "../apps/backend/src/core/change-tracking/ledger-schema";
 
 function arg(name: string, fallback: string): string {
   const match = process.argv.find((value) => value.startsWith(`--${name}=`));
@@ -535,7 +538,7 @@ function benchCounting() {
 async function benchMeasurementRows() {
   const repo = makeRepo(50);
   const dataDir = mkdtempSync(path.join(tmpdir(), "ork-bench-ledger-"));
-  const database = openBackendDatabase(dataDir);
+  const database = openChangeLedgerDatabase(dataDir);
   const service = new ChangeTrackingService({
     dataDir,
     database: () => database,
@@ -556,7 +559,9 @@ async function benchMeasurementRows() {
     database.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
     return {
       fileMiB:
-        Math.round((statSync(path.join(dataDir, "orkestrator.sqlite")).size / 2 ** 20) * 10) / 10,
+        Math.round(
+          (statSync(path.join(dataDir, CHANGE_LEDGER_DATABASE_FILE)).size / 2 ** 20) * 10,
+        ) / 10,
       freeMiB: Math.round(((pragma("freelist_count") * pragma("page_size")) / 2 ** 20) * 10) / 10,
     };
   };

@@ -471,6 +471,12 @@ const SQLITE_FILES = new Set([
   "orkestrator.sqlite-wal",
   "orkestrator.sqlite-shm",
 ]);
+/** The change-tracking ledger's own database: its bytes move with every checkpoint. */
+const LEDGER_SQLITE_FILES = new Set([
+  "change-tracking.sqlite",
+  "change-tracking.sqlite-wal",
+  "change-tracking.sqlite-shm",
+]);
 
 function walk(dir: string, prefix = ""): Record<string, string> {
   const out: Record<string, string> = {};
@@ -483,7 +489,7 @@ function walk(dir: string, prefix = ""): Record<string, string> {
       Object.assign(out, walk(absolute, relative));
     } else if (stat.isSymbolicLink()) {
       out[relative] = `link ${readlinkSync(absolute)}`;
-    } else if (!SQLITE_FILES.has(relative)) {
+    } else if (!SQLITE_FILES.has(relative) && !LEDGER_SQLITE_FILES.has(relative)) {
       out[relative] =
         `file ${(stat.mode & 0o777).toString(8)} ${stat.size} ${sha256(readFileSync(absolute))}`;
     }

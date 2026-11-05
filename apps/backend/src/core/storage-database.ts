@@ -32,8 +32,28 @@ const log = createLogger("storage");
 
 export { STORAGE_DATABASE_FILE };
 
+/**
+ * The change-tracking ledger's own database file, beside
+ * {@link STORAGE_DATABASE_FILE} (`change-tracking/ledger-schema.ts`).
+ */
+export const CHANGE_LEDGER_DATABASE_FILE = "change-tracking.sqlite";
+
 /** Freed pages returned per scrub (4 KiB pages: at most 16 MiB at a time). */
 const INCREMENTAL_VACUUM_PAGES = 4096;
+
+/**
+ * First wait before a deferred scrub tries again ({@link StorageDatabase.scrubDeletedContent}).
+ * It doubles per busy attempt up to {@link SCRUB_RETRY_MAX_MS}.
+ */
+export const SCRUB_RETRY_FIRST_MS = 5_000;
+/** The longest wait between attempts of a deferred scrub. */
+export const SCRUB_RETRY_MAX_MS = 60_000;
+
+/**
+ * Rows `PRAGMA optimize` samples per index (`analysis_limit`), which bounds its
+ * cost on a large table. SQLite recommends a few hundred.
+ */
+const OPTIMIZE_ANALYSIS_LIMIT = 400;
 
 /** How a store's JSON value maps onto rows. Fixed per store name. */
 export type StoreLayout =
@@ -218,6 +238,11 @@ export interface StorageDatabaseOptions {
   migrations?: readonly StorageMigration[];
   /** Resolves a store's layout; unknown stores are documents. */
   layoutFor?: (store: string) => StoreLayout;
+  /**
+   * The database file in `dataDir`, {@link STORAGE_DATABASE_FILE} by default.
+   * The change-tracking ledger has its own file (`change-tracking/ledger-schema.ts`).
+   */
+  file?: string;
   busyTimeoutMs?: number;
   /**
    * Called before migrating a database that already has data (outside any
@@ -271,11 +296,15 @@ export class StorageDatabase {
   private readonly layoutFor: (store: string) => StoreLayout;
   private readonly observe: ((event: StorageReadEvent) => void) | undefined;
   private readonly observeFetch: ((length: number) => void) | undefined;
+  private readonly busyTimeoutMs: number;
+  /** The timer of a deferred scrub, while one is pending. */
+  private scrubRetry: ReturnType<typeof setTimeout> | null = null;
+  private scrubRetryDelayMs = SCRUB_RETRY_FIRST_MS;
   private closed = false;
 
   constructor(dataDir: string, options: StorageDatabaseOptions = {}) {
     fs.mkdirSync(dataDir, { recursive: true });
-    this.path = path.join(dataDir, STORAGE_DATABASE_FILE);
+    this.path = path.join(dataDir, options.file ?? STORAGE_DATABASE_FILE);
     if (fs.existsSync(this.path) && fs.lstatSync(this.path).isSymbolicLink()) {
       throw new Error("Storage database must not be a symbolic link");
     }
@@ -287,7 +316,8 @@ export class StorageDatabase {
       // Sensitive stores (agent mail, prompt queues, credentials) share this
       // file. SQLite creates -wal/-shm with the database file's mode.
       fs.chmodSync(this.path, 0o600);
-      this.db.exec(`PRAGMA busy_timeout = ${Math.max(0, options.busyTimeoutMs ?? 10_000)}`);
+      this.busyTimeoutMs = Math.max(0, options.busyTimeoutMs ?? 10_000);
+      this.db.exec(`PRAGMA busy_timeout = ${this.busyTimeoutMs}`);
       // Only takes effect before the first table exists (a new database);
       // switching later needs a full VACUUM. Lets deletes give space back.
       this.db.exec("PRAGMA auto_vacuum = INCREMENTAL");
@@ -296,7 +326,9 @@ export class StorageDatabase {
       this.db.exec("PRAGMA synchronous = FULL");
       // Deleting user content must not leave it readable in free pages.
       this.db.exec("PRAGMA secure_delete = ON");
-      this.db.exec("PRAGMA foreign_keys = ON");
+      // No table declares a foreign key, so `foreign_keys` is left off: setting
+      // it would promise referential checks that nothing enforces. A migration
+      // that declares keys must turn it on here.
       this.db.exec("PRAGMA journal_size_limit = 8388608");
       const migrations = [SCHEMA, ...(options.migrations ?? [])];
       const target = migrations.reduce((max, migration) => Math.max(max, migration.version), 0);
@@ -327,8 +359,19 @@ export class StorageDatabase {
     }
   }
 
+  /**
+   * Closes the connection. Planner statistics are refreshed first for the
+   * tables this connection queried ({@link optimize}), as SQLite recommends,
+   * and a deferred scrub is tried once more without waiting.
+   */
   close(): void {
     if (this.closed) return;
+    this.optimize();
+    if (this.scrubRetry) {
+      clearTimeout(this.scrubRetry);
+      this.scrubRetry = null;
+      this.tryTruncateWal();
+    }
     this.closed = true;
     this.cache.clear();
     this.db.close();
@@ -970,22 +1013,112 @@ export class StorageDatabase {
   /**
    * Makes deleted content unrecoverable from the WAL. `secure_delete` zeroes
    * freed pages in the main file; a truncating checkpoint moves the deleting
-   * transaction there and discards the old frames. Busy readers can defer
-   * truncation, so this is best effort and never throws. SQLite reports that
-   * deferral in the checkpoint's result row rather than as an error.
+   * transaction there and discards the old frames.
+   *
+   * The checkpoint never waits. A reader holding an older snapshot (an hourly
+   * snapshot copy, another backend's long read) would make a truncating
+   * checkpoint call the busy handler for the whole busy timeout, blocking the
+   * event loop, so it runs with `busy_timeout = 0`: it copies what it can and
+   * reports the rest busy. A busy or failed scrub is then retried from a timer,
+   * also without waiting, {@link SCRUB_RETRY_FIRST_MS} later and doubling up to
+   * {@link SCRUB_RETRY_MAX_MS}, until the WAL truncates or the connection
+   * closes. So deleted content leaves the WAL within a minute of the last
+   * older reader finishing. Never throws.
    */
   scrubDeletedContent(): void {
     try {
       // Return a bounded number of freed pages to the filesystem first, so a
       // large delete shrinks the file without one long blocking vacuum.
       this.db.exec(`PRAGMA incremental_vacuum(${INCREMENTAL_VACUUM_PAGES})`);
-      const { busy } = this.db.query("PRAGMA wal_checkpoint(TRUNCATE)").get() as { busy: number };
-      if (busy === 0) log.recovered("scrub.checkpoint-failed", "scrub");
-      else log.throttled("warn", "scrub.checkpoint-failed", { scope: "scrub", kind: "busy" });
+    } catch {
+      // A concurrent writer holds the lock; the next scrub returns the pages.
+    }
+    if (this.tryTruncateWal()) {
+      this.cancelScrubRetry();
+      return;
+    }
+    this.scheduleScrubRetry();
+  }
+
+  /** Whether a scrub is waiting for readers to move on. */
+  hasDeferredScrub(): boolean {
+    return this.scrubRetry !== null;
+  }
+
+  /**
+   * One truncating checkpoint that never invokes the busy handler. True when
+   * the WAL was truncated. A failure is logged (throttled) and reported false.
+   */
+  private tryTruncateWal(): boolean {
+    if (this.closed) return false;
+    try {
+      this.db.exec("PRAGMA busy_timeout = 0");
+      try {
+        const { busy } = this.db.query("PRAGMA wal_checkpoint(TRUNCATE)").get() as {
+          busy: number;
+        };
+        if (busy === 0) {
+          log.recovered("scrub.checkpoint-failed", "scrub");
+          return true;
+        }
+        log.throttled("warn", "scrub.checkpoint-failed", { scope: "scrub", kind: "busy" });
+        return false;
+      } finally {
+        this.db.exec(`PRAGMA busy_timeout = ${this.busyTimeoutMs}`);
+      }
     } catch (error) {
-      // A concurrent reader keeps the WAL alive; the next checkpoint scrubs it.
       log.throttled("warn", "scrub.checkpoint-failed", {
         scope: "scrub",
+        error,
+        fields: () => ({ error: formatLogError(error, { message: false, stack: false }) }),
+      });
+      return false;
+    }
+  }
+
+  private scheduleScrubRetry(): void {
+    if (this.closed || this.scrubRetry) return;
+    const delay = this.scrubRetryDelayMs;
+    this.scrubRetryDelayMs = Math.min(delay * 2, SCRUB_RETRY_MAX_MS);
+    this.scrubRetry = setTimeout(() => {
+      this.scrubRetry = null;
+      if (this.closed) return;
+      if (this.tryTruncateWal()) this.scrubRetryDelayMs = SCRUB_RETRY_FIRST_MS;
+      else this.scheduleScrubRetry();
+    }, delay);
+    this.scrubRetry.unref?.();
+  }
+
+  private cancelScrubRetry(): void {
+    if (this.scrubRetry) clearTimeout(this.scrubRetry);
+    this.scrubRetry = null;
+    this.scrubRetryDelayMs = SCRUB_RETRY_FIRST_MS;
+  }
+
+  /**
+   * Refreshes the query planner's statistics for the tables this connection
+   * has queried, with `PRAGMA optimize` bounded by `analysis_limit`. Cheap when
+   * nothing changed much, which is the usual case, so it runs from the
+   * periodic backup check and at close. It never waits for another writer and
+   * never throws: stale statistics only cost plan quality.
+   */
+  optimize(): void {
+    if (this.closed) return;
+    try {
+      // Statistics are written in a write transaction. Never wait for another
+      // writer here: a busy database just keeps its statistics until next time.
+      this.db.exec("PRAGMA busy_timeout = 0");
+      try {
+        this.db.exec(`PRAGMA analysis_limit = ${OPTIMIZE_ANALYSIS_LIMIT}`);
+        this.db.exec("PRAGMA optimize");
+      } finally {
+        this.db.exec(`PRAGMA busy_timeout = ${this.busyTimeoutMs}`);
+      }
+      log.recovered("optimize.failed", "optimize");
+    } catch (error) {
+      if ((error as { code?: unknown }).code === "SQLITE_BUSY") return;
+      log.throttled("warn", "optimize.failed", {
+        scope: "optimize",
         error,
         fields: () => ({ error: formatLogError(error, { message: false, stack: false }) }),
       });

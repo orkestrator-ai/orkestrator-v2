@@ -55,7 +55,15 @@ export const STORAGE_LOG_AREAS = defineLogAreas({
       "lease.heartbeat-failed":
         "A held lease's heartbeat failed, which shortens the lease; the next one retries.",
       "scrub.checkpoint-failed":
-        "Deleted content could not be scrubbed from the WAL because the truncating checkpoint failed or was blocked; the next checkpoint retries.",
+        "Deleted content could not be scrubbed from the WAL yet because the truncating checkpoint failed or a reader held an older snapshot; it is retried without waiting until it succeeds.",
+      "optimize.failed":
+        "Refreshing the query planner's statistics failed; queries still run and the next check retries.",
+      "ledger.moved":
+        "The change-tracking ledger was moved out of the main database into its own file; `rows` and `durationMs` say how much and how long.",
+      "snapshot.ledger-skipped":
+        "The daily change-tracking ledger snapshot was skipped because the disk or the snapshot budget lacks room; `retryAt` says when it tries again.",
+      "snapshot.ledger-failed":
+        "The daily change-tracking ledger snapshot failed; `retryAt` says when it tries again, if known.",
       ...THROTTLE_LOG_EVENTS,
     },
   },

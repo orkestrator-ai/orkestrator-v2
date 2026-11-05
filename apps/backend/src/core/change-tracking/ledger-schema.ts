@@ -1,20 +1,48 @@
 /**
- * ChangeLedger schema (storage migration 4).
+ * ChangeLedger schema and its database file.
  *
- * The first engine with its own indexed tables in `orkestrator.sqlite`: the
- * ledger needs joins and range scans (turns of a thread, open windows of a
- * worktree, outbox order) that the shared `store_rows` layout cannot serve
- * without decoding whole stores. Rows hold identities, bounded metadata and
- * references only. File contents and evidence bodies are files under
- * `<dataDir>/change-tracking/` (see snapshot-store.ts, evidence-body-store.ts).
+ * The first engine with its own indexed tables: the ledger needs joins and
+ * range scans (turns of a thread, open windows of a worktree, outbox order)
+ * that the shared `store_rows` layout cannot serve without decoding whole
+ * stores. Rows hold identities, bounded metadata and references only. File
+ * contents and evidence bodies are files under `<dataDir>/change-tracking/`
+ * (see snapshot-store.ts, evidence-body-store.ts).
  *
- * Import nothing at runtime: `storage-stores.ts` loads this module while
- * opening the database.
+ * The tables live in their own file, {@link CHANGE_LEDGER_DATABASE_FILE},
+ * beside `orkestrator.sqlite`. Storage migration 4 first created them in the
+ * main database; migration 7 ({@link moveChangeLedgerMigration}) moves them
+ * out, so the hourly snapshot of the app's stores no longer copies the ledger.
+ * Nothing joins or writes across the two files.
+ *
+ * `storage-stores.ts` loads this module while opening the database, so it
+ * imports only the storage layer at runtime, never the rest of change tracking.
  */
 
-import type { StorageMigration } from "../storage-database.js";
+import { createLogger } from "@orkestrator/protocol/logger";
+import { snapshotBeforeMigration } from "../storage-backups.js";
+import {
+  CHANGE_LEDGER_DATABASE_FILE,
+  StorageDatabase,
+  type StorageDatabaseOptions,
+  type StorageMigration,
+} from "../storage-database.js";
 
+const log = createLogger("storage");
+
+/** Storage migration 4: the ledger's tables, first created in `orkestrator.sqlite`. */
 export const CHANGE_LEDGER_MIGRATION_VERSION = 4;
+
+/** Storage migration 7: the ledger leaves `orkestrator.sqlite` for its own file. */
+export const CHANGE_LEDGER_MOVE_MIGRATION_VERSION = 7;
+
+export { CHANGE_LEDGER_DATABASE_FILE };
+
+/**
+ * Schema version of {@link CHANGE_LEDGER_DATABASE_FILE}: 1 is the storage base
+ * schema every `StorageDatabase` file has, 2 the ledger's tables. Versioned on
+ * its own, and refused when newer than the build, as the main file is.
+ */
+export const CHANGE_LEDGER_FILE_SCHEMA_VERSION = 2;
 
 export const CHANGE_LEDGER_SCHEMA = `
 CREATE TABLE change_ledger_meta (
@@ -347,6 +375,12 @@ CREATE TABLE change_restore_operations (
 ) STRICT;
 `;
 
+/** Every ledger table, in schema order. */
+export const CHANGE_LEDGER_TABLES: readonly string[] = Array.from(
+  CHANGE_LEDGER_SCHEMA.matchAll(/^CREATE TABLE (\w+) \(/gm),
+  (match) => match[1]!,
+);
+
 export const changeLedgerMigration: StorageMigration = {
   version: CHANGE_LEDGER_MIGRATION_VERSION,
   name: "change-ledger",
@@ -354,3 +388,140 @@ export const changeLedgerMigration: StorageMigration = {
     db.exec(CHANGE_LEDGER_SCHEMA);
   },
 };
+
+const CHANGE_LEDGER_FILE_MIGRATIONS: readonly StorageMigration[] = [
+  {
+    version: CHANGE_LEDGER_FILE_SCHEMA_VERSION,
+    name: "change-ledger",
+    up({ db }) {
+      db.exec(CHANGE_LEDGER_SCHEMA);
+    },
+  },
+];
+
+/**
+ * Opens (creating on first use) the ledger's own database. It has the main
+ * database's settings (WAL, full sync, secure delete) and, before a later
+ * schema migration, its own `change-tracking-pre-migration-v<from>` snapshot.
+ */
+export function openChangeLedgerDatabase(
+  dataDir: string,
+  options: Pick<StorageDatabaseOptions, "busyTimeoutMs"> = {},
+): StorageDatabase {
+  return new StorageDatabase(dataDir, {
+    ...options,
+    file: CHANGE_LEDGER_DATABASE_FILE,
+    migrations: CHANGE_LEDGER_FILE_MIGRATIONS,
+    beforeMigrate: (opened, from) =>
+      snapshotBeforeMigration(opened, dataDir, from, Date.now(), "change-tracking-pre-migration"),
+  });
+}
+
+/**
+ * Storage migration 7. Copies the ledger's committed rows from
+ * `orkestrator.sqlite` into {@link CHANGE_LEDGER_DATABASE_FILE}, replacing
+ * whatever that file held, then drops the tables here. The copy is one
+ * transaction on the ledger file, through a second connection that attaches
+ * this database and only reads it: WAL lets it read the committed rows while the
+ * migration holds the write lock. Earlier migrations in the same open never
+ * write ledger rows, so the committed rows are all of them. Tables migration 4
+ * created in this same open are empty, so a new database copies nothing and
+ * leaves the ledger file to be created on first use.
+ *
+ * A crash between the copy and this migration's commit leaves both copies;
+ * the next open copies again, which replaces the file's rows with the same
+ * ones. The pre-migration snapshot taken before this open keeps the ledger as
+ * it was, so restoring that snapshot and starting again moves that ledger.
+ */
+export const moveChangeLedgerMigration: StorageMigration = {
+  version: CHANGE_LEDGER_MOVE_MIGRATION_VERSION,
+  name: "move-change-ledger",
+  up({ dataDir, db, database }) {
+    const present = new Set(
+      (
+        db.query("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{
+          name: string;
+        }>
+      ).map((row) => row.name),
+    );
+    const tables = CHANGE_LEDGER_TABLES.filter((table) => present.has(table));
+    if (tables.length === 0) return;
+    const started = performance.now();
+    // Tables migration 4 created in this same open are empty: nothing to copy.
+    const rows =
+      database.openedAtVersion < CHANGE_LEDGER_MIGRATION_VERSION
+        ? 0
+        : copyCommittedLedger(dataDir, database.path);
+    // The rows now live in the ledger file, so zeroing every dropped page
+    // would only rewrite the whole ledger region for nothing. The free pages
+    // are returned to the filesystem in steps after start-up.
+    db.exec("PRAGMA secure_delete = OFF");
+    try {
+      // Dropping a table also removes its AUTOINCREMENT counter.
+      for (const table of tables) db.exec(`DROP TABLE IF EXISTS ${table}`);
+    } finally {
+      db.exec("PRAGMA secure_delete = ON");
+    }
+    log.info("ledger.moved", { rows, durationMs: Math.round(performance.now() - started) });
+  },
+};
+
+/** Copies every committed ledger row from `source` into the ledger file. Returns the rows copied. */
+function copyCommittedLedger(dataDir: string, source: string): number {
+  const target = openChangeLedgerDatabase(dataDir);
+  try {
+    const db = target.db;
+    db.query("ATTACH DATABASE ? AS moving").run(source);
+    try {
+      // Deferred, not IMMEDIATE: an IMMEDIATE transaction would ask for the
+      // write lock of the attached database too, which the migration holds.
+      return db.transaction(() => {
+        const visible = new Set(
+          (
+            db.query("SELECT name FROM moving.sqlite_master WHERE type = 'table'").all() as Array<{
+              name: string;
+            }>
+          ).map((row) => row.name),
+        );
+        let rows = 0;
+        for (const table of CHANGE_LEDGER_TABLES) {
+          db.exec(`DELETE FROM main.${table}`);
+          if (!visible.has(table)) continue;
+          const columns = sharedColumns(db, table);
+          rows += db
+            .query(`INSERT INTO main.${table} (${columns}) SELECT ${columns} FROM moving.${table}`)
+            .run().changes;
+        }
+        if (visible.has("sqlite_sequence")) {
+          // AUTOINCREMENT counters, so no id is ever reused after the move.
+          for (const table of CHANGE_LEDGER_TABLES) {
+            db.query("DELETE FROM main.sqlite_sequence WHERE name = ?").run(table);
+            db.query(
+              "INSERT INTO main.sqlite_sequence (name, seq) SELECT name, seq FROM moving.sqlite_sequence WHERE name = ?",
+            ).run(table);
+          }
+        }
+        return rows;
+      })();
+    } finally {
+      db.exec("DETACH DATABASE moving");
+    }
+  } finally {
+    target.close();
+  }
+}
+
+/** The columns `table` has in both files, quoted, in the ledger file's order. */
+function sharedColumns(db: StorageDatabase["db"], table: string): string {
+  const names = (schema: string) =>
+    (
+      db.query(`SELECT name FROM pragma_table_info(?, ?)`).all(table, schema) as Array<{
+        name: string;
+      }>
+    ).map((row) => row.name);
+  const source = new Set(names("moving"));
+  return names("main")
+    .filter((name) => source.has(name))
+    .map((name) => `"${name}"`)
+    .join(", ");
+}

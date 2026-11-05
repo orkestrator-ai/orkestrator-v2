@@ -167,6 +167,10 @@ export class ChangeRetentionService {
       previous = left;
       await yieldToEventLoop();
     }
+    // The ledger is the database with joins and range scans, so keep its
+    // planner statistics current as it grows and shrinks. Cheap when nothing
+    // changed much.
+    ledger.optimize();
   }
 
   private async pruneBatches(

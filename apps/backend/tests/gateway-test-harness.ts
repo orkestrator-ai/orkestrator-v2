@@ -42,7 +42,9 @@ import { afterEach, expect, mock } from "bun:test";
 import { WebSocket } from "ws";
 
 import {
+  encodeTerminalBinaryFrame,
   parseTerminalWebSocketServerControlFrame,
+  TERMINAL_BINARY_FRAME_TYPE,
   TERMINAL_WEBSOCKET_SUBPROTOCOL,
   type TerminalWebSocketServerControlFrame,
 } from "@orkestrator/protocol/terminal-websocket";
@@ -625,4 +627,65 @@ export function stallSocket(ws: WebSocket) {
       }
     },
   };
+}
+
+export const HELD_INPUT = new TextEncoder().encode("held");
+
+/** The first terminal operation blocks, so later ones wait on the session's ordering tail. */
+export function blockingTerminalBackend() {
+  let release!: () => void;
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const operations: string[] = [];
+  const backend = {
+    invoke: mock(async (command: string, args: Record<string, unknown>) => {
+      if (command === "get_terminal_session") return { id: args.sessionId, running: true };
+      if (command === "get_terminal_output_snapshot") {
+        return { output: "", generation: 1, revision: 0 };
+      }
+      if (command === "terminal_write" || command === "terminal_resize") {
+        operations.push(command);
+        if (operations.length === 1) await blocked;
+      }
+      return undefined;
+    }),
+  };
+  return { backend, operations, release };
+}
+
+/** Sends input, input and a resize; the first input is in the backend when this returns. */
+export async function queueBehindBlockedWrite(
+  terminal: Awaited<ReturnType<typeof openTerminalSocket>>,
+  operations: string[],
+  gauges: { pendingOperationCount: number },
+) {
+  terminal.socket.send(JSON.stringify({ type: "subscribe", requestId: 1, sessionId: "queued" }));
+  const subscribed = await nextTerminalControl(terminal.inbox, "subscribed");
+  if (subscribed.type !== "subscribed") throw new Error("Expected subscribed frame");
+  for (const revision of [1, 2]) {
+    terminal.socket.send(
+      encodeTerminalBinaryFrame({
+        type: TERMINAL_BINARY_FRAME_TYPE.input,
+        channelId: subscribed.channelId,
+        generation: 1,
+        revision,
+        bytes: HELD_INPUT,
+      }),
+    );
+  }
+  terminal.socket.send(
+    JSON.stringify({
+      type: "resize",
+      channelId: subscribed.channelId,
+      operationId: 3,
+      cols: 80,
+      rows: 24,
+    }),
+  );
+  await waitUntil(
+    () => operations.length === 1 && gauges.pendingOperationCount === 3,
+    "Terminal operations never queued behind the blocked write",
+  );
+  return { channelId: subscribed.channelId };
 }

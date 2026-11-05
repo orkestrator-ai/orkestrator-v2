@@ -94,6 +94,9 @@ export class MessageRenderBoundary extends Component<
   MessageRenderBoundaryProps,
   MessageRenderBoundaryState
 > {
+  /** What the renderer error ring records as this boundary (`renderer-errors.ts`). */
+  static readonly diagnosticBoundary = "message-row";
+
   state: MessageRenderBoundaryState = { failed: false };
 
   static getDerivedStateFromError(): MessageRenderBoundaryState {

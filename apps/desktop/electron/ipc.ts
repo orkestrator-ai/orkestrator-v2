@@ -182,6 +182,11 @@ export type MainIpcDependencies = {
   getBrowserPreviews?: (event: IpcEventLike) => BrowserPreviewController | null;
   /** The sending window's live interactive-artifact host; absent means unavailable. */
   getArtifactHosts?: (event: IpcEventLike) => ArtifactHostController | null;
+  /**
+   * The sending renderer's `orkestrator:debug` preference, read at its start.
+   * Decides only whether Help offers Open Developer Tools.
+   */
+  setRendererDebugLogging?: (event: IpcEventLike, enabled: boolean) => void;
   trustedRendererUrl: string;
 };
 
@@ -272,6 +277,7 @@ export function registerMainIpc({
   browserPreviews,
   getBrowserPreviews,
   getArtifactHosts,
+  setRendererDebugLogging,
   trustedRendererUrl,
 }: MainIpcDependencies): void {
   const isTrustedSender = (event: IpcEventLike): boolean =>
@@ -465,6 +471,13 @@ export function registerMainIpc({
     const window = getMainWindow(event);
     if (!window) return false;
     window.webContents.setZoomFactor(factor);
+    return true;
+  });
+
+  handle("orkestrator:window:set-renderer-debug", (event, enabled: unknown) => {
+    if (typeof enabled !== "boolean") throw new Error("Expected renderer debug logging on or off");
+    if (!setRendererDebugLogging) return false;
+    setRendererDebugLogging(event, enabled);
     return true;
   });
 

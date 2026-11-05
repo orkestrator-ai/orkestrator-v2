@@ -15,11 +15,10 @@ A batch file combines several reports as numbered parts and takes the rating of 
 | Rank | File | Criticality | Finished | Covers | Why this rating |
 | --- | --- | --- | --- | --- | --- |
 | 1 | [0490-e25-container-start.md](0490-e25-container-start.md) | Medium | No | **E25, Container start.**<br>`0490`: DK-14: Agent-home inputs are copied in full per environment and again on every start<br>`0500`: DK-13: Each environment clones from the remote again | From `0490`: Every container start copies inputs again, at a size nobody has measured. |
-| 2 | [0790-e16-log-controls.md](0790-e16-log-controls.md) | Medium | No | **E16, Log controls.**<br>`0790`: R8's remainder (L7) and its control: a switch, DevTools and a persisted error ring.<br>`0890`: User controls: presets, auto-revert and privacy text.<br>`0900`: User controls: `--log-level` and `--log-category`. | From `0790`: Renderer bugs in the packaged app leave no trace, which is a supportability gap rather than broken behaviour. |
-| 3 | [0160-e10-conditional-reads-and-deltas.md](0160-e10-conditional-reads-and-deltas.md) | Low | No | **E10, Conditional reads and deltas.**<br>`0160`: TX-1: A transcript delta can only be built from the newest cached view<br>`0180`: TX-5: Session-state reads have no conditional path from the bridge<br>`0190`: TX-6: Bridge transcript windows are always sent whole | From `0160`: The report rates it High, but the maintainer gated it on a baseline, so it stays Low until that measurement arrives. |
-| 4 | [0390-gw-7-websocket-compression.md](0390-gw-7-websocket-compression.md) | Low | No | GW-7: No WebSocket message compression | Deferred by 0052 decision D6 until the transport direction is chosen. |
-| 5 | [0560-st-9-agent-mail-store-remainder.md](0560-st-9-agent-mail-store-remainder.md) | Low | No | ST-9 (rest): Agent mail: pending injects and mailbox lists still sit on the whole store | The read cost the finding described has gone, and the rest needs a stored-format change only a measurement could justify. |
-| 6 | [0693-dk-10-second-claude-binary.md](0693-dk-10-second-claude-binary.md) | Low | No | DK-10: The image ships two Claude Code native binaries | It is an optional image-size saving that waits on a maintainer decision. |
+| 2 | [0160-e10-conditional-reads-and-deltas.md](0160-e10-conditional-reads-and-deltas.md) | Low | No | **E10, Conditional reads and deltas.**<br>`0160`: TX-1: A transcript delta can only be built from the newest cached view<br>`0180`: TX-5: Session-state reads have no conditional path from the bridge<br>`0190`: TX-6: Bridge transcript windows are always sent whole | From `0160`: The report rates it High, but the maintainer gated it on a baseline, so it stays Low until that measurement arrives. |
+| 3 | [0390-gw-7-websocket-compression.md](0390-gw-7-websocket-compression.md) | Low | No | GW-7: No WebSocket message compression | Deferred by 0052 decision D6 until the transport direction is chosen. |
+| 4 | [0560-st-9-agent-mail-store-remainder.md](0560-st-9-agent-mail-store-remainder.md) | Low | No | ST-9 (rest): Agent mail: pending injects and mailbox lists still sit on the whole store | The read cost the finding described has gone, and the rest needs a stored-format change only a measurement could justify. |
+| 5 | [0693-dk-10-second-claude-binary.md](0693-dk-10-second-claude-binary.md) | Low | No | DK-10: The image ships two Claude Code native binaries | It is an optional image-size saving that waits on a maintainer decision. |
 
 ## Parallel running
 
@@ -36,14 +35,12 @@ This index only changes when a branch merges, so it can't show what is running n
 | E1 | Baseline run | The baseline task in `0150`, `0160`, `0180` and `0190` | No lane | None | None |
 | E25 | [Container start](0490-e25-container-start.md) | `0490`, `0500` | Containers, 3 of 3 | None | None |
 | E10 | [Conditional reads and deltas](0160-e10-conditional-reads-and-deltas.md) | `0160`, `0180`, `0190` | Transcript, 1 of 1 | E1 (Baseline run) | None |
-| E16 | [Log controls](0790-e16-log-controls.md) | `0790`, `0890`, `0900` | Logging and diagnostics, 1 of 1 | None | None |
 
 Why these are grouped:
 
 - **E1:** The baseline task in `0150`, `0160`, `0180` and `0190`. A measurement on an isolated `dev:test` profile with no code change, and it must happen before E10. `0400`'s baseline was taken with E26; see the closing check of E26 below.
 - **E25:** `0500` depends on `0490`.
 - **E10:** Waiting on the baseline. `0190` links to `0160`.
-- **E16:** Linked settings for log detail.
 
 ### Files built on their own
 
@@ -194,7 +191,7 @@ When one of these becomes ready, it joins the lane shown.
 
 ## Status of every logging and database item
 
-27 done, 4 partly done, 5 open, 1 waiting on a maintainer decision, 1 no action.
+33 done, 3 partly done, 1 waiting on a maintainer decision, 1 no action.
 
 | Finding | Disposition | Evidence |
 | --- | --- | --- |
@@ -205,7 +202,7 @@ When one of these becomes ready, it joins the lane shown.
 | R5 safe error formatter | Done | `formatLogError` and `CommandFailedError` print backstop (`apps/backend/src/core/shell.ts:75-80`), #1570; the stderr tail was dropped by the user's decision (`docs/architecture/logging.md:258-260`). |
 | R6 essential tier and silent gaps | Done | The silent failures log, and the user-facing notices are in: a Settings → Schedules notice when this backend does not fire schedules (`schedulerStatus`, `SchedulesSettings.tsx`) and a transcript note when a Pi or Cursor resume falls back (`appendResumeFallbackNotice`); see [the E13 closing check](#closing-check-of-e13-silent-failures), with live evidence in [5160](../../todo/cross-cutting/5160-silent-failures-live-evidence.md). The essential tier is built (0750, `docs/architecture/logging.md`) and the previous Docker bridge log is kept and readable through `previous: true` and `getContainerServerLog` (E14, see [its closing check](#closing-check-of-e14-docker-logs)). The bug report prompt now points at it; see [the E15 closing check](#closing-check-of-e15-health-and-diagnostics). |
 | R7 relay and file writer | Done | Level-carrying records and the updater logger landed in #1558 (`backend-process.ts:46-64`, `updater-log.ts:35`); batching landed with DK-18; the relay's lines are bounded by the shared `bounded-line-splitter.ts`, and the relay skip was measured and not added (2026-11-05, closing check of E26 below). Whether the writer's 4 MiB queue fills in real use is [5761](../../todo/cross-cutting/5761-log-writer-queue-bound-live.md). See [the file writer](../../architecture/logging.md#the-file-writer). |
-| R8 renderer diagnostics | Partly done | Lifecycle logs moved to `debug` (#1592) and keystroke warnings throttled (`useTerminal.ts:1125`); switch, DevTools and ring are open in 0790. |
+| R8 renderer diagnostics | Done | Lifecycle logs moved to `debug` (#1592) and keystroke warnings throttled (`useTerminal.ts:1125`); the switch, Help → Open Developer Tools and a content-free error ring in the essential log are in; see [the E16 closing check](#closing-check-of-e16-log-controls). Realms, web clients and iOS: [6300](../../todo/cross-cutting/6300-renderer-error-ring-for-realms-and-web-clients.md); live evidence: [6301](../../todo/cross-cutting/6301-log-controls-live-evidence.md). |
 | R9 Codex raw event logging | Done | Removed rather than reconnected: the toggle, default, writer and `raw-log.write-failed` are gone, and a stored key is left alone; `CODEX_BRIDGE_RECORD_NOTIFICATIONS` remains for developers. See [the E17 closing check](#closing-check-of-e17-dead-code). |
 | R10 Docker log hygiene | Done | Inherited `DEBUG`, `RUST_LOG` and `DEBUG_CLAUDE_AGENT_SDK` no longer reach local bridges unless `ORKESTRATOR_KEEP_VENDOR_DEBUG=1` (`bridge-vendor-debug-env.ts`; E13 `0830`). The disk items are also done (E14, see [its closing check](#closing-check-of-e14-docker-logs)): the no-Perl fallback and an image without the writer are capped at 5 MiB, dropped lines are marked, and `json-file` with bounds replaces a missing `local` driver. |
 | R11 export diagnostics | Done | `plan_diagnostics_bundle` and `read_diagnostics_bundle` (`diagnostics-bundle.ts`), Settings → Debug, `orkestrator diagnostics export`; see [the E15 closing check](#closing-check-of-e15-health-and-diagnostics). Container server logs: [6143](../../todo/cross-cutting/6143-diagnostics-bundle-container-logs.md). |
@@ -223,14 +220,14 @@ When one of these becomes ready, it joins the lane shown.
 | Control: Keep detailed logs for | Done | Retention input with live sweep and size display (`GlobalSettings.sections.tsx:2213`, `docs/architecture/logging.md:514-519`). |
 | Control: Detail level | Done | **Log Detail** default level, `info` (`LogDetailSettings.tsx`, `logDetail` in `app-config-defaults.ts:93`). |
 | Control: Per-area overrides | Done | Levels by area, collapsible (`LogDetailSettings.tsx`), with `logDetailAreas` from `packages/protocol/src/log-policy.ts`. |
-| Control: Quick presets | Open | No preset in `LogDetailSettings.tsx`; 0890. |
-| Control: Auto-revert detail | Open | No expiry on `logDetail` (`packages/protocol/src/log-policy.ts`); 0890. |
-| Control: Renderer debug logging | Open | `orkestrator:debug` has no setting or UI (`docs/architecture/logging.md:755-761`); 0790. |
+| Control: Quick presets | Done | Six presets that write plain `level` and `areaLevels`, with the match shown (`log-detail-presets.ts`, `LogDetailSettings.tsx`); see [the E16 closing check](#closing-check-of-e16-log-controls). |
+| Control: Auto-revert detail | Done | Backend-owned `logDetailExpiresAt`, 24 hours above `info`, checked at start and every minute, with **Keep raised detail on** (`log-policy.ts`, `storage-config.ts`, `log-policy-service.ts`); see [the E16 closing check](#closing-check-of-e16-log-controls). |
+| Control: Renderer debug logging | Done | Settings → Debug → **Renderer Debug Logging** sets the key for this window and reloads (`RendererDebugSettings.tsx`); see [the E16 closing check](#closing-check-of-e16-log-controls). |
 | Control: Export diagnostics | Done | **Export diagnostics** in Settings → Debug shows the manifest, then saves (`DiagnosticsExportCard.tsx`); see [the E15 closing check](#closing-check-of-e15-health-and-diagnostics). |
 | Control: Open log folder and clean up | Done | Both buttons exist in Settings → Debug (`GlobalSettings.sections.tsx`, near `:2293`). |
-| Control: `--log-level`, `--log-category` | Open | Neither is in `apps/backend/src/server-flags.ts` or `packages/cli/src/client/argv.ts`; recommended outcome is no flag; 0900. |
+| Control: `--log-level`, `--log-category` | Done | Decided against flags; `ORKESTRATOR_LOG_LEVEL` for `orkestrator serve` is documented ([public-cli.md](../../architecture/public-cli.md#log-levels-for-serve)); see [the E16 closing check](#closing-check-of-e16-log-controls). |
 | Control: `ORKESTRATOR_LOG` | Done | Built as `ORKESTRATOR_LOG_LEVEL` with the same syntax (`packages/protocol/src/node/logger-environment.ts:11`). |
-| Design note: privacy text in the UI | Open | Log Detail's copy does not state it (`LogDetailSettings.tsx`); 0890. |
+| Design note: privacy text in the UI | Done | Log Detail says logs are designed to leave out prompts, terminal output, file contents and credentials (`LogDetailSettings.tsx`); see [the E16 closing check](#closing-check-of-e16-log-controls). |
 | Finding with no recommendation: D4 Kanban, notes, plans, comments after project removal | Waiting on a maintainer decision | `removeProject` does not touch them (`storage-projects.ts:480-507`); [5820](../../todo/cross-cutting/5820-removed-project-kanban-notes-plans.md). |
 | Finding with no recommendation: L4 backend `uncaughtException` | Done | A monitor writes one essential entry and the process dies as before (`process-failure-log.ts`), pinned against the runtime by `uncaught-exception.integration.test.ts`. |
 | Finding with no recommendation: L4 Electron `crashReporter` | No action | Nothing leaves the machine by design, and a minidump is not content-free; recorded in 0750. |
@@ -305,6 +302,26 @@ The outcome of every task in the E13 batch file, checked back against the code o
 | 0830 | 1. Filter vendor debug variables on local bridge launch | Done | `dropInheritedVendorDebug` (`bridge-vendor-debug-env.ts`), called in `commands-servers.ts`, documented under [the bridge hop](../../architecture/logging.md#the-bridge-hop). Tests: `bridge-vendor-debug-env.test.ts`, and "a Cursor coordinator launch carries the coordinator process policy" in `commands-servers-coordinator.test.ts`. |
 | 0830 | Needs verification: does any provider need these in normal use | Moved to a to-do | Nothing in the repository reads them; the vendor CLIs were not run. [5160](../../todo/cross-cutting/5160-silent-failures-live-evidence.md) task 2. |
 | 0830 | Needs verification: does a settings field pass user-set variables to local bridges | Answered: no | The local launch environment is `process.env` plus variables Orkestrator sets itself (`startLocalServerAttempt` in `commands-servers.ts`). |
+
+## Closing check of E16 (Log controls)
+
+The outcome of every task in the E16 batch file (parts `0790`, `0890` and `0900`), checked back against the code on 2026-11-05 before the file was deleted. Base commit `1a66d95c3`; the file's last version, ending in this table, is the parent of the commit that deleted it. R8 and the control rows in the table above summarise it. Every finding still held when re-checked.
+
+| Part | Task or item | Outcome | Code, tests, evidence or to-do |
+| --- | --- | --- | --- |
+| 0790 | 1. Settings switch for renderer debug | Done, recommended option | Settings → Debug → **Renderer Debug Logging** (`RendererDebugSettings.tsx`) calls `setRendererDebugPreference` (`apps/web/src/lib/debug-log.ts`), which sets or clears `localStorage["orkestrator:debug"]` for this window and reloads. Tests: `RendererDebugSettings.test.tsx`, `debug-log.test.ts`. Seen live: the switch stored the key and showed "On in this window" after the reload. |
+| 0790 | 2. Open Developer Tools from the menu | Done, recommended option | Help on every platform (the system Help menu on macOS) with **Open Developer Tools** only while a renderer reported debug logging on: `application-menu.ts`, `renderer-debug-tools.ts`, the trusted-sender IPC route `orkestrator:window:set-renderer-debug` (`ipc.ts`, `preload-api.ts`, `main.ts`), reported at start by `reportRendererDebugLogging`. The artifact host and previews are untouched. Tests: `application-menu.test.ts`, `renderer-debug-tools.test.ts`, `main-ipc.test.ts`, `preload-api.test.ts`. Added 2026-11-05: `log-controls-packaged-electron.spec.ts` drives the real switch and the item in the packaged Linux app (headless), and `application-menu-electron.spec.ts` covers the item on real Electron; `native-application-menu.yml` runs them on the other platforms. macOS, Windows and a drawn menu bar are not yet observed and stay in [6301](../../todo/cross-cutting/6301-log-controls-live-evidence.md) task 1; the repository has no Windows package target. |
+| 0790 | 3. A persisted, content-free error ring: what an entry holds | Done, recommended option | Error class, boundary, route (the renderer surface: the app has no router), count and fingerprint, 100 entries, no message or stack: `packages/protocol/src/renderer-errors.ts`, `apps/web/src/lib/renderer-error-ring.ts`, fed by React's root callbacks (`react-root-errors.ts`) and the window's error events (`renderer-bootstrap.ts`). Tests: `renderer-errors.test.ts`, `renderer-error-ring.test.ts` (a message or stack is never stored), `react-root-errors.test.ts`, `renderer-bootstrap.test.ts`. |
+| 0790 | 3. Where it is kept | Done, recommended option | Sent to the backend's essential log through the new `record_renderer_errors` (`renderer-error-recorder.ts`): every entry re-parsed, any other key refusing the write, 30 entries a minute, refused to workspace clients; the essential event `renderer-errors` `error.recorded` with label classifiers. Upload: `renderer-error-upload.ts`, a desktop window's own renderer only. Tests: `renderer-error-recorder.test.ts`, `log-essential.test.ts`, `log-vocabulary.test.ts`, `renderer-error-upload.test.ts`. Seen live: the command wrote the entry to a profile's `essential.jsonl`, and a write with a `message` was refused and stored nothing. The Electron leg end to end: [6301](../../todo/cross-cutting/6301-log-controls-live-evidence.md) task 2. |
+| 0790 | Constraint: never through the `desktop.startup` marker path | Done | The ring never writes to the console or uses the area. Tests: `renderer-bootstrap.test.ts` (no marker for a recorded failure) and the unchanged `renderer-diagnostics.test.ts`. |
+| 0790 | Current state: every renderer `console.*` raises a `console-message` in main | No longer a task | Recorded by the report as still true but minor; unchanged, and not a task. |
+| 0790 | Open question: the remote web client's ring and iOS | To-do | [6300](../../todo/cross-cutting/6300-renderer-error-ring-for-realms-and-web-clients.md), with workspace realms. |
+| 0890 | 1. Quick presets | Done, recommended option | `log-detail-presets.ts`: Normal, Quiet, Agent sessions, Crashes and stopped processes, Updates, Everything, each written as ordinary `level` and `areaLevels`; the matching preset or **Custom** shown in `LogDetailSettings.tsx`. Test: `LogDetailSettings.test.tsx`. |
+| 0890 | 2. Auto-revert: where the timer lives | Done, recommended option | Backend-owned `logDetailExpiresAt` recomputed on every config write (`nextLogDetailExpiresAt`, `storage-config.ts`), checked at start and every minute (`LogPolicyService`, `reconcileLogDetailExpiry`), reverting through the normal config write; saving untouched; `logDetailKeepRaised` keeps it on, and an older client's save keeps the choice and still gets an expiry. Tests: `log-policy.test.ts`, `log-detail-expiry.test.ts`. Seen live: an expiry in the past at start reverted `bridge=debug` to `info`, left saving alone and wrote `policy.detail-expired`. The running one-minute check was seen reverting in the packaged Linux app on 2026-11-05 (`log-controls-packaged-electron.spec.ts`). |
+| 0890 | 2. Auto-revert: the default | Done, recommended option | 24 hours, only above `info`; the settings show when it goes back and offer **Keep raised detail on**. Test: `LogDetailSettings.test.tsx`. |
+| 0890 | 3. Privacy text | Done, recommended option | "Logs are designed to leave out prompts, terminal output, file contents and credentials." in the Log Detail header, with no "never". Test: `LogDetailSettings.test.tsx`. |
+| 0900 | 1. `--log-level` and `--log-category` | Done, recommended option | No flags. `ORKESTRATOR_LOG_LEVEL` for `orkestrator serve` documented in [public-cli.md](../../architecture/public-cli.md#log-levels-for-serve) and the logging guide. |
+| All | `logging.md` saying the renderer key has no setting | Done | The renderer section now describes the switch and the Help menu item. |
 
 ## Closing check of E15 (Health and diagnostics)
 

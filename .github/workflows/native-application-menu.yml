@@ -4,14 +4,37 @@ on:
   pull_request:
     paths:
       - .github/workflows/native-application-menu.yml
+      - apps/backend/src/core/log-policy-service.ts
+      - apps/backend/src/core/storage-config.ts
+      - apps/backend/src/core/renderer-error-recorder.ts
+      - apps/backend/src/core/commands-registry-system.ts
+      - apps/desktop/electron/main.ts
+      - apps/desktop/electron/ipc.ts
+      - apps/desktop/electron/preload-api.ts
+      - apps/web/src/lib/debug-log.ts
+      - apps/web/src/lib/renderer-bootstrap.ts
+      - apps/web/src/lib/renderer-diagnostics.ts
+      - apps/web/src/lib/renderer-error-*.ts
+      - apps/web/src/components/settings/RendererDebugSettings.*
+      - apps/web/src/components/settings/LogDetailSettings.*
+      - apps/web/src/components/settings/log-detail-presets.*
+      - apps/web/src/components/settings/GlobalSettings*.*
+      - packages/protocol/src/log-policy.ts
+      - packages/protocol/src/renderer-errors.ts
+      - packages/protocol/src/log-essential-labels.ts
       - apps/desktop/electron/application-menu.ts
+      - apps/desktop/electron/renderer-debug-tools.ts
       - apps/desktop/package.json
       - packages/protocol/src/keyboard-shortcuts.ts
       - e2e/agent-testing/application-menu-electron.spec.ts
       - e2e/agent-testing/design-electron-cleanup.ts
       - e2e/agent-testing/electron-cleanup.spec.ts
+      - e2e/agent-testing/log-controls-packaged-electron.spec.ts
       - e2e/agent-testing/native-menu-input.ts
+      - e2e/agent-testing/packaged-electron-app.ts
       - e2e/agent-testing/playwright.electron.config.ts
+      - e2e/agent-testing/playwright.packaged-electron.config.ts
+      - e2e/agent-testing/renderer-log-boundary-electron.spec.ts
       - e2e/fixtures/application-menu-electron.ts
       - e2e/process-cleanup.ts
       - tests/unit/electron-process-table.test.ts
@@ -22,13 +45,13 @@ jobs:
   menu:
     name: Native menu (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    timeout-minutes: 25
     permissions:
       contents: read
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-15]
     defaults:
       run:
         shell: bash
@@ -49,8 +72,11 @@ jobs:
         env:
           ORKESTRATOR_NATIVE_MENU_INPUT: "1"
         run: |
-          if [ "$RUNNER_OS" = Linux ]; then
-            xvfb-run -a mise run test:logged -- --name native-menu-linux -- bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts application-menu-electron.spec.ts electron-cleanup.spec.ts --repeat-each=5 --retries=0
+          if [ "$RUNNER_OS" = macOS ]; then
+            # The native-input test covers Windows and Linux; this runs the Help menu test.
+            mise run test:logged -- --name native-menu-macos -- bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts application-menu-electron.spec.ts --repeat-each=5 --retries=0
+          elif [ "$RUNNER_OS" = Linux ]; then
+            xvfb-run -a mise run test:logged -- --name native-menu-linux -- bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts application-menu-electron.spec.ts electron-cleanup.spec.ts renderer-log-boundary-electron.spec.ts --repeat-each=5 --retries=0
           else
             mise run test:logged -- --name native-menu-windows -- bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts application-menu-electron.spec.ts electron-cleanup.spec.ts --repeat-each=5 --retries=0
           fi
@@ -60,5 +86,51 @@ jobs:
         with:
           name: native-menu-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: output/agent-testing/electron-smoke/electron
+          if-no-files-found: error
+          retention-days: 7
+
+  # The repository has no Windows package target, so Windows is qualified by the
+  # menu job above, on real Electron rather than a package.
+  packaged-log-controls:
+    name: Packaged log controls (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-15]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+      - run: bun install --frozen-lockfile
+      - name: Install Electron runtime
+        run: bun apps/desktop/node_modules/electron/install.js
+      - name: Install Linux desktop libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes libgtk-3-0 libnss3 libasound2t64
+      - name: Build the packaged test app, installing nothing
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then
+            mise run package:mac:unpacked:test
+          else
+            mise run package:linux:unpacked:test
+          fi
+      - name: Qualify the log controls in the packaged app
+        env:
+          ORKESTRATOR_AGENT_TEST_RUN_ID: packaged-log-controls
+        run: mise run test:logged -- --name packaged-log-controls -- bunx playwright test --config e2e/agent-testing/playwright.packaged-electron.config.ts log-controls-packaged-electron.spec.ts --retries=0
+      - name: Upload packaged log controls evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: packaged-log-controls-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: output/agent-testing/packaged-log-controls/electron-packaged
           if-no-files-found: error
           retention-days: 7

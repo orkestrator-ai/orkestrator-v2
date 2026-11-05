@@ -503,6 +503,45 @@ describe("TmuxTranscriptReader", () => {
       expect(reads.stats).toBe(0);
     });
 
+    test("a stale page window does not reset a tail advanced by polling", async () => {
+      writeFileSync(file, jsonl(userLine(0)));
+      const backend = TmuxBackend.local(dir);
+      const reader = new TmuxTranscriptReader(backend, SESSION);
+      const seen: unknown[] = [];
+      const sink: TailLineSink = (line) => seen.push(line);
+      reader.bindTail(file);
+      await reader.drainTail(sink);
+      const originalWindow = backend.readTranscriptWindow.bind(backend);
+      let release!: () => void;
+      let captured!: () => void;
+      const barrier = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const ready = new Promise<void>((resolve) => {
+        captured = resolve;
+      });
+      backend.readTranscriptWindow = async (...args) => {
+        const window = await originalWindow(...args);
+        captured();
+        await barrier;
+        return window;
+      };
+      const page = reader.readPage(file, undefined, sink);
+      await ready;
+      writeFileSync(file, jsonl(userLine(0)) + jsonl(userLine(1)));
+      await reader.drainTail(sink);
+      let tailReads = 0;
+      const originalTail = backend.readFileBytesFrom.bind(backend);
+      backend.readFileBytesFrom = async (...args) => {
+        tailReads += 1;
+        return originalTail(...args);
+      };
+      release();
+      await page;
+      expect(seen).toEqual([userLine(0), userLine(1)]);
+      expect(tailReads).toBe(0);
+    });
+
     test("concurrent reads deliver each line once, in order", async () => {
       writeFileSync(file, Array.from({ length: 50 }, (_, n) => jsonl(userLine(n))).join(""));
       const reader = new TmuxTranscriptReader(TmuxBackend.local(dir), SESSION);

@@ -232,13 +232,17 @@ export class TmuxTranscriptReader {
       }
 
       await this.tailLock.runExclusive(async () => {
-        this.resetIfTruncated(window.size);
+        // A poll may have advanced past the window captured outside this lock.
+        // Confirm shrinkage against the current file before resetting shared state.
+        const size =
+          window.size < this.tail!.bytesRead ? await this.backend.fileSize(filePath) : window.size;
+        this.resetIfTruncated(size);
         const tail = this.tail!;
         if (tail.bytesRead >= cut.endOffset) return;
         this.catchUps += 1;
         // The window's size is at least the end of the page, so it cannot read
         // as a truncation; passing it spares the extra stat.
-        this.deliverTailLines(await tail.readNew(this.backend, window.size), sink);
+        this.deliverTailLines(await tail.readNew(this.backend, size), sink);
       });
 
       return {

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, setSystemTime, test } from "bun:test";
 import type { TranscriptContent, TranscriptLine } from "@/lib/claude-tmux-client";
 import type { ClaudeMessage } from "@/lib/claude-types";
 import { ERROR_MESSAGE_PREFIX } from "@/lib/chat/client-only-messages";
@@ -1752,6 +1752,36 @@ describe("transcript pages", () => {
     expect(call.toolOutput).toBe("done");
     expect(call.settledAt).toBe("2026-11-04T10:00:05.000Z");
   });
+
+  for (const timestamp of [undefined, "invalid"]) {
+    test(`cross-page adoption ignores unusable record clock: ${timestamp}`, () => {
+      const store = useClaudeTmuxStore.getState();
+      const result = { ...toolResult("result-1", "tool-1"), timestamp };
+      try {
+        for (let replay = 0; replay < 2; replay += 1) {
+          setSystemTime(new Date(1800000000000 + replay * 86400000));
+          store.applyTailPage(
+            "e",
+            {
+              lines: [result, text("after")],
+              earlierCursor: "s:100",
+            },
+            { retainHistory: false },
+          );
+          store.prependTranscriptPage("e", "s:100", {
+            lines: [text("before"), toolUse("call-1", "tool-1")],
+            earlierCursor: null,
+          });
+          expect(ids()).toEqual(["before", "call-1", "after"]);
+          const call = tab().messages[1]!.parts.find((part) => part.type === "tool-invocation")!;
+          expect(call.toolState).toBe("success");
+          expect(call.settledAt).toBeUndefined();
+        }
+      } finally {
+        setSystemTime();
+      }
+    });
+  }
 
   test("a result with no call anywhere shows once nothing earlier is left to load", () => {
     const store = useClaudeTmuxStore.getState();

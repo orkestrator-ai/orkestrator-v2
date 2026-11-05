@@ -536,18 +536,18 @@ export function ClaudeTmuxChatTab({
     const page = await getTranscriptPage(tabId, environmentId, before);
     if (page.expired) {
       // The transcript was replaced under the cursor: start again from its tail.
-      applyTailPage(
-        storeKey,
-        await getTranscriptPage(
-          tabId,
-          environmentId,
-          undefined,
-          before.slice(0, before.lastIndexOf(":")),
-        ),
-        {
-          retainHistory: false,
-        },
+      const tail = await getTranscriptPage(
+        tabId,
+        environmentId,
+        undefined,
+        before.slice(0, before.lastIndexOf(":")),
       );
+      if (tail.lines.length > 0) {
+        applyTailPage(storeKey, tail, { retainHistory: false });
+      } else {
+        // An unavailable file is not evidence that visible history was deleted.
+        prependTranscriptPage(storeKey, before, { lines: [], earlierCursor: null });
+      }
       return;
     }
     prependTranscriptPage(storeKey, before, page);

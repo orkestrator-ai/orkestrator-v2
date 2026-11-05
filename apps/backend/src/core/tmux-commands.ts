@@ -376,7 +376,14 @@ export function registerTmuxBackendCommands(
     const backend = await resolveBackend(envId, context);
     const { workspace, claudeHome } = workspaceAndClaudeHome(backend);
     const file = `${claudeHome}/projects/${encodeCwd(workspace)}/${sessionId}.jsonl`;
-    const key = JSON.stringify([envId, file, sessionId]);
+    const key = JSON.stringify([
+      envId,
+      backend.kind,
+      backend.containerId,
+      backend.cwd,
+      file,
+      sessionId,
+    ]);
     const reader = historyReaders.get(key) ?? new TmuxTranscriptReader(backend, sessionId);
     historyReaders.delete(key);
     historyReaders.set(key, reader);

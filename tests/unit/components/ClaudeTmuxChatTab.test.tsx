@@ -1942,6 +1942,23 @@ Running 1 Explore agent...
       expect(screen.queryByText("Tail message")).toBeNull();
     });
 
+    test("an empty tail after cursor expiry preserves visible history", async () => {
+      getTranscriptPageMock.mockImplementation(async () => ({
+        lines: [line("tail", "Tail message")],
+        earlierCursor: "s:200",
+      }));
+      render(renderTab());
+      await screen.findByText("Tail message");
+      getTranscriptPageMock.mockImplementation(async (_tab, _env, before) =>
+        before === undefined
+          ? { lines: [], earlierCursor: null }
+          : { lines: [], earlierCursor: null, expired: true },
+      );
+      fireEvent.click(button()!);
+      await waitFor(() => expect(button()).toBeNull());
+      expect(screen.getByText("Tail message")).toBeTruthy();
+    });
+
     test("reports a failed page and leaves the control to retry", async () => {
       getTranscriptPageMock.mockImplementation(async (_tab, _env, before) => {
         if (before !== undefined) throw new Error("exec failed");

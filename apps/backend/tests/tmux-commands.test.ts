@@ -1,6 +1,7 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { compatibilityPathUsage } from "../src/core/compatibility-path-usage";
 import path from "node:path";
+import { TmuxBackend } from "../src/core/tmux-backend";
 import { spawn } from "node:child_process";
 import { promises as fs } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
@@ -16,6 +17,36 @@ import {
 } from "./tmux-test-harness.js";
 
 describe("Electron tmux hooks and transcripts", () => {
+  test("stopped history uses the recreated container backend", async () => {
+    const handlers = createHandlers();
+    const environment = {
+      id: "history-env",
+      environmentType: "containerized",
+      containerId: "old-container",
+    };
+    const context = { storage: { getEnvironment: async () => environment } };
+    const targets: string[] = [];
+    const window = spyOn(TmuxBackend.prototype, "readTranscriptWindow").mockImplementation(
+      async function (this: TmuxBackend) {
+        targets.push(this.containerId!);
+        return { size: 0, start: 0, bytes: Buffer.alloc(0) };
+      },
+    );
+    try {
+      const args = {
+        environmentId: environment.id,
+        tabId: "stopped",
+        page: { sessionId: "saved-session" },
+      };
+      await invoke(handlers, "claude_tmux_transcript", args, context);
+      environment.containerId = "new-container";
+      await invoke(handlers, "claude_tmux_transcript", args, context);
+      expect(targets).toEqual(["old-container", "new-container"]);
+    } finally {
+      window.mockRestore();
+    }
+  });
+
   test("starts with installed hooks, reads transcripts, replies to hooks, and maps interactive input", async () => {
     const handlers = createHandlers();
 

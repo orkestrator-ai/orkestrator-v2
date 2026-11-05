@@ -36,6 +36,9 @@ import {
   usePromptDraftStore,
 } from "./promptDraftStore";
 
+// Keep the transcript clock separate from the display fallback on waiting results.
+type TranscriptMessage = ClaudeMessage & { recordTimestamp?: string };
+
 export function createClaudeTmuxStateKey(environmentId: string, tabId: string): string {
   return `env:${environmentId}:tab:${tabId}`;
 }
@@ -895,12 +898,13 @@ function applyLine(state: TmuxTabState, line: TranscriptLine): TmuxTabState {
   const isRootAssistant =
     role === "assistant" && isRootAssistantRecord(parentToolUseId, line.isSidechain);
   const modelId = isRootAssistant ? normalizeBackendModelId(line.message?.model) : undefined;
-  const newMessage: ClaudeMessage = {
+  const newMessage: TranscriptMessage = {
     id,
     role,
     content: textOfParts(parts),
     parts,
     createdAt: timestamp,
+    recordTimestamp,
     ...(modelId ? { modelId } : {}),
   };
 
@@ -1166,8 +1170,7 @@ function rowsBeforeOverlap(loaded: ClaudeMessage[], fresh: ClaudeMessage[]): Cla
  *
  * A result only waits when no earlier row held its call, so only the rows from
  * `newStart` on can be waiting on the rows newly placed before them. The merge
- * stamps the result row's own time, which is the record's clock whenever the
- * record has one.
+ * uses only the record clock; a display fallback must never move a tool card.
  */
 function adoptToolResults(messages: ClaudeMessage[], newStart: number): ClaudeMessage[] {
   let adopted: ClaudeMessage[] | undefined;
@@ -1180,7 +1183,7 @@ function adoptToolResults(messages: ClaudeMessage[], newStart: number): ClaudeMe
     const merged = mergeToolResultsIntoPrior(
       adopted ?? messages.slice(0, index),
       message.parts,
-      message.createdAt,
+      (message as TranscriptMessage).recordTimestamp,
     );
     if (merged) adopted = merged;
     else (adopted ??= messages.slice(0, index)).push(message);
@@ -1188,7 +1191,7 @@ function adoptToolResults(messages: ClaudeMessage[], newStart: number): ClaudeMe
   return adopted ?? messages;
 }
 
-function mergeMessage(prev: ClaudeMessage, next: ClaudeMessage): ClaudeMessage {
+function mergeMessage(prev: TranscriptMessage, next: TranscriptMessage): TranscriptMessage {
   const parts = next.parts.length > 0 ? next.parts : prev.parts;
   return {
     ...prev,
@@ -1196,6 +1199,7 @@ function mergeMessage(prev: ClaudeMessage, next: ClaudeMessage): ClaudeMessage {
     content: textOfParts(parts),
     parts,
     createdAt: next.createdAt || prev.createdAt,
+    recordTimestamp: next.recordTimestamp,
     ...(next.modelId ? { modelId: next.modelId } : {}),
   };
 }

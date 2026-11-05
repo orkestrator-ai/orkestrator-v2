@@ -344,9 +344,8 @@ test.each(["SIGINT", "SIGTERM"])(
 
 test("same-version old launcher failures during manager reload do not fail a corrected reinstall", async () => {
   const f = await fixture({ publish: false });
-  const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
-  Object.defineProperty(process, "platform", { value: "linux" });
-  restores.push(() => Object.defineProperty(process, "platform", platform));
+  // Keep the host's real process-identity checks: pretending macOS is Linux
+  // makes the replacement descriptor require /proc, which does not exist.
   await symlink(
     path.join(f.dataDir, "backend/releases/9.9.9"),
     path.join(f.dataDir, "backend/current"),
@@ -354,7 +353,7 @@ test("same-version old launcher failures during manager reload do not fail a cor
   const calls: string[][] = [];
   f.manager.mockImplementation(((file: string, args: string[]) => {
     calls.push([file, ...args]);
-    // The old launcher keeps writing its own install generation through enable.
+    // The old launcher keeps writing its own install generation during reload.
     writeFileSync(
       path.join(f.dataDir, "backend/launcher-state.json"),
       JSON.stringify({
@@ -415,11 +414,18 @@ test("same-version old launcher failures during manager reload do not fail a cor
     "--host",
     "100.64.0.10",
   ]);
-  expect(calls.map((call) => call.slice(0, 3))).toEqual([
-    ["systemctl", "--user", "daemon-reload"],
-    ["systemctl", "--user", "enable"],
-    ["systemctl", "--user", "restart"],
-  ]);
+  if (process.platform === "linux") {
+    expect(calls.map((call) => call.slice(0, 3))).toEqual([
+      ["systemctl", "--user", "daemon-reload"],
+      ["systemctl", "--user", "enable"],
+      ["systemctl", "--user", "restart"],
+    ]);
+  } else {
+    expect(calls.map((call) => call.slice(0, 2))).toEqual([
+      ["launchctl", "bootout"],
+      ["launchctl", "bootstrap"],
+    ]);
+  }
   expect(polls).toBe(2);
   expect(result.code).toBe(0);
   expect(JSON.parse(result.out).result.ready).toBe(true);

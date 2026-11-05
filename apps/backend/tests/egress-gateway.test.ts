@@ -10,6 +10,7 @@ import {
 import {
   createEgressGateway,
   egressEnforcement,
+  egressFilterEnvironment,
   egressGatewayCreateArguments,
   egressGatewayName,
   parseDockerCreatedAt,
@@ -138,6 +139,16 @@ describe("where a runtime's firewall runs", () => {
     expect(
       egressGatewayCreateArguments({ ...spec, githubSeed: "/data/github-ranges.txt" }).join(" "),
     ).not.toContain("github-ranges");
+  });
+
+  test("the name checks' rollback switch reaches only a new gateway's policy", () => {
+    expect(egressFilterEnvironment(undefined)).toEqual({});
+    expect(egressFilterEnvironment("on")).toEqual({});
+    expect(egressFilterEnvironment(" OFF ")).toEqual({ ORKESTRATOR_EGRESS_FILTER: "off" });
+    expect(egressFilterEnvironment("0")).toEqual({ ORKESTRATOR_EGRESS_FILTER: "off" });
+    // The gateway records it at its first boot (orkestrator-egress-gateway.sh):
+    // the start path passes no policy at all, so a start never changes it.
+    expect(prepareEgressGatewayForStart.toString()).not.toContain("ORKESTRATOR_EGRESS_FILTER");
   });
 
   test("parsers accept only what Docker reports", () => {

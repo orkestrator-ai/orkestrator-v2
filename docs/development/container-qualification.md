@@ -52,6 +52,7 @@ ignores `apps/backend/tests/**`, so a repository-root path matches no file.
 | Live network | same command, `./tests/container-live-network.test.ts` | C22, C24, C26; on a gateway image C22 runs behind the egress gateway |
 | Live firewall | same command, `./tests/container-live-firewall.test.ts` | C23 and the policy 3 tuples; on a gateway image also root tampering from the runtime, published ports through the gateway and a gateway restart. Point `ORKESTRATOR_QUALIFICATION_IMAGE` at an image that does not declare `egress-gateway` for the in-container firewall |
 | Live egress conditions | same command, `./tests/container-live-egress-conditions.test.ts` | Gateway IPv6 (the daemon's IPv6 default, or with `ORKESTRATOR_LIVE_IPV6_NETWORK=1` an IPv6 network the test attaches), DNS rotation through a controlled resolver, and with `ORKESTRATOR_LIVE_DAEMON_RESTART_COMMAND` a Docker daemon restart. Point that command only at a disposable daemon. |
+| Live egress name checks (M12) | same command, `./tests/container-live-egress-filter.test.ts`; set `ORKESTRATOR_QUALIFICATION_OLDER_IMAGE` to add an image without `egress-filter` | The gateway's TLS SNI, HTTP Host and DNS checks: an allowed name, a foreign SNI on its address, a Host check on a named port against a local fixture, bodies both ways, a server-first protocol, GitHub SSH, DNS refusals over UDP, TCP and straight to an outside resolver, a live edit, the daemon killed and restarted, a restart, a full-mode runtime, the rollback switch and an older image. Outside traffic only to registry.npmjs.org, nodejs.org and GitHub |
 | Live readiness faults | same command, `./tests/container-live-readiness.test.ts` | C09 faults (missing firewall, DNS, permissions, torn status write, restart during launch; on derived images that do not declare `egress-gateway`, so the firewall stays in the runtime), a gateway that cannot apply its firewall, C10, C22 host-service reply, C23 re-run |
 | Live rebuild faults | same command, `./tests/container-live-rebuild-faults.test.ts` | C15: daemon disconnect mid-copy (a `DOCKER_HOST` proxy in the test process), kill just before and after the commit write |
 | Live build pipeline code rewind | same command, `./tests/build-pipeline-code-rewind-docker.test.ts` | "Rewind code to here" on fake providers through `createPipelineEnvironmentGit` and `docker exec`: preview, backup ref, reset, restart and lease push; a paused container refused with a readable reason; a reset journaled before the container stopped finishing once it answers (to-do 0405, task 7) |
@@ -120,6 +121,261 @@ Live tests start runtimes through `tests/container-live-start.ts`
 (`startRuntime`): Docker refuses a runtime whose egress gateway is not
 running, so a bare `docker start` of a restricted runtime fails on a gateway
 image.
+
+## Remaining validation blockers repaired (2026-11-05)
+
+Follow-up source commit `4bf05e1e840e0258ee7e43e928b2a96d87bd760a`
+was rebased onto `main` at `cbe0f9a5b9914cc6780b8008d9da95a7f2518d38`.
+The five deterministic failures recorded below are now repaired:
+
+- Legacy standalone releases explicitly use Bun's hoisted linker, matching
+  the fetch and locked-install paths. A caller's isolated global store no
+  longer leaves a published release depending on an external package cache.
+  The regression publishes executable entry → mid → leaf fixtures, deletes
+  the caller cache, and executes the installed release. Both locked and legacy
+  releases retain the expected transitive dependency version. Before the fix,
+  the cache-deletion regression failed because the entry was unresolvable;
+  evidence is `orkestrator-test-run.w7rxDc/protocol-install-runtime-baseline.log.gz`
+  under the host temporary directory.
+- Schedule rendering canonicalizes zero-offset GMT labels, including `GMT+0`,
+  to `GMT`. Civil time, nonzero offsets and daylight abbreviations are unchanged.
+  Deterministic ICU-label tests include zero offset, BST, GMT+1 and a half-hour
+  offset. The unchanged web schedule and coordinator timer assertions pass;
+  browser coverage verifies rendering, inactive-view remount and reload.
+- The corrected-reinstall CLI test uses its real host platform for both manager
+  commands and process-identity validation. Spoofing Linux on macOS required
+  unavailable `/proc` identity data and incorrectly refused the ready descriptor.
+  Both native manager sequences and the original two-poll readiness/generation
+  assertions remain checked; no process-identity check is bypassed.
+
+The linker choice makes a release independent of caller cache preferences;
+keeping caller-selected linking would preserve that preference but permits the
+reproduced runtime failure. Canonicalizing only zero-offset aliases stabilizes
+the existing display contract while preserving useful daylight and numeric
+nonzero labels. These changes do not alter schedule firing instants.
+
+### Final qualification
+
+At `4bf05e1e8`, full typechecking, build, lint, formatting, installer owners,
+CLI reinstall owner, schedule-time owner, web schedule owner, backend timer owner,
+and the scheduler browser owner all passed through `mise run test:logged`.
+The packaged CLI scenarios passed **10 of 10**, with no cleanup errors; manifest:
+`output/cli-scenarios/2026-11-05T23-00-10-077Z-2d20a45b/manifest.json`.
+Scheduler screenshot comparisons, using an emulated ICU zero-offset spelling,
+are in `output/visual-previews/schedule-zone-*-card-*.png`.
+
+The first follow-up aggregate passed every runtime package but found a registry
+collision with newer main's independent case 6550. The branch's egress case was
+renumbered to [9833](../tests/flaky-tests/environments-and-containers/9833-egress-worker-restart-dns-timeout.md)
+and all references updated in metadata-only commit
+`74c7faeeeecee1b17e173a36432ae21dec5f2e02`. The registry guard and formatting
+passed, then a fresh complete default aggregate passed on that exact commit:
+
+```sh
+mise run test:logged -- --name remaining-final-default -- mise run test
+```
+
+The aggregate exited **0** in **196.0 s**: workspace, root/support, bridges and
+protocol-lockfile groups all passed. Durable passing summary:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.z71WBd/summary.json`.
+The previously intermittent Claude case did not fail in these aggregates; its
+existing open flake record is retained without claiming a root-cause fix.
+All validation/scenario processes finished and the source worktree was clean.
+No production backend, service manager or real application data was used.
+
+The Docker qualification below remains the last Docker run; this follow-up
+changes the standalone installer and schedule label formatting, not firewall,
+container lifecycle or bridge behavior. Native Linux/rootless, enabled IPv6,
+older-image and live-provider qualifications were not added by this follow-up.
+
+## Egress review findings repaired (2026-11-05)
+
+The five review findings were repaired in source commit
+`9ffb0fe96c85388e942a3d0dff936053b024e0fa`, rebased onto `main` at
+`251f772d6000dc0c64cbeadc705db719554d8c5d`. Follow-up
+`e5705cfe1ffc5a1ddc12f72614dc2ddffadfb5ea` corrects a stale Docker
+browser selector from button to tab; the saved accessibility tree showed
+the coordinator conversation was already present as a selected tab.
+
+### Behaviour and decisions
+
+- **HTTP classification:** keep an incomplete textual method/request line
+  subject to HTTP parsing when raw UTF-8 target bytes arrive. Treating it as
+  another protocol could bypass Host checks on named non-443 ports; rejecting
+  every non-ASCII target would unnecessarily reject requests origins accept.
+  Existing classification size and time limits still apply.
+- **DNS/TCP backpressure:** allow one outstanding answer per client and stop
+  reading/starting queries until it drains. This bounds queued output to one
+  65,537-byte framed response and preserves pipelining. A queue of multiple
+  answers could offer more concurrency but needs separate byte admission and
+  ordering logic; the single-answer approach matches the existing sequential
+  upstream processing.
+- **Allowlist edits:** stage proposed names for DNS-only lookups while retaining
+  the old connection permissions; publish final permissions after the address
+  rebuild succeeds. Publishing a union of TCP permissions would grant access
+  before commit, while replacing permissions early could revoke streams even
+  on failure. DNS staging temporarily permits lookups of explicitly proposed
+  names; failure restores the prior names and periodic refresh clears staging
+  left by an interrupted edit.
+- The policy-2 status now explains that name checks require policy 3 and removal
+  of the override. The firewall test now distinguishes positive port-53 rules
+  from the proxy rule's negated destination port.
+
+### Regression evidence
+
+Socket-backed tests cover every UTF-8 request split, allowed and refused Hosts,
+a blocked DNS reader, bounded response admission, pipeline continuation and an
+independent client. The shell/daemon fixture reloads staged names while an old
+stream is active, verifies its continued use and denies proposed TCP permissions,
+then checks successful commit or failure restoration. Status tests cover the
+policy-2 unavailable state. Browser coverage exercises each status, reloads,
+normal/narrow viewports and horizontal bounds; screenshots are in
+`output/visual-previews/egress-policy2-*-card-*.png`. The live owner also sends
+raw UTF-8 HTTP requests one byte at a time and checks they never reach the origin.
+
+All commands use `mise run test:logged`:
+
+- At `9ffb0fe96`: focused daemon/firewall/slow-policy owners passed;
+  status owner passed; `e2e/EnvironmentNetworkPolicy.spec.ts` passed.
+  `mise run typecheck`, `mise run format:check`, `mise run lint` and
+  `mise run build` passed. The exact-head image build and final-image smoke passed.
+- The live egress file initially failed after worker restart, then the complete
+  unchanged file passed alone in 33.7 s. Both observations remain in
+  [flake 9833](../tests/flaky-tests/environments-and-containers/9833-egress-worker-restart-dns-timeout.md).
+- The default suite at `9ffb0fe96` exited 1: protocol standalone-install ENOENT,
+  CLI corrected-reinstall exit 4, two web schedule GMT/GMT+0 mismatches,
+  backend coordinator-timer GMT/GMT+0 mismatch, and a Claude persisted-turn
+  marker failure. The first five reproduced in complete owning-file runs;
+  the Claude owner passed alone and is recorded in
+  [1221](../tests/flaky-tests/agent-bridges/1221-claude-resumed-root-preferences-retention.md).
+  These implementations are outside the egress repair diff. Root/support
+  passed 3,676 tests; the aggregate is not reported as green.
+- The first isolated Docker run reached 20 passed, four skipped and one failed
+  because its coordinator locator expected a button instead of a tab.
+  After correcting that selector, full typechecking, formatting, lint and build
+  passed again at `e5705cfe1`.
+- At `e5705cfe1`, the required
+  `ORKESTRATOR_TEST_NO_PROGRESS_TIMEOUT_MS=600000 mise run test:logged -- --name agent-docker -- mise run test:agent:docker:isolated`
+  passed: **21 passed, four skipped, zero unexpected failures, zero flakes**.
+  The coordinator switch/hidden-document/reload/two-window scenario passed.
+  Image smoke and M8 qualification passed. The runner stopped/reset its
+  disposable profile and removed its owned resources; no live profile remains.
+  No real provider turn was enabled.
+
+The default suite was not repeated for the final E2E-selector-only commit;
+its failing result above belongs to `9ffb0fe96`. Native Linux/rootless,
+older-image comparison and enabled IPv6 qualification remain unproved.
+
+Artifacts below the host temporary directory:
+
+- `orkestrator-test-run.2EP93a/egress-fixed-default.log.gz` and
+  `orkestrator-test-run.5SrDNz/*.log.gz`: default suite.
+- `orkestrator-test-run.LWtglc/egress-fixed-live.log.gz`: initial live failure.
+- `orkestrator-test-run.P7P33H/agent-docker.log.gz`: stale-role failure.
+The final passing Docker workflow's raw log was deleted by the logged runner;
+its durable browser results are
+`output/agent-testing/qa-browser-b77dcea1-bdd/browser/results.json`.
+
+## Egress name-check review repairs (2026-11-05)
+
+Image `orkestrator-review-egress:6833fa71`, built from worktree
+`egress-sni-dns` after validated commit `328e511c9`, passed the final-image
+smoke and the expanded `container-live-egress-filter.test.ts` on Docker Desktop.
+The final live run (`egress-live-source-guard`) completed with exit 0 in 82 seconds.
+The older-image case remains optional and was skipped because no older image
+was supplied; its original evidence below is retained.
+
+The added cases exercise:
+
+- First HTTP requests with leading CRLF, lowercase/custom methods and tabs,
+  sent a byte at a time; forbidden Hosts get 403 and the fixture's request
+  count does not increase. Client-first EHLO, USER and AUTH commands pass on
+  the explicit non-443 port.
+- TCP DNS to a fixture address whose TCP port 53 is allowlisted still goes
+  through the resolver and returns REFUSED for a forbidden name.
+- Both `node` and workload root fail to bind the daemon's UDP port on
+  loopback or the namespace address, even with `SO_REUSEADDR`, and cannot set
+  `SO_MARK`. The supervisor retains the listening sockets across worker
+  restart; 200 bind attempts during that interval all fail.
+- Direct UDP/TCP queries to Docker's actual embedded resolver ports, found
+  through procfs, receive no answer. Normal allowed resolution still works.
+- Two firewall initializations retain the same supervisor and worker, with
+  exactly one worker and blocked DNS still enforced.
+- Removing a name closes its live HTTP connection while another stays usable,
+  without restarting the worker. Unit tests use socket pairs to advance past
+  the 30/60-second classification deadlines without waiting in real time.
+- A workload sends a forged reply with the exact pending transaction ID and
+  socket port from `127.0.0.11` on an unrelated source port; it is ignored.
+  Unmarked workload datagrams claiming source `127.0.0.11:53` are rejected
+  before loopback acceptance; Docker's genuine replies acquire that source
+  port later in POSTROUTING.
+  A controlled addressed-upstream fixture also sends replies from the wrong
+  port, queries masquerading as replies, wrong IDs and mismatched questions
+  before its genuine response. Only the genuine response reaches the client.
+- A failed primary UDP resolver falls through to the second; truncated UDP
+  falls back to TCP; a primary TCP refusal or a primary that accepts without
+  answering falls through to the second protected resolver. Forbidden names
+  never reach the fixtures.
+
+The daemon keeps non-reusable UDP listeners in its supervisor and uses one
+connected, marked UDP socket per pending query (bounded by 1,024), with a
+cryptographic transaction ID and response/question validation. TCP retries
+are bounded by the protected resolver list and a per-attempt timeout.
+Native rootful Linux and rootless Docker were not run on this Mac; the existing
+Linux CI workflow and [6101](../todo/containers-and-environments/6101-egress-name-checks-platform-coverage.md)
+retain those qualification requirements. These results do not claim prevention
+of domain fronting, encrypted names or data sent to an allowed service.
+
+## Egress name checks on Docker Desktop (2026-11-05)
+
+S-0100 (security finding M12): the egress gateway's name checks
+(`egress-filter=1`, `docker/orkestrator-egress-filter.pl`), on Docker Desktop
+29.9.2, macOS, Apple Silicon (LinuxKit 7.0.14, cgroup v2, iptables 1.8.11 on
+nf_tables), from worktree `egress-sni-dns` at base `704809a20`. Image
+`orkestrator-s0100:filter`, built from the worktree with the capability label
+(`egress-filter=1`); older image `orkestrator-v2:dev-01c4621f8529`
+(`egress-gateway=1`, no `egress-filter`), read only.
+
+- `container-live-egress-filter.test.ts`: 4 pass, 0 fail, 66 assertions,
+  24 s. An allowed name over TLS answered 200; the same Cloudflare address
+  asked for `tenant.<run>.invalid` failed with `tlsv1 alert access denied`
+  (curl 35); a foreign Host on the fixture's port 8080 got the gateway's 403
+  and never reached the fixture; a 4 MiB upload's digest matched; the
+  fixture's banner arrived first on port 2525; GitHub answered `SSH-2.0` on
+  22; `c2VjcmV0.exfil.<run>.invalid` got REFUSED with EDE 18 over UDP, over
+  TCP and sent to `192.0.2.53`, and `getent` failed; `nodejs.org` added in
+  place resolved and answered 200, and a name removed while its address
+  stayed allowed got 403; with the daemon's supervisor and worker killed an
+  allowed address was refused (curl 7) and DNS reached no server, the
+  refresher started it again, and a killed worker was back within 2 s; a
+  restart kept the checks. A full-mode runtime had no daemon and no record,
+  and a reserved name was not refused. A gateway created with
+  `ORKESTRATOR_EGRESS_FILTER=off` recorded `off`, let a foreign Host through
+  and kept `off` across a restart without the variable. The older image's
+  gateway reported no `egressFilter`, let a foreign Host through, answered
+  the blocked name without EDE, and kept that across a restart.
+- Before the suite, by hand with a manual gateway and a capability-free
+  workload in its namespace: the same cases, plus `github.io` on GitHub's
+  Pages address refused at TLS, 21 downloads of a 4 MB tarball with one
+  digest, and 40 parallel 7 MB downloads in 34 s through the daemon against
+  40 s with no gateway on the same network (the link varied between runs;
+  single streams matched). The daemon's two processes held 8 MB of RSS
+  each, and the gateway's cgroup peaked at 39 MB of its 128 MiB.
+- Existing suites with the new image: `container-live-readiness` 9 pass;
+  `container-live-network` 3 pass, 1 fail; `container-live-egress-conditions`
+  1 pass, 1 skip (IPv6 not offered), 1 fail. Both failures fail identically
+  with the older image and are recorded in
+  [6103](../todo/containers-and-environments/6103-live-suite-failures-seen-during-s0100.md).
+  C23 (`container-live-firewall.test.ts`) was not run here because it
+  contacts `example.com`, which is not on the default allowlist; CI runs it.
+- Not run: rootful Linux Engine and rootless Docker
+  ([6101](../todo/containers-and-environments/6101-egress-name-checks-platform-coverage.md)).
+
+Created and removed: the image tags `orkestrator-s0100:filter` and
+`orkestrator-s0100:iter` (label `orkestrator-s0100=1`), the manual network
+`s0100-net-manual` and containers `s0100-gw`, `s0100-wl` (same label), and
+each suite run's owner-labelled runtimes, gateways, fixtures, volumes and
+networks, which `afterAll` removed and listed again as empty.
 
 ## Stop attribution: the drain waited on interactive shells (2026-11-02)
 

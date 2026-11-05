@@ -457,6 +457,9 @@ RUN test "$(/usr/local/bin/bun --version)" = "1.4.4" \
 # Copy and set up firewall scripts
 COPY docker/init-firewall.sh docker/update-firewall.sh docker/run-root-setup.sh /usr/local/bin/
 COPY docker/orkestrator-egress-gateway.sh /usr/local/bin/orkestrator-egress-gateway
+# The gateway's name checks: Perl from the base system (perl-base, already in
+# the image for the log writer), so no new package or download to pin.
+COPY docker/orkestrator-egress-filter.pl /usr/local/bin/orkestrator-egress-filter
 COPY docker/firewall-domains.sh /usr/local/lib/orkestrator/firewall-domains.sh
 COPY docker/default-allowed-domains /usr/local/lib/orkestrator/default-allowed-domains
 USER root
@@ -464,6 +467,8 @@ USER root
 # only grants are that entrypoint (which records the policy once) and the
 # full-mode root setup. An egress gateway runs the same image as root.
 RUN chmod +x /usr/local/bin/init-firewall.sh /usr/local/bin/update-firewall.sh /usr/local/bin/run-root-setup.sh /usr/local/bin/orkestrator-egress-gateway && \
+  chown root:root /usr/local/bin/orkestrator-egress-filter && chmod 0755 /usr/local/bin/orkestrator-egress-filter && \
+  perl -c /usr/local/bin/orkestrator-egress-filter && \
   chown -R root:root /usr/local/lib/orkestrator && chmod 0755 /usr/local/lib/orkestrator && \
   chmod 0644 /usr/local/lib/orkestrator/firewall-domains.sh /usr/local/lib/orkestrator/default-allowed-domains && \
   printf '%s\n' \

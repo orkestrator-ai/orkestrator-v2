@@ -412,13 +412,15 @@ export async function installRelease(
       await mkdir(path.join(staging, "node_modules"), { recursive: true });
       await rename(fetched, path.join(staging, "node_modules", STANDALONE_PACKAGE));
     } else {
-      // A release older than the published lockfile installs as it always did.
+      // Older releases resolve afresh, but still own their installed tree.
+      // The caller's isolated global store can otherwise leave the published
+      // release pointing outside itself into an install cache that may be removed.
       await writeReleaseManifest(staging, version);
-      await run(options.bun, installArguments(options.registry, "--production"), {
-        cwd: staging,
-        timeoutMs,
-        signal: options.signal,
-      });
+      await run(
+        options.bun,
+        installArguments(options.registry, "--production", "--linker=hoisted"),
+        { cwd: staging, timeoutMs, signal: options.signal },
+      );
     }
     options.signal?.throwIfAborted();
     await rm(path.join(staging, ".cache"), { recursive: true, force: true });

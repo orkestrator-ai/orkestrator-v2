@@ -206,6 +206,9 @@ const SetupRecoveryFixture = lazy(async () => ({
 const AutoMergeErrorFixture = lazy(async () => ({
   default: (await import("./AutoMergeErrorFixture")).AutoMergeErrorFixture,
 }));
+const EnvironmentNetworkPolicyFixture = lazy(async () => ({
+  default: (await import("./EnvironmentNetworkPolicyFixture")).EnvironmentNetworkPolicyFixture,
+}));
 const EnvironmentSettingsDrawerFixture = lazy(async () => ({
   default: (await import("./EnvironmentSettingsDrawerFixture")).EnvironmentSettingsDrawerFixture,
 }));
@@ -2014,6 +2017,13 @@ function fixtureForPath() {
     return (
       <Suspense fallback={null}>
         <AutoMergeErrorFixture />
+      </Suspense>
+    );
+  }
+  if (window.location.pathname === "/environment-network-policy") {
+    return (
+      <Suspense fallback={null}>
+        <EnvironmentNetworkPolicyFixture />
       </Suspense>
     );
   }

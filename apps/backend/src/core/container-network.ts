@@ -306,6 +306,13 @@ export function parseFirewallStatus(text: string): EnvironmentNetworkPolicy["eff
       value.revocation === "conntrack" || value.revocation === "unavailable"
         ? value.revocation
         : null,
+    // Absent from images that predate the gateway's name checks.
+    egressFilter:
+      value.egressFilter === "enforced" ||
+      value.egressFilter === "off" ||
+      value.egressFilter === "unavailable"
+        ? value.egressFilter
+        : null,
   };
 }
 

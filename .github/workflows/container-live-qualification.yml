@@ -42,6 +42,12 @@ on:
       - "docker/orkestrator-worktree-signal.sh"
       - "docker/orkestrator-migrate.sh"
       - "docker/entrypoint.sh"
+      - "docker/init-firewall.sh"
+      - "docker/firewall-domains.sh"
+      - "docker/update-firewall.sh"
+      - "docker/orkestrator-egress-gateway.sh"
+      - "docker/orkestrator-egress-filter.pl"
+      - "apps/backend/src/core/egress-gateway.ts"
       - "scripts/qualify-opencode-seeded-data.sh"
       - "scripts/opencode-seeded-data/**"
 
@@ -167,6 +173,11 @@ jobs:
         env:
           ORKESTRATOR_LIVE_IPV6_NETWORK: "1"
         run: bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-live-egress-conditions.test.ts --parallel=1
+
+      # TLS SNI, HTTP Host and DNS name checks at the egress gateway (M12).
+      - name: Live egress name checks (M12)
+        if: ${{ !cancelled() }}
+        run: bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-live-egress-filter.test.ts --parallel=1
 
       - name: Live readiness faults (C09, C10, C22, C23)
         if: ${{ !cancelled() }}

@@ -664,14 +664,31 @@ describe("BuildPipelineService queued steer", () => {
     });
   });
 
-  test("leaves the message queued when the turn ended before delivery", async () => {
+  for (const outcome of ["idle", "mismatch"] as const) {
+    test(`keeps the message for the next turn when delivery answers ${outcome}`, async () => {
+      await withService(async ({ service, storage, provider }) => {
+        const { built, messageId } = await startWithQueued(service, storage, provider);
+        provider.steerOutcome = { outcome };
+
+        const result = await service.steerQueuedMessage(built.id, messageId);
+
+        expect(result.delivery).toBe("next-turn");
+        expect(result.pipeline.pendingUserMessages?.map((entry) => entry.id)).toEqual([messageId]);
+      });
+    });
+  }
+
+  test("keeps the message for the next turn when the bridge reports no running turn", async () => {
     await withService(async ({ service, storage, provider }) => {
+      // The stage is `running` as far as the pipeline knows, as during a
+      // background wait, while the bridge has no turn to steer.
       const { built, messageId } = await startWithQueued(service, storage, provider);
-      provider.steerOutcome = { outcome: "idle" };
+      provider.activeSteerRun = async () => ({ state: "idle" });
 
       const result = await service.steerQueuedMessage(built.id, messageId);
 
-      expect(result.delivery).toBe("queued");
+      expect(result.delivery).toBe("next-turn");
+      expect(provider.steers).toHaveLength(0);
       expect(result.pipeline.pendingUserMessages?.map((entry) => entry.id)).toEqual([messageId]);
     });
   });

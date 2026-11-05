@@ -61,6 +61,18 @@ describe("pipeline session graph fields", () => {
       expect(isBuildPipeline({ ...pipeline, kanbanReactivationRetryAt: invalid })).toBe(false);
     }
   });
+  test("background work wait fields are optional and typed", () => {
+    expect(
+      isBuildPipeline(
+        pipelineWith({
+          awaitingBackgroundWork: true,
+          backgroundMessageRetryAt: "2026-10-27T20:00:00.000Z",
+        }),
+      ),
+    ).toBe(true);
+    expect(isBuildPipeline(pipelineWith({ awaitingBackgroundWork: "yes" as never }))).toBe(false);
+    expect(isBuildPipeline(pipelineWith({ backgroundMessageRetryAt: "tomorrow" }))).toBe(false);
+  });
   test("accepts the reviewer outcome, error and issue counts, and records without them", () => {
     expect(isBuildPipeline(pipelineWith({}))).toBe(true);
     expect(

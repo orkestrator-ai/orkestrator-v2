@@ -202,6 +202,12 @@ export function discardPreparationResult(session: PipelineSession): void {
   delete session.structuredWaitStartedAt;
 }
 
+/** The agent is no longer waiting on background work, or has a new turn to run. */
+export function clearBackgroundWait(session: PipelineSession): void {
+  delete session.awaitingBackgroundWork;
+  delete session.backgroundMessageRetryAt;
+}
+
 export function resumablePhase(phase: BuildPhase): ResumableBuildPhase | null {
   return isActiveBuildPhase(phase) ? (phase as ResumableBuildPhase) : null;
 }

@@ -422,7 +422,13 @@ export function PipelineSessionTranscript({
                   {showThinking ? (
                     <div className="px-2 @sm:px-4">
                       <div className="chat-status-row mx-auto max-w-3xl min-w-0">
-                        <AgentThinkingIndicator agentName={agentLabel} />
+                        {session?.awaitingBackgroundWork ? (
+                          <span role="status" className="agent-thinking-shimmer text-xs">
+                            {agentLabel} is waiting on background work…
+                          </span>
+                        ) : (
+                          <AgentThinkingIndicator agentName={agentLabel} />
+                        )}
                       </div>
                     </div>
                   ) : null}

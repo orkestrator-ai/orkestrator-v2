@@ -7,6 +7,10 @@ import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failu
 import { randomUUID } from "node:crypto";
 import { dispatchWorkerMailTurn } from "./build-pipeline-worker-mail.js";
 import {
+  dispatchUserMessageDuringBackgroundWork,
+  userMessageDueDuringBackgroundWork,
+} from "./build-pipeline-service-user-messages.js";
+import {
   type BuildPipeline,
   type BuildPipelineAgent,
   type PipelineSession,
@@ -38,6 +42,7 @@ import {
 } from "./build-pipeline-provider.js";
 import { buildPipelineKanbanUpdate } from "./build-pipeline-kanban-lifecycle.js";
 import {
+  clearBackgroundWait,
   errorMessage,
   sessionForCurrentPhase,
   resumablePhase,
@@ -822,8 +827,20 @@ export class BuildPipelineSupervisor {
       status === "idle" &&
       (backgroundWorkLive === true || (retainedContinuationRequestIds?.length ?? 0) > 0);
     if (status === "running" || backgroundWorkPending) {
+      if (backgroundWorkPending && userMessageDueDuringBackgroundWork(pipeline, session)) {
+        await dispatchUserMessageDuringBackgroundWork(this.ctx, pipeline, session, () =>
+          this.dispatchUserMessage(pipeline, provider, session),
+        );
+        return;
+      }
       const statusChanged = session.status !== "running";
       session.status = "running";
+      const waitChanged = session.awaitingBackgroundWork !== (backgroundWorkPending || undefined);
+      if (backgroundWorkPending) {
+        session.awaitingBackgroundWork = true;
+      } else {
+        clearBackgroundWait(session);
+      }
       // Viewers read the committed copy, which only a save changes, so the
       // transcript is looked at only when this pass may save it: a status
       // change, the persist boundary, or a shown stall warning that movement
@@ -832,7 +849,7 @@ export class BuildPipelineSupervisor {
       const persistDue = this.shouldPersistTranscript(session);
       const transcript = sharedTranscriptRead(provider, session.sdkSessionId);
       const transcriptChanged =
-        statusChanged || persistDue || pipeline.stallWarning !== undefined
+        statusChanged || waitChanged || persistDue || pipeline.stallWarning !== undefined
           ? await this.refreshMovedTranscript(session, provider, { read: transcript.read })
           : false;
       // Live usage, so a running node shows what the turn has cost so far.
@@ -866,7 +883,12 @@ export class BuildPipelineSupervisor {
       // and this pipeline's control row. A pass that read nothing had no
       // warning to clear, and its stall clock is younger than the persist
       // interval, so no warning can appear on it either.
-      if (statusChanged || warningChanged || ((transcriptChanged || usageChanged) && persistDue)) {
+      if (
+        statusChanged ||
+        waitChanged ||
+        warningChanged ||
+        ((transcriptChanged || usageChanged) && persistDue)
+      ) {
         session.messagesPersistedAt = new Date().toISOString();
         await this.ctx.save(pipeline, record.revision);
       }
@@ -875,6 +897,7 @@ export class BuildPipelineSupervisor {
 
     const wasRunning = session.status === "running";
     session.status = "idle";
+    clearBackgroundWait(session);
     const completionChanged = session.completedAt === undefined;
     session.completedAt ??= new Date().toISOString();
     delete pipeline.stallWarning;
@@ -1385,6 +1408,7 @@ export class BuildPipelineSupervisor {
     delete session.completedAt;
     delete session.usageFinalizationPolls;
     delete pipeline.stallWarning;
+    clearBackgroundWait(session);
     await this.ctx.save(pipeline, pipeline.backendRevision);
     await this.dispatchPending(pipeline, provider);
   }

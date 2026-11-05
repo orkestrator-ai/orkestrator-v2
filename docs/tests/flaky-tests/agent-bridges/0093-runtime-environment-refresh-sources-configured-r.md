@@ -202,6 +202,21 @@ This confirms intermittent behavior, not target-branch reproduction of the
 timeout or proof of an environmental cause. No implementation, assertion,
 timeout or skip changed.
 
+## Background-wait message validation — 2026-11-05
+
+`mise run test` on a branch with no `bridges/` changes failed the exact
+helper-refresh case after 15,002.32 ms, with one file worker. The run shared the
+host with a live `dev:test` profile and a Playwright browser, so the host was
+busier than a normal aggregate run.
+
+The unchanged owner passed alone (9 passed, 0 failed, 123 ms):
+
+```sh
+bun test src/runtime-env.test.ts --preload ../../tests/setup-node.ts --parallel=1
+```
+
+Run from `bridges/codex-bridge`. No root cause is claimed; this case remains open.
+
 The final exact aggregate rerun after logger sink acknowledgement passed the
 entire bridges group (74.1 s), including this owner. Root and protocol groups
 also passed. Backend still had the independently reproduced preview failure

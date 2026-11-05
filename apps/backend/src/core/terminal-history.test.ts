@@ -998,6 +998,36 @@ describe.serial("terminal history", () => {
     expect(history.stats()).toMatchObject({ queuedBytes: 0, queuedChunks: 0 });
   });
 
+  test("preserves an early overflow gap when loading an existing manifest", async () => {
+    const dataDir = await temporaryDirectory();
+    const directory = await readySession(dataDir, "existing-gap");
+    history.append("existing-gap", "before\r\n", 1, 1);
+    await history.flush(true);
+    restartHistory();
+    history.configure({
+      sessionId: "existing-gap",
+      dataDir,
+      stableIdentity: "existing-gap",
+      cols: 80,
+      rows: 24,
+    });
+    history.append("existing-gap", "x\r\n".repeat(500_000), 2, 1);
+    expect((await history.page("existing-gap"))?.historyGap).toBe(true);
+    await history.flush();
+    expect(
+      JSON.parse(await readFile(path.join(directory, "manifest.json"), "utf8")).historyGap,
+    ).toBe(true);
+    restartHistory();
+    history.configure({
+      sessionId: "existing-gap",
+      dataDir,
+      stableIdentity: "existing-gap",
+      cols: 80,
+      rows: 24,
+    });
+    expect((await history.page("existing-gap"))?.historyGap).toBe(true);
+  });
+
   test("persists an explicit gap when the archive queue's byte bound overflows", async () => {
     const dataDir = await temporaryDirectory();
     const directory = await readySession(dataDir, "overloaded-session");
@@ -1088,6 +1118,38 @@ describe.serial("terminal history", () => {
     expect(rows.at(-1)).toBe("next");
     expect(rows).not.toContain("dropped");
     expect((await history.page("whole-line-drop"))?.historyGap).toBe(true);
+  });
+
+  test.each(["\r", "\n"])(
+    "recovers a dropped %j without losing real blank lines",
+    async (ending) => {
+      await readySession(await temporaryDirectory(), "split-drop");
+      history.append("split-drop", fillQueue("\r\n"), 1, 1);
+      history.append("split-drop", `lost${ending}`, 2, 1);
+      await history.settled();
+      const before = (await history.stateSnapshot("split-drop"))!.latestSequence;
+      history.append("split-drop", "\nnext\r\n", 3, 1);
+      const page = await history.page("split-drop");
+      expect(page?.rows.filter((row) => Number(row.id.split(":")[0]) > before)).toEqual(
+        ending === "\r"
+          ? [{ id: `${before + 1}:0`, text: "next" }]
+          : [
+              { id: `${before + 1}:0`, text: "" },
+              { id: `${before + 2}:0`, text: "next" },
+            ],
+      );
+      expect(page?.historyGap).toBe(true);
+    },
+  );
+
+  test("preserves a generation boundary when its first chunk is dropped whole", async () => {
+    await readySession(await temporaryDirectory(), "lost-generation");
+    history.append("lost-generation", fillQueue(), 1, 1);
+    history.append("lost-generation", "lost", 1, 2);
+    await history.settled();
+    history.append("lost-generation", "prompt> ls\r\n", 2, 2);
+    expect((await readAllRows("lost-generation")).at(-1)).toBe("prompt> ls");
+    expect((await history.page("lost-generation"))?.historyGap).toBe(true);
   });
 
   test("resumes after dropped output held the end of an escape sequence", async () => {
@@ -1296,19 +1358,67 @@ describe.serial("terminal history", () => {
     );
   });
 
+  test("carried text stays charged when snapshots number split lines during blocked I/O", async () => {
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    history = createHistory({
+      pageReadHook: async () => {
+        entered.resolve();
+        await release.promise;
+      },
+    });
+    await readySession(await temporaryDirectory(), "carry-bound");
+    const reading = history.page("carry-bound");
+    await entered.promise;
+    try {
+      for (let index = 0; index < 40; index += 1) {
+        history.append("carry-bound", "x".repeat(64 * 1024), index * 2 + 1, 1);
+        await history.stateSnapshot("carry-bound");
+        if (index === 0) expect(history.stats().queuedBytes).toBeGreaterThanOrEqual(64 * 1024);
+        history.append("carry-bound", "\n", index * 2 + 2, 1);
+        const snapshot = await history.stateSnapshot("carry-bound");
+        expect(history.stats().queuedBytes).toBeLessThanOrEqual(TERMINAL_HISTORY_PENDING_BYTES);
+        // Completed rows are 64 KiB; no more than sixteen can fit the byte cap.
+        expect(snapshot!.latestSequence).toBeLessThanOrEqual(16);
+      }
+    } finally {
+      release.resolve();
+    }
+    await reading;
+    await history.flush();
+    expect(history.stats()).toMatchObject({ queuedBytes: 0, queuedChunks: 0 });
+    expect((await history.page("carry-bound"))?.historyGap).toBe(true);
+  });
+
   test("the first checkpoint records output still queued", async () => {
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    history = createHistory({
+      pageReadHook: async () => {
+        entered.resolve();
+        await release.promise;
+      },
+    });
     const directory = await readySession(await temporaryDirectory(), "queued-checkpoint");
+    const reading = history.page("queued-checkpoint");
+    await entered.promise;
     const readCheckpoint = async () =>
       JSON.parse(await readFile(path.join(directory, "checkpoint.json"), "utf8")) as {
         sequence: number;
         revision: number;
       };
-    // The first append checkpoints at once, ahead of the flush timer.
+    // Hold I/O so even an expired flush timer cannot drain the queued output.
     history.append("queued-checkpoint", seqOutput(1, 30), 1, 1);
+    try {
+      expect((await history.stateSnapshot("queued-checkpoint"))?.latestSequence).toBe(30);
+      expect(history.stats().queuedChunks).toBe(1);
+      expect(await readdir(directory)).not.toContain("segment-000001.jsonl");
+    } finally {
+      release.resolve();
+    }
+    await reading;
     await history.settled();
     expect(await readCheckpoint()).toMatchObject({ sequence: 30, revision: 1 });
-    expect(history.stats().queuedChunks).toBe(1);
-    expect(await readdir(directory)).not.toContain("segment-000001.jsonl");
 
     history.append("queued-checkpoint", seqOutput(31, 40), 2, 1);
     await history.flush();

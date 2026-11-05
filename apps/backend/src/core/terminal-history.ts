@@ -53,7 +53,7 @@ const TERMINAL_CELL_ESTIMATED_BYTES = 96;
 
 type HistoryRecord = { sequence: number; at: number; text: string };
 /** How output dropped at the queue's bound ended: where the next kept chunk starts. */
-type DroppedOutputEnding = "line-start" | "mid-line";
+type DroppedOutputEnding = "line-start" | "mid-line" | "after-cr";
 type QueuedChunk = {
   text: string;
   at: number;
@@ -120,6 +120,8 @@ type Session = {
   archivePendingCr: boolean;
   archiveHighSurrogate: string;
   archiveLineCarry: string;
+  archiveCarryBytes: number;
+  archiveGenerationChanged: boolean;
   archiveSkipLine: boolean;
   archiveDropped: DroppedOutputEnding | null;
   completedAt: number | null;
@@ -790,6 +792,7 @@ export class TerminalHistory {
       session.manifest = {
         ...previousManifest,
         archiveRowsVersion: 1,
+        historyGap: previousManifest.historyGap || session.manifest.historyGap,
         archiveTruncated: previousManifest.archiveTruncated ?? false,
         incarnation: session.incarnation,
         completed: active ? false : previousManifest.completed,
@@ -971,6 +974,8 @@ export class TerminalHistory {
       archivePendingCr: false,
       archiveHighSurrogate: "",
       archiveLineCarry: "",
+      archiveCarryBytes: 0,
+      archiveGenerationChanged: false,
       archiveSkipLine: false,
       archiveDropped: null,
       completedAt: null,
@@ -1205,22 +1210,32 @@ export class TerminalHistory {
   }
 
   private numberRows(session: Session, rows: string[], at: number, charge: number): void {
+    // Carry bytes keep their admission charge across reads and flushes. Transfer
+    // that charge to rows only when the carry is completed (or finalized).
+    const carryBytes = Buffer.byteLength(session.archiveLineCarry, "utf8");
+    const rowCharge = charge + session.archiveCarryBytes - carryBytes;
+    session.archiveCarryBytes = carryBytes;
     if (rows.length === 0) {
-      this.releaseQueuedChunk(session, charge);
+      this.releaseQueuedChunk(session, rowCharge);
       return;
+    }
+    if (charge === 0 && rowCharge > 0) {
+      // Finalizing the carry creates a block without an incoming chunk slot.
+      session.queuedChunks += 1;
+      this.queuedChunks += 1;
     }
     const first = session.sequence + 1;
     session.sequence += rows.length;
     session.manifest.latestSequence = session.sequence;
-    session.numbered.push({ first, at, text: rows.join("\n"), charge });
+    session.numbered.push({ first, at, text: rows.join("\n"), charge: rowCharge });
   }
 
   /**
    * Sanitizes queued output, splits it into rows and numbers them, without
    * touching disk. A flush does this when it writes; anything that reads
    * `session.sequence` does it first, because output still queued has no number.
-   * Numbered rows keep their chunk's charge, and sanitizing never makes text
-   * larger beyond what the line carry already holds, so the byte bound still holds.
+   * Numbered rows and the line carry share the admitted byte charge, so reads
+   * cannot release bytes that remain retained in either representation.
    */
   private numberQueuedOutput(session: Session): void {
     for (const chunk of session.pending.splice(0)) {
@@ -1232,7 +1247,11 @@ export class TerminalHistory {
         this.finishArchiveLine(session, rows);
         session.archiveSkipLine = !chunk.generationChanged && chunk.afterDrop === "mid-line";
       }
-      this.takeArchiveLines(session, sanitizeHistoryChunk(session, chunk.text), rows);
+      const text =
+        !chunk.generationChanged && chunk.afterDrop === "after-cr" && chunk.text.startsWith("\n")
+          ? chunk.text.slice(1)
+          : chunk.text;
+      this.takeArchiveLines(session, sanitizeHistoryChunk(session, text), rows);
       this.numberRows(session, rows, chunk.at, chunk.charge);
     }
     session.pendingBytes = 0;
@@ -1242,7 +1261,7 @@ export class TerminalHistory {
     this.numberQueuedOutput(session);
     const rows: string[] = [];
     this.finishArchiveLine(session, rows);
-    // Already in memory as the line carry, whose size is bounded, so uncharged.
+    // Transfer the remaining carry charge to the final rows.
     this.numberRows(session, rows, Date.now(), 0);
   }
 
@@ -1270,11 +1289,12 @@ export class TerminalHistory {
       session.pending.push({
         text: admitted,
         at,
-        generationChanged,
+        generationChanged: generationChanged || session.archiveGenerationChanged,
         afterDrop: session.archiveDropped,
         charge,
       });
       session.archiveDropped = null;
+      session.archiveGenerationChanged = false;
       session.pendingBytes += charge;
       session.queuedBytes += charge;
       session.queuedChunks += 1;
@@ -1290,7 +1310,9 @@ export class TerminalHistory {
     }
     if (admitted.length < text.length) {
       const last = text.at(-1);
-      session.archiveDropped = last === "\n" || last === "\r" ? "line-start" : "mid-line";
+      session.archiveDropped =
+        last === "\r" ? "after-cr" : last === "\n" ? "line-start" : "mid-line";
+      session.archiveGenerationChanged ||= generationChanged && admitted.length === 0;
       this.markHistoryGap(session);
     }
   }

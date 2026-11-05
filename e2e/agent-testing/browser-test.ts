@@ -33,16 +33,67 @@ export function isModuleLoad(request: Pick<Request, "method" | "resourceType">):
   return request.method() === "GET" && MODULE_RESOURCE_TYPES.has(request.resourceType());
 }
 
+/** A module response as the route handler fulfils it. */
+export type CachedModule = { status: number; headers: Record<string, string>; body: Buffer };
+
+/**
+ * One context's module responses, so a reload is served from memory. Routing
+ * turns Chromium's HTTP cache off, and fetching every module through the test
+ * process again on each reload took 15–20 s on a loaded host, long enough for a
+ * reloaded page to miss its own assertions. Only complete 200 responses are
+ * kept, within a byte budget; the renderer's sources do not change during a
+ * case, and a module Vite rebuilds gets a new `?t=` URL.
+ */
+export class ModuleCache {
+  private readonly entries = new Map<string, CachedModule>();
+  private bytes = 0;
+
+  constructor(private readonly maxBytes = 256 * 1024 * 1024) {}
+
+  get(url: string): CachedModule | undefined {
+    return this.entries.get(url);
+  }
+
+  set(url: string, module: CachedModule): void {
+    if (module.status !== 200 || this.entries.has(url)) return;
+    if (this.bytes + module.body.byteLength > this.maxBytes) return;
+    this.entries.set(url, module);
+    this.bytes += module.body.byteLength;
+  }
+
+  get size(): number {
+    return this.entries.size;
+  }
+}
+
+/** `body()` is already decoded, so drop what described the bytes on the wire. */
+export function decodedBodyHeaders(headers: Record<string, string>): Record<string, string> {
+  const { "content-encoding": _encoding, "content-length": _length, ...rest } = headers;
+  return rest;
+}
+
 /**
  * Routes a context's loopback scripts and styles through Playwright's own
  * fetch, which no host network change aborts. The default context already has
  * this; call it for every context a case creates for a second client.
  */
 export async function fetchModulesOutsideChromium(context: BrowserContext): Promise<void> {
+  const cache = new ModuleCache();
   await context.route(LOOPBACK_URL, async (route) => {
-    if (!isModuleLoad(route.request())) return route.fallback();
+    const request = route.request();
+    if (!isModuleLoad(request)) return route.fallback();
     try {
-      await route.fulfill({ response: await route.fetch({ maxRetries: 2 }) });
+      let module = cache.get(request.url());
+      if (!module) {
+        const response = await route.fetch({ maxRetries: 2 });
+        module = {
+          status: response.status(),
+          headers: decodedBodyHeaders(response.headers()),
+          body: await response.body(),
+        };
+        cache.set(request.url(), module);
+      }
+      await route.fulfill(module);
     } catch {
       // The page navigated away or closed while this module was on its way.
       await route.abort().catch(() => undefined);

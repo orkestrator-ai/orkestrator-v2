@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { LOOPBACK_URL, isModuleLoad } from "./browser-test";
+import { LOOPBACK_URL, ModuleCache, decodedBodyHeaders, isModuleLoad } from "./browser-test";
 
 const directory = import.meta.dirname;
 
@@ -66,5 +66,34 @@ describe("the browser suite's shared test", () => {
     expect(isModuleLoad(request("POST", "script"))).toBe(false);
     for (const type of ["document", "fetch", "xhr", "eventsource", "websocket", "image", "font"])
       expect(isModuleLoad(request("GET", type)), type).toBe(false);
+  });
+
+  test("keeps complete module responses within its byte budget", () => {
+    const cache = new ModuleCache(10);
+    const module = (status: number, bytes: number) => ({
+      status,
+      headers: { "content-type": "text/javascript" },
+      body: Buffer.alloc(bytes),
+    });
+    cache.set("http://127.0.0.1/a.js", module(200, 6));
+    cache.set("http://127.0.0.1/missing.js", module(404, 1));
+    cache.set("http://127.0.0.1/b.js", module(200, 6));
+    cache.set("http://127.0.0.1/c.js", module(200, 4));
+    expect(cache.get("http://127.0.0.1/a.js")?.body.byteLength).toBe(6);
+    expect(cache.get("http://127.0.0.1/missing.js")).toBeUndefined();
+    expect(cache.get("http://127.0.0.1/b.js")).toBeUndefined();
+    expect(cache.get("http://127.0.0.1/c.js")?.body.byteLength).toBe(4);
+    expect(cache.size).toBe(2);
+  });
+
+  test("drops the wire encoding headers of a body it serves decoded", () => {
+    expect(
+      decodedBodyHeaders({
+        "content-type": "text/javascript",
+        "content-encoding": "gzip",
+        "content-length": "120",
+        etag: "W/1",
+      }),
+    ).toEqual({ "content-type": "text/javascript", etag: "W/1" });
   });
 });

@@ -58,7 +58,6 @@ These batches don't share a protected area. They only have to respect the confli
 
 - **E1 (Baseline run):** the baseline task in `0150`, `0160`, `0180`, `0190` and `0400`, in efficiency-logging-database
 - **E20 (ACP bridge):** efficiency-logging-database `0270`, `0260`, `0240`
-- **E-0650 (Terminal container subscription):** efficiency-logging-database `0650`
 - **E-0694 (Attention follow polling):** efficiency-logging-database `0694`
 - **CI-0010 (Backend shard timeout):** ci-shard-validation `0010`
 

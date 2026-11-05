@@ -1950,7 +1950,7 @@ export function SharedNativeAgentController({
       }
       // A prompt with a stable id must not be queued: the queue carries no id,
       // so a copy the backend already sent would run twice. Retried by the
-      // caller once the turn ends and this callback changes.
+      // caller once the turn ends and this callback changes with `canQueue`.
       if (submitOptions?.noQueue && canQueue) return false;
       // Claim the intent before validation or dispatch. A remount cannot replay
       // it a second time, and every terminal validation return releases it.
@@ -2946,12 +2946,19 @@ export function SharedNativeAgentController({
       if (accepted) clearTabInitialPrompt(tabId, data.environmentId);
       else initialPromptSentRef.current = false;
     });
+    // `submit` refuses while a queue edit, another send or a pre-send check
+    // holds its ref. Refs wake nothing, so the states released alongside them
+    // are listed here and a refused prompt is retried once the last one clears
+    // (`sendLocked` already carries two of them, but not `preparingSend`).
   }, [
     backendOwnsStartupPrompt,
     clearTabInitialPrompt,
     data.environmentId,
     initialPrompt,
+    isSubmitting,
+    preparingSend,
     projection,
+    queueEditPending,
     sendingHeld,
     setSendError,
     submit,

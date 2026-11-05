@@ -146,8 +146,8 @@ When one of these becomes ready, it joins the lane shown.
 | ST-2 | Done | `dlopen` once per process, `confined-read.ts:28` (c3c899b16); the handle cache was deliberately not done, 1202 task 7. |
 | ST-3 | Done | `ObjectStore.reuse` leaves a fence younger than half the grace alone and the closure check skips objects proven in the pass, `object-store.ts`, `capture.ts` (#1734); see the E4 closing check below. |
 | ST-4 | Done | Bounded line count LRU, `snapshot-diff.ts:96-120` (c3c899b16). |
-| ST-5 | Done | `ManifestCache` behind `readManifest`, `findManifestEntry` binary search, one render in the whitespace-ignore view (#1761); batch budget follow-up [4760](../../todo/cross-cutting/4760-whitespace-view-skips-batch-budget.md). |
-| ST-6 | Done | Off-loop zlib from 16 KiB and `FileHandle.sync()` per object before its rename, in `ObjectBatch` (#1761); evidence-body follow-up [4761](../../todo/cross-cutting/4761-evidence-body-store-fsync-on-event-loop.md). |
+| ST-5 | Done | `ManifestCache` behind `readManifest`, `findManifestEntry` binary search, one render in the whitespace-ignore view (#1761); batch budget follow-up 4760, done and deleted 2026-11-05. |
+| ST-6 | Done | Off-loop zlib from 16 KiB and `FileHandle.sync()` per object before its rename, in `ObjectBatch` (#1761); evidence-body follow-up 4761, done and deleted 2026-11-05. |
 | ST-7 | Done | One-row reads, `storage-projects.ts:654`, `storage-native.ts:424`, `storage-prompt-queue-store.ts:127`, `storage-drafts.ts:160`, `:731`, `storage-sessions.ts:262` (12289fc56); 1202 assigns the lease-held native mutations to TX-4. |
 | ST-8 | Done | `updateStoreRow` carries the cache forward, `storage-database.ts:830-838` (12289fc56). |
 | ST-9 | Partly done | Frozen read model and single serialisation, `storage-agent-mail-store.ts:364`, `:431-436` (6953e8df7); pending-inject collection and body-free list remain, see 0560. |
@@ -483,7 +483,7 @@ The outcome of every task in the E4 batch file, checked back against the code on
 | 0480 | Needs verification: zlib off the thread, 16 MiB stall | Done (#1761) | Longest stall 107–143 ms to 12–13 ms ([change tracking](../../architecture/change-tracking.md#benchmarks)). |
 | 0530 | 1. Manifest cache | Done (#1761) | `manifest-cache.ts`; `manifest-cache.test.ts`. |
 | 0530 | 2. Binary search per row | Done (#1761) | `findManifestEntry` in `capture.ts`; `diff-bodies-lookup.test.ts`. |
-| 0530 | 3. Render once in the whitespace-ignore view | Done (#1761) | `renderSnapshotBodies` in `diff-bodies.ts`; `diff-bodies-lookup.test.ts`; follow-up [4760](../../todo/cross-cutting/4760-whitespace-view-skips-batch-budget.md). |
+| 0530 | 3. Render once in the whitespace-ignore view | Done (#1761) | `renderSnapshotBodies` in `diff-bodies.ts`; `diff-bodies-lookup.test.ts`; follow-up 4760, done and deleted 2026-11-05. |
 | 0530 | Needs verification: manifest sizes | Done (#1761) on a fixture | 100,000-entry manifest benchmark; real sizes are part of [5361](../../todo/cross-cutting/5361-retention-pass-on-a-large-real-store.md). |
 | 0550 | 1. Keep `usedBytes` current | Done | `ObjectStore.currentBytes` and the sweep's subtraction in `object-store.ts`, read by `retention.ts`; `retention-store-walks.test.ts`. |
 | 0550 | 2. Reachability from cached manifests | Done, after measuring | The parsed-manifest cache served 8 of 400 manifests per pass on the `--only=retention` fixture, so `reachability-cache.ts` keeps each manifest's object ids between passes; `retention-store-walks.test.ts`. |

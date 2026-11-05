@@ -316,22 +316,20 @@ export class DiffBodyService {
     };
   }
 
-  private async renderView(
+  /**
+   * One render for the whole page in both views, so the page's `maxBatchBytes`
+   * bounds the diffing either way and later files show `batch-limit`.
+   */
+  private renderView(
     files: SnapshotFileChange[],
     budget: { maxBatchBytes: number; contextLines?: number },
     ignoreWhitespace: boolean,
   ): Promise<ChangeDiffFileBody[]> {
-    if (!ignoreWhitespace) return renderSnapshotBodies(this.deps.store, files, budget);
-    const bodies: ChangeDiffFileBody[] = [];
-    for (const file of files) {
-      bodies.push(
-        ...(await renderSnapshotBodies(this.deps.store, [file], {
-          ...budget,
-          ignoreWhitespace: true,
-        })),
-      );
-    }
-    return bodies;
+    return renderSnapshotBodies(
+      this.deps.store,
+      files,
+      ignoreWhitespace ? { ...budget, ignoreWhitespace: true } : budget,
+    );
   }
 
   /**

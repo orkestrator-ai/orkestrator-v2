@@ -151,6 +151,11 @@ export interface OrkestratorGatewayOptions {
   allowedOrigins?: string[];
   compression?: GatewayCompressionMode;
   keepaliveMs?: number;
+  /** Optional traffic clock/scheduler, for deterministic burst attribution tests. */
+  trafficSummary?: Pick<
+    import("./gateway-traffic-summary.js").GatewayTrafficSummaryOptions,
+    "now" | "schedule"
+  >;
   proxyBodyIdleTimeoutMs?: number;
   /** Legacy browser-preview connect+headers deadline (default 30 s). */
   browserPreviewHeadersTimeoutMs?: number;

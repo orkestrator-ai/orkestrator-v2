@@ -27,6 +27,7 @@ import {
   MAX_CLIENT_METRICS_BODY_BYTES,
   METRIC_UNKNOWN_COMMAND_KEY,
   METRIC_KEEPALIVE_KEY,
+  normalizeMetricLabel,
   InvalidRequestBodyError,
   RequestBodyTooLargeError,
   sanitizeClientBootReport,
@@ -138,6 +139,13 @@ export class GatewayHandlers {
         ? (args as Record<string, unknown>)
         : {};
     const startedAt = Date.now();
+    // Attribute work to its arrival window, even if it outlives the burst.
+    // Without registry evidence, retain only the reserved unknown label.
+    this.ctx.traffic.noteInvoke(
+      normalizeMetricLabel(
+        this.ctx.backend.hasCommand?.(command) ? command : METRIC_UNKNOWN_COMMAND_KEY,
+      ),
+    );
 
     try {
       const result = await this.ctx.backend.invoke(

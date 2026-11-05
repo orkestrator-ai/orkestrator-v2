@@ -2,7 +2,9 @@
 
 Checked against `main` at `930189337` (2026-10-26). Items 1 to 3 done on
 2026-10-27 in #1323 (`5b5cfcdf8`); item 3's counter split done on
-2026-10-29 against `79f3bc97e`. Item 4 waits on the support window.
+2026-10-29 against `79f3bc97e`. Item 4 waits on the support window;
+re-checked against `cbe0f9a5b` on 2026-11-05, when it also took over
+efficiency finding TX-10 (report 0385) and its interim map.
 
 ## Task analysis
 
@@ -10,14 +12,16 @@ Analysed 2026-10-27 against `main` at `863b5782`, which is the parent of
 #1323 (`5b5cfcdf8`), so the investigation below describes the code before
 items 1 to 3 landed. Its line numbers are stale. Re-checked against
 `79f3bc97e` on 2026-10-29; see **Assumptions and decisions** for where the
-recommended options were followed and where they were not.
+recommended options were followed and where they were not. Task 4
+re-checked against `cbe0f9a5b` on 2026-11-05 for efficiency finding TX-10;
+see **TX-10's interim map (task 4)**.
 
 ### Tasks
 
 1. **Direct cursor wherever the provider pages**: keep a direct cursor through a backend byte bound, or add a direct mint from the summary window, chosen by a measurement of the no-cursor cases. Status: done (2026-10-27, #1323: a direct cursor through the byte bound).
 2. **`loadEarlierMessages` pages directly**: stop calling the `sync-v1` projection to mint a cursor, with tests for a byte-bounded view, an OpenCode window, a prefix collapse and a held place. Status: done (2026-10-27, #1323; the mint remains only as the fallback for a view without a direct cursor).
 3. **Keep v1 cursors for older renderers and record the condition**: keep serving v1 cursors, counted by `history.joined-v1-page`, with the retirement condition in the register. Status: done (condition 2026-10-27; counter split by cause 2026-10-29).
-4. **Remove joined paging**: delete joined paging, the v1 cursor namespace and `projectionHistory` once the floor passes the renderer from task 2. Status: blocked (on task 2 shipping in a Stable release and the support window).
+4. **Remove joined paging**: delete joined paging, the v1 cursor namespace and `projectionHistory` once the floor passes the renderer from task 2. Status: blocked (tasks 1 to 3 first shipped Stable in v2.36.0, so the floor reaches them on 2027-01-02; the rest of the register condition is also open). Holds TX-10's interim id-to-index map, to build only if the counters show real use before then.
 
 ### 1. Direct cursor wherever the provider pages
 
@@ -91,11 +95,25 @@ recommended options were followed and where they were not.
 
 **Problem.** Joined paging keeps `projectionHistory`, a byte-bounded per-session cache (`native-agent-transcript-projection.ts:770`), plus the v1 cursor namespace and `firstHistoryCursor` (`:1692`), all for compatibility only.
 
-**Context.** The retirement condition is in the register. Removal also needs the counter quiet on the machines the maintainer can reach.
+**Context.** The retirement condition is in the register. Removal also needs the counter quiet on the machines the maintainer can reach. Efficiency finding TX-10 ([report](../../reports/2026-10-27-efficiency.md#b-native-agent-transcript-pipeline)) rates the cost of each joined page and proposed an interim fix; its report file 0385 was closed into this task on 2026-11-05.
 
-**Investigation.** Nothing to remove yet. Removing this does not affect the `sync-v1` live-update protocol.
+**Investigation.** Re-checked against `cbe0f9a5b` on 2026-11-05.
+
+- The cost TX-10 describes is still there. `getMessagePage` (`native-agent-transcript-projection.ts:4080`) falls through to joined paging when `directMessagePage` declines, records the counter (`:4090`, id from `joinedPageCounter`, `:266`), runs a whole `sync-v1` `refreshProjection` (`:4091`), then finds the cursor with a `findIndex` that SHA-256-hashes each message id in turn (`:4116`). The three ids are at `compatibility-path-usage.ts:39-43`.
+- The window has not passed. No Stable release is 60 days old, so the floor is still v2.21.0 (`version-compatibility.md`, The support window). Tasks 1 to 3 (#1323 `5b5cfcdf8`, #1429 `054904b8a`) and the Claude summary-route change the `/messages` fallback row waits on (#1296 `c9f4043b`) first shipped Stable in v2.36.0, published 2026-11-03, so the floor reaches them on 2027-01-02.
+- The rest of the register condition is open too: the `/messages` fallback row has not retired (0050), and the first-message byte-bound, cursor-boundary and cursor-length cases have no direct recovery yet. No task in this file builds that recovery; it has to exist before the path can go.
+- Nothing to remove yet. Removing this does not affect the `sync-v1` live-update protocol.
 
 **Decisions.**
+
+- **Add TX-10's interim fix, an id-to-index map per history epoch, before removal?**
+  - **No: leave the path as it is until this task removes it, unless the counters show real use (recommended).**
+    - Pros: no new state on a path that is going away; the per-click whole read the path was filed for is already gone (task 1).
+    - Cons: a caller still on the path pays one whole read and a hashing scan per page until removal.
+  - **Build the map now.**
+    - Pros: removes the hashing scan.
+    - Cons: a new structure that needs byte and count bounds ([report invariants](../../reports/2026-10-27-efficiency.md#invariants-every-fix-must-keep)) on a retiring path; it leaves the whole `sync-v1` read, the larger cost, untouched.
+  - **When the map becomes worth building:** any of the three counters shows a `lastSeenAt` after 2026-11-03 (the first release that carries the split) on a machine running v2.36.0 or later, at a rate of more than an occasional page, and removal is still more than a few weeks off. Read the counters with the `get_compatibility_path_usage` backend command or the `compatibilityPaths` block of the gateway's `/__orkestrator/metrics` ([version-compatibility.md](../../architecture/version-compatibility.md#usage-counters)), on an isolated profile or a machine the maintainer owns. Read `lastSeenAt`, not `count`: the base id's older totals mix every cause. `unpaged-source` use is cured by the `/messages` fallback retiring and `unnamed-cursor` use by direct recovery, so either is a reason to do that work first; the map only helps if removal is blocked for long. If it is built, key it by the cursor's hashed id per `projectionHistory` epoch and bound it with that cache, so it is evicted and cleared with the entry.
 
 - **Keep this item here or move it?**
   - **Keep it here as the file's last item (recommended).**
@@ -229,7 +247,13 @@ cursor, and that cost a whole transcript read on bridges that page directly.
    and the counter is quiet on the machines you can reach, remove joined
    paging, the v1 cursor namespace, `projectionHistory` and the renderer's
    mint in `loadEarlierMessages` (a view without a direct cursor then has
-   nothing older to load, and the control retires).
+   nothing older to load, and the control retires). Re-checked 2026-11-05:
+   the floor reaches v2.36.0, the first Stable release with tasks 1 to 3, on
+   2027-01-02; the `/messages` fallback row and direct recovery for the
+   first-message byte-bound, cursor-boundary and cursor-length cases are
+   still open. Efficiency finding TX-10 closes with this task. Its interim
+   id-to-index map is not built; task 4's decision says when it would be
+   and how to read the counters.
 
 ## Assumptions and decisions
 
@@ -402,6 +426,19 @@ paging. It is out of this file's scope and unchanged.
 Options: keep it here as the last item (recommended); or move it to 0034.
 Chosen: keep it here, so the file closes when the path is gone.
 
+### TX-10's interim map (task 4)
+
+Efficiency report file 0385 (TX-10) asked whether to add an id-to-index map
+per history epoch while joined paging waits for removal. Options: leave the
+path until task 4 removes it, unless the counters show real use
+(recommended); or build the map now. Chosen: leave it (recommended), and
+close 0385 into task 4. Why: the support window has not passed (floor
+v2.21.0 on 2026-11-05), the map would not remove the whole `sync-v1` read,
+and no counter data exists yet to show use: the split counters first
+shipped Stable in v2.36.0 on 2026-11-03, and no production instance was read
+for this check. Task 4's decision records the trigger and how to read the
+counters.
+
 ### Measurement data (tasks 1 and 3)
 
 Real-world frequency would need live sessions or the user's data; neither was
@@ -440,3 +477,6 @@ collecting with the first release that carries them.
 - [native-transcripts.md](../../architecture/native-transcripts.md#history-pages-and-cursors).
 - [`version-compatibility.md`](../../architecture/version-compatibility.md#the-support-window):
   the support window.
+- [Efficiency report, B](../../reports/2026-10-27-efficiency.md#b-native-agent-transcript-pipeline)
+  (TX-10), closed into task 4; see the
+  [closing note for 0385](../../reports/efficiency-logging-database/0000-index.md#closing-check-of-0385-tx-10-joined-history-pages).

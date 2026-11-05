@@ -16,10 +16,9 @@ A batch file combines several reports as numbered parts and takes the rating of 
 | --- | --- | --- | --- | --- | --- |
 | 1 | [0490-e25-container-start.md](0490-e25-container-start.md) | Medium | No | **E25, Container start.**<br>`0490`: DK-14: Agent-home inputs are copied in full per environment and again on every start<br>`0500`: DK-13: Each environment clones from the remote again | From `0490`: Every container start copies inputs again, at a size nobody has measured. |
 | 2 | [0160-e10-conditional-reads-and-deltas.md](0160-e10-conditional-reads-and-deltas.md) | Low | No | **E10, Conditional reads and deltas.**<br>`0160`: TX-1: A transcript delta can only be built from the newest cached view<br>`0180`: TX-5: Session-state reads have no conditional path from the bridge<br>`0190`: TX-6: Bridge transcript windows are always sent whole | From `0160`: The report rates it High, but the maintainer gated it on a baseline, so it stays Low until that measurement arrives. |
-| 3 | [0385-tx-10-joined-history-pages.md](0385-tx-10-joined-history-pages.md) | Low | No | TX-10: Joined history pages read the whole transcript per page | A compatibility path that only older renderers use and that 0232 will remove, blocked on the support window. |
-| 4 | [0390-gw-7-websocket-compression.md](0390-gw-7-websocket-compression.md) | Low | No | GW-7: No WebSocket message compression | Deferred by 0052 decision D6 until the transport direction is chosen. |
-| 5 | [0560-st-9-agent-mail-store-remainder.md](0560-st-9-agent-mail-store-remainder.md) | Low | No | ST-9 (rest): Agent mail: pending injects and mailbox lists still sit on the whole store | The read cost the finding described has gone, and the rest needs a stored-format change only a measurement could justify. |
-| 6 | [0693-dk-10-second-claude-binary.md](0693-dk-10-second-claude-binary.md) | Low | No | DK-10: The image ships two Claude Code native binaries | It is an optional image-size saving that waits on a maintainer decision. |
+| 3 | [0390-gw-7-websocket-compression.md](0390-gw-7-websocket-compression.md) | Low | No | GW-7: No WebSocket message compression | Deferred by 0052 decision D6 until the transport direction is chosen. |
+| 4 | [0560-st-9-agent-mail-store-remainder.md](0560-st-9-agent-mail-store-remainder.md) | Low | No | ST-9 (rest): Agent mail: pending injects and mailbox lists still sit on the whole store | The read cost the finding described has gone, and the rest needs a stored-format change only a measurement could justify. |
+| 5 | [0693-dk-10-second-claude-binary.md](0693-dk-10-second-claude-binary.md) | Low | No | DK-10: The image ships two Claude Code native binaries | It is an optional image-size saving that waits on a maintainer decision. |
 
 ## Parallel running
 
@@ -56,7 +55,6 @@ When one of these becomes ready, it joins the lane shown.
 
 | File | Why it waits | Lane |
 | --- | --- | --- |
-| [`0385`](0385-tx-10-joined-history-pages.md) | Blocked on todo 0232 and the support window | Transcript |
 | [`0390`](0390-gw-7-websocket-compression.md) | Deferred by 0052 decision D6 | Gateway |
 | [`0693`](0693-dk-10-second-claude-binary.md) | Waits on a maintainer decision | Containers |
 | [`0560`](0560-st-9-agent-mail-store-remainder.md) | Needs a measurement to justify a stored-format change | Storage |
@@ -92,7 +90,7 @@ When one of these becomes ready, it joins the lane shown.
 | TX-7 | Done | Exact head-row recovery starts at most once a second per view, at once for a quiet view, with a deadline a moving token cannot push back (`PROGRESSIVE_HYDRATION_SETTLE_MS`, `scheduleIncompleteProgressiveHydration`); see [Closing check of E11](#closing-check-of-e11-projection-hashing). How often a trimmed head streams is [6260](../../todo/transcripts-and-observation/6260-projection-hashing-measurements.md) task 3. |
 | TX-8 | Done | A miss on a remote reference (prefix `r`, `apps/backend/src/core/native-agent-remote-detail-recovery.ts`) re-registers it from a cached row or page, or runs one summary read, never a raw `sync-v1` refresh (`recoverRemoteToolDetails` in `apps/backend/src/core/native-agent-transcript-projection.ts`, E9); see [Closing check of E9](#closing-check-of-e9-transcript-reads). |
 | TX-9 | Done | `valueFingerprint` is memoised per object beside `encodings` (`apps/backend/src/core/native-agent-projection-encoding.ts`); see [Closing check of E11](#closing-check-of-e11-projection-hashing). |
-| TX-10 | Open | Joined pages still refresh and scan with SHA-256 per row (`apps/backend/src/core/native-agent-transcript-projection.ts:3878`, `:3903-3909`), owned by 0232 task 4; see 0385. |
+| TX-10 | Open | Joined pages still refresh and scan with SHA-256 per row (`getMessagePage`, `apps/backend/src/core/native-agent-transcript-projection.ts:4091`, `:4116`, at `cbe0f9a5b`). The report file was closed into [0232](../../todo/transcripts-and-observation/0232-direct-history-cursor-minting.md) task 4, which removes the path once the support window allows; see the [0385 closing check](#closing-check-of-0385-tx-10-joined-history-pages). |
 | TX-11 | Done | `nativeAgentPartsDigest` is fed from memoised part encodings with its value unchanged, parts compare field by field, and patch sizes come from the memo (`packages/protocol/src/native-agent-transcript-patch.ts`, `apps/backend/src/core/native-agent-transcript-patches.ts`); patch version unchanged; see [Closing check of E11](#closing-check-of-e11-projection-hashing). |
 | TX-12 | Done | The gateway splices memoised rows into marked transcript results (`spliceEncodedJson`, `apps/backend/src/gateway-handlers.ts`), and `encodedBytesWithMessages` counts `revisedMessages` through the memo; see [Closing check of E11](#closing-check-of-e11-projection-hashing). |
 | TX-13 | Done | The view token hashes each row's memoised fingerprint (`updateHashWithFingerprints` in `commitProgressiveTranscript`), `revisedMessages` included; see [Closing check of E11](#closing-check-of-e11-projection-hashing). |
@@ -681,3 +679,11 @@ Checked back on 2026-11-05 on branch `renderer-store-report-cf7c05d19868-r1`, ba
 | 0640 reverted (2 runs) | 0 | 170 | 5.41 to 5.77 ms | 11.2 to 13.5 ms |
 
 Store writes were 0 idle and 160 per window streaming (both tabs) in every variant. Neither revert changes the commit count, and the per-commit differences are within noise. A Bun micro-benchmark of `setProjection` with 128 sessions held: 8.86 to 9.34 µs per write before 0640, 3.97 to 4.17 µs after. For 0510, 1202 task 3 already measured the merge at at most 0.3 ms per update before the fix and 0.03 to 0.06 ms after. Production React and a real bridge's cadence were not measured. The question was whether the work shows in a profile, and at this scale it does not.
+
+## Closing check of 0385 (TX-10, joined history pages)
+
+`0385-tx-10-joined-history-pages.md` was checked back against the code on 2026-11-05 and deleted. Base commit `cbe0f9a5b`; its last version is the commit before the one that deleted it. It was not in a batch: it sat in **Not ready to start**, blocked on todo 0232 and the support window, and leaves that table and the ranking with this change. TX-10 in the table above summarises this.
+
+| Task | Outcome | Left over |
+| --- | --- | --- |
+| 1. Retire joined paging, or add the interim map | The finding holds: a joined page records `history.joined-v1-page` or a cause id (`native-agent-transcript-projection.ts:4090`), runs a whole `sync-v1` `refreshProjection` (`:4091`) and SHA-256-hashes message ids in a `findIndex` (`:4116`). The support window has not passed: the floor is still v2.21.0, and v2.36.0 (2026-11-03), the first Stable release with 0232 tasks 1 to 3, enters the window on 2027-01-02; the `/messages` fallback row and direct recovery for the remaining no-cursor cases are also open. So joined paging stays, and the report's recommended option was taken: no interim map. No counter data was read (the split counters first shipped Stable on 2026-11-03, and no production instance was touched). | [0232](../../todo/transcripts-and-observation/0232-direct-history-cursor-minting.md) task 4: the removal, plus the decision on the interim map, what counter use would justify it, and how to read the counters |

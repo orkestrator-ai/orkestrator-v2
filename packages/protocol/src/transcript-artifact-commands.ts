@@ -332,7 +332,13 @@ export const TRANSCRIPT_MEDIA_STREAM_MAX_CONTAINER_BYTES = 512 * 1024 * 1024;
  * `renderer_unavailable` (no content origin: use the bounded base64 path).
  */
 export interface TranscriptMediaStreamRequest {
-  environmentId: string;
+  /**
+   * The owning environment. Omitted for a detached transcript's absolute host
+   * path, which is then confined to the `read_file_base64` roots. A backend
+   * that predates that answers `invalid_input`; the renderer falls back to
+   * the bounded base64 read.
+   */
+  environmentId?: string;
   /** Absolute host path or worktree-relative path; for containers, `/workspace/…` or relative. */
   path: string;
   /** Must name the environment's own container when given. */

@@ -13,7 +13,8 @@ import { useMultiReviewStore } from "../../apps/web/src/stores/multiReviewStore"
 /**
  * A Multi Review in any phase, for the flow graph's browser checks and
  * screenshots. `?phase=` picks the phase (`paused-prepare`, `paused-consolidate`
- * and `paused-fix` choose the paused step), `?reviewers=` the panel size.
+ * and `paused-fix` choose the paused step), `?reviewers=` the panel size,
+ * `?worktreeChanged` a review whose worktree moved.
  */
 
 type FixturePhase = Exclude<MultiReviewPhase, "paused"> | `paused-${MultiReviewStepKind}`;
@@ -457,6 +458,7 @@ export function MultiReviewFlowFixture() {
   const [workflow] = useState(() => {
     const snapshot = multiReviewFlowWorkflow(phase, count);
     if (packageControls) snapshot.validationRun = undefined;
+    if (params.has("worktreeChanged")) snapshot.reviewWorktreeChanged = true;
     if (params.has("manyFindings")) {
       snapshot.reviewers[0]!.report = {
         ...snapshot.reviewers[0]!.report!,

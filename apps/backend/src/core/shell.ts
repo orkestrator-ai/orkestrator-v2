@@ -16,6 +16,7 @@ export {
   commandInvocationCount,
   GitRemoteTimeoutError,
   observeCommandInvocations,
+  nonInteractiveGitEnv,
   runCommand,
   runCommandBuffer,
   type ExecBufferResult,

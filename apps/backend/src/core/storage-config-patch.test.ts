@@ -7,6 +7,7 @@ import { BackendRuntime } from "./backend-runtime.js";
 import { createCommandRegistry } from "./commands-registry.js";
 import { parseConfigUnsetKeys } from "./commands-registry-projects.js";
 import type { CommandContext } from "./commands-context.js";
+import { defaultConfig } from "./storage-shared-config.js";
 import { StorageService } from "./storage.js";
 
 async function withStorage(run: (storage: StorageService) => Promise<void>): Promise<void> {
@@ -104,6 +105,76 @@ describe("patching the global config", () => {
     expect(parseConfigUnsetKeys(["a"])).toEqual(["a"]);
     expect(() => parseConfigUnsetKeys([""])).toThrow();
     expect(() => parseConfigUnsetKeys(Array.from({ length: 129 }, (_, i) => `k${i}`))).toThrow();
+  });
+});
+
+describe("the retired Codex raw event logging key", () => {
+  const RETIRED_KEY = "experimentalCodexRawEventLogging";
+
+  async function storedOnDisk(dataDir: string): Promise<Record<string, unknown>> {
+    const raw = await fs.readFile(path.join(dataDir, "config.json"), "utf8");
+    return (JSON.parse(raw) as { global: Record<string, unknown> }).global;
+  }
+
+  test("a new install does not write it", async () => {
+    expect(defaultConfig().global).not.toHaveProperty(RETIRED_KEY);
+    await withStorage(async (storage) => {
+      await storage.patchGlobalConfig({ terminalScrollback: 4321 });
+      expect((await storage.loadOwnConfig()).global).not.toHaveProperty(RETIRED_KEY);
+    });
+  });
+
+  // Left in place so a downgrade finds what it wrote; nothing reads it here.
+  test("an existing config.json holding it still loads and keeps it through a save", async () => {
+    const dataDir = await fs.mkdtemp(path.join(tmpdir(), "ork-config-retired-key-"));
+    try {
+      const existing = defaultConfig();
+      (existing.global as unknown as Record<string, unknown>)[RETIRED_KEY] = false;
+      await fs.writeFile(
+        path.join(dataDir, "config.json"),
+        `${JSON.stringify(existing, null, 2)}\n`,
+      );
+
+      const storage = new StorageService(dataDir);
+      await storage.init();
+      expect((await storage.loadConfig()).global).toHaveProperty(RETIRED_KEY, false);
+
+      await storage.patchGlobalConfig({ terminalScrollback: 4321 });
+      expect(await storedOnDisk(dataDir)).toMatchObject({
+        [RETIRED_KEY]: false,
+        terminalScrollback: 4321,
+      });
+
+      const restarted = new StorageService(dataDir);
+      await restarted.init();
+      expect((await restarted.loadConfig()).global).toHaveProperty(RETIRED_KEY, false);
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("a save from an older client that still sends it is not refused", async () => {
+    await withStorage(async (storage) => {
+      const registry = createCommandRegistry();
+      const runtime = new BackendRuntime({ emit: () => undefined });
+      const context = { storage, runtime } as CommandContext;
+      try {
+        const patched = (await registry.get("patch_global_config")!(
+          { patch: { [RETIRED_KEY]: false, codexMaxConcurrentThreads: 3 } },
+          context,
+        )) as { global: Record<string, unknown> };
+        expect(patched.global.codexMaxConcurrentThreads).toBe(3);
+
+        const { global } = await storage.loadConfig();
+        const replaced = (await registry.get("update_global_config")!(
+          { global: { ...global, [RETIRED_KEY]: true, codexMaxConcurrentThreads: 4 } },
+          context,
+        )) as { global: Record<string, unknown> };
+        expect(replaced.global.codexMaxConcurrentThreads).toBe(4);
+      } finally {
+        runtime.shutdown();
+      }
+    });
   });
 });
 

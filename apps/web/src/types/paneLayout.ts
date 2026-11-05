@@ -137,6 +137,8 @@ export interface BuildTabData {
 export interface KeyInformationTabData {
   environmentId: string;
   pipelineId: string;
+  /** The Notes step's reading: the brief led by what needs a look. */
+  view?: "notes";
 }
 
 export interface MultiReviewTabData {

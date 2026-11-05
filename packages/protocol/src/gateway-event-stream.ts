@@ -41,6 +41,16 @@ export const GATEWAY_EVENT_CURSOR_PARAM = "since";
 export const GATEWAY_KEEPALIVE_EVENTS_PARAM = "keepaliveEvents";
 export const GATEWAY_KEEPALIVE_EVENT = "gateway.keepalive";
 /**
+ * Query parameter saying how a stream wants relayed node events. `per-node`: not
+ * on this stream at all, because the client reads them on their own filtered
+ * stream. `legacy`: all of them here under the one old name. A gateway that
+ * ignores the parameter sends the old name, so a client listens for both.
+ * Leaving it out is how an older client looks: the gateway answers as `legacy`
+ * and counts it.
+ */
+export const GATEWAY_RELAYED_EVENTS_PARAM = "relayedEvents";
+export type GatewayRelayedEventsMode = "per-node" | "legacy";
+/**
  * A link that drops with no answer (a tailnet peer that vanished) never errors
  * an open stream: the socket waits on TCP for many minutes. A stream the gateway
  * has said nothing on for two keepalives (`KEEPALIVE_MS`, 25 s) and some slack is

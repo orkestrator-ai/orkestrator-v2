@@ -11,7 +11,7 @@ import type { ContainerGitFetchStatus } from "./container-git-fetch.js";
 
 /**
  * The one read-only surface for recurring-work diagnostics, shared by the
- * `get_recurring_work_diagnostics` command and the gateway's `/api/metrics`.
+ * `get_recurring_work_diagnostics` command and the gateway's `/__orkestrator/metrics`.
  *
  * Schedulers and admission pools register themselves here when constructed
  * (and unregister on dispose/close), so diagnostics report every live instance

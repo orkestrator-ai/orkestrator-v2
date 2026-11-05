@@ -174,6 +174,9 @@ export class ProviderEvidenceIngress {
     capabilities: readonly ProviderChangeCapabilities[],
     fetchBody: (id: string) => Promise<Uint8Array | null>,
   ): Promise<IngestResult> {
+    this.ledger.transaction(() =>
+      this.ledger.recordEvidenceSource(context.environmentId, context.sourceKey),
+    );
     const result: IngestResult = {
       acks: [],
       retainedBodyIds: [],

@@ -164,6 +164,74 @@ const LEDGER_TABLES_OF_ONE_ENVIRONMENT = [
 ];
 
 describe("deleting an environment", () => {
+  test("restart before deletion removes a failed acknowledgment without re-registering its source", async () => {
+    const h = setup();
+    const spool = new ChangeEvidenceSpool();
+    const source = spoolSource(spool);
+    // A malformed frame exercises the real ingress path without creating a binding.
+    source.read = async () => ({
+      ...spool.read(0),
+      entries: [{ type: "frame", seq: 1, frame: {} } as never],
+      nextCursor: 1,
+    });
+    source.ack = async () => {
+      throw new Error("ack unavailable");
+    };
+    await h.service.pullEvidence(source);
+    const ackKey = `pending-evidence-ack:${source.sourceKey}`;
+    expect(h.service.ledger.cursor(source.sourceKey)?.cursor).toBe(1);
+    expect(h.service.ledger.meta(ackKey)).not.toBeNull();
+    expect(count(h, "change_evidence_gaps")).toBe(1);
+    h.service.shutdown();
+    const restarted = new ChangeTrackingService({
+      dataDir: h.dataDir,
+      database: () => h.database(),
+      emit: () => undefined,
+      environmentTarget: async () => ({ kind: "local", worktreePath: h.repo }),
+      durable: false,
+      manualScheduling: true,
+    });
+    try {
+      restarted.start();
+      restarted.environmentDeleted("env-1");
+      await restarted.retention.run(Date.now() + 2 * HOUR);
+      expect(count(h, "change_evidence_gaps")).toBe(0);
+      expect(restarted.ledger.cursor(source.sourceKey)).toBeNull();
+      expect(restarted.ledger.meta(ackKey)).toBeNull();
+      expect(restarted.ledger.evidenceSources("env-1")).toEqual([]);
+      await restarted.retention.run(Date.now() + 100 * DAY);
+      expect(restarted.ledger.cursor(source.sourceKey)).toBeNull();
+      expect(restarted.ledger.meta(ackKey)).toBeNull();
+    } finally {
+      restarted.shutdown();
+    }
+  });
+
+  test("retried deletion keeps the original worktrees, sources and request time", async () => {
+    const h = setup();
+    await runTurn(h, "env-1", "retry");
+    await recordEdit(h, "env-1", "retry");
+    h.service.environmentDeleted("env-1");
+    const original = h.service.retention.purges.pendingPurges()[0]!;
+    await h.service.retention.run();
+    // Purging consumed the rows that originally named the worktree.
+    expect(h.service.retention.purges.environmentWorktrees("env-1")).toEqual([]);
+    h.service.environmentDeleted("env-1");
+    expect(h.service.retention.purges.pendingPurges()[0]).toEqual(original);
+    // Also preserve metadata if a caller retries with no discovered ownership.
+    h.service.retention.purges.requestPurge({
+      environmentId: "env-1",
+      requestedAt: new Date(Date.now() + HOUR).toISOString(),
+      worktreeIds: [],
+      sourceKeys: [],
+    });
+    expect(h.service.retention.purges.pendingPurges()[0]).toEqual(original);
+    await h.service.retention.run(Date.now() + 2 * HOUR);
+    expect(count(h, "change_worktrees")).toBe(0);
+    expect(count(h, "change_evidence_cursors")).toBe(0);
+    expect(h.service.retention.purges.pendingPurges()).toEqual([]);
+  });
+
   test("purges its ledger rows, evidence bodies and objects, and no more than that", async () => {
     const h = setup();
     await runTurn(h, "env-1", "r1");

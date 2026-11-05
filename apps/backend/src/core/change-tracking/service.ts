@@ -298,8 +298,8 @@ export class ChangeTrackingService {
       .environmentWorktrees(environmentId)
       .filter((worktreeId) => !purges.worktreeUsedElsewhere(worktreeId, environmentId));
     for (const worktreeId of worktreeIds) this.registry.tombstone(worktreeId);
-    const sourceKeys: string[] = [];
-    for (const [key, source] of this.sources) {
+    const sourceKeys = this.ledger.evidenceSources(environmentId);
+    for (const [key, source] of Array.from(this.sources)) {
       if (source.environmentId !== environmentId) continue;
       sourceKeys.push(source.sourceKey);
       this.sources.delete(key);
@@ -614,6 +614,9 @@ export class ChangeTrackingService {
    */
   pullEvidence(source: EvidenceSource): Promise<number> {
     if (this.deletedEnvironments.has(source.environmentId)) return Promise.resolve(0);
+    this.ledger.transaction(() =>
+      this.ledger.recordEvidenceSource(source.environmentId, source.sourceKey),
+    );
     this.sources.set(`${source.environmentId}\0${source.provider}`, source);
     if (this.sources.size > 1_024) {
       const oldest = this.sources.keys().next().value;

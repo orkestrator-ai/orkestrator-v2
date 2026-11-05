@@ -302,6 +302,23 @@ export class ChangeLedger {
     return row?.value ?? null;
   }
 
+  /** Persist source ownership before any cursor, acknowledgment or malformed-frame gap. */
+  recordEvidenceSource(environmentId: string, sourceKey: string): void {
+    this.setMeta(
+      `evidence-source:${encodeURIComponent(environmentId)}:${encodeURIComponent(sourceKey)}`,
+      sourceKey,
+    );
+  }
+
+  evidenceSources(environmentId: string): string[] {
+    const prefix = `evidence-source:${encodeURIComponent(environmentId)}:`;
+    return (
+      this.db
+        .query("SELECT value FROM change_ledger_meta WHERE key >= ? AND key < ?")
+        .all(prefix, `${prefix}￿`) as Array<{ value: string }>
+    ).map((row) => row.value);
+  }
+
   setMeta(key: string, value: string): void {
     this.db
       .query(

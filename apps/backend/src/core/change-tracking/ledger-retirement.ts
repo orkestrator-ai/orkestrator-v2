@@ -159,16 +159,23 @@ export class LedgerRetirement {
   }
 
   requestPurge(purge: EnvironmentPurge): void {
-    this.ledger.transaction(() =>
+    this.ledger.transaction(() => {
+      const key = `${PURGE_PREFIX}${purge.environmentId}`;
+      const stored = this.ledger.meta(key);
+      const previous = stored
+        ? (JSON.parse(stored) as Omit<EnvironmentPurge, "environmentId">)
+        : null;
       this.ledger.setMeta(
-        `${PURGE_PREFIX}${purge.environmentId}`,
+        key,
         JSON.stringify({
-          requestedAt: purge.requestedAt,
-          worktreeIds: purge.worktreeIds,
-          sourceKeys: purge.sourceKeys,
+          requestedAt: previous?.requestedAt ?? purge.requestedAt,
+          worktreeIds: Array.from(
+            new Set([...(previous?.worktreeIds ?? []), ...purge.worktreeIds]),
+          ),
+          sourceKeys: Array.from(new Set([...(previous?.sourceKeys ?? []), ...purge.sourceKeys])),
         }),
-      ),
-    );
+      );
+    });
   }
 
   pendingPurges(): EnvironmentPurge[] {
@@ -177,6 +184,16 @@ export class LedgerRetirement {
       environmentId: row.key.slice(PURGE_PREFIX.length),
       ...(JSON.parse(row.value) as Omit<EnvironmentPurge, "environmentId">),
     }));
+  }
+
+  private purgeSourceGaps(environmentId: string, budget: Budget): boolean {
+    const stored = this.ledger.meta(`${PURGE_PREFIX}${environmentId}`);
+    if (!stored) return true;
+    const purge = JSON.parse(stored) as Omit<EnvironmentPurge, "environmentId">;
+    for (const sourceKey of purge.sourceKeys) {
+      if (!this.drain("change_evidence_gaps", "binding_id = ?", [sourceKey], budget)) return false;
+    }
+    return true;
   }
 
   private metaUnder(prefix: string, limit = 4_096) {
@@ -196,6 +213,7 @@ export class LedgerRetirement {
       if (this.environmentHeld(environmentId, nowIso)) return { rows: 0, done: false, held: true };
       const budget: Budget = { left: rows };
       const done =
+        this.purgeSourceGaps(environmentId, budget) &&
         this.purgeBindings(environmentId, budget) &&
         this.purgeTurns(environmentId, budget) &&
         this.purgeSegments(environmentId, budget) &&
@@ -386,6 +404,10 @@ export class LedgerRetirement {
         this.db.query("DELETE FROM change_evidence_cursors WHERE source_key = ?").run(sourceKey);
         this.db.query("DELETE FROM change_ledger_meta WHERE key = ?").run(pendingAckKey(sourceKey));
       }
+      const prefix = `evidence-source:${encodeURIComponent(purge.environmentId)}:`;
+      this.db
+        .query("DELETE FROM change_ledger_meta WHERE key >= ? AND key < ?")
+        .run(prefix, `${prefix}￿`);
       // Delivered announcements of what just went; the table has no key index.
       this.db
         .query(

@@ -1,5 +1,3 @@
-import { randomUUID } from "node:crypto";
-import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import type { StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 import type {
   AgentInteractionProviderCapability,
@@ -103,8 +101,7 @@ import { bridgeChangeEvidenceSource } from "./http-bridge-change-evidence.js";
 import { readAcpTurnTerminalError } from "./http-bridge-turn-outcome.js";
 import { HttpBridgeObservationWakeup } from "./http-bridge-observation-stream.js";
 import { readBridgeResumableSessions } from "./http-bridge-resumable-sessions.js";
-
-const log = createLogger("native-agent");
+import { HttpBridgeSteerQualification } from "./http-bridge-steer-qualification.js";
 
 export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
   readonly agent: HttpBridgeAgent;
@@ -136,11 +133,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
   readonly turnTerminalError?: (sessionId: string, requestId: string) => Promise<string | null>;
   /** Claude and Codex: the bridge event stream as the idle wakeup. */
   private readonly observationWakeup: HttpBridgeObservationWakeup;
-  /**
-   * One per connection, so one bridge's success never reports a recovery for
-   * another's fault. Opaque because the line must not carry a session id.
-   */
-  private readonly steerQualificationLogScope: string;
+  private readonly steerQualification: HttpBridgeSteerQualification;
 
   constructor(
     private readonly connection: BridgeConnection,
@@ -150,7 +143,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     private readonly planUsage?: PlanUsageState,
   ) {
     this.agent = connection.agent as HttpBridgeAgent;
-    this.steerQualificationLogScope = `${this.agent}:${randomUUID()}`;
+    this.steerQualification = new HttpBridgeSteerQualification(this.agent, connection, fetchImpl);
     this.observationWakeup = new HttpBridgeObservationWakeup(
       connection,
       fetchImpl,
@@ -336,47 +329,8 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     return runId ? { state: "running", runId } : { state: "unknown" };
   }
 
-  async steerSupported(sessionId: string): Promise<boolean> {
-    const response = await bridgeFetch(
-      this.connection,
-      `/session/${encodeURIComponent(sessionId)}/steer/dispatch` +
-        `?requestId=${encodeURIComponent("orkestrator-steer-qualification")}`,
-      {},
-      this.fetchImpl,
-    ).catch((error: unknown) => {
-      // `message: false` because a fetch error can quote the session's URL.
-      log.throttled("warn", "steer.qualification-failed", {
-        scope: this.steerQualificationLogScope,
-        error,
-        fields: () => ({
-          agent: this.agent,
-          error: formatLogError(error, { message: false, stack: false }),
-        }),
-      });
-      return null;
-    });
-    if (!response) return false;
-    if (!response.ok) {
-      this.noteSteerQualificationRefused(`http-${response.status}`, response.status);
-      return false;
-    }
-    const body = asRecord(
-      await boundedJson(response, `${this.agent} steer qualification`).catch(() => null),
-    );
-    if (body?.dispatch !== "unknown" && body?.dispatch !== "dispatched") {
-      this.noteSteerQualificationRefused("unexpected-answer", response.status);
-      return false;
-    }
-    log.recovered("steer.qualification-failed", this.steerQualificationLogScope);
-    return true;
-  }
-
-  private noteSteerQualificationRefused(kind: string, status: number): void {
-    log.throttled("warn", "steer.qualification-failed", {
-      scope: this.steerQualificationLogScope,
-      kind,
-      fields: () => ({ agent: this.agent, status }),
-    });
+  steerSupported(sessionId: string): Promise<boolean> {
+    return this.steerQualification.supported(sessionId);
   }
 
   async steerStatus(sessionId: string, requestId: string): Promise<ProviderSteerDispatchStatus> {

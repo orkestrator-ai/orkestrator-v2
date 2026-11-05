@@ -47,6 +47,14 @@ const log = createLogger("usage-history");
  * and the filtered aggregation. The owner index is what
  * {@link UsageHistoryStore.deleteByEnvironment} deletes by.
  *
+ * What is kept instead is the small finished report per query, never the
+ * parsed rows: a repeat query (the pane re-opening, a poll, switching back to
+ * a range) answers from it without reading a row. Entries are valid for one
+ * store state: the database identity, the store's committed revision (which
+ * every row write bumps, whichever process made it) and today's date, so a
+ * new turn, a label, a deletion, a prune or a day rollover all invalidate
+ * them. The cache is bounded by entry count and bytes.
+ *
  * Retention is swept from the write path only. A read never triggers it: the
  * usage pane would otherwise pay a second full scan plus a write transaction
  * per expired row before it could answer.
@@ -66,6 +74,10 @@ export const MAX_USAGE_HISTORY_ROWS = 20_000;
 export const USAGE_HISTORY_PRUNE_INTERVAL_MS = 60 * 60 * 1000;
 /** Rows per prune transaction, so a large first prune cannot hold the write lock. */
 export const USAGE_HISTORY_PRUNE_BATCH_ROWS = 250;
+/** Finished reports kept for the current store state, one per query. */
+export const USAGE_REPORT_CACHE_MAX_ENTRIES = 16;
+/** Serialized bytes the kept reports may hold together. */
+export const USAGE_REPORT_CACHE_MAX_BYTES = 2 * 1024 * 1024;
 
 export interface UsageHistoryStoreOptions {
   /** The backend database; called per operation so a reopened connection is used. */
@@ -92,6 +104,11 @@ export class UsageHistoryStore {
   private readonly maxRows: number;
   private readonly retentionDays: number;
   private lastPruneAt = 0;
+  /** Finished reports by query, valid while the store is in `reportCacheState`. */
+  private readonly reportCache = new Map<string, { report: UsageHistoryReport; bytes: number }>();
+  private reportCacheBytes = 0;
+  private reportCacheState: string | null = null;
+  private reportCacheDatabase: StorageDatabase | null = null;
 
   constructor(private readonly options: UsageHistoryStoreOptions) {
     this.now = options.now ?? (() => new Date());
@@ -130,6 +147,56 @@ export class UsageHistoryStore {
     const now = this.now();
     const toDay = usageDayKey(now);
     const days = normalizeUsageRangeDays(query.days);
+    const database = this.options.database();
+    const state = `${database.instanceId}\u0000${database.storeRevision(USAGE_HISTORY_STORE) ?? "none"}\u0000${toDay}`;
+    if (state !== this.reportCacheState || database !== this.reportCacheDatabase) {
+      this.clearReportCache();
+      this.reportCacheState = state;
+      this.reportCacheDatabase = database;
+    }
+    const cacheKey = JSON.stringify([days, query.platform ?? null, query.environmentId ?? null]);
+    const cached = this.reportCache.get(cacheKey);
+    if (cached) {
+      // Most recently used last, so eviction drops the oldest query.
+      this.reportCache.delete(cacheKey);
+      this.reportCache.set(cacheKey, cached);
+      return { ...structuredClone(cached.report), generatedAt: now.toISOString() };
+    }
+    const report = this.buildReport(query, now, toDay, days);
+    this.rememberReport(cacheKey, report);
+    return report;
+  }
+
+  /** Drops every kept report (also how tests and a reopened database start clean). */
+  clearReportCache(): void {
+    this.reportCache.clear();
+    this.reportCacheBytes = 0;
+  }
+
+  private rememberReport(cacheKey: string, report: UsageHistoryReport): void {
+    const bytes = Buffer.byteLength(JSON.stringify(report));
+    // One report may use at most a quarter of the budget, so a few large
+    // environment lists cannot crowd out every other query.
+    if (bytes > USAGE_REPORT_CACHE_MAX_BYTES / 4) return;
+    this.reportCache.set(cacheKey, { report: structuredClone(report), bytes });
+    this.reportCacheBytes += bytes;
+    while (
+      this.reportCache.size > USAGE_REPORT_CACHE_MAX_ENTRIES ||
+      this.reportCacheBytes > USAGE_REPORT_CACHE_MAX_BYTES
+    ) {
+      const oldest = this.reportCache.keys().next().value as string | undefined;
+      if (oldest === undefined) break;
+      this.reportCacheBytes -= this.reportCache.get(oldest)?.bytes ?? 0;
+      this.reportCache.delete(oldest);
+    }
+  }
+
+  private buildReport(
+    query: UsageHistoryQuery,
+    now: Date,
+    toDay: string,
+    days: number,
+  ): UsageHistoryReport {
     const fromDay = shiftUsageDay(toDay, days - 1);
     const dayTotals = new Map<string, UsageTotals>();
     const dayPlatformTotals = new Map<string, Map<AgentPlatform, UsageTotals>>();

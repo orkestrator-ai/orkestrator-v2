@@ -85,11 +85,14 @@ export function mediaStreamingAvailable(
 /**
  * What a failed `transcript_media_open_stream` means for the player:
  * `fallback` uses the bounded base64 path (no content origin, an older
- * backend, a transient staging limit); otherwise the shown failure state.
+ * backend, a transient staging limit, a request the backend does not accept,
+ * such as an environment-less stream on a backend that predates it);
+ * otherwise the shown failure state.
  */
 export function mediaStreamFailure(error: unknown): "fallback" | "unsupported" | MediaLoadFailure {
   const { code, message } = artifactErrorInfo(error);
   if (
+    code === "invalid_input" ||
     code === "renderer_unavailable" ||
     code === "capacity_exceeded" ||
     code === "storage_unavailable"

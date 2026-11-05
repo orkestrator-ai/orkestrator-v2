@@ -554,7 +554,13 @@ export class NodeLink {
           Object.assign(error, { code: payload.code });
         throw error;
       }
-      if (!payload || typeof payload !== "object" || !("result" in payload)) {
+      // A command that returns nothing is serialized as `{}`: it ran and answered.
+      if (
+        !payload ||
+        typeof payload !== "object" ||
+        Array.isArray(payload) ||
+        !("result" in payload || Object.keys(payload).length === 0)
+      ) {
         throw new Error("The node returned an incomplete response.");
       }
       return payload.result as T;

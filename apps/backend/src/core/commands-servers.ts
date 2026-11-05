@@ -1665,7 +1665,10 @@ export async function deleteEnvironment(
           await runEnvironmentCleanupStep(cleanup, "branch", context);
         }
       }
-      await storage.removeSessionsByEnvironment(environmentId).catch(() => undefined);
+      // Damaged session metadata must not strand deletion after resources are gone.
+      await storage.removeSessionsByEnvironment(environmentId).catch(() => {
+        environmentLog.warn("cleanup.sessions-failed", { environmentId });
+      });
       await storage.deleteMultiReviewWorkflowsByEnvironment(environmentId);
       // A pipeline whose environment is gone can never advance again; leaving it
       // behind would resurrect a dead build on the next client that hydrates.

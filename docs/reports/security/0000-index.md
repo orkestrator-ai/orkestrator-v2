@@ -40,7 +40,7 @@ This index only changes when a branch merges, so it can't show what is running n
 
 | Batch | Name | Parts | Lane and position | Finish first | Not at the same time as |
 | --- | --- | --- | --- | --- | --- |
-| X1 | [Coordinator trust boundary](0090-x1-coordinator-trust-boundary.md) | `0090`, `0180`, `0210`; also coordinator `0120` task 1, `0310` | Coordinator backend, 3 of 5 | None | None |
+| X1 | [Coordinator trust boundary](0090-x1-coordinator-trust-boundary.md) | `0090`, `0180`, `0210`; also coordinator `0120` task 1, `0310` | Coordinator backend, 2 of 4 | None | None |
 | S2 | [Bridge credential](0040-s2-bridge-credential.md) | `0040`, `0120`, `0250` | Containers, 1 of 6 | None | E13 (Silent failures), E20 (ACP bridge), E21 (Pi bridge) |
 
 Why these are grouped:

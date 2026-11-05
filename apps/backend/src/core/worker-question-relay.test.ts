@@ -141,8 +141,9 @@ beforeEach(async () => {
     nativeAgents: { sessionPendingInteractions: async () => pending },
   } as unknown as CommandContext;
   commands = createCommandRegistry();
-  commands.set("get_native_agent_projection", (async () => ({
-    interactions: pending,
+  commands.set("get_native_agent_session_state_update", (async () => ({
+    status: "snapshot",
+    value: { interactions: pending },
   })) as CommandHandler);
   commands.set("resolve_native_agent_interaction", resolve as unknown as CommandHandler);
   commands.set("get_node_status", (async () => ({ nodeId: "bk_self" })) as CommandHandler);

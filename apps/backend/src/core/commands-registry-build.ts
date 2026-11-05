@@ -107,6 +107,20 @@ export function registerBuildPipelineCommands(
       asNonBlankString(reviewerId, "reviewerId"),
     );
   });
+  register("restart_build_pipeline_reviewer", ({ pipelineId, reviewerId }, context) => {
+    if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
+    return context.buildPipelines.restartReviewer(
+      asNonBlankString(pipelineId, "pipelineId"),
+      asNonBlankString(reviewerId, "reviewerId"),
+    );
+  });
+  register("stop_build_pipeline_reviewer", ({ pipelineId, reviewerId }, context) => {
+    if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
+    return context.buildPipelines.stopReviewer(
+      asNonBlankString(pipelineId, "pipelineId"),
+      asNonBlankString(reviewerId, "reviewerId"),
+    );
+  });
   // `selection` is "Restart in…": the step reruns on another agent or model.
   register("restart_build_pipeline_step", ({ pipelineId, stageId, selection }, context) => {
     if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
@@ -247,12 +261,18 @@ export function registerBuildPipelineCommands(
    * `limit` messages of the stage session's committed transcript, which the
    * pipeline checkpoints while the turn runs and keeps after it ends.
    */
-  register("get_build_pipeline_worker_transcript", ({ environmentId, tabId, limit }, { storage }) =>
-    readPipelineWorkerTranscript(storage, {
-      environmentId: asNonBlankString(environmentId, "environmentId"),
-      tabId: asNonBlankString(tabId, "tabId"),
-      limit: typeof limit === "number" ? limit : undefined,
-    }),
+  register(
+    "get_build_pipeline_worker_transcript",
+    async ({ environmentId, tabId, limit }, { storage, multiReviews }) => {
+      const input = {
+        environmentId: asNonBlankString(environmentId, "environmentId"),
+        tabId: asNonBlankString(tabId, "tabId"),
+        limit: typeof limit === "number" ? limit : undefined,
+      };
+      // A Multi Review reviewer shares the worker address; its own read serves it.
+      const reviewer = await multiReviews?.workerTranscript(input);
+      return reviewer ?? readPipelineWorkerTranscript(storage, input);
+    },
   );
   register("list_build_pipelines", async (args, { storage }) =>
     conditionalManifestSnapshot(args, storage, "build-pipeline", async () => {

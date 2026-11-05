@@ -44,6 +44,7 @@ export const WEB_SYNC_LOG_AREAS = defineLogAreas({
     events: {
       "events.disconnected": "The main event stream dropped; it reconnects and replays.",
       "terminal-stream.disconnected": "A terminal event stream dropped; it reconnects.",
+      "relayed-stream.disconnected": "The relayed node event stream dropped; it reconnects.",
       "connection-listener.failed": "A main stream connection state listener threw.",
       "event-listener.failed": "A listener for a gateway event threw.",
       "stream-listener.failed": "A listener for the stream-connected notice threw.",

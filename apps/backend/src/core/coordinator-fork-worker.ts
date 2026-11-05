@@ -336,6 +336,18 @@ export function registerCoordinatorForkWorker(
                 context.runtime.coordinatorRequests.workerTabs,
                 association.id,
                 STARTUP_AGENT_TAB_ID,
+                undefined,
+                {
+                  summary: launch.prompt,
+                  // Bounded and checked again by the store.
+                  ...(agent ? { agent: agent as AgentPlatform } : {}),
+                  ...(launch.modelId ? { model: launch.modelId } : {}),
+                  ...(launch.reasoningId ? { reasoning: launch.reasoningId } : {}),
+                  source:
+                    launch.modelId || launch.reasoningId
+                      ? ("requested" as const)
+                      : ("default" as const),
+                },
               )
             )?.delegation?.state === "running";
           if (remote)

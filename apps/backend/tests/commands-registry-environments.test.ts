@@ -1092,7 +1092,9 @@ exit 0
       );
       const manifest = spyOn(dockerImage, "readImageManifest").mockResolvedValue({
         kind: "manifest",
-        manifest: { capabilities: { "github-git-credential": 1 } } as ImageManifest,
+        manifest: {
+          capabilities: { "staged-inputs": 5, "github-git-credential": 1 },
+        } as ImageManifest,
       });
       const sync = spyOn(githubCredential, "syncRuntimeGitHubCredential");
       const commands = createCommandRegistry();

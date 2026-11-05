@@ -214,6 +214,33 @@ describe("host media streams", () => {
   });
 });
 
+describe("readable-roots media streams", () => {
+  test("serve ranges from an allowed root and refuse a path outside it", async () => {
+    let roots = [worktree];
+    const media = manager({ readableHostRoots: async () => roots });
+    const opened = await media.open({ path: path.join(worktree, "media", "clip.wav") });
+    expect(opened).toMatchObject({ mimeType: "audio/wav", byteLength: WAV.byteLength });
+    const ranged = await get(opened.url, "bytes=0-43");
+    expect(ranged.status).toBe(206);
+    expect(ranged.body.equals(Buffer.from(WAV.subarray(0, 44)))).toBe(true);
+
+    expect(await failure(media.open({ path: path.join(outside, "secret.wav") }))).toBe(
+      "policy_denied",
+    );
+    expect(await failure(media.open({ path: path.join(worktree, "link.wav") }))).toBe(
+      "policy_denied",
+    );
+    // The allowlist no longer names the root: the minted capability fails closed.
+    roots = [outside];
+    expect((await get(opened.url, "bytes=0-3")).status).toBe(404);
+    // The environment sweep leaves readable-roots streams to their own checks.
+    roots = [worktree];
+    const second = await media.open({ path: path.join(worktree, "media", "clip.wav") });
+    await media.sweep();
+    expect((await get(second.url, "bytes=0-3")).status).toBe(206);
+  });
+});
+
 describe("container media streams", () => {
   test("copies once into staging with the container reader and serves ranges", async () => {
     const media = manager();

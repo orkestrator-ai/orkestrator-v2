@@ -420,13 +420,7 @@ describe("Orkestrator control MCP server", () => {
 
     expect(listed.response.status).toBe(200);
     expect(listed.body.error).toBeUndefined();
-    for (const name of [
-      "launch_environment",
-      "launch_job",
-      "send_prompt_to_tab",
-      "launch_node_environment",
-      "send_prompt_to_node_tab",
-    ]) {
+    for (const name of ["launch_environment", "launch_job", "send_prompt_to_tab"]) {
       const tool = listed.body.result?.tools?.find((candidate) => candidate.name === name);
       expect(tool).toBeDefined();
       expect(tool?.inputSchema?.properties?.prompt?.description).toContain(
@@ -604,22 +598,6 @@ describe("Orkestrator control MCP server", () => {
     };
     expect(launchedSelection.reviewers[0]).toMatchObject({ lens: lensSummary });
     expect(JSON.stringify(launchedSelection)).not.toContain(lens.instruction);
-
-    const started = await call("start_multi_review", {
-      requestId: "start-lens",
-      buildPipelineId: "pipeline-1",
-      environmentId: "env-1",
-      targetBranch: "main",
-      reviewers,
-    });
-    expect(started.body.result?.isError).not.toBe(true);
-    expect(
-      invocations.findLast((entry) => entry.command === "start_coordinator_multi_review")?.args
-        .input,
-    ).toMatchObject({ reviewers });
-    expect(
-      (started.body.result!.structuredContent!.selection as { reviewers: unknown[] }).reviewers[0],
-    ).toMatchObject({ lens: lensSummary });
 
     const launches = () =>
       invocations.filter((entry) => entry.command === "launch_coordinator_multi_review_action")

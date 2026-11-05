@@ -49,7 +49,11 @@ import type { ControlMcpInvoker } from "./control-shared-actions.js";
  * permission is this machine's, checked here and again by
  * `run_granted_agent_account_switch` as it records the switch; it still
  * refuses a signed-out or known-exhausted account, and past the hourly limit
- * the switch asks the user after all.
+ * the switch asks the user after all. A switch either permission allowed is
+ * recorded as a request that ran without asking, which is how the user sees
+ * it. Resuming the tabs the limit stopped stays the coordinator's job: a
+ * switch that ran returns them (`limitedTabs`, `resumeStep`) and an approved
+ * one's mail says to read them.
  */
 
 export const ACCOUNT_TOOL_CAPABILITIES: ReadonlyArray<readonly [string, string]> = [
@@ -66,19 +70,19 @@ function accountName(account: AgentAccountSummary): string {
   return account.identity.email ? `${account.label} (${account.identity.email})` : account.label;
 }
 
-/** `run_granted_agent_account_switch`'s answer; the request is a `NodeActionRequest`. */
+/** A recorded switch request, as the account switch commands return it (a `NodeActionRequest`). */
+interface GrantedRequest {
+  requestId: string;
+  state: string;
+  authorizedBy?: string;
+  result?: { code: string; message: string };
+}
+
+/** `run_granted_agent_account_switch`'s answer. */
 type GrantedSwitch =
   | { outcome: "not-granted" }
   | { outcome: "over-limit"; recent: number; limit: number; windowMinutes: number }
-  | {
-      outcome: "ran" | "existing";
-      request: {
-        requestId: string;
-        state: string;
-        authorizedBy?: string;
-        result?: { code: string; message: string };
-      };
-    };
+  | { outcome: "ran" | "existing"; request: GrantedRequest };
 
 const NO_ACCOUNTS_NOTE =
   "Only Claude and Codex keep switchable accounts. Grok, Pi, OpenCode and Cursor use one login per machine; signing in another is the user's job in Settings.";
@@ -262,8 +266,42 @@ async function refuseExhausted(
   );
 }
 
-function grantedResult(
-  request: { requestId: string; state: string; result?: { code: string; message: string } },
+/**
+ * The tabs a switch should resume: this project's tabs on that machine whose
+ * newest recorded turn stopped on that provider's usage limit, from the same
+ * reader as `get_usage_limits`. `undefined` when it cannot be read.
+ */
+export type ResumeTabs = JsonRecord[] | undefined;
+
+/** What the coordinator does about the limited tabs once a switch ran. */
+export function resumeAfterSwitch(tabs: ResumeTabs): JsonRecord {
+  if (tabs === undefined) {
+    return {
+      resumeStep:
+        "Call get_usage_limits to find the tabs that stopped on this provider's usage limit, then send each a short prompt with send_prompt_to_tab (for example 'continue') so it runs on the new account.",
+    };
+  }
+  if (tabs.length === 0) {
+    return {
+      limitedTabs: [],
+      resumeStep:
+        "No tab of this project is recorded as stopped on this provider's usage limit, so there is nothing to resume.",
+    };
+  }
+  return {
+    limitedTabs: tabs,
+    resumeStep:
+      "Resume each tab in limitedTabs: send it one short prompt with send_prompt_to_tab (for example 'continue'), so it runs again on the new account. Only these tabs: any other tab was not stopped by the limit, and a tab that is busy now was already resumed. Each one wakes you when its turn ends.",
+  };
+}
+
+/**
+ * The answer for a switch that ran without asking, under the standing
+ * permission or a self-timer's. Either way it is recorded where the user sees
+ * it, and there is nothing for the user to approve.
+ */
+async function unattendedResult(
+  request: GrantedRequest,
   view: {
     machineView: JsonRecord;
     platform: AgentAccountPlatform;
@@ -271,10 +309,14 @@ function grantedResult(
     accountId: string;
     accountLabel: string;
   },
+  authorizedBy: JsonRecord,
+  resume: () => Promise<ResumeTabs>,
 ) {
+  const permission =
+    request.authorizedBy === "self-timer" ? "the timer's permission" : "the standing permission";
   if (request.state === "failed") {
     throw new Error(
-      `The switch under the standing permission failed: ${request.result?.message ?? "no reason given"}.`,
+      `The switch under ${permission} failed: ${request.result?.message ?? "no reason given"}.`,
     );
   }
   const base = {
@@ -283,7 +325,7 @@ function grantedResult(
     previousAccountId: view.previousAccountId,
     accountId: view.accountId,
     accountLabel: view.accountLabel,
-    authorizedBy: { setting: "standing-grant", recordId: request.requestId },
+    authorizedBy,
     scope: "machine",
   };
   if (request.state === "outcome-unknown") {
@@ -297,7 +339,7 @@ function grantedResult(
     return toolResult({
       ...base,
       state: "switching",
-      note: "This switch is already running under the standing permission. Check list_provider_accounts before calling again.",
+      note: `This switch is already running under ${permission}. Check list_provider_accounts before calling again.`,
     });
   }
   return toolResult({
@@ -305,7 +347,32 @@ function grantedResult(
     state: "switched",
     effect: agentAccountSwitchEffect(view.platform),
     nextStep:
-      "It already ran: the user allowed coordinators to switch without asking, so there is nothing for them to approve. Tell the user which account you switched from and to, on which machine, and why. Tabs stopped on a usage limit need a new prompt to run again.",
+      request.authorizedBy === "self-timer"
+        ? "It already ran under the permission the user gave this timer; it is listed for them with the account. Tell the user which account you switched from and to, on which machine, and why. Then follow resumeStep."
+        : "It already ran: the user allowed coordinators to switch without asking, so there is nothing for them to approve. Tell the user which account you switched from and to, on which machine, and why. Then follow resumeStep.",
+    ...resumeAfterSwitch(await resume()),
+  });
+}
+
+/** The answer when the `requestId` already named a request the user was asked about. */
+function existingRequestResult(
+  request: GrantedRequest,
+  requestId: string,
+  machineView: JsonRecord,
+  platform: AgentAccountPlatform,
+  accountId: string,
+) {
+  return toolResult({
+    state: request.state,
+    approvalRequestId: request.requestId,
+    machine: machineView,
+    platform,
+    accountId,
+    ...(request.result ? { result: request.result } : {}),
+    note:
+      request.state === "pending"
+        ? `requestId ${requestId} already asked the user to approve this switch. Nothing has changed yet; you will be told the outcome by mail.`
+        : `requestId ${requestId} was already used for this switch, which is ${request.state}. Use a new requestId for a new switch.`,
   });
 }
 
@@ -347,7 +414,7 @@ export function registerAccountTools(server: McpServer, context: AccountToolCont
         ...(limited
           ? {
               nextStep: automatic
-                ? "Automatic recovery is active: the backend handles confirmed weekly-limit stops and resends them when the bridge is idle. Wait for its outcome; no coordinator action is needed."
+                ? "Automatic recovery is active: the backend handles confirmed 5-hour and weekly limit stops and resends them when the bridge is idle. Wait for its outcome; no coordinator action is needed."
                 : "Compare accounts with list_provider_accounts, switch with switch_provider_account, then send each limited tab a short prompt (send_prompt_to_tab, for example 'continue') so it runs again on the new account.",
             }
           : {}),
@@ -421,7 +488,7 @@ export function registerAccountTools(server: McpServer, context: AccountToolCont
     {
       title: "Change automatic account switching",
       description:
-        "Turn automatic account switching on or off for a provider, or change whether one account is included. When on, the backend keeps the machine on the included signed-in account whose general weekly limit resets soonest, staying put unless another login resets more than an hour sooner and counting entries with the same email as one login. It moves on at 98% of that limit or when a fresh reading confirms a limit error used it up, and resends the work the weekly limit stopped. The ticks apply on every machine this one controls, matched by email; an account with no email has its tick on its own machine only and stays out until ticked. With enabled true it also ends this machine's pin, or the pin on nodeId, left by a manual switch, and no other machine's. A machine with a command node takes the shared ticks from it and refuses to change them, but can still end its own pin and change the tick of an account with no email. list_provider_accounts shows the state. The coordinator is authorized to change email-matched ticks and end pins only when the user explicitly asked; these changes can move subscriptions and trigger automatic recovery. No-email accounts must be included by the user in Settings.",
+        "Turn automatic account switching on or off for a provider, or change whether one account is included. When on, the backend keeps the machine on the included signed-in account with room whose general weekly limit resets soonest, staying put unless another login resets more than an hour sooner and counting entries with the same email as one login. It moves on at 98% of that limit or of the 5-hour limit, or when a fresh reading confirms a limit error used one up, comes back when that 5-hour limit resets, and resends the work either limit stopped. The ticks apply on every machine this one controls, matched by email; an account with no email has its tick on its own machine only and stays out until ticked. With enabled true it also ends this machine's pin, or the pin on nodeId, left by a manual switch, and no other machine's. A machine with a command node takes the shared ticks from it and refuses to change them, but can still end its own pin and change the tick of an account with no email. list_provider_accounts shows the state. The coordinator is authorized to change email-matched ticks and end pins only when the user explicitly asked; these changes can move subscriptions and trigger automatic recovery. No-email accounts must be included by the user in Settings.",
       inputSchema: z.object({
         platform: z.enum(AGENT_ACCOUNT_PLATFORMS),
         enabled: z.boolean().optional().describe("The provider's main tick."),
@@ -559,7 +626,7 @@ export function registerAccountTools(server: McpServer, context: AccountToolCont
       title: "Switch the active provider account",
       description:
         "Make another signed-in Claude or Codex login the active account for that provider on this machine (or another with nodeId), through the same switch as Settings. Machine-wide: every session of that provider on that machine moves to it on its next turn; a turn already running finishes on the current account; no restart. " +
-        `It changes which subscription is billed, so it needs the user's permission, in one of three forms. (1) With scheduleId of the self-timer that woke you, whose reminder says it carries the user's permission, it switches at once. (2) When the user turned on "Let coordinators switch accounts without asking" for that provider in Settings on this machine, it switches at once with no approval, on this machine and on machines this one controls (state switched, authorizedBy standing-grant); the user is shown each such switch, but you still tell them what you did. Even then it refuses a signed-out account or one whose usage reading says it is used up, and after ${COORDINATOR_ACCOUNT_SWITCH_LIMIT.switches} switches of one provider on one machine within an hour it asks the user instead and says why. (3) Otherwise it creates a request the user approves in Orkestrator and you are told the outcome by mail. Read state in the result: only pending means the user must approve; never ask the user to approve a switch that already ran. Only switch when the user asked for switches, never on your own initiative; the standing permission is that request made in advance. Take accountId from list_provider_accounts and prefer one with hasAllocationLeft true. Like any manual switch, it pins the account while automatic switching is on.`,
+        `It changes which subscription is billed, so it needs the user's permission, in one of three forms. (1) With scheduleId of the self-timer that woke you, whose reminder says it carries the user's permission, it switches at once. (2) When the user turned on "Let coordinators switch accounts without asking" for that provider in Settings on this machine, it switches at once with no approval, on this machine and on machines this one controls (state switched, authorizedBy standing-grant); the user is shown each such switch, but you still tell them what you did. Even then it refuses a signed-out account or one whose usage reading says it is used up, and after ${COORDINATOR_ACCOUNT_SWITCH_LIMIT.switches} switches of one provider on one machine within an hour it asks the user instead and says why. (3) Otherwise it creates a request the user approves in Orkestrator and you are told the outcome by mail. Read state in the result: only pending means the user must approve; never ask the user to approve a switch that already ran. Only switch when the user asked for switches, never on your own initiative; the standing permission is that request made in advance. Take accountId from list_provider_accounts and prefer one with hasAllocationLeft true. Like any manual switch, it pins the account while automatic switching is on. A switch that ran lists limitedTabs, this project's tabs on that machine whose last turn stopped on that provider's usage limit: nothing restarts them, so send each one short prompt with send_prompt_to_tab (resumeStep says so).`,
       inputSchema: z.object({
         requestId: z
           .string()
@@ -622,31 +689,6 @@ export function registerAccountTools(server: McpServer, context: AccountToolCont
           `“${account.label}” is not signed in on ${machine.nodeName}; ask the user to sign it in under Settings → Agent accounts first.`,
         );
       }
-      if (scheduleId) {
-        const grant = await timerPermission(scheduleId, platform, machine);
-        await machine.call(
-          "set_active_agent_account",
-          { platform, accountId },
-          `switch-account:${scope.coordinatorId}:${requestId}`,
-        );
-        return toolResult({
-          state: "switched",
-          machine: machineView,
-          platform,
-          previousAccountId,
-          accountId,
-          accountLabel: account.label,
-          authorizedBy: {
-            scheduleId,
-            userInstruction: grant.userInstruction,
-            grantedAt: grant.grantedAt,
-          },
-          scope: "machine",
-          effect: agentAccountSwitchEffect(platform),
-          nextStep:
-            "Tell the user which account you switched from and to, on which machine, and why. Tabs stopped on a usage limit need a new prompt to run again.",
-        });
-      }
       const switchRequestId = `switch-account:${scope.coordinatorId}:${requestId}`;
       const requestedBy = { ...(await mailbox()), projectId: scope.projectId };
       const target = {
@@ -656,6 +698,79 @@ export function registerAccountTools(server: McpServer, context: AccountToolCont
         accountId,
         accountLabel: accountName(account),
       };
+      const previous = snapshot.accounts.find(
+        (entry) => entry.platform === platform && entry.id === previousAccountId,
+      );
+      // Read once the switch ran: the tabs of this project on that machine
+      // whose last turn stopped on this provider's limit.
+      const resumeTabs = async (): Promise<ResumeTabs> => {
+        try {
+          const target = machine.self ? null : await context.onNode(machine.nodeId);
+          if (!machine.self && !target) return undefined;
+          const limits = target
+            ? await target.call<JsonRecord>("get_project_usage_limits", {
+                projectId: target.projectId,
+              })
+            : await invoke<JsonRecord>("get_project_usage_limits", {
+                projectId: scope.projectId,
+              });
+          if (!Array.isArray(limits.limitedTabs)) return undefined;
+          return (limits.limitedTabs as JsonRecord[])
+            .filter((tab) => tab.agent === platform)
+            .map((tab) => ({
+              environmentId: tab.environmentId,
+              environmentName: tab.environmentName,
+              tabId: tab.tabId,
+              observedAt: tab.observedAt,
+              ...(tab.signal ? { signal: tab.signal } : {}),
+              ...(target ? { nodeId: machine.nodeId } : {}),
+            }));
+        } catch {
+          return undefined;
+        }
+      };
+      const previousTarget = {
+        ...(previousAccountId ? { previousAccountId } : {}),
+        ...(previous ? { previousAccountLabel: accountName(previous) } : {}),
+      };
+      if (scheduleId) {
+        const grant = await timerPermission(scheduleId, platform, machine);
+        // Recorded as a request that ran without asking, so the user sees it
+        // with the switches the standing permission made.
+        const run = await invoke<{ request: GrantedRequest }>("run_timer_agent_account_switch", {
+          requestId: switchRequestId,
+          ...target,
+          ...previousTarget,
+          requestedBy,
+          reason,
+          selfTimer: {
+            scheduleId,
+            userInstruction: grant.userInstruction,
+            grantedAt: grant.grantedAt,
+          },
+        });
+        if (run.request.authorizedBy !== "self-timer") {
+          // The same requestId already asked the user; report that request.
+          return existingRequestResult(run.request, requestId, machineView, platform, accountId);
+        }
+        return await unattendedResult(
+          run.request,
+          {
+            machineView,
+            platform,
+            previousAccountId,
+            accountId,
+            accountLabel: account.label,
+          },
+          {
+            scheduleId,
+            userInstruction: grant.userInstruction,
+            grantedAt: grant.grantedAt,
+            recordId: run.request.requestId,
+          },
+          resumeTabs,
+        );
+      }
       let askedBecause: string | undefined;
       // A permission that cannot be read is not a permission: ask instead.
       const granted = await invoke<{ grants?: Partial<Record<AgentAccountPlatform, boolean>> }>(
@@ -667,41 +782,31 @@ export function registerAccountTools(server: McpServer, context: AccountToolCont
       );
       if (granted) {
         await refuseExhausted(machine, platform, account, now());
-        const previous = snapshot.accounts.find(
-          (entry) => entry.platform === platform && entry.id === previousAccountId,
-        );
         const run = await invoke<GrantedSwitch>("run_granted_agent_account_switch", {
           requestId: switchRequestId,
           ...target,
-          ...(previousAccountId ? { previousAccountId } : {}),
-          ...(previous ? { previousAccountLabel: accountName(previous) } : {}),
+          ...previousTarget,
           requestedBy,
           reason,
         });
         if (run.outcome === "ran" || run.outcome === "existing") {
           const { request } = run;
-          if (request.authorizedBy === "standing-grant") {
-            return grantedResult(request, {
-              machineView,
-              platform,
-              previousAccountId,
-              accountId,
-              accountLabel: account.label,
-            });
+          if (request.authorizedBy) {
+            return await unattendedResult(
+              request,
+              {
+                machineView,
+                platform,
+                previousAccountId,
+                accountId,
+                accountLabel: account.label,
+              },
+              { setting: "standing-grant", recordId: request.requestId },
+              resumeTabs,
+            );
           }
           // The same requestId already asked the user; report that request.
-          return toolResult({
-            state: request.state,
-            approvalRequestId: request.requestId,
-            machine: machineView,
-            platform,
-            accountId,
-            ...(request.result ? { result: request.result } : {}),
-            note:
-              request.state === "pending"
-                ? `requestId ${requestId} already asked the user to approve this switch. Nothing has changed yet; you will be told the outcome by mail.`
-                : `requestId ${requestId} was already used for this switch, which is ${request.state}. Use a new requestId for a new switch.`,
-          });
+          return existingRequestResult(request, requestId, machineView, platform, accountId);
         }
         if (run.outcome === "over-limit") {
           askedBecause = `Coordinators already switched the active ${PLATFORM_NAMES[platform]} account on ${machine.nodeName} ${run.recent} times in the last ${run.windowMinutes} minutes, the most Settings allows without asking.`;

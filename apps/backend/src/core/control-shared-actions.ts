@@ -17,6 +17,7 @@ import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { normalizeAgentPlatforms } from "@orkestrator/protocol/agent-platforms";
 import {
   resolveAgentPlatformSettings,
+  resolveDefaultAgent,
   type AgentSettingsTier,
   type AgentSettingsTiers,
 } from "@orkestrator/protocol/agent-settings";
@@ -412,6 +413,43 @@ export async function launchSettingsTiers(
       ? (global.agentSettings as AgentSettingsTier)
       : undefined,
   };
+}
+
+/**
+ * The agent a launch that names none runs, out of the enabled platforms: the
+ * saved default agent (environment, then repository, then app settings) when
+ * it is enabled, else the first enabled platform. This is `defaults.agent` in
+ * `get_launch_options`, so the default a model reads is the one that runs.
+ */
+export function defaultLaunchAgent(
+  tiers: AgentSettingsTiers,
+  enabledAgents: readonly AgentPlatform[],
+): AgentPlatform | null {
+  const configured = resolveDefaultAgent(tiers);
+  return enabledAgents.includes(configured) ? configured : (enabledAgents[0] ?? null);
+}
+
+/**
+ * The agent a launch runs: the caller's choice, or the saved default when it
+ * left `agent` out. Read from the same tiers the startup launch reads, on the
+ * node whose invoker this is, so a launch on another node takes that node's
+ * default.
+ */
+export async function resolveLaunchAgent(
+  invoke: ControlMcpInvoker,
+  projectId: string,
+  requested: AgentPlatform | undefined,
+  environment?: JsonRecord,
+): Promise<{ agent: AgentPlatform; defaulted: boolean }> {
+  if (requested) return { agent: requested, defaulted: false };
+  const [config, tiers] = await Promise.all([
+    invoke<unknown>("get_config"),
+    launchSettingsTiers(invoke, projectId, environment),
+  ]);
+  const global = isRecord(config) && isRecord(config.global) ? config.global : {};
+  const agent = defaultLaunchAgent(tiers, normalizeAgentPlatforms(global.enabledAgentPlatforms));
+  if (!agent) throw new Error("No agent platform is enabled; enable one in Settings first");
+  return { agent, defaulted: true };
 }
 
 function catalogModel(

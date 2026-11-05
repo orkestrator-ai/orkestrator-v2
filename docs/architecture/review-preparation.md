@@ -270,32 +270,62 @@ read-only is enforced depends on the provider: Claude (with its OS sandbox)
 and Codex enforce it, OpenCode and Cursor configure it, Grok treats it as
 advice.
 
-The Build Pipeline backs this with a read-only Git guard on every provider
-(`workspace-read-only-guard.ts`, applied by `build-pipeline-read-only-guard.ts`
-to Review, consolidation and Verify):
+A worktree that moves while reviewers read marks the review stale, in both, and
+stops nothing: reviewers read the immutable package, so their reports still
+describe what they read, and they can be wrong about the code as it is now. A
+Build Pipeline panel records it on `reviewFanout.snapshotStale` and then on the
+Consolidation session as `reviewWorktreeChanged`; a single review on its session.
+A Multi Review records `reviewWorktreeChanged` when its reviewers finish, comparing
+the worktree with the package's head and the paths it left uncommitted. Both tabs
+show a notice. A worktree that cannot be read says nothing. A package that fails
+integrity verification (`reviewSnapshotStale` on a Multi Review with a package) is
+a different fault and still fails the stage: the evidence itself changed.
 
-- **Before dispatch** the backend records HEAD and the Git-visible
-  uncommitted paths through `get_environment_uncommitted_paths`, the same
-  probe for local worktrees and containers. A single reviewer keeps the
-  baseline on its session (the `validation*AtStart` fields Verify already
-  used); a panel keeps one on `reviewFanout.workspaceBaseline` for all its
-  reviewers and the consolidator, taken before the first reviewer starts. A
-  state the backend cannot observe fails the stage before any session exists.
-- **At submit time** an acceptance check on `review-report`,
-  `consolidated-review` and `verification-result` refuses a result with a
-  correctable `worktree_changed` error that names the moved HEAD or the paths,
-  so the agent can put the tree back and submit again within its turn. A
+Verify keeps a read-only Git guard on every provider
+(`workspace-read-only-guard.ts`, applied by `build-pipeline-read-only-guard.ts`):
+
+- **Before dispatch** the backend records HEAD and the Git-visible uncommitted
+  paths through `get_environment_uncommitted_paths`, the same probe for local
+  worktrees and containers. A state it cannot observe fails the stage before any
+  session exists. Review and panel passes take the same baseline, for the stale
+  mark.
+- **At submit time** an acceptance check on `verification-result` refuses a result
+  with a correctable `worktree_changed` error that names the moved HEAD or the
+  paths, so the agent can put the tree back and submit again within its turn. A
   refusal spends no correction budget.
-- **When the result is consumed** the pipeline compares again: a single
-  review before its report is routed, a panel whenever a reviewer report
-  arrives and again before the consolidated report is accepted. A change
-  fails the stage with the paths or HEAD in the error. Nothing is reset; the
-  worktree is the evidence.
+- **When the result is consumed** the pipeline compares again, and a change fails
+  the stage with the paths or HEAD in the error. Nothing is reset; the worktree is
+  the evidence.
 
-Scope is Git's: ignored files, `.git` internals, paths outside the worktree
-and edits to a path that was already uncommitted are invisible. Guards detect;
-they do not prevent. Review sessions and panel passes recorded before the
-guard existed carry no baseline and are not certified.
+Graph runs' reviewer nodes keep their own guard (`graph-agent-guards.ts`), which
+this does not change. Scope is Git's: ignored files, `.git` internals, paths
+outside the worktree and edits to a path that was already uncommitted are
+invisible. Review sessions and panel passes recorded before the guard existed
+carry no baseline and are never marked.
+
+**Compatibility.** `reviewWorktreeChanged` on a Multi Review is written only when
+the worktree moved. Its guard refuses unknown keys, so an older client cannot read
+that one review until the next preparation clears it; every other review is
+unaffected. The pipeline's fields are additive to a record whose guard ignores them.
+
+## The same controls in both
+
+Multi Review and the Build Pipeline keep a panel the same way:
+
+| Situation | Behaviour |
+| --- | --- |
+| Pause, then resume | Only what the pause interrupted runs again: its reviewers, and consolidation continues in its own session. A Multi Review cannot pause while reviewers run |
+| Restart consolidation | Consolidation alone, on the reports it has |
+| Retry a failed review | With a report in hand, only failed and interrupted reviewers run again, and stops hold. With none, stopped reviewers run again too |
+| Restart one reviewer | In any state, optionally on another model in a Multi Review; its peers carry on |
+| Stop one reviewer | Consolidation runs without it; a late result from its turn is denied |
+| Skip | Pipeline: any agent step. Multi Review: the reviewers still working (`skip_multi_review_step` with `review`), or Address Findings, which returns to `ready` with no pull request |
+| Rewind code to a step | Pipeline: any step that recorded its head. Multi Review: preparation (the pinned head) and Address Findings (the package's head) |
+
+Differences that remain, by design: Preparation and consolidation of a Multi Review
+cannot be skipped, because everything after them reads what they produce. A Multi
+Review's pull request step cannot force-push, so a rewind over commits the upstream
+already has is refused there rather than journaled as on a pipeline.
 
 ## Launching from a client
 
@@ -337,7 +367,7 @@ log hashes remain readable during upgrades.
 
 `autoFix` and `autoPr` are fixed on the workflow at launch. The launch dialog
 opens its two checkboxes on the saved app-level settings. Coordinator launches
-(`launch_multi_review`, `start_multi_review`) take the same saved values unless
+(`launch_multi_review`) take the same saved values unless
 the call sets them, and a requested `autoPr: true` turns an omitted `autoFix` on
 (`multiReviewAutomation` in `coordinator-launch-defaults.ts`). Both paths then
 run the same `MultiReviewService` code:
@@ -386,7 +416,7 @@ overrides it for testing. The default stays `bespoke` until the graph runtime
 has soaked and the user decides to flip it; the bespoke service is not
 retired. A running review keeps the engine it started on.
 
-Every launch surface (the dialog, `launch_multi_review` and
+Every launch surface (the dialog, `launch_multi_review`, an operator's
 `start_multi_review`, the CLI's `review launch`) still calls
 `MultiReviewService.start`, so all of them follow the setting. On `graph` the
 service records `engine: "graph"` and `graphRun.runId`
@@ -707,8 +737,8 @@ guard, presets and prompt section live in
   included, edited on each row of the Multi Review defaults. The Multi Review
   button, the Build launcher's reviewer rows and coordinator launches that omit
   their rows start from them.
-- **Callers.** The coordinator's `launch_multi_review`, `start_multi_review`
-  and `start_build_pipeline` accept `lens` on reviewer rows and report it as
+- **Callers.** The coordinator's `launch_multi_review` and
+  `start_build_pipeline` accept `lens` on reviewer rows and report it as
   `{ label, instructionBytes }`. The public `review.launch` action accepts it on
   `reviewers`, and `orkestrator review launch` sets it with `--focus N=TEXT` or
   `--focus-file N=PATH` ([public CLI](public-cli.md)).

@@ -1,5 +1,4 @@
 import { canonicalWorktreePath } from "@orkestrator/protocol/node/worktree-paths";
-import { execFile } from "node:child_process";
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 
@@ -8,14 +7,16 @@ import type {
   DiskUsageEnvironmentSummary,
   DiskUsageItem,
   EnvironmentDiskUsage,
+  ProjectGitMirrorUsage,
 } from "@orkestrator/protocol/disk-usage";
 import { defaultRuntimeProfileRoots } from "@orkestrator/protocol/node/runtime-profile-status";
 
 import type { CommandContext } from "./commands-context.js";
 import { retainedContainerIds, storageVolumeNames } from "./environment-cleanup.js";
 import type { Environment } from "./models.js";
+import { GIT_MIRROR_NAME, GIT_MIRRORS_DIR } from "./project-git-mirror.js";
 import { containerSize, volumeSizes } from "./recovery-copies.js";
-import { pathExists } from "./shell.js";
+import { CommandFailedError, pathExists, runCommand } from "./shell.js";
 
 const DU_TIMEOUT_MS = 180_000;
 const DU_MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
@@ -37,23 +38,34 @@ export type DiskUsageProbes = {
   profilesDirectory: () => string | null;
 };
 
-const runDu: DuRunner = (args) =>
-  new Promise((resolve, reject) => {
-    execFile(
-      "du",
-      args,
-      { encoding: "utf8", maxBuffer: DU_MAX_OUTPUT_BYTES, timeout: DU_TIMEOUT_MS },
-      (error, stdout) => {
-        // `du` exits 1 when it cannot read part of a tree and still reports
-        // what it could; a timeout or kill leaves totals that are too small.
-        if (error && (error.killed || error.signal || !stdout)) reject(error);
-        else resolve(stdout);
-      },
-    );
-  });
+export async function runDu(
+  args: string[],
+  limits: { command?: string; timeoutMs?: number; maxOutputBytes?: number } = {},
+): Promise<string> {
+  try {
+    const { stdout } = await runCommand(limits.command ?? "du", args, {
+      timeoutMs: limits.timeoutMs ?? DU_TIMEOUT_MS,
+      maxOutputBytes: limits.maxOutputBytes ?? DU_MAX_OUTPUT_BYTES,
+    });
+    return stdout;
+  } catch (error) {
+    // `du` exits 1 when it cannot read part of a tree and still reports what it
+    // could; a timeout, kill or overflow leaves totals that are too small.
+    if (
+      error instanceof CommandFailedError &&
+      error.stdout &&
+      !error.timedOut &&
+      !error.signal &&
+      !error.outputLimitExceeded
+    ) {
+      return error.stdout;
+    }
+    throw error;
+  }
+}
 
 const defaultProbes: DiskUsageProbes = {
-  du: runDu,
+  du: (args) => runDu(args),
   containerSize,
   volumeSizes,
   profilesDirectory: () => {
@@ -393,6 +405,47 @@ export async function getEnvironmentDiskUsage(
     if (Date.now() - entry.at >= CACHE_TTL_MS) cache.delete(id);
   }
   return result;
+}
+
+/**
+ * Every project's Git mirror, largest first, with those of removed projects.
+ * A directory holding no mirror and no build yet is not listed. Measured on each
+ * ask rather than cached: a mirror is a handful of packs, so the walk is short.
+ */
+export async function listProjectGitMirrorUsage(
+  context: Pick<CommandContext, "storage">,
+  probes: DiskUsageProbes = defaultProbes,
+): Promise<ProjectGitMirrorUsage[]> {
+  const root = path.join(context.storage.getDataDir(), GIT_MIRRORS_DIR);
+  const [names, projects] = await Promise.all([
+    readdir(root).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return [] as string[];
+      throw error;
+    }),
+    context.storage.loadProjects(),
+  ]);
+  const projectNames = new Map(projects.map((project) => [project.id, project.name]));
+  const mirrors = await Promise.all(
+    names.map(async (projectId): Promise<ProjectGitMirrorUsage | null> => {
+      const directory = path.join(root, projectId);
+      if (!(await holdsGitMirror(directory))) return null;
+      return {
+        projectId,
+        projectName: projectNames.get(projectId) ?? null,
+        path: directory,
+        bytes: (await measureDirectory(directory, probes)).bytes,
+      };
+    }),
+  );
+  return mirrors
+    .filter((mirror) => mirror !== null)
+    .sort((left, right) => (right.bytes ?? 0) - (left.bytes ?? 0));
+}
+
+async function holdsGitMirror(directory: string): Promise<boolean> {
+  if (await pathExists(path.join(directory, "mount", GIT_MIRROR_NAME))) return true;
+  const names = await readdir(directory).catch(() => [] as string[]);
+  return names.some((name) => name.startsWith(".building-"));
 }
 
 /** Every environment, for the disk usage overview; sizes are asked per environment. */

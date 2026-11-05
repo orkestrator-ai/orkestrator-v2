@@ -60,7 +60,6 @@ function runningState(id: string): SessionState {
     ],
     activeSubagentToolIds: new Set(),
     activeSubagentDescriptors: new Map(),
-    settledCursorAgentIds: new Set(),
     subagentLimitExceeded: false,
     subagentToolIds: new Map(),
     cursorTodos: [],

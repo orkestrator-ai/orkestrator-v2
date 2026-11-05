@@ -3,7 +3,8 @@
 ## Task analysis
 
 Analysed 2026-11-01 against the branch built from `main` at `93b99bfba`, and task 9
-on 2026-11-04 against `main` at `96ee1eb3e`. How it works is in
+on 2026-11-04 against `main` at `96ee1eb3e`, and tasks 3 and 10 on 2026-11-05 against
+`main` at `414a89c0a`. How it works is in
 [agent-accounts.md](../../architecture/agent-accounts.md#automatic-switching).
 
 The feature is built and tested on fake accounts and readings, and on real bridges
@@ -16,13 +17,14 @@ needs a real provider, so none can run in CI.
 
 1. **A real Claude weekly refusal**: the refusal's words reach the turn's error, a forced read shows `seven_day` at 100%, and the machine moves. Status: open; needs a Claude account at its weekly limit.
 2. **A real Codex weekly refusal**: the same for Codex, and which slot holds the week on a real account. Status: open; needs a Codex account at its weekly limit.
-3. **A real model-specific or 5-hour refusal stays stopped**: a Fable or 5-hour refusal moves nothing and resends nothing. Status: open; needs an account at one of those limits with weekly room.
+3. **A real model-specific refusal stays stopped**: a Fable refusal moves nothing and resends nothing. Status: open; needs an account at that limit with room on the general limits.
 4. **How soon a reading shows 100%**: whether the usage endpoint can still say under 100% just after the refusal. Status: open; decides whether a confirmed stop needs a second look.
 5. **The resend against a real provider**: the conversation continues on the new account in a real turn. Status: open; billed. The bridge replacement and shared transcript are proven offline on both pinned CLIs, for all four kinds of work.
 6. **Paid-overage fields on real accounts**: Claude's `extra_usage` on the OAuth usage endpoint; Codex's `credits` and `rate_limit.limit_reached` on the HTTP one. Status: open.
 7. **Two machines**: the ticks reach a leaf by email, a pin on the leaf, a notice from a leaf's switch reaching the command node's coordinator, and an older leaf. Status: open; joins the two-machine batch in [0722](0722-per-machine-agent-accounts.md).
 8. **The cost of a coordinator's notice**: each notice wakes a main coordinator for a turn. Status: open; decide after watching a real week.
 9. **The flapping stops on rkmbp**: no more `soonest-reset` moves between the host login and its twin once the fix runs there. Status: open; needs the fixed build running on rkmbp with the tick on.
+10. **A real 5-hour limit, there and back**: a real 5-hour refusal moves the machine and resends, and the machine returns when that limit resets. Status: open; needs a real 5-hour limit with the tick on and a second login.
 
 ### 1. A real Claude weekly refusal
 
@@ -60,20 +62,20 @@ needs a real provider, so none can run in CI.
     - Pros: covers an odd duration.
     - Cons: a metered feature's week could read the same.
 
-### 3. A real model-specific or 5-hour refusal stays stopped
+### 3. A real model-specific refusal stays stopped
 
 **Problem.** That these never move the machine is proven on fake readings only.
 
-**Context.** Decision 4 of the ticket. On Claude they are separate windows; on Codex the 5-hour limit is the other slot.
+**Context.** Decision 4 of the original ticket. On Claude they are separate windows. The 5-hour limit used to be in this task; since 2026-11-05 it moves the machine (task 10).
 
-**Investigation.** The check is the fresh reading: `seven_day` below 100% means stay stopped. It is only as good as task 4. The stack's 5-hour case stays stopped on both CLIs, with Claude's own "You've hit your 5-hour limit" reaching the turn. The `rateLimitType` in task 1 could say which limit without a read, if a real refusal carries it; that would also close task 4's window for Claude.
+**Investigation.** The check is the fresh reading: `seven_day` below 100% and `five_hour` below 98% means stay stopped. It is only as good as task 4. The stack's "another limit" case stays stopped on both CLIs, using a 5-hour refusal whose reading shows neither limit out, because no fixture has a real model refusal's headers. The `rateLimitType` in task 1 could say which limit without a read, if a real refusal carries it; that would also close task 4's window for Claude.
 
 **Decisions.**
 
 - **How to get the evidence?**
-  - **Watch the next real 5-hour stop with the tick on (recommended).**
-    - Pros: 5-hour stops are common, so this comes soon and for free.
-    - Cons: Fable and other model limits are rarer.
+  - **Watch the next real Fable stop with the tick on (recommended).**
+    - Pros: free apart from the turn it costs.
+    - Cons: model limits are rarer than the general ones.
   - **Run a turn on purpose to exhaust a limit.**
     - Pros: on demand.
     - Cons: billed, and spends real allowance.
@@ -93,8 +95,8 @@ needs a real provider, so none can run in CI.
     - Pros: never resends on anything short of proof; simplest.
     - Cons: a stop in the window stays stopped.
   - **Treat 98% and up as used up after a limit error.**
-    - Pros: covers rounding and short lag.
-    - Cons: a 5-hour stop with weekly at 98.5% would resend, against decision 6.
+    - Pros: covers rounding and short lag, and is what the 5-hour limit now does.
+    - Cons: a Fable stop with weekly at 98.5% would resend, against decision 6.
   - **Read again a few times before deciding.**
     - Pros: keeps proof, and covers lag.
     - Cons: holds the workflow longer, and each read spends the endpoint's allowance.
@@ -189,7 +191,53 @@ needs a real provider, so none can run in CI.
     - Pros: settles the inference.
     - Cons: real usage calls for an answer the fix no longer needs.
 
+### 10. A real 5-hour limit, there and back
+
+**Problem.** Leaving on the 5-hour limit and returning when it resets is proven on fake readings and scripted servers only.
+
+**Context.** How it behaves is in [When it moves](../../architecture/agent-accounts.md#when-it-moves). The Codex short window is identified by being shorter than a week, from `plan-usage.test.ts` fixtures rather than from an account at its limit.
+
+**Investigation.** The stack's `native-five-hour` scenario shows the move and the continuation on the pinned CLIs. It says nothing about whether a real provider resets the window when it says, whether `resets_at` moves within a window, or whether usage can fall and so move the machine back early.
+
+**Decisions.**
+
+- **How to get the evidence?**
+  - **Watch `lastSwitch` and the coordinator's notices through the next real 5-hour limit with the tick on (recommended).**
+    - Pros: 5-hour limits are common, so this comes soon, and a read of what is already recorded costs no turn.
+    - Cons: needs a second login with room at that moment.
+  - **Run turns on purpose to fill a window.**
+    - Pros: on demand.
+    - Cons: billed, and spends real allowance.
+
 ## Assumptions and decisions
+
+### Moving on the 5-hour limit (task 10)
+
+- **What the 5-hour limit is allowed to change.**
+  - **Who has room, never the order (chosen).**
+    - Pros: this is what the ticket asks for: the soonest weekly account is always the goal, so the machine returns as soon as it can, and no reading of a fast-moving window can reorder accounts.
+    - Cons: an account can be moved onto at 97% and left again soon after.
+  - **Prefer accounts with more 5-hour room within the order.**
+    - Pros: fewer moves.
+    - Cons: burns later weeks while the soonest has room, which is the waste the ticket is against.
+- **What confirms a 5-hour refusal.**
+  - **At or past the 98% threshold (chosen).**
+    - Pros: this window fills fast enough to read under 100% at the refusal, which would otherwise lose the resend. The machine leaves at 98% anyway, so the only cost is a model-limit refusal in that band being resent on another account, which is what the user wants then.
+    - Cons: differs from the weekly limit, which stays at 100%.
+  - **At 100%, as for the week.**
+    - Pros: one rule.
+    - Cons: task 4's unmeasured lag would strand the work in the case this ticket is about.
+- **How the machine comes back.**
+  - **A timer for the next reset, on top of a five-minute backstop (chosen).**
+    - Pros: back as the window resets, at the cost of one check; needs no state beyond the process, because the next check re-arms it.
+    - Cons: one more timer to clear on stop. Worth clamping, because `setTimeout` overflows on a nonsense reset far ahead and would fire at once in a loop.
+  - **Only a shorter polling interval.**
+    - Pros: no new moving part.
+    - Cons: every check reads every included account, against an endpoint whose allowance a running session shares.
+- **The backstop going from ten minutes to five.** A filling 5-hour window can pass from 98% to a refusal within ten minutes, so ten would often miss the threshold during a long turn with no turn-end edge. Reads remain cached for two minutes.
+- **The move back keeps the one-hour reset tolerance.** Two weeks ending within the hour run out about together, so no allowance is at stake, and it is the same rule that stopped the flapping in task 9.
+- **A reason of its own, `five-hour`.** The notice can then say which limit moved the machine. An older command node reads it as an unknown reason: it declines that notice, which goes to the leaf's own coordinator, one from before the notice hierarchy ignores the event, and `lastSwitch` is left out of its view of the leaf rather than failing it. Nothing new has to be kept for older peers.
+- **"All providers" means Claude and Codex.** The ticket asks for every provider. Only these two hold more than one login, so the others have nothing to switch to, and nothing was added for them.
 
 ### Same-login entries and near-identical resets (task 9)
 

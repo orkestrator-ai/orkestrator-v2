@@ -1,7 +1,7 @@
 import { normalizeNotificationSoundSettings } from "@orkestrator/protocol/notification-sounds";
 import { useConfigStore } from "@/stores/configStore";
 
-export type NotificationSoundKind = "agent-stopped" | "pr-merged";
+export type NotificationSoundKind = "agent-stopped" | "pr-merged" | "coordinator-report";
 
 let audioContext: AudioContext | null = null;
 
@@ -35,6 +35,11 @@ const CHIMES: Record<NotificationSoundKind, readonly Note[]> = {
     { frequency: 523.25, offset: 0, duration: 0.15, volume: 0.1 },
     { frequency: 659.25, offset: 0.1, duration: 0.17, volume: 0.11 },
     { frequency: 783.99, offset: 0.2, duration: 0.3, volume: 0.13 },
+  ],
+  // Two even notes a fourth apart: a report has arrived, and the coordinator is on it.
+  "coordinator-report": [
+    { frequency: 587.33, offset: 0, duration: 0.14, volume: 0.11 },
+    { frequency: 783.99, offset: 0.14, duration: 0.2, volume: 0.12 },
   ],
 };
 
@@ -76,7 +81,8 @@ export function isNotificationSoundEnabled(kind: NotificationSoundKind): boolean
   const settings = normalizeNotificationSoundSettings(
     useConfigStore.getState().config.global.notificationSounds,
   );
-  return kind === "agent-stopped" ? settings.agentStopped : settings.prMerged;
+  if (kind === "agent-stopped") return settings.agentStopped;
+  return kind === "pr-merged" ? settings.prMerged : settings.coordinatorReport;
 }
 
 export async function playConfiguredNotificationSound(

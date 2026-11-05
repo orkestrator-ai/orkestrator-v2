@@ -91,7 +91,6 @@ export function createDefaultGlobalConfig() {
     terminalHistoryRetentionMb: DEFAULT_TERMINAL_HISTORY_RETENTION_MB,
     terminalHistoryGlobalRetentionMb: DEFAULT_TERMINAL_HISTORY_GLOBAL_RETENTION_MB,
     terminalHistoryRetentionDays: DEFAULT_TERMINAL_HISTORY_RETENTION_DAYS,
-    experimentalCodexRawEventLogging: true,
     debugLogging: false,
     logDetail: defaultLogDetail(),
     debugLogRetentionDays: DEFAULT_DEBUG_LOG_RETENTION_DAYS,

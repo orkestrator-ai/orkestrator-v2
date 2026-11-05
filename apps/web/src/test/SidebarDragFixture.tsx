@@ -27,11 +27,39 @@ import {
 } from "@/stores/coordinatorActivityStore";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { usePrMonitorStore } from "@/stores/prMonitorStore";
+import type { ActivitySortOrder } from "@/stores/uiStore";
 import type { Project, Environment } from "@/types";
 
 const ALIGNMENT_ICON =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==";
 const LONG_NAME = "a-machine-or-checkout-name-long-enough-that-it-has-to-truncate-in-the-sidebar";
+
+/** `?activity-sort`: an environment in each state the "By activity" list orders by. */
+const ACTIVITY_SORT_ROWS: ReadonlyArray<
+  Pick<Environment, "name" | "agentActivityState" | "hasUnreadWork" | "lastActivityAt"> & {
+    merged?: true;
+  }
+> = [
+  {
+    name: "merged-working",
+    merged: true,
+    agentActivityState: "working",
+    lastActivityAt: "2026-10-28T15:00:00Z",
+  },
+  { name: "merged-recent", merged: true, lastActivityAt: "2026-10-28T14:00:00Z" },
+  { name: "working-recent", agentActivityState: "working", lastActivityAt: "2026-10-28T13:00:00Z" },
+  { name: "idle-recent", lastActivityAt: "2026-10-28T12:00:00Z" },
+  { name: "unread", hasUnreadWork: true, lastActivityAt: "2026-10-28T11:00:00Z" },
+  { name: "waiting", agentActivityState: "waiting", lastActivityAt: "2026-10-28T10:00:00Z" },
+  { name: "idle-old", lastActivityAt: "2026-10-28T08:00:00Z" },
+  { name: "working-old", agentActivityState: "working", lastActivityAt: "2026-10-28T07:00:00Z" },
+  {
+    name: "merged-unread",
+    merged: true,
+    hasUnreadWork: true,
+    lastActivityAt: "2026-10-28T06:00:00Z",
+  },
+];
 
 /** What the fake backend reports for the members' coordinators. */
 let alignmentActivity: CoordinatorActivityState | null = null;
@@ -52,6 +80,7 @@ function install() {
   // names, mail badges, another machine's copy of the repository, and a
   // project with no repository, which stays outside every group.
   const alignment = params.has("alignment");
+  const activitySort = params.has("activity-sort");
   // `?merge-ready`: `p-env-1` and `q-env-1` have a PR ready to merge, while
   // `p-env-2`'s is blocked, so the two can be compared side by side.
   const signal = params.get("signal");
@@ -93,26 +122,43 @@ function install() {
         ...(alignment && (id === "p" || id === "solo") ? { icon: ALIGNMENT_ICON } : {}),
       }));
   let layout = saved?.layout ?? emptyPortalLayout();
-  const environments: Environment[] = projects.flatMap((project) =>
-    [1, 2, 3].map((index) => ({
-      id: `${project.id}-env-${index}`,
-      name: `${project.id}-env-${index}`,
-      projectId: project.id,
-      branch: "main",
-      containerId: null,
-      status: crossMachine ? "running" : "stopped",
-      ...prFor(`${project.id}-env-${index}`),
-      createdAt: "2026-10-22T00:00:00Z",
-      networkAccessMode: "restricted",
-      order: index,
-      environmentType: "local",
-      agentActivityState:
-        readyIds.has(`${project.id}-env-${index}`) && signal === "needs-answer"
-          ? "waiting"
-          : "idle",
-      agentActivityUpdatedAt: "2026-10-28T10:00:00Z",
-    })),
-  );
+  const environments: Environment[] = activitySort
+    ? ACTIVITY_SORT_ROWS.map(({ merged: rowMerged, ...row }, order) => ({
+        id: row.name,
+        projectId: "p",
+        branch: row.name,
+        containerId: null,
+        status: "running",
+        prUrl: rowMerged ? `https://github.com/acme/source/pull/${order + 1}` : null,
+        prState: rowMerged ? "merged" : null,
+        hasMergeConflicts: null,
+        createdAt: "2026-10-22T00:00:00Z",
+        networkAccessMode: "restricted",
+        order,
+        environmentType: "local",
+        agentActivityUpdatedAt: "2026-10-28T10:00:00Z",
+        ...row,
+      }))
+    : projects.flatMap((project) =>
+        [1, 2, 3].map((index) => ({
+          id: `${project.id}-env-${index}`,
+          name: `${project.id}-env-${index}`,
+          projectId: project.id,
+          branch: "main",
+          containerId: null,
+          status: crossMachine ? "running" : "stopped",
+          ...prFor(`${project.id}-env-${index}`),
+          createdAt: "2026-10-22T00:00:00Z",
+          networkAccessMode: "restricted",
+          order: index,
+          environmentType: "local",
+          agentActivityState:
+            readyIds.has(`${project.id}-env-${index}`) && signal === "needs-answer"
+              ? "waiting"
+              : "idle",
+          agentActivityUpdatedAt: "2026-10-28T10:00:00Z",
+        })),
+      );
   const calls = createStore<{ writes: Array<{ command: string; args: unknown }> }>(() => ({
     writes: [],
   }));
@@ -320,7 +366,8 @@ function install() {
     projectCollapseChoices: projects.map((p) => p.id),
     selectedProjectId: null,
     selectedEnvironmentId: null,
-    environmentSortMode: crossMachine ? "activity" : "project",
+    environmentSortMode: activitySort || crossMachine ? "activity" : "project",
+    activitySortOrder: (params.get("order") as ActivitySortOrder | null) ?? "priority",
   });
   useMachineViewStore.setState({
     grouping: repository ? "repository" : merged && !byMachine ? "project" : "machine",

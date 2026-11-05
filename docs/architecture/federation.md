@@ -464,9 +464,12 @@ with `MachinesFilter`:
   from the project's Git URL (`repositoryHint`), or an explicit mapping
   argument. Names, paths and branches never group projects.
 - Activity order offers **Priority order** (the default for both local and
-  federated lists), **Newest first**, and **Oldest first**. Priority puts unread
-  work first, then waiting, working and idle, newest first within each group.
-  The local list, the federated list and `orkestrator environment list --sort`
+  federated lists), **Newest first**, and **Oldest first**. Every order keeps
+  merged environments below unmerged ones and, within each, working environments
+  below the others. Within those groups priority puts unread work first, then
+  waiting and idle, newest first within each; the other two order by time alone.
+  A machine that predates `prState` in its summary sends none, so its merged rows
+  stay with the unmerged ones. The local list, the federated list and `orkestrator environment list --sort`
   share one comparator (`@orkestrator/protocol/environment-activity-order`), and
   this machine's rows rank the activity they display in both lists, so an active
   build counts as working. All three orders use `lastActivityAt`, the time of actual user/agent

@@ -2,16 +2,11 @@ import {
   BridgeRunDiagnostics,
   bridgeDebugEnabled,
   bridgeDiagnosticsStreamEnabled,
-  readBridgeDebugFlag,
   writeBridgeDiagnostic,
   type BridgeDiagnosticWrite,
 } from "@orkestrator/protocol/node/bridge-diagnostics";
 import { isObject, type SessionState } from "./state.js";
 import { CursorSdkDiagnostics } from "./sdk-diagnostics.js";
-
-export function cursorDebugEnabled(value = process.env.CURSOR_BRIDGE_DEBUG): boolean {
-  return readBridgeDebugFlag(value);
-}
 
 export class CursorRunDiagnostics extends BridgeRunDiagnostics {
   private readonly sdk: CursorSdkDiagnostics;

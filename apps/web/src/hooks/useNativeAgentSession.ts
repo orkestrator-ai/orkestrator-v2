@@ -1,3 +1,4 @@
+import { hostTimeZone } from "@orkestrator/protocol/schedule-time";
 import { toast } from "sonner";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
@@ -3235,6 +3236,8 @@ export function useNativeAgentSession<TMessage = unknown>({
         ...(options.attachments?.length ? { attachments: options.attachments } : {}),
         // Revalidated by the backend at dequeue, never rebound by name.
         ...(options.command ? { command: options.command } : {}),
+        // A coordinator records the user's zone from the prompt the user sent.
+        clientTimeZone: hostTimeZone(),
       });
       return refresh();
     },

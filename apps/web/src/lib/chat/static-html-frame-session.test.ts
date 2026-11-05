@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { STATIC_PRESENTATION_POLICY } from "@orkestrator/protocol/rich-content-policy";
-import { STATIC_HTML_FRAME_CHANNEL } from "@orkestrator/protocol/static-html-presentation";
+import {
+  STATIC_HTML_FRAME_CHANNEL,
+  STATIC_HTML_MAX_FIND_QUERY_CHARACTERS,
+  STATIC_HTML_MAX_TEXT_CHUNKS,
+} from "@orkestrator/protocol/static-html-presentation";
 import { StaticHtmlFrameSession } from "./static-html-frame-session";
 
 const NONCE = "n".repeat(32);
@@ -202,6 +206,128 @@ describe("StaticHtmlFrameSession", () => {
     expect(
       send({ type: "link-request", generation: GENERATION, url: "javascript:x", label: "" }),
     ).toEqual({ kind: "rejected", reason: "bad-shape" });
+  });
+
+  describe("document text", () => {
+    const chunk = (index: number, count: number, text = `part ${index} `) => ({
+      type: "text",
+      generation: GENERATION,
+      index,
+      count,
+      text,
+    });
+
+    test("is reassembled, and handed over only once it is whole", () => {
+      const { send, rendered } = setup();
+      rendered();
+      expect(send(chunk(0, 3))).toEqual({ kind: "text-partial" });
+      expect(send(chunk(1, 3))).toEqual({ kind: "text-partial" });
+      expect(send(chunk(2, 3))).toEqual({ kind: "text", text: "part 0 part 1 part 2 " });
+    });
+
+    test("is refused before the document has rendered", () => {
+      const { send, ready } = setup();
+      ready();
+      expect(send(chunk(0, 1))).toEqual({ kind: "rejected", reason: "not-rendering" });
+    });
+
+    test("is reported once per mount", () => {
+      const { send, rendered } = setup();
+      rendered();
+      expect(send(chunk(0, 1, "first")).kind).toBe("text");
+      expect(send(chunk(0, 1, "second"))).toEqual({ kind: "rejected", reason: "bad-shape" });
+    });
+
+    test("with a chunk missing is abandoned rather than indexed in part", () => {
+      const { send, rendered } = setup();
+      rendered();
+      send(chunk(0, 3));
+      expect(send(chunk(2, 3))).toEqual({ kind: "rejected", reason: "bad-shape" });
+      expect(send(chunk(1, 3))).toEqual({ kind: "rejected", reason: "bad-shape" });
+    });
+
+    test("of a full report is not refused by the channel's rate limit", () => {
+      const { send, rendered } = setup();
+      rendered();
+      const kinds = Array.from(
+        { length: STATIC_HTML_MAX_TEXT_CHUNKS },
+        (_, index) => send(chunk(index, STATIC_HTML_MAX_TEXT_CHUNKS)).kind,
+      );
+      expect(kinds.at(-1)).toBe("text");
+      expect(kinds.filter((kind) => kind === "text-partial")).toHaveLength(
+        STATIC_HTML_MAX_TEXT_CHUNKS - 1,
+      );
+    });
+  });
+
+  describe("find", () => {
+    const report = { type: "find-match", generation: GENERATION, top: 40, height: 16 };
+
+    test("waits for the document, and names this mount", () => {
+      const { session, ready } = setup();
+      expect(session.findMessage("needle", 0)).toBeNull();
+      ready();
+      session.renderMessage("<p>x</p>", THEME, "light");
+      expect(session.findMessage("needle", 0)).toBeNull();
+      const second = setup();
+      second.rendered();
+      expect(second.session.findMessage("needle", 2)).toEqual({
+        channel: STATIC_HTML_FRAME_CHANNEL,
+        v: 1,
+        type: "find",
+        generation: GENERATION,
+        query: "needle",
+        occurrence: 2,
+      });
+    });
+
+    test("is sent only when it changes, and a mount that never searched hears no clear", () => {
+      const { session, rendered } = setup();
+      rendered();
+      expect(session.findMessage("", null)).toBeNull();
+      expect(session.findMessage("   ", 1)).toBeNull();
+      expect(session.findMessage("needle", 1)).not.toBeNull();
+      expect(session.findMessage("needle", 1)).toBeNull();
+      expect(session.findMessage("needle", null)).toMatchObject({ occurrence: null });
+      expect(session.findMessage("", null)).toMatchObject({ query: "", occurrence: null });
+      expect(session.findMessage("", null)).toBeNull();
+    });
+
+    test("a query past the limit clears rather than being sent", () => {
+      const { session, rendered } = setup();
+      rendered();
+      const longest = "x".repeat(STATIC_HTML_MAX_FIND_QUERY_CHARACTERS);
+      expect(session.findMessage(longest, 0)).toMatchObject({ query: longest });
+      expect(session.findMessage(`${longest}x`, 0)).toMatchObject({ query: "", occurrence: null });
+    });
+
+    test("nothing goes to an invalidated mount", () => {
+      const { session, rendered } = setup();
+      rendered();
+      session.invalidate();
+      expect(session.findMessage("needle", 0)).toBeNull();
+    });
+
+    test("a report counts only while this frame holds the active match", () => {
+      const { session, send, rendered } = setup();
+      expect(send(report)).toEqual({ kind: "rejected", reason: "not-rendering" });
+      rendered();
+      expect(send(report)).toEqual({ kind: "rejected", reason: "not-finding" });
+      session.findMessage("needle", null);
+      expect(send(report)).toEqual({ kind: "rejected", reason: "not-finding" });
+      session.findMessage("needle", 1);
+      expect(send(report)).toEqual({ kind: "find-match", top: 40, height: 16 });
+    });
+
+    test("a report carrying anything but its numbers is refused", () => {
+      const { session, send, rendered } = setup();
+      rendered();
+      session.findMessage("needle", 1);
+      expect(send({ ...report, query: "needle" })).toEqual({
+        kind: "rejected",
+        reason: "bad-shape",
+      });
+    });
   });
 
   test("a frame error ends the mount", () => {

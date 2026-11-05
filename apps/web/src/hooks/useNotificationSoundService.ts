@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  COORDINATOR_WAKE_ATTENTION_EVENT,
   ENVIRONMENT_ATTENTION_EVENT,
+  isCoordinatorWakeAttentionEvent,
   isEnvironmentAttentionEvent,
 } from "@orkestrator/protocol/environment-attention";
 import { normalizeNotificationSoundSettings } from "@orkestrator/protocol/notification-sounds";
@@ -9,6 +11,12 @@ import { clientStateCapabilities } from "@/lib/client-state-capabilities";
 import { listen, NATIVE_EVENT_STREAM_CONNECTED_EVENT, type UnlistenFn } from "@/lib/native/events";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useConfigStore } from "@/stores/configStore";
+import {
+  coordinatorConversationTab,
+  useActiveCoordinatorConversationStore,
+} from "@/stores/activeCoordinatorConversationStore";
+import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
+import { useUIStore } from "@/stores/uiStore";
 import { useVisibleEnvironmentId } from "./useVisibleEnvironmentId";
 import {
   playConfiguredNotificationSound,
@@ -19,6 +27,18 @@ import {
 export const ATTENTION_DEDUPE_LIMIT = 256;
 /** Several environments finishing together are one cue. */
 export const ATTENTION_COALESCE_MS = 500;
+
+/** This project's coordinator page is what the user is looking at right now. */
+function coordinatorOnScreen(projectId: string): boolean {
+  if (typeof document !== "undefined" && document.visibilityState !== "visible") return false;
+  if (useRemoteWorkspaceStore.getState().active !== null) return false;
+  const { selectedProjectId, projectBoardTab } = useUIStore.getState();
+  const conversation = useActiveCoordinatorConversationStore.getState().active;
+  return (
+    selectedProjectId === projectId &&
+    coordinatorConversationTab(conversation, selectedProjectId, projectBoardTab) !== null
+  );
+}
 
 /**
  * Plays the "agent stopped" cue from the backend's `environment-attention`
@@ -35,6 +55,10 @@ export const ATTENTION_COALESCE_MS = 500;
  * environment snapshot's `hasUnreadWork` edge. Existing unread work at startup
  * is baselined rather than replayed, on either path; an event missed while
  * disconnected is not replayed either, because a late sound is not state.
+ *
+ * Plays the "coordinator report" cue from `coordinator-wake-attention` on the
+ * same terms: once per wake, quiet while that coordinator's page is on screen in
+ * a visible window. A backend that predates the event simply never sends it.
  */
 export function useNotificationSoundService(): void {
   const environments = useEnvironmentStore((state) => state.environments);
@@ -46,6 +70,12 @@ export function useNotificationSoundService(): void {
   const prMergedSoundEnabled = useConfigStore(
     (state) => normalizeNotificationSoundSettings(state.config.global.notificationSounds).prMerged,
   );
+  const coordinatorReportSoundEnabled = useConfigStore(
+    (state) =>
+      normalizeNotificationSoundSettings(state.config.global.notificationSounds).coordinatorReport,
+  );
+  // Shared, so a worker's stop and the wake it causes in one moment are one cue.
+  const lastCueAtRef = useRef(Number.NEGATIVE_INFINITY);
   const previousUnreadRef = useRef<Map<string, boolean> | null>(null);
   const visibleEnvironmentRef = useRef(selectedEnvironmentId);
   useEffect(() => {
@@ -83,16 +113,21 @@ export function useNotificationSoundService(): void {
     let disposed = false;
     let stop: UnlistenFn | null = null;
     const seen = new BoundedKeySet(ATTENTION_DEDUPE_LIMIT);
-    let lastCueAt = Number.NEGATIVE_INFINITY;
     void listen<unknown>(ENVIRONMENT_ATTENTION_EVENT, (event) => {
       // The payload crosses a process boundary; validate rather than trust.
       if (!isEnvironmentAttentionEvent(event.payload)) return;
       const { attentionId, environmentId } = event.payload;
       if (!seen.add(attentionId)) return;
       if (environmentId === visibleEnvironmentRef.current) return;
+      if (
+        !normalizeNotificationSoundSettings(
+          useConfigStore.getState().config.global.notificationSounds,
+        ).agentStopped
+      )
+        return;
       const now = Date.now();
-      if (now - lastCueAt < ATTENTION_COALESCE_MS) return;
-      lastCueAt = now;
+      if (now - lastCueAtRef.current < ATTENTION_COALESCE_MS) return;
+      lastCueAtRef.current = now;
       void playConfiguredNotificationSound("agent-stopped");
     })
       .then((unlisten) => {
@@ -105,6 +140,36 @@ export function useNotificationSoundService(): void {
       stop?.();
     };
   }, [eventDriven]);
+
+  useEffect(() => {
+    let disposed = false;
+    let stop: UnlistenFn | null = null;
+    const seen = new BoundedKeySet(ATTENTION_DEDUPE_LIMIT);
+    void listen<unknown>(COORDINATOR_WAKE_ATTENTION_EVENT, (event) => {
+      if (!isCoordinatorWakeAttentionEvent(event.payload)) return;
+      const { attentionId, projectId } = event.payload;
+      if (!seen.add(attentionId) || coordinatorOnScreen(projectId)) return;
+      if (
+        !normalizeNotificationSoundSettings(
+          useConfigStore.getState().config.global.notificationSounds,
+        ).coordinatorReport
+      )
+        return;
+      const now = Date.now();
+      if (now - lastCueAtRef.current < ATTENTION_COALESCE_MS) return;
+      lastCueAtRef.current = now;
+      void playConfiguredNotificationSound("coordinator-report");
+    })
+      .then((unlisten) => {
+        if (disposed) unlisten();
+        else stop = unlisten;
+      })
+      .catch(() => undefined);
+    return () => {
+      disposed = true;
+      stop?.();
+    };
+  }, []);
 
   useEffect(() => {
     const nextUnread = new Map(
@@ -131,7 +196,8 @@ export function useNotificationSoundService(): void {
   }, [environments, eventDriven, selectedEnvironmentId]);
 
   useEffect(() => {
-    if (!agentStoppedSoundEnabled && !prMergedSoundEnabled) return;
+    if (!agentStoppedSoundEnabled && !prMergedSoundEnabled && !coordinatorReportSoundEnabled)
+      return;
     let priming = false;
     let disposed = false;
     const prime = () => {
@@ -151,5 +217,5 @@ export function useNotificationSoundService(): void {
       window.removeEventListener("pointerdown", prime);
       window.removeEventListener("keydown", prime);
     };
-  }, [agentStoppedSoundEnabled, prMergedSoundEnabled]);
+  }, [agentStoppedSoundEnabled, prMergedSoundEnabled, coordinatorReportSoundEnabled]);
 }

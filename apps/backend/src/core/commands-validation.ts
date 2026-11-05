@@ -1,3 +1,4 @@
+import { isValidTimeZone } from "@orkestrator/protocol/schedule-time";
 import { parseNativeAgentCommandIntent } from "@orkestrator/protocol/agent-command-catalogue";
 import { createHash } from "node:crypto";
 import {
@@ -185,8 +186,8 @@ export function resolveAnthropicApiKey(global: AppConfig["global"]): {
 }
 
 /**
- * Single source of truth for the Cursor key. `createDockerContainer` forwards
- * `apiKey`; the renderer is told only `source`, never the value.
+ * Single source of truth for the Cursor key. The credential sync hands `apiKey`
+ * to a running container; the renderer is told only `source`, never the value.
  */
 export function resolveCursorApiKey(global: AppConfig["global"]): {
   apiKey?: string;
@@ -413,6 +414,8 @@ export function asDispatchNativeAgentPromptInput(args: JsonRecord): DispatchNati
       typeof args.includeLocalSettings === "boolean" ? args.includeLocalSettings : undefined,
     promptSuggestions:
       typeof args.promptSuggestions === "boolean" ? args.promptSuggestions : undefined,
+    // Advisory: a zone this runtime cannot name is dropped, never a refusal.
+    ...(isValidTimeZone(args.clientTimeZone) ? { clientTimeZone: args.clientTimeZone } : {}),
   };
 }
 

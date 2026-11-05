@@ -117,6 +117,44 @@ describe("isGlobalConfigEcho", () => {
     }
   });
 
+  test("the retired Codex raw event logging key says nothing about a change", () => {
+    const retired = "experimentalCodexRawEventLogging";
+    // An older client's form sends it whatever this machine stores.
+    expect(
+      isGlobalConfigEcho(
+        "update_global_config",
+        { global: { ...current.global, [retired]: true } },
+        current,
+      ),
+    ).toBe(true);
+    // A machine that stored it, saved by a client that no longer sends it.
+    expect(
+      isGlobalConfigEcho(
+        "update_global_config",
+        { global: { ...current.global } },
+        { ...current, global: { ...current.global, [retired]: true } },
+      ),
+    ).toBe(true);
+    expect(
+      isGlobalConfigEcho("patch_global_config", { patch: { [retired]: false } }, current),
+    ).toBe(true);
+    // It does not excuse a real change sent beside it.
+    expect(
+      isGlobalConfigEcho(
+        "update_global_config",
+        { global: { ...current.global, [retired]: true, allowedDomains: [] } },
+        current,
+      ),
+    ).toBe(false);
+    expect(
+      isGlobalConfigEcho(
+        "patch_global_config",
+        { patch: { [retired]: false, allowedDomains: [] } },
+        current,
+      ),
+    ).toBe(false);
+  });
+
   test("without preserveInheritedSettings, inherited settings count too", () => {
     const global = { ...current.global, favoriteModels: [] };
     expect(isGlobalConfigEcho("update_global_config", { global }, current)).toBe(false);

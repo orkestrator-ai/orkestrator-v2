@@ -385,7 +385,6 @@ describe("GlobalSettings", () => {
             backgroundColor: "#000000",
           },
           terminalScrollback: 5000,
-          experimentalCodexRawEventLogging: true,
           debugLogging: false,
           debugLogRetentionDays: 7,
           webClientEnabled: true,
@@ -1379,7 +1378,8 @@ describe("GlobalSettings", () => {
     rerender(<GlobalSettings activeSection="container" />);
     expect(screen.getByText("Limit resources of new containers")).toBeTruthy();
     rerender(<GlobalSettings activeSection="experimental" />);
-    expect(screen.getByText("Codex Raw Event Logging")).toBeTruthy();
+    expect(screen.getByRole("switch", { name: "Enable scheduling" })).toBeTruthy();
+    expect(screen.queryByText("Codex Raw Event Logging")).toBeNull();
     rerender(<GlobalSettings activeSection="debug" />);
     expect(screen.getByText("App version")).toBeTruthy();
     expect(screen.getByText("Save Logs to Disk")).toBeTruthy();
@@ -2935,22 +2935,6 @@ describe("GlobalSettings", () => {
       }),
     );
     expect(mockPatchGlobalConfig).toHaveBeenCalledTimes(1);
-  });
-
-  test("saves experimental Codex raw event logging changes", async () => {
-    render(<GlobalSettings activeSection="experimental" />);
-
-    fireEvent.click(screen.getByRole("button", { name: "Enabled" }));
-    await flushAutoSave();
-
-    await waitFor(() => {
-      expect(mockPatchGlobalConfig).toHaveBeenCalledWith(
-        expect.objectContaining({
-          experimentalCodexRawEventLogging: false,
-        }),
-        SAVE_OPTIONS,
-      );
-    });
   });
 
   test("saves the experimental scheduling switch, off by default", async () => {

@@ -9,7 +9,7 @@ import { nativeAgentCapabilities } from "@orkestrator/protocol/native-agent";
 import { PUBLIC_API_LIMITS, type PublicDispatchState } from "@orkestrator/protocol/public-api";
 import { coordinatorIdFromRuntimeId } from "@orkestrator/protocol/coordinator";
 import { encodePublicSessionId } from "@orkestrator/protocol/public-api-resources";
-import { validateSelection } from "../control-shared-actions.js";
+import { resolveLaunchAgent, validateSelection } from "../control-shared-actions.js";
 import type { Environment } from "../models.js";
 import { requireEnvironment } from "./actions-discovery.js";
 import { isSetupReady } from "./actions-environments.js";
@@ -195,6 +195,7 @@ export function dispatchOutcome(
 }
 
 export interface StartInput extends AgentSelection {
+  agentDefaulted?: boolean;
   environmentId: string;
   prompt: string;
   title?: string;
@@ -208,7 +209,10 @@ const sessionStart: MutationActionHandler<StartInput> = {
   parse(input) {
     onlyActionKeys(input, "session.start");
     const environmentId = requiredId(input, "environmentId");
-    const selection = parseAgentSelection(input);
+    const selection = parseAgentSelection({
+      ...input,
+      agent: input.agent === undefined ? "claude" : input.agent,
+    });
     const prompt = textInput(
       input,
       "prompt",
@@ -222,6 +226,7 @@ const sessionStart: MutationActionHandler<StartInput> = {
       environmentId,
       prompt,
       ...selection,
+      ...(input.agent === undefined ? { agentDefaulted: true } : {}),
       ...(title ? { title } : {}),
       ...(literal ? { literal } : {}),
       ...(attachments ? { attachments } : {}),
@@ -230,10 +235,25 @@ const sessionStart: MutationActionHandler<StartInput> = {
     return {
       value,
       scope: `environment:${environmentId}`,
-      intent: { ...value, attachments: attachmentIntent(attachments) },
+      intent: {
+        ...value,
+        ...(input.agent === undefined ? { agent: null } : {}),
+        attachments: attachmentIntent(attachments),
+      },
     };
   },
   async prepare(input, context) {
+    if (input.agentDefaulted) {
+      const environment = await requireEnvironment(context, input.environmentId);
+      input = {
+        ...input,
+        agent: (
+          await resolveLaunchAgent(context.invoke, environment.projectId, undefined, {
+            ...environment,
+          })
+        ).agent,
+      };
+    }
     return prepareSessionStart(input, context);
   },
 };
@@ -328,6 +348,12 @@ export async function prepareSessionStart(
         sessionId,
         tabId: job.tabId,
         runId: operation.operationId,
+        selection: {
+          agent: input.agent,
+          model: resolved.model ?? null,
+          reasoning: resolved.reasoningEffort ?? null,
+          source: input.model || input.reasoning ? "requested" : "default",
+        },
       });
       if (job.status === "accepted") {
         // Advisory follow-up: the run is already the provider's.

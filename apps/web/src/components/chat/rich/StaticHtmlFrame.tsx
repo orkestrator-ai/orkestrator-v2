@@ -19,6 +19,7 @@ import { createUuid } from "@/lib/uuid";
 import { noteStaticFrameEvent } from "@/stores/staticHtmlFrameSlots";
 import { HOST_DETACHING_EVENT } from "@/lib/stable-host";
 import { cn } from "@/lib/utils";
+import { recordStaticFindMatch } from "../chat-find-context";
 import { staticHtmlFrameSource } from "./static-html-frame-source";
 
 export type StaticFrameFailure = StaticHtmlFrameErrorCode | "timeout" | "reloaded" | "unstable";
@@ -30,6 +31,8 @@ export interface StaticFrameEvents {
   /** Coalesced to the frame channel's size rate; the latest height always arrives. */
   onHeight: (height: number) => void;
   onFailure: (failure: StaticFrameFailure) => void;
+  /** The rendered document's bounded text, reported whole, at most once per mount. */
+  onText: (text: string) => void;
   onInteraction: (interacting: boolean) => void;
   onLink: (link: { href: string; hostname: string; label: string }) => void;
   onEscape: () => void;
@@ -70,6 +73,8 @@ export function StaticHtmlFrame({
   mode,
   height,
   rendered,
+  findQuery,
+  findOccurrence,
   events,
 }: {
   html: string;
@@ -80,6 +85,10 @@ export function StaticHtmlFrame({
   /** The inline height to apply; ignored in expanded mode, which fills its container. */
   height: number;
   rendered: boolean;
+  /** An open Find bar's query; null when there is none. */
+  findQuery: string | null;
+  /** The active match, when it is in this document. */
+  findOccurrence: number | null;
   events: StaticFrameEvents;
 }) {
   const iframe = useRef<HTMLIFrameElement>(null);
@@ -144,6 +153,9 @@ export function StaticHtmlFrame({
           latest.current.events.onHeight(outcome.height);
           latest.current.events.onRendered();
           break;
+        case "text":
+          latest.current.events.onText(outcome.text);
+          break;
         case "size":
           reportSize(outcome.height);
           break;
@@ -173,6 +185,10 @@ export function StaticHtmlFrame({
         case "escape":
           latest.current.events.onEscape();
           break;
+        case "find-match":
+          if (iframe.current) recordStaticFindMatch(iframe.current, outcome);
+          break;
+        case "text-partial":
         case "rejected":
           break;
       }
@@ -208,6 +224,14 @@ export function StaticHtmlFrame({
     if (message) iframe.current?.contentWindow?.postMessage(message, "*");
     // `rendered` too: a theme change during the handshake still reaches the frame.
   }, [mount, appearance, rendered]);
+
+  // Only this mount's frame hears the query, once it has a document to search.
+  useEffect(() => {
+    const message = mount.session.findMessage(findQuery ?? "", findOccurrence);
+    if (!message) return;
+    if (iframe.current) recordStaticFindMatch(iframe.current, null);
+    iframe.current?.contentWindow?.postMessage(message, "*");
+  }, [mount, rendered, findQuery, findOccurrence]);
 
   return (
     <iframe

@@ -63,7 +63,7 @@ export function registerSystemCommands(
   /**
    * Bounded, content-free recurring-work diagnostics: per-kind counters, active
    * attempts and worst ages, plus scheduler and admission-pool status. Reading
-   * it performs no I/O. Also served additively on the gateway's `/api/metrics`.
+   * it performs no I/O. Also served additively on the gateway's `/__orkestrator/metrics`.
    */
   register("get_recurring_work_diagnostics", (args) => {
     assertOnlyKeys(args, [], "arguments");
@@ -73,7 +73,7 @@ export function registerSystemCommands(
    * Content-free usage of each mixed-version compatibility path: a count and
    * the first and last time it was taken, persisted across restarts. Retiring
    * a path rests on this (`docs/architecture/version-compatibility.md`). Also
-   * served additively on the gateway's `/api/metrics`.
+   * served additively on the gateway's `/__orkestrator/metrics`.
    */
   register("get_compatibility_path_usage", (args) => {
     assertOnlyKeys(args, [], "arguments");

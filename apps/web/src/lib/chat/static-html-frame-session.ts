@@ -6,8 +6,10 @@ import { STATIC_PRESENTATION_POLICY } from "@orkestrator/protocol/rich-content-p
 import {
   STATIC_HTML_FRAME_CHANNEL,
   STATIC_HTML_FRAME_PROTOCOL_VERSION,
+  STATIC_HTML_MAX_FIND_QUERY_CHARACTERS,
   parseStaticHtmlFrameMessage,
   type StaticHtmlFrameErrorCode,
+  type StaticHtmlFrameMessage,
   type StaticHtmlFrameRejection,
   type StaticHtmlFrameTheme,
   type StaticHtmlHostMessage,
@@ -31,11 +33,14 @@ import {
 export type StaticHtmlFrameOutcome =
   | { kind: "ready" }
   | { kind: "rendered"; height: number; themed: boolean }
+  | { kind: "text"; text: string }
+  | { kind: "text-partial" }
   | { kind: "size"; height: number }
   | { kind: "error"; code: StaticHtmlFrameErrorCode }
   | { kind: "interaction"; focused: boolean; hasSelection: boolean; pointerSelecting: boolean }
   | { kind: "link"; href: string; hostname: string; label: string }
   | { kind: "escape" }
+  | { kind: "find-match"; top: number; height: number }
   | { kind: "reloaded" }
   | { kind: "unstable" }
   | {
@@ -46,6 +51,7 @@ export type StaticHtmlFrameOutcome =
         | "wrong-nonce"
         | "invalidated"
         | "not-rendering"
+        | "not-finding"
         | "rate-limited";
     };
 
@@ -56,6 +62,10 @@ export class StaticHtmlFrameSession {
   private refused = 0;
   private lastHeight: number | null = null;
   private sizeChanges: number[] = [];
+  /** Chunks of the mount's one text report; null once it arrived or was abandoned. */
+  private textChunks: string[] | null = [];
+  /** What this mount's frame was last asked to find; nothing yet is the same as cleared. */
+  private sentFind: { query: string; occurrence: number | null } = { query: "", occurrence: null };
   private readonly limiter: ArtifactFrameRateLimiter;
   private readonly now: () => number;
 
@@ -110,6 +120,9 @@ export class StaticHtmlFrameSession {
         this.phase = "rendered";
         this.lastHeight = message.height;
         return { kind: "rendered", height: message.height, themed: message.themed };
+      case "text":
+        if (this.phase !== "rendered") return { kind: "rejected", reason: "not-rendering" };
+        return this.noteText(message);
       case "size":
         if (this.phase !== "rendered") return { kind: "rejected", reason: "not-rendering" };
         return this.noteSize(message.height);
@@ -133,7 +146,29 @@ export class StaticHtmlFrameSession {
       }
       case "escape":
         return { kind: "escape" };
+      case "find-match":
+        if (this.phase !== "rendered") return { kind: "rejected", reason: "not-rendering" };
+        if (this.sentFind.occurrence === null) return { kind: "rejected", reason: "not-finding" };
+        return { kind: "find-match", top: message.top, height: message.height };
     }
+  }
+
+  /**
+   * Whole or not at all, like the document itself: a chunk out of sequence means
+   * the rate limiter dropped one, and part of a report is never indexed.
+   */
+  private noteText(
+    message: Extract<StaticHtmlFrameMessage, { type: "text" }>,
+  ): StaticHtmlFrameOutcome {
+    const chunks = this.textChunks;
+    if (chunks === null || message.index !== chunks.length) {
+      this.textChunks = null;
+      return { kind: "rejected", reason: "bad-shape" };
+    }
+    chunks.push(message.text);
+    if (chunks.length < message.count) return { kind: "text-partial" };
+    this.textChunks = null;
+    return { kind: "text", text: chunks.join("") };
   }
 
   private noteSize(height: number): StaticHtmlFrameOutcome {
@@ -177,6 +212,28 @@ export class StaticHtmlFrameSession {
       type: "theme",
       generation: this.init.generation,
       theme,
+    };
+  }
+
+  /**
+   * The query and active match, when they differ from what the frame last heard.
+   * A query past the channel's limit clears the frame instead of being sent, which
+   * leaves that card as it is with no frame: the match leads to the card.
+   */
+  findMessage(query: string, occurrence: number | null): StaticHtmlHostMessage | null {
+    if (this.phase !== "rendered") return null;
+    const sendable =
+      query.trim().length > 0 && query.length <= STATIC_HTML_MAX_FIND_QUERY_CHARACTERS;
+    const next = sendable ? { query, occurrence } : { query: "", occurrence: null };
+    if (next.query === this.sentFind.query && next.occurrence === this.sentFind.occurrence)
+      return null;
+    this.sentFind = next;
+    return {
+      channel: STATIC_HTML_FRAME_CHANNEL,
+      v: STATIC_HTML_FRAME_PROTOCOL_VERSION,
+      type: "find",
+      generation: this.init.generation,
+      ...next,
     };
   }
 }

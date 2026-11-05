@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import type { ReactNode } from "react";
 import { invoke } from "@/lib/native/backend";
 import { resetTranscriptArtifactCapabilities } from "@/hooks/useTranscriptArtifactCapabilities";
 import { RichTranscriptScopeContext, type RichTranscriptScope } from "@/lib/chat/rich-identity";
@@ -67,15 +66,15 @@ function setBackend(
   };
 }
 
-function Scoped({ children }: { children: ReactNode }) {
-  return <RichTranscriptScopeContext value={SCOPE}>{children}</RichTranscriptScopeContext>;
-}
-
-async function openPreview(reference: { path: string; containerId?: string }, name: string) {
+async function openPreview(
+  reference: { path: string; containerId?: string },
+  name: string,
+  scope: RichTranscriptScope = SCOPE,
+) {
   const view = render(
-    <Scoped>
+    <RichTranscriptScopeContext value={scope}>
       <FilePreview reference={reference} name={name} />
-    </Scoped>,
+    </RichTranscriptScopeContext>,
   );
   fireEvent.click(screen.getByRole("button", { name: new RegExp(`^Preview file: ${name}`) }));
   // The capability snapshot loads once per connection, when a viewer needs it.
@@ -158,6 +157,44 @@ describe("streamed file preview media", () => {
     // A small streamed asset can still be downloaded; bytes are read only on request.
     expect(screen.getByRole("button", { name: "Download original" })).toBeTruthy();
     expect(calls("read_container_file_base64")).toHaveLength(0);
+  });
+
+  test("a detached transcript streams a host path without an environment", async () => {
+    await openPreview({ path: "/workspace-storage/big.mp4" }, "big.mp4", {
+      ...SCOPE,
+      environmentId: "detached",
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Load video" }));
+    await waitFor(() => expect(document.querySelector("video")).toBeTruthy());
+    expect(calls("transcript_media_open_stream")).toEqual([{ path: "/workspace-storage/big.mp4" }]);
+    expect(document.querySelector("video")!.getAttribute("src")).toBe(STREAM_URL);
+    expect(calls("read_file_base64")).toHaveLength(0);
+  });
+
+  test("a backend that predates environment-less streams falls back to base64", async () => {
+    setBackend({
+      transcript_media_open_stream: async () => {
+        throw structured("invalid_input", "environmentId is required");
+      },
+    });
+    await openPreview({ path: "/workspace-storage/clip.mp4" }, "clip.mp4", {
+      ...SCOPE,
+      environmentId: "detached",
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Load video" }));
+    await waitFor(() => expect(document.querySelector("video")).toBeTruthy());
+    expect(calls("read_file_base64")).toHaveLength(1);
+    expect(document.querySelector("video")!.getAttribute("src")).toBe("blob:media-test");
+  });
+
+  test("a detached container file keeps the base64 path", async () => {
+    await openPreview({ path: "/workspace/out/clip.mp4", containerId: "c0ffee" }, "clip.mp4", {
+      ...SCOPE,
+      environmentId: "detached",
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Load video" }));
+    await waitFor(() => expect(calls("read_container_file_base64")).toHaveLength(1));
+    expect(calls("transcript_media_open_stream")).toHaveLength(0);
   });
 
   test("without a content origin the bounded base64 path is used and nothing is streamed", async () => {

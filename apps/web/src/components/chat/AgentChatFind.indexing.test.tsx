@@ -1,9 +1,21 @@
-import { cachedArtifactSearchBody, rememberArtifactSearchBody } from "@/lib/chat/artifact-requests";
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import {
+  artifactSearchBodyRevision,
+  cachedArtifactSearchBody,
+  clearArtifactRequestCache,
+  rememberArtifactSearchBody,
+} from "@/lib/chat/artifact-requests";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { useRef, type ChangeEvent } from "react";
 import { act, cleanup, fireEvent, renderHook } from "@testing-library/react";
+import { artifactPartContent } from "@orkestrator/protocol/transcript-artifacts";
+import type { TranscriptArtifactRef } from "@orkestrator/protocol/transcript-artifacts";
 import { clearProtectedRichContent } from "@/lib/chat/rich-content-reset";
-import { useAgentChatFind } from "./AgentChatFind";
+import type { NativeMessage, NativeMessagePart } from "@/lib/chat/native-message-types";
+import { useAgentChatFind, type AgentChatFindMatch } from "./AgentChatFind";
+import {
+  getNativeMessageSearchProjection,
+  getNativeMessageSearchText,
+} from "./native-message-search";
 
 interface Row {
   id: string;
@@ -128,7 +140,7 @@ describe("useAgentChatFind indexing (WEB-10)", () => {
   });
 });
 
-test("unchanged artifact rows refresh body text after publication and withdrawal", () => {
+test("an open bar follows artifact bodies as they are published and withdrawn", () => {
   const items = [{ id: "artifact-row", parts: [{ type: "artifact", content: "summary" }] }];
   const artifact = { publicationId: "search-test", artifactId: "artifact-test", revision: 1 };
   const getSearchText = () => `summary ${cachedArtifactSearchBody(artifact) ?? ""}`;
@@ -142,16 +154,217 @@ test("unchanged artifact rows refresh body text after publication and withdrawal
     }),
   );
   fireEvent.keyDown(document, { key: "f", metaKey: true });
-  const query = (value: string) =>
-    act(() =>
-      hook.result.current.onQueryChange({ target: { value } } as ChangeEvent<HTMLInputElement>),
-    );
-  query("body");
+  act(() =>
+    hook.result.current.onQueryChange({
+      target: { value: "body" },
+    } as ChangeEvent<HTMLInputElement>),
+  );
   expect(hook.result.current.matches).toHaveLength(0);
-  rememberArtifactSearchBody(artifact, "body loaded");
-  query("loaded");
+  const scope = { backendId: "backend", environmentId: "env", logicalSessionKey: "session" };
+  act(() => rememberArtifactSearchBody(artifact, "body loaded", scope));
   expect(hook.result.current.matches).toHaveLength(1);
-  rememberArtifactSearchBody(artifact, null);
-  query("body");
+  act(() => rememberArtifactSearchBody(artifact, null, scope));
   expect(hook.result.current.matches).toHaveLength(0);
+});
+
+describe("a body arriving while find is open", () => {
+  const SCOPE = { backendId: "backend", environmentId: "env", logicalSessionKey: "session" };
+  const REF: TranscriptArtifactRef = {
+    schemaVersion: 1,
+    artifactId: "art_abcdefgh1",
+    revision: 2,
+    publicationId: "pub_abcdefgh1",
+    kind: "html-static",
+    title: "Report title",
+    summary: "A needle summary",
+    provenance: { backendId: "backend", origin: "agent" },
+  };
+  const artifactPart = {
+    type: "artifact",
+    content: artifactPartContent(REF),
+    artifact: REF,
+    publishedAt: "2026-11-05T10:00:00.000Z",
+    conversationSequence: 1,
+  } as NativeMessagePart;
+  const textPart = (content: string) => ({ type: "text", content }) as NativeMessagePart;
+  const row = (id: string, parts: NativeMessagePart[]): NativeMessage => ({
+    id,
+    role: "assistant",
+    content: "",
+    createdAt: "2026-11-05T10:00:00.000Z",
+    parts,
+  });
+
+  function open(initialItems: NativeMessage[], query = "needle") {
+    const onNavigate = mock((_match: AgentChatFindMatch, _query: string) => {});
+    const getSearchText = mock(getNativeMessageSearchText);
+    const hook = renderHook(
+      ({ items }: { items: NativeMessage[] }) =>
+        useAgentChatFind({
+          items,
+          getSearchText,
+          getSearchProjection: getNativeMessageSearchProjection,
+          isActive: true,
+          ownerRef: useRef<HTMLElement | null>(null),
+          onNavigate,
+        }),
+      { initialProps: { items: initialItems } },
+    );
+    fireEvent.keyDown(document, { key: "f", metaKey: true });
+    act(() =>
+      hook.result.current.onQueryChange({
+        target: { value: query },
+      } as ChangeEvent<HTMLInputElement>),
+    );
+    const next = () => act(() => hook.result.current.onNext());
+    return { ...hook, onNavigate, getSearchText, next };
+  }
+
+  /** What the selected match is, whatever its place in the list. */
+  function selectedText(
+    hook: { result: { current: ReturnType<typeof useAgentChatFind> } },
+    items: NativeMessage[],
+  ) {
+    const match = hook.result.current.currentMatch!;
+    const { text } = getNativeMessageSearchProjection(items[match.itemIndex]!);
+    return text.slice(match.characterIndex, match.characterIndex + 20);
+  }
+
+  beforeEach(() => clearArtifactRequestCache());
+  afterEach(() => clearArtifactRequestCache());
+
+  test("in an earlier row, updates the count and keeps the selected match", () => {
+    const items = [
+      row("report", [artifactPart]),
+      row("later", [textPart("needle in the later row")]),
+    ];
+    const view = open(items);
+    expect(view.result.current.matches).toHaveLength(2);
+    view.next();
+    expect(view.result.current.currentMatchIndex).toBe(1);
+    const navigations = view.onNavigate.mock.calls.length;
+
+    act(() => rememberArtifactSearchBody(REF, "needle one, needle two", SCOPE));
+
+    expect(view.result.current.matches).toHaveLength(4);
+    expect(view.result.current.currentMatchIndex).toBe(3);
+    expect(selectedText(view, items)).toBe("needle in the later ");
+    // The same match is not a navigation: the reader stays where they scrolled.
+    expect(view.onNavigate.mock.calls).toHaveLength(navigations);
+  });
+
+  test("before the selected match in its own row, keeps that match", () => {
+    const items = [row("report", [artifactPart, textPart("needle after the report")])];
+    const view = open(items);
+    view.next();
+    expect(selectedText(view, items)).toBe("needle after the rep");
+    const navigations = view.onNavigate.mock.calls.length;
+
+    // The body starts like the text after it, so comparing the row's text could not tell them apart.
+    act(() => rememberArtifactSearchBody(REF, "needle after the body", SCOPE));
+
+    expect(view.result.current.matches).toHaveLength(3);
+    expect(view.result.current.currentMatchIndex).toBe(2);
+    expect(selectedText(view, items)).toBe("needle after the rep");
+    expect(view.onNavigate.mock.calls).toHaveLength(navigations);
+  });
+
+  test("after the selected match, changes the count and leaves its place alone", () => {
+    const items = [row("first", [textPart("needle first")]), row("report", [artifactPart])];
+    const view = open(items);
+    expect(view.result.current.currentMatchIndex).toBe(0);
+    act(() => rememberArtifactSearchBody(REF, "needle body", SCOPE));
+    expect(view.result.current.matches).toHaveLength(3);
+    expect(view.result.current.currentMatchIndex).toBe(0);
+    expect(selectedText(view, items)).toBe("needle first");
+  });
+
+  test("stepping continues from the kept match, and each new match is a navigation", () => {
+    const items = [row("report", [artifactPart]), row("later", [textPart("needle later")])];
+    const view = open(items);
+    view.next();
+    act(() => rememberArtifactSearchBody(REF, "needle body", SCOPE));
+    expect(view.result.current.currentMatchIndex).toBe(2);
+    const navigations = view.onNavigate.mock.calls.length;
+    view.next();
+    expect(view.result.current.currentMatchIndex).toBe(0);
+    expect(view.onNavigate.mock.calls).toHaveLength(navigations + 1);
+  });
+
+  test("withdrawing the body that holds the selected match falls to what now holds its place", () => {
+    const items = [row("report", [artifactPart]), row("later", [textPart("needle later")])];
+    act(() => rememberArtifactSearchBody(REF, "needle body", SCOPE));
+    const view = open(items);
+    view.next();
+    expect(selectedText(view, items)).toBe("needle body");
+    const navigations = view.onNavigate.mock.calls.length;
+    act(() => rememberArtifactSearchBody(REF, null, SCOPE));
+    expect(view.result.current.matches).toHaveLength(2);
+    expect(view.result.current.currentMatchIndex).toBe(1);
+    expect(selectedText(view, items)).toBe("needle later");
+    expect(view.onNavigate.mock.calls).toHaveLength(navigations + 1);
+  });
+
+  test("a page of older history keeps the selected match too", () => {
+    const items = [
+      row("first", [textPart("needle first")]),
+      row("second", [textPart("needle second")]),
+    ];
+    const view = open(items);
+    view.next();
+    const navigations = view.onNavigate.mock.calls.length;
+    const paged = [row("older", [textPart("needle older")]), ...items];
+    view.rerender({ items: paged });
+    expect(view.result.current.currentMatchIndex).toBe(2);
+    expect(selectedText(view, paged)).toBe("needle second");
+    expect(view.onNavigate.mock.calls).toHaveLength(navigations);
+  });
+
+  test("a row streaming after the selected match does not move it", () => {
+    const items = [row("first", [textPart("needle first")])];
+    const view = open(items);
+    const navigations = view.onNavigate.mock.calls.length;
+    const streamed = [row("first", [textPart("needle first and needle more")])];
+    view.rerender({ items: streamed });
+    expect(view.result.current.matches).toHaveLength(2);
+    expect(view.result.current.currentMatchIndex).toBe(0);
+    expect(view.onNavigate.mock.calls).toHaveLength(navigations);
+  });
+
+  test("a closed bar does not read the body or re-render for it", () => {
+    let renders = 0;
+    const getSearchText = mock(getNativeMessageSearchText);
+    const items = [row("report", [artifactPart])];
+    renderHook(() => {
+      renders += 1;
+      return useAgentChatFind({
+        items,
+        getSearchText,
+        isActive: true,
+        ownerRef: useRef<HTMLElement | null>(null),
+        onNavigate: () => {},
+      });
+    });
+    const before = renders;
+    act(() => rememberArtifactSearchBody(REF, "needle body", SCOPE));
+    expect(renders).toBe(before);
+    expect(getSearchText).toHaveBeenCalledTimes(0);
+  });
+
+  test("only a body's own row is read again", () => {
+    const items = [row("report", [artifactPart]), row("later", [textPart("needle later")])];
+    const view = open(items);
+    view.getSearchText.mockClear();
+    act(() => rememberArtifactSearchBody(REF, "needle body", SCOPE));
+    expect(view.getSearchText).toHaveBeenCalledTimes(1);
+  });
+
+  test("a card mounting again with the same body changes nothing", () => {
+    rememberArtifactSearchBody(REF, "needle body", SCOPE);
+    const revision = artifactSearchBodyRevision();
+    rememberArtifactSearchBody(REF, "needle body", SCOPE);
+    expect(artifactSearchBodyRevision()).toBe(revision);
+    rememberArtifactSearchBody(REF, "needle changed", SCOPE);
+    expect(artifactSearchBodyRevision()).toBe(revision + 1);
+  });
 });

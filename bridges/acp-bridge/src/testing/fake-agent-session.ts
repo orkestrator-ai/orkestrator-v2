@@ -1,6 +1,6 @@
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import {
-  cursorConfig,
+  genericConfig,
   grokConfig,
   isObject,
   provider,
@@ -64,12 +64,12 @@ function answerSetConfigOption(message: JsonObject): void {
   }
   const params = isObject(message.params) ? message.params : {};
   const configId = typeof params.configId === "string" ? params.configId : "";
-  const option = cursorConfig.configOptions.find((entry) => entry.id === configId);
+  const option = genericConfig.configOptions.find((entry) => entry.id === configId);
   if (option) option.currentValue = params.value as never;
   write({
     jsonrpc: "2.0",
     id: message.id,
-    result: { configOptions: cursorConfig.configOptions },
+    result: { configOptions: genericConfig.configOptions },
   });
 }
 
@@ -77,7 +77,7 @@ function answerSetMode(message: JsonObject): void {
   const params = isObject(message.params) ? message.params : {};
   const modeId = typeof params.modeId === "string" ? params.modeId : "agent";
   if (provider === "grok") grokConfig.modes.currentModeId = modeId;
-  else cursorConfig.modes.currentModeId = modeId;
+  else genericConfig.modes.currentModeId = modeId;
   write({ jsonrpc: "2.0", id: message.id, result: {} });
 }
 
@@ -485,19 +485,6 @@ export function handleSessionMessage(message: JsonObject): boolean {
         rawOutput: { isBackground: true },
       });
     }
-    // Cursor's index only holds calls that have settled, so this replay grows
-    // as the turn progresses: the read still in flight appears only once the
-    // hold file releases it. Replayed in completion order, which is the
-    // reverse of the launch order the live transcript carries.
-    // A prior same-kind read with a title and path but no output hash, plus the
-    // live turn's true entry only after the hold file exists. A live pass sized
-    // to one settled target keeps that stale call as its only candidate.
-    // The same first turn as above, preceded by tool calls from turns the live
-    // transcript has already enriched or never held. Exercises the collector's
-    // count bound: only the trailing `capacity` calls may survive.
-    // Two complete turns' worth of tool calls, so a replay that loads late
-    // enough to see the *second* turn can be caught handing its paths and
-    // titles to the first turn's parts.
     // The same history without provider message ids, which is all the bridge
     // gets from an agent that does not stamp them. Message boundaries then have
     // to come from chunk-versus-whole rather than from part type.

@@ -1,4 +1,12 @@
-import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { Expand, ExternalLink, RefreshCw, X } from "lucide-react";
 import { clampArtifactFrameHeight } from "@orkestrator/protocol/artifact-frame-channel";
 import {
@@ -21,6 +29,7 @@ import {
 import { useRichViewField } from "@/stores/richContentViewStore";
 import { useStaticFrameSlot, type StaticFrameRank } from "@/stores/staticHtmlFrameSlots";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
+import { ChatFindActiveContext, StaticDocumentFindContext } from "../chat-find-context";
 import {
   StaticHtmlFrame,
   type StaticFrameEvents,
@@ -188,6 +197,7 @@ export function StaticHtmlArtifactView({
   expanded,
   onExpand,
   onCloseExpanded,
+  onDocumentText,
 }: {
   artifactRef: TranscriptArtifactRef;
   view: ArtifactPublicationView;
@@ -198,7 +208,16 @@ export function StaticHtmlArtifactView({
   expanded: boolean;
   onExpand: () => void;
   onCloseExpanded: () => void;
+  /** The text a frame reported for Find; null when this card can no longer show it. */
+  onDocumentText: (text: string | null) => void;
 }) {
+  const documentFind = useContext(StaticDocumentFindContext);
+  const activeRow = useContext(ChatFindActiveContext);
+  const findQuery = documentFind?.query ?? null;
+  const findOccurrence =
+    activeRow && documentFind?.activePublicationId === artifactRef.publicationId
+      ? documentFind.activeOccurrence
+      : null;
   const { observe, visibility } = useRichBlockVisibility();
   const { priority } = useRichRenderPriority(visibility);
   const visible = priority === "visible";
@@ -215,6 +234,11 @@ export function StaticHtmlArtifactView({
     reached && !revoked,
   );
   const ready: VerifiedStaticDocument | null = verified.status === "ready" ? verified.value : null;
+  // Text from an earlier visit is not a fallback for a read that now fails.
+  const readFailed = verified.status === "error";
+  useEffect(() => {
+    if (readFailed) onDocumentText(null);
+  }, [onDocumentText, readFailed]);
 
   const [attempt, setAttempt] = useState(0);
   const baseKey = `${scope.generation}:${expectedSha256}:${attempt}`;
@@ -269,24 +293,32 @@ export function StaticHtmlArtifactView({
         setOverflowing(height > FRAME_CHANNEL_POLICY.maxInlineHeight);
         setMeasuredHeight(height);
       },
-      onFailure: (failure) => updateInline({ failure, rendered: false, interacting: false }),
+      onFailure: (failure) => {
+        onDocumentText(null);
+        updateInline({ failure, rendered: false, interacting: false });
+      },
+      onText: onDocumentText,
       onInteraction: (interacting) => updateInline({ interacting }),
       onLink: setLink,
       onEscape: () => container.current?.focus(),
     }),
-    [setMeasuredHeight, updateInline],
+    [onDocumentText, setMeasuredHeight, updateInline],
   );
   const dialogEvents = useMemo<StaticFrameEvents>(
     () => ({
       onRendered: () => updateDialog({ rendered: true }),
       onReleased: () => updateDialog({ rendered: false }),
       onHeight: () => {},
-      onFailure: (failure) => updateDialog({ failure, rendered: false }),
+      onFailure: (failure) => {
+        onDocumentText(null);
+        updateDialog({ failure, rendered: false });
+      },
+      onText: onDocumentText,
       onInteraction: () => {},
       onLink: setLink,
       onEscape: onCloseExpanded,
     }),
-    [onCloseExpanded, updateDialog],
+    [onCloseExpanded, onDocumentText, updateDialog],
   );
 
   if (revoked) {
@@ -382,6 +414,8 @@ export function StaticHtmlArtifactView({
             mode="inline"
             height={estimatedHeight}
             rendered={inline.rendered}
+            findQuery={findQuery}
+            findOccurrence={findOccurrence}
             events={inlineEvents}
           />
         ) : null}
@@ -435,6 +469,8 @@ export function StaticHtmlArtifactView({
                   mode="expanded"
                   height={0}
                   rendered={dialog.rendered}
+                  findQuery={findQuery}
+                  findOccurrence={findOccurrence}
                   events={dialogEvents}
                 />
               ) : null}

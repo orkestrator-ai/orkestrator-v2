@@ -386,3 +386,27 @@ describe("provisional findings on the reviewer record", () => {
     expect(prompt).not.toContain("Unconfirmed from");
   });
 });
+
+test("combined sinks route findings to the accepting Build Pipeline reviewer", async () => {
+  const { combineProvisionalFindingSinks } = await import("./review-provisional-findings.js");
+  const calls: string[] = [];
+  const sink = (key: string) => ({
+    accepts: (_scope: unknown, resultKey: string) => resultKey === key,
+    report: async () => {
+      calls.push(key);
+      return {
+        ok: true,
+        findingId: "id",
+        duplicate: false,
+        provisionalCount: 1,
+        limit: 80,
+      } as const;
+    },
+  });
+  const combined = combineProvisionalFindingSinks([sink("multi-review"), sink("pipeline")]);
+  expect(combined.accepts(SCOPE, "pipeline")).toBe(true);
+  expect(combined.accepts(SCOPE, "missing")).toBe(false);
+  await combined.report(SCOPE, "pipeline", issue("Pipeline finding"));
+  await combined.report(SCOPE, "multi-review", issue("Review finding"));
+  expect(calls).toEqual(["pipeline", "multi-review"]);
+});

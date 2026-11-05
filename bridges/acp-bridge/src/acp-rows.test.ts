@@ -44,7 +44,6 @@ function runningState(options: { structured?: boolean } = {}): SessionState {
     ],
     activeSubagentToolIds: new Set(),
     activeSubagentDescriptors: new Map(),
-    settledCursorAgentIds: new Set(),
     subagentLimitExceeded: false,
     subagentToolIds: new Map(),
     cursorTodos: [],

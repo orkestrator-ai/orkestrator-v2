@@ -332,13 +332,19 @@ export async function restoreRecoveryCopy(
 /** The authoritative container lifecycle state, for rehydrating progress. */
 export async function getContainerLifecycleSnapshot(
   environmentId: string,
+  machine?: AccountMachine,
 ): Promise<ContainerLifecycleSnapshot> {
-  return invoke<ContainerLifecycleSnapshot>("get_container_lifecycle_snapshot", { environmentId });
+  return machineInvoke<ContainerLifecycleSnapshot>(machine, "get_container_lifecycle_snapshot", {
+    environmentId,
+  });
 }
 
 /** What a preserving rebuild would keep, and whether it is possible now. */
-export async function getRebuildPreview(environmentId: string): Promise<RebuildPreview> {
-  return invoke<RebuildPreview>("get_rebuild_preview", { environmentId });
+export async function getRebuildPreview(
+  environmentId: string,
+  machine?: AccountMachine,
+): Promise<RebuildPreview> {
+  return machineInvoke<RebuildPreview>(machine, "get_rebuild_preview", { environmentId });
 }
 
 /**
@@ -361,8 +367,9 @@ export async function cancelContainerOperation(
 export async function recreateEnvironment(
   environmentId: string,
   options: RecreateEnvironmentOptions,
+  machine?: AccountMachine,
 ): Promise<void> {
-  return invoke("recreate_environment", { environmentId, ...options });
+  return machineInvoke(machine, "recreate_environment", { environmentId, ...options });
 }
 
 export async function syncEnvironmentStatus(environmentId: string): Promise<Environment> {

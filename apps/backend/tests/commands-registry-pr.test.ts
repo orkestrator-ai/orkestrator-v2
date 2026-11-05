@@ -1319,15 +1319,17 @@ exit 1
     );
   });
 
-  shimTest(
-    "persists merge cleanup intent before dispatch and completes local cleanup in the backend",
-    async () => {
+  for (const automatic of [false, true]) {
+    shimTest(`completes local cleanup in the backend, automatic=${automatic}`, async () => {
       const worktreePath = await createTempDir("ork-electron-merge-cleanup-local-");
       const environment = createEnvironment({
         id: "env-merge-cleanup-local",
         worktreePath,
         prUrl: "https://github.com/acme/repo/pull/42",
         prState: "open",
+        autoMerge: automatic,
+        autoMergeCleanup: automatic,
+        autoMergeEnabledAt: "automatic-generation",
       });
       const { context, updates } = createContext(environment);
       const commands = createCommandRegistry();
@@ -1411,6 +1413,7 @@ exit 1
                 method: "squash",
                 deleteBranch: true,
                 cleanupAfterMerge: true,
+                ...(automatic ? { autoMergeEnabledAt: "automatic-generation" } : {}),
               },
               context,
             ),
@@ -1425,8 +1428,11 @@ exit 1
           const mergingIndex = updates.findIndex(
             (update) => update.lifecycleOperation === "merging",
           );
-          expect(intentIndex).toBeGreaterThanOrEqual(0);
-          expect(mergingIndex).toBeGreaterThan(intentIndex);
+          if (automatic) expect(intentIndex).toBe(-1);
+          else {
+            expect(intentIndex).toBeGreaterThanOrEqual(0);
+            expect(mergingIndex).toBeGreaterThan(intentIndex);
+          }
           expect(updates).toContainEqual(
             expect.objectContaining({
               prState: "merged",
@@ -1460,12 +1466,9 @@ exit 1
           );
         },
       );
-    },
-  );
+    });
 
-  shimTest(
-    "keeps an unconfirmed container merge cleanup pending without deleting the environment",
-    async () => {
+    shimTest(`keeps unconfirmed container cleanup pending, automatic=${automatic}`, async () => {
       const environment = createEnvironment({
         id: "env-merge-cleanup-container-pending",
         environmentType: "containerized",
@@ -1474,6 +1477,9 @@ exit 1
         status: "stopped",
         prUrl: "https://github.com/acme/repo/pull/42",
         prState: "open",
+        autoMerge: automatic,
+        autoMergeCleanup: automatic,
+        autoMergeEnabledAt: "automatic-generation",
       });
       const { context } = createContext(environment);
       const commands = createCommandRegistry();
@@ -1510,6 +1516,7 @@ exit 1
               method: "rebase",
               deleteBranch: true,
               cleanupAfterMerge: true,
+              ...(automatic ? { autoMergeEnabledAt: "automatic-generation" } : {}),
             },
             context,
           );
@@ -1519,10 +1526,19 @@ exit 1
           });
 
           await expect(context.storage.getEnvironment(environment.id)).resolves.toMatchObject({
-            cleanupAfterMergeRequestedAt: expect.any(String),
-            cleanupAfterMergeError: null,
+            ...(automatic
+              ? {}
+              : { cleanupAfterMergeRequestedAt: expect.any(String), cleanupAfterMergeError: null }),
             prState: "open",
+            autoMerge: automatic,
+            autoMergeCleanup: automatic,
+            autoMergeEnabledAt: "automatic-generation",
           });
+          if (automatic) {
+            expect(
+              (await context.storage.getEnvironment(environment.id))?.cleanupAfterMergeRequestedAt,
+            ).toBeUndefined();
+          }
           const execLog = await fs.readFile(logs.exec, "utf8");
           expect(execLog).toContain(
             "'gh' 'pr' 'merge' 'https://github.com/acme/repo/pull/42' '--rebase'",
@@ -1531,9 +1547,8 @@ exit 1
           expect(existsSync(logs.rm)).toBe(false);
         },
       );
-    },
-  );
-
+    });
+  }
   shimTest("continues confirmed cleanup when persisting merged PR state fails once", async () => {
     const worktreePath = await createTempDir("ork-electron-merge-cleanup-persist-fail-");
     const environment = createEnvironment({

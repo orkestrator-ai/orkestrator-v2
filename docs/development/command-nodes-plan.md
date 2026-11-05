@@ -349,6 +349,11 @@ the environment's ownership on every call. The tools are `list_nodes`,
 `send_node_message` and `request_environment_deletion`; `transfer_files` and
 the project-file tools follow in M4.
 
+Later every tool took `nodeId` instead, and the duplicating node tools were
+removed; `list_nodes`, `read_node_environment` and
+`request_environment_deletion` remain (see
+[coordinator.md](../architecture/coordinator.md#multiple-machines)).
+
 The original design below (kept for reference) had existing control tools
 accept an optional `nodeId`, defaulting to this node:
 

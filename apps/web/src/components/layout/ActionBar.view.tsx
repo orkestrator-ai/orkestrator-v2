@@ -59,6 +59,7 @@ import {
   Workflow,
 } from "lucide-react";
 import { GithubIcon } from "@/components/icons/GithubIcon";
+import { AutoMergeIcon } from "@/components/icons/AutoMergeIcon";
 import {
   ClaudeIcon,
   CodexIcon,
@@ -1291,15 +1292,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                         {autoMerge.saving ? (
                           <Loader2 className="h-4 w-4 animate-spin" />
                         ) : (
-                          <span
-                            aria-hidden="true"
-                            className="relative inline-flex size-5 items-end justify-start"
-                          >
-                            <GitMerge className="h-4 w-4" />
-                            <span className="absolute top-0 right-0 text-[9px] leading-none font-semibold">
-                              A
-                            </span>
-                          </span>
+                          <AutoMergeIcon />
                         )}
                       </Button>
                     </ToolbarTooltipTrigger>

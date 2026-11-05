@@ -1,11 +1,16 @@
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { ENVIRONMENT_ATTENTION_EVENT } from "@orkestrator/protocol/environment-attention";
+import {
+  COORDINATOR_WAKE_ATTENTION_EVENT,
+  ENVIRONMENT_ATTENTION_EVENT,
+} from "@orkestrator/protocol/environment-attention";
+import { useActiveCoordinatorConversationStore } from "@/stores/activeCoordinatorConversationStore";
 import { resetClientStateCapabilitiesForTests } from "@/lib/client-state-capabilities";
 import { listen as nativeListen } from "@/lib/native/events";
 import * as realNotificationSounds from "@/lib/notification-sounds";
 import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
+import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { useUIStore } from "@/stores/uiStore";
 import type { Environment } from "@/types";
 
@@ -33,6 +38,7 @@ function environment(id: string, hasUnreadWork: boolean): Environment {
 }
 
 beforeEach(() => {
+  useRemoteWorkspaceStore.setState({ active: null });
   playConfiguredNotificationSound.mockReset();
   playConfiguredNotificationSound.mockResolvedValue(true);
   primeNotificationSounds.mockReset();
@@ -40,7 +46,7 @@ beforeEach(() => {
   useEnvironmentStore.setState({ environments: [] });
   useUIStore.setState({ selectedEnvironmentId: null });
   useConfigStore.getState().updateGlobalConfig({
-    notificationSounds: { agentStopped: true, prMerged: true },
+    notificationSounds: { agentStopped: true, prMerged: true, coordinatorReport: true },
   });
 });
 
@@ -51,6 +57,96 @@ afterEach(() => {
 });
 
 const listenMock = nativeListen as unknown as ReturnType<typeof mock>;
+
+describe("when a coordinator is woken for its worker", () => {
+  const handlers = new Set<(event: { payload: unknown }) => void>();
+  const wake = (attentionId: string, projectId = "project-1") => ({
+    attentionId,
+    projectId,
+    coordinatorId: "coordinator-1",
+    occurredAt: new Date(0).toISOString(),
+  });
+  const deliver = (payload: unknown) => {
+    for (const handler of handlers) handler({ payload });
+  };
+  async function mounted() {
+    const view = renderHook(() => useNotificationSoundService());
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    return view;
+  }
+  const showCoordinator = () => {
+    useUIStore.setState({ selectedProjectId: "project-1", projectBoardTab: "coordinator" });
+    useActiveCoordinatorConversationStore.setState({
+      active: {
+        projectId: "project-1",
+        tabId: "coordinator-tab",
+        data: { platform: "claude", environmentId: "coordinator:c:c", isLocal: true },
+      },
+    });
+  };
+
+  beforeEach(() => {
+    handlers.clear();
+    useActiveCoordinatorConversationStore.setState({ active: null });
+    useUIStore.setState({ selectedProjectId: null, projectBoardTab: "board" as never });
+    listenMock.mockImplementation(
+      (event: string, handler: (event: { payload: unknown }) => void) => {
+        if (event !== COORDINATOR_WAKE_ATTENTION_EVENT) return Promise.resolve(() => {});
+        handlers.add(handler);
+        return Promise.resolve(() => handlers.delete(handler));
+      },
+    );
+  });
+
+  test("sounds its own cue once per wake, however often it is delivered", async () => {
+    await mounted();
+    deliver(wake("w1"));
+    deliver(wake("w1"));
+    expect(playConfiguredNotificationSound).toHaveBeenCalledTimes(1);
+    expect(playConfiguredNotificationSound).toHaveBeenCalledWith("coordinator-report");
+  });
+
+  test("stays quiet for a malformed payload", async () => {
+    await mounted();
+    deliver({ attentionId: "w1" });
+    expect(playConfiguredNotificationSound).not.toHaveBeenCalled();
+  });
+
+  test("stays quiet while that coordinator is on screen, and not for another project's", async () => {
+    showCoordinator();
+    await mounted();
+    deliver(wake("w1"));
+    expect(playConfiguredNotificationSound).not.toHaveBeenCalled();
+    deliver(wake("w2", "project-2"));
+    expect(playConfiguredNotificationSound).toHaveBeenCalledTimes(1);
+  });
+
+  test("sounds when a remote workspace covers the selected coordinator", async () => {
+    showCoordinator();
+    await mounted();
+    act(() =>
+      useRemoteWorkspaceStore.setState({
+        active: { nodeId: "bk_leaf", projectId: "remote-project", environmentId: "remote-env" },
+      }),
+    );
+    deliver(wake("remote-covered"));
+    expect(playConfiguredNotificationSound).toHaveBeenCalledWith("coordinator-report");
+  });
+
+  test("sounds when the user has left the page, even with the coordinator selected", async () => {
+    showCoordinator();
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
+    try {
+      await mounted();
+      deliver(wake("w1"));
+      expect(playConfiguredNotificationSound).toHaveBeenCalledTimes(1);
+    } finally {
+      delete (document as unknown as { visibilityState?: string }).visibilityState;
+    }
+  });
+});
 
 describe("from the backend's attention events", () => {
   const handlers = new Set<(event: { payload: unknown }) => void>();
@@ -220,9 +316,9 @@ describe("useNotificationSoundService", () => {
     expect(primeNotificationSounds).toHaveBeenCalledTimes(2);
   });
 
-  test("does not register priming work when both cues are disabled", () => {
+  test("does not register priming work when every cue is disabled", () => {
     useConfigStore.getState().updateGlobalConfig({
-      notificationSounds: { agentStopped: false, prMerged: false },
+      notificationSounds: { agentStopped: false, prMerged: false, coordinatorReport: false },
     });
     renderHook(() => useNotificationSoundService());
 
@@ -247,3 +343,56 @@ test("Home completion sounds while the board obscures it, but not while Home is 
   act(() => useEnvironmentStore.getState().updateEnvironment(home.id, { hasUnreadWork: true }));
   expect(playConfiguredNotificationSound).toHaveBeenCalledTimes(1);
 });
+
+test.each([false, true])(
+  "disabled paired cue does not suppress enabled cue (agent=%s)",
+  async (agentStopped) => {
+    resetClientStateCapabilitiesForTests({ environmentAttention: true } as never);
+    const handlers = new Map<string, (event: { payload: unknown }) => void>();
+    listenMock.mockImplementation(
+      (event: string, handler: (event: { payload: unknown }) => void) => {
+        handlers.set(event, handler);
+        return Promise.resolve(() => handlers.delete(event));
+      },
+    );
+    useUIStore.setState({ selectedProjectId: null });
+    useConfigStore.getState().updateGlobalConfig({
+      notificationSounds: {
+        agentStopped,
+        coordinatorReport: !agentStopped,
+        prMerged: false,
+      },
+    });
+    renderHook(() => useNotificationSoundService());
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    const events = [
+      [
+        ENVIRONMENT_ATTENTION_EVENT,
+        {
+          attentionId: "mixed-agent",
+          environmentId: "worker",
+          projectId: "project-1",
+          reason: "agent_finished",
+          occurredAt: new Date().toISOString(),
+        },
+      ],
+      [
+        COORDINATOR_WAKE_ATTENTION_EVENT,
+        {
+          attentionId: "mixed-wake",
+          projectId: "project-1",
+          coordinatorId: "c",
+          occurredAt: new Date().toISOString(),
+        },
+      ],
+    ] as const;
+    for (const [event, payload] of agentStopped ? events.toReversed() : events)
+      handlers.get(event)!({ payload });
+    expect(playConfiguredNotificationSound).toHaveBeenCalledTimes(1);
+    expect(playConfiguredNotificationSound).toHaveBeenCalledWith(
+      agentStopped ? "agent-stopped" : "coordinator-report",
+    );
+  },
+);

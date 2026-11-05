@@ -372,6 +372,7 @@ export class GatewayLifecycle {
     }
     this.ctx.clients.clear();
     this.ctx.eventReplay.releaseRetained();
+    this.ctx.relayedEventReplay.releaseRetained();
     this.ctx.terminalWebSocket.close();
     this.ctx.previewTunnel?.close();
     for (const proxyRequest of this.ctx.proxyRequests) {

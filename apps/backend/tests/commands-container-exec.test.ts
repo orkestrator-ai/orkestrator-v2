@@ -115,12 +115,15 @@ describe("Electron backend command registry", () => {
         home,
         credentialFile,
         // See the note on the test above: never let this reach a real Git config.
+        // Only PATH is inherited, so no askpass, config or token in the runner's
+        // environment can answer for the fixture.
         env: {
-          ...process.env,
+          PATH: process.env.PATH,
           HOME: home,
           XDG_CONFIG_HOME: path.join(home, ".config"),
           GIT_CONFIG_GLOBAL: path.join(home, ".gitconfig"),
           GIT_CONFIG_NOSYSTEM: "1",
+          GIT_CEILING_DIRECTORIES: path.dirname(home),
           GIT_TERMINAL_PROMPT: "0",
           ORKESTRATOR_GITHUB_CREDENTIAL_FILE: credentialFile,
           GITHUB_TOKEN: "",
@@ -139,12 +142,20 @@ describe("Electron backend command registry", () => {
     }
 
     // What Git itself would send, through whichever helpers its config selects.
-    function fill(env: NodeJS.ProcessEnv, url: string, extraEnv: NodeJS.ProcessEnv = {}) {
+    // Run outside any repository: Git also reads the config of the repository it
+    // starts in, so from a checkout with its own credential.helper it would ask
+    // that helper for the developer's real login.
+    function fillResult(env: NodeJS.ProcessEnv, url: string) {
       return spawnSync("git", ["credential", "fill"], {
-        env: { ...env, ...extraEnv },
+        cwd: path.dirname(helper),
+        env,
         input: `url=${url}\n\n`,
         encoding: "utf8",
-      }).stdout;
+      });
+    }
+
+    function fill(env: NodeJS.ProcessEnv, url: string, extraEnv: NodeJS.ProcessEnv = {}) {
+      return fillResult({ ...env, ...extraEnv }, url).stdout;
     }
 
     async function setupCredentialBlock(): Promise<string> {
@@ -211,6 +222,50 @@ describe("Electron backend command registry", () => {
       expect(fill(env, "https://github.com/owner/repo.git")).not.toContain("password=");
     });
 
+    test("the fixture is not answered by the runner's checkout or environment", async () => {
+      const ambient = "password=ambient-fake-credential";
+      const answer = `!f() { echo username=ambient; echo ${ambient}; }; f`;
+      const checkout = await createTempDir("ork-github-helper-checkout-");
+      await runGit(checkout, ["init", "-b", "work", "."]);
+      await runGit(checkout, ["config", "--local", "credential.helper", answer]);
+      const askpass = path.join(checkout, "askpass.sh");
+      await fs.writeFile(askpass, "#!/bin/sh\necho ambient-fake-credential\n", { mode: 0o755 });
+
+      const url = "https://github.com/owner/repo.git";
+      const runnerCwd = process.cwd();
+      const runnerEnv = { ...process.env };
+      Object.assign(process.env, {
+        GIT_ASKPASS: askpass,
+        SSH_ASKPASS: askpass,
+        GIT_CONFIG_COUNT: "1",
+        GIT_CONFIG_KEY_0: "credential.helper",
+        GIT_CONFIG_VALUE_0: answer,
+      });
+      process.chdir(checkout);
+      try {
+        const { env, credentialFile } = await helperEnvironment();
+        // A control: run from inside that checkout, Git does consult its helper.
+        const control = spawnSync("git", ["credential", "fill"], {
+          cwd: checkout,
+          env,
+          input: `url=${url}\n\n`,
+          encoding: "utf8",
+        });
+        expect(control.stdout).toContain(ambient);
+
+        sync(env, credentialFile, "");
+        const filled = fill(env, url);
+        expect(filled).not.toContain(ambient);
+        expect(filled).not.toContain("password=");
+      } finally {
+        process.chdir(runnerCwd);
+        for (const name of Object.keys(process.env)) {
+          if (!(name in runnerEnv)) delete process.env[name];
+        }
+        Object.assign(process.env, runnerEnv);
+      }
+    });
+
     test("removes a token-bearing rewrite an older image or backend left behind", async () => {
       const { env, home, credentialFile } = await helperEnvironment();
       const legacy = spawnSync(
@@ -256,11 +311,7 @@ describe("Electron backend command registry", () => {
       );
       sync(env, credentialFile, "secret-token");
 
-      const filled = spawnSync("git", ["credential", "fill"], {
-        env,
-        input: "url=https://github.com/owner/repo.git\n\n",
-        encoding: "utf8",
-      });
+      const filled = fillResult(env, "https://github.com/owner/repo.git");
       expect(filled.stdout).toContain("password=secret-token");
       expect(filled.stderr).not.toContain("homebrew");
       expect(await fs.readFile(path.join(home, ".gitconfig"), "utf8")).not.toContain("homebrew");

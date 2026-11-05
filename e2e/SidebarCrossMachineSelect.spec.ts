@@ -106,8 +106,11 @@ test("pending restart disables bulk controls and marks its row busy", async ({
   });
   await page.evaluate(() => {
     const original = window.orkestrator!.invoke;
-    window.orkestrator!.invoke = async (command, args) => {
-      const result = await original(command, args);
+    window.orkestrator!.invoke = async <T = unknown>(
+      command: string,
+      args?: Record<string, unknown>,
+    ): Promise<T> => {
+      const result = await original<T>(command, args);
       if (command === "invoke_on_node" && args?.command === "stop_environment") {
         await new Promise<void>((resolve) =>
           window.addEventListener("release-test-stop", () => resolve(), { once: true }),

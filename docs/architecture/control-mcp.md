@@ -603,8 +603,9 @@ only an approval opens a pull request, from a temporary worktree on the node
 that owns the project copy. The backend command that opens it
 (`open_project_agents_md_pr`) is refused by name to coordinator credentials;
 see [`coordinator.md`](coordinator.md#saving-decisions-to-agentsmd).
-`launch_multi_review` and `start_multi_review` take optional `autoFix` and
-`autoPr` booleans. Omitted, they use the user's saved Multi Review settings, as
+`launch_multi_review` (and an operator's `start_multi_review`; coordinators
+are offered only `launch_multi_review`) take optional `autoFix` and `autoPr`
+booleans. Omitted, they use the user's saved Multi Review settings, as
 the button does; a coordinator sets them only when the user asks. With both on
 the review runs consolidation, then Fix, then a PR session, and the PR never
 precedes a completed Fix. With `autoPr` on, a consolidation with nothing to fix

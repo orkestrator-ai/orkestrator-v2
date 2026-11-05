@@ -186,6 +186,10 @@ fi
 # Only marked daemon queries may reach it, including after Docker's DNAT.
 if [ "$FILTER_STATE" = enforced ]; then
     iptables -A OUTPUT -d 127.0.0.11 -m mark ! --mark "$ORK_FILTER_MARK" -j REJECT
+    # Docker's resolver sends from its private high port here and SNATs to
+    # 53 in POSTROUTING. A workload can bind the unused .11:53 itself, but
+    # must not impersonate that post-NAT endpoint on a connected query socket.
+    iptables -A OUTPUT -p udp -s 127.0.0.11 --sport 53 -m mark ! --mark "$ORK_FILTER_MARK" -j REJECT
 fi
 
 # Allow localhost

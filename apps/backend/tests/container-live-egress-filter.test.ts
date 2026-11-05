@@ -364,6 +364,109 @@ describe("M12 name checks at the egress gateway", () => {
           "no servers could be reached",
         );
       }
+      // Exercise the pending-query socket with a workload that knows both
+      // its transaction ID and ephemeral port. Hold back the genuine reply.
+      const resolverDrop = [
+        "-d",
+        "127.0.0.11",
+        "-p",
+        "udp",
+        "-m",
+        "mark",
+        "--mark",
+        "0x6f726b",
+        "-j",
+        "DROP",
+      ];
+      await inGateway(gateway, "iptables", "-I", "OUTPUT", "1", ...resolverDrop);
+      try {
+        const question = Buffer.concat([
+          Buffer.from("123401000001000000000000", "hex"),
+          ..."registry.npmjs.org"
+            .split(".")
+            .map((label) => Buffer.concat([Buffer.from([label.length]), Buffer.from(label)])),
+          Buffer.from("0000010001", "hex"),
+        ]).toString("hex");
+        await docker([
+          "exec",
+          "-d",
+          "-u",
+          "root",
+          gateway,
+          "perl",
+          "-e",
+          `open(my $f, '<', '/usr/local/bin/orkestrator-egress-filter') or die $!;
+           my $source = do { local $/; <$f> }; $source =~ s/main\\(\\) unless caller;//;
+           eval $source . "\\n" . $ARGV[0]; die $@ if $@;`,
+          `$opt{mark} = 0x6f726b;
+           my $message = pack('H*', '${question}');
+           my ($id, $flags, undef, $end) = parse_query($message);
+           $pending{$id} = { message => $message, flags => $flags, question_end => $end,
+             resolvers => ['127.0.0.11'], attempt => 0 };
+           dns_send($id); my $fh = $pending{$id}{socket} or die 'no socket';
+           my ($port) = unpack_sockaddr_in(getsockname($fh));
+           open(my $ready, '>', '/tmp/udp-auth.port'); print {$ready} $port; close $ready;
+           select undef, undef, undef, 2;
+           dns_udp_answer($fh);
+           open(my $done, '>', '/tmp/udp-auth.result');
+           print {$done} exists $pending{$id} ? 'ignored' : 'forgery accepted'; close $done;`,
+        ]);
+        let port = "";
+        for (let i = 0; i < 30; i++) {
+          port = await inGateway(gateway, "cat", "/tmp/udp-auth.port").catch(() => "");
+          if (port) break;
+          await Bun.sleep(100);
+        }
+        expect(port).toMatch(/^\d+$/);
+        expect(
+          await docker([
+            "exec",
+            "-u",
+            "node",
+            containerId,
+            "perl",
+            "-MSocket",
+            "-e",
+            `socket(my $s, PF_INET, SOCK_DGRAM, 0) or die $!;
+           bind($s, sockaddr_in(0, inet_aton('127.0.0.11'))) or die $!;
+           my $answer = pack('H*', $ARGV[1]); substr($answer, 2, 2, pack('n', 0x8180));
+           send($s, $answer, 0, sockaddr_in($ARGV[0], inet_aton('127.0.0.1'))) or die $!; print 'sent';`,
+            port,
+            question,
+          ]),
+        ).toBe("sent");
+        // Before Docker's POSTROUTING SNAT, genuine resolver responses have
+        // a private high source port. An unmarked workload cannot claim 53.
+        expect(
+          await docker([
+            "exec",
+            "-u",
+            "node",
+            containerId,
+            "perl",
+            "-MSocket",
+            "-e",
+            `socket(my $s, PF_INET, SOCK_DGRAM, 0) or die $!;
+           bind($s, sockaddr_in(53, inet_aton('127.0.0.11'))) or die $!;
+           connect($s, sockaddr_in($ARGV[0], inet_aton('127.0.0.1'))) or die $!;
+           my $written = send($s, pack('H*', $ARGV[1]), 0);
+           die 'forged source endpoint permitted' if defined $written;
+           die "wrong send error: $!" unless $!{EPERM}; print 'blocked';`,
+            port,
+            question,
+          ]),
+        ).toBe("blocked");
+        let result = "";
+        for (let i = 0; i < 40; i++) {
+          result = await inGateway(gateway, "cat", "/tmp/udp-auth.result").catch(() => "");
+          if (result) break;
+          await Bun.sleep(100);
+        }
+        expect(result).toBe("ignored");
+      } finally {
+        await inGateway(gateway, "iptables", "-D", "OUTPUT", ...resolverDrop);
+      }
+
       const supervisor = await inGateway(
         gateway,
         "cat",

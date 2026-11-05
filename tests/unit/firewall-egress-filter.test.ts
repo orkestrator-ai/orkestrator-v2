@@ -201,6 +201,11 @@ describe("init-firewall.sh with name checks", () => {
         // The tuple proxy explicitly excludes DNS even though its -I puts it first.
         const embeddedGuard = `iptables -A OUTPUT -d 127.0.0.11 -m mark ! --mark ${mark} -j REJECT`;
         expect(calls).toContain(embeddedGuard);
+        const forgedReplyGuard = `iptables -A OUTPUT -p udp -s 127.0.0.11 --sport 53 -m mark ! --mark ${mark} -j REJECT`;
+        expect(calls).toContain(forgedReplyGuard);
+        expect(calls.indexOf(forgedReplyGuard)).toBeLessThan(
+          calls.indexOf("iptables -A OUTPUT -o lo -j ACCEPT"),
+        );
         expect(calls.indexOf(embeddedGuard)).toBeLessThan(
           calls.indexOf("iptables -A OUTPUT -o lo -j ACCEPT"),
         );

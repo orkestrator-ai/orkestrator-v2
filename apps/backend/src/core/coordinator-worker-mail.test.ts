@@ -579,6 +579,7 @@ describe("coordinator messages to the project home", () => {
   test("the routing rule names both routes, isolation and the project home rule", () => {
     expect(COORDINATOR_ROUTING_RULE).toContain("create_ticket");
     expect(COORDINATOR_ROUTING_RULE).toContain("start_build_pipeline");
+    expect(COORDINATOR_ROUTING_RULE).toContain("send_prompt_to_tab or launch_job");
     expect(COORDINATOR_ROUTING_RULE).toContain("launch_environment with a prompt");
     expect(COORDINATOR_ROUTING_RULE).toContain("isolated environment");
     expect(COORDINATOR_ROUTING_RULE).toContain("exceptional circumstances");

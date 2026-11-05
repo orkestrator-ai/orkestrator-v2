@@ -17,6 +17,7 @@ import {
 import {
   COMMAND_NODE_COORDINATOR_MAIL_ADDRESS,
   COORDINATOR_ASYNC_CONTRACT,
+  COORDINATOR_MESSAGING_OFF_NOTE,
   COORDINATOR_ENVIRONMENT_CHOICE_RULE,
   COORDINATOR_LAUNCH_DEFAULTS_RULE,
   COORDINATOR_PR_RULE,
@@ -562,12 +563,21 @@ function withNodeTag<T extends { structuredContent?: unknown; content: unknown[]
   };
 }
 
-function filteredToolServer(server: McpServer, listed: (tool: string) => boolean): McpServer {
+function filteredToolServer(
+  server: McpServer,
+  listed: (tool: string) => boolean,
+  finishResult: (result: unknown) => unknown = (result) => result,
+): McpServer {
   return {
-    registerTool: ((name: string, ...rest: unknown[]) =>
-      listed(name)
-        ? (server.registerTool as (...args: unknown[]) => unknown)(name, ...rest)
-        : undefined) as McpServer["registerTool"],
+    registerTool: ((name: string, ...rest: unknown[]) => {
+      if (!listed(name)) return undefined;
+      const handler = rest.at(-1) as (...args: unknown[]) => unknown;
+      return (server.registerTool as (...args: unknown[]) => unknown)(
+        name,
+        ...rest.slice(0, -1),
+        async (...args: unknown[]) => finishResult(await handler(...args)),
+      );
+    }) as McpServer["registerTool"],
   } as McpServer;
 }
 
@@ -576,6 +586,40 @@ const OPERATOR_INSTRUCTIONS =
   "Every mutation needs a new requestId; reuse one only to retry after an ambiguous response. " +
   "When a result is confirmation-required, read its description aloud, get explicit confirmation, then repeat the identical call with confirmToken. " +
   "Report that work started and check back later with run_status rather than waiting. find_actions and describe_action reveal every other action; run_action runs one.";
+
+/**
+ * A coordinator tool result while agent messaging is off: tools still run, but
+ * every wake they would promise is mail, so the promise (`wake`, the next step
+ * it implies, the poll guard's restated contract) becomes the note saying so.
+ */
+export function withoutWakePromise(result: unknown): unknown {
+  if (!isRecord(result)) return result;
+  const rewrite = (value: JsonRecord): JsonRecord => {
+    if (typeof value.wake !== "string" && value.instruction !== COORDINATOR_ASYNC_CONTRACT) {
+      return value;
+    }
+    const rewritten: JsonRecord = { ...value, wake: COORDINATOR_MESSAGING_OFF_NOTE };
+    delete rewritten.nextStep;
+    if (value.instruction === COORDINATOR_ASYNC_CONTRACT) delete rewritten.instruction;
+    return rewritten;
+  };
+  const rewriteBlock = (block: unknown): unknown => {
+    if (!isRecord(block) || block.type !== "text" || typeof block.text !== "string") return block;
+    try {
+      const parsed: unknown = JSON.parse(block.text);
+      return isRecord(parsed) ? { ...block, text: JSON.stringify(rewrite(parsed)) } : block;
+    } catch {
+      return block;
+    }
+  };
+  return {
+    ...result,
+    ...(Array.isArray(result.content) ? { content: result.content.map(rewriteBlock) } : {}),
+    ...(isRecord(result.structuredContent)
+      ? { structuredContent: rewrite(result.structuredContent) }
+      : {}),
+  };
+}
 
 /** A coordinator's worker prompts ask for commits and focused checks, never a pull request (see COORDINATOR_PR_RULE, COORDINATOR_VALIDATION_RULE). */
 const COORDINATOR_WORKER_PROMPT_NOTE =
@@ -610,27 +654,36 @@ export async function createControlMcp(
         "Reuse requestId when retrying mutations. " +
         (coordinatorScope ? COORDINATOR_LAUNCH_DEFAULTS_RULE : LAUNCH_DEFAULTS_GUIDANCE) +
         // Side agents launch nothing, so these rules are the main coordinator's.
-        (coordinatorScope?.capabilities.includes("environments")
+        // With messaging off they promise wakes, so the note below stands instead.
+        (coordinatorScope?.capabilities.includes("environments") && messagingEnabled
           ? ` ${COORDINATOR_ENVIRONMENT_CHOICE_RULE} ${COORDINATOR_PR_RULE} ${COORDINATOR_VALIDATION_RULE}`
           : "") +
-        (coordinatorScope?.capabilities.includes("accounts") && schedulingEnabled
+        (coordinatorScope?.capabilities.includes("accounts") &&
+        schedulingEnabled &&
+        messagingEnabled
           ? ` ${COORDINATOR_TIMERS_AND_ACCOUNTS_RULE}`
           : "") +
-        (coordinatorScope ? ` ${COORDINATOR_ASYNC_CONTRACT}` : "") +
+        (coordinatorScope
+          ? ` ${messagingEnabled ? COORDINATOR_ASYNC_CONTRACT : COORDINATOR_MESSAGING_OFF_NOTE}`
+          : "") +
         (operator ? ` ${OPERATOR_INSTRUCTIONS}` : ""),
     },
   );
-  const server = filteredToolServer(mcp, (tool) => {
-    if (coordinatorScope) {
-      const capability = COORDINATOR_TOOL_CAPABILITY.get(tool);
-      if (capability === "schedules" && !schedulingEnabled) return false;
-      return capability !== undefined && coordinatorScope.capabilities.includes(capability);
-    }
-    // Operator credentials: the original tools are part of every profile
-    // except voice, and each needs the public actions it runs.
-    if (!operator) return true;
-    return operator.profile !== "voice" && operatorToolListed(operator, tool);
-  });
+  const server = filteredToolServer(
+    mcp,
+    (tool) => {
+      if (coordinatorScope) {
+        const capability = COORDINATOR_TOOL_CAPABILITY.get(tool);
+        if (capability === "schedules" && !schedulingEnabled) return false;
+        return capability !== undefined && coordinatorScope.capabilities.includes(capability);
+      }
+      // Operator credentials: the original tools are part of every profile
+      // except voice, and each needs the public actions it runs.
+      if (!operator) return true;
+      return operator.profile !== "voice" && operatorToolListed(operator, tool);
+    },
+    coordinatorScope && !messagingEnabled ? withoutWakePromise : undefined,
+  );
 
   /**
    * Launch options plus what an omitted model and effort resolve to.

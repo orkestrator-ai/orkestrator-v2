@@ -313,6 +313,48 @@ export interface CoordinatorDelegation {
   stopRequestedAt?: string;
 }
 
+/** What coordinator-started work asks of the user, for the panel and for the agent. */
+export type CoordinatorWorkBucket = "needs-you" | "running" | "finished";
+
+/**
+ * The bucket one delegation alone puts its worker in. The one definition of
+ * "needs you" for a delegation, so the Work panel and `list_workflows` cannot
+ * disagree. The panel also joins what only it can read (its prompt mirrors and
+ * a worker's live activity), which can move a row but never this answer.
+ */
+export function coordinatorDelegationBucket(
+  delegation: Pick<CoordinatorDelegation, "state" | "waiting">,
+): CoordinatorWorkBucket {
+  if (delegation.state !== "running") return "finished";
+  return delegation.waiting ? "needs-you" : "running";
+}
+
+/** A delegation as the agent reads it from `list_workflows`. */
+export interface CoordinatorDelegationSummary {
+  state: CoordinatorDelegation["state"];
+  bucket: CoordinatorWorkBucket;
+  workerTabId: string;
+  requestedAt: string;
+  completedAt?: string;
+  /** When the worker began waiting on input or an approval. */
+  waitingSince?: string;
+  stopRequestedAt?: string;
+}
+
+export function coordinatorDelegationSummary(
+  delegation: CoordinatorDelegation,
+): CoordinatorDelegationSummary {
+  return {
+    state: delegation.state,
+    bucket: coordinatorDelegationBucket(delegation),
+    workerTabId: delegation.workerTabId,
+    requestedAt: delegation.requestedAt,
+    ...(delegation.completedAt ? { completedAt: delegation.completedAt } : {}),
+    ...(delegation.waiting ? { waitingSince: delegation.waiting.since } : {}),
+    ...(delegation.stopRequestedAt ? { stopRequestedAt: delegation.stopRequestedAt } : {}),
+  };
+}
+
 /** The last status a coordinator was sent for one workflow or worker. */
 export interface CoordinatorStatusNoticeRecord {
   /** Stable key of the settled state; the same key is never sent twice. */
@@ -608,7 +650,7 @@ export const COORDINATOR_PROJECT_HOME_MESSAGE_WINDOW_MS = 3 * 60 * 60_000;
  * checkout. `send_message` enforces the project-home half (reason, approval).
  */
 export const COORDINATOR_ROUTING_RULE =
-  "Routing: run all work in an isolated environment with its own worktree or container. Fully specified work, which can be written up as a ticket with acceptance criteria: create the ticket with create_ticket, then start_build_pipeline for it. Smaller or interactive work: launch_environment with a prompt, then work with that worker back and forth. The project home is the user's own checkout, and an agent working there conflicts with the user's own work in it, so use it only in exceptional circumstances and first tell the user why an environment will not do. send_message to the project home needs projectHomeReason, and waits for the user's approval unless you messaged it in the last 3 hours.";
+  "Routing: run all work in an isolated environment with its own worktree or container. Fully specified work, which can be written up as a ticket with acceptance criteria: create the ticket with create_ticket, then start_build_pipeline for it. Smaller or interactive work: when an idle worker already fits, reuse it with send_prompt_to_tab or launch_job; otherwise launch_environment with a prompt, then work with that worker back and forth. The project home is the user's own checkout, and an agent working there conflicts with the user's own work in it, so use it only in exceptional circumstances and first tell the user why an environment will not do. send_message to the project home needs projectHomeReason, and waits for the user's approval unless you messaged it in the last 3 hours.";
 /**
  * Which kind of worker environment to use, told to every main coordinator
  * verbatim.
@@ -668,6 +710,15 @@ export const COORDINATOR_DELEGATION_HOLD_REASON = "delegation-running";
  */
 export const COORDINATOR_ASYNC_CONTRACT =
   "Delegation is asynchronous. After launching a worker, sending it a message, or starting a workflow, finish this turn with a short summary of what was delegated and what you expect back. Do not wait, sleep, poll the mailbox, or repeatedly check message status: you will be woken with a new message when the worker has finished, and that message starts a new turn. Workers do not send progress updates, so silence means the work is still running.";
+
+/**
+ * What a coordinator is told instead of `COORDINATOR_ASYNC_CONTRACT` while agent
+ * messaging is off, on the same surfaces. Every wake is mail, and a wake held
+ * while messaging is off goes out only when it is turned back on, so promising
+ * one would leave the coordinator waiting on the user's setting.
+ */
+export const COORDINATOR_MESSAGING_OFF_NOTE =
+  "Agent messaging is off, so nothing wakes this conversation and no worker can report back until the user turns it on in Settings. Do not launch workers or wait for a wake: tell the user. Read a worker's state with list_workflows or get_environment when asked.";
 
 /**
  * What `create_pr` and `resolve_conflicts` tell a coordinator about being woken.
@@ -732,6 +783,8 @@ export interface CoordinatorSnapshot {
   projectPath: string;
   providerAvailability: Partial<Record<AgentPlatform, CoordinatorProviderQualification>>;
   controlMcp: { enabled: boolean; running: boolean; error: string | null };
+  /** Absent from a backend older than this field, which says nothing about the setting. */
+  agentMessaging?: { enabled: boolean };
   workflows: CoordinatorWorkflowAssociation[];
 }
 

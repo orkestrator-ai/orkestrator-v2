@@ -347,3 +347,95 @@ describe("removeConfinedDirectory", () => {
     await fs.rm(displaced, { recursive: true, force: true });
   });
 });
+
+describe("writeConfinedFile helper capture", () => {
+  const realExecPath = process.execPath;
+
+  afterEach(() => {
+    process.execPath = realExecPath;
+  });
+
+  async function stubHelper(body: string): Promise<void> {
+    const directory = await createWorktree();
+    const script = path.join(directory, "fake-helper");
+    await fs.writeFile(script, `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+    process.execPath = script;
+  }
+
+  test("delivers a payload far larger than a pipe buffer", async () => {
+    const root = await createWorktree();
+    const payload = Buffer.alloc(MAX_WRITE_FILE_BYTES, 0x61);
+    await writeConfinedFile(root, "large.bin", payload);
+    expect((await fs.readFile(path.join(root, "large.bin"))).equals(payload)).toBe(true);
+  });
+
+  test("an empty payload still publishes an empty file", async () => {
+    const root = await createWorktree();
+    await writeConfinedFile(root, "empty.bin", Buffer.alloc(0));
+    expect((await fs.readFile(path.join(root, "empty.bin"))).length).toBe(0);
+  });
+
+  test("a helper refusing before it reads stdin reports its diagnostic, not a broken pipe", async () => {
+    const root = await createWorktree();
+    const outside = await createWorktree();
+    await fs.symlink(outside, path.join(root, "link"));
+    await expect(
+      writeConfinedFile(root, "link/file.bin", Buffer.alloc(MAX_WRITE_FILE_BYTES, 0x61)),
+    ).rejects.toThrow("Confined file write failed (symlink or non-directory ancestor)");
+    expect(await fs.readdir(outside)).toEqual([]);
+  });
+
+  test("keeps the ancestor marker callers branch on", async () => {
+    const root = await createWorktree();
+    await expect(
+      writeConfinedFile(root, "missing/file.bin", Buffer.from("x"), { createAncestors: false }),
+    ).rejects.toThrow("(ENOENT_ANCESTOR)");
+  });
+
+  test("a silent failure reports the exit code", async () => {
+    const root = await createWorktree();
+    await stubHelper("exit 9");
+    await expect(writeConfinedFile(root, "file.bin", Buffer.from("x"))).rejects.toThrow(
+      "Confined file write failed (exit 9)",
+    );
+  });
+
+  test("a helper killed by a signal fails, with no exit code to report", async () => {
+    const root = await createWorktree();
+    await stubHelper("kill -KILL $$");
+    await expect(writeConfinedFile(root, "file.bin", Buffer.from("x"))).rejects.toThrow(
+      "Confined file write failed (exit null)",
+    );
+  });
+
+  test("a long diagnostic is clipped", async () => {
+    const root = await createWorktree();
+    await stubHelper(`head -c 4096 /dev/zero | tr '\\0' d >&2; exit 1`);
+    const error = (await writeConfinedFile(root, "file.bin", Buffer.from("x")).catch(
+      (reason: unknown) => reason,
+    )) as Error;
+    expect(error.message).toBe(`Confined file write failed (${"d".repeat(1_024)})`);
+  });
+
+  test("a helper that cannot start is not reported as a refused write", async () => {
+    const root = await createWorktree();
+    process.execPath = "/nonexistent/ork-helper-6060";
+    const error = (await writeConfinedFile(root, "file.bin", Buffer.from("x")).catch(
+      (reason: unknown) => reason,
+    )) as Error;
+    expect(error).toBeInstanceOf(Error);
+    expect(error.message).not.toContain("Confined file write failed");
+    expect(error.message).not.toContain("PINNED");
+  });
+
+  test("arms no deadline: the write has always run until the helper exits", async () => {
+    const root = await createWorktree();
+    const timers = spyOn(globalThis, "setTimeout");
+    try {
+      await writeConfinedFile(root, "file.bin", Buffer.from("x"));
+      expect(timers.mock.calls.map((call) => call[1])).not.toContain(60_000);
+    } finally {
+      timers.mockRestore();
+    }
+  });
+});

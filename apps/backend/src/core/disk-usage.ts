@@ -1,5 +1,4 @@
 import { canonicalWorktreePath } from "@orkestrator/protocol/node/worktree-paths";
-import { execFile } from "node:child_process";
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 
@@ -17,7 +16,7 @@ import { retainedContainerIds, storageVolumeNames } from "./environment-cleanup.
 import type { Environment } from "./models.js";
 import { GIT_MIRROR_NAME, GIT_MIRRORS_DIR } from "./project-git-mirror.js";
 import { containerSize, volumeSizes } from "./recovery-copies.js";
-import { pathExists } from "./shell.js";
+import { CommandFailedError, pathExists, runCommand } from "./shell.js";
 
 const DU_TIMEOUT_MS = 180_000;
 const DU_MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
@@ -39,23 +38,34 @@ export type DiskUsageProbes = {
   profilesDirectory: () => string | null;
 };
 
-const runDu: DuRunner = (args) =>
-  new Promise((resolve, reject) => {
-    execFile(
-      "du",
-      args,
-      { encoding: "utf8", maxBuffer: DU_MAX_OUTPUT_BYTES, timeout: DU_TIMEOUT_MS },
-      (error, stdout) => {
-        // `du` exits 1 when it cannot read part of a tree and still reports
-        // what it could; a timeout or kill leaves totals that are too small.
-        if (error && (error.killed || error.signal || !stdout)) reject(error);
-        else resolve(stdout);
-      },
-    );
-  });
+export async function runDu(
+  args: string[],
+  limits: { command?: string; timeoutMs?: number; maxOutputBytes?: number } = {},
+): Promise<string> {
+  try {
+    const { stdout } = await runCommand(limits.command ?? "du", args, {
+      timeoutMs: limits.timeoutMs ?? DU_TIMEOUT_MS,
+      maxOutputBytes: limits.maxOutputBytes ?? DU_MAX_OUTPUT_BYTES,
+    });
+    return stdout;
+  } catch (error) {
+    // `du` exits 1 when it cannot read part of a tree and still reports what it
+    // could; a timeout, kill or overflow leaves totals that are too small.
+    if (
+      error instanceof CommandFailedError &&
+      error.stdout &&
+      !error.timedOut &&
+      !error.signal &&
+      !error.outputLimitExceeded
+    ) {
+      return error.stdout;
+    }
+    throw error;
+  }
+}
 
 const defaultProbes: DiskUsageProbes = {
-  du: runDu,
+  du: (args) => runDu(args),
   containerSize,
   volumeSizes,
   profilesDirectory: () => {

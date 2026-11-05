@@ -2,7 +2,7 @@
 
 ## Task analysis
 
-Analysed 2026-11-04 against `main` at `a44641cb`.
+Analysed 2026-11-04 against `main` at `a44641cb`. Task 5 re-checked and acted on 2026-11-05 against `main` at `6e796ca32`.
 
 ### Tasks
 
@@ -10,7 +10,7 @@ Analysed 2026-11-04 against `main` at `a44641cb`.
 2. **Find a reduced case**: reproduce the lost event without this repository's code. Status: open.
 3. **Decide on a bound in `runCommand`**: stop a backend command waiting out its whole timeout for a child that has exited. Status: done (2026-11-04), through file capture and a macOS exit watchdog rather than a bound.
 4. **Unblock readers parked on a superseded scan**: a read already waiting when a retarget arrives still waits for that scan. Status: open.
-5. **Move the backend's other pipe captures off Bun's readers**: `node:child_process` captures outside `runCommand` can still stall. Status: open.
+5. **Move the backend's other pipe captures off Bun's readers**: `node:child_process` captures outside `runCommand` can still stall. Status: done (2026-11-05) for every site not held for running work; re-check the held files in that task's subsection once their work lands. Captures that did not fit are in [6060](6060-pipe-captures-that-could-not-move-to-runcommand.md).
 6. **Reap children whose exit Bun lost**: on macOS such a child stays a zombie after its command settles. Status: open.
 
 ### 1. Report the defect upstream
@@ -92,9 +92,15 @@ Analysed 2026-11-04 against `main` at `a44641cb`.
 
 **Problem.** The defect is still in Bun, so anything else that waits on a child's piped output can still stall until its own timeout.
 
-**Context.** `runCommand` is the main path, and all 122 children of case 1537's test use it, but `node:child_process` is still imported by about 30 backend and protocol files. Examples that capture output include `review-worktree-fingerprint.ts`, `process-identity.ts`, `disk-usage.ts` and `path-safety.ts`.
+**Context.** `runCommand` is the main path, and all 122 children of case 1537's test use it, but `node:child_process` was still imported by 43 non-test backend and protocol files. Most were followers, self-contained scripts, synchronous callers or type-only imports. `review-worktree-fingerprint.ts`, named when this task was written, is script text run inside the environment, so it could not move.
 
-**Investigation.** None has been seen to stall; the only measurements are of `runCommand`. Long-running followers (`spawnCommand`, `spawnParentBoundCommand`) read live output, so file capture does not fit them.
+**Investigation.** None has been seen to stall; the only measurements are of `runCommand`. Long-running followers (`spawnCommand`, `spawnParentBoundCommand`) read live output, so file capture does not fit them. Moved on 2026-11-05: `disk-usage.ts` (`du`), `process-identity.ts` (`ps`), `claude-host-credentials.ts` (`security`), `ssh-agent-socket.ts`, `tailscale-serve.ts`, `preview-process-tree.ts` (`ps`), `preview-supervisor.ts` (`runDocker`), `tmux-shared.ts` (`execWithRawOutput`) and `path-safety.ts` (`writeConfinedFile`). None of them needs `waitForDescendants`: each reads a program that writes before it exits, and none reads a background helper.
+
+**Held for running work, unchanged, to re-check when that work lands:**
+
+- `apps/backend/src/core/diff-stats-service.ts`, `commands-files.ts` and `change-tracking/git-scopes.ts` (E-0580). None imports `node:child_process` today; the last two use `runCommand` or `runCommandBuffer`.
+- Everything in `apps/backend/src/core/change-tracking/` (E3). `capture.ts` holds a synchronous `execFileSync` inside a `node -e` container helper, and `service-test-support.ts` and six tests import `execFileSync` directly.
+- `apps/backend/src/core/commands-containers.ts` and the Docker scripts (S-0080). `commands-containers.ts` imports `node:child_process` nowhere today.
 
 **Decisions.**
 
@@ -134,6 +140,30 @@ Chose to document and test the same-worktree admission wait and the already-park
 
 Chose file capture because a bound could only fail a command that had succeeded, and the ticket for case 1537 required the cause removed rather than turned into a different failure. The macOS watchdog is limited to macOS because the lost exit was only observed there: none of 141 Linux stalls lost it. Tasks 5 and 6 were added for what this leaves.
 
+### Task 5: `runCommand` moves to its own module
+
+Chose to move the capture primitive to `command-capture.ts`, with `shell.ts` re-exporting it, because `shell.ts` imports `path-safety.ts`, so `path-safety.ts` importing `shell.ts` would be a runtime cycle, which lint refuses. Every other importer stays on `shell.ts`.
+
+### Task 5: two additions to `runCommand`, and no new primitive
+
+Added `maxOutputBytes`, because each moved site had its own `maxBuffer` that a caller-side check after exit could not enforce while the child ran. Added `stderr` and `stdoutBytes` to `CommandFailedError`, because sites that report a status (`execWithRawOutput`, `runDocker`, `writeConfinedFile`, the Tailscale errors) need the streams apart and `message` merges them. `stdoutBytes` stays empty for a command with redacted values, since redaction works on text.
+
+### Task 5: what changes at a timeout
+
+Took `runCommand`'s single timeout behaviour rather than adding a kill-signal option: SIGTERM to the command's private group, then SIGKILL 100 ms later. `execFile` sites gain the SIGKILL. `execWithRawOutput` and `runDocker` used an immediate SIGKILL to the child alone, so they settle up to 100 ms later and also stop its descendants. Their results are unchanged, and tests cover a child that ignores SIGTERM.
+
+### Task 5: output limits where a site had none
+
+`execWithRawOutput` had no limit, and a container's first transcript tail reads from offset 0, so it passes 1 GiB rather than `runCommand`'s 50 MiB. Past that limit it rejects, because the tail reader ignores the status and would otherwise skip bytes. `runDocker` keeps returning the first 64 KiB of stdout as a success, as it did; a client past 50 MiB on a stream now gets no exit code.
+
+### Task 5: Keychain output
+
+`security`'s stdout now lands in an unlinked, owner-only file for the command's lifetime, rather than a pipe. Accepted because `agent-accounts-promotion.ts` already reads Keychain secrets through `runCommand`, and the file has no name on disk. Its blocks are freed on close, not overwritten, so it does rest on disk encryption for that window.
+
+### Task 5: `writeConfinedFile`'s test hook keeps a pipe
+
+`afterDirectoriesOpened` has to act between the helper pinning its directories and receiving the payload, which needs a live read, so that path stays on `spawn`. Only tests set it. They exercise the same helper script but not `runCommand`'s delivery; `path-safety.test.ts` covers that path separately.
+
 ## Constraints and rationale
 
 - Never raise a test deadline, skip or retry to hide this; see the [flake rules](../../tests/flaky-tests/0000-index.md).
@@ -143,7 +173,7 @@ Chose file capture because a bound could only fail a command that had succeeded,
 ## Needs verification
 
 - Whether the lost event happens on x86-64 Linux. All Linux evidence is aarch64 in a container; CI's misses suggest it does, but no CI run has reported a step.
-- How often it reaches users through the remaining pipe captures (task 5).
+- How often it reaches users through the remaining pipe captures ([6060](6060-pipe-captures-that-could-not-move-to-runcommand.md)).
 - Whether a Bun canary build still has it.
 
 ## Related
@@ -151,6 +181,7 @@ Chose file capture because a bound could only fail a command that had succeeded,
 - [Flake case 1537](../../tests/flaky-tests/environments-and-containers/1537-diff-base-override-scan-timeout.md)
 - [CI shard report 0010](../../reports/ci-shard-validation/0010-backend-shard-diff-base-override-timeout.md)
 - [0030 test suite and CI health](0030-test-suite-and-ci-health.md)
+- [6060 pipe captures that could not move to `runCommand`](6060-pipe-captures-that-could-not-move-to-runcommand.md)
 
 ## Replaces
 

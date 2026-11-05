@@ -1,8 +1,8 @@
-import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { runCommand } from "./shell.js";
 
 const HOST_CLAUDE_KEYCHAIN_SERVICE = "Claude Code-credentials";
 
@@ -39,18 +39,12 @@ export function claudeLoginLookupOptions(
     : {};
 }
 
-function readKeychainCommand(args: string[]): Promise<string> {
-  return new Promise((resolve, reject) => {
-    execFile(
-      "security",
-      args,
-      { encoding: "utf8", timeout: 10_000, maxBuffer: MAX_HOST_AGENT_CREDENTIAL_BYTES },
-      (error, stdout) => {
-        if (error) reject(error);
-        else resolve(stdout);
-      },
-    );
+export async function readKeychainCommand(args: string[], timeoutMs = 10_000): Promise<string> {
+  const { stdout } = await runCommand("security", args, {
+    timeoutMs,
+    maxOutputBytes: MAX_HOST_AGENT_CREDENTIAL_BYTES,
   });
+  return stdout;
 }
 
 const MAX_HOST_AGENT_CREDENTIAL_BYTES = 1024 * 1024;

@@ -21,6 +21,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { delimiter, join } from "node:path";
+import { readKeychainCommand } from "../src/core/claude-host-credentials";
 import { tmpdir } from "node:os";
 
 const { __testing } = await import("../src/core/commands");
@@ -245,6 +246,32 @@ describe("host Claude credential resolution on macOS", () => {
       stubSecurity(dir, `#!/bin/sh\nprintf '%s' '${KEYCHAIN}'\n`);
       await writeOnDisk(dir, ON_DISK);
       expect(await getHostClaudeCredentials("darwin", dir)).toBe(KEYCHAIN);
+    });
+  });
+
+  test("treats an oversized Keychain answer as no record, not a cut credential", async () => {
+    await withTempDirAsync(async (dir) => {
+      stubSecurity(dir, `#!/bin/sh\nhead -c ${1024 * 1024 + 1} /dev/zero\n`);
+      await writeOnDisk(dir, ON_DISK);
+      expect(await getHostClaudeCredentials("darwin", dir)).toBe(ON_DISK);
+    });
+  });
+
+  test("a Keychain read past its timeout rejects, whatever it printed", async () => {
+    await withTempDirAsync(async (dir) => {
+      stubSecurity(dir, `#!/bin/sh\nprintf '%s' '${KEYCHAIN}'\nexec sleep 30\n`);
+      await expect(readKeychainCommand(["find-generic-password"], 100)).rejects.toMatchObject({
+        timedOut: true,
+      });
+    });
+  });
+
+  test("a failed Keychain read keeps its exit status and no secret in the message", async () => {
+    await withTempDirAsync(async (dir) => {
+      stubSecurity(dir, "#!/bin/sh\necho 'item could not be found' >&2\nexit 44\n");
+      await expect(readKeychainCommand(["find-generic-password"])).rejects.toMatchObject({
+        exitCode: 44,
+      });
     });
   });
 

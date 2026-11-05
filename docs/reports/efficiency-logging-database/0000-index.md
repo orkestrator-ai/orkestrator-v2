@@ -44,10 +44,9 @@ A batch file combines several reports as numbered parts and takes the rating of 
 | 28 | [0620-e23-renderer-polling.md](0620-e23-renderer-polling.md) | Low | No | **E23, Renderer polling.**<br>`0620`: WEB-12: One environment change refetches the project's whole environment list<br>`0630`: WEB-13: Expanded truncated folders are re-read every 5 s without a digest<br>`0660`: WEB-18: Some renderer polls keep running while the window is hidden | From `0620`: Bursts already collapse to one project read, so this should wait for a measurement. |
 | 29 | [0650-web-16-terminal-container-environment-subscription.md](0650-web-16-terminal-container-environment-subscription.md) | Low | No | WEB-16: `TerminalContainer` subscribes to the whole environment object | It is an unmeasured re-render, with launch-effect risk in the fix. |
 | 30 | [0680-bg-10-multi-review-snapshot-drift-checks.md](0680-bg-10-multi-review-snapshot-drift-checks.md) | Low | No | BG-10: Multi Review snapshot mode runs a drift check per reviewer | It costs a bounded number of extra git probes per review pass. |
-| 31 | [0691-dk-5-preview-capture-data-urls.md](0691-dk-5-preview-capture-data-urls.md) | Low | No | DK-5: Preview captures cross IPC as large data URLs | Captures are occasional and bounded. |
-| 32 | [0692-dk-6-preview-tunnel-multiplexing.md](0692-dk-6-preview-tunnel-multiplexing.md) | Low | No | DK-6: The preview tunnel opens a WebSocket per TCP connection | The existing connection pool already removes most repeats. |
-| 33 | [0693-dk-10-second-claude-binary.md](0693-dk-10-second-claude-binary.md) | Low | No | DK-10: The image ships two Claude Code native binaries | It is an optional image-size saving that waits on a maintainer decision. |
-| 34 | [0694-dk-16-attention-follow-polling.md](0694-dk-16-attention-follow-polling.md) | Low | No | DK-16 (rest): CLI `attention --follow` re-downloads pending items on every poll | It affects only long-running followers, and pending pages are probably small. |
+| 31 | [0692-dk-6-preview-tunnel-multiplexing.md](0692-dk-6-preview-tunnel-multiplexing.md) | Low | No | DK-6: The preview tunnel opens a WebSocket per TCP connection | The existing connection pool already removes most repeats. |
+| 32 | [0693-dk-10-second-claude-binary.md](0693-dk-10-second-claude-binary.md) | Low | No | DK-10: The image ships two Claude Code native binaries | It is an optional image-size saving that waits on a maintainer decision. |
+| 33 | [0694-dk-16-attention-follow-polling.md](0694-dk-16-attention-follow-polling.md) | Low | No | DK-16 (rest): CLI `attention --follow` re-downloads pending items on every poll | It affects only long-running followers, and pending pages are probably small. |
 
 ## Parallel running
 
@@ -72,7 +71,7 @@ This index only changes when a branch merges, so it can't show what is running n
 | E4 | [Object store](0430-e4-object-store.md) | `0430`, `0480`, `0530`, `0550` | Change tracking, 2 of 2 | None | None |
 | E5 | [Database upkeep](0760-e5-database-upkeep.md) | `0760`, `0800`, `0910`, `0920` | Storage, 1 of 2 | None | E15 (Health and diagnostics) |
 | E7 | [Diff scans](0420-e7-diff-scans.md) | `0420`, `0440`, `0450`, `0460`, `0570` | Git scans and file reads, 1 of 2 | None | E3 (Retention and deletion) |
-| E26 | [Local desktop transport](0400-e26-local-desktop-transport.md) | `0400`, `0860` | Desktop, 1 of 2 | E1 (Baseline run) | None |
+| E26 | [Local desktop transport](0400-e26-local-desktop-transport.md) | `0400`, `0860` | Desktop, 1 of 1 | E1 (Baseline run) | None |
 | E18 | [Gateway events](0280-e18-gateway-events.md) | `0280`, `0290`, `0300`, `0370` | Gateway, 2 of 4 | None | None |
 | E24 | [Gateway static and preview](0310-e24-gateway-static-and-preview.md) | `0310`, `0365` | Gateway, 3 of 4 | None | None |
 | E13 | [Silent failures](0720-e13-silent-failures.md) | `0720`, `0830` | Logging and diagnostics, 1 of 4 | None | E20 (ACP bridge), E21 (Pi bridge) |
@@ -114,7 +113,6 @@ These still follow the lane and conflict rules above.
 | Batch | Name | Files | Lane and position | Finish first | Not at the same time as |
 | --- | --- | --- | --- | --- | --- |
 | E-0580 | [File RPC and usage report](0580-st-21-file-rpc-and-usage-report.md) | `0580` | Git scans and file reads, 2 of 2 | None | None |
-| E-0691 | [Preview capture data URLs](0691-dk-5-preview-capture-data-urls.md) | `0691` | Desktop, 2 of 2 | None | None |
 | E-0140 | [Codex queue bound](0140-br-13-serial-queue-bound.md) | `0140` | No lane | None | None |
 | E-0250 | [Codex running tool cards](0250-br-7-codex-running-tool-cards.md) | `0250` | No lane | None | None |
 | E-0360 | [SSE replay rings](0360-br-15-sse-replay-rings.md) | `0360` | No lane | None | None |
@@ -250,7 +248,7 @@ When one of these becomes ready, it joins the lane shown.
 | DK-2 | Partly done | Two serialisations per invoke on the gateway transport, behind the same off-by-default setting (2026-11-04, 1202 task 12); see 0400. |
 | DK-3 | Done | `file-stamps.ts:34` (da0f720fa). |
 | DK-4 | Done | Idle timeout and `Range:` resume, `download.ts:8-14` (da0f720fa). |
-| DK-5 | Done | Capture images cross IPC as bytes (2026-11-04, 1202 task 12); region crops still cross as data URLs; see 0691. |
+| DK-5 | Done | Capture images and region crops cross IPC as bytes, and the preload converts them with native base64 (`preload-api.ts`, `cropPng`); no custom scheme, because a real Electron run showed no renderer stall near the size limit (2026-11-05, 1202 task 12). PNG work left on main is todo 5540. |
 | DK-6 | Done | Tunnel v2 multiplexes an attachment's connections over one socket, `preview-tunnel-session.ts`, `preview-tunnel-mux-server.ts` (2026-11-04, todo 4500); see 0692. |
 | DK-7 | Done | Order and split SDK layers, `docker/Dockerfile:40-65`, `:421-423` (fd679c0e2). |
 | DK-8 | Done | `mise link`, `docker/Dockerfile:399` (fd679c0e2). |

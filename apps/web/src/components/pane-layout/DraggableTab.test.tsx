@@ -1334,6 +1334,23 @@ describe("DraggableTab tab semantics", () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
+  test("the Mac delete key closes once and advertises Backspace", () => {
+    const original = Object.getOwnPropertyDescriptor(navigator, "platform");
+    Object.defineProperty(navigator, "platform", { configurable: true, value: "MacIntel" });
+    try {
+      const onKeyboardClose = mock(() => {});
+      const tab = renderKeyboardTab({ onKeyboardClose });
+      expect(tab.getAttribute("aria-keyshortcuts")).toBe("Delete Backspace");
+      fireEvent.keyDown(tab, { key: "Backspace" });
+      fireEvent.keyDown(tab, { key: "Backspace", repeat: true });
+      fireEvent.keyDown(tab, { key: "Backspace", metaKey: true });
+      expect(onKeyboardClose).toHaveBeenCalledTimes(1);
+    } finally {
+      if (original) Object.defineProperty(navigator, "platform", original);
+      else Reflect.deleteProperty(navigator, "platform");
+    }
+  });
+
   test("Delete falls back to onClose when no keyboard route is given", () => {
     const onClose = mock(() => {});
     fireEvent.keyDown(renderKeyboardTab({ onClose }), { key: "Delete" });

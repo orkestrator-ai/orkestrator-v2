@@ -233,3 +233,42 @@ test("switching panes on a phone keeps each pane's scroll position and the termi
     ]);
   }
 });
+
+test("keyboard selection and close let the real terminal retain focus", async ({
+  page,
+}, testInfo) => {
+  await page.goto("/pane-breakpoint?keyboard");
+  if (testInfo.project.name === "mobile-chromium") {
+    await paneSwitcherTab(page, /Shell/).click();
+  }
+  const strip = page
+    .locator('[data-pane-host="terminal-pane"]')
+    .getByRole("tablist", { name: "Environment tabs" });
+  const shell = strip.getByRole("tab", { name: /^Shell \d+$/ });
+  await expect(
+    page.locator('[data-pane-host="terminal-pane"] .xterm-helper-textarea').first(),
+  ).toHaveCount(1);
+  await shell.focus();
+  await page.screenshot({
+    path: `output/visual-previews/tab-focus-before-${testInfo.project.name}.png`,
+  });
+  await shell.press("Enter");
+  await expect(shell).toHaveAttribute("aria-selected", "true");
+  // The next terminal can take focus before asynchronous tab removal settles.
+  // Exercise this race with TerminalContainer's real xterm input, not a stub.
+  await shell.evaluate((element) => {
+    element.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete", bubbles: true }));
+    const inputs = document.querySelectorAll<HTMLTextAreaElement>(
+      '[data-pane-host="terminal-pane"] .xterm-helper-textarea',
+    );
+    inputs[inputs.length - 1]?.focus();
+  });
+  await expect(shell).toHaveCount(0);
+  await expect(strip.getByRole("tab", { name: /^Spare shell \d+$/ })).toBeVisible();
+  await expect(
+    page.locator('[data-pane-host="terminal-pane"] .xterm-helper-textarea'),
+  ).toBeFocused();
+  await page.screenshot({
+    path: `output/visual-previews/tab-focus-after-${testInfo.project.name}.png`,
+  });
+});

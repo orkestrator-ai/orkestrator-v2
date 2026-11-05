@@ -333,3 +333,5 @@ cursor positioning and macOS Option-drag column selection for a consistent local
 selection gesture that sends no input. Tracking mouse modes to change these
 options dynamically would preserve more shell gestures but adds lifecycle state
 to both terminal implementations.
+
+On macOS, the focused pane tab also accepts Backspace (the key labelled delete); Fn+Delete remains supported.

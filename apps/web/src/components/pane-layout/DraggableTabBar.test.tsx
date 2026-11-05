@@ -214,6 +214,88 @@ describe("DraggableTabBar", () => {
       expect(paneTabIds()).toEqual(["dirty-file"]);
     });
 
+    for (const fromMenu of [false, true]) {
+      test(`dirty keyboard close restores focus after async confirmation (${fromMenu ? "menu" : "Delete"})`, async () => {
+        renderStrip(["one"]);
+        usePaneLayoutStore.getState().addTab(
+          "default",
+          {
+            id: "dirty",
+            type: "file",
+            fileData: { filePath: "dirty.ts", containerId: "container" },
+          },
+          environmentId,
+        );
+        useFileDirtyStore.getState().hydrateDraft("dirty", "changed", "disk");
+        const tab = await screen.findByRole("tab", { name: "dirty.ts, unsaved changes" });
+        tab.focus();
+        if (fromMenu) {
+          fireEvent.keyDown(tab, { key: "ContextMenu" });
+          const close = await screen.findByRole("menuitem", { name: /^Close$/ });
+          close.focus();
+          fireEvent.keyDown(close, { key: "Enter" });
+        } else fireEvent.keyDown(tab, { key: "Delete" });
+        let finish!: () => void;
+        (
+          invoke as unknown as { mockImplementation: (fn: () => Promise<unknown>) => void }
+        ).mockImplementation(
+          () =>
+            new Promise<void>((resolve) => {
+              finish = resolve;
+            }),
+        );
+        const confirm = await screen.findByRole("button", { name: "Close Without Saving" });
+        confirm.focus();
+        fireEvent.click(confirm);
+        await waitFor(() => expect(finish).toBeDefined());
+        expect(paneTabIds()).toContain("dirty");
+        finish();
+        await waitFor(() => expect(paneTabIds()).toEqual(["one"]));
+        await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+        await waitFor(() =>
+          expect(document.activeElement).toBe(screen.getByRole("tab", { name: "Terminal 1" })),
+        );
+      });
+    }
+
+    test.each(["file", "review"])(
+      "failed keyboard %s close cannot hand off focus after a later pointer close",
+      async (kind) => {
+        renderStrip(["one"]);
+        usePaneLayoutStore.getState().addTab(
+          "default",
+          {
+            id: "file",
+            type: kind === "file" ? "file" : "multi-review",
+            fileData:
+              kind === "file" ? { filePath: "file.ts", containerId: "container" } : undefined,
+            multiReviewTabData:
+              kind === "review" ? { environmentId, workflowId: "failed-review" } : undefined,
+          },
+          environmentId,
+        );
+        useMultiReviewStore.setState({
+          workflows: new Map([["failed-review", { phase: "cancelled" } as never]]),
+        });
+        await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(2));
+        const tab = screen.getAllByRole("tab")[1]!;
+        (
+          invoke as unknown as { mockImplementation: (fn: () => Promise<unknown>) => void }
+        ).mockImplementation(() => Promise.reject(new Error("discard unavailable")));
+        tab.focus();
+        fireEvent.keyDown(tab, { key: "Delete" });
+        await waitFor(() => expect(invoke).toHaveBeenCalled());
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        expect(paneTabIds()).toContain("file");
+        (
+          invoke as unknown as { mockImplementation: (fn: () => Promise<unknown>) => void }
+        ).mockImplementation(() => Promise.resolve());
+        fireEvent.click(within(tab).getByRole("button"));
+        await waitFor(() => expect(paneTabIds()).toEqual(["one"]));
+        expect(document.activeElement).not.toBe(screen.getByRole("tab", { name: "Terminal 1" }));
+      },
+    );
+
     test("arrow keys, Home and End move focus without selecting", () => {
       renderStrip(["one", "two", "three"]);
       const [one, two, three] = screen.getAllByRole("tab");

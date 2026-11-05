@@ -242,7 +242,7 @@ export const KEYBOARD_SHORTCUT_GROUPS: readonly KeyboardShortcutGroup[] = [
       {
         id: "close-focused-tab",
         description: "Close the tab focused in the tab strip",
-        mac: ["Delete"],
+        mac: ["⌫ / Delete"],
         other: ["Delete"],
       },
       {

@@ -1,3 +1,4 @@
+import { detectShortcutPlatform } from "@/lib/keyboard-shortcuts";
 import { useCallback, useRef, type KeyboardEvent } from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
@@ -356,6 +357,7 @@ export function DraggableTab({
     },
     [setNodeRef],
   );
+  const isMac = detectShortcutPlatform() === "mac";
   const closeFromKeyboard = onKeyboardClose ?? onClose;
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     // The close button inside the tab answers its own keys.
@@ -382,7 +384,7 @@ export function DraggableTab({
         event.currentTarget.click();
         return;
       }
-      if (event.key === "Delete" && !hasModifier) {
+      if ((event.key === "Delete" || (isMac && event.key === "Backspace")) && !hasModifier) {
         event.preventDefault();
         // Focus moves to the next tab, so holding the key must not close them all.
         if (canClose && !event.repeat) closeFromKeyboard?.();
@@ -401,7 +403,7 @@ export function DraggableTab({
       aria-selected={isActive}
       aria-label={isDirty ? `${title}, unsaved changes` : title}
       aria-haspopup="menu"
-      aria-keyshortcuts={canClose ? "Delete" : undefined}
+      aria-keyshortcuts={canClose ? (isMac ? "Delete Backspace" : "Delete") : undefined}
       // Only the drag instructions: the rest of `attributes` names a button role
       // and a "sortable" role description, which would be announced over the tab.
       aria-describedby={attributes["aria-describedby"]}

@@ -2,7 +2,7 @@
 
 ## Task analysis
 
-Analysed 2026-11-05 against `main` at `6e796ca32`.
+Analysed 2026-11-05 against `main` at `6e796ca32`. Task 5 added the same day against `main` at `af2e566e5`.
 
 ### Tasks
 
@@ -10,6 +10,7 @@ Analysed 2026-11-05 against `main` at `6e796ca32`.
 2. **Database copy result**: the backend waits on `close` for the copy's verdict, with no deadline of its own. Status: open.
 3. **Design export container helper**: a stall reports a completed write as an unknown outcome once the deadline passes. Status: open.
 4. **Protocol captures**: `workspace-change-probe.ts`, `standalone-service.ts` and SSH `process-runner.ts` cannot import the backend's `runCommand`. Status: open.
+5. **One-shot exchanges through `spawnCommand`**: some callers write stdin and wait on `close`, and one has no deadline. Status: open.
 
 ### 1. Review worktree fingerprint script
 
@@ -82,6 +83,24 @@ Analysed 2026-11-05 against `main` at `6e796ca32`.
   - **Leave them until one is seen to stall.**
     - Pros: no change to a package every bridge depends on.
     - Cons: the bridges' own pipe captures stay a separate question either way.
+
+### 5. One-shot exchanges through `spawnCommand`
+
+**Problem.** To-do 4260 task 5 left `spawnCommand` and its callers alone as live followers, but some callers use it for a single exchange and settle on `close`. `runContainerEvidenceScript` has no deadline, so a lost completion event would leave its promise pending.
+
+**Context.** Found while classifying importers for 4260 task 5; this is not a full inventory of `spawnCommand`'s callers. In `apps/backend/src/core/`: `runContainerEvidenceScript` (`web-annotation-evidence-files.ts`, no deadline), `runContainerPathCheck` (`web-annotation-source-checks.ts`, deadline settles the call), `docker-copy-out.ts` (30 s default, deadline settles the call) and `waitForContainerReviewPackageWrite` (`commands-review.ts`, also used by `graph-artifacts.ts`, 60 s default, deadline settles the call). The container writes in `commands-registry-terminal.ts` settle on `exit` and read no output. `runCommand` accepts a `stdin` payload.
+
+**Investigation.** None has been seen to stall, and none of these sites was run under a stall. The web-annotation and graph-artifact tests inject a spawn function that runs the helper script without Docker, so moving those sites means replacing that seam, for example with a fake `docker` on `PATH` as the moved sites' tests use. `docker-copy-out.ts` needs raw bytes and an `oversized` result, which `runCommandBuffer` and `maxOutputBytes` may cover but which was not tried.
+
+**Decisions.**
+
+- **How to cover them?**
+  - **List every `spawnCommand` caller, then move those that only exchange one payload, starting with `runContainerEvidenceScript` (recommended).**
+    - Pros: removes the one wait with no deadline; uses the existing capture path; separates real followers from one-shot callers.
+    - Cons: each site's tests need a new seam; a write that succeeded but stalled today is at least bounded by its deadline, so the gain for those sites is smaller.
+  - **Only add a deadline to `runContainerEvidenceScript`.**
+    - Pros: a small change that removes the unbounded wait.
+    - Cons: a stall still reports a command that succeeded as failed.
 
 ## Assumptions and decisions
 

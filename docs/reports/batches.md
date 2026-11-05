@@ -57,7 +57,6 @@ Worked out on 2026-11-03 against `main` at `a44641cbc`, from the 167 work files 
 These batches don't share a protected area. They only have to respect the conflicts below.
 
 - **E1 (Baseline run):** the baseline task in `0150`, `0160`, `0180`, `0190` and `0400`, in efficiency-logging-database
-- **S-0260 (Live checks on other platforms):** security `0260`
 - **E20 (ACP bridge):** efficiency-logging-database `0270`, `0260`, `0240`
 - **E-0650 (Terminal container subscription):** efficiency-logging-database `0650`
 - **E-0694 (Attention follow polling):** efficiency-logging-database `0694`

@@ -42,7 +42,7 @@ governs, marked "Decided".
 12. **Local desktop transport**: local windows on the filtered gateway transport, and the IPC payload costs (DK-1, DK-2, DK-5, DK-6). Status: done (DK-1, DK-2 and DK-5 on 2026-11-04 behind a setting that is off by default; DK-6 fixed on 2026-11-04 by tunnel v2, [4500](4500-preview-tunnel-one-socket-per-connection.md); the default flip is [4501](4501-local-window-transport-default.md)).
 13. **Toolchain startup and downloads**: stamp-based verification and resumable downloads (DK-3, DK-4). Status: done (2026-11-03; Electron launch-to-ready 10.2–13.8 s before, 1.6–1.9 s after; a cold-cache run still needs live evidence).
 14. **Docker image size**: layer order, the second Bun, npm caches, the leftover apt layer and the second Claude binary (DK-7 to DK-11). Status: open (DK-7, DK-8, DK-9 and DK-11 done 2026-11-02; amd64 image smoke and Docker qualification passed; DK-10 left for a maintainer decision).
-15. **Container data transfer**: in-volume clone move, a per-project mirror, agent-home input stamps and same-device moves (DK-12 to DK-15). Status: done (2026-11-04; follow-ups in [4820](../containers-and-environments/4820-project-git-mirror-follow-ups.md)).
+15. **Container data transfer**: in-volume clone move, a per-project mirror, agent-home input stamps and same-device moves (DK-12 to DK-15). Status: done (2026-11-04; its follow-ups done 2026-11-05).
 16. **CLI and logging**: conditional `--follow` reads, transport buffering and the log sink (DK-16 to DK-18). Status: done (DK-16 and DK-17 done 2026-11-03; DK-18, the log sink, done 2026-11-04).
 
 ### 1. Baseline and before-and-after numbers
@@ -1496,7 +1496,7 @@ Done 2026-11-04 against `main` at `96ee1eb3`:
 
 Done 2026-11-04 against `main` at `a8bdce44`:
 
-- DK-13: a new container environment clones from a per-project bare mirror (`git clone --no-tags --reference <mirror> --dissociate <url>`), bound read-only, and falls back to the old clone on any problem with it (`git-mirror=1`). `apps/backend/src/core/project-git-mirror.ts` builds, refreshes, bounds and removes the mirror; `clone_from_git_mirror` in `docker/workspace-setup.sh` uses it. Tests: `tests/unit/workspace-setup-git-mirror.test.ts`, `apps/backend/tests/project-git-mirror.integration.test.ts`, `project-git-mirror-create.test.ts`, `project-git-mirror-docker.test.ts`. `docs/architecture/container-lifecycle.md` ("Project Git mirror") and `docs/development/disk-usage.md` ("Project Git mirrors") describe it. Follow-ups: [4820](../containers-and-environments/4820-project-git-mirror-follow-ups.md).
+- DK-13: a new container environment clones from a per-project bare mirror (`git clone --no-tags --reference <mirror> --dissociate <url>`), bound read-only, and falls back to the old clone on any problem with it (`git-mirror=1`). `apps/backend/src/core/project-git-mirror.ts` builds, refreshes, bounds and removes the mirror; `clone_from_git_mirror` in `docker/workspace-setup.sh` uses it. Tests: `tests/unit/workspace-setup-git-mirror.test.ts`, `apps/backend/tests/project-git-mirror.integration.test.ts`, `project-git-mirror-create.test.ts`, `project-git-mirror-docker.test.ts`. `docs/architecture/container-lifecycle.md` ("Project Git mirror") and `docs/development/disk-usage.md` ("Project Git mirrors") describe it.
 
 **Investigation.** Re-checked on 2026-11-02: DK-12 and DK-15 were still as the report describes. A same-disk worktree without submodules already moved by rename (`git worktree move`); the copy happened only for worktrees with submodules, which git refuses to move.
 
@@ -1590,7 +1590,7 @@ The DK-12 numbers came from a throwaway script that runs the old and new steps o
 - **DK-13: when does it refresh?** (decided 2026-11-04)
   - **In the background on each container creation, at most every 15 minutes per project, never waited for (taken).**
     - Pros: a launch is never delayed or blocked, an idle project makes no requests, and staleness only costs the difference. Git publishes a pack before the refs that reach it, so a clone may read during a refresh.
-    - Cons: the first environment pays its clone and the mirror's own download; the second is the first to benefit. [4820](../containers-and-environments/4820-project-git-mirror-follow-ups.md) task 1 can seed the first mirror from the host checkout.
+    - Cons: the first environment pays its clone and the mirror's own download; the second is the first to benefit. A build now seeds from the host checkout where it can, which saves that download.
   - **Wait for the first build, then clone from it.**
     - Pros: one download rather than two for a new project.
     - Cons: delays the first environment by a whole clone, and a slow or failing remote would hold up a launch, which the ticket forbids.
@@ -2356,7 +2356,7 @@ browser and real-stack suites were not run.
   not in a container. ST-18's open-view path is proved at the backend and by the
   renderer's existing `reset` test, not in a live browser session.
 
-- DK-13 on a real rootless daemon and on Docker Desktop: only Docker Engine 29.9.2, rootful, was run. A foreign uid reading the mirror (`--user 12345`) stands in for a rootless workload user. See [4820](../containers-and-environments/4820-project-git-mirror-follow-ups.md).
+- DK-13 on a real rootless daemon and on Docker Desktop: only Docker Engine 29.9.2, rootful, was run. A foreign uid reading the mirror (`--user 12345`) stands in for a rootless workload user. See [what is not yet qualified](../../architecture/container-lifecycle.md#project-git-mirror).
 
 - WEB-12, WEB-13 and WEB-18 with `localWindowGatewayTransport` on and off in a real Electron window: `local-gateway-transport-electron.spec.ts` was not run, because this host has no disposable display (`xvfb-run`). From code, the polls and the new reads all go through the same `invoke`, and neither the gateway nor the relay filters commands by name; the Chromium run exercised the gateway path only. Tracked in [5460](5460-renderer-polling-live-evidence.md) task 3, with E23's other live-evidence items.
 - WEB-19 timings in Chromium: answered 2026-11-05 by E22's closing check (`docs/reports/efficiency-logging-database/0000-index.md`). With React's development build and a `<Profiler>` around a rich `MessageMarkdown`, the median per update at 30 KB was 27.1 ms for a full render and 5.5 ms for the live path (5 KB: 4.8 and 1.3 ms). Production React in Chromium was not measured.

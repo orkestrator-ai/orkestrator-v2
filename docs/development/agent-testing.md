@@ -1868,7 +1868,7 @@ command transport.
 Mail tiles are judged on every scenario with mail (`async`, `family`, `status`,
 `deliver-now`, `goal` and each side of `peer`) by `e2e/agent-testing/coordinator-mail-tiles.ts`.
 Each provider echoes the injected carrier as a user row in its own way, and the
-transcript shows that row as tiles only when the renderer's
+transcript shows that row as tiles only when the protocol package's
 `isPeerMailCarrierContent` accepts its `content`. The check runs the
 renderer's own `createPeerMailNativeMessagesFromCarrier` over every echoed
 row and requires: no carrier row shown raw (a carrier only in the parts, or

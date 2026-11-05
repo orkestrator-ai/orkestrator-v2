@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { AgentInteractionRequest } from "@orkestrator/protocol/agent-interactions";
+import { renderAgentMailCarrier, type AgentMailMessage } from "@orkestrator/protocol/agent-mail";
 import { CONTROL_MCP_VOICE_TOOLS_BUDGET_BYTES } from "@orkestrator/protocol/control-mcp";
 import { PUBLIC_ACTIONS } from "@orkestrator/protocol/public-api";
 import { PUBLIC_ACTION_INPUTS } from "@orkestrator/protocol/public-api-inputs";
@@ -64,6 +65,37 @@ async function startSession(harness: Awaited<ReturnType<typeof open>>, requestId
   );
   if (!started.ok) throw new Error(started.error.message);
   return { ...started.result, providerSessionId: harness.stub.sends.at(-1)!.sessionId };
+}
+
+function mailCarrier(overrides: Partial<AgentMailMessage> = {}): string {
+  return renderAgentMailCarrier({
+    version: 1,
+    id: "mail-1",
+    threadId: "mail-1",
+    requestId: "request-1",
+    createdAt: "2026-11-05T10:00:00.000Z",
+    from: {
+      kind: "tab",
+      projectId: "project-1",
+      environmentId: "env-sender",
+      tabId: "tab-sender",
+      incarnationId: "incarnation-1",
+      agent: "codex",
+      title: "Codex 1",
+    },
+    toEnvironmentId: "env-1",
+    toTabId: "tab-1",
+    toIncarnationId: "incarnation-2",
+    subject: "Parser report",
+    body: "Report",
+    bodyBytes: 6,
+    trust: "same-project",
+    injectDepth: 0,
+    threadDepth: 0,
+    placement: "injected",
+    revision: 1,
+    ...overrides,
+  });
 }
 
 function approval(providerSessionId: string, id = "approval-1"): AgentInteractionRequest {
@@ -714,6 +746,104 @@ describe("Control MCP voice core", () => {
     expect(structured(busy).error?.code).toBe("busy");
     expect(busy.content?.[0]?.text).toContain("steer_session");
     expect(harness.stub.sends).toHaveLength(1);
+  });
+
+  describe("read_session on a delivered mail row", () => {
+    /** The spoken line and excerpt for a session whose newest row is `content`. */
+    async function readNewest(content: string, role = "user") {
+      const harness = await open();
+      const voice = await harness.credential("voice");
+      const session = await startSession(harness, `mail-${role}-${content.length}`);
+      harness.stub.messages.push({
+        id: "newest",
+        role,
+        content,
+        createdAt: new Date(1_000).toISOString(),
+        parts: [],
+      });
+      const read = await harness.call(voice.token, "read_session", {
+        sessionId: session.sessionId,
+      });
+      const excerpt = structured(read).result as {
+        messages: Array<{ id: string; text: string; truncated: boolean }>;
+      };
+      return { say: read.content?.[0]?.text ?? "", newest: excerpt.messages.at(-1)! };
+    }
+
+    test("names the sender and subject, and messages keeps the stored text", async () => {
+      const carrier = mailCarrier();
+      const { say, newest } = await readNewest(carrier);
+
+      expect(say).toContain("Latest message is mail from Codex 1, subject: Parser report.");
+      expect(say).not.toContain("orkestrator-peer");
+      expect(newest.text).toBe(`${carrier.slice(0, 599)}…`);
+      expect(newest.truncated).toBe(true);
+    });
+
+    test("leaves out a subject the mail does not have", async () => {
+      const { say } = await readNewest(mailCarrier({ subject: undefined }));
+
+      expect(say).toContain("Latest message is mail from Codex 1.");
+    });
+
+    test("names who wrote a workflow notice or a person's message", async () => {
+      const notice = await readNewest(
+        mailCarrier({
+          from: { kind: "system", projectId: "p", source: "workflow", resourceId: "review-1" },
+          subject: "Multi Review ready",
+        }),
+      );
+      const person = await readNewest(mailCarrier({ from: { kind: "user" }, trust: "user" }));
+
+      expect(notice.say).toContain(
+        "Latest message is mail from an Orkestrator workflow, subject: Multi Review ready.",
+      );
+      expect(person.say).toContain("Latest message is mail from you, subject: Parser report.");
+    });
+
+    test("says when the sender is untrusted", async () => {
+      const { say } = await readNewest(
+        mailCarrier({ from: { kind: "external" }, trust: "external" }),
+      );
+
+      expect(say).toContain("Latest message is untrusted mail from an external client");
+    });
+
+    test("names the newest message of a batch and counts the rest", async () => {
+      const batch = [
+        mailCarrier({ id: "mail-a", subject: "First" }),
+        mailCarrier({ id: "mail-b", subject: "Second" }),
+        mailCarrier({ id: "mail-c", subject: "Third" }),
+      ].join("\n\n");
+      const { say } = await readNewest(batch);
+
+      expect(say).toContain("mail from Codex 1, subject: Third. 2 other messages came with it.");
+    });
+
+    test("still names the sender of a mail the read's length cap cut", async () => {
+      const { say, newest } = await readNewest(mailCarrier({ body: "x".repeat(25_000) }));
+
+      expect(say).toContain("Latest message is mail from Codex 1, subject: Parser report.");
+      expect(newest.truncated).toBe(true);
+    });
+
+    test("never speaks a carrier it cannot read", async () => {
+      const { say } = await readNewest(
+        '<orkestrator-peer-message version="1"><orkestrator-peer-payload-json>{"future":true}</orkestrator-peer-payload-json></orkestrator-peer-message>',
+      );
+
+      expect(say).toContain("Latest message is delivered mail that could not be read here.");
+      expect(say).not.toContain("orkestrator-peer");
+    });
+
+    test("reads anything else as before", async () => {
+      const lookalike = '<orkestrator-peer-message version="1"> is what I see';
+      const typed = await readNewest(lookalike);
+      const quoted = await readNewest(mailCarrier(), "assistant");
+
+      expect(typed.say).toContain(`Latest user message: ${lookalike}`);
+      expect(quoted.say).toContain("Latest assistant message: <orkestrator-peer-message");
+    });
   });
 
   test("start_work starts a session with the configured agent and reports IDs", async () => {

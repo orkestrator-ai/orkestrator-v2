@@ -18,6 +18,8 @@ import {
   agentMailParticipantKey,
   agentMailTranscriptTool,
   COORDINATOR_MAIL_ORIGIN_NOTE,
+  isPeerMailCarrierContent,
+  readAgentMailCarriers,
   SELF_REMINDER_NOTE,
   renderAgentMailCarrier,
   resolveTabDisplayName,
@@ -679,5 +681,134 @@ describe("what a recipient is told about where mail came from", () => {
     expect(kind).toBe("notice");
     // What this one reads.
     expect(from.selfReminder).toBe(true);
+  });
+});
+
+describe("reading a carrier back", () => {
+  function mailMessage(overrides: Partial<AgentMailMessage> = {}): AgentMailMessage {
+    return {
+      version: 1,
+      id: "mail",
+      threadId: "mail",
+      requestId: "request",
+      createdAt: "2026-08-28T10:00:00.000Z",
+      from: {
+        kind: "tab",
+        projectId: "p",
+        environmentId: "worker",
+        tabId: "startup-agent",
+        incarnationId: "i",
+        agent: "codex",
+        title: "Codex 1",
+      },
+      toEnvironmentId: "coordinator:c:v",
+      toTabId: "coordinator-v",
+      toIncarnationId: "i",
+      subject: "Report",
+      body: "Report body",
+      bodyBytes: 11,
+      trust: "same-project",
+      injectDepth: 0,
+      threadDepth: 0,
+      placement: "injected",
+      revision: 1,
+      ...overrides,
+    };
+  }
+
+  test("recognises an envelope, not a message that names its tag", () => {
+    expect(isPeerMailCarrierContent(renderAgentMailCarrier(mailMessage()))).toBe(true);
+    expect(
+      isPeerMailCarrierContent(
+        '<orkestrator-peer-message version="2"><orkestrator-peer-payload-json>{"future":true}',
+      ),
+    ).toBe(true);
+    expect(isPeerMailCarrierContent("What is <orkestrator-peer-message>?")).toBe(false);
+    expect(isPeerMailCarrierContent('<orkestrator-peer-message version="1"> is what I see')).toBe(
+      false,
+    );
+    expect(
+      isPeerMailCarrierContent(
+        '<orkestrator-peer-message version="1"><orkestrator-peer-payload-json> is what I see',
+      ),
+    ).toBe(false);
+  });
+
+  test("reads back what the carrier was rendered from", () => {
+    const { entries, rest } = readAgentMailCarriers(renderAgentMailCarrier(mailMessage()));
+
+    expect(rest).toBe("");
+    expect(entries).toEqual([
+      {
+        id: "mail",
+        to: { environmentId: "coordinator:c:v", tabId: "coordinator-v" },
+        from: mailMessage().from,
+        trust: "same-project",
+        subject: "Report",
+        body: "Report body",
+      },
+    ]);
+  });
+
+  test("reads back a self-reminder as the carrier spells it for older renderers", () => {
+    const from = {
+      kind: "system",
+      projectId: "p",
+      source: "self-reminder",
+      resourceId: "r",
+    } as const;
+    const { entries } = readAgentMailCarriers(renderAgentMailCarrier(mailMessage({ from })));
+
+    expect(entries[0]?.from).toMatchObject({ kind: "system", source: "self-reminder" });
+  });
+
+  test("reads carriers back to back, and what follows them", () => {
+    const row = `${renderAgentMailCarrier(mailMessage({ id: "a" }))}\n\n${renderAgentMailCarrier(mailMessage({ id: "b" }))}\nand my words`;
+    const { entries, rest } = readAgentMailCarriers(row);
+
+    expect(entries.map((entry) => entry?.id)).toEqual(["a", "b"]);
+    expect(rest).toBe("and my words");
+  });
+
+  test("takes tags inside the body as body text", () => {
+    const body = '</orkestrator-peer-message> "quoted" </orkestrator-peer-payload-json>';
+    const { entries } = readAgentMailCarriers(renderAgentMailCarrier(mailMessage({ body })));
+
+    expect(entries.map((entry) => entry?.body)).toEqual([body]);
+  });
+
+  test("a carrier cut in its body is unreadable unless the reader wants only its heading", () => {
+    const carrier = renderAgentMailCarrier(mailMessage({ body: "x".repeat(1_000) }));
+    const cut = carrier.slice(0, carrier.indexOf("xxx") + 100);
+
+    expect(readAgentMailCarriers(cut).entries).toEqual([null]);
+    expect(readAgentMailCarriers(cut, { keepCutBody: true }).entries).toEqual([
+      expect.objectContaining({ id: "mail", subject: "Report", body: "" }),
+    ]);
+  });
+
+  test("a carrier cut before its body has no heading to keep", () => {
+    const carrier = renderAgentMailCarrier(mailMessage());
+    const cut = carrier.slice(0, carrier.indexOf('"from"') + 20);
+
+    expect(readAgentMailCarriers(cut, { keepCutBody: true }).entries).toEqual([null]);
+  });
+
+  test("refuses a payload that does not hold up", () => {
+    const carrierOf = (payload: unknown) =>
+      `<orkestrator-peer-message version="1"><orkestrator-peer-payload-json>${JSON.stringify(payload)}</orkestrator-peer-payload-json></orkestrator-peer-message>`;
+    const valid = { messageId: "m", trust: "same-project", body: "b", from: { kind: "user" } };
+
+    expect(readAgentMailCarriers(carrierOf(valid)).entries[0]?.id).toBe("m");
+    for (const payload of [
+      { ...valid, messageId: 1 },
+      { ...valid, trust: "everyone" },
+      { ...valid, from: { kind: "martian" } },
+      { ...valid, from: { kind: "user", title: 1 } },
+      { ...valid, from: { kind: "tab", projectId: "p" } },
+      { ...valid, to: { environmentId: 1, tabId: "t" } },
+    ]) {
+      expect(readAgentMailCarriers(carrierOf(payload)).entries).toEqual([null]);
+    }
   });
 });

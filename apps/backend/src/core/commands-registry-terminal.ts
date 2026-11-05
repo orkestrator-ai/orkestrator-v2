@@ -90,7 +90,6 @@ import {
   stableTerminalKey,
   assertEnvironmentDeletionNotRequested,
   spawnTerminalProcess,
-  getWorktreeBaseDir,
   isSetupTerminalSessionId,
   isTerminalSessionAttachable,
   dockerExec,
@@ -126,7 +125,8 @@ import {
 import { conditionalSnapshot } from "./commands-terminal.js";
 import type { GitFileChange } from "./commands-helpers.js";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
-import { coordinatorAttachmentsRoot } from "./storage-coordinators.js";
+import { readableHostFileRoots } from "./readable-host-roots.js";
+import { containerGitBlobReadCommand, decodeGitBatchOutput } from "./git-blob-read.js";
 import {
   parseReviewWorktreeFingerprint,
   REVIEW_WORKTREE_FINGERPRINT_SCRIPT,
@@ -945,26 +945,9 @@ export function registerTerminalCommands(
       context.runtime.diffStats.gitFetchScheduler,
     ),
   );
-  register("read_file_base64", async ({ filePath }, context) => {
-    // Worktrees created in a folder the user chose are readable one by one,
-    // never the chosen folder as a whole.
-    const customWorktrees = (await context.storage.loadEnvironments())
-      .filter(
-        (environment) =>
-          environment.environmentType === "local" &&
-          !environment.projectHome &&
-          !!environment.worktreeBaseDir &&
-          !!environment.worktreePath,
-      )
-      .map((environment) => environment.worktreePath!);
-    return readFileBase64(asString(filePath, "filePath"), [
-      getWorktreeBaseDir(context),
-      ...customWorktrees,
-      // A coordinator's pasted images are staged in application data, never
-      // in the checkout it must not touch; its transcript names them there.
-      coordinatorAttachmentsRoot(context.storage.getDataDir()),
-    ]);
-  });
+  register("read_file_base64", async ({ filePath }, context) =>
+    readFileBase64(asString(filePath, "filePath"), await readableHostFileRoots(context)),
+  );
   register("read_environment_file_base64", async (args, context) => {
     assertOnlyKeys(args, ["environmentId", "filePath"], "arguments");
     const environment = await requireLocalMutationEnvironment(
@@ -1251,17 +1234,17 @@ export function registerTerminalCommands(
   register("read_file_at_branch", async ({ containerId, filePath, branch }) => {
     const target = validateRelativeFilePath(asString(filePath, "filePath"));
     const object = `${asString(branch, "branch")}:${target}`;
-    const id = asString(containerId, "containerId");
-    const rawSize = (
-      await dockerExec(id, `git cat-file -s ${quoteShell(object)} 2>/dev/null || true`)
-    ).trim();
-    if (!rawSize) return null;
-    assertEditorTextFileSize(Number(rawSize));
+    // One `git cat-file --batch` answers the size and the body; the output is
+    // cut after the largest acceptable answer, so an oversized blob is refused
+    // from its header without crossing the exec channel in full.
     const encoded = await dockerExec(
-      id,
-      `set -o pipefail; git show ${quoteShell(object)} | base64`,
+      asString(containerId, "containerId"),
+      containerGitBlobReadCommand(object, MAX_TEXT_FILE_BYTES),
     );
-    const content = decodeEditorTextFile(Buffer.from(encoded, "base64"));
+    const read = decodeGitBatchOutput(Buffer.from(encoded, "base64"), MAX_TEXT_FILE_BYTES);
+    if (read?.kind === "too-large") assertEditorTextFileSize(read.size);
+    if (read?.kind !== "blob") return null;
+    const content = decodeEditorTextFile(read.bytes);
     return { path: target, content, language: inferLanguage(target) };
   });
   register("read_container_file_base64", async ({ containerId, filePath }) => {

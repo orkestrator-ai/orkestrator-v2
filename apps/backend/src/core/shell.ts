@@ -212,7 +212,7 @@ export function observeCommandInvocations(command: string, observer: CommandObse
  *
  * Anything the caller or the backend's own environment already set wins.
  */
-function nonInteractiveGitEnv(env: NodeJS.ProcessEnv | undefined): NodeJS.ProcessEnv {
+export function nonInteractiveGitEnv(env: NodeJS.ProcessEnv | undefined): NodeJS.ProcessEnv {
   const merged = { ...(env ?? process.env) };
   merged.GIT_TERMINAL_PROMPT ??= "0";
   if (process.platform !== "win32") {

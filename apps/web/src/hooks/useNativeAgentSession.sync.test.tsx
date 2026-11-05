@@ -562,6 +562,36 @@ describe("useNativeAgentSession sync-v1 history paging", () => {
     expect(result.current.projection?.messages[2]?.parts).toEqual(allParts);
   });
 
+  test("does not show a part twice when a first-read trimmed head is updated", async () => {
+    const head = (content: string) => ({
+      ...message("asst"),
+      parts: [{ type: "text", content, sourcePartId: "kept-part" }],
+    });
+    const trimmed = (revision: number) => ({
+      revision,
+      messageWindow: {
+        limit: 2,
+        truncated: true,
+        truncationReason: "bytes" as const,
+        omittedParts: 1,
+        canLoadEarlier: false,
+      },
+    });
+    projectionUpdates = [() => snapshot("token-1", [head("kept")], { projection: trimmed(1) })];
+    const { result } = await renderConnectedSession();
+
+    projectionUpdates = [
+      () => snapshot("token-2", [head("kept and grown")], { projection: trimmed(2) }),
+    ];
+    await act(async () => {
+      await result.current.refresh();
+    });
+
+    expect(result.current.projection?.messages[0]?.parts).toEqual([
+      { type: "text", content: "kept and grown", sourcePartId: "kept-part" },
+    ]);
+  });
+
   async function sessionWithHistory() {
     projectionUpdates = [
       () =>

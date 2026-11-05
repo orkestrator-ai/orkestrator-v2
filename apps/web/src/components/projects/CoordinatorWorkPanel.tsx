@@ -10,9 +10,11 @@ import {
   PanelRightClose,
   PanelRightOpen,
   SearchCheck,
+  Square,
   Workflow,
   X,
 } from "lucide-react";
+import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
@@ -29,7 +31,9 @@ import {
   type CoordinatorWorkCounts,
   type CoordinatorWorkItem,
   type CoordinatorWorkKind,
+  type CoordinatorWorkStop,
   type CoordinatorWorkTarget,
+  nextWakeLine,
 } from "@/lib/coordinator-work-items";
 import { cn } from "@/lib/utils";
 import { useUIStore } from "@/stores/uiStore";
@@ -67,18 +71,34 @@ function BucketIcon({ bucket }: { bucket: CoordinatorWorkBucket }) {
   return <CheckCircle2 className="size-3.5 shrink-0 text-emerald-300" aria-hidden="true" />;
 }
 
+/** What a row runs on and for how long, in the order someone scans it. */
+function workMeta(item: CoordinatorWorkItem): string[] {
+  return [
+    ...(item.agent ? [AGENT_PLATFORM_LABELS[item.agent]] : []),
+    ...(item.model ? [item.model] : []),
+    ...(item.overridden ? ["requested"] : []),
+    ...(item.age ? [item.age] : []),
+  ];
+}
+
 function WorkRow({
   item,
   onOpen,
+  onStop,
   onClear,
 }: {
   item: CoordinatorWorkItem;
   onOpen: (target: CoordinatorWorkTarget) => void;
+  /** Settles when the stop has finished; its failure is the caller's to show. */
+  onStop?: (stop: CoordinatorWorkStop) => Promise<void>;
   /** Present on rows that can be cleared, which are the ones with a right-click menu. */
   onClear?: () => void;
 }) {
   const KindIcon = KIND_ICONS[item.kind];
   const target = item.target;
+  const [stopping, setStopping] = useState(false);
+  const stop = item.stop;
+  const meta = workMeta(item);
   const row = (
     <li
       className="flex items-start gap-2 rounded px-2 py-1.5 hover:bg-elevated/60"
@@ -116,20 +136,53 @@ function WorkRow({
             </span>
           ) : null}
         </div>
+        {item.summary ? (
+          <p
+            className="mt-0.5 line-clamp-2 break-words text-[11px] text-foreground/70"
+            title={item.summary}
+            data-work-summary=""
+          >
+            {item.summary}
+          </p>
+        ) : null}
+        {meta.length > 0 ? (
+          <div className="mt-0.5 truncate text-[10px] text-muted-foreground" data-work-meta="">
+            {meta.join(" · ")}
+          </div>
+        ) : null}
       </div>
-      <Button
-        size="sm"
-        variant="outline"
-        className="h-6 shrink-0 px-2 text-[11px]"
-        aria-label={`Open ${item.name}${!target && item.unavailableReason ? `: ${item.unavailableReason}` : ""}`}
-        title={target ? `Open ${item.name}` : item.unavailableReason}
-        disabled={!target}
-        onClick={() => {
-          if (target) onOpen(target);
-        }}
-      >
-        Open
-      </Button>
+      <div className="flex shrink-0 flex-col gap-1">
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-6 px-2 text-[11px]"
+          aria-label={`Open ${item.name}${!target && item.unavailableReason ? `: ${item.unavailableReason}` : ""}`}
+          title={target ? `Open ${item.name}` : item.unavailableReason}
+          disabled={!target}
+          onClick={() => {
+            if (target) onOpen(target);
+          }}
+        >
+          Open
+        </Button>
+        {stop && onStop ? (
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-6 gap-1 px-2 text-[11px] text-muted-foreground"
+            aria-label={`Stop ${item.name}`}
+            title="Stop this worker's running turn. The environment and its conversation stay, and the coordinator is told."
+            disabled={stopping}
+            onClick={() => {
+              setStopping(true);
+              void onStop(stop).finally(() => setStopping(false));
+            }}
+          >
+            <Square className="size-3" aria-hidden="true" />
+            Stop
+          </Button>
+        ) : null}
+      </div>
     </li>
   );
   if (!onClear) return row;
@@ -151,12 +204,14 @@ function WorkSection({
   rows,
   headingId,
   onOpen,
+  onStop,
   onClearFinished,
 }: {
   bucket: CoordinatorWorkBucket;
   rows: CoordinatorWorkItem[];
   headingId: string;
   onOpen: (target: CoordinatorWorkTarget) => void;
+  onStop?: (stop: CoordinatorWorkStop) => Promise<void>;
   onClearFinished: (associationIds: string[]) => Promise<void>;
 }) {
   const collapsed = useUIStore((state) => state.collapsedWorkBuckets.includes(bucket));
@@ -208,6 +263,7 @@ function WorkSection({
                 key={item.key}
                 item={item}
                 onOpen={onOpen}
+                {...(onStop ? { onStop } : {})}
                 {...(isClearableWorkItem(item)
                   ? { onClear: () => void onClearFinished(item.associationIds) }
                   : {})}
@@ -238,6 +294,7 @@ export function CoordinatorWorkPanel({
   counts,
   openDelegations,
   onOpen,
+  onStop,
   onClearFinished,
 }: {
   items: CoordinatorWorkItem[];
@@ -245,6 +302,8 @@ export function CoordinatorWorkPanel({
   /** Running delegations, exposed for end-to-end checks. */
   openDelegations: number;
   onOpen: (target: CoordinatorWorkTarget) => void;
+  /** Absent while nothing can be stopped from here (coordination paused, no conversation). */
+  onStop?: (stop: CoordinatorWorkStop) => Promise<void>;
   /** Settles when the clear has finished; its failure is the caller's to show. */
   onClearFinished: (associationIds: string[]) => Promise<void>;
 }) {
@@ -361,6 +420,7 @@ export function CoordinatorWorkPanel({
                 rows={rows}
                 headingId={`${headingId}-${bucket}`}
                 onOpen={onOpen}
+                {...(onStop ? { onStop } : {})}
                 onClearFinished={onClearFinished}
               />
             );
@@ -368,5 +428,32 @@ export function CoordinatorWorkPanel({
         )}
       </div>
     </aside>
+  );
+}
+
+/**
+ * What the next wake waits for, on a screen too narrow to keep the Work panel
+ * open beside the conversation. Wide screens already show this in the panel.
+ */
+export function CoordinatorNextWakeLine({
+  items,
+  quiet,
+}: {
+  items: readonly CoordinatorWorkItem[];
+  /** The coordinator is running a turn or paused: no wake is what it is waiting for. */
+  quiet: boolean;
+}) {
+  const wide = useMediaQuery(WORK_PANEL_WIDE_QUERY);
+  const line = wide || quiet ? null : nextWakeLine(items);
+  if (!line) return null;
+  return (
+    <div
+      role="status"
+      className="shrink-0 truncate border-t border-border/60 px-3 py-1 text-center text-[11px] text-muted-foreground"
+      title={line}
+      data-coordinator-next-wake=""
+    >
+      {line}
+    </div>
   );
 }

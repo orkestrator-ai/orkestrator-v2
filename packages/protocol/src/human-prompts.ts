@@ -324,6 +324,80 @@ export interface HumanPromptList {
   prompts: HumanPromptEntry[];
 }
 
+const HUMAN_PROMPT_KINDS: ReadonlySet<unknown> = new Set<HumanPromptKind>([
+  "sign-in",
+  "device-code",
+  "press-enter",
+  "secret",
+  "host-key",
+]);
+const HUMAN_PROMPT_SOURCES: ReadonlySet<unknown> = new Set<HumanPromptSource>([
+  "user-command",
+  "agent-tool",
+  "agent-background-task",
+]);
+const MAX_ENTRY_ID = 256;
+const MAX_ENTRY_COMMAND = 500;
+const MAX_ENTRY_CODE = 64;
+const MAX_ENTRY_KEY = 4096;
+
+function boundedEntryText(value: unknown, max: number): string | undefined {
+  // oxlint-disable-next-line no-control-regex -- remote text is rendered as plain text
+  return typeof value === "string" && value
+    ? value.replace(/[\u0000-\u001f\u007f]/g, " ").slice(0, max)
+    : undefined;
+}
+
+/**
+ * One entry another node answered, checked before this client draws or acts on
+ * it, or `null`. Everything is bounded, and a link must pass the same sign-in
+ * check as detection, so a node cannot put an arbitrary "Open link" here.
+ */
+export function normalizeRemoteHumanPromptEntry(value: unknown): HumanPromptEntry | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const entry = value as Record<string, unknown>;
+  const prompt = entry.prompt;
+  if (!prompt || typeof prompt !== "object" || Array.isArray(prompt)) return null;
+  const fields = prompt as Record<string, unknown>;
+  const id = boundedEntryText(entry.id, MAX_ENTRY_ID);
+  const environmentId = boundedEntryText(entry.environmentId, MAX_ENTRY_ID);
+  const tabId = boundedEntryText(entry.tabId, MAX_ENTRY_ID);
+  const since = boundedEntryText(entry.since, 64);
+  const text = boundedEntryText(fields.text, MAX_TEXT);
+  // An identity, never drawn: its separators are what makes it one.
+  const key = typeof fields.key === "string" ? fields.key.slice(0, MAX_ENTRY_KEY) : undefined;
+  if (
+    !id ||
+    !environmentId ||
+    !tabId ||
+    !since ||
+    text === undefined ||
+    !key ||
+    !HUMAN_PROMPT_KINDS.has(fields.kind) ||
+    !HUMAN_PROMPT_SOURCES.has(entry.source)
+  )
+    return null;
+  const url = typeof fields.url === "string" && isSignInLink(fields.url) ? fields.url : undefined;
+  const code = boundedEntryText(fields.code, MAX_ENTRY_CODE);
+  const command = boundedEntryText(entry.command, MAX_ENTRY_COMMAND);
+  return {
+    id,
+    environmentId,
+    tabId,
+    source: entry.source as HumanPromptSource,
+    ...(command ? { command } : {}),
+    prompt: {
+      kind: fields.kind as HumanPromptKind,
+      ...(url ? { url } : {}),
+      ...(code ? { code } : {}),
+      wantsEnter: fields.wantsEnter === true,
+      text,
+      key,
+    },
+    since,
+  };
+}
+
 /** How many of the newest transcript rows {@link humanPromptObservation} scans. */
 export const HUMAN_PROMPT_OBSERVATION_ROWS = 64;
 

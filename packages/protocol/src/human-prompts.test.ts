@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
 
-import { detectHumanPrompt, HumanPromptScanner, normalizeTerminalText } from "./human-prompts";
+import {
+  detectHumanPrompt,
+  HumanPromptScanner,
+  normalizeRemoteHumanPromptEntry,
+  normalizeTerminalText,
+} from "./human-prompts";
 
 /** Output captured from real runs (codes and ids are the originals' shape, not live values). */
 const SAMPLES = {
@@ -204,4 +209,53 @@ test("unknown or credential-bearing hosts never become sign-in actions", () => {
     expect(detectHumanPrompt(`Sign in at ${url}`)).toBeNull();
     expect(detectHumanPrompt(`Sign in at ${url}\nDevice code: ABCD-EFGH\nPress ENTER`)).toBeNull();
   }
+});
+
+describe("normalizeRemoteHumanPromptEntry", () => {
+  const entry = {
+    id: "tool-1",
+    environmentId: "env-1",
+    tabId: "tab-1",
+    source: "agent-tool",
+    command: "gh auth login",
+    since: "2026-11-05T10:00:00.000Z",
+    prompt: {
+      kind: "device-code",
+      url: "https://github.com/login/device",
+      code: "1A2B-3C4D",
+      wantsEnter: false,
+      text: "Enter the code",
+      key: "device-code\u0000https://github.com/login/device\u00001A2B-3C4D\u0000",
+    },
+  };
+
+  test("keeps a well-formed entry as it was sent", () => {
+    expect(normalizeRemoteHumanPromptEntry(entry)).toEqual(entry as never);
+  });
+
+  test("drops a link that is not a sign-in link, keeping the rest of the prompt", () => {
+    const normalized = normalizeRemoteHumanPromptEntry({
+      ...entry,
+      prompt: { ...entry.prompt, url: "https://attacker.example/login" },
+    });
+    expect(normalized?.prompt.url).toBeUndefined();
+    expect(normalized?.prompt.code).toBe("1A2B-3C4D");
+  });
+
+  test("refuses a malformed entry and bounds what it keeps", () => {
+    expect(normalizeRemoteHumanPromptEntry(null)).toBeNull();
+    expect(normalizeRemoteHumanPromptEntry({ ...entry, prompt: "nope" })).toBeNull();
+    expect(normalizeRemoteHumanPromptEntry({ ...entry, source: "other" })).toBeNull();
+    expect(
+      normalizeRemoteHumanPromptEntry({ ...entry, prompt: { ...entry.prompt, kind: "other" } }),
+    ).toBeNull();
+    const long = normalizeRemoteHumanPromptEntry({
+      ...entry,
+      command: "x".repeat(5_000),
+      userCommandId: "local-only",
+    });
+    expect(long?.command).toHaveLength(500);
+    // A remote command cannot be answered from here, so no id for it survives.
+    expect(long?.userCommandId).toBeUndefined();
+  });
 });

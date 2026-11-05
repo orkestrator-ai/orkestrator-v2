@@ -85,6 +85,16 @@ export const closeCoordinatorConversation = (
   invoke("close_coordinator_conversation", { projectId, conversationId });
 
 /** Hide finished rows from the Work panel. Older backends answer "Unknown backend command". */
+/**
+ * The coordinator's `stop_worker_turn`, from the Work panel: one tab's running
+ * turn, on this machine or `nodeId`. `requestId` is the at-most-once key.
+ */
+export const stopCoordinatorWorkerTurn = (
+  scope: { projectId: string; coordinatorId: string; conversationId: string },
+  input: { requestId: string; environmentId: string; tabId: string; nodeId?: string },
+): Promise<{ stopped?: boolean }> =>
+  invoke("stop_coordinator_worker_turn", { scope, input: { ...input, stoppedBy: "user" } });
+
 export const hideCoordinatorWork = (
   projectId: string,
   associationIds: readonly string[],

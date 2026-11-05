@@ -1360,7 +1360,10 @@ Running 1 Explore agent...
       } satisfies AgentMailMessage);
     }
 
-    const userLine = (uuid: string, content: unknown) => ({
+    const userLine = (
+      uuid: string,
+      content: NonNullable<realTmuxClient.TranscriptLine["message"]>["content"],
+    ): realTmuxClient.TranscriptLine => ({
       type: "user",
       uuid,
       timestamp: "2026-11-05T10:00:00.000Z",

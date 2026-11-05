@@ -17,7 +17,7 @@ Analysed 2026-11-04 against `main` at `e198fd4a7`.
 
 **Context.** `apps/backend/tests/bridge-credential-docker.test.ts` proves on all five real bridges that the answer routes refuse what the agent can read and pass the backend's token through to the route. `bridges/acp-bridge/src/acp-approval-verifier.test.ts` answers a real parked request on the real router. The non-dumpable flag is the one thing the provider SDKs have not run under in a real turn: `@cursor/sdk` and Pi run in the bridge process, and a process cannot open its own `/proc/self/environ` once non-dumpable (checked on 2026-11-04).
 
-**Investigation.** Nothing in the bridges' own code or their SDK imports reads a process's own `/proc/self/environ`, by search. Native helpers inside the SDK were not read.
+**Investigation.** Nothing in the bridges' own code or their SDK imports reads a process's own `/proc/self/environ`, by search. Native helpers inside the SDK were not read. OpenCode has this evidence short of a real provider: on 2026-11-05 a fake model in a real container made a real `bash` call that parked, the agent's answer was refused and the user's approval and denial both worked, all with the server non-dumpable.
 
 **Decisions.**
 

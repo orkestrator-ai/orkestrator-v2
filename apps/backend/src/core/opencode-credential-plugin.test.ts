@@ -1,0 +1,104 @@
+import { afterEach, describe, expect, test } from "bun:test";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { buildOpenCodeCredentialPluginSource } from "./agent-credential-files.js";
+import { writeHostOpenCodeCredentialPlugin } from "./opencode-host-credential.js";
+
+const FAKE_PASSWORD = "fake-password-for-a-test";
+const directories: string[] = [];
+
+afterEach(async () => {
+  for (const directory of directories.splice(0)) {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+async function temporaryDirectory(): Promise<string> {
+  const directory = await mkdtemp(path.join(tmpdir(), "ork-opencode-credential-"));
+  directories.push(directory);
+  return directory;
+}
+
+/**
+ * Load the plugin the way OpenCode does, under Bun, in a process of its own: it
+ * marks whatever loads it non-dumpable. Prints what the process then looks like.
+ */
+async function runPlugin(source: string): Promise<{
+  env: string | null;
+  childEnv: string;
+  dumpable: number;
+  hooks: string[];
+  toolError: string | null;
+}> {
+  const directory = await temporaryDirectory();
+  const plugin = path.join(directory, "plugin.js");
+  await writeFile(plugin, source);
+  const runner = path.join(directory, "runner.js");
+  await writeFile(
+    runner,
+    `import { dlopen, FFIType } from "bun:ffi";
+import { spawnSync } from "node:child_process";
+import { OrkestratorCredentialPlugin } from ${JSON.stringify(plugin)};
+const hooks = await OrkestratorCredentialPlugin();
+const libc = dlopen("libc.so.6", { prctl: { args: [FFIType.i32, FFIType.u64, FFIType.u64, FFIType.u64, FFIType.u64], returns: FFIType.i32 } });
+const child = spawnSync("sh", ["-c", "printf %s \\"$OPENCODE_SERVER_PASSWORD\\""]);
+let toolError = null;
+try { await hooks["tool.execute.before"]?.(); } catch (error) { toolError = error.message; }
+console.log(JSON.stringify({
+  env: process.env.OPENCODE_SERVER_PASSWORD ?? null,
+  childEnv: child.stdout.toString(),
+  dumpable: libc.symbols.prctl(3, 0n, 0n, 0n, 0n),
+  hooks: Object.keys(hooks),
+  toolError,
+}));
+`,
+  );
+  const result = Bun.spawnSync([process.execPath, runner], {
+    env: { PATH: process.env.PATH, OPENCODE_SERVER_PASSWORD: FAKE_PASSWORD },
+  });
+  expect(result.exitCode).toBe(0);
+  return JSON.parse(result.stdout.toString());
+}
+
+describe.skipIf(process.platform !== "linux")("the OpenCode credential plugin", () => {
+  test("takes the password from the environment and marks the server non-dumpable", async () => {
+    expect(await runPlugin(buildOpenCodeCredentialPluginSource("refuse-tools"))).toEqual({
+      env: null,
+      childEnv: "",
+      dumpable: 0,
+      hooks: [],
+      toolError: null,
+    });
+  });
+
+  /** libc that cannot load stands in for any reason the flag cannot be set. */
+  const unhardenable = (mode: "refuse-tools" | "log") =>
+    buildOpenCodeCredentialPluginSource(mode).replace("libc.so.6", "libnot-a-real-library.so");
+
+  test("a container server it could not harden refuses tools", async () => {
+    const result = await runPlugin(unhardenable("refuse-tools"));
+    expect(result).toMatchObject({ env: null, dumpable: 1 });
+    expect(result.toolError).toContain("Refusing to run tools");
+  });
+
+  test("a host server it could not harden keeps running, as a bridge does", async () => {
+    expect(await runPlugin(unhardenable("log"))).toMatchObject({
+      env: null,
+      dumpable: 1,
+      hooks: [],
+      toolError: null,
+    });
+  });
+});
+
+test("the host plugin is written whole, private, and again on each start", async () => {
+  const dataDir = await temporaryDirectory();
+  const configDir = await writeHostOpenCodeCredentialPlugin(dataDir);
+  expect(configDir).toBe(path.join(dataDir, "opencode-host-config"));
+  const plugin = path.join(configDir, "plugins", "orkestrator-credential.js");
+  await writeFile(plugin, "stale");
+  await writeHostOpenCodeCredentialPlugin(dataDir);
+  expect(await readFile(plugin, "utf8")).toBe(buildOpenCodeCredentialPluginSource("log"));
+  expect((await stat(plugin)).mode & 0o777).toBe(0o600);
+});

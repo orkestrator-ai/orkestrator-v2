@@ -4007,6 +4007,7 @@ exec node -e 'const http=require("node:http");http.createServer((req,res)=>{res.
       `#!/bin/sh
 printf 'used %s\\n' "$*" >> "${markerPath}"
 printf '%s' "$OPENCODE_CONFIG_CONTENT" > "${configMarkerPath}"
+printf '%s' "$OPENCODE_CONFIG_DIR" > "${configMarkerPath}.dir"
 PORT=""
 HOST="127.0.0.1"
 while [ "$#" -gt 0 ]; do
@@ -4063,6 +4064,13 @@ exec env PORT_ARG="$PORT" HOST_ARG="$HOST" node -e 'const http = require("node:h
       expect(await fs.readFile(markerPath, "utf8")).toContain("used serve --port");
       expect(await fs.readFile(configMarkerPath, "utf8")).toBe(userOpenCodeConfigContent);
       expect(updates).toContainEqual({ localOpencodePort: result.port, opencodePid: result.pid });
+      // Nothing was named, so the server gets the plugin that keeps its password from its tools.
+      const configDirectory = await fs.readFile(`${configMarkerPath}.dir`, "utf8");
+      expect(configDirectory).toBe(path.join(context.storage.getDataDir(), "opencode-host-config"));
+      const plugin = path.join(configDirectory, "plugins", "orkestrator-credential.js");
+      expect(await fs.readFile(plugin, "utf8")).toContain(
+        "delete process.env.OPENCODE_SERVER_PASSWORD",
+      );
     } finally {
       await commands.get("stop_local_opencode_server_cmd")?.(
         { environmentId: environment.id },

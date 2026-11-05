@@ -1,7 +1,9 @@
 /**
  * Security report H4 on a real container: a process running as the agent's uid
  * cannot get the bridge-control credential, cannot answer an approval without
- * it, and the backend's own calls still work.
+ * it, and the backend's own calls still work. OpenCode, which has no bridge of
+ * ours, is held to the same on a permission a real tool call parked, raised by a
+ * fake model inside the container.
  *
  * Opt-in: RUN_LIVE_DOCKER_TESTS=1 and ORKESTRATOR_QUALIFICATION_IMAGE=<image>
  * with `bridge-credential=1`. No credential is delivered (an agent-test context
@@ -12,6 +14,7 @@ import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createOpencodeClient } from "@opencode-ai/sdk/v2/client";
 import { bridgeTokenVerifier } from "@orkestrator/protocol/node/bridge-credential";
 import {
   containerCredentialFile,
@@ -19,6 +22,7 @@ import {
   readContainerBridgeToken,
   type ContainerBridgeKind,
 } from "../src/core/container-bridge-credential";
+import { OPENCODE_SERVER_PORT } from "../src/core/constants";
 import { dockerOwnerNamespace } from "../src/core/docker-ownership";
 import { waitForContainerBoot } from "../src/core/container-readiness";
 import { runCommand } from "../src/core/shell";
@@ -117,6 +121,8 @@ async function startFixture(image: string, name: string) {
     "-e",
     "GIT_URL=https://example.invalid/none.git",
     ...BRIDGES.flatMap((bridge) => ["-p", `127.0.0.1::${bridge.port}`]),
+    "-p",
+    `127.0.0.1::${OPENCODE_SERVER_PORT}`,
     image,
   ]);
   await waitForContainerBoot(id, { timeoutMs: 120_000 });
@@ -370,6 +376,223 @@ describe("bridge credential on a real container", () => {
   );
 });
 
+/** What a user's model would ask for, from a port inside the container. */
+const FAKE_MODEL_PORT = 4599;
+const FAKE_MODEL = `
+const chunk = { id: "fixture", object: "chat.completion.chunk", created: 1, model: "fixture" };
+const stream = (delta, finish_reason) =>
+  new Response(
+    [
+      { ...chunk, choices: [{ index: 0, delta, finish_reason: null }] },
+      { ...chunk, choices: [{ index: 0, delta: {}, finish_reason }] },
+    ].map((value) => "data: " + JSON.stringify(value) + "\\n\\n").join("") + "data: [DONE]\\n\\n",
+    { headers: { "content-type": "text/event-stream" } },
+  );
+Bun.serve({
+  hostname: "127.0.0.1",
+  port: ${FAKE_MODEL_PORT},
+  async fetch(request) {
+    const { messages } = await request.json();
+    const last = messages.at(-1);
+    if (last.role === "tool") return stream({ role: "assistant", content: "Done." }, "stop");
+    const text = typeof last.content === "string" ? last.content : JSON.stringify(last.content);
+    const command = text.match(/RUN<(.*)>RUN/s)?.[1] ?? "true";
+    const args = JSON.stringify({ command, description: "Fixture command" });
+    return stream(
+      {
+        role: "assistant",
+        tool_calls: [{ index: 0, id: "call_0", type: "function", function: { name: "bash", arguments: args } }],
+      },
+      "tool_calls",
+    );
+  },
+});
+`;
+
+describe("OpenCode's password on a real container", () => {
+  let hostPort = 0;
+  let authToken = "";
+  const client = () =>
+    createOpencodeClient({
+      baseUrl: `http://127.0.0.1:${hostPort}`,
+      directory: "/workspace",
+      headers: {
+        authorization: `Basic ${Buffer.from(`opencode:${authToken}`).toString("base64")}`,
+      },
+    });
+  /** The status of a reply from inside the container, with `password` read from stdin. */
+  const replyFromAgent = (requestId: string, password: string) =>
+    asAgent(
+      `IFS= read -r password
+      printf 'user = "opencode:%s"\\n' "$password" | curl -s -o /dev/null -w '%{http_code}' -m 10 -K - -X POST \\
+        -H 'content-type: application/json' -d '{"reply":"once"}' \\
+        'http://127.0.0.1:${OPENCODE_SERVER_PORT}/permission/${requestId}/reply?directory=/workspace'`,
+      `${password}\n`,
+    );
+  const pendingPermission = async () => {
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      const { data } = await client().permission.list();
+      if (data?.length) return data[0]!;
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+    }
+    throw new Error("OpenCode never parked a permission");
+  };
+  /** A prompt the fake model turns into a real bash call, which `ask` then parks. */
+  const parkCommand = async (command: string) => {
+    const session = await client().session.create({
+      permission: [{ permission: "bash", pattern: "*", action: "ask" }],
+    });
+    expect(session.error).toBeUndefined();
+    const prompted = await client().session.promptAsync({
+      sessionID: session.data!.id,
+      model: { providerID: "fixture", modelID: "fixture" },
+      parts: [{ type: "text", text: `RUN<${command}>RUN` }],
+    });
+    expect(prompted.error).toBeUndefined();
+    return pendingPermission();
+  };
+
+  live(
+    "starts from the root-only file, and only root and the server hold the password",
+    async () => {
+      await asAgent(
+        `mkdir -p ~/.config/opencode
+        cat > ~/.config/opencode/opencode.json <<'CONFIG'
+${JSON.stringify({
+  provider: {
+    fixture: {
+      npm: "@ai-sdk/openai-compatible",
+      name: "Local fixture",
+      options: { baseURL: `http://127.0.0.1:${FAKE_MODEL_PORT}/v1`, apiKey: "not-a-key" },
+      models: { fixture: { name: "Fixture", limit: { context: 16000, output: 2000 } } },
+    },
+  },
+})}
+CONFIG
+        cat > /tmp/fake-model.js <<'MODEL'
+${FAKE_MODEL}
+MODEL
+        setsid bun /tmp/fake-model.js > /tmp/fake-model.log 2>&1 < /dev/null &`,
+      );
+      const result = (await invoke("start_opencode_server", { containerId })) as {
+        hostPort: number;
+        wasRunning: boolean;
+        authToken: string;
+      };
+      expect(result.wasRunning).toBe(false);
+      expect(result.authToken).toMatch(/^okb_[A-Za-z0-9_-]{43}$/);
+      hostPort = result.hostPort;
+      authToken = result.authToken;
+      expect(await readContainerBridgeToken(containerId, "opencode")).toBe(authToken);
+      expect(await invoke("get_opencode_server_status", { containerId })).toMatchObject({
+        running: true,
+        authToken,
+      });
+    },
+    LIVE_TIMEOUT_MS,
+  );
+
+  live(
+    "a process as the agent's uid can't read it anywhere",
+    async () => {
+      // One process: no wrapper shell or log writer outlives the launch holding a copy.
+      const pids = (await asAgent(`pgrep -f '[o]pencode serve'`)).split("\n").filter(Boolean);
+      expect(pids).toHaveLength(1);
+      const pid = pids[0]!;
+      expect(
+        await asAgent(
+          `cat ${containerCredentialFile("opencode")} 2>&1 || true; ls /run/orkestrator-bridge 2>&1 || true`,
+        ),
+      ).toContain("Permission denied");
+      expect(
+        await asAgent(`test -e ${CONTAINER_TOKEN_FILES.opencode} && echo present || true`),
+      ).toBe("");
+      for (const file of ["environ", "mem"]) {
+        expect(await asAgent(`head -c 16 /proc/${pid}/${file} 2>&1 || true`)).toContain(
+          "Permission denied",
+        );
+      }
+      expect(await asAgent(`ls /proc/${pid}/fd 2>&1 || true`)).toContain("Permission denied");
+      const scan = `IFS= read -r pattern
+      grep -rlFf <(printf '%s\\n' "$pattern") /tmp /home/node /workspace /run/orkestrator /opt 2>/dev/null
+      for f in /proc/[0-9]*/environ /proc/[0-9]*/cmdline; do tr '\\0' ' ' < "$f" 2>/dev/null; echo; done | grep -cFf <(printf '%s\\n' "$pattern") || true`;
+      const found = (await asAgent(scan, `${authToken}\n`)).split("\n");
+      expect(found.filter((line) => line && line !== "0")).toEqual([]);
+    },
+    LIVE_TIMEOUT_MS,
+  );
+
+  live(
+    "a parked permission can't be answered by the agent, and a user's answer runs the tool",
+    async () => {
+      // A script, because OpenCode asks about outside paths it sees in a command first.
+      await asAgent(`cat > /workspace/tool-probe.sh <<'PROBE'
+env > /tmp/tool-env
+cat /proc/$(pgrep -f '[o]pencode serve' | head -n 1)/environ > /tmp/tool-parent-env 2> /tmp/tool-parent-error
+touch /tmp/tool-ran
+PROBE`);
+      const permission = await parkCommand("sh ./tool-probe.sh");
+      expect(permission.permission).toBe("bash");
+      // Nothing the agent's uid holds answers it, and the request stays parked.
+      expect(await replyFromAgent(permission.id, "")).toBe("401");
+      expect(await replyFromAgent(permission.id, bridgeTokenVerifier(authToken))).toBe("401");
+      expect(await asAgent("test -e /tmp/tool-ran && echo ran || true")).toBe("");
+      expect((await client().permission.list()).data?.map((entry) => entry.id)).toEqual([
+        permission.id,
+      ]);
+      // The call a user's approval makes, through the SDK the backend uses.
+      const replied = await client().permission.reply({ requestID: permission.id, reply: "once" });
+      expect(replied.error).toBeUndefined();
+      for (let attempt = 0; attempt < 60; attempt += 1) {
+        if ((await asAgent("test -e /tmp/tool-ran && echo ran || true")) === "ran") break;
+        await new Promise((resolve) => setTimeout(resolve, 1_000));
+      }
+      expect(await asAgent("cat /tmp/tool-ran >/dev/null && echo ran")).toBe("ran");
+      // What a tool actually sees: no password, and no way into its parent.
+      expect(
+        await asAgent("cut -d= -f1 /tmp/tool-env | grep -c '^OPENCODE_SERVER_PASSWORD$' || true"),
+      ).toBe("0");
+      expect(await asAgent("cat /tmp/tool-parent-error")).toContain("Permission denied");
+      expect(await asAgent("wc -c < /tmp/tool-parent-env")).toBe("0");
+    },
+    LIVE_TIMEOUT_MS,
+  );
+
+  live(
+    "a user's denial stops the tool",
+    async () => {
+      const permission = await parkCommand("touch ./tool-denied");
+      const replied = await client().permission.reply({
+        requestID: permission.id,
+        reply: "reject",
+      });
+      expect(replied.error).toBeUndefined();
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
+      expect(await asAgent("test -e /workspace/tool-denied && echo ran || true")).toBe("");
+      expect((await client().permission.list()).data).toEqual([]);
+    },
+    LIVE_TIMEOUT_MS,
+  );
+
+  live(
+    "stopping forgets the password, and a restart mints one the old one can't open",
+    async () => {
+      await invoke("stop_opencode_server", { containerId });
+      expect(await readContainerBridgeToken(containerId, "opencode")).toBeNull();
+      const restarted = (await invoke("start_opencode_server", { containerId })) as {
+        wasRunning: boolean;
+        authToken: string;
+      };
+      expect(restarted.wasRunning).toBe(false);
+      expect(restarted.authToken).not.toBe(authToken);
+      const refused = await client().permission.list();
+      expect(refused.response.status).toBe(401);
+      await invoke("stop_opencode_server", { containerId });
+    },
+    LIVE_TIMEOUT_MS,
+  );
+});
+
 /**
  * The image a container is already on may predate all of this. Opt in with
  * ORKESTRATOR_QUALIFICATION_OLDER_IMAGE naming one without `bridge-credential`.
@@ -400,6 +623,26 @@ liveOnOlderImage(
     };
     expect(again).toMatchObject({ wasRunning: true, authToken: result.authToken });
     await invokeOlder("stop_pi_server", { containerId: id });
+
+    // OpenCode there keeps the layout it always had.
+    const openCode = (await invokeOlder("start_opencode_server", { containerId: id })) as {
+      hostPort: number;
+      wasRunning: boolean;
+      authToken: string;
+    };
+    expect(openCode.wasRunning).toBe(false);
+    expect(await readContainerBridgeToken(id, "opencode")).toBe(openCode.authToken);
+    const health = await fetch(`http://127.0.0.1:${openCode.hostPort}/global/health`, {
+      headers: {
+        authorization: `Basic ${Buffer.from(`opencode:${openCode.authToken}`).toString("base64")}`,
+      },
+    });
+    expect(health.status).toBe(200);
+    expect(await invokeOlder("start_opencode_server", { containerId: id })).toMatchObject({
+      wasRunning: true,
+      authToken: openCode.authToken,
+    });
+    await invokeOlder("stop_opencode_server", { containerId: id });
   },
   LIVE_TIMEOUT_MS,
 );

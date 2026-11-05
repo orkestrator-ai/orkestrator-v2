@@ -95,6 +95,8 @@ export const NATIVE_AGENT_LOG_AREAS = defineLogAreas({
         "The bounded request workers are full, so the stream restarts and a snapshot reconciles.",
       "request.failed":
         "Handling a request event failed, so the stream restarts. Error class only.",
+      "credential-plugin.skipped":
+        "A host OpenCode server started without the credential plugin, so its tools inherit its password; `reason` says why.",
     },
   },
 });

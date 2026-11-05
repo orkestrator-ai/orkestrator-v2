@@ -1642,8 +1642,9 @@ read it (`container-bridge-credential.ts`). The rules for bridges are in
 What the agent's uid can still do is in
 [to-do 4980](../todo/containers-and-environments/4980-agent-uid-process-control.md):
 kill the bridge and listen on its port, or plant code for the next start through
-its login shell or runtime environment. OpenCode has no bridge, so its password
-stays readable ([4981](../todo/containers-and-environments/4981-opencode-password-readable-by-agent.md)).
+its login shell or runtime environment. OpenCode has no bridge and takes the plain
+password, in `opencode-token` in the same directory; a plugin inside the server keeps
+it from the agent ([4981](../todo/containers-and-environments/4981-opencode-password-readable-by-agent.md)).
 Qualified by `apps/backend/tests/bridge-credential-docker.test.ts`.
 
 ## Container worktree signal (`container-worktree-signal=1`)

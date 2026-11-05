@@ -8,7 +8,11 @@ import {
   readContainerBridgeToken,
   removeContainerBridgeCredential,
 } from "../src/core/container-bridge-credential";
-import { startContainerClaudeServer } from "../src/core/commands-containers";
+import { OPENCODE_CREDENTIAL_PLUGIN_PATH } from "../src/core/agent-credential-files";
+import {
+  startContainerClaudeServer,
+  startContainerOpenCodeServer,
+} from "../src/core/commands-containers";
 import { createCommandFixtures } from "./command-fixtures";
 
 const { fs, reserveFreePort, withFakeDocker } = await createCommandFixtures();
@@ -190,13 +194,23 @@ describe("readContainerBridgeToken", () => {
     });
   });
 
-  test("OpenCode has no root file: its server needs the password in its environment", async () => {
+  test("OpenCode's password follows the same order as a bridge's token", async () => {
+    await withDocker({ FAKE_ROOT_TOKEN: "r".repeat(43) }, async (read) => {
+      expect(await readContainerBridgeToken("container", "opencode")).toBe("r".repeat(43));
+
+      const { argv } = await read();
+      expect(argv).toHaveLength(1);
+      expect(argv[0]).toContain("--user root");
+      expect(argv[0]).toContain("/run/orkestrator-bridge/opencode-token");
+    });
+    // A server an older backend or an older image started.
     await withDocker({ FAKE_NODE_TOKEN: "o".repeat(43) }, async (read) => {
       expect(await readContainerBridgeToken("container", "opencode")).toBe("o".repeat(43));
 
       const { argv } = await read();
-      expect(argv).toHaveLength(1);
-      expect(argv[0]).not.toContain("--user root");
+      expect(argv).toHaveLength(2);
+      expect(argv[1]).not.toContain("--user root");
+      expect(argv[1]).toContain("/tmp/opencode-server-password");
     });
   });
 
@@ -292,5 +306,86 @@ test("token-file launch removes the stale root token before starting", async () 
     expect(removal).toBeGreaterThanOrEqual(0);
     expect(start).toBeGreaterThan(removal);
     expect(await readContainerBridgeToken("container", "codex")).toBe(TOKEN);
+  });
+});
+
+describe("startContainerOpenCodeServer", () => {
+  /** A fake server that answers health only for the password the script was given. */
+  async function withOpenCode(
+    mode: "verifier" | "token-file",
+    check: (started: { authToken: string }, log: string, argv: string) => void,
+  ): Promise<void> {
+    const port = await reserveFreePort();
+    const previousPort = process.env.FAKE_DOCKER_PORT;
+    process.env.FAKE_DOCKER_PORT = String(port);
+    const script = `#!/bin/sh
+printf 'ARGV:%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+case " $* " in
+  *" -i "*) printf 'STDIN:%s\\n' "$(cat)" >> "$FAKE_DOCKER_EXEC_LOG" ;;
+esac
+case "$1" in
+  inspect) printf 'running\\n' ;;
+  port) printf '127.0.0.1:%s\\n' "$FAKE_DOCKER_PORT" ;;
+esac
+exit 0
+`;
+    let server: ReturnType<typeof Bun.serve> | undefined;
+    let arrive: ReturnType<typeof setInterval> | undefined;
+    try {
+      await withFakeDocker(script, async (logs) => {
+        // The server answers once the launch has run, as a real one does.
+        arrive = setInterval(async () => {
+          const log = await fs.readFile(logs.exec, "utf8").catch(() => "");
+          if (!server && log.includes("exec -d ")) {
+            server = Bun.serve({ port, hostname: "127.0.0.1", fetch: () => Response.json({}) });
+          }
+        }, 50);
+        const started = await startContainerOpenCodeServer("container", mode);
+        const log = await fs.readFile(logs.exec, "utf8");
+        const argv = log
+          .split(/^(?=ARGV:|STDIN:)/m)
+          .filter((line) => line.startsWith("ARGV:"))
+          .join("\n");
+        check(started, log, argv);
+      });
+    } finally {
+      clearInterval(arrive);
+      server?.stop(true);
+      if (previousPort === undefined) delete process.env.FAKE_DOCKER_PORT;
+      else process.env.FAKE_DOCKER_PORT = previousPort;
+    }
+  }
+
+  test("verifier mode keeps the password from everything but the server and root", async () => {
+    await withOpenCode("verifier", (started, log, argv) => {
+      expect(started.authToken).toMatch(/^okb_/);
+      expect(argv).not.toContain(started.authToken);
+      // Root's file, on stdin.
+      expect(argv).toContain("--user root");
+      expect(argv).toContain('mv "$credential_tmp" /run/orkestrator-bridge/opencode-token');
+      expect(log).toContain(`STDIN:${started.authToken}`);
+      // Not left where `node` reads it, and a stale one goes.
+      expect(argv).not.toContain("> /tmp/opencode-server-password");
+      expect(argv).toContain("rm -f /tmp/opencode-server-password");
+      // Handed to the server alone, with the plugin that takes it back in place.
+      expect(argv).toContain("export -n OPENCODE_SERVER_PASSWORD");
+      expect(argv).toContain(`> ${OPENCODE_CREDENTIAL_PLUGIN_PATH}`);
+      expect(argv).toContain(
+        `OPENCODE_SERVER_PASSWORD="$OPENCODE_SERVER_PASSWORD" setsid opencode serve`,
+      );
+      expect(argv).not.toContain("setsid sh -c");
+    });
+  });
+
+  test("token-file mode keeps an older image's layout and clears a stale root file", async () => {
+    await withOpenCode("token-file", (started, log, argv) => {
+      expect(started.authToken).toMatch(/^okb_/);
+      expect(argv).not.toContain(started.authToken);
+      expect(argv).toContain("rm -f /run/orkestrator-bridge/opencode-token");
+      expect(argv).toContain("> /tmp/opencode-server-password");
+      expect(argv).not.toContain(OPENCODE_CREDENTIAL_PLUGIN_PATH);
+      expect(argv).not.toContain("export -n");
+      expect(log).toContain(`export OPENCODE_SERVER_PASSWORD='${started.authToken}'`);
+    });
   });
 });

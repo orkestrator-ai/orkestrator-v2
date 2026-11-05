@@ -36,7 +36,9 @@ lists are the reason these engines are built the way they are. In short:
    per environment and gives a bridge only its SHA-256, as `CLAUDE_BRIDGE_TOKEN_SHA256`,
    `CODEX_BRIDGE_TOKEN_SHA256`, `CURSOR_BRIDGE_TOKEN_SHA256`, `ACP_BRIDGE_TOKEN_SHA256`
    or `PI_BRIDGE_TOKEN_SHA256`. (OpenCode takes `OPENCODE_SERVER_PASSWORD`, which it
-   compares itself, so it is readable by its agent: to-do
+   compares itself. A plugin running inside the server removes the variable and marks
+   the server non-dumpable before a tool can run, and the launch gives it to that one
+   process: `buildOpenCodeCredentialPluginSource`, to-do
    [4981](../todo/containers-and-environments/4981-opencode-password-readable-by-agent.md).)
    The agent shares the bridge's uid, so the bridge holds no token for it to read,
    and marks itself non-dumpable so it cannot read one from a request in flight. On
@@ -705,6 +707,12 @@ first one after each dispatch (`dispatchFailure`), and
 history holds no message for the request.
 
 ### Maintaining the OpenCode integration
+
+The credential plugin depends on three things a bump can change, all exercised by
+`apps/backend/tests/bridge-credential-docker.test.ts`: OpenCode reads its password
+once at startup, so removing the variable leaves authentication on; plugins load
+before the first tool; and nothing it spawns uses a bare `Bun.spawn`, which passes on
+the variable a deleted `process.env` entry no longer shows.
 
 Upstream is building a goal plugin into OpenCode core, unreleased at 1.19.5. If a pin
 ships it, reserve its command and record how to keep it off, because Orkestrator's

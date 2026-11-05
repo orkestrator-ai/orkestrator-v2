@@ -2,7 +2,7 @@
 
 ## Task analysis
 
-Analysed 2026-11-03 against `main` at `7b48c23fb`. Tasks 1, 3 and 4 acted on 2026-11-04 from `main` at `e198fd4a7` (security report S2); what they leave is in [4980](4980-agent-uid-process-control.md), [4981](4981-opencode-password-readable-by-agent.md) and [4982](4982-bridge-credential-live-evidence.md).
+Analysed 2026-11-03 against `main` at `7b48c23fb`. Tasks 1, 3 and 4 acted on 2026-11-04 from `main` at `e198fd4a7` (security report S2); what they leave is in [4980](4980-agent-uid-process-control.md) and [4982](4982-bridge-credential-live-evidence.md). [4981](4981-opencode-password-readable-by-agent.md) gave OpenCode the same boundary.
 
 ### Tasks
 

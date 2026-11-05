@@ -17,11 +17,13 @@ import { runCommand } from "./shell.js";
  *
  * On an image with `bridge-credential=1` the token sits in a root-only file the
  * backend reads with a root exec, and the bridge is given only its SHA-256, so
- * nothing running as `node` holds the token. On an older image, and for a
- * bridge an older backend started, the token stays in `/tmp` and in the
- * bridge's environment, where the agent can read it, until the container is
- * rebuilt. Either way it reaches the container on stdin, never in `docker exec`
- * argv, where any local user can read it through `ps` or `/proc`.
+ * nothing running as `node` holds the token. OpenCode compares a plain password,
+ * so it takes the password itself and a plugin keeps it from its tools
+ * (`buildOpenCodeCredentialPluginSource`). On an older image, and for a bridge an
+ * older backend started, the token stays in `/tmp` and in the bridge's
+ * environment, where the agent can read it, until the container is rebuilt.
+ * Either way it reaches the container on stdin, never in `docker exec` argv,
+ * where any local user can read it through `ps` or `/proc`.
  */
 export type ContainerBridgeKind = Exclude<LocalServerKind, "opencode">;
 export type ContainerCredentialMode = "verifier" | "token-file";
@@ -53,7 +55,7 @@ const TOKEN_ENV: Record<ContainerBridgeKind, string> = {
  */
 const VERIFIER_BUN = "bun --config=/dev/null";
 
-export function containerCredentialFile(kind: ContainerBridgeKind): string {
+export function containerCredentialFile(kind: LocalServerKind): string {
   return `${CONTAINER_BRIDGE_CREDENTIAL_DIR}/${kind}-token`;
 }
 
@@ -70,8 +72,8 @@ export interface ContainerBridgeLaunch {
 
 export interface ContainerScriptLaunch {
   /** The file and token to write as root, before the script runs. */
-  rootCredential?: { kind: ContainerBridgeKind; token: string };
-  removeRootCredential?: ContainerBridgeKind;
+  rootCredential?: { kind: LocalServerKind; token: string };
+  removeRootCredential?: LocalServerKind;
   /** Exported at the top of the script, delivered on stdin. */
   secrets?: Record<string, string | undefined>;
 }
@@ -103,7 +105,7 @@ export function containerBridgeLaunch(
 /** Write `token` where only root in the container can read it. */
 export async function writeContainerBridgeCredential(
   containerId: string,
-  kind: ContainerBridgeKind,
+  kind: LocalServerKind,
   token: string,
 ): Promise<void> {
   const command = [
@@ -125,7 +127,7 @@ export async function writeContainerBridgeCredential(
 
 export async function removeContainerBridgeCredential(
   containerId: string,
-  kind: ContainerBridgeKind,
+  kind: LocalServerKind,
 ): Promise<void> {
   await runCommand(
     "docker",
@@ -136,7 +138,7 @@ export async function removeContainerBridgeCredential(
 
 async function readRootCredential(
   containerId: string,
-  kind: ContainerBridgeKind,
+  kind: LocalServerKind,
   timeoutMs: number,
   signal?: AbortSignal,
 ): Promise<string> {
@@ -167,10 +169,8 @@ export async function readContainerBridgeToken(
   options: { timeoutMs?: number; signal?: AbortSignal } = {},
 ): Promise<string | null> {
   const timeoutMs = options.timeoutMs ?? 120_000;
-  if (kind !== "opencode") {
-    const token = await readRootCredential(containerId, kind, timeoutMs, options.signal);
-    if (BRIDGE_TOKEN_PATTERN.test(token)) return token;
-  }
+  const rootToken = await readRootCredential(containerId, kind, timeoutMs, options.signal);
+  if (BRIDGE_TOKEN_PATTERN.test(rootToken)) return rootToken;
   const token = (
     await dockerExec(
       containerId,
@@ -181,7 +181,7 @@ export async function readContainerBridgeToken(
     )
   ).trim();
   if (!BRIDGE_TOKEN_PATTERN.test(token)) return null;
-  if (kind !== "opencode") compatibilityPathUsage.record("bridge-credential.token-file");
+  compatibilityPathUsage.record("bridge-credential.token-file");
   return token;
 }
 

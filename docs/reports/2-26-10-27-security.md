@@ -259,7 +259,8 @@ The agent's uid can no longer read a token, answer an approval or clear
 `readOnly`. It can still kill the bridge and catch a token on its port, or plant
 code for the next start
 ([todo 4980](../todo/containers-and-environments/4980-agent-uid-process-control.md));
-OpenCode has no bridge
+OpenCode has no bridge, so its plain password is kept from the agent by a plugin
+inside its server
 ([todo 4981](../todo/containers-and-environments/4981-opencode-password-readable-by-agent.md));
 and containers on older images keep the old behaviour until rebuilt.
 The rest of this status is the earlier state (2026-11-03). Every bridge now deletes its token from

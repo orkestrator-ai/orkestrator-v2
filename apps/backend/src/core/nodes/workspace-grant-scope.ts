@@ -58,6 +58,15 @@ const GLOBAL_CONFIG_WRITES: ReadonlySet<string> = new Set([
 
 const INHERITED_KEYS: ReadonlySet<string> = new Set(INHERITED_GLOBAL_SETTING_KEYS);
 
+/**
+ * Settings nothing reads any more. An older client's form still sends them,
+ * whatever this machine stores, so they say nothing about whether a write
+ * would change the machine. See the version compatibility register.
+ */
+const RETIRED_GLOBAL_SETTING_KEYS: ReadonlySet<string> = new Set([
+  "experimentalCodexRawEventLogging",
+]);
+
 export function isGlobalConfigWriteCommand(command: string): boolean {
   return GLOBAL_CONFIG_WRITES.has(command);
 }
@@ -108,6 +117,7 @@ export function isGlobalConfigEcho(command: string, args: unknown, current: unkn
     const keys = new Set([...Object.keys(storedGlobal), ...Object.keys(incomingGlobal)]);
     for (const key of keys) {
       if (preserveInherited && INHERITED_KEYS.has(key)) continue;
+      if (RETIRED_GLOBAL_SETTING_KEYS.has(key)) continue;
       if (!sameJson(incomingGlobal[key], storedGlobal[key])) return false;
     }
     return true;
@@ -119,6 +129,7 @@ export function isGlobalConfigEcho(command: string, args: unknown, current: unkn
     if (!Array.isArray(unset)) return false;
     const patchGlobal = stripRendererCredentials(patch) as Record<string, unknown>;
     for (const [key, value] of Object.entries(patchGlobal)) {
+      if (RETIRED_GLOBAL_SETTING_KEYS.has(key)) continue;
       if (!sameJson(value, storedGlobal[key])) return false;
     }
     return unset.every((key) => typeof key === "string" && storedGlobal[key] === undefined);

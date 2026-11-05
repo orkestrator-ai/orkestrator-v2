@@ -12,7 +12,7 @@ import {
   MAX_NODE_EVENT_PREFIXES,
   NODE_EVENT_WATCH_TTL_MS,
   parseNodeEventPrefixes,
-  RELAYED_NODE_EVENT,
+  relayedNodeEventName,
   type NodeEventWatchResult,
   type RelayedNodeEvent,
 } from "@orkestrator/protocol/node-events";
@@ -26,7 +26,9 @@ import type { ReadModelLink } from "./node-read-model.js";
  * Clients lease watches (`watch_node_events`) naming a node and event
  * prefixes. For each node with at least one live watch the relay keeps one
  * subscription to that node's event stream, for the union of the watched
- * prefixes, and re-emits every matching event as `relayed-node-event`.
+ * prefixes, and re-emits every matching event under that node's own name
+ * (`relayed-node-event:<nodeId>`). The gateway turns that back into the one old
+ * name for a client that has not asked for per-node names.
  * Nothing is subscribed for a node nobody watches, and a lease that is not
  * renewed expires, so a client that went away costs nothing for long.
  *
@@ -95,6 +97,14 @@ export class NodeEventRelay {
     this.sync();
   }
 
+  /** Recovery hints only apply while a live lease still watches this node. */
+  isWatched(nodeId: BackendId): boolean {
+    const now = (this.options.now ?? Date.now)();
+    return Array.from(this.watches.values()).some(
+      (watch) => watch.nodeId === nodeId && watch.expiresAt > now,
+    );
+  }
+
   /** Create or renew a lease. Renewing may also change the node or its prefixes. */
   watch(args: Record<string, unknown>): NodeEventWatchResult {
     const nodeId = args.nodeId;
@@ -116,7 +126,12 @@ export class NodeEventRelay {
     };
     this.watches.set(watch.watchId, watch);
     this.sync();
-    return { watchId: watch.watchId, expiresAt: watch.expiresAt, renewed: existing !== undefined };
+    return {
+      watchId: watch.watchId,
+      expiresAt: watch.expiresAt,
+      renewed: existing !== undefined,
+      perNodeEvents: true,
+    };
   }
 
   unwatch(watchId: unknown): { removed: boolean } {
@@ -230,7 +245,7 @@ export class NodeEventRelay {
             return;
           }
           const frame: RelayedNodeEvent = { nodeId, kind: "event", event, payload };
-          this.options.emit(RELAYED_NODE_EVENT, frame);
+          this.options.emit(relayedNodeEventName(nodeId), frame);
         },
       }),
     };
@@ -245,7 +260,7 @@ export class NodeEventRelay {
 
   private relayResync(nodeId: BackendId): void {
     const frame: RelayedNodeEvent = { nodeId, kind: "resync" };
-    this.options.emit(RELAYED_NODE_EVENT, frame);
+    this.options.emit(relayedNodeEventName(nodeId), frame);
   }
 
   /** Expired leases are swept while any exist, so a vanished client's stream closes. */

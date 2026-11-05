@@ -94,9 +94,11 @@ without blur and resize the window; it fits the width of the transcript.
   never a later draft.
 - **Find.** Find matches a report's summary immediately. Once the document has
   been displayed in this session, Find also includes its text up to 64 Ki
-  characters. A match leads to the report's card without highlighting the text
-  inside its frame. An open Find bar picks up newly loaded text on the next
-  query or conversation update.
+  characters, and an open Find bar picks that text up as soon as it arrives. In a
+  displayed report, Find highlights every match and scrolls to the current one,
+  opening a closed section around it until you move on or close Find. A report
+  waiting for a free frame shows its saved preview, so a match there leads to its
+  card.
 
 Selecting text keeps a report open while it stays in the transcript's rendered
 range. As with any message, scrolling far enough away ends the selection.

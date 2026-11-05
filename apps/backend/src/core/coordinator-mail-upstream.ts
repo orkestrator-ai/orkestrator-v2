@@ -27,6 +27,7 @@
  * checkout. Every failure is logged and swallowed; mail is never held back by
  * this step.
  */
+import { coordinatorConversationRunnable } from "@orkestrator/protocol/coordinator";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { openCoordinatorConversation } from "./coordinator-runtime.js";
 import {
@@ -89,7 +90,7 @@ export async function fastForwardBeforeCoordinatorMail(
     const open = await openCoordinatorConversation(deps.storage, runtimeId);
     if (
       !open ||
-      open.workspace.lifecycleState !== "ready" ||
+      !coordinatorConversationRunnable(open.workspace, open.conversation) ||
       open.conversation.role === "side" ||
       !open.conversation.agent
     ) {

@@ -10,6 +10,7 @@ import {
   listProjectGitMirrorUsage,
   measureEnvironmentDiskUsage,
   parseDuOutput,
+  runDu,
   summarizeEntries,
   type DiskUsageProbes,
 } from "./disk-usage.js";
@@ -497,4 +498,68 @@ test("container breakdown includes recovery copies and unique active and retaine
   expect(partial.primary.unavailable).toBeTruthy();
   probes.containerSize = async () => null;
   expect((await measureEnvironmentDiskUsage(env, probes)).totalBytes).toBeNull();
+});
+
+describe("runDu", () => {
+  async function fakeDuCommand(body: string): Promise<string> {
+    const command = path.join(await tempDir("ork-disk-usage-du-"), "du");
+    await fs.writeFile(command, `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+    return command;
+  }
+
+  test("measures a real directory", async () => {
+    const directory = await tempDir("ork-disk-usage-real-");
+    const sizes = parseDuOutput(await runDu(["-k", "-x", "-d", "1", directory]));
+    expect(sizes.has(directory)).toBe(true);
+  });
+
+  test("keeps what it could read when part of the tree was unreadable", async () => {
+    const command = await fakeDuCommand(`printf '4\\t/partial\\n'; exit 1`);
+    expect(await runDu([], { command })).toBe("4\t/partial\n");
+  });
+
+  test("rejects a failure that reported nothing", async () => {
+    await expect(runDu([], { command: await fakeDuCommand("exit 1") })).rejects.toThrow();
+  });
+
+  test("rejects a missing executable", async () => {
+    await expect(runDu([], { command: "ork-no-such-command-6060" })).rejects.toThrow();
+  });
+
+  test("rejects a killed walk, whose partial totals are too small", async () => {
+    const command = await fakeDuCommand(`printf '4\\t/partial\\n'; kill -KILL $$`);
+    await expect(runDu([], { command })).rejects.toThrow();
+  });
+
+  test("rejects a walk past its timeout, whatever it printed", async () => {
+    const command = await fakeDuCommand(`printf '4\\t/partial\\n'; exec sleep 30`);
+    await expect(runDu([], { command, timeoutMs: 100 })).rejects.toMatchObject({ timedOut: true });
+  });
+
+  test("rejects a walk past its output limit, also on a partial-read exit", async () => {
+    const command = await fakeDuCommand(`printf '4\\t/partial\\n'; exit 1`);
+    await expect(runDu([], { command, maxOutputBytes: 4 })).rejects.toMatchObject({
+      outputLimitExceeded: true,
+    });
+  });
+
+  test("a walk that fails measures as unknown, not as empty", async () => {
+    const worktree = await tempDir("ork-disk-usage-failed-");
+    const command = await fakeDuCommand("exit 1");
+    const usage = await measureEnvironmentDiskUsage(
+      {
+        id: "environment",
+        environmentType: "local",
+        worktreePath: worktree,
+      } as Environment,
+      {
+        du: (args) => runDu(args, { command }),
+        containerSize: async () => null,
+        volumeSizes: async () => null,
+        profilesDirectory: () => null,
+      },
+    );
+    expect(usage.primary.bytes).toBeNull();
+    expect(usage.primary.unavailable).toBe("The worktree could not be measured");
+  });
 });

@@ -193,6 +193,9 @@ describe("coordinator command registry", () => {
     };
     await expect(launch(args, context)).resolves.toMatchObject({ environment: { id: "worker-1" } });
     expect(create).toHaveBeenCalledTimes(1);
+    expect(
+      (await storage.coordinators.listOpenCoordinatorDelegations())[0]?.delegation?.request,
+    ).toMatchObject({ summary: "Implement it", source: "default" });
     expect(String(create.mock.calls[0]![0]!.initialPrompt)).toContain(
       COORDINATOR_DELEGATION_FRAME_OPEN,
     );

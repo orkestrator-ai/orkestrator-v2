@@ -1,3 +1,5 @@
+import { invoke } from "@/lib/native/backend";
+import { resetTranscriptArtifactCapabilities } from "@/hooks/useTranscriptArtifactCapabilities";
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useFileDirtyStore } from "@/stores/fileDirtyStore";
@@ -1183,3 +1185,102 @@ describe("FileViewerTab component", () => {
     expect(useFileDirtyStore.getState().getContent("unmounted-read-tab")).toBeNull();
   });
 });
+
+for (const diff of [false, true]) {
+  test(`unreachable stream falls back in ${diff ? "live diff" : "file viewer"}`, async () => {
+    const originalImage = globalThis.Image;
+    const invokeMock = invoke as unknown as ReturnType<typeof mock>;
+    resetTranscriptArtifactCapabilities();
+    const closed: string[] = [];
+    invokeMock.mockImplementation(async (command: string, args: { streamId?: string }) => {
+      if (command === "transcript_artifact_capabilities")
+        return {
+          backendId: "backend-1",
+          contentOrigin: "https://artifacts.example-usercontent.net",
+        };
+      if (command === "transcript_media_open_stream")
+        return {
+          url: "https://artifacts.example-usercontent.net/m/unreachable",
+          mimeType: "image/png",
+          streamId: "stream-1",
+        };
+      if (command === "transcript_media_close_stream") closed.push(args.streamId!);
+      return null;
+    });
+    globalThis.Image = function () {
+      const img = document.createElement("img");
+      Object.defineProperty(img, "src", {
+        set: () => queueMicrotask(() => img.dispatchEvent(new Event("error"))),
+      });
+      return img;
+    } as unknown as typeof Image;
+    try {
+      const view = render(
+        <FileViewerTab {...liveImageProps} changeDiff={diff ? liveImageTarget : undefined} />,
+      );
+      await waitFor(() =>
+        expect(screen.getByAltText("assets/logo.png").getAttribute("src")).toBe(
+          `data:image/png;base64,${RED_PNG}`,
+        ),
+      );
+      expect(readEnvironmentFileBase64Mock).toHaveBeenCalledTimes(1);
+      expect(closed).toEqual(["stream-1"]);
+      view.unmount();
+      expect(closed).toEqual(["stream-1"]);
+    } finally {
+      globalThis.Image = originalImage;
+      resetTranscriptArtifactCapabilities();
+      invokeMock.mockImplementation(() => Promise.resolve());
+    }
+  });
+}
+
+for (const diff of [false, true]) {
+  test(`pending stream is released on path change and unmount in ${diff ? "live diff" : "file viewer"}`, async () => {
+    const originalImage = globalThis.Image;
+    const invokeMock = invoke as unknown as ReturnType<typeof mock>;
+    resetTranscriptArtifactCapabilities();
+    const closed: string[] = [];
+    let opened = 0;
+    invokeMock.mockImplementation(async (command: string, args: { streamId?: string }) => {
+      if (command === "transcript_artifact_capabilities")
+        return {
+          backendId: "backend-1",
+          contentOrigin: "https://artifacts.example-usercontent.net",
+        };
+      if (command === "transcript_media_open_stream")
+        return {
+          url: "https://artifacts.example-usercontent.net/m/pending",
+          mimeType: "image/png",
+          streamId: `stream-${++opened}`,
+        };
+      if (command === "transcript_media_close_stream") closed.push(args.streamId!);
+      return null;
+    });
+    globalThis.Image = function () {
+      return document.createElement("img");
+    } as unknown as typeof Image;
+    try {
+      const view = render(
+        <FileViewerTab {...liveImageProps} changeDiff={diff ? liveImageTarget : undefined} />,
+      );
+      await waitFor(() => expect(opened).toBe(1));
+      view.rerender(
+        <FileViewerTab
+          {...liveImageProps}
+          filePath="other.png"
+          changeDiff={diff ? { ...liveImageTarget, path: "other.png" } : undefined}
+        />,
+      );
+      await waitFor(() => expect(opened).toBe(2));
+      expect(closed).toEqual(["stream-1"]);
+      view.unmount();
+      await waitFor(() => expect(closed).toEqual(["stream-1", "stream-2"]));
+      expect(readEnvironmentFileBase64Mock).not.toHaveBeenCalled();
+    } finally {
+      globalThis.Image = originalImage;
+      resetTranscriptArtifactCapabilities();
+      invokeMock.mockImplementation(() => Promise.resolve());
+    }
+  });
+}

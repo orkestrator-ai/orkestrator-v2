@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ContainerResourceLimitsSettings } from "./ContainerResourceLimitsSettings";
 import { isWindowMachine, useAccountMachine } from "./account-machine";
 import { CoordinatorWebResearchSettings } from "./CoordinatorWebResearchSettings";
+import { requestGlobalSettings } from "@/lib/settings-navigation";
 import { AutoSteerSetting } from "./AutoSteerSetting";
 import { DataSavingSetting } from "./DataSavingSetting";
 import { PreviewSettings } from "./PreviewSettings";
@@ -340,8 +341,6 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     setTerminalHistoryGlobalRetentionMb,
     terminalHistoryRetentionDays,
     setTerminalHistoryRetentionDays,
-    experimentalCodexRawEventLogging,
-    setExperimentalCodexRawEventLogging,
     experimentalScheduling,
     setExperimentalScheduling,
     localWindowGatewayTransport,
@@ -1223,6 +1222,25 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
           </SelectContent>
         </Select>
       </div>
+      <p className="text-xs leading-relaxed text-muted-foreground">
+        Coordinator safety level and web research are in{" "}
+        <button
+          type="button"
+          className="underline underline-offset-2 hover:text-foreground focus-hairline"
+          onClick={() => requestGlobalSettings("coordinator")}
+        >
+          Coordinator settings
+        </button>
+        .
+      </p>
+    </SettingsPageLayout>
+  );
+
+  const renderCoordinator = () => (
+    <SettingsPageLayout
+      title="Coordinator"
+      description="How this machine's project coordinators are held to read-only and what they may look up."
+    >
       <div>
         <h3 className="text-sm font-medium text-foreground">Coordinator safety level</h3>
         <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
@@ -1267,6 +1285,22 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
         servers={coordinatorResearchMcpServers}
         setServers={setCoordinatorResearchMcpServers}
       />
+      <div>
+        <h3 className="text-sm font-medium text-foreground">Messaging</h3>
+        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+          Workers report back to a coordinator through agent messaging, so delegation needs it on.
+          Coordinator status updates are set there too, with the rest of messaging.
+        </p>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          className="mt-3"
+          onClick={() => requestGlobalSettings("messaging")}
+        >
+          Open Messaging settings
+        </Button>
+      </div>
     </SettingsPageLayout>
   );
 
@@ -2416,7 +2450,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
 
   const renderExperimental = () => (
     <SettingsPageLayout title="Experimental">
-      {isWindowMachine(machine) && (
+      {isWindowMachine(machine) ? (
         <div className={cn(SETTINGS_CARD_CLASS, "divide-y divide-zinc-800")}>
           <SettingsRow
             label="Graphs"
@@ -2465,69 +2499,12 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
             </SettingsRow>
           )}
         </div>
+      ) : (
+        <p className="text-sm text-muted-foreground">
+          Experimental settings belong to the machine this window runs on. Select it above to change
+          them.
+        </p>
       )}
-      <div className="space-y-3">
-        <SettingsSectionHeader title="Codex Raw Event Logging">
-          Captures the additional raw Codex bridge events used to validate transcript-derived
-          subagent rendering.
-        </SettingsSectionHeader>
-        <button
-          type="button"
-          onClick={() => setExperimentalCodexRawEventLogging(!experimentalCodexRawEventLogging)}
-          className={cn(
-            "max-w-xs w-full p-3 rounded-lg border text-left transition-colors",
-            experimentalCodexRawEventLogging
-              ? "border-ring bg-primary/5"
-              : "border-transparent bg-zinc-900 hover:border-zinc-600",
-          )}
-        >
-          <div className="flex items-center justify-between">
-            <span className="font-medium text-sm">
-              {experimentalCodexRawEventLogging ? "Enabled" : "Disabled"}
-            </span>
-            <div
-              className={cn(
-                "w-9 h-5 rounded-full transition-colors relative",
-                experimentalCodexRawEventLogging ? "bg-primary" : "bg-muted-foreground/30",
-              )}
-            >
-              <div
-                className={cn(
-                  "absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform",
-                  experimentalCodexRawEventLogging ? "translate-x-4" : "translate-x-0.5",
-                )}
-              />
-            </div>
-          </div>
-        </button>
-        <p className="text-xs text-muted-foreground">
-          Leave this enabled while validating subagent transcript rendering. Turn it off later if
-          you no longer want to persist the extra Codex event payloads.
-        </p>
-        {experimentalCodexRawEventLogging && logDirectory && (
-          <div className="space-y-1.5">
-            <p className="text-xs text-muted-foreground">
-              Local environment logs will be saved under:
-            </p>
-            <button
-              type="button"
-              disabled={!canRevealFiles}
-              onClick={() => {
-                if (logDirectory) backend.revealInFileManager(logDirectory).catch(() => {});
-              }}
-              className="flex items-center gap-1.5 text-xs text-primary hover:underline font-mono truncate max-w-full disabled:text-muted-foreground disabled:no-underline"
-              title={`${logDirectory}/codex-raw`}
-            >
-              <FolderOpen className="h-3 w-3 shrink-0" />
-              <span className="truncate">{logDirectory}/codex-raw</span>
-            </button>
-          </div>
-        )}
-        <p className="text-xs text-muted-foreground/60">
-          Requires bridge restart to take effect. Local environment logs are written under the app
-          log directory in `codex-raw/`.
-        </p>
-      </div>
     </SettingsPageLayout>
   );
 
@@ -2536,6 +2513,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     "version-control": renderVersionControl,
     defaults: renderDefaults,
     platforms: renderPlatforms,
+    coordinator: renderCoordinator,
     review: renderReview,
     claude: renderClaude,
     cursor: renderCursor,

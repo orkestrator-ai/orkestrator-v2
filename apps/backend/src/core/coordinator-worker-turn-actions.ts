@@ -107,6 +107,7 @@ function onTab(
 async function markStopRequested(
   context: CommandContext,
   match: (association: CoordinatorWorkflowAssociation) => boolean,
+  byUser: boolean,
 ): Promise<{ ids: string[]; at: string; open: number }> {
   const at = new Date().toISOString();
   const ids: string[] = [];
@@ -119,7 +120,11 @@ async function markStopRequested(
       (current) => {
         if (current.delegation?.state !== "running" || current.delegation.stopRequestedAt)
           return false;
-        current.delegation = { ...current.delegation, stopRequestedAt: at };
+        current.delegation = {
+          ...current.delegation,
+          stopRequestedAt: at,
+          ...(byUser ? { stopRequestedBy: "user" as const } : {}),
+        };
         ids.push(current.id);
         return true;
       },
@@ -136,7 +141,11 @@ async function unmarkStopRequested(
     await context.storage.coordinators
       .updateCoordinatorWorkflowAssociation(id, (current) => {
         if (!current.delegation || current.delegation.stopRequestedAt !== marked.at) return false;
-        const { stopRequestedAt: _stopRequestedAt, ...delegation } = current.delegation;
+        const {
+          stopRequestedAt: _stopRequestedAt,
+          stopRequestedBy: _stopRequestedBy,
+          ...delegation
+        } = current.delegation;
         current.delegation = delegation;
         return true;
       })
@@ -163,26 +172,34 @@ export function registerCoordinatorWorkerTurnActions(
   /**
    * Stop the turn in one worker tab. An open delegation on that tab is marked,
    * then settles on the turn end as any other, so the coordinator is woken
-   * once with what the worker had done, told it stopped the turn itself.
+   * once with what the worker had done, told who stopped the turn: itself, or
+   * the user (`stoppedBy: "user"`), which only the Work panel sends; the
+   * coordinator's tool schema does not admit it.
    */
   register("stop_coordinator_worker_turn", async (args, context) => {
     const caller = await coordinatorCaller(args.scope, context);
     const input = record(args.input, "the stop input");
     const requestId = asNonBlankString(input.requestId, "requestId");
     const { remote, environmentId, tabId } = await workerTarget(context, caller, input);
+    const byUser = input.stoppedBy === "user";
     return withCoordinatorReceipt(
       context,
       caller,
       {
         requestId,
         action: "stop-worker-turn",
-        payload: { environmentId, tabId, ...(remote ? { nodeId: remote.nodeId } : {}) },
+        payload: {
+          environmentId,
+          tabId,
+          ...(remote ? { nodeId: remote.nodeId } : {}),
+          ...(byUser ? { stoppedBy: "user" } : {}),
+        },
       },
       async () => {
         const match = onTab(caller, { environmentId, tabId, nodeId: remote?.nodeId });
         const marks: Array<{ ids: string[]; at: string; open: number }> = [];
         const mark = async () => {
-          marks.push(await markStopRequested(context, match));
+          marks.push(await markStopRequested(context, match, byUser));
         };
         const unmark = async () => {
           for (const marked of marks.splice(0)) await unmarkStopRequested(context, marked);
@@ -313,6 +330,9 @@ export function registerCoordinatorWorkerTurnActions(
               environmentId,
               tabId,
               requestId,
+              request: {
+                summary: `/${String(result.command ?? command.command).replace(/^\/+/, "")}`,
+              },
             },
           );
           delegationOpened = opened.opened === true;

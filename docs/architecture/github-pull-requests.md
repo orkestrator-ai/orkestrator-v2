@@ -313,8 +313,8 @@ or question). Under forced colours the sweep is removed. The row's
 
 ## Auto-merge
 
-The **Auto-merge** toggle in the action bar's PR section (shown while the PR is
-open) sets the environment's durable `autoMerge` flag through
+The **Integrate** button in pipeline key information and the **Auto-merge**
+toggle in the action bar's PR section (shown while the PR is open) set the environment's durable `autoMerge` flag through
 `set_environment_auto_merge`. While the flag is on, the sidebar row shows a
 white merge icon to the right of the environment name. Turning it off stores an
 explicit `false`, because renderers merge environment records field by field.
@@ -328,15 +328,24 @@ fresh check). `decideAutoMerge` uses `evaluatePrMergeReadiness` with the same
 freshness rule as the green shimmer (`isPrReadingConfirmedByMonitor`):
 
 - **Ready**: it runs `merge_environment_pr` exactly as the Merge PR button does
-  (squash, delete the branch, no environment cleanup).
+  (squash, delete the branch). The key-information Integrate dialog also
+  offers Auto-merge & Cleanup, which deletes the environment after confirmed
+  merge (including a merge performed externally). Closed PRs do not trigger cleanup.
+  Automatic cleanup stays in `autoMergeCleanup` until confirmation, then
+  becomes `cleanupAfterMergeRequestedAt` for recovery; failed or pending
+  attempts do not create a manual cleanup request. Turning integration off or
+  selecting plain Auto-merge withdraws automatic cleanup. Independent manual
+  Merge & Cleanup requests remain durable. Options cannot change during a merge.
 - **Conflicts**: it launches the Resolve agent through `launch_native_agent_job`
   with the `resolve` action default, the PR's base branch, and the
   `refresh-pr-after-agent-completion` completion action, without taking focus.
   That action arms `prRecheckAfterAgentCompletionArmedAt`, which the monitor
   clears only once GitHub stops reporting conflicts. While it is armed no
-  second Resolve is launched, so a manual Resolve also counts, and a Resolve
-  that finishes with conflicts still present is left for the user rather than
-  relaunched.
+  second Resolve is launched. A confirmed automatic completion records a
+  durable completion time; only a newer successful conflict reading permits
+  another attempt. Three completed attempts with conflicts stop integration
+  and record an actionable error (shown by the Integrate tooltip). Re-enabling
+  resets the attempt budget. Manual and unconfirmed Resolve jobs stay armed.
 - **Anything else** (stale, mergeability unknown, draft, blocked, behind,
   no merge permission, and checks pending or failing when checks are
   required): it waits for the next reading.

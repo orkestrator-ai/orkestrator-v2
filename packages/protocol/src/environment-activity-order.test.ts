@@ -15,7 +15,7 @@ const sortIds = (rows: Row[], order: ActivitySortOrder) =>
     .map(({ id }) => id);
 
 describe("compareEnvironmentsByActivity", () => {
-  test("priority: unread, then waiting, working and idle, newest activity first within each", () => {
+  test("priority: unread, then waiting and idle, newest first within each, then working", () => {
     const rows: Row[] = [
       { id: "idle-new", activity: "idle", lastActivityAt: "2026-07-23T10:00:00Z" },
       { id: "working", activity: "working", lastActivityAt: "2026-07-21T10:00:00Z" },
@@ -28,10 +28,70 @@ describe("compareEnvironmentsByActivity", () => {
       "unread",
       "waiting-new",
       "waiting-old",
-      "working",
       "no-activity",
       "idle-new",
+      "working",
     ]);
+  });
+
+  describe("groups every order keeps", () => {
+    const rows: Row[] = [
+      {
+        id: "merged-unread",
+        prState: "merged",
+        hasUnreadWork: true,
+        lastActivityAt: "2026-07-24T10:00:00Z",
+      },
+      {
+        id: "merged-working",
+        prState: "merged",
+        activity: "working",
+        lastActivityAt: "2026-07-25T10:00:00Z",
+      },
+      { id: "working-new", activity: "working", lastActivityAt: "2026-07-23T10:00:00Z" },
+      {
+        id: "working-unread",
+        activity: "working",
+        hasUnreadWork: true,
+        lastActivityAt: "2026-07-22T10:00:00Z",
+      },
+      { id: "closed", prState: "closed", lastActivityAt: "2026-07-21T10:00:00Z" },
+      { id: "open", prState: "open", activity: "waiting", lastActivityAt: "2026-07-20T10:00:00Z" },
+      { id: "no-pr", lastActivityAt: "2026-07-19T10:00:00Z" },
+    ];
+
+    test("priority keeps unread and waiting at the top of their own group", () => {
+      expect(sortIds(rows, "priority")).toEqual([
+        "open",
+        "closed",
+        "no-pr",
+        "working-unread",
+        "working-new",
+        "merged-unread",
+        "merged-working",
+      ]);
+    });
+
+    test("newest and oldest order by time alone within each group", () => {
+      expect(sortIds(rows, "newest")).toEqual([
+        "closed",
+        "open",
+        "no-pr",
+        "working-new",
+        "working-unread",
+        "merged-unread",
+        "merged-working",
+      ]);
+      expect(sortIds(rows, "oldest")).toEqual([
+        "no-pr",
+        "open",
+        "closed",
+        "working-unread",
+        "working-new",
+        "merged-unread",
+        "merged-working",
+      ]);
+    });
   });
 
   test("priority recency prefers lastActivityAt over the snapshot time", () => {
@@ -54,7 +114,7 @@ describe("compareEnvironmentsByActivity", () => {
     expect(sortIds(rows, "priority")).toEqual(["recent", "legacy", "refreshed"]);
   });
 
-  test("chronological orders use lastActivityAt alone and place undated rows last, then first", () => {
+  test("chronological orders use lastActivityAt within a group, undated rows last, then first", () => {
     const rows: Row[] = [
       { id: "old", activity: "waiting", lastActivityAt: "2026-07-20T10:00:00Z" },
       { id: "undated", hasUnreadWork: true, activityUpdatedAt: "2026-07-25T10:00:00Z" },

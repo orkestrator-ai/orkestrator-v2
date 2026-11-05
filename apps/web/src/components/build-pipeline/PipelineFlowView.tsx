@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -59,13 +60,17 @@ import { defaultFlowSelection } from "@/components/flow-graph/flow-graph-model";
 import { reviewerStatusNote } from "@/components/review/multi-review-steps";
 import { ReviewValidationStatus } from "@/components/review/ReviewValidationStatus";
 import { ReviewerStartFailureNotice } from "@/components/review/ReviewerStartFailureNotice";
+import { reviewerProvisionalSummary } from "@/components/review/multi-review-steps";
 import { WorkflowResultStatus } from "@/components/review/WorkflowResultStatus";
 import {
   pipelineFlowModel,
   pipelinePackageRestartStageId,
   pipelineReviewPassNodes,
   pipelineReviewerStartFailures,
+  pipelineRestartableReviewerId,
+  pipelineReviewWorktreeChanged,
   pipelineSkipAction,
+  pipelineStoppableReviewerId,
   type PipelineFlowModel,
   type PipelineFlowNode,
 } from "./pipeline-flow";
@@ -180,8 +185,8 @@ export interface PipelineFlowViewProps {
  *
  * The graph is a projection of the pipeline record; selection, zoom, pan and
  * whether the graph is collapsed are view state and never reach the record.
- * A node opens in the inspector on a click, and its session opens in a tab of
- * its own on a double click.
+ * A node opens in the inspector on a click, and its session, or the Notes
+ * step's notes, opens in a tab of its own on a double click.
  */
 export function PipelineFlowView({
   pipeline,
@@ -247,8 +252,8 @@ export function PipelineFlowView({
   const now = useSyncExternalStore(subscribeDisplayClock, displayClock.getSnapshot);
 
   // The running step, else the last step reached; a node the user picked
-  // wins while it exists. Notes is opened by hand: it never runs, so there is
-  // nothing in it to follow.
+  // wins while it exists. Notes counts as reached only once the run completes,
+  // so a finished run lands on it and an unfinished one never does.
   const columnOf = new Map<string, number>();
   model.columns.forEach((column, index) => {
     for (const id of column.nodeIds) columnOf.set(id, index);
@@ -261,7 +266,7 @@ export function PipelineFlowView({
     pendingRetry?.id ??
     defaultFlowSelection(
       model.nodes
-        .filter((node) => !node.session?.superseded && !node.superseded && node.kind !== "notes")
+        .filter((node) => !node.session?.superseded && !node.superseded)
         .map((node) => ({
           id: node.id,
           state: node.placeholder ? "not-started" : node.state,
@@ -274,6 +279,33 @@ export function PipelineFlowView({
     model.nodes.find((node) => node.id === pinnedId) ??
     model.nodes.find((node) => node.id === followed) ??
     model.nodes[0];
+  // This view survives graph collapse. A tab reopen still starts a new arrival.
+  const followsNotes = selected?.kind === "notes" && selected.id !== pinnedId;
+  const [landedViewKey, setLandedViewKey] = useState<string | null>(null);
+  if (landedViewKey !== null && (!followsNotes || landedViewKey !== viewKey)) {
+    setLandedViewKey(null);
+  }
+  const graphContainerRef = useRef<HTMLDivElement>(null);
+  const expandedScrollTop = useRef<number | null>(null);
+  useLayoutEffect(() => {
+    if (collapsed || expandedScrollTop.current === null) return;
+    const graph = graphContainerRef.current;
+    const scroller = graph?.closest<HTMLElement>('[data-testid="pipeline-flow-scroll"]');
+    if (!graph || !scroller) return;
+    const restore = () => {
+      const top = expandedScrollTop.current;
+      if (top === null || scroller.scrollHeight - scroller.clientHeight < top) return;
+      scroller.scrollTop = top;
+      expandedScrollTop.current = null;
+      observer.disconnect();
+    };
+    // Expansion mounts an unmeasured graph first. Wait for its real height
+    // before restoring an offset the collapsed inspector may have clamped.
+    const observer = new ResizeObserver(restore);
+    observer.observe(graph);
+    restore();
+    return () => observer.disconnect();
+  }, [collapsed]);
   const selectedSessionId = selected?.session?.sdkSessionId ?? null;
   // The shell's info pane reads which stage session is on screen.
   useEffect(() => {
@@ -312,6 +344,12 @@ export function PipelineFlowView({
     const options = pipelineSessionTabOptions(pipeline, node);
     if (!options || !createTab || !node.session) return;
     createTab(node.session.agent ?? pipeline.agentType, options);
+  };
+  const openNotes = () => {
+    if (!createTab) return;
+    createTab("key-information", {
+      keyInformation: { environmentId, pipelineId: pipeline.id, view: "notes" },
+    });
   };
   const openReview = (key: string) => {
     if (!createTab) return;
@@ -367,6 +405,14 @@ export function PipelineFlowView({
         onSelect: () => openSession(node),
       });
     }
+    if (node.kind === "notes" && createTab) {
+      actions.push({
+        key: "open-notes",
+        label: "Open notes in a tab",
+        icon: ExternalLink,
+        onSelect: openNotes,
+      });
+    }
     if (node.passKey && !passKey && createTab && !node.placeholder) {
       actions.push({
         key: "open-review",
@@ -398,6 +444,26 @@ export function PipelineFlowView({
         icon: RefreshCw,
         disabled,
         onSelect: () => controls.retryStage(),
+      });
+    }
+    const stoppableReviewer = pipelineStoppableReviewerId(pipeline, node);
+    if (stoppableReviewer) {
+      actions.push({
+        key: "stop-reviewer",
+        label: "Stop reviewer",
+        icon: Square,
+        disabled,
+        onSelect: () => controls.stopReviewer(stoppableReviewer),
+      });
+    }
+    const restartableReviewer = pipelineRestartableReviewerId(pipeline, node);
+    if (restartableReviewer) {
+      actions.push({
+        key: "restart-reviewer",
+        label: "Restart reviewer",
+        icon: RefreshCw,
+        disabled,
+        onSelect: () => controls.restartReviewer(restartableReviewer),
       });
     }
     if (node.session && !node.placeholder && !node.superseded) {
@@ -531,7 +597,9 @@ export function PipelineFlowView({
     const actions = actionsFor(node);
     nodeActions.set(node.id, actions);
     const canOpen =
-      Boolean(node.session && createTab) || (node.kind === "pr" && Boolean(pullRequest && shipped));
+      Boolean(node.session && createTab) ||
+      (node.kind === "pr" && Boolean(pullRequest && shipped)) ||
+      (node.kind === "notes" && Boolean(createTab));
     const view = pipelineNodeView({
       node,
       pipeline,
@@ -539,7 +607,11 @@ export function PipelineFlowView({
       now,
       modelLabel,
       canOpen,
-      onOpen: () => (node.kind === "pr" ? void viewPR() : openSession(node)),
+      onOpen: () => {
+        if (node.kind === "pr") void viewPR();
+        else if (node.kind === "notes") openNotes();
+        else openSession(node);
+      },
       contextMenu: contextMenuFor(actions),
     });
     if (
@@ -598,7 +670,14 @@ export function PipelineFlowView({
     type: "button",
     "aria-expanded": !collapsed,
     "aria-controls": graphId,
-    onClick: () => setCollapsed(viewKey, !collapsed),
+    onClick: () => {
+      if (!collapsed) {
+        expandedScrollTop.current =
+          graphContainerRef.current?.closest<HTMLElement>('[data-testid="pipeline-flow-scroll"]')
+            ?.scrollTop ?? null;
+      }
+      setCollapsed(viewKey, !collapsed);
+    },
   } as const;
   const progress = (
     <span
@@ -615,6 +694,15 @@ export function PipelineFlowView({
       <OverviewScroll>
         <div className="@container flex min-h-full flex-col">
           {notices}
+          {pipelineReviewWorktreeChanged(pipeline) ? (
+            <div
+              className="shrink-0 border-b border-divider bg-amber-500/8 px-3 py-2 text-sm text-amber-500"
+              data-testid="pipeline-review-stale"
+            >
+              The worktree changed during the latest review. The review carried on, so its report
+              may not describe the code as it is now.
+            </div>
+          ) : null}
           {startFailures.failures.length > 0 ? (
             <div className="shrink-0 border-b border-divider px-3 py-2">
               <ReviewerStartFailureNotice
@@ -651,7 +739,12 @@ export function PipelineFlowView({
               ) : null}
             </div>
           )}
-          <div id={graphId} hidden={collapsed} className={cn(collapsed && "hidden")}>
+          <div
+            ref={graphContainerRef}
+            id={graphId}
+            hidden={collapsed}
+            className={cn(collapsed && "hidden")}
+          >
             {collapsed ? null : (
               <PipelineFlowGraph
                 model={model}
@@ -663,6 +756,8 @@ export function PipelineFlowView({
                 layout={layout}
                 fullscreenContainer={tabRoot}
                 isActive={isActive}
+                landOnSelection={followsNotes && landedViewKey !== viewKey}
+                onSelectionLanded={() => setLandedViewKey(viewKey)}
               />
             )}
           </div>
@@ -841,6 +936,21 @@ function InspectorNotes({
       <p key="error" className="break-words whitespace-pre-wrap text-failure">
         {node.error}
       </p>,
+    );
+  }
+  const provisional = node.reviewer ? reviewerProvisionalSummary(node.reviewer) : null;
+  if (provisional) {
+    notes.push(
+      <div key="provisional" data-testid="pipeline-reviewer-provisional">
+        <p className="text-muted-foreground">{provisional}</p>
+        <ul className="mt-1 space-y-0.5">
+          {node.reviewer!.provisionalFindings!.map((finding) => (
+            <li key={finding.id} className="break-words">
+              {finding.issue.severity} · {finding.issue.title}
+            </li>
+          ))}
+        </ul>
+      </div>,
     );
   }
   if (session?.resultSubmission) {

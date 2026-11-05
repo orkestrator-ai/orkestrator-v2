@@ -201,6 +201,14 @@ tag for another route is not sent upstream. Reloads of a previewed dev server
 then revalidate instead of downloading, rewriting and compressing every
 module again.
 
+A static file with no precompressed sibling is compressed on the fly, up to
+`MAX_STATIC_FALLBACK_SOURCE_BYTES`. Its tags depend only on the source file and
+the coding, so a revalidation is compared with them before anything is
+compressed (`heldStaticFallbackEncoding` in `apps/backend/src/gateway-proxy.ts`).
+A match answers `304` with the variant the client holds and no coded
+`Content-Length`, which only compressing would tell us. `If-None-Match: *` and
+`If-Modified-Since` alone name no variant, so they still compress first.
+
 Streaming gzip contexts are shared by direct and proxied streams and capped at
 `MAX_CONCURRENT_STREAMING_COMPRESSIONS` (8); a stream that finds the pool full
 continues in identity and counts as declined. A browser holds two event
@@ -423,6 +431,17 @@ fires on what a current backend sends. The OpenCode-specific notice for
 backends older than 2.19.17 (raw `{ info, parts }` envelopes) was retired on
 2026-10-24, because those backends are outside the window.
 
+## Browser connection capacity
+
+A tab watching federated nodes also opens one filtered relayed-event stream.
+Together with the main stream this uses two persistent connections per tab,
+and terminals can add a third. Plain HTTP/1.1 browsers commonly allow only six
+connections per origin: three watching tabs can exhaust that budget and delay
+commands. Use an HTTP/2 frontend (for example the supported Tailscale Serve
+frontend) for multiple watching tabs. HTTPS alone does not imply HTTP/2.
+Cross-tab stream sharing is not implemented; a multi-tab plain-HTTP qualification
+is still required before claiming that configuration avoids starvation.
+
 ## Event stream reconnects
 
 A web client holds one authoritative event stream and its terminal output
@@ -469,7 +488,14 @@ reconnects on its own capped, jittered ladder (`ReconnectBackoff` from
   `gateway.cursor` frame per run of them, before the next matching frame or at
   the end of the window. An event larger than the replay ring's byte bound empties
   the window, so reconnecting clients reconcile, and it is counted in
-  `replay.ring.oversizedAppends` on `/__orkestrator/metrics`.
+  `replay.ring.oversizedAppends` on `/__orkestrator/metrics`. A scoped client's
+  replay is charged against its buffer for what it will be written: matching
+  frames and one cursor per run of skips, so a burst of unrelated events no
+  longer tells it `replay-too-large`.
+- Relayed node events are outside that window. They have a second ring
+  (`replay.relayedRing` in the metrics) and, in a renderer, a stream of their own
+  with its own cursor, so a busy leaf cannot make a client reconcile
+  ([command nodes](command-nodes.md)).
 - A link can drop with no answer at all (a tailnet peer that vanished), and then
   an open stream never errors: its socket waits on TCP for many minutes. So
   every client watches for silence. A main stream that shows no sign of life for

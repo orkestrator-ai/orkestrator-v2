@@ -1,4 +1,3 @@
-import { createInterface } from "node:readline";
 import type { BackendHello } from "@orkestrator/protocol/backend-profile";
 import { checkBackendRoute } from "./backend-hello.js";
 import { spawn, type ChildProcess } from "node:child_process";
@@ -7,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { DESKTOP_SUPERVISED_ENV } from "@orkestrator/protocol/node/application-logging";
+import { forEachBoundedLine } from "@orkestrator/protocol/node/bounded-line-splitter";
 import { isLogPolicyChangedRecord } from "@orkestrator/protocol/node/log-policy";
 import type { GatewayTokenSettings, WebClientStatus } from "@orkestrator/protocol/web-client";
 import {
@@ -17,8 +17,10 @@ import {
 import {
   GATEWAY_EVENT_CURSOR_PARAM,
   GATEWAY_STREAM_CONNECT_TIMEOUT_MS,
+  GATEWAY_RELAYED_EVENTS_PARAM,
   GATEWAY_STREAM_SILENCE_LIMIT_MS,
   GatewayEventStreamState,
+  type GatewayRelayedEventsMode,
   NATIVE_EVENT_STREAM_CONNECTED_EVENT,
   TERMINAL_EVENT_STREAM_CONNECTED_EVENT,
   readSseStream,
@@ -705,6 +707,12 @@ export class BackendHttpClient {
       try {
         const url = this.endpoint("/__orkestrator/events");
         if (stream.cursor) url.searchParams.set(GATEWAY_EVENT_CURSOR_PARAM, stream.cursor);
+        // Main forwards to windows it does not track watches for, so it takes
+        // every relayed event on this one stream.
+        url.searchParams.set(
+          GATEWAY_RELAYED_EVENTS_PARAM,
+          "legacy" satisfies GatewayRelayedEventsMode,
+        );
         if (!this.relayTerminalOutput) {
           url.searchParams.set("excludeEvents", TERMINAL_OUTPUT_EVENT_PREFIX);
         }
@@ -977,9 +985,10 @@ export class BackendProcess {
     // even after childFailure clears the process state on exit.
     this.childClosed = new Promise((resolve) => child.once("close", () => resolve()));
     // Line-oriented: production logging tees `console`, so a chunk boundary
-    // must not become a log-entry boundary or split a single record.
+    // must not become a log-entry boundary or split a single record. Bounded:
+    // a backend line with no newline cannot grow this process's memory.
     if (child.stderr) {
-      createInterface({ input: child.stderr }).on("line", (line) => {
+      forEachBoundedLine(child.stderr, (line) => {
         relayBackendLine("stderr", line, options.onLogPolicyChanged);
       });
     }
@@ -1028,13 +1037,12 @@ export class BackendProcess {
           reject(new Error("Backend service stdout is unavailable"));
           return;
         }
-        const lines = createInterface({ input: child.stdout });
         const finish = (message: ReadyMessage) => {
           clearTimeout(timeout);
           rejectStartup = null;
           resolve(message);
         };
-        lines.on("line", (line) => {
+        forEachBoundedLine(child.stdout, (line) => {
           const message = parseReadyMessage(line);
           if (message) finish(message);
           else relayBackendLine("stdout", line, options.onLogPolicyChanged);

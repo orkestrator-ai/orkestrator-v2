@@ -42,12 +42,16 @@ const provider: StackProvider = {
     later: scenario === "native-all-out" ? "refuse" : "reply",
   },
   readings: { soonest: { weeklyUsedPercent: 50 }, later: { weeklyUsedPercent: 10 } },
-  refusalClaim: scenario === "native-other-limit" ? "five_hour" : "seven_day",
-  // A real weekly refusal reads 100%; a 5-hour one leaves the week where it was.
+  refusalClaim:
+    scenario === "native-five-hour" || scenario === "native-other-limit"
+      ? "five_hour"
+      : "seven_day",
+  // A real weekly refusal reads 100%, and a 5-hour one reads 100% there while the week
+  // stays where it was. A refusal for any other limit, a Fable one say, moves neither.
   onRefusal: (account) => {
     provider.firstRefusalAt ??= Date.now();
-    if (scenario === "native-other-limit") provider.readings[account].fiveHourUsedPercent = 100;
-    else provider.readings[account].weeklyUsedPercent = 100;
+    if (scenario === "native-five-hour") provider.readings[account].fiveHourUsedPercent = 100;
+    else if (scenario !== "native-other-limit") provider.readings[account].weeklyUsedPercent = 100;
   },
   usageReads: [],
 };
@@ -230,6 +234,7 @@ const SETTLE_MS = 20_000;
 try {
   switch (scenario) {
     case "native-build":
+    case "native-five-hour":
       await startNativeTurn("build", "build");
       await until(() => resends() >= 1, "the resend");
       await Bun.sleep(SETTLE_MS);

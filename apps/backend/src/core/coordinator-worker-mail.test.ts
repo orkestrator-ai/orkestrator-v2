@@ -158,6 +158,19 @@ const homeMessage = (overrides: Record<string, unknown> = {}) => ({
 });
 
 describe("coordinator messages to the project home", () => {
+  test("a conversation that failed to start cannot send; nothing is sent", async () => {
+    await storage.coordinators.mutateCoordinatorWorkspace(scope.projectId, (current) => ({
+      ...current!,
+      conversations: current!.conversations.map((item) =>
+        item.id === scope.conversationId ? { ...item, startupError: "bridge failed" } : item,
+      ),
+    }));
+    await expect(
+      send({ requestId: "failed-sender", toEnvironmentId: workerId, body: "Hello" }),
+    ).rejects.toThrow("unavailable");
+    expect(await mailTo(workerId)).toHaveLength(0);
+  });
+
   test("ordinary workers are messaged exactly as before: no approval, no warning", async () => {
     const sent = await send({ requestId: "worker-1", toEnvironmentId: workerId, body: "Go." });
     expect(sent).toMatchObject({ placement: "pending-inject", coordinatorDelegationOpened: true });
@@ -165,6 +178,9 @@ describe("coordinator messages to the project home", () => {
     expect(sent).not.toHaveProperty("projectHomeWarning");
     expect(await pendingRequests()).toEqual([]);
     expect(await mailTo(workerId)).toHaveLength(1);
+    expect(
+      (await storage.coordinators.listOpenCoordinatorDelegations())[0]?.delegation?.request,
+    ).toMatchObject({ summary: "Go." });
   });
 
   test("a message without a reason is refused and nothing is sent or held", async () => {

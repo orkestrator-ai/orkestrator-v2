@@ -1283,9 +1283,15 @@ export async function applyComposerToSession(state: SessionState): Promise<void>
 export const SESSION_LIST_TIMEOUT_MESSAGE = "Pi took too long to read its session history";
 
 let sessionListTimeoutMs = CATALOG_TIMEOUT_MS;
+let lastSessionListRead: Promise<unknown> | undefined;
 
 export function setSessionListTimeoutForTests(timeoutMs?: number): void {
   sessionListTimeoutMs = timeoutMs ?? CATALOG_TIMEOUT_MS;
+}
+
+/** Settles once the latest read has stopped, including one a timeout gave up on. */
+export async function sessionListReadSettledForTests(): Promise<void> {
+  await lastSessionListRead?.catch(() => undefined);
 }
 
 /**
@@ -1296,12 +1302,10 @@ export function setSessionListTimeoutForTests(timeoutMs?: number): void {
  */
 export async function listResumableSessions(): Promise<NativeAgentResumeEntry[]> {
   const read = new AbortController();
+  const work = readResumableSessions(read.signal);
+  lastSessionListRead = work;
   try {
-    return await withTimeout(
-      readResumableSessions(read.signal),
-      sessionListTimeoutMs,
-      SESSION_LIST_TIMEOUT_MESSAGE,
-    );
+    return await withTimeout(work, sessionListTimeoutMs, SESSION_LIST_TIMEOUT_MESSAGE);
   } catch (error) {
     read.abort();
     // A timeout is not an empty history. The route says so; the user would
@@ -1318,6 +1322,9 @@ async function readResumableSessions(signal: AbortSignal): Promise<NativeAgentRe
   const stamp = await sessionFilesStamp(directory);
   const cached = cachedSessionList(directory, stamp);
   if (cached) return cached;
+  // The ceiling may expire while the files are stamped. A read given up on
+  // must not go on to parse every session file with nobody waiting for it.
+  signal.throwIfAborted();
 
   const listed = await SessionManager.list(workingDirectory, sessionDirectory(), undefined, signal);
   const entries = listed.slice(0, MAX_RESUME_ENTRIES).map((info) => ({

@@ -44,3 +44,15 @@ Analysed 2026-11-03 against `main` at `a2bba9d8`.
 - [Efficiency report, A](../2026-10-27-efficiency.md#a-gateway-and-transport) (GW-3)
 - [1202 task 4](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md)
 - [0052 remote client bandwidth](../../todo/transcripts-and-observation/0052-remote-client-bandwidth.md)
+
+## Outcome
+
+Re-checked on 2026-11-05 against `main` at `69a3b4ca5`: the finding still held. The per-terminal fetch had moved to `web-gateway.ts:1114`, and the local desktop window had since been given its own opt-in to the shared stream (`sharedTerminalStream`), but bearer and cross-origin clients still opened one request per terminal.
+
+| Item in this file | Outcome |
+| --- | --- |
+| Task 1: share one filtered stream on the fetch path | Done, with the recommended option. One owner (`refreshSharedTerminalConnection` in `apps/web/src/lib/native/web-gateway.ts`) drives either an `EventSource` or a fetch reader (`openSharedTerminalConnection`), chosen by `sharedTerminalStreamUsesEventSource`: an `EventSource` only when no bearer token has to be sent, as before for same-origin pages and the local desktop window (`terminalEventSource`, renamed from `sharedTerminalStream`). The per-terminal fetch, its ladders and its state are gone. Tests: `web-gateway-shared-terminal-stream.test.ts` (one authenticated stream for several terminals, a rebuild with a scoped desync for terminals already carried, no rebuild on an unchanged filter, one credential-free stream for seven cross-origin terminals, the transport choice); the direct-client cases in `web-gateway.test.ts`, `web-gateway-reconnect.test.ts` and `web-gateway-silent-recovery.test.ts` now assert the shared stream. Same-origin tests pass unchanged. |
+| Task 1, live evidence in a real browser | Moved to to-do [5380](../../todo/transcripts-and-observation/5380-bearer-terminal-stream-live-evidence.md), task 1. |
+| Constraints: missed events stay detectable | Done: a filter change or reopen announces the scoped desync to every terminal the stream already carried (`announceTerminalStreamOpen`), tested as above. The comma-separated `includeEvents` filter predates the support window's floor, so no compatibility path was needed. |
+| Open question: ship before 1202 task 4's measurements? | No longer holds: it shipped on its own, as the question allowed; 1202 task 4 records GW-3 as done. |
+| Needs verification: which real clients use HTTP/1.1 | Moved to to-do [5380](../../todo/transcripts-and-observation/5380-bearer-terminal-stream-live-evidence.md), task 2. The fix does not depend on the answer. |

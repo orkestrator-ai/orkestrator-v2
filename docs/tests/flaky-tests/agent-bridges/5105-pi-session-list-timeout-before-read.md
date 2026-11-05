@@ -30,3 +30,11 @@ The undefined captured signal is consistent with the five-millisecond deadline
 firing before discovery reaches the mocked SDK list function. This is a
 hypothesis; the isolated pass establishes intermittency, not the root cause.
 Do not skip or loosen the assertion.
+
+## Later aggregate
+
+The subsequent `c8-default-repaired` full-suite run passed its bridge group
+without changing Pi code. Its aggregate evidence is
+`/tmp/orkestrator-test-run.XQvHvE/c8-default-repaired.log.gz`.
+The full run still failed on the separate backend coordinator-mail assertion
+and native-agent registry index mismatch; it did not fail in Pi.

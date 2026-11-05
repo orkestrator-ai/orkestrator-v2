@@ -27,6 +27,7 @@ private final class FakeLogoutSender: GatewayLogoutSending, @unchecked Sendable 
     }
 
     func releaseHeldRequests() {
+        holdsRequests = false
         held.forEach { $0.resume() }
         held = []
     }
@@ -236,23 +237,32 @@ final class SessionEndTests: XCTestCase {
             return nil
         }
 
-        // This returning at all, with the logout parked, is the point of the test.
-        await coordinator.handleBridgeRequest(
-            id: "forget-id",
-            action: "forget",
-            body: ["connectionId": forgotten.id.uuidString]
-        )
+        // Cleanup is armed before dispatch, including if the handler regresses
+        // to awaiting logout. Releasing also lets any late request pass through.
+        defer { logout.releaseHeldRequests() }
+        let returned = expectation(description: "Forget returns while logout is held")
+        let forgetTask = Task {
+            await coordinator.handleBridgeRequest(
+                id: "forget-id",
+                action: "forget",
+                body: ["connectionId": forgotten.id.uuidString]
+            )
+            returned.fulfill()
+        }
+        await fulfillment(of: [returned], timeout: 2)
+        // Always release and drain before assertions that can throw. A broken
+        // handler therefore fails at the deadline without stranding its task.
+        logout.releaseHeldRequests()
+        await forgetTask.value
 
         XCTAssertTrue(try XCTUnwrap(replies.last).contains(#""forget-id", true"#))
         XCTAssertEqual(store.vault.connections.map(\.id), [other.id])
         XCTAssertEqual(model.vault, store.vault)
 
-        // The forget stands whatever the parked request does, and the cookie goes first.
-        defer { logout.releaseHeldRequests() }
+        // The forget still stands after the parked request is released.
         try await waitUntil { !logout.requests.isEmpty }
-        let whileHeld = await cookieStore.allCookies()
-        XCTAssertTrue(whileHeld.isEmpty)
-        logout.releaseHeldRequests()
+        let remainingCookies = await cookieStore.allCookies()
+        XCTAssertTrue(remainingCookies.isEmpty)
         await coordinator.sessionEndTask?.value
         XCTAssertEqual(store.vault.connections.map(\.id), [other.id])
     }
@@ -450,6 +460,8 @@ final class SessionEndTests: XCTestCase {
         let a = connection(address: "https://desk.example")
         let b = connection(address: "https://desk.example:8443")
         let logout = FakeLogoutSender()
+        logout.holdsRequests = true
+        defer { logout.releaseHeldRequests() }
         let (coordinator, cookieStore) = await makeCoordinator(
             store: MemoryCredentialStore(vault: vault(a, b)), cookies: [], logoutSender: logout
         )
@@ -473,10 +485,23 @@ final class SessionEndTests: XCTestCase {
         await forget(a, using: coordinator)
         let cleanup = coordinator.sessionEndTask
         coordinator.authenticate(b)
+        let secondSignIn = try XCTUnwrap(coordinator.authenticationTask)
+        let signedIn = expectation(description: "Later same-host login finishes while logout is held")
+        let observeSignIn = Task {
+            await secondSignIn.value
+            signedIn.fulfill()
+        }
         releaseWrite?.resume()
         releaseWrite = nil
+        await fulfillment(of: [signedIn], timeout: 2)
+        // The cookie write must have finished even though logout cannot finish.
+        let whileHeld = await cookieStore.allCookies()
+        XCTAssertEqual(whileHeld.map(\.value), ["b-session"])
+        try await waitUntil { !logout.requests.isEmpty }
+        XCTAssertTrue(logout.holdsRequests)
+        logout.releaseHeldRequests()
+        await observeSignIn.value
         await firstSignIn.value
-        await coordinator.authenticationTask?.value
         await cleanup?.value
         let remaining = await cookieStore.allCookies()
         XCTAssertEqual(remaining.map(\.value), ["b-session"])
@@ -552,6 +577,28 @@ final class GatewayLogoutClientTests: XCTestCase {
         await shortLivedClient().logOut(address: address, sessionCookie: try sessionCookie())
 
         XCTAssertLessThan(ContinuousClock.now - started, .seconds(5))
+    }
+
+    func testTheDefaultClientBoundsASilentGatewayToFiveSeconds() async throws {
+        let gateway = try FakeGateway(reply: .never)
+        defer { gateway.stop() }
+        let address = try await gateway.start()
+        let cookie = try sessionCookie()
+        let finished = expectation(description: "Production logout timeout expires")
+        let started = ContinuousClock.now
+        let logout = Task {
+            await GatewayLogoutClient().logOut(address: address, sessionCookie: cookie)
+            finished.fulfill()
+        }
+        await fulfillment(of: [finished], timeout: 8)
+        let elapsed = ContinuousClock.now - started
+        // Close the connection even on timeout so a missing production bound
+        // cannot strand the task for URLSession's much longer default timeout.
+        gateway.stop()
+        await logout.value
+        XCTAssertEqual(gateway.requests.count, 1)
+        XCTAssertGreaterThanOrEqual(elapsed, .seconds(4))
+        XCTAssertLessThan(elapsed, .seconds(8))
     }
 
     func testAnUnreachableGatewayIsAbsorbed() async throws {

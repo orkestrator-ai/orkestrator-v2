@@ -216,7 +216,19 @@ through the `terminalTransport` option or the
 (`TERMINAL_TRANSPORT_STORAGE_KEY` in `apps/web/src/lib/native/web-gateway.ts`).
 The socket has process-wide socket and channel limits and a per-socket channel
 limit, uses no message compression, and is not touched by `--compression`.
-Output ACKs are cumulative and coalesced for 50 ms.
+Output ACKs are cumulative and coalesced for 1 s; they are advisory, and flow
+control reads the socket's buffer instead.
+
+A client offers `orkestrator-terminal.v1.input-results` ahead of
+`orkestrator-terminal.v1`. On the former, input that succeeded is answered by a
+cumulative `input-results` frame per channel per flush ("everything up to this
+id"), and a failure or a resize keeps its own `operation-result`. Input on a
+channel completes in id order and collected results go out ahead of any other
+control frame, so a cumulative frame never covers an input still in flight or
+about to fail. Nothing waits for a batch: the frame goes out in the flush a lone
+result would have used, so results merge only when they finish together. An
+older client offering only v1, or an older server selecting it, keeps one
+`operation-result` per input.
 
 The flush stops moving channel frames to a socket holding 256 KiB and resumes
 from the `ws.send` callback, so a backlog stays in its own channel's queue and

@@ -310,23 +310,16 @@ export class GatewayProxy {
 
             // A stalled rewrite would hold its decode budget indefinitely:
             // bound the time between upstream chunks, not the whole body.
-            let rewriteIdle: ReturnType<typeof setTimeout> | null = null;
-            const resetRewriteIdle = () => {
-              if (rewriteIdle) clearTimeout(rewriteIdle);
-              rewriteIdle = setTimeout(
-                () => abortBody(new Error("Browser preview response stalled")),
-                this.ctx.proxyBodyIdleTimeoutMs,
-              );
-              rewriteIdle.unref?.();
-            };
-            resetRewriteIdle();
-            releaseReservationOnResponseSettled(response, () => {
-              if (rewriteIdle) clearTimeout(rewriteIdle);
-            });
-            proxyResponse.on("data", resetRewriteIdle);
-            proxyResponse.once("end", () => {
-              if (rewriteIdle) clearTimeout(rewriteIdle);
-            });
+            const rewriteIdle = setTimeout(
+              () => abortBody(new Error("Browser preview response stalled")),
+              this.ctx.proxyBodyIdleTimeoutMs,
+            );
+            rewriteIdle.unref?.();
+            releaseReservationOnResponseSettled(response, () => clearTimeout(rewriteIdle));
+            // A refresh after the clears below does nothing, and one after the
+            // timer fired cannot abort twice: `abortBody` has already settled.
+            proxyResponse.on("data", () => rewriteIdle.refresh());
+            proxyResponse.once("end", () => clearTimeout(rewriteIdle));
 
             if (decoder) {
               proxyResponse.on("data", (chunk: Buffer | string) => {
@@ -561,7 +554,10 @@ export class GatewayProxy {
             // client gave up, starving every other proxied response of a slot.
             const idleTimeoutMs = this.ctx.proxyBodyIdleTimeoutMs;
             const armIdleTimer = () => {
-              clearIdleTimer();
+              if (idleTimer) {
+                idleTimer.refresh();
+                return;
+              }
               idleTimer = setTimeout(() => {
                 idleTimer = null;
                 abortBody(new Error(`Proxied response stalled for ${idleTimeoutMs} ms`));

@@ -1512,7 +1512,10 @@ describe("web gateway browser API", () => {
     expect(String(directSocket.url)).toBe(
       "wss://workstation.tailnet.ts.net/__orkestrator/terminal",
     );
-    expect(directSocket.protocols).toBe("orkestrator-terminal.v1");
+    expect(directSocket.protocols).toEqual([
+      "orkestrator-terminal.v1.input-results",
+      "orkestrator-terminal.v1",
+    ]);
     directSocket.open();
     expect(sentControlFrames(directSocket)[0]).toEqual({
       type: "authenticate",

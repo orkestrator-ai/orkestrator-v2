@@ -1,7 +1,14 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
+import type { BrowserContext, Route } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { LOOPBACK_URL, ModuleCache, decodedBodyHeaders, isModuleLoad } from "./browser-test";
+import {
+  LOOPBACK_URL,
+  ModuleCache,
+  decodedBodyHeaders,
+  fetchModulesOutsideChromium,
+  isModuleLoad,
+} from "./browser-test";
 
 const directory = import.meta.dirname;
 
@@ -95,5 +102,117 @@ describe("the browser suite's shared test", () => {
         etag: "W/1",
       }),
     ).toEqual({ "content-type": "text/javascript", etag: "W/1" });
+  });
+});
+
+/** Capture the real installed callback without replacing any shared module. */
+async function moduleHandler() {
+  let handler: ((route: Route) => Promise<void>) | undefined;
+  const context = {
+    route: mock(async (pattern: RegExp, callback: (route: Route) => Promise<void>) => {
+      expect(pattern).toBe(LOOPBACK_URL);
+      handler = callback;
+    }),
+  };
+  await fetchModulesOutsideChromium(context as unknown as BrowserContext);
+  expect(context.route).toHaveBeenCalledTimes(1);
+  if (!handler) throw new Error("Module route was not installed");
+  return handler;
+}
+
+function moduleRoute(options: { method?: string; resourceType?: string; status?: number } = {}) {
+  const body = Buffer.from("export const loaded = true;");
+  const route = {
+    request: () => ({
+      method: () => options.method ?? "GET",
+      resourceType: () => options.resourceType ?? "script",
+      url: () => "http://127.0.0.1:5173/src/main.ts",
+    }),
+    fetch: mock(async () => ({
+      status: () => options.status ?? 200,
+      headers: () => ({
+        "content-type": "text/javascript",
+        "content-encoding": "gzip",
+        "content-length": "100",
+      }),
+      body: async () => body,
+    })),
+    fulfill: mock(async (_response: unknown) => {}),
+    fallback: mock(async () => {}),
+    abort: mock(async () => {}),
+  };
+  return {
+    route,
+    body,
+    dispatch: (handler: (route: Route) => Promise<void>) => handler(route as unknown as Route),
+  };
+}
+
+describe("installed module route handler", () => {
+  test("fetches a module once and fulfils a same-URL load from the context cache", async () => {
+    const handler = await moduleHandler();
+    const first = moduleRoute();
+    await first.dispatch(handler);
+    expect(first.route.fetch).toHaveBeenCalledWith({ maxRetries: 2 });
+    expect(first.route.fulfill).toHaveBeenCalledWith({
+      status: 200,
+      headers: { "content-type": "text/javascript" },
+      body: first.body,
+    });
+    const reload = moduleRoute();
+    await reload.dispatch(handler);
+    expect(reload.route.fetch).not.toHaveBeenCalled();
+    expect(reload.route.fulfill).toHaveBeenCalledWith(first.route.fulfill.mock.calls[0]![0]);
+    expect(first.route.fallback).not.toHaveBeenCalled();
+    expect(first.route.abort).not.toHaveBeenCalled();
+
+    const otherContext = moduleRoute();
+    await otherContext.dispatch(await moduleHandler());
+    expect(otherContext.route.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  test("falls back without fetching or fulfilling non-module requests", async () => {
+    const handler = await moduleHandler();
+    for (const options of [
+      { resourceType: "document" },
+      { resourceType: "fetch" },
+      { method: "POST" },
+    ]) {
+      const { route, dispatch } = moduleRoute(options);
+      await dispatch(handler);
+      expect(route.fallback).toHaveBeenCalledTimes(1);
+      expect(route.fetch).not.toHaveBeenCalled();
+      expect(route.fulfill).not.toHaveBeenCalled();
+      expect(route.abort).not.toHaveBeenCalled();
+    }
+  });
+
+  test("fulfils unsuccessful responses but fetches them again on the next load", async () => {
+    const handler = await moduleHandler();
+    const missing = moduleRoute({ status: 404, resourceType: "stylesheet" });
+    await missing.dispatch(handler);
+    expect(missing.route.fulfill).toHaveBeenCalledWith({
+      status: 404,
+      headers: { "content-type": "text/javascript" },
+      body: missing.body,
+    });
+    const retry = moduleRoute();
+    await retry.dispatch(handler);
+    expect(retry.route.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  test("aborts a failed fetch without caching it, even if abort also rejects", async () => {
+    const handler = await moduleHandler();
+    const failed = moduleRoute();
+    failed.route.fetch.mockRejectedValueOnce(new Error("Request closed"));
+    failed.route.abort.mockRejectedValueOnce(new Error("Page closed"));
+    await failed.dispatch(handler);
+    expect(failed.route.abort).toHaveBeenCalledTimes(1);
+    expect(failed.route.fulfill).not.toHaveBeenCalled();
+    expect(failed.route.fallback).not.toHaveBeenCalled();
+    const retry = moduleRoute();
+    await retry.dispatch(handler);
+    expect(retry.route.fetch).toHaveBeenCalledTimes(1);
+    expect(retry.route.fulfill).toHaveBeenCalledTimes(1);
   });
 });

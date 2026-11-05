@@ -45,6 +45,7 @@ import {
   projectionTitle,
 } from "@/lib/changes/labels";
 import { writeText } from "@/lib/native/clipboard";
+import { useSidebarActionStore } from "@/stores/sidebarActionStore";
 import { cn } from "@/lib/utils";
 import type { FreshnessNotice } from "@/lib/view-freshness";
 import type { EnvironmentType } from "@/types";
@@ -445,7 +446,10 @@ export function EnvironmentRow({
   agentSummary,
   deleteNotice,
 }: EnvironmentRowProps) {
-  const model = environmentRowModel(facts);
+  const pending = useSidebarActionStore((state) =>
+    state.pending.has(multiSelect?.id ?? facts.environmentId),
+  );
+  const model = environmentRowModel({ ...facts, busy: facts.busy || pending });
   const [deleteOpen, setDeleteOpenState] = useState(false);
   const setDeleteOpen = (open: boolean) => {
     setDeleteOpenState(open);
@@ -473,9 +477,10 @@ export function EnvironmentRow({
   const multiSelectActive = multiSelect?.active === true;
   const menuItems = environmentRowMenuItems(model, actions, () => setDeleteOpen(true));
 
-  const activate = (event: React.MouseEvent | React.KeyboardEvent) =>
-    // metaKey covers Cmd on Mac, ctrlKey covers Ctrl on Windows/Linux.
+  const activate = (event: React.MouseEvent | React.KeyboardEvent) => {
+    if (facts.deleting && (event.shiftKey || event.metaKey || event.ctrlKey)) return;
     onActivate({ shiftKey: event.shiftKey, metaKey: event.metaKey || event.ctrlKey });
+  };
 
   return (
     <>
@@ -506,6 +511,7 @@ export function EnvironmentRow({
             )}
             <div
               role="button"
+              aria-busy={pending || undefined}
               tabIndex={0}
               // A range runs over the rows as drawn; a deleting row has nothing to select.
               data-environment-selection-id={facts.deleting ? undefined : multiSelect?.id}
@@ -540,9 +546,9 @@ export function EnvironmentRow({
             >
               {model.spinner === "deleting" ? (
                 <Loader2 className="h-4 w-4 shrink-0 animate-spin text-destructive" />
-              ) : multiSelectActive ? null : model.spinner === "transition" ? (
+              ) : model.spinner === "transition" ? (
                 <Loader2 className="h-4 w-4 shrink-0 animate-spin text-amber-500" />
-              ) : (
+              ) : multiSelectActive ? null : (
                 <EnvironmentStatusMarker
                   local={model.isLocal}
                   state={model.markerState}

@@ -17,6 +17,11 @@ import {
   type SelectedEnvironment,
 } from "@/lib/federation/selected-environments";
 import type { PortalStore } from "@/lib/portal/portal-store";
+import {
+  claimSidebarAction,
+  releaseSidebarAction,
+  useSidebarActionStore,
+} from "@/stores/sidebarActionStore";
 import { useUIStore } from "@/stores";
 import type { Environment } from "@/types";
 
@@ -55,6 +60,7 @@ export function useSelectedEnvironmentActions({
   deleteEnvironment: (environmentId: string) => Promise<unknown>;
 }) {
   const { portal } = useFederation();
+  const pending = useSidebarActionStore((state) => state.pending);
   const selected = resolveSelectedEnvironments(selectionIds, localEnvironments, machines);
 
   // An environment deleted elsewhere leaves the selection, whichever machine it was on.
@@ -71,17 +77,24 @@ export function useSelectedEnvironmentActions({
   }, [localEnvironments, machines, resolvedCount, selectionIds.length]);
 
   const run = async (action: BulkAction, targets: readonly SelectedEnvironment[]) => {
-    const reachable = targets.filter(isSelectedEnvironmentReachable);
-    const skipped = targets.length - reachable.length;
+    const available = targets.filter(isSelectedEnvironmentReachable);
+    const skipped = targets.length - available.length;
+    const reachable = available.filter((target) => claimSidebarAction(target.selectionId));
     if (skipped > 0) {
       toast.warning(
         `${action.label}: skipped ${skipped} ${skipped === 1 ? "environment" : "environments"} on unavailable machines`,
       );
     }
     const results = await Promise.allSettled(
-      reachable.map((target) =>
-        target.remote ? action.remote(portal, target.remote.ref) : action.local(target.selectionId),
-      ),
+      reachable.map(async (target) => {
+        try {
+          return await (target.remote
+            ? action.remote(portal, target.remote.ref)
+            : action.local(target.selectionId));
+        } finally {
+          releaseSidebarAction(target.selectionId);
+        }
+      }),
     );
     results.forEach((result, index) => {
       if (result.status === "fulfilled") return;
@@ -101,8 +114,12 @@ export function useSelectedEnvironmentActions({
 
   return {
     selected,
-    canStopOrRestart: running.some(isSelectedEnvironmentReachable),
-    canDelete: selected.some(isSelectedEnvironmentReachable),
+    canStopOrRestart: running.some(
+      (entry) => !pending.has(entry.selectionId) && isSelectedEnvironmentReachable(entry),
+    ),
+    canDelete: selected.some(
+      (entry) => !pending.has(entry.selectionId) && isSelectedEnvironmentReachable(entry),
+    ),
     stopSelected: () =>
       run(
         {

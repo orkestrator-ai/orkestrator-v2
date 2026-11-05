@@ -66,6 +66,19 @@ describe("resolveSelectedEnvironments", () => {
     ).toEqual(["bk_b", null, "bk_a"]);
   });
 
+  test("excludes deleting rows even if their last reported status is running", () => {
+    expect(
+      resolveSelectedEnvironments(
+        ["requested", "deleting", key("a", "removing"), key("a", "ready")],
+        [
+          local("requested", { deletionRequestedAt: "2026-11-05T00:00:00Z" }),
+          local("deleting", { lifecycleOperation: "deleting" }),
+        ],
+        [machine("a", [{ id: "removing", extra: { deleting: true } }, { id: "ready" }])],
+      ).map((entry) => entry.selectionId),
+    ).toEqual([key("a", "ready")]);
+  });
+
   test("drops rows that no longer exist on any machine", () => {
     expect(
       resolveSelectedEnvironments(

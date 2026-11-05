@@ -19,7 +19,7 @@ import {
   uninstallDesktopFake,
 } from "@/test/federation-desktop-fake";
 import type { Environment, Project } from "@/types";
-import { mockToastWarning } from "../../../../../tests/mocks/sonner";
+import { mockToastError, mockToastWarning } from "../../../../../tests/mocks/sonner";
 import { HierarchicalSidebar } from "./HierarchicalSidebar";
 
 const initialView = useMachineViewStore.getState();
@@ -62,6 +62,7 @@ const remoteEnvironment = (id: string, name: string, status = "running") => ({
   status,
   environmentType: "local",
   agentActivityState: "idle",
+  lifecycleOperation: "" as string,
 });
 
 const dataset = (...environments: ReturnType<typeof remoteEnvironment>[]) => ({
@@ -150,6 +151,7 @@ async function everyRowDrawn() {
 beforeEach(() => {
   if (!HTMLElement.prototype.scrollIntoView) HTMLElement.prototype.scrollIntoView = () => {};
   mockToastWarning.mockClear();
+  mockToastError.mockClear();
   useRemoteWorkspaceStore.setState({ active: null });
   useUIStore.setState({
     selectedProjectId: "p1",
@@ -437,5 +439,130 @@ describe("bulk actions", () => {
 
     await waitFor(() => expect(selected()).toEqual(["b1"]));
     expect(screen.getByText("1 selected")).toBeTruthy();
+  });
+});
+
+describe("bulk action admission", () => {
+  test.each(["Stop selected", "Restart selected"])(
+    "a pending restart blocks %s and repeated activation",
+    async (title) => {
+      let finish!: () => void;
+      const stopped = new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+      const { fake } = setup({
+        respond: (call) =>
+          call.connectionId === "a" && call.command === "stop_environment" ? stopped : undefined,
+      });
+      await everyRowDrawn();
+      fireEvent.click(await row("On A"), { metaKey: true });
+      const restart = screen.getByTitle("Restart selected");
+      // Same batch, before React has rendered disabled controls: the claim must be synchronous.
+      act(() => {
+        fireEvent.click(restart);
+        fireEvent.click(restart);
+        fireEvent.click(screen.getByTitle(title));
+      });
+      await waitFor(() => expect(fake.callsTo("a", "stop_environment")).toHaveLength(1));
+      expect((screen.getByTitle(title) as HTMLButtonElement).disabled).toBe(true);
+      expect((screen.getByTitle("Delete selected") as HTMLButtonElement).disabled).toBe(true);
+      expect((await row("On A")).getAttribute("aria-busy")).toBe("true");
+      expect(fake.callsTo("a", "start_environment_background")).toHaveLength(0);
+      await act(async () => {
+        finish();
+        await stopped;
+      });
+      await waitFor(() =>
+        expect(writesTo(fake, "a").map((call) => call.command)).toEqual([
+          "stop_environment",
+          "start_environment_background",
+        ]),
+      );
+      await waitFor(() =>
+        expect((screen.getByTitle("Stop selected") as HTMLButtonElement).disabled).toBe(false),
+      );
+      expect((await row("On A")).hasAttribute("aria-busy")).toBe(false);
+    },
+  );
+
+  test("a rejection is reported per machine while another target succeeds and can act again", async () => {
+    let finish!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const { fake } = setup({
+      respond: async (call) => {
+        if (call.connectionId === "a" && call.command === "stop_environment") {
+          await pending;
+          return new Error("Rejected by owner");
+        }
+        return undefined;
+      },
+    });
+    await everyRowDrawn();
+    fireEvent.click(await row("On A"), { metaKey: true });
+    fireEvent.click(await row("On B"), { metaKey: true });
+    fireEvent.click(screen.getByTitle("Restart selected"));
+    await waitFor(() => expect(fake.callsTo("b", "start_environment_background")).toHaveLength(1));
+    fireEvent.click(screen.getByTitle("Stop selected"));
+    await waitFor(() => expect(fake.callsTo("b", "stop_environment")).toHaveLength(2));
+    expect(fake.callsTo("a", "stop_environment")).toHaveLength(1);
+    await act(async () => {
+      finish();
+      await pending;
+    });
+    await waitFor(() =>
+      expect(mockToastError).toHaveBeenCalledWith("Restart failed on Machine A", {
+        description: "Rejected by owner",
+      }),
+    );
+    expect(fake.callsTo("a", "start_environment_background")).toHaveLength(0);
+    expect(mockToastError).toHaveBeenCalledTimes(1);
+    // A rejected claim is released, permitting an explicit new attempt.
+    fireEvent.click(screen.getByTitle("Stop selected"));
+    await waitFor(() => expect(fake.callsTo("a", "stop_environment")).toHaveLength(2));
+    await waitFor(() => expect(mockToastError).toHaveBeenCalledTimes(2));
+  });
+
+  test("deleting remote rows ignore Cmd/Shift clicks, leave selection and range order, and cannot be stopped", async () => {
+    const { fake, datasets } = setup();
+    await everyRowDrawn();
+    fireEvent.click(await row("On A"), { metaKey: true });
+    fireEvent.click(await row("On B"), { metaKey: true });
+    datasets.a.environments.rp[0]!.lifecycleOperation = "deleting";
+    await act(() => portalStore.refresh());
+    await waitFor(() => expect(selected()).toEqual([keyOn("b", "shared")]));
+    const deleting = await row("On A");
+    expect(rowIdsOnScreen()).not.toContain(keyOn("a", "shared"));
+    expect(within(deleting.parentElement!).queryByRole("checkbox")).toBeNull();
+    fireEvent.click(deleting, { metaKey: true });
+    fireEvent.click(deleting, { shiftKey: true });
+    fireEvent.keyDown(deleting, { key: "Enter", ctrlKey: true });
+    expect(selected()).toEqual([keyOn("b", "shared")]);
+    fireEvent.click(screen.getByTitle("Stop selected"));
+    await waitFor(() => expect(fake.callsTo("b", "stop_environment")).toHaveLength(1));
+    expect(writesTo(fake, "a")).toEqual([]);
+  });
+
+  test("a machine filter limits ranges while later-hidden selections still receive bulk actions", async () => {
+    const { fake } = setup();
+    await everyRowDrawn();
+    fireEvent.click(await row("On B"), { metaKey: true });
+    act(() => useMachineViewStore.getState().setMachineFilter("bk_a"));
+    await waitFor(() => expect(rowIdsOnScreen()).toHaveLength(2));
+    expect(rowIdsOnScreen()).toEqual(
+      expect.arrayContaining([keyOn("a", "shared"), keyOn("a", "a2")]),
+    );
+    // Hidden anchor falls back to the clicked row, never a hidden range.
+    fireEvent.click(await row("On A"), { shiftKey: true });
+    expect(selected()).toEqual([keyOn("a", "shared")]);
+    fireEvent.click(await row("Second on A"), { shiftKey: true });
+    expect(selected()).toEqual(rowIdsOnScreen());
+    act(() => useMachineViewStore.getState().setMachineFilter("bk_b"));
+    await waitFor(() => expect(rowIdsOnScreen()).toEqual([keyOn("b", "shared")]));
+    expect(selected()).toHaveLength(2);
+    fireEvent.click(screen.getByTitle("Stop selected"));
+    await waitFor(() => expect(fake.callsTo("a", "stop_environment")).toHaveLength(2));
+    expect(writesTo(fake, "b")).toEqual([]);
   });
 });

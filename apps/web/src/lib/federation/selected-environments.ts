@@ -28,7 +28,12 @@ export function resolveSelectedEnvironments(
     const ref = parseEnvironmentKey(selectionId);
     if (!ref) {
       const environment = localEnvironments.find((candidate) => candidate.id === selectionId);
-      if (!environment) return [];
+      if (
+        !environment ||
+        environment.deletionRequestedAt ||
+        environment.lifecycleOperation === "deleting"
+      )
+        return [];
       return [
         {
           selectionId,
@@ -43,7 +48,7 @@ export function resolveSelectedEnvironments(
     if (!machine) return [];
     for (const environments of machine.environmentsByProject.values()) {
       const environment = environments.find((candidate) => candidate.key === selectionId);
-      if (environment) {
+      if (environment && !environment.deleting && environment.status !== "deleting") {
         return [
           {
             selectionId,

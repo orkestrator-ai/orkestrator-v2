@@ -91,3 +91,47 @@ test.describe("multi-select across machines", () => {
     );
   });
 });
+
+test("pending restart disables bulk controls and marks its row busy", async ({
+  page,
+}, testInfo) => {
+  await page.goto("/sidebar-drag?cross-machine");
+  const target = row(page, "remote-feature");
+  await target.click(toggle);
+  await page.getByTestId("sidebar-writes").evaluate((element) => {
+    (element as HTMLElement).style.display = "none";
+  });
+  await page.screenshot({
+    path: `output/visual-previews/bulk-actions-before-${testInfo.project.name}.png`,
+  });
+  await page.evaluate(() => {
+    const original = window.orkestrator!.invoke;
+    window.orkestrator!.invoke = async (command, args) => {
+      const result = await original(command, args);
+      if (command === "invoke_on_node" && args?.command === "stop_environment") {
+        await new Promise<void>((resolve) =>
+          window.addEventListener("release-test-stop", () => resolve(), { once: true }),
+        );
+      }
+      return result;
+    };
+  });
+  await page.getByTitle("Restart selected").click();
+  await expect(target).toHaveAttribute("aria-busy", "true");
+  await expect(target.locator(".animate-spin")).toBeVisible();
+  await expect(page.getByTitle("Stop selected")).toBeDisabled();
+  await expect(page.getByTitle("Restart selected")).toBeDisabled();
+  await expect(page.getByTitle("Delete selected")).toBeDisabled();
+  await page.screenshot({
+    path: `output/visual-previews/bulk-actions-pending-${testInfo.project.name}.png`,
+  });
+  await page.evaluate(() => window.dispatchEvent(new Event("release-test-stop")));
+  await expect(target).not.toHaveAttribute("aria-busy");
+  await expect(page.getByTitle("Stop selected")).toBeEnabled();
+  expect(
+    (await writes(page)).filter(({ args }) => args.command === "stop_environment"),
+  ).toHaveLength(1);
+  expect(
+    (await writes(page)).filter(({ args }) => args.command === "start_environment_background"),
+  ).toHaveLength(1);
+});

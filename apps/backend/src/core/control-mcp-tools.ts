@@ -168,7 +168,6 @@ export const COORDINATOR_TOOL_CAPABILITY = new Map<string, string>([
   ["resume_build_pipeline", "build-pipelines"],
   ["cancel_build_pipeline", "build-pipelines"],
   ["restart_build_pipeline_step", "build-pipelines"],
-  ["start_multi_review", "multi-review"],
   ["launch_multi_review", "multi-review"],
   ["open_multi_review", "multi-review"],
   ["open_multi_review_fix", "multi-review"],
@@ -203,6 +202,25 @@ export const COORDINATOR_TOOL_CAPABILITY = new Map<string, string>([
   ...COORDINATOR_SUBORK_TOOL_CAPABILITIES,
 ]);
 export const COORDINATOR_CAPABILITIES = new Set(COORDINATOR_TOOL_CAPABILITY.values());
+
+/**
+ * Coordinator tools that were removed, with what does the same job now.
+ *
+ * Each duplicated a tool that takes nodeId (or, for start_multi_review, the
+ * complete launch_multi_review) and did less. A saved schedule naming one is
+ * refused at fire time with this replacement, and paused, rather than
+ * failing as an unknown tool. The backend commands behind them stay, so an
+ * older command node or leaf that calls them is unaffected.
+ */
+export const RETIRED_COORDINATOR_TOOLS: ReadonlyMap<string, string> = new Map([
+  ["list_node_environments", "list_environments with nodeId"],
+  ["launch_node_environment", "launch_environment with nodeId"],
+  ["start_node_environment", "start_environment with nodeId"],
+  ["stop_node_environment", "stop_environment with nodeId"],
+  ["send_prompt_to_node_tab", "send_prompt_to_tab with nodeId"],
+  ["send_node_message", "send_message with nodeId"],
+  ["start_multi_review", "launch_multi_review"],
+]);
 
 /**
  * What a conversation's credential may do. A side agent reads the project,

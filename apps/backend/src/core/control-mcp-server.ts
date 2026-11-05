@@ -22,6 +22,7 @@ import {
   COORDINATOR_CAPABILITIES,
   coordinatorToolGranted,
   createControlMcp,
+  RETIRED_COORDINATOR_TOOLS,
   type CoordinatorControlScope,
 } from "./control-mcp-tools.js";
 import { CoordinatorPollTracker } from "./control-mcp-poll-guard.js";
@@ -595,6 +596,13 @@ export class ControlMcpServer {
     tool: string,
     args: Record<string, unknown>,
   ): Promise<InProcessToolResult> {
+    const replacement = RETIRED_COORDINATOR_TOOLS.get(tool);
+    if (replacement) {
+      return {
+        isError: true,
+        text: `capability-denied: ${tool} was removed from the coordinator's tools; use ${replacement} instead`,
+      };
+    }
     if (!coordinatorToolGranted(coordinatorScope, tool)) {
       return { isError: true, text: "capability-denied: Coordinator capability denied" };
     }

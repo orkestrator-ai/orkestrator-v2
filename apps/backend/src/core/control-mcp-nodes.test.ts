@@ -153,13 +153,6 @@ describe("CO-02/CO-06 interrogating and creating on connected nodes", () => {
       self: { nodeId: "bk_self", mode: "command" },
       nodes: [{ nodeId: "bk_leaf", name: "Build box", hasProject: true, available: true }],
     });
-    const listed = await call("list_node_environments");
-    expect(listed.nodes).toEqual([
-      expect.objectContaining({
-        nodeId: "bk_leaf",
-        environments: [expect.objectContaining({ environmentId: "e1", name: "feature-a" })],
-      }),
-    ]);
   });
 
   test("a node without this project refuses and points at asking the user", async () => {
@@ -169,64 +162,26 @@ describe("CO-02/CO-06 interrogating and creating on connected nodes", () => {
     ).rejects.toThrow("has no copy of this project");
   });
 
-  test("the older launch tool permits placement based on load or OS", () => {
-    const { descriptions } = harness();
-    const description = descriptions.get("launch_node_environment")!;
-    expect(description).toContain("load or OS gives a clear reason to move");
-    expect(description).toContain("Check list_nodes before placement");
-    expect(description).not.toContain("only when the user asks");
-  });
-
-  test("launching on a node is the coordinator's node launch, scoped to this conversation", async () => {
-    const { call, calls } = harness();
-    const result = await call("launch_node_environment", {
-      requestId: "launch-1",
-      nodeId: "bk_leaf",
-      environmentType: "local",
-      agent: "codex",
-      conversationMode: "build",
-      prompt: "Fix the bug",
-      baseBranch: "main",
-      baseCommit: "a".repeat(40),
-    });
-    expect(result).toMatchObject({ nodeId: "bk_leaf", environmentId: "e-new", status: "accepted" });
-    const launch = calls.find((entry) => entry.command === "launch_coordinator_node_environment")!;
-    expect(launch.args).toMatchObject({
-      scope: { projectId: "p-self", coordinatorId: "c1", conversationId: "conv-1" },
-      requestId: "launch-1",
-      nodeId: "bk_leaf",
-      input: {
-        projectId: "p-self",
-        initialPrompt: "Fix the bug",
-        delegationBaseBranch: "main",
-        delegationBaseCommit: "a".repeat(40),
-      },
-    });
+  test("the older node forms are gone; the nodeId tools replace them", () => {
+    const { tools, descriptions } = harness();
+    for (const retired of [
+      "list_node_environments",
+      "launch_node_environment",
+      "start_node_environment",
+      "stop_node_environment",
+      "send_prompt_to_node_tab",
+      "send_node_message",
+    ]) {
+      expect(tools.has(retired)).toBe(false);
+    }
+    // What stays is the one read no nodeId tool makes: a file on another node.
+    expect(descriptions.get("read_node_environment")).toContain("text file");
   });
 
   test("reading another node's environment never routes a write", async () => {
     const { call, routed } = harness();
     await call("read_node_environment", { nodeId: "bk_leaf", environmentId: "e1", limit: 10 });
     expect(routed.map((entry) => entry.command)).toEqual(["get_environment", "get_pane_layout"]);
-  });
-});
-
-describe("CO-05 messaging agents on connected nodes", () => {
-  test("a coordinator message is the coordinator's node mail, scoped to this conversation", async () => {
-    const { call, calls } = harness();
-    await call("send_node_message", {
-      requestId: "mail-1",
-      nodeId: "bk_leaf",
-      environmentId: "e1",
-      body: "Status?",
-    });
-    expect(calls.find((entry) => entry.command === "send_coordinator_node_mail")!.args).toEqual({
-      scope: { projectId: "p-self", coordinatorId: "c1", conversationId: "conv-1" },
-      nodeId: "bk_leaf",
-      requestId: "mail-1",
-      toEnvironmentId: "e1",
-      body: "Status?",
-    });
   });
 });
 

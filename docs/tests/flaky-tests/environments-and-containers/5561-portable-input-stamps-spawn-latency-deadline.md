@@ -11,7 +11,7 @@
 - **Not a hang:** four boots sampled after they had lived 20 s were all still making progress, with short-lived children (`gmkdir`, `bash`) started one to three seconds earlier and in run, uninterruptible or exiting states. A slow spell that outlasts several tests would explain failures in a row, which look like a wedged process.
 - **Unrelated to the branch it was seen on:** the only code that branch changes is one test in `apps/backend/src/core/public-api/public-api-attention.test.ts`, which nothing imports and which this file does not load. The passing rerun includes that change.
 - **Fix:** none here. The assertions, deadlines and entrypoint are unchanged, because a longer deadline on this branch would only hide the condition.
-- **Not measured:** spawn time during the original preparation run, so that run is matched by its symptom alone. The number of processes one boot spawns.
+- **Not measured:** spawn time during the original preparation run and the 04:07–04:18 rerun (42 pass, 8 fail), so those runs are matched by their symptoms alone. The number of processes one boot spawns.
 
 ## Runs at `b363473e5`
 

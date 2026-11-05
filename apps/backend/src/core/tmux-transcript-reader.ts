@@ -135,7 +135,7 @@ export type TailLineSink = (line: unknown, stamped: unknown) => void;
  */
 export class TmuxTranscriptReader {
   private tracker = new TranscriptTaskTracker();
-  private readonly snapshotHistory = new TaskSnapshotHistory();
+  private snapshotHistory = new TaskSnapshotHistory();
   private tail: TranscriptTail | undefined;
   /** `TranscriptTail` holds one offset; the poll loop and a page's catch-up share it. */
   private readonly tailLock = new AsyncMutex();
@@ -172,9 +172,21 @@ export class TmuxTranscriptReader {
   async drainTail(sink: TailLineSink, knownSize?: number, epoch?: number): Promise<number> {
     return await this.tailLock.runExclusive(async () => {
       if (!this.tail) return 0;
-      const size = epoch === this.catchUps ? knownSize : undefined;
-      return this.deliverTailLines(await this.tail.readNew(this.backend, size), sink);
+      const size =
+        (epoch === this.catchUps ? knownSize : undefined) ??
+        (await this.backend.fileSize(this.tail.filePath));
+      this.resetIfTruncated(size);
+      return this.deliverTailLines(await this.tail!.readNew(this.backend, size), sink);
     });
+  }
+
+  /** Reset all state derived from the old file together, under tailLock. */
+  private resetIfTruncated(size: number): void {
+    if (!this.tail || size >= this.tail.bytesRead) return;
+    this.tail = new TranscriptTail(this.tail.filePath);
+    this.tracker = new TranscriptTaskTracker();
+    this.snapshotHistory = new TaskSnapshotHistory();
+    this.catchUps += 1;
   }
 
   private deliverTailLines(lines: unknown[], sink: TailLineSink): number {
@@ -220,6 +232,7 @@ export class TmuxTranscriptReader {
       }
 
       await this.tailLock.runExclusive(async () => {
+        this.resetIfTruncated(window.size);
         const tail = this.tail!;
         if (tail.bytesRead >= cut.endOffset) return;
         this.catchUps += 1;

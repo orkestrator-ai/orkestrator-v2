@@ -276,11 +276,12 @@ export async function getTranscriptPage(
   tabId: string,
   environmentId: string,
   before?: string,
+  sessionId?: string,
 ): Promise<TranscriptPage> {
   const result = await invoke<TranscriptLine[] | TranscriptPage>("claude_tmux_transcript", {
     tabId,
     environmentId,
-    page: before === undefined ? {} : { before },
+    page: { ...(before === undefined ? {} : { before }), ...(sessionId ? { sessionId } : {}) },
   });
   return Array.isArray(result) ? { lines: result, earlierCursor: null } : result;
 }

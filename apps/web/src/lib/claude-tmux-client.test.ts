@@ -160,6 +160,15 @@ describe("claude-tmux-client invoke wrappers", () => {
     });
   });
 
+  test("getTranscriptPage can reload stopped history after cursor expiry", async () => {
+    await getTranscriptPage("tab-1", "env-1", undefined, "session");
+    expect(calls[0]!.args).toEqual({
+      tabId: "tab-1",
+      environmentId: "env-1",
+      page: { sessionId: "session" },
+    });
+  });
+
   test("getTranscriptPage reads a backend's whole-file array as a page with nothing before it", async () => {
     const line = { type: "user", uuid: "u1" };
     invokeResult = [line];

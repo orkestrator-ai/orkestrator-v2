@@ -383,6 +383,27 @@ describe("TmuxTranscriptReader", () => {
         .lines;
     }
 
+    test.each(["page", "poll"])(
+      "%s resets task state and stamps after truncation",
+      async (first) => {
+        writeFileSync(file, taskTranscript().map(jsonl).join(""));
+        const reader = new TmuxTranscriptReader(TmuxBackend.local(dir), SESSION, limits);
+        const oldPage = await reader.readPage(file, undefined, noSink);
+        expect(reader.taskList().items).toHaveLength(2);
+        // Reuse an old result id without its call: neither pending calls nor
+        // snapshots from the original transcript may stamp this new record.
+        const replacement = [taskCreated("t1", 1, "First"), userLine(999)];
+        writeFileSync(file, replacement.map(jsonl).join(""));
+        expect((await reader.readPage(file, oldPage.earlierCursor!, noSink)).expired).toBe(true);
+        if (first === "poll") await reader.drainTail(noSink);
+        const pages = await allPages(reader);
+        expect(pages.toReversed().flatMap((page) => page.lines)).toEqual(replacement);
+        expect(reader.taskList().items).toEqual([]);
+        await expect(reader.drainTail(noSink)).resolves.toBe(0);
+        expect(reader.taskList().items).toEqual([]);
+      },
+    );
+
     test("pages carry the same stamps as the whole-file read, from any page", async () => {
       const lines = taskTranscript();
       const whole = await wholeRead(lines);

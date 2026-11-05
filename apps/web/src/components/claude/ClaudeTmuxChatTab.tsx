@@ -536,9 +536,18 @@ export function ClaudeTmuxChatTab({
     const page = await getTranscriptPage(tabId, environmentId, before);
     if (page.expired) {
       // The transcript was replaced under the cursor: start again from its tail.
-      applyTailPage(storeKey, await getTranscriptPage(tabId, environmentId), {
-        retainHistory: false,
-      });
+      applyTailPage(
+        storeKey,
+        await getTranscriptPage(
+          tabId,
+          environmentId,
+          undefined,
+          before.slice(0, before.lastIndexOf(":")),
+        ),
+        {
+          retainHistory: false,
+        },
+      );
       return;
     }
     prependTranscriptPage(storeKey, before, page);

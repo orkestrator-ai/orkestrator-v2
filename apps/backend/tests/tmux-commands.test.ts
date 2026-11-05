@@ -1039,6 +1039,31 @@ describe("Electron tmux hooks and transcripts", () => {
         countBefore + 1,
       );
 
+      // Removing the live session must not strand the remaining history.
+      // The fallback uses no retained reader or session-registry state, just
+      // as after a backend restart.
+      await invoke(handlers, "claude_tmux_stop", args, context);
+      await expect(invoke(handlers, "claude_tmux_status", args, context)).resolves.toBeNull();
+      const stoppedSeen = [...tail.lines];
+      let stoppedBefore = tail.earlierCursor;
+      while (stoppedBefore) {
+        const page = (await invoke(
+          handlers,
+          "claude_tmux_transcript",
+          { ...args, page: { before: stoppedBefore } },
+          context,
+        )) as Page;
+        stoppedSeen.unshift(...page.lines);
+        stoppedBefore = page.earlierCursor;
+      }
+      expect(stoppedSeen.map((line) => line.uuid)).toEqual(lines.map((line) => line.uuid));
+      const reloaded = (await invoke(
+        handlers,
+        "claude_tmux_transcript",
+        { ...args, page: { sessionId: status.session_id } },
+        context,
+      )) as Page;
+      expect(reloaded.lines).toEqual(tail.lines);
       await invoke(handlers, "claude_tmux_stop", args, context);
     });
   });

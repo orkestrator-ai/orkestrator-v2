@@ -1882,6 +1882,22 @@ Running 1 Explore agent...
       await waitFor(() => expect(button()).toBeNull());
     });
 
+    test("earlier history remains loadable after a stopped event", async () => {
+      getTranscriptPageMock.mockImplementation(async (_tab, _env, before) =>
+        before === undefined
+          ? { lines: [line("tail", "Tail message")], earlierCursor: "s:200" }
+          : { lines: [line("older", "Older message")], earlierCursor: null },
+      );
+      render(renderTab());
+      await screen.findByText("Tail message");
+      await act(async () => {
+        subscribedHandler?.({ kind: "stopped", tab_id: "tab-1", environment_id: "env-1" });
+      });
+      fireEvent.click(button()!);
+      await screen.findByText("Older message");
+      await waitFor(() => expect(button()).toBeNull());
+    });
+
     test("a transcript that fits one page offers nothing earlier", async () => {
       getTranscriptPageMock.mockImplementation(async () => ({
         lines: [line("only", "The whole transcript")],

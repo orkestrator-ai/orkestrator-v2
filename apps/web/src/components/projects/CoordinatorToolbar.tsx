@@ -24,8 +24,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { FreshnessIndicator } from "@/components/freshness/FreshnessIndicator";
+import { requestGlobalSettings } from "@/lib/settings-navigation";
 import { cn } from "@/lib/utils";
-import { CoordinatorErrorDetails, CoordinatorIsolationBadge } from "./CoordinatorPanelNotices";
+import type { FreshnessNotice } from "@/lib/view-freshness";
+import {
+  coordinatorGitErrorText,
+  CoordinatorErrorDetails,
+  CoordinatorIsolationBadge,
+} from "./CoordinatorPanelNotices";
 
 function gitSummary(status: ProjectGitStatus | null): string {
   if (!status) return "Reading repository…";
@@ -45,7 +52,8 @@ interface CoordinatorToolbarProps {
   gitBusy: boolean;
   fetching: boolean;
   conversationBusy: boolean;
-  error: string | null;
+  /** Set only while background reads are failing. */
+  freshness: FreshnessNotice | null;
   runGit: (
     kind: "fetch" | "sync" | "switch",
     ref?: string,
@@ -70,7 +78,7 @@ export function CoordinatorToolbar({
   gitBusy,
   fetching,
   conversationBusy,
-  error,
+  freshness,
   runGit,
   prepareSwitch,
   activeTurn,
@@ -106,9 +114,7 @@ export function CoordinatorToolbar({
     selectedAgent && selectedQualification && selectedQualification.tier !== "enforced"
       ? AGENT_PLATFORM_LABELS[selectedAgent]
       : null;
-  const gitError = git?.lastError ? git.lastError.stderr || git.lastError.message : null;
-  // An action failure that only repeats the repository's own error is shown once.
-  const coordinatorError = error && error !== gitError ? error : null;
+  const gitError = coordinatorGitErrorText(git);
 
   return (
     <>
@@ -171,6 +177,17 @@ export function CoordinatorToolbar({
             ) : null}
             {gitSummary(git)}
           </span>
+          {freshness ? (
+            <span
+              role="status"
+              title={freshness.detail}
+              data-coordinator-freshness={freshness.kind}
+              className="inline-flex items-center gap-1 text-xs text-amber-300"
+            >
+              <FreshnessIndicator notice={freshness} />
+              {freshness.label}
+            </span>
+          ) : null}
           {canSync ? (
             // A disabled button takes no pointer events, so its reason shows from here.
             <span className="inline-flex" title={activeTurnReason}>
@@ -203,7 +220,7 @@ export function CoordinatorToolbar({
               variant="outline"
               disabled={conversationBusy}
               onClick={onPause}
-              title="Pause coordination"
+              title="Pause this project's coordinator: mail and new turns are held until you resume. Conversations stay readable."
             >
               <Pause className="size-3.5" />
               <span className="max-sm:sr-only">Pause</span>
@@ -219,9 +236,6 @@ export function CoordinatorToolbar({
         ) : null}
         {blocked && switchBlocked ? <p className="mt-1 text-xs text-amber-300">{blocked}</p> : null}
         {gitError ? <CoordinatorErrorDetails label="Repository error" message={gitError} /> : null}
-        {coordinatorError ? (
-          <CoordinatorErrorDetails label="Coordinator error" message={coordinatorError} />
-        ) : null}
         {!snapshot.controlMcp.enabled || !snapshot.controlMcp.running ? (
           <p className="mt-1 text-xs text-amber-300">
             Orchestration controls are unavailable because Control MCP is{" "}
@@ -231,8 +245,15 @@ export function CoordinatorToolbar({
         ) : null}
         {snapshot.agentMessaging?.enabled === false ? (
           <p className="mt-1 text-xs text-amber-300">
-            Delegation unavailable: agent messaging is off, so workers cannot report back. Turn it
-            on in Settings → Messaging.
+            Delegation unavailable: agent messaging is off, so workers cannot report back.{" "}
+            <button
+              type="button"
+              className="underline underline-offset-2 hover:text-amber-200 focus-hairline"
+              onClick={() => requestGlobalSettings("messaging")}
+            >
+              Turn it on in Settings → Messaging
+            </button>
+            .
           </p>
         ) : null}
       </div>

@@ -881,6 +881,38 @@ describe("Orkestrator control MCP server", () => {
     expect((await rpc(credential.url, credential.token, "tools/list")).response.status).toBe(401);
   });
 
+  test("refuses the credential of a conversation that failed to start, and only that one", async () => {
+    overrides.set("get_project_coordinator", () => ({
+      workspace: {
+        id: "coordinator-1",
+        lifecycleState: "ready",
+        conversations: [
+          { id: "main", mailboxIncarnationId: "incarnation-main" },
+          {
+            id: "side",
+            mailboxIncarnationId: "incarnation-side",
+            startupError: "bridge did not become healthy",
+          },
+        ],
+      },
+    }));
+    const issue = (conversationId: string) =>
+      server.issueCoordinatorCredential({
+        role: "coordinator",
+        projectId: "project-1",
+        coordinatorId: "coordinator-1",
+        conversationId,
+        mailboxIncarnationId: `incarnation-${conversationId}`,
+        capabilities: ["discovery"],
+      });
+    const failed = issue("side");
+    const refused = await rpc(failed.url, failed.token, "tools/list");
+    expect(refused.response.status).toBe(409);
+    const working = issue("main");
+    const answered = await rpc(working.url, working.token, "tools/list");
+    expect(answered.response.status).toBe(200);
+  });
+
   // A bridge reads its token once, at launch, so a credential that lapsed while
   // it sat idle overnight left a live coordinator with no tools at all: no
   // launches and no send_message to hand the work on with.

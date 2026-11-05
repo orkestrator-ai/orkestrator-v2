@@ -3,7 +3,7 @@ import { act, cleanup, render, waitFor } from "@testing-library/react";
 import { useLayoutEffect } from "react";
 import type { CoordinatorSnapshot, ProjectGitStatus } from "@orkestrator/protocol/coordinator";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
-import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
+import { READ_RETRY_MAX_MS, resetReadCoordinatorForTests } from "@/lib/read-coordinator";
 import {
   dispatchResourceChange,
   requestViewSafetyChecks,
@@ -174,6 +174,89 @@ afterEach(() => {
 });
 
 describe("useCoordinatorPanelData", () => {
+  describe("freshness", () => {
+    /** Fails the named background read, then lets each read and retry run. */
+    async function failReads(command: string, rounds: number) {
+      nativeInvokeMock.mockImplementation((name: string, args: Record<string, unknown> = {}) => {
+        if (name === command) return Promise.reject(new Error("read failed"));
+        return fake.invoke(name, args);
+      });
+      for (let round = 0; round < rounds; round += 1) {
+        if (command === "get_project_coordinator_view") await announce("p1");
+        else await settle(GIT_STATUS_PROBE_INTERVAL_MS);
+        await settle(READ_RETRY_MAX_MS);
+      }
+    }
+
+    function recoverReads() {
+      nativeInvokeMock.mockImplementation((name: string, args: Record<string, unknown> = {}) =>
+        fake.invoke(name, args),
+      );
+    }
+
+    test("says nothing in normal use or for one failure the retry can settle", async () => {
+      render(<Harness projectId="p1" />);
+      await settle();
+      await waitFor(() => expect(latest.snapshot).not.toBeNull());
+      expect(latest.freshness).toBeNull();
+
+      nativeInvokeMock.mockImplementation((name: string, args: Record<string, unknown> = {}) => {
+        if (name === "get_project_coordinator_view") {
+          nativeInvokeMock.mockImplementation((next: string, nextArgs = {}) =>
+            fake.invoke(next, nextArgs as Record<string, unknown>),
+          );
+          return Promise.reject(new Error("read failed"));
+        }
+        return fake.invoke(name, args);
+      });
+      await announce("p1");
+      expect(latest.freshness).toBeNull();
+      await settle(READ_RETRY_MAX_MS);
+      expect(latest.freshness).toBeNull();
+    });
+
+    test("a failing coordinator read is stale in view-freshness words, keeps the last state, and clears", async () => {
+      render(<Harness projectId="p1" />);
+      await settle();
+      await waitFor(() => expect(latest.snapshot).not.toBeNull());
+      const held = latest.snapshot;
+
+      await failReads("get_project_coordinator_view", 2);
+      expect(latest.freshness?.kind).toMatch(/stale|degraded/);
+      expect(latest.freshness?.label).toMatch(/out of date/i);
+      expect(latest.freshness?.detail).toContain("the coordinator");
+      expect(latest.snapshot).toBe(held);
+
+      recoverReads();
+      await settle(READ_RETRY_MAX_MS);
+      await announce("p1");
+      await waitFor(() => expect(latest.freshness).toBeNull());
+    });
+
+    test("a failing repository read is named as the repository status", async () => {
+      render(<Harness projectId="p1" />);
+      await settle();
+      await waitFor(() => expect(latest.snapshot).not.toBeNull());
+      await failReads("get_project_git_status", 2);
+      expect(latest.freshness?.detail).toContain("the repository status");
+      recoverReads();
+      await settle(READ_RETRY_MAX_MS + GIT_STATUS_PROBE_INTERVAL_MS);
+      await waitFor(() => expect(latest.freshness).toBeNull());
+    });
+
+    test("another project starts with no notice", async () => {
+      const { rerender } = render(<Harness projectId="p1" />);
+      await settle();
+      await waitFor(() => expect(latest.snapshot).not.toBeNull());
+      await failReads("get_project_coordinator_view", 2);
+      expect(latest.freshness).not.toBeNull();
+      recoverReads();
+      rerender(<Harness projectId="p2" />);
+      await settle();
+      expect(latest.freshness).toBeNull();
+    });
+  });
+
   test("a change announced while hydrating is read once the view is live", async () => {
     const gate = deferred<void>();
     fake.ensureGate.set(

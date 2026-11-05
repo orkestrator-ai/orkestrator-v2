@@ -7,7 +7,10 @@ import {
   type AgentRegistrySnapshot,
   type AgentTabState,
 } from "@orkestrator/protocol/agent-registry";
-import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
+import {
+  coordinatorConversationRunnable,
+  coordinatorRuntimeId,
+} from "@orkestrator/protocol/coordinator";
 import type { NativeAgentGoalSummary } from "@orkestrator/protocol/native-agent-goal";
 import { encodePublicSessionId } from "@orkestrator/protocol/public-api-resources";
 import { paneLayoutLeaves } from "./storage-shared.js";
@@ -140,9 +143,9 @@ export class AgentRegistry {
     }
     for (const workspace of coordinators) {
       if (filter.projectId && workspace.projectId !== filter.projectId) continue;
-      const ready = workspace.lifecycleState === "ready";
       for (const conversation of workspace.conversations) {
         if (conversation.closedAt) continue;
+        const ready = coordinatorConversationRunnable(workspace, conversation);
         const environmentId = coordinatorRuntimeId(workspace.id, conversation.id);
         if (filter.environmentId && filter.environmentId !== environmentId) continue;
         const agent = conversation.agent ?? null;

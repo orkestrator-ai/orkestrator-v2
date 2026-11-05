@@ -1,5 +1,9 @@
 import type { ReactNode } from "react";
-import { AlertCircle, LockKeyhole, ShieldAlert } from "lucide-react";
+import { AlertCircle, Copy, LockKeyhole, RotateCcw, ShieldAlert, X } from "lucide-react";
+import { toast } from "sonner";
+import type { ProjectGitStatus } from "@orkestrator/protocol/coordinator";
+import { Button } from "@/components/ui/button";
+import { writeText } from "@/lib/native/clipboard";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
@@ -117,7 +121,95 @@ export function CoordinatorBanner({
   );
 }
 
-/** One expandable error line; repository and coordinator errors each get one. */
+/** The repository's own retained error, as the toolbar's disclosure shows it. */
+export function coordinatorGitErrorText(git: ProjectGitStatus | null): string | null {
+  return git?.lastError ? git.lastError.stderr || git.lastError.message : null;
+}
+
+/**
+ * A failed action, visible and announced. A retained repository error stays a
+ * disclosure instead, because it describes a state rather than something the
+ * user just did.
+ */
+export function CoordinatorActionAlert({
+  message,
+  onDismiss,
+}: {
+  message: string;
+  onDismiss: () => void;
+}) {
+  return (
+    <CoordinatorBanner
+      tone="error"
+      action={
+        <Button
+          size="icon"
+          variant="ghost"
+          className="size-7"
+          aria-label="Dismiss error"
+          title="Dismiss"
+          onClick={onDismiss}
+        >
+          <X className="size-3.5" />
+        </Button>
+      }
+    >
+      <span className="block max-h-28 overflow-auto break-words whitespace-pre-wrap">
+        {message}
+      </span>
+    </CoordinatorBanner>
+  );
+}
+
+/** A conversation's bridge failed to start: this pane's notice and the ways out of it. */
+export function CoordinatorStartupFailure({
+  title,
+  error,
+  busy,
+  onRetry,
+  onClose,
+}: {
+  title: string;
+  error: string;
+  busy: boolean;
+  onRetry: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <CoordinatorBanner
+      tone="error"
+      action={
+        <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+          <Button size="sm" variant="outline" disabled={busy} onClick={onRetry}>
+            <RotateCcw className="size-3.5" />
+            Retry
+          </Button>
+          <Button size="sm" variant="outline" disabled={busy} onClick={onClose}>
+            Close conversation
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => {
+              void writeText(error).then(
+                () => toast.success("Error copied"),
+                () => toast.error("Could not copy the error"),
+              );
+            }}
+          >
+            <Copy className="size-3.5" />
+            Copy error
+          </Button>
+        </div>
+      }
+    >
+      <span className="font-medium">{title} could not start.</span>{" "}
+      <span className="break-words text-red-200/80">{error}</span>
+    </CoordinatorBanner>
+  );
+}
+
+/** One expandable error line for the repository's retained error. */
 export function CoordinatorErrorDetails({ label, message }: { label: string; message: string }) {
   return (
     <details className="mt-1 text-xs text-red-300">

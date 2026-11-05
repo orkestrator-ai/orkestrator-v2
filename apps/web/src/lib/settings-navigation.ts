@@ -11,6 +11,7 @@ export const GLOBAL_SETTINGS_SECTIONS = [
   "usage",
   "defaults",
   "platforms",
+  "coordinator",
   "review",
   "claude",
   "codex",

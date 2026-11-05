@@ -5,7 +5,10 @@ import {
   parseCoordinatorPaneLayoutSaveResult,
   type CoordinatorPaneLayout,
 } from "./coordinator-pane-layout.js";
-import { isEnvironmentAttentionEvent } from "./environment-attention.js";
+import {
+  isCoordinatorWakeAttentionEvent,
+  isEnvironmentAttentionEvent,
+} from "./environment-attention.js";
 import {
   NOTICE_DISMISSAL_LIMITS,
   normalizeNoticeDismissalSessions,
@@ -87,5 +90,14 @@ describe("environment attention events", () => {
     expect(isEnvironmentAttentionEvent(event)).toBe(true);
     expect(isEnvironmentAttentionEvent({ ...event, reason: "marked_unread" })).toBe(false);
     expect(isEnvironmentAttentionEvent({ ...event, attentionId: "" })).toBe(false);
+    const wake = {
+      attentionId: "a",
+      projectId: "p",
+      coordinatorId: "c",
+      occurredAt: "2026-11-01T00:00:00.000Z",
+    };
+    expect(isCoordinatorWakeAttentionEvent(wake)).toBe(true);
+    expect(isCoordinatorWakeAttentionEvent({ ...wake, coordinatorId: "" })).toBe(false);
+    expect(isCoordinatorWakeAttentionEvent(null)).toBe(false);
   });
 });

@@ -557,7 +557,7 @@ export interface MultiReviewWorkflow {
     resultReminderSent?: boolean;
     /** The step's one continuation after a provider restart was spent. */
     restartContinuationSent?: boolean;
-    /** Times this step turn was resent after the weekly limit stopped it. */
+    /** Times this step turn was resent after a usage limit stopped it. */
     usageLimitResends?: number;
     idleResultPolls?: number;
     /** Bounded terminal polls while the provider finalizes cumulative usage. */

@@ -19,8 +19,10 @@ for (const filePath of ["src/app.ts", ".env", ".env.local", "config/production.e
     test(`${command} normalizes the language for ${filePath}`, async () => {
       const content = "EXAMPLE=value\n";
       transport = spyOn(helpers, "dockerExec").mockImplementation(async (_id, script) =>
-        script.startsWith("git cat-file")
-          ? String(Buffer.byteLength(content))
+        script.includes("git cat-file --batch")
+          ? Buffer.from(
+              `${"a".repeat(40)} blob ${Buffer.byteLength(content)}\n${content}\n`,
+            ).toString("base64")
           : Buffer.from(content).toString("base64"),
       );
       const handler = commands.get(command)!;
@@ -34,7 +36,8 @@ for (const filePath of ["src/app.ts", ".env", ".env.local", "config/production.e
         content,
         language: filePath.endsWith(".ts") ? "typescript" : "dotenv",
       });
-      expect(transport).toHaveBeenCalledTimes(command === "read_file_at_branch" ? 2 : 1);
+      // A branch read is one exec: size and body come from one cat-file.
+      expect(transport).toHaveBeenCalledTimes(1);
     });
   }
 }

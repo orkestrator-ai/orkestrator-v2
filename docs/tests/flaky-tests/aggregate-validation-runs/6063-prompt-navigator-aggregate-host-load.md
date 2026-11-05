@@ -1,6 +1,6 @@
 # Prompt navigator aggregate run: git and timing tests under host load
 
-- **ID:** 5105
+- **ID:** 6063
 - **Status:** open
 - **Date observed:** 2026-11-05
 

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { STATIC_PRESENTATION_POLICY } from "@orkestrator/protocol/rich-content-policy";
 import {
   STATIC_HTML_FRAME_CHANNEL,
+  STATIC_HTML_MAX_FIND_QUERY_CHARACTERS,
   STATIC_HTML_MAX_TEXT_CHUNKS,
 } from "@orkestrator/protocol/static-html-presentation";
 import { StaticHtmlFrameSession } from "./static-html-frame-session";
@@ -256,6 +257,76 @@ describe("StaticHtmlFrameSession", () => {
       expect(kinds.filter((kind) => kind === "text-partial")).toHaveLength(
         STATIC_HTML_MAX_TEXT_CHUNKS - 1,
       );
+    });
+  });
+
+  describe("find", () => {
+    const report = { type: "find-match", generation: GENERATION, top: 40, height: 16 };
+
+    test("waits for the document, and names this mount", () => {
+      const { session, ready } = setup();
+      expect(session.findMessage("needle", 0)).toBeNull();
+      ready();
+      session.renderMessage("<p>x</p>", THEME, "light");
+      expect(session.findMessage("needle", 0)).toBeNull();
+      const second = setup();
+      second.rendered();
+      expect(second.session.findMessage("needle", 2)).toEqual({
+        channel: STATIC_HTML_FRAME_CHANNEL,
+        v: 1,
+        type: "find",
+        generation: GENERATION,
+        query: "needle",
+        occurrence: 2,
+      });
+    });
+
+    test("is sent only when it changes, and a mount that never searched hears no clear", () => {
+      const { session, rendered } = setup();
+      rendered();
+      expect(session.findMessage("", null)).toBeNull();
+      expect(session.findMessage("   ", 1)).toBeNull();
+      expect(session.findMessage("needle", 1)).not.toBeNull();
+      expect(session.findMessage("needle", 1)).toBeNull();
+      expect(session.findMessage("needle", null)).toMatchObject({ occurrence: null });
+      expect(session.findMessage("", null)).toMatchObject({ query: "", occurrence: null });
+      expect(session.findMessage("", null)).toBeNull();
+    });
+
+    test("a query past the limit clears rather than being sent", () => {
+      const { session, rendered } = setup();
+      rendered();
+      const longest = "x".repeat(STATIC_HTML_MAX_FIND_QUERY_CHARACTERS);
+      expect(session.findMessage(longest, 0)).toMatchObject({ query: longest });
+      expect(session.findMessage(`${longest}x`, 0)).toMatchObject({ query: "", occurrence: null });
+    });
+
+    test("nothing goes to an invalidated mount", () => {
+      const { session, rendered } = setup();
+      rendered();
+      session.invalidate();
+      expect(session.findMessage("needle", 0)).toBeNull();
+    });
+
+    test("a report counts only while this frame holds the active match", () => {
+      const { session, send, rendered } = setup();
+      expect(send(report)).toEqual({ kind: "rejected", reason: "not-rendering" });
+      rendered();
+      expect(send(report)).toEqual({ kind: "rejected", reason: "not-finding" });
+      session.findMessage("needle", null);
+      expect(send(report)).toEqual({ kind: "rejected", reason: "not-finding" });
+      session.findMessage("needle", 1);
+      expect(send(report)).toEqual({ kind: "find-match", top: 40, height: 16 });
+    });
+
+    test("a report carrying anything but its numbers is refused", () => {
+      const { session, send, rendered } = setup();
+      rendered();
+      session.findMessage("needle", 1);
+      expect(send({ ...report, query: "needle" })).toEqual({
+        kind: "rejected",
+        reason: "bad-shape",
+      });
     });
   });
 

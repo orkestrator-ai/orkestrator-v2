@@ -18,7 +18,10 @@ export type { PublicOperationsStorage } from "./storage-public-operations.js";
 
 import type { NativeAgentGoal } from "@orkestrator/protocol/native-agent-goal";
 import type { NativeSessionInvalidationCause } from "@orkestrator/protocol/native-agent-observation";
-import type { EnvironmentAttentionEvent } from "@orkestrator/protocol/environment-attention";
+import type {
+  CoordinatorWakeAttentionEvent,
+  EnvironmentAttentionEvent,
+} from "@orkestrator/protocol/environment-attention";
 import type { ScheduledJobStore } from "./scheduled-jobs/store.js";
 import type { PermissionRuleStore } from "./permission-rules/store.js";
 import {
@@ -196,6 +199,7 @@ export class StorageService {
   async init(): Promise<void> {
     await this.context.open();
     this.context.startSnapshots();
+    await this.repos.config.restrictConfigFileModes();
     await this.repos.config.migrateConfigSchema();
     await this.repos.nativeAgentSessions.migrateNativeAgentSessionOwners();
   }
@@ -234,6 +238,15 @@ export class StorageService {
     listener: (event: EnvironmentAttentionEvent) => void,
   ): () => void {
     return this.context.changes.addEnvironmentAttentionListener(listener);
+  }
+
+  /** Observe coordinators woken for a worker they waited on (the "coordinator report" signal). */
+  addCoordinatorWakeListener(listener: (event: CoordinatorWakeAttentionEvent) => void): () => void {
+    return this.context.changes.addCoordinatorWakeListener(listener);
+  }
+
+  notifyCoordinatorWake(event: CoordinatorWakeAttentionEvent): void {
+    this.context.changes.notifyCoordinatorWake(event);
   }
 
   /**

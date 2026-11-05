@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { createRef, type ReactNode } from "react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { createRef, useContext, type ReactNode } from "react";
 import * as realVirtuoso from "react-virtuoso";
 import { setHighlightBackend } from "@/lib/chat/highlighter/client";
 import {
@@ -40,6 +40,9 @@ mock.module("react-virtuoso", () => ({
 const { VirtualizedMessageList } = await import("./VirtualizedMessageList");
 const { NativeMessage } = await import("./NativeMessage");
 const { getNativeMessageSearchText } = await import("./native-message-search");
+const { clearArtifactRequestCache, rememberArtifactSearchBody, useCachedArtifactSearchBody } =
+  await import("@/lib/chat/artifact-requests");
+const { StaticDocumentFindContext } = await import("./chat-find-context");
 
 class FakeHighlight {
   readonly ranges: Range[];
@@ -265,5 +268,130 @@ describe("find pairs rich matches by block identity", () => {
     expect(
       all?.some((range) => range.startContainer.parentElement === screen.getByTestId("extra")),
     ).toBe(false);
+  });
+
+  test("a body arriving keeps the count, the DOM pairing and the selected match together", async () => {
+    const reference = {
+      schemaVersion: 1,
+      artifactId: "art_abcdefgh1",
+      revision: 2,
+      publicationId: "pub_abcdefgh1",
+      kind: "html-static",
+      title: "Report title",
+      summary: "Report summary",
+      provenance: { backendId: "backend", origin: "agent" },
+    };
+    const message = {
+      id: "with-report",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-11-05T10:00:00.000Z",
+      parts: [
+        { type: "text", content: "needle before", sourcePartId: "part-1" },
+        {
+          type: "artifact",
+          content: "Report",
+          artifact: reference,
+          publishedAt: "2026-11-05T10:00:00.000Z",
+          conversationSequence: 1,
+        },
+        { type: "text", content: "needle after", sourcePartId: "part-3" },
+      ],
+    } as unknown as NativeMessageType;
+
+    // The roots a card renders: its mirror follows the same cache find now does.
+    function Row() {
+      const body = useCachedArtifactSearchBody(reference);
+      const documentFind = useContext(StaticDocumentFindContext);
+      return (
+        <div>
+          <output data-testid="document-find">{JSON.stringify(documentFind)}</output>
+          <p data-agent-chat-search-content="true" data-testid="before">
+            needle before
+          </p>
+          <p data-agent-chat-search-content="true">Report summary</p>
+          {body ? (
+            <div data-agent-chat-search-content="true">
+              <p data-rich-search-mirror="true" data-testid="body">
+                {body}
+              </p>
+            </div>
+          ) : null}
+          <p data-agent-chat-search-content="true" data-testid="after">
+            needle after
+          </p>
+        </div>
+      );
+    }
+    render(
+      <VirtualizedMessageList
+        messages={[message]}
+        computeItemKey={(_index, item) => item.id}
+        renderMessage={() => <Row />}
+        scrollProps={scrollProps()}
+        virtuosoRef={createRef()}
+        find={{ isActive: true, getSearchText: getNativeMessageSearchText }}
+      />,
+    );
+    fireEvent.keyDown(document, { key: "f", metaKey: true });
+    const input = await screen.findByRole("textbox", { name: "Find in chat" });
+    fireEvent.change(input, { target: { value: "needle" } });
+    expect(await screen.findByText("1 of 2")).toBeTruthy();
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(await screen.findByText("2 of 2")).toBeTruthy();
+    await waitFor(() =>
+      expect(currentRange()?.startContainer.parentElement).toBe(screen.getByTestId("after")),
+    );
+
+    act(() =>
+      rememberArtifactSearchBody(reference, "needle one and needle two", {
+        backendId: "backend",
+        environmentId: "env",
+        logicalSessionKey: "session",
+      }),
+    );
+
+    // No query edit: the count moved, and the match after the report is still the current one.
+    expect(await screen.findByText("4 of 4")).toBeTruthy();
+    await waitFor(() => {
+      const all = Array.from(highlights.entries()).find(([key]) => key.includes("match"))?.[1]
+        .ranges;
+      expect(all?.map((range) => range.startContainer.parentElement?.dataset.testid)).toEqual([
+        "before",
+        "body",
+        "body",
+        "after",
+      ]);
+      expect(currentRange()?.startContainer.parentElement).toBe(screen.getByTestId("after"));
+    });
+    const documentFind = () => JSON.parse(screen.getByTestId("document-find").textContent!);
+    expect(documentFind()).toEqual({
+      query: "needle",
+      activePublicationId: null,
+      activeOccurrence: null,
+    });
+
+    // Stepping back into the report names its occurrence, counted within its body.
+    fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
+    expect(await screen.findByText("3 of 4")).toBeTruthy();
+    await waitFor(() =>
+      expect(documentFind()).toEqual({
+        query: "needle",
+        activePublicationId: "pub_abcdefgh1",
+        activeOccurrence: 1,
+      }),
+    );
+    fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
+    expect(await screen.findByText("2 of 4")).toBeTruthy();
+    await waitFor(() =>
+      expect(documentFind()).toMatchObject({
+        activePublicationId: "pub_abcdefgh1",
+        activeOccurrence: 0,
+      }),
+    );
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() => expect(documentFind()).toBeNull());
+    clearArtifactRequestCache();
   });
 });

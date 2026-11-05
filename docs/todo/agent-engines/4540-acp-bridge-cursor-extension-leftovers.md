@@ -2,7 +2,7 @@
 
 ## Task analysis
 
-Analysed 2026-11-04 against `main` at `96ee1eb3`, with the replay removal from [1202](../cross-cutting/1202-efficiency-review-follow-ups.md) task 6 (BR-16) applied.
+Analysed 2026-11-04 against `main` at `96ee1eb3`, with the replay removal from [1202](../cross-cutting/1202-efficiency-review-follow-ups.md) task 6 (BR-16) applied. Re-checked 2026-11-05 against `3baeaacf6` by batch E20, which removed the replay's orphans; see [Assumptions and decisions](#assumptions-and-decisions).
 
 ### Tasks
 
@@ -15,14 +15,14 @@ Analysed 2026-11-04 against `main` at `96ee1eb3`, with the replay removal from [
 
 **Context.** BR-16 removed only the tool metadata replay, because that was the part gated on `provider === "cursor"` and spawning a process per pass. Cursor runs on `bridges/cursor-bridge`; `apps/backend/src/core/commands-servers.ts` and `host-model-catalog-refresh.ts` send only Grok here, and the container entrypoint exports `ACP_PROVIDER=grok`.
 
-**Investigation.** These are gated by method name, not provider, so a provider-id argument does not prove them unreachable: `isCursorTaskMethod` and `isCursorUpdateTodosMethod` dispatch at `bridges/acp-bridge/src/acp-session.ts:2312` and `:2316`. Grok's launcher record lists no acknowledged extension methods, and nothing here shows Grok sending a `cursor/` method, but no run against the real binary was made to confirm it. What goes with them: `applyCursorTask` and the child-directory pairing around `bumpCursorDiscoveryRevision` and `settledCursorAgentIds`, the `cursorTask` field on tool sources, `CURSOR_JSONL_SOURCE_PREFIX`, and most of `testing/fake-agent-prompt-cursor.ts` and the `cursor/task` cases in `acp-transcript.test.ts` and `acp-context.test.ts`. The fixtures still send these methods under the neutral `acp-fixture` provider.
+**Investigation.** These are gated by method name, not provider, so a provider-id argument does not prove them unreachable: `isCursorTaskMethod` and `isCursorUpdateTodosMethod` dispatch at `bridges/acp-bridge/src/acp-session.ts:2305` and `:2309`. Grok's launcher record lists no acknowledged extension methods, and nothing here shows Grok sending a `cursor/` method, but no run against the real binary was made to confirm it. What goes with them: `applyCursorTask`, the `cursorTask` field on tool sources, and most of `testing/fake-agent-prompt-cursor.ts` and the `cursor/task` cases in `acp-transcript.test.ts` and `acp-context.test.ts`. The fixtures still send these methods under the neutral `acp-fixture` provider.
 
 **Decisions.**
 
 - **Remove, or keep as a generic extension?**
   - **Remove them, after a Grok run confirms it never sends them (recommended).**
     - Pros: a large block of provider-specific state and persistence fields goes; `bridges/acp-bridge/AGENTS.md` keeps provider quirks to named providers, and these have no provider left.
-    - Cons: a wide diff in `acp-tools.ts`; persisted `settledCursorAgentIds` and `cursorTaskPromptReported` fields have to keep loading from existing state files.
+    - Cons: a wide diff in `acp-tools.ts`.
   - **Leave them.**
     - Pros: no risk to the suites.
     - Cons: the code keeps being maintained for nothing.
@@ -48,7 +48,13 @@ Analysed 2026-11-04 against `main` at `96ee1eb3`, with the replay removal from [
 ## Constraints and rationale
 
 - Generic ACP behaviour stays (`bridges/acp-bridge/AGENTS.md`, "Standard ACP first").
-- Existing state files must keep loading.
+- Existing state files must keep loading. The loader ignores fields it does not know, and `acp-persist-writer.test.ts` checks that for `settledCursorAgentIds` and `cursorTaskPromptReported`.
+
+## Assumptions and decisions
+
+### Task 1: removed what only the replay used
+
+E20 removed the discovery counter (`bumpCursorDiscoveryRevision`), `settledCursorAgentIds`, `cursorTaskPromptReported`, `recordCursorTaskPrompt`, `toolPartAgentId`, the descriptor's `agentId`, `agentIdDiscovered`, `agentIdSettlementSafe` and `reportedPrompt`, and the replay's constants, `CURSOR_JSONL_SOURCE_PREFIX` among them. Nothing read them once the replay had gone, so this holds whichever way task 1 is decided. The `cursor/*` handlers themselves were left, because task 1 is still waiting on a run against the real Grok binary, which E20 could not make.
 
 ## Needs verification
 
@@ -57,4 +63,4 @@ Analysed 2026-11-04 against `main` at `96ee1eb3`, with the replay removal from [
 ## Related
 
 - [1202 task 6](../cross-cutting/1202-efficiency-review-follow-ups.md), BR-16
-- [E20, ACP bridge report](../../reports/efficiency-logging-database/0240-e20-acp-bridge.md)
+- [5900](5900-acp-state-write-cost-at-the-cap.md), the rest of batch E20

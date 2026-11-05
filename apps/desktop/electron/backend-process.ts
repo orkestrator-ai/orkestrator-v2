@@ -17,8 +17,10 @@ import {
 import {
   GATEWAY_EVENT_CURSOR_PARAM,
   GATEWAY_STREAM_CONNECT_TIMEOUT_MS,
+  GATEWAY_RELAYED_EVENTS_PARAM,
   GATEWAY_STREAM_SILENCE_LIMIT_MS,
   GatewayEventStreamState,
+  type GatewayRelayedEventsMode,
   NATIVE_EVENT_STREAM_CONNECTED_EVENT,
   TERMINAL_EVENT_STREAM_CONNECTED_EVENT,
   readSseStream,
@@ -705,6 +707,12 @@ export class BackendHttpClient {
       try {
         const url = this.endpoint("/__orkestrator/events");
         if (stream.cursor) url.searchParams.set(GATEWAY_EVENT_CURSOR_PARAM, stream.cursor);
+        // Main forwards to windows it does not track watches for, so it takes
+        // every relayed event on this one stream.
+        url.searchParams.set(
+          GATEWAY_RELAYED_EVENTS_PARAM,
+          "legacy" satisfies GatewayRelayedEventsMode,
+        );
         if (!this.relayTerminalOutput) {
           url.searchParams.set("excludeEvents", TERMINAL_OUTPUT_EVENT_PREFIX);
         }

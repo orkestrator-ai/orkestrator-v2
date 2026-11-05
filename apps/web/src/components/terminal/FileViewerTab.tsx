@@ -19,6 +19,7 @@ import {
   resolveFileDraftSaveConflict,
 } from "@/lib/file-draft-persistence";
 import { DraftRevisionConflictError } from "@/lib/draft-conflict";
+import { loadEnvironmentImage } from "@/lib/environment-image-source";
 import type { ChangeDiffTarget } from "@/types/paneLayout";
 import {
   LazyLoadBoundary,
@@ -136,7 +137,7 @@ interface FileViewerTabProps {
 }
 
 type LiveImageState =
-  | { key: string; kind: "image"; dataUrl: string; request: number; signal: AbortSignal }
+  | { key: string; kind: "image"; url: string; request: number; signal: AbortSignal }
   | { key: string; kind: "failed" };
 
 /** Keep subscribing after fallback so a replaced or restored image can recover. */
@@ -187,27 +188,34 @@ function LiveImageDiffPreview({
     if (!isActive) return;
     const request = ++requestRef.current;
     const controller = new AbortController();
+    let release: (() => void) | null = null;
     void (async () => {
       try {
         const mimeType = getImageMimeType(filePath);
         if (!mimeType) throw new Error("Unsupported image format");
-        let base64: string;
-        if (isLocalEnvironment && worktreePath && environmentId) {
-          base64 = await backend.readEnvironmentFileBase64(environmentId, filePath);
-        } else if (!isLocalEnvironment && containerId) {
-          base64 = await backend.readContainerFileBase64(containerId, filePath);
-        } else {
-          throw new Error("The image has no owning environment");
+        const loaded = await loadEnvironmentImage(
+          {
+            environmentId,
+            containerId,
+            isLocalEnvironment,
+            worktreePath,
+            filePath,
+            mimeType,
+          },
+          controller.signal,
+        );
+        if (controller.signal.aborted) {
+          loaded.release();
+          return;
         }
-        if (!controller.signal.aborted) {
-          setImage({
-            key,
-            kind: "image",
-            dataUrl: `data:${mimeType};base64,${base64}`,
-            request,
-            signal: controller.signal,
-          });
-        }
+        release = loaded.release;
+        setImage({
+          key,
+          kind: "image",
+          url: loaded.url,
+          request,
+          signal: controller.signal,
+        });
       } catch {
         if (!controller.signal.aborted) setImage({ key, kind: "failed" });
       }
@@ -215,6 +223,7 @@ function LiveImageDiffPreview({
     return () => {
       // Fence decode errors from the old DOM node as well as pending reads.
       controller.abort();
+      release?.();
     };
   }, [key, isActive, filePath, environmentId, containerId, worktreePath, isLocalEnvironment]);
 
@@ -232,7 +241,7 @@ function LiveImageDiffPreview({
       <div className="min-h-0 flex-1 flex items-center justify-center overflow-auto p-4">
         <img
           key={image.request}
-          src={image.dataUrl}
+          src={image.url}
           alt={filePath}
           className="max-w-full max-h-full object-contain"
           onError={() => {
@@ -284,7 +293,7 @@ export function FileViewerTab({
 
   // File content state
   const [content, setContent] = useState<string | null>(null);
-  const [imageDataUrl, setImageDataUrl] = useState<string | null>(null);
+  const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [detectedLanguage, setDetectedLanguage] = useState<string>(language || "plaintext");
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -457,32 +466,42 @@ export function FileViewerTab({
     }
 
     let cancelled = false;
+    const imageController = new AbortController();
+    let releaseImage: (() => void) | null = null;
 
     async function loadFile() {
       setIsLoading(true);
       setDraftHydrated(false);
       setError(null);
       setContent(null);
-      setImageDataUrl(null);
+      setImageUrl(null);
 
       try {
         if (isImage) {
-          // Load image as base64
+          // A stream capability when the content origin is reachable, else base64.
           const mimeType = getImageMimeType(filePath);
           if (!mimeType) {
             throw new Error(`Unsupported image format: ${getFileExtension(filePath)}`);
           }
-          let base64Content: string;
-          if (isLocalEnvironment && worktreePath) {
-            if (!environmentId) throw new Error("The image has no owning environment");
-            base64Content = await backend.readEnvironmentFileBase64(environmentId, filePath);
-          } else if (containerId) {
-            base64Content = await backend.readContainerFileBase64(containerId, filePath);
-          } else {
+          if (!(isLocalEnvironment && worktreePath) && !containerId) {
             throw new Error("No container ID or worktree path available for image viewing");
           }
-          if (!cancelled) {
-            setImageDataUrl(`data:${mimeType};base64,${base64Content}`);
+          const loaded = await loadEnvironmentImage(
+            {
+              environmentId,
+              containerId,
+              isLocalEnvironment,
+              worktreePath,
+              filePath,
+              mimeType,
+            },
+            imageController.signal,
+          );
+          if (cancelled) {
+            loaded.release();
+          } else {
+            releaseImage = loaded.release;
+            setImageUrl(loaded.url);
           }
         } else {
           // Load text file - use appropriate command based on environment type
@@ -553,6 +572,8 @@ export function FileViewerTab({
     loadFile();
     return () => {
       cancelled = true;
+      imageController.abort();
+      releaseImage?.();
     };
   }, [
     containerId,
@@ -748,10 +769,10 @@ export function FileViewerTab({
       </div>
 
       {/* Image Viewer for image files */}
-      {isImage && imageDataUrl && (
+      {isImage && imageUrl && (
         <div className="min-h-0 flex-1 flex items-center justify-center overflow-auto p-4">
           <img
-            src={imageDataUrl}
+            src={imageUrl}
             alt={filePath}
             className="max-w-full max-h-full object-contain"
             style={{

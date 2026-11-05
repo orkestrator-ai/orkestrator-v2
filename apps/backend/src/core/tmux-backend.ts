@@ -74,13 +74,19 @@ export class TmuxBackend {
     return new TmuxBackend("container", { containerId });
   }
 
-  async exec(args: string[], stdin?: string, timeoutMs = 60_000): Promise<ExecOutput> {
+  async exec(
+    args: string[],
+    stdin?: string,
+    timeoutMs = 60_000,
+    options: { waitForDescendants?: boolean } = {},
+  ): Promise<ExecOutput> {
     if (args.length === 0) throw new Error("cannot execute empty command");
     if (this.kind === "local") {
       return execWithOutput(args[0]!, args.slice(1), {
         cwd: this.cwd,
         stdin,
         timeoutMs,
+        waitForDescendants: options.waitForDescendants,
       });
     }
 
@@ -88,7 +94,7 @@ export class TmuxBackend {
     return execWithOutput(
       "docker",
       containerExecArgs(this.containerId, args, stdin !== undefined),
-      { stdin, timeoutMs },
+      { stdin, timeoutMs, waitForDescendants: options.waitForDescendants },
     );
   }
 

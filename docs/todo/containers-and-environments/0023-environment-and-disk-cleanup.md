@@ -500,7 +500,7 @@ Decisions made on 2026-10-26 while working through the file.
    these prefixes, so there was nothing to reuse.
 2. **Where to surface permanently failing cleanup (item 2).** Options: (a) a
    `disk:report` row; (b) a section in the recurring-work diagnostics
-   (`get_recurring_work_diagnostics`, `/api/metrics`); (c) a UI notice in
+   (`get_recurring_work_diagnostics`, `/__orkestrator/metrics`); (c) a UI notice in
    Settings > Disk usage, needing a new backend command and renderer work.
    Chose (a). Pros: `disk:report` is already the operator's view of what
    cleanup left behind, is read-only and can name environment ids and the

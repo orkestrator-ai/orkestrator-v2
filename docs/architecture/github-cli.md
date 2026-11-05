@@ -106,7 +106,8 @@ reviews, merges and branch deletion). Containers have their own setting; see
   and authenticated host `gh` subprocesses remove inherited `GH_TOKEN` and
   `GITHUB_TOKEN`, including overrides in caller-provided environments. Other
   environment settings are preserved.
-- **PAT mode** uses the trimmed stored personal access token (`githubToken`).
+- **PAT mode** uses the trimmed stored personal access token (`githubToken`),
+  which is [plaintext at 0600](storage.md#provider-secrets-at-rest).
   Host `gh` subprocesses receive it as `GH_TOKEN`; inherited token variables
   cannot override it. A missing, empty or whitespace-only PAT makes authenticated
   operations fail with a Settings action before invoking `gh`; there is no host

@@ -120,6 +120,26 @@ describe("DraggableTab title precedence", () => {
     expect(screen.getByText("Key information 1")).toBeTruthy();
   });
 
+  test("the notes view of a key-information tab is titled and drawn as notes", () => {
+    seedPipeline("pipeline-1", "Review the brief");
+    const tab: TabInfo = {
+      id: "notes",
+      type: "key-information",
+      keyInformationTabData: {
+        environmentId: "env-1",
+        pipelineId: "pipeline-1",
+        view: "notes",
+      },
+    };
+    const { container } = renderTab(tab);
+    expect(screen.getByText("Notes: Review the brief")).toBeTruthy();
+    expect(container.querySelector("svg.lucide-sticky-note.text-amber-400")).toBeTruthy();
+    cleanup();
+    useBuildPipelineStore.setState({ pipelines: new Map() });
+    renderTab(tab);
+    expect(screen.getByText("Notes 1")).toBeTruthy();
+  });
+
   test("session.name beats every other source", () => {
     const tab: TabInfo = {
       id: "tab-a",

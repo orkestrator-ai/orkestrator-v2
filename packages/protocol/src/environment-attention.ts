@@ -53,3 +53,34 @@ export function isEnvironmentAttentionEvent(value: unknown): value is Environmen
     event.occurredAt.length <= 64
   );
 }
+
+/**
+ * Backend -> client "a coordinator was woken for a worker it was waiting on".
+ *
+ * Raised once per delegation, after the wake (the worker's report, or the notice
+ * standing in for one) was delivered to the coordinator. Presentation only, on
+ * the same terms as above: `attentionId` is stable for the wake so a client acts
+ * on it once, a client that was away hears nothing later, and it is content-free.
+ */
+export const COORDINATOR_WAKE_ATTENTION_EVENT = "coordinator-wake-attention";
+
+export interface CoordinatorWakeAttentionEvent {
+  attentionId: string;
+  projectId: string;
+  coordinatorId: string;
+  occurredAt: string;
+}
+
+export function isCoordinatorWakeAttentionEvent(
+  value: unknown,
+): value is CoordinatorWakeAttentionEvent {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const event = value as Record<string, unknown>;
+  return (
+    isId(event.attentionId) &&
+    isId(event.projectId) &&
+    isId(event.coordinatorId) &&
+    typeof event.occurredAt === "string" &&
+    event.occurredAt.length <= 64
+  );
+}

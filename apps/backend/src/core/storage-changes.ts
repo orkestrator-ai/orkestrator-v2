@@ -11,7 +11,10 @@ import type {
   ScopedResourceRevisionManifest,
 } from "./storage-shared.js";
 import type { StorageContext } from "./storage-context.js";
-import type { EnvironmentAttentionEvent } from "@orkestrator/protocol/environment-attention";
+import type {
+  CoordinatorWakeAttentionEvent,
+  EnvironmentAttentionEvent,
+} from "@orkestrator/protocol/environment-attention";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import type { NativeSessionInvalidationCause } from "@orkestrator/protocol/native-agent-observation";
 import { nativeSessionInvalidationMetrics } from "./native-session-invalidation-metrics.js";
@@ -50,6 +53,7 @@ export class StorageChanges {
   private listener: ResourceChangeListener | null = null;
   private readonly observers = new Set<ResourceChangeListener>();
   private readonly attentionListeners = new Set<(event: EnvironmentAttentionEvent) => void>();
+  private readonly wakeListeners = new Set<(event: CoordinatorWakeAttentionEvent) => void>();
   /** Revision of the latest announced change; the scoped manifest's cursor. */
   private revision = 0;
   private readonly journal: JournalEntry[] = [];
@@ -79,6 +83,24 @@ export class StorageChanges {
   ): () => void {
     this.attentionListeners.add(listener);
     return () => this.attentionListeners.delete(listener);
+  }
+
+  /** Observe coordinators the backend has just woken for a worker they were waiting on. */
+  addCoordinatorWakeListener(listener: (event: CoordinatorWakeAttentionEvent) => void): () => void {
+    this.wakeListeners.add(listener);
+    return () => this.wakeListeners.delete(listener);
+  }
+
+  /** Publishes one delivered wake; a listener that throws never fails the delivery. */
+  notifyCoordinatorWake(event: CoordinatorWakeAttentionEvent): void {
+    if (this.context.deferUntilCommit(() => this.notifyCoordinatorWake(event))) return;
+    for (const listener of this.wakeListeners) {
+      try {
+        listener(event);
+      } catch (error) {
+        log.error("listener.attention-failed", { error: formatLogError(error) });
+      }
+    }
   }
 
   /**

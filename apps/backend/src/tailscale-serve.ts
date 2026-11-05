@@ -2,10 +2,8 @@ import type {
   ManagedWebClientOwnership,
   ManagedWebClientOwnershipStore,
 } from "./managed-web-client.js";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { CommandFailedError, runCommand } from "./core/shell.js";
 
-const execFileAsync = promisify(execFile);
 const COMMAND_TIMEOUT_MS = 30_000;
 
 export type TailscaleCommandRunner = (
@@ -13,17 +11,28 @@ export type TailscaleCommandRunner = (
   args: string[],
 ) => Promise<{ stdout: string; stderr: string }>;
 
-const defaultRunner: TailscaleCommandRunner = async (command, args) => {
-  const result = await execFileAsync(command, args, {
-    encoding: "utf8",
-    timeout: COMMAND_TIMEOUT_MS,
-    maxBuffer: 1024 * 1024,
-    // The macOS app bundle uses this flag to select CLI behavior when it is
-    // launched from a non-interactive child process.
-    env: { ...process.env, TAILSCALE_BE_CLI: process.env.TAILSCALE_BE_CLI ?? "true" },
-  });
-  return { stdout: result.stdout, stderr: result.stderr };
-};
+export async function defaultTailscaleRunner(
+  command: string,
+  args: string[],
+  limits: { timeoutMs?: number; maxOutputBytes?: number } = {},
+): Promise<{ stdout: string; stderr: string }> {
+  try {
+    return await runCommand(command, args, {
+      timeoutMs: limits.timeoutMs ?? COMMAND_TIMEOUT_MS,
+      maxOutputBytes: limits.maxOutputBytes ?? 1024 * 1024,
+      // The macOS app bundle uses this flag to select CLI behavior when it is
+      // launched from a non-interactive child process.
+      env: { ...process.env, TAILSCALE_BE_CLI: process.env.TAILSCALE_BE_CLI ?? "true" },
+    });
+  } catch (error) {
+    // `commandError` shows stderr, else the message, which `runCommand` fills from
+    // stdout. Failures have only ever reported stderr or the command.
+    if (error instanceof CommandFailedError && !error.executableMissing && !error.stderr.trim()) {
+      throw new Error(`Command failed: ${[command, ...args].join(" ")}`);
+    }
+    throw error;
+  }
+}
 
 export function extractTailscaleServeUrl(output: string): string | null {
   for (const match of output.matchAll(/https:\/\/[^\s|]+/g)) {
@@ -247,7 +256,7 @@ export class TailscaleServeManager {
 
   constructor(
     private readonly executable = "tailscale",
-    private readonly run: TailscaleCommandRunner = defaultRunner,
+    private readonly run: TailscaleCommandRunner = defaultTailscaleRunner,
   ) {}
 
   async start(

@@ -1,14 +1,12 @@
 import {
   MAX_ACTIVE_SUBAGENTS_PER_SESSION,
   MAX_CHILD_PARTS_PER_CALL,
-  MAX_CURSOR_CHILD_PROMPT_BYTES,
   MAX_MESSAGES,
   MAX_PARTS_PER_MESSAGE,
   MAX_TOOL_ID_BYTES,
   MAX_TOOL_NAME_BYTES,
   MAX_TOOL_TITLE_BYTES,
   TRANSCRIPT_CHECK_INTERVAL_BYTES,
-  bumpCursorDiscoveryRevision,
   trimmedToolCalls,
   acpToolSourceStates,
   isObject,
@@ -620,47 +618,8 @@ export function ensureAcpToolSource(part: BridgeToolPart): AcpToolSourceState {
   return source;
 }
 
-/**
- * Stand-in prompt for a Task Cursor has not described yet, recovered from the
- * child's own transcript. It goes to `cursorTask` rather than the part so a
- * later `rawInput` patch cannot wipe it and the real `cursor/task` prompt,
- * when it arrives, replaces it.
- */
-export function recordCursorTaskPrompt(part: BridgeToolPart, prompt: string): boolean {
-  const bounded = truncateUtf8(prompt.trim(), MAX_CURSOR_CHILD_PROMPT_BYTES);
-  if (!bounded) return false;
-  const source = ensureAcpToolSource(part);
-  if (source.cursorTask?.prompt) return false;
-  source.cursorTask = { ...source.cursorTask, prompt: bounded };
-  renderAcpToolSource(part, source);
-  return true;
-}
-
-/** Cursor Task `agentId`, from `cursor/task` args or the launch `rawOutput`. */
-export function toolPartAgentId(part: BridgeToolPart): string | undefined {
-  if (typeof part.toolArgs?.agentId === "string") {
-    return truncateUtf8(part.toolArgs.agentId.trim(), MAX_TOOL_ID_BYTES);
-  }
-  if (typeof part.toolArgs?.agent_id === "string") {
-    return truncateUtf8(part.toolArgs.agent_id.trim(), MAX_TOOL_ID_BYTES);
-  }
-  const lifecycle = toolCallLifecycle(part.toolOutput);
-  if (typeof lifecycle?.agentId === "string") {
-    return truncateUtf8(lifecycle.agentId.trim(), MAX_TOOL_ID_BYTES);
-  }
-  if (typeof lifecycle?.agent_id === "string") {
-    return truncateUtf8(lifecycle.agent_id.trim(), MAX_TOOL_ID_BYTES);
-  }
-  return undefined;
-}
-
 export function syncActiveSubagentTool(state: SessionState, part: BridgeToolPart): void {
   if (part.agentState === "active") {
-    const agentId = toolPartAgentId(part);
-    const reportedPrompt =
-      part.cursorTaskPromptReported === true && typeof part.toolArgs?.prompt === "string"
-        ? truncateUtf8(part.toolArgs.prompt.trim(), MAX_CURSOR_CHILD_PROMPT_BYTES)
-        : undefined;
     const activated = activateSubagent(state, part.toolUseId, {
       ...(typeof part.toolArgs?.description === "string"
         ? { description: truncateUtf8(part.toolArgs.description.trim(), MAX_TOOL_TITLE_BYTES) }
@@ -669,12 +628,6 @@ export function syncActiveSubagentTool(state: SessionState, part: BridgeToolPart
         ? { subagentType: truncateUtf8(part.toolArgs.subagent_type.trim(), MAX_TOOL_NAME_BYTES) }
         : {}),
       ...(part.toolState ? { toolState: part.toolState } : {}),
-      ...(reportedPrompt ? { reportedPrompt } : {}),
-      // An id rendered on the tool part came from Cursor's own payload, not
-      // transcript-directory inference. Clear the weaker provenance so the
-      // background continuation waiter can trust the now-authoritative id.
-      ...(agentId ? { agentId, agentIdDiscovered: false } : {}),
-      ...(agentId ? { agentIdSettlementSafe: false } : {}),
     });
     if (!activated) {
       part.agentState = "failed";
@@ -717,37 +670,25 @@ export function activateSubagent(
     state.child?.notify("session/cancel", { sessionId: state.acpSessionId });
     return false;
   }
-  const wasActive = state.activeSubagentToolIds.has(toolUseId);
   const previous = state.activeSubagentDescriptors.get(toolUseId);
   const next = {
     ...previous,
     ...descriptor,
-    agentId: descriptor.agentId ?? previous?.agentId,
     description: descriptor.description ?? previous?.description,
     subagentType: descriptor.subagentType ?? previous?.subagentType,
     toolState: descriptor.toolState ?? previous?.toolState,
   };
   state.activeSubagentToolIds.add(toolUseId);
   state.activeSubagentDescriptors.set(toolUseId, next);
-  if (
-    !wasActive ||
-    previous?.agentId !== next.agentId ||
-    previous?.agentIdDiscovered !== next.agentIdDiscovered ||
-    previous?.agentIdSettlementSafe !== next.agentIdSettlementSafe ||
-    previous?.reportedPrompt !== next.reportedPrompt
-  ) {
-    bumpCursorDiscoveryRevision();
-  }
   return true;
 }
 
 export function settleActiveSubagent(state: SessionState, toolUseId: string): void {
-  const activeDeleted = state.activeSubagentToolIds.delete(toolUseId);
-  const descriptorDeleted = state.activeSubagentDescriptors.delete(toolUseId);
+  state.activeSubagentToolIds.delete(toolUseId);
+  state.activeSubagentDescriptors.delete(toolUseId);
   for (const [subagentId, mappedToolUseId] of state.subagentToolIds) {
     if (mappedToolUseId === toolUseId) state.subagentToolIds.delete(subagentId);
   }
-  if (activeDeleted || descriptorDeleted) bumpCursorDiscoveryRevision();
 }
 
 export const MAX_CURSOR_TASK_PROMPT_BYTES = 64 * 1024;
@@ -1433,7 +1374,6 @@ export function applyCursorTask(state: SessionState, params: JsonObject): void {
     }
   }
   renderAcpToolSource(part, source);
-  if (prompt) part.cursorTaskPromptReported = true;
   if (part.agentState === "finished" || part.agentState === "failed") {
     stampSubagentRuntimeDuration(part);
   }
@@ -1442,8 +1382,6 @@ export function applyCursorTask(state: SessionState, params: JsonObject): void {
 }
 
 export function failAllActiveSubagents(state: SessionState): void {
-  const hadActiveSubagents =
-    state.activeSubagentToolIds.size > 0 || state.activeSubagentDescriptors.size > 0;
   for (const message of state.messages) {
     for (const part of message.parts) {
       if (part.type !== "tool-invocation" || !state.activeSubagentToolIds.has(part.toolUseId))
@@ -1458,7 +1396,6 @@ export function failAllActiveSubagents(state: SessionState): void {
   state.activeSubagentToolIds.clear();
   state.activeSubagentDescriptors.clear();
   state.subagentToolIds.clear();
-  if (hadActiveSubagents) bumpCursorDiscoveryRevision();
 }
 
 export function settleEvictedSubagentFromToolUpdate(

@@ -32,6 +32,7 @@ import type { CommandContext } from "./commands-context.js";
 /** Capabilities every image must declare to be `compatible` for new work. */
 export const BACKEND_REQUIRED_IMAGE_CAPABILITIES: Partial<Record<ImageCapability, number>> = {
   "workspace-prepare": 1,
+  "staged-inputs": 1,
 };
 
 export const MANIFEST_PROBE_ROLE = "manifest-probe";
@@ -234,7 +235,7 @@ const REMEDIATION = {
   missing:
     "Docker is running, but the environment image has not been downloaded yet. It downloads automatically when you create a container environment, or download it now.",
   legacy:
-    "The environment image predates image manifests. Existing environments keep working; rebuild or pull a current image for new features.",
+    "The environment image predates image manifests. Existing environments keep working, but new containers need a current image: rebuild or pull one.",
   incompatible:
     "The environment image does not provide the contracts this version of Orkestrator needs. Rebuild or pull a current image, then rebuild affected environments.",
   unavailable: "Docker could not be reached. Start Docker and retry.",

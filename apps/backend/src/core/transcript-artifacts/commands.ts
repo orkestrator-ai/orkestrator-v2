@@ -29,6 +29,7 @@ import type { TranscriptArtifactService } from "./service.js";
 import path from "node:path";
 import { TranscriptMediaStreams, type MediaStreamServer } from "./media-stream.js";
 import { spawnDockerMediaReader } from "./media-stream-container.js";
+import { readableHostFileRoots } from "../readable-host-roots.js";
 
 const REPRESENTATIONS: readonly ArtifactRepresentation[] = [
   "source",
@@ -122,6 +123,8 @@ function mediaStreams(context: CommandContext): TranscriptMediaStreams {
     getEnvironment: async (environmentId) => (await storage.getEnvironment(environmentId)) ?? null,
     stagingRoot: path.join(storage.getDataDir(), "transcript-media-staging"),
     spawnContainerReader: spawnDockerMediaReader,
+    // The same allowlist as `read_file_base64`, rebuilt per request.
+    readableHostRoots: () => readableHostFileRoots(context),
   });
   mediaStreamManagers.set(artifacts, created);
   return created;

@@ -20,6 +20,7 @@ import { StringDecoder } from "node:string_decoder";
 import { PREVIEW_ADMISSION_POLICY } from "@orkestrator/protocol/rich-content-policy";
 
 import { isProcessAlive, processStartIdentity } from "../process-identity.js";
+import { CommandFailedError, runCommand } from "../shell.js";
 import { killTree, treeResidentBytes } from "./preview-process-tree.js";
 import type { WorkerEvent, WorkerJobPackage, WorkerResult } from "./preview-worker-protocol.js";
 
@@ -261,6 +262,7 @@ const MEMORY_SAMPLE_MS = 500;
 /** Shared pages are counted once per Chromium process, so the summed RSS gets a looser bound. */
 const TREE_MEMORY_FACTOR = 4;
 const DOCKER_COMMAND_TIMEOUT_MS = 10_000;
+const DOCKER_STDOUT_MAX_CHARS = 64 * 1024;
 
 /** The fixed `docker run` argument vector. Nothing comes from artifact content. */
 export function containerRunArgs(launch: ContainerWorkerLaunch, name: string): string[] {
@@ -308,27 +310,22 @@ export function containerRunArgs(launch: ContainerWorkerLaunch, name: string): s
   ];
 }
 
-function runDocker(
+/** Exit code and the start of stdout; a code of null means it never finished. */
+async function runDocker(
   docker: string,
   args: string[],
   timeoutMs = DOCKER_COMMAND_TIMEOUT_MS,
 ): Promise<{ code: number | null; stdout: string }> {
-  return new Promise((resolve) => {
-    const child = spawn(docker, args, { stdio: ["ignore", "pipe", "ignore"], windowsHide: true });
-    let stdout = "";
-    child.stdout?.on("data", (chunk: Buffer) => {
-      if (stdout.length < 64 * 1024) stdout += chunk.toString("utf8");
-    });
-    const timer = setTimeout(() => child.kill("SIGKILL"), timeoutMs);
-    child.on("error", () => {
-      clearTimeout(timer);
-      resolve({ code: null, stdout: "" });
-    });
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      resolve({ code, stdout });
-    });
-  });
+  try {
+    const { stdout } = await runCommand(docker, args, { timeoutMs });
+    return { code: 0, stdout: stdout.slice(0, DOCKER_STDOUT_MAX_CHARS) };
+  } catch (error) {
+    if (!(error instanceof CommandFailedError)) return { code: null, stdout: "" };
+    return {
+      code: error.timedOut || error.outputLimitExceeded ? null : error.exitCode,
+      stdout: error.stdout.slice(0, DOCKER_STDOUT_MAX_CHARS),
+    };
+  }
 }
 
 export { runDocker };

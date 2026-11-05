@@ -40,9 +40,25 @@ export interface SearchSegment {
   reveal: SearchSegmentReveal;
 }
 
+/**
+ * One source of a message's search text: a text part, or an artifact card's
+ * summary or body. `key` survives text arriving around the root (an artifact
+ * body between two text parts moves what follows it), so a match can be named
+ * by its root and its offset inside it. `publicationId` marks an artifact body.
+ */
+export interface SearchRoot {
+  key: string;
+  /** UTF-16 offsets into the projected search text. */
+  start: number;
+  end: number;
+  publicationId?: string;
+}
+
 export interface SearchProjection {
   text: string;
   segments: readonly SearchSegment[];
+  /** Absent when the whole text comes from one source. */
+  roots?: readonly SearchRoot[];
 }
 
 export const EMPTY_SEARCH_PROJECTION: SearchProjection = { text: "", segments: [] };
@@ -70,6 +86,14 @@ export function segmentAt(
     if (offset >= segment.start && offset < segment.end) return segment;
   }
   return null;
+}
+
+/** The root holding a UTF-16 offset of the projected text, if any. */
+export function rootAt(
+  roots: readonly SearchRoot[] | undefined,
+  offset: number,
+): SearchRoot | null {
+  return roots?.find((root) => offset >= root.start && offset < root.end) ?? null;
 }
 
 /** Group identity of a match or range: a block of one part, or prose. */

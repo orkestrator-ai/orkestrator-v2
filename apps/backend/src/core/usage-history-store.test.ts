@@ -7,7 +7,12 @@ import { usageDayKey } from "@orkestrator/protocol/usage-history";
 import type { StorageDatabase } from "./storage-database.js";
 import { openBackendDatabase } from "./storage-stores.js";
 import { USAGE_HISTORY_STORE } from "./usage-history-layout.js";
-import { USAGE_HISTORY_PRUNE_BATCH_ROWS, UsageHistoryStore } from "./usage-history-store.js";
+import {
+  USAGE_HISTORY_PRUNE_BATCH_ROWS,
+  USAGE_REPORT_CACHE_MAX_BYTES,
+  USAGE_REPORT_CACHE_MAX_ENTRIES,
+  UsageHistoryStore,
+} from "./usage-history-store.js";
 import { MAX_RECORDED_TURN_IDS } from "./usage-history-record.js";
 
 const directories: string[] = [];
@@ -687,5 +692,119 @@ describe("the retention sweep's batches", () => {
     expect(opened).toBe(1);
     const reopened = connect(directory);
     expect(reopened.rows(USAGE_HISTORY_STORE).list({ values: false })).toHaveLength(10);
+  });
+});
+
+describe("the finished report cache", () => {
+  async function seeded(clock: Clock) {
+    const directory = await dataDirectory();
+    const database = connect(directory);
+    const store = new UsageHistoryStore({ database: () => database, now: () => clock.value });
+    store.recordTurns({
+      sessionKey: "env-1:claude:tab-1",
+      environmentId: "env-1",
+      platform: "claude",
+      turns: [turn("t1")],
+    });
+    const rows = spyOn(database, "rows");
+    return { directory, database, store, rows };
+  }
+
+  function cacheOf(store: UsageHistoryStore) {
+    return store as unknown as {
+      reportCache: Map<string, unknown>;
+      reportCacheBytes: number;
+    };
+  }
+
+  test("a repeat query answers from the finished report without reading a row", async () => {
+    const clock: Clock = { value: new Date(2026, 9, 20, 9, 0, 0) };
+    const { store, rows } = await seeded(clock);
+    const first = store.report({ days: 7 });
+    expect(rows).toHaveBeenCalledTimes(1);
+    clock.value = new Date(2026, 9, 20, 9, 5, 0);
+    const second = store.report({ days: 7 });
+    expect(rows).toHaveBeenCalledTimes(1);
+    expect({ ...second, generatedAt: first.generatedAt }).toEqual(first);
+    expect(second.generatedAt).toBe(clock.value.toISOString());
+    // Each query keeps its own report; filters are part of the key.
+    expect(store.report({ days: 7, environmentId: "env-2" }).sessions).toBe(0);
+    expect(rows).toHaveBeenCalledTimes(2);
+    expect(store.report({ days: 30 }).sessions).toBe(1);
+    expect(rows).toHaveBeenCalledTimes(3);
+  });
+
+  test("a caller changing its copy cannot change the next answer", async () => {
+    const clock: Clock = { value: new Date(2026, 9, 20, 9, 0, 0) };
+    const { store } = await seeded(clock);
+    const first = store.report({ days: 7 });
+    first.totals.turns = 999;
+    first.environments.length = 0;
+    const second = store.report({ days: 7 });
+    expect(second.totals.turns).toBe(1);
+    expect(second.environments).toHaveLength(1);
+    second.days.length = 0;
+    expect(store.report({ days: 7 }).days).toHaveLength(7);
+  });
+
+  test("every write, from this connection or another, invalidates it", async () => {
+    const clock: Clock = { value: new Date(2026, 9, 20, 9, 0, 0) };
+    const { store, directory } = await seeded(clock);
+    expect(store.report({ days: 7 }).totals.turns).toBe(1);
+
+    store.recordTurns({
+      sessionKey: "env-1:claude:tab-1",
+      environmentId: "env-1",
+      platform: "claude",
+      turns: [turn("t2")],
+    });
+    expect(store.report({ days: 7 }).totals.turns).toBe(2);
+
+    store.labelEnvironment("env-1", { environmentName: "renamed" });
+    expect(store.report({ days: 7 }).environments[0]?.name).toBe("renamed");
+
+    const other = await storeWithClock(clock, directory);
+    other.store.recordTurns({
+      sessionKey: "env-3:codex:tab-1",
+      environmentId: "env-3",
+      platform: "codex",
+      turns: [turn("t9")],
+    });
+    expect(store.report({ days: 7 }).sessions).toBe(2);
+
+    store.deleteByEnvironment("env-3");
+    expect(store.report({ days: 7 }).sessions).toBe(1);
+  });
+
+  test("a day rollover invalidates it with no write", async () => {
+    const clock: Clock = { value: new Date(2026, 9, 20, 23, 59, 0) };
+    const { store, rows } = await seeded(clock);
+    const before = store.report({ days: 1 });
+    expect(before.totals.turns).toBe(1);
+    clock.value = new Date(2026, 9, 21, 0, 1, 0);
+    const after = store.report({ days: 1 });
+    expect(rows).toHaveBeenCalledTimes(2);
+    expect(after.toDay).toBe(usageDayKey(clock.value));
+    expect(after.totals.turns).toBe(0);
+  });
+
+  test("is bounded by entry count and bytes", async () => {
+    const clock: Clock = { value: new Date(2026, 9, 20, 9, 0, 0) };
+    const { store } = await seeded(clock);
+    for (let index = 0; index < USAGE_REPORT_CACHE_MAX_ENTRIES + 8; index++) {
+      store.report({ days: 7, environmentId: `env-${index}` });
+    }
+    const cache = cacheOf(store);
+    expect(cache.reportCache.size).toBe(USAGE_REPORT_CACHE_MAX_ENTRIES);
+    expect(cache.reportCacheBytes).toBeGreaterThan(0);
+    expect(cache.reportCacheBytes).toBeLessThanOrEqual(USAGE_REPORT_CACHE_MAX_BYTES);
+    // The oldest queries were evicted, the newest kept.
+    expect(cache.reportCache.has(JSON.stringify([7, null, "env-0"]))).toBe(false);
+    expect(
+      cache.reportCache.has(JSON.stringify([7, null, `env-${USAGE_REPORT_CACHE_MAX_ENTRIES + 7}`])),
+    ).toBe(true);
+    store.clearReportCache();
+    expect(cache.reportCache.size).toBe(0);
+    expect(cache.reportCacheBytes).toBe(0);
   });
 });

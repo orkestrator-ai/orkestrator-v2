@@ -430,7 +430,7 @@ describe("GlobalSettings defaults section", () => {
         ...state.config,
         global: {
           ...state.config.global,
-          notificationSounds: { agentStopped: false, prMerged: true },
+          notificationSounds: { agentStopped: false, prMerged: true, coordinatorReport: false },
         },
       },
     }));
@@ -448,6 +448,7 @@ describe("GlobalSettings defaults section", () => {
     expect(useConfigStore.getState().config.global.notificationSounds).toEqual({
       agentStopped: false,
       prMerged: true,
+      coordinatorReport: false,
     });
   });
 

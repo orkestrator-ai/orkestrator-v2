@@ -522,14 +522,19 @@ and chart labels, and artifact cards by their search roots: the summary,
 then — once the card has loaded and is showing it — the body
 (`artifactPartSearchSegments` in `lib/chat/rich-search-text.ts`). A chart
 artifact's body root holds its labels (`chartSpecSearchText`), a workflow
-snapshot's its title, description, node and edge labels, both as hidden
-mirrors bounded to 64 Ki characters; a Mermaid artifact's source is a search
-root only while its source view is shown. The card writes that text to a
-bounded synchronous cache keyed by publication id
+snapshot's its title, description, node and edge labels, a static document's
+the text its frame reported ([Static document
+presentation](#static-document-presentation)), all as hidden mirrors bounded to
+64 Ki characters; a Mermaid artifact's source is a search root only while its
+source view is shown. The card writes that text to a synchronous cache keyed by
+publication id and bounded by count and total characters
 (`rememberArtifactSearchBody` / `cachedArtifactSearchBody` in
-`artifact-requests.ts`), so an unloaded body contributes only the summary
-and find never reports a match it cannot reveal. Find's projection is
-recomputed when the transcript changes, not when a body finishes loading. Toolbar
+`artifact-requests.ts`), so an unloaded body contributes only the summary.
+Each entry names its conversation, so clearing a conversation's or
+environment's protected content takes its text too. A match in a mirror leads
+to its card, where the text itself is not highlighted. Find's projection is
+recomputed when the transcript changes or its query does, not when a body
+finishes loading. Toolbar
 chrome (`data-rich-chrome`) is excluded from find highlighting and copy.
 Find temporarily reveals a hidden match and restores the user's choice when
 find closes. Copy code, Copy source, Copy table, Copy data and Copy message
@@ -855,9 +860,9 @@ image's context digest, so refactoring it would invalidate every unpublished
 receipt and every prepared worker image with no change in behaviour. Unifying them
 belongs with the next intentional change to the design runtime.
 
-**Channel.** `render` and `theme` from the host; `ready`, `rendered`, `size`,
-`error`, `interaction`, `link-request` and `escape` from the frame. Nothing else
-exists: no backend invocation, tool, clipboard or generic key forwarding. The
+**Channel.** `render` and `theme` from the host; `ready`, `rendered`, `text`,
+`size`, `error`, `interaction`, `link-request` and `escape` from the frame. Nothing
+else exists: no backend invocation, tool, clipboard or generic key forwarding. The
 frame's origin is `"null"` and proves nothing, so `StaticHtmlFrameSession` checks
 the exact sender window, the per-mount nonce and generation, the protocol version,
 the exact keys and the size of every message. `render` goes out once, after this
@@ -865,6 +870,19 @@ mount's own `ready`. A second `load` or `ready` invalidates the mount without
 resending anything; **Retry** mounts a new iframe with a new identity. An
 oscillating height or a message flood stops the mount with a stated reason.
 `interaction` carries three booleans and never any selected text.
+
+**Find.** After `rendered`, the runtime reads the sanitized document's text and
+posts it as `text` chunks, which is the only way it leaves the frame. The host
+never parses artifact HTML: the session reassembles the chunks and the card
+publishes the result to Find's cache and a hidden mirror, as a React text node.
+The text comes from the tree rather than layout, so a closed `<details>` counts,
+a hidden tab reports the same text, and `<head>`, `<style>`, `<noscript>` and the
+`hidden` attribute do not count (text hidden only by CSS does). Inline elements
+join their neighbours; any other element is a boundary a search does not match
+across. One report per mount, whole or not at all: a chunk out of sequence means
+the rate limiter dropped one, and that mount's text is abandoned. Scrolling away
+keeps the text and a remounted card reads it back from the cache; Saved preview,
+Source, a frame failure and a failed read withdraw it.
 
 **Theme.** `--ork-*` tokens and `--ork-chart-1…8` (`readStaticHtmlThemeTokens`).
 The application currently ships dark only (`class="dark"`), while verified
@@ -885,6 +903,7 @@ paint an opaque canvas over a transparent themed document.
 | Size updates applied | 4 per second, latest wins | `FRAME_CHANNEL_POLICY`; the host coalesces rather than drops, so the final height always lands |
 | Frames per window | 4 | Initial resource policy, qualified below; not a performance guarantee |
 | Render timeout | 15 s | Then released, with retry. The saved preview stays on screen meanwhile, so it errs long: a page under a saturated host took over 5 s |
+| Text for Find | 64 Ki characters, in chunks of 2 Ki | The limit of other artifact bodies. A chunk of three-byte characters stays within `FRAME_CHANNEL_POLICY.maxMessageBytes`, and a full report's 32 chunks fit its burst of 40 |
 
 **Allocation (`stores/staticHtmlFrameSlots.ts`).** Ranks, highest first:
 expanded, interacting (focus, selection or pointer down, reported by the frame),
@@ -936,9 +955,14 @@ on a static document, so the frame bound is also asserted by
 The gate never held four frames on screen at once: the fixture's documents are 150
 messages apart, so four simultaneous frames are not separately measured.
 
-**Limits.** Text inside the frame does not participate in Find; the card's summary
-and source behaviour are unchanged. Multiple automatically executing JavaScript
-documents, more chart types and a convenience publishing tool are out of scope:
+**Limits.** Find covers a document only after its frame has rendered it in this
+session, so a report the reader has not reached matches only by its summary. Text
+beyond 64 Ki characters is not searchable, and the card does not say so. A match
+leads to the card but is not highlighted inside the frame, and an open Find bar
+picks up new text on its next query or transcript change:
+[`5780`](../todo/transcripts-and-observation/5780-find-inside-static-documents.md).
+Multiple automatically executing JavaScript documents, more chart types and a
+convenience publishing tool are out of scope:
 [`4650`](../todo/transcripts-and-observation/4650-static-html-presentation-follow-ups.md).
 
 ## Rollout

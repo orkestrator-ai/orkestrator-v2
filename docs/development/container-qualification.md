@@ -122,6 +122,94 @@ Live tests start runtimes through `tests/container-live-start.ts`
 running, so a bare `docker start` of a restricted runtime fails on a gateway
 image.
 
+## Egress review findings repaired (2026-11-05)
+
+The five review findings were repaired in source commit
+`9ffb0fe96c85388e942a3d0dff936053b024e0fa`, rebased onto `main` at
+`251f772d6000dc0c64cbeadc705db719554d8c5d`. Follow-up
+`e5705cfe1ffc5a1ddc12f72614dc2ddffadfb5ea` corrects a stale Docker
+browser selector from button to tab; the saved accessibility tree showed
+the coordinator conversation was already present as a selected tab.
+
+### Behaviour and decisions
+
+- **HTTP classification:** keep an incomplete textual method/request line
+  subject to HTTP parsing when raw UTF-8 target bytes arrive. Treating it as
+  another protocol could bypass Host checks on named non-443 ports; rejecting
+  every non-ASCII target would unnecessarily reject requests origins accept.
+  Existing classification size and time limits still apply.
+- **DNS/TCP backpressure:** allow one outstanding answer per client and stop
+  reading/starting queries until it drains. This bounds queued output to one
+  65,537-byte framed response and preserves pipelining. A queue of multiple
+  answers could offer more concurrency but needs separate byte admission and
+  ordering logic; the single-answer approach matches the existing sequential
+  upstream processing.
+- **Allowlist edits:** stage proposed names for DNS-only lookups while retaining
+  the old connection permissions; publish final permissions after the address
+  rebuild succeeds. Publishing a union of TCP permissions would grant access
+  before commit, while replacing permissions early could revoke streams even
+  on failure. DNS staging temporarily permits lookups of explicitly proposed
+  names; failure restores the prior names and periodic refresh clears staging
+  left by an interrupted edit.
+- The policy-2 status now explains that name checks require policy 3 and removal
+  of the override. The firewall test now distinguishes positive port-53 rules
+  from the proxy rule's negated destination port.
+
+### Regression evidence
+
+Socket-backed tests cover every UTF-8 request split, allowed and refused Hosts,
+a blocked DNS reader, bounded response admission, pipeline continuation and an
+independent client. The shell/daemon fixture reloads staged names while an old
+stream is active, verifies its continued use and denies proposed TCP permissions,
+then checks successful commit or failure restoration. Status tests cover the
+policy-2 unavailable state. Browser coverage exercises each status, reloads,
+normal/narrow viewports and horizontal bounds; screenshots are in
+`output/visual-previews/egress-policy2-*-card-*.png`. The live owner also sends
+raw UTF-8 HTTP requests one byte at a time and checks they never reach the origin.
+
+All commands use `mise run test:logged`:
+
+- At `9ffb0fe96`: focused daemon/firewall/slow-policy owners passed;
+  status owner passed; `e2e/EnvironmentNetworkPolicy.spec.ts` passed.
+  `mise run typecheck`, `mise run format:check`, `mise run lint` and
+  `mise run build` passed. The exact-head image build and final-image smoke passed.
+- The live egress file initially failed after worker restart, then the complete
+  unchanged file passed alone in 33.7 s. Both observations remain in
+  [flake 6550](../tests/flaky-tests/environments-and-containers/6550-egress-worker-restart-dns-timeout.md).
+- The default suite at `9ffb0fe96` exited 1: protocol standalone-install ENOENT,
+  CLI corrected-reinstall exit 4, two web schedule GMT/GMT+0 mismatches,
+  backend coordinator-timer GMT/GMT+0 mismatch, and a Claude persisted-turn
+  marker failure. The first five reproduced in complete owning-file runs;
+  the Claude owner passed alone and is recorded in
+  [1221](../tests/flaky-tests/agent-bridges/1221-claude-resumed-root-preferences-retention.md).
+  These implementations are outside the egress repair diff. Root/support
+  passed 3,676 tests; the aggregate is not reported as green.
+- The first isolated Docker run reached 20 passed, four skipped and one failed
+  because its coordinator locator expected a button instead of a tab.
+  After correcting that selector, full typechecking, formatting, lint and build
+  passed again at `e5705cfe1`.
+- At `e5705cfe1`, the required
+  `ORKESTRATOR_TEST_NO_PROGRESS_TIMEOUT_MS=600000 mise run test:logged -- --name agent-docker -- mise run test:agent:docker:isolated`
+  passed: **21 passed, four skipped, zero unexpected failures, zero flakes**.
+  The coordinator switch/hidden-document/reload/two-window scenario passed.
+  Image smoke and M8 qualification passed. The runner stopped/reset its
+  disposable profile and removed its owned resources; no live profile remains.
+  No real provider turn was enabled.
+
+The default suite was not repeated for the final E2E-selector-only commit;
+its failing result above belongs to `9ffb0fe96`. Native Linux/rootless,
+older-image comparison and enabled IPv6 qualification remain unproved.
+
+Artifacts below the host temporary directory:
+
+- `orkestrator-test-run.2EP93a/egress-fixed-default.log.gz` and
+  `orkestrator-test-run.5SrDNz/*.log.gz`: default suite.
+- `orkestrator-test-run.LWtglc/egress-fixed-live.log.gz`: initial live failure.
+- `orkestrator-test-run.P7P33H/agent-docker.log.gz`: stale-role failure.
+The final passing Docker workflow's raw log was deleted by the logged runner;
+its durable browser results are
+`output/agent-testing/qa-browser-b77dcea1-bdd/browser/results.json`.
+
 ## Egress name-check review repairs (2026-11-05)
 
 Image `orkestrator-review-egress:6833fa71`, built from worktree

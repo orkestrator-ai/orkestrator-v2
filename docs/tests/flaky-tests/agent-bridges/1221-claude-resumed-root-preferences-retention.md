@@ -38,3 +38,19 @@ mise run test:logged -- --name claude-runtime-owner -- bun test --cwd bridges/cl
 Aggregate evidence: `orkestrator-test-run.fjlb7l/bridges.log.gz` in the host
 temporary directory. This remains an intermittent failure with no established
 cause; no assertions, deadlines or skips were changed.
+
+## Egress repair qualification — 2026-11-05
+
+At `9ffb0fe96c85388e942a3d0dff936053b024e0fa`,
+`mise run test:logged -- --name egress-fixed-default -- mise run test`
+repeated the missing persisted `turnInFlight` assertion at line 638 (40.16 ms).
+The Claude group reported 1,866 passed, nine skipped and one failed.
+The complete unchanged owner passed alone (exit 0, 0.4 s):
+
+```sh
+mise run test:logged -- --name egress-fixed-claude-idle-isolated -- bun test --cwd bridges/claude-bridge ./src/services/session-manager-runtime-idle.test.ts --parallel=1 --only-failures
+```
+
+Evidence: `orkestrator-test-run.5SrDNz/bridges.log.gz` below the host temporary
+directory; outer log `orkestrator-test-run.2EP93a/egress-fixed-default.log.gz`.
+No cause is established and no bridge implementation, assertion or timeout changed.

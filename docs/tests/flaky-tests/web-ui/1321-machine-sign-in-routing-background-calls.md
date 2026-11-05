@@ -69,6 +69,13 @@
   implementation, assertion, timeout or skip changed. Shared-host contention
   remains a hypothesis, and the aggregate remains non-green.
 
+## Bridge credential repair validation — 2026-11-05
+
+- Original command: `mise run test:logged -- --name review-default-tests -- mise run test`; default workspace group reserved six worker slots.
+- Failure: 73.23 ms: exact call assertion received background node-status and summary calls. Evidence: `/tmp/orkestrator-test-run.8nVKRg/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log` (compressed on aggregate completion).
+- Complete unchanged owner: `NODE_ENV=test mise run test:logged -- --name triage-sign-in -- bun test --cwd apps/web ./src/components/settings/machine-sign-in-routing.test.tsx --parallel=1 --only-failures` passed, exit 0, in 1.1 s. Passing output was removed by the logged runner.
+- Owning code and assertions were unchanged. This repeats the open case; no new root cause established. Aggregate totals were not yet available when the owner reran.
+
 ## Root cause and fix — 2026-11-05
 
 - **Cause:** each sign-in that goes through `portalStore.invokeOnNode` schedules a debounced refresh (`scheduleRefresh`, 100 ms in `portal-store.ts`). When the previous test's timer fired after `afterEach` had removed `window.orkestratorPortal`, `portalInvoke` fell back to `invoke`, the mock under assertion. `afterEach` had already reset that mock and `beforeEach` did not clear it, so `get_node_status` and `get_node_summaries` were still recorded when the next test began. Only the `command node` case runs second among the exact-call cases, which is why it alone failed. The gap between tests has to reach the timer, which fits the failure appearing only in loaded aggregate runs.

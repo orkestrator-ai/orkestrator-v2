@@ -232,7 +232,7 @@ describe("monorepo orchestration scripts", () => {
     // builder workspace or its dependencies.
     for (const bridge of ["claude", "codex", "acp", "pi", "cursor"]) {
       expect(source).toContain(
-        `COPY --from=bridge-build --chown=node:node /opt/bridge-build/bridges/${bridge}-bridge /opt/${bridge}-bridge`,
+        `COPY --from=bridge-build --chown=root:root /opt/bridge-build/bridges/${bridge}-bridge /opt/${bridge}-bridge`,
       );
     }
     expect(source.slice(runtime)).not.toContain("bun install");
@@ -253,11 +253,11 @@ describe("monorepo orchestration scripts", () => {
     // the rarely-changed tools (starship, mise) sit above both.
     const firstBridge = source.indexOf("COPY --from=bridge-build", runtime);
     const firstBundle = source.indexOf(
-      "COPY --from=bridge-build --chown=node:node /opt/bridge-build/",
+      "COPY --from=bridge-build --chown=root:root /opt/bridge-build/",
     );
     for (const bridge of ["pi", "cursor", "claude"]) {
       const deps = source.indexOf(
-        `COPY --from=bridge-build --chown=node:node /opt/bridge-deps/${bridge}-bridge /opt/${bridge}-bridge/dist/node_modules`,
+        `COPY --from=bridge-build --chown=root:root /opt/bridge-deps/${bridge}-bridge /opt/${bridge}-bridge/dist/node_modules`,
       );
       expect(deps, bridge).toBeGreaterThan(-1);
       expect(deps, bridge).toBeLessThan(firstBundle);

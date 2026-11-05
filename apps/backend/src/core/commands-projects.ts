@@ -1,3 +1,4 @@
+import { containerCredentialMode } from "./container-credential-mode.js";
 import { bridgeDebugEnvValue } from "@orkestrator/protocol/log-policy";
 import { gitHubCli } from "./github-cli-binary.js";
 import { gitHubCliEnv } from "./github-credentials.js";
@@ -27,6 +28,7 @@ type ClaudeCatalogRefreshDependencies = {
   fetchClaudeBridgeModelCatalog: typeof fetchClaudeBridgeModelCatalog;
   startContainerClaudeServer: typeof startContainerClaudeServer;
   startLocalServer: typeof startLocalServer;
+  containerCredentialMode?: typeof containerCredentialMode;
 };
 
 const defaultClaudeCatalogRefreshDependencies: ClaudeCatalogRefreshDependencies = {
@@ -68,6 +70,10 @@ export async function refreshClaudeModelCatalog(
           undefined,
           bridgeDebugEnvValue(global) === "1",
           global.claudeBackgroundCommandLimitHours,
+          await (dependencies.containerCredentialMode ?? containerCredentialMode)(
+            context,
+            containerId,
+          ),
         );
       },
     );

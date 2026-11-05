@@ -75,13 +75,24 @@ calls them (`apps/backend/src/core/http-bridge-provider*.ts`,
 
 ## The bridge token is not proof of the user's intent
 
-The agent a bridge runs shares its uid and can read the bridge token (security
-H4; the rest is [todo 3930](../docs/todo/containers-and-environments/3930-bridge-credential-out-of-agent-uid.md)).
+The agent a bridge runs shares its uid, so anything the bridge keeps in a file,
+its startup environment or an open descriptor the agent can read too (security
+H4). So a bridge holds no token: it checks a hash of it. What the agent's uid can
+still do to catch a token is
+[todo 4980](../docs/todo/containers-and-environments/4980-agent-uid-process-control.md).
 
-- **Delete the token from `process.env` at startup**, right where it is read,
-  as every bridge does. Spawn children through `node:child_process` or with an
-  explicit `env`: `Bun.spawn` with no `env` option passes the startup
-  environment, deleted token included.
+- **Read the credential with `loadBridgeCredential`** (`@orkestrator/protocol/node/bridge-credential`)
+  at startup, as every bridge does. It takes `<TOKEN_ENV>_SHA256` from a current
+  backend (or the token itself from an older one), removes it from `process.env`,
+  and marks the process non-dumpable, which gives `/proc/<pid>/{environ,mem,fd}` to
+  root. Compare with `credential.matches`, and never sign or derive anything from
+  a token: a verifier-only bridge has none. A process cannot open its own
+  `/proc/self/environ` once non-dumpable. Spawn children through
+  `node:child_process` or with an explicit `env`: `Bun.spawn` with no `env` option
+  passes the startup environment.
+- **`readOnly` and approval answers stay behind that one credential.** Both are
+  decisions a request makes, so a narrow-only rule cannot cover them, and neither
+  has a second secret: a second secret would have the same storage problem.
 - **A token holder may only narrow a live session's policy.** Every route that
   takes a policy refuses a wider one with 403 `policy-widening-refused`, leaving
   the session as it was: compare with `executionPolicyWidenings` or
@@ -93,10 +104,10 @@ H4; the rest is [todo 3930](../docs/todo/containers-and-environments/3930-bridge
   await before committing, because another request may have narrowed it.
 - **A session with no live policy takes the one it is given.** That is a new
   session, or one loaded from disk after a restart, which is how a wider policy
-  reaches a conversation at all. A bridge that restores a policy from disk keeps
-  it in force but marks it `policyPending`, in memory only, until a request sets
-  one or a prompt starts under it. That window is the known remainder of H4
-  until the bridge credential moves. A request with no policy, or an unusable
+  reaches a conversation at all: on `policy-widening-refused` the backend restarts
+  an idle bridge and resumes (`replaceBridgeForWiderPolicy`). A bridge that
+  restores a policy from disk keeps it in force but marks it `policyPending`, in
+  memory only, until a request sets one or a prompt starts under it. A request with no policy, or an unusable
   one, never clears a live policy: no policy means the host default, the widest
   there is.
 

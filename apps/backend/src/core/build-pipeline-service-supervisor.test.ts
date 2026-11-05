@@ -30,7 +30,12 @@ import { StorageService } from "./storage.js";
 
 import { BuildPipelineService } from "./build-pipeline-service.js";
 
-import { ProviderSessionFailedError } from "./build-pipeline-provider.js";
+import {
+  AmbiguousPromptDispatchError,
+  PromptRejectedError,
+  ProviderSessionFailedError,
+  ProviderUnavailableError,
+} from "./build-pipeline-provider.js";
 import {
   TEST_ADDRESS_FINDINGS_RESULT,
   TEST_REVIEW_PREPARATION,
@@ -127,6 +132,7 @@ class FakeProvider implements BuildPipelineProvider {
   verificationComplete = true;
   preparationResult = TEST_REVIEW_PREPARATION;
   fixResult: unknown = TEST_ADDRESS_FINDINGS_RESULT;
+  dispatchStatus?: BuildPipelineProvider["dispatchStatus"];
   settleTurn?: BuildPipelineProvider["settleTurn"];
   observeSession?: BuildPipelineProvider["observeSession"];
   usageFromMessages?: BuildPipelineProvider["usageFromMessages"];
@@ -1691,16 +1697,51 @@ describe("BuildPipelineService", () => {
         });
       }
 
-      for (const request of ["message", "review retry", "both"] as const) {
+      test(`sends a queued message as a new turn while the idle build has ${signalName}`, async () => {
+        await withService(async (service, storage, provider) => {
+          const { started, session } = await startBuilding(service, storage);
+          provider.observeSession = async () => observation;
+          await service.advanceNow(started.id);
+          expect((await pipeline(storage, started.id)).sessions[0]?.awaitingBackgroundWork).toBe(
+            true,
+          );
+          const sentCount = provider.sent.length;
+
+          await service.sendMessage(started.id, "also update the README");
+          await service.advanceNow(started.id);
+
+          const delivered = await pipeline(storage, started.id);
+          expect(delivered.phase).toBe("building");
+          expect(delivered.error).toBeUndefined();
+          expect(delivered.pendingUserMessages).toBeUndefined();
+          expect(delivered.pendingPromptAttempt).toBeUndefined();
+          expect(delivered.sessions[0]?.status).toBe("running");
+          expect(delivered.sessions[0]?.awaitingBackgroundWork).toBeUndefined();
+          expect(provider.sent).toHaveLength(sentCount + 1);
+          expect(provider.sent.at(-1)).toMatchObject({
+            sessionId: session.sdkSessionId,
+            prompt: "also update the README",
+          });
+
+          // That turn ending with the work still live keeps the stage held.
+          await service.advanceNow(started.id);
+          const held = await pipeline(storage, started.id);
+          expect(held.phase).toBe("building");
+          expect(held.sessions[0]?.awaitingBackgroundWork).toBe(true);
+          expect(provider.sent).toHaveLength(sentCount + 1);
+        });
+      });
+
+      for (const request of ["review retry", "both"] as const) {
         test(`defers ${request} while the idle build has ${signalName}`, async () => {
           await withService(async (service, storage, provider) => {
             const { started, session } = await startBuilding(service, storage);
             provider.observeSession = async () => observation;
             const sentCount = provider.sent.length;
             const createdCount = provider.created.length;
-            if (request !== "review retry")
-              await service.sendMessage(started.id, "also update the README");
-            if (request !== "message") await service.retryReview(started.id);
+            // A message sent first would already have gone out as a new turn.
+            await service.retryReview(started.id);
+            if (request === "both") await service.sendMessage(started.id, "also update the README");
             await service.advanceNow(started.id);
             const queued = await pipeline(storage, started.id);
 
@@ -1718,12 +1759,12 @@ describe("BuildPipelineService", () => {
               expect(provider.sent).toHaveLength(sentCount);
               expect(provider.created).toHaveLength(createdCount);
             }
-            if (request !== "review retry") {
+            if (request === "both") {
               expect(queued.pendingUserMessages?.map(({ text }) => text)).toEqual([
                 "also update the README",
               ]);
             }
-            if (request !== "message") expect(queued.reviewRetryRequested).toBe(true);
+            expect(queued.reviewRetryRequested).toBe(true);
 
             provider.observeSession = async () => ({ status: "idle" });
             await service.advanceNow(started.id);
@@ -1731,24 +1772,141 @@ describe("BuildPipelineService", () => {
             expect(resumed.error).toBeUndefined();
             expect(resumed.failureContext).toBeUndefined();
             expect(provider.sent).toHaveLength(sentCount + 1);
-            if (request === "message") {
-              expect(resumed.phase).toBe("building");
-              expect(resumed.pendingUserMessages).toBeUndefined();
-              expect(provider.sent.at(-1)).toMatchObject({
-                sessionId: session.sdkSessionId,
-                prompt: "also update the README",
-              });
-            } else {
-              expect(resumed.phase).toBe("fixing");
-              expect(resumed.reviewRetryRequested).toBeUndefined();
-              expect(resumed.pendingUserMessages).toEqual(queued.pendingUserMessages);
-              expect(resumed.sessions[resumed.currentSessionIndex]?.label).toBe(
-                REVIEW_PACKAGE_SESSION_LABEL,
-              );
-            }
+            expect(resumed.phase).toBe("fixing");
+            expect(resumed.reviewRetryRequested).toBeUndefined();
+            expect(resumed.pendingUserMessages).toEqual(queued.pendingUserMessages);
+            expect(resumed.sessions[resumed.currentSessionIndex]?.label).toBe(
+              REVIEW_PACKAGE_SESSION_LABEL,
+            );
           });
         });
       }
+
+      test.each(["ambiguous", "journaled"] as const)(
+        `recovers %s background messages with ${signalName}`,
+        async (mode) => {
+          await withService(async (service, storage, provider) => {
+            const { started, session } = await startBuilding(service, storage);
+            provider.observeSession = async () => observation;
+            await service.advanceNow(started.id);
+            const send = provider.send.bind(provider);
+            const requests: string[] = [];
+            provider.send = async (_id, _text, options) => {
+              requests.push(options.requestId);
+              throw new AmbiguousPromptDispatchError("response lost");
+            };
+            await service.sendMessage(started.id, "also update the README");
+            await service.advanceNow(started.id);
+            const parked = await pipeline(storage, started.id);
+            expect(
+              parked.pendingPromptAttempt?.backgroundMessage?.session.structuredRequestId,
+            ).toBe(session.structuredRequestId);
+            expect(parked.pendingUserMessages).toBeUndefined();
+            expect(parked.reconnectAttempt).toBeUndefined();
+            if (mode === "journaled") {
+              const record = (await storage.getBuildPipeline(started.id))!;
+              delete parked.pendingPromptAttempt!.dispatchingAt;
+              await storage.saveBuildPipeline(
+                record.id,
+                record.projectId,
+                record.environmentId,
+                record.version,
+                parked,
+                record.revision,
+              );
+            }
+            await service.shutdown();
+            const recovered = new BuildPipelineService(storage, async () => undefined as never, {
+              autoAdvance: false,
+              provider: async () => provider,
+            });
+            provider.dispatchStatus = async () => "absent";
+            provider.structured = async () => null;
+            provider.send = async (_id, _text, options) => {
+              requests.push(options.requestId);
+              throw new PromptRejectedError("Background work must finish or stop");
+            };
+            try {
+              await recovered.advanceNow(started.id);
+              const refused = await pipeline(storage, started.id);
+              expect(refused.phase).toBe("building");
+              expect(refused.error).toBeUndefined();
+              expect(refused.reconnectAttempt).toBeUndefined();
+              expect(refused.pendingPromptAttempt).toBeUndefined();
+              expect(refused.pendingUserMessages?.map((m) => m.text)).toEqual([
+                "also update the README",
+              ]);
+              expect(refused.sessions[0]?.structuredRequestId).toBe(session.structuredRequestId);
+              expect(refused.sessions[0]?.backgroundMessageRefusal).toBe(
+                "Background work must finish or stop",
+              );
+              expect(new Set(requests).size).toBe(1);
+              const count = requests.length;
+              provider.send = send;
+              await recovered.advanceNow(started.id);
+              expect(requests).toHaveLength(count);
+            } finally {
+              await recovered.shutdown();
+            }
+          });
+        },
+      );
+
+      test(`keeps a refused message queued and the stage running with ${signalName}`, async () => {
+        await withService(async (service, storage, provider) => {
+          const { started, session } = await startBuilding(service, storage);
+          provider.observeSession = async () => observation;
+          await service.advanceNow(started.id);
+          const structuredRequestId = session.structuredRequestId;
+          const sentCount = provider.sent.length;
+          const send = provider.send.bind(provider);
+          provider.send = async () => {
+            throw new ProviderUnavailableError("Claude is still running background work");
+          };
+
+          await service.sendMessage(started.id, "also update the README");
+          await service.advanceNow(started.id);
+          provider.send = send;
+
+          const refused = await pipeline(storage, started.id);
+          expect(refused.phase).toBe("building");
+          expect(refused.error).toBeUndefined();
+          expect(refused.reconnectAttempt).toBeUndefined();
+          expect(refused.pendingPromptAttempt).toBeUndefined();
+          expect(refused.pendingUserMessages?.map(({ text }) => text)).toEqual([
+            "also update the README",
+          ]);
+          // Nothing reached the agent, so a submitted result is still the stage's.
+          expect(refused.sessions[0]).toMatchObject({
+            structuredRequestId,
+            awaitingBackgroundWork: true,
+            status: "running",
+          });
+          expect(refused.sessions[0]?.backgroundMessageRetryAt).toBeString();
+
+          // Not retried on every pass.
+          await service.advanceNow(started.id);
+          expect(provider.sent).toHaveLength(sentCount);
+
+          // Due again: it goes out as a new turn.
+          const record = (await storage.getBuildPipeline(started.id))!;
+          const stored = record.snapshot as BuildPipeline;
+          stored.sessions[0]!.backgroundMessageRetryAt = new Date(Date.now() - 1).toISOString();
+          await storage.saveBuildPipeline(
+            record.id,
+            record.projectId,
+            record.environmentId,
+            record.version,
+            stored,
+            record.revision,
+          );
+          await service.advanceNow(started.id);
+          const delivered = await pipeline(storage, started.id);
+          expect(delivered.pendingUserMessages).toBeUndefined();
+          expect(provider.sent.at(-1)?.prompt).toBe("also update the README");
+          expect(delivered.sessions[0]?.backgroundMessageRetryAt).toBeUndefined();
+        });
+      });
 
       test.each([false, true])(
         `holds the build with ${signalName} when settleTurn returns %s`,

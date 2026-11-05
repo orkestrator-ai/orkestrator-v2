@@ -17,7 +17,6 @@ Worked out on 2026-11-03 against `main` at `a44641cbc`, from the 167 work files 
 | Batch | File | Parts |
 | --- | --- | --- |
 | X1 | [security/0090-x1-coordinator-trust-boundary.md](security/0090-x1-coordinator-trust-boundary.md) | `Security 0090`, `Security 0180`, `Security 0210`, `Coordinator 0120`, `Coordinator 0310` |
-| S2 | [security/0040-s2-bridge-credential.md](security/0040-s2-bridge-credential.md) | `0040`, `0120`, `0250` |
 | C4 | [coordinator/0040-c4-tool-surface.md](coordinator/0040-c4-tool-surface.md) | `0040`, `0130`, `0150`, `0160` |
 | C2 | [coordinator/0080-c2-workflow-records.md](coordinator/0080-c2-workflow-records.md) | `0080`, `0100`, `0380` |
 | C3 | [coordinator/0110-c3-sweep-and-reads.md](coordinator/0110-c3-sweep-and-reads.md) | `0110`, `0370` |
@@ -53,7 +52,7 @@ Worked out on 2026-11-03 against `main` at `a44641cbc`, from the 167 work files 
 | --- | --- | --- |
 | Coordinator backend | 1. C4 (Tool surface)<br>2. X1 (Coordinator trust boundary)<br>3. C2 (Workflow records)<br>4. C3 (Sweep and reads) | `coordinator-service.ts`, `control-mcp-tools.ts`, the protocol's `coordinator.ts` and the context prompt in `native-agent-service.ts` |
 | Coordinator panel | 1. C7 (Work panel and navigation)<br>2. C8 (Tab strip)<br>3. C6 (Errors and dead ends)<br>4. C10 (Explanations)<br>5. C-0390 (Panel re-render cost, measure first) | `CoordinatorPanel.tsx`, `CoordinatorPanelNotices.tsx`, `TabShell.tsx` |
-| Containers | 1. S2 (Bridge credential)<br>2. S-0080 (Legacy host mounts)<br>3. S-0100 (Egress SNI and DNS)<br>4. S-0170 (Agent-tools bind address)<br>5. E14 (Docker logs)<br>6. E25 (Container start) | `commands-containers.ts`, `commands-registry-servers.ts` and the `docker/` entrypoint, setup and firewall scripts |
+| Containers | 1. S-0080 (Legacy host mounts)<br>2. S-0100 (Egress SNI and DNS)<br>3. S-0170 (Agent-tools bind address)<br>4. E14 (Docker logs)<br>5. E25 (Container start) | `commands-containers.ts`, `commands-registry-servers.ts` and the `docker/` entrypoint, setup and firewall scripts |
 | Transcript | 1. E9 (Transcript reads)<br>2. E10 (Conditional reads and deltas)<br>3. E11 (Projection hashing)<br>4. E12 (Renderer store) | `native-agent-transcript-projection.ts` (5,570 lines), `useNativeAgentSession.ts` (3,870 lines), `nativeAgentProjectionStore.ts` |
 | Change tracking | 1. E3 (Retention and deletion)<br>2. E4 (Object store) | `apps/backend/src/core/change-tracking/` |
 | Storage | 1. E5 (Database upkeep)<br>2. S-0190 (Provider secrets at rest) | `storage-database.ts`, `storage-backups.ts`, `storage-stores.ts` |
@@ -94,9 +93,6 @@ Don't run these pairs at the same time.
 | C3 (Sweep and reads) | C6 (Errors and dead ends) | `coordinator-service.ts`, `control-mcp-server.ts` |
 | C6 (Errors and dead ends) | E12 (Renderer store) | `useNativeAgentSession.ts`, `AgentNativeTab.controller.tsx` |
 | C7 (Work panel and navigation) | E23 (Renderer polling) | `useUserCommands.ts` |
-| S2 (Bridge credential) | E13 (Silent failures) | Bridge `http.ts` files, `acp-context.ts`, `acp-server.ts`, `commands-registry-servers.ts` |
-| S2 (Bridge credential) | E20 (ACP bridge) | `acp-context.ts` |
-| S2 (Bridge credential) | E21 (Pi bridge) | `bridges/pi-bridge/src/http.ts` |
 | E3 (Retention and deletion) | E7 (Diff scans) | `change-tracking/service.ts` |
 | E5 (Database upkeep) | E15 (Health and diagnostics) | `storage-backups.ts` |
 | E26 (Local desktop transport) | E-0120 (Bearer terminal streams) | `web-gateway.ts` |
@@ -108,7 +104,6 @@ Don't run these pairs at the same time.
 | Finish | Before |
 | --- | --- |
 | E1 (Baseline run) | E9, E10 and E26, on code those batches have not changed yet |
-| `0040` in S2 | `0120` in S2, or do both together, because `0040` can change how the token reaches the bridge |
 | `0530` in E4 | `0550` in E4 |
 | `0490` in E25 | `0500` in E25 |
 
@@ -122,7 +117,7 @@ These files are named by several batches that can still run together. The report
 | `gateway-support-core.ts` | E15, E17, E18, E24, E-0120 |
 | `native-agent-transcript-projection.ts` | E15 (`0880` task 1) with the Transcript lane |
 | `native-agent-service.ts`, `control-mcp-tools.ts` | E9 with C2, C3, C4 and X1 |
-| `commands-files.ts` | S2, E7, E-0580 |
+| `commands-files.ts` | E7, E-0580 |
 | `commands-servers.ts` | C6, E3, E13, E20 |
 | `GlobalSettings.sections.tsx` | C6, E15, E17 |
 | `native-agent-display-tail-store.ts` | E5, E11 |

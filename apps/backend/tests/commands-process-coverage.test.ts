@@ -1,4 +1,15 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import * as credentialModes from "../src/core/container-credential-mode.js";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  mock,
+  spyOn,
+  test,
+} from "bun:test";
 import { promises as fs } from "node:fs";
 import http from "node:http";
 import os from "node:os";
@@ -934,6 +945,7 @@ describe("process and platform command behavior", () => {
     process.env.FAKE_CLAUDE_BRIDGE_TOKEN = "b".repeat(43);
     process.env.FAKE_OPENCODE_SERVER_PASSWORD = "o".repeat(43);
     try {
+      credentialModeSpy.mockRejectedValue(new Error("manifest unavailable"));
       expect(await invoke("start_opencode_server", { containerId: "container-a" })).toEqual({
         hostPort: healthy.port,
         wasRunning: true,
@@ -2022,3 +2034,12 @@ describe("Linear command behavior", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
+
+// These command fixtures intentionally represent legacy token-file images.
+let credentialModeSpy: ReturnType<typeof spyOn>;
+beforeEach(() => {
+  credentialModeSpy = spyOn(credentialModes, "containerCredentialMode").mockResolvedValue(
+    "token-file",
+  );
+});
+afterEach(() => credentialModeSpy.mockRestore());

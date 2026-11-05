@@ -1,12 +1,13 @@
 import { createLogger } from "@orkestrator/protocol/logger";
 import type { CommandContext } from "./commands-context.js";
-import { dockerExec, getHostPort } from "./commands-container-exec.js";
+import { getHostPort } from "./commands-container-exec.js";
 import {
-  CONTAINER_BRIDGE_PEEK,
+  CONTAINER_BRIDGE_PORTS,
   localRuntimeEnvironment,
   localServerPort,
 } from "./commands-servers.js";
-import { BRIDGE_TOKEN_PATTERN, type LocalServerKind } from "./local-server-runtime.js";
+import { readContainerBridgeToken } from "./container-bridge-credential.js";
+import type { LocalServerKind } from "./local-server-runtime.js";
 import type { BridgeLogPolicyTarget } from "./log-policy-service.js";
 
 /** OpenCode has no bridge of ours to carry the route. */
@@ -15,11 +16,13 @@ const log = createLogger("logging");
 const CONTAINER_LOOKUP_CONCURRENCY = 4;
 const CONTAINER_LOOKUP_TIMEOUT_MS = 3_000;
 
-type DiscoveryDependencies = Pick<
-  typeof import("./commands-container-exec.js"),
-  "getHostPort" | "dockerExec"
->;
-const defaultDependencies: DiscoveryDependencies = { getHostPort, dockerExec };
+type DiscoveryDependencies = Pick<typeof import("./commands-container-exec.js"), "getHostPort"> & {
+  readToken: typeof readContainerBridgeToken;
+};
+const defaultDependencies: DiscoveryDependencies = {
+  getHostPort,
+  readToken: readContainerBridgeToken,
+};
 
 async function localTargets(context: CommandContext): Promise<BridgeLogPolicyTarget[]> {
   const localServers = context.runtime.localServers;
@@ -46,20 +49,20 @@ async function containerTarget(
   agent: LocalServerKind,
   dependencies: DiscoveryDependencies,
 ): Promise<BridgeLogPolicyTarget | null> {
-  const { containerPort, tokenFile } = CONTAINER_BRIDGE_PEEK[agent];
   const signal = AbortSignal.timeout(CONTAINER_LOOKUP_TIMEOUT_MS);
-  const hostPort = await dependencies.getHostPort(containerId, containerPort, "tcp", signal, true);
+  const hostPort = await dependencies.getHostPort(
+    containerId,
+    CONTAINER_BRIDGE_PORTS[agent],
+    "tcp",
+    signal,
+    true,
+  );
   if (!hostPort) return null;
-  const authToken = (
-    await dependencies.dockerExec(
-      containerId,
-      `cat ${tokenFile} 2>/dev/null || true`,
-      CONTAINER_LOOKUP_TIMEOUT_MS,
-      undefined,
-      signal,
-    )
-  ).trim();
-  if (!BRIDGE_TOKEN_PATTERN.test(authToken)) return null;
+  const authToken = await dependencies.readToken(containerId, agent, {
+    timeoutMs: CONTAINER_LOOKUP_TIMEOUT_MS,
+    signal,
+  });
+  if (!authToken) return null;
   return { agent, baseUrl: `http://127.0.0.1:${hostPort}`, authToken };
 }
 

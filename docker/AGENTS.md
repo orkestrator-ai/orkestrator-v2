@@ -43,7 +43,13 @@ Agent CLIs, one per supported platform:
 
 Prebuilt bridge servers, so a container never builds them at runtime:
 - `/opt/claude-bridge`, `/opt/codex-bridge`, `/opt/cursor-bridge`,
-  `/opt/pi-bridge`, and `/opt/acp-bridge` (used only by Grok Build).
+  `/opt/pi-bridge`, and `/opt/acp-bridge` (used only by Grok Build). Root-owned:
+  they run as `node`, and code `node` could replace would see every token presented
+  to the bridge.
+- `/run/orkestrator-bridge` holds each bridge's token, mode 700 root
+  (`bridge-credential=1`). Only the backend's root exec reads it; a bridge gets a
+  hash (`apps/backend/src/core/container-bridge-credential.ts`). Never read a
+  `node`-writable path as root to look for one: `node` can make it a symlink.
 
 Keep `COPY --chown=node:node patches /opt/bridge-build/patches` before the
 filtered `bun install`: Bun validates root `patchedDependencies` even when the

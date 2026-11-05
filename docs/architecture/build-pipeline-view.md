@@ -467,6 +467,18 @@ Validation against a fixed snapshot disables sending and steering, while queued
 messages can still be edited or removed. A typed `/steer` still goes straight to the
 live turn (`steer_build_pipeline`).
 
+A stage whose turn ended while background work it started is still live stays
+`running`, because advancing would start the next stage against a worktree that
+work may still change. `awaitingBackgroundWork` on the session says no model turn
+is in progress: the footer reads "is waiting on background work" rather than "is
+thinking", and Steer and Auto-steer are off. A queued message does not wait for
+that work. The supervisor sends it as a new turn into the same process, and the
+stage stays held if the work is still live when that turn ends. A pending review
+retry still waits, because it replaces the session. If the bridge refuses the send
+(it answers 409 to a prompt that changes a launch-only setting while background
+work is live), the message returns to the queue, nothing about the stage changes,
+and it is tried again a minute later; the stage is never failed for it.
+
 Actions sit in each node's context menu and in the inspector: open the session
 (Open Rework session on a Rework node), open the review pass as a Multi Review tab,
 retry a failed reviewer (`retry_build_pipeline_reviewer`), retry the failed

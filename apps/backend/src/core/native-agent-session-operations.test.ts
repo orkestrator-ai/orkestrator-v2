@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { BridgePolicyWideningRefusedError } from "./agent-provider-contract.js";
 import {
   NativeAgentSessionOperations,
   type NativeAgentSessionOperationsHost,
@@ -117,6 +118,9 @@ function harness(
     resolveProjectionSession: async () =>
       session ? { key: sessionKey, session, provider, transient: false } : null,
     provider: async () => provider,
+    replaceBridgeForWiderPolicy: async () => {
+      events.push("replace-bridge");
+    },
     observeProvider: async () => provider,
     trustedSessionInput: async (value) => value,
     adoptSession: async (value) => {
@@ -251,6 +255,96 @@ describe("NativeAgentSessionOperations", () => {
       });
       expect(reopened).toBe(2);
       expect(adoptions).toBe(2);
+    });
+
+    test("a user's wider policy replaces the bridge, then resumes on the new one", async () => {
+      const resumes: string[] = [];
+      const refusing = {
+        resumeSession: async () => {
+          resumes.push("old-bridge");
+          throw new BridgePolicyWideningRefusedError("refused");
+        },
+      };
+      const fresh = {
+        resumeSession: async (id: string) => {
+          resumes.push("new-bridge");
+          return id;
+        },
+      } as unknown as NativeAgentRuntimeProvider;
+      let replaced = false;
+      const { operations, events } = harness({
+        provider: refusing,
+        host: {
+          provider: async () =>
+            replaced ? fresh : (refusing as unknown as NativeAgentRuntimeProvider),
+          replaceBridgeForWiderPolicy: async () => {
+            replaced = true;
+          },
+        },
+      });
+
+      await operations.resumeProjectionSession({
+        ...identity,
+        providerSessionId: "provider-session",
+      });
+
+      expect(resumes).toEqual(["old-bridge", "new-bridge"]);
+      expect(events).toContain("adopt:provider-session");
+    });
+
+    test("a bridge with live work keeps it and the resume says what to do", async () => {
+      let resumes = 0;
+      const { operations } = harness({
+        provider: {
+          resumeSession: async () => {
+            resumes += 1;
+            throw new BridgePolicyWideningRefusedError("refused");
+          },
+        },
+        host: {
+          replaceBridgeForWiderPolicy: async () => {
+            throw new Error("a turn is running");
+          },
+        },
+      });
+
+      await expect(
+        operations.resumeProjectionSession({ ...identity, providerSessionId: "provider-session" }),
+      ).rejects.toThrow("a turn is running");
+      expect(resumes).toBe(1);
+    });
+
+    test("a bridge that still refuses after the restart is not retried again", async () => {
+      let resumes = 0;
+      const { operations, events } = harness({
+        provider: {
+          resumeSession: async () => {
+            resumes += 1;
+            throw new BridgePolicyWideningRefusedError("refused");
+          },
+        },
+      });
+
+      await expect(
+        operations.resumeProjectionSession({ ...identity, providerSessionId: "provider-session" }),
+      ).rejects.toBeInstanceOf(BridgePolicyWideningRefusedError);
+      expect(resumes).toBe(2);
+      expect(events.filter((event) => event === "replace-bridge")).toHaveLength(1);
+    });
+
+    test("a refusal for another reason does not touch the bridge", async () => {
+      const { operations, events } = harness({
+        provider: {
+          resumeSession: async () => {
+            throw new Error("HTTP 403: forbidden");
+          },
+        },
+      });
+
+      await expect(
+        operations.resumeProjectionSession({ ...identity, providerSessionId: "provider-session" }),
+      ).rejects.toThrow("forbidden");
+      expect(events).not.toContain("replace-bridge");
     });
 
     test("lists resumable sessions newest first without the tab's own conversation", async () => {

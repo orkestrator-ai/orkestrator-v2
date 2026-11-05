@@ -1,4 +1,5 @@
-import { expect, test } from "bun:test";
+import * as credentialModes from "../src/core/container-credential-mode.js";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 
@@ -14,6 +15,13 @@ const {
   path,
   withFakeDocker,
 } = await createCommandFixtures();
+
+// These replacement fixtures intentionally represent legacy token-file images.
+let modeSpy: ReturnType<typeof spyOn>;
+beforeEach(() => {
+  modeSpy = spyOn(credentialModes, "containerCredentialMode").mockResolvedValue("token-file");
+});
+afterEach(() => modeSpy.mockRestore());
 
 // Claude's stop/replacement lives in commands-containers; Codex's lives in
 // commands-registry-servers. Exercise both with the real HTTP health predicate.
@@ -78,7 +86,7 @@ exit 0
         expect(result).toMatchObject({
           hostPort,
           wasRunning: false,
-          authToken: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
+          authToken: expect.stringMatching(/^okb_[A-Za-z0-9_-]{43}$/),
         });
         // The stop wait and start's reuse check both encounter HTML. Neither
         // may mistake it for the old bridge still running or a reusable bridge.
@@ -89,7 +97,9 @@ exit 0
         expect(execLog).toContain(stop);
         expect(execLog.split("\n").filter((line) => line.startsWith("exec -d "))).toHaveLength(1);
         expect(execLog.indexOf(stop)).toBeLessThan(execLog.indexOf("exec -d "));
-        expect(execLog).toContain(`${provider.toUpperCase()}_BRIDGE_TOKEN=`);
+        expect(execLog).toContain(
+          `"$${provider.toUpperCase()}_BRIDGE_TOKEN" > /tmp/${provider}-bridge-token`,
+        );
       });
     } finally {
       server.closeAllConnections();

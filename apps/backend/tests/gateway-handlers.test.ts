@@ -16,6 +16,61 @@ describe("remote gateway", () => {
     expect(response.json()).toMatchObject({ eventLoop: null, consoleOutput: null });
   });
 
+  test("authenticated metrics add the database figures without changing other fields", async () => {
+    const database = {
+      generatedAt: "2026-11-05T10:00:00.000Z",
+      main: {
+        fileBytes: 8_192,
+        walBytes: 0,
+        pageBytes: 4_096,
+        pageCount: 2,
+        freelistPages: 1,
+        freelistBytes: 4_096,
+      },
+      ledger: null,
+      backups: { count: 0, bytes: 0, newestAt: null, kinds: {} },
+      retention: null,
+      topTables: { main: null, ledger: null },
+      leaseWaits: { bucketsMs: [1], families: {}, overflowed: 0, transactionsBusy: 0 },
+    };
+    let attached: (() => unknown) | null = null;
+    const { info } = await startGateway({
+      env: {},
+      backend: {
+        invoke: async () => ({}),
+        databaseStats: () => database as never,
+        attachGatewayMetrics: (source: () => unknown) => {
+          attached = source;
+        },
+      },
+    });
+    const response = await requestUrl(`${info.url}__orkestrator/metrics`, {
+      headers: { authorization: `Bearer ${info.token}` },
+    });
+    const body = response.json() as Record<string, unknown>;
+    expect(body.database).toEqual(database);
+    // Every earlier field is still there: the change is additive.
+    for (const field of [
+      "replay",
+      "recurringWork",
+      "compatibilityPaths",
+      "eventLoop",
+      "consoleOutput",
+    ]) {
+      expect(body).toHaveProperty(field);
+    }
+    // The bundle reads the same snapshot in-process.
+    expect((attached as unknown as () => Record<string, unknown>)().database).toEqual(database);
+  });
+
+  test("authenticated metrics report no database for a backend without one", async () => {
+    const { info } = await startGateway({ env: {} });
+    const response = await requestUrl(`${info.url}__orkestrator/metrics`, {
+      headers: { authorization: `Bearer ${info.token}` },
+    });
+    expect(response.json()).toMatchObject({ database: null });
+  });
+
   test("authenticated metrics include event-loop diagnostics and console write failures", async () => {
     const { info } = await startGateway({ env: {} });
     const target = {

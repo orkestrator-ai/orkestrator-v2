@@ -1239,11 +1239,21 @@ describe("production retention scheduling", () => {
       await Promise.resolve();
       const retry = timeout.mock.calls.find((call) => call[1] === 30_000)!;
       expect(retry).toBeDefined();
+      expect(h.service.lastRetention()).toMatchObject({
+        outcome: "completed",
+        failedPasses: 0,
+        report: { purgesWaiting: true },
+      });
       run.mockRejectedValue(new Error("retention test failure"));
       (retry[0] as () => void)();
       await Promise.resolve();
       await Promise.resolve();
       expect(records.some((line) => line.includes("retention.failed"))).toBe(true);
+      expect(h.service.lastRetention()).toMatchObject({
+        outcome: "failed",
+        failedPasses: 1,
+        report: null,
+      });
       h.service.shutdown();
       expect(clearTimeoutSpy.mock.calls.length).toBeGreaterThanOrEqual(1);
       expect(clearIntervalSpy.mock.calls.length).toBeGreaterThanOrEqual(1);

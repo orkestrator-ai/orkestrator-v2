@@ -5,7 +5,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { CHANGE_LEDGER_DATABASE_FILE, type StorageDatabase } from "./storage-database.js";
+import type {
+  DatabaseBackupSummary,
+  DatabaseTopTable,
+  DatabaseTopTables,
+} from "@orkestrator/protocol/backend-diagnostics";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { HEALTH_SUMMARY_STORE } from "./health-summary-layout.js";
 
 const log = createLogger("storage");
 
@@ -97,6 +103,11 @@ const COPY_TIMEOUT_MS = 2 * HOURLY_INTERVAL_MS;
 const BACKOFF_FILE = ".hourly-backoff.json";
 /** The same for the ledger's copies, so neither kind's failures delay the other. */
 const LEDGER_BACKOFF_FILE = ".ledger-backoff.json";
+/** The latest sampled table sizes for each database; see {@link readTopTables}. */
+const TOP_TABLES_FILE = ".top-tables.json";
+/** Enough to show what dominates a file. Bounds the child's reply too. */
+export const MAX_TOP_TABLES = 12;
+const MAX_TABLE_NAME_CHARS = 128;
 
 const SNAPSHOT =
   /^(hourly|pre-migration-v\d+|change-tracking-daily|change-tracking-pre-migration-v\d+)-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z)\.sqlite$/;
@@ -248,12 +259,15 @@ export function removeStaleBackupTemporaries(dataDir: string, now = Date.now()):
  * the copy with `quick_check`, in a child process at low priority. Resolves
  * whether the copy is sound; rejects when the copy fails. Both steps read
  * the whole file; in-process they would block every request for minutes on
- * a large database.
+ * a large database. A sound copy is also sized by table through `dbstat`, which
+ * scans it too; `onTopTables` receives the result. That scan touches only the
+ * finished copy, never the live file or this event loop, and SQLite without
+ * `dbstat` (Bun on macOS loads the system library) simply reports nothing.
  */
 export function copyDatabaseInChildProcess(
   source: string,
   target: string,
-  options: { timeoutMs?: number } = {},
+  options: { timeoutMs?: number; onTopTables?: (tables: DatabaseTopTable[]) => void } = {},
 ): Promise<boolean> {
   return new Promise((resolve, reject) => {
     const child = spawn(
@@ -299,8 +313,12 @@ export function copyDatabaseInChildProcess(
     });
     child.once("close", (code, signal) => {
       settle();
-      if (code === 0 && stdout.trim() === "sound") resolve(true);
-      else if (code === 0 && stdout.trim() === "unsound") resolve(false);
+      const [verdict, tables] = stdout.trim().split("\n", 2);
+      if (code === 0 && verdict === "sound") {
+        const parsed = parseTopTables(tables);
+        if (parsed) options.onTopTables?.(parsed);
+        resolve(true);
+      } else if (code === 0 && verdict === "unsound") resolve(false);
       else {
         const reason =
           stderr.trim().split("\n").at(-1) || (signal ? `killed by ${signal}` : `exit ${code}`);
@@ -331,7 +349,12 @@ worker.on("error", () => { clearTimeout(timer); process.exit(1); });
 worker.on("close", (code) => { clearTimeout(timer); process.exit(stopped ? 1 : code ?? 1); });
 `;
 
-/** Run by {@link copyDatabaseInChildProcess}: `-- <source> <target>`. Prints `sound` or `unsound`. */
+/**
+ * Run by {@link copyDatabaseInChildProcess}: `-- <source> <target>`. Prints
+ * `sound` or `unsound`, and after `sound` a line of JSON holding the largest
+ * tables and indexes by bytes, when this SQLite has `dbstat`. A failed scan
+ * never fails the copy.
+ */
 const DATABASE_COPY_HELPER = String.raw`
 const { Database } = require("bun:sqlite");
 const fs = require("node:fs");
@@ -347,18 +370,50 @@ try {
   fs.chmodSync(target, 0o600);
   const copy = new Database(target, { readonly: true });
   let sound = false;
+  let tables = "";
   try {
     const rows = copy.query("PRAGMA quick_check").all();
     sound = rows.length === 1 && Object.values(rows[0])[0] === "ok";
+    if (sound) {
+      try {
+        tables = JSON.stringify(
+          copy
+            .query("SELECT name, SUM(pgsize) AS bytes FROM dbstat GROUP BY name ORDER BY bytes DESC LIMIT ${MAX_TOP_TABLES}")
+            .all(),
+        );
+      } catch {
+        // No dbstat in this SQLite: the copy still counts.
+      }
+    }
   } finally {
     copy.close();
   }
-  process.stdout.write(sound ? "sound" : "unsound");
+  process.stdout.write(sound ? "sound\n" + tables : "unsound");
 } catch (error) {
   process.stderr.write(String(error && error.message ? error.message : error).split("\n")[0]);
   process.exit(1);
 }
 `;
+
+/** The child's second line: only well-formed names and sizes get past here. */
+function parseTopTables(line: string | undefined): DatabaseTopTable[] | null {
+  if (!line) return null;
+  try {
+    const rows = JSON.parse(line) as unknown;
+    if (!Array.isArray(rows)) return null;
+    return rows
+      .filter(
+        (row): row is DatabaseTopTable =>
+          typeof row?.name === "string" &&
+          row.name.length <= MAX_TABLE_NAME_CHARS &&
+          Number.isSafeInteger(row?.bytes),
+      )
+      .slice(0, MAX_TOP_TABLES)
+      .map(({ name, bytes }) => ({ name, bytes }));
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Free space a copy of `bytes` needs: the copy itself, plus as much again
@@ -413,6 +468,69 @@ export function enforceBackupBudget(
         fs.rmSync(entry.file, { force: true });
       });
   }
+}
+
+type TopTablesFile = { main?: DatabaseTopTables; ledger?: DatabaseTopTables };
+
+/** The table sizes the last copies of each database reported; empty before the first. */
+export function readTopTables(dataDir: string): TopTablesFile {
+  try {
+    const value = JSON.parse(
+      fs.readFileSync(path.join(dataDir, BACKUP_DIRECTORY, TOP_TABLES_FILE), "utf8"),
+    ) as unknown;
+    return typeof value === "object" && value !== null ? (value as TopTablesFile) : {};
+  } catch {
+    return {};
+  }
+}
+
+/** Never fails the snapshot it describes. */
+function recordTopTables(
+  directory: string,
+  database: keyof TopTablesFile,
+  at: number,
+  tables: DatabaseTopTable[],
+): void {
+  try {
+    const file = path.join(directory, TOP_TABLES_FILE);
+    const temporary = `${file}.${process.pid}.tmp`;
+    const current = readTopTables(path.dirname(directory));
+    fs.writeFileSync(
+      temporary,
+      JSON.stringify({
+        ...current,
+        [database]: { takenAt: new Date(at).toISOString(), tables },
+      }),
+      { mode: 0o600 },
+    );
+    fs.renameSync(temporary, file);
+  } catch (error) {
+    log.warn("snapshot.top-tables-failed", { error: formatLogError(error, { message: false }) });
+  }
+}
+
+/** Count and bytes of every retained snapshot. A stat per snapshot, of which few are kept. */
+export function summarizeStorageSnapshots(dataDir: string): DatabaseBackupSummary {
+  const summary: DatabaseBackupSummary = {
+    count: 0,
+    bytes: 0,
+    newestAt: null,
+    kinds: {
+      hourly: { count: 0, bytes: 0 },
+      "pre-migration": { count: 0, bytes: 0 },
+      ledger: { count: 0, bytes: 0 },
+      "ledger-pre-migration": { count: 0, bytes: 0 },
+    },
+  };
+  for (const entry of listStorageSnapshots(dataDir)) {
+    const bytes = snapshotBytes(entry);
+    summary.count += 1;
+    summary.bytes += bytes;
+    summary.kinds[entry.kind].count += 1;
+    summary.kinds[entry.kind].bytes += bytes;
+    summary.newestAt ??= new Date(entry.takenAt).toISOString();
+  }
+  return summary;
 }
 
 function isPreMigration(entry: StorageSnapshot): boolean {
@@ -523,13 +641,17 @@ export function purgeStorageSnapshots(dataDir: string, now = Date.now()): void {
  * change to a store bumps it), the deletion bookkeeping in `storage_meta` and
  * the schema version. Leases are coordination, not content, so a heartbeat
  * does not count as a change. A snapshot keeps all three, so its fingerprint
- * is the live database's at the moment it was taken.
+ * is the live database's at the moment it was taken. The health summary gets a
+ * row every few minutes on an idle machine, so counting it would take an hourly
+ * copy of a database nothing else had changed.
  */
 function contentFingerprint(db: Database): string {
   const hash = createHash("sha256");
   const { user_version } = db.query("PRAGMA user_version").get() as { user_version: number };
   hash.update(`schema\0${user_version}`);
-  const stores = db.query("SELECT name, revision FROM stores ORDER BY name").all() as Array<{
+  const stores = db
+    .query("SELECT name, revision FROM stores WHERE name != ? ORDER BY name")
+    .all(HEALTH_SUMMARY_STORE) as Array<{
     name: string;
     revision: number;
   }>;
@@ -594,7 +716,6 @@ export async function takeHourlySnapshotIfDue(
   now: () => number = Date.now,
   options: HourlySnapshotOptions = {},
 ): Promise<string | null> {
-  const copy = options.copy ?? copyDatabaseInChildProcess;
   const availableBytes = options.availableBytes ?? availableDiskBytes;
   let release: (() => Promise<void>) | undefined;
   let directory: string | undefined;
@@ -605,6 +726,13 @@ export async function takeHourlySnapshotIfDue(
     });
     const at = now();
     directory = backupDirectory(dataDir);
+    const backups = directory;
+    const copy =
+      options.copy ??
+      ((from: string, to: string) =>
+        copyDatabaseInChildProcess(from, to, {
+          onTopTables: (tables) => recordTopTables(backups, "main", at, tables),
+        }));
     removeStaleBackupTemporaries(dataDir, at);
     // Purge first: a snapshot past the age bound must not stand in for a new one.
     purgeStorageSnapshots(dataDir, at);
@@ -686,7 +814,6 @@ export async function takeLedgerSnapshotIfDue(
 ): Promise<string | null> {
   const source = path.join(dataDir, CHANGE_LEDGER_DATABASE_FILE);
   if (!fs.existsSync(source)) return null;
-  const copy = options.copy ?? copyDatabaseInChildProcess;
   const availableBytes = options.availableBytes ?? availableDiskBytes;
   const maxBytes = options.maxBytes ?? MAX_BACKUP_BYTES;
   let release: (() => Promise<void>) | undefined;
@@ -698,6 +825,13 @@ export async function takeLedgerSnapshotIfDue(
     });
     const at = now();
     directory = backupDirectory(dataDir);
+    const backups = directory;
+    const copy =
+      options.copy ??
+      ((from: string, to: string) =>
+        copyDatabaseInChildProcess(from, to, {
+          onTopTables: (tables) => recordTopTables(backups, "ledger", at, tables),
+        }));
     removeStaleBackupTemporaries(dataDir, at);
     purgeStorageSnapshots(dataDir, at);
     enforceBackupBudget(dataDir, 0, maxBytes);

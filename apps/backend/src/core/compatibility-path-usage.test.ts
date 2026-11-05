@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test, spyOn } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -37,6 +37,47 @@ function clock(start = Date.parse("2026-10-24T10:00:00.000Z")) {
 }
 
 describe("CompatibilityPathUsage", () => {
+  test("peek answers from memory after one first read, so a poll writes nothing", () => {
+    let merges = 0;
+    let writes = 0;
+    const stored = {
+      count: 5,
+      firstSeenAt: "2026-01-01T00:00:00.000Z",
+      lastSeenAt: "2026-01-02T00:00:00.000Z",
+    };
+    const usage = new CompatibilityPathUsage();
+    usage.attach({
+      merge(pending) {
+        merges += 1;
+        if (pending.size > 0) writes += 1;
+        return { version: 1, paths: { "history.joined-v1-page": stored } };
+      },
+    });
+    expect(usage.peek().paths["history.joined-v1-page"]?.count).toBe(5);
+    expect(merges).toBe(1);
+
+    usage.record("history.joined-v1-page");
+    usage.record("bridge-close.upgrade-required");
+    for (let index = 0; index < 3; index += 1) {
+      const { paths } = usage.peek();
+      expect(paths["history.joined-v1-page"]?.count).toBe(6);
+      expect(paths["bridge-close.upgrade-required"]?.count).toBe(1);
+    }
+    expect(merges).toBe(1);
+    expect(writes).toBe(0);
+
+    // The durable read still goes through the sink.
+    usage.snapshot();
+    expect(writes).toBe(1);
+    usage.detach(usage["sink"]!);
+  });
+
+  test("peek without a sink is the pending counts", () => {
+    const usage = new CompatibilityPathUsage();
+    usage.record("preview.tunnel-v1");
+    expect(usage.peek().paths["preview.tunnel-v1"]?.count).toBe(1);
+  });
+
   test("counts each path with its first and last use, without a sink", () => {
     const time = clock();
     const usage = new CompatibilityPathUsage(time.now);
@@ -339,4 +380,49 @@ describe("compatibility paths record their use", () => {
       before + 1,
     );
   });
+});
+
+test("an idle reader refreshes another backend's totals on each bounded timer tick", () => {
+  const callbacks: Array<() => void> = [];
+  const original = globalThis.setTimeout;
+  const timer = spyOn(globalThis, "setTimeout").mockImplementation(((
+    callback: () => void,
+    ms: number,
+  ) => {
+    callbacks.push(callback);
+    return original(callback, ms);
+  }) as typeof setTimeout);
+  const stored = { version: 1 as const, paths: {} };
+  let reads = 0;
+  let writes = 0;
+  const sink: CompatibilityPathUsageSink = {
+    merge(pending) {
+      reads++;
+      if (pending.size) writes++;
+      return mergeCompatibilityPathUsage(stored, pending);
+    },
+  };
+  const time = clock();
+  const reader = new CompatibilityPathUsage(time.now);
+  const writer = new CompatibilityPathUsage(time.now);
+  try {
+    reader.attach(sink);
+    writer.attach(sink);
+    expect(reader.peek().paths).toEqual({});
+    writer.record("preview.tunnel-v1");
+    writer.snapshot();
+    const before = reads;
+    expect(reader.peek().paths).toEqual({});
+    expect(reads).toBe(before);
+    time.advance(60_000);
+    // peek replaced the initial attach timer; tick the reader's current timer.
+    callbacks[2]!();
+    expect(reader.peek().paths["preview.tunnel-v1"]?.count).toBe(1);
+    expect(writes).toBe(1);
+    expect(callbacks.length).toBeGreaterThan(2);
+  } finally {
+    reader.detach(sink);
+    writer.detach(sink);
+    timer.mockRestore();
+  }
 });

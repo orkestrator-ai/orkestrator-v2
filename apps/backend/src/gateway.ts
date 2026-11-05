@@ -75,6 +75,7 @@ export class OrkestratorGateway {
     };
     this.auth = new GatewayAuth(this.context, this.lifecycle, routes, this.proxy);
     this.handlers = new GatewayHandlers(this.context, this.events, this.auth, this.proxy);
+    options.backend.attachGatewayMetrics?.(() => this.handlers.metricsSnapshot());
   }
 
   start(): Promise<GatewayStartInfo | null> {

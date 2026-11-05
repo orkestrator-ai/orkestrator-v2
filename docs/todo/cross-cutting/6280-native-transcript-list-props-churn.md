@@ -6,8 +6,8 @@ Analysed 2026-11-05 against `main` at `533acf703`, with 5960 task 1 applied. Car
 
 ### Tasks
 
-1. **Stop re-rendering the list when nothing it shows changed**: give `<Virtuoso>` the same props across a render of the tab that changes nothing in the transcript. Status: open.
-2. **No-op file-mention writes on a caret move**: `useFileMentions.handleCursorChange` sets state to the values it already holds. Status: open.
+1. **Stop re-rendering the list when nothing it shows changed**: give `<Virtuoso>` the same props across a render of the tab that changes nothing in the transcript. Status: done 2026-11-05.
+2. **No-op file-mention writes on a caret move**: `useFileMentions.handleCursorChange` sets state to the values it already holds. Status: decided 2026-11-05: left as it is, because Chromium shows no cost.
 
 ### 1. Stop re-rendering the list when nothing it shows changed
 
@@ -62,6 +62,44 @@ Every nested update was scheduled from `react-virtuoso`'s republish, about seven
   - **Skip the writes when the menu is already closed and the query empty.**
     - Pros: removes the happy-dom nested update and any bail-out render on a caret move.
     - Cons: `handleCursorChange` must then depend on `isMenuOpen`, so its identity changes when the menu opens or closes, and `MentionableInput` re-subscribes its `selectionchange` listener each time.
+
+## Assumptions and decisions
+
+### Re-check before starting (tasks 1 and 2)
+
+The finding still held on `41f9eb638`, after E12 (#1852), C-0390 (#1854) and C10 (#1851): 50 writes gave 52 `update` and 52 `nested-update` commits per tab, and `transcriptHeader`, `footer`, `emptyState`, `renderMessage`, `computeItemKey` and `itemContent` were still built inline. `messageActions` was already stable in the controller: a conditional on a `useCallback`, so it needed no change.
+
+### Stable inputs alone are not enough (task 1)
+
+The recommended option was to make every input stable, and to reject memoising the element on its own. Both are needed. The library's effect has no dependency list, so it republishes on every render of `<Virtuoso>` even when each prop is the same. `VirtualizedMessageList` therefore renders `memo(Virtuoso)`, and stable inputs are what let that memo hold. A `memo` compares every prop, so unlike a hand-written `useMemo` of the element it cannot miss one.
+
+Inputs the analysis did not list also had to be stable: the status label and the transcript cards from the controller, the resume click that `emptyState` reads, the overscan object, which a focused row rebuilt on every render (`useRatchetedOverscan`), and the inline `style` and `increaseViewportBy`. Other callers of the list keep passing inline props and behave as before.
+
+### What it saves (task 1)
+
+Chromium, development React, 1600 by 900, a 100-row fixture and a fake `invoke`, per tab per 50 writes. Two runs of five batches each, alternating unmodified and changed code, after warming up with 100 writes.
+
+| Tabs | Code | `update` commits | `nested-update` commits | Mean `update` | Mean `nested-update` | Total |
+| --- | --- | --- | --- | --- | --- | --- |
+| One | Before | 50 | 50 | 3.96 ms | 1.58 ms | 277 ms |
+| One | After | 51.6 | 0 | 4.37 ms | none | 226 ms |
+| Two | Before | 50 | 50 | 1.74 ms | 0.87 ms | 130 ms |
+| Two | After | 51.65 | 0 | 2.48 ms | none | 128 ms |
+
+Plainly: the nested update is gone, which saves about 1 ms per render with one tab under development React and nothing measurable with two, because each remaining `update` commit got slower by 0.4 to 0.7 ms. That slowdown was not attributed. This fits E12's finding that these fixes make little visible difference at this fixture size. What is reliably gained is that a nested update now means a real row change. A trace of the commits over 50 writes, run three times, found no commit that rendered a `TranscriptRow` or the footer, where before each nested commit rendered them. The extra commit or two are empty and take 0 ms. Production React was not measured.
+
+### Keeping rows correct (task 1)
+
+`e2e/TranscriptListRenders.spec.ts` counts nested updates and checks that rows follow find, highlight, expansion, actions, footer status, the header, the previous message, streaming and a hidden tab's return. Five of its tests fail on the unmodified code. To check that it catches a missed dependency, 11 dependencies were removed one at a time. Nine failed the spec straight away. `messages` in `itemContent` is hidden on Codex, because the fork plan rebuilds `renderMessage` whenever messages change, so the spec also runs a Cursor tab, and that catches it. `isLoading` in the footer is hidden because a running turn also changes its clock, so `NativeChatShell.test.tsx` covers it alone. Lint's `react-hooks/exhaustive-deps` also reports both as errors.
+
+### Caret moves (task 2)
+
+Left as it is, the recommended option. With the same fixture, 30 arrow keys and 20 clicks in the composer gave 0 commits both before and after task 1, over 6 batches of each. A temporary counter in the controller, since removed, saw 2 renders over 30 arrow keys and 2 over 20 clicks, in an earlier fixture whose fake backend caused a commit of its own on each read. So there is no render per move. Skipping the writes would make `handleCursorChange` depend on `isMenuOpen` and re-subscribe `MentionableInput`'s listener for no cost seen in a real browser. The spec holds this with a caret-move test.
+
+### Found along the way
+
+- [6620](../transcripts-and-observation/6620-first-find-stops-short.md): the first find on a freshly opened long transcript can stop short of its match. It reproduces without this change. The spec works around it.
+- Flake [6621](../../tests/flaky-tests/native-agents-and-transcripts/6621-virtuoso-follow-small-wheel-release.md): a `VirtuosoFollow` test fails about half the time alone, on unmodified code too.
 
 ## Constraints and rationale
 

@@ -42,6 +42,8 @@ const FIXTURE = `<!doctype html>
   open.innerHTML = '<p id="in-open">Open root paragraph of words</p>'
     + 'Bare root text of words'
     + '<x-inner id="inner"></x-inner>'
+    + '<x-private id="private">Misleading light text</x-private>'
+    + '<p id="outer-after">Outer paragraph after private component</p>'
     + '<div data-sensitive id="secret">Private synthetic value</div>'
     + '<input id="pin" type="password" value="hunter2hunter2">';
   const inner = open.getElementById("inner").attachShadow({ mode: "open" });
@@ -49,9 +51,14 @@ const FIXTURE = `<!doctype html>
   const closed = document.getElementById("closed").attachShadow({ mode: "closed" });
   closed.innerHTML = '<p id="in-closed">Closed root paragraph of words</p>';
   window.__closedRoot = closed;
+  const nestedClosed = open.getElementById("private").attachShadow({ mode: "closed" });
+  nestedClosed.innerHTML = '<p id="in-private">Nested closed paragraph of words</p>';
+  window.__nestedClosedRoot = nestedClosed;
 </script></body></html>`;
 
 const NODE = {
+  inPrivate: `window.__nestedClosedRoot.getElementById("in-private").firstChild`,
+  outerAfter: `document.getElementById("open").shadowRoot.getElementById("outer-after").firstChild`,
   light: `document.getElementById("light").firstChild`,
   after: `document.getElementById("after").firstChild`,
   inOpen: `document.getElementById("open").shadowRoot.getElementById("in-open").firstChild`,
@@ -260,6 +267,12 @@ describe.skipIf(!CHROMIUM)("text selections in an isolated world, in Chromium", 
     ["light into an open root", [NODE.light, "paragraph"], [NODE.inOpen, "paragraph"]],
     ["an open root out to light", [NODE.inOpen, "paragraph"], [NODE.after, "paragraph"]],
     ["a root into its nested root", [NODE.inOpen, "paragraph"], [NODE.inInner, "paragraph"]],
+    ["outer open into nested closed", [NODE.inOpen, "paragraph"], [NODE.inPrivate, "paragraph"]],
+    [
+      "nested closed out to outer open",
+      [NODE.inPrivate, "paragraph"],
+      [NODE.outerAfter, "paragraph"],
+    ],
     ["light into a closed root", [NODE.light, "paragraph"], [NODE.inClosed, "paragraph"]],
   ] as const) {
     test(`a selection from ${name} stays unsupported`, async () => {
@@ -284,6 +297,24 @@ describe.skipIf(!CHROMIUM)("text selections in an isolated world, in Chromium", 
     expect(await isolated.hint()).toContain("This text can't be captured");
     await isolated.run(BROWSER_PREVIEW_CAPTURE_CANCEL_SCRIPT);
   }, 30_000);
+
+  for (const gesture of ["drag", "double-click"] as const) {
+    test(`a ${gesture} inside a nested closed root is refused`, async () => {
+      await isolated.load();
+      await isolated.start();
+      if (gesture === "drag") await isolated.selectPhrase(NODE.inPrivate, "paragraph of");
+      else {
+        const word = await spot(isolated.page, NODE.inPrivate, "paragraph");
+        await isolated.page.mouse.click(word.left + 5, word.y, { clickCount: 2 });
+        await isolated.page.waitForTimeout(40);
+      }
+      const status = await isolated.status();
+      expect(status.status).toBe("selecting");
+      expect(status.selection).toBeUndefined();
+      expect(await isolated.hint()).toContain("This text can't be captured");
+      await isolated.run(BROWSER_PREVIEW_CAPTURE_CANCEL_SCRIPT);
+    }, 30_000);
+  }
 
   test("sensitive content inside a root stays refused", async () => {
     await isolated.load();

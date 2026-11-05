@@ -1167,7 +1167,7 @@ export function browserPreviewAnchorKit() {
    * The range a text selection names, or null when nothing is selected. The
    * two endpoints must share one tree: a selection across a shadow boundary
    * is `unsupported`, because a range and a text map each cover one tree. So
-   * is a document selection that `getRangeAt` reports differently, which means
+   * is a tree-local selection that `getRangeAt` reports differently, which means
    * an endpoint sits in a tree page script cannot reach, a closed root. Select
    * all is the one exception: Chromium composes it as the root element's
    * contents and keeps a narrower live range, as it always has.
@@ -1193,6 +1193,19 @@ export function browserPreviewAnchorKit() {
           live.endOffset === composed.endOffset);
       return agrees && !live.collapsed ? { range: live.cloneRange() } : { error: "unsupported" };
     }
+    // Document.getSelection retargets even valid open-root ranges. Read the
+    // innermost root's local selection instead: it preserves this tree's real
+    // endpoints, but retargets an inaccessible nested closed root to its host.
+    const local = (root as ShadowRoot & { getSelection?: () => Selection | null }).getSelection?.();
+    if (!local || local.rangeCount === 0) return { error: "unsupported" };
+    const live = local.getRangeAt(0);
+    if (
+      live.startContainer !== composed.startContainer ||
+      live.startOffset !== composed.startOffset ||
+      live.endContainer !== composed.endContainer ||
+      live.endOffset !== composed.endOffset
+    )
+      return { error: "unsupported" };
     const range = document.createRange();
     range.setStart(composed.startContainer, composed.startOffset);
     range.setEnd(composed.endContainer, composed.endOffset);

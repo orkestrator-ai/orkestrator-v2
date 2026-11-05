@@ -78,6 +78,34 @@ function selectAcross(harness: Harness, start: Point, end: Point): void {
     : hidden(end)
       ? rescope(end, [], "start")
       : rescope(end, [], "end");
+  // Chromium's ShadowRoot.getSelection uses tree-local live endpoints; a
+  // nested root is retargeted just as a root is for Document.getSelection.
+  const localRoots = new Set<ShadowRoot>();
+  for (const point of [start, end]) {
+    let root = point.node.getRootNode() as ShadowRoot;
+    while ((root as unknown) !== document) {
+      localRoots.add(root);
+      root = root.host.getRootNode() as ShadowRoot;
+    }
+  }
+  for (const root of localRoots) {
+    Object.defineProperty(root, "getSelection", {
+      configurable: true,
+      value: () => {
+        const from = rescope(start, [root], "start");
+        const to =
+          start.node.getRootNode() !== root
+            ? from
+            : end.node.getRootNode() !== root
+              ? rescope(end, [root], "start")
+              : rescope(end, [root], "end");
+        const range = document.createRange();
+        range.setStart(from.node, from.offset);
+        range.setEnd(to.node, to.offset);
+        return { rangeCount: 1, getRangeAt: () => range };
+      },
+    });
+  }
   const selection = harness.window.getSelection()! as unknown as Record<string, unknown>;
   const live = () => {
     const range = document.createRange();
@@ -380,6 +408,30 @@ describe("closed roots stay out of reach", () => {
     expect(status.selection).toBeUndefined();
     expect(hintText(harness)).toContain("This text can't be captured");
   });
+
+  for (const direction of ["into", "out", "inside"] as const) {
+    test(`a selection ${direction} a nested closed root is refused`, () => {
+      const harness = page(`<x-open></x-open>`);
+      const outer = shadow(
+        harness.document,
+        "x-open",
+        `<p>Visible outer words</p><x-private>Misleading light text</x-private><p id="after">After outer words</p>`,
+      );
+      const closed = shadow(outer, "x-private", `<p>Hidden secret words</p>`, "closed");
+      const hidden = phrase(closed.querySelector("p")!.firstChild!, "secret");
+      const before = phrase(outer.querySelector("p")!.firstChild!, "outer");
+      const after = phrase(outer.querySelector("#after")!.firstChild!, "outer");
+      const status =
+        direction === "into"
+          ? capture(harness, before[0], hidden[1])
+          : direction === "out"
+            ? capture(harness, hidden[0], after[1])
+            : capture(harness, ...hidden);
+      expect(status.status).toBe("selecting");
+      expect(status.selection).toBeUndefined();
+      expect(hintText(harness)).toContain("This text can't be captured");
+    });
+  }
 
   test("a range inside one that the page handed over is unsupported", () => {
     const { harness, root } = closedPage();

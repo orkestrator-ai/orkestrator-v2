@@ -312,7 +312,11 @@ a selection across a light and shadow boundary, or between two roots, is
 `unsupported`. So is a document selection `getRangeAt` reports differently, since
 one endpoint is then in a closed root the kit cannot read; select all is the one
 exception, which Chromium composes as the root element's contents and which keeps
-the document's light text. A range at the top
+the document's light text. Within an open root the kit instead compares against
+`ShadowRoot.getSelection().getRangeAt(0)`: the root-local live range preserves
+valid open-root endpoints while exposing disagreement around a nested closed
+host. Missing root-local selection support is refused. This prevents silently
+saving only the outer text or a closed host's light text. A range at the top
 level of a root (text directly under it, or a range across its top-level elements)
 has no containing element in the root: its container carries the host's semantics,
 the root's scope, no stable id and the path `:host`. Sensitive-field checks follow

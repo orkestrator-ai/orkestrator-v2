@@ -2,7 +2,7 @@
 
 Which files under `docs/reports` can be built together, and which pieces of work must not run at the same time. Each folder's `0000-index.md` has the same information for its own files, in a **Parallel running** section.
 
-Worked out on 2026-11-03 against `main` at `a44641cbc`, from the 167 work files in the four folders. On 2026-11-04, 137 of them were combined into the 41 batch files listed under [Batch files](#batch-files), which keep each report as a numbered part, with repeated text removed. That leaves 71 files. The other 30 are built on their own, need a decision or measurement first, or are blocked. E1 is a set of baseline tasks inside other batch files, so it has no file of its own. E8 (Agent tab polling) was built on 2026-11-04 and its file deleted, so this plan no longer lists it; its result is in [1202 task 4](../todo/cross-cutting/1202-efficiency-review-follow-ups.md).
+Worked out on 2026-11-03 against `main` at `a44641cbc`, from the 167 work files in the four folders. On 2026-11-04, 137 of them were combined into the 41 batch files listed under [Batch files](#batch-files), which keep each report as a numbered part, with repeated text removed. That leaves 71 files. The other 30 are built on their own, need a decision or measurement first, or are blocked. E1 is a set of baseline tasks inside other batch files, so it has no file of its own. E8 (Agent tab polling) was built on 2026-11-04 and its file deleted, so this plan no longer lists it; its result is in [1202 task 4](../todo/cross-cutting/1202-efficiency-review-follow-ups.md). E4 (Object store) was built on 2026-11-05 and its file deleted the same way; its outcome is the closing check in [the efficiency index](efficiency-logging-database/0000-index.md#closing-check-of-e4-object-store).
 
 ## Rules
 
@@ -32,7 +32,6 @@ Worked out on 2026-11-03 against `main` at `a44641cbc`, from the 167 work files 
 | E11 | [efficiency-logging-database/0210-e11-projection-hashing.md](efficiency-logging-database/0210-e11-projection-hashing.md) | `0210`, `0220`, `0320`, `0330`, `0340`, `0345`, `0350`, `0380` |
 | E12 | [efficiency-logging-database/0510-e12-renderer-store.md](efficiency-logging-database/0510-e12-renderer-store.md) | `0510`, `0590`, `0640` |
 | E3 | [efficiency-logging-database/0540-e3-retention-and-deletion.md](efficiency-logging-database/0540-e3-retention-and-deletion.md) | `0730`, `0540`, `0840` |
-| E4 | [efficiency-logging-database/0430-e4-object-store.md](efficiency-logging-database/0430-e4-object-store.md) | `0430`, `0480`, `0530`, `0550` |
 | E5 | [efficiency-logging-database/0760-e5-database-upkeep.md](efficiency-logging-database/0760-e5-database-upkeep.md) | `0760`, `0800`, `0910`, `0920` |
 | E7 | [efficiency-logging-database/0420-e7-diff-scans.md](efficiency-logging-database/0420-e7-diff-scans.md) | `0420`, `0440`, `0450`, `0460`, `0570` |
 | E26 | [efficiency-logging-database/0400-e26-local-desktop-transport.md](efficiency-logging-database/0400-e26-local-desktop-transport.md) | `0400`, `0860` |
@@ -54,7 +53,7 @@ Worked out on 2026-11-03 against `main` at `a44641cbc`, from the 167 work files 
 | Coordinator panel | 1. C7 (Work panel and navigation)<br>2. C8 (Tab strip)<br>3. C6 (Errors and dead ends)<br>4. C10 (Explanations)<br>5. C-0390 (Panel re-render cost, measure first) | `CoordinatorPanel.tsx`, `CoordinatorPanelNotices.tsx`, `TabShell.tsx` |
 | Containers | 1. S-0080 (Legacy host mounts)<br>2. S-0100 (Egress SNI and DNS)<br>3. S-0170 (Agent-tools bind address)<br>4. E14 (Docker logs)<br>5. E25 (Container start) | `commands-containers.ts`, `commands-registry-servers.ts` and the `docker/` entrypoint, setup and firewall scripts |
 | Transcript | 1. E9 (Transcript reads)<br>2. E10 (Conditional reads and deltas)<br>3. E11 (Projection hashing)<br>4. E12 (Renderer store) | `native-agent-transcript-projection.ts` (5,570 lines), `useNativeAgentSession.ts` (3,870 lines), `nativeAgentProjectionStore.ts` |
-| Change tracking | 1. E3 (Retention and deletion)<br>2. E4 (Object store) | `apps/backend/src/core/change-tracking/` |
+| Change tracking | 1. E3 (Retention and deletion) | `apps/backend/src/core/change-tracking/` |
 | Storage | 1. E5 (Database upkeep)<br>2. S-0190 (Provider secrets at rest) | `storage-database.ts`, `storage-backups.ts`, `storage-stores.ts` |
 | Git scans and file reads | 1. E7 (Diff scans)<br>2. E-0580 (File RPC and usage report) | `commands-files.ts`, `git-scopes.ts`, `diff-stats-service.ts` |
 | Desktop | 1. E26 (Local desktop transport)<br>2. E-0691 (Preview capture data URLs) | `apps/desktop/electron/` windows, IPC and preloads, `backend-process.ts` |
@@ -106,7 +105,6 @@ Don't run these pairs at the same time.
 | --- | --- |
 | E1 (Baseline run) | E9, E10 and E26, on code those batches have not changed yet |
 | `0360` in C5 | `0170` in C5, so the new lines go into the extracted builder |
-| `0530` in E4 | `0550` in E4 |
 | `0490` in E25 | `0500` in E25 |
 
 ## Rebase with care
@@ -123,7 +121,6 @@ These files are named by several batches that can still run together. The report
 | `commands-servers.ts` | C6, E3, E13, E20 |
 | `GlobalSettings.sections.tsx` | C6, E15, E17 |
 | `native-agent-display-tail-store.ts` | E5, E11 |
-| `change-tracking/capture.ts` | E4, E7 |
 | `usage-history-store.ts` | E15, E-0580 |
 | `App.tsx`, `MailTile.tsx` | E-0520 with E23 (`App.tsx`) and C7 (`MailTile.tsx`) |
 

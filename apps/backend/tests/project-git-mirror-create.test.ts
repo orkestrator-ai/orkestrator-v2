@@ -33,6 +33,8 @@ async function createCommand(options: {
   capabilities: Record<string, number>;
   gitUrl?: string;
   identity?: Partial<CreateContainerIdentity>;
+  /** Restricted, with this allowlist; full when absent. */
+  allowedDomains?: string[];
 }): Promise<{ create: string; dataDir: string }> {
   const dir = await tempDir("ork-git-mirror-create-");
   cleanup.push(dir);
@@ -57,7 +59,11 @@ async function createCommand(options: {
   spawnSync("tar", ["--format=ustar", "-cf", tarball, "-C", dir, "image-manifest.json"], {
     env: { ...process.env, COPYFILE_DISABLE: "1" },
   });
-  const environment = lifecycleEnvironment({ networkAccessMode: "full" });
+  const environment = lifecycleEnvironment(
+    options.allowedDomains
+      ? { networkAccessMode: "restricted", allowedDomains: options.allowedDomains }
+      : { networkAccessMode: "full" },
+  );
   const { context } = memoryLifecycleContext([environment], dir);
   Object.assign(context, {
     runtimeFlavor: "agent-test",
@@ -136,4 +142,37 @@ test("a project whose stored URL is not a remote gets neither", async () => {
   });
 
   expect(create).not.toContain("orkestrator-git-mirror");
+});
+
+test("a restricted container gets the mirror of a GitHub remote, which its firewall always opens", async () => {
+  const { create } = await createCommand({
+    capabilities: { "git-mirror": 1 },
+    gitUrl: "git@github.com:acme/repo.git",
+    allowedDomains: ["registry.npmjs.org"],
+  });
+
+  expect(create).toContain("NETWORK_MODE=restricted");
+  expect(create).toContain("-e ORKESTRATOR_GIT_MIRROR=/orkestrator-git-mirror/mirror.git");
+});
+
+test("a restricted container that cannot reach the remote does not read it through the mirror", async () => {
+  const { create } = await createCommand({
+    capabilities: { "git-mirror": 1 },
+    gitUrl: "https://git.example.com/acme/repo.git",
+    allowedDomains: ["registry.npmjs.org", "example.com"],
+  });
+
+  expect(create).toContain("NETWORK_MODE=restricted");
+  expect(create).not.toContain("orkestrator-git-mirror");
+  expect(create).not.toContain("ORKESTRATOR_GIT_MIRROR");
+});
+
+test("a restricted container whose allowlist names the remote's host gets the mirror", async () => {
+  const { create } = await createCommand({
+    capabilities: { "git-mirror": 1 },
+    gitUrl: "git@git.example.com:acme/repo.git",
+    allowedDomains: ["git.example.com"],
+  });
+
+  expect(create).toContain("-e ORKESTRATOR_GIT_MIRROR=/orkestrator-git-mirror/mirror.git");
 });

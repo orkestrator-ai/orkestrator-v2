@@ -59,6 +59,12 @@ calls them (`apps/backend/src/core/http-bridge-provider*.ts`,
   still in flight and `pending: false` once it finished; the backend lets a
   restart notice naming another request stand aside only for a `pending`
   request, so never report a finished request as pending.
+- A `GET /session/list` error body reaches the user as it stands: the backend
+  passes its `error` on as the whole message (`readBridgeResumableSessions`) and
+  the resume dialog prints it as plain text under its heading. Keep it a short,
+  fixed, content-free reason. A bridge that bounds the read must answer within
+  the backend's `BRIDGE_SESSION_LIST_TIMEOUT_MS` (35 s), or the backend gives up
+  first and the reason is lost.
 - Prompt dispatch and `POST /session/:id/attach` share the same client timeout,
   because they do the same work. A bridge with no attached agent process pays a
   full spawn plus `initialize` plus `session/load` on whichever request arrives

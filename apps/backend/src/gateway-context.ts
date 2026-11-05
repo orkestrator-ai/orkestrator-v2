@@ -14,6 +14,7 @@ import { PreviewTunnelServer } from "./preview-tunnel-server.js";
 import type { GatewayAuth } from "./gateway-auth.js";
 import { GatewayCredentialThrottle } from "./gateway-credential-throttle.js";
 import { GatewayHostPolicy } from "./gateway-host-policy.js";
+import { GatewayTrafficSummary } from "./gateway-traffic-summary.js";
 import { BrowserSessionStore, gatewayRequestCredential } from "./gateway-sessions.js";
 import {
   KEEPALIVE_MS,
@@ -85,6 +86,8 @@ export class GatewayContext {
   readonly replayHandshakeFrameCapacity: number;
   readonly replayHandshakeMaxBytes: number;
   readonly metrics: GatewayMetricsStore;
+  /** Per-second connection and request counts; logs `traffic.burst` on a spike. */
+  readonly traffic: GatewayTrafficSummary;
   readonly terminalWebSocket: TerminalWebSocketGateway;
   /** Backend-owned preview services, when this gateway fronts a full backend. */
   readonly previews?: PreviewRuntime;
@@ -130,6 +133,10 @@ export class GatewayContext {
     private readonly credentials: GatewayCredentialChecks,
   ) {
     this.backend = options.backend;
+    this.traffic = new GatewayTrafficSummary({
+      ...options.trafficSummary,
+      openSockets: () => this.sockets.size,
+    });
     this.dataDir = options.dataDir;
     this.rendererRoot = options.rendererRoot;
     this.rendererDevServerUrl = options.rendererDevServerUrl;

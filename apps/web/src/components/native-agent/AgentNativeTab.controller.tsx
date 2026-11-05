@@ -201,6 +201,7 @@ import {
 } from "@/stores/conversationScrollTargetStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
+import { useShallow } from "zustand/react/shallow";
 import {
   nativeComposeDraft,
   nativeComposePersistenceStore,
@@ -357,14 +358,40 @@ export function SharedNativeAgentController({
   const adapter = getNativeAgentAdapter(platform);
   const label = adapter.label;
   const config = useConfigStore((state) => state.config);
-  const environment = useEnvironmentStore((state) => state.getEnvironmentById(data.environmentId));
+  // Only the fields this tab reads: the environment record changes for status,
+  // activity, pull request and name updates it does not use, and each of those
+  // would otherwise re-render the tab and its transcript.
+  const {
+    envAgentSettings,
+    envInitialPrompt,
+    envProjectId,
+    envSetupPhase,
+    envWorktreePath,
+    hasStartupAgentSession,
+    pendingAgentLaunch,
+    startupAgentFailed,
+  } = useEnvironmentStore(
+    useShallow((state) => {
+      const env = state.environments.find((e) => e.id === data.environmentId);
+      return {
+        envAgentSettings: env?.agentSettings,
+        envInitialPrompt: env?.initialPrompt,
+        envProjectId: env?.projectId,
+        envSetupPhase: env?.setupPhase,
+        envWorktreePath: env?.worktreePath,
+        hasStartupAgentSession: env?.startupAgentSession !== undefined,
+        pendingAgentLaunch: env?.pendingAgentLaunch === true,
+        startupAgentFailed: env?.startupAgentSession?.status === "error",
+      };
+    }),
+  );
   // The whole tier chain in one call, for this platform only. A model belongs
   // to its own platform's catalogue, so nothing here can hand one platform's id
   // to another.
   const configured = resolvedPlatformSettings(
     config,
-    environment?.projectId ?? coordinatorProjectId,
-    environment,
+    envProjectId ?? coordinatorProjectId,
+    { agentSettings: envAgentSettings },
     platform,
   );
   const configuredModel = configured.model;
@@ -393,8 +420,7 @@ export function SharedNativeAgentController({
   // against the project's checkout under their own read-only lifecycle. The
   // ordinary worker setup gate would otherwise classify that absence as
   // permanently pending and its override action cannot target a synthetic ID.
-  const setupPending =
-    hasEnvironmentRecord && isSetupBlocked({ setupPhase: environment?.setupPhase });
+  const setupPending = hasEnvironmentRecord && isSetupBlocked({ setupPhase: envSetupPhase });
   const inputRef = useRef<MentionableInputRef>(null);
   const inputContainerRef = useRef<HTMLDivElement>(null);
   const initialPromptSentRef = useRef(false);
@@ -672,7 +698,7 @@ export function SharedNativeAgentController({
   const clearTabAgentHandoff = usePaneLayoutStore((state) => state.clearTabAgentHandoff);
   const fileSearch = useFileSearch(
     data.containerId,
-    environment?.worktreePath ?? coordinatorWorkspacePath,
+    envWorktreePath ?? coordinatorWorkspacePath,
     adapter.capabilities.attachments.files || adapter.capabilities.attachments.images,
   );
   const {
@@ -703,8 +729,7 @@ export function SharedNativeAgentController({
   });
   const classifyCommand = commandComposer.classify;
   const backendOwnsStartupPrompt =
-    tabId === STARTUP_AGENT_TAB_ID &&
-    (environment?.pendingAgentLaunch === true || environment?.startupAgentSession !== undefined);
+    tabId === STARTUP_AGENT_TAB_ID && (pendingAgentLaunch || hasStartupAgentSession);
   const {
     favorites: allFavorites,
     toggleFavorite,
@@ -881,7 +906,7 @@ export function SharedNativeAgentController({
     source: requestedResumeSessionId
       ? undefined
       : backendOwnsStartupPrompt
-        ? environment?.initialPrompt
+        ? envInitialPrompt
         : initialPrompt,
     backendOwned: backendOwnsStartupPrompt,
     tabInitialPrompt: initialPrompt,
@@ -890,9 +915,7 @@ export function SharedNativeAgentController({
       (message) => message.role === "user" && !isClientOnlyNativeMessage(message),
     ),
     sendFailed: sendError !== null,
-    launchFailed:
-      environment?.startupAgentSession?.status === "error" &&
-      environment.pendingAgentLaunch !== true,
+    launchFailed: startupAgentFailed && !pendingAgentLaunch,
   };
   // The clock is read in the updater, never in render; the render-time call
   // only asks whether anything changed.
@@ -1927,7 +1950,7 @@ export function SharedNativeAgentController({
       }
       // A prompt with a stable id must not be queued: the queue carries no id,
       // so a copy the backend already sent would run twice. Retried by the
-      // caller once the turn ends and this callback changes.
+      // caller once the turn ends and this callback changes with `canQueue`.
       if (submitOptions?.noQueue && canQueue) return false;
       // Claim the intent before validation or dispatch. A remount cannot replay
       // it a second time, and every terminal validation return releases it.
@@ -2662,7 +2685,7 @@ export function SharedNativeAgentController({
       const current = useNativeComposeStore.getState().drafts.get(sessionKey);
       const resolved = resolveWorkspaceAttachment(file, {
         containerId: data.containerId,
-        worktreePath: environment?.worktreePath ?? coordinatorWorkspacePath,
+        worktreePath: envWorktreePath ?? coordinatorWorkspacePath,
         allowFiles: adapter.capabilities.attachments.files,
         allowImages: adapter.capabilities.attachments.images,
         modelSupportsImages: selectedModel?.supportsImageInput,
@@ -2681,7 +2704,7 @@ export function SharedNativeAgentController({
       adapter.capabilities.attachments.files,
       adapter.capabilities.attachments.images,
       data.containerId,
-      environment?.worktreePath,
+      envWorktreePath,
       coordinatorWorkspacePath,
       selectedModel?.label,
       selectedModel?.supportsImageInput,
@@ -2709,7 +2732,7 @@ export function SharedNativeAgentController({
   useNativeComposeBarPaste({
     inputContainerRef,
     containerId: data.containerId ?? null,
-    worktreePath: isReadOnlyCoordinator || isBugReport ? undefined : environment?.worktreePath,
+    worktreePath: isReadOnlyCoordinator || isBugReport ? undefined : envWorktreePath,
     writeImage: isReadOnlyCoordinator || isBugReport ? writeSpecialImage : undefined,
     onAttach: handlePastedImage,
     canAttachImage: () =>
@@ -2923,12 +2946,19 @@ export function SharedNativeAgentController({
       if (accepted) clearTabInitialPrompt(tabId, data.environmentId);
       else initialPromptSentRef.current = false;
     });
+    // `submit` refuses while a queue edit, another send or a pre-send check
+    // holds its ref. Refs wake nothing, so the states released alongside them
+    // are listed here and a refused prompt is retried once the last one clears
+    // (`sendLocked` already carries two of them, but not `preparingSend`).
   }, [
     backendOwnsStartupPrompt,
     clearTabInitialPrompt,
     data.environmentId,
     initialPrompt,
+    isSubmitting,
+    preparingSend,
     projection,
+    queueEditPending,
     sendingHeld,
     setSendError,
     submit,
@@ -3170,7 +3200,7 @@ export function SharedNativeAgentController({
     return (
       <SetupPendingOverlay
         environmentId={data.environmentId}
-        setupPhase={environment?.setupPhase}
+        setupPhase={envSetupPhase}
         subtext={`${label} will connect automatically once setup finishes`}
         pendingPrompt={startupPromptPreview ?? undefined}
       />

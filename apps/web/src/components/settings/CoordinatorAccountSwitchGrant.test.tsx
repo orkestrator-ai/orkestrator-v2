@@ -242,7 +242,7 @@ describe("coordinator account-switch permission in Settings", () => {
     state = { ...state, grants: { claude: false, codex: false }, recentSwitches: [] };
     nodeSubscribers.get("bk_leaf")!.onResync();
     await waitFor(() => expect(box.getAttribute("aria-checked")).toBe("false"));
-    expect(screen.queryByRole("listitem")).toBeNull();
+    expect(screen.queryByRole("listitem") === null).toBe(true);
     view.unmount();
     expect(nodeStops).toEqual(["bk_leaf"]);
   });

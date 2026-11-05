@@ -5,10 +5,11 @@ import {
   type BackendInstanceDescriptor,
 } from "@orkestrator/protocol/backend-instance";
 import { CliError } from "./errors.js";
+import { readProcessStartTime, type ProcessStartReader } from "./process-start.js";
 import {
+  descriptorProcessRefusal,
   isDescriptorRefusal,
   isLoopbackHost,
-  processIsAlive,
   readDescriptor,
   readTokenFile,
 } from "./targets.js";
@@ -100,7 +101,11 @@ export async function startupLogExcerpt(
 export async function awaitServiceConnection(
   dataDir: string,
   previousGeneration: string | null,
-  options: ObserveOptions & { expectedVersion?: string; assertStarting?: () => Promise<void> },
+  options: ObserveOptions & {
+    expectedVersion?: string;
+    assertStarting?: () => Promise<void>;
+    readStart?: ProcessStartReader;
+  },
 ): Promise<ServiceConnection | null> {
   const file = path.join(dataDir, BACKEND_INSTANCE_DESCRIPTOR_FILE);
   try {
@@ -111,7 +116,10 @@ export async function awaitServiceConnection(
           value.generation !== previousGeneration &&
           path.resolve(value.dataDir) === path.resolve(dataDir) &&
           (options.expectedVersion === undefined || value.appVersion === options.expectedVersion) &&
-          processIsAlive(value.pid);
+          // The token is read below, so the pid must still be the backend
+          // that wrote this descriptor, not a later process reusing it.
+          (await descriptorProcessRefusal(value, options.readStart ?? readProcessStartTime)) ===
+            null;
         if (fresh) return { done: true as const, value };
       } catch (error) {
         if (isDescriptorRefusal(error)) throw error;

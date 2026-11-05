@@ -220,10 +220,13 @@ describe("gateway browser sessions", () => {
     expect(bearer.status).toBe(404);
   });
 
-  test("logout revokes the session on the server, not just in the browser", async () => {
+  test("native cookie-only POST without Origin revokes the session on the server", async () => {
     const { info } = await startGateway();
     const { cookie } = await signIn(info);
-    const logout = await requestUrl(`${info.url}__orkestrator/logout`, { headers: { cookie } });
+    const logout = await requestUrl(`${info.url}__orkestrator/logout`, {
+      method: "POST",
+      headers: { cookie },
+    });
     expect(logout.status).toBe(303);
     expect(logout.headers["set-cookie"]?.[0]).toContain("Max-Age=0");
 

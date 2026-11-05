@@ -87,12 +87,21 @@ descriptor is never skipped: a profile falls back to the manifest's endpoint
 only when opening the descriptor returns `ENOENT`. Access-denied, other I/O
 errors and invalid contents are refusals. Service startup and generation reads
 also surface refusals immediately. A failed PID probe, including `EPERM`, counts
-as gone, closing the cross-user PID-reuse case. A successful probe establishes
-only that the current user can signal a process with that PID: reuse by another
-process of the same user is not detected. The descriptor is not bound to the
-original process start time or the port's listener, so same-user PID reuse can
-still cause the credential to be sent to a stale port before response identity
-validation. L12 is therefore only partially fixed.
+as gone, closing the cross-user PID-reuse case.
+
+A live PID is bound to the backend before every credential read, including
+polls and credential-rotation retries. On Linux, the descriptor publishes
+`processIdentity`: the boot ID plus field 22 (start ticks) of the process's
+procfs stat. The client compares these exactly, without converting through
+wall-clock boot time. Clock corrections therefore cannot invalidate the binding.
+Older Linux backends must be upgraded and restarted to publish this identity;
+missing or unreadable identities fail closed.
+
+On macOS, the client reads `/bin/ps -o lstart=` with a fixed locale and UTC
+timezone. The start must be within one hour before to 30 seconds after the
+descriptor's `startedAt`, allowing backend initialization time and timestamp
+resolution. Unreadable or mismatching values fail closed. Service startup
+applies the same guard before reading a fresh descriptor's token.
 
 The installation ID is stable per data directory (a copied directory gets a
 new one). Every public response carries `backend.installationId`/`generation`;
@@ -250,6 +259,8 @@ not advertise at its version before sending it.
 | `run retry/discard` | `run.retry/discard` | `retry/discard_native_agent_dispatch` | provider |
 | `run cancel/output` | `run.cancel/output` | exec worker control | process / read |
 | `run receipts` | local | private local receipts | none |
+| `diagnostics plan` | `diagnostics.plan` | builds the bundle in the backend's memory ([logging.md](logging.md#the-diagnostics-bundle)); the manifest is the bundle's own | read |
+| `diagnostics export [--plan PLAN_ID] [--file PATH]` | `diagnostics.read` | reads a plan piece by piece and writes it **on this machine**, owner-only, never overwriting. Nothing is uploaded | read |
 | `host status` | `host.status` | `HostMaintenanceService` detailed snapshot (impact, tools, image) | read |
 | `host update channel stable/beta/unstable` | `host.update.channel` | persisted channel and a fresh check; refused while updating | metadata |
 | `host update check [--wait]` | `host.update.check` | check request answered by the host's updater | metadata |

@@ -1,7 +1,7 @@
 # Fake Git startup can consume the status timeout
 
 - **ID:** 2883
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-11-02
 - **Test:** `status timeout reports ETIMEDOUT and retries without fsmonitor (bun/node)`
 - **File:** `apps/backend/src/core/review-validation-worker.test.ts:1736`
@@ -54,3 +54,12 @@ three-file, one-worker run (126 pass, 2 unrelated failures overall); 30 repetiti
 of both timeout variants passed there in 17.5 s. This confirms timing sensitivity
 but does not reproduce the failure on main; its independence remains unproven.
 No timeout or assertion was loosened.
+
+## Resolution (2026-11-05)
+
+The hypothesis above is now established. On a loaded macOS host the test failed in the
+aggregate (`mise run test:full`) and alone, both interpreters each time, with only the
+fallback invocation recorded. A copy of the test at `48d2ed40c` failed 3 of 3 runs by test
+name; with the injected deadline raised from 200 ms to 2000 ms it passed 6 of 6 on the same
+host in the same session. The fake Git died before its `printf` ran. Fixed on `investigate-ci-f07d88911341-r1`
+by raising the deadline, which is still a real `spawnSync` timeout. No source changed.

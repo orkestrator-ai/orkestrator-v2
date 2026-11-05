@@ -4163,6 +4163,11 @@ export class NativeAgentService {
     return outcome;
   }
 
+  /** The last progressive reads per domain, for diagnostics. Memory only. */
+  progressiveReadSamples() {
+    return this.projections.progressiveReadSamples();
+  }
+
   async shutdown(): Promise<void> {
     this.stopped = true;
     this.goals.stop();

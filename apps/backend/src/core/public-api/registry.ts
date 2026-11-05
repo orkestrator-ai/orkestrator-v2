@@ -4,6 +4,7 @@ import type { CommandRegistrar, RegistryDependencies } from "../commands-registr
 import { ATTENTION_HANDLERS } from "./actions-attention.js";
 import { BUILD_HANDLERS } from "./actions-builds.js";
 import { CHANGE_HANDLERS } from "./actions-changes.js";
+import { DIAGNOSTICS_HANDLERS } from "./actions-diagnostics.js";
 import { createCapabilitiesHandler, DISCOVERY_HANDLERS } from "./actions-discovery.js";
 import { ENVIRONMENT_HANDLERS } from "./actions-environments.js";
 import { GRAPH_HANDLERS } from "./actions-graphs.js";
@@ -62,6 +63,7 @@ export function publicActionHandlers(): PublicActionHandler[] {
     ...RUN_RECOVERY_HANDLERS,
     ...EXEC_HANDLERS,
     ...HOST_HANDLERS,
+    ...DIAGNOSTICS_HANDLERS,
   ];
   handlers.push(
     ...createRunReadHandlers((action) => handlers.find((handler) => handler.action === action)),

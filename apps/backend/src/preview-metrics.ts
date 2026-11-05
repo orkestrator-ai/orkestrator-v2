@@ -31,6 +31,12 @@ export type PreviewHistogramName =
 
 const HISTOGRAM_SAMPLES = 512;
 
+/** The last {@link HISTOGRAM_SAMPLES} values. Quantiles ignore order, so only the slot moves. */
+interface SampleRing {
+  values: number[];
+  next: number;
+}
+
 /**
  * Bounded counters and sample histograms for preview transports. Never holds
  * URLs, paths, headers, payloads, or identifiers — only fixed names and the
@@ -38,7 +44,7 @@ const HISTOGRAM_SAMPLES = 512;
  */
 export class PreviewMetrics {
   private readonly counters = new Map<string, number>();
-  private readonly histograms = new Map<PreviewHistogramName, number[]>();
+  private readonly histograms = new Map<PreviewHistogramName, SampleRing>();
   private readonly gauges = new Map<string, () => number>();
 
   increment(name: PreviewMetricName, category?: PreviewErrorCategory, count = 1): void {
@@ -48,10 +54,14 @@ export class PreviewMetrics {
 
   observe(name: PreviewHistogramName, valueMs: number): void {
     if (!Number.isFinite(valueMs) || valueMs < 0) return;
-    const samples = this.histograms.get(name) ?? [];
-    samples.push(valueMs);
-    if (samples.length > HISTOGRAM_SAMPLES) samples.shift();
-    this.histograms.set(name, samples);
+    let samples = this.histograms.get(name);
+    if (!samples) {
+      samples = { values: [], next: 0 };
+      this.histograms.set(name, samples);
+    }
+    // Once full, the newest overwrites the oldest in place.
+    samples.values[samples.next] = valueMs;
+    samples.next = (samples.next + 1) % HISTOGRAM_SAMPLES;
   }
 
   /**
@@ -74,7 +84,7 @@ export class PreviewMetrics {
   snapshot() {
     const histograms: Record<string, { count: number; p50: number; p95: number; max: number }> = {};
     for (const [name, samples] of this.histograms) {
-      const sorted = [...samples].sort((a, b) => a - b);
+      const sorted = [...samples.values].sort((a, b) => a - b);
       const at = (quantile: number) =>
         sorted[Math.min(sorted.length - 1, Math.floor(quantile * sorted.length))] ?? 0;
       histograms[name] = {

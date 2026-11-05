@@ -306,6 +306,10 @@ export class GatewayAuth {
     });
     const url = new URL(request.url ?? "/", "http://orkestrator.local");
     const route = classifyGatewayRoute(url.pathname);
+    this.ctx.traffic.noteRequest(
+      request,
+      url.pathname.startsWith(NODE_RELAY_PREFIX) ? "node-relay" : route,
+    );
     const requestMetrics = this.ctx.metrics.beginRequest({
       route,
       listenerKind,
@@ -615,6 +619,7 @@ export class GatewayAuth {
       endpointRole: listenerKind === "control" ? "control" : "client",
     };
     if (identity.nodeMode) hello.nodeMode = identity.nodeMode;
+    if (identity.buildCommit) hello.buildCommit = identity.buildCommit;
     jsonResponse(response, 200, hello, { "cache-control": "no-store" });
   }
 

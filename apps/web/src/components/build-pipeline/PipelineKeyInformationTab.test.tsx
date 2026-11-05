@@ -203,14 +203,14 @@ describe("PipelineKeyInformationTab", () => {
       const title = framing === "objective" ? "Objective" : "Problem";
       const statement = section(tab, title);
       expect(within(tab).getAllByRole("region")[0]).toBe(statement);
-      expect(within(tab).queryByRole("region", { name: "Summary" })).toBeNull();
+      expect(within(tab).queryByRole("region", { name: "Summary" }) === null).toBe(true);
       const prose = within(statement).getByText(legacy.statement!);
       expect(prose.classList.contains("text-[15px]")).toBe(true);
       expect(prose.classList.contains("leading-7")).toBe(true);
       expect(prose.parentElement!.classList.contains("border-amber-400/60")).toBe(true);
       const nav = within(tab).getByRole("navigation", { name: "Key information sections" });
       expect(within(nav).getAllByRole("button")[0]!.textContent).toBe(title);
-      expect(within(nav).queryByRole("button", { name: "Summary" })).toBeNull();
+      expect(within(nav).queryByRole("button", { name: "Summary" }) === null).toBe(true);
       expect(nav.querySelector('[aria-current="location"]')?.textContent).toBe(title);
     },
   );
@@ -228,7 +228,7 @@ describe("PipelineKeyInformationTab", () => {
     expect(prose.classList.contains("text-[15px]")).toBe(true);
     expect(prose.classList.contains("leading-7")).toBe(true);
     expect(prose.parentElement!.classList.contains("border-amber-400/60")).toBe(true);
-    expect(within(tab).queryByText("Nothing has been recorded yet")).toBeNull();
+    expect(within(tab).queryByText("Nothing has been recorded yet") === null).toBe(true);
     const nav = within(tab).getByRole("navigation", { name: "Key information sections" });
     expect(
       within(nav)

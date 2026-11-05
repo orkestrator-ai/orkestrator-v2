@@ -6060,18 +6060,17 @@ describe("pr monitor commands", () => {
         });
         // Every read of the environment store, through the facade or from
         // another repository, reaches the projects repository.
+        // Arming reads its one row directly, so this fails only the monitor's
+        // hydration, however many reads that takes.
         const projects = storageInternals(storage).repos.projects;
-        const loadEnvironments = projects.loadEnvironments.bind(projects);
-        let calls = 0;
         const loadSpy = spyOn(projects, "loadEnvironments").mockImplementation(async () => {
-          calls += 1;
-          if (calls === 2) throw new Error("temporary storage read failure");
-          return loadEnvironments();
+          throw new Error("temporary storage read failure");
         });
 
         const armedAt = (await invoke("arm_pr_refresh_after_agent_completion", {
           environmentId: "e1",
         })) as string;
+        loadSpy.mockRestore();
         expect(armedAt).toEqual(expect.any(String));
         expect((await storage.getEnvironment("e1"))?.prRecheckAfterAgentCompletionArmedAt).toBe(
           armedAt,
@@ -6081,7 +6080,6 @@ describe("pr monitor commands", () => {
             /arm\.track-failed environmentId=e1 .*temporary storage read failure/,
           ),
         );
-        loadSpy.mockRestore();
       } finally {
         warning.mockRestore();
       }

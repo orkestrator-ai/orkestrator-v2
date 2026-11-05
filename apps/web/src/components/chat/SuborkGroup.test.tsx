@@ -113,7 +113,7 @@ describe("SuborkGroup", () => {
     expect(header.getAttribute("aria-expanded")).toBe("true");
     fireEvent.click(header);
     expect(header.getAttribute("aria-expanded")).toBe("false");
-    expect(screen.queryByText("Opus review")).toBeNull();
+    expect(screen.queryByText("Opus review") === null).toBe(true);
   });
 
   test("only a running call offers Stop", async () => {
@@ -122,7 +122,7 @@ describe("SuborkGroup", () => {
     await waitFor(() => expect(actions.stop).toHaveBeenCalledWith("batch-1"));
     cleanup();
     renderGroup({ ...BATCH, status: "settled", settledAt: "2026-11-04T00:05:00.000Z" });
-    expect(screen.queryByRole("button", { name: "Stop these suborks" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Stop these suborks" }) === null).toBe(true);
   });
 
   test("says when the answers did not reach the agent", () => {

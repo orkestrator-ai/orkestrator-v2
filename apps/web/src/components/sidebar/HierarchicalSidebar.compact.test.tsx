@@ -158,10 +158,10 @@ describe("what compact shows", () => {
     const header = document.querySelector("[data-sidebar-header]") as HTMLElement;
     expect(within(header).getAllByRole("button")).toHaveLength(1);
     expect(within(header).getByRole("button", { name: "Sidebar view: Compact" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /Search/ })).toBeNull();
-    expect(screen.queryByTestId("project-search-dialog")).toBeNull();
-    expect(screen.queryByTestId("machine-section-header")).toBeNull();
-    expect(screen.queryByTestId("federated-repository-list")).toBeNull();
+    expect(screen.queryByRole("button", { name: /Search/ }) === null).toBe(true);
+    expect(screen.queryByTestId("project-search-dialog") === null).toBe(true);
+    expect(screen.queryByTestId("machine-section-header") === null).toBe(true);
+    expect(screen.queryByTestId("federated-repository-list") === null).toBe(true);
   });
 
   test("no text is drawn outside the tooltips", async () => {
@@ -187,7 +187,7 @@ describe("what compact shows", () => {
     const [icon] = await findCompactIcons(2);
     const tile = within(icon!).getByTestId("command-node-home-icon");
     expect(tile.querySelector("svg")).toBeTruthy();
-    expect(within(tile).queryByTestId("project-icon")).toBeNull();
+    expect(within(tile).queryByTestId("project-icon") === null).toBe(true);
   });
 
   test("a repository with an icon shows it through the shared tile", async () => {
@@ -417,7 +417,7 @@ describe("the keyboard", () => {
     expect(document.activeElement).toBe(app);
     // Native Enter activation is asserted in e2e/SidebarMotion.spec.ts.
     expect(app.tagName).toBe("BUTTON");
-    expect(app.className).toContain("focus-visible:ring-2");
+    expect(app.className).toContain("focus-hairline");
   });
 
   test("the rotate shortcut leaves compact and comes back", async () => {
@@ -426,7 +426,9 @@ describe("the keyboard", () => {
     await findCompactIcons(2);
     act(() => requestAppShortcut("rotate-sidebar-grouping"));
     expect(useMachineViewStore.getState().grouping).toBe("machine");
-    await waitFor(() => expect(screen.queryByTestId("compact-repository-list")).toBeNull());
+    await waitFor(() =>
+      expect(screen.queryByTestId("compact-repository-list") === null).toBe(true),
+    );
     act(() => requestAppShortcut("rotate-sidebar-grouping"));
     expect(useMachineViewStore.getState().grouping).toBe("project");
     act(() => requestAppShortcut("rotate-sidebar-grouping"));
@@ -454,7 +456,9 @@ describe("leaving with the mouse", () => {
     fireEvent.pointerDown(screen.getByRole("button", { name: "Sidebar view: Compact" }));
     fireEvent.click(await screen.findByRole("menuitemradio", { name: "By repository" }));
     expect(useMachineViewStore.getState().grouping).toBe("repository");
-    await waitFor(() => expect(screen.queryByTestId("compact-repository-list")).toBeNull());
+    await waitFor(() =>
+      expect(screen.queryByTestId("compact-repository-list") === null).toBe(true),
+    );
     expect(await screen.findByTestId("federated-repository-list")).toBeTruthy();
   });
 
@@ -493,7 +497,7 @@ describe("leaving with the mouse", () => {
     useUIStore.setState({ environmentSortMode: "activity" });
     renderSidebar();
     await findCompactIcons(2);
-    expect(screen.queryByTestId("federated-activity-list")).toBeNull();
+    expect(screen.queryByTestId("federated-activity-list") === null).toBe(true);
   });
 });
 
@@ -510,8 +514,8 @@ describe("other surfaces", () => {
     renderSidebar();
     await findCompactIcons(2);
     act(() => requestAppShortcut("search-projects"));
-    expect(screen.queryByTestId("project-search-dialog")).toBeNull();
-    expect(screen.queryByRole("combobox")).toBeNull();
+    expect(screen.queryByTestId("project-search-dialog") === null).toBe(true);
+    expect(screen.queryByRole("combobox") === null).toBe(true);
   });
 
   test("the phone layout falls back to the repository list and keeps the choice", async () => {
@@ -524,7 +528,7 @@ describe("other surfaces", () => {
     installTwoMachines();
     renderSidebar();
     expect(await screen.findByTestId("federated-repository-list")).toBeTruthy();
-    expect(screen.queryByTestId("compact-repository-list")).toBeNull();
+    expect(screen.queryByTestId("compact-repository-list") === null).toBe(true);
     expect(useMachineViewStore.getState().grouping).toBe("compact");
   });
 });

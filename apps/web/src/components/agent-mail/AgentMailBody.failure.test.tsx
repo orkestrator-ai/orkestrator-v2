@@ -32,7 +32,7 @@ test("rejected Markdown chunk keeps plain mail and the surrounding shell mounted
     </main>,
   );
   const reload = await screen.findByRole("button", { name: "Reload application" });
-  expect(screen.queryByRole("button", { name: "Retry formatting" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Retry formatting" }) === null).toBe(true);
   fireEvent.click(reload);
   expect(onReload).toHaveBeenCalledTimes(1);
   expect(rejectImport).toHaveBeenCalledTimes(1);

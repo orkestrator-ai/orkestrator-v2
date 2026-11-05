@@ -1,7 +1,7 @@
 # Toolchain stamp comparison collides within one millisecond
 
 - **ID:** 4041
-- **Status:** open
+- **Status:** resolved
 - **Observed:** 2026-11-04
 - **Test:** `verified stamps across launches > an explicit full verification ignores stamps`
 - **File:** `packages/toolchain/src/manager-stamps.test.ts`
@@ -23,3 +23,10 @@ millisecond produce equal values even though the file was verified again; the
 failing value ends in `000000`, which fits. The `Tests (workspace)` shard passed in
 the recent `main` runs checked, so CI runners may rarely be this fast. No test or
 source changed for this case.
+
+## Resolution (2026-11-05)
+
+The cause in 4042 applies here too. The test now waits past a stamp tick
+(`nextStampTime` in `manager-stamps.test.ts`, 2 ms) before the second launch; the
+assertion is unchanged. It also failed on CI `main` at `e198fd4a7` (run 41887107581).
+Fixed on `investigate-ci-f07d88911341-r1`, verified with 40 of 40 passing runs of the file alone on macOS.

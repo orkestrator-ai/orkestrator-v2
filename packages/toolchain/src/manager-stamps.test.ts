@@ -92,6 +92,9 @@ async function stamps(dataDir: string) {
   };
 }
 
+/** Stamps have millisecond resolution; a re-stamp in the same one would look like none. */
+const nextStampTime = () => Bun.sleep(2);
+
 describe("verified stamps across launches", () => {
   test("an unchanged toolchain is not hashed again on the next launch", async () => {
     const dataDir = await createDataDir();
@@ -222,6 +225,7 @@ describe("verified stamps across launches", () => {
     // Same size, so only the digest can tell.
     await chmod(executablePath, 0o700);
     await writeFile(executablePath, Buffer.alloc(BODY.byteLength, 0x41));
+    await nextStampTime();
     await launch(dataDir, fetchImpl);
 
     expect(fetchImpl).toHaveBeenCalledTimes(2);
@@ -236,6 +240,7 @@ describe("verified stamps across launches", () => {
     const executablePath = await readlink(first.executables.codex);
     const before = await stamps(dataDir);
 
+    await nextStampTime();
     await launch(dataDir, fetchImpl, { timingsForTests: { fullCheckIntervalMs: 0 } });
     const after = await stamps(dataDir);
 
@@ -252,6 +257,7 @@ describe("verified stamps across launches", () => {
     const executablePath = await readlink(first.executables.codex);
     const before = (await stamps(dataDir)).files[executablePath]!;
 
+    await nextStampTime();
     await launch(dataDir, fetchImpl, { fullVerification: true });
 
     expect((await stamps(dataDir)).files[executablePath]!.stampedAtNs).not.toBe(before.stampedAtNs);

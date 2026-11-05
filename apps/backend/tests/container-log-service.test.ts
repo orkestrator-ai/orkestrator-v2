@@ -1,13 +1,22 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
-import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { ContainerLogService, LOG_LIMITS, recordCut } from "../src/core/container-log-service";
 import {
   boundedBackgroundLaunch,
   boundedLaunchWithPrivateEnv,
+  CONTAINER_LOG_MAX_BYTES,
   CONTAINER_LOG_WRITER,
 } from "../src/core/container-log-bounds";
 
@@ -193,14 +202,42 @@ describe("container log service", () => {
 });
 
 describe("bounded bridge output", () => {
-  test("launch uses the rotating writer when the image has it, else the plain redirect", () => {
+  test("launch uses the rotating writer when the image has it, else a capped redirect", () => {
     const shell = boundedBackgroundLaunch("bun /opt/x/index.js", "/tmp/x.log");
     expect(shell).toContain("if [ -x /usr/local/bin/orkestrator-log-writer ]; then");
     expect(shell).toContain(
       "setsid sh -c 'bun /opt/x/index.js 2>&1 | /usr/local/bin/orkestrator-log-writer /tmp/x.log'",
     );
-    expect(shell).toContain("setsid bun /opt/x/index.js > /tmp/x.log 2>&1 &");
+    expect(shell).toContain(
+      `setsid sh -c 'bun /opt/x/index.js 2>&1 | { head -c ${CONTAINER_LOG_MAX_BYTES}; cat >/dev/null; }' > /tmp/x.log 2>&1 &`,
+    );
   });
+
+  test("an image without the writer keeps the first 5 MiB and drains the rest", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "ork-log-cap-"));
+    try {
+      const file = path.join(dir, "bridge.log");
+      const done = path.join(dir, "done");
+      const producer = path.join(dir, "producer.sh");
+      // The producer can only finish once `cat` is reading, which is after
+      // `head` has written its 5 MiB and exited.
+      writeFileSync(
+        producer,
+        `head -c ${CONTAINER_LOG_MAX_BYTES + 1024 * 1024} /dev/zero\necho stderr >&2\ntouch ${done}\n`,
+      );
+      const shell = boundedBackgroundLaunch(`bash ${producer}`, file).replaceAll(
+        CONTAINER_LOG_WRITER,
+        path.join(dir, "no-writer"),
+      );
+      expect(Bun.spawnSync({ cmd: ["bash", "-c", shell] }).exitCode).toBe(0);
+      const deadline = Date.now() + 10_000;
+      while (!existsSync(done) && Date.now() < deadline) await Bun.sleep(25);
+      expect(existsSync(done)).toBe(true);
+      expect(statSync(file).size).toBe(CONTAINER_LOG_MAX_BYTES);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 15_000);
 
   const WRITER = path.resolve(import.meta.dir, "../../../docker/orkestrator-log-writer.sh");
 

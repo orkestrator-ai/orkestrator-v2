@@ -33,9 +33,21 @@ umask 077
 # grow the writer's memory. perl-base is Essential on Debian, so the image
 # always has it.
 if ! command -v perl >/dev/null 2>&1; then
-    # Unbounded, as an image without the writer is, but still draining.
-    # If opening or writing fails, consume the remaining input as well.
-    cat >>"$file" || cat >/dev/null
+    # A custom image without Perl: no rotation, but still bounded. Append up
+    # to max-bytes less what the file already holds, then count the rest
+    # while draining it, so the producer never sees a closed pipe. A failed
+    # open or write leaves the rest to the count as well. At end of input a
+    # marker says how much was dropped.
+    size=0
+    # Only a regular file has a size to read; /dev/full, say, reads forever.
+    [ -f "$file" ] && size=$(( $(wc -c <"$file" 2>/dev/null || echo 0) ))
+    room=$(( max > size ? max - size : 0 ))
+    head -c "$room" >>"$file" 2>/dev/null || true
+    dropped=$(( $(wc -c) ))
+    if [ "$dropped" -gt 0 ]; then
+        printf '\n[orkestrator-log-writer] dropped at least %s bytes past %s\n' "$dropped" "$max" \
+            >>"$file" 2>/dev/null || true
+    fi
     exit 0
 fi
 exec perl -e '
@@ -49,27 +61,54 @@ my ($file, $max, $keep) = @ARGV;
 my $fold = 65536;
 my $size = (-f $file ? -s _ : 0) || 0;
 my ($log, $out, $buffer) = (undef, "", "");
+# Lines lost to a failed open, write or rotation since the last write that
+# succeeded. The next write that succeeds starts with a marker giving the
+# count, so a gap (a full disk, say) is visible in the log itself. If the
+# file never becomes writable again, the marker never appears. Accounting is
+# not wound back for lost lines: $size running ahead of the file only makes
+# the next rotation, which frees the oldest file, come sooner.
+my $dropped = 0;
 
 # A failed open or write drops that output; the next write tries again.
 sub put {
     return unless length $out;
+    my $data = $out;
+    $data = "[orkestrator-log-writer] dropped $dropped lines\n$data" if $dropped;
+    # The marker is not counted towards $size until written, so it can take
+    # a file past max-bytes by its own length.
+    my $marker = length($data) - length($out);
+    $out = "";
     if (!$log && !sysopen($log, $file, O_WRONLY | O_APPEND | O_CREAT, 0600)) {
         undef $log;
-        $out = "";
+        lost($data, 0, $marker);
         return;
     }
     my $offset = 0;
-    while ($offset < length $out) {
-        my $wrote = syswrite($log, $out, length($out) - $offset, $offset);
+    while ($offset < length $data) {
+        my $wrote = syswrite($log, $data, length($data) - $offset, $offset);
         if (!defined $wrote) {
             next if $! == EINTR;
             close $log;
             undef $log;
-            last;
+            lost($data, $offset, $marker);
+            return;
         }
         $offset += $wrote;
     }
-    $out = "";
+    $size += $marker;
+    $dropped = 0;
+}
+
+# Counts the lines of $data from $offset on as dropped: every line not
+# written whole. A marker that was written has reported its count.
+sub lost {
+    my ($data, $offset, $marker) = @_;
+    if ($marker && $offset >= $marker) {
+        $dropped = 0;
+        $size += $marker;
+    }
+    my $from = $offset > $marker ? $offset : $marker;
+    $dropped += (substr($data, $from) =~ tr/\n//);
 }
 
 sub rotate {
@@ -94,7 +133,10 @@ sub line {
     my $n = length($text) + 1;
     # A failed rotation leaves the active file (and its accounting) intact.
     # Drop this line and retry on later input, while continuing to drain.
-    return if $size > 0 && $size + $n > $max && !rotate();
+    if ($size > 0 && $size + $n > $max && !rotate()) {
+        $dropped++;
+        return;
+    }
     $out .= "$text\n";
     $size += $n;
 }

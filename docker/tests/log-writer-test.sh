@@ -85,7 +85,8 @@ printf 'before\n' >&3
 sleep 0.2
 mkdir "$work/missing"
 printf 'after\n' >&3
-wait_content "$work/missing/open.log" after
+# The first write that succeeds says how many lines were lost before it.
+wait_content "$work/missing/open.log" $'[orkestrator-log-writer] dropped 1 lines\nafter'
 finish_writer
 
 # /dev/full opens successfully and fails at syswrite. Large input proves that
@@ -104,9 +105,28 @@ if [ -c /dev/full ]; then
     sleep 0.2
     rm "$work/write-recovery.log"
     printf 'after\n' >&3
-    wait_content "$work/write-recovery.log" after
+    wait_content "$work/write-recovery.log" $'[orkestrator-log-writer] dropped 1 lines\nafter'
     finish_writer
 fi
+
+# A failed rotation drops the line that needed it; a later line that fits
+# goes to the file after a marker with the count, in the same run.
+file="$work/rotate-marker.log"
+mkdir -p "$file.1/occupied"
+printf '%040d\n%080d\n%080d\n%020d\n' 1 2 3 4 | bash "$writer" "$file" 100 2
+[ "$(cat "$file")" = "$(printf '%040d\n[orkestrator-log-writer] dropped 2 lines\n%020d' 1 4)" ] ||
+    fail 'a failed rotation left no dropped-lines marker'
+
+# A write cut short by the file size limit (a full disk behaves alike) loses
+# the rest of that line and every line after it until a write succeeds:
+# here, after rotation, into a new file. SIGXFSZ is ignored, as the limit
+# would otherwise kill the writer instead of failing its write.
+file="$work/fsize.log"
+{ printf '%0599d\n' 1 2 3 4; } |
+    bash -c 'trap "" XFSZ; ulimit -f 1; exec bash "$0" "$1" 2048 2' "$writer" "$file"
+[ "$(wc -c <"$file.1")" -eq 1024 ] || fail 'the size limit did not cut the first file'
+[ "$(cat "$file")" = "$(printf '[orkestrator-log-writer] dropped 2 lines\n%0599d' 4)" ] ||
+    fail 'a failed write left no dropped-lines marker'
 
 # Signal the exact process spawned here only, after its first persisted line
 # proves the shell has execed Perl and installed the ignored dispositions.
@@ -121,12 +141,27 @@ printf 'after TERM\n' >&3
 wait_content "$work/signals.log" $'before\nafter HUP\nafter TERM'
 finish_writer
 
-# Limit PATH to cat, forcing the no-Perl branch. Test success, open failure,
-# and write failure with enough input to expose premature pipe closure.
+# Limit PATH to cat, head and wc, forcing the no-Perl branch. Test success,
+# the cap, open failure, and write failure with enough input to expose
+# premature pipe closure.
 mkdir "$work/bin"
-ln -s "$(command -v cat)" "$work/bin/cat"
+for tool in cat head wc; do ln -s "$(command -v "$tool")" "$work/bin/$tool"; done
 printf 'fallback\n' | PATH="$work/bin" /bin/bash "$writer" "$work/fallback.log"
 wait_content "$work/fallback.log" fallback
+# The cap counts what the file already holds, and the rest is drained.
+for ((i = 0; i < 20000; i++)); do printf 'fallback line\n'; done |
+    PATH="$work/bin" /bin/bash "$writer" "$work/fallback.log" 100
+# A `head` that reads ahead would leave fewer bytes to count, hence the
+# pattern for the count (GNU head reads no further than its limit).
+expected="fallback
+$(for ((i = 0; i < 6; i++)); do printf 'fallback line\n'; done)
+fallbac"
+[ "$(head -n 8 "$work/fallback.log")" = "$expected" ] ||
+    fail 'the no-Perl fallback did not keep its first 100 bytes'
+[ "$(wc -l <"$work/fallback.log")" -eq 9 ] &&
+    tail -n 1 "$work/fallback.log" |
+    grep -Eqx '\[orkestrator-log-writer\] dropped at least [0-9]+ bytes past 100' ||
+    fail 'the no-Perl fallback did not end with a dropped-bytes marker'
 for ((i = 0; i < 20000; i++)); do printf 'fallback drop\n'; done |
     PATH="$work/bin" /bin/bash "$writer" "$work/absent/log" 2>/dev/null
 if [ -c /dev/full ]; then

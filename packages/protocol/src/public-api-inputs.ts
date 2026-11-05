@@ -307,7 +307,8 @@ const agentSelection: Record<string, PublicJsonSchema> = {
   agent: {
     type: "string",
     enum: AGENT_PLATFORMS,
-    description: "Agent platform; agent.options lists the enabled ones.",
+    description:
+      "Agent platform; agent.options lists the enabled ones. For environment.launch and session.start, omit to use the saved default on first admission; retries retain the original choice.",
   },
   model: {
     type: "string",
@@ -865,7 +866,6 @@ export const PUBLIC_ACTION_INPUTS: Readonly<Record<PublicActionName, PublicActio
       input: schema({ ...createEnvironmentFields, ...agentSelection, prompt }, [
         "projectId",
         "type",
-        "agent",
         "prompt",
       ]),
       examples: [
@@ -966,7 +966,7 @@ export const PUBLIC_ACTION_INPUTS: Readonly<Record<PublicActionName, PublicActio
           literal,
           attachments,
         },
-        ["environmentId", "agent", "prompt"],
+        ["environmentId", "prompt"],
       ),
       examples: [
         {

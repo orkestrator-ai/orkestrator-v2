@@ -156,7 +156,10 @@ test("launch persists the root and selection, announces both resources, and rehy
 test("concurrent retries and a fresh registry use the same durable identity and reject changed payloads", async () => {
   const outcomes = await Promise.all(Array.from({ length: 5 }, () => launch()));
   commands = createCommandRegistry();
-  expect((await launch()).workflow.id).toBe(outcomes[0]!.workflow.id);
+  const replay = await launch();
+  expect(replay.workflow.id).toBe(outcomes[0]!.workflow.id);
+  // The same request id again is that request's review, and says so.
+  expect(replay.replayed).toBe(true);
   expect(start).toHaveBeenCalledTimes(1);
   await expect(launch({ targetBranch: "changed" })).rejects.toThrow("different payload");
   expect((await storage.getPaneLayout(environmentId))?.root).toMatchObject({
@@ -193,6 +196,8 @@ test("existing active workflows reattach even with a different model selection a
     workflow: { id: first.workflow.id },
     ui: { tabId: first.ui.tabId },
   });
+  // Reattaching an active review under a new request id is not a replay.
+  expect(second.replayed).toBeUndefined();
   expect(start).toHaveBeenCalledTimes(1);
   expect(cancel).not.toHaveBeenCalled();
   const associations = await storage.coordinators.listCoordinatorWorkflowAssociations(

@@ -1684,7 +1684,7 @@ DK-16 and DK-17 done on 2026-11-03. `session.transcript` takes an optional `know
 
 DK-18 done on 2026-11-04. The writer (`installProductionApplicationLogging` in `application-logging.ts`) queues lines and each link of its one write chain appends everything queued, on the next event-loop turn, in pieces of at most `maxBatchBytes` (256 KiB). `mkdir` runs before the first write and again only after a failed write. Lines logged during an append share the next one, so `flush` and `stop` still await the chain's tail. The 4 MiB `maxPendingBytes` bound and its drop markers are unchanged, and it now has a count bound beside it, `maxPendingEntries` (65,536 entries), as the invariants require of every queue. `ENOENT` on an append means the folder was removed: the unwritten lines get one retry through a fresh `mkdir`, and the file index is rescanned from what is on disk. Any other failure loses that batch, writes one `write.failed` line to the console with its `entries` and `bytes`, and never rejects the chain. Tests: `apps/desktop/electron/application-logging.test.ts` ("production application log batching": a counted burst, order across batches, the batch bound, the flush bound in event-loop turns, stop and the quit hold, a removed folder, failed `mkdir` and append, a report that throws, the byte and count bounds) and `apps/backend/src/standalone-logging.test.ts` (shutdown keeps every queued line).
 
-**Investigation.** Re-checked 2026-11-03 against `main` at `7b48c23f`. The backend still reads the window fresh (`forceSnapshot: true`) on an unchanged answer; the saving is the page's mapping, serialisation and transfer, not the provider read. `attention --follow` already pages runs and setups by `cursor`, but each poll re-sends every pending question and approval; not changed here.
+**Investigation.** Re-checked 2026-11-03 against `main` at `7b48c23f`. The backend still reads the window fresh (`forceSnapshot: true`) on an unchanged answer; the saving is the page's mapping, serialisation and transfer, not the provider read. `attention --follow` already pages runs and setups by `cursor`, but each poll re-sends every pending question and approval; not changed here. Measured with the scripted provider on 2026-11-05 and left unconditional on that fixture evidence. Default/maximum pages with three-byte names and 36-character interaction ids have 32/80 KiB regression budgets, not universal bounds; escaped names and longer provider ids can exceed them; see [5560](../cli-and-slash-commands/5560-attention-follow-page-size.md).
 
 **Decisions.**
 
@@ -2147,6 +2147,10 @@ fails at once, so a refused or offline host still reaches the existing retry
 dialog quickly. The partial stays for that retry and the next launch. Partials
 no pinned archive references are removed after a day unused, not at once,
 because another build sharing the cache may pin them.
+
+### Task 16: attention payload budgets describe a fixture (DK-16)
+
+On 2026-11-05, scoped the 32/80 KiB budgets to the tested three-byte names and 36-character interaction ids. Kept unconditional attention polling on the fixture evidence and live measurement in 5560. A universal byte limit would require a public-contract change; this correction makes no such change and does not claim coverage of escaped strings or longer provider ids.
 
 ### Task 16: when follow sends `knownToken` (DK-16)
 

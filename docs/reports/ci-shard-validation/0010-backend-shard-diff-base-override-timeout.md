@@ -143,7 +143,7 @@ The test now reports its steps on any failure or deadline miss, and a passing ru
 - [Flake case 1537](../../tests/flaky-tests/environments-and-containers/1537-diff-base-override-scan-timeout.md)
 - [Todo 4260](../../todo/cross-cutting/4260-bun-loses-child-process-events.md): the runtime defect behind the stall, still in Bun
 - [0030 test suite and CI health](../../todo/cross-cutting/0030-test-suite-and-ci-health.md), task 1. The required-check ruleset is still unapplied (`gh api repos/orkestrator-ai/orkestrator-v2/rulesets` returned an empty list today), which is why #1636 could merge with a red gate. That stays with 0030 as a maintainer action.
-- [2922 full and isolated suite failures on main](../../todo/cross-cutting/2922-full-and-isolated-suite-failures-on-main.md), which owns the `bounded test diagnostics` failure.
+- To-do 2922 (finished and removed), which owned the `bounded test diagnostics` failure.
 
 ## Merge reconciliation (2026-11-04)
 
@@ -159,4 +159,4 @@ output uses the explicit `waitForDescendants` contract.
 
 The incoming branch also recorded deterministic `bounded test diagnostics`
 failures on `0bd2cea9`, `a06f16d7` and `a44641cb`, and rewrote those assertions.
-That work stays with [2922](../../todo/cross-cutting/2922-full-and-isolated-suite-failures-on-main.md).
+That work stayed with to-do 2922, since finished and removed.

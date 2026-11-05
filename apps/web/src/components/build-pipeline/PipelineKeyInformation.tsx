@@ -25,6 +25,7 @@ import {
 } from "./key-information-section-nav";
 import { KeyInformationProse } from "./KeyInformationProse";
 import { KeyInformationText } from "./KeyInformationText";
+import { PipelineIntegrateButton } from "./PipelineIntegrateButton";
 
 /**
  * The pipeline header's Key information button and the floating panel it
@@ -37,14 +38,20 @@ import { KeyInformationText } from "./KeyInformationText";
  * With `onOpenTab` the brief can also be read as a full tab: the panel's
  * pop-out button turns the panel into that tab, and right-clicking the header
  * button opens the tab directly without showing the panel first.
+ *
+ * With `environmentId` the panel's header also offers Integrate, which turns
+ * on that environment's auto-merge after a confirmation.
  */
 export function PipelineKeyInformationButton({
   keyInformation,
   onOpenTab,
+  environmentId,
 }: {
   keyInformation: BuildPipelineKeyInformation | undefined;
   /** Opens (or focuses) the brief's tab; returns whether a tab is now shown. */
   onOpenTab?: () => boolean;
+  /** The pipeline's environment, whose pull request Integrate merges. */
+  environmentId?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [tooltipOpen, setTooltipOpen] = useState(false);
@@ -64,12 +71,17 @@ export function PipelineKeyInformationButton({
     if (!open) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
+      // Escape in the Integrate confirmation closes only that dialog.
+      if (isInsideConfirmation(event.target)) return;
       closeAndRestoreFocus();
     };
     const onPointerDown = (event: PointerEvent) => {
       const target = event.target as Node | null;
       if (!target) return;
       if (panelRef.current?.contains(target) || buttonRef.current?.contains(target)) return;
+      // The confirmation is portaled out of the panel, and its overlay covers
+      // the page, so a click there is not a click away from the panel.
+      if (isInsideConfirmation(target)) return;
       setOpen(false);
     };
     document.addEventListener("keydown", onKeyDown);
@@ -148,6 +160,7 @@ export function PipelineKeyInformationButton({
                 {keyInformationUpdatedLine(keyInformation)}
               </div>
             </div>
+            {environmentId ? <PipelineIntegrateButton environmentId={environmentId} /> : null}
             {onOpenTab ? (
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -182,6 +195,15 @@ export function PipelineKeyInformationButton({
         </div>
       ) : null}
     </>
+  );
+}
+
+function isInsideConfirmation(target: EventTarget | null): boolean {
+  if (!(target instanceof Node)) return false;
+  const element = target instanceof Element ? target : target.parentElement;
+  return (
+    !!element?.closest('[role="alertdialog"]') ||
+    !!element?.closest('[data-slot="alert-dialog-overlay"]')
   );
 }
 

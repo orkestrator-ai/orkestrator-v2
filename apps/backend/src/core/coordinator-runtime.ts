@@ -1,6 +1,7 @@
 import {
   coordinatorConversationIdFromRuntimeId,
   coordinatorIdFromRuntimeId,
+  coordinatorConversationRunnable,
   type CoordinatorConversation,
   type CoordinatorWorkspace,
 } from "@orkestrator/protocol/coordinator";
@@ -13,6 +14,7 @@ export type CoordinatorRuntimeUnavailableReason =
   | "workspace"
   | "workspace-not-ready"
   | "conversation"
+  | "startup-failed"
   | "unassigned"
   | "unsupported-agent"
   | "checkout";
@@ -23,6 +25,8 @@ export type CoordinatorRuntimeResolution =
       status: "unavailable";
       coordinatorId: string;
       reason: CoordinatorRuntimeUnavailableReason;
+      /** With `startup-failed`: why, sanitized for display. */
+      startupError?: string;
     }
   | {
       status: "ready";
@@ -57,6 +61,15 @@ export async function resolveCoordinatorRuntime(
   );
   if (!conversation || !conversationId) {
     return { status: "unavailable", coordinatorId, reason: "conversation" };
+  }
+  // Its own failure, not the coordinator's: only this conversation is refused.
+  if (conversation.startupError) {
+    return {
+      status: "unavailable",
+      coordinatorId,
+      reason: "startup-failed",
+      startupError: conversation.startupError,
+    };
   }
   // No provider yet: the conversation exists, but nothing has been
   // materialized for it. Callers that need a runtime must say so distinctly,
@@ -109,6 +122,30 @@ export async function openCoordinatorConversation(
   return workspace && conversation ? { workspace, conversation } : null;
 }
 
+/**
+ * Why an open conversation may be read but not run, or null when it may run.
+ * The transcript and state reads answer from saved data while this is set, and
+ * must never resolve a provider, which is what would start a bridge.
+ */
+export async function heldCoordinatorConversation(
+  storage: Pick<StorageService, "coordinators">,
+  runtimeId: string,
+): Promise<{
+  workspace: CoordinatorWorkspace;
+  conversation: CoordinatorConversation;
+  message: string;
+} | null> {
+  const open = await openCoordinatorConversation(storage, runtimeId);
+  if (!open || coordinatorConversationRunnable(open.workspace, open.conversation)) return null;
+  const message =
+    open.workspace.lifecycleState === "paused"
+      ? "The Coordinator is paused; showing saved history"
+      : open.workspace.lifecycleState === "error"
+        ? "The Coordinator could not start; showing saved history"
+        : "This conversation could not start; showing saved history";
+  return { ...open, message };
+}
+
 export function coordinatorRuntimeUnavailableMessage(
   resolution: Extract<CoordinatorRuntimeResolution, { status: "unavailable" }>,
 ): string {
@@ -117,6 +154,10 @@ export function coordinatorRuntimeUnavailableMessage(
       return "Coordinator workspace is not ready";
     case "conversation":
       return "The coordinator conversation is unavailable";
+    case "startup-failed":
+      // An older renderer, which has no pane notice, shows this as the failure.
+      // "not ready" is what a schedule's retry looks for: Retry can still clear it.
+      return `This coordinator conversation is not ready because it could not start: ${resolution.startupError ?? "unknown error"}`;
     case "unassigned":
       return "This coordinator conversation has no agent yet; send its first prompt to choose one";
     case "unsupported-agent":

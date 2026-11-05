@@ -46,17 +46,23 @@ function updateInputSchema() {
     summary: text(limits.proseLength)
       .optional()
       .describe(
-        "One paragraph on the change as a whole, in plain language for a reader who does not know the code: what changed and why it matters. No file names, identifiers or jargon.",
+        "The change as a whole, in plain language for a reader who does not know the code: what changed and why it matters. No file names, identifiers or jargon. Two to four short paragraphs separated by a blank line, with `- ` bullet lines where the points are a list; never one long block.",
       ),
     statement: text(limits.proseLength)
       .optional()
-      .describe("The problem being solved, or the objective being completed, in a few sentences."),
+      .describe(
+        "The problem being solved, or the objective being completed, in a few sentences. Separate paragraphs with a blank line; `- ` lines show as bullets.",
+      ),
     context: text(limits.proseLength)
       .optional()
-      .describe("The situation around the work: where it lives, what it affects, constraints."),
+      .describe(
+        "The situation around the work: where it lives, what it affects, constraints. Separate paragraphs with a blank line; `- ` lines show as bullets.",
+      ),
     solution: text(limits.proseLength)
       .optional()
-      .describe("The solution, as a reader would want it summarised."),
+      .describe(
+        "The solution, as a reader would want it summarised. Separate paragraphs with a blank line; `- ` lines show as bullets.",
+      ),
     workDone: textList(limits.listItems, limits.itemLength)
       .optional()
       .describe("What the agents did, one entry per notable piece of work."),

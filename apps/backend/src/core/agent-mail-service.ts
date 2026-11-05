@@ -12,7 +12,11 @@ import {
   isEnvironmentReadyForAgents,
   isEnvironmentSetupSettled,
 } from "@orkestrator/protocol/environment-readiness";
-import { coordinatorIdFromRuntimeId } from "@orkestrator/protocol/coordinator";
+import {
+  coordinatorConversationIdFromRuntimeId,
+  coordinatorConversationRunnable,
+  coordinatorIdFromRuntimeId,
+} from "@orkestrator/protocol/coordinator";
 import { randomUUID } from "node:crypto";
 import type { NativeAgentService } from "./native-agent-service.js";
 import type { MailSteerDispatchOutcome } from "./native-agent-service-shared.js";
@@ -765,7 +769,15 @@ export class AgentMailService {
       if (coordinatorId) {
         const workspace =
           await this.storage.coordinators.getCoordinatorWorkspaceById(coordinatorId);
-        if (!workspace || workspace.lifecycleState !== "ready") {
+        // The recipient's own state: a sibling that failed to start holds back
+        // nobody else's mail, and this conversation's waits until it is retried.
+        const conversationId = coordinatorConversationIdFromRuntimeId(mailbox.environmentId);
+        const recipient = workspace?.conversations.find((item) => item.id === conversationId);
+        if (
+          !workspace ||
+          workspace.lifecycleState !== "ready" ||
+          (recipient && !coordinatorConversationRunnable(workspace, recipient))
+        ) {
           await this.recordPresence(mailbox.mailboxId, "environment_unready");
           this.noteSkip(message, mailbox, "environment_unready");
           continue;

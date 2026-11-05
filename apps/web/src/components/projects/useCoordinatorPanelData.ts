@@ -8,6 +8,7 @@ import {
 import { useCoordinatedRead } from "@/hooks/useCoordinatedRead";
 import * as backend from "@/lib/backend";
 import { onResourceChanged, onViewSafetyCheck } from "@/lib/resource-sync";
+import { readFailuresFreshnessNotice, type FreshnessNotice } from "@/lib/view-freshness";
 
 /**
  * Low-frequency probe for Git changes made outside Orkestrator (a terminal
@@ -84,6 +85,10 @@ export interface CoordinatorPanelData {
   git: ProjectGitStatus | null;
   loading: boolean;
   error: string | null;
+  /** Dismisses `error`. A later failed load sets it again. */
+  clearError: () => void;
+  /** Set only while background reads are failing; the panel keeps its last state. */
+  freshness: FreshnessNotice | null;
   /** Ensures the workspace, then reads status and requests a policy-bound fetch. */
   load: () => Promise<void>;
   /** Applies a direct (mutation) answer for the current project. */
@@ -107,6 +112,8 @@ export function useCoordinatorPanelData(projectId: string): CoordinatorPanelData
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [readyProject, setReadyProject] = useState<string | null>(null);
+  const [viewFailures, setViewFailures] = useState(0);
+  const [gitFailures, setGitFailures] = useState(0);
   // A new project starts from nothing; nothing from the previous one applies.
   const [shownProject, setShownProject] = useState(projectId);
   if (shownProject !== projectId) {
@@ -116,6 +123,8 @@ export function useCoordinatorPanelData(projectId: string): CoordinatorPanelData
     setReadyProject(null);
     setLoading(true);
     setError(null);
+    setViewFailures(0);
+    setGitFailures(0);
   }
   const ready = readyProject === projectId;
   /**
@@ -222,7 +231,9 @@ export function useCoordinatorPanelData(projectId: string): CoordinatorPanelData
       return { projectId: pid, snapshot: full, stamp: null, directSeq, legacy: true };
     },
     onState: (state) => {
+      if (state.status === "error") setViewFailures(state.failures);
       if (state.status !== "current" || !state.value) return;
+      setViewFailures(0);
       const value = state.value;
       if (value.projectId !== projectRef.current) return;
       if (value.directSeq !== directSeqRef.current) {
@@ -252,7 +263,11 @@ export function useCoordinatorPanelData(projectId: string): CoordinatorPanelData
       return backend.getProjectGitStatus(projectId);
     },
     onState: (state) => {
-      if (state.status === "current") applyGit(state.value);
+      if (state.status === "error") setGitFailures(state.failures);
+      if (state.status === "current") {
+        setGitFailures(0);
+        applyGit(state.value);
+      }
     },
   });
 
@@ -354,6 +369,16 @@ export function useCoordinatorPanelData(projectId: string): CoordinatorPanelData
     };
   }, [invalidateGit, invalidateView, ready]);
 
+  const clearError = useCallback(() => setError(null), []);
+  const freshness = readFailuresFreshnessNotice(
+    Math.max(viewFailures, gitFailures),
+    viewFailures > 1 && gitFailures > 1
+      ? "the coordinator and repository status"
+      : viewFailures > 1
+        ? "the coordinator"
+        : "the repository status",
+  );
+
   const viewRefresh = view.refresh;
   const refreshView = useCallback(async () => {
     await viewRefresh();
@@ -364,6 +389,8 @@ export function useCoordinatorPanelData(projectId: string): CoordinatorPanelData
     git: git && git.projectId === projectId ? git : null,
     loading,
     error,
+    clearError,
+    freshness,
     load,
     applySnapshot,
     applyGit,

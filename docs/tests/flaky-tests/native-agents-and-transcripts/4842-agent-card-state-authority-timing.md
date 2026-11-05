@@ -29,7 +29,7 @@ back before line 676 asserted its absence. A real bridge cannot answer
 fixture artefact, and how often a poll fell in that window depended on load.
 The `failed-read` case had the same window.
 
-**Fix.** The test file gains a `stateFallback` hook for unscripted state reads.
+**Fix.** The branch test file gained a `stateFallback` hook for unscripted state reads.
 The two outage transitions set it to keep reporting the outage (the rejection
 or the `unavailable` reply) until the held recovery read is scripted, and clear
 it at that point; every other test keeps the `unchanged` default. No assertion
@@ -42,3 +42,29 @@ three cases. Without the wait, the whole file passed through
 `mise run test:logged -- --name agent-native-progressive -- bun --cwd=apps/web test src/components/native-agent/AgentNativeTab.progressive.test.tsx --parallel=1 --only-failures`
 (with `NODE_ENV=test`, 11.6 s), and the three parameterised cases passed five
 repeated runs.
+
+## Resolution (2026-11-05, C5 review repair)
+
+The captured run at `dacb38039` repeated the Stop-button assertion failure
+(1027.79 ms; 31,770 passed, 3 failed, 137 not run overall). The isolated
+owner also failed (41 passed, 1 failed, 7.6 s) using:
+
+```sh
+mise run test:logged -- --name address-progressive-owner -- env NODE_ENV=test bun test --cwd apps/web ./src/components/native-agent/AgentNativeTab.progressive.test.tsx --parallel=1 --only-failures
+```
+
+Evidence: `/tmp/orkestrator-test-run.fSBhmH/address-progressive-owner.log.gz`.
+The fixture consumed its one unavailable response, then answered subsequent
+polls with `unchanged`, which restores state authority. The assertion could
+therefore race a fixture-generated recovery before the held recovery read was
+installed. The fixture now repeats the outage until the explicit held recovery,
+and keeps that recovery held across additional reads. Assertions are unchanged.
+The complete isolated owner passed after repair (8.0 s). Aggregate verification
+is recorded in the Address Findings result.
+
+## Merge reconciliation (2026-11-05)
+
+Both branches independently repaired the same fixture race. The merged test uses
+`fallbackStateRead` from the C5 repair, including its held-recovery fallback and
+cleanup after release. The reproduction and verification records above describe
+the respective branch fixes before reconciliation.

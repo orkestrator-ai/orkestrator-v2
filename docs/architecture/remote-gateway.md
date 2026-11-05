@@ -269,10 +269,10 @@ gateway itself instead:
   lists, `local-backend-unavailable`) stay on IPC. The window sets no
   `orkestratorGateway`: it is still a local client.
 - It talks to the control listener, the origin main already uses, which never
-  compresses. All of its terminals share one filtered SSE stream, even though it
-  has a `baseUrl`: the listener is plain HTTP, about six connections per origin,
-  and one stream per terminal would leave commands queueing behind them. The
-  terminal WebSocket stays a separate choice.
+  compresses. Like every web client, it carries all of its terminals on one
+  filtered SSE stream; `terminalEventSource` makes that stream an `EventSource`
+  even though the window has a `baseUrl`, since main adds the credential below
+  the page. The terminal WebSocket stays a separate choice.
 - The page never holds the token. `directTransportAuthorization` lets main's
   `webRequest` hook add it for exactly this origin and the `invoke` and `events`
   routes, and the request presents the backend's own origin, which any launch
@@ -426,8 +426,14 @@ backends older than 2.19.17 (raw `{ info, parts }` envelopes) was retired on
 ## Event stream reconnects
 
 A web client holds one authoritative event stream and its terminal output
-streams. A same-origin browser shares one filtered `EventSource` across all its
-terminals; a direct (bearer) client opens one fetch stream per terminal. A
+streams. Every client carries all its terminals on one filtered stream
+(`includeEvents=a,b,c`): a same-origin browser reads it with an `EventSource`,
+and a direct (bearer) or cross-origin client with `fetch`, because an
+`EventSource` cannot send a bearer token. One stream per terminal would leave
+commands queued behind them on HTTP/1.1, which allows about six connections per
+host, and would hold one of the gateway's eight streaming-gzip slots per
+terminal. Changing the filter reopens the stream, and every terminal it
+already carried is told to re-read its snapshot. A
 backend restart drops all of them in every open tab at once, so each stream
 reconnects on its own capped, jittered ladder (`ReconnectBackoff` from
 `packages/protocol/src/reconnect-backoff.ts`, wired in

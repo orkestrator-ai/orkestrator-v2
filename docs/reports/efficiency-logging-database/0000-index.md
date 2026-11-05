@@ -44,12 +44,11 @@ A batch file combines several reports as numbered parts and takes the rating of 
 | 28 | [0580-st-21-file-rpc-and-usage-report.md](0580-st-21-file-rpc-and-usage-report.md) | Low | No | ST-21: Whole files cross RPC as base64, branch reads spawn twice, and usage reports parse every row | These are occasional, bounded reads. |
 | 29 | [0600-e22-chat-rendering.md](0600-e22-chat-rendering.md) | Low | No | **E22, Chat rendering.**<br>`0600`: WEB-10: With find open, the whole transcript is re-indexed on every update<br>`0670`: WEB-19: Streaming markdown rebuilds the whole message's tree per update | From `0600`: The cost exists only while find is open on a long transcript. |
 | 30 | [0620-e23-renderer-polling.md](0620-e23-renderer-polling.md) | Low | No | **E23, Renderer polling.**<br>`0620`: WEB-12: One environment change refetches the project's whole environment list<br>`0630`: WEB-13: Expanded truncated folders are re-read every 5 s without a digest<br>`0660`: WEB-18: Some renderer polls keep running while the window is hidden | From `0620`: Bursts already collapse to one project read, so this should wait for a measurement. |
-| 31 | [0650-web-16-terminal-container-environment-subscription.md](0650-web-16-terminal-container-environment-subscription.md) | Low | No | WEB-16: `TerminalContainer` subscribes to the whole environment object | It is an unmeasured re-render, with launch-effect risk in the fix. |
-| 32 | [0680-bg-10-multi-review-snapshot-drift-checks.md](0680-bg-10-multi-review-snapshot-drift-checks.md) | Low | No | BG-10: Multi Review snapshot mode runs a drift check per reviewer | It costs a bounded number of extra git probes per review pass. |
-| 33 | [0691-dk-5-preview-capture-data-urls.md](0691-dk-5-preview-capture-data-urls.md) | Low | No | DK-5: Preview captures cross IPC as large data URLs | Captures are occasional and bounded. |
-| 34 | [0692-dk-6-preview-tunnel-multiplexing.md](0692-dk-6-preview-tunnel-multiplexing.md) | Low | No | DK-6: The preview tunnel opens a WebSocket per TCP connection | The existing connection pool already removes most repeats. |
-| 35 | [0693-dk-10-second-claude-binary.md](0693-dk-10-second-claude-binary.md) | Low | No | DK-10: The image ships two Claude Code native binaries | It is an optional image-size saving that waits on a maintainer decision. |
-| 36 | [0694-dk-16-attention-follow-polling.md](0694-dk-16-attention-follow-polling.md) | Low | No | DK-16 (rest): CLI `attention --follow` re-downloads pending items on every poll | It affects only long-running followers, and pending pages are probably small. |
+| 31 | [0680-bg-10-multi-review-snapshot-drift-checks.md](0680-bg-10-multi-review-snapshot-drift-checks.md) | Low | No | BG-10: Multi Review snapshot mode runs a drift check per reviewer | It costs a bounded number of extra git probes per review pass. |
+| 32 | [0691-dk-5-preview-capture-data-urls.md](0691-dk-5-preview-capture-data-urls.md) | Low | No | DK-5: Preview captures cross IPC as large data URLs | Captures are occasional and bounded. |
+| 33 | [0692-dk-6-preview-tunnel-multiplexing.md](0692-dk-6-preview-tunnel-multiplexing.md) | Low | No | DK-6: The preview tunnel opens a WebSocket per TCP connection | The existing connection pool already removes most repeats. |
+| 34 | [0693-dk-10-second-claude-binary.md](0693-dk-10-second-claude-binary.md) | Low | No | DK-10: The image ships two Claude Code native binaries | It is an optional image-size saving that waits on a maintainer decision. |
+| 35 | [0694-dk-16-attention-follow-polling.md](0694-dk-16-attention-follow-polling.md) | Low | No | DK-16 (rest): CLI `attention --follow` re-downloads pending items on every poll | It affects only long-running followers, and pending pages are probably small. |
 
 ## Parallel running
 
@@ -124,7 +123,6 @@ These still follow the lane and conflict rules above.
 | E-0250 | [Codex running tool cards](0250-br-7-codex-running-tool-cards.md) | `0250` | No lane | None | None |
 | E-0360 | [SSE replay rings](0360-br-15-sse-replay-rings.md) | `0360` | No lane | None | None |
 | E-0520 | [Startup bundle](0520-web-9-startup-bundle.md) | `0520` | No lane | None | None |
-| E-0650 | [Terminal container subscription](0650-web-16-terminal-container-environment-subscription.md) | `0650` | No lane | None | None |
 | E-0680 | [Multi Review drift checks](0680-bg-10-multi-review-snapshot-drift-checks.md) | `0680` | No lane | None | None |
 | E-0692 | [Preview tunnel multiplexing](0692-dk-6-preview-tunnel-multiplexing.md) | `0692` | No lane | None | None |
 | E-0694 | [Attention follow polling](0694-dk-16-attention-follow-polling.md) | `0694` | No lane | None | None |
@@ -142,7 +140,7 @@ When one of these becomes ready, it joins the lane shown.
 
 ## Status of every efficiency finding
 
-50 done, 8 partly done, 63 open, 2 no action.
+78 done, 8 partly done, 35 open, 2 no action.
 
 | Finding | Disposition | Evidence |
 | --- | --- | --- |
@@ -211,7 +209,7 @@ When one of these becomes ready, it joins the lane shown.
 | WEB-13 | Open | `reloadFolders` has no digest, `useFilesPanel.ts:644-663`; see 0630. |
 | WEB-14 | Open | Four Maps copied up front, `nativeAgentProjectionStore.ts:173-178`; see 0640. |
 | WEB-15 | Done | Memoised `readTranscriptTail`, `AgentNativeTab.controller.tsx:1152` (9c06cb7aa). |
-| WEB-16 | Open | Whole environment subscribed, `TerminalContainer.view.tsx:168-170`; see 0650. |
+| WEB-16 | Done | `useShallow` selector of the fields read, `TerminalContainer.view.tsx:160-199`; `reuseUnchangedFields`, `environmentStore.ts` (bfac1f577); guarded by `TerminalContainer.render-count.test.tsx`; see [1202 task 3](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md). The native tab's own whole-record selector is [5580](../../todo/cross-cutting/5580-agent-native-tab-environment-subscription.md). |
 | WEB-17 | Done | `LiveElapsed`, `ClaudeTmuxChatTab.tsx:1406`; `createRuntimeClock`, `MultiReviewTab.tsx:564` (387d1412f); `BuildChatTab.tsx` has no interval. |
 | WEB-18 | Open | Plain intervals at `App.tsx:683`, `useUserCommands.ts:68` and others; see 0660. |
 | WEB-19 | Open | One `Markdown` render per update, `MessageMarkdown.tsx:393-399`; see 0670. |

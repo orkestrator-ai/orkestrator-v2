@@ -79,7 +79,6 @@ These batches don't share a protected area. They only have to respect the confli
 - **E-0250 (Codex running tool cards):** efficiency-logging-database `0250`
 - **E-0360 (SSE replay rings):** efficiency-logging-database `0360`
 - **E-0520 (Startup bundle):** efficiency-logging-database `0520`
-- **E-0650 (Terminal container subscription):** efficiency-logging-database `0650`
 - **E-0680 (Multi Review drift checks):** efficiency-logging-database `0680`
 - **E-0692 (Preview tunnel multiplexing):** efficiency-logging-database `0692`
 - **E-0694 (Attention follow polling):** efficiency-logging-database `0694`

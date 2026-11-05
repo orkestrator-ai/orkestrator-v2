@@ -12,6 +12,7 @@ import { subscribeCommandNodeEvents, subscribeNodeEvents } from "@/lib/federatio
 import { listenAuthoritative } from "@/lib/native/authoritative-events";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import { Checkbox } from "@/components/ui/checkbox";
+import { InfoHint } from "@/components/ui/info-hint";
 import { getCoordinatorAccountSwitchGrant, setCoordinatorAccountSwitchGrant } from "@/lib/backend";
 import type { AccountMachine } from "@/lib/backend/agent-accounts";
 import { formatRelativeTime } from "@/lib/format-relative-time";
@@ -147,17 +148,24 @@ export function CoordinatorAccountSwitchGrant({
           onCheckedChange={(checked) => void change(checked === true)}
         />
         <div className="min-w-0 space-y-1">
-          <label htmlFor={id} className="text-sm font-medium text-foreground">
-            Let coordinators switch accounts without asking
-          </label>
-          <p className="text-xs text-muted-foreground">
-            {granted
-              ? `Coordinators on ${where} switch the active ${platformLabel} account at once, here and on the machines it controls, instead of waiting for your approval.`
-              : `Coordinators on ${where} ask you before switching the active ${platformLabel} account.`}{" "}
-            Only to a signed-in account that is not known to be used up, and at most{" "}
-            {state.limit.switches} switches per machine in {state.limit.windowMinutes} minutes; past
-            that they ask again. Each switch is listed here, with any a timer you allowed made.
-          </p>
+          <div className="flex items-center gap-2">
+            <label htmlFor={id} className="text-sm font-medium text-foreground">
+              Let coordinators switch accounts without asking
+            </label>
+            <InfoHint label="About coordinator account switching">
+              <p>
+                {granted
+                  ? `Coordinators on ${where} switch the active ${platformLabel} account at once, here and on the machines it controls, instead of waiting for your approval.`
+                  : `Coordinators on ${where} ask you before switching the active ${platformLabel} account.`}
+              </p>
+              <p>
+                Only to a signed-in account that is not known to be used up, and at most{" "}
+                {state.limit.switches} switches per machine in {state.limit.windowMinutes} minutes;
+                past that they ask again. Each switch is listed here, with any a timer you allowed
+                made.
+              </p>
+            </InfoHint>
+          </div>
           {error ? <p className="text-xs text-destructive">{error}</p> : null}
           {switches.length > 0 ? (
             <div className="space-y-1 pt-1">

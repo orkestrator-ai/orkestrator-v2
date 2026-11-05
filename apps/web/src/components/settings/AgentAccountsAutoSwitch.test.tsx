@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { AgentAccountAutoSwitchState } from "@orkestrator/protocol/agent-account-auto-switch";
 import type { AgentAccountsSnapshot } from "@orkestrator/protocol/agent-accounts";
 
@@ -148,7 +148,10 @@ describe("automatic account switching in Settings", () => {
     fireEvent.click(screen.getByRole("button", { name: "Use" }));
     expect(await screen.findByText("Pinned to API key")).toBeTruthy();
     expect((await mainTick()).getAttribute("aria-checked")).toBe("false");
-    expect(screen.getByText(/A manual switch pinned API key/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "About automatic switching" }));
+    expect(
+      within(await screen.findByRole("tooltip")).getByText(/A manual switch pinned API key/),
+    ).toBeTruthy();
   });
 
   test("a machine that predates it shows no ticks and keeps working", async () => {

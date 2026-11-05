@@ -16,8 +16,7 @@ A batch file combines several reports as numbered parts and takes the rating of 
 | --- | --- | --- | --- | --- | --- |
 | 1 | [0490-e25-container-start.md](0490-e25-container-start.md) | Medium | No | **E25, Container start.**<br>`0490`: DK-14: Agent-home inputs are copied in full per environment and again on every start<br>`0500`: DK-13: Each environment clones from the remote again | From `0490`: Every container start copies inputs again, at a size nobody has measured. |
 | 2 | [0160-e10-conditional-reads-and-deltas.md](0160-e10-conditional-reads-and-deltas.md) | Low | No | **E10, Conditional reads and deltas.**<br>`0160`: TX-1: A transcript delta can only be built from the newest cached view<br>`0180`: TX-5: Session-state reads have no conditional path from the bridge<br>`0190`: TX-6: Bridge transcript windows are always sent whole | From `0160`: The report rates it High, but the maintainer gated it on a baseline, so it stays Low until that measurement arrives. |
-| 3 | [0390-gw-7-websocket-compression.md](0390-gw-7-websocket-compression.md) | Low | No | GW-7: No WebSocket message compression | Deferred by 0052 decision D6 until the transport direction is chosen. |
-| 4 | [0560-st-9-agent-mail-store-remainder.md](0560-st-9-agent-mail-store-remainder.md) | Low | No | ST-9 (rest): Agent mail: pending injects and mailbox lists still sit on the whole store | The read cost the finding described has gone, and the rest needs a stored-format change only a measurement could justify. |
+| 3 | [0560-st-9-agent-mail-store-remainder.md](0560-st-9-agent-mail-store-remainder.md) | Low | No | ST-9 (rest): Agent mail: pending injects and mailbox lists still sit on the whole store | The read cost the finding described has gone, and the rest needs a stored-format change only a measurement could justify. |
 
 ## Parallel running
 
@@ -54,8 +53,9 @@ When one of these becomes ready, it joins the lane shown.
 
 | File | Why it waits | Lane |
 | --- | --- | --- |
-| [`0390`](0390-gw-7-websocket-compression.md) | Deferred by 0052 decision D6 | Gateway |
 | [`0560`](0560-st-9-agent-mail-store-remainder.md) | Needs a measurement to justify a stored-format change | Storage |
+
+`0390` (GW-7, WebSocket compression) left this table on 2026-11-05: its file is deleted and the work waits in [0052](../../todo/transcripts-and-observation/0052-remote-client-bandwidth.md) task 8, which starts only when the terminal WebSocket becomes the remote terminal transport; see [the closing check of E-0390](#closing-check-of-e-0390-websocket-compression).
 
 ## Status of every efficiency finding
 
@@ -69,7 +69,7 @@ When one of these becomes ready, it joins the lane shown.
 | GW-4 | Done | `SseFrameDecoder` keeps a chunk list and searches only the new text (`packages/protocol/src/gateway-event-stream.ts:162`, #1548 `12289fc56`), though the report's minor `indexOf` sub-fix in `parseSseBlock` (`:96`) was not taken, which leaves that parse linear per frame. |
 | GW-5 | Done | One `Buffer` per frame is written to every client, with its byte count passed to the writer (`apps/backend/src/gateway-events.ts:30`, `apps/backend/src/gateway-support-extra.ts:653`); see 1202 task 11 and the [E18 closing check](#closing-check-of-e18-gateway-events). |
 | GW-6 | Done | `flush` pauses channel frames at a 256 KiB watermark and resumes on the send callback (`apps/backend/src/terminal-websocket-server.ts:945`, `:972`); see 1202 task 11. |
-| GW-7 | Open | No compression option is set (`apps/backend/src/terminal-websocket-server.ts:193-198`), and 0052 D6 defers the work; see 0390. |
+| GW-7 | Open | No compression option is set (`apps/backend/src/terminal-websocket-server.ts:220-229`), and the terminal WebSocket is still opt-in, so 0052 D6 still defers the work. The 0390 file is deleted; the work, its trigger and a Bun loopback probe are in [0052](../../todo/transcripts-and-observation/0052-remote-client-bandwidth.md) task 8. See [the closing check of E-0390](#closing-check-of-e-0390-websocket-compression). |
 | GW-8 | Done | The private-origin proxy reuses pooled connections (`apps/backend/src/preview-http-proxy.ts:160`, `apps/backend/src/preview-upstream-pool.ts`, #1604 `b64242842`). |
 | GW-9 | Done | Compressed and rewritten bodies get a derived ETag that maps back upstream (`apps/backend/src/gateway-proxy.ts:188`, `:397`, `apps/backend/src/gateway-proxy-etag.ts`, #1604 `b64242842`). |
 | GW-10 | No action | Declined on first-load numbers: the rewrite is about 150–190 ms of a 1,754-module, 28 MB first load, a combined regex would save 46–93 ms of that, and a rewriter edit makes every module a full response once. The rewriter is unchanged (`apps/backend/src/gateway-support-extra.ts:569`). See the [E24 closing check](#closing-check-of-e24-gateway-static-and-preview). |
@@ -689,6 +689,17 @@ Store writes were 0 idle and 160 per window streaming (both tabs) in every varia
 | Found by the check | The container bridge never runs the SDK's copy | Every production SDK call passes `pathToClaudeCodeExecutable` from `CLAUDE_CLI_PATH` (`claudeExecutableOptions`, `session-manager-core.ts:169-173`), and the container bridge, started by `docker exec`, inherits the image's `ENV CLAUDE_CLI_PATH` (`docker/Dockerfile:219`). |
 | Task 1: maintainer decision | Moved to a to-do | 6780 task 1. It keeps 0693's two options (symlink while identical; keep both) and adds dropping the SDK's platform binary in the builder, which it recommends: the saving holds after the pins diverge and DK-7's layer order is untouched. |
 | Constraints: separate release trains, DK-7 layer order | Hold | No pin or layer changed; 6780 carries both constraints for whichever option is built. |
+
+## Closing check of E-0390 (WebSocket compression)
+
+`0390-gw-7-websocket-compression.md` was checked back against the code on 2026-11-05 and deleted. Base commit `cbe0f9a5b`; its last version is the parent of the commit that deleted it. GW-7 in the table above summarises this. No compression code was added, and no new to-do was needed: [0052](../../todo/transcripts-and-observation/0052-remote-client-bandwidth.md) task 8 already owned the work and now carries the report's requirements.
+
+| Task | Outcome | Code, evidence or to-do |
+| --- | --- | --- |
+| 1. Prototype `permessage-deflate` if the WebSocket becomes the bulk transport | Still deferred: the condition is not met | The finding holds: `TerminalWebSocketGateway` sets no `perMessageDeflate` (`terminal-websocket-server.ts:220-229`). The WebSocket is used only when `terminalTransport` or the `orkestrator-terminal-transport` key selects it (`web-gateway.ts:177-184`); the shared terminal stream (GW-3) is SSE and local windows pin `http-sse`. 0052 task 2 is open and task 5 left the terminal transport unchanged, so D6 is not reopened. Trigger and requirements: 0052 task 8. |
+| Decision: none here (0052 D6) | Not reopened | Recorded in 0052, "Task 8: GW-7 re-check from efficiency report 0390". |
+| Requirement: about 1 KB threshold, bounded memory, check under Bun's `ws` | Bun check done; the rest carried to 0052 task 8 | Under Bun the bare `ws` import is Bun's built-in module, not the 8.22.0 pin. A loopback probe on Bun 1.4.4 through `handleUpgrade` negotiated the extension, left 64 B and 900 B messages uncompressed at a 1,024 B threshold, cut synthetic build output 16 KiB to 1,650 B and 64 KiB to 6,159 B, grew random 64 KiB by 1 %, and cost about 30 ms of extra send CPU per MB (911–993 ms against 37–57 ms for 29.7 MB). Per-socket zlib memory under Bun was not measured, so the byte bound stays a requirement in task 8. |
+| Constraint: every compression buffer has byte and count bounds | Carried to 0052 task 8 | Task 8's requirement 2. |
 
 ## Closing check of 0385 (TX-10, joined history pages)
 

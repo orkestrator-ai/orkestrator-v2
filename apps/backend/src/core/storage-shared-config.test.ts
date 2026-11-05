@@ -115,6 +115,7 @@ describe("defaultConfig", () => {
     expect(defaultConfig().global.notificationSounds).toEqual({
       agentStopped: true,
       prMerged: true,
+      coordinatorReport: true,
     });
   });
 

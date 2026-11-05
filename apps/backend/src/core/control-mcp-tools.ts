@@ -459,7 +459,13 @@ async function ownConversationMailbox(
 async function tryOpenNodeDelegation(
   invoke: ControlMcpInvoker,
   scope: CoordinatorControlScope,
-  worker: { nodeId: string; environmentId: string; tabId: string; requestId: string },
+  worker: {
+    nodeId: string;
+    environmentId: string;
+    tabId: string;
+    requestId: string;
+    request: unknown;
+  },
 ): Promise<boolean> {
   try {
     const result = await invoke<unknown>("open_coordinator_node_delegation", {
@@ -476,7 +482,7 @@ async function tryOpenNodeDelegation(
 async function tryOpenCoordinatorDelegation(
   invoke: ControlMcpInvoker,
   scope: CoordinatorControlScope,
-  input: { environmentId: string; tabId: string; requestId: string },
+  input: { environmentId: string; tabId: string; requestId: string; request: unknown },
 ): Promise<boolean> {
   try {
     const result = await invoke<unknown>("open_coordinator_delegation", { scope, ...input });
@@ -1982,6 +1988,10 @@ export async function createControlMcp(
         ? await target.call<unknown>("launch_control_job", launchArgs, `job:${input.requestId}`)
         : await invoke<unknown>("launch_control_job", launchArgs);
       if (!isRecord(job)) throw new Error("Job launch returned no result");
+      const jobRequest = {
+        summary: input.prompt,
+        ...(isRecord(selection.selection) ? selection.selection : {}),
+      };
       // Only against the tab the job actually landed in. A guessed tab id would
       // open a delegation nothing can ever close, leaving the conversation
       // shown as waiting on a worker that does not exist.
@@ -1993,11 +2003,13 @@ export async function createControlMcp(
                 environmentId: input.environmentId,
                 tabId: job.tabId,
                 requestId: input.requestId,
+                request: jobRequest,
               })
             : await tryOpenCoordinatorDelegation(invoke, coordinatorScope, {
                 environmentId: input.environmentId,
                 tabId: job.tabId,
                 requestId: input.requestId,
+                request: jobRequest,
               })
           : false;
       return toolResult({
@@ -2091,11 +2103,13 @@ export async function createControlMcp(
               environmentId,
               tabId,
               requestId,
+              request: { summary: prompt, agent: native.agent },
             })
           : await tryOpenCoordinatorDelegation(invoke, coordinatorScope, {
               environmentId,
               tabId,
               requestId,
+              request: { summary: prompt, agent: native.agent },
             });
       return toolResult({
         environmentId,

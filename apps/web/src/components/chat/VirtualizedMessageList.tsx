@@ -1,4 +1,10 @@
-import { ChatFindActiveContext } from "./chat-find-context";
+import {
+  activeDocumentOccurrence,
+  ChatFindActiveContext,
+  STATIC_FIND_MATCH_EVENT,
+  staticDocumentMatchRect,
+  StaticDocumentFindContext,
+} from "./chat-find-context";
 import {
   Component,
   type ReactNode,
@@ -406,26 +412,9 @@ export function VirtualizedMessageList<TMessage>({
   );
   /** Generation of find's own navigation; its match refinement may not outlive the reader moving. */
   const findNavigationRef = useRef<number | null>(null);
-  /**
-   * The match find last navigated to, by identity. Matches are recomputed
-   * whenever the rows change (every streaming update while find is open);
-   * only a different match is a navigation — re-navigating to the same one
-   * would pull a reader who scrolled away back to it on every token.
-   */
-  const lastFindMatchRef = useRef<string | null>(null);
   const handleFindNavigate = useCallback(
-    (match: AgentChatFindMatch, query: string) => {
+    (match: AgentChatFindMatch) => {
       const message = messagesRef.current[match.itemIndex];
-      const identity = JSON.stringify([
-        query,
-        message === undefined
-          ? match.itemIndex
-          : computeItemKeyRef.current(match.itemIndex, message),
-        match.characterIndex,
-        match.occurrenceIndex,
-      ]);
-      if (identity === lastFindMatchRef.current) return;
-      lastFindMatchRef.current = identity;
       if (controller) {
         const navigated = controller.navigateTo(
           {
@@ -450,13 +439,37 @@ export function VirtualizedMessageList<TMessage>({
     },
     [controller, virtuosoRef],
   );
+  const getSearchProjection =
+    find?.getSearchProjection ??
+    (find?.getSearchText as SearchTextGetter<TMessage> | undefined)?.projection;
   const chatFind = useAgentChatFind({
     items: messages,
     getSearchText: find?.getSearchText ?? EMPTY_SEARCH_TEXT,
+    getSearchProjection,
     isActive: find?.isActive ?? false,
     ownerRef: rootRef,
     onNavigate: handleFindNavigate,
   });
+  // What the static documents in this transcript are asked about. Held as plain
+  // values, so a streaming update that moves no match leaves the cards alone.
+  const activeDocument = useMemo(() => {
+    const current = chatFind.currentMatch;
+    const message = current ? messages[current.itemIndex] : undefined;
+    return current && message !== undefined && getSearchProjection
+      ? activeDocumentOccurrence(getSearchProjection(message).roots, chatFind.matches, current)
+      : null;
+  }, [chatFind.currentMatch, chatFind.matches, getSearchProjection, messages]);
+  const documentFindQuery =
+    find?.isActive && chatFind.isOpen && chatFind.query.trim() ? chatFind.query : null;
+  const activePublicationId = activeDocument?.publicationId ?? null;
+  const activeOccurrence = activeDocument?.occurrence ?? null;
+  const documentFind = useMemo(
+    () =>
+      documentFindQuery === null
+        ? null
+        : { query: documentFindQuery, activePublicationId, activeOccurrence },
+    [activeOccurrence, activePublicationId, documentFindQuery],
+  );
   // Asking for the latest message ends a find session rather than leaving
   // find and the latest journey competing for the viewport.
   const closeFind = chatFind.onClose;
@@ -475,17 +488,11 @@ export function VirtualizedMessageList<TMessage>({
     );
     return () => controller.setRowIndexResolver(null);
   }, [controller]);
-  // Clearing the query starts a new search even if it returns to the same
-  // occurrence. Reset before the hook's passive navigation effect runs.
+  // A cleared search has no navigation left to refine. Reset before the hook's
+  // passive navigation effect runs.
   useLayoutEffect(() => {
-    if (!findOpen || !chatFind.query.trim()) {
-      lastFindMatchRef.current = null;
-      findNavigationRef.current = null;
-    }
+    if (!findOpen || !chatFind.query.trim()) findNavigationRef.current = null;
   }, [chatFind.query, findOpen]);
-  const getSearchProjection =
-    find?.getSearchProjection ??
-    (find?.getSearchText as SearchTextGetter<TMessage> | undefined)?.projection;
 
   // Rows report whether they intersect the scroller viewport, so rich blocks
   // in Virtuoso's overscan request idle prefetch rather than visible work.
@@ -831,7 +838,9 @@ export function VirtualizedMessageList<TMessage>({
         const range = activeRange;
         const matchRect = () => {
           if (!node.isConnected) return null;
-          return anchor ? anchor.getBoundingClientRect() : range.getBoundingClientRect();
+          if (!anchor) return range.getBoundingClientRect();
+          // A static document's frame knows where the match is inside it.
+          return (mirror && staticDocumentMatchRect(mirror)) ?? anchor.getBoundingClientRect();
         };
         const findNavigation = findNavigationRef.current;
         if (controller && scroller) {
@@ -865,7 +874,16 @@ export function VirtualizedMessageList<TMessage>({
     };
 
     frame = requestAnimationFrame(applyHighlights);
+    // A frame's answer arrives after this pass, possibly after its navigation has
+    // settled, so it gets another. The reader moving still ends the refinement.
+    const root = rootRef.current;
+    const onFrameMatch = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(applyHighlights);
+    };
+    root?.addEventListener(STATIC_FIND_MATCH_EVENT, onFrameMatch);
     return () => {
+      root?.removeEventListener(STATIC_FIND_MATCH_EVENT, onFrameMatch);
       cancelAnimationFrame(frame);
       clearHighlights();
     };
@@ -913,63 +931,69 @@ export function VirtualizedMessageList<TMessage>({
           onCommentDone={annotation.onCommentDone}
         />
       ) : null}
-      <LiveArrivalsContext value={animateArrivals}>
-        <Virtuoso
-          ref={virtuosoRef}
-          data={messages}
-          context={context}
-          firstItemIndex={firstItemIndex}
-          computeItemKey={(absolute, data) => computeItemKey(absolute - firstItemIndex, data)}
-          itemContent={(absolute, data) => {
-            const index = absolute - firstItemIndex;
-            const rowKey = computeItemKey(index, data);
-            return (
-              <TranscriptRow
-                rowKey={rowKey}
-                index={index}
-                tracker={tracker}
-                arrivals={arrivals}
-                isCurrentFindMessage={chatFind.isOpen && chatFind.currentMatch?.itemIndex === index}
-                isHighlighted={highlightedItemKey !== null && rowKey === highlightedItemKey}
-              >
-                {renderMessage(
-                  index,
-                  data,
-                  resolvePreviousMessage
-                    ? resolvePreviousMessage(messages, index)
-                    : index > 0
-                      ? (messages[index - 1] ?? null)
-                      : null,
-                )}
-              </TranscriptRow>
-            );
-          }}
-          components={components}
-          // Literal false whenever following may not run: Virtuoso's size and
-          // viewport paths test `followOutput !== false`, so a function that
-          // would return false still lets them scroll.
-          followOutput={
-            pausedLocally || scrollProps.followEnabled === false ? false : scrollProps.followOutput
-          }
-          atBottomStateChange={scrollProps.atBottomStateChange}
-          atBottomThreshold={scrollProps.atBottomThreshold}
-          totalListHeightChanged={scrollProps.totalListHeightChanged}
-          restoreStateFrom={scrollProps.restoreStateFrom}
-          scrollerRef={transcriptScrollerRef}
-          rangeChanged={handleRangeChanged}
-          minOverscanItemCount={keepMounted ?? undefined}
-          // A tool block can be thousands of pixels tall. Using it as Virtuoso's
-          // default probe height overestimates new text/tool rows, briefly pushes
-          // visible history out of the window, then remounts it after measurement.
-          // 320px is near a representative mixed transcript row while still far
-          // below those outliers; it also bounds the cold-fill render count.
-          // Measured and restored rows retain their real heights.
-          defaultItemHeight={320}
-          increaseViewportBy={{ top: 400, bottom: 200 }}
-          style={{ height: "100%" }}
-          className="py-4"
-        />
-      </LiveArrivalsContext>
+      <StaticDocumentFindContext value={documentFind}>
+        <LiveArrivalsContext value={animateArrivals}>
+          <Virtuoso
+            ref={virtuosoRef}
+            data={messages}
+            context={context}
+            firstItemIndex={firstItemIndex}
+            computeItemKey={(absolute, data) => computeItemKey(absolute - firstItemIndex, data)}
+            itemContent={(absolute, data) => {
+              const index = absolute - firstItemIndex;
+              const rowKey = computeItemKey(index, data);
+              return (
+                <TranscriptRow
+                  rowKey={rowKey}
+                  index={index}
+                  tracker={tracker}
+                  arrivals={arrivals}
+                  isCurrentFindMessage={
+                    chatFind.isOpen && chatFind.currentMatch?.itemIndex === index
+                  }
+                  isHighlighted={highlightedItemKey !== null && rowKey === highlightedItemKey}
+                >
+                  {renderMessage(
+                    index,
+                    data,
+                    resolvePreviousMessage
+                      ? resolvePreviousMessage(messages, index)
+                      : index > 0
+                        ? (messages[index - 1] ?? null)
+                        : null,
+                  )}
+                </TranscriptRow>
+              );
+            }}
+            components={components}
+            // Literal false whenever following may not run: Virtuoso's size and
+            // viewport paths test `followOutput !== false`, so a function that
+            // would return false still lets them scroll.
+            followOutput={
+              pausedLocally || scrollProps.followEnabled === false
+                ? false
+                : scrollProps.followOutput
+            }
+            atBottomStateChange={scrollProps.atBottomStateChange}
+            atBottomThreshold={scrollProps.atBottomThreshold}
+            totalListHeightChanged={scrollProps.totalListHeightChanged}
+            restoreStateFrom={scrollProps.restoreStateFrom}
+            scrollerRef={transcriptScrollerRef}
+            rangeChanged={handleRangeChanged}
+            minOverscanItemCount={keepMounted ?? undefined}
+            // A tool block can be thousands of pixels tall. Using it as Virtuoso's
+            // default probe height overestimates new text/tool rows, briefly pushes
+            // visible history out of the window, then remounts it after measurement.
+            // 320px is near a representative mixed transcript row while still far
+            // below those outliers; it also bounds the cold-fill render count.
+            // Measured and restored rows retain their real heights.
+            defaultItemHeight={320}
+            increaseViewportBy={{ top: 400, bottom: 200 }}
+            style={{ height: "100%" }}
+            className="py-4"
+          />
+        </LiveArrivalsContext>
+      </StaticDocumentFindContext>
     </div>
   );
 }

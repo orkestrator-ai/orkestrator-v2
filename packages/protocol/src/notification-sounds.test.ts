@@ -14,10 +14,22 @@ describe("notification sound settings", () => {
     );
   });
 
+  test("a config written before the coordinator report cue gets it on", () => {
+    expect(normalizeNotificationSoundSettings({ agentStopped: false, prMerged: false })).toEqual({
+      agentStopped: false,
+      prMerged: false,
+      coordinatorReport: true,
+    });
+    expect(normalizeNotificationSoundSettings({ coordinatorReport: false }).coordinatorReport).toBe(
+      false,
+    );
+  });
+
   test("preserves explicit choices while filling missing fields", () => {
     expect(normalizeNotificationSoundSettings({ agentStopped: false })).toEqual({
       agentStopped: false,
       prMerged: true,
+      coordinatorReport: true,
     });
   });
 });

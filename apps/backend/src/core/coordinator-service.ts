@@ -1469,6 +1469,7 @@ export class CoordinatorService {
               id: delegation.workerTabId,
               environmentId: association.resourceId,
               tabId: delegation.workerTabId,
+              ...(association.nodeId ? { nodeId: association.nodeId } : {}),
               label: association.resourceId,
             },
             state: delegation.state,
@@ -1577,21 +1578,25 @@ export class CoordinatorService {
       // A turn the coordinator stopped (stop_worker_turn) ends like any
       // other, however its delegation closed (the turn end, or a failed or
       // stopped environment); say who stopped it, so a turn end is not read
-      // as the worker finishing.
-      const stoppedByCoordinator = delegation.stopRequestedAt !== undefined;
+      // as the worker finishing. The Work panel's Stop says the user did it.
+      const stopRequested = delegation.stopRequestedAt !== undefined;
+      const stoppedByUser = delegation.stopRequestedBy === "user";
       const outcome =
         delegation.state === "completed"
-          ? stoppedByCoordinator
+          ? stopRequested
             ? "stopped"
             : "finished"
           : delegation.state === "failed"
             ? "failed"
             : "stopped";
-      const stopNote = !stoppedByCoordinator
+      const stoppedWith = stoppedByUser
+        ? "the user stopped its turn from the Work panel"
+        : "you stopped its turn with stop_worker_turn";
+      const stopNote = !stopRequested
         ? `without sending a report.`
         : delegation.state === "completed"
-          ? `because you stopped its turn with stop_worker_turn, before it sent a report. Its tab is idle and keeps the conversation; send_prompt_to_tab gives it its next instruction.`
-          : `after you stopped its turn with stop_worker_turn, before it sent a report.`;
+          ? `because ${stoppedWith}, before it sent a report. Its tab is idle and keeps the conversation; send_prompt_to_tab gives it its next instruction.`
+          : `after ${stoppedWith}, before it sent a report.`;
       // What the worker last said is the closest thing to a report it left.
       // Only a finished turn has a live session worth reading; best effort.
       const excerpt =
@@ -1654,13 +1659,14 @@ export class CoordinatorService {
                 id: delegation.workerTabId,
                 environmentId: association.resourceId,
                 tabId: delegation.workerTabId,
+                ...(association.nodeId ? { nodeId: association.nodeId } : {}),
                 label,
               },
               state: delegation.state,
               tone:
                 delegation.state === "failed"
                   ? "failure"
-                  : stoppedByCoordinator
+                  : stopRequested
                     ? "info"
                     : delegation.state === "completed"
                       ? "success"
@@ -1684,6 +1690,13 @@ export class CoordinatorService {
     if (!latest?.conversations.some((item) => item.id === conversation.id && !item.closedAt))
       return;
     await this.storage.coordinators.markCoordinatorDelegationWoken(association.id);
+    // A presentation cue only; the id is fixed, so a client hears one per wake.
+    this.storage.notifyCoordinatorWake({
+      attentionId: `delegation-wake:${association.id}:${delegation.requestedAt}`,
+      projectId: association.projectId,
+      coordinatorId: association.coordinatorId,
+      occurredAt: new Date().toISOString(),
+    });
   }
 
   /**

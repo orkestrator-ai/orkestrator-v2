@@ -18,6 +18,13 @@ export const DEFAULT_GATEWAY_REPLAY_MAX_BYTES = 2 * 1024 * 1024;
  * keep advancing after release, so a returning client is told to reconcile.
  */
 export const DEFAULT_GATEWAY_REPLAY_IDLE_RETENTION_MS = 5 * 60_000;
+/**
+ * Relayed node events have a window of their own, so a busy leaf can only expire
+ * relayed cursors. It is a quarter of the main window: a gap here costs a re-read
+ * of what is shown from the watched nodes, not a reconcile of the whole client.
+ */
+export const DEFAULT_GATEWAY_RELAYED_REPLAY_FRAME_CAPACITY = 512;
+export const DEFAULT_GATEWAY_RELAYED_REPLAY_MAX_BYTES = 512 * 1024;
 
 export interface GatewayReplayFrame {
   revision: number;

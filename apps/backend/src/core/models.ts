@@ -1244,7 +1244,6 @@ export interface AppConfig {
     terminalHistoryRetentionMb?: number;
     terminalHistoryGlobalRetentionMb?: number;
     terminalHistoryRetentionDays?: number;
-    experimentalCodexRawEventLogging?: boolean;
     /**
      * Experimental gate for scheduled jobs. Off (or absent) hides Settings →
      * Schedules, refuses the schedule commands and public actions, withholds

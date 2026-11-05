@@ -1079,16 +1079,12 @@ case "$*" in
   *"/workspace/src/oversized.txt"*) printf 'File is too large to open in the editor (maximum size is ${MAX_TEXT_FILE_SIZE_LABEL})\\n' >&2; exit 1 ;;
   *"/workspace/.env"*) printf 'Rk9PPWJhcg==\\n' ;;
   *"/workspace/src/app.ts"*) printf 'ZXhwb3J0IGNvbnN0IHZhbHVlID0gMjsK\\n' ;;
-  *"git cat-file -s 'main:src/app.ts'"*) printf '24\\n' ;;
-  *"git cat-file -s 'missing:src/app.ts'"*) ;;
-  *"git cat-file -s 'empty:src/app.ts'"*) printf '0\\n' ;;
-  *"git cat-file -s 'binary:src/app.ts'"*) printf '2\\n' ;;
-  *"git cat-file -s 'invalid:src/app.ts'"*) printf '3\\n' ;;
-  *"git cat-file -s 'oversized:src/app.ts'"*) printf '5242881\\n' ;;
-  *"set -o pipefail; git show 'main:src/app.ts' | base64"*) printf 'ZXhwb3J0IGNvbnN0IHZhbHVlID0gMTsK\\n' ;;
-  *"set -o pipefail; git show 'empty:src/app.ts' | base64"*) ;;
-  *"set -o pipefail; git show 'binary:src/app.ts' | base64"*) printf 'AAE=\\n' ;;
-  *"set -o pipefail; git show 'invalid:src/app.ts' | base64"*) printf '//79\\n' ;;
+  *"'main:src/app.ts' | git cat-file --batch"*) printf 'YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYSBibG9iIDI0CmV4cG9ydCBjb25zdCB2YWx1ZSA9IDE7Cgo=\\n' ;;
+  *"'missing:src/app.ts' | git cat-file --batch"*) printf 'bWlzc2luZzpzcmMvYXBwLnRzIG1pc3NpbmcK\\n' ;;
+  *"'empty:src/app.ts' | git cat-file --batch"*) printf 'YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYSBibG9iIDAKCg==\\n' ;;
+  *"'binary:src/app.ts' | git cat-file --batch"*) printf 'YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYSBibG9iIDIKAAEK\\n' ;;
+  *"'invalid:src/app.ts' | git cat-file --batch"*) printf 'YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYSBibG9iIDMK//79Cg==\\n' ;;
+  *"'oversized:src/app.ts' | git cat-file --batch"*) printf 'YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYSBibG9iIDUyNDI4ODEK\\n' ;;
   *"/workspace/assets/blob.bin"*) printf 'AAEC\\n' ;;
   *"mkdir -p '/workspace/generated'"*) ;;
   *"base64 -d > '/workspace/generated/out.bin'"*) cat > "$FAKE_DOCKER_STDIN" ;;
@@ -1227,7 +1223,12 @@ esac
       expect(dockerLog).toContain(
         `/workspace/src/app.ts' ${MAX_TEXT_FILE_BYTES} editor '${MAX_TEXT_FILE_SIZE_LABEL}'`,
       );
-      expect(dockerLog).toContain("set -o pipefail; git show 'main:src/app.ts' | base64");
+      // One exec, one cat-file process per branch read.
+      expect(dockerLog).toContain(
+        "printf '%s\\n' 'main:src/app.ts' | git cat-file --batch 2>/dev/null | head -c",
+      );
+      expect(dockerLog).not.toContain("git show");
+      expect(dockerLog).not.toContain("cat-file -s");
       expect(dockerLog).toContain(
         "exec -i container-1 bash -lc mkdir -p -- '/workspace/generated' && base64 -d > '/workspace/generated/out.bin'",
       );

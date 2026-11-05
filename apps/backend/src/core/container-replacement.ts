@@ -68,6 +68,8 @@ import {
   resolveDockerImage,
 } from "./docker-image.js";
 import { createDockerContainer } from "./commands-containers.js";
+import { imageWithoutStagedInputsMessage } from "./commands-error-text.js";
+import { imageDeclaresStagedInputs } from "@orkestrator/protocol/image-manifest";
 import { assertEnvironmentBudgetEnforceable } from "./container-resources.js";
 import { stopEnvironmentReviewValidation } from "./review-validation-service.js";
 import { stopEnvironmentExecWorkers } from "./public-api/exec-control.js";
@@ -750,7 +752,8 @@ async function replaceRuntimePreservingStateUnfenced(
         "A preserving rebuild needs a reachable local Docker engine. The original container was not changed.",
       );
     }
-    const decision = selectStorageFormat(await imageCapabilities(image.imageId, context), topology);
+    const capabilities = await imageCapabilities(image.imageId, context);
+    const decision = selectStorageFormat(capabilities, topology);
     if (decision.format !== "volume-v1") {
       throw lifecycleError(
         "capability-unavailable",
@@ -765,6 +768,13 @@ async function replaceRuntimePreservingStateUnfenced(
       "The original container was not changed.",
       topology,
     );
+    // The candidate would be refused at creation; say so before the source stops.
+    if (!imageDeclaresStagedInputs(capabilities)) {
+      throw lifecycleError(
+        "capability-unavailable",
+        `${imageWithoutStagedInputsMessage(image.imageRef)} The original container was not changed.`,
+      );
+    }
     const sum = (values: Array<number | null>) =>
       values.some((value) => value === null)
         ? null
@@ -1046,7 +1056,11 @@ export async function rebuildPreview(
   }
   const image = await resolveDockerImage(configuredImageRef(context));
   if (image.kind !== "present") return refuse("image-unavailable");
-  const decision = selectStorageFormat(await imageCapabilities(image.imageId, context), topology);
+  const capabilities = await imageCapabilities(image.imageId, context);
+  const decision = selectStorageFormat(capabilities, topology);
   if (decision.format !== "volume-v1") return refuse(decision.reason);
+  // Published images declare both or neither; a hand-built manifest gets the
+  // same "update the image" answer rather than a failure after the copy.
+  if (!imageDeclaresStagedInputs(capabilities)) return refuse("image-without-storage-contract");
   return { ...preview, available: true };
 }

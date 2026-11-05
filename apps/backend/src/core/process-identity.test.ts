@@ -1,11 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import {
   isProcessAlive,
   isRecordedProcessAlive,
   processStartIdentity,
   readLiveCommandLines,
+  readPsCommandLines,
 } from "./process-identity.js";
 
 describe("production process identity", () => {
@@ -58,4 +61,43 @@ describe("production process identity", () => {
       expect(await readLiveCommandLines()).not.toContain(marker);
     },
   );
+});
+
+describe("readPsCommandLines", () => {
+  const originalPath = process.env.PATH;
+
+  async function withPs<T>(body: string, run: () => Promise<T>): Promise<T> {
+    const directory = mkdtempSync(path.join(tmpdir(), "ork-process-identity-ps-"));
+    const script = path.join(directory, "ps");
+    writeFileSync(script, `#!/bin/sh\n${body}\n`);
+    chmodSync(script, 0o755);
+    process.env.PATH = `${directory}${path.delimiter}${originalPath ?? ""}`;
+    try {
+      return await run();
+    } finally {
+      process.env.PATH = originalPath;
+      rmSync(directory, { recursive: true, force: true });
+    }
+  }
+
+  test("returns ps's whole output, asked for in the C locale", async () => {
+    const stdout = await withPs(`printf '%s|%s\\n' "$LC_ALL" "$*"`, () => readPsCommandLines());
+    expect(stdout).toBe("C|-axww -o args=\n");
+  });
+
+  test("a failing ps is unknown, whatever it printed", async () => {
+    expect(await withPs("echo partial; exit 1", () => readPsCommandLines())).toBeNull();
+  });
+
+  test("a ps past its timeout is unknown, whatever it printed", async () => {
+    const lines = await withPs("echo partial; exec sleep 30", () =>
+      readPsCommandLines({ timeoutMs: 100 }),
+    );
+    expect(lines).toBeNull();
+  });
+
+  test("a ps past its output limit is unknown rather than a shorter list", async () => {
+    const lines = await withPs("printf 123456", () => readPsCommandLines({ maxOutputBytes: 5 }));
+    expect(lines).toBeNull();
+  });
 });

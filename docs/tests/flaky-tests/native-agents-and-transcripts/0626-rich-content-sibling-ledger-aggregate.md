@@ -154,3 +154,7 @@ remains unknown. No rich-content implementation or assertions changed.
 - Complete unchanged owner rerun: `mise run test:logged -- --name merge-revocation-rerun -- env NODE_ENV=test bun test --cwd apps/web ./src/lib/chat/rich-conversation-revocation.test.tsx --parallel=1 --only-failures` passed (exit 0, 2.6 seconds). Passing output was removed by the logged runner.
 - Evidence: `/tmp/orkestrator-test-run.WgzY1u/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; outer aggregate log `/tmp/orkestrator-test-run.6qQiEz/merge-default-suite.log.gz`.
 - This repeats the open case. No implementation, assertion, timeout or skip changed; root cause remains unconfirmed, and the aggregate remains non-green.
+
+## Static Find review recurrence, 2026-11-05
+
+Preparation at `c0808605ddf1d4ecb421db6493f91018f1199b56` repeated the sibling ledger length mismatch (expected 1, received 0). Evidence: `.orkestrator/review-artifacts/review-validation-72ace150-e330-4d03-bde1-fdc95c60e6e0/validation-04.stdout.txt`; web group reported six failures. Complete unchanged owner rerun: `mise run test:logged -- --name revocation-alone -- bun --cwd=apps/web test ./src/lib/chat/rich-conversation-revocation.test.tsx --parallel=1 --only-failures`, passed, exit 0, 1.7 s. No cause established; preserve assertions.

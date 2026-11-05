@@ -311,6 +311,68 @@ export interface CoordinatorDelegation {
    * bounded hold for background work is skipped.
    */
   stopRequestedAt?: string;
+  /** The user stopped it from the Work panel, so the notice does not credit the coordinator. */
+  stopRequestedBy?: "user";
+  /** What was asked and on what, for the Work panel. Absent on older records. */
+  request?: CoordinatorDelegationRequest;
+}
+
+/**
+ * What the Work panel shows about one request: a one-line summary of the ask and
+ * the selection it ran with. The coordinator store is rewritten whole and holds
+ * up to `MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS` records, so every field is short
+ * and bounded by {@link normalizeCoordinatorDelegationRequest}. Never read back
+ * as the prompt: it is a display line, cut at the bound.
+ */
+export interface CoordinatorDelegationRequest {
+  summary?: string;
+  agent?: AgentPlatform;
+  /** Null when no tier pins a model and the agent picks its own. */
+  model?: string | null;
+  reasoning?: string | null;
+  /** `requested` when the coordinator overrode the saved default. */
+  source?: "requested" | "default";
+}
+
+export const COORDINATOR_DELEGATION_SUMMARY_MAX = 140;
+const COORDINATOR_DELEGATION_SELECTION_MAX = 120;
+
+function boundedSelection(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const text = value.trim();
+  return text && text.length <= COORDINATOR_DELEGATION_SELECTION_MAX ? text : undefined;
+}
+
+/** One line of at most {@link COORDINATOR_DELEGATION_SUMMARY_MAX} characters, or nothing. */
+export function coordinatorDelegationSummaryLine(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const text = value.trim().replace(/\s+/g, " ");
+  if (!text) return undefined;
+  if (text.length <= COORDINATOR_DELEGATION_SUMMARY_MAX) return text;
+  // Never leave half of a surrogate pair at the cut.
+  const cut = text.slice(0, COORDINATOR_DELEGATION_SUMMARY_MAX - 1).replace(/[\ud800-\udbff]$/, "");
+  return `${cut}…`;
+}
+
+/** A request with every field checked and bounded, or undefined when nothing is left. */
+export function normalizeCoordinatorDelegationRequest(
+  value: unknown,
+): CoordinatorDelegationRequest | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const source = value as Record<string, unknown>;
+  const summary = coordinatorDelegationSummaryLine(source.summary);
+  const model = boundedSelection(source.model);
+  const reasoning = boundedSelection(source.reasoning);
+  const request: CoordinatorDelegationRequest = {
+    ...(summary ? { summary } : {}),
+    ...(isAgentPlatform(source.agent) ? { agent: source.agent } : {}),
+    ...(model ? { model } : source.model === null ? { model: null } : {}),
+    ...(reasoning ? { reasoning } : source.reasoning === null ? { reasoning: null } : {}),
+    ...(source.source === "requested" || source.source === "default"
+      ? { source: source.source }
+      : {}),
+  };
+  return Object.keys(request).length > 0 ? request : undefined;
 }
 
 /** What coordinator-started work asks of the user, for the panel and for the agent. */

@@ -21,6 +21,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { delimiter, join } from "node:path";
+import { readKeychainCommand } from "../src/core/claude-host-credentials";
 import { tmpdir } from "node:os";
 
 const { __testing } = await import("../src/core/commands");
@@ -247,6 +248,43 @@ describe("host Claude credential resolution on macOS", () => {
       expect(await getHostClaudeCredentials("darwin", dir)).toBe(KEYCHAIN);
     });
   });
+
+  test("treats an oversized Keychain answer as no record, not a cut credential", async () => {
+    await withTempDirAsync(async (dir) => {
+      stubSecurity(dir, `#!/bin/sh\nhead -c ${1024 * 1024 + 1} /dev/zero\n`);
+      await writeOnDisk(dir, ON_DISK);
+      expect(await getHostClaudeCredentials("darwin", dir)).toBe(ON_DISK);
+    });
+  });
+
+  for (const failure of ["timeout", "overflow", "exit"] as const) {
+    test(`a Keychain ${failure} never exposes partial credential output`, async () => {
+      await withTempDirAsync(async (dir) => {
+        const suffix =
+          failure === "timeout"
+            ? "exec sleep 30"
+            : failure === "overflow"
+              ? `head -c ${1024 * 1024 + 1} /dev/zero`
+              : "exit 44";
+        stubSecurity(dir, `#!/bin/sh\nprintf '%s' '${KEYCHAIN}'\n${suffix}\n`);
+        const error = await readKeychainCommand(["find-generic-password"], 1000).catch(
+          (reason) => reason,
+        );
+        expect(error).toMatchObject({
+          message: "Keychain read failed",
+          stdout: "",
+          stderr: "",
+          stdoutBytes: Buffer.alloc(0),
+          timedOut: failure === "timeout",
+          outputLimitExceeded: failure === "overflow",
+          ...(failure === "exit" ? { exitCode: 44 } : {}),
+        });
+        expect(String(error)).not.toContain(KEYCHAIN);
+        expect(JSON.stringify(error)).not.toContain(KEYCHAIN);
+        expect(error.stack).not.toContain(KEYCHAIN);
+      });
+    });
+  }
 
   test("passes the Keychain service name the security tool expects", async () => {
     await withTempDirAsync(async (dir) => {

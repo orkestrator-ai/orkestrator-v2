@@ -635,8 +635,6 @@ export interface GlobalConfig {
   terminalHistoryGlobalRetentionMb?: number;
   /** Number of days completed terminal archives remain on disk. */
   terminalHistoryRetentionDays?: number;
-  /** Capture raw Codex bridge events for subagent transcript debugging */
-  experimentalCodexRawEventLogging?: boolean;
   /** Experimental: scheduled jobs (Settings → Schedules, schedule tools and actions) */
   experimentalScheduling?: boolean;
   /**

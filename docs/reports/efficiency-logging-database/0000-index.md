@@ -20,18 +20,14 @@ A batch file combines several reports as numbered parts and takes the rating of 
 | 4 | [0490-e25-container-start.md](0490-e25-container-start.md) | Medium | No | **E25, Container start.**<br>`0490`: DK-14: Agent-home inputs are copied in full per environment and again on every start<br>`0500`: DK-13: Each environment clones from the remote again | From `0490`: Every container start copies inputs again, at a size nobody has measured. |
 | 5 | [0510-e12-renderer-store.md](0510-e12-renderer-store.md) | Medium | No | **E12, Renderer store.**<br>`0510`: WEB-6: The live-head merge serialises parts with no identity shortcut<br>`0590`: WEB-2 (rest): The native session hook subscribes to whole cache entries it reads only at mount<br>`0640`: WEB-14: Projection store writes copy four Maps even when one changes | From `0510`: Head-row serialisation runs on transcript updates while streaming, at a cost no Profiler run has confirmed. |
 | 6 | [0750-e15-health-and-diagnostics.md](0750-e15-health-and-diagnostics.md) | Medium | No | **E15, Health and diagnostics.**<br>`0750` (done): R6's always-on tier and control, plus L4's uncaught exception gap.<br>`0820`: R12 (M1): a rolling health row and a clean shutdown marker.<br>`0810`: R19 (M6): database size, waits, top tables and a panel.<br>`0880`: R13 (M3, M4, M5): write-only metrics, small inefficiencies and shared primitives.<br>`0780`: R11 (M2, L7) and its control: a local diagnostics bundle. | From `0750`: First-occurrence evidence is a missing measurement rather than a defect in shipped behaviour. |
-| 7 | [0770-e17-dead-code.md](0770-e17-dead-code.md) | Medium | No | **E17, Dead code.**<br>`0770`: R9 (L8): remove the no-op toggle.<br>`0930`: L10 and M2 leftovers that no recommendation covers. | From `0770`: A default-on setting tells users something false, though nothing is captured today. |
-| 8 | [0790-e16-log-controls.md](0790-e16-log-controls.md) | Medium | No | **E16, Log controls.**<br>`0790`: R8's remainder (L7) and its control: a switch, DevTools and a persisted error ring.<br>`0890`: User controls: presets, auto-revert and privacy text.<br>`0900`: User controls: `--log-level` and `--log-category`. | From `0790`: Renderer bugs in the packaged app leave no trace, which is a supportability gap rather than broken behaviour. |
-| 9 | [0160-e10-conditional-reads-and-deltas.md](0160-e10-conditional-reads-and-deltas.md) | Low | No | **E10, Conditional reads and deltas.**<br>`0160`: TX-1: A transcript delta can only be built from the newest cached view<br>`0180`: TX-5: Session-state reads have no conditional path from the bridge<br>`0190`: TX-6: Bridge transcript windows are always sent whole | From `0160`: The report rates it High, but the maintainer gated it on a baseline, so it stays Low until that measurement arrives. |
-| 10 | [0210-e11-projection-hashing.md](0210-e11-projection-hashing.md) | Low | No | **E11, Projection hashing.**<br>`0210`: TX-3: The legacy commit re-serialises the whole projection to fingerprint it<br>`0220`: TX-9, TX-13: Memoise row fingerprints and hash them for the view token<br>`0320`: TX-7: Head-row recovery re-reads the raw transcript on each streaming revision<br>`0330`: TX-11: Patch building re-serialises and hashes whole rows in a JavaScript loop<br>`0340`: TX-12: Already-encoded rows are stringified again on the way out<br>`0345`: TX-14: Restart-preview checkpoints are serialised three times and cloned<br>`0350`: TX-16: Inline tool bodies are re-hashed whenever their row misses the cache<br>`0380`: TX-17: Small linear scans in the transcript projection | From `0210`: A contained optimisation with no behaviour change and no measured cost. |
-| 11 | [0240-e20-acp-bridge.md](0240-e20-acp-bridge.md) | Low | No | **E20, ACP bridge.**<br>`0270`: BR-16: ACP's Cursor replay looks like dead code<br>`0260`: BR-12: ACP stdout framing is quadratic for large frames<br>`0240`: BR-1 (remainder): ACP still serialises every session on each state write | From `0240`: The write rate is already down to once a second, so the remaining cache should wait for a measurement. |
-| 12 | [0280-e18-gateway-events.md](0280-e18-gateway-events.md) | Low | No | **E18, Gateway events.**<br>`0280`: GW-5: Events are measured and encoded again for each subscriber<br>`0290`: GW-12: Scoped stream replay writes one cursor frame per skipped event<br>`0300`: GW-14: Replay lookup is a linear filter and an oversized event is invisible<br>`0370`: GW-11: Relayed federation events share one name and the main replay window | From `0280`: A small per-subscriber cost that should wait for a profile. |
-| 13 | [0310-e24-gateway-static-and-preview.md](0310-e24-gateway-static-and-preview.md) | Low | No | **E24, Gateway static and preview.**<br>`0310`: GW-15: Static fallback compression runs before the 304 check<br>`0365`: GW-10: The preview body rewrite makes many full regex passes | From `0310`: Wasted compression only for revalidated static files that have no precompressed sibling. |
-| 14 | [0385-tx-10-joined-history-pages.md](0385-tx-10-joined-history-pages.md) | Low | No | TX-10: Joined history pages read the whole transcript per page | A compatibility path that only older renderers use and that 0232 will remove, blocked on the support window. |
-| 15 | [0390-gw-7-websocket-compression.md](0390-gw-7-websocket-compression.md) | Low | No | GW-7: No WebSocket message compression | Deferred by 0052 decision D6 until the transport direction is chosen. |
-| 16 | [0560-st-9-agent-mail-store-remainder.md](0560-st-9-agent-mail-store-remainder.md) | Low | No | ST-9 (rest): Agent mail: pending injects and mailbox lists still sit on the whole store | The read cost the finding described has gone, and the rest needs a stored-format change only a measurement could justify. |
-| 17 | [0580-st-21-file-rpc-and-usage-report.md](0580-st-21-file-rpc-and-usage-report.md) | Low | No | ST-21: Whole files cross RPC as base64, branch reads spawn twice, and usage reports parse every row | These are occasional, bounded reads. |
-| 18 | [0693-dk-10-second-claude-binary.md](0693-dk-10-second-claude-binary.md) | Low | No | DK-10: The image ships two Claude Code native binaries | It is an optional image-size saving that waits on a maintainer decision. |
+| 7 | [0790-e16-log-controls.md](0790-e16-log-controls.md) | Medium | No | **E16, Log controls.**<br>`0790`: R8's remainder (L7) and its control: a switch, DevTools and a persisted error ring.<br>`0890`: User controls: presets, auto-revert and privacy text.<br>`0900`: User controls: `--log-level` and `--log-category`. | From `0790`: Renderer bugs in the packaged app leave no trace, which is a supportability gap rather than broken behaviour. |
+| 8 | [0160-e10-conditional-reads-and-deltas.md](0160-e10-conditional-reads-and-deltas.md) | Low | No | **E10, Conditional reads and deltas.**<br>`0160`: TX-1: A transcript delta can only be built from the newest cached view<br>`0180`: TX-5: Session-state reads have no conditional path from the bridge<br>`0190`: TX-6: Bridge transcript windows are always sent whole | From `0160`: The report rates it High, but the maintainer gated it on a baseline, so it stays Low until that measurement arrives. |
+| 9 | [0210-e11-projection-hashing.md](0210-e11-projection-hashing.md) | Low | No | **E11, Projection hashing.**<br>`0210`: TX-3: The legacy commit re-serialises the whole projection to fingerprint it<br>`0220`: TX-9, TX-13: Memoise row fingerprints and hash them for the view token<br>`0320`: TX-7: Head-row recovery re-reads the raw transcript on each streaming revision<br>`0330`: TX-11: Patch building re-serialises and hashes whole rows in a JavaScript loop<br>`0340`: TX-12: Already-encoded rows are stringified again on the way out<br>`0345`: TX-14: Restart-preview checkpoints are serialised three times and cloned<br>`0350`: TX-16: Inline tool bodies are re-hashed whenever their row misses the cache<br>`0380`: TX-17: Small linear scans in the transcript projection | From `0210`: A contained optimisation with no behaviour change and no measured cost. |
+| 10 | [0310-e24-gateway-static-and-preview.md](0310-e24-gateway-static-and-preview.md) | Low | No | **E24, Gateway static and preview.**<br>`0310`: GW-15: Static fallback compression runs before the 304 check<br>`0365`: GW-10: The preview body rewrite makes many full regex passes | From `0310`: Wasted compression only for revalidated static files that have no precompressed sibling. |
+| 11 | [0385-tx-10-joined-history-pages.md](0385-tx-10-joined-history-pages.md) | Low | No | TX-10: Joined history pages read the whole transcript per page | A compatibility path that only older renderers use and that 0232 will remove, blocked on the support window. |
+| 12 | [0390-gw-7-websocket-compression.md](0390-gw-7-websocket-compression.md) | Low | No | GW-7: No WebSocket message compression | Deferred by 0052 decision D6 until the transport direction is chosen. |
+| 13 | [0560-st-9-agent-mail-store-remainder.md](0560-st-9-agent-mail-store-remainder.md) | Low | No | ST-9 (rest): Agent mail: pending injects and mailbox lists still sit on the whole store | The read cost the finding described has gone, and the rest needs a stored-format change only a measurement could justify. |
+| 14 | [0693-dk-10-second-claude-binary.md](0693-dk-10-second-claude-binary.md) | Low | No | DK-10: The image ships two Claude Code native binaries | It is an optional image-size saving that waits on a maintainer decision. |
 
 ## Parallel running
 
@@ -46,19 +42,16 @@ This index only changes when a branch merges, so it can't show what is running n
 | Batch | Name | Parts | Lane and position | Finish first | Not at the same time as |
 | --- | --- | --- | --- | --- | --- |
 | E1 | Baseline run | The baseline task in `0150`, `0160`, `0180`, `0190` and `0400` | No lane | None | None |
-| E25 | [Container start](0490-e25-container-start.md) | `0490`, `0500` | Containers, 4 of 4 | None | None |
+| E25 | [Container start](0490-e25-container-start.md) | `0490`, `0500` | Containers, 3 of 3 | None | None |
 | E9 | [Transcript reads](0110-e9-transcript-reads.md) | `0150`, `0200`, `0110` | Transcript, 1 of 4 | E1 (Baseline run) | None |
 | E10 | [Conditional reads and deltas](0160-e10-conditional-reads-and-deltas.md) | `0160`, `0180`, `0190` | Transcript, 2 of 4 | E1 (Baseline run) | None |
 | E11 | [Projection hashing](0210-e11-projection-hashing.md) | `0210`, `0220`, `0320`, `0330`, `0340`, `0345`, `0350`, `0380` | Transcript, 3 of 4 | None | None |
 | E12 | [Renderer store](0510-e12-renderer-store.md) | `0510`, `0590`, `0640` | Transcript, 4 of 4 | None | C6 (Errors and dead ends) |
 | E3 | [Retention and deletion](0540-e3-retention-and-deletion.md) | `0730`, `0540`, `0840` | Change tracking, 1 of 1 | None | None |
 | E26 | [Local desktop transport](0400-e26-local-desktop-transport.md) | `0400`, `0860` | Desktop, 1 of 1 | E1 (Baseline run) | None |
-| E18 | [Gateway events](0280-e18-gateway-events.md) | `0280`, `0290`, `0300`, `0370` | Gateway, 1 of 3 | None | None |
-| E24 | [Gateway static and preview](0310-e24-gateway-static-and-preview.md) | `0310`, `0365` | Gateway, 2 of 3 | None | None |
-| E17 | [Dead code](0770-e17-dead-code.md) | `0770`, `0930` | Logging and diagnostics, 1 of 3 | None | None |
-| E15 | [Health and diagnostics](0750-e15-health-and-diagnostics.md) | `0750`, `0820`, `0810`, `0880`, `0780` | Logging and diagnostics, 2 of 3 | None | None |
-| E16 | [Log controls](0790-e16-log-controls.md) | `0790`, `0890`, `0900` | Logging and diagnostics, 3 of 3 | None | None |
-| E20 | [ACP bridge](0240-e20-acp-bridge.md) | `0270`, `0260`, `0240` | No lane | None | None |
+| E24 | [Gateway static and preview](0310-e24-gateway-static-and-preview.md) | `0310`, `0365` | Gateway, 1 of 2 | None | None |
+| E15 | [Health and diagnostics](0750-e15-health-and-diagnostics.md) | `0750`, `0820`, `0810`, `0880`, `0780` | Logging and diagnostics, 1 of 2 | None | None |
+| E16 | [Log controls](0790-e16-log-controls.md) | `0790`, `0890`, `0900` | Logging and diagnostics, 2 of 2 | None | None |
 
 Why these are grouped:
 
@@ -70,12 +63,9 @@ Why these are grouped:
 - **E12:** Same hook and projection store.
 - **E3:** All decide what gets deleted and when.
 - **E26:** Both in `backend-process.ts`.
-- **E18:** Same replay and event files.
 - **E24:** Both in `gateway-proxy.ts`.
-- **E17:** Low-risk removals. Goes before E15, which names six of the same files.
 - **E15:** Build the sources first. `0780` then packages them.
 - **E16:** Linked settings for log detail.
-- **E20:** Remove the dead code first.
 
 ### Files built on their own
 
@@ -83,7 +73,6 @@ These still follow the lane and conflict rules above.
 
 | Batch | Name | Files | Lane and position | Finish first | Not at the same time as |
 | --- | --- | --- | --- | --- | --- |
-| E-0580 | [File RPC and usage report](0580-st-21-file-rpc-and-usage-report.md) | `0580` | Git scans and file reads, 1 of 1 | None | None |
 
 ### Not ready to start
 
@@ -98,7 +87,7 @@ When one of these becomes ready, it joins the lane shown.
 
 ## Status of every efficiency finding
 
-90 done, 8 partly done, 23 open, 2 no action.
+91 done, 7 partly done, 23 open, 2 no action.
 
 | Finding | Disposition | Evidence |
 | --- | --- | --- |
@@ -106,16 +95,16 @@ When one of these becomes ready, it joins the lane shown.
 | GW-2 | Done | The default compression mode is `on` (`apps/backend/src/gateway-support-core.ts:536`, #1548 `12289fc56`, 0052 D14), and SSE streams use `GzipEventClientWriter` (`apps/backend/src/gateway-handlers.ts:211`). |
 | GW-3 | Done | Every web client carries its terminals on one filtered stream; bearer and cross-origin clients read it with `fetch` (`openSharedTerminalConnection`, `apps/web/src/lib/native/web-gateway.ts`; tests in `web-gateway-shared-terminal-stream.test.ts`). Built 2026-11-05 from 0120, whose file is deleted; real-browser evidence is [5380](../../todo/transcripts-and-observation/5380-bearer-terminal-stream-live-evidence.md). |
 | GW-4 | Done | `SseFrameDecoder` keeps a chunk list and searches only the new text (`packages/protocol/src/gateway-event-stream.ts:162`, #1548 `12289fc56`), though the report's minor `indexOf` sub-fix in `parseSseBlock` (`:96`) was not taken, which leaves that parse linear per frame. |
-| GW-5 | Done | One `Buffer` per frame is written to every client, with its byte count passed to the writer (`apps/backend/src/gateway-events.ts:30`, `apps/backend/src/gateway-support-extra.ts:653`); see 0280 and 1202 task 11. |
+| GW-5 | Done | One `Buffer` per frame is written to every client, with its byte count passed to the writer (`apps/backend/src/gateway-events.ts:30`, `apps/backend/src/gateway-support-extra.ts:653`); see 1202 task 11 and the [E18 closing check](#closing-check-of-e18-gateway-events). |
 | GW-6 | Done | `flush` pauses channel frames at a 256 KiB watermark and resumes on the send callback (`apps/backend/src/terminal-websocket-server.ts:945`, `:972`); see 1202 task 11. |
 | GW-7 | Open | No compression option is set (`apps/backend/src/terminal-websocket-server.ts:193-198`), and 0052 D6 defers the work; see 0390. |
 | GW-8 | Done | The private-origin proxy reuses pooled connections (`apps/backend/src/preview-http-proxy.ts:160`, `apps/backend/src/preview-upstream-pool.ts`, #1604 `b64242842`). |
 | GW-9 | Done | Compressed and rewritten bodies get a derived ETag that maps back upstream (`apps/backend/src/gateway-proxy.ts:188`, `:397`, `apps/backend/src/gateway-proxy-etag.ts`, #1604 `b64242842`). |
 | GW-10 | Open | The rewrite still runs nine `replace` passes on HTML (`apps/backend/src/gateway-support-extra.ts:555`); see 0365. |
-| GW-11 | Open | All relayed frames share one event name (`apps/backend/src/core/nodes/node-event-relay.ts:233`, `:248`) and the main replay ring; see 0370. |
-| GW-12 | Done | One cursor frame per run of skipped replay frames (`apps/backend/src/gateway-events.ts:198`); see 0290 and 1202 task 11. |
+| GW-11 | Done | Relayed events are named per node (`relayedNodeEventName`, `apps/backend/src/core/nodes/node-event-relay.ts:240`, `:255`) and kept in their own ring (`relayedEventReplay`), and a renderer reads them on one filtered stream with its own cursor (`apps/web/src/lib/native/relayed-event-stream.ts`). Older clients keep the old name. Live checks are in [5840](../../todo/cross-cutting/5840-relayed-events-live-evidence.md) and the desktop's main process in [5841](../../todo/cross-cutting/5841-desktop-main-relayed-stream.md); see the [E18 closing check](#closing-check-of-e18-gateway-events). |
+| GW-12 | Done | One cursor frame per run of skipped replay frames (`apps/backend/src/gateway-events.ts:308`), and a scoped client's replay budget counts only what it is written (`:363`); see 1202 task 11 and the [E18 closing check](#closing-check-of-e18-gateway-events). |
 | GW-13 | Done | The rebuild section follows `container-lifecycle-updated` with a 15 s backstop (`apps/web/src/components/environments/EnvironmentRebuildSection.tsx:146`, `:175-177`, #1606 `9c06cb7aa`), and 1202 records the choice to leave the other two 3 s backstops. |
-| GW-14 | Done | The lookup is a `slice` (`apps/backend/src/gateway-event-replay.ts:182`), and `oversizedAppends` counts frames over the byte bound (`:146`); see 0300 and 1202 task 11. |
+| GW-14 | Done | The lookup is a `slice` (`apps/backend/src/gateway-event-replay.ts:191`), and `oversizedAppends` counts frames over the byte bound (`:155`); see 1202 task 11 and the [E18 closing check](#closing-check-of-e18-gateway-events). |
 | GW-15 | Open | Compression still runs before the 304 check (`apps/backend/src/gateway-proxy.ts:794`, `:860`); see 0310. |
 | GW-16 | Done | The idle deadlines refresh one timer (`apps/backend/src/gateway-proxy.ts:313`, `:556`, `packages/protocol/src/node/preview-forward.ts:319`), the decoders are shared (`apps/backend/src/terminal-websocket-server.ts:170-171`), input results are cumulative per flush on a negotiated subprotocol (`:904`, `:1143`), and acks go once a second (`apps/web/src/lib/native/terminal-websocket-client.ts:104`); see 1202 task 11. Live checks past loopback Chromium are in [5080](../../todo/cross-cutting/5080-terminal-websocket-live-evidence.md). |
 | TX-1 | Done | Superseded views stay in a bounded ring per key, and the cached answer and the read path both build deltas from it (`apps/backend/src/core/native-agent-transcript-delta-bases.ts`); see 0160. |
@@ -136,7 +125,7 @@ When one of these becomes ready, it joins the lane shown.
 | TX-16 | Open | Inline bodies are still serialised and hashed on a row miss (`apps/backend/src/core/native-agent-transcript-projection.ts:807-808`); see 0350. |
 | TX-17 | Open | The scans remain (`apps/backend/src/core/native-agent-transcript-projection.ts:1203`, `:2035`, `:2078`), and the report names no fix; see 0380. |
 | TX-18 | Open | The fallback still calls `this.legacy(sessionId)` without the limit (`apps/backend/src/core/http-bridge-transcript-reader.ts:66`); see 0200. |
-| BR-1 | Partly done | Streaming writes are limited to one a second (`bridges/acp-bridge/src/acp-persist-writer.ts:239-249`, #1548 `12289fc56`), but the report's fragment cache was not built and each write still serialises every session (`:293`); see 0240. |
+| BR-1 | Done | Streaming writes are limited to one a second (`bridges/acp-bridge/src/acp-persist-writer.ts:231-241`, #1548 `12289fc56`). The report's fragment cache was not built, because a measurement at the bound was not conclusive; figures and the open questions are in [5900](../../todo/agent-engines/5900-acp-state-write-cost-at-the-cap.md). |
 | BR-2 | Done | `isSessionConfigPersisted` reads one record through `loadRecord` (`bridges/codex-bridge/src/app-server-runtime-sessions.ts:1803`, `bridges/codex-bridge/src/sessions/persistence.ts:386`, #1683 `38ac30844`). |
 | BR-3 | Done | The check interval is 1 MiB (`bridges/acp-bridge/src/acp-context.ts:961`, #1548 `12289fc56`). |
 | BR-4 | Done | `TranscriptRowSizes` remembers row sizes (`packages/protocol/src/node/transcript-budget.ts:296`), used by Pi and Cursor through `packages/protocol/src/node/bridge-transcript-bounds.ts:80` and by ACP through `bridges/acp-bridge/src/acp-rows.ts:197` (#1593 `e668f0a6d`). |
@@ -147,11 +136,11 @@ When one of these becomes ready, it joins the lane shown.
 | BR-9 | Done | `emitRow` returns whether it published, and the caller returns early otherwise (`bridges/claude-bridge/src/services/session-manager-prompt-stream.ts:431`, `:553`, #1693 `9a878575d`). |
 | BR-10 | Done | `session-list-cache.ts` keeps the list while no file changes, and a timeout answers 504 (`bridges/pi-bridge/src/agent-session.ts`); see 1202 task 6. The resume dialog shows a generic failure rather than the 504's reason, and the timeout's size is unmeasured: [5480](../../todo/agent-engines/5480-pi-resume-list-timeout-leftovers.md). |
 | BR-11 | Done | `readSessionIndex` caches the parsed index and reads only appended bytes (`bridges/codex-bridge/src/history/session-index-cache.ts`, `bridges/codex-bridge/src/history/rollout.ts:92`, #1683 `38ac30844`). |
-| BR-12 | Done | `JsonlLineFramer` searches only the new chunk (`bridges/acp-bridge/src/acp-jsonl-framer.ts`); see 1202 task 6. |
+| BR-12 | Done | `JsonlLineFramer` searches only the new chunk (`bridges/acp-bridge/src/acp-jsonl-framer.ts`), and `acp-jsonl-framer.test.ts` covers the close at the real 4 MiB limit for terminated and unterminated lines; see 1202 task 6. Real frame sizes are still unread: [5900](../../todo/agent-engines/5900-acp-state-write-cost-at-the-cap.md) task 4. |
 | BR-13 | Done | `SerialQueue` drains an array per key with count and byte bounds, and overflow replaces the child (`bridges/codex-bridge/src/app-server/jsonl-rpc-client.ts`); see 1202 task 6. A real high-water mark is still to be read: [5481](../../todo/agent-engines/5481-codex-notification-queue-headroom.md). |
 | BR-14 | Done | `encodeStateWithinBudget` encodes each record once (`bridges/pi-bridge/src/persistence.ts`); see 1202 task 6. A test that the durability barrier rejects state that cannot fit is [5480](../../todo/agent-engines/5480-pi-resume-list-timeout-leftovers.md) task 4. |
 | BR-15 | Done | The transcript helpers moved to `packages/protocol/src/node` (#1593 `e668f0a6d`), and both bridges now use one replay ring, `EventRing` (`packages/protocol/src/node/event-ring.ts`); Claude collapses superseded frames and reuses each frame's byte count (`bridges/claude-bridge/src/routes/events.ts`). See the closing check of E-0360 below. |
-| BR-16 | Done | The replay and its gates are removed and the harness uses `acp-fixture`; the method-gated `cursor/*` handlers are [4540](../../todo/agent-engines/4540-acp-bridge-cursor-extension-leftovers.md). See 1202 task 6. |
+| BR-16 | Done | The replay, its gates and what only it used are removed, and the harness and fake agent use `acp-fixture`; the method-gated `cursor/*` handlers are [4540](../../todo/agent-engines/4540-acp-bridge-cursor-extension-leftovers.md). See 1202 task 6. |
 | WEB-1 | Done | A background round is one request plus discovery when due, 3 requests per round to 1.04 (`useNativeAgentSession.ts`); the finding's note that Claude and Codex idle views never back off no longer held (`turn.quietObservation`, `native-session-read-policy.ts`); see [1202 task 4](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md). |
 | WEB-2 | Done | Identity kept and recency condition gone (12289fc56); the hook reads its sync and progressive caches with `getState()` (`useNativeAgentSession.ts`, 2026-11-04); see 0590 and [1202](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md). |
 | WEB-3 | Done | `useHydrateOncePerEnvironment`, `App.tsx:368`; no-op guards in `environmentStore.ts` setters (12289fc56). |
@@ -191,7 +180,7 @@ When one of these becomes ready, it joins the lane shown.
 | ST-18 | Done 2026-11-04 | Demand lasts 2 min from the last read, then a `reset` event; see [change-tracking.md](../../architecture/change-tracking.md#scopes). |
 | ST-19 | Partly done | Measurement pruning, `change-ledger.ts:1144`, `measurement-service.ts:213`, `retention.ts:122` (8a6bc2f84); `NOT IN` scan at `change-ledger.ts:931-936` remains, see 0540. |
 | ST-20 | Done 2026-11-05 | Byte count kept across sweeps (`ObjectStore.currentBytes`), sweep walks without the lock, `ReachabilityCache` between passes (`retention.ts`, `reachability-cache.ts`); live sizing [5361](../../todo/cross-cutting/5361-retention-pass-on-a-large-real-store.md). |
-| ST-21 | Open | Base64 commands, `commands-registry-terminal.ts:940`, `:960`; two spawns, `commands-files.ts:2335-2361`; see 0580. |
+| ST-21 | Done 2026-11-05 | Environment-less media streams under the `read_file_base64` roots (`readable-host-roots.ts`) and stream-loaded file viewer images; one `git cat-file --batch` per branch read (`git-blob-read.ts`); the finished usage report kept per query and store revision (`usage-history-store.ts`); live evidence and a usage measurement in [5800](../../todo/cross-cutting/5800-file-read-streaming-leftovers.md). |
 | BG-1 | Done | Bound through the snapshot, `tmux-backend.ts:406`; bounded head and memo, `tmux-hooks.ts:978`, `:1025` (051261eee). |
 | BG-2 | Done | Idle cadence and doorbell, `tmux-session-manager.ts:696-707`, `tmux-hook-signal.ts:84` (051261eee). |
 | BG-3 | Done | Disabled returns early, `agent-mail-service.ts:380` (12289fc56); liveness reuse, `tmux-commands.ts:334-342` (d7054dace); paused refresh kept by decision, 1202 task 10. |
@@ -228,7 +217,7 @@ When one of these becomes ready, it joins the lane shown.
 
 ## Status of every logging and database item
 
-16 done, 6 partly done, 15 open, 1 no action.
+18 done, 6 partly done, 13 open, 1 no action.
 
 | Finding | Disposition | Evidence |
 | --- | --- | --- |
@@ -240,7 +229,7 @@ When one of these becomes ready, it joins the lane shown.
 | R6 essential tier and silent gaps | Partly done | The silent failures log, and the user-facing notices are in: a Settings → Schedules notice when this backend does not fire schedules (`schedulerStatus`, `SchedulesSettings.tsx`) and a transcript note when a Pi or Cursor resume falls back (`appendResumeFallbackNotice`); see [the E13 closing check](#closing-check-of-e13-silent-failures), with live evidence in [5160](../../todo/cross-cutting/5160-silent-failures-live-evidence.md). The essential tier is built (0750, `docs/architecture/logging.md`) and the previous Docker bridge log is kept and readable through `previous: true` and `getContainerServerLog` (E14, see [its closing check](#closing-check-of-e14-docker-logs)). |
 | R7 relay and file writer | Partly done | Level-carrying records and the updater logger landed in #1558 (`backend-process.ts:46-64`, `updater-log.ts:35`); batching landed with DK-18; only the line bound and relay skip remain open in [0860](0400-e26-local-desktop-transport.md#0860-finish-the-electron-relay-and-file-writer). See [the file writer](../../architecture/logging.md#the-file-writer). |
 | R8 renderer diagnostics | Partly done | Lifecycle logs moved to `debug` (#1592) and keystroke warnings throttled (`useTerminal.ts:1125`); switch, DevTools and ring are open in 0790. |
-| R9 Codex raw event logging | Open | `ORKESTRATOR_CODEX_RAW_LOG_DIR` is read and never set (`bridges/codex-bridge/src/index.ts:382`), writer reachable only for tests (`:974`), default still on (`app-config-defaults.ts:91`); 0770. |
+| R9 Codex raw event logging | Done | Removed rather than reconnected: the toggle, default, writer and `raw-log.write-failed` are gone, and a stored key is left alone; `CODEX_BRIDGE_RECORD_NOTIFICATIONS` remains for developers. See [the E17 closing check](#closing-check-of-e17-dead-code). |
 | R10 Docker log hygiene | Done | Inherited `DEBUG`, `RUST_LOG` and `DEBUG_CLAUDE_AGENT_SDK` no longer reach local bridges unless `ORKESTRATOR_KEEP_VENDOR_DEBUG=1` (`bridge-vendor-debug-env.ts`; E13 `0830`). The disk items are also done (E14, see [its closing check](#closing-check-of-e14-docker-logs)): the no-Perl fallback and an image without the writer are capped at 5 MiB, dropped lines are marked, and `json-file` with bounds replaces a missing `local` driver. |
 | R11 export diagnostics | Open | No export code or `diagnostics` CLI command exists; the Bug button reads facts, not metrics (`packages/protocol/src/node/bug-report-facts.ts`); 0780. |
 | R12 health summary | Open | No `process.memoryUsage` under any `src`, and no shutdown marker; 0820. |
@@ -268,7 +257,7 @@ When one of these becomes ready, it joins the lane shown.
 | Finding with no recommendation: D4 Kanban, notes, plans, comments after project removal | Open | `removeProject` does not touch them (`storage-projects.ts:476-502`); 0840. |
 | Finding with no recommendation: L4 backend `uncaughtException` | Open | No handler in the backend, while the desktop has one (`native-dialogs.ts:232`); task in 0750. |
 | Finding with no recommendation: L4 Electron `crashReporter` | No action | Nothing leaves the machine by design, and a minidump is not content-free; recorded in 0750. |
-| Finding with no recommendation: L10 dead code, M2 wrong comments | Open | `run-diagnostics.ts:12`, `commands-registry-system.ts:66`; 0930. |
+| Finding with no recommendation: L10 dead code, M2 wrong comments | Done | `cursorDebugEnabled` is deleted and comments name `/__orkestrator/metrics`; see [the E17 closing check](#closing-check-of-e17-dead-code). |
 | Finding with no recommendation: L10 tags and level misuse | Done | Fixed areas replaced tags (`docs/architecture/logging.md:794-884`); raw stderr stays `ERROR` by design, as text with no level (`:604`). |
 
 ## Closing check of E2 (Measurement rows)
@@ -340,6 +329,27 @@ The outcome of every task in the E13 batch file, checked back against the code o
 | 0830 | Needs verification: does any provider need these in normal use | Moved to a to-do | Nothing in the repository reads them; the vendor CLIs were not run. [5160](../../todo/cross-cutting/5160-silent-failures-live-evidence.md) task 2. |
 | 0830 | Needs verification: does a settings field pass user-set variables to local bridges | Answered: no | The local launch environment is `process.env` plus variables Orkestrator sets itself (`startLocalServerAttempt` in `commands-servers.ts`). |
 
+## Closing check of E17 (Dead code)
+
+The outcome of every item in the E17 batch file, checked back against the code on 2026-11-05 before the file was deleted. Base commit `af2e566e5`; the file's last version, ending in this table, is the parent of the commit that deleted it. R9 and the L10 and M2 row in the table above summarise this. No finding had stopped holding, and no to-do was needed.
+
+History correction (2026-11-05): the messages of outcome commit `19de22bab` and deletion commit `cbfd96eda` incorrectly cite `3baeaacf6` as the base. Both refer to base `af2e566e5849ff15cf1124de487e7570bcfd0a58`, as recorded in this closing check. This correction is appended rather than rewording those commits so that the validated commit `cbfd96eda9047e4c72f945818b8e4ca19a678946` stays in the branch's history.
+
+| Part | Item | Outcome | Code, evidence or to-do |
+| --- | --- | --- | --- |
+| 0770 | 1. Remove the toggle, default, types and allowlist entries | Done | Gone from `GlobalSettings.sections.tsx`, `GlobalSettings.tsx`, `global-settings-patch.ts`, `types/index.ts`, `models.ts` and `app-config-defaults.ts`. Tests: `renders every settings section` in `GlobalSettings.test.tsx` now asserts the heading is absent; `uses the shared section defaults rather than copies` (`app-config-defaults.test.ts`); `a new install does not write it` (`storage-config-patch.test.ts`). |
+| 0770 | 1. Remove the unreachable writer | Done | `writeCodexRawLog`, `ORKESTRATOR_CODEX_RAW_LOG_DIR`, and the helpers only it used (`normalizeOptionalEnvPath`, `sanitizeLogFileComponent`, `normalizeLogPayload`) are gone from `bridges/codex-bridge/src/index.ts`, with their two tests in `index-coverage.test.ts`. |
+| 0770 | 1. Remove `raw-log.write-failed` | Done | Gone from `log-vocabulary/bridge.ts`. |
+| 0770 | Decision: remove or reconnect | Done, recommended option | Removed. |
+| 0770 | Decision: the stored key | Done, recommended option | Not read and not stripped. Test: `an existing config.json holding it still loads and keeps it through a save` (`storage-config-patch.test.ts`). The form never sends or unsets it: `a retired key left in the stored config is neither sent nor unset` (`global-settings-patch.test.ts`). |
+| 0770 | Constraint: an older client's save is not refused | Done, and it found a refusal the report did not name | A direct save was already safe: `a save from an older client that still sends it is not refused` (`storage-config-patch.test.ts`, both commands). A workspace client's was not: an older form always sends the key, so against a machine storing none, `isGlobalConfigEcho` would see a change and answer 403. `RETIRED_GLOBAL_SETTING_KEYS` (`nodes/workspace-grant-scope.ts`) leaves the key out of that comparison, with a row in the [version compatibility register](../../architecture/version-compatibility.md#register). Tests: `the retired Codex raw event logging key says nothing about a change` (`workspace-grant-scope.test.ts`) and `answers an older client's save carrying the retired raw logging key without writing` (`gateway-workspace-grant-scope.test.ts`); both fail with the fix disabled. |
+| 0770 | Beyond the report: the Experimental page on another machine | Done | That view showed only the removed block, so it would have gone blank. It now says the settings belong to this window's machine. Test: `a command window with a leaf selected only offers scheduling on the window machine` (`SettingsPage.machine-routing.test.tsx`). |
+| 0770 | `CODEX_BRIDGE_RECORD_NOTIFICATIONS` stays | Holds | `notification-recorder.ts` is unchanged and `notification-recorder.test.ts` passes. [Logging](../../architecture/logging.md) now says it is the only capture of raw Codex events. |
+| 0770 | Needs verification: does any other tool read `<logs>/codex-raw` | Answered: no | A repository-wide search finds the name only in four tests, as an example nested directory: `log-storage.test.ts`, `commands-registry-environments-logs.test.ts`, `application-logging.test.ts` and `essential-log.test.ts`. Tools outside the repository were not searched. A directory left by an old install gets no special handling: the size report counts it, and the age sweep and **Clean up logs** treat it like any other. |
+| 0930 | 1. Remove `cursorDebugEnabled` | Done | The function and its assertions are gone from `run-diagnostics.ts` and `run-diagnostics.test.ts`; the file's other diagnostics are unchanged. The `CURSOR_BRIDGE_DEBUG` variable stays as the documented fallback in the shared `bridgeDebugEnabled`, covered by `bridge-diagnostics.test.ts`. |
+| 0930 | 2. Correct comments naming `/api/metrics` | Done | `/__orkestrator/metrics` in `commands-registry-system.ts` (two), `compatibility-path-usage.ts` (`:115`, not the report's `:81`) and `recurring-diagnostics.ts`, plus three places the report did not list: `version-compatibility.md`, to-dos 0023 and 0232. Only the review's own M2 finding, which reports the wrong name, still contains it. |
+| 0930 | Current state: the rest of L10 | Re-checked, holds | Fixed areas in `logging.md`; `flushBufferedDebugLoggers` in `bridge-diagnostics.ts`; raw stderr has no level; `dropInheritedVendorDebug` in `commands-servers.ts` (E13). |
+
 ## Closing check of E14 (Docker logs)
 
 The outcome of every task in the E14 batch file, checked back against the code on 2026-11-05 before the file was deleted. Base commit `69a3b4ca5`; read the batch file at that commit, or with its outcome table at `a5248324a`. R6 and R10 in the table above summarise this. Part 0740 had already landed in `#1715`; no finding of 0850 had stopped holding. No to-do was needed.
@@ -392,6 +402,16 @@ These five files were marked Finished or Done, checked back against the code ite
 | `0520-web-9-startup-bundle.md` | E-0520 | All five tasks done; guarded by `startup-closure.test.ts`. | None |
 | `0692-dk-6-preview-tunnel-multiplexing.md` | E-0692 | Task done as tunnel v2. Not confirmed: first-load cost over a real remote link. | [4500](../../todo/cross-cutting/4500-preview-tunnel-one-socket-per-connection.md) task 1 |
 
+## Closing check of E20 (ACP bridge)
+
+`0240-e20-acp-bridge.md` was checked back against the code item by item on 2026-11-05 and deleted. Base commit `0e8958f57`; the check and first measurements were at `3baeaacf6`, and nothing between the two touches `bridges/acp-bridge`. Its last version, ending with its outcome table, is the commit before the one that deleted it.
+
+| Part | Outcome | Left over |
+| --- | --- | --- |
+| `0270` (BR-16) | Replay and gates were gone. The check found the fake agent still falling back to `cursor`, and constants, a counter, a set and fields only the replay used; all removed. | The method-gated handlers, already in [4540](../../todo/agent-engines/4540-acp-bridge-cursor-extension-leftovers.md) |
+| `0260` (BR-12) | Done as recorded. A test at the real 4 MiB limit, through a real `AcpProcess`, was missing and is added. | Real frame sizes: [5900](../../todo/agent-engines/5900-acp-state-write-cost-at-the-cap.md) task 4 |
+| `0240` (BR-1) | Measured at 256 sessions and 16 MB: a stall of 84 to 112 ms with nothing trimmed and 178 to 195 ms with every session windowed, at load 28 to 53. Cache not built: not conclusive. | [5900](../../todo/agent-engines/5900-acp-state-write-cost-at-the-cap.md) tasks 1 to 3 |
+
 ## Closing check of E23 (Renderer polling)
 
 The outcome of every task in the E23 batch file, checked back against the code on 2026-11-05 before the file was deleted. Base commit `69a3b4ca5`, where the build began; the file's last version, ending in this table, is at the parent of its deletion commit. All three parts had been built by #1754 (`bfac1f577`) after the file was analysed, so every finding no longer holds; WEB-12, WEB-13 and WEB-18 in the table above summarise this. Live evidence left over is [5460](../../todo/cross-cutting/5460-renderer-polling-live-evidence.md).
@@ -433,3 +453,32 @@ The outcome of every task in the E4 batch file, checked back against the code on
 | 0550 | 2. Reachability from cached manifests | Done, after measuring | The parsed-manifest cache served 8 of 400 manifests per pass on the `--only=retention` fixture, so `reachability-cache.ts` keeps each manifest's object ids between passes; `retention-store-walks.test.ts`. |
 | 0550 | 3. Sweep without holding the write mutex for the whole walk | Done | Walk without the lock, re-`lstat` and remove 64 per hold in `object-store.ts`; `retention-store-walks.test.ts`. |
 | 0550 | Needs verification: real sweep duration on a large store | Moved to a to-do | [5361](../../todo/cross-cutting/5361-retention-pass-on-a-large-real-store.md). |
+
+## Closing check of E18 (Gateway events)
+
+Built on 2026-11-05 on branch `gateway-events-a349aeaade47-r1`, based on `main` at `1e6d56391`, and checked item by item against the batch file before it was deleted. The full outcome table, naming the code and test for every item, ends the file's last version, in the commit before its deletion (`f05ff7366` on that branch).
+
+| Part | Finding | Outcome |
+| --- | --- | --- |
+| `0280` | GW-5: frames measured and encoded per subscriber | Done (2026-11-04). A production profile is [5840](../../todo/cross-cutting/5840-relayed-events-live-evidence.md), task 3. |
+| `0290` | GW-12: a cursor per skipped replay frame | Done (2026-11-04). The replay budget decision left open in [1202 task 11](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md) is settled as the report recommended: a scoped client is charged for what it is written. |
+| `0300` | GW-14: linear replay lookup, invisible oversized event | Done (2026-11-04). |
+| `0370` | GW-11: relayed events share one name and the main window | Done for renderers on the gateway transport, with older clients and nodes covered. Live checks are [5840](../../todo/cross-cutting/5840-relayed-events-live-evidence.md), tasks 1 and 2, and the desktop's main process is [5841](../../todo/cross-cutting/5841-desktop-main-relayed-stream.md). |
+
+The detailed outcome evidence is retained here so it survives squash merges (historical line numbers):
+
+| Part | Item | Outcome | Evidence |
+| --- | --- | --- | --- |
+| 0280 | Task 1: share one encoded frame across subscribers | Done | `encodeGatewayFrame` (`apps/backend/src/gateway-event-replay.ts:68`); the replay frame holds a `Buffer` and its count; `EventClientWriter.write(chunk, byteLength?)` (`apps/backend/src/gateway-support-extra.ts:654`). Test: "gateway event frames are encoded once" in `apps/backend/tests/gateway-frame-costs.test.ts`. |
+| 0280 | Decision: a `Buffer` plus its length | Done, as recommended | The ring holds no string, and its bounds count `encodedBytes`. Test: the window cases in `apps/backend/src/gateway-event-replay.test.ts`. |
+| 0280 | Needs verification: frame measures and `emit` time | Done; a production profile moved to a to-do | Measured on 2026-11-04 in [1202 task 11](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md). No production profile was taken: to-do 5840, task 3. |
+| 0290 | Task 1: collapse skipped replay frames into one cursor | Done | `writeReplayFrames` (`apps/backend/src/gateway-events.ts:308`). Test: "scoped replay cursor frames" in `gateway-frame-costs.test.ts`. |
+| 0290 | Decision: when to emit the cursor | Done, not as recommended | Built on 2026-11-04 as one cursor before the next matching frame and one at the end. The recommended end-only form would still work, since every matching replay frame carries an `id`. Kept because it saves one small frame per run and would change what a client sees mid-window, and the test pinning that order stands. Decision recorded in 1202 task 11. |
+| 0290 | Decision: fix the replay budget for filtered clients | Done, as recommended (settled here; it was open in 1202 task 11) | `replayFitsClientBudget` charges matching frames plus one cursor per run, using the newest cursor so the figure stays an upper bound (`gateway-events.ts:363`). Tests: "the replay budget of a scoped client" in `gateway-frame-costs.test.ts`, including an unscoped client still reconciling and the upper bound. |
+| 0300 | Task 1: find the replay range by index | Done | `slice(revision + 1 - oldestRevision)` (`gateway-event-replay.ts:191`). Test: the window cases in `gateway-event-replay.test.ts`. |
+| 0300 | Task 2: count oversized appends | Done | `oversizedAppends` (`gateway-event-replay.ts:155`), reported as `replay.ring.oversizedAppends`. Test: "oversized replay appends" in `gateway-frame-costs.test.ts`. |
+| 0370 | Task 1: name relayed events per node | Done for renderers on the gateway transport; the desktop's main process moved to a to-do | `relayedNodeEventName` (`packages/protocol/src/node-events.ts`), emitted at `apps/backend/src/core/nodes/node-event-relay.ts:240` and `:255`; a client subscribes per watched node through `RelayedEventStream` (`apps/web/src/lib/native/relayed-event-stream.ts`) and `listenPerNode` (`apps/web/src/lib/federation/node-events.ts:132`). Tests: "per-node relayed streams" in `apps/backend/tests/gateway-relayed-events.test.ts`, `apps/web/src/lib/native/web-gateway-relayed-stream.test.ts`, `node-event-relay.test.ts`. Main's stream: to-do 5841. |
+| 0370 | Decision: how to roll out the name | Done, as recommended | Prefix plus node id. A filter change reopens the one stream from its cursor rather than re-reading, handled like terminal filters but with replay. Older clients: `emit` and `writeLegacyRelayedResyncs` (`gateway-events.ts:55`, `:184`), tested in "a client on an older version" in `gateway-relayed-events.test.ts`. Older command nodes: "an older command node relays on the old name" in `apps/web/src/lib/federation/node-events.test.ts`. Both paths are in the version-compatibility register. |
+| 0370 | Task 2: give relayed traffic its own replay share | Done | `relayedEventReplay` (`apps/backend/src/gateway-context.ts`), 512 frames and 512 KiB (`gateway-event-replay.ts`). Test: "a busy leaf expires relayed cursors only; a main cursor still replays" in `gateway-relayed-events.test.ts`. |
+| 0370 | Decision: how to separate them | Done, as recommended | A second bounded ring with its own cursor, on its own stream rather than a merged cursor, so `Last-Event-ID` and the handshake are unchanged. Tests: the same file, plus the renderer's stream class against a real gateway. |
+| 0370 | Live evidence: two real nodes in a real browser, and real older releases | Moved to a to-do | To-do 5840, tasks 1 and 2. |

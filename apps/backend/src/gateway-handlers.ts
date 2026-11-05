@@ -25,6 +25,7 @@ import {
   MAX_CLIENT_METRICS_BODY_BYTES,
   METRIC_UNKNOWN_COMMAND_KEY,
   METRIC_KEEPALIVE_KEY,
+  normalizeMetricLabel,
   InvalidRequestBodyError,
   RequestBodyTooLargeError,
   sanitizeClientBootReport,
@@ -145,6 +146,7 @@ export class GatewayHandlers {
           : safeArgs,
       );
       const responseBody = JSON.stringify({ result });
+      this.ctx.traffic.noteInvoke(normalizeMetricLabel(command));
       this.ctx.metrics.recordInvoke(
         command,
         requestBytes,
@@ -168,6 +170,7 @@ export class GatewayHandlers {
       const metricCommand = this.commandIsRegistered(command, message)
         ? command
         : METRIC_UNKNOWN_COMMAND_KEY;
+      this.ctx.traffic.noteInvoke(normalizeMetricLabel(metricCommand));
       this.ctx.metrics.recordInvoke(
         metricCommand,
         requestBytes,

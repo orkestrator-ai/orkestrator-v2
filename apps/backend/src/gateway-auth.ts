@@ -306,6 +306,10 @@ export class GatewayAuth {
     });
     const url = new URL(request.url ?? "/", "http://orkestrator.local");
     const route = classifyGatewayRoute(url.pathname);
+    this.ctx.traffic.noteRequest(
+      request,
+      url.pathname.startsWith(NODE_RELAY_PREFIX) ? "node-relay" : route,
+    );
     const requestMetrics = this.ctx.metrics.beginRequest({
       route,
       listenerKind,

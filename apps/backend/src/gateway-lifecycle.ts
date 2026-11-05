@@ -243,6 +243,7 @@ export class GatewayLifecycle {
     });
     server.keepAliveTimeout = GATEWAY_KEEP_ALIVE_TIMEOUT_MS;
     server.on("connection", (socket) => {
+      this.ctx.traffic.noteConnection(listenerKind);
       this.ctx.sockets.add(socket);
       socket.once("close", () => this.ctx.sockets.delete(socket));
     });
@@ -361,6 +362,7 @@ export class GatewayLifecycle {
   }
 
   async stop(): Promise<void> {
+    this.ctx.traffic.flush();
     this.ctx.agentTestBootstraps.clear();
     this.ctx.browserSessions.revokeAll();
     if (this.ctx.keepalive) {

@@ -326,6 +326,19 @@ live runs still to do, are in
 `apps/backend/scripts/sse-route-probe.ts` measures whether a route holds or
 changes a gzip stream; the steps for a real tailnet are in the to-do.
 
+A second cause gives the same empty 502: more new connections than the accept
+queue holds (`kern.ipc.somaxconn`, 128 on macOS) arriving during even a 10 ms
+event-loop stall. The kernel resets the rest, and Serve logs `dial tcp ...
+connect: connection reset by peer`. To name the sender, the gateway counts new
+connections and requests per second (`apps/backend/src/gateway-traffic-summary.ts`).
+When a second holds 100 or more of either, it writes one `[gateway]
+traffic.burst` warning per burst, at most one every 30 s, with the top sources,
+route classes, client families, listeners and invoke command names. The source
+is `X-Forwarded-For`, which Serve sets to the sending device's tailnet address,
+believed only on a loopback connection and only as an IP literal; map it to a
+device with `tailscale status`. Connections the kernel reset never reach the
+gateway, so the counts cover what got through.
+
 ## Loopback client gateway (SSH forwarding target)
 
 A desktop client can reach a backend on another machine through a managed SSH

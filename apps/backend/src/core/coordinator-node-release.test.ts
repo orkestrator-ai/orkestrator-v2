@@ -3,13 +3,15 @@
  * over) or stays unreachable for a day, on the real mail world. Only the leaf
  * is simulated (`FakeRemote`).
  */
-import { afterEach, describe, expect, setSystemTime, test } from "bun:test";
+import { afterEach, describe, expect, setSystemTime, spyOn, test } from "bun:test";
 import type { AgentTabState } from "@orkestrator/protocol/agent-registry";
 
 import { MailWorld } from "./agent-mail-world-test-support.js";
 import type { CoordinatorRemoteAccess, RemoteWorkerState } from "./coordinator-remote.js";
 import { selectCoordinatorWorkflowsToClear } from "./coordinator-workflow-retention.js";
-import { NODE_OFFLINE_NOTICE_MS } from "./coordinator-node-release.js";
+import { seedStore } from "./storage-test-support.js";
+import { MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS } from "./coordinator-workflow-retention.js";
+import { NODE_OFFLINE_NOTICE_MS, CoordinatorNodeReleases } from "./coordinator-node-release.js";
 import { WorkerTabCloseAdmission } from "./worker-tab-close-admission.js";
 
 class FakeRemote implements CoordinatorRemoteAccess {
@@ -103,6 +105,140 @@ async function record(world: MailWorld, id: string) {
     await world.storage.coordinators.listCoordinatorWorkflowAssociations(world.projectId)
   ).find((entry) => entry.id === id);
 }
+
+test("failed release mail survives actual capacity cleanup and retries exactly once", async () => {
+  const { world, remote, main } = await remoteWorld();
+  remote.registered = new Set(["bk_leaf"]);
+  const old = new Date(Date.now() - 26 * 3600_000).toISOString();
+  const records = await world.storage.coordinators.listCoordinatorWorkflowAssociations(
+    world.projectId,
+  );
+  for (const item of records)
+    await world.storage.coordinators.updateCoordinatorWorkflowAssociation(item.id, (current) => {
+      current.createdAt = old;
+      return true;
+    });
+  const send = spyOn(world.storage, "sendAgentMail").mockRejectedValue(
+    new Error("temporary mail failure"),
+  );
+  await world.coordinator.nodesReleased([{ nodeId: "bk_leaf" }], "forgotten");
+  send.mockRestore();
+  const released = await world.storage.coordinators.listCoordinatorWorkflowAssociations(
+    world.projectId,
+  );
+  const filler = Array.from(
+    { length: MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS - released.length },
+    (_, i) => ({
+      ...released[1]!,
+      id: `history-${i}`,
+      requestId: `history-${i}`,
+      nodeRelease: { ...released[1]!.nodeRelease!, notifiedAt: old },
+    }),
+  );
+  seedStore(`${world.root}/data`, "coordinators.json", {
+    version: 1,
+    workspaces: { [world.projectId]: (await world.coordinator.get(world.projectId))!.workspace },
+    workflows: [...released, ...filler],
+  });
+  await world.storage.coordinators.saveCoordinatorWorkflowAssociation({
+    ...released[1]!,
+    id: "next",
+    requestId: "next",
+  });
+  expect((await record(world, "remote-delegation"))?.nodeRelease?.notifiedAt).toBeUndefined();
+  await world.coordinator.reconcileWorkerDelegations();
+  await world.coordinator.reconcileWorkerDelegations();
+  await world.deliver();
+  expect(world.received(main)).toHaveLength(1);
+});
+
+test("released unresolved pipeline is never polled again", async () => {
+  const { world, remote } = await remoteWorld();
+  await world.storage.coordinators.updateCoordinatorWorkflowAssociation(
+    "remote-pipeline",
+    (item) => {
+      item.createsEnvironment = true;
+      return true;
+    },
+  );
+  await world.coordinator.nodesReleased([{ nodeId: "bk_leaf" }], "handed-over");
+  const reads = remote.reads;
+  await world.coordinator.reconcileWorkflowNotifications();
+  await world.coordinator.reconcileWorkflowNotifications();
+  expect(remote.reads).toBe(reads);
+});
+
+test("a new coordinator waiting during an already-noticed outage gets one notice", async () => {
+  const { world } = await remoteWorld();
+  const recipients: string[] = [];
+  const release = new CoordinatorNodeReleases({
+    storage: world.storage,
+    mainAddress: async (id) => {
+      recipients.push(id);
+      return null;
+    },
+    nodeName: async () => "leaf",
+    offlineNoticeMs: 0,
+  });
+  await release.noteRead("bk_leaf", false);
+  const old = (await record(world, "remote-delegation"))!;
+  await world.storage.coordinators.saveCoordinatorWorkflowAssociation({
+    ...old,
+    id: "second",
+    requestId: "second",
+    coordinatorId: "second-coordinator",
+  });
+  await release.noteRead("bk_leaf", false);
+  await release.noteRead("bk_leaf", false);
+  expect(recipients).toEqual([world.coordinatorId, "second-coordinator"]);
+});
+
+test("a report held before release is delivered as ordinary mail", async () => {
+  const { world, main } = await remoteWorld();
+  const report = await world.storage.sendAgentMail(
+    {
+      kind: "node",
+      nodeId: "bk_leaf",
+      nodeName: "Build box",
+      role: "agent",
+      projectId: world.projectId,
+      environmentId: "leaf-env",
+      tabId: "startup-agent",
+      title: "worker",
+    },
+    {
+      requestId: "held-before-release",
+      toEnvironmentId: main.environmentId,
+      toTabId: main.tabId,
+      body: "Report before release.",
+    },
+  );
+  expect(report.placement).toBe("inject-held");
+  await world.coordinator.nodesReleased([{ nodeId: "bk_leaf" }], "forgotten");
+  await world.coordinator.reconcileWorkerDelegations();
+  await world.deliver();
+  await world.finishTurn(main);
+  expect(world.received(main).join("\n")).toContain("Report before release.");
+});
+
+test("partial and unsupported registries never close open work", async () => {
+  const { world, remote, main } = await remoteWorld();
+  remote.registeredNodeIds = async () => {
+    const registry = await world.storage.nodes.getNodeRegistry(true);
+    return new Set(registry.nodes.map((node) => node.nodeId));
+  };
+  for (const value of [
+    { version: 2, nodes: [] },
+    { version: 1, nodes: [{}] },
+  ]) {
+    seedStore(`${world.root}/data`, "node-registry.json", value);
+    await world.coordinator.reconcileWorkerDelegations();
+    expect((await record(world, "remote-delegation"))?.nodeRelease).toBeUndefined();
+    expect((await record(world, "remote-delegation"))?.delegation?.state).toBe("running");
+  }
+  await world.deliver();
+  expect(world.received(main)).toHaveLength(0);
+});
 
 describe("a released node", () => {
   test("forgetting closes its delegations as stopped, marks its workflows reported, and sends one notice", async () => {

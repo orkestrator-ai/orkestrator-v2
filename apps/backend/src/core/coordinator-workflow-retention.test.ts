@@ -612,7 +612,7 @@ describe("released nodes", () => {
       finished("released", {
         ...remote,
         nodeId: "gone",
-        nodeRelease: { at: OLD, reason: "forgotten" },
+        nodeRelease: { at: OLD, reason: "forgotten", notifiedAt: OLD },
       }),
       finished("released-intent", {
         kind: "build-pipeline",

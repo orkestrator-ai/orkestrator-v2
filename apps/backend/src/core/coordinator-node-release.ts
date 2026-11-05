@@ -48,7 +48,7 @@ export interface CoordinatorNodeReleaseContext {
  * clock is in memory: a restart only restarts it.
  */
 export class CoordinatorNodeReleases {
-  private readonly offline = new Map<string, { since: number; told: Set<string>; done: boolean }>();
+  private readonly offline = new Map<string, { since: number; told: Set<string> }>();
   private readonly offlineChecks = new Map<string, Promise<void>>();
   private readonly now: () => number;
 
@@ -139,11 +139,11 @@ export class CoordinatorNodeReleases {
     const now = this.now();
     let episode = this.offline.get(nodeId);
     if (!episode) {
-      episode = { since: now, told: new Set(), done: false };
+      episode = { since: now, told: new Set() };
       this.offline.set(nodeId, episode);
     }
     const threshold = this.context.offlineNoticeMs ?? NODE_OFFLINE_NOTICE_MS;
-    if (episode.done || now - episode.since < threshold) return Promise.resolve();
+    if (now - episode.since < threshold) return Promise.resolve();
     // Several delegations on one node are read in the same sweep: one check at a time.
     const running = this.offlineChecks.get(nodeId);
     if (running) return running;
@@ -156,7 +156,7 @@ export class CoordinatorNodeReleases {
 
   private async tellOffline(
     nodeId: string,
-    episode: { since: number; told: Set<string>; done: boolean },
+    episode: { since: number; told: Set<string> },
   ): Promise<void> {
     const open = (await this.context.storage.coordinators.listOpenCoordinatorDelegations()).filter(
       (association) => association.nodeId === nodeId,
@@ -169,7 +169,6 @@ export class CoordinatorNodeReleases {
         association,
       ]);
     }
-    let failed = false;
     const since = new Date(episode.since).toISOString();
     const name = await this.context.nodeName(nodeId).catch(() => nodeId);
     for (const [coordinatorId, group] of byCoordinator) {
@@ -184,7 +183,6 @@ export class CoordinatorNodeReleases {
         });
         episode.told.add(coordinatorId);
       } catch (error) {
-        failed = true;
         log.throttled("warn", "node-offline.notice-failed", {
           scope: nodeId,
           error,
@@ -192,8 +190,7 @@ export class CoordinatorNodeReleases {
         });
       }
     }
-    // A failed send is retried on the next failed read of the same episode.
-    if (!failed && this.offline.get(nodeId) === episode) episode.done = true;
+    // The told set deduplicates recipients while allowing new coordinators to join.
   }
 
   /**

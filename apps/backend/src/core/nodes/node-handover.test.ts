@@ -402,6 +402,7 @@ describe("handover recovery and invariants", () => {
 
   test("restart recovers a committed handover whose responses were all lost", async () => {
     const network = new TestNodeNetwork();
+    const released: string[] = [];
     let loseResponses = true;
     const source = await network.add("desktop", {
       forceRegistration: true,
@@ -410,6 +411,9 @@ describe("handover recovery and invariants", () => {
           token: "token-desktop-secret",
           origins: ["https://desktop.test"],
         }),
+        onNodesReleased: (nodes) => {
+          released.push(...nodes.map((node) => node.nodeId));
+        },
         fetchImpl: (async (url, init) => {
           const response = await network.fetch(url, init);
           if (
@@ -446,6 +450,8 @@ describe("handover recovery and invariants", () => {
     await target.service.start();
     await source.service.start();
     await settle(80);
+    expect(released).toContain(id(target));
+    expect(released).toContain(id(moved));
     expect(source.storage.registry.pendingHandover).toBeUndefined();
     expect(await registryOf(source)).toEqual([]);
     expect(await controllersOf(moved)).toEqual([id(target)]);

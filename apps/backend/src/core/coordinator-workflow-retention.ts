@@ -109,6 +109,7 @@ export function selectCoordinatorWorkflowsToClear(
 
   const candidates: Array<{ id: string; createdAt: number; index: number }> = [];
   workflows.forEach((association, index) => {
+    if (association.nodeRelease && !association.nodeRelease.notifiedAt) return;
     // A leaf's late provisioning is learned on the next authority lookup.
     // Retain that creation intent until the actual environment is known.
     // A released node's records are local history now: nothing there can be read or reach here.

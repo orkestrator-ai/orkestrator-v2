@@ -519,6 +519,53 @@ describe("Orkestrator control MCP server", () => {
     expect(sent.body.result?.structuredContent?.message).not.toHaveProperty("projectHomeWarning");
   });
 
+  test("remote send_message lifts delegation failure into a successful warning", async () => {
+    const credential = coordinatorCredential(["mail", "discovery"]);
+    overrides.set("get_node_status", () => ({
+      nodeId: "bk_cmd",
+      mode: "command",
+      controllers: [],
+    }));
+    overrides.set("get_node_summaries", () => ({
+      selfId: "bk_cmd",
+      nodes: [
+        {
+          nodeId: "bk_leaf",
+          available: true,
+          view: { displayName: "Leaf" },
+          projects: [
+            {
+              ref: { backendId: "bk_leaf", projectId: "p-leaf" },
+              repositoryHint: "example.invalid/secret/repo",
+            },
+          ],
+          environments: [],
+        },
+      ],
+    }));
+    overrides.set("send_coordinator_node_mail", () => ({
+      id: "remote-message",
+      placement: "pending-inject",
+      coordinatorDelegationOpened: false,
+      delegationNote: "Sent, but no delegation opened.",
+    }));
+    const sent = await rpc(credential.url, credential.token, "tools/call", {
+      name: "send_message",
+      arguments: {
+        requestId: "remote-warning",
+        nodeId: "bk_leaf",
+        toEnvironmentId: "leaf-env",
+        body: "Go.",
+      },
+    });
+    expect(sent.body.result?.isError).not.toBe(true);
+    expect(sent.body.result?.structuredContent).toMatchObject({
+      warning: "Sent, but no delegation opened.",
+      message: { id: "remote-message" },
+    });
+    expect(sent.body.result?.structuredContent?.message).not.toHaveProperty("delegationNote");
+  });
+
   // A leaf without `node-mail-steer` answers with no outcome of its own.
   for (const [placement, reason, outcome, leafOutcome] of [
     ["pending-inject", undefined, "unsupported, queued"],

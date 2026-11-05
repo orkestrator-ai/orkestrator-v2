@@ -1392,7 +1392,7 @@ export class NodeService {
    * detach is pending is not in it.
    */
   async registeredNodeIds(): Promise<Set<string>> {
-    const registry = await this.currentRegistry();
+    const registry = await this.storage.nodes.getNodeRegistry(true);
     return new Set<string>([
       ...registry.nodes.map((node) => node.nodeId),
       ...(registry.pendingHandover ? [registry.pendingHandover.target.nodeId] : []),

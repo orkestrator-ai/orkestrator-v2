@@ -1508,3 +1508,56 @@ describe("nextWakeLine", () => {
     ).toBeNull();
   });
 });
+
+for (const kind of ["build-pipeline", "multi-review", "graph-run"] as const) {
+  for (const reason of ["forgotten", "handed-over"] as const) {
+    for (const cached of [false, true]) {
+      test(`released ${kind} ${reason} cached=${cached} is finished and unavailable`, () => {
+        const id = "released";
+        const key = remoteWorkKey("node-b", id);
+        const [item] = deriveCoordinatorWorkItems(
+          sources({
+            workflows: [
+              association({
+                kind,
+                resourceId: id,
+                nodeId: "node-b",
+                nodeRelease: { reason, at: at(-1000) },
+              }),
+            ],
+            remotePipelines: new Map(cached ? [[key, pipeline(id)]] : []),
+            remoteReviews: new Map(cached ? [[key, review(id)]] : []),
+            remoteGraphRuns: new Map(cached ? [[key, graphRun(id)]] : []),
+          }),
+        );
+        expect(item).toMatchObject({
+          bucket: "finished",
+          target: null,
+          finishedAt: NOW - 1000,
+          prOpen: false,
+        });
+        expect(isClearableWorkItem(item!)).toBe(true);
+      });
+    }
+  }
+}
+
+test("returned worker uses its new live delegation instead of released history", () => {
+  const [item] = deriveCoordinatorWorkItems(
+    sources({
+      workflows: [
+        delegated(
+          "env",
+          "stopped",
+          {},
+          { nodeId: "node-b", nodeRelease: { reason: "forgotten", at: at(-HOUR) } },
+        ),
+        delegated("env", "running", { requestedAt: at(-1000) }, { nodeId: "node-b" }),
+      ],
+      nodes: [node("node-b", "Returned", [{ environmentId: "env" }])],
+    }),
+  );
+  expect(item?.bucket).toBe("running");
+  expect(item?.stop).toBeDefined();
+  expect(item?.target).not.toBeNull();
+});

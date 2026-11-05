@@ -5,6 +5,7 @@ const nativeAgentGoalLog = createLogger("native-agent.goal");
 export * from "./native-agent-service-shared.js";
 import { STARTUP_AGENT_TAB_ID } from "@orkestrator/protocol/tab-initial-prompt";
 import * as shared from "./native-agent-service-shared.js";
+import { readNativeAgentLiveUpdate } from "./native-agent-live-update.js";
 import type {
   BuildPipelineAgent,
   TaskSnapshotImage,
@@ -45,6 +46,7 @@ import type {
   NativeAgentTranscriptUpdateInput,
   NativeAgentProgressiveInput,
   NativeAgentDiscoveryUpdateInput,
+  NativeAgentLiveUpdateInput,
   NativeAgentMessagePage,
   MailInjectDispatchOutcome,
   MailSteerDispatchOutcome,
@@ -114,6 +116,7 @@ import {
   dispatchOutcomeLostMessage,
   nativeAsyncQuestionItemId,
   type NativeAgentDiscoveryUpdate,
+  type NativeAgentLiveUpdate,
   type NativeAgentSessionStateUpdate,
   type NativeAgentTranscriptUpdate,
   resolveNativeAgentApprovalMode,
@@ -318,6 +321,10 @@ export class NativeAgentService {
     input: NativeAgentProgressiveInput,
   ): Promise<NativeAgentSessionStateUpdate> {
     return this.projections.getSessionStateUpdate(input);
+  }
+
+  getLiveUpdate(input: NativeAgentLiveUpdateInput): Promise<NativeAgentLiveUpdate> {
+    return readNativeAgentLiveUpdate(this.projections, input);
   }
 
   getDiscoveryUpdate(input: NativeAgentDiscoveryUpdateInput): Promise<NativeAgentDiscoveryUpdate> {

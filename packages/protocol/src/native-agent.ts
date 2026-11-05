@@ -2723,6 +2723,25 @@ export type NativeAgentTranscriptUpdate<TMessage = unknown> =
 export type NativeAgentSessionStateUpdate = NativeAgentDomainUpdate<NativeAgentSessionStateView>;
 export type NativeAgentDiscoveryUpdate = NativeAgentDomainUpdate<NativeAgentDiscoveryView>;
 
+/**
+ * One request for a session's transcript and state, each with its own token,
+ * for a view that already holds both. A backend advertises it in
+ * `liveUpdateVersions`. Discovery stays its own read: it changes far less often.
+ */
+export const NATIVE_AGENT_LIVE_UPDATE_VERSION = 1 as const;
+
+/** A part still running when the combined read answered; the client reads it on its own. */
+export interface NativeAgentPendingUpdate {
+  viewVersion: typeof NATIVE_AGENT_LIVE_UPDATE_VERSION;
+  status: "pending";
+}
+
+export interface NativeAgentLiveUpdate<TMessage = unknown> {
+  viewVersion: typeof NATIVE_AGENT_LIVE_UPDATE_VERSION;
+  transcript: NativeAgentTranscriptUpdate<TMessage> | NativeAgentPendingUpdate;
+  state: NativeAgentSessionStateUpdate | NativeAgentPendingUpdate;
+}
+
 /** The fixed tail carried by the live synchronization surface. */
 export interface NativeAgentLiveWindow {
   /** Maximum number of newest messages. */
@@ -3269,6 +3288,26 @@ export function isNativeAgentSessionStateUpdate(
     state.capabilities &&
     typeof state.capabilities === "object" &&
     !Array.isArray(state.capabilities),
+  );
+}
+
+function isNativeAgentPendingUpdate(value: unknown): value is NativeAgentPendingUpdate {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const candidate = value as Record<string, unknown>;
+  return (
+    candidate.viewVersion === NATIVE_AGENT_LIVE_UPDATE_VERSION && candidate.status === "pending"
+  );
+}
+
+export function isNativeAgentLiveUpdate(value: unknown): value is NativeAgentLiveUpdate {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const candidate = value as Record<string, unknown>;
+  return (
+    candidate.viewVersion === NATIVE_AGENT_LIVE_UPDATE_VERSION &&
+    (isNativeAgentPendingUpdate(candidate.transcript) ||
+      isNativeAgentTranscriptUpdate(candidate.transcript)) &&
+    (isNativeAgentPendingUpdate(candidate.state) ||
+      isNativeAgentSessionStateUpdate(candidate.state))
   );
 }
 

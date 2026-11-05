@@ -33,9 +33,43 @@ async function scrollHalfway(scroller: Locator): Promise<number> {
   return offset;
 }
 
+async function expectStableEnd(transcript: Locator, overview: Locator, overviewOffset: number) {
+  // Wait for activation to reach latest, then observe every frame for 750 ms.
+  // A single successful poll can miss a later resize or footer layout shift.
+  await expect
+    .poll(() =>
+      transcript.evaluate(
+        (element) => element.scrollHeight - element.clientHeight - element.scrollTop,
+      ),
+    )
+    .toBeLessThanOrEqual(1);
+  const samples = await transcript.evaluate(
+    async (element, { overviewElement, expectedOverview }) => {
+      const samples: { bottomGap: number; overviewTop: number }[] = [];
+      const started = performance.now();
+      do {
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+        const sample = {
+          bottomGap: element.scrollHeight - element.clientHeight - element.scrollTop,
+          overviewTop: overviewElement!.scrollTop,
+        };
+        samples.push(sample);
+        if (sample.bottomGap > 1 || sample.overviewTop !== expectedOverview) break;
+      } while (performance.now() - started < 750);
+      return samples;
+    },
+    { overviewElement: await overview.elementHandle(), expectedOverview: overviewOffset },
+  );
+  expect(samples.length).toBeGreaterThan(1);
+  for (const sample of samples) {
+    expect(sample.bottomGap).toBeLessThanOrEqual(1);
+    expect(sample.overviewTop).toBe(overviewOffset);
+  }
+}
+
 // These transcripts use `activation: "latest"`, so showing the pane lands on the
 // newest message in every engine, and the overview around them stays put. WebKit
-// resets some hidden scrollers (0860); run this file with ORKESTRATOR_E2E_BROWSER=webkit.
+// resets some hidden scrollers (0860); CI runs this in Chromium and WebKit.
 for (const view of VIEWS) {
   test(`${view.name} shows the newest message when its pane returns`, async ({ page }) => {
     await page.setViewportSize({ width: page.viewportSize()!.width, height: 700 });
@@ -48,7 +82,6 @@ for (const view of VIEWS) {
       transcript.evaluate(
         (element) => element.scrollHeight - element.clientHeight - element.scrollTop,
       );
-    const overviewTop = () => overview.evaluate((element) => element.scrollTop);
     await expect(transcript).toContainText("Transcript entry 40.");
     await expect.poll(bottomGap).toBeLessThanOrEqual(1);
     const mounted = await transcript.elementHandle();
@@ -60,8 +93,7 @@ for (const view of VIEWS) {
     await page.getByRole("button", { name: "Append transcript entry" }).click();
     await showPane.click();
     await expect(transcript).toContainText("Transcript entry 41.");
-    await expect.poll(bottomGap).toBeLessThanOrEqual(1);
-    await expect.poll(overviewTop).toBe(overviewOffset);
+    await expectStableEnd(transcript, overview, overviewOffset);
     expect(await transcript.evaluate((element, original) => element === original, mounted)).toBe(
       true,
     );
@@ -72,10 +104,26 @@ for (const view of VIEWS) {
     await page.mouse.wheel(0, -600);
     await expect.poll(bottomGap).toBeGreaterThan(100);
     overviewOffset = await scrollHalfway(overview);
+    const readerOffset = await transcript.evaluate((element) => element.scrollTop);
+    expect(readerOffset).toBeGreaterThan(100);
     await hidePane.click();
     await expect(transcript).toBeHidden();
+
+    // Arm before the click, ahead of activation's animation-frame callbacks.
+    // Sampling after click() returns would miss a reset followed by a jump to latest.
+    const firstVisibleFrame = await transcript.evaluateHandle((element) => {
+      const result = { top: null as number | null };
+      const sample = () => {
+        if (element.getClientRects().length > 0) result.top = element.scrollTop;
+        else requestAnimationFrame(sample);
+      };
+      requestAnimationFrame(sample);
+      return result;
+    });
     await showPane.click();
-    await expect.poll(bottomGap).toBeLessThanOrEqual(1);
-    await expect.poll(overviewTop).toBe(overviewOffset);
+    await expect.poll(() => firstVisibleFrame.evaluate((result) => result.top)).not.toBeNull();
+    expect(await firstVisibleFrame.evaluate((result) => result.top)).toBe(readerOffset);
+    await firstVisibleFrame.dispose();
+    await expectStableEnd(transcript, overview, overviewOffset);
   });
 }

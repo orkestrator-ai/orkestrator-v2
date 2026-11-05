@@ -183,6 +183,15 @@ transcript has a review report in its footer: in WebKit they start up to about
 about 120 ms. The cause was not traced
 ([5620](../todo/coordinator-and-multi-review/5620-pipeline-transcript-place-and-webkit-settling.md)).
 
+CI runs `InspectorTranscriptHide.spec.ts` in both Chromium and WebKit, in
+both viewport projects. It samples the reader's first visible animation frame
+with a probe armed before showing the pane, then checks latest-on-activation.
+For both the follower and reader, it samples every animation frame for 750 ms
+after reaching the end, checking that the transcript stays at the end and the
+overview stays at its saved offset. This bounds the settling claim to that
+observation window; it does not qualify real Safari or explain the report's
+brief initial offset.
+
 Persisted entries (bounded LRU, 200) hold the validated Virtuoso snapshot,
 follow intent, the semantic anchor, the scroller width and the layout the
 snapshot was measured under (window width and root font size), under a

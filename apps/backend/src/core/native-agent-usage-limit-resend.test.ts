@@ -258,7 +258,7 @@ describe("a native tab the weekly limit stopped", () => {
     expect(h.dispatches).toEqual([]);
   });
 
-  test("a stop that is not the weekly limit stays stopped", async () => {
+  test("a stop the switcher does not confirm stays stopped", async () => {
     const h = harness({ verdict: "stop" });
     h.resend.noteActivity(h.state.session, "idle", "working");
     await h.settle();

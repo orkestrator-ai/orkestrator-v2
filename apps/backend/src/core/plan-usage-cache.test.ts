@@ -1,4 +1,4 @@
-import { weeklyLimitReading } from "@orkestrator/protocol/agent-account-auto-switch";
+import { usageLimitReading } from "@orkestrator/protocol/agent-account-auto-switch";
 import { beforeEach, describe, expect, test } from "bun:test";
 import {
   CACHE_TTL_MS,
@@ -289,5 +289,5 @@ test("session windows preserve known paid-overage metadata in lastOk", () => {
   // This is the outgoing reading persisted on a switch, then served stale
   // when a direct inactive-account read cannot answer.
   const saved = JSON.parse(JSON.stringify(cache.lastOk("claude")));
-  expect(weeklyLimitReading("claude", { ...saved, stale: true }, Date.now()).wouldPay).toBe(true);
+  expect(usageLimitReading("claude", { ...saved, stale: true }, Date.now()).wouldPay).toBe(true);
 });

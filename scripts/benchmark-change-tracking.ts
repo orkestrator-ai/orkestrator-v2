@@ -679,7 +679,7 @@ async function benchMeasurementRows() {
  */
 async function benchRetention() {
   const dataDir = mkdtempSync(path.join(tmpdir(), "ork-bench-retention-"));
-  const database = openBackendDatabase(dataDir);
+  const database = openChangeLedgerDatabase(dataDir);
   const service = new ChangeTrackingService({
     dataDir,
     database: () => database,

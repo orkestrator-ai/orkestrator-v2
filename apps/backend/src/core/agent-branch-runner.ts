@@ -723,7 +723,7 @@ export class AgentBranchRunner<B extends AgentBranchRecord> {
     // failure: a result it already submitted is still accepted below, and
     // otherwise the same session continues the work once.
     const restartInterrupted = status === "error" && observation.interruption === "restart";
-    // Nor is the weekly limit, once automatic switching moved this machine: a
+    // Nor is a 5-hour or weekly limit, once automatic switching moved this machine: a
     // result it submitted is still accepted, and otherwise the session continues
     // on the new account.
     let usageLimitResend = false;

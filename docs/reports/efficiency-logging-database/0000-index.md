@@ -433,7 +433,7 @@ The outcome of every task in the E4 batch file, checked back against the code on
 
 ## Closing check of E3 (Retention and deletion)
 
-The outcome of every task in the E3 batch file, checked back against the code on 2026-11-05 before the file was deleted. Base commit `0e8958f57`; the batch file at `a95c0effb` ends with the full outcome table, naming each test. Every finding still held when re-checked, except that part 0540's superseded measurements were already pruned.
+The outcome of every task in the E3 batch file, checked back against the code on 2026-11-05 before the file was deleted. Base commit `af2e566e5`; the batch file at `0661a72eb` ends with the full outcome table, naming each test. Every finding still held when re-checked, except that part 0540's superseded measurements were already pruned.
 
 | Part | Task | Outcome | Code, evidence or to-do |
 | --- | --- | --- | --- |

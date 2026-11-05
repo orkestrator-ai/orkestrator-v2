@@ -732,6 +732,40 @@ describe("CoordinatorPanel", () => {
     expect(notes.grok).toBeUndefined();
   });
 
+  test("says delegation is unavailable while agent messaging is off", async () => {
+    const notice = /Delegation unavailable: agent messaging is off/;
+    // An older backend says nothing about the setting, which is not "off".
+    ensuredSnapshot = { ...snapshot, agentMessaging: undefined };
+    const { unmount } = render(<CoordinatorPanel projectId="project-1" />);
+    await screen.findByRole("button", { name: /^Pause$/ });
+    expect(screen.queryByText(notice)).toBeNull();
+    unmount();
+    cleanup();
+
+    ensuredSnapshot = { ...snapshot, agentMessaging: { enabled: true } };
+    const second = render(<CoordinatorPanel projectId="project-1" />);
+    await screen.findByRole("button", { name: /^Pause$/ });
+    expect(screen.queryByText(notice)).toBeNull();
+    second.unmount();
+    cleanup();
+
+    ensuredSnapshot = { ...snapshot, agentMessaging: { enabled: false } };
+    render(<CoordinatorPanel projectId="project-1" />);
+    expect(await screen.findByText(notice)).toBeTruthy();
+    // It stands alongside the Control MCP warning rather than replacing it.
+    expect(screen.queryByText(/Orchestration controls are unavailable/)).toBeNull();
+    cleanup();
+
+    ensuredSnapshot = {
+      ...snapshot,
+      agentMessaging: { enabled: false },
+      controlMcp: { enabled: false, running: false, error: null },
+    };
+    render(<CoordinatorPanel projectId="project-1" />);
+    expect(await screen.findByText(notice)).toBeTruthy();
+    expect(screen.getByText(/Orchestration controls are unavailable/)).toBeTruthy();
+  });
+
   test("explains an assigned conversation whose platform became unavailable", async () => {
     ensuredSnapshot = {
       ...snapshot,

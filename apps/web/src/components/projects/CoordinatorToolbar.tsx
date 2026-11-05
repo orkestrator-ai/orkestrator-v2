@@ -221,6 +221,12 @@ export function CoordinatorToolbar({
             {snapshot.controlMcp.error ? `: ${snapshot.controlMcp.error}` : "."}
           </p>
         ) : null}
+        {snapshot.agentMessaging?.enabled === false ? (
+          <p className="mt-1 text-xs text-amber-300">
+            Delegation unavailable: agent messaging is off, so workers cannot report back. Turn it
+            on in Settings → Messaging.
+          </p>
+        ) : null}
       </div>
       <AlertDialog
         open={pendingSwitch !== null}

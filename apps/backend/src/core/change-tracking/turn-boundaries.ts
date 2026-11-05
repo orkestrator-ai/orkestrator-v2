@@ -24,6 +24,7 @@
 import { randomUUID } from "node:crypto";
 import {
   OwnerFenceError,
+  TERMINAL_TURN_LIFECYCLES as TERMINAL,
   type ChangeLedger,
   type SegmentRow,
   type SnapshotRow,
@@ -67,8 +68,6 @@ export function turnIdFor(
     200,
   );
 }
-
-const TERMINAL = new Set(["finalized", "interrupted", "end-unavailable", "abandoned"]);
 
 export class TurnBoundaryService {
   private readonly lastProvisional = new Map<string, number>();

@@ -91,6 +91,8 @@ function oldLocateIncomingParts(
   };
   const overlapAt = (offset: number) => {
     const overlap = Math.min(local.length - offset, incoming.length);
+    // To-do 4520 review: only a suffix overlap overrides the length rule.
+    if (acceptGrowth && offset + overlap < local.length) return 0;
     let strict = 0;
     for (let index = 0; index < overlap; index += 1) {
       const result = match(offset + index, index);
@@ -149,7 +151,7 @@ function oldPreferCompleteLiveHead<TMessage>(
   const localParts = (local as { parts?: unknown } | undefined)?.parts;
   const headParts = (head as { parts?: unknown }).parts;
   if (!Array.isArray(localParts) || !Array.isArray(headParts)) return incomingOnly();
-  // To-do 4520: overlap comes first; the length rule applies only without one.
+  // To-do 4520: overlap comes first; for an omitted-length row it must be a suffix.
   const located =
     headParts.length === 0 && (omittedParts ?? 0) > 0
       ? localParts.length
@@ -325,6 +327,22 @@ describe("preferCompleteLiveHead", () => {
       expect(result.restoredPrefix).toBe(true);
     });
 
+    test("restores a true cut prefix when repeated content matches before its final part", () => {
+      const prefix = [plainText("a"), plainText("b"), plainText("c")];
+      const incoming = row([plainText("a")]);
+      const result = preferCompleteLiveHead<unknown>([row(prefix)], [incoming], 3);
+      expect(result.messages[0]).toEqual(row([...prefix, plainText("a")]));
+      expect(result.restoredPrefix).toBe(true);
+    });
+
+    test("uses a shorter suffix overlap instead of a longer match inside the prefix", () => {
+      const prefix = [plainText("a"), plainText("b"), plainText("c"), plainText("a")];
+      const incoming = row([plainText("a"), plainText("b")]);
+      const result = preferCompleteLiveHead<unknown>([row(prefix)], [incoming], 4);
+      expect(result.messages[0]).toEqual(row([...prefix, plainText("b")]));
+      expect(result.restoredPrefix).toBe(false);
+    });
+
     test("reads a growing text part with no durable identity as an overlap", () => {
       const held = row([plainText("kept")]);
       const incoming = row([plainText("kept and grown")]);
@@ -341,8 +359,9 @@ describe("preferCompleteLiveHead", () => {
       expect(result.restoredPrefix).toBe(false);
     });
 
-    // Nothing in these parts separates a repeated part from the same part read
-    // twice. Showing it once and reporting no restored prefix is the safe answer:
+    // When the match reaches the held row's end, nothing in these parts separates
+    // a repeated part from the same part read twice. Showing it once and reporting
+    // no restored prefix is the safe answer:
     // the caller falls back to the contiguous tail, and the cut part returns when
     // a later read delivers the whole row.
     test("shows equal parts once when no identity can tell a true prefix from a copy", () => {

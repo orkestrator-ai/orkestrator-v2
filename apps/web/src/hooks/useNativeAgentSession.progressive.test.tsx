@@ -1727,6 +1727,14 @@ describe("useNativeAgentSession progressive view", () => {
     expect(projection?.messages[2]?.parts).toEqual(all);
   });
 
+  test("keeps earlier rows when a new part repeats content inside a fully omitted head", async () => {
+    const prefix = ["a", "b", "c"].map((content) => ({ type: "text", content }));
+    const projection = await applyTrimmedHead(prefix, [{ type: "text", content: "a" }], 3);
+
+    expect(projection?.messages.map(({ id }) => id)).toEqual(["old", "user", "asst"]);
+    expect(projection?.messages[2]?.parts).toEqual([...prefix, { type: "text", content: "a" }]);
+  });
+
   test("distinguishes Codex file changes that share a tool id", async () => {
     const files = ["a.ts", "b.ts", "c.ts", "d.ts"].map((path) => ({
       type: "tool-invocation",

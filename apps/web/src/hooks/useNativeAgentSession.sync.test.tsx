@@ -24,7 +24,7 @@ import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 interface TestMessage {
   id: string;
   text: string;
-  parts?: Array<{ type: string; content: string; sourcePartId: string }>;
+  parts?: Array<{ type: string; content: string; sourcePartId?: string }>;
 }
 
 const realBackendSnapshot = { ...realBackend };
@@ -589,6 +589,63 @@ describe("useNativeAgentSession sync-v1 history paging", () => {
 
     expect(result.current.projection?.messages[0]?.parts).toEqual([
       { type: "text", content: "kept and grown", sourcePartId: "kept-part" },
+    ]);
+  });
+
+  test("keeps paged history when a new part repeats content inside a fully omitted head", async () => {
+    const prefix = ["a", "b", "c"].map((content) => ({ type: "text", content }));
+    const heldHead = { ...message("asst"), parts: prefix };
+    projectionUpdates = [
+      () =>
+        snapshot("token-1", [message("user"), heldHead], {
+          historyCursor: "cursor-before-user",
+        }),
+    ];
+    const { result } = await renderConnectedSession();
+    messagePages = [
+      () => ({
+        syncVersion: 1,
+        messages: [message("old")],
+        historyEpoch: "epoch-1",
+        complete: true,
+        truncated: false,
+      }),
+    ];
+    await act(async () => {
+      await result.current.loadEarlierMessages();
+    });
+    expect(result.current.projection?.messages.map(({ id }) => id)).toEqual([
+      "old",
+      "user",
+      "asst",
+    ]);
+
+    projectionUpdates = [
+      () =>
+        snapshot("token-2", [{ ...heldHead, parts: [{ type: "text", content: "a" }] }], {
+          projection: {
+            revision: 2,
+            messageWindow: {
+              limit: 1,
+              truncated: true,
+              truncationReason: "bytes",
+              omittedParts: 3,
+              canLoadEarlier: false,
+            },
+          },
+        }),
+    ];
+    await act(async () => {
+      await result.current.refresh();
+    });
+    expect(result.current.projection?.messages.map(({ id }) => id)).toEqual([
+      "old",
+      "user",
+      "asst",
+    ]);
+    expect(result.current.projection?.messages[2]?.parts).toEqual([
+      ...prefix,
+      { type: "text", content: "a" },
     ]);
   });
 

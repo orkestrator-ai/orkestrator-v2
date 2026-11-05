@@ -36,7 +36,8 @@ function durablePartIdentity(part: unknown): string | undefined {
  * Parts with a durable identity match on it. Parts without one must be equal,
  * except the last local part, which may still have been streaming when this
  * client read it; that loose match counts on its own only when `acceptGrowth`
- * is set.
+ * is set for an omitted-length held row. In that case a match must also reach
+ * the final local part to override the cut-prefix length rule.
  */
 function locateIncomingParts(
   local: readonly unknown[],
@@ -66,6 +67,9 @@ function locateIncomingParts(
   };
   const overlapAt = (offset: number) => {
     const overlap = Math.min(local.length - offset, incoming.length);
+    // On the omitted-length path, an earlier trimmed copy must overlap through
+    // its final part. A shorter match can be repeated content in a true prefix.
+    if (acceptGrowth && offset + overlap < local.length) return 0;
     let strict = 0;
     for (let index = 0; index < overlap; index += 1) {
       const result = match(offset + index, index);
@@ -112,8 +116,10 @@ function locateIncomingParts(
  *
  * A held row exactly as long as the omitted count is either the prefix the
  * window cut or an earlier trimmed copy of the same window, so its length only
- * decides when the incoming parts do not overlap it. Parts equal in content,
- * with no durable identity or under reissued ids, cannot tell the two apart, and
+ * decides when the incoming parts do not overlap through its final part.
+ * Matches ending earlier can be repeated content in a true cut prefix.
+ * Parts equal in content, with no durable identity or under reissued ids,
+ * cannot tell the two apart at that boundary, and
  * neither can a text or thinking part with no identity that starts with the held
  * one. Those read as an overlap even when they were a true prefix: each part
  * shows once and `restoredPrefix` is false, so the caller keeps to the contiguous

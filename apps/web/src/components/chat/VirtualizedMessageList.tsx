@@ -406,26 +406,9 @@ export function VirtualizedMessageList<TMessage>({
   );
   /** Generation of find's own navigation; its match refinement may not outlive the reader moving. */
   const findNavigationRef = useRef<number | null>(null);
-  /**
-   * The match find last navigated to, by identity. Matches are recomputed
-   * whenever the rows change (every streaming update while find is open);
-   * only a different match is a navigation — re-navigating to the same one
-   * would pull a reader who scrolled away back to it on every token.
-   */
-  const lastFindMatchRef = useRef<string | null>(null);
   const handleFindNavigate = useCallback(
-    (match: AgentChatFindMatch, query: string) => {
+    (match: AgentChatFindMatch) => {
       const message = messagesRef.current[match.itemIndex];
-      const identity = JSON.stringify([
-        query,
-        message === undefined
-          ? match.itemIndex
-          : computeItemKeyRef.current(match.itemIndex, message),
-        match.characterIndex,
-        match.occurrenceIndex,
-      ]);
-      if (identity === lastFindMatchRef.current) return;
-      lastFindMatchRef.current = identity;
       if (controller) {
         const navigated = controller.navigateTo(
           {
@@ -450,9 +433,13 @@ export function VirtualizedMessageList<TMessage>({
     },
     [controller, virtuosoRef],
   );
+  const getSearchProjection =
+    find?.getSearchProjection ??
+    (find?.getSearchText as SearchTextGetter<TMessage> | undefined)?.projection;
   const chatFind = useAgentChatFind({
     items: messages,
     getSearchText: find?.getSearchText ?? EMPTY_SEARCH_TEXT,
+    getSearchProjection,
     isActive: find?.isActive ?? false,
     ownerRef: rootRef,
     onNavigate: handleFindNavigate,
@@ -475,17 +462,11 @@ export function VirtualizedMessageList<TMessage>({
     );
     return () => controller.setRowIndexResolver(null);
   }, [controller]);
-  // Clearing the query starts a new search even if it returns to the same
-  // occurrence. Reset before the hook's passive navigation effect runs.
+  // A cleared search has no navigation left to refine. Reset before the hook's
+  // passive navigation effect runs.
   useLayoutEffect(() => {
-    if (!findOpen || !chatFind.query.trim()) {
-      lastFindMatchRef.current = null;
-      findNavigationRef.current = null;
-    }
+    if (!findOpen || !chatFind.query.trim()) findNavigationRef.current = null;
   }, [chatFind.query, findOpen]);
-  const getSearchProjection =
-    find?.getSearchProjection ??
-    (find?.getSearchText as SearchTextGetter<TMessage> | undefined)?.projection;
 
   // Rows report whether they intersect the scroller viewport, so rich blocks
   // in Virtuoso's overscan request idle prefetch rather than visible work.

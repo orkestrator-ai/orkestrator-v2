@@ -17,6 +17,7 @@ import {
   PROJECT_HOME_WARNING,
   projectHomeApprovalRequestId,
 } from "./coordinator-worker-mail.js";
+import { COORDINATOR_WORKFLOW_STORE_IN_USE_ERROR } from "./coordinator-workflow-retention.js";
 import { projectHomeMailAttachmentDir } from "./mail-attachments.js";
 import { isNodeExcludedCommand } from "./nodes/node-routing.js";
 import { NodeCoordination } from "./nodes/node-coordination.js";
@@ -639,6 +640,25 @@ describe("coordinator request ids on worker mail", () => {
       expect(result.delegationNote).toContain("The message was sent");
       expect(result.delegationNote).toContain("Do not resend");
       expect(result.delegationNote).not.toContain("Nothing was");
+      expect(await mailTo(workerId)).toHaveLength(1);
+    } finally {
+      opening.mockRestore();
+    }
+  });
+  test("a full workflow store still sends the mail, and says no wake will come and why", async () => {
+    const opening = spyOn(storage.coordinators, "openCoordinatorDelegation").mockRejectedValue(
+      new Error(COORDINATOR_WORKFLOW_STORE_IN_USE_ERROR),
+    );
+    try {
+      const result = await send({
+        requestId: "store-full",
+        toEnvironmentId: workerId,
+        body: "Go.",
+      });
+      expect(result).toMatchObject({ coordinatorDelegationOpened: false });
+      expect(result.delegationNote).toContain("you will not be woken when the worker answers");
+      expect(result.delegationNote).toContain("the coordinator workflow store is full");
+      expect(result.delegationNote).toContain("Delete finished worker environments");
       expect(await mailTo(workerId)).toHaveLength(1);
     } finally {
       opening.mockRestore();

@@ -2375,9 +2375,13 @@ export async function createControlMcp(
               delivery,
               wake,
               nextStep,
+              delegationNote: remoteDelegationNote,
               ...summary
             } = sent;
             return toolResult({
+              ...(typeof remoteDelegationNote === "string"
+                ? { warning: remoteDelegationNote }
+                : {}),
               message: summary,
               ...(delivery !== undefined ? { delivery, wake, nextStep } : {}),
               // The leaf's outcome when it could steer; an older leaf cannot.
@@ -2415,10 +2419,16 @@ export async function createControlMcp(
           deliverNowNote,
           projectHome: _projectHome,
           projectHomeWarning,
+          delegationNote,
           ...summary
         } = message;
+        // The message was sent either way; a warning says what the coordinator
+        // must not expect (a wake) and why, without reading as a failed send.
+        const warnings = [projectHomeWarning, delegationNote].filter(
+          (item): item is string => typeof item === "string",
+        );
         return toolResult({
-          ...(typeof projectHomeWarning === "string" ? { warning: projectHomeWarning } : {}),
+          ...(warnings.length > 0 ? { warning: warnings.join(" ") } : {}),
           message: summary,
           ...(deliverNowOutcome !== undefined
             ? { deliverNow: deliverNowOutcome, deliverNowNote }

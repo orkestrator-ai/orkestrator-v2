@@ -45,6 +45,8 @@ export interface NodeCoordinatorRemoteDeps {
   summaries(nodeIds?: string[]): Promise<NodeSummariesResult>;
   /** Collect a node's outbox now (the mail collector). */
   collectMail?(nodeId: string): Promise<boolean>;
+  /** The node registry's controlled node ids (`NodeService.registeredNodeIds`). */
+  registeredNodeIds?(): Promise<ReadonlySet<string>>;
 }
 
 /** A routed read, or `"unavailable"` when the node did not answer. */
@@ -237,6 +239,11 @@ export class NodeCoordinatorRemote implements CoordinatorRemoteAccess {
         ? { deleting: true }
         : {}),
     };
+  }
+
+  registeredNodeIds(): Promise<ReadonlySet<string>> {
+    if (!this.deps.registeredNodeIds) return Promise.reject(new Error("Node registry unavailable"));
+    return this.deps.registeredNodeIds();
   }
 
   async nodeName(nodeId: string): Promise<string> {

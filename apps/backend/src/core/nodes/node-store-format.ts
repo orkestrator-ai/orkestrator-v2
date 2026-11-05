@@ -195,12 +195,26 @@ function handoverReceipts(value: unknown): CommandHandoverReceipt[] {
   });
 }
 
-export function readStoredNodeRegistry(value: unknown): {
+/** Strict reads are required before treating registry absence as removal. */
+export function readStoredNodeRegistry(
+  value: unknown,
+  strict = false,
+): {
   registry: NodeRegistry;
   dropped: number;
 } {
   const root = record(value);
-  if (!root || root.version !== 1) return { registry: emptyNodeRegistry(), dropped: 0 };
+  if (!root || root.version !== 1) {
+    if (strict) throw new Error("Unsupported node registry");
+    return { registry: emptyNodeRegistry(), dropped: 0 };
+  }
+  if (
+    strict &&
+    (!Array.isArray(root.nodes) ||
+      root.nodes.length > MAX_REGISTERED_NODES ||
+      (root.pendingHandover && !pendingHandover(root.pendingHandover)))
+  )
+    throw new Error("Incomplete node registry");
   const rawNodes = Array.isArray(root.nodes) ? root.nodes.slice(0, MAX_REGISTERED_NODES) : [];
   const rawTombstones = Array.isArray(root.tombstones)
     ? root.tombstones.slice(0, MAX_REGISTERED_NODES)
@@ -227,6 +241,7 @@ export function readStoredNodeRegistry(value: unknown): {
     seen.add(entry.nodeId);
     tombstones.push(entry);
   }
+  if (strict && dropped) throw new Error("Incomplete node registry");
   const pending = pendingHandover(root.pendingHandover);
   const receipts = handoverReceipts(root.handoverReceipts);
   return {

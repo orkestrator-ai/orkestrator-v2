@@ -355,6 +355,8 @@ function workerItem(
   associations: CoordinatorWorkflowAssociation[],
   sources: CoordinatorWorkSources,
 ): CoordinatorWorkItem {
+  const live = associations.filter((association) => !association.nodeRelease);
+  if (live.length && live.length !== associations.length) return workerItem(live, sources);
   const first = associations[0]!;
   const environmentId = first.resourceId;
   const delegations = associations
@@ -366,6 +368,8 @@ function workerItem(
   );
   const latestDelegation = delegations.at(-1);
   const outcome = associations.find((association) => association.workerOutcome)?.workerOutcome;
+  // Its machine was forgotten or handed over: nothing about it can be read from here.
+  const release = associations.find((association) => association.nodeRelease)?.nodeRelease;
   const createdAt = Math.min(
     ...associations.map((association) => time(association.createdAt) ?? 0),
   );
@@ -391,6 +395,10 @@ function workerItem(
   if (deleted) {
     bucket = "finished";
     stage = "Environment deleted";
+  } else if (release) {
+    bucket = "finished";
+    stage =
+      release.reason === "handed-over" ? "Worker · handed over" : "Worker · machine forgotten";
   } else if (needsYou) {
     bucket = "needs-you";
     stage = "Worker · waiting for you";
@@ -430,6 +438,7 @@ function workerItem(
     bucket === "finished"
       ? (latest(
           ...delegations.map((delegation) => time(delegation.completedAt)),
+          time(release?.at),
           time(outcome?.ended?.at),
           time(outcome?.deletedAt),
         ) ?? createdAt)
@@ -438,6 +447,7 @@ function workerItem(
   let target: CoordinatorWorkTarget | null = null;
   let unavailableReason: string | undefined;
   if (deleted) unavailableReason = "The environment was deleted.";
+  else if (release) unavailableReason = "Its machine is no longer controlled here.";
   else if (first.nodeId) {
     target = remoteTarget(
       first.nodeId,
@@ -463,15 +473,16 @@ function workerItem(
   const summary = latestDelegation?.request?.summary;
   const selection = selectionOf(delegations);
   // A tab already told to stop has nothing more to ask of it.
-  const stoppable = deleted
-    ? []
-    : Array.from(
-        new Set(
-          running
-            .filter((delegation) => !delegation.stopRequestedAt)
-            .map((delegation) => delegation.workerTabId),
-        ),
-      );
+  const stoppable =
+    deleted || release
+      ? []
+      : Array.from(
+          new Set(
+            running
+              .filter((delegation) => !delegation.stopRequestedAt)
+              .map((delegation) => delegation.workerTabId),
+          ),
+        );
   return {
     key: `worker:${first.nodeId ?? ""}:${environmentId}`,
     associationIds: associations.map((association) => association.id),
@@ -545,10 +556,37 @@ function environmentPrOpen(
   return prState === "open" || outcomePrOpen(association);
 }
 
+function releasedItem(
+  association: CoordinatorWorkflowAssociation,
+  sources: CoordinatorWorkSources,
+  kind: CoordinatorWorkKind,
+): CoordinatorWorkItem {
+  const finishedAt = time(association.nodeRelease!.at) ?? time(association.createdAt) ?? 0;
+  return {
+    key: `${kind}:${association.nodeId ?? ""}:${association.resourceId}`,
+    associationIds: [association.id],
+    kind,
+    bucket: "finished",
+    name: `${kind === "build" ? "Build" : kind === "review" ? "Review" : "Graph run"} ${association.resourceId}`,
+    machine: association.nodeId ? nodeLookup(sources, association.nodeId).machine : undefined,
+    stage:
+      association.nodeRelease!.reason === "handed-over"
+        ? "Machine handed over"
+        : "Machine forgotten",
+    target: null,
+    unavailableReason: "Its machine is no longer controlled here.",
+    openDelegations: 0,
+    finishedAt,
+    prOpen: false,
+    sortAt: finishedAt,
+  };
+}
+
 function buildItem(
   association: CoordinatorWorkflowAssociation,
   sources: CoordinatorWorkSources,
 ): CoordinatorWorkItem {
+  if (association.nodeRelease) return releasedItem(association, sources, "build");
   const nodeId = association.nodeId;
   const pipeline = nodeId
     ? sources.remotePipelines.get(remoteWorkKey(nodeId, association.resourceId))
@@ -664,6 +702,7 @@ function reviewItem(
   association: CoordinatorWorkflowAssociation,
   sources: CoordinatorWorkSources,
 ): CoordinatorWorkItem {
+  if (association.nodeRelease) return releasedItem(association, sources, "review");
   const nodeId = association.nodeId;
   const workflow = nodeId
     ? sources.remoteReviews.get(remoteWorkKey(nodeId, association.resourceId))
@@ -785,6 +824,7 @@ function graphRunItem(
   association: CoordinatorWorkflowAssociation,
   sources: CoordinatorWorkSources,
 ): CoordinatorWorkItem {
+  if (association.nodeRelease) return releasedItem(association, sources, "graph-run");
   const nodeId = association.nodeId;
   const createdAt = time(association.createdAt) ?? 0;
   const run = nodeId

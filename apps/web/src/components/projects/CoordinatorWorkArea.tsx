@@ -16,6 +16,7 @@ import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import { CoordinatorNextWakeLine, CoordinatorWorkPanel } from "./CoordinatorWorkPanel";
+import { CoordinatorWorkflowStoreBanner } from "./CoordinatorPanelNotices";
 import { useCoordinatorWorkItems } from "./useCoordinatorWorkItems";
 
 interface CoordinatorWorkAreaProps {
@@ -144,6 +145,7 @@ export function CoordinatorWorkArea({
 
   return (
     <>
+      <CoordinatorWorkflowStoreBanner state={snapshot.workflowStore} />
       <HumanPromptBanner
         prompts={workerPrompts}
         label={promptLabel}

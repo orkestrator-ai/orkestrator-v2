@@ -489,7 +489,7 @@ function uiTab(name: Name) {
   const index = uiTabOrder.indexOf(name) + 1;
   const label = s().services[name]!.marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return s()
-    .window.getByRole("button", { name: new RegExp(`^${label} ${index} `) })
+    .window.getByRole("tab", { name: new RegExp(`^${label} ${index}$`) })
     .first();
 }
 

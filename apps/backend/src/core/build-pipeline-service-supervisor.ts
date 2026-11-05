@@ -261,7 +261,8 @@ export class BuildPipelineSupervisor {
           this.ctx.workflowAgentMcp(pipeline, resultKey, provider, stage),
         artifactDispatch: this.ctx.options.artifactDispatch,
         captureWorkspaceBaseline: (pipeline) => this.readOnly.capturePanel(pipeline),
-        workspaceViolation: (pipeline, subject) => this.readOnly.panelViolation(pipeline, subject),
+        workspaceChanged: (pipeline) => this.readOnly.panelChanged(pipeline),
+        provisionalFindings: this.ctx.provisionalFindings,
         concurrency: this.ctx.options.reviewFanoutConcurrency,
         efficiency: this.ctx.options.efficiency,
         pollGate: (pipeline) => ({
@@ -557,12 +558,11 @@ export class BuildPipelineSupervisor {
       pipeline.reviewFanout
     ) {
       delete pipeline.stageRetryRequested;
-      if (await this.reviewFanout().restartConsolidation(pipeline)) {
+      if (await this.reviewFanout().retryAfterFailure(pipeline)) {
         await this.advanceReviewFanout(pipeline);
         return;
       }
-      // A reviewer-stage failure has no usable settled panel to preserve. Keep
-      // the existing full-stage retry semantics in that case.
+      // No panel to keep, or a package that no longer verifies.
       await this.startStage(pipeline, "review", "reviewing");
       return;
     }
@@ -664,6 +664,7 @@ export class BuildPipelineSupervisor {
     const {
       status,
       error: statusDetail,
+      failureKind,
       turnSettled,
       backgroundWorkLive,
       retainedContinuationRequestIds,
@@ -733,6 +734,7 @@ export class BuildPipelineSupervisor {
           pipeline.activePromptContext?.requestId ??
           session.sdkSessionId,
         error: statusDetail,
+        ...(failureKind ? { failureKind } : {}),
         resends: session.usageLimitResends ?? 0,
         ...(session.turnStartedAt ? { turnStartedAt: session.turnStartedAt } : {}),
         session: { label: session.label },
@@ -2129,19 +2131,14 @@ export class BuildPipelineSupervisor {
     if (!requestId) throw new Error("Review result key is missing");
     const result = await this.ctx.readWorkflowResult<unknown>(provider, session, requestId);
     if (!result) {
-      try {
-        await this.recovery.awaitStructuredResult(pipeline, provider, session, "review");
-      } catch (error) {
-        // A report the read-only guard kept refusing never arrives. Name the
-        // repairable change that blocked it; an unavailable comparison keeps
-        // the original missing-result error.
-        await this.readOnly.certifySession(pipeline, session, { repairableOnly: true });
-        throw error;
-      }
+      await this.recovery.awaitStructuredResult(pipeline, provider, session, "review");
       return;
     }
-    // The report is only usable from the worktree the reviewer was given.
-    await this.readOnly.certifySession(pipeline, session);
+    // A worktree that moved under the reviewer marks the review stale and stops
+    // nothing: the report stands.
+    if (await this.readOnly.sessionChanged(pipeline, session)) {
+      session.reviewWorktreeChanged = true;
+    }
     delete session.structuredWaitStartedAt;
     if (!result.ok) throw new Error(result.error.message);
     const parsed = safeParseStructuredReviewReport(result.value, {

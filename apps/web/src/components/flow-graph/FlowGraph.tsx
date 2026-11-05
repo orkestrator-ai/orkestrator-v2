@@ -99,6 +99,8 @@ export interface FlowNodeModel {
   /** One more row on the node's face, e.g. a pull request's checks. */
   extra?: ReactNode;
   canOpen: boolean;
+  /** The tooltip for what opening does, when it is not opening a session. */
+  openHint?: string;
   onOpen: () => void;
   contextMenu: ReactNode;
 }
@@ -291,7 +293,9 @@ function FlowNode({
 }) {
   const errorId = useId();
   const failure = node.state === "failed" && node.error?.trim() ? node.error : undefined;
-  const openHint = node.canOpen ? "Double-click or press Enter to open the session" : undefined;
+  const openHint = node.canOpen
+    ? (node.openHint ?? "Double-click or press Enter to open the session")
+    : undefined;
   const muted = node.state === "not-started" || node.state === "cancelled";
   const runtimeRow = flowNodeHasRuntimeRow(node);
   // Live under the owning view's clock: only this node re-renders on a tick.

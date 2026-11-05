@@ -52,6 +52,8 @@ export interface PreviewPublicationDetail {
   enabled: boolean;
   available: boolean;
   reason?: string;
+  /** The preview domain shares a site with the app (absent from older backends). */
+  warning?: string;
   domain: string | null;
   listening: { address: string; port: number } | null;
   certificate: { validTo: string; coversHosts: boolean } | null;

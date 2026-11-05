@@ -107,12 +107,12 @@ describe("browser preview capture spool", () => {
 
     const listed = await store.list();
     expect(listed.map((entry) => entry.captureId)).toEqual([second.captureId, first.captureId]);
-    const read = await store.read(first.captureId);
-    const again = await store.read(first.captureId);
-    expect(read?.imageDataUrl).toBe(pngDataUrl(64, 40, 1));
+    const read = await store.readWire(first.captureId);
+    const again = await store.readWire(first.captureId);
+    expect(read?.imageBytes).toEqual(pngBytes(64, 40, 1));
     expect(read?.capture.page.route).toBe("/settings?tab=profile");
     expect(again?.descriptor.captureId).toBe(first.captureId);
-    expect(await store.read("capture-not-a-real-id")).toBeNull();
+    expect(await store.readWire("capture-not-a-real-id")).toBeNull();
   });
 
   test("recovers pending captures after a restart", async () => {
@@ -121,7 +121,7 @@ describe("browser preview capture spool", () => {
     const restarted = first.open();
 
     expect((await restarted.list()).map((entry) => entry.captureId)).toEqual([created.captureId]);
-    expect((await restarted.read(created.captureId))?.imageDataUrl).toBe(pngDataUrl(64, 40, 1));
+    expect((await restarted.readWire(created.captureId))?.imageBytes).toEqual(pngBytes(64, 40, 1));
     const next = await restarted.create(createInput());
     expect((await restarted.list())[0]?.captureId).toBe(next.captureId);
   });
@@ -289,9 +289,6 @@ describe("browser preview capture spool", () => {
     const wire = await spool.store.readWire(created.captureId);
     expect(Buffer.from(wire!.imageBytes!).equals(image)).toBe(true);
     expect(wire && "imageDataUrl" in wire).toBe(false);
-    expect((await spool.store.read(created.captureId))!.imageDataUrl).toBe(
-      `data:image/png;base64,${image.toString("base64")}`,
-    );
 
     const redacted = pngBytes(64, 40, 2);
     await spool.store.replaceImage(created.captureId, {
@@ -335,8 +332,8 @@ describe("browser preview capture spool", () => {
       height: 40,
       bytes: pngBytes(64, 40, 0x11).length,
     });
-    const read = await spool.store.read(created.captureId);
-    expect(read?.imageDataUrl).toBe(pngDataUrl(64, 40, 0x11));
+    const read = await spool.store.readWire(created.captureId);
+    expect(read?.imageBytes).toEqual(pngBytes(64, 40, 0x11));
     expect(read?.capture.redaction).toMatchObject({ manualRegions: 2, imageExcluded: false });
     expect(read?.capture.geometry?.image).toMatchObject({
       width: 64,
@@ -350,13 +347,15 @@ describe("browser preview capture spool", () => {
     });
     expect(excluded.image).toBeNull();
     expect(files(spool.directory)).toEqual([`${created.captureId}.json`]);
-    const final = await spool.store.read(created.captureId);
-    expect(final?.imageDataUrl).toBeNull();
+    const final = await spool.store.readWire(created.captureId);
+    expect(final?.imageBytes).toBeNull();
     expect(final?.capture.redaction.imageExcluded).toBe(true);
     expect(final?.capture.geometry?.image).toBeNull();
 
     const restarted = spool.open();
-    expect((await restarted.read(created.captureId))?.capture.redaction.imageExcluded).toBe(true);
+    expect((await restarted.readWire(created.captureId))?.capture.redaction.imageExcluded).toBe(
+      true,
+    );
   });
 
   test("rejects invalid replacement images and unknown captures", async () => {
@@ -381,7 +380,9 @@ describe("browser preview capture spool", () => {
         manualRegions: 0,
       }),
     ).rejects.toMatchObject({ code: "not-found" });
-    expect((await spool.store.read(created.captureId))?.imageDataUrl).toBe(pngDataUrl(64, 40, 1));
+    expect((await spool.store.readWire(created.captureId))?.imageBytes).toEqual(
+      pngBytes(64, 40, 1),
+    );
   });
 
   test("rejects a duplicate capture id and invalid capture metadata", async () => {

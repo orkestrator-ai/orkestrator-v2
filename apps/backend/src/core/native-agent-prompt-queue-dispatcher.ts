@@ -1,4 +1,5 @@
 import { goalContinuationRequestId } from "@orkestrator/protocol/native-agent-goal";
+import type { TurnFailureKind } from "@orkestrator/protocol/agent-usage-limits";
 import type {
   BuildPipelineAgent,
   NativeAgentSessionActionOutcome,
@@ -81,6 +82,8 @@ export interface NativeAgentPromptQueueDispatcherHost {
     status: string,
     detail: string | undefined,
     provider?: Pick<NativeAgentRuntimeProvider, "turnTerminalError">,
+    /** The bridge's structured kind for an `error` status, when it sent one. */
+    failureKind?: TurnFailureKind,
   ): Promise<number | void>;
   /** A weekly-limit stop is being decided; its resend goes ahead of the queue. */
   usageLimitResendPending?(key: string): boolean;
@@ -611,10 +614,11 @@ export class NativeAgentPromptQueueDispatcher {
     // Read as data: a failed last turn must defer with a bounded backoff and a
     // reason, not escape as a throw that the outer handler can only report as
     // an anonymous drain fault.
-    const { status, error: statusDetail } = await readProviderStatus(
-      provider,
-      session.providerSessionId,
-    );
+    const {
+      status,
+      error: statusDetail,
+      failureKind,
+    } = await readProviderStatus(provider, session.providerSessionId);
     // This read is the last look at the previous turn before the next prompt
     // replaces its status; keep its content-free outcome for observers.
     const outcomeRetryMs = await this.host.recordObservedTurnOutcome(
@@ -622,6 +626,7 @@ export class NativeAgentPromptQueueDispatcher {
       status,
       statusDetail,
       provider,
+      failureKind,
     );
     if (outcomeRetryMs !== undefined) {
       this.queueRetryAt.set(queueKey, Date.now() + outcomeRetryMs);
@@ -798,6 +803,8 @@ export class NativeAgentPromptQueueDispatcher {
         attachments,
         prompt: message.text,
         requestId: reservation.requestId,
+        // The zone of the renderer that queued it; validated where it is recorded.
+        clientTimeZone: queueString(message, "clientTimeZone"),
         // Revalidated now, at dequeue: a selection whose binding changed while
         // queued fails with its reason instead of running something else.
         ...(parseNativeAgentCommandIntent(message.command)

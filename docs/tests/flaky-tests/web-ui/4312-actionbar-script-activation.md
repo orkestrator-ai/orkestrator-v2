@@ -1,5 +1,6 @@
 # ActionBar script launch activation recurrence
 
+- **ID:** 4312
 - **Status:** open
 - **Date observed:** 2026-11-05
 - **Test:** `ActionBar editor and run commands > activates an unknown script launch but skips activation when launch throws`

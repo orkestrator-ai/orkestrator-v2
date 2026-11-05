@@ -1,5 +1,6 @@
 /**
- * Findings a Multi Review reviewer reports while it is still running.
+ * Findings a reviewer of a Multi Review or a build pipeline panel reports while
+ * it is still running.
  *
  * A reviewer's report arrives whole, when its result is accepted, so the flow
  * graph's "Findings so far" used to fill in one reviewer at a time. The
@@ -34,7 +35,6 @@ import {
   type ReviewContractValidationIssue,
   type ReviewIssue,
 } from "@orkestrator/protocol/structured-review";
-import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
 
 export interface ProvisionalFindingScope {
   environmentId: string;
@@ -165,6 +165,15 @@ interface InboxEntry extends ProvisionalFindingScope {
   staged: ReviewerProvisionalFinding[];
 }
 
+/** What the inbox reads of the workflow that owns a panel. */
+export interface ProvisionalFindingWorkflow {
+  id: string;
+  environmentId: string;
+  projectId: string;
+  phase: string;
+  reviewers: readonly ReviewerRecord[];
+}
+
 export interface ProvisionalFindingSink {
   /** Whether this attempt takes `report_finding` now; decides if the tool is listed. */
   accepts(scope: ProvisionalFindingScope, resultKey: string): boolean;
@@ -200,7 +209,7 @@ export class ProvisionalFindingInbox implements ProvisionalFindingSink {
    * tool mode during the review stage; anything else of this workflow's is
    * forgotten, with whatever it had staged.
    */
-  track(workflow: MultiReviewWorkflow): void {
+  track(workflow: ProvisionalFindingWorkflow): void {
     const live = new Set<string>();
     if (workflow.phase === "reviewing") {
       for (const reviewer of workflow.reviewers) {
@@ -358,5 +367,20 @@ function attemptClosed(): ReportFindingResult {
       message:
         "This review attempt is finished or no longer running, so it takes no more findings.",
     },
+  };
+}
+
+/** One sink over several owners. Each attempt belongs to at most one of them. */
+export function combineProvisionalFindingSinks(
+  sinks: readonly ProvisionalFindingSink[],
+): ProvisionalFindingSink {
+  return {
+    accepts: (scope, resultKey) => sinks.some((sink) => sink.accepts(scope, resultKey)),
+    report: (scope, resultKey, finding) =>
+      (sinks.find((sink) => sink.accepts(scope, resultKey)) ?? sinks[0]!).report(
+        scope,
+        resultKey,
+        finding,
+      ),
   };
 }

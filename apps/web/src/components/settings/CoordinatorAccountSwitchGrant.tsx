@@ -48,6 +48,12 @@ export function CoordinatorSwitchRecordRow({ record }: { record: CoordinatorAcco
         {record.coordinatorName}, {formatRelativeTime(record.at)}
         {record.reason ? `: “${record.reason}”` : ""}
       </p>
+      {record.authorizedBy === "self-timer" ? (
+        <p className="text-muted-foreground">
+          Allowed by a timer you set
+          {record.userInstruction ? `: you asked “${record.userInstruction}”` : ""}
+        </p>
+      ) : null}
     </li>
   );
 }
@@ -150,7 +156,7 @@ export function CoordinatorAccountSwitchGrant({
               : `Coordinators on ${where} ask you before switching the active ${platformLabel} account.`}{" "}
             Only to a signed-in account that is not known to be used up, and at most{" "}
             {state.limit.switches} switches per machine in {state.limit.windowMinutes} minutes; past
-            that they ask again. Each switch is listed here.
+            that they ask again. Each switch is listed here, with any a timer you allowed made.
           </p>
           {error ? <p className="text-xs text-destructive">{error}</p> : null}
           {switches.length > 0 ? (

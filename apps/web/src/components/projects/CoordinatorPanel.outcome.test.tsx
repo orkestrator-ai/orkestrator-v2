@@ -280,7 +280,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
     expect(main.getAttribute("data-placeholder")).toBe("What would you like to get done?");
     expect(main.getAttribute("data-starter-prompts")).toBe(COORDINATOR_STARTER_PROMPTS.join("|"));
 
-    fireEvent.click(screen.getByRole("button", { name: "Side 1, Codex" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Side 1, Codex" }));
     await waitFor(() =>
       expect(screen.getByTestId("native-agent").getAttribute("data-tab-id")).toBe(
         "coordinator-side-1",
@@ -578,7 +578,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Keep open" }));
     await waitFor(() => expect(screen.queryByRole("alertdialog") === null).toBe(true));
     expect(closeConversation).not.toHaveBeenCalled();
-    expect(screen.getByRole("button", { name: "Coordinator, Codex" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Coordinator, main, Codex" })).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: /^Close Coordinator\./ }));
     fireEvent.click(

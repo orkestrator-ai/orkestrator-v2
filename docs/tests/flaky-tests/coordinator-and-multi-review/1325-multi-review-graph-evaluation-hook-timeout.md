@@ -26,3 +26,21 @@ implementation, assertion, timeout or skip changed.
 Aggregate evidence:
 `orkestrator-test-run.3gLWVy/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
 in the host temporary directory.
+
+## Usage-limit review recurrence — 2026-11-05
+
+`mise run test:logged -- --name address-default-rerun -- mise run test`
+repeated `The unnamed beforeEach/afterEach hook` at 5001.72 ms against the 5000 ms deadline.
+The workspace group reserved six slots (backend up to four workers, web two)
+beside the one-worker root and two-worker bridge groups on the shared Linux
+host. The aggregate queued for about 740 s. The package reported 15256 passed, 132 skipped and one failed across 1027 backend files (601.71 s).
+
+The unchanged owning file passed alone in 8.8 s (exit zero):
+
+```sh
+mise run test:logged -- --name address-graph-evaluation-rerun -- bun test --cwd apps/backend ./src/core/multi-review-graph-evaluation.test.ts --parallel=1 --only-failures
+```
+
+Evidence: `/tmp/orkestrator-test-run.NrGGXS/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`. Passing owner output was removed by the logged runner.
+This confirms another aggregate-only occurrence; scheduling pressure remains a
+hypothesis, not a proven cause. No assertion, timeout or skip was changed.

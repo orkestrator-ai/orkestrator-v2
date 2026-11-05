@@ -112,6 +112,32 @@ What removal changes for the user:
 - A retry of a request older than 24 hours whose record was removed is treated
   as new.
 
+**Request ids.** A coordinator's request ids share one namespace across all of
+its conversations (`coordinatorId` + `requestId`), so a retry still replays
+after the main conversation is replaced. The context block and the server
+instructions therefore say `COORDINATOR_REQUEST_ID_RULE`
+(`packages/protocol/src/coordinator.ts`): every mutation needs a new unique
+`requestId`; reuse one only to retry the same call. When an id names an
+earlier request:
+
+- the same payload replays it, and the launch, build and Multi Review results
+  say so with `replayed: true` and `replayNote` (`COORDINATOR_REPLAYED_NOTE`),
+  so a replay never reads as fresh work. Surface actions already answered
+  `replayed: true`;
+- a different payload, worker or tab is refused with
+  `COORDINATOR_REQUEST_ID_REUSED_ERROR`, which says the id was used before,
+  possibly by an earlier conversation, that nothing was done, and to use a new
+  one; an id held by another conversation of the same coordinator says the
+  same;
+- `send_message` checks before sending: an id this coordinator already used to
+  ask another worker is refused, because the message could open no delegation
+  and no wake would come back. Any other failure to open the delegation after
+  the message is stored is reported in the result's `delegationNote`.
+
+A launch that leaves `agent` out is fingerprinted as "the default agent"
+(`coordinatorLaunchIdentity`), so a retry after the user changes their default
+still replays, as an omitted build choice already did.
+
 The working directory is the canonical `Project.localPath`. A project without a
 valid local path shows a checkout setup state; it does not silently use an
 environment worktree, a container, or a temporary clone. Bridge state,
@@ -152,6 +178,15 @@ works across the nodes that node controls:
   prompts and messages open delegations that wake this conversation once,
   and build pipelines and Multi Reviews there send status wakes. See
   [command-nodes.md](command-nodes.md#one-tool-family-every-node).
+  The older `*_node_*` forms (`list_node_environments`,
+  `launch_node_environment`, `start_node_environment`, `stop_node_environment`,
+  `send_prompt_to_node_tab`, `send_node_message`) were removed because they
+  did less; `read_node_environment` stays, as the only way to read a file in
+  another node's environment. `RETIRED_COORDINATOR_TOOLS`
+  (`control-mcp-tools.ts`) names each replacement: a saved schedule that names
+  a retired tool is paused with it. The backend commands behind them stay, so
+  older command nodes and leaves are unaffected
+  ([version-compatibility.md](version-compatibility.md)).
 - Tickets are shared: the project's board syncs to every node with a copy,
   under the same ids. `create_ticket` (with or without `nodeId`) and then
   `start_build_pipeline` with a `nodeId` builds a ticket on that node by its
@@ -266,8 +301,9 @@ coordinator conversation, on any provider. It names the session, machine, reposi
 account, the reset time when known (else the provider's words for it) and whether the
 session will resend, is waiting, or stays stopped.
 
-"Really stops" means the turn ended failed with a usage-limit error
-(`classifyUsageLimitError`). A transient limit the provider retries while the session
+"Really stops" means the turn ended failed with a usage limit: the bridge's
+structured `failureKind`, or else the error text (`usageLimitFailure`, see
+[agent-accounts.md](agent-accounts.md#usage-limit-signal)). A transient limit the provider retries while the session
 carries on does not fail the turn, so it sends nothing. Native tabs report from
 `NativeAgentUsageLimitResend`, workflows from `provider.usageLimitStop`, and both reach
 `AgentAccountAutoSwitcher`, whose `onLimitStop` fires once per stopped turn with the
@@ -481,8 +517,20 @@ delegation. Any agent reaches it at the mail address `"coordinator"`
 main right now; an address of a conversation that has since closed is
 redirected there too.
 
-Closing the main tab is how its provider is changed. Nothing reopens it on its
-own until it is needed: the next agent mail to the coordinator, or a worker's
+A conversation's provider is fixed once it has a session, so changing the
+coordinator's agent means a new main conversation. **Change agent**, a button
+on the assigned main tab and an item in its tab menu, does that after a
+confirmation: it closes the main, then opens a fresh, unassigned main in the
+same tab group and tab position (`createConversation` with no main open), whose composer offers
+every qualified platform. If agent mail arrives before the user picks one, that
+new main is given the default agent as described below. Once side agents are
+open, the main tab shows a **Main** label, also in its accessible name.
+The renderer retains the replacement slot while creation is pending; if creation
+fails after a successful close, it publishes the closed snapshot and reports the
+error. Tab close actions are unavailable while a conversation action is pending.
+
+Closing the main tab without Change agent asks first, and nothing reopens it on
+its own until it is needed: the next agent mail to the coordinator, or a worker's
 delegation wake, starts a new main with the repository's default agent
 (`CoordinatorService.ensureMainConversation`) and moves onto it the work the
 closed one still owed a report for (open delegations, unreported workflows).
@@ -531,7 +579,17 @@ drag a tab onto another group's strip to move it, or onto a pane edge to open
 a new group beside or below it, so a side agent can sit next to the main
 coordinator. Dividers resize, and a group closes when its last tab leaves.
 Each group has its own **New side agent** action, and a new conversation
-joins whichever group is focused.
+joins whichever group is focused. On a phone the action shows only its icon,
+because the strip scrolls.
+
+Each strip is a `tablist` of `role="tab"` buttons; the draggable shell around
+a tab takes no role or tab stop of its own, and each group's content is the
+`tabpanel` its front tab labels. Arrow keys, Home and End move between a
+strip's tabs, Enter or Space selects one. The keyboard drag sensor is left out
+because it claims Enter and Space, so moving a tab without a pointer goes
+through the tab's menu (right-click, the context-menu key or Shift+F10): **Move
+to new group** and **Move to group N** call the same layout functions a drop
+does (`splitCoordinatorPaneAtEdge`, `moveCoordinatorConversation`).
 
 The arrangement is presentation, edited by the renderer
 (`apps/web/src/lib/coordinator-pane-layout.ts`) and stored by the backend per
@@ -546,7 +604,12 @@ without the capability the layout stays in that copy. It never opens or closes a
 conversation; on every snapshot it is reconciled against the backend's open set,
 dropping closed conversations and placing new ones. Focusing a group selects its front
 conversation (`selectCoordinatorConversation`), and a selection made elsewhere
-brings that conversation to the front of its group. Only each group's front
+brings that conversation to the front of its group. A press or focus inside a
+tab strip does not focus the group first: a tab selects itself, so a click on a
+tab in another group writes one selection rather than the group's front tab
+and then the clicked one, and every finished drag focuses the group the tab
+landed in or started from (`coordinatorDragEndChange`), since a drag does not
+click. Only each group's front
 conversation is mounted.
 
 ## Activity indicator
@@ -1455,15 +1518,34 @@ the workers still being waited on, filtered before the 200-row cap, so it answer
 `coordinatorDelegationBucket` (`packages/protocol/src/coordinator.ts`) is the one
 definition of a delegation's bucket, shared with the [Work panel](#work-panel).
 
-Repeated unchanged reads of `read_messages`, `get_message_status` or
-`list_environments` return the authorized page with `repeatedRead: true` and
-the contract attached, after three identical answers inside 120 seconds. The
-guard never withholds data. For `list_environments` "identical" means the same
-filters and the same lifecycle, setup, activity and PR state for every listed
-environment (and every other node's rows); `lastActivityAt` is left out, so
-re-listing while a worker is still `working` counts as the same answer. PR
-state there is the whole reading below: a PR that starts conflicting, has a
-check finish or fail, or becomes ready to merge is a different answer.
+The poll guard (`apps/backend/src/core/control-mcp-poll-guard.ts`) covers
+`read_messages`, `get_message_status`, `list_environments`, `list_agents`,
+`get_environment`, `get_tab_state`, `get_tab_transcript`, `get_build_pipeline`,
+`get_multi_review` and `list_workflows`. After three identical answers, the
+next one still returns the whole authorized result, with `repeatedRead: true`
+and the contract attached; the guard never withholds data. Two rules decide
+what is identical:
+
+- **The key is the question.** Each read is keyed on the tool, its target and
+  the filters that change what is asked (`status`, `unreadOnly`, `openOnly`),
+  never on paging or size (`limit`, `offset`), so asking for a different page
+  size does not reset the count.
+- **The fingerprint is the state a poll watches.** For `list_environments` and
+  `get_environment`, lifecycle, setup, activity and PR state for every listed
+  environment (and every other node's rows), leaving out `lastActivityAt`, so
+  re-listing while a worker is still `working` counts as the same answer. PR
+  state there is the whole reading below: a PR that starts conflicting, has a
+  check finish or fail, or becomes ready to merge is a different answer.
+  `list_agents` compares each tab's state and goal; `get_tab_state` the
+  connection, turn phase and error, open interactions and goal, not the
+  streaming revision; `get_tab_transcript` its newest row (a row is one model
+  response), whatever `limit` asked for; a workflow its summary without
+  timestamps and revisions; `list_workflows` each association's delegation,
+  follow and resource state.
+
+The window slides: each identical read extends it by 120 seconds, so slow
+polling is caught too. Entries are bounded (256) and dropped with the
+conversation's credential.
 
 A coordinator's `get_environment` and `list_environments` rows for a worker
 with a pull request carry, besides `prUrl` and `prState`,
@@ -1901,6 +1983,15 @@ every round. There is no pane tab for any of them; the mailbox is the worker.
 - **Delegations.** A coordinator message to a worker opens a delegation like
   any other; it settles when that worker's turn ends or the worker ends
   (`workerActivity` reads the pipeline for a `pipeline-worker:` tab).
+- **Multi Review reviewers.** Each reviewer of a Multi Review has the same kind
+  of mailbox while its review is in its reviewers' stage, under the same address
+  scheme, so `list_mailboxes`, `send_message` and `get_tab_transcript` treat it
+  alike (`multiReviewWorkers`, `multi-review-worker-mail.ts`). Queued mail becomes
+  its next turn before its result is accepted, and `deliverNow` steers under the
+  workflow lock. A restart rotates the session key, so it is a new address and
+  mail never follows. Preparation, consolidation and Address Findings keep their
+  own sessions and have no worker mailbox. A send naming only the environment is
+  still routed as usual: a Multi Review does not make it a pipeline environment.
 
 Decisions:
 
@@ -1983,7 +2074,7 @@ Decisions:
   `unsupported, queued` for scheduled pending mail, `not queued` with the
   leaf's placement and reason otherwise. A lost answer is the ordinary
   outcome-unknown error with no `deliverNow` claim; retrying the same
-  `requestId` replays on the leaf. `send_node_message` has no `deliverNow`.
+  `requestId` replays on the leaf.
   Live qualification is in
   [0740](../todo/coordinator-and-multi-review/0740-coordinator-deliver-now-live-qualification.md).
 
@@ -2177,7 +2268,7 @@ or prompted **settles**, so it can keep track and respond without polling
 
 **Ownership.** Only resources with a coordinator workflow association: the
 durable record written at launch or prompt time with the coordinator and
-conversation ids (`launch_multi_review`, `start_multi_review`,
+conversation ids (`launch_multi_review`,
 `start_build_pipeline`, `launch_graph` (a `graph-run` association),
 `create_pr` and `resolve_conflicts` (a `pull-request` association),
 `launch_feature_plan` (a `feature-plan` association per message), and the
@@ -2406,7 +2497,7 @@ worker, wake an observation within seconds; the
 every owned workflow, followed pull request and open delegation, which
 recovers a missed save, a timer lost to a restart, or bookkeeping that never
 landed.
-`launch_multi_review`, `address_multi_review`, `start_multi_review`,
+`launch_multi_review`, `address_multi_review`,
 `start_build_pipeline` and `launch_graph` return `delivery: "async"` with
 `COORDINATOR_WORKFLOW_STATUS_WAKE`, so the model is told it will be woken
 rather than left to poll `get_multi_review`; `create_pr` (when it launched)
@@ -2531,9 +2622,10 @@ three places that agree:
 - `COORDINATOR_LAUNCH_DEFAULTS_RULE` (`packages/protocol/src/coordinator.ts`)
   is a single line in the coordinator context prompt and the Control MCP server
   instructions.
-- The descriptions of `launch_environment`, `launch_job`, `launch_multi_review`,
-  `start_multi_review` and `start_build_pipeline`, and of each model, effort and
-  agent field, say that omitting the field uses the saved default.
+- The descriptions of `launch_environment`, `launch_job`, `launch_multi_review`
+  and `start_build_pipeline`, and of each model, effort and agent field, say
+  that omitting the field uses the saved default. `agent` is optional on
+  `launch_environment` and `launch_job` too.
 - `get_launch_options` returns `defaults` (`agent`, per-agent
   `byAgent[agent] = { modelId, reasoningId }`, `guidance`) and marks each
   agent's default catalogue row with `isDefault: true`.
@@ -2542,9 +2634,10 @@ What an omitted choice resolves to:
 
 | Tool | Omitted | Resolves to |
 | --- | --- | --- |
+| `launch_environment`, `launch_job` | `agent` | The saved default agent (environment → repository → app settings; a job reads its environment's tier) when it is enabled, else the first enabled platform: `defaults.agent` from `get_launch_options` (`defaultLaunchAgent`, `control-shared-actions.ts`). A launch on another node resolves on that node |
 | `launch_environment`, `launch_job` | `modelId`, `reasoningId`, `fastMode` | The platform column across environment → repository → app settings, else the agent's own default (`defaultReasoningId` for effort) |
-| `launch_multi_review`, `start_multi_review` | `reviewers`, `reviewModel`, `fixModel` | The Multi Review button's rows: Review, Review 2, saved extra reviewers and reviewer count, each reviewer with its position's saved focus (`multiReview.reviewerLenses`); Review preparation and Address Findings review issues, each falling back to Review |
-| `launch_multi_review`, `start_multi_review` | `autoFix`, `autoPr` | The saved app-level Auto-fix and Auto-PR, which the button reads; a requested `autoPr: true` turns an omitted `autoFix` on |
+| `launch_multi_review` | `reviewers`, `reviewModel`, `fixModel` | The Multi Review button's rows: Review, Review 2, saved extra reviewers and reviewer count, each reviewer with its position's saved focus (`multiReview.reviewerLenses`); Review preparation and Address Findings review issues, each falling back to Review |
+| `launch_multi_review` | `autoFix`, `autoPr` | The saved app-level Auto-fix and Auto-PR, which the button reads; a requested `autoPr: true` turns an omitted `autoFix` on |
 | `start_build_pipeline` | `agentType`, `steps`, `reviewers`, `reviewPreparation` | `buildPipelineConfiguredDefaults` (`packages/protocol/src/build-pipeline-defaults.ts`), the resolver the Build button uses |
 
 Every one of these can be overridden. A coordinator is told to override only
@@ -2589,7 +2682,7 @@ Overrides layer the way the launchers do. For `start_build_pipeline`:
 
 Each Multi Review row field is replaced independently.
 
-A reviewer row, in `launch_multi_review`, `start_multi_review` or
+A reviewer row, in `launch_multi_review` or
 `start_build_pipeline`'s `reviewers`, may carry `lens: { label, instruction }`:
 the reviewer's focus, a label of at most 64 characters and an instruction of at
 most 4 KiB ([reviewer lenses](review-preparation.md#reviewer-lenses)). The
@@ -2618,7 +2711,7 @@ if the call set `modelId` or `reasoningId` and `default` otherwise. `model` is
 null when no tier pins one and the agent picks its own. The Multi Review result
 reports its rows the same way, plus `autoFix` and `autoPr` with a source of
 `default`, `requested` or `implied` (auto-fix turned on by a requested auto-PR).
-`start_multi_review` reports the same `selection`. `start_build_pipeline` reports the pipeline's
+`start_build_pipeline` reports the pipeline's
 `agentType`, `steps`, `reviewers` and `reviewPreparation`, with a per-step and
 per-field `source`; a step's stored instructions are reported as
 `instructionsBytes`, not echoed. A reviewer's lens is reported in every
@@ -2725,7 +2818,7 @@ authoritative reconciliation load referenced workflows before installing tabs.
 
 | Existing control / button family | Durable consequences and disposition |
 | --- | --- |
-| `start_multi_review` / Multi Review | Backend-only and build-gated; retained for diagnostics/recovery. Its metadata explicitly prefers `launch_multi_review`, which adds root-tab publication, focus, readiness checks, reattachment, and truthful recovery. |
+| `start_multi_review` / Multi Review | Backend-only and build-gated. No longer offered to coordinators (`RETIRED_COORDINATOR_TOOLS`); `launch_multi_review` adds root-tab publication, focus, readiness checks, reattachment, and truthful recovery. Operator credentials keep their own `start_multi_review` over `review.launch`. |
 | Multi Review open / Open Address Findings session | Added `open_multi_review` and `open_multi_review_fix`; operate entirely through backend snapshots and pane persistence. No additional provider turn. |
 | `address_multi_review` / Address findings | Upgraded to the complete action above. Existing backend handoff already owns session adoption, turn idempotency, and eventual Address Findings publication; it now selects that tab when published and reports queued/partial outcomes. |
 | `start_build_pipeline` / Build | Already complete: `BuildPipelineService` owns environment provisioning, workflow persistence, Kanban/feature ownership, root-tab creation and selection, with supervisor repair. Reuse it; no duplicate wrapper added. |

@@ -100,7 +100,7 @@ The material risks are concentrated in four themes:
 | M6 | Medium | Web/Electron | No CSP on the main renderer or the gateway-served app, which hold a generic command bridge | Verified |
 | M7 | Medium | Electron | OS sandbox disabled for every window that loads the preload | Reported |
 | M8 | Medium | Container | Host `~/.claude.json` staged unfiltered and readable in the container | Fixed; running containers require stop/start (see §4) |
-| M9 | Medium | Container | Legacy images still mount whole host agent homes | Reported |
+| M9 | Medium | Container | Legacy images still mount whole host agent homes | Fixed for new containers; existing ones are listed for rebuild (see §4) |
 | M10 | Medium | Mail | Coordinator mail can target the project-home environment (local path) | Potential |
 | M11 | Medium (design) | Mail | Prompt injection can propagate worker → coordinator → other worker | Reported |
 | M12 | Medium (design) | Firewall | IP-based allowlist (shared CDN fronts), allowed APIs accept attacker credentials, DNS tunnelling | Reported |
@@ -125,9 +125,9 @@ reveals or rotates the token only for the token sent as a bearer header. A
 leaked cookie still authenticates as that session until it ends; this was
 accepted on 2026-11-04, because a restricted container was refused at the
 gateway's port on Docker Desktop and binding a session to its peer address would
-not help (`docs/architecture/remote-gateway.md`, Security notes). Linux Engine
-is still to check
-([0260](security/0260-live-checks-on-other-platforms.md)). The `__Host-` name is
+not help (`docs/architecture/remote-gateway.md`, Security notes). Linux Engine,
+rootful and rootless, gave the same refusal on 2026-11-05
+(`docs/development/container-qualification.md`). The `__Host-` name is
 read and stripped but not issued yet, because older iOS builds look the cookie
 up by its plain name (todo 2960).
 **Actors:** A1 (container agent), A5
@@ -570,7 +570,7 @@ does not sanitize it. The stopped-container start path filters the staged file
 in place and the entrypoint rebuilds the relay and imported copies. Until that
 stop/start, those running containers can still expose the old raw content.
 This does not revoke any secrets previously read; rotate exposed API keys or
-Control MCP tokens as needed. Legacy direct mounts still require the M9 fix.
+Control MCP tokens as needed. Legacy direct mounts persist only on runtimes created before the M9 fix, until they are rebuilt.
 
 Live qualification (`apps/backend/tests/claude-config-filter-docker.test.ts`,
 run by `mise run test:agent:docker:isolated` against the image it builds, so
@@ -596,7 +596,7 @@ the user configured are all exposed to the agent.
 
 ### M9. Legacy (pre-staged-inputs) images still mount whole host agent homes
 
-**Status:** Reported
+**Status:** Fixed for new containers on 2026-11-05: creating one from such an image is refused by name. Existing ones keep running until the user rebuilds them, and the cleanup review lists them with a Rebuild action.
 
 **Where:** `apps/backend/src/core/commands-containers.ts:470-535`. `~/.claude`,
 `~/.codex`, `~/.pi`, `~/.config/opencode` and `~/.local/share/opencode` are
@@ -810,8 +810,8 @@ write and terminal calls when the policy denies them.
 - The review validation worker was only spot-checked: commands are passed as argv to `bash -lc`.
 - `tmux-hooks` `find` invocations were not reviewed.
 - Pi's `grep`/`find` tools live in the Pi SDK, outside this repo.
-- The iOS app (`apps/ios`) was not reviewed.
-- The initial review did no dynamic testing. H2 has since been checked against locally built before/after images with the root-boundary smoke test (see its Status above). H1, M1 and M2 pass in Chromium, Firefox and WebKit (`e2e/preview/gateway-browser-security.spec.ts`) and H3 on Docker Desktop (`docs/development/container-qualification.md`). Shipping Safari and rootless Docker remain ([0260](security/0260-live-checks-on-other-platforms.md)).
+- The iOS app (`apps/ios`) was not reviewed at the time. It was reviewed on 2026-11-05 against `69a3b4ca5`, by reading the code and running it on simulators: three defects were fixed (a crash from a CSP-sandboxed page calling the native bridge, a status check that accepted an answer from a redirect target, and a sign-in that refused tokens containing `+`), and the rest is in to-dos [5600](../todo/cross-cutting/5600-ios-bridge-user-consent.md), [5601](../todo/cross-cutting/5601-ios-runtime-security-checks.md) (device and signed-build checks) and [5602](../todo/cross-cutting/5602-ios-session-and-privacy-hardening.md).
+- The initial review did no dynamic testing. H2 has since been checked against locally built before/after images with the root-boundary smoke test (see its Status above). H1, M1 and M2 pass in Chromium, Firefox and WebKit (`e2e/preview/gateway-browser-security.spec.ts`) and H3 on Docker Desktop and rootless Linux Engine (`docs/development/container-qualification.md`). Shipping Safari remains ([todo 5500](../todo/previews-and-annotations/5500-shipping-safari-gateway-security-checks.md)).
 
 ## 9. Recommended remediation order
 

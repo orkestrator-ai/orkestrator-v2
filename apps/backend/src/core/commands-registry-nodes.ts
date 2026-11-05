@@ -19,6 +19,7 @@ import {
   parseNodeActionApproval,
   parseNodeFileScope,
   runGrantedAccountSwitch,
+  runTimerAccountSwitch,
   type NodeCoordination,
   type NodePortal,
   type NodeService,
@@ -439,6 +440,38 @@ export function registerNodeCommands(register: CommandRegistrar): void {
       "arguments",
     );
     return runGrantedAccountSwitch(
+      {
+        actions: coordination(context).actions,
+        loadGlobalConfig: async () => (await context.storage.loadConfig()).global,
+        projectName: async (projectId) =>
+          (await context.storage.getProject(projectId).catch(() => null))?.name,
+        emit: (event, payload) => context.emit(event, payload),
+      },
+      args,
+    );
+  });
+
+  // A coordinator's account switch under the permission of the self-timer that
+  // woke it, checked by `switch_provider_account`; recorded so the user sees it.
+  register("run_timer_agent_account_switch", async (args, context) => {
+    assertOnlyKeys(
+      args,
+      [
+        "requestId",
+        "platform",
+        "nodeId",
+        "nodeName",
+        "accountId",
+        "accountLabel",
+        "previousAccountId",
+        "previousAccountLabel",
+        "requestedBy",
+        "reason",
+        "selfTimer",
+      ],
+      "arguments",
+    );
+    return runTimerAccountSwitch(
       {
         actions: coordination(context).actions,
         loadGlobalConfig: async () => (await context.storage.loadConfig()).global,

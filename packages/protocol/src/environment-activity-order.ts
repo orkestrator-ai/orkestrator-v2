@@ -14,11 +14,11 @@ export type ActivitySortOrder = "priority" | "newest" | "oldest";
 
 export const ACTIVITY_SORT_ORDERS: readonly ActivitySortOrder[] = ["priority", "newest", "oldest"];
 
-/** Priority-order rank: unread work first, then waiting, working and idle. */
+/** Priority-order rank: unread work first, then waiting, idle and working. */
 export const ACTIVITY_ATTENTION_RANK: Readonly<Record<AgentActivityState, number>> = {
   waiting: 0,
-  working: 1,
-  idle: 2,
+  idle: 1,
+  working: 2,
 };
 
 /** The fields the activity order reads. Callers map their own record onto it. */
@@ -34,6 +34,8 @@ export interface ActivityOrderFields {
    * remote backend's summary) that carries no `lastActivityAt`.
    */
   activityUpdatedAt?: string | null;
+  /** The last PR reading; absent from a record that has none or predates it. */
+  prState?: string | null;
 }
 
 /**
@@ -116,13 +118,26 @@ export function compareActivityTimestampsDesc(
 }
 
 /**
+ * The groups every order keeps, top to bottom: unmerged before merged, and
+ * within each, environments that are not working before those that are.
+ * Both placements are explicit user requirements, including for unread rows
+ * and chronological modes; timestamps order rows only within these groups.
+ */
+function activityGroup({ activity, prState }: ActivityOrderFields): number {
+  return (prState === "merged" ? 2 : 0) + (activity === "working" ? 1 : 0);
+}
+
+/**
  * Orders two environments by activity; 0 means tied, so the caller appends its
  * own stable fallback (project and environment order locally, backend and
  * environment ids across machines).
  *
- * - "priority": unread work first, then waiting, working and idle; newest first
- *   within each group by `lastActivityAt`, falling back to the snapshot time
- *   only when a record has none.
+ * Every order first keeps merged environments below unmerged ones and working
+ * environments below the others (`activityGroup`). Within a group:
+ *
+ * - "priority": unread work first, then waiting and idle; newest first within
+ *   each by `lastActivityAt`, falling back to the snapshot time only when a
+ *   record has none.
  * - "newest" / "oldest": by `lastActivityAt` alone, the time of actual user or
  *   agent activity, so snapshot writes and lease refreshes never reorder rows.
  *   Undated rows follow dated ones when newest first and precede them when
@@ -133,6 +148,8 @@ export function compareEnvironmentsByActivity(
   right: ActivityOrderFields,
   order: ActivitySortOrder = "priority",
 ): number {
+  const group = activityGroup(left) - activityGroup(right);
+  if (group !== 0) return group;
   if (order === "priority") {
     const unread = Number(right.hasUnreadWork === true) - Number(left.hasUnreadWork === true);
     if (unread !== 0) return unread;

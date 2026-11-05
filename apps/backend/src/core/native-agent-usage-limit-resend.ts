@@ -30,7 +30,7 @@ import {
   usageLimitResendRequestId,
   type UsageLimitStopVerdict,
 } from "@orkestrator/protocol/agent-account-auto-switch";
-import { classifyUsageLimitError } from "@orkestrator/protocol/agent-usage-limits";
+import { usageLimitFailure, type TurnFailureKind } from "@orkestrator/protocol/agent-usage-limits";
 import { isAgentAccountPlatform } from "@orkestrator/protocol/agent-accounts";
 import { coordinatorIdFromRuntimeId } from "@orkestrator/protocol/coordinator";
 import {
@@ -68,6 +68,7 @@ export interface UsageLimitStops {
     environmentId: string;
     requestId: string;
     error: string | undefined;
+    failureKind?: TurnFailureKind;
     resends: number;
     turnStartedAt?: string;
     siblingTurnRunning?: () => boolean;
@@ -79,6 +80,7 @@ export interface UsageLimitStops {
     environmentId: string;
     requestId: string;
     error: string | undefined;
+    failureKind?: TurnFailureKind;
     turnStartedAt?: string;
     session?: { tabId?: string; label?: string };
   }): Promise<void>;
@@ -95,7 +97,7 @@ export interface NativeAgentUsageLimitResendDependencies {
     logicalSessionKey: string;
     requestId: string;
     expectedProviderSessionId: string;
-  }): Promise<{ outcome: string; error?: string }>;
+  }): Promise<{ outcome: string; error?: string; failureKind?: TurnFailureKind }>;
   observedActivity(
     key: string,
   ): { providerSessionId: string; state: AgentActivityState } | undefined;
@@ -270,7 +272,7 @@ export class NativeAgentUsageLimitResend {
           retained.retryAt = this.deps.now() + RETRY_MS;
           return;
         }
-        if (outcome.outcome !== "failed" || !classifyUsageLimitError(outcome.error)) {
+        if (outcome.outcome !== "failed" || !usageLimitFailure(outcome)) {
           this.noticeCandidates.delete(session.key);
           return;
         }
@@ -279,6 +281,7 @@ export class NativeAgentUsageLimitResend {
           environmentId: session.environmentId,
           requestId,
           error: outcome.error,
+          ...(outcome.failureKind ? { failureKind: outcome.failureKind } : {}),
           session: sessionTabId(session),
         });
         if (this.noticeCandidates.get(session.key) === retained)
@@ -380,6 +383,7 @@ export class NativeAgentUsageLimitResend {
         environmentId: session.environmentId,
         requestId,
         error: outcome.error,
+        ...(outcome.failureKind ? { failureKind: outcome.failureKind } : {}),
         ...turnStartedAt,
         session: sessionTabId(session),
       });
@@ -390,6 +394,7 @@ export class NativeAgentUsageLimitResend {
       environmentId: session.environmentId,
       requestId,
       error: outcome.error,
+      ...(outcome.failureKind ? { failureKind: outcome.failureKind } : {}),
       resends: usageLimitResendCount(requestId),
       ...turnStartedAt,
       session: sessionTabId(session),

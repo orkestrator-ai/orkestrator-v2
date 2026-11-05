@@ -1,5 +1,5 @@
 import { acknowledgeDockerReachabilityWarning } from "../docker-reachability-warning";
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test } from "./browser-test";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -44,27 +44,6 @@ function nullSeparated(file: string): string[] | null {
   }
 }
 
-/**
- * Chromium aborts in-flight requests, loopback included, whenever a host network
- * interface changes, and other builds' Docker work changes them all the time
- * (flake 2340). This case is about what the profile serves rather than that
- * host's quiet, so its modules are fetched outside Chromium's network stack.
- */
-async function fetchModulesOutsideChromium(page: Page, origin: string): Promise<void> {
-  await page.route(`${origin}/**`, async (route) => {
-    const request = route.request();
-    if (request.method() !== "GET" || !["script", "stylesheet"].includes(request.resourceType())) {
-      return route.fallback();
-    }
-    try {
-      await route.fulfill({ response: await route.fetch({ maxRetries: 2 }) });
-    } catch {
-      // The page navigated away or closed while this module was on its way.
-      await route.abort().catch(() => undefined);
-    }
-  });
-}
-
 test.beforeEach(async ({ page }) => acknowledgeDockerReachabilityWarning(page));
 
 test("a headless profile's Electron has no display and the app is served to a browser", async ({
@@ -100,9 +79,10 @@ test("a headless profile's Electron has no display and the app is served to a br
     expect.arrayContaining([...HEADLESS_ELECTRON_SWITCHES]),
   );
 
-  await fetchModulesOutsideChromium(page, new URL(status.browserUrl!).origin);
-  // The navigation itself and the app's first commands stay in Chromium, so one
-  // can still be aborted. Each attempt needs its own single-use login link.
+  // The shared `test` fetches this page's modules outside Chromium (flake
+  // 2340), but the navigation itself and the app's first commands stay in
+  // Chromium, so one can still be aborted. Each attempt needs its own
+  // single-use login link.
   await expect(async () => {
     const { loginUrl } = profileCommand<{ loginUrl: string }>("dev:login");
     await page.goto(loginUrl, { timeout: 60_000 });
@@ -110,5 +90,4 @@ test("a headless profile's Electron has no display and the app is served to a br
       page.getByRole("button", { name: /^(Expand|Collapse) project / }).first(),
     ).toBeVisible({ timeout: 60_000 });
   }).toPass({ timeout: 180_000 });
-  await page.unrouteAll({ behavior: "ignoreErrors" });
 });

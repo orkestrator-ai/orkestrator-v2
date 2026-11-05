@@ -90,14 +90,14 @@ matrix with evidence for every row are in
 - **One tool family.** Every environment and workflow tool takes an
   optional `nodeId` (see
   [One tool family, every node](../architecture/command-nodes.md#one-tool-family-every-node));
-  the original node tools below remain and share its paths.
+  the older node tools that duplicated it (`list_node_environments`,
+  `launch_node_environment`, `start_node_environment`,
+  `stop_node_environment`, `send_prompt_to_node_tab`, `send_node_message`)
+  were removed in favour of the `nodeId` forms.
 - **Node tools** (`control-mcp-nodes.ts`, `control-mcp-node-files.ts`):
-  - `list_nodes` and `list_node_environments`;
+  - `list_nodes`;
   - `read_node_environment`: state, tabs, transcript, diff, a file, and
-    pipeline state;
-  - `launch_node_environment`, `start_node_environment` /
-    `stop_node_environment` and `send_prompt_to_node_tab`;
-  - `send_node_message`;
+    pipeline state (kept for the file read no `nodeId` tool makes);
   - `request_environment_deletion`;
   - `transfer_files` and `compare_project_files`;
   - `request_project_file_update`, `request_env_value_reveal` and

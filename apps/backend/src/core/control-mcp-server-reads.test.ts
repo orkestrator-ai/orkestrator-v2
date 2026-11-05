@@ -141,6 +141,7 @@ describe("Orkestrator control MCP server", () => {
         },
       ],
     }));
+    let remoteDefault = "codex";
     overrides.set("invoke_on_node", (args) => {
       const inner = {
         command: String(args.command),
@@ -159,7 +160,11 @@ describe("Orkestrator control MCP server", () => {
         // The node's own launch options.
         get_project: { id: "p-leaf", name: "Orkestrator" },
         get_config: {
-          global: { enabledAgentPlatforms: ["codex"], agentMessaging: { enabled: true } },
+          global: {
+            enabledAgentPlatforms: ["codex", "claude"],
+            agentSettings: { defaultAgent: remoteDefault },
+            agentMessaging: { enabled: true },
+          },
         },
         get_native_agent_model_catalog: [
           {
@@ -262,6 +267,31 @@ describe("Orkestrator control MCP server", () => {
     expect(
       invocations.find(({ command }) => command === "launch_coordinator_node_environment")?.args,
     ).toMatchObject({ nodeId: "bk_leaf", requestId: "launch-remote" });
+
+    remoteDefault = "claude";
+    const saved = {
+      id: "leaf-new",
+      projectId: "p-leaf",
+      agentSettings: { defaultAgent: "codex" },
+      startupAgentSession: { agent: "codex", model: "original-model", reasoningEffort: "high" },
+    };
+    overrides.set("get_coordinator_node_launch_environment", () => saved);
+    overrides.set("launch_coordinator_node_environment", () => ({
+      environment: saved,
+      replayed: true,
+    }));
+    const replay = await call("launch_environment", {
+      requestId: "launch-remote",
+      projectId: "project-1",
+      prompt: "Fix it.",
+      baseBranch: "main",
+      baseCommit: "a".repeat(40),
+      nodeId: "bk_leaf",
+    });
+    expect(replay).toMatchObject({
+      replayed: true,
+      selection: { agent: "codex", model: "original-model", reasoning: "high" },
+    });
 
     // A reply to an agent on another node goes back across the node link.
     await call("send_message", {
@@ -856,5 +886,77 @@ describe("Orkestrator control MCP server", () => {
     });
     worker = { ...worker, prMergeability: "behind" };
     expect(await list()).not.toHaveProperty("repeatedRead");
+  });
+
+  test("list_agents and get_environment are guarded too, and the description asks for no polling", async () => {
+    let state = "working";
+    overrides.set("get_agent_registry", () => ({
+      entries: [{ environmentId: "env-1", tabId: "agent-1", state, ownerKind: "environment" }],
+      environments: [],
+    }));
+    const credential = coordinatorCredential(["discovery", "environments"]);
+    const call = async (name: string, args: Record<string, unknown> = {}) =>
+      (await rpc(credential.url, credential.token, "tools/call", { name, arguments: args })).body
+        .result?.structuredContent as Record<string, unknown> | undefined;
+    for (let read = 0; read < 3; read += 1) {
+      expect(await call("list_agents")).not.toHaveProperty("repeatedRead");
+    }
+    expect(await call("list_agents")).toHaveProperty("repeatedRead", true);
+    state = "idle";
+    expect(await call("list_agents")).not.toHaveProperty("repeatedRead");
+
+    for (let read = 0; read < 3; read += 1) {
+      expect(await call("get_environment", { environmentId: "env-1" })).not.toHaveProperty(
+        "repeatedRead",
+      );
+    }
+    expect(await call("get_environment", { environmentId: "env-1" })).toMatchObject({
+      environment: { id: "env-1" },
+      repeatedRead: true,
+    });
+
+    const listed = await rpc(credential.url, credential.token, "tools/list", {});
+    const tools = (listed.body.result?.tools ?? []) as Array<{ name: string; description: string }>;
+    const description = tools.find((tool) => tool.name === "list_agents")?.description;
+    expect(description).not.toContain("instead of polling");
+    expect(description).toContain("not to wait");
+  });
+
+  test("get_tab_state and list_workflows flag an unchanged re-read only", async () => {
+    let phase = "running";
+    let revision = 1;
+    overrides.set("get_pane_layout", () => ({
+      activePaneId: "pane-1",
+      root: {
+        kind: "leaf",
+        id: "pane-1",
+        activeTabId: "native-1",
+        tabs: [{ id: "native-1", type: "agent-native", nativeAgentData: { platform: "codex" } }],
+      },
+    }));
+    overrides.set("get_native_agent_projection", () => ({
+      connection: "connected",
+      turn: { phase },
+      interactions: [],
+      // Streaming moves the revision on every event; that is not news.
+      revision: (revision += 1),
+      messages: [],
+    }));
+    const credential = coordinatorCredential(["discovery", "environments"]);
+    const call = async (name: string, args: Record<string, unknown> = {}) =>
+      (await rpc(credential.url, credential.token, "tools/call", { name, arguments: args })).body
+        .result?.structuredContent as Record<string, unknown> | undefined;
+    const tab = { environmentId: "env-1", tabId: "native-1" };
+    for (let read = 0; read < 3; read += 1) {
+      expect(await call("get_tab_state", tab)).not.toHaveProperty("repeatedRead");
+    }
+    expect(await call("get_tab_state", tab)).toHaveProperty("repeatedRead", true);
+    phase = "idle";
+    expect(await call("get_tab_state", tab)).not.toHaveProperty("repeatedRead");
+
+    for (let read = 0; read < 3; read += 1) {
+      expect(await call("list_workflows", { openOnly: true })).not.toHaveProperty("repeatedRead");
+    }
+    expect(await call("list_workflows", { openOnly: true })).toHaveProperty("repeatedRead", true);
   });
 });

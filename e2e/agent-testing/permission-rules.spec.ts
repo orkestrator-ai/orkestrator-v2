@@ -1,4 +1,4 @@
-import { expect, test, type Page, type TestInfo } from "@playwright/test";
+import { expect, test, type Page, type TestInfo } from "./browser-test";
 import { spawn, spawnSync } from "node:child_process";
 import { openSync, closeSync } from "node:fs";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";

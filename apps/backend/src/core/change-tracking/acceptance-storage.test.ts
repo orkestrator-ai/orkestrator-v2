@@ -19,7 +19,7 @@ import {
   type ChangeProjectionEvent,
 } from "@orkestrator/protocol/change-resources";
 import type { StorageDatabase } from "../storage-database.js";
-import { openBackendDatabase } from "../storage-stores.js";
+import { openChangeLedgerDatabase } from "./ledger-schema.js";
 import { captureWorktree, displayPath, HostCaptureExecutor, readManifest } from "./capture.js";
 import { gitScopeResourceKey } from "./git-scopes.js";
 import type { ChangeTrackingPolicy } from "./policy-registry.js";
@@ -99,7 +99,7 @@ function reopen(h: Harness, policy: Partial<ChangeTrackingPolicy> = {}) {
   const events: Array<{ event: string; payload: unknown }> = [];
   const service = new ChangeTrackingService({
     dataDir: h.dataDir,
-    database: () => (database ??= openBackendDatabase(h.dataDir)),
+    database: () => (database ??= openChangeLedgerDatabase(h.dataDir)),
     emit: (event, payload) => events.push({ event, payload }),
     environmentTarget: async (environmentId) =>
       environmentId === "env-1" ? { kind: "local", worktreePath: h.repo } : null,

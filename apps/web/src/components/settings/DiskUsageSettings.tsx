@@ -3,6 +3,7 @@ import {
   ChevronDown,
   ChevronRight,
   Container,
+  FolderGit2,
   FolderOpen,
   Laptop,
   Loader2,
@@ -21,6 +22,7 @@ import * as backend from "@/lib/backend";
 import type {
   DiskUsageEnvironmentSummary,
   EnvironmentDiskUsage,
+  ProjectGitMirrorUsage,
   WorktreeLocationsSnapshot,
 } from "@/lib/backend";
 import { pickHostPath } from "@/lib/host-path-picker";
@@ -471,11 +473,114 @@ function EnvironmentUsage() {
   );
 }
 
+function ProjectGitMirrors() {
+  const [mirrors, setMirrors] = useState<ProjectGitMirrorUsage[] | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const requestRef = useRef(0);
+  const { machine } = useAccountMachine();
+
+  const [loadedMachine, setLoadedMachine] = useState(machine);
+  if (loadedMachine !== machine) {
+    setLoadedMachine(machine);
+    setMirrors(null);
+    setLoadError(null);
+  }
+
+  const load = useCallback(() => {
+    const request = ++requestRef.current;
+    return backend
+      .listProjectGitMirrorUsage(machine)
+      .then((list) => {
+        if (request !== requestRef.current) return;
+        setMirrors(list);
+        setLoadError(null);
+      })
+      .catch((error: unknown) => {
+        if (request === requestRef.current)
+          setLoadError(error instanceof Error ? error.message : String(error));
+      })
+      .finally(() => {
+        if (request === requestRef.current) setRefreshing(false);
+      });
+  }, [machine]);
+
+  useEffect(() => {
+    void load();
+    return () => {
+      requestRef.current += 1;
+    };
+  }, [load]);
+
+  const total = mirrors?.reduce((sum, mirror) => sum + (mirror.bytes ?? 0), 0) ?? 0;
+  const incomplete = mirrors?.some((mirror) => mirror.bytes === null) ?? false;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-end justify-between gap-4">
+        <SettingsSectionHeader title="Project Git mirrors">
+          {mirrors === null
+            ? loadError
+              ? "Sizes are unavailable."
+              : "Measuring mirrors…"
+            : mirrors.length === 0
+              ? "New container environments clone from a mirror of their project once it exists."
+              : `${formatDiskBytes(total)}${incomplete ? " measured (some sizes unavailable)" : ""} across ${mirrors.length} mirror${mirrors.length === 1 ? "" : "s"}. New container environments clone from these; each finished mirror is at most 2 GiB and is removed with its project. Sizes include temporary build data.`}
+        </SettingsSectionHeader>
+        <Button
+          variant="outline"
+          size="sm"
+          aria-label="Refresh project Git mirrors"
+          onClick={() => {
+            setRefreshing(true);
+            setLoadError(null);
+            void load();
+          }}
+          disabled={refreshing}
+        >
+          {refreshing ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+          ) : (
+            <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
+          )}
+          Refresh
+        </Button>
+      </div>
+
+      {loadError && <p className="text-sm text-destructive">{loadError}</p>}
+
+      {mirrors && mirrors.length > 0 && (
+        <ul className={cn(SETTINGS_CARD_CLASS, "divide-y divide-zinc-800 overflow-hidden")}>
+          {mirrors.map((mirror) => (
+            <li key={mirror.projectId} className="flex items-center gap-3 px-3 py-2.5">
+              <FolderGit2 className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm">
+                  {mirror.projectName ?? "Removed project"}
+                </span>
+                <span
+                  className="block truncate font-mono text-[11px] text-muted-foreground"
+                  title={mirror.path}
+                >
+                  {mirror.path}
+                </span>
+              </span>
+              <span className="w-20 shrink-0 text-right text-sm tabular-nums">
+                {formatDiskBytes(mirror.bytes)}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 export function DiskUsageSettings() {
   return (
     <SettingsPageLayout
       title="Disk usage"
-      description="Space used by each environment's worktree or container, and by the dev worktrees of development profiles started from it."
+      description="Space used by each environment's worktree or container, by the dev worktrees of development profiles started from it, and by each project's Git mirror."
     >
       <div className="space-y-3">
         <SettingsSectionHeader title="Default locations" />
@@ -483,6 +588,8 @@ export function DiskUsageSettings() {
       </div>
 
       <EnvironmentUsage />
+
+      <ProjectGitMirrors />
     </SettingsPageLayout>
   );
 }

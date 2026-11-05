@@ -7,8 +7,8 @@ import {
 } from "../../../../backend/src/core/registry-writer-lease";
 import { StorageService } from "../../../../backend/src/core/storage";
 import { schedulerStatus } from "../../../../backend/src/core/commands-registry-scheduled-jobs";
-import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { afterAll, afterEach, describe, expect, mock, test, spyOn, setSystemTime } from "bun:test";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 import {
   schedulerPausedMessage,
@@ -165,6 +165,152 @@ describe("SchedulesSettings", () => {
       "not-found: No such tab",
     );
     expect(within(nightly).getByTestId("schedule-next").textContent).toBe("—");
+  });
+
+  test("a timer carrying the user's account-switch permission is marked, and when it lapses", async () => {
+    const grant = {
+      kind: "switch-agent-account",
+      platforms: ["claude"],
+      userInstruction: "check in 2 hours and switch if they are limited",
+      grantedIn: "user-turn",
+      grantedAt: "2099-10-25T10:00:00.000Z",
+    };
+    const timer = job({
+      id: "sch_timer",
+      name: "Self-timer: check usage limits",
+      action: {
+        kind: "action",
+        action: "send_message",
+        input: { toEnvironmentId: "coordinator", body: "Check", grant },
+      },
+    });
+    schedules = [timer, failed];
+    render(<SchedulesSettings />);
+    const [row] = await screen.findAllByTestId("schedule-row");
+    const badge = within(row!).getByTestId("schedule-account-switch-permission");
+    expect(badge.textContent).toBe("May switch Claude accounts when it fires");
+    expect(badge.getAttribute("title")).toContain(
+      "You asked: “check in 2 hours and switch if they are limited”",
+    );
+    expect(badge.getAttribute("title")).toContain("for 2 hours after this timer fires");
+    // Only the timer that carries it is marked.
+    expect(
+      within(screen.getAllByTestId("schedule-row")[1]!).queryByTestId(
+        "schedule-account-switch-permission",
+      ),
+    ).toBeNull();
+  });
+
+  test("production badge expires while mounted and reschedules on a same-key reload", async () => {
+    const { AccountSwitchPermissionBadge } = await import("./SchedulesSettings");
+    const fired = Date.parse("2099-10-25T12:00:00Z");
+    let callback: (() => void) | undefined;
+    setSystemTime(fired);
+    const timer = spyOn(globalThis, "setTimeout").mockImplementation(((fn: () => void) => {
+      callback = fn;
+      return 123;
+    }) as typeof setTimeout);
+    const clear = spyOn(globalThis, "clearTimeout").mockImplementation(() => {});
+    try {
+      const action = {
+        kind: "action" as const,
+        action: "send_message",
+        input: {
+          grant: {
+            kind: "switch-agent-account",
+            platforms: ["claude"],
+            userInstruction: "switch",
+            grantedIn: "user-turn",
+            grantedAt: new Date(fired).toISOString(),
+          },
+        },
+      };
+      const lastFire = {
+        fireId: "f",
+        kind: "scheduled" as const,
+        state: "succeeded" as const,
+        scheduledFor: new Date(fired).toISOString(),
+        finishedAt: new Date(fired).toISOString(),
+        attempts: 1,
+      };
+      const view = (finishedAt: string) => (
+        <AccountSwitchPermissionBadge
+          key="same-job"
+          job={{ action, lastFire: { ...lastFire, finishedAt }, timeZone: "UTC" }}
+        />
+      );
+      const { rerender } = render(view(lastFire.finishedAt));
+      expect(screen.getByTestId("schedule-account-switch-permission").textContent).toContain(
+        "until",
+      );
+      expect(timer.mock.calls.at(-1)?.[1]).toBe(7_200_000);
+      setSystemTime(fired + 3_600_000);
+      rerender(view(new Date(fired + 3_600_000).toISOString()));
+      expect(clear).toHaveBeenCalled();
+      setSystemTime(fired + 10_800_001);
+      act(() => callback!());
+      expect(screen.getByTestId("schedule-account-switch-permission").textContent).toContain(
+        "lapsed",
+      );
+      rerender(view(new Date(fired + 3_600_000).toISOString()));
+      expect(screen.getByTestId("schedule-account-switch-permission").textContent).toContain(
+        "lapsed",
+      );
+      cleanup();
+    } finally {
+      timer.mockRestore();
+      clear.mockRestore();
+      setSystemTime();
+    }
+  });
+
+  test("the permission badge counts its window from the fire", async () => {
+    const { AccountSwitchPermissionBadge } = await import("./SchedulesSettings");
+    const action = {
+      kind: "action" as const,
+      action: "send_message",
+      input: {
+        toEnvironmentId: "coordinator",
+        body: "Check",
+        grant: {
+          kind: "switch-agent-account",
+          platforms: ["claude", "codex"],
+          nodeIds: ["bk_leaf"],
+          userInstruction: "switch if limited",
+          grantedIn: "user-turn",
+          grantedAt: "2099-10-25T10:00:00.000Z",
+        },
+      },
+    };
+    const lastFire = {
+      fireId: "f",
+      kind: "scheduled" as const,
+      scheduledFor: "2099-10-25T12:00:00.000Z",
+      finishedAt: "2099-10-25T12:00:00.000Z",
+      state: "succeeded" as const,
+      attempts: 1,
+    };
+    const fired = Date.parse("2099-10-25T12:00:00.000Z");
+    const { rerender } = render(
+      <AccountSwitchPermissionBadge
+        job={{ action, lastFire, timeZone: "UTC" }}
+        now={fired + 60_000}
+      />,
+    );
+    const badge = screen.getByTestId("schedule-account-switch-permission");
+    expect(badge.textContent).toBe(
+      "May switch Claude and Codex accounts until 2099-10-25 14:00 UTC",
+    );
+    expect(badge.getAttribute("title")).toContain("on this machine and 1 other");
+    rerender(
+      <AccountSwitchPermissionBadge
+        job={{ action, lastFire, timeZone: "UTC" }}
+        now={fired + 3 * 3_600_000}
+      />,
+    );
+    expect(screen.getByTestId("schedule-account-switch-permission").textContent).toBe(
+      "Claude and Codex switch permission lapsed",
+    );
   });
 
   test("says when this backend does not fire the schedules it lists", async () => {

@@ -537,6 +537,32 @@ export function presentPeerMailCarrierRow(
   return rows;
 }
 
+/** Per source row: reparsing every carrier on each new line would also rebuild its tile. */
+const presentedPeerMailRows = new WeakMap<NativeMessage, NativeMessage[] | null>();
+
+/**
+ * Normalized transcript rows with each stored mail row presented as
+ * {@link presentPeerMailCarrierRow} does. Rows are keyed on their id, so a
+ * delivery echoed twice is one tile.
+ */
+export function presentPeerMailRows(messages: readonly NativeMessage[]): NativeMessage[] {
+  const shownMailIds = new Set<string>();
+  return messages.flatMap((message) => {
+    if (message.role !== "user") return [message];
+    let rows = presentedPeerMailRows.get(message);
+    if (rows === undefined) {
+      rows = presentPeerMailCarrierRow(message);
+      presentedPeerMailRows.set(message, rows);
+    }
+    if (!rows) return [message];
+    return rows.filter((row) => {
+      if (shownMailIds.has(row.id)) return false;
+      shownMailIds.add(row.id);
+      return true;
+    });
+  });
+}
+
 /** The first carrier in a provider row; see {@link createPeerMailNativeMessagesFromCarrier}. */
 export function createPeerMailNativeMessageFromCarrier(
   message: Pick<NativeMessage, "content" | "createdAt">,

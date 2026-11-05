@@ -53,16 +53,8 @@ export async function accountSwitchGranted(
   );
 }
 
-/**
- * Switch at once under the standing permission, or say why not. The account
- * checks (signed in, not known to be exhausted) are the caller's, which has
- * the account list and usage readings in hand; this owns the permission, the
- * limit and the record.
- */
-export async function runGrantedAccountSwitch(
-  deps: AccountSwitchGrantDeps,
-  args: Record<string, unknown>,
-): Promise<GrantedAccountSwitchOutcome> {
+/** The switch's target and requester, from a command's arguments. */
+function switchTarget(args: Record<string, unknown>) {
   const platform = args.platform;
   if (!isAgentAccountPlatform(platform)) throw new Error("Expected platform claude or codex.");
   const requestId = bounded(args.requestId, 256);
@@ -81,35 +73,101 @@ export async function runGrantedAccountSwitch(
   ) {
     throw new Error("Expected the requesting coordinator.");
   }
-  // Read on every call, so turning it off takes effect for the next one.
-  if (!(await accountSwitchGranted(deps, platform))) return { outcome: "not-granted" };
   const accountLabel = bounded(args.accountLabel, 1024);
   const previousAccountId = bounded(args.previousAccountId, 100);
   const previousAccountLabel = bounded(args.previousAccountLabel, 1024);
-  const reason = bounded(args.reason, 500);
-  const projectName = await deps.projectName(by.projectId).catch(() => undefined);
+  return {
+    platform,
+    requestId,
+    nodeId,
+    reason: bounded(args.reason, 500),
+    target: {
+      nodeId,
+      nodeName,
+      platform,
+      accountId,
+      ...(accountLabel ? { accountLabel } : {}),
+      ...(previousAccountId ? { previousAccountId } : {}),
+      ...(previousAccountLabel ? { previousAccountLabel } : {}),
+    },
+    requestedBy: {
+      coordinatorEnvironmentId: by.coordinatorEnvironmentId,
+      coordinatorTabId: by.coordinatorTabId,
+      projectId: by.projectId,
+    },
+  };
+}
+
+async function coordinatorName(
+  deps: Pick<AccountSwitchGrantDeps, "projectName">,
+  projectId: string,
+): Promise<string> {
+  const projectName = await deps.projectName(projectId).catch(() => undefined);
+  return projectName ? `${projectName} coordinator` : "Project coordinator";
+}
+
+/**
+ * Run and record a switch the self-timer that woke the coordinator allows.
+ * The caller (`switch_provider_account`) has checked that timer's permission:
+ * its owner, provider, machines and the window since it fired. This records
+ * the switch as already approved, with the user's words, and runs it, so the
+ * user sees it with the standing permission's switches. It takes no hourly
+ * limit: it is one switch the user asked for in their own turn.
+ */
+export async function runTimerAccountSwitch(
+  deps: AccountSwitchGrantDeps,
+  args: Record<string, unknown>,
+): Promise<{ outcome: "ran" | "existing"; request: NodeActionRequest }> {
+  const { requestId, reason, target, requestedBy } = switchTarget(args);
+  const timer = args.selfTimer as Record<string, unknown> | undefined;
+  const scheduleId = bounded(timer?.scheduleId, 100);
+  const userInstruction = bounded(timer?.userInstruction, 500);
+  const grantedAt = bounded(timer?.grantedAt, 64);
+  if (!scheduleId || !userInstruction || !grantedAt) {
+    throw new Error("Expected the self-timer's scheduleId, userInstruction and grantedAt.");
+  }
   const result = await deps.actions.runUnattended(
     {
       requestId,
       kind: "switch-agent-account",
-      targets: [
-        {
-          nodeId,
-          nodeName,
-          platform,
-          accountId,
-          ...(accountLabel ? { accountLabel } : {}),
-          ...(previousAccountId ? { previousAccountId } : {}),
-          ...(previousAccountLabel ? { previousAccountLabel } : {}),
-        },
-      ],
-      requestedBy: {
-        coordinatorEnvironmentId: by.coordinatorEnvironmentId,
-        coordinatorTabId: by.coordinatorTabId,
-        projectId: by.projectId,
-      },
+      targets: [target],
+      requestedBy,
       ...(reason ? { reason } : {}),
-      coordinatorName: projectName ? `${projectName} coordinator` : "Project coordinator",
+      coordinatorName: await coordinatorName(deps, requestedBy.projectId),
+      authorizedBy: "self-timer",
+      selfTimer: { scheduleId, userInstruction, grantedAt },
+    },
+    null,
+  );
+  if ("overLimit" in result) throw new Error("A self-timer's switch has no limit.");
+  if (result.ran) {
+    const record = accountSwitchRecord(result.request);
+    if (record) deps.emit(COORDINATOR_ACCOUNT_SWITCHED_EVENT, record);
+  }
+  return { outcome: result.ran ? "ran" : "existing", request: result.request };
+}
+
+/**
+ * Switch at once under the standing permission, or say why not. The account
+ * checks (signed in, not known to be exhausted) are the caller's, which has
+ * the account list and usage readings in hand; this owns the permission, the
+ * limit and the record.
+ */
+export async function runGrantedAccountSwitch(
+  deps: AccountSwitchGrantDeps,
+  args: Record<string, unknown>,
+): Promise<GrantedAccountSwitchOutcome> {
+  const { platform, requestId, nodeId, reason, target, requestedBy } = switchTarget(args);
+  // Read on every call, so turning it off takes effect for the next one.
+  if (!(await accountSwitchGranted(deps, platform))) return { outcome: "not-granted" };
+  const result = await deps.actions.runUnattended(
+    {
+      requestId,
+      kind: "switch-agent-account",
+      targets: [target],
+      requestedBy,
+      ...(reason ? { reason } : {}),
+      coordinatorName: await coordinatorName(deps, requestedBy.projectId),
     },
     {
       count: COORDINATOR_ACCOUNT_SWITCH_LIMIT.switches,
@@ -142,13 +200,20 @@ export function accountSwitchRecord(
   const [target] = request.targets;
   if (
     request.kind !== "switch-agent-account" ||
-    request.authorizedBy !== "standing-grant" ||
+    !request.authorizedBy ||
     !target ||
     !isAgentAccountPlatform(target.platform) ||
     !target.accountId
   )
     return null;
   return {
+    authorizedBy: request.authorizedBy,
+    ...(request.selfTimer
+      ? {
+          scheduleId: request.selfTimer.scheduleId,
+          userInstruction: request.selfTimer.userInstruction,
+        }
+      : {}),
     requestId: request.requestId,
     at: request.createdAt,
     platform: target.platform,
@@ -165,7 +230,7 @@ export function accountSwitchRecord(
   };
 }
 
-/** The permission per provider and the switches it allowed, newest first. */
+/** The permission per provider and the switches made without asking, newest first. */
 export async function accountSwitchGrantState(
   deps: Pick<AccountSwitchGrantDeps, "loadGlobalConfig"> & {
     actions: Pick<NodeActionRequests, "list"> | null;

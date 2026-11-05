@@ -2,7 +2,7 @@
 
 Which files under `docs/reports` can be built together, and which pieces of work must not run at the same time. Each folder's `0000-index.md` has the same information for its own files, in a **Parallel running** section.
 
-Worked out on 2026-11-03 against `main` at `a44641cbc`, from the 167 work files in the four folders. On 2026-11-04, 137 of them were combined into the 41 batch files listed under [Batch files](#batch-files), which keep each report as a numbered part, with repeated text removed. That leaves 71 files. The other 30 are built on their own, need a decision or measurement first, or are blocked. E1 is a set of baseline tasks inside other batch files, so it has no file of its own. E8 (Agent tab polling) was built on 2026-11-04 and its file deleted, so this plan no longer lists it; its result is in [1202 task 4](../todo/cross-cutting/1202-efficiency-review-follow-ups.md). E4 (Object store) was built on 2026-11-05 and its file deleted the same way; its outcome is the closing check in [the efficiency index](efficiency-logging-database/0000-index.md#closing-check-of-e4-object-store). E-0120 (Bearer terminal streams) was built on 2026-11-05 and its file deleted too; GW-3 is recorded as done in the efficiency index. E21, E-0140, E-0250, E-0520 and E-0692 were finished, checked back and deleted on 2026-11-05; their outcome is in the efficiency index's [closing check](efficiency-logging-database/0000-index.md#closing-check-of-e21-e-0140-e-0250-e-0520-and-e-0692). S-0200 (Workspace grant allowlist) was built on 2026-11-05 and its file deleted too; I1 is recorded as done in the security index, and its live checks are in [todo 5740](../todo/cross-cutting/5740-workspace-grant-scope-live-evidence.md).
+Worked out on 2026-11-03 against `main` at `a44641cbc`, from the 167 work files in the four folders. On 2026-11-04, 137 of them were combined into the 41 batch files listed under [Batch files](#batch-files), which keep each report as a numbered part, with repeated text removed. That leaves 71 files. The other 30 are built on their own, need a decision or measurement first, or are blocked. E1 is a set of baseline tasks inside other batch files, so it has no file of its own. E8 (Agent tab polling) was built on 2026-11-04 and its file deleted, so this plan no longer lists it; its result is in [1202 task 4](../todo/cross-cutting/1202-efficiency-review-follow-ups.md). E4 (Object store) was built on 2026-11-05 and its file deleted the same way; its outcome is the closing check in [the efficiency index](efficiency-logging-database/0000-index.md#closing-check-of-e4-object-store). E5 (Database upkeep) was built on 2026-11-05 and its file deleted; its outcome is in the [efficiency folder's index](efficiency-logging-database/0000-index.md#closing-check-of-e5-database-upkeep). E-0120 (Bearer terminal streams) was built on 2026-11-05 and its file deleted too; GW-3 is recorded as done in the efficiency index. E21, E-0140, E-0250, E-0520 and E-0692 were finished, checked back and deleted on 2026-11-05; their outcome is in the efficiency index's [closing check](efficiency-logging-database/0000-index.md#closing-check-of-e21-e-0140-e-0250-e-0520-and-e-0692). S-0200 (Workspace grant allowlist) was built on 2026-11-05 and its file deleted too; I1 is recorded as done in the security index, and its live checks are in [todo 5740](../todo/cross-cutting/5740-workspace-grant-scope-live-evidence.md). S-0080 (Legacy host mounts) was built on 2026-11-05 and its file deleted too; M9 is recorded as done in the security index, and what only a running install can answer is in [todo 5860](../todo/containers-and-environments/5860-legacy-host-mounts-live-evidence.md). S-0230 (Preview publication domain) was built on 2026-11-05 and its file deleted; its result is in the security index status table (I5) and its live check in [5240](../todo/previews-and-annotations/5240-same-site-preview-domain-live.md). S-0270 (iOS app review) was built on 2026-11-05 and its file deleted, so this plan no longer lists it; what it left is in to-dos [5600](../todo/cross-cutting/5600-ios-bridge-user-consent.md), [5601](../todo/cross-cutting/5601-ios-runtime-security-checks.md) and [5602](../todo/cross-cutting/5602-ios-session-and-privacy-hardening.md). C4 (Tool surface) was built on 2026-11-05 and its file deleted; what it could not prove without real provider turns is in [4920](../todo/coordinator-and-multi-review/4920-coordinator-tool-surface-live-follow-ups.md).
 
 ## Rules
 
@@ -17,11 +17,9 @@ Worked out on 2026-11-03 against `main` at `a44641cbc`, from the 167 work files 
 | Batch | File | Parts |
 | --- | --- | --- |
 | X1 | [security/0090-x1-coordinator-trust-boundary.md](security/0090-x1-coordinator-trust-boundary.md) | `Security 0090`, `Security 0180`, `Security 0210`, `Coordinator 0120`, `Coordinator 0310` |
-| C4 | [coordinator/0040-c4-tool-surface.md](coordinator/0040-c4-tool-surface.md) | `0040`, `0130`, `0150`, `0160` |
 | C2 | [coordinator/0080-c2-workflow-records.md](coordinator/0080-c2-workflow-records.md) | `0080`, `0100`, `0380` |
 | C3 | [coordinator/0110-c3-sweep-and-reads.md](coordinator/0110-c3-sweep-and-reads.md) | `0110`, `0370` |
 | C7 | [coordinator/0060-c7-work-panel-and-navigation.md](coordinator/0060-c7-work-panel-and-navigation.md) | `0060`, `0260`, `0280`, `0450` |
-| C8 | [coordinator/0070-c8-tab-strip.md](coordinator/0070-c8-tab-strip.md) | `0070`, `0230`, `0420`, `0430` |
 | C6 | [coordinator/0020-c6-errors-and-dead-ends.md](coordinator/0020-c6-errors-and-dead-ends.md) | `0020`, `0180`, `0200`, `0210`, `0250`, `0440` |
 | C10 | [coordinator/0240-c10-explanations.md](coordinator/0240-c10-explanations.md) | `0320`, `0330`, `0400`, `0240` |
 | E25 | [efficiency-logging-database/0490-e25-container-start.md](efficiency-logging-database/0490-e25-container-start.md) | `0490`, `0500` |
@@ -30,7 +28,6 @@ Worked out on 2026-11-03 against `main` at `a44641cbc`, from the 167 work files 
 | E11 | [efficiency-logging-database/0210-e11-projection-hashing.md](efficiency-logging-database/0210-e11-projection-hashing.md) | `0210`, `0220`, `0320`, `0330`, `0340`, `0345`, `0350`, `0380` |
 | E12 | [efficiency-logging-database/0510-e12-renderer-store.md](efficiency-logging-database/0510-e12-renderer-store.md) | `0510`, `0590`, `0640` |
 | E3 | [efficiency-logging-database/0540-e3-retention-and-deletion.md](efficiency-logging-database/0540-e3-retention-and-deletion.md) | `0730`, `0540`, `0840` |
-| E5 | [efficiency-logging-database/0760-e5-database-upkeep.md](efficiency-logging-database/0760-e5-database-upkeep.md) | `0760`, `0800`, `0910`, `0920` |
 | E26 | [efficiency-logging-database/0400-e26-local-desktop-transport.md](efficiency-logging-database/0400-e26-local-desktop-transport.md) | `0400`, `0860` |
 | E18 | [efficiency-logging-database/0280-e18-gateway-events.md](efficiency-logging-database/0280-e18-gateway-events.md) | `0280`, `0290`, `0300`, `0370` |
 | E24 | [efficiency-logging-database/0310-e24-gateway-static-and-preview.md](efficiency-logging-database/0310-e24-gateway-static-and-preview.md) | `0310`, `0365` |
@@ -43,14 +40,13 @@ Worked out on 2026-11-03 against `main` at `a44641cbc`, from the 167 work files 
 
 | Lane | Run order | Code it protects |
 | --- | --- | --- |
-| Coordinator backend | 1. C4 (Tool surface)<br>2. X1 (Coordinator trust boundary)<br>3. C2 (Workflow records)<br>4. C3 (Sweep and reads) | `coordinator-service.ts`, `control-mcp-tools.ts`, the protocol's `coordinator.ts` and the context prompt in `native-agent-service.ts` |
-| Coordinator panel | 1. C7 (Work panel and navigation)<br>2. C8 (Tab strip)<br>3. C6 (Errors and dead ends)<br>4. C10 (Explanations)<br>5. C-0390 (Panel re-render cost, measure first) | `CoordinatorPanel.tsx`, `CoordinatorPanelNotices.tsx`, `TabShell.tsx` |
-| Containers | 1. S-0080 (Legacy host mounts)<br>2. S-0100 (Egress SNI and DNS)<br>3. S-0170 (Agent-tools bind address)<br>4. E25 (Container start) | `commands-containers.ts`, `commands-registry-servers.ts` and the `docker/` entrypoint, setup and firewall scripts |
+| Coordinator backend | 1. X1 (Coordinator trust boundary)<br>2. C2 (Workflow records)<br>3. C3 (Sweep and reads) | `coordinator-service.ts`, `control-mcp-tools.ts`, the protocol's `coordinator.ts` and the context prompt in `native-agent-service.ts` |
+| Coordinator panel | 1. C7 (Work panel and navigation)<br>2. C6 (Errors and dead ends)<br>3. C10 (Explanations)<br>4. C-0390 (Panel re-render cost, measure first) | `CoordinatorPanel.tsx`, `CoordinatorPanelNotices.tsx`, `TabShell.tsx` |
+| Containers | 1. S-0100 (Egress SNI and DNS)<br>2. S-0170 (Agent-tools bind address)<br>3. E25 (Container start) | `commands-containers.ts`, `commands-registry-servers.ts` and the `docker/` entrypoint, setup and firewall scripts |
 | Transcript | 1. E9 (Transcript reads)<br>2. E10 (Conditional reads and deltas)<br>3. E11 (Projection hashing)<br>4. E12 (Renderer store) | `native-agent-transcript-projection.ts` (5,570 lines), `useNativeAgentSession.ts` (3,870 lines), `nativeAgentProjectionStore.ts` |
 | Change tracking | 1. E3 (Retention and deletion) | `apps/backend/src/core/change-tracking/` |
-| Storage | 1. E5 (Database upkeep)<br>2. S-0190 (Provider secrets at rest) | `storage-database.ts`, `storage-backups.ts`, `storage-stores.ts` |
-| Git scans and file reads | 1. E-0580 (File RPC and usage report) | `commands-files.ts`, `git-scopes.ts`, `diff-stats-service.ts` |
-| Desktop | 1. E26 (Local desktop transport)<br>2. E-0691 (Preview capture data URLs) | `apps/desktop/electron/` windows, IPC and preloads, `backend-process.ts` |
+| Storage | 1. S-0190 (Provider secrets at rest) | `storage-database.ts`, `storage-backups.ts`, `storage-stores.ts` |
+| Desktop | 1. E26 (Local desktop transport) | `apps/desktop/electron/` windows, IPC and preloads, `backend-process.ts` |
 | Gateway | 1. E18 (Gateway events)<br>2. E24 (Gateway static and preview)<br>3. S-0160 (Descriptor process binding) | `gateway-auth.ts`, `gateway-events.ts`, `gateway-proxy.ts`, `gateway-support-*.ts`, `terminal-websocket-server.ts` |
 | Logging and diagnostics | 1. E17 (Dead code)<br>2. E15 (Health and diagnostics)<br>3. E16 (Log controls) | `application-logging.ts`, the metrics route and the logging settings |
 
@@ -58,14 +54,8 @@ Worked out on 2026-11-03 against `main` at `a44641cbc`, from the 167 work files 
 
 These batches don't share a protected area. They only have to respect the conflicts below.
 
-- **C-0410 (Leaf-mode gate):** coordinator `0410`
 - **E1 (Baseline run):** the baseline task in `0150`, `0160`, `0180`, `0190` and `0400`, in efficiency-logging-database
-- **S-0230 (Preview publication domain):** security `0230`
-- **S-0270 (iOS app review):** security `0270`
-- **S-0260 (Live checks on other platforms):** security `0260`
 - **E20 (ACP bridge):** efficiency-logging-database `0270`, `0260`, `0240`
-- **E-0650 (Terminal container subscription):** efficiency-logging-database `0650`
-- **E-0694 (Attention follow polling):** efficiency-logging-database `0694`
 - **CI-0010 (Backend shard timeout):** ci-shard-validation `0010`
 
 ## Conflicts between lanes
@@ -76,7 +66,6 @@ Don't run these pairs at the same time.
 | --- | --- | --- |
 | C3 (Sweep and reads) | C6 (Errors and dead ends) | `coordinator-service.ts`, `control-mcp-server.ts` |
 | C6 (Errors and dead ends) | E12 (Renderer store) | `useNativeAgentSession.ts`, `AgentNativeTab.controller.tsx` |
-| E5 (Database upkeep) | E15 (Health and diagnostics) | `storage-backups.ts` |
 
 ## Must finish first
 
@@ -94,12 +83,9 @@ These files are named by several batches that can still run together. The report
 | `apps/backend/src/core/index.ts` | E9, E15, S-0170 |
 | `gateway-support-core.ts` | E15, E17, E18, E24 |
 | `native-agent-transcript-projection.ts` | E15 (`0880` task 1) with the Transcript lane |
-| `native-agent-service.ts`, `control-mcp-tools.ts` | E9 with C2, C3, C4 and X1 |
-| `commands-files.ts` | E-0580 |
+| `native-agent-service.ts`, `control-mcp-tools.ts` | E9 with C2, C3 and X1 |
 | `commands-servers.ts` | C6, E3, E20 |
 | `GlobalSettings.sections.tsx` | C6, E15, E17 |
-| `native-agent-display-tail-store.ts` | E5, E11 |
-| `usage-history-store.ts` | E15, E-0580 |
 | `MailTile.tsx` | E-0520, C7 |
 
 ## How this was worked out

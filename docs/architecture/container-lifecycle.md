@@ -1262,10 +1262,10 @@ Container agents reach the backend's agent tools server (workflow results,
 mail, tickets) at `http://host.docker.internal:<port>/mcp`. A host firewall
 that drops Docker traffic (ufw's default policy on many Linux desktops) makes
 those calls hang: a review stage used to idle until its result poll gave up.
-The server answers any non-POST with 405 before authenticating, so a
-credential-free GET that gets *any* HTTP status proves the path; a timeout,
-refusal or unresolved name proves it broken. Three checks share one probe
-script and parser:
+For an admitted peer (see [Who may connect](#who-may-connect)), the server
+answers any non-POST with 405 before authenticating, so a credential-free GET
+that gets *any* HTTP status proves the path; a timeout, refusal or unresolved
+name proves it broken. Three checks share one probe script and parser:
 
 | When | From | Effect |
 | --- | --- | --- |
@@ -1312,6 +1312,52 @@ network pane shows "Agent tools unavailable" for a container environment
 while the verdict is `blocked` (`EnvironmentAgentToolsStatus`). Existing
 gateway runtimes snapshot their host address at gateway boot and need a
 rebuild after host loopback is enabled.
+
+### Who may connect
+
+The server listens on every host interface (`0.0.0.0`), because the host-side
+address `host.docker.internal` reaches differs per daemon and per environment
+network. Before anything is routed it decides on the peer address
+(`agent-tools-peer-filter.ts`):
+
+- **Admitted:** loopback (`127.0.0.0/8`, `::1`, mapped forms), and any address
+  inside an IPv4 subnet of the daemon's default `bridge` network or of a
+  network labelled `orkestrator-owner=<this data directory's owner>`
+  (environment networks and the reachability probe's network).
+- **Refused:** everything else, including the LAN and a tailnet. The
+  connection is closed with no bytes written: no 405, 404 or 401, so an
+  outside peer cannot tell a route from a closed port. A peer the current
+  list already refuses is closed on accept, before its request is read.
+
+The subnet list is read with `docker network ls --filter
+label=orkestrator-owner=<owner>` and one `docker network inspect` per network
+(at most 256 networks and 512 subnets). It follows network creation and
+removal: `ensureEnvironmentNetwork`, `removeEnvironmentNetwork`, the probe
+network's create and removal, the stale-probe reap and reviewed cleanup
+report each change (`docker-network-changes.ts`), which marks the list stale
+and reloads it at once. A request that arrives while a reload is running
+waits for it. An unknown peer also reloads the list, at most once every 15 s
+unless a change was reported, so a labelled network another process created
+is admitted on its first call after that, and an outside peer costs at most
+one Docker read per 15 s. A failed read keeps the previous list. The first
+read happens on the first non-loopback peer, so a backend whose containers
+arrive on loopback never reads Docker for this. Refusals are logged
+(`[docker.reachability] peers.refused`) at most once a minute with a count.
+
+The peer address a container's call arrives from, by topology:
+
+| Topology | Peer seen by the server | Admitted by | Evidence |
+| --- | --- | --- | --- |
+| Docker Desktop (macOS) | `127.0.0.1`, for the default bridge, an environment network and an unowned network alike | Loopback | Run 2026-11-05 on Docker Desktop 4.98.0 (Engine 29.9.2, arm64) with `apps/backend/scripts/agent-tools-peer-evidence.ts` |
+| Linux Engine | The container's own address on its network (no NAT for traffic to a host address) | The network's subnet | Not run; [todo 6820](../todo/containers-and-environments/6820-agent-tools-peer-gate-linux-evidence.md) |
+| Rootless (RootlessKit host loopback `10.0.2.2`) | Expected `127.0.0.1`: the port driver connects from the host's loopback | Loopback | Not run; [todo 6820](../todo/containers-and-environments/6820-agent-tools-peer-gate-linux-evidence.md) |
+
+On Docker Desktop this means every container on the daemon, owned or not, and
+every local process can still reach the port, as before; the token remains
+the boundary there. What changed is that the host's LAN and tailnet addresses
+no longer answer. The C22 live qualification case passes its scene's owner
+to the filter, because its server's data directory differs from the one that
+owns its environment network.
 
 ## Resource budgets and usage (`container-resources.ts`)
 

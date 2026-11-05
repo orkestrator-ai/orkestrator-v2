@@ -41,7 +41,8 @@ export function defaultLogDetail(): LogDetail {
 /**
  * What `debugLogging: true` already meant for level and detail before the two
  * settings split: nothing changed for the logger, and bridges wrote their
- * snapshots. Anyone upgrading with it on keeps exactly that.
+ * snapshots. Upgrades initially retain that detail; raised bridge detail expires
+ * after 24 hours unless Keep raised detail on is enabled.
  */
 export function legacyDebugLogDetail(): LogDetail {
   return { level: DEFAULT_LOG_LEVEL, areaLevels: { [BRIDGE_LOG_SCOPE]: "debug" } };

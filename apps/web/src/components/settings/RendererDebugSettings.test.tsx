@@ -34,3 +34,27 @@ test("on shows the state in force, and turning it off clears the key and reloads
   expect(localStorage.getItem(DEBUG_LOG_STORAGE_KEY)).toBeNull();
   expect(reload).toHaveBeenCalledTimes(1);
 });
+
+test("a refused storage lookup leaves the switch usable and does not reload", () => {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  const reload = mock(() => undefined);
+  render(<RendererDebugSettings reload={reload} desktop={false} />);
+  const toggle = screen.getByRole("switch", { name: "Renderer debug logging for this window" });
+  try {
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      get() {
+        throw new Error("blocked");
+      },
+    });
+    fireEvent.click(toggle);
+    expect(toggle.hasAttribute("disabled")).toBe(false);
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    expect(reload).not.toHaveBeenCalled();
+  } finally {
+    if (descriptor) Object.defineProperty(globalThis, "localStorage", descriptor);
+    else Reflect.deleteProperty(globalThis, "localStorage");
+  }
+  fireEvent.click(toggle);
+  expect(reload).toHaveBeenCalledTimes(1);
+});

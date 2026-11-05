@@ -237,3 +237,34 @@ test("the scheduled check reverts persisted detail and stop prevents future chec
     service.stop();
   }
 });
+
+test("saveConfig preserves an older client's keep-raised choice and recomputes expiry", async () => {
+  const storage = await storageIn();
+  await storage.patchGlobalConfig({ logDetail: bridgeDebug, logDetailKeepRaised: true });
+  const config = await storage.loadOwnConfig();
+  delete config.global.logDetailKeepRaised;
+  config.global.logDetailExpiresAt = "2999-01-01T00:00:00.000Z";
+  await storage.saveConfig(config);
+  const kept = await storage.loadOwnConfig();
+  expect(kept.global.logDetailKeepRaised).toBe(true);
+  expect(kept.global.logDetailExpiresAt).toBeUndefined();
+  kept.global.logDetailKeepRaised = false;
+  kept.global.logDetailExpiresAt = "2999-01-01T00:00:00.000Z";
+  const before = Date.now();
+  await storage.saveConfig(kept);
+  const released = await storage.loadOwnConfig();
+  expect(Date.parse(released.global.logDetailExpiresAt!)).toBeGreaterThanOrEqual(
+    before + LOG_DETAIL_EXPIRY_MS,
+  );
+  expect(Date.parse(released.global.logDetailExpiresAt!)).toBeLessThanOrEqual(
+    Date.now() + LOG_DETAIL_EXPIRY_MS,
+  );
+  const expiry = released.global.logDetailExpiresAt;
+  delete released.global.logDetailKeepRaised;
+  released.global.logDetailExpiresAt = "2999-01-01T00:00:00.000Z";
+  await storage.saveConfig(released);
+  expect((await storage.loadOwnConfig()).global.logDetailExpiresAt).toBe(expiry);
+  expect((await storage.loadOwnConfig()).global.logDetailExpiresAt).not.toBe(
+    "2999-01-01T00:00:00.000Z",
+  );
+});

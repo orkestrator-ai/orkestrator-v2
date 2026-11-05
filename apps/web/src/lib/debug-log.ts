@@ -68,11 +68,12 @@ interface PreferenceStorage {
 export function setRendererDebugPreference(
   enabled: boolean,
   {
-    storage = globalThis.localStorage,
+    storage,
     reload = () => globalThis.location.reload(),
   }: { storage?: PreferenceStorage; reload?: () => void } = {},
 ): boolean {
   try {
+    storage ??= globalThis.localStorage;
     if (enabled) storage.setItem(DEBUG_LOG_STORAGE_KEY, "1");
     else storage.removeItem(DEBUG_LOG_STORAGE_KEY);
   } catch {

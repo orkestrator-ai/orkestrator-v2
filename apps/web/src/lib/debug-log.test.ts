@@ -121,3 +121,22 @@ describe("the Settings switch and the desktop report", () => {
     expect(() => reportRendererDebugLogging(undefined)).not.toThrow();
   });
 });
+
+test("a throwing localStorage getter returns false without reloading", () => {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  const reload = mock(() => undefined);
+  try {
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      get() {
+        throw new Error("blocked");
+      },
+    });
+    expect(setRendererDebugPreference(true, { reload })).toBe(false);
+    expect(setRendererDebugPreference(false, { reload })).toBe(false);
+    expect(reload).not.toHaveBeenCalled();
+  } finally {
+    if (descriptor) Object.defineProperty(globalThis, "localStorage", descriptor);
+    else Reflect.deleteProperty(globalThis, "localStorage");
+  }
+});

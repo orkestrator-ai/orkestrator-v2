@@ -4,6 +4,24 @@ on:
   pull_request:
     paths:
       - .github/workflows/native-application-menu.yml
+      - apps/backend/src/core/log-policy-service.ts
+      - apps/backend/src/core/storage-config.ts
+      - apps/backend/src/core/renderer-error-recorder.ts
+      - apps/backend/src/core/commands-registry-system.ts
+      - apps/desktop/electron/main.ts
+      - apps/desktop/electron/ipc.ts
+      - apps/desktop/electron/preload-api.ts
+      - apps/web/src/lib/debug-log.ts
+      - apps/web/src/lib/renderer-bootstrap.ts
+      - apps/web/src/lib/renderer-diagnostics.ts
+      - apps/web/src/lib/renderer-error-*.ts
+      - apps/web/src/components/settings/RendererDebugSettings.*
+      - apps/web/src/components/settings/LogDetailSettings.*
+      - apps/web/src/components/settings/log-detail-presets.*
+      - apps/web/src/components/settings/GlobalSettings*.*
+      - packages/protocol/src/log-policy.ts
+      - packages/protocol/src/renderer-errors.ts
+      - packages/protocol/src/log-essential-labels.ts
       - apps/desktop/electron/application-menu.ts
       - apps/desktop/electron/renderer-debug-tools.ts
       - apps/desktop/package.json

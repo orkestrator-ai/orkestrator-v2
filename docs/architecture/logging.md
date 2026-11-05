@@ -564,13 +564,18 @@ flowchart LR
   C -->|"parsed again, 30 entries a minute"| E[(logs/essential)]
 ```
 
+Pending metadata (including in-flight counts) is bounded to 100 entries in per-window
+session storage and removed after acknowledgement. Reloads can recover it; pagehide
+also attempts a flush. Blocked storage falls back to memory. A lost acknowledgement
+can cause a duplicate count after reload; this is best-effort diagnostic delivery.
+
 - **Recorded once, at the root.** Every boundary's catch passes through React's root
   `onCaughtError`, which receives the boundary instance; a boundary names itself with a
   static `diagnosticBoundary`. Nothing is added to each boundary's `componentDidCatch`.
 - **Bounded in the renderer.** At most 100 distinct entries, the least recently seen
   dropped first. A repeat only raises a count.
 - **Sent by a desktop window only.** Its own renderer starts the upload
-  (`renderer-error-upload.ts`) once the app starts: every 10 seconds at most, up to 20
+  (`renderer-error-upload.ts`) once the app starts: promptly for the first failure, then every 10 seconds, up to 20
   entries a write. A failed send puts the counts back and waits twice as long, up to five
   minutes. A backend that predates the command answers "Unknown backend command", which
   stops the upload for that load. A workspace realm and a browser tab keep their ring
@@ -980,7 +985,8 @@ flowchart LR
   A config without `logDetail` is upgraded once by `normalizePersistedConfig`: on
   maps to `level: info`, `areaLevels: { bridge: debug }`, off to the defaults.
   `bridge.diagnostics` inherits `debug` from `bridge`, so someone upgrading with it
-  on keeps the per-minute snapshot stream unchanged. The
+  on initially keeps the per-minute snapshot stream. This raised bridge detail
+  expires after 24 hours unless **Keep raised detail on** is enabled. The
   key names stay, so a downgrade still reads them. `resolveLogDetail` applies the
   same mapping for a reader that gets there first (Electron starts before its
   backend). A save from a client that predates `logDetail` keeps the stored value.

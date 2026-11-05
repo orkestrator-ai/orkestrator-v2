@@ -413,6 +413,8 @@ test("a real window sends its startup markers to the main process and none of it
       root.unmount();
       host.remove();
     });
+    // Reload immediately after the caught failure, before the old ten-second interval.
+    await window.reload();
     await expect.poll(essential, { timeout: 30_000 }).toContain('"event":"error.recorded"');
     const records = (await essential())
       .trim()

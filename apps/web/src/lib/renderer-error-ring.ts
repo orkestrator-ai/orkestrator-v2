@@ -36,6 +36,36 @@ export class RendererErrorRing {
   /** In order of last occurrence, oldest first, so eviction drops the least recent. */
   private readonly slots = new Map<string, Slot>();
 
+  private readonly listeners = new Set<() => void>();
+
+  subscribe(listener: () => void): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+
+  pendingEntries(): RendererErrorEntry[] {
+    return Array.from(this.slots.values(), (slot) => ({
+      ...slot.entry,
+      count: slot.unsent,
+    })).filter((entry) => entry.count > 0);
+  }
+
+  /** Rehydrate strictly validated metadata, never raw errors. */
+  recover(entries: readonly RendererErrorEntry[]): void {
+    for (const entry of entries) {
+      const key = `${entry.errorClass}|${entry.boundary}|${entry.route}|${entry.fingerprint}`;
+      const slot = this.slots.get(key);
+      this.slots.set(key, {
+        entry,
+        total: cap((slot?.total ?? 0) + entry.count),
+        unsent: cap((slot?.unsent ?? 0) + entry.count),
+      });
+      while (this.slots.size > this.capacity) this.slots.delete(this.slots.keys().next().value!);
+    }
+  }
+
   constructor(private readonly capacity = RENDERER_ERROR_RING_SIZE) {}
 
   record(
@@ -61,6 +91,13 @@ export class RendererErrorRing {
       const oldest = this.slots.keys().next().value;
       if (oldest === undefined) break;
       this.slots.delete(oldest);
+    }
+    for (const listener of this.listeners) {
+      try {
+        listener();
+      } catch {
+        /* Diagnostics never interrupt error handling. */
+      }
     }
   }
 

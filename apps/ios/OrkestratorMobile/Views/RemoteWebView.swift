@@ -125,6 +125,8 @@ struct RemoteWebView: UIViewRepresentable {
         private(set) var requestedConnection: RemoteConnection?
         var authenticationTask: Task<Void, Never>?
         var readinessTask: Task<Void, Never>?
+        private(set) var sessionEndTask: Task<Void, Never>?
+        var logoutSender: any GatewayLogoutSending = GatewayLogoutClient()
         private(set) var handledRetryID: UUID?
         private var readinessGeneration = UUID()
         var readinessCheckLimit = 100
@@ -644,7 +646,9 @@ struct RemoteWebView: UIViewRepresentable {
                     guard let connectionID = body["connectionId"] as? String else {
                         throw ConnectionBridgeError.invalidInput
                     }
+                    let forgotten = try? model.savedConnection(connectionID: connectionID)
                     let result = try model.forget(connectionID: connectionID)
+                    if let forgotten { endSession(of: forgotten) }
                     try await reply(id: requestID, result: result)
                 default:
                     throw ConnectionBridgeError.unsupportedAction
@@ -653,6 +657,50 @@ struct RemoteWebView: UIViewRepresentable {
                 isSwitchingThroughBridge = false
                 await reply(id: requestID, error: error.localizedDescription)
             }
+        }
+
+        /// Runs once a server is already forgotten, and nothing waits for it, so a
+        /// slow or failed logout cannot hold up or change that. It also outlives
+        /// `teardown`, because forgetting the last server dismantles this web view.
+        private func endSession(of connection: RemoteConnection) {
+            let isRequested = connection.id == requestedConnection?.id
+            if isRequested { authenticationTask?.cancel() }
+            guard let cookieStore = webView?.configuration.websiteDataStore.httpCookieStore,
+                  Self.cookiesHoldSession(
+                    of: connection,
+                    isRequested: isRequested,
+                    remaining: model.vault.connections
+                  ) else { return }
+            let logoutSender = self.logoutSender
+            sessionEndTask = Task {
+                let cookies = await cookieStore.allCookies().filter {
+                    Self.cookie($0, belongsToHostOf: connection.address)
+                }
+                for cookie in cookies {
+                    await cookieStore.deleteCookie(cookie)
+                }
+                for cookie in cookies where GatewayLogoutClient.sessionCookieNames.contains(cookie.name) {
+                    await logoutSender.logOut(address: connection.address, sessionCookie: cookie)
+                }
+            }
+        }
+
+        /// Cookies ignore ports, so a saved server at another port of the same host
+        /// shares them, and the jar keeps only the last sign-in. Unless the forgotten
+        /// server is the one signed in, they may be the other server's live session,
+        /// which must neither be deleted nor sent to the forgotten server.
+        static func cookiesHoldSession(
+            of connection: RemoteConnection,
+            isRequested: Bool,
+            remaining: [RemoteConnection]
+        ) -> Bool {
+            isRequested || !remaining.contains { $0.hostname.lowercased() == connection.hostname.lowercased() }
+        }
+
+        static func cookie(_ cookie: HTTPCookie, belongsToHostOf address: URL) -> Bool {
+            guard let host = address.host(percentEncoded: false)?.lowercased() else { return false }
+            let domain = cookie.domain.lowercased()
+            return (domain.hasPrefix(".") ? String(domain.dropFirst()) : domain) == host
         }
 
         private func finishBridgeSwitch() {

@@ -2,13 +2,13 @@
 
 ## Task analysis
 
-Analysed 2026-11-05 against `main` at `69a3b4ca5`.
+Analysed 2026-11-05 against `main` at `69a3b4ca5`. Claims re-checked and built on 2026-11-05 against `main` at `6e796ca32`; the recommended option was taken for all three tasks.
 
 ### Tasks
 
-1. **End the session when a server is forgotten**: forgetting a server leaves its web session alive. Status: open.
-2. **Hide the app in the app switcher**: iOS keeps a snapshot of whatever the app showed. Status: open.
-3. **Do not overwrite the vault after a failed read**: a Keychain read failure can lead to saved servers being lost. Status: open.
+1. **End the session when a server is forgotten**: forgetting a server now deletes its host's cookies from the web store and makes a best-effort logout request. Status: done.
+2. **Hide the app in the app switcher**: an opaque cover now shows whenever the scene is not active. Status: done; the device check is [5601](5601-ios-runtime-security-checks.md) task 6.
+3. **Do not overwrite the vault after a failed read**: a failed read is remembered, read again before any write, and every write but the malformed-data recovery is refused. Status: done; how often it happens on a device is [5601](5601-ios-runtime-security-checks.md) task 3.
 
 ### 1. End the session when a server is forgotten
 
@@ -64,9 +64,61 @@ Analysed 2026-11-05 against `main` at `69a3b4ca5`.
     - Pros: smaller; repairs the common case.
     - Cons: a save during the failure still overwrites the vault.
 
+## Assumptions and decisions
+
+### Task 1: The coordinator ends the session, after the forget has succeeded
+
+`RemoteWebView.Coordinator` owns the web store, so the bridge's `forget` action starts the work once `ConnectionModel.forget` has returned, and replies without waiting for it. A forget that fails to write leaves the session alone. The work deletes the host's cookies first, then sends `POST /__orkestrator/logout` with only the gateway session cookie, because the gateway revokes the session that cookie names. `GatewayLogoutClient` carries the cookie by hand and has a 5 second limit, so the logout does not need a page to run in, which matters when the last server is forgotten and the web view is dismantled. It refuses the gateway's redirect to its login page, so the cookie goes only to the forgotten address.
+
+### Task 1: Cookies shared with a saved server on the same host
+
+Cookies ignore ports, and the store keeps one session cookie per host: the last sign-in. So `https://desk.example` and `https://desk.example:8443` share a cookie. The re-check found this case, which the analysis did not cover. If the forgotten server is not the one signed in and another saved server has the same host, the cookies are left alone and no logout is sent. Deleting them could end the other server's live session, and sending them would hand its session to a different gateway. The cost is that the forgotten server's own session, if it was the last sign-in on that host, runs to its backend expiry. That is the outcome the analysis already accepted as a fallback, and only for this uncommon setup.
+
+### Task 1: Only cookies for the exact host
+
+A cookie belongs to the host when its domain equals the host, ignoring case and a leading dot. Parent-domain and subdomain cookies are not deleted, because other hosts share or own them. Service preview cookies on another host therefore stay until the process ends, which is also when the store goes.
+
+### Task 1: A sign-in in flight
+
+Forgetting the server being signed in cancels that sign-in, so it cannot set a cookie after the deletion. A session the gateway has already minted for the cancelled attempt runs to its expiry, like the one each cold launch already leaves behind.
+
+### Task 2: An overlay on the root view and on the sheet
+
+`PrivacyCover` is an overlay, so the web view underneath keeps its page and session and the app shows normally on return. A SwiftUI overlay does not reach a sheet, and the connection editor is one, so the sheet has its own. Two limits are left to [5601](5601-ios-runtime-security-checks.md) task 6, because neither can be settled here: views WebKit presents itself, such as a file picker or a link preview, sit above SwiftUI and are not covered, and the keyboard is in its own window. A separate cover window at alert level would cover those but is more code than the analysis asked for, and is the change to make if the device check shows it matters.
+
+The cover's image comes from the asset catalog, which could not be compiled on this machine (see [Current state](#current-state)), so the tests run the cover without its mark. Its layout with the mark was seen once in a throwaway build that loaded the image from a loose file.
+
+### Task 3: The guard covers every write, not only `connect`
+
+The analysis named the save in `connect`. The re-check found a worse path: `forget` on an unread vault saw an empty list and called `delete()`, which removed the whole item, even for an id it had never heard of. `connect`, `use`, `rename` and `forget` all read again first. In `connect` the read happens after the network check, right before the new vault is built, so the device can lock during the check without harm.
+
+### Task 3: What the messages say
+
+A failed read now tells the user the servers have not been removed and will come back. A refused save says nothing was saved and why, and leaves the draft token in the editor so it need not be typed again. A malformed vault keeps its existing message and recovery: connecting again replaces it. A successful foreground retry clears those messages but leaves an unrelated error, such as a rejected token, in place.
+
+### All tasks: Test runner on this machine
+
+`mise run test:ios` cannot run here, because the iOS 26.5 simulator runtime that Xcode's SDK requires for the asset catalog is not installed, and the constraints for this work rule out changing Xcode's state. The project's own scheme was run with per-command overrides that leave the catalog out. Nothing in the suite needs the catalog. Test command and result are in [Current state](#current-state).
+
 ## Current state
 
-None of these three is built. None exposes a token to anyone but the user's own device.
+All three are built. None exposed a token to anyone but the user's own device.
+
+On 2026-11-05 the project's `OrkestratorMobile` scheme passed **98 tests, 0 failed, 0 skipped** (the 66 existing ones and 32 new), read from the Xcode result summary, with Xcode 26.6 on an isolated iPhone 17 Pro simulator with iOS 26.2. The command, with `<udid>` that simulator's id, was:
+
+```bash
+xcodebuild -project apps/ios/OrkestratorMobile.xcodeproj -scheme OrkestratorMobile -configuration Debug \
+  -sdk iphonesimulator -destination "platform=iOS Simulator,id=<udid>" -destination-timeout 180 \
+  -derivedDataPath "$PWD/output/agent-testing/5602/derived-data" \
+  EXCLUDED_SOURCE_FILE_NAMES=Assets.xcassets ASSETCATALOG_COMPILER_APPICON_NAME= \
+  ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME= test
+```
+
+Xcode's destination lookup also failed intermittently on that loaded machine, exiting 70 before building anything, and that same command then succeeded on a later attempt (the 98-test run took eight). The unmodified `mise run test:ios` exited 70 at that lookup, and with the lookup past and the catalog left in, the build stopped at the catalog ("No simulator runtime version ... available"). So the asset catalog and app icon were not compiled in this work.
+
+Removing each safeguard in turn made its tests fail, then the change was restored: no cover (3 cover tests), no cover on the sheet (the sheet test), no read before the save in `connect` (6 vault tests), and `forget` waiting for the logout (the hung-logout test).
+
+The tests use fakes throughout: a failing credential store, a fake logout sender, and a fake gateway on loopback over HTTP. Nothing here has run on a device or against a real gateway; those checks are [5601](5601-ios-runtime-security-checks.md) tasks 2, 3 and 6.
 
 ## Constraints and rationale
 

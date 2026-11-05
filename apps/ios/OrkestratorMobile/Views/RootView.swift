@@ -2,6 +2,7 @@ import SwiftUI
 
 struct RootView: View {
     @EnvironmentObject private var model: ConnectionModel
+    @Environment(\.scenePhase) private var scenePhase
     @State private var webState: WebViewState = .loading
 
     var body: some View {
@@ -42,10 +43,16 @@ struct RootView: View {
                 ConnectionEditorView(canCancel: true)
                     .environmentObject(model)
             }
+            // A sheet is presented above the root view, so its cover has to be its own.
+            .modifier(PrivacyCover())
         }
         .onChange(of: model.activeConnection?.id) { _, _ in
             webState = .loading
         }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { model.retryVaultReadIfFailed() }
+        }
+        .modifier(PrivacyCover())
     }
 
     private func switchConnection(_ connection: RemoteConnection) {
@@ -65,6 +72,30 @@ enum RootDestination: Equatable {
     case launchSelection
     case remote(RemoteConnection)
     case connectionEditor
+}
+
+/// iOS snapshots the screen as the app leaves the foreground and keeps the image
+/// on disk. An overlay rather than a replacement, so the web view underneath keeps
+/// its page and session and the app shows normally on return.
+struct PrivacyCover: ViewModifier {
+    @Environment(\.scenePhase) private var scenePhase
+
+    func body(content: Content) -> some View {
+        content.overlay {
+            if scenePhase != .active {
+                ZStack {
+                    Color(red: 0.043, green: 0.051, blue: 0.063)
+                    Image("BrandMark")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 72, height: 72)
+                        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                }
+                .ignoresSafeArea()
+                .accessibilityHidden(true)
+            }
+        }
+    }
 }
 
 func rootDestination(

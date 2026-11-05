@@ -1,7 +1,15 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { createLogger } from "@orkestrator/protocol/logger";
 import { captureLogs, type LogCapture } from "@orkestrator/protocol/testing/log-capture";
-import { applyRendererLogLevel, DEBUG_LOG_STORAGE_KEY, readDebugPreference } from "./debug-log";
+import {
+  applyRendererLogLevel,
+  canOfferDeveloperTools,
+  DEBUG_LOG_STORAGE_KEY,
+  readDebugPreference,
+  rendererDebugLoggingActive,
+  reportRendererDebugLogging,
+  setRendererDebugPreference,
+} from "./debug-log";
 
 describe("readDebugPreference", () => {
   test("is off when nothing is stored", () => {
@@ -54,5 +62,62 @@ describe("applyRendererLogLevel", () => {
 
     expect(log.isEnabled("debug")).toBe(true);
     expect(logs.lines).toEqual(["[web.pane-layout] persist.failed count=1"]);
+  });
+});
+
+describe("the Settings switch and the desktop report", () => {
+  afterEach(() => {
+    localStorage.removeItem(DEBUG_LOG_STORAGE_KEY);
+    applyRendererLogLevel();
+  });
+
+  test("turning it on writes the key for this window and reloads", () => {
+    const reload = mock(() => undefined);
+    expect(setRendererDebugPreference(true, { reload })).toBe(true);
+    expect(localStorage.getItem(DEBUG_LOG_STORAGE_KEY)).toBe("1");
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  test("turning it off clears the key and reloads", () => {
+    localStorage.setItem(DEBUG_LOG_STORAGE_KEY, "1");
+    const reload = mock(() => undefined);
+    expect(setRendererDebugPreference(false, { reload })).toBe(true);
+    expect(localStorage.getItem(DEBUG_LOG_STORAGE_KEY)).toBeNull();
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  test("storage that refuses the write does not reload", () => {
+    const reload = mock(() => undefined);
+    const storage = {
+      setItem: () => {
+        throw new Error("denied");
+      },
+      removeItem: () => undefined,
+    };
+    expect(setRendererDebugPreference(true, { storage, reload })).toBe(false);
+    expect(reload).not.toHaveBeenCalled();
+  });
+
+  test("what is in force is what the renderer started with, not what is stored since", () => {
+    applyRendererLogLevel();
+    expect(rendererDebugLoggingActive()).toBe(false);
+    setRendererDebugPreference(true, { reload: () => undefined });
+    expect(rendererDebugLoggingActive()).toBe(false);
+    applyRendererLogLevel();
+    expect(rendererDebugLoggingActive()).toBe(true);
+  });
+
+  test("the desktop hears the state at start, on or off; a browser has nothing to tell", () => {
+    const setRendererDebugLogging = mock(async (_enabled: boolean) => true);
+    localStorage.setItem(DEBUG_LOG_STORAGE_KEY, "1");
+    applyRendererLogLevel();
+    reportRendererDebugLogging({ setRendererDebugLogging });
+    localStorage.removeItem(DEBUG_LOG_STORAGE_KEY);
+    applyRendererLogLevel();
+    reportRendererDebugLogging({ setRendererDebugLogging });
+    expect(setRendererDebugLogging.mock.calls.map(([enabled]) => enabled)).toEqual([true, false]);
+    expect(canOfferDeveloperTools({})).toBe(false);
+    expect(() => reportRendererDebugLogging({})).not.toThrow();
+    expect(() => reportRendererDebugLogging(undefined)).not.toThrow();
   });
 });

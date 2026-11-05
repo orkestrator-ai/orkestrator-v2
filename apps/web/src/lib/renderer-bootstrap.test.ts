@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { captureLogs, type LogCapture } from "@orkestrator/protocol/testing/log-capture";
 import { bootstrapRenderer } from "./renderer-bootstrap";
+import { rendererErrorRing } from "./renderer-error-ring";
 
 describe("renderer entry bootstrap", () => {
   let logs: LogCapture | undefined;
@@ -114,5 +115,33 @@ describe("renderer entry bootstrap", () => {
     });
 
     expect(logs.lines.join("\n")).toContain("ResizeObserver loop limit exceeded");
+  });
+
+  test("records window errors and rejections in the error ring, not as markers", async () => {
+    const listeners = new Map<string, (event: any) => void>();
+    logs = captureLogs();
+    const emitMarker = mock((_event: string) => undefined);
+    await bootstrapRenderer({
+      target: {
+        addEventListener: (type: string, listener: (event: any) => void) => {
+          listeners.set(type, listener);
+        },
+      } as never,
+      startDesktop: (async ({ start }: { start(): Promise<void> }) => start()) as never,
+      loadRenderer: async () => ({ startRenderer: async () => undefined }),
+      emitMarker,
+    });
+    rendererErrorRing.takeUnsent(Number.MAX_SAFE_INTEGER);
+
+    listeners.get("error")?.({ message: "x", error: new RangeError("secret text") });
+    listeners.get("unhandledrejection")?.({ reason: "secret text" });
+
+    const recorded = rendererErrorRing.takeUnsent(Number.MAX_SAFE_INTEGER);
+    expect(recorded.map(({ errorClass, boundary }) => [errorClass, boundary])).toEqual([
+      ["RangeError", "window"],
+      ["NonErrorThrow", "rejection"],
+    ]);
+    expect(JSON.stringify(recorded)).not.toContain("secret");
+    expect(emitMarker).not.toHaveBeenCalled();
   });
 });

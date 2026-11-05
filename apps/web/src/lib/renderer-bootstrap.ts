@@ -1,6 +1,7 @@
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { startDesktopRenderer } from "./desktop-startup";
 import { emitDesktopStartupMarker } from "./desktop-startup-marker";
+import { recordRendererFailure } from "./renderer-error-ring";
 
 const log = createLogger("web.window");
 
@@ -40,8 +41,11 @@ export async function bootstrapRenderer({
     if (startupPending) emitMarker("renderer-error");
   };
 
+  // The error ring is separate from the startup markers: it never writes to the
+  // console and never uses the `desktop.startup` area.
   target.addEventListener("error", (event) => {
     reportStartupError();
+    recordRendererFailure(event.error ?? event.message, "window");
     log.error("error.unhandled", {
       error: formatLogError(event.error ?? event.message),
       file: sourceFile(event.filename),
@@ -51,6 +55,7 @@ export async function bootstrapRenderer({
   });
   target.addEventListener("unhandledrejection", (event) => {
     if (startupPending) emitMarker("unhandled-rejection");
+    recordRendererFailure(event.reason, "rejection");
     log.error("rejection.unhandled", { error: formatLogError(event.reason) });
   });
 

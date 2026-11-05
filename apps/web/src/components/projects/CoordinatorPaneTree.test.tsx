@@ -121,7 +121,7 @@ test("each group is a labelled tab list whose panel is labelled by its front tab
     coordinatorTabElementId(left!.id, left!.activeConversationId!),
   );
   expect(document.getElementById(panel.getAttribute("aria-labelledby")!)?.textContent).toBe(
-    left!.activeConversationId,
+    left!.activeConversationId!,
   );
 });
 

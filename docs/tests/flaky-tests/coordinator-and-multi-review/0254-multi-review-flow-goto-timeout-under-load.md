@@ -50,3 +50,16 @@ All 21 failing owners, including this unchanged file, passed with one worker in 
 ## CLI matrices second main merge — 2026-10-18
 
 Four desktop retained-clean-review PR snapshot cases timed out in the aggregate. The entire unchanged MultiReviewFlow owner passed in the one-worker rerun, confirming intermittent failures for these cases. Full commands, 339-pass/80-skip/13-failure aggregate and 96-pass/15-skip/three-failure focused counts, and evidence paths are in [0382](../web-ui/0382-component-browser-parallel-load.md). No implementation, assertion, timeout or skip changed.
+
+## To-do 4222 fixture change — 2026-11-05
+
+While qualifying the Multi Review fixture change for to-do 4222 on beelink (load
+average about 77), `ORKESTRATOR_E2E_PORT=1467 bunx playwright test --config
+e2e/playwright.config.ts e2e/MultiReviewPackageLayout.spec.ts e2e/MultiReviewFlow.spec.ts`
+with the default eight workers reported 117 passed, 4 skipped and 1 failed:
+`[desktop-chromium] a retained clean-review PR notice reflects the current consolidating
+snapshot after reload` hit the 30 s test timeout with no `ERR_NETWORK_CHANGED` in its
+trace. `"e2e/MultiReviewFlow.spec.ts:938" --repeat-each=3` then passed 23 of 24, with
+the mobile `interactive` case timing out the same way. The whole file pair then passed
+with `--workers=2` through `test:logged` (exit 0, 342 s). The fixture change touches
+neither the retained-PR fixture nor these cases. No timeout, assertion or skip changed.

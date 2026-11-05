@@ -18,7 +18,7 @@
  * in the fixture project, and every case removes them (and its pipeline) in
  * `finally`. This spec deliberately does not use the `agent-browser` CLI.
  */
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page } from "./browser-test";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";

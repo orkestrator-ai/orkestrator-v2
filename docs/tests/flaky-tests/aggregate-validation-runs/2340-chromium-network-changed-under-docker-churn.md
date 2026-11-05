@@ -183,12 +183,46 @@ with `headless-profile.spec.ts --repeat-each=3 --workers=1`:
   1.8 s each when nothing aborted it.
 
 `headless-profile.spec.ts` now does this, because that case is about what the profile
-serves. No other spec changed: fetching modules outside Chromium changes what a real
-browser journey exercises, so the choice for the whole suite is task 3 of to-do
-[4222](../../../todo/cross-cutting/4222-browser-failures-left-after-headless-qualification.md).
+serves. No other spec changed then; see below for the whole suite.
 
 A run's output now names the failed cases whose trace has this error
 (`e2e/agent-testing/network-churn-report.ts`). The suite's result does not change.
+
+## The whole browser suite, 2026-11-05 (to-do 4222 task 3)
+
+The isolated browser suite's specs now take `test` from
+`e2e/agent-testing/browser-test.ts`. Its `context` fixture fetches every loopback
+script and stylesheet with `route.fetch()` and keeps the responses in memory for that
+context. Specs that open another context call `fetchModulesOutsideChromium` on it.
+`browser-gateway.spec.ts` and `client-outage.spec.ts` stay on Chromium's own path,
+because the browser's network path is what they test. `browser-test.test.ts` holds
+both lists. `headless-profile.spec.ts` uses the shared fixture instead of its own copy.
+
+The in-memory copy matters. Routing turns Chromium's HTTP cache off, and without it
+every reload fetched about 1,100 modules through the test process again: on beelink at
+load average 50 to 75, a median of about 450 ms each and up to 8 s, still arriving 16
+to 20 s after the reload. `design-canvas.spec.ts:16` then failed 3 of 3 at its
+check after the last reload, where it had passed 2 of 2 with the base specs. With the
+cache, `design-canvas.spec.ts:16` and `graph-run-view.spec.ts:48` passed 3 of 3
+each in 247 s.
+
+These runs used a credential-free `--headless --fixture` profile, because the build
+was not allowed to read the host's agent credentials. On it, some cases fail the same
+way with the base specs as with the shared fixture, behind the "Claude Code Is Not
+Logged In" modal or the "Checking CLI tools installation" overlay:
+`graph-designer.spec.ts:239` (2 of 2 each), `headless-profile.spec.ts` (2 of 2 each,
+though it passed 2 of 2 with the fixture on an earlier Claude-only profile), both
+`pull-request-pane.spec.ts` cases, `sidebar-width-consumers.spec.ts:119` and
+`web-annotations-gateway.spec.ts`'s desktop-capture case. `graph-designer-mock`,
+`graph-designer-editing` and `backend-owned-state` passed with the fixture.
+
+Not measured: a run under artificial network churn. That build was not allowed to
+create Docker networks on beelink, and `ip monitor link address` recorded 2 to 12
+events in each 10-minute run, so these runs show the fixture costs nothing that
+breaks a case, not that it removes this failure from the whole suite. The single-spec
+measurement above (0 of 3 before, 3 of 3 after under network churn) is the evidence
+for the mechanism. Record a recurrence here if a browser-suite case still fails with
+`net::ERR_NETWORK_CHANGED` in its trace.
 
 ## Static HTML review repair, 2026-11-05
 

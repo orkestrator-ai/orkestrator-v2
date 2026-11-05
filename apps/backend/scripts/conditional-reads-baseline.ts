@@ -44,6 +44,7 @@ import { HttpBridgeProvider } from "../src/core/http-bridge-provider.js";
 import { NativeAgentService } from "../src/core/native-agent-service.js";
 import { projectionInternals } from "../src/core/native-agent-service-test-collaborators.js";
 import { StorageService } from "../src/core/storage.js";
+import { collectStreamingSamples } from "./conditional-reads-samples.js";
 
 configureLogger({ level: "error" });
 
@@ -518,7 +519,9 @@ async function runScenario(input: ScenarioInput) {
       routeMs: 0,
       parseMs: 0,
     });
-    const samplesBefore = service.progressiveReadSamples().length;
+    const measuredSamples = collectStreamingSamples(
+      projectionInternals(service).progressiveMetrics,
+    );
 
     bridge.startTurn();
     const streamTimer = setInterval(() => bridge.stream(), TICK_MS);
@@ -529,6 +532,7 @@ async function runScenario(input: ScenarioInput) {
         while (Date.now() < until) {
           const startedAt = Date.now();
           await poll(service, input.agent, viewer);
+          measuredSamples.capture();
           await Bun.sleep(Math.max(0, viewer.cadenceMs - (Date.now() - startedAt)));
         }
       }),
@@ -540,7 +544,8 @@ async function runScenario(input: ScenarioInput) {
       transcript: { ...bridge.transcript },
       viewers: viewers.map((v) => ({ name: v.name, ...structuredClone(v.count) })),
     };
-    const samples = service.progressiveReadSamples().slice(samplesBefore);
+    measuredSamples.capture();
+    const samples = measuredSamples.samples;
     const stateSamples = samples.filter((s) => s.domain === "state" && !s.joined);
     const transcriptSamples = samples.filter((s) => s.domain === "transcript");
 

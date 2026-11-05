@@ -24,16 +24,16 @@ The figures, for tasks 2 to 4 below to cite:
 | --- | --- | --- |
 | 0160 | Transcript answers over 10 s, three viewers, ring as built | 47 of 47 deltas; 99–108 KB to each 500 ms viewer, 41–43 KB to the lagging one, on both windows |
 | 0160 | The same with the ring disabled (before TX-1) | 46 of 47 snapshots; 1.86–1.96 MB to each viewer on `typical` and 6.30–6.63 MB on `full`; 0.68 MB and 2.32 MB to the lagging one |
-| 0160 | Where the multi-viewer answers came from | All 44 sampled reads were the early cached answer (`memory:delta`), each one read behind; one viewer alone got `provider:delta` 19 of 19 |
+| 0160 | Where the multi-viewer answers came from | Corrected collection: 47 samples for 47 polls, with 46 `memory:delta` and 1 `provider:delta` on each window; one viewer alone got `provider:delta` 20 of 20. With the ring disabled: 46 `memory:cached` and 1 `provider:delta` |
 | 0180 | Bridge requests per state poll | 5.0 on Claude, Codex and Pi: the state route, Codex `/config` or Pi `/queue` (Claude has none), two or three interaction routes and `/steer/dispatch` |
 | 0180 | State bodies identical to the previous one | Streaming: 0 of 47 and 0 of 20 (one of 47 in one run). Idle: 4 of 5 |
-| 0180 | State read time, p50 | 2–9 ms in total, 2–8 ms of it the source reads; normalising under 1 ms |
+| 0180 | State read time, p50 | Corrected run: 2–15 ms in total, 2–13 ms of it the source reads; normalising 0–1 ms |
 | 0180 | State token hash per poll | 3–14 µs with no catalogue or 10 models (4.4 KB); 141–266 µs with 300 models (130 KB), against 27–35 µs with the models removed |
 | 0180 | Pi `/status` body | 4.5 KB with 10 models, 130 KB with 300, on every poll |
 | 0190 | Bridge transcript reads while streaming | One viewer: 20 in 10 s, every one a whole snapshot (161 KB `typical`, 517 KB `full`), 3.2 MB and 10.3 MB. Three viewers: 46–47, 7.6 MB and 23.8–24.3 MB |
 | 0190 | What a delta from the backend's `knownToken` would carry | 7.2–7.8 KB per read (changed rows, the id order, `revisedMessages` and the envelope): 22 times smaller on `typical`, 68 times on `full` |
 | 0190 | Base still in an 8-entry bridge ring | 100% of reads |
-| 0190 | Loopback cost per read, one viewer, p50 | Provider source time 1 ms on `typical`, 3–4 ms on `full`, normalising 0–1 ms. This includes the fake's own work (building the summary, encoding it twice and parsing it once more to time it), so it is an upper bound |
+| 0190 | Loopback cost per read, one viewer, p50 | Corrected run: provider source time 2 ms on `typical`, 10 ms on `full`, normalising 1 ms. Original runs: 1 ms and 3–4 ms. The fake includes summary building and extra encoding/parsing; timing varies with host load and is not a bound on real-stack cost |
 
 **Investigation.** Not run on a real stack. A real bridge's state body, its streaming cadence and its row sizes are what the fake approximates; the counts of requests per poll come from the real backend code and do not depend on the fake.
 
@@ -71,7 +71,7 @@ The figures, for tasks 2 to 4 below to cite:
 
 **Context.** Part 0180 recommended keying the catalogue by a revision and hashing the revision.
 
-**Investigation.** Re-checked on `cbe0f9a5b`: the hash is in `getSessionStateUpdate` (`native-agent-transcript-projection.ts`), over the view `readProgressiveSessionState` builds with `projectionComposer`. Measured (task 1): 3–14 µs per poll with no catalogue or 10 models, and 141–266 µs with 300 models against 27–35 µs without them. That is under 0.3 ms a poll in the worst case, beside a 2–9 ms state read, and at 2 polls a second under 0.06% of a core. The larger cost of a big catalogue is elsewhere: Pi's `/status` sends its whole composer, 130 KB with 300 models, on every poll, and the backend parses it each time. A catalogue revision in the backend's hash does not remove that read.
+**Investigation.** Re-checked on `cbe0f9a5b`: the hash is in `getSessionStateUpdate` (`native-agent-transcript-projection.ts`), over the view `readProgressiveSessionState` builds with `projectionComposer`. Measured (task 1): 3–14 µs per poll with no catalogue or 10 models, and 141–266 µs with 300 models against 27–35 µs without them. That is under 0.3 ms a poll in the worst case, beside a corrected 2–15 ms state read, and at 2 polls a second under 0.06% of a core. The larger cost of a big catalogue is elsewhere: Pi's `/status` sends its whole composer, 130 KB with 300 models, on every poll, and the backend parses it each time. A catalogue revision in the backend's hash does not remove that read.
 
 **Decisions.**
 
@@ -90,18 +90,18 @@ The figures, for tasks 2 to 4 below to cite:
 
 **Context.** Part 0190 recommended a delta from the `knownToken` the backend already sends, falling back to a snapshot on an unknown base, with a bridge ring and a capability check. Its alternative was to keep whole windows, "a fair choice if the baseline shows it is small", because this is loopback CPU rather than remote bandwidth.
 
-**Investigation.** Re-checked on `cbe0f9a5b`: `readHttpBridgeSummaryTranscript` (`apps/backend/src/core/http-bridge-transcript-v2.ts`) handles `unchanged` and otherwise a whole snapshot; all five bridges answer through `bridgeTranscriptRouteBody` (`packages/protocol/src/node/bridge-transcript-routes.ts`), so a fix would land there and in the backend. Measured (task 1): a delta would be 22 to 68 times smaller (7.2–7.8 KB against 161–517 KB), and an 8-entry ring would always have held the base. But the cost it removes is small: at most 1 ms a read on a typical window and 3–4 ms on a full one, including the fake's own work, which at 2 reads a second is at most 0.2% and 0.8% of a core per streaming session. Viewers each drive reads (20 in 10 s with one viewer, 47 with three), so three viewers of a full window would cost up to about 2%. The bytes never leave the machine: the bridge is a local process or a local container.
+**Investigation.** Re-checked on `cbe0f9a5b`: `readHttpBridgeSummaryTranscript` (`apps/backend/src/core/http-bridge-transcript-v2.ts`) handles `unchanged` and otherwise a whole snapshot; all five bridges answer through `bridgeTranscriptRouteBody` (`packages/protocol/src/node/bridge-transcript-routes.ts`), so a fix would land there and in the backend. Measured (task 1): a delta would be 22 to 68 times smaller (7.2–7.8 KB against 161–517 KB), and an 8-entry ring would always have held the base. The original run measured 1 ms a read on a typical window and 3–4 ms on a full one, including the fake's own work. The corrected run measured 2 ms and 10 ms (0.4% and 2% of a core at two reads a second, before normalisation). These load-sensitive fake timings do not establish an upper bound. Viewers each drive reads (20 in 10 s with one viewer, 47 with three). The bytes never leave the machine: the bridge is a local process or a local container.
 
 **Decisions.**
 
 - **Build it?**
   - **Not now: keep whole windows on loopback (recommended).**
-    - Pros: no new wire form across five bridges; no backend cache of raw provider windows to rebuild a snapshot from; the cost is under 1% of a core per streaming session for one viewer.
-    - Cons: a full window streaming to several viewers costs up to about 2% of a core.
+    - Pros: no new wire form across five bridges; no backend cache of raw provider windows to rebuild a snapshot from; the original timings were small; real-stack cost remains unmeasured.
+    - Cons: corrected fake timings reached 10 ms per full-window read for one viewer; no reliable CPU bound is established.
   - **Build the recommended delta.**
     - Pros: 22 to 68 times fewer bytes and less parsing per read.
-    - Cons: a bridge ring per session, a backend copy of each session's last raw window, a capability check and a version-compatibility entry, for a saving the fake bounds at a few milliseconds a second.
-- **What would change the answer?** A real-stack run (task 1) showing larger windows, a faster write cadence or reads well above 4 ms, or a backend serving many streaming sessions at once.
+    - Cons: a bridge ring per session, a backend copy of each session's last raw window, a capability check and a version-compatibility entry, for a saving whose real-stack size remains unmeasured.
+- **What would change the answer?** A real-stack run (task 1) showing larger windows, a faster write cadence or reads well above 4 ms, or a backend serving many streaming sessions at once. The corrected fake run already exceeded 4 ms, so the earlier fake CPU bound must not be used to dismiss this task.
 
 ### 5. The steer qualification probe runs on every state poll
 
@@ -120,6 +120,28 @@ The figures, for tasks 2 to 4 below to cite:
   - **Leave it.**
     - Pros: always current.
     - Cons: a bridge request per poll for an answer that does not change.
+
+## Assumptions and decisions
+
+### Task 1: correct the streaming measurement boundary
+
+The review repair clears diagnostic metrics after warm-up and drains them after each completed poll into the benchmark's results. This excludes warm-up samples from every domain and retains long runs beyond the diagnostic buffer's 256-sample limit without changing production metrics. A final drain precedes idle polling. A numeric offset was rejected because the list groups domains and its buffers roll over.
+
+A fresh 10-second matrix on 2026-11-05, after validated commit `27161bad6`, captured 47 transcript and 47 non-joined state samples in each three-viewer case, and 20 of each in every one-viewer case. Two deterministic tests cover mixed-domain warm-up, duplicate drains and 600 polls. The refresh ran while backend validation was active; timings are observations under that load, not a causal comparison with the original runs. Counts and bytes above remain the original baseline; the sample-count/outcome and phase-time rows are replaced by the corrected run. Raw aggregates: `output/efficiency/e10-review-fixed.json` (git-ignored).
+
+| Case | State p50 total/source/normalise (ms) | Transcript provider p50 source/normalise (ms) |
+| --- | --- | --- |
+| Claude typical, three viewers, ring | 2 / 2 / 0 | 1 / 1 |
+| Claude typical, three viewers, no ring | 2 / 2 / 0 | 1 / 0 |
+| Claude full, three viewers, ring | 9 / 8 / 0 | 14 / 6 |
+| Claude full, three viewers, no ring | 15 / 12 / 0 | 5 / 1 |
+| Claude typical, one viewer | 5 / 4 / 0 | 2 / 1 |
+| Claude full, one viewer | 14 / 13 / 0 | 10 / 1 |
+| Codex typical, one viewer | 6 / 5 / 0 | 3 / 1 |
+| Pi typical, 10 models, one viewer | 6 / 5 / 0 | 2 / 1 |
+| Pi typical, 300 models, one viewer | 9 / 8 / 1 | 3 / 1 |
+
+Multi-viewer provider percentiles contain only the first read (one sample); the other 46 reads use memory. One-viewer provider percentiles contain all 20 samples. The deferred tasks remain open; the earlier CPU upper-bound claim is withdrawn pending task 1's real-stack measurements.
 
 ## Current state
 

@@ -1,7 +1,7 @@
 # `real Git through the shared owner` loses events on a saturated `fseventsd`
 
 - **ID:** 5061
-- **Status:** resolved
+- **Status:** open
 - **Date observed:** 2026-11-04
 - **File:** `apps/backend/src/core/worktree-snapshots-git.test.ts`
 - **Host:** arktech-mini, macOS arm64, external APFS volume, Bun 1.4.4. `fseventsd` was using 100–138% of a core with 8–11 GB resident after seven days of uptime, load average 6 to 10.
@@ -83,3 +83,33 @@ to stderr per detection on macOS. `console.log` would not do: the test preload s
 The cases [0947](0947-worktree-git-aggregate-timeouts.md) and
 [0957](0957-worktree-index-and-shared-ref-aggregate-timeouts.md) are on the same file and
 may share this cause on macOS. They stay open: no aggregate stress run was done here.
+
+## 2026-11-05 full-suite recurrence and explicit-delivery repair
+
+Review preparation at `3ef4e38e6` ran `mise run test:full` (exit 1,
+1,562,750 ms). The ignored-write case failed after 180,756 ms with
+`no quiet window with a delivered ignored write before the deadline`.
+Its no-scan assertion was never reached. Complete suite totals were unavailable;
+triage listed 16 distinct failures and unattributed errors. Original evidence:
+`.orkestrator/review-artifacts/review-validation-575573b4-beca-47da-ba6f-ac452035415c/validation-04.stdout.txt`.
+The earlier passing isolated runs did not establish aggregate reliability, so
+this case is reopened rather than attributing this recurrence to a proved cause.
+
+The ignored-write assertion now writes a real ignored file and explicitly delivers
+its path through the real root watcher listener while temporarily withholding
+native callbacks. It asserts zero hints and zero scans after the minimum scan
+gap. A source-path event through that same listener must then trigger a real Git
+scan and publish the source change. This removes both missing delivery and late
+unrelated callbacks from the negative assertion without bypassing the watcher
+filter or shared service. Other cases still test native delivery; healthy-host
+macOS qualification remains in to-do 5060 task 3. This record stays open pending
+aggregate reliability evidence for the remaining native-delivery cases.
+
+Targeted repair validation on macOS (2026-11-05):
+
+- `mise run test:logged -- --name ignored-write-fix -- bun test --cwd apps/backend ./src/core/worktree-snapshots-git.test.ts --parallel=1 --only-failures`: exit 0, 157.7 s.
+- `mise run test:logged -- --name ignored-write-repeat -- bun test --cwd apps/backend ./src/core/worktree-snapshots-git.test.ts --parallel=1 --only-failures --test-name-pattern 'a write under the ignored node_modules' --rerun-each 3`: exit 0, 41.0 s.
+- `mise run test:logged -- --name flake-index-fix -- bun test ./tests/unit/flaky-tests-index.test.ts ./tests/unit/todo-index.test.ts --parallel=1 --only-failures`: exit 0, 2.0 s.
+
+Passing logs are removed by the logged runner. These isolated passes repair the
+filter assertion's evidence; they do not resolve the broader native delivery case.

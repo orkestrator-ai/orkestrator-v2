@@ -49,6 +49,8 @@ let publishedRows: ChangeRow[] = [];
 let watchingSupported = true;
 let scansStarted = 0;
 let scansFinished = 0;
+let forwardNativeEvents = true;
+let deliverRootEvent: ((event: "change", name: string) => void) | undefined;
 
 function run(cwd: string, ...args: string[]): void {
   const result = Bun.spawnSync(["git", "-c", "user.email=a@b", "-c", "user.name=a", ...args], {
@@ -69,9 +71,6 @@ const latestRevision = () =>
   events.reduce((highest, event) => Math.max(highest, event.fileListRevision ?? 0), 0);
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-const isUnderDependencies = (event: { target: string; name: string | null }) =>
-  event.target === linked && event.name?.split(path.sep).join("/").startsWith("node_modules/");
 
 /**
  * What a run on a loaded Mac cost. It also keeps `--only-failures` from going quiet
@@ -117,35 +116,6 @@ async function removeUntilUnlisted(...names: string[]): Promise<void> {
     },
     (rows) => !rows.some((row) => names.includes(row.path)),
   );
-}
-
-/**
- * Writes under `node_modules` in a window with nothing else in flight, and returns
- * the counts from just before that write. A window in which any other native event
- * arrived proves nothing, and macOS must also have delivered the ignored write,
- * since no hint for an event that never came is no evidence either.
- */
-async function writeIgnoredInQuietWindow(): Promise<{ scansBefore: number; hintsBefore: number }> {
-  const settled = LOCAL_SCAN_MIN_GAP_MS + 100;
-  const deadline = Date.now() + DETECTION_DEADLINE_MS;
-  for (let attempt = 0; Date.now() < deadline; attempt += 1) {
-    const windowStart = rawEvents.length;
-    await until(() => scansStarted === scansFinished);
-    // Let settled hints finish before counting this write.
-    await sleep(settled);
-    const scansBefore = scansStarted;
-    const hintsBefore = hintedPaths.length;
-    const writeAt = rawEvents.length;
-    await fs.writeFile(path.join(linked, "node_modules", "pkg", `index-${attempt}.js`), "x\n");
-    await sleep(settled);
-    const quiet = rawEvents.slice(windowStart).every(isUnderDependencies);
-    const delivered = !EVENTS_CAN_BE_LOST || rawEvents.slice(writeAt).some(isUnderDependencies);
-    if (quiet && delivered) {
-      reportDelivery("ignored write delivered", deadline - DETECTION_DEADLINE_MS);
-      return { scansBefore, hintsBefore };
-    }
-  }
-  throw new Error("no quiet window with a delivered ignored write before the deadline");
 }
 
 async function readRows(): Promise<ChangeRow[]> {
@@ -202,14 +172,16 @@ beforeAll(
             hintedPaths.push(...(hint?.paths ?? []));
             options.onChange(hint);
           },
-          startWatch: (target, listener, watchOptions) =>
-            watch(target, { ...watchOptions, persistent: false }, (event, filename) => {
+          startWatch: (target, listener, watchOptions) => {
+            if (target === linked) deliverRootEvent = listener;
+            return watch(target, { ...watchOptions, persistent: false }, (event, filename) => {
               const name = filename?.toString() ?? null;
               rawEvents.push({ target, name });
               if (target === linked && name?.split(path.sep).at(-1) === readinessFile)
                 readinessHints++;
-              listener(event, name);
-            }),
+              if (forwardNativeEvents) listener(event, name);
+            });
+          },
         }),
       scan: async (target) => {
         scansStarted++;
@@ -340,18 +312,38 @@ describe("real Git through the shared owner", () => {
 
   test("a write under the ignored node_modules reaches no hint", async () => {
     if (!watchingSupported) return;
-    const { scansBefore, hintsBefore } = await writeIgnoredInQuietWindow();
-    expect(scansStarted).toBe(scansBefore);
-    expect(hintedPaths.length).toBe(hintsBefore);
-    // A later source edit proves the watch delivered past the write above.
-    await detect(
-      () => fs.writeFile(path.join(linked, "a.txt"), "one\ntwo\nthree\n"),
-      (rows) => rows.some((row) => row.path === "a.txt" && row.additions === 2),
-    );
-    expect(scansStarted).toBeGreaterThan(scansBefore);
-    expect(hintedPaths.slice(hintsBefore)).toContain("a.txt");
-    expect(hintedPaths.filter((name) => name.startsWith("node_modules/"))).toEqual([]);
-    expect((await readRows()).filter((row) => row.path.startsWith("node_modules/"))).toEqual([]);
+    // Exercise the real plan/filter/service with explicit delivery. Delayed native
+    // events from earlier tests must not contaminate this negative assertion.
+    // Native delivery remains covered by the surrounding detection tests.
+    forwardNativeEvents = false;
+    try {
+      expect(deliverRootEvent).toBeDefined();
+      await until(() => scansStarted === scansFinished);
+      await sleep(LOCAL_SCAN_MIN_GAP_MS + 100);
+      await until(() => scansStarted === scansFinished);
+      const scansBefore = scansStarted;
+      const hintsBefore = hintedPaths.length;
+      await fs.writeFile(path.join(linked, "node_modules", "pkg", "index.js"), "x\n");
+      deliverRootEvent!("change", "node_modules/pkg/index.js");
+      await sleep(LOCAL_SCAN_MIN_GAP_MS + 100);
+      expect(scansStarted).toBe(scansBefore);
+      expect(hintedPaths.length).toBe(hintsBefore);
+      // Positive control: the same listener must still reach the owner, scan
+      // real Git, and publish the changed source file without a read or timer.
+      await detect(
+        async () => {
+          await fs.writeFile(path.join(linked, "a.txt"), "one\ntwo\nthree\n");
+          deliverRootEvent!("change", "a.txt");
+        },
+        (rows) => rows.some((row) => row.path === "a.txt" && row.additions === 2),
+      );
+      expect(scansStarted).toBeGreaterThan(scansBefore);
+      expect(hintedPaths.slice(hintsBefore)).toContain("a.txt");
+      expect(hintedPaths.filter((name) => name.startsWith("node_modules/"))).toEqual([]);
+      expect((await readRows()).filter((row) => row.path.startsWith("node_modules/"))).toEqual([]);
+    } finally {
+      forwardNativeEvents = true;
+    }
   });
 
   test("a file written inside the minimum gap reaches the following scan unasked", async () => {

@@ -109,8 +109,10 @@ about 11 GB resident after seven days, and the first event took 3 to 35 s to arr
 callback counts are not usable: before was 54 and 6, after was 6 and 12. What holds
 there is the behaviour: `worktree-watcher-real.test.ts` shows the same write under
 `node_modules` reported with the plan off and not with it on, and
-`worktree-snapshots-git.test.ts` shows it through the real service, where a delivered
-ignored write starts no scan and a later source edit is detected. That host also
+`worktree-snapshots-git.test.ts` shows it through the real service, where an explicitly delivered
+ignored-path event starts no scan and a later source-path event is detected.
+That assertion withholds native callbacks so unrelated late delivery cannot
+contaminate its counters; separate detection cases retain native coverage. That host also
 loses events for every program: Bun and Node watching one directory were handed the
 same 6 of 12 writes, up to 61 s late and the rest not at all
 ([flake 5061](../tests/flaky-tests/environments-and-containers/5061-real-git-owner-saturated-fseventsd.md)).

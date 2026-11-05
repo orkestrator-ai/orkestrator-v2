@@ -106,17 +106,35 @@ The alternatives were to keep the single write and leave the service unproved un
 
 ## Current state
 
-Done as part of E7, with its code and tests:
+### Outcome of every task in the report
 
-| Part and task | Outcome |
-| --- | --- |
-| 0420 task 1, minimum gap | `LOCAL_SCAN_MIN_GAP_MS`, `DiffStatsService.scanGapRemaining`; `worktree-snapshots.test.ts` "minimum scan gap" |
-| 0420 task 2, hints under ignored directories | Done for `node_modules`, through the watch plan; the rest is task 2 here |
-| 0440 tasks 1 to 3 | `git-diff-summary.ts`, `resolveLocalGitBaseCommit`, `ensureLocalGitExcludeOnce`; `git-diff-summary.test.ts`, `commands-files-local-scan.test.ts`, `local-git-scan-caches.test.ts` |
-| 0450 tasks 1 and 2 | `countUntrackedFileLines`, `mapWithConcurrency` in `git-scopes.ts`; `local-git-scan-caches.test.ts`, `git-scopes.test.ts` |
-| 0460 task 1 | `gitScopeDemandTtlMs` and a `reset` event; `git-scopes.test.ts` "Git scope demand (ST-18)" |
-| 0570 task 1, what the watch costs | Measured: [git-scan-caches.md](../../architecture/git-scan-caches.md#what-the-worktree-watch-leaves-out) |
-| 0570 task 2, watch non-ignored subtrees | `worktree-watch-plan.ts`, `worktree-watcher.ts`; `worktree-watch-plan.test.ts`, `worktree-watcher-split.test.ts`, `worktree-watcher-real.test.ts`, `worktree-snapshots-git.test.ts` |
+The report file is deleted, so this table is its closing record. It has one row for every task and every Needs verification item in the five parts, checked against the file as it stands at `48d2ed40c`, this work's base commit, which holds the same text as `e198fd4a7`. A task that ended two ways has a row for each. Code is under `apps/backend/src/core/` and tests are beside it, except `worktree-watcher-real.test.ts`, which is in `apps/backend/tests/`.
+
+| Part and task | Outcome | Code or evidence | Test |
+| --- | --- | --- | --- |
+| 0420 task 1, minimum gap with a trailing run | Done | `LOCAL_SCAN_MIN_GAP_MS`, `DiffStatsService.scanGapRemaining` (`diff-stats-service.ts`) | `worktree-snapshots.test.ts` "minimum scan gap"; `worktree-snapshots-git.test.ts` "a file written inside the minimum gap reaches the following scan unasked" |
+| 0420 task 2, drop hints under ignored directories: a proved `node_modules` | Done. The report recommended no; that stopped fitting once the watch plan held Git's proof | `listIgnoredDependencyTrees`, `planWatchTargets` (`worktree-watch-plan.ts`), `startWorktreeWatcher` (`worktree-watcher.ts`) | `worktree-watcher-split.test.ts` "drops events under an excluded subtree, and only those"; `worktree-snapshots-git.test.ts` "a write under the ignored node_modules reaches no hint" |
+| 0420 task 2, drop hints under ignored directories: every other ignored directory | Moved to to-do 5060, task 2 | The tree view shows them, so they stay watched and start scans at the gap's rate | None |
+| 0420 Needs verification, scan rate during a real install | Moved to to-do 5060, task 1 | Not measured on a live stack | None |
+| 0440 task 1, one diff pass | Done | `parseGitDiffSummary`, `withoutStatOnlyModifications` (`git-diff-summary.ts`), used by `getLocalGitStatusDetailed` and `buildContainerGitStatusScript` (`commands-files.ts`) and `git-scopes.ts` | `git-diff-summary.test.ts` "one combined diff pass"; `commands-files-local-scan.test.ts` "git processes per scan (ST-14)" |
+| 0440 task 2, ensure the exclude file once per worktree | Done for local scans, with a stat stamp added so a rewritten file is repaired. Containers repeat it in their script by decision ([git-scan-caches.md](../../architecture/git-scan-caches.md#what-one-scan-costs)) | `ensureLocalGitExcludeOnce` (`local-git-scan-caches.ts`) | `local-git-scan-caches.test.ts` "ensuring the exclude file"; `commands-files-local-scan.test.ts` "a removed exclude file is written again without its patterns going missing" and "repairs excludes after same-container replacement, deletion, rewrite and failed housekeeping" |
+| 0440 task 3, reuse the resolved base oid | Done | `resolveLocalGitBaseCommit` (`commands-files.ts`) | `commands-files-local-scan.test.ts` "runs one combined diff, resolves the base once and ensures the exclude file once" and "compares against the commit a branch base resolved to, trying origin first" |
+| 0440 Needs verification, stat-only modifications in the combined output | Done | `withoutStatOnlyModifications` drops them as the two runs did | `git-diff-summary.test.ts` "reports exactly what the two separate passes reported, working tree against a commit" |
+| 0440 Needs verification, process counts per scan | Done. The report's 7 to 9 measured as 7, and 4 after | `scripts/benchmark-local-diff-scan.ts`, workload `scan-1k` | `commands-files-local-scan.test.ts` "runs one combined diff, resolves the base once and ensures the exclude file once" |
+| 0450 task 1, stat-keyed line count cache | Done, on the settled-stamp rule | `countUntrackedFileLines` (`local-git-scan-caches.ts`) | `local-git-scan-caches.test.ts` "untracked line counts"; `commands-files-local-scan.test.ts` "a scan reads an unchanged settled untracked file once, and a fresh one every time" |
+| 0450 task 2, bounded concurrency in Git scopes | Done, still recording `ambiguous-index-membership` | `mapWithConcurrency`, `UNTRACKED_SCAN_CONCURRENCY` (`change-tracking/git-scopes.ts`) | `change-tracking/git-scopes.test.ts` "a scope counts untracked files with bounded concurrency" |
+| 0450 Needs verification, how often worktrees hold enough untracked files | Moved to to-do 5060, task 5 | Not measured; only a synthetic workload | None |
+| 0460 task 1, expire scope demand | Done. The recommended TTL, plus a `reset` event, because the TTL alone would freeze an open view | `gitScopeDemandTtlMs` (`change-tracking/policy-registry.ts`), `demandTtlMs` (`change-tracking/git-scopes.ts`) | `change-tracking/git-scopes.test.ts` "Git scope demand (ST-18)" |
+| 0460 Needs verification, how long a view stays open without a read | No longer holds: no read cadence exists to set the TTL from. A view reads once on mount and on a resync (`apps/web/src/lib/changes/subscriptions.ts`) | The `reset` event replaces that dependency | `change-tracking/git-scopes.test.ts` "a view left open follows changes across expiry: reset, read, recompute" |
+| 0570 task 1, what the watch costs: Linux | Done. One inotify watch per directory: 4,672 on `watch-nm-4k` | `scripts/benchmark-worktree-watch.ts`; [the measured tables](../../architecture/git-scan-caches.md#what-the-worktree-watch-leaves-out) | `worktree-watcher-real.test.ts` "takes no inotify watches inside an ignored node_modules" |
+| 0570 task 1, what the watch costs: macOS | Moved to to-do 5060, task 3 | Start and close stalls were measured, but only on a host with a saturated `fseventsd`, and its callback counts are unusable | None |
+| 0570 task 2, watch non-ignored subtrees: a proved `node_modules` | Done, with a per-platform plan instead of the recommended shape. Linux takes 170 watches against 4,672; macOS keeps one root and drops the events on arrival. The recommended shape stalled macOS and missed nested `node_modules` | `planWatchTargets`, `listIgnoredDependencyTrees` (`worktree-watch-plan.ts`), `startWorktreeWatcher` (`worktree-watcher.ts`) | `worktree-watch-plan.test.ts`; `worktree-watcher-split.test.ts`; `worktree-watcher-real.test.ts` "a write under an ignored node_modules goes unreported while a source write is noticed", "a file in a directory created after the watch began is noticed", "a tracked file under node_modules is noticed"; `worktree-snapshots-git.test.ts` "a file in a directory created after the watch began is detected" |
+| 0570 task 2, watch non-ignored subtrees: every other ignored directory | Moved to to-do 5060, task 2 | They stay watched, because the tree view shows them | None |
+| 0570 task 2, watch non-ignored subtrees: macOS event callbacks | Moved to to-do 5060, task 3 | Events under `node_modules` still reach JavaScript there, because Bun's `fs.watch` exposes no exclusion paths | None |
+| 0570 Needs verification, Bun's recursive watcher on Linux | Done in `oven/bun:1.4.4` on Docker Desktop's VM. A Linux host's own file system is moved to to-do 5060, task 4 | The Linux column of [the platform table](../../architecture/git-scan-caches.md#what-the-worktree-watch-leaves-out) | `worktree-watcher-real.test.ts` and `worktree-snapshots-git.test.ts`, run in that container |
+| 0570 Needs verification, Bun's recursive watcher on macOS | Moved to to-do 5060, task 3 | Coverage is proved, but one write's prompt delivery is not, on the host available: Bun and Node each received the same 6 of 12 writes ([flake 5061](../../tests/flaky-tests/environments-and-containers/5061-real-git-owner-saturated-fseventsd.md)) | `worktree-watcher-real.test.ts` proves the coverage; delivery has no test |
+
+The report's constraints still hold: scans keep their hardening (`commands-files-local-scan.test.ts` "scanning a worktree does not run a program its own Git config names"), and a watcher event stays a hint behind the safety scan (`worktree-snapshots.test.ts` "the watched tree recovers from a missed hint on the safety tick").
 
 ## Constraints and rationale
 
@@ -132,4 +150,4 @@ A worktree with more than 256 ignored `node_modules` or a plan of over 1,024 wat
 
 ## Replaces
 
-Batch E7's report file in `docs/reports/efficiency-logging-database/`, deleted with this work; `e198fd4a7` holds it.
+Batch E7's report file in `docs/reports/efficiency-logging-database/`, deleted with this work; `e198fd4a7` holds it. Where each of its tasks ended up is in [the outcome table](#outcome-of-every-task-in-the-report).

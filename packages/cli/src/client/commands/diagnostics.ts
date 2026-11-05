@@ -77,6 +77,7 @@ export const diagnosticsCommands: CommandSpec[] = [
     action: "diagnostics.read",
     inputFields: { plan: "planId", file: null },
     summary: "Save a diagnostics bundle (.tar.gz) on this machine. Nothing is uploaded.",
+    idOutput: "the saved file's path",
     description:
       "Metrics, health figures, database figures and logs, with credentials and home directories redacted by pattern. Redaction is not a proof, so read the files before sharing them. The bundle is written with owner-only permissions, and an existing file is never overwritten.",
     positionals: [],

@@ -6,7 +6,7 @@ Analysed 2026-11-04 against `main` at `a8bdce444`.
 
 ### Tasks
 
-1. **Apply `maxBatchBytes` across a whitespace-ignore page**: decide whether that view shares the page budget as the normal view does. Status: open.
+1. **Apply `maxBatchBytes` across a whitespace-ignore page**: decide whether that view shares the page budget as the normal view does. Status: done.
 
 ### 1. Apply `maxBatchBytes` across a whitespace-ignore page
 
@@ -25,3 +25,17 @@ Analysed 2026-11-04 against `main` at `a8bdce444`.
   - **Leave it.**
     - Pros: nothing a client sees changes.
     - Cons: a page can diff far more than `maxBatchBytes` on the event loop.
+
+## Assumptions and decisions
+
+Re-checked 2026-11-05 against `main` at `f6d4162e1`, after E3 (#1833) merged. The finding still held: `DiffBodyService.renderView` called `renderSnapshotBodies` once per file of a whitespace-ignore page, each with a fresh `maxBatchBytes`.
+
+### Task 1: share the page budget
+
+Took the recommended option: `renderView` makes one `renderSnapshotBodies` call for the whole page in both views, passing `ignoreWhitespace` for the whitespace view. Later files on a page past the budget show `changes.body.batch-limit`, as the normal view does. `diff-bodies-lookup.test.ts` kept its comparison with the old per-file double render, now named as holding only within the budget, and gained a test that the budget applies across a whitespace page (it fails on the per-file code). `docs/architecture/change-tracking.md` "Manifest cache" says so.
+
+## Outcome
+
+| Task | Outcome |
+| --- | --- |
+| 1. Apply `maxBatchBytes` across a whitespace-ignore page | Done. Code: `DiffBodyService.renderView` in `apps/backend/src/core/change-tracking/diff-bodies.ts` renders the page in one `renderSnapshotBodies` call. Test: `diff-bodies-lookup.test.ts`, "the whitespace-ignore view > shares the page's batch budget across files, as the normal view does". |

@@ -73,8 +73,8 @@ This index only changes when a branch merges, so it can't show what is running n
 | E5 | [Database upkeep](0760-e5-database-upkeep.md) | `0760`, `0800`, `0910`, `0920` | Storage, 1 of 2 | None | E15 (Health and diagnostics) |
 | E7 | [Diff scans](0420-e7-diff-scans.md) | `0420`, `0440`, `0450`, `0460`, `0570` | Git scans and file reads, 1 of 2 | None | E3 (Retention and deletion) |
 | E26 | [Local desktop transport](0400-e26-local-desktop-transport.md) | `0400`, `0860` | Desktop, 1 of 2 | E1 (Baseline run) | None |
-| E18 | [Gateway events](0280-e18-gateway-events.md) | `0280`, `0290`, `0300`, `0370` | Gateway, 2 of 4 | None | None |
-| E24 | [Gateway static and preview](0310-e24-gateway-static-and-preview.md) | `0310`, `0365` | Gateway, 3 of 4 | None | None |
+| E18 | [Gateway events](0280-e18-gateway-events.md) | `0280`, `0290`, `0300`, `0370` | Gateway, 1 of 3 | None | None |
+| E24 | [Gateway static and preview](0310-e24-gateway-static-and-preview.md) | `0310`, `0365` | Gateway, 2 of 3 | None | None |
 | E13 | [Silent failures](0720-e13-silent-failures.md) | `0720`, `0830` | Logging and diagnostics, 1 of 4 | None | E20 (ACP bridge), E21 (Pi bridge) |
 | E17 | [Dead code](0770-e17-dead-code.md) | `0770`, `0930` | Logging and diagnostics, 2 of 4 | None | None |
 | E15 | [Health and diagnostics](0750-e15-health-and-diagnostics.md) | `0750`, `0820`, `0810`, `0880`, `0780` | Logging and diagnostics, 3 of 4 | None | E5 (Database upkeep) |

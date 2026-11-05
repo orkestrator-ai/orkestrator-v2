@@ -1368,7 +1368,7 @@ async function recordSetupCompletion(
  * The id is persisted with the operation and used for the create, so a tag
  * moved mid-operation cannot change what the candidate runs. A missing image
  * fails here with the image-unavailable classification; an answer that cannot
- * be read leaves the create to report the daemon's own error.
+ * be read leaves the create to refuse, since it cannot check the image.
  */
 export async function resolveOperationImage(
   context: Pick<CommandContext, "dockerImage">,

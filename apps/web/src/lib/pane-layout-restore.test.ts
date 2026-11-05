@@ -8,6 +8,7 @@ import { mergePersistedPaneLayouts } from "./pane-layout-merge";
 import {
   LEGACY_PANE_LAYOUT_VERSION,
   PANE_LAYOUT_VERSION,
+  type PaneLeaf,
   type PersistedPaneLayout,
   type TabInfo,
 } from "@/types/paneLayout";
@@ -166,6 +167,34 @@ describe("reconcilePersistedLayout", () => {
       ],
     });
     expect(JSON.stringify(layout)).not.toContain("deleted-pipeline");
+  });
+
+  test("key information tabs keep the notes view and drop an unknown one", () => {
+    const layout = reconcilePersistedLayout(
+      saved({
+        kind: "leaf",
+        id: "pane",
+        activeTabId: "a",
+        tabs: [
+          {
+            id: "a",
+            type: "key-information",
+            keyInformationTabData: { pipelineId: "pipeline-1", view: "notes" },
+          },
+          {
+            id: "b",
+            type: "key-information",
+            keyInformationTabData: { pipelineId: "pipeline-1", view: "unknown" },
+          },
+        ],
+      }),
+      { ...context, hasBuildPipeline: (pipelineId: string) => pipelineId === "pipeline-1" },
+    );
+    const { tabs } = layout!.root as PaneLeaf;
+    expect(tabs.map((tab) => tab.keyInformationTabData)).toEqual([
+      { environmentId: "env-1", pipelineId: "pipeline-1", view: "notes" },
+      { environmentId: "env-1", pipelineId: "pipeline-1" },
+    ]);
   });
 
   test("rejects primitive and other non-object persisted roots", () => {

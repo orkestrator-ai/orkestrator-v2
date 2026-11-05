@@ -7,7 +7,9 @@ import {
   type ProjectGitStatus,
   type ProjectGitSwitchConfirmation,
 } from "@orkestrator/protocol/coordinator";
+import type { HumanPromptEntry } from "@orkestrator/protocol/human-prompts";
 import type { NativeAgentSessionProjection } from "@orkestrator/protocol/native-agent";
+import type { Environment } from "@/types";
 import * as realBackend from "@/lib/backend";
 import * as realNativeAgent from "@/components/native-agent";
 import type { AgentMailMailboxSnapshot } from "@orkestrator/protocol/agent-mail";
@@ -44,6 +46,10 @@ import { dispatchResourceChange } from "@/lib/resource-sync";
 import { resetNativeAgentSyncCapabilityForTests } from "@/hooks/useNativeAgentSession";
 import * as paneTree from "./CoordinatorPaneTree";
 import { createSessionKey } from "@/lib/utils";
+
+import { portalStore } from "@/lib/portal/portal-store";
+import * as nodeEvents from "@/lib/federation/node-events";
+import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 
 const backendSnapshot = { ...realBackend };
 const nativeAgentSnapshot = { ...realNativeAgent };
@@ -267,6 +273,9 @@ async function refreshCoordinator(assignedSnapshot: CoordinatorSnapshot, revisio
   await screen.findByRole("tab", { name: `Refreshed ${revision}, Claude Code` });
 }
 
+let workerPromptsForTest: HumanPromptEntry[] = [];
+const stopWorkerTurn = mock(async () => ({ stopped: true }));
+
 mock.module("@/lib/backend", () => ({
   ...backendSnapshot,
   getLocalFileTree: mock(async () => []),
@@ -288,6 +297,8 @@ mock.module("@/lib/backend", () => ({
   createCoordinatorConversation: createConversation,
   closeCoordinatorConversation: closeConversation,
   hideCoordinatorWork: hideWork,
+  stopCoordinatorWorkerTurn: stopWorkerTurn,
+  listHumanPrompts: async () => ({ prompts: workerPromptsForTest }),
   assignCoordinatorConversationAgent: assignAgent,
   getNativeAgentSyncCapabilities: async () => ({ projectionSyncVersions: [] }),
   ensureNativeAgentSession: async (
@@ -2004,6 +2015,140 @@ describe("CoordinatorPanel", () => {
     expect(within(panel).getByText("Worker worker-for-first")).toBeTruthy();
     expect(within(panel).getByText("Worker worker-for-second")).toBeTruthy();
     expect(within(panel).queryByText("Worker worker-for-other") === null).toBe(true);
+  });
+
+  describe("acting on a worker from the panel", () => {
+    const running = {
+      id: "running",
+      coordinatorId: "coordinator-1",
+      projectId: "project-1",
+      conversationId: "conversation-1",
+      kind: "environment" as const,
+      resourceId: "worker-env",
+      requestId: "running",
+      createdAt: new Date().toISOString(),
+      delegation: {
+        requestedAt: new Date().toISOString(),
+        workerTabId: "worker-tab",
+        state: "running" as const,
+        request: { summary: "Fix the parser", agent: "claude" as const },
+      },
+    };
+    const worker = { id: "worker-env", projectId: "project-1", name: "api-fix" } as Environment;
+    const previousEnvironments = useEnvironmentStore.getState().environments;
+
+    beforeEach(() => {
+      stopWorkerTurn.mockClear();
+      workerPromptsForTest = [];
+      useEnvironmentStore.setState({ environments: [worker] });
+      ensuredSnapshot = { ...snapshot, workflows: [running] };
+    });
+    afterEach(() => {
+      workerPromptsForTest = [];
+      useEnvironmentStore.setState({ environments: previousEnvironments });
+    });
+
+    test("Stop on a Work row stops that worker through the coordinator's command", async () => {
+      render(<CoordinatorPanel projectId="project-1" />);
+      await screen.findByTestId("native-agent");
+      fireEvent.click(screen.getByRole("button", { name: /^Show work/ }));
+      const panel = screen.getByRole("complementary", { name: "Work" });
+      expect(within(panel).getByText("Fix the parser")).toBeTruthy();
+      fireEvent.click(within(panel).getByRole("button", { name: "Stop api-fix" }));
+      await waitFor(() => expect(stopWorkerTurn).toHaveBeenCalledTimes(1));
+      expect(stopWorkerTurn.mock.calls[0]).toMatchObject([
+        {
+          projectId: "project-1",
+          coordinatorId: "coordinator-1",
+          conversationId: "conversation-1",
+        },
+        { environmentId: "worker-env", tabId: "worker-tab" },
+      ]);
+    });
+
+    test("remote prompt Open targets its node, project, environment and tab and disconnect removes it", async () => {
+      const priorPortal = portalStore.getState();
+      const priorRemote = useRemoteWorkspaceStore.getState();
+      const node = {
+        nodeId: "bk_leaf",
+        available: true,
+        loadedAt: 1,
+        view: { displayName: "Build box" },
+        environments: [
+          {
+            ref: { backendId: "bk_leaf", environmentId: "worker-env" },
+            projectId: "leaf-project",
+            name: "remote-api",
+            status: "running",
+          },
+        ],
+      };
+      const invoke = spyOn(portalStore, "invokeOnNode").mockResolvedValue({
+        prompts: [
+          {
+            id: "remote-prompt",
+            environmentId: "worker-env",
+            tabId: "worker-tab",
+            source: "agent-tool",
+            since: new Date().toISOString(),
+            prompt: {
+              kind: "secret",
+              wantsEnter: false,
+              text: "Remote password:",
+              key: "remote-secret",
+            },
+          },
+        ],
+      });
+      const subscribe = spyOn(nodeEvents, "subscribeNodeEvents").mockReturnValue(() => {});
+      portalStore.store.setState({ selfId: "bk_cmd" as never, nodes: [node] as never });
+      ensuredSnapshot = { ...snapshot, workflows: [{ ...running, nodeId: "bk_leaf" }] };
+      try {
+        render(<CoordinatorPanel projectId="project-1" />);
+        const open = await screen.findByRole("button", { name: "Open remote-api on Build box" });
+        expect(invoke).toHaveBeenCalledWith("bk_leaf", "list_human_prompts", {
+          environmentIds: ["worker-env"],
+        });
+        fireEvent.click(open);
+        expect(useRemoteWorkspaceStore.getState().active).toMatchObject({
+          nodeId: "bk_leaf",
+          projectId: "leaf-project",
+          environmentId: "worker-env",
+        });
+        expect(
+          useRemoteWorkspaceStore.getState().requests["bk_leaf"]?.request.workTarget,
+        ).toMatchObject({
+          environmentId: "worker-env",
+          tabId: "worker-tab",
+        });
+        act(() => portalStore.store.setState({ nodes: [{ ...node, available: false }] as never }));
+        await waitFor(() => expect(screen.queryByText(/Remote password:/)).toBeNull());
+        expect(screen.queryByRole("button", { name: "Open remote-api on Build box" })).toBeNull();
+      } finally {
+        cleanup();
+        invoke.mockRestore();
+        subscribe.mockRestore();
+        portalStore.store.setState(priorPortal, true);
+        useRemoteWorkspaceStore.setState(priorRemote, true);
+      }
+    });
+
+    test("the prompt banner's Open goes to the waiting worker's tab", async () => {
+      workerPromptsForTest = [
+        {
+          id: "tool-1",
+          environmentId: "worker-env",
+          tabId: "worker-tab",
+          source: "agent-tool",
+          since: new Date().toISOString(),
+          prompt: { kind: "secret", wantsEnter: false, text: "Password:", key: "secret" },
+        },
+      ];
+      render(<CoordinatorPanel projectId="project-1" />);
+      await screen.findByTestId("native-agent");
+      fireEvent.click(await screen.findByRole("button", { name: "Open api-fix" }));
+      await waitFor(() => expect(useUIStore.getState().selectedEnvironmentId).toBe("worker-env"));
+    });
   });
 
   test("moves a worker to Needs you when its waiting episode is announced, without a coordinator turn", async () => {

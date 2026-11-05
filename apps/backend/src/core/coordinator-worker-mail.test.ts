@@ -165,6 +165,9 @@ describe("coordinator messages to the project home", () => {
     expect(sent).not.toHaveProperty("projectHomeWarning");
     expect(await pendingRequests()).toEqual([]);
     expect(await mailTo(workerId)).toHaveLength(1);
+    expect(
+      (await storage.coordinators.listOpenCoordinatorDelegations())[0]?.delegation?.request,
+    ).toMatchObject({ summary: "Go." });
   });
 
   test("a message without a reason is refused and nothing is sent or held", async () => {

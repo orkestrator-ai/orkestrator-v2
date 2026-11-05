@@ -4,9 +4,10 @@
  * an identity, and a directory is only safe to remove once no live process
  * still names it.
  */
-import { execFile, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { readFile, readdir } from "node:fs/promises";
+import { runCommand } from "./shell.js";
 
 /** A process's start time, so a later process reusing its PID is not mistaken for it. */
 export function processStartIdentity(pid: number): string | null {
@@ -57,6 +58,22 @@ export function isRecordedProcessAlive(
 
 const COMMAND_LINES_MAX_BYTES = 32 * 1024 * 1024;
 
+/** `ps`'s view of {@link readLiveCommandLines}, for hosts without `/proc`. */
+export async function readPsCommandLines(
+  limits: { timeoutMs?: number; maxOutputBytes?: number } = {},
+): Promise<string | null> {
+  try {
+    const { stdout } = await runCommand("ps", ["-axww", "-o", "args="], {
+      timeoutMs: limits.timeoutMs ?? 5_000,
+      maxOutputBytes: limits.maxOutputBytes ?? COMMAND_LINES_MAX_BYTES,
+      env: { ...process.env, LC_ALL: "C" },
+    });
+    return stdout;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * The command lines of every visible live process, newline-separated, or
  * `null` when they cannot be read (callers then treat every path as in use).
@@ -79,17 +96,5 @@ export async function readLiveCommandLines(): Promise<string | null> {
       return null;
     }
   }
-  return new Promise((resolve) => {
-    execFile(
-      "ps",
-      ["-axww", "-o", "args="],
-      {
-        encoding: "utf8",
-        timeout: 5_000,
-        maxBuffer: COMMAND_LINES_MAX_BYTES,
-        env: { ...process.env, LC_ALL: "C" },
-      },
-      (error, stdout) => resolve(error ? null : stdout),
-    );
-  });
+  return readPsCommandLines();
 }

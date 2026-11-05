@@ -10,6 +10,8 @@ import {
 import { resetResourceCaches } from "../src/core/container-resources";
 import { resetDockerTopologyCache, resetImageManifestCache } from "../src/core/docker-image";
 import {
+  FIXTURE_IMAGE_ID,
+  imageManifestArchive,
   lifecycleEnvironment,
   memoryLifecycleContext,
   tempDir,
@@ -58,6 +60,7 @@ async function createWithProject(project: string, filesToCopy: string[] = [], se
       repositories: { "project-1": { filesToCopy: seeded ? [] : filesToCopy } },
     }),
   });
+  const manifest = await imageManifestArchive(dir);
   let commands: string[] = [];
   await withDockerScript(
     `#!/bin/sh
@@ -65,8 +68,13 @@ printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 case "$1" in
   context) printf 'unix:///var/run/docker.sock\\n' ;;
   info) printf '{"OSType":"linux","OperatingSystem":"Debian","Architecture":"x86_64","ServerVersion":"29.7.2","SecurityOptions":[]}\\n' ;;
-  create) printf 'seed-container\\n' ;;
+  create)
+    case "$*" in
+      *manifest-probe*) printf 'manifest-probe\\n' ;;
+      *) printf 'seed-container\\n' ;;
+    esac ;;
   cp)
+    case "$2" in manifest-probe:*) cat '${manifest}'; exit 0 ;; esac
     [ "$2" = -a ] || exit 1
     tar -xf - -C '${capture}' ;;
 
@@ -74,8 +82,12 @@ esac
 exit 0
 `,
     async (log) => {
-      expect(await createDockerContainer(environment, context)).toBe("seed-container");
-      commands = (await log.read()).split("\n").filter(Boolean);
+      expect(await createDockerContainer(environment, context, { imageId: FIXTURE_IMAGE_ID })).toBe(
+        "seed-container",
+      );
+      commands = (await log.read())
+        .split("\n")
+        .filter((line) => Boolean(line) && !line.includes("manifest-probe"));
     },
   );
   const create = commands.find((line) => line.startsWith("create "));

@@ -1,11 +1,11 @@
 import { bridgeDiagnosticPayloads } from "@orkestrator/protocol/testing/bridge-diagnostic-lines";
 import { afterEach, describe, expect, jest, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-// Circular-payload normalization and raw-log I/O can be paused behind the
-// process-heavy bridge suites. Preserve the assertions under aggregate load.
+// File reads here can be paused behind the process-heavy bridge suites. Preserve
+// the assertions under aggregate load.
 jest.setTimeout(30_000);
 
 process.env.CODEX_BRIDGE_NO_SERVER = "1";
@@ -779,53 +779,6 @@ describe("codex bridge private boundary coverage", () => {
     expect(warnings).toEqual([
       [expect.stringContaining("[bridge.codex] models.debug-read-failed")],
     ]);
-  });
-
-  test("normalizes raw log payloads and writes sanitized JSONL filenames", async () => {
-    const root = temporaryRoot();
-    const circular: Record<string, unknown> = {};
-    circular.self = circular;
-
-    expect(__testing.sanitizeLogFileComponentForTesting("../unsafe:id%")).toBe(".._unsafe_id_");
-    expect(__testing.normalizeLogPayloadForTesting({ nested: [1, true] })).toEqual({
-      nested: [1, true],
-    });
-    expect(__testing.normalizeLogPayloadForTesting(circular)).toBe("[object Object]");
-    await __testing.writeCodexRawLogForTesting(
-      "../unsafe:id%",
-      { kind: "event", payload: __testing.normalizeLogPayloadForTesting(circular) },
-      root,
-    );
-
-    const line = readFileSync(join(root, ".._unsafe_id_.jsonl"), "utf8").trim();
-    expect(JSON.parse(line)).toMatchObject({
-      sessionId: "../unsafe:id%",
-      kind: "event",
-      payload: "[object Object]",
-      timestamp: expect.any(String),
-    });
-  });
-
-  test("contains raw log setup failures and no-ops without a log directory", async () => {
-    const root = temporaryRoot();
-    const blockingFile = join(root, "not-a-directory");
-    writeFileSync(blockingFile, "blocked", "utf8");
-    const errors: unknown[][] = [];
-    const originalConsoleError = console.warn;
-    console.warn = (...args: unknown[]) => errors.push(args);
-
-    try {
-      await expect(
-        __testing.writeCodexRawLogForTesting("session", {}, null),
-      ).resolves.toBeUndefined();
-      await expect(
-        __testing.writeCodexRawLogForTesting("session", {}, blockingFile),
-      ).resolves.toBeUndefined();
-    } finally {
-      console.warn = originalConsoleError;
-    }
-
-    expect(errors).toContainEqual([expect.stringContaining("[bridge.codex] raw-log.write-failed")]);
   });
 
   test("extracts only valid persisted role-specific message content", () => {

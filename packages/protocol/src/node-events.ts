@@ -5,8 +5,10 @@
  * administrative can be routed to its owner (`invoke_on_node`). This is the
  * matching channel for its events. A client asks the command node to watch a
  * node for some event prefixes (`watch_node_events`), renews that lease while
- * it still shows the data, and receives each matching event as
- * {@link RELAYED_NODE_EVENT}, qualified by the node it came from.
+ * it still shows the data, and receives each matching event under that node's
+ * own name ({@link relayedNodeEventName}), qualified by the node it came from.
+ * A stream that has not asked for per-node names gets them all as
+ * {@link RELAYED_NODE_EVENT} instead, which is what older clients listen on.
  *
  * Relayed events are increments over what the client read through
  * `invoke_on_node`, never the only source of truth. A `resync` frame means
@@ -18,6 +20,8 @@
 import { isBackendId, type BackendId } from "./federation.js";
 
 export const RELAYED_NODE_EVENT = "relayed-node-event";
+/** A per-node relayed event's name is this followed by the node id. */
+export const RELAYED_NODE_EVENT_PREFIX = `${RELAYED_NODE_EVENT}:`;
 
 /** A lease lasts this long unless renewed. */
 export const NODE_EVENT_WATCH_TTL_MS = 90_000;
@@ -46,6 +50,26 @@ export interface NodeEventWatchResult {
   expiresAt: number;
   /** False when the command node did not hold this lease (for example after a restart). */
   renewed: boolean;
+  /**
+   * The command node relays this node's events under {@link relayedNodeEventName}.
+   * Absent on an older command node, whose frames all use {@link RELAYED_NODE_EVENT}.
+   */
+  perNodeEvents?: true;
+}
+
+export function relayedNodeEventName(nodeId: BackendId): string {
+  return `${RELAYED_NODE_EVENT_PREFIX}${nodeId}`;
+}
+
+export function isPerNodeRelayedEvent(event: string): boolean {
+  return event.startsWith(RELAYED_NODE_EVENT_PREFIX);
+}
+
+/** The node a per-node relayed event belongs to, or null for any other event. */
+export function relayedNodeEventNodeId(event: string): BackendId | null {
+  if (!isPerNodeRelayedEvent(event)) return null;
+  const nodeId = event.slice(RELAYED_NODE_EVENT_PREFIX.length);
+  return isBackendId(nodeId) ? nodeId : null;
 }
 
 export function isRelayableEvent(event: string): boolean {

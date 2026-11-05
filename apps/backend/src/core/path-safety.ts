@@ -5,6 +5,7 @@ import { spawn } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { dlopen, FFIType, ptr, read, type Pointer } from "bun:ffi";
+import { CommandFailedError, runCommandBuffer } from "./command-capture.js";
 import { APP_SLUG } from "./constants.js";
 
 export const MAX_BINARY_FILE_BYTES = 10 * 1024 * 1024;
@@ -610,6 +611,62 @@ if (childDev && (String(final.dev) !== childDev || String(final.ino) !== childIn
 fs.rmSync(target, { recursive: true, force: true });
 `;
 
+const MAX_HELPER_DIAGNOSTIC_CHARS = 1_024;
+const READY_TOKEN = "ORK_WRITE_READY";
+
+function confinedWriteFailure(stderr: string, exitCode: number | null): Error {
+  const diagnostic = stderr.slice(0, MAX_HELPER_DIAGNOSTIC_CHARS);
+  return new Error(`Confined file write failed (${diagnostic || `exit ${exitCode}`})`);
+}
+
+/**
+ * Runs the helper with a stdout handshake instead of a capture: `afterDirectoriesOpened`
+ * must act between the helper pinning its directories and it receiving the payload,
+ * which needs a live read. Only tests set that hook.
+ */
+function writeThroughHandshake(
+  rootPath: string,
+  helperArgs: string[],
+  content: Buffer,
+  afterDirectoriesOpened: () => void | Promise<void>,
+): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const child = spawn(process.execPath, [...helperArgs, READY_TOKEN], {
+      cwd: rootPath,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let stderr = "";
+    child.stderr.on("data", (chunk) => {
+      if (stderr.length < MAX_HELPER_DIAGNOSTIC_CHARS) stderr += chunk.toString();
+    });
+    child.once("error", reject);
+    // `exit` can precede the final stderr data event. Settle on `close`, which
+    // fires after the stdio streams close, so a fail-closed helper diagnostic
+    // is not nondeterministically replaced by the bare exit code.
+    child.once("close", (code) => {
+      if (code === 0) resolve();
+      else reject(confinedWriteFailure(stderr, code));
+    });
+    child.stdin.on("error", (error: NodeJS.ErrnoException) => {
+      // An identity/symlink rejection can close stdin before the bounded
+      // payload is consumed. The exit status is the authoritative failure.
+      if (error.code !== "EPIPE") reject(error);
+    });
+    let stdout = "";
+    child.stdout.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString();
+      if (!stdout.includes(`${READY_TOKEN}\n`)) return;
+      stdout = "";
+      void Promise.resolve(afterDirectoriesOpened())
+        .then(() => child.stdin.end(content))
+        .catch((error) => {
+          child.kill();
+          reject(error);
+        });
+    });
+  });
+}
+
 async function writeFromPinnedRoot(
   rootPath: string,
   rootStats: Stats,
@@ -620,61 +677,32 @@ async function writeFromPinnedRoot(
   createAncestors: boolean,
   testHooks: ConfinedPathTestHooks = {},
 ): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const readyToken = testHooks.afterDirectoriesOpened ? "ORK_WRITE_READY" : "";
-    const child = spawn(
-      process.execPath,
-      [
-        "-e",
-        PINNED_CWD_WRITE_HELPER,
-        target,
-        exclusive ? "exclusive" : "overwrite",
-        String(rootStats.dev),
-        String(rootStats.ino),
-        String(content.byteLength),
-        String(fileMode),
-        createAncestors ? "create" : "existing",
-        readyToken,
-      ],
-      {
-        cwd: rootPath,
-        stdio: ["pipe", "pipe", "pipe"],
-      },
-    );
-    let stderr = "";
-    child.stderr.on("data", (chunk) => {
-      if (stderr.length < 1_024) stderr += chunk.toString().slice(0, 1_024 - stderr.length);
+  const helperArgs = [
+    "-e",
+    PINNED_CWD_WRITE_HELPER,
+    target,
+    exclusive ? "exclusive" : "overwrite",
+    String(rootStats.dev),
+    String(rootStats.ino),
+    String(content.byteLength),
+    String(fileMode),
+    createAncestors ? "create" : "existing",
+  ];
+  if (testHooks.afterDirectoriesOpened) {
+    await writeThroughHandshake(rootPath, helperArgs, content, testHooks.afterDirectoriesOpened);
+    return;
+  }
+  try {
+    // No deadline: a bounded payload on a slow disk still has to finish or fail.
+    await runCommandBuffer(process.execPath, helperArgs, {
+      cwd: rootPath,
+      stdin: content,
+      timeoutMs: 0,
     });
-    child.once("error", reject);
-    // `exit` can precede the final stderr data event. Settle on `close`, which
-    // fires after the stdio streams close, so a fail-closed helper diagnostic
-    // is not nondeterministically replaced by the bare exit code.
-    child.once("close", (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`Confined file write failed (${stderr || `exit ${code}`})`));
-    });
-    child.stdin.on("error", (error: NodeJS.ErrnoException) => {
-      // An identity/symlink rejection can close stdin before the bounded
-      // payload is consumed. The exit status is the authoritative failure.
-      if (error.code !== "EPIPE") reject(error);
-    });
-    if (readyToken) {
-      let stdout = "";
-      child.stdout.on("data", (chunk: Buffer) => {
-        stdout += chunk.toString();
-        if (!stdout.includes(`${readyToken}\n`)) return;
-        stdout = "";
-        void Promise.resolve(testHooks.afterDirectoriesOpened?.())
-          .then(() => child.stdin.end(content))
-          .catch((error) => {
-            child.kill();
-            reject(error);
-          });
-      });
-    } else {
-      child.stdin.end(content);
-    }
-  });
+  } catch (error) {
+    if (!(error instanceof CommandFailedError) || error.executableMissing) throw error;
+    throw confinedWriteFailure(error.stderr, error.exitCode);
+  }
 }
 
 /** Removes one directory tree relative to a root-pinned child cwd. */

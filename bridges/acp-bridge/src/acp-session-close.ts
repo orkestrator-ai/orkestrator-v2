@@ -3,7 +3,6 @@ import {
   CLOSE_ATTACH_WAIT_MS,
   CLOSE_CANCEL_WAIT_MS,
   CLOSE_SESSION_WAIT_MS,
-  bumpCursorDiscoveryRevision,
   clientSessionKeys,
   sessions,
 } from "./acp-context.js";
@@ -156,10 +155,7 @@ async function runClose(state: SessionState): Promise<RetainingCloseOutcome> {
   // No await between the landed write and the removal: until here every
   // lookup still finds the session (closing), and from here on it is gone
   // from the registry and the file alike.
-  if (sessions.get(state.id) === state) {
-    sessions.delete(state.id);
-    bumpCursorDiscoveryRevision();
-  }
+  if (sessions.get(state.id) === state) sessions.delete(state.id);
   const clientKey = state.clientSessionKey;
   if (clientKey !== undefined && clientSessionKeys.get(clientKey) === state.id) {
     clientSessionKeys.delete(clientKey);

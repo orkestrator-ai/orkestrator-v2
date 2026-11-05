@@ -748,15 +748,22 @@ and is not followed automatically, so a finished run still opens on the step it
 last reached. On a failed run it stays readable and its status says "So far".
 Only a cancelled run that never shipped omits it.
 
-Its inspector (`PipelineNotesView`) leads with **Needs a look**, then shows the
-whole key information document (`KeyInformationDocument`, the same one the
-key information tab renders). The list comes from `pipelineFollowUps`
+Its inspector (`PipelineNotesView`) shows the whole key information document
+(`KeyInformationDocument`, the same one the key information tab renders), with
+**Needs a look** directly under the summary, or ahead of the sections when the
+brief has no summary. The list comes from `pipelineFollowUps`
 (`@orkestrator/protocol/build-pipeline-notes`), a pure reading of the record:
 
 - criteria the newest live Verify marked `not-checked`, with what was missing;
 - the brief's `notDone` entries;
 - review issues still `open` or `partially-resolved`;
 - tests whose result is not `passed`.
+
+A double click on the node (Enter, or its "Open notes in a tab" action) opens
+the same reading on a full pane: the `key-information` tab with `view: "notes"`.
+A pipeline has one such tab, separate from its key information tab, which keeps
+showing the brief alone. Both keep only the pipeline id and read the record, so
+they follow every update and survive a reload.
 
 The Ship stage passes the same list to `prPrompt`, which has the description
 carry a `## Needs a look` section, so the person merging sees it. Only the

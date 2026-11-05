@@ -3,10 +3,11 @@ import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { KeyInformationTabData, TabInfo } from "@/types/paneLayout";
 
 /**
- * Opens a build pipeline's key information in its own `key-information` tab.
- * There is one tab per pipeline: opening it again focuses that tab rather
- * than counting a new one, so it is resolved before the tab limit. Kept free
- * of the tab view's own modules, which load lazily.
+ * Opens a build pipeline's key information or notes in its own
+ * `key-information` tab. There is one tab per pipeline and view: opening it
+ * again focuses that tab rather than counting a new one, so it is resolved
+ * before the tab limit. Kept free of the tab view's own modules, which load
+ * lazily.
  */
 export function openKeyInformationTab(options: {
   environmentId: string;
@@ -22,7 +23,9 @@ export function openKeyInformationTab(options: {
   const store = usePaneLayoutStore.getState();
   const openTab = options.allTabs.find(
     (tab) =>
-      tab.type === "key-information" && tab.keyInformationTabData?.pipelineId === target.pipelineId,
+      tab.type === "key-information" &&
+      tab.keyInformationTabData?.pipelineId === target.pipelineId &&
+      tab.keyInformationTabData.view === target.view,
   );
   if (openTab) {
     const pane = store.findPaneWithTab(openTab.id, environmentId);
@@ -40,7 +43,11 @@ export function openKeyInformationTab(options: {
     {
       id: createUniqueTabId("key-information"),
       type: "key-information",
-      keyInformationTabData: { environmentId, pipelineId: target.pipelineId },
+      keyInformationTabData: {
+        environmentId,
+        pipelineId: target.pipelineId,
+        ...(target.view ? { view: target.view } : {}),
+      },
     },
     environmentId,
   );

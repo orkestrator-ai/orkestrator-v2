@@ -129,6 +129,18 @@ describe("a client grant at the leaf's gateway", () => {
     expect(invoke.mock.calls.map(([command]) => command)).toEqual(["get_config", "get_config"]);
   });
 
+  test("allows Work panel Stop but refuses the leaf-only controller command", async () => {
+    const { invoke, call } = await gatewayWithBackend();
+    const args = {
+      scope: { projectId: "project-1", coordinatorId: "c", conversationId: "chat" },
+      input: { requestId: "stop-1", environmentId: "env-1", tabId: "tab-1", stoppedBy: "user" },
+    };
+    expect((await call("stop_coordinator_worker_turn", args)).status).toBe(200);
+    expect(invoke).toHaveBeenCalledWith("stop_coordinator_worker_turn", args);
+    expect((await call("stop_controller_worker_turn", args)).status).toBe(403);
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
   test("still runs terminals", async () => {
     const { invoke, call } = await gatewayWithBackend();
     for (const [command, args] of terminalCommands) {
@@ -142,6 +154,17 @@ describe("a client grant at the leaf's gateway", () => {
   test("answers an older realm's unchanged settings echo without writing", async () => {
     const { invoke, call } = await gatewayWithBackend();
     const answered = await call("update_global_config", olderRealmFavouriteEcho);
+    expect(answered.status).toBe(200);
+    expect(answered.json()).toEqual({ result: leafConfig });
+    expect(invoke.mock.calls.map(([command]) => command)).toEqual(["get_config"]);
+  });
+
+  test("answers an older client's save carrying the retired raw logging key without writing", async () => {
+    const { invoke, call } = await gatewayWithBackend();
+    const answered = await call("update_global_config", {
+      global: { ...olderRealmFavouriteEcho.global, experimentalCodexRawEventLogging: true },
+      preserveInheritedSettings: true,
+    });
     expect(answered.status).toBe(200);
     expect(answered.json()).toEqual({ result: leafConfig });
     expect(invoke.mock.calls.map(([command]) => command)).toEqual(["get_config"]);

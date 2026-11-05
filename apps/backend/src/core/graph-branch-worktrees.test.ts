@@ -119,7 +119,8 @@ describe("the container path", () => {
     const worktrees = new GraphBranchWorktrees({
       storage: { getEnvironment: async () => environment },
       fence,
-      createRunner: (env, held) => createEnvironmentCommandRunner(env, held, undefined, execute),
+      createRunner: (env, held) =>
+        createEnvironmentCommandRunner(env, held, undefined, undefined, execute),
       now: () => new Date("2026-10-29T12:00:00.000Z"),
     });
     return {
@@ -209,7 +210,7 @@ describe("the container path", () => {
       },
     };
     const createRunner = (env: Environment) =>
-      createEnvironmentCommandRunner(env, fence, undefined, (async (
+      createEnvironmentCommandRunner(env, fence, undefined, undefined, (async (
         command: string,
         args: string[],
       ) => {

@@ -1,9 +1,13 @@
-import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, jest, spyOn, test } from "bun:test";
 import { appendFile, mkdtemp, rm, unlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SessionManager, type SessionInfo } from "@earendil-works/pi-coding-agent";
-import { listResumableSessions, setSessionListTimeoutForTests } from "./agent-session.js";
+import {
+  listResumableSessions,
+  sessionListReadSettledForTests,
+  setSessionListTimeoutForTests,
+} from "./agent-session.js";
 import { workingDirectory } from "./config.js";
 import { SESSION_LIST_CACHE_TTL_MS } from "./session-list-cache.js";
 import { TimeoutError } from "./timeout.js";
@@ -45,6 +49,8 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  jest.useRealTimers();
+  await sessionListReadSettledForTests();
   list.mockRestore();
   setSessionListTimeoutForTests();
   if (previousSessionDirectory === undefined) delete process.env.PI_SESSION_DIR;
@@ -148,35 +154,46 @@ describe("the resumable session list", () => {
     expect(list).toHaveBeenCalledTimes(2);
   });
 
+  // Fake timers decide where the ceiling lands, so neither ordering depends on
+  // how long the stamp's file reads take on a loaded host.
   test("a timeout is reported, not an empty history, and stops the read", async () => {
     await writeSession("one", "first prompt");
     let signal: AbortSignal | undefined;
+    let started!: () => void;
+    const listStarted = new Promise<void>((resolve) => (started = resolve));
     list.mockImplementation((_cwd, _dir, _progress, given) => {
       signal = given;
+      started();
       return new Promise((_, reject) => {
         given!.addEventListener("abort", () => reject(given!.reason));
       });
     });
-    setSessionListTimeoutForTests(1000);
-    // Allow filesystem preparation to finish before advancing the timeout clock.
-    const timeout = spyOn(globalThis, "setTimeout");
-    let expire: (() => void) | undefined;
-    timeout.mockImplementation(((callback: () => void) => {
-      expire = callback;
-      return { unref() {} };
-    }) as never);
+    jest.useFakeTimers();
+    setSessionListTimeoutForTests(5);
 
-    const pending = listResumableSessions().catch((error: unknown) => error);
-    try {
-      while (!signal) await Bun.sleep(1);
-      expire!();
-    } finally {
-      timeout.mockRestore();
-    }
-    const failure = await pending;
+    const failure = listResumableSessions().catch((error: unknown) => error);
+    await listStarted;
+    jest.advanceTimersByTime(5);
 
-    expect(failure).toBeInstanceOf(TimeoutError);
+    expect(await failure).toBeInstanceOf(TimeoutError);
     expect(signal?.aborted).toBe(true);
+  });
+
+  test("a timeout before the list starts never starts it", async () => {
+    await writeSession("one", "first prompt");
+    jest.useFakeTimers();
+    setSessionListTimeoutForTests(5);
+
+    const failure = listResumableSessions().catch((error: unknown) => error);
+    jest.advanceTimersByTime(5);
+
+    expect(await failure).toBeInstanceOf(TimeoutError);
+    await sessionListReadSettledForTests();
+    expect(list).not.toHaveBeenCalled();
+    jest.useRealTimers();
+    setSessionListTimeoutForTests();
+    expect(await listResumableSessions()).toHaveLength(1);
+    expect(list).toHaveBeenCalledTimes(1);
   });
 
   test("any other failure still reads as no sessions", async () => {

@@ -9,6 +9,7 @@ import { openBackendDatabase } from "../storage-stores.js";
 import type { StorageService } from "../storage.js";
 import { baselineTargetBranch } from "../diff-baseline.js";
 import { importOpenCodeCommandJournals } from "./legacy-import.js";
+import { openChangeLedgerDatabase } from "./ledger-schema.js";
 import { ChangeTrackingService } from "./service.js";
 import type { WorktreeTarget } from "./worktree-owner.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
@@ -21,13 +22,19 @@ export function createBackendChangeTracking(input: {
   emit: (event: string, payload: unknown) => void;
   refreshEnvironment: (environmentId: string) => void;
 }): ChangeTrackingService {
-  // The ledger shares orkestrator.sqlite through its own connection (WAL), as
-  // other row engines do; it is opened on first use, after storage init.
+  // The ledger has its own file, change-tracking.sqlite, opened on first use,
+  // after storage init.
   let database: StorageDatabase | null = null;
   const service = new ChangeTrackingService({
     dataDir: input.dataDir,
     database: () => {
-      if (!database || database.isClosed()) database = openBackendDatabase(input.dataDir);
+      if (!database || database.isClosed()) {
+        // The main database's migration 7 moves an older ledger into the
+        // ledger file, replacing its rows. It must have run before the ledger
+        // is first written, so open (and migrate) the main database first.
+        openBackendDatabase(input.dataDir).close();
+        database = openChangeLedgerDatabase(input.dataDir);
+      }
       return database;
     },
     emit: input.emit,

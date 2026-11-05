@@ -26,7 +26,6 @@ import { MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS } from "./coordinator-workflow-re
 import { seedStore, readStoredValue } from "./storage-test-support.js";
 import { multiReviewInputWithDefaults } from "./coordinator-launch-defaults.js";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
-import { __testing as __seedTesting } from "./host-model-catalog-seed.js";
 
 describe("coordinator command registry", () => {
   let root: string;
@@ -402,7 +401,6 @@ describe("coordinator command registry", () => {
   });
 
   test("seeds a project-scoped OpenCode catalogue for an unassigned coordinator", async () => {
-    __seedTesting.reset();
     const project = await storage.addProject(createProject("remote", checkout));
     const config = await storage.loadConfig();
     await storage.updateGlobalConfig({

@@ -1,7 +1,7 @@
 /**
  * Service-level coverage for the Multi Review efficiency work: evidence
- * permits across service lifetimes, conditional reviewer transcripts, and
- * content-free measurement. The broad behavioural suite lives in
+ * permits across service lifetimes, one snapshot drift check per admission
+ * pass, conditional reviewer transcripts, and content-free measurement. The broad behavioural suite lives in
  * `multi-review-service.test.ts`.
  */
 import { expect, jest, test } from "bun:test";
@@ -103,7 +103,7 @@ class Provider {
   async abort() {}
 }
 
-async function setup(reviewerCount: number) {
+async function setup(reviewerCount: number, options: { snapshotMode?: boolean } = {}) {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "ork-multi-review-efficiency-"));
   const storage = new StorageService(dataDir);
   await storage.init();
@@ -126,7 +126,13 @@ async function setup(reviewerCount: number) {
     setupScriptsComplete: true,
   });
   const commands: string[] = [];
-  const controls = { failVerifications: 0 };
+  const controls = {
+    failVerifications: 0,
+    /** The live worktree's uncommitted paths; the pinned baseline is clean. */
+    worktreePaths: [] as string[],
+    /** Answer the worktree probe with an unusable result ("could not look"). */
+    worktreeUnreadable: false,
+  };
   const invoke = async <T>(command: string, args?: Record<string, unknown>): Promise<T> => {
     commands.push(command);
     if (command === "verify_review_package") {
@@ -138,7 +144,8 @@ async function setup(reviewerCount: number) {
     }
     if (command === "generate_review_package") return testGeneratedReviewPackage(args!) as T;
     if (command === "get_environment_uncommitted_paths") {
-      return { head: HEAD, paths: [], fingerprint: "a".repeat(64) } as T;
+      if (controls.worktreeUnreadable) return { status: "unknown" } as T;
+      return { head: HEAD, paths: [...controls.worktreePaths], fingerprint: "a".repeat(64) } as T;
     }
     throw new Error(`unexpected command ${command}`);
   };
@@ -175,14 +182,18 @@ async function setup(reviewerCount: number) {
       fingerprint: "a".repeat(64),
       capturedAt: timestamp,
     },
-    reviewPackage: parseReviewPackageReference(
-      testGeneratedReviewPackage({
-        packageId: "review-package-eff",
-        round: 1,
-        targetBranch: "main",
-      }),
-      { id: "review-package-eff", round: 1, targetBranch: "main" },
-    ),
+    ...(options.snapshotMode
+      ? {}
+      : {
+          reviewPackage: parseReviewPackageReference(
+            testGeneratedReviewPackage({
+              packageId: "review-package-eff",
+              round: 1,
+              targetBranch: "main",
+            }),
+            { id: "review-package-eff", round: 1, targetBranch: "main" },
+          ),
+        }),
     phase: "reviewing",
     createdAt: timestamp,
     updatedAt: timestamp,
@@ -201,6 +212,12 @@ async function setup(reviewerCount: number) {
     workflowId: workflow.id,
     snapshot,
     verifications: () => commands.filter((command) => command === "verify_review_package").length,
+    worktreeProbes: () =>
+      commands.filter((command) => command === "get_environment_uncommitted_paths").length,
+    reviewerPrompts: () =>
+      [...provider.prompts.values()].filter((prompt) =>
+        prompt.includes("You are independent reviewer"),
+      ),
     cleanup: () => fs.rm(dataDir, { recursive: true, force: true }),
   };
 }
@@ -258,6 +275,86 @@ test("a transient admission verification failure fails the workflow before any d
     expect(
       (await env.snapshot()).reviewers.every((reviewer) => reviewer.dispatchState === "sent"),
     ).toBe(true);
+    await service.shutdown();
+  } finally {
+    await env.cleanup();
+  }
+});
+
+test("snapshot mode checks the worktree once per admission pass, not once per reviewer", async () => {
+  const env = await setup(3, { snapshotMode: true });
+  try {
+    env.provider.failSendFor.add("session-1");
+    const service = env.createService();
+    await service.advanceNow(env.workflowId);
+    // Three reviewer prompts were built from one probe (each probe is two
+    // `git status` captures in the environment), not one probe per reviewer.
+    expect(env.worktreeProbes()).toBe(1);
+    expect(env.provider.sends).toEqual(["session-2", "session-3"]);
+    expect((await env.snapshot()).reviewers[0]?.dispatchState).toBe("prepared");
+
+    // The retrying reviewer is admitted by the next pass, which checks again
+    // and sees the change made after the first pass's check.
+    env.controls.worktreePaths = ["src/appeared.ts"];
+    env.provider.failSendFor.clear();
+    await service.advanceNow(env.workflowId);
+    expect(env.worktreeProbes()).toBe(2);
+    const prompts = env.reviewerPrompts();
+    expect(prompts).toHaveLength(3);
+    expect(prompts[0]).toContain("**Authoritative worktree state**");
+    expect(prompts[1]).toContain("**Authoritative worktree state**");
+    expect(prompts[2]).toContain("**Pinned worktree state (known stale)**");
+    const drifted = await env.snapshot();
+    expect(drifted.reviewSnapshotStale).toBe(true);
+    expect(drifted.error).toBeUndefined();
+
+    // A pass that admits nobody does not probe at all.
+    await service.advanceNow(env.workflowId);
+    expect(env.worktreeProbes()).toBe(2);
+    await service.shutdown();
+  } finally {
+    await env.cleanup();
+  }
+});
+
+test("a drift found by the pass's check reaches every prompt that pass builds", async () => {
+  const env = await setup(3, { snapshotMode: true });
+  try {
+    env.controls.worktreePaths = ["src/appeared.ts"];
+    const service = env.createService();
+    await service.advanceNow(env.workflowId);
+    expect(env.worktreeProbes()).toBe(1);
+    const prompts = env.reviewerPrompts();
+    expect(prompts).toHaveLength(3);
+    for (const prompt of prompts) {
+      expect(prompt).toContain("**Pinned worktree state (known stale)**");
+      expect(prompt).not.toContain("**Authoritative worktree state**");
+    }
+    const drifted = await env.snapshot();
+    // Drift is a durable warning in snapshot mode, never a failure.
+    expect(drifted.reviewSnapshotStale).toBe(true);
+    expect(drifted.phase).toBe("reviewing");
+    expect(drifted.reviewers.every((reviewer) => reviewer.dispatchState === "sent")).toBe(true);
+    await service.shutdown();
+  } finally {
+    await env.cleanup();
+  }
+});
+
+test("an unreadable worktree fails snapshot admission before any reviewer starts", async () => {
+  const env = await setup(3, { snapshotMode: true });
+  try {
+    env.controls.worktreeUnreadable = true;
+    const service = env.createService();
+    await service.advanceNow(env.workflowId);
+    // "Could not look" stays distinct from "has changed": it is not recorded
+    // as drift, and no reviewer session is opened on unverified evidence.
+    const failed = await env.snapshot();
+    expect(failed.phase).toBe("failed");
+    expect(failed.error).toContain("cannot verify its worktree snapshot");
+    expect(failed.reviewSnapshotStale).toBeUndefined();
+    expect(env.provider.sessions).toBe(0);
+    expect(env.provider.sends).toEqual([]);
     await service.shutdown();
   } finally {
     await env.cleanup();

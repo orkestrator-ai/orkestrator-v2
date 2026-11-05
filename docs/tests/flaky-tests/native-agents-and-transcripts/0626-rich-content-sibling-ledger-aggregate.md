@@ -145,3 +145,12 @@ remains unknown. No rich-content implementation or assertions changed.
 - Complete unchanged owner: `NODE_ENV=test mise run test:logged -- --name fixes-rich-revocation-isolated -- bun test --cwd apps/web ./src/lib/chat/rich-conversation-revocation.test.tsx --parallel=1 --only-failures` passed all 11 tests, exit 0, in 3.3 seconds.
 - An initial owner invocation without explicit `NODE_ENV=test` loaded production React and failed because `React.act` was unavailable; diagnostics: `/tmp/orkestrator-test-run.8Yo4dx/fixes-rich-revocation-isolated.log.gz`. Correcting the invocation required no source changes.
 - No owning rich-content code or assertions changed. This repeats open case 0626; its root cause remains unknown.
+
+## Leaf-mode branch merge validation — 2026-11-05
+
+- Merge parents: `0c9f7eb93c03d510284bf27200d7f058d0498556` and `e1f4c875fe7667a094ab350b8f7880aab8b6783d`. This owner was outside the four original conflicts and was unchanged by resolution.
+- Original command: `mise run test:logged -- --name merge-default-suite -- mise run test`; workspace/root/bridges/protocol reservations 6/1/2/1 slots, web two isolated Bun workers. The run waited 660.1 seconds for capacity and exited 1 after 1268.2 seconds.
+- Failure: `conversation deletion clears that conversation's protected rich content > the backend's transcript-artifact hint for a deleted conversation clears it once`, `apps/web/src/lib/chat/rich-conversation-revocation.test.tsx:187`, sibling ledger expected length 1, received 0 (233.79 ms). Web totals: 12,500 passed, 10 skipped, one failed across 833 files. All other package tasks and the root, bridge and protocol-check groups passed.
+- Complete unchanged owner rerun: `mise run test:logged -- --name merge-revocation-rerun -- env NODE_ENV=test bun test --cwd apps/web ./src/lib/chat/rich-conversation-revocation.test.tsx --parallel=1 --only-failures` passed (exit 0, 2.6 seconds). Passing output was removed by the logged runner.
+- Evidence: `/tmp/orkestrator-test-run.WgzY1u/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; outer aggregate log `/tmp/orkestrator-test-run.6qQiEz/merge-default-suite.log.gz`.
+- This repeats the open case. No implementation, assertion, timeout or skip changed; root cause remains unconfirmed, and the aggregate remains non-green.

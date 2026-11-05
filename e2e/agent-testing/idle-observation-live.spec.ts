@@ -37,7 +37,14 @@
  * no "ask" mode) is recorded `not-exercised` or `skipped`, never `passed`.
  * Real turns cost tokens; this spec runs only when asked for.
  */
-import { expect, test, type Browser, type BrowserContext, type Page } from "@playwright/test";
+import {
+  expect,
+  test,
+  type Browser,
+  type BrowserContext,
+  type Page,
+  fetchModulesOutsideChromium,
+} from "./browser-test";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -304,6 +311,7 @@ async function openClient(browser: Browser, status: Status, logicalSessionKey: s
   const context = await browser.newContext({
     viewport: { width: 1440, height: 1100 },
   });
+  await fetchModulesOutsideChromium(context);
   await context.addInitScript(installFaultSeams);
   const page = await context.newPage();
   // These cases use local worktrees. A host's Docker firewall notice must

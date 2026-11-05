@@ -55,6 +55,27 @@ describe("TabShell", () => {
     expect(onMouseDown).not.toHaveBeenCalled();
   });
 
+  test("busy close stays mounted and focused but refuses activation", () => {
+    const onClose = mock(() => {});
+    const { rerender } = render(
+      <TabShell isActive onClose={onClose} closeLabel="Close First">
+        First
+      </TabShell>,
+    );
+    const close = screen.getByRole("button", { name: "Close First" });
+    close.focus();
+    rerender(
+      <TabShell isActive onClose={onClose} closeLabel="Close First" closeDisabled>
+        First
+      </TabShell>,
+    );
+    expect(screen.getByRole("button", { name: "Close First" })).toBe(close);
+    expect(document.activeElement).toBe(close);
+    expect(close.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(close);
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
   test("omits inactive and unavailable controls", () => {
     const { container } = render(<TabShell isActive={false}>Tab title</TabShell>);
 

@@ -111,8 +111,21 @@ same host can therefore lose Vite module loads and render a blank page or the
 "Orkestrator couldn't connect" screen; see
 flake [2340](../tests/flaky-tests/aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md).
 When a browser run fails, it prints which failed cases have that error in their
-trace; the run's result does not change. `headless-profile.spec.ts` fetches its
-modules outside Chromium's network stack, so this does not fail the headless check.
+trace; the run's result does not change.
+
+The browser suite's specs therefore take `test` from
+`e2e/agent-testing/browser-test.ts` rather than `@playwright/test`. Its
+`context` fixture fetches every loopback script and stylesheet through
+Playwright (`route.fetch()`), which no interface change aborts, and keeps them
+in memory for that context, because routing turns Chromium's HTTP cache off and
+refetching every module on each reload made reloaded pages miss their
+assertions on a loaded host. Navigations, commands and event streams still go
+through Chromium. A spec that opens a
+second context calls `fetchModulesOutsideChromium(context)` on it.
+`browser-gateway.spec.ts` and `client-outage.spec.ts` keep Chromium's own path
+for module loads, because the browser's network path is what they test.
+`browser-test.test.ts` fails when a new spec in `playwright.browser.config.ts`
+uses neither, or creates a context it does not route.
 
 Both full browser tasks (`test:agent:browser` and its isolated variant) build
 the packaged CLI first (`build:cli`), because `cli-ui.spec.ts` drives

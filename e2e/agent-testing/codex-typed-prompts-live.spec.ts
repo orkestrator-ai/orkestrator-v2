@@ -1,7 +1,7 @@
 /** Opt-in real composer → bridge → Codex → reload/resume qualification.
  * Uses only disposable fixture worktrees; three short provider turns.
  */
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./browser-test";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import {
   authenticatedInvoke,

@@ -80,7 +80,12 @@ import {
 import { modelRuntime } from "./runtime.js";
 import { cachedSessionList, rememberSessionList, sessionFilesStamp } from "./session-list-cache.js";
 import { TimeoutError, withTimeout } from "./timeout.js";
-import { applySessionEvent, providerDuration, replayNestedToolCalls } from "./translate.js";
+import {
+  appendResumeFallbackNotice,
+  applySessionEvent,
+  providerDuration,
+  replayNestedToolCalls,
+} from "./translate.js";
 import {
   boundTranscript,
   chargeTranscript,
@@ -1080,7 +1085,8 @@ function thinkingDefaults(settingsManager: SettingsManager): ThinkingLevelDefaul
  * keeps the model's context across a bridge restart. A file that no longer
  * exists degrades to a fresh session rather than a failed attach: a new
  * conversation with the transcript we already hold is a far better outcome
- * than a tab that can never send again.
+ * than a tab that can never send again. Either way the transcript says so,
+ * because the model no longer remembers what the user can still read.
  */
 export function sessionManagerFor(state: SessionState): SessionManager {
   const directory = sessionDirectory();
@@ -1091,8 +1097,15 @@ export function sessionManagerFor(state: SessionState): SessionManager {
       // Report lost context only when the bridge has evidence of prior activity.
       const hasHistory = (statSync(state.sessionFile, { throwIfNoEntry: false })?.size ?? 0) > 0;
       const manager = SessionManager.open(state.sessionFile, directory, workingDirectory);
-      if (!hasHistory && (state.messages.length > 0 || state.promptSequence > 0)) {
+      if (hasHistory) state.resumeFallbackFile = undefined;
+      if (
+        !hasHistory &&
+        state.resumeFallbackFile !== state.sessionFile &&
+        (state.messages.length > 0 || state.promptSequence > 0)
+      ) {
+        state.resumeFallbackFile = state.sessionFile;
         log.warn("session.resume-fell-back", { sessionId: state.id });
+        appendResumeFallbackNotice(state);
       }
       return manager;
     } catch (error) {
@@ -1101,6 +1114,7 @@ export function sessionManagerFor(state: SessionState): SessionManager {
         error: formatLogError(error, { message: false }),
       });
       state.sessionFile = undefined;
+      appendResumeFallbackNotice(state);
     }
   }
   return SessionManager.create(workingDirectory, directory);
@@ -1283,9 +1297,15 @@ export async function applyComposerToSession(state: SessionState): Promise<void>
 export const SESSION_LIST_TIMEOUT_MESSAGE = "Pi took too long to read its session history";
 
 let sessionListTimeoutMs = CATALOG_TIMEOUT_MS;
+let lastSessionListRead: Promise<unknown> | undefined;
 
 export function setSessionListTimeoutForTests(timeoutMs?: number): void {
   sessionListTimeoutMs = timeoutMs ?? CATALOG_TIMEOUT_MS;
+}
+
+/** Settles once the latest read has stopped, including one a timeout gave up on. */
+export async function sessionListReadSettledForTests(): Promise<void> {
+  await lastSessionListRead?.catch(() => undefined);
 }
 
 /**
@@ -1296,12 +1316,10 @@ export function setSessionListTimeoutForTests(timeoutMs?: number): void {
  */
 export async function listResumableSessions(): Promise<NativeAgentResumeEntry[]> {
   const read = new AbortController();
+  const work = readResumableSessions(read.signal);
+  lastSessionListRead = work;
   try {
-    return await withTimeout(
-      readResumableSessions(read.signal),
-      sessionListTimeoutMs,
-      SESSION_LIST_TIMEOUT_MESSAGE,
-    );
+    return await withTimeout(work, sessionListTimeoutMs, SESSION_LIST_TIMEOUT_MESSAGE);
   } catch (error) {
     read.abort();
     // A timeout is not an empty history. The route says so; the user would
@@ -1319,6 +1337,9 @@ async function readResumableSessions(signal: AbortSignal): Promise<NativeAgentRe
   signal.throwIfAborted();
   const cached = cachedSessionList(directory, stamp);
   if (cached) return cached;
+  // The ceiling may expire while the files are stamped. A read given up on
+  // must not go on to parse every session file with nobody waiting for it.
+  signal.throwIfAborted();
 
   const listed = await SessionManager.list(workingDirectory, sessionDirectory(), undefined, signal);
   const entries = listed.slice(0, MAX_RESUME_ENTRIES).map((info) => ({

@@ -1,7 +1,7 @@
 # `startWorktreeWatcher > observes a real file write` (`apps/backend/tests/worktree-watcher.test.ts:237`)
 
 - **ID:** 0091
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-08-06
 - **Original command:** `bun run test` (root group: `bun test tests --parallel=4`)
 - **Suite counts:** 3,686 passed, 1 skipped, 1 failed
@@ -90,3 +90,10 @@ No watcher implementation, assertion, deadline or skip changed.
 The backend aggregate finished with 12,572 passed, 123 skipped, and 21 failed
 across 769 files (630.64 s). Full merge validation and remaining failures are
 recorded in [1171](../aggregate-validation-runs/1171-orkestrator-permission-rules-0723-validation.md).
+
+## Root cause and fix — 2026-11-05
+
+- **Recurrence:** `mise run test:logged -- --name watcher-unit-final -- bun test --cwd apps/backend ./src/core/worktree-watch-plan.test.ts ./src/core/worktree-watcher-split.test.ts ./tests/worktree-watcher.test.ts --parallel=2 --only-failures`: 69 passed, this test failed with zero changes at its 5 s deadline (5013.71 ms). Artifact: `orkestrator-test-run.9MieQJ` under the host temporary directory. The same command then passed twice, and the owning file passed alone.
+- **Root cause:** the host's `fseventsd` loses and delays events for every program. Bun and Node watching one directory side by side were handed the same 6 of 12 writes, up to 61 s late, with no Orkestrator code involved; the runs are in [5061](5061-real-git-owner-saturated-fseventsd.md). That replaces the contention and delivery hypotheses above: repeated writes for a few seconds cannot outlast it.
+- **Fix:** `43ead013a`. On macOS the bounded write loop runs for up to 90 s. Linux keeps 5 s. A broken watcher still fails at the deadline.
+- **Verification:** the owning file alone, 12 of 12, on the same host with `fseventsd` still at about 100% of a core. No aggregate stress run was done; reopen this record if the test fails at the 90 s deadline.

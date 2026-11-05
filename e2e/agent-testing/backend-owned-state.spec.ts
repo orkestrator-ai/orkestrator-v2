@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./browser-test";
 import {
   AGENT_HANDOFF_VERSION,
   createAgentHandoffSnapshot,

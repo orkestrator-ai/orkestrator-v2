@@ -1,6 +1,6 @@
 import { acknowledgeDockerReachabilityWarning } from "../docker-reachability-warning";
 import { ensureProjectExpanded } from "./sidebar-project";
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./browser-test";
 import { writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";

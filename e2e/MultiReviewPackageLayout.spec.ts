@@ -35,6 +35,8 @@ for (const containerWidth of [390, 1407, 1408, 1600]) {
       let container = element.parentElement!;
       while (getComputedStyle(container).containerType === "normal")
         container = container.parentElement!;
+      let overview = element.parentElement!;
+      while (getComputedStyle(overview).overflowY !== "auto") overview = overview.parentElement!;
       const box = (node: Element) => {
         const { x, y, width, height, right, bottom } = node.getBoundingClientRect();
         return { x, y, width, height, right, bottom };
@@ -51,6 +53,7 @@ for (const containerWidth of [390, 1407, 1408, 1600]) {
         tableOverflowStyle: getComputedStyle(tableScroll).overflowX,
         logOverflow: log.scrollHeight - log.clientHeight,
         documentOverflow: document.documentElement.scrollWidth - window.innerWidth,
+        overviewOverflow: overview.scrollHeight - overview.clientHeight,
       };
     });
     expect(geometry.containerWidth).toBe(containerWidth);
@@ -73,6 +76,12 @@ for (const containerWidth of [390, 1407, 1408, 1600]) {
     expect(geometry.logOverflow).toBeGreaterThan(300);
     expect(geometry.log.right).toBeLessThanOrEqual(geometry.transcript.right + 1);
     if (containerWidth >= 1408) {
+      // The transcript can only fill the height left beside the details column
+      // when that column fits it; otherwise the overview scrolls, as it should.
+      // The fixture's content keeps a margin for wider fonts than the host's.
+      expect(geometry.overviewOverflow, "the details column fits the viewport").toBeLessThanOrEqual(
+        1,
+      );
       const footer = page.getByRole("button", { name: "Cancel" }).locator("xpath=..");
       const footerBox = (await footer.boundingBox())!;
       expect(footerBox.y - geometry.log.bottom).toBeGreaterThanOrEqual(0);

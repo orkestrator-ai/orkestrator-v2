@@ -219,7 +219,7 @@ The ticket asks for the sentence, and for `get_log_storage_stats` to report the 
 - **Store?**
   - **A `health-summary` store on `StorageDatabase.rows()`, one row per sample, pruned in the write transaction (recommended; the report's choice).**
     - Pros: queryable; survives restarts; the raw writer guard covers it.
-    - Cons: a few more fsynced commits on a busy database; part of every hourly copy until [0760](0760-e5-database-upkeep.md#0760-take-the-change-ledger-out-of-hourly-snapshots).
+    - Cons: a few more fsynced commits on a busy database; part of every hourly copy, though since E5 moved the change ledger into its own file that copy holds the app stores only ([storage migrations](../../architecture/storage.md#migrations), version 7).
   - **A JSONL file beside the logs.**
     - Pros: no database writes; still readable when storage is the problem.
     - Cons: another bounded file to rotate, and nothing queries it.

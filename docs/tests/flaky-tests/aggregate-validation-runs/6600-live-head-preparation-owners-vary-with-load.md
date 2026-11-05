@@ -9,7 +9,7 @@
 
 ## Failing tests
 
-These 16 were triaged `related` through the false match described in [to-do 6601](../../../todo/coordinator-and-multi-review/6601-triage-related-from-a-directory-named-in-a-comment.md). Their import closures reach no changed file. The 17th `related` failure, in `packages/cli/tests/service-install.test.ts`, fails every time and is in [to-do 6602](../../../todo/cross-cutting/6602-service-install-and-codex-host-rules-fail-alone.md), so it is not a flake.
+These 16 were triaged `related` because a doc comment naming `apps/web` in `packages/protocol/src/web-annotations.ts`, which their import graphs load, counted as a reference to the changed directory. To-do 6601 fixed that on 2026-11-05: a replay of these failures now gives `undetermined` ([failure triage](../../../architecture/review-preparation.md#failure-triage)). Their import closures reach no changed file. The 17th `related` failure, in `packages/cli/tests/service-install.test.ts`, fails every time and is in [to-do 6602](../../../todo/cross-cutting/6602-service-install-and-codex-host-rules-fail-alone.md), so it is not a flake.
 
 | Owner | Tests that failed in the aggregate | Original failure |
 | --- | --- | --- |

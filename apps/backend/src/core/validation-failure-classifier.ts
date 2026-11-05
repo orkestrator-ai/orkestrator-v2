@@ -636,6 +636,12 @@ export function classifyValidationFailures(input: ValidationFailureClassifierInp
   // ---------------------------------------------------------------------------
   // Evidence: paths a test names (fixtures, documents, directories it scans)
   // ---------------------------------------------------------------------------
+  // A test and its own helpers may name a changed file, its basename or a
+  // directory above it. Any other module the test loads counts only by a
+  // changed file's full path in its code, as a module that reads that file at
+  // run time does: a directory or a basename there is a description (a doc
+  // comment's `apps/web`, a `config.json` read from elsewhere), not evidence
+  // that this test depends on the change. Comments never count.
   const GENERIC_BASENAMES = new Set([
     "index.ts",
     "index.tsx",
@@ -646,13 +652,24 @@ export function classifyValidationFailures(input: ValidationFailureClassifierInp
     "README.md",
     "AGENTS.md",
   ]);
+  const HELPER_DIRECTORY =
+    /(?:^|\/)(?:tests?|__tests__|testing|fixtures?|__fixtures__|mocks?|__mocks__|e2e)\//;
+  const HELPER_BASENAME =
+    /(?:^|[-_.])(?:tests?|testing|spec|fixtures?|mocks?|stubs?|fakes?)(?:[-_.])/;
+  const isHelperFile = (relative: string): boolean =>
+    TEST_FILE.test(relative) ||
+    HELPER_DIRECTORY.test(relative) ||
+    HELPER_BASENAME.test(path.posix.basename(relative));
   const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   // One entry per distinct literal; a cheap `includes` gates each pattern.
-  const pathTokens = new Map<string, { file: string; pattern: RegExp }>();
+  // `path` is what a match reports: the changed file, or the directory named.
+  type PathToken = { path: string; helperOnly: boolean; pattern: RegExp };
+  const pathTokens = new Map<string, PathToken>();
   for (const file of input.changedFiles) {
     if (!pathTokens.has(file)) {
       pathTokens.set(file, {
-        file,
+        path: file,
+        helperOnly: false,
         pattern: new RegExp(`(?:^|[^\\w./-])${escapeRegExp(file)}(?![\\w-])`),
       });
     }
@@ -664,7 +681,8 @@ export function classifyValidationFailures(input: ValidationFailureClassifierInp
       !pathTokens.has(basename)
     ) {
       pathTokens.set(basename, {
-        file,
+        path: file,
+        helperOnly: true,
         pattern: new RegExp(`["'\`/]${escapeRegExp(basename)}["'\`]`),
       });
     }
@@ -675,32 +693,73 @@ export function classifyValidationFailures(input: ValidationFailureClassifierInp
       const directory = segments.slice(0, length).join("/");
       if (pathTokens.has(directory)) continue;
       pathTokens.set(directory, {
-        file,
+        path: directory,
+        helperOnly: true,
         pattern: new RegExp(`["'\`]${escapeRegExp(directory)}/?(?:["'\`]|/\\*)`),
       });
     }
   }
 
+  /** The file's code without comments; the raw text when it cannot be parsed. */
+  function codeOf(relative: string, text: string): string {
+    if (!CODE_FILE.test(relative) || !BunRuntime?.Transpiler) return text;
+    const loader = /\.[cm]?ts$/.test(relative) ? "ts" : "tsx";
+    try {
+      let transpiler = transpilers.get(loader);
+      if (!transpiler) {
+        transpiler = new BunRuntime.Transpiler({ loader });
+        transpilers.set(loader, transpiler);
+      }
+      return transpiler.transformSync(text);
+    } catch {
+      return text;
+    }
+  }
+
   const referenceCache = new Map<string, string | null>();
-  function referenceIn(file: string): string | null {
-    if (referenceCache.has(file)) return referenceCache.get(file)!;
+  function referenceIn(file: string, helper: boolean): string | null {
+    const cacheKey = `${helper ? "helper" : "module"}:${file}`;
+    if (referenceCache.has(cacheKey)) return referenceCache.get(cacheKey)!;
     let found: string | null = null;
     const text = textCache.get(file) ?? readRepositoryText(file);
     if (text) {
-      for (const [literal, token] of pathTokens) {
-        if (text.includes(literal) && token.pattern.test(text)) {
-          found = token.file;
+      const candidates = [...pathTokens].filter(
+        ([literal, token]) => (helper || !token.helperOnly) && text.includes(literal),
+      );
+      // Most files name no changed path at all, so only those that might are
+      // parsed to drop their comments.
+      const code = candidates.length > 0 ? codeOf(file, text) : "";
+      for (const [, token] of candidates) {
+        if (token.pattern.test(code)) {
+          found = token.path;
           break;
         }
       }
     }
-    referenceCache.set(file, found);
+    referenceCache.set(cacheKey, found);
     return found;
   }
-  function referencedChange(files: string[]): string | null {
+
+  /** The test file and the helpers it reaches through its own imports. */
+  function helpersOf(testFile: string, closure: string[]): Set<string> {
+    const inClosure = new Set(closure);
+    const reached = new Set([testFile]);
+    const queue = [testFile];
+    for (let next = 0; next < queue.length; next += 1) {
+      for (const dependency of dependencyCache.get(queue[next]!)?.deps ?? []) {
+        if (reached.has(dependency) || !inClosure.has(dependency)) continue;
+        reached.add(dependency);
+        queue.push(dependency);
+      }
+    }
+    return new Set([testFile, ...[...reached].filter(isHelperFile)]);
+  }
+
+  function referencedChange(testFile: string, files: string[]): string | null {
+    const helpers = helpersOf(testFile, files);
     for (const file of files) {
       if (outOfTime()) return null;
-      const found = referenceIn(file);
+      const found = referenceIn(file, helpers.has(file));
       if (found) return found;
     }
     return null;
@@ -895,7 +954,9 @@ export function classifyValidationFailures(input: ValidationFailureClassifierInp
         reasons.push("not-import-traceable");
       } else if (!changed.has(failure.file)) {
         const closure = importClosure(failure.file, failure.runner === "bun");
-        const referenced = closure.changedHit ? null : referencedChange(closure.files);
+        const referenced = closure.changedHit
+          ? null
+          : referencedChange(failure.file, closure.files);
         if (closure.changedHit) {
           reasons.push("imports-changed-file");
           changedPath = closure.changedHit;

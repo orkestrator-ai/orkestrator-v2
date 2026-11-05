@@ -48,4 +48,4 @@ Analysed 2026-11-05 against `main` at `41f9eb638`.
 ## Related
 
 - [Flake case 6600](../../tests/flaky-tests/aggregate-validation-runs/6600-live-head-preparation-owners-vary-with-load.md), the run these were separated from.
-- [6601](../coordinator-and-multi-review/6601-triage-related-from-a-directory-named-in-a-comment.md), why the service-install failure was triaged `related`.
+- [Failure triage](../../architecture/review-preparation.md#failure-triage): the service-install failure was triaged `related` through a doc comment naming `apps/web`, which to-do 6601 fixed on 2026-11-05; [6920](../coordinator-and-multi-review/6920-triage-related-through-a-widely-shared-import.md) carries its follow-up.

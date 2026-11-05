@@ -5148,6 +5148,16 @@ describe("build pipeline commands", () => {
       id,
       reviewerId,
     }));
+    const restartReviewer = mock(async (id: string, reviewerId: string) => ({
+      operation: "restart-reviewer",
+      id,
+      reviewerId,
+    }));
+    const stopReviewer = mock(async (id: string, reviewerId: string) => ({
+      operation: "stop-reviewer",
+      id,
+      reviewerId,
+    }));
     const restartCurrentStep = mock(async (id: string) => ({
       operation: "restart-current-step",
       id,
@@ -5181,6 +5191,8 @@ describe("build pipeline commands", () => {
       previewCodeRewind,
       rewindCode,
       retryReviewer,
+      restartReviewer,
+      stopReviewer,
       restartCurrentStep,
       retryInteractionFailure,
     } as unknown as NonNullable<CommandContext["buildPipelines"]>;
@@ -5312,6 +5324,38 @@ describe("build pipeline commands", () => {
           await expect(invoke("retry_build_pipeline_reviewer", args)).rejects.toThrow();
         }
         expect(retryReviewer).toHaveBeenCalledTimes(1);
+        await expect(
+          invoke("stop_build_pipeline_reviewer", {
+            pipelineId: "pipeline-1",
+            reviewerId: "reviewer-2",
+          }),
+        ).resolves.toEqual({
+          operation: "stop-reviewer",
+          id: "pipeline-1",
+          reviewerId: "reviewer-2",
+        });
+        expect(stopReviewer).toHaveBeenCalledWith("pipeline-1", "reviewer-2");
+        for (const args of [
+          { pipelineId: " ", reviewerId: "reviewer-2" },
+          { pipelineId: "pipeline-1", reviewerId: " " },
+        ]) {
+          await expect(invoke("stop_build_pipeline_reviewer", args)).rejects.toThrow();
+        }
+        expect(stopReviewer).toHaveBeenCalledTimes(1);
+        await expect(
+          invoke("restart_build_pipeline_reviewer", {
+            pipelineId: "pipeline-1",
+            reviewerId: "reviewer-2",
+          }),
+        ).resolves.toEqual({
+          operation: "restart-reviewer",
+          id: "pipeline-1",
+          reviewerId: "reviewer-2",
+        });
+        expect(restartReviewer).toHaveBeenCalledWith("pipeline-1", "reviewer-2");
+        await expect(
+          invoke("restart_build_pipeline_reviewer", { pipelineId: "pipeline-1", reviewerId: " " }),
+        ).rejects.toThrow();
 
         await expect(
           invoke("restart_build_pipeline_current_step", {
@@ -5485,6 +5529,8 @@ describe("build pipeline commands", () => {
           { pipelineId: "pipeline-1", stageId: "build-session", expectedHead: "c".repeat(40) },
         ],
         ["retry_build_pipeline_reviewer", { pipelineId: "pipeline-1", reviewerId: "reviewer-2" }],
+        ["stop_build_pipeline_reviewer", { pipelineId: "pipeline-1", reviewerId: "reviewer-2" }],
+        ["restart_build_pipeline_reviewer", { pipelineId: "pipeline-1", reviewerId: "reviewer-2" }],
         ["restart_build_pipeline_current_step", { pipelineId: "pipeline-1" }],
         [
           "retry_build_pipeline_interaction_failure",

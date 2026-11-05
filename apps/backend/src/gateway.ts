@@ -110,6 +110,10 @@ export class OrkestratorGateway {
     return this.context.eventReplay;
   }
 
+  protected get relayedEventReplay(): GatewayEventReplay {
+    return this.context.relayedEventReplay;
+  }
+
   protected get metrics(): GatewayMetricsStore {
     return this.context.metrics;
   }

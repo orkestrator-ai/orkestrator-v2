@@ -21,6 +21,7 @@ function summary(
   state: string | null,
   lastActivityAt: string | null,
   hasUnreadWork = false,
+  prState: string | null = null,
 ): PublicEnvironmentSummary {
   return {
     id,
@@ -37,7 +38,7 @@ function summary(
     startupSession: null,
     workspacePath: null,
     base: { branch: null, commit: null },
-    pr: { url: null, state: null },
+    pr: { url: null, state: prState },
     createdAt: "2026-10-21T00:00:00Z",
     lastActivityAt,
     settingsRevision: "r1",
@@ -50,6 +51,7 @@ const ITEMS = [
   summary("unknown", "something-else", "2026-10-21T13:00:00Z"),
   summary("waiting", "waiting", "2026-10-21T09:00:00Z"),
   summary("unread", null, "2026-10-21T08:00:00Z", true),
+  summary("merged", "idle", "2026-10-21T14:00:00Z", true, "merged"),
 ];
 
 describe("sortEnvironmentsByActivity", () => {
@@ -57,9 +59,30 @@ describe("sortEnvironmentsByActivity", () => {
     const ids = (order: "priority" | "newest" | "oldest") =>
       sortEnvironmentsByActivity(ITEMS, order).map(({ id }) => id);
     // An unrecognised state counts as idle.
-    expect(ids("priority")).toEqual(["unread", "waiting", "working", "unknown", "idle-new"]);
-    expect(ids("newest")).toEqual(["unknown", "idle-new", "working", "waiting", "unread"]);
-    expect(ids("oldest")).toEqual(["unread", "waiting", "working", "idle-new", "unknown"]);
+    expect(ids("priority")).toEqual([
+      "unread",
+      "waiting",
+      "unknown",
+      "idle-new",
+      "working",
+      "merged",
+    ]);
+    expect(ids("newest")).toEqual([
+      "unknown",
+      "idle-new",
+      "waiting",
+      "unread",
+      "working",
+      "merged",
+    ]);
+    expect(ids("oldest")).toEqual([
+      "unread",
+      "waiting",
+      "idle-new",
+      "unknown",
+      "working",
+      "merged",
+    ]);
     const tied = [summary("b", "idle", null), summary("a", "idle", null)];
     expect(sortEnvironmentsByActivity(tied, "newest").map(({ id }) => id)).toEqual(["b", "a"]);
   });
@@ -92,7 +115,7 @@ describe("environment list --sort", () => {
     const run = await box.run(["environment", "list", "--sort", "priority", "--json"]);
     expect(run.code).toBe(0);
     const ids = JSON.parse(run.out).result.items.map(({ id }: { id: string }) => id);
-    expect(ids).toEqual(["unread", "waiting", "working", "unknown", "idle-new"]);
+    expect(ids).toEqual(["unread", "waiting", "unknown", "idle-new", "working", "merged"]);
     const request = gateway.requests.find(
       (candidate) => candidate.body.args.action === "environment.list",
     );

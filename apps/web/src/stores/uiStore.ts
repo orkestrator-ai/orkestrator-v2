@@ -32,9 +32,11 @@ export type ProjectBoardTab =
   "home" | "coordinator" | "kanban" | "github" | "linear" | "features" | "notes" | "pull-requests";
 export type EnvironmentSortMode = "project" | "activity";
 /**
- * How "By activity" orders environments: `priority` puts unread work, then
- * waiting, then working before idle, newest first within each; `newest` and
- * `oldest` order by activity time alone. Defined with the shared comparator.
+ * How "By activity" orders environments. Every order keeps merged environments
+ * below unmerged ones and working environments below the others. Within those
+ * groups `priority` puts unread work, then waiting, before idle, newest first
+ * within each; `newest` and `oldest` order by activity time alone. Defined with
+ * the shared comparator.
  */
 export type { ActivitySortOrder } from "@orkestrator/protocol/environment-activity-order";
 

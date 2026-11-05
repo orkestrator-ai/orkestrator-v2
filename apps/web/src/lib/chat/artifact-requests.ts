@@ -676,13 +676,20 @@ const searchBodies = new Map<
   { artifactId: string; revision: number; text: string; scope: RichConversationScope }
 >();
 let searchBodyCharacters = 0;
+let searchBodyRevision = 0;
 const searchBodyListeners = new Set<() => void>();
 
 function notifySearchBodies(): void {
+  searchBodyRevision += 1;
   for (const listener of Array.from(searchBodyListeners)) listener();
 }
 
-function subscribeSearchBodies(listener: () => void): () => void {
+/** Changes whenever a body arrives or leaves; nothing else moves it. */
+export function artifactSearchBodyRevision(): number {
+  return searchBodyRevision;
+}
+
+export function subscribeArtifactSearchBodies(listener: () => void): () => void {
   searchBodyListeners.add(listener);
   return () => {
     searchBodyListeners.delete(listener);
@@ -710,11 +717,18 @@ export function rememberArtifactSearchBody(
   text: string | null,
   scope: RichConversationScope,
 ): void {
+  const previous = searchBodies.get(artifact.publicationId);
   const dropped = dropSearchBody(artifact.publicationId);
   if (text === null || text.length === 0) {
     if (dropped) notifySearchBodies();
     return;
   }
+  // A card that mounts again republishes what it published before. Its place in
+  // the eviction order moves, but an open Find bar has nothing to recompute.
+  let changed =
+    previous?.text !== text ||
+    previous.artifactId !== artifact.artifactId ||
+    previous.revision !== artifact.revision;
   searchBodies.set(artifact.publicationId, {
     artifactId: artifact.artifactId,
     revision: artifact.revision,
@@ -729,8 +743,9 @@ export function rememberArtifactSearchBody(
     const oldest = searchBodies.keys().next().value;
     if (oldest === undefined) break;
     dropSearchBody(oldest);
+    changed = true;
   }
-  notifySearchBodies();
+  if (changed) notifySearchBodies();
 }
 
 /** The loaded body text for an artifact part's reference, or null. */
@@ -745,5 +760,7 @@ export function cachedArtifactSearchBody(artifact: unknown): string | null {
 
 /** `cachedArtifactSearchBody`, for a card whose search root follows the cache. */
 export function useCachedArtifactSearchBody(artifact: unknown): string | null {
-  return useSyncExternalStore(subscribeSearchBodies, () => cachedArtifactSearchBody(artifact));
+  return useSyncExternalStore(subscribeArtifactSearchBodies, () =>
+    cachedArtifactSearchBody(artifact),
+  );
 }

@@ -624,6 +624,16 @@ capabilities that are random 256-bit table keys, revocable, never logged.
   the environment's own container. The response is `{ url, mimeType,
   byteLength, expiresAt, streamId }`; `transcript_media_close_stream
   { streamId }` revokes it and removes any staged copy.
+- **No environment.** A request without `environmentId` (a detached
+  transcript's absolute host path) is confined to the roots `read_file_base64`
+  reads (`readableHostFileRoots`, `readable-host-roots.ts`: the worktree base,
+  custom worktrees one by one, coordinator attachments), rebuilt on every
+  served request, so the route never reads more than that command. A relative
+  path or a `containerId` without an environment is refused. These streams
+  are revoked as one group (`readable-host-roots`) and the environment sweep
+  leaves them alone. The file viewer's image tab also loads from a stream
+  when the origin is reachable (`environment-image-source.ts`), falling back
+  to `read_environment_file_base64` / `read_container_file_base64`.
 - **Type.** Sniffed from the leading bytes (`media-stream-sniff.ts`), never
   the file name: MP4/M4A/QuickTime, WebM/Matroska, Ogg, WAV, FLAC, MP3, AAC
   and PNG/JPEG/GIF/WebP/AVIF/BMP. SVG, HTML, PDF and anything unrecognised

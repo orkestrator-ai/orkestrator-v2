@@ -53,6 +53,7 @@ export function supervisionDemand(
   workflow: MultiReviewWorkflow,
   dispatchesAddressFindingsPrompts: boolean,
 ): "none" | "fast" | "observe" {
+  if (workflow.pendingCodeRewind) return "fast";
   // A graph-engine review only projects its run until the run settles (item
   // 301); its run's own changes wake it, so observing is the safety net.
   if (isGraphEngineProjection(workflow))

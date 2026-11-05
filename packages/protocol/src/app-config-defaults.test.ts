@@ -33,6 +33,7 @@ describe("createDefaultAppConfig", () => {
     expect(global.agentMessaging).toEqual({ ...DEFAULT_AGENT_MESSAGING_SETTINGS });
     expect(global.openCodeModelProviders).toEqual([...DEFAULT_OPENCODE_MODEL_PROVIDERS]);
     expect(global.debugLogging).toBe(false);
+    expect(global).not.toHaveProperty("experimentalCodexRawEventLogging");
     expect(global.agentSettings.platforms.codex).toEqual({
       mode: "native",
       model: DEFAULT_CODEX_MODEL_ID,

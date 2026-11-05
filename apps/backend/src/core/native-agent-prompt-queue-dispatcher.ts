@@ -43,7 +43,7 @@ const log = createLogger("native-agent");
 
 type SettledSteer = "dispatched" | "absent" | undefined;
 
-/** How soon the queue looks again while a weekly-limit stop is being decided. */
+/** How soon the queue looks again while a usage-limit stop is being decided. */
 const USAGE_LIMIT_QUEUE_HOLD_MS = 5_000;
 
 /** What the prompt-queue dispatcher needs from the service that wires it. */
@@ -85,7 +85,7 @@ export interface NativeAgentPromptQueueDispatcherHost {
     /** The bridge's structured kind for an `error` status, when it sent one. */
     failureKind?: TurnFailureKind,
   ): Promise<number | void>;
-  /** A weekly-limit stop is being decided; its resend goes ahead of the queue. */
+  /** A usage-limit stop is being decided; its resend goes ahead of the queue. */
   usageLimitResendPending?(key: string): boolean;
   /** Resolve a parked prompt dispatch as confirmed or permanently retired. */
   settleAmbiguousDispatch(

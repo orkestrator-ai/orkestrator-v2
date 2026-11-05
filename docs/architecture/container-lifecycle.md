@@ -533,11 +533,24 @@ and discarding copies, reconciling an interrupted operation — is unaffected.
 Persisted capabilities are the compatibility boundary: a runtime created from
 an image without `persistent-workspace`, `staged-inputs` or `network-policy=2`,
 or on an Engine older than 26, keeps the writable layer, host agent-home
-mounts or the shared bridge that image expects. That is one lifecycle engine
+mounts or the shared bridge that image expected. That is one lifecycle engine
 branching on what the image declares, not a second one, and it is not
 retired: an environment leaves it through a preserving rebuild, which always
 uses the current image. No switch makes a capable image behave like an old
 one any more.
+
+No new container gets host agent-home mounts. Creating one from an image that
+does not declare `staged-inputs` is refused with `capability-unavailable`
+before anything is created, whichever path asked (a create, a rebuild's
+candidate or a restore that needs a new runtime), and the message names the
+image and asks for a current one. A failed start persists that same message.
+An image whose manifest Docker cannot read is not called old: the create
+reports `daemon-unavailable` and creates nothing. `get_docker_image_status`
+requires the capability too, so Settings reports such an image as incompatible
+and offers the download. A custom image has to be rebuilt from the current
+Dockerfile. A runtime that already exists is never refused for this: a start
+or a read does not reach the create, so it keeps running with its mounts until
+the user rebuilds it.
 
 | Switch | Status | Effect while set | Owner and removal |
 | --- | --- | --- | --- |
@@ -553,9 +566,22 @@ What still exists in the legacy shapes, and what handles it:
 | Resource | Handled by |
 | --- | --- |
 | Current runtime on the writable layer | "Rebuild (keeps files)" or `orkestrator environment recreate` (a `migrate`); never migrated by a start, read or status refresh |
-| Current runtime with host mounts, policy 1 or an in-container firewall (an older image, or created while a removed switch was set) | Kept until rebuilt; `get_environment_inputs` reports `host-mounts`, the network status reports the policy and `enforcement`. Any rebuild creates the new runtime from the current image |
+| Current runtime with host mounts or policy 1 | Kept until rebuilt, and listed in the cleanup review with a Rebuild action per environment. `get_environment_inputs` reports `host-mounts`, the network status reports the policy. Any rebuild creates the new runtime from the current image, and creating one from an image without `staged-inputs` is refused |
+| Current runtime with an in-container firewall (an older image, or created while a removed switch was set) | Kept until rebuilt; the network status reports `enforcement`. Any rebuild creates the new runtime from the current image |
 | Recovery copy of a legacy runtime | Listed, restored (swapped back as it was) and discarded like any copy; removed with the environment by the cleanup ledger |
 | `legacy-unadopted` container (from before owner labels) | Offered for reattachment in the cleanup review, never removed by it |
+
+The cleanup review's list (`legacyRuntimes` on `docker_cleanup_preview`) reads
+each assigned container with `docker inspect` when the review opens. A runtime
+counts as having host mounts when it has no inputs-revision label and binds one
+of the mount points the old images read; staged inputs bind the same mount
+points, which is why the label decides. A runtime with no network-policy label
+is on policy 1. A container Docker did not answer for is counted in
+`legacyRuntimesUnchecked` and the review says so, rather than reading silence
+as nothing to rebuild. The list never joins the removal selection: its only
+action is the preserving rebuild, confirmed through the same dialog as the
+environment's own Container settings, on the machine the review is for. An
+environment with a container operation running shows as busy until it ends.
 
 There is no host-archive export. A runtime's data leaves the legacy shape only
 as a verified copy into a new storage set on the same daemon, which then
@@ -820,14 +846,16 @@ and the environment's inputs section says to rebuild (`unreadableOnRootless`,
   `/claude-config/.orkestrator-anthropic-key` in the staged revision, and
   `docker/runtime-env.sh` exports it into shells and agent processes, because
   Claude Code in terminals reads it from the process environment: it is
-  visible to same-user processes, but not in `docker inspect`. Only a
-  container of an image without staged inputs still gets
-  `-e ANTHROPIC_API_KEY` (and `CURSOR_API_KEY`).
-- Older images keep the read-only home mounts their entrypoint expects, and a
-  running legacy container keeps them until it is rebuilt; `get_environment_inputs`
-  reports that as `host-mounts`, never as narrowed.
-- Credentials (staged inputs, the staged Anthropic key, or the creation
-  environment of an image without staged inputs, the Cursor key and the
+  visible to same-user processes, but not in `docker inspect`. Neither key
+  goes in a new container's creation environment. A container created before
+  staged inputs keeps the `-e ANTHROPIC_API_KEY` (and `CURSOR_API_KEY`) it was
+  created with until it is rebuilt.
+- No new container is created from an image without staged inputs (see
+  [Rollout switches and legacy runtimes](#rollout-switches-and-legacy-runtimes)).
+  A runtime created from one keeps its read-only home mounts until it is
+  rebuilt; `get_environment_inputs` reports that as `host-mounts`, never as
+  narrowed.
+- Credentials (staged inputs, the staged Anthropic key, the Cursor key and the
   start-time Claude credential sync) go only to
   providers that are enabled, authorized for agent-test profiles and not
   revoked for the environment (`providerCredentialsAllowed`).
@@ -929,10 +957,6 @@ are therefore never bind-mounted (security report H3):
   only when the project file is absent; a refusal never permits fallback.
   Other configured files still use `stageConfiguredProjectFilesForContainer`
   (realpath-confined, `docker cp` into `/project-files`).
-- The other `bindIfExists` callers mount host agent homes and `~/.gitconfig`
-  for images without staged inputs. Those paths are the user's own host
-  configuration, not repository content, and a dotfiles manager may link
-  them, so they still follow links.
 
 ## Environment networks (`network-policy=2`)
 

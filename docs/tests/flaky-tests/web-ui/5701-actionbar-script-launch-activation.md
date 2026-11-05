@@ -1,5 +1,6 @@
 # ActionBar script launch activation assertion
 
+- **ID:** 5701
 - **Status:** open
 - **Date observed:** 2026-11-05
 - **Test:** `ActionBar editor and run commands > activates an unknown script launch but skips activation when launch throws`

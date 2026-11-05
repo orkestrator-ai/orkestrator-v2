@@ -139,15 +139,20 @@ describe("Electron backend command registry", () => {
     }
 
     // What Git itself would send, through whichever helpers its config selects.
-    function fill(env: NodeJS.ProcessEnv, url: string, extraEnv: NodeJS.ProcessEnv = {}) {
+    // Run outside any repository: Git also reads the config of the repository it
+    // starts in, so from a checkout with its own credential.helper it would ask
+    // that helper for the developer's real login.
+    function fillResult(env: NodeJS.ProcessEnv, url: string) {
       return spawnSync("git", ["credential", "fill"], {
-        // A temporary global config alone does not suppress this checkout's
-        // local credential helpers. Keep the probe inside the fixture home.
-        cwd: env.HOME,
-        env: { ...env, ...extraEnv },
+        cwd: path.dirname(helper),
+        env,
         input: `url=${url}\n\n`,
         encoding: "utf8",
-      }).stdout;
+      });
+    }
+
+    function fill(env: NodeJS.ProcessEnv, url: string, extraEnv: NodeJS.ProcessEnv = {}) {
+      return fillResult({ ...env, ...extraEnv }, url).stdout;
     }
 
     async function setupCredentialBlock(): Promise<string> {
@@ -259,11 +264,7 @@ describe("Electron backend command registry", () => {
       );
       sync(env, credentialFile, "secret-token");
 
-      const filled = spawnSync("git", ["credential", "fill"], {
-        env,
-        input: "url=https://github.com/owner/repo.git\n\n",
-        encoding: "utf8",
-      });
+      const filled = fillResult(env, "https://github.com/owner/repo.git");
       expect(filled.stdout).toContain("password=secret-token");
       expect(filled.stderr).not.toContain("homebrew");
       expect(await fs.readFile(path.join(home, ".gitconfig"), "utf8")).not.toContain("homebrew");

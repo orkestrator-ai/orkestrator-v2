@@ -6,14 +6,21 @@
  * assigns — and verified on write and read, so an opaque body id can never
  * name an arbitrary filesystem path. Bodies inherit session authorization:
  * they are read only through `changes_get_diff` for a measurement the caller
- * may already see, never logged and never put in metrics. Bytes are written
- * (and fsynced) before the ledger row that references them commits.
+ * may already see, never logged and never put in metrics.
+ *
+ * A resolved {@link EvidenceBodyStore.put} means the body survives a power
+ * loss: the bytes are synced before the rename and the directory entry after
+ * it, because the ledger row naming the body commits next and the
+ * acknowledgement lets the bridge release its own copy. Both syncs are awaited
+ * on the thread pool, never on the event loop. Directory syncs are store-wide,
+ * as in the object store: concurrent puts share one, and adopting a body whose
+ * entry is not yet synced waits for it.
  */
 
 import { createHash, randomUUID } from "node:crypto";
-import { closeSync, fsyncSync, openSync } from "node:fs";
 import { lstat, mkdir, readdir, readFile, rename, rm, utimes, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fsyncPath, type SyncPath } from "./durable-sync.js";
 
 const BODY_ID = /^sha256:([0-9a-f]{64})$/;
 /** Removals per hold of the store lock, so a write never waits on a whole sweep. */
@@ -25,10 +32,17 @@ export function bodyIdFor(bytes: Uint8Array): string {
 
 export class EvidenceBodyStore {
   private lock: Promise<unknown> = Promise.resolve();
+  /** Directories holding a name not yet synced. */
+  private readonly unsyncedDirectories = new Set<string>();
+  /** Directories the sync under way covers. */
+  private readonly syncingDirectories = new Set<string>();
+  private directorySync: Promise<unknown> = Promise.resolve();
 
   constructor(
     private readonly root: string,
     private readonly durable = true,
+    /** Replaces the fsync itself, for tests that observe order or inject failure. */
+    private readonly sync: SyncPath = fsyncPath,
   ) {}
 
   /** Serializes a placement or renewal against a sweep's check-and-remove. */
@@ -45,41 +59,93 @@ export class EvidenceBodyStore {
     return join(this.root, hex.slice(0, 2), hex.slice(2));
   }
 
-  /** Store bytes under their id; rejects bytes that do not hash to `id`. */
+  /**
+   * Store bytes under their id; rejects bytes that do not hash to `id`.
+   * Resolves only once the body and its directory entry are synced, so the
+   * caller may then commit a row naming it and acknowledge the bridge.
+   */
   async put(id: string, bytes: Uint8Array): Promise<boolean> {
     const target = this.path(id);
     if (!target || bodyIdFor(bytes) !== id) return false;
     if (await this.reuse(id)) return true;
-    await mkdir(join(target, ".."), { recursive: true, mode: 0o700 });
+    const directory = dirname(target);
+    const created = await mkdir(directory, { recursive: true, mode: 0o700 });
     const temp = `${target}.${randomUUID()}.tmp`;
-    await writeFile(temp, bytes, { mode: 0o600 });
-    if (this.durable) {
-      const fd = openSync(temp, "r");
-      try {
-        fsyncSync(fd);
-      } finally {
-        closeSync(fd);
-      }
+    try {
+      await writeFile(temp, bytes, { mode: 0o600 });
+      if (this.durable) await this.sync(temp, "file");
+    } catch (error) {
+      // A later fsync can succeed after a writeback error without proving these bytes.
+      await rm(temp, { force: true });
+      throw error;
     }
-    await this.exclusive(() => rename(temp, target));
+    await this.exclusive(async () => {
+      await rename(temp, target);
+      if (!this.durable) return;
+      this.unsyncedDirectories.add(directory);
+      // `mkdir` names the first directory it made; each parent up to it gained an entry.
+      if (created !== undefined)
+        for (let parent = dirname(directory); ; parent = dirname(parent)) {
+          this.unsyncedDirectories.add(parent);
+          if (parent === dirname(created) || parent === dirname(parent)) break;
+        }
+    });
+    await this.syncDirectories();
     return true;
   }
 
   /**
    * Adopts a body that is already stored, renewing its orphan fence: the ledger
    * row naming it commits after this, and a sweep decides on the file's mtime.
-   * False when the body is gone, so the caller fetches it again.
+   * False when the body is gone, or its entry could not be synced, so the
+   * caller fetches it again.
    */
-  reuse(id: string): Promise<boolean> {
+  async reuse(id: string): Promise<boolean> {
     const target = this.path(id);
-    if (!target) return Promise.resolve(false);
-    return this.exclusive(async () => {
+    if (!target) return false;
+    const directory = dirname(target);
+    const adopted = await this.exclusive(async () => {
       const at = new Date();
-      return utimes(target, at, at).then(
+      const present = await utimes(target, at, at).then(
         () => true,
         () => false,
       );
+      // Placed by a writer whose directory sync has not finished.
+      const unsynced =
+        this.unsyncedDirectories.has(directory) || this.syncingDirectories.has(directory);
+      return { present, unsynced };
     });
+    if (!adopted.present) return false;
+    if (!adopted.unsynced) return true;
+    return this.syncDirectories().then(
+      () => true,
+      () => false,
+    );
+  }
+
+  /**
+   * Sync every directory with an unsynced name. Runs after any sync already
+   * under way, so on success each name placed before this call is durable. A
+   * failed directory stays listed: the next put or reuse tries it again.
+   */
+  private syncDirectories(): Promise<void> {
+    if (!this.durable) return Promise.resolve();
+    const run = this.directorySync.then(async () => {
+      const directories = Array.from(this.unsyncedDirectories);
+      this.unsyncedDirectories.clear();
+      for (const directory of directories) this.syncingDirectories.add(directory);
+      const results = await Promise.allSettled(
+        directories.map((directory) => this.sync(directory, "directory")),
+      );
+      this.syncingDirectories.clear();
+      const failed = results.find((result) => result.status === "rejected");
+      if (failed) {
+        for (const directory of directories) this.unsyncedDirectories.add(directory);
+        throw failed.reason;
+      }
+    });
+    this.directorySync = run.catch(() => undefined);
+    return run;
   }
 
   async get(id: string): Promise<Uint8Array | null> {

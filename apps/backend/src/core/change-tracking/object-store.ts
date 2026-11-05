@@ -36,7 +36,6 @@ import { lstatSync } from "node:fs";
 import {
   lstat,
   mkdir,
-  open,
   readdir,
   readFile,
   rename,
@@ -48,6 +47,7 @@ import {
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { deflate, deflateSync, inflate, inflateSync } from "node:zlib";
+import { fsyncPath, type SyncPath } from "./durable-sync.js";
 import { ManifestCache, type ManifestCacheLimits } from "./manifest-cache.js";
 
 export type ObjectType = "blob" | "manifest";
@@ -107,7 +107,7 @@ export interface ObjectStoreOptions {
   fsync?: SyncPath;
 }
 
-export type SyncPath = (path: string, kind: "file" | "directory") => Promise<void>;
+export type { SyncPath };
 
 /**
  * A group of writes that become durable together. Nothing put here is readable
@@ -594,29 +594,6 @@ async function writeIfMissing(file: string, content: string): Promise<void> {
     await writeFile(file, content, { flag: "wx", mode: 0o600 });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-  }
-}
-
-/**
- * A platform or filesystem that cannot fsync this kind of path keeps the old
- * atomic-rename guarantee. A real failure (EIO, ENOSPC) must reach the caller,
- * because the object would otherwise be named while not durable.
- */
-function syncUnsupported(error: unknown, kind: "file" | "directory"): boolean {
-  const code = (error as NodeJS.ErrnoException).code ?? "";
-  if (code === "EINVAL" || code === "ENOTSUP" || code === "EOPNOTSUPP") return true;
-  return kind === "directory" && ["EISDIR", "EPERM", "EACCES", "ENOENT"].includes(code);
-}
-
-async function fsyncPath(path: string, kind: "file" | "directory"): Promise<void> {
-  let handle: Awaited<ReturnType<typeof open>> | undefined;
-  try {
-    handle = await open(path, "r");
-    await handle.sync();
-  } catch (error) {
-    if (!syncUnsupported(error, kind)) throw error;
-  } finally {
-    await handle?.close().catch(() => undefined);
   }
 }
 

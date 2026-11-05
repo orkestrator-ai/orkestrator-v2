@@ -14,10 +14,9 @@ A batch file combines several reports as numbered parts and takes the rating of 
 
 | Rank | File | Criticality | Finished | Covers | Why this rating |
 | --- | --- | --- | --- | --- | --- |
-| 1 | [0490-e25-container-start.md](0490-e25-container-start.md) | Medium | No | **E25, Container start.**<br>`0490`: DK-14: Agent-home inputs are copied in full per environment and again on every start<br>`0500`: DK-13: Each environment clones from the remote again | From `0490`: Every container start copies inputs again, at a size nobody has measured. |
-| 2 | [0160-e10-conditional-reads-and-deltas.md](0160-e10-conditional-reads-and-deltas.md) | Low | No | **E10, Conditional reads and deltas.**<br>`0160`: TX-1: A transcript delta can only be built from the newest cached view<br>`0180`: TX-5: Session-state reads have no conditional path from the bridge<br>`0190`: TX-6: Bridge transcript windows are always sent whole | From `0160`: The report rates it High, but the maintainer gated it on a baseline, so it stays Low until that measurement arrives. |
-| 3 | [0560-st-9-agent-mail-store-remainder.md](0560-st-9-agent-mail-store-remainder.md) | Low | No | ST-9 (rest): Agent mail: pending injects and mailbox lists still sit on the whole store | The read cost the finding described has gone, and the rest needs a stored-format change only a measurement could justify. |
-| 4 | [0693-dk-10-second-claude-binary.md](0693-dk-10-second-claude-binary.md) | Low | No | DK-10: The image ships two Claude Code native binaries | It is an optional image-size saving that waits on a maintainer decision. |
+| 1 | [0160-e10-conditional-reads-and-deltas.md](0160-e10-conditional-reads-and-deltas.md) | Low | No | **E10, Conditional reads and deltas.**<br>`0160`: TX-1: A transcript delta can only be built from the newest cached view<br>`0180`: TX-5: Session-state reads have no conditional path from the bridge<br>`0190`: TX-6: Bridge transcript windows are always sent whole | From `0160`: The report rates it High, but the maintainer gated it on a baseline, so it stays Low until that measurement arrives. |
+| 2 | [0560-st-9-agent-mail-store-remainder.md](0560-st-9-agent-mail-store-remainder.md) | Low | No | ST-9 (rest): Agent mail: pending injects and mailbox lists still sit on the whole store | The read cost the finding described has gone, and the rest needs a stored-format change only a measurement could justify. |
+| 3 | [0693-dk-10-second-claude-binary.md](0693-dk-10-second-claude-binary.md) | Low | No | DK-10: The image ships two Claude Code native binaries | It is an optional image-size saving that waits on a maintainer decision. |
 
 ## Parallel running
 
@@ -32,13 +31,11 @@ This index only changes when a branch merges, so it can't show what is running n
 | Batch | Name | Parts | Lane and position | Finish first | Not at the same time as |
 | --- | --- | --- | --- | --- | --- |
 | E1 | Baseline run | The baseline task in `0150`, `0160`, `0180` and `0190` | No lane | None | None |
-| E25 | [Container start](0490-e25-container-start.md) | `0490`, `0500` | Containers, 2 of 2 | None | None |
 | E10 | [Conditional reads and deltas](0160-e10-conditional-reads-and-deltas.md) | `0160`, `0180`, `0190` | Transcript, 1 of 1 | E1 (Baseline run) | None |
 
 Why these are grouped:
 
 - **E1:** The baseline task in `0150`, `0160`, `0180` and `0190`. A measurement on an isolated `dev:test` profile with no code change, and it must happen before E10. `0400`'s baseline was taken with E26; see the closing check of E26 below.
-- **E25:** `0500` depends on `0490`.
 - **E10:** Waiting on the baseline. `0190` links to `0160`.
 
 ### Files built on their own
@@ -701,7 +698,7 @@ Store writes were 0 idle and 160 per window streaming (both tabs) in every varia
 
 ## Closing check of E25 (Container start)
 
-Built and checked back on 2026-11-05 on branch `20261105-225510-120411378c4f`, based on `main` at `cbe0f9a5b`, item by item against the batch file before it was deleted (its last version is in the parent of the commit that deletes it). The line numbers the file gave were from `a2bba9d8`; everything below was re-read against the branch. Part `0500` turned out to be built already by #1759 (`26ff5925b`) and #1804 (`0e8958f57`), after the file was analysed and before this batch; the file still listed it as open.
+Built and checked back on 2026-11-05 on branch `container-start-report-120411378c4f-r1`, based on `main` at `cbe0f9a5b` and rebased onto `585cf97d8`, item by item against the batch file `0490-e25-container-start.md` before it was deleted (its last version is in the parent of the commit that deletes it). The line numbers the file gave were from `a2bba9d8`; everything below was re-read against the branch. Part `0500` turned out to be built already by #1759 (`26ff5925b`) and #1804 (`0e8958f57`), after the file was analysed and before this batch; the file still listed it as open.
 
 | Part | Finding | Outcome |
 | --- | --- | --- |

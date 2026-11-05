@@ -863,7 +863,9 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
         ? { ...current, lifecycleState: "error", lastStartupError: "legacy failure" }
         : current,
     );
-    await expect(startLocalServerUnlocked(runtimeId, context, "codex")).rejects.toThrow();
+    await expect(startLocalServerUnlocked(runtimeId, context, "codex")).rejects.toThrow(
+      "Coordinator workspace is not ready",
+    );
     expect(context.runtime.localServers.process(`codex:${runtimeId}`)).toBeUndefined();
     expect((await storage.coordinators.getCoordinatorWorkspace(project.id))?.lifecycleState).toBe(
       "error",

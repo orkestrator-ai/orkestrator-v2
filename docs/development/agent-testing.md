@@ -1107,6 +1107,31 @@ The restarts leave the profile running under a detached launcher; stop it
 with `dev:stop` as usual. `dev:status` no longer reports `testProject` after a
 restart, so the spec falls back to the profile's seeded copy.
 
+### Live requests of a running agent tab
+
+`e2e/agent-testing/agent-tab-requests-live.spec.ts` counts what one visible
+Claude tab sends while its turn is in a foreground wait (the `running-quiet`
+workload), then drops the page's connection during a second running turn and
+checks the view recovers without a reload. It has its own opt-in and uses the
+host's Claude credentials:
+
+```bash
+mise run dev:test --profile qa-tab-requests --fixture --credential-source claude --agent-platforms claude
+# In a second terminal:
+ORKESTRATOR_AGENT_TEST_PROFILE=qa-tab-requests ORKESTRATOR_AGENT_TEST_RUN_ID=qa-tab-requests \
+  ORKESTRATOR_AGENT_TEST_LIVE_TAB_REQUESTS=1 \
+  mise run test:logged -- --name tab-requests -- bunx playwright test \
+  --config e2e/agent-testing/playwright.browser.config.ts agent-tab-requests-live.spec.ts --workers=1
+mise run dev:stop --profile qa-tab-requests
+mise run dev:reset --profile qa-tab-requests
+```
+
+It knows nothing about which commands the renderer sends, so the same file
+measures two commits. Results are appended to
+`output/agent-testing/<run id>/agent-tab-requests.json`: command names, counts
+and byte totals, per round and per second, from both the page and the gateway's
+`/__orkestrator/metrics`.
+
 ### Live revision tokens with inactive views
 
 `e2e/agent-testing/claude-revision-tokens-live.spec.ts` checks Claude's

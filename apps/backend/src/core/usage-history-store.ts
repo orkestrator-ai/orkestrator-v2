@@ -16,7 +16,7 @@ import {
   type UsageTotals,
 } from "@orkestrator/protocol/usage-history";
 import type { NativeAgentTurnUsage } from "@orkestrator/protocol/native-agent";
-import type { StorageDatabase } from "./storage-database.js";
+import { StoreCorruptError, type StorageDatabase } from "./storage-database.js";
 import { USAGE_HISTORY_STORE } from "./usage-history-layout.js";
 import {
   applyLabelToRecord,
@@ -64,6 +64,8 @@ const log = createLogger("usage-history");
 export const MAX_USAGE_HISTORY_ROWS = 20_000;
 /** How often a read or write may trigger the retention sweep. */
 export const USAGE_HISTORY_PRUNE_INTERVAL_MS = 60 * 60 * 1000;
+/** Rows per prune transaction, so a large first prune cannot hold the write lock. */
+export const USAGE_HISTORY_PRUNE_BATCH_ROWS = 250;
 
 export interface UsageHistoryStoreOptions {
   /** The backend database; called per operation so a reopened connection is used. */
@@ -292,45 +294,66 @@ export class UsageHistoryStore {
     );
   }
 
-  /** Day buckets past retention, then the least recently used rows. */
-  prune(): { prunedRows: number; prunedDays: number } {
+  /**
+   * Day buckets past retention, then the least recently used rows, a batch of
+   * rows per transaction with the event loop free between batches. A row is
+   * read and decided inside its transaction, so a turn recorded during the sweep
+   * is never overwritten, and a row it just refreshed is not dropped as least
+   * recently used. A connection closed between batches ends the sweep; the next
+   * one finishes it.
+   */
+  async prune(): Promise<{ prunedRows: number; prunedDays: number }> {
     this.lastPruneAt = Date.now();
     const oldestDay = shiftUsageDay(usageDayKey(this.now()), this.retentionDays - 1);
-    const records = this.readRecords();
+    const database = this.options.database();
+    if (!database.hasStore(USAGE_HISTORY_STORE)) return { prunedRows: 0, prunedDays: 0 };
+    const keys = database
+      .rows(USAGE_HISTORY_STORE)
+      .list({ values: false })
+      .map((entry) => entry.key);
     let prunedRows = 0;
     let prunedDays = 0;
-    const survivors: Array<{ key: string; lastSeenAt: string }> = [];
-    for (const { key, record } of records) {
-      const changed = pruneRecordDays(record, oldestDay);
-      if (Object.keys(record.days).length === 0) {
-        this.deleteRow(key);
-        prunedRows += 1;
-        continue;
+    const survivors: Array<{ key: string; lastSeenAt: string; snapshot: string }> = [];
+    const sweep = await this.inBatches(database, keys, (key) => {
+      const outcome = pruneExpiredDays(database, key, oldestDay);
+      if (outcome.kind === "removed") prunedRows += 1;
+      if (outcome.kind === "survivor") {
+        if (outcome.changed) prunedDays += 1;
+        survivors.push({ key, lastSeenAt: outcome.lastSeenAt, snapshot: outcome.snapshot });
       }
-      if (changed) {
-        prunedDays += 1;
-        this.writeRow(key, record);
-      }
-      survivors.push({ key, lastSeenAt: record.lastSeenAt });
-    }
-    if (survivors.length > this.maxRows) {
+    });
+    if (sweep && survivors.length > this.maxRows) {
       survivors.sort((left, right) => left.lastSeenAt.localeCompare(right.lastSeenAt));
-      for (const { key } of survivors.slice(0, survivors.length - this.maxRows)) {
-        this.deleteRow(key);
-        prunedRows += 1;
-      }
+      const oldest = survivors.slice(0, survivors.length - this.maxRows);
+      await this.inBatches(database, oldest, ({ key, snapshot }) => {
+        if (dropUnlessRefreshed(database, key, snapshot)) prunedRows += 1;
+      });
     }
     return { prunedRows, prunedDays };
+  }
+
+  /** `false` when the connection closed before every item was visited. */
+  private async inBatches<T>(
+    database: StorageDatabase,
+    items: readonly T[],
+    visit: (item: T) => void,
+  ): Promise<boolean> {
+    for (let start = 0; start < items.length; start += USAGE_HISTORY_PRUNE_BATCH_ROWS) {
+      if (start > 0) await new Promise((resolve) => setImmediate(resolve));
+      if (database.isClosed()) return false;
+      database.transaction(() => {
+        for (const item of items.slice(start, start + USAGE_HISTORY_PRUNE_BATCH_ROWS)) visit(item);
+      });
+    }
+    return true;
   }
 
   private pruneIfDue(): void {
     const elapsed = Date.now() - this.lastPruneAt;
     if (this.lastPruneAt !== 0 && elapsed < USAGE_HISTORY_PRUNE_INTERVAL_MS) return;
-    try {
-      this.prune();
-    } catch (error) {
+    void this.prune().catch((error: unknown) => {
       log.warn("prune.failed", { error: formatLogError(error) });
-    }
+    });
   }
 
   private readRecords(): Array<{ key: string; record: UsageSessionRecord }> {
@@ -351,18 +374,46 @@ export class UsageHistoryStore {
     }
     return records;
   }
+}
 
-  private writeRow(key: string, record: UsageSessionRecord): void {
-    this.options
-      .database()
-      .updateStoreRow(USAGE_HISTORY_STORE, key, () => ({ result: true, value: record }));
-  }
+type PruneOutcome =
+  | { kind: "removed" | "skipped" }
+  | { kind: "survivor"; changed: boolean; lastSeenAt: string; snapshot: string };
 
-  private deleteRow(key: string): void {
-    this.options
-      .database()
-      .updateStoreRow(USAGE_HISTORY_STORE, key, () => ({ result: true, delete: true as const }));
+/**
+ * Drops one row's expired days, or the row when none is left. A row that cannot
+ * be read is left alone, as a report leaves it out.
+ */
+function pruneExpiredDays(database: StorageDatabase, key: string, oldestDay: string): PruneOutcome {
+  try {
+    return database.updateStoreRow<PruneOutcome>(USAGE_HISTORY_STORE, key, (current) => {
+      const record = parseUsageSessionRecord(current);
+      if (!record) return { result: { kind: "skipped" } };
+      const changed = pruneRecordDays(record, oldestDay);
+      if (Object.keys(record.days).length === 0) {
+        return { result: { kind: "removed" }, delete: true };
+      }
+      const result: PruneOutcome = {
+        kind: "survivor",
+        changed,
+        lastSeenAt: record.lastSeenAt,
+        snapshot: JSON.stringify(record),
+      };
+      return changed ? { result, value: record } : { result };
+    });
+  } catch (error) {
+    if (error instanceof StoreCorruptError) return { kind: "skipped" };
+    throw error;
   }
+}
+
+/** Removes a row chosen as least recently used, unless a turn has touched it since. */
+function dropUnlessRefreshed(database: StorageDatabase, key: string, snapshot: string): boolean {
+  return database.updateStoreRow<boolean>(USAGE_HISTORY_STORE, key, (current) =>
+    JSON.stringify(parseUsageSessionRecord(current)) === snapshot
+      ? { result: true, delete: true }
+      : { result: false },
+  );
 }
 
 function mapTotals<K>(map: Map<K, UsageTotals>, key: K): UsageTotals {

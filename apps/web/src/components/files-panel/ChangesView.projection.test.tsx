@@ -231,6 +231,46 @@ describe("ChangesView on the environment change projection", () => {
     expect(screen.queryByRole("button", { name: /Show more files/ }) === null).toBe(true);
   });
 
+  test("past the row cap it says how many files are not listed once paging has ended", async () => {
+    useChangeProjectionStore.getState().applyProjection(
+      environmentProjectionFixture("env-1", {
+        state: "partial",
+        coverageState: "partial",
+        reasonKeys: ["changes.reason.file-rows-capped"],
+        filePage: {
+          snapshotToken: "token-1",
+          rows: [fileRowFixture("a.ts")],
+          nextCursor: "cursor-1",
+          totalRows: 2,
+          omittedRows: 1_500,
+        },
+      }),
+    );
+    installBackend({
+      files: () => ({
+        kind: "page",
+        snapshotToken: "token-1",
+        rows: [fileRowFixture("b.ts")],
+        nextCursor: null,
+        totalRows: 2,
+        deliveredRows: 2,
+        omittedRows: 1_500,
+      }),
+    });
+    renderChanges();
+    expect(screen.getByTestId("change-rows-reasons").textContent).toBe(
+      "Too many changed files to list; the totals count them all",
+    );
+    expect(screen.queryByTestId("change-rows-omitted")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Show more files (1 of 2)" }));
+    await waitFor(() => expect(rowTexts()).toEqual(["m-1:a.ts", "m-1:b.ts"]));
+    expect(screen.getByRole("note").textContent).toBe(
+      `${new Intl.NumberFormat().format(1_500)} files not listed. The totals count them all.`,
+    );
+    expect(screen.queryByRole("button", { name: /Show more files/ }) === null).toBe(true);
+  });
+
   test("a stale cursor re-reads the projection and restarts paging without stitching", async () => {
     useChangeProjectionStore.getState().applyProjection(
       environmentProjectionFixture("env-1", {

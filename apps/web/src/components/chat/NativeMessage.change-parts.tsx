@@ -247,7 +247,10 @@ export function ChangeFileRows({
   const page = projection.filePage;
   if (!page || page.rows.length === 0) return null;
   const opensCurrent = page.rows.some((row) => !row.detail);
-  const more = page.nextCursor !== null || (page.totalRows ?? page.rows.length) > page.rows.length;
+  const more =
+    page.nextCursor !== null ||
+    (page.totalRows ?? page.rows.length) > page.rows.length ||
+    Boolean(page.omittedRows);
   return (
     <div className="py-1 text-xs" data-testid="change-file-rows">
       <ul className="space-y-0.5">

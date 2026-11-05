@@ -22,6 +22,7 @@ import {
   type ChangesGetFilesResult,
 } from "@orkestrator/protocol/change-resources";
 import {
+  FILE_ROWS_CAPPED_REASON,
   unknownCount,
   type ChangeMeasurement,
   type CountQuality,
@@ -373,11 +374,15 @@ export class ChangeProjectionService {
     const total = this.ledger.measurementFileCount(measurement.measurementId);
     const token = this.snapshotToken(resourceKey, measurement.measurementId);
     const next = offset + rows.length;
+    const omittedRows = measurement.completeness.reasons.includes(FILE_ROWS_CAPPED_REASON)
+      ? (measurement.totals.changedFiles ?? total) - total
+      : 0;
     return {
       snapshotToken: token,
       rows,
       nextCursor: next < total ? encodeCursor(token, next) : null,
       totalRows: total,
+      ...(omittedRows > 0 ? { omittedRows } : {}),
     };
   }
 
@@ -414,6 +419,7 @@ export class ChangeProjectionService {
       nextCursor: page.nextCursor,
       totalRows: page.totalRows,
       deliveredRows: offset + page.rows.length,
+      ...(page.omittedRows ? { omittedRows: page.omittedRows } : {}),
     };
   }
 }

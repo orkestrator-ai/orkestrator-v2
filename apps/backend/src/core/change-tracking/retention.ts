@@ -14,11 +14,14 @@
  * captures are refused with an explicit reason.
  */
 
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { readManifest } from "./capture.js";
 import type { ChangeLedger } from "./change-ledger.js";
 import { MEASUREMENTS_KEPT_PER_OWNER } from "./measurement-service.js";
 import type { ObjectStore } from "./object-store.js";
 import type { ChangeTrackingPolicyRegistry } from "./policy-registry.js";
+
+const log = createLogger("change-tracking");
 
 /** Superseded measurements are pruned in batches of at most this many file rows. */
 const MEASUREMENT_PRUNE_BATCH_FILE_ROWS = 256;
@@ -44,6 +47,9 @@ export interface RetentionReport {
 export class ChangeRetentionService {
   private hardLimited = false;
   private running: Promise<RetentionReport> | null = null;
+  private stopped = false;
+  /** One drain per owner and scope; a publication during one is picked up by its next batch. */
+  private readonly ownerDrains = new Map<string, Promise<void>>();
 
   constructor(
     private readonly deps: {
@@ -64,6 +70,37 @@ export class ChangeRetentionService {
       this.running = null;
     });
     return this.running;
+  }
+
+  /**
+   * Drains an owner's superseded measurements right after a publication that
+   * could not prune them all, so the rows do not wait for the hourly pass. The
+   * freed pages are reused by the owner's next measurement; the pass releases
+   * what is left.
+   */
+  drainOwner(owner: { kind: string; id: string; scope: string }): void {
+    const key = `${owner.kind}\0${owner.id}\0${owner.scope}`;
+    if (this.stopped || this.ownerDrains.has(key)) return;
+    const drain = yieldToEventLoop()
+      .then(() => this.pruneBatches(Date.now(), owner))
+      .then(
+        () => undefined,
+        (error) => log.warn("measurement-drain.failed", { error: formatLogError(error) }),
+      )
+      .finally(() => {
+        this.ownerDrains.delete(key);
+      });
+    this.ownerDrains.set(key, drain);
+  }
+
+  /** Settle owner drains (tests and benchmarks). */
+  async idle(): Promise<void> {
+    while (this.ownerDrains.size > 0) await Promise.all(this.ownerDrains.values());
+  }
+
+  /** Stops owner drains at their next batch; the database may close after this. */
+  stop(): void {
+    this.stopped = true;
   }
 
   private async runNow(nowMs: number): Promise<RetentionReport> {
@@ -118,19 +155,10 @@ export class ChangeRetentionService {
    */
   private async pruneMeasurements(nowMs: number, report: RetentionReport): Promise<void> {
     const { ledger } = this.deps;
-    while (true) {
-      const pruned = ledger.pruneSupersededMeasurements({
-        keepLatest: MEASUREMENTS_KEPT_PER_OWNER,
-        nowIso: new Date(nowMs).toISOString(),
-        maxMeasurements: MEASUREMENT_PRUNE_BATCH,
-        maxFileRows: MEASUREMENT_PRUNE_BATCH_FILE_ROWS,
-      });
-      report.prunedMeasurements += pruned.measurements;
-      report.prunedMeasurementFiles += pruned.files;
-      if (pruned.measurements === 0 && pruned.files === 0) break;
-      await yieldToEventLoop();
-    }
-    if (report.prunedMeasurementFiles === 0 && report.prunedMeasurements === 0) return;
+    const pruned = await this.pruneBatches(nowMs);
+    report.prunedMeasurements += pruned.measurements;
+    report.prunedMeasurementFiles += pruned.files;
+    // Also when this pass pruned nothing: publications and owner drains free pages too.
     let previous = Number.POSITIVE_INFINITY;
     while (true) {
       const left = ledger.releaseFreePages(RELEASE_PAGES_PER_STEP);
@@ -139,6 +167,27 @@ export class ChangeRetentionService {
       previous = left;
       await yieldToEventLoop();
     }
+  }
+
+  private async pruneBatches(
+    nowMs: number,
+    owner?: { kind: string; id: string; scope: string },
+  ): Promise<{ measurements: number; files: number }> {
+    const total = { measurements: 0, files: 0 };
+    while (!this.stopped) {
+      const pruned = this.deps.ledger.pruneSupersededMeasurements({
+        keepLatest: MEASUREMENTS_KEPT_PER_OWNER,
+        nowIso: new Date(nowMs).toISOString(),
+        maxMeasurements: MEASUREMENT_PRUNE_BATCH,
+        maxFileRows: MEASUREMENT_PRUNE_BATCH_FILE_ROWS,
+        ...(owner ? { owner } : {}),
+      });
+      total.measurements += pruned.measurements;
+      total.files += pruned.files;
+      if (pruned.measurements === 0 && pruned.files === 0) break;
+      await yieldToEventLoop();
+    }
+    return total;
   }
 
   private releaseTurnEndpoints(

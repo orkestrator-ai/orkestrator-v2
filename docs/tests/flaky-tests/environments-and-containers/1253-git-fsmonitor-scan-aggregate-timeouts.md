@@ -259,3 +259,33 @@ Evidence:
 - Main (20 repeats): `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.P19uWS/r4-main-git-fsmonitor-owner.log.gz`.
 
 No assertion, timeout, skip, or unrelated implementation changed.
+
+## E19 terminal WebSocket review preparation — 2026-11-04
+
+Review preparation at `b211f60f6` ran `mise run test` with
+workspace/root/bridges/protocol reservations of 6/1/2/1 and timed out a case
+not named above: `git fsmonitor > project-home status auto-starts and preserves
+the configured daemon` at 5,010.51 ms against its 5,000 ms budget. Bun printed
+`killed 1 dangling process` directly before the failure. Backend totals were
+15,016 pass, 113 skip, two fail and one error across 1,012 files (247.63 s). The
+other failure was the coordinator-mail fallback, triaged unrelated. The root,
+bridges and protocol groups passed.
+
+The one error was `# Unhandled error between tests`, a `CommandFailedError` for
+`git status --porcelain=v2 --branch --untracked-files=normal` with signal
+`SIGTERM` and `timedOut: false`, thrown through
+`retryGitWithoutFsmonitorOnTimeout` from `readStatus` in
+`project-git-service.ts`, the path this test exercises. It fits the between-test
+errors recorded above: a Git child outlives the test deadline, is signalled and
+rejects late. The log does not name the process Bun killed, so that link is
+inferred from the matching call path and signal.
+
+The complete unchanged owner passed alone at `71bd88528` (exit 0, 18.0 s):
+`mise run test:logged -- --name fsmonitor-owner -- bun test --cwd apps/backend ./src/core/git-fsmonitor.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures`.
+
+The branch does not change the owner or `git-fsmonitor.ts`. The cause of the
+slow scan is still not established, so this stays open. Evidence:
+`.orkestrator/review-artifacts/review-validation-d2e06c1d-324f-4187-a3a6-4afd8fae5ffd/validation-04.stdout.txt`
+and `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.sNlZvR/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+
+No assertion, timeout, skip, or unrelated implementation changed.

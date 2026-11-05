@@ -680,6 +680,27 @@ describe("V11: handoff from partial and unknown measurements", () => {
     expect(text).not.toMatch(/[+-]0\b/);
   });
 
+  test("V11: a truncated provider file list reads as partial and keeps its counts", async () => {
+    const { h, projection } = await observed({
+      boundary: { before: "fresh-before", after: "after-terminal" },
+      overlap: "none-observed",
+      change: {
+        additions: 7,
+        deletions: 0,
+        filesTruncated: true,
+        files: [{ path: "a.txt", status: "A", additions: 1, deletions: 0 }],
+      },
+    });
+    expect(projection.coverageState).toBe("partial");
+    expect(projection.reasonKeys).toContain("changes.reason.file-list-truncated");
+    expect(projection.counters.additions).toEqual({
+      value: 7,
+      quality: "complete",
+      bound: "exact",
+    });
+    expect(h.service.handoff.serialize([projection.measurementId!]).text).toContain("(partial)");
+  });
+
   test("V11: an unavailable observation is unknown in the handoff, never zero", async () => {
     const { h, projection } = await observed({
       boundary: { before: "fresh-before", after: "after-terminal" },

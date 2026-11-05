@@ -315,7 +315,10 @@ export async function forwardPreviewRequest(
       const bodyStream = upstreamResponse.body;
       const resetIdle = () => {
         if (streaming) return; // Long-lived event streams are bounded by the access lease instead.
-        if (idle) clearTimeout(idle);
+        if (idle) {
+          idle.refresh();
+          return;
+        }
         idle = setTimeout(() => {
           result.outcome = "failed";
           result.category = "headers-timeout";

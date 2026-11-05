@@ -16,6 +16,16 @@
  * offsets through `moveBefore`.
  */
 
+/** Frames must discard their channel before a fallback move destroys their document. */
+export const HOST_DETACHING_EVENT = "orkestrator:host-detaching";
+
+function notifyDetachingFrames(host: HTMLElement): void {
+  if (!host.isConnected) return;
+  for (const frame of Array.from(host.querySelectorAll("iframe"))) {
+    frame.dispatchEvent(new Event(HOST_DETACHING_EVENT));
+  }
+}
+
 type MoveBeforeParent = Node & { moveBefore?: (node: Node, child: Node | null) => void };
 
 interface HostState {
@@ -56,6 +66,7 @@ function moveHost(host: HTMLElement, parent: Node, state: HostState | undefined)
     }
   }
   const full = state?.complete ? state : captureHostState(host, true);
+  notifyDetachingFrames(host);
   parent.appendChild(host);
   restoreHostState(host, full);
 }
@@ -180,5 +191,6 @@ export function parkHost(host: HTMLElement, park: HTMLElement): void {
     }
   }
   parkedStates.set(host, state.complete ? state : captureHostState(host, true));
+  notifyDetachingFrames(host);
   park.appendChild(host);
 }

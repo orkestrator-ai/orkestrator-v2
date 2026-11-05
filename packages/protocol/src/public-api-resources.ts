@@ -440,6 +440,8 @@ export interface PublicChangeFilePage {
   nextCursor: string | null;
   /** Null when the backend does not know the total. */
   totalRows: number | null;
+  /** Changed files with no stored row (past the cap); no cursor reaches them. */
+  omittedRows?: number;
 }
 
 /**

@@ -231,6 +231,138 @@ describe("superseded measurements", () => {
     expect(ledger.measurement("large-0")).toBeNull();
   });
 
+  test("a publication drains the owner's superseded rows in batches, without the hourly pass", async () => {
+    const { h, target, key } = setup();
+    const ledger = h.service.ledger;
+    const batch = spyOn(ledger, "pruneSupersededMeasurements");
+    const drains = spyOn(h.service.retention, "drainOwner");
+    for (let round = 0; round < 6; round += 1) await scan(h, target, 700, round);
+    await h.service.retention.idle();
+
+    expect(drains).toHaveBeenCalled();
+    expect(
+      batch.mock.results.every((result) => result.type !== "return" || result.value.files <= 256),
+    ).toBe(true);
+    drains.mockRestore();
+    batch.mockRestore();
+    expect(
+      count(h, "SELECT COUNT(*) AS n FROM change_measurements WHERE scope = 'environment-net'"),
+    ).toBe(MEASUREMENTS_KEPT_PER_OWNER);
+    expect(count(h, "SELECT COUNT(*) AS n FROM change_measurement_files")).toBe(
+      700 * MEASUREMENTS_KEPT_PER_OWNER,
+    );
+    const view = h.service.getView({ resourceKey: key, pageSize: 200 });
+    if (view.kind !== "projection") throw new Error("projection expected");
+    expect(view.projection.filePage?.totalRows).toBe(700);
+  });
+
+  test("a publication under the row ceiling prunes in its own transaction and starts no drain", async () => {
+    const { h, target } = setup();
+    const drains = spyOn(h.service.retention, "drainOwner");
+    for (let round = 0; round < 5; round += 1) await scan(h, target, 50, round);
+    expect(drains).not.toHaveBeenCalled();
+    drains.mockRestore();
+    expect(count(h, "SELECT COUNT(*) AS n FROM change_measurement_files")).toBe(
+      50 * MEASUREMENTS_KEPT_PER_OWNER,
+    );
+  });
+
+  test("one owner runs one drain, and a reader's pin outlives it", async () => {
+    const { h, target, key } = setup();
+    await scan(h, target, 1, 0);
+    const ledger = h.service.ledger;
+    const latest = h.service.projections.selectedMeasurement(key)!;
+    const owner = { kind: "environment", id: "pinned" };
+    ledger.transaction(() => {
+      for (let index = 0; index < 5; index += 1)
+        ledger.insertMeasurement(
+          { ...latest, measurementId: `pinned-${index}` },
+          owner,
+          Array.from({ length: 300 }, (_, row) => fileRecord(`p${row}`)),
+          ledger.nextSequence(),
+        );
+    });
+    const release = ledger.pinMeasurement("pinned-0");
+    const batch = spyOn(ledger, "pruneSupersededMeasurements");
+    const scoped = { ...owner, scope: latest.scope };
+    h.service.retention.drainOwner(scoped);
+    h.service.retention.drainOwner(scoped);
+    await h.service.retention.idle();
+    // Two measurements of 300 rows at 256 a batch, then the empty one that ends it.
+    expect(batch.mock.calls.length).toBe(4);
+    batch.mockRestore();
+    expect(ledger.measurementFileCount("pinned-0")).toBe(300);
+    expect(ledger.measurement("pinned-1")).toBeNull();
+    expect(ledger.measurement("pinned-2")).toBeNull();
+    expect(ledger.measurementFileCount("pinned-4")).toBe(300);
+    release();
+    h.service.retention.drainOwner(scoped);
+    await h.service.retention.idle();
+    expect(ledger.measurement("pinned-0")).toBeNull();
+  });
+
+  test("a failed drain does not reject and the retention pass still finishes the work", async () => {
+    const { h, target, key } = setup();
+    await scan(h, target, 1, 0);
+    const ledger = h.service.ledger;
+    const latest = h.service.projections.selectedMeasurement(key)!;
+    const owner = { kind: "environment", id: "failing" };
+    ledger.transaction(() => {
+      for (let index = 0; index < 3; index += 1)
+        ledger.insertMeasurement(
+          { ...latest, measurementId: `failing-${index}` },
+          owner,
+          [fileRecord("p")],
+          ledger.nextSequence(),
+        );
+    });
+    const batch = spyOn(ledger, "pruneSupersededMeasurements").mockImplementationOnce(() => {
+      throw new Error("database is locked");
+    });
+    h.service.retention.drainOwner({ ...owner, scope: latest.scope });
+    await h.service.retention.idle();
+    batch.mockRestore();
+    expect(ledger.measurement("failing-0")).not.toBeNull();
+    await h.service.retention.run();
+    expect(ledger.measurement("failing-0")).toBeNull();
+  });
+
+  test("a stopped service starts no drain and ends a running one at its next batch", async () => {
+    const { h, target, key } = setup();
+    await scan(h, target, 1, 0);
+    const ledger = h.service.ledger;
+    const latest = h.service.projections.selectedMeasurement(key)!;
+    const owner = { kind: "environment", id: "stopping" };
+    ledger.transaction(() => {
+      for (let index = 0; index < 3; index += 1)
+        ledger.insertMeasurement(
+          { ...latest, measurementId: `stopping-${index}` },
+          owner,
+          Array.from({ length: 600 }, (_, row) => fileRecord(`p${row}`)),
+          ledger.nextSequence(),
+        );
+    });
+    const batch = spyOn(ledger, "pruneSupersededMeasurements");
+    h.service.retention.drainOwner({ ...owner, scope: latest.scope });
+    h.service.retention.stop();
+    await h.service.retention.idle();
+    h.service.retention.drainOwner({ ...owner, scope: latest.scope });
+    await h.service.retention.idle();
+    expect(batch).not.toHaveBeenCalled();
+    batch.mockRestore();
+    expect(ledger.measurementFileCount("stopping-0")).toBe(600);
+  });
+
+  test("the retention pass releases pages a drain freed even when it prunes nothing itself", async () => {
+    const { h, target } = setup();
+    const release = spyOn(h.service.ledger, "releaseFreePages");
+    await scan(h, target, 700, 0);
+    const report = await h.service.retention.run();
+    expect(report.prunedMeasurements).toBe(0);
+    expect(release).toHaveBeenCalled();
+    release.mockRestore();
+  });
+
   test.each(["incremental", "no-progress"])(
     "retention releases free pages and stops on %s",
     async (mode) => {

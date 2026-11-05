@@ -266,3 +266,10 @@ projection race; no root cause is established. Original group evidence:
 - **Status:** still open. The original 31.8 s wait timeout and the
   fallback-name, empty-action snapshot at line 140 are different variants, and
   this change does not address them.
+
+## E6 store-write review repair — 2026-11-05
+
+- Recorded `mise run test` at `7bfd46df0` failed the line-140 snapshot in 697.56 ms: children still had fallback names and empty actions. Backend: 15,035 pass, 115 skip, 3 fail, 1 error across 1,012 files. Original output remains in `.orkestrator/review-artifacts/review-validation-d1e558f9-f9c1-4288-bf06-576ef34bd9ad/validation-04.stdout.txt`.
+- The initial wait checked only identified children and the rejected spawn's name. That condition can hold before child activity hydration finishes.
+- Repair: wait for the three expected names and tool actions and the rejected spawn's failure action before taking the snapshot. All existing snapshot assertions remain.
+- Owning check: `mise run test:logged -- --name codex-cards -- bun test --cwd apps/backend ./tests/codex-subagent-cards.test.ts --parallel=1 --only-failures` passed (one test, 0.7 seconds). This addresses the partial-hydration symptom; the earlier cold-restart recovering/idle symptom remains open.

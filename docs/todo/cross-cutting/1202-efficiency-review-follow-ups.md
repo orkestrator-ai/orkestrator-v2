@@ -27,16 +27,16 @@ governs, marked "Decided".
 ### Tasks
 
 1. **Baseline and before-and-after numbers**: capture the report's measurements for the work already done and before each structural task. Status: open.
-2. **Storage keyed reads and writes**: the lease-held native session mutations, one shared decoded snapshot, the agent mail remainder, keyed-array row writes and the position index (TX-4 rest, BG-5, ST-9 rest, ST-10, ST-11). Status: open (ST-7, ST-8, BG-5, ST-11 and ST-10's compose drafts and environment writers done; TX-4 rest, ST-9 rest and ST-10's session and project writers open).
+2. **Storage keyed reads and writes**: the lease-held native session mutations, one shared decoded snapshot, the agent mail remainder, keyed-array row writes and the position index (TX-4 rest, BG-5, ST-9 rest, ST-10, ST-11). Status: open (ST-7, ST-8, BG-5, ST-11 and ST-10 done, TX-4's rest done 2026-11-04; ST-9 rest open; the prompt-queue reads a steer still makes are [5100](5100-prompt-queue-row-writes.md), live store sizes and write rates are [5101](5101-store-size-and-write-rate-live.md)).
 3. **Renderer re-renders and refetches**: WEB-6, WEB-7, WEB-9 to WEB-14 and WEB-16 to WEB-19, plus WEB-2's narrower subscriptions. Status: done (2026-11-04; WEB-2, WEB-3, WEB-4, WEB-5, WEB-8, WEB-15 and GW-13 earlier; WEB-7 and WEB-17 on 2026-11-03; WEB-2's third fix, WEB-6, WEB-9, WEB-10 and WEB-11, then WEB-12 to WEB-14, WEB-16, WEB-18 and WEB-19 on 2026-11-04; a React Profiler run stays with task 1).
-4. **Live agent view requests**: discovery out of the 500 ms round, a combined read, then bridge state ETags and transcript deltas (WEB-1, GW-1, GW-3, TX-5, TX-6). Status: open.
+4. **Live agent view requests**: discovery out of the 500 ms round, a combined read, then bridge state ETags and transcript deltas (WEB-1, GW-1, GW-3, TX-5, TX-6). Status: open (WEB-1 and GW-1 done 2026-11-04, a visible running tab from 3 requests per round to 1.04; GW-3, TX-5 and TX-6 open).
 5. **Transcript pipeline**: delta-base ring, unlimited post-dispatch reads, memoised fingerprints and the smaller items (TX-1 to TX-3, TX-7 to TX-9, TX-11 to TX-18). Status: open (TX-1 and TX-2 done 2026-11-04, focused tests only; live before-and-after numbers stay with task 1; TX-3, TX-7 to TX-9 and TX-11 to TX-18 open).
 6. **Bridge hot paths**: Codex config reads, cached transcript measurement, tool-card fast paths, Claude part identity, stream framing and shared helpers (BR-2, BR-4 to BR-16). Status: open (BR-1 and BR-3 done, without new tests; BR-4 to BR-6 and the transcript half of BR-15 done 2026-11-02; BR-2, BR-8, BR-9 and BR-11 done 2026-11-03; BR-7, BR-10, BR-12 to BR-14 and BR-16 done 2026-11-04; BR-15's SSE replay rings open).
 7. **Change tracking and git scans**: stamp short-circuit, count memo, manifest cache, off-loop zlib and the git scan costs (ST-1 to ST-6, ST-13 to ST-21). Status: open (ST-1, ST-2 and ST-4 done on 2026-11-02; ST-3, ST-14, ST-15, ST-16 and ST-18 done 2026-11-04, warm capture over 10,000 files with one changed from 681–797 ms to 211–319 ms p50, and a warm local diff scan from 7 git processes and every untracked file read to 4 and none; ST-2's directory-handle cache deliberately not done; ST-16's dropping of hints under ignored directories not done; ST-5 and ST-6 done 2026-11-04, longest event-loop stall during a capture storing a 16 MiB blob from 107–143 ms to 12–13 ms p50 and a cold durable capture of 1,000 files from 3.3–4.1 s to 0.6–1.1 s; ST-13, ST-17 and ST-19 to ST-21 open).
-8. **tmux and container polling**: the rest of BG-1, BG-2 and BG-8, plus BG-7, BG-14 and BG-15. Status: open (BG-1, BG-2, BG-7 and BG-8 done 2026-11-03, image proven locally; BG-14 and BG-15 open).
+8. **tmux and container polling**: the rest of BG-1, BG-2 and BG-8, plus BG-7, BG-14 and BG-15. Status: open (BG-1, BG-2, BG-7 and BG-8 done 2026-11-03, image proven locally; BG-14 done 2026-11-04, its remaining live evidence in [5120](../transcripts-and-observation/5120-tmux-transcript-reopen-live-evidence.md); BG-15 open).
 9. **PR monitor cost**: batched queries, then activity backoff (BG-6, BG-13). Status: done (2026-11-03; live before-and-after numbers stay with task 1).
 10. **Other background jobs**: the rest of BG-3, plus BG-9, BG-11 and BG-12. Status: done (2026-11-02; live before-and-after numbers stay with task 1).
-11. **Gateway and preview proxy**: GW-5, GW-6, GW-8 to GW-12 and GW-14 to GW-16. Status: open (GW-8 and GW-9 done; GW-4 done; GW-2 done in 0052; GW-5, GW-6, GW-12 and GW-14 done 2026-11-04, a flooding terminal channel no longer desyncs a quiet one; GW-10, GW-11, GW-15 and GW-16 open).
+11. **Gateway and preview proxy**: GW-5, GW-6, GW-8 to GW-12 and GW-14 to GW-16. Status: open (GW-8 and GW-9 done; GW-4 done; GW-2 done in 0052; GW-5, GW-6, GW-12 and GW-14 done 2026-11-04, a flooding terminal channel no longer desyncs a quiet one; GW-16 done 2026-11-04, live checks beyond loopback Chromium are in [5080](5080-terminal-websocket-live-evidence.md); GW-10, GW-11 and GW-15 open).
 12. **Local desktop transport**: local windows on the filtered gateway transport, and the IPC payload costs (DK-1, DK-2, DK-5, DK-6). Status: done (DK-1, DK-2 and DK-5 on 2026-11-04 behind a setting that is off by default; DK-6 fixed on 2026-11-04 by tunnel v2, [4500](4500-preview-tunnel-one-socket-per-connection.md); the default flip is [4501](4501-local-window-transport-default.md)).
 13. **Toolchain startup and downloads**: stamp-based verification and resumable downloads (DK-3, DK-4). Status: done (2026-11-03; Electron launch-to-ready 10.2–13.8 s before, 1.6–1.9 s after; a cold-cache run still needs live evidence).
 14. **Docker image size**: layer order, the second Bun, npm caches, the leftover apt layer and the second Claude binary (DK-7 to DK-11). Status: open (DK-7, DK-8, DK-9 and DK-11 done 2026-11-02; amd64 image smoke and Docker qualification passed; DK-10 left for a maintainer decision).
@@ -80,7 +80,65 @@ Done 2026-11-04 (branch `array-layout-writers-dd246b495d6d-r1`, re-checked again
 - Tests: `storage-database.test.ts` (array rows: insert, update, delete, order, owner, no-ops, key refusal, document fallback, rollback, mixing with whole-value writes); `storage-environment-row-writes.test.ts` (one field writes one row, counted by temporary SQLite triggers, with no whole-store read or write; each single-environment writer; concurrent connections; deletion fences; a SIGKILL between commit and scrub followed by a reopen; an older reader and writer on the same database).
 - Older build, checked by hand on 2026-11-04 with `HEAD` code from `96ee1eb3e` in a temporary worktree against a temporary data directory: it opened a database this branch had written (schema version 6, unchanged), listed the environments in order, updated and added one, and this branch reopened the result. No before-and-after timing was taken (task 1).
 
-**Investigation.** Re-checked 2026-11-02 and, for environments, 2026-11-04. Still whole-store: the lease-held native session mutations in `storage-native.ts` (22 call sites still load the whole store inside the key's lease, TX-4's rest) and the record-store writers the report names under ST-10 (`storage-projects.ts` for projects, `storage-sessions.ts`). Background callers not moved to the snapshot either mutate what they read or pass it on to code not checked yet: `reconcilePendingLaunches` (launches environments), environment cleanup, the local-server reaper, diff stats, the PR monitor and the coordinator, goal and sign-in services. Mail presence was checked: it already reads one row per mailbox (`mailInjectPresence`). ST-9's remainder (pending injects as their own collection, a body-free mailbox list) was not re-checked.
+Done 2026-11-04 (branch `store-writes-25e6fc826b9d-r1`, E6 of the efficiency batches), TX-4's rest, ST-10's session and project writers, and R20's blob length, read-only leases and usage prune. Each finding was re-checked against `main` at `e198fd4a7` first:
+
+- TX-4: `loadNativeAgentSessions` had 32 call sites (20 in `storage-native.ts`, 12 in `storage-native-deliveries.ts`). 28 held a key's lease, 27 of them mutations and `readNativeAgentPublicationState` a read; all 28 now read one row, through `readNativeAgentSessionUnderLease` or, for the two sweeps that must pass over a bad record, `peekNativeAgentSession`. The other 4 walk the store and stay. Damaged JSON in a key's own row now refuses that key, before any provider create; before, it read as "no session". Damaged JSON in another key's row no longer makes every key read as absent. `readNativeAgentPublicationState` reads one queue row.
+- ST-10, sessions: every writer commits only the rows it names in one transaction, reading the environment's rows by owner where it needs them. This also closes a loss: one damaged row used to make `updateStore` replace the whole store with the fallback, so the next session write lost every session.
+- ST-10, projects: every writer keeps the lease and commits rows (`saveProject`); `getProject` reads one row. An add, a new remote and a new checkout path still read the whole store, since they compare against the others, and write one row. The store joined `LEASED_ROW_STORES`.
+- Nothing about stored data changed: no schema version, no migration, no new stored value. An older build reads and writes these rows as before, and a store held as a document falls back to a whole-value write (`storage-session-project-row-writes.test.ts`).
+- R20, sizes: see "Blob length" under Decisions. `length(CAST(value AS BLOB))` remains only as the fallback.
+- R20, leases: `getAgentInteractionResolutionJournal` takes no lease. `pruneAgentInteractionResolutionJournal` is pure, and `build-pipeline-service-interactions.ts` copes with a stale read: a claim commits before the pending record that names it, and everything past the read goes through the processing lease. `resetAgentMailInjectBackoff` checks `store.snapshot()` first; a backoff committed just after the check is the same as one committed just after the reset.
+- R20, prune: `prune` is asynchronous and commits 250 rows per transaction with `setImmediate` between batches. Each row is read and decided inside its transaction, which also fixes a lost update: the old sweep wrote back the record it had read earlier, and another backend's turn in between was lost. A closed connection ends the sweep without reopening it, and the next due sweep finishes.
+- Tests: `storage-native-session-row-reads.test.ts`, `storage-session-project-row-writes.test.ts`, `storage-read-only-leases.test.ts`, the "retention sweep's batches" group of `usage-history-store.test.ts`, the size tests in `storage-database.test.ts`, and the journal test in `storage-native-agent-sessions.test.ts`, which replaces "orders a journal read against an in-flight update": that ordering is the behaviour the report's option removes. They cover concurrent writers across connections and across two real processes, a SIGKILL inside a multi-row transaction followed by an integrity check and a reopen, and a failure inside a transaction. Run against `e198fd4a7`, 16 of the 32 row-read, row-write and lease tests fail, among them every one-row assertion; the interrupted-write tests fail there only because they hook methods the base lacks.
+
+Measured with `bun scripts/benchmark-store-writes.ts`, workload `store-writes-v1` (2,000 native sessions of 200 request ids, 5,000 terminal sessions in 500 environments, 500 projects, 64 display tails of 1 MiB, 500 mailboxes of 50 messages, 20,000 usage rows). Three interleaved runs of `e198fd4a7` and this branch, 50 operations per run, on macOS 27 arm64 with Bun 1.4.4 and generated data in the temporary directory. Times are the lowest and highest p50 of the three runs.
+
+| Write path | Before (ms) | After (ms) | Rows written | Lease writes |
+| --- | --- | --- | --- | --- |
+| Native: activity checkpoint | 45.7–76.1 | 0.21–0.37 | 1 | 2 |
+| Native: activity checkpoint, no change | 45.1–61.9 | 0.10–0.16 | 0 | 2 |
+| Native: dispatch journal | 49.1–63.5 | 1.5–2.5 | 1 | 2 |
+| Session: one field | 3.3–5.3 | 0.07–0.12 | 1 | 0 |
+| Session: create, read the environment's rows, remove | 6.6–10.6 | 0.64–0.93 | 2 | 0 |
+| Session: disconnect an environment | 4.0–6.4 | 0.31–0.43 | 10 | 0 |
+| Session: reorder an environment | 4.0–6.0 | 0.55–0.71 | 10 | 0 |
+| Project: one field | 0.60–0.85 | 0.19–0.35 | 1 | 2 |
+| Project: new remote URL | 0.63–0.78 | 0.27–0.46 | 1 | 2 |
+| Project: read one | 0.07–0.09 | 0.00–0.01 | 0 | 0 |
+| Project: add and remove | 3.0–4.3 | 1.8–3.7 | 2 | 6 |
+| Project: move one to the end of 500 | 3.4–4.8 | **5.8–8.7 (slower)** | 500 | 2 |
+| Listing: 64 rows of 1 MiB, sizes only | 46–60 | 9.4–11.7 | 0 | 0 |
+| Journal: read | 0.17–0.30 | 0.01 | 0 | 2 before, 0 after |
+| Mail: backoff reset, nothing to reset | 9.8–13.5 | 0.00–0.01 | 0 | 2 before, 0 after |
+
+| Usage prune, 20,000 rows, 10,000 changed | Before | After |
+| --- | --- | --- |
+| Total | 2,353–3,142 ms | 1,687–2,422 ms |
+| Commits | 10,000 | 80 |
+| Longest event-loop stall | 2,353–3,142 ms | 42–64 ms |
+| Longest single commit | 10–87 ms | 38–64 ms |
+
+The rows-written column does not move because the whole-value writers already diffed against the stored rows: what they paid per write was decoding and re-serializing the store. The real write rate and store sizes behind these numbers were not measured ([5101](5101-store-size-and-write-rate-live.md)), and the cold-cache listing cost and the fallback on an older macOS were not either ([5102](5102-sqlite-size-fallback-live.md)).
+
+The E6 report was checked item by item and deleted; it stays in git history at base commit `48d2ed40c`, under `docs/reports/efficiency-logging-database/`. Every task and "Needs verification" item in that file, with its outcome (tests are under `apps/backend/src/core/`):
+
+| Part | Item | Outcome | Code and test, evidence, or to-do |
+| --- | --- | --- | --- |
+| 0230 | Task 1: load one row inside the key's lease | Done, with one site moved to a to-do | Code: `readNativeAgentSessionUnderLease` and `peekNativeAgentSession` (`storage-native.ts`). Test: `storage-native-session-row-reads.test.ts`, "a mutation reads and writes only its own key" and "two backends writing one key and other keys lose nothing". A steer's prompt queue step cannot move alone and is [5100](5100-prompt-queue-row-writes.md). |
+| 0230 | Needs verification: which of the 32 call sites are mutations | Done | Classified above under TX-4: 28 held a key's lease (27 mutations, 1 read), 4 walk the store. Test: "whole-store loads remain only where the whole store is the question" in the same file. |
+| 0470 | Task 1: row writes for array stores | Done, by #1736 | Code: keyed array layouts in `updateStoreRow` (`storage-database.ts`). Test: `storage-database.test.ts`, "StorageDatabase.updateStoreRow on a keyed array store". |
+| 0470 | Task 2: move a store's writers together | Done | Environments, by #1736: `saveEnvironment` (`storage-projects.ts`), `storage-environment-row-writes.test.ts`. Sessions: `storage-drafts.ts`, `storage-sessions.ts`. Projects: `saveProject` (`storage-projects.ts`). Tests: `storage-session-project-row-writes.test.ts`, "one field writes one row and reads and writes nothing else" and "two connections writing sessions and projects lose no update"; `storage-session-project-row-writes.integration.test.ts`, "two processes writing the same rows lose no update" and the two "an interrupted write" kills; `storage-writer-guards.test.ts`. |
+| 0470 | Needs verification: how large the environment store gets and how often it is written | Moved to a to-do | [5101](5101-store-size-and-write-rate-live.md): needs a real install, which this work could not touch. |
+| 0870 | Task 1: stop reading whole values to size them | Done | Code: `rowBytesExpression` and the primary-key scan in `rows()` (`storage-database.ts`). Test: `storage-database.test.ts`, "a library without octet_length falls back to the cast, with the same answer", "production sizing falls back when the connection rejects octet_length" and "a sizes-only listing keeps the listing's order without an ordered scan". |
+| 0870 | Task 2: remove leases taken only to read, journal read | Done | Code: `getAgentInteractionResolutionJournal` (`storage-native.ts`). Test: `storage-native-agent-sessions.test.ts`, "a journal read takes no lease and writes nothing". |
+| 0870 | Task 2: remove leases taken only to read, no-op backoff reset | Done | Code: `resetAgentMailInjectBackoff` (`storage-agent-mail-injects.ts`). Test: `storage-read-only-leases.test.ts`, "nothing to reset takes no lease and writes nothing". |
+| 0870 | Task 3: one transaction for the usage-history prune | Done, in batches as the report recommended | Code: `prune` and `USAGE_HISTORY_PRUNE_BATCH_ROWS` (`usage-history-store.ts`). Test: `usage-history-store.test.ts`, "commits a bounded batch at a time and frees the event loop between them" and "a turn recorded during the sweep is not lost". |
+| 0870 | Needs verification: the overflow read cost was not timed | Done, cold cache moved to a to-do | Timed warm in the table above (46–60 ms to 9.4–11.7 ms). A cold-cache listing is [5102](5102-sqlite-size-fallback-live.md), task 2. |
+| 0870 | Needs verification: SQLite version in Bun 1.4.4 on each platform | Partly checked, rest moved to a to-do | SQLite 3.54.0 on macOS 27 arm64 and 3.53.4 on Linux arm64 both have `octet_length`. The other platforms, and a real older macOS, are [5102](5102-sqlite-size-fallback-live.md), task 1. |
+
+No item needed the outcome "no longer holds": each was still present in the code when re-checked, or had already been done by #1736, as the table says.
+
+**Investigation.** Re-checked 2026-11-02 and, for environments, 2026-11-04. Background callers not moved to the snapshot either mutate what they read or pass it on to code not checked yet: `reconcilePendingLaunches` (launches environments), environment cleanup, the local-server reaper, diff stats, the PR monitor and the coordinator, goal and sign-in services. Mail presence was checked: it already reads one row per mailbox (`mailInjectPresence`). ST-9's remainder (pending injects as their own collection, a body-free mailbox list) was not re-checked.
 
 **Decisions.**
 
@@ -129,13 +187,26 @@ Done 2026-11-04 (branch `array-layout-writers-dd246b495d6d-r1`, re-checked again
   - **Move the record stores (sessions, projects) first.**
     - Pros: `updateStoreRow` already supports them.
     - Cons: smaller stores, so less gained.
-- **ST-10, sessions and projects: next step?** Open.
+- **ST-10, sessions and projects: next step?** Done 2026-11-04 with the first option.
   - **Move sessions next, then projects, each with its writer guard change (recommended).**
     - Pros: array row writes now exist for both; sessions change more often than projects.
-    - Cons: sessions need a check of what `updateStore` callers rely on; a project reorder still writes many rows.
+    - Cons: sessions need a check of what `updateStore` callers rely on; a project reorder still writes many rows, and on the generated workload moving one project across 500 went from 3.4–4.8 ms to 5.8–8.7 ms.
   - **Leave them whole.**
     - Pros: no risk to two stores that are small on most installs.
     - Cons: the report's remaining ST-10 writers stay O(store) per field.
+- **Blob length: how to size a value without reading it (R20, D7)?** Done 2026-11-04. The report's recommended `octet_length` no longer fitted alone, so this extends it.
+  - **`octet_length(value)` with a fallback to the cast, plus a primary-key scan sorted in JavaScript for sizes-only listings (recommended, done).**
+    - Pros: 46–60 ms to 9.4–11.7 ms at 64 rows of 1 MiB; no schema change; works on any SQLite, because the expression is chosen per connection.
+    - Cons: an older SQLite keeps the cast's cost on the size expression; a JavaScript sort per listing; the SQL no longer states the order, so a test pins it.
+  - **`octet_length(value)` alone, as the report recommended.**
+    - Pros: one expression; the SQL keeps its `ORDER BY`.
+    - Cons: measured to change little: 52.5 ms against 60.6 ms on macOS and 40.0 ms against 52.2 ms on Linux. A query with no size at all still took 52.9 ms and 35.9 ms, because `ORDER BY` walks `store_rows_position` and seeks each row, and a seek in this `WITHOUT ROWID` table reads whole cells, overflow pages included, to compare keys. It also fails at query time on a library older than 3.43.
+  - **A stored `bytes` column.**
+    - Pros: independent of the SQLite version.
+    - Cons: a migration that locks out older builds, every writer path must keep it right, and the ordered seek would still read the cells.
+  - **A separate listing without sizes for key-only callers.**
+    - Pros: no version risk.
+    - Cons: display tails and pipeline manifests read `bytes`, so they would still pay; the seek cost is the same either way.
 
 ### 3. Renderer re-renders and refetches
 
@@ -401,17 +472,44 @@ Left on their own timers, and why: `CAPTURE_RESUME_INTERVAL_MS` in `useAnnotatio
 
 **Context.** Decided 2026-11-01: take discovery out of the 500 ms round, then add a combined read; choose push or long-poll only if measurements still justify it, and keep a recovery poll either way. Quiet backoff already covers all six providers (0052 task 2).
 
-**Investigation.** The three reads are in `useNativeAgentSession.ts`; only `/invoke` exists (`gateway-auth.ts`). Bridge state reads have no conditional path and hash a state that includes the model catalogue (TX-5); transcript windows are always sent whole (TX-6). GW-3 is in `web-gateway.ts`.
+Done 2026-11-04 (WEB-1, GW-1): discovery left the timed round and a round is one request. Baseline taken first on an isolated `dev:test` profile at `e198fd4a7`, before any polling code changed, with `e2e/agent-testing/agent-tab-requests-live.spec.ts` (setup in [agent-testing.md](../../development/agent-testing.md#live-requests-of-a-running-agent-tab)). The named workload is `running-quiet`: one visible Claude tab whose turn is in a foreground wait, watched for 40 s. Two runs each, on the same machine:
+
+| Measure over 40 s | Before (`e198fd4a7`) | After |
+| --- | --- | --- |
+| Session requests | 246, 249 | 85, 85 |
+| Requests per round | 3.00, 3.00 | 1.04, 1.04 |
+| Requests per second | 6.15, 6.22 | 2.13, 2.12 |
+| Rounds (the cadence stayed 500 ms) | 82, 83 | 82, 82 |
+| Discovery reads | 82, 83 | 3, 3 |
+| Bytes on the wire, headers included | 463,918, 471,279 | 224,032, 225,611 |
+| Gateway request bodies | 78,392, 79,348 | 34,191, 34,191 |
+| Gateway response bodies | 223,533, 237,818 | 187,920, 201,261 |
+| Reconnect (offline 6 s, stream dropped): first read after online | 56 ms, 53 ms | 60 ms, 55 ms |
+
+Three of the discovery reads fall in a 40 s window because one section expiry sits inside it: the read that finds the sections expired, then follow-ups until they settle. Those are also about half of the remaining response bytes (93,620 of 187,920), since each is a whole discovery snapshot; the code says its availability flipped, which was not checked read by read.
+
+- Discovery (`NativeDiscoveryReadSchedule`, `native-session-read-policy.ts`): read on mount, a session or identity change, any read that is not a background round, a resync, a resume or reconnect, a phase change and an invalidation that names discovery (`nativeSessionInvalidationNamesDiscovery`, `native-agent-observation.ts`), and otherwise every 30 s with its token. `resource-sync.ts` now keeps a cause that names discovery when it coalesces a burst, which it previously overwrote with the newest. Tests: `useNativeAgentSession.read-round.test.tsx`, `native-session-read-policy.test.ts`, `resource-sync.test.ts`, `native-agent-observation.test.ts`.
+- Combined read (`get_native_agent_live_update`, `native-agent-live-update.ts`, `liveUpdateVersions` in `get_native_agent_sync_capabilities`): one request for transcript and state, used by a background round over tokens the view holds. Tests: `native-agent-live-update.test.ts`, `useNativeAgentSession.read-round.test.tsx`. Two rows added to the [version compatibility register](../../architecture/version-compatibility.md#register).
+- Real stack, profile `e8-agent-tab-polling` with real Claude turns: the requests spec above; its case that lets a turn end while the environment is off screen (no session request in 31 s inactive, the answer shown 251 ms after return, and again after a reload); its case that hides `liveUpdateVersions` from the page (2 reads a round, 60 in 15 s, no combined read sent, no failed session command); and `slash-command-picker.spec.ts` and `slash-command-inactive.spec.ts`. Claude only: the other platforms share this code path through unit tests, not a live run. `claude-revision-tokens-live.spec.ts` fails at its first case with and without this change, so it is no evidence either way; see [5040](../transcripts-and-observation/5040-revision-token-spec-background-output.md). Its page reader now counts a combined read as the two reads it answers.
+
+**Investigation.** The three reads are in `useNativeAgentSession.ts`; only `/invoke` exists (`gateway-auth.ts`). Bridge state reads have no conditional path and hash a state that includes the model catalogue (TX-5); transcript windows are always sent whole (TX-6). GW-3 is in `web-gateway.ts`. Push or long-poll: a running tab still sends two requests a second, each an `unchanged` answer of about 1.6 KB on the wire when nothing moved. Whether that justifies either is the maintainer's choice from these numbers; nothing here started it.
 
 **Decisions.**
 
-- **Where does the combined read live?**
+- **Where does the combined read live?** Done as recommended.
   - **One new progressive-update command that answers transcript and state with their `knownToken`s (recommended).**
     - Pros: one request; reuses the existing token contract; older backends are detected by the missing command.
     - Cons: a new protocol command that needs a version-compatibility entry.
   - **A generic bounded `/invoke-batch`.**
     - Pros: helps every caller.
     - Cons: new gateway surface with its own bounds, auth and error semantics.
+- **What triggers a discovery read?** Done 2026-11-04 with the first option, plus follow-ups for a section that has not settled (see Assumptions and decisions).
+  - **Mount, a session or identity change, a manual refresh, resync, a phase change and an invalidation that names discovery, with a 30 s backstop that reuses its `knownToken` (recommended).**
+    - Pros: covers both reports' lists; a new command or model still arrives; the backstop covers a missed hint and drives the refresh that produces announcements.
+    - Cons: a catalogue change not announced waits up to 30 s.
+  - **Only events, with no backstop.**
+    - Pros: fewest reads.
+    - Cons: the maintainer asked for a recovery poll to stay, and with no read the backend would not refresh discovery, so a change would never be announced.
 
 ### 5. Transcript pipeline
 
@@ -839,7 +937,9 @@ Live on beelink with the locally built image `orkestrator-v2:dev-task8-7d4bb9536
 
 Rechecked 2026-11-03 at `70c0228d1` (after the review fixes), image rebuilt from that commit as `orkestrator-v2:dev-f9ed233a0aa0` (`mise run docker:build:dev --profile task8r2-7d4bb95362a6`, exit 0); its manifest declares `tmux-hook-signal: 1` and `claude-state-signal: 3`. `tmux-hook-signal-docker.test.ts` against it: four runs at 4 execs in 10 s idle, plus one through `test:logged` (`task8-image-doorbell`), all passed. Its first run at that commit counted 7 and failed the old bound of 6, because the tab had no transcript and so also ran the fallback search, and pre-idle ticks could fall inside the window. The test now seeds the transcript, starts counting inside the idle wait, and asserts at most 4 execs and no search. Older image: `orkestrator-v2:latest`'s manifest has no `tmux-hook-signal` and its `orkestrator-state-signal hook` exits 0, so it stays on the one-exec poll. `tmux-exec-count.ts --seconds 600` reproduced the table above exactly, before and after.
 
-**Investigation.** Still open: BG-14 (reopening a tab replays the whole transcript through `docker exec`, `transcriptLines()` in `tmux-session-manager.ts` and `ClaudeTmuxChatTab.tsx`) and BG-15 (`dispatchMailInject` in `prompt-queue-drainer.ts` repeats the presence reads). The doorbell's network hop to a real backend is proven only where containers reach the host (the Linux Engine workflow); beelink's cannot, so its test rings a fake doorbell on the container's loopback.
+Done 2026-11-04, BG-14: a tab reopen reads one page from the transcript's tail (`readPage` in `tmux-transcript-reader.ts`, at most 512 KiB and 500 records, one `docker exec`) and the renderer pages earlier history in (`ClaudeTmuxChatTab.tsx`, `prependTranscriptPage` in `claudeTmuxStore.ts`). Task snapshots no longer need a replay: the poll tail's one pass records each call's snapshot (`TaskSnapshotHistory`). Through a fake `docker` on PATH (`apps/backend/scripts/tmux-reopen-read-size.ts`, workload "longest session"): 36,853,890 bytes in 2 execs before, 524,306 bytes in 1 exec after. Remaining live evidence: [5120](../transcripts-and-observation/5120-tmux-transcript-reopen-live-evidence.md).
+
+**Investigation.** Still open: BG-15 (`dispatchMailInject` in `prompt-queue-drainer.ts` repeats the presence reads). The doorbell's network hop to a real backend is proven only where containers reach the host (the Linux Engine workflow); beelink's cannot, so its test rings a fake doorbell on the container's loopback.
 
 **Decisions.**
 
@@ -850,7 +950,7 @@ Rechecked 2026-11-03 at `70c0228d1` (after the review fixes), image rebuilt from
   - **One long-lived `docker exec -i` co-process per container.**
     - Pros: no image change.
     - Cons: a new long-lived process to supervise, bound and restart; its death must be detected.
-- **BG-14: how to stop a reopen replaying the whole transcript?**
+- **BG-14: how to stop a reopen replaying the whole transcript?** Decided and done 2026-11-04: page from the tail.
   - **Page from the tail, as native transcripts page their history (recommended).**
     - Pros: one bounded read per reopen; the renderer already has a paged history view for native tabs.
     - Cons: the tmux chat tab has to move onto paged history; renderer and backend change together.
@@ -928,7 +1028,7 @@ Tests: `commands-pr-monitor-batch.test.ts` (reader rules, and the `gh` boundary 
 
 ### 11. Gateway and preview proxy
 
-**Problem.** Per-frame and per-request costs remain in the gateway (GW-10, GW-11, GW-15, GW-16). The preview proxy's missing upstream connection reuse (GW-8) and stripped ETags (GW-9), the terminal socket back-pressure (GW-6) and the event frame costs (GW-5, GW-12, GW-14) are fixed.
+**Problem.** Per-frame and per-request costs remain in the gateway (GW-10, GW-11, GW-15). The preview proxy's missing upstream connection reuse (GW-8) and stripped ETags (GW-9), the terminal socket back-pressure (GW-6), the event frame costs (GW-5, GW-12, GW-14) and the small per-chunk and per-frame costs (GW-16) are fixed.
 
 **Context.** Done: the shared SSE decoder is linear (GW-4). GW-2 is done in 0052 (D14). Done on 2026-11-02:
 
@@ -938,6 +1038,7 @@ Tests: `commands-pr-monitor-batch.test.ts` (reader rules, and the `gh` boundary 
 - GW-5, done 2026-11-04: a frame is UTF-8 encoded once (`encodeGatewayFrame` in `gateway-event-replay.ts`), the replay ring holds that `Buffer` instead of the string, every client is written the same `Buffer`, and writers take the byte count as an argument (`EventClientWriter.write(chunk, byteLength?)`). Only short fixed strings such as keepalives are still measured by the writer.
 - GW-12, done 2026-11-04: `GatewayEvents.writeReplayFrames` writes one cursor frame per run of skipped events, just before the next matching frame or at the end of the window. The cursor it carries is the newest skipped revision. `gateway.connected`'s `replayed` count and the replay metrics still count the whole window.
 - GW-14, done 2026-11-04: `since()` finds the range with `slice(revision + 1 - oldest)`, and `replay.ring.oversizedAppends` in `/__orkestrator/metrics` counts frames larger than the ring's byte bound. Such a frame still empties the window, which keeps the gap detectable.
+- GW-16, done 2026-11-04. Idle deadlines: `gateway-proxy.ts` (`rewriteIdle`, `armIdleTimer`) and `preview-forward.ts` (`resetIdle`) refresh one timer per body. Decoders: two module-level decoders in `terminal-websocket-server.ts`. Operation results: on the `orkestrator-terminal.v1.input-results` subprotocol, input that succeeded is answered by one cumulative `input-results` frame per channel per flush; failures and resizes stay alone, and results collected so far go out ahead of any other control frame, so control frames keep their order. A client offering only v1 keeps one `operation-result` per input, and such a socket counts `terminal-websocket.per-input-results`. Acks: `DEFAULT_TERMINAL_ACKNOWLEDGEMENT_DELAY_MS` is 1 s. Tests: `apps/backend/tests/terminal-websocket-input-results.test.ts`, `terminal-websocket-client-gateway.test.ts` (the renderer's client against the real gateway), `gateway-proxy-idle-timers.test.ts`, the idle-deadline case in `preview-forward.test.ts`, and the cumulative-results and default-delay cases in `terminal-websocket-client.test.ts`.
 - Tests for these four: `apps/backend/tests/terminal-websocket-backpressure.test.ts`, `apps/backend/tests/gateway-frame-costs.test.ts`, and the window and oversized cases in `apps/backend/src/gateway-event-replay.test.ts`.
 - Tests for GW-8 and GW-9: `preview-upstream-pool.test.ts`, the reuse cases in `preview-forward.test.ts` and `preview-publication.test.ts`, `gateway-proxy-etag.test.ts`, and in `test:preview:browser` `e2e/preview/upstream-pool.spec.ts` (reuse, revocation and generation change close idle connections, legacy-route 304) plus the opt-in measurement `e2e/preview/vite-page-load.spec.ts`. The whole `test:preview:browser` suite with the Vite fixture passed twice in Chromium, Firefox and WebKit (58 passed, 2 skipped: the Chromium-only measurement). On beelink WebKit ran only with Ubuntu 24.04's `libicu74`, `libxml2` and `libflite1` libraries added to a private copy of the WebKit bundle (see 2680).
 
@@ -985,7 +1086,49 @@ Review correction (2026-11-04): the original burst timings included a fixed 100 
 
 The noisy channel now desyncs sooner: about 110 frames (1.8 MB) earlier in this workload, because it no longer has the socket's 2 MiB to fill. The timings move with the host: an earlier `fan-out` pair on the same builds gave 447–481 µs before and 192–403 µs after, and the whole-window `since()` range after the change is wide. The desync, frame-measure and cursor counts did not vary between runs.
 
-Not re-checked: GW-10, GW-11, GW-15, GW-16.
+Not re-checked: GW-10, GW-11, GW-15.
+
+Re-checked GW-16 on 2026-11-04 against `main` at `e198fd4a7`: all four items held, at moved lines (`gateway-proxy.ts:313-329` and `:563-571`, `preview-forward.ts:316-326`, `terminal-websocket-server.ts:426` and `:586`, `operationResult` at `:1101`, `terminal-websocket-client.ts:99`). An ack was found to be redundant on the server: `channel()` already resets `invalidChannelFrames` for any valid channel, before the ack's own reset runs.
+
+`timer.refresh()` under Bun 1.4.4, which 0375 had not exercised: it moves the deadline from now, keeps an unreferenced timer unreferenced, and does nothing after `clearTimeout`, but re-arms a timer that has already fired. So `armIdleTimer` still creates a new timer after one fires, and the other two sites can only re-arm through data on a stream the firing already destroyed, which is a no-op. A refresh took about 36 ns against 91 ns for a clear and a new timer, so the saving is allocation churn rather than noticeable time.
+
+**GW-16 before and after.** `apps/backend/scripts/terminal-input-costs.ts`: the real gateway and the renderer's real client over a real socket, against a fake backend. The same script ran with the five changed sources at `e198fd4a7` and with this change, 5 runs before and 10 after (two sets, one either side of the before set), on one host with load average 3.5 to 5.9, Bun 1.4.4. Ranges are those runs. Raw JSON is in `output/efficiency/e19/` of the build worktree (git-ignored).
+
+| Workload | Measure | Before | After |
+| --- | --- | --- | --- |
+| `proxy-chunks`: one 64-chunk body through each idle deadline (buffered proxy, preview rewrite, preview forwarder) | Idle timers created per body, each site | 65 | 1 |
+| `typing`: 200 keystrokes 15 ms apart, each echoed | Decoders constructed | 253–256 | 0 |
+| | Result frames | 200 | 200 |
+| | Result bytes | 17,692 | 12,492 |
+| | Ack frames | 53–56 | 4 |
+| | Keystroke to result, median | 0.22–0.34 ms | 0.21–0.30 ms |
+| | Keystroke to result, 95th percentile | 0.35–0.54 ms | 0.34–0.51 ms |
+| | Writes and results in order, none lost | yes | yes |
+| `burst`: 200 keystrokes in one turn, writes complete at once | Decoders constructed | 200 | 0 |
+| | Result frames | 200 | 1 |
+| | Result bytes | 17,692 | 63 |
+| | All settled | 2.65–3.41 ms | 1.17–2.13 ms |
+| | Writes and results in order, none lost | yes | yes |
+| `burst-slow-write`: the same burst, each write takes 1 ms | Result frames | 200 | 200 |
+| | Result bytes | 17,692 | 12,492 |
+| | All settled | 250.8–253.4 ms | 250.2–262.0 ms |
+| `output`: one channel, 100 frames a second for 5 s | Ack frames | 100 | 5 |
+| | Acks per second | 17.6–17.7 | 0.87–0.88 |
+| | Ack payload bytes | 5,780 | 289 |
+
+The counts did not vary between runs, except the before `typing` acks and decoders shown as ranges. The latency ranges overlap, and these synthetic figures show no measurable added delay rather than none at all.
+
+**Real Chromium, real shell.** An isolated `dev:test` profile at this change, with the transport turned on and frames counted in the page (loopback, counts only). Chromium offered both subprotocols and the server selected input results.
+
+| 25 ms typing, then keys with no delay, then a reload | Negotiated | Offering only v1, as an older client |
+| --- | --- | --- |
+| Typing: input frames / result frames | 52 / 52 | 52 / 52 |
+| No-delay keys: input frames / result frames | 316 / 314 | 316 / 316 |
+| Failed results, socket closes | 0, 0 | 0, 0 |
+| Typed text intact in the terminal's output | yes | yes |
+| Input works after a reload | yes | yes |
+
+So on a real shell the frame count barely falls: each write finishes in its own event-loop turn, and Playwright's no-delay keys still arrive one at a time. A person typing, or keys over any path where results finish apart, gets one frame per key, about 29% smaller (88 to 62 bytes on average). The frame count only falls when results finish together, as in `burst`. No batching that adds no delay can do better than this, and a wait long enough to merge keystrokes would be the delay the ticket forbids. `e2e/agent-testing/terminal-input-resume.spec.ts -g websocket` also passed on that profile.
 
 **Decisions.**
 
@@ -1024,6 +1167,27 @@ Not re-checked: GW-10, GW-11, GW-15, GW-16.
   - **The report's `W/"<upstream>|<encoding>|rw<prefix-hash>"`.**
     - Pros: shorter.
     - Cons: loses whether the upstream tag was weak, so Vite would never answer 304; a rewriter change would revalidate stale rewrites.
+- **How to batch operation results (GW-16)?** Done.
+  - **A cumulative result per channel per flush, with failures alone (recommended).**
+    - Pros: no added wait, since the frame goes out in the flush a lone result would have used; 200 results become one when they finish together; each frame is smaller even when they do not; a failure keeps its message.
+    - Cons: a new frame and a negotiation, for one frame per key at typing speed, where only the bytes fall.
+  - **Leave it.**
+    - Pros: no protocol change, and the frames are small.
+    - Cons: one larger frame per key always.
+- **How to negotiate input results (GW-16)?** Done.
+  - **A second subprotocol, offered ahead of v1 (recommended).**
+    - Pros: settled in the upgrade, so it costs no frame or round trip; an older server selects v1 and an older client offers only v1, with no version check on either side; the backend can count older clients.
+    - Cons: a name to keep alongside v1 until the window passes.
+  - **A client frame after `ready.features`, as `ping` does.**
+    - Pros: follows the nearest precedent.
+    - Cons: results sent before it arrives need a second code path, and it adds a frame to every connection.
+- **Send fewer acks, or use them (GW-16)?** Done.
+  - **Send them once a second (recommended).**
+    - Pros: a client-only constant with no protocol change; 100 acks become 5 in the `output` workload.
+    - Cons: revisit if flow control ever wants them.
+  - **Use them as flow-control credit.**
+    - Pros: gives the server a true view of client progress.
+    - Cons: a much larger change, and GW-6's `bufferedAmount` watermark covers the same socket problem.
 - **How does a paused flush resume (GW-6)?** Done.
   - **From the `ws.send` callback, pausing only while a send is in flight (recommended).**
     - Pros: no work while a socket is stalled; a pause can never be left with nothing to wake it, whatever else `bufferedAmount` holds; corrected `terminal-burst` runs delivered all frames without desync (14–35 ms before, 19–33 ms after; insufficient to claim zero latency cost).
@@ -1817,6 +1981,22 @@ but at the 30 s safety read, after one read on adoption that can still correct
 a state stored before a restart. Dropping the poll entirely would lose that
 correction.
 
+### Task 8: BG-14 page size
+
+512 KiB and 500 records. On one host's 3,976 Claude transcripts (median 171 KB, 99th percentile 6.4 MB, longest 37 MB) that holds the median file whole and costs a long one about 1.4% of a whole read. A record longer than a page grows the window, up to 32 MiB; past that it becomes a notice row, so the read stays bounded and nothing vanishes silently.
+
+### Task 8: BG-14 historical task snapshots
+
+Kept per session as `tool_use_id` to snapshot, fed by the tail's one pass, bounded to 4,096 calls and 16 MiB, oldest first. A forgotten call's row renders from its own args, as a call the backend could not parse does. The alternative of replaying from the start for each page was rejected: it would put the whole-file read back behind every older page.
+
+### Task 8: BG-14 stays one command
+
+`claude_tmux_transcript` gains an optional `page`. An older backend ignores it and answers an array, which the client reads as a whole transcript, so a new renderer needs no capability probe or failed round trip. A call without `page` is an older renderer and still gets the array, counted as `tmux-transcript.whole-read`; both are in the [compatibility register](../../architecture/version-compatibility.md#register).
+
+### Task 8: BG-14 keeps paged-in rows across a reopen
+
+A reopened tail that overlaps the loaded rows keeps the older ones and their cursor, so a reader's place survives an environment switch. Without an overlap (more than a page was missed), or on a manual refresh, the tab starts again from the tail, which repairs any gap; earlier history stays a click away.
+
 ### Task 8: the image check counts a bound idle tab
 
 Made on 2026-11-03. The image test's idle window first counted an unbound tab
@@ -2140,7 +2320,8 @@ browser and real-stack suites were not run.
 
 - WEB-12, WEB-13 and WEB-18 with `localWindowGatewayTransport` on and off in a real Electron window: `local-gateway-transport-electron.spec.ts` was not run, because this host has no disposable display (`xvfb-run`). From code, the polls and the new reads all go through the same `invoke`, and neither the gateway nor the relay filters commands by name; the Chromium run exercised the gateway path only.
 - WEB-19 timings in Chromium: the numbers are production React under Happy DOM; no React Profiler run was made.
-- WEB-11 on a real mobile WebView and over a slow remote link: that a socket left dead in the background gets no pong and is replaced, and that 2.5 s is long enough for a healthy pong. Only fake-socket client tests and the real gateway's ping handling in a backend test have run.
+- WEB-11 on a real mobile WebView and over a slow remote link: that a socket left dead in the background gets no pong and is replaced, and that 2.5 s is long enough for a healthy pong. Only fake-socket client tests and the real gateway's ping handling in a backend test have run. Tracked in [5080](5080-terminal-websocket-live-evidence.md).
+- GW-16 past loopback Chromium: the input-results subprotocol through the Tailscale Serve route, a command-node relay in a browser, WebKit and a mobile WebView. Tracked in [5080](5080-terminal-websocket-live-evidence.md).
 
 ## Related
 
@@ -2197,3 +2378,59 @@ Verification named four desktop failures. None of them came from a gateway chang
 **Revoked-access recovery (three cases in `preview-transport-manager.test.ts`).** A real bug in tunnel v2: a pooled stream stayed reusable between the session `error` frame and the close frame, so a request after a revocation got a 502. Fixed in `PreviewTunnelSession`; the choice is recorded in [4500](4500-preview-tunnel-one-socket-per-connection.md).
 
 **Node pull-mode receive window (`preview-tunnel-session.test.ts`).** On Node 26.7.0 `read()` with no size returned one 64 KiB chunk of the four buffered, where the test expected all of them. The credit logic was correct, so the test now drains the stream until `read()` returns null. Only Node 26.7.0 is installed on the host, so the test was not run on an older Node.
+
+### Task 11: GW-16 cumulative input results (2026-11-04)
+
+Kept the report's recommended per-flush batching after measuring it, although a real shell at typing speed still gets one frame per key: it adds no wait, costs fewer bytes per key either way, and collapses results that finish together. A timed window would merge more, and the ticket rules out delaying a keystroke's result. Input-only, because resizes are rare and carry their own failures. The frame uses a new subprotocol rather than a `ready` feature, as the report suggested, so a socket's result format is fixed from its first frame. Results are collected per socket rather than per channel object, because a result can complete after its channel retired, and it is then sent and ignored exactly as the older frame was.
+
+### Task 11: leftovers from efficiency report 0100 (2026-11-04)
+
+Report `docs/reports/efficiency-logging-database/0100-e19-terminal-websocket.md` was checked item by item and deleted; `git show e198fd4a7:<that path>` still reads it. Its GW-6 and WEB-11 work was confirmed in code and tests. What needs evidence no host here could give went to [5080](5080-terminal-websocket-live-evidence.md).
+
+
+#### E19 retained task outcome table
+
+The complete pre-retirement report is readable with:
+`git show 48d2ed40c87dfda6cd1d681fa54bc930e26e03f8:docs/reports/efficiency-logging-database/0100-e19-terminal-websocket.md`.
+The six rows below preserve its original part/task numbering; the report stays deleted.
+
+| Original part / task | Outcome | Code and validation evidence |
+| --- | --- | --- |
+| 0100 task 1 — stop channel flushing above the socket watermark (GW-6) | Done; existing implementation confirmed | `apps/backend/src/terminal-websocket-server.ts`: `flush`, `socketBackedUp` and send-callback resume; `apps/backend/tests/terminal-websocket-backpressure.test.ts`, `terminal-websocket-stalled.integration.test.ts`; task 11 measurements above and `apps/backend/scripts/gateway-frame-costs.ts` terminal-flood workload. |
+| 0375 task 1 — refresh idle timers (GW-16) | Done | `apps/backend/src/gateway-proxy.ts` and `packages/protocol/src/node/preview-forward.ts`; `apps/backend/tests/gateway-proxy-idle-timers.test.ts` and `packages/protocol/src/node/preview-forward.test.ts` cover steady traffic, last-chunk silence deadlines and one timer per body. |
+| 0375 task 2 — reuse decoders (GW-16) | Done | Module-level fatal control and non-fatal input decoders in `apps/backend/src/terminal-websocket-server.ts`; `apps/backend/tests/terminal-websocket-input-results.test.ts` covers allocation counts, split UTF-8 and recovery after malformed input. |
+| 0375 task 3 — batch input operation results (GW-16) | Done; remote qualification moved | `packages/protocol/src/terminal-websocket.ts`, server `operationResult` / `queueInputResults`, client `resolveInputThrough`; protocol, server input-results, client-gateway and renderer client tests cover ordering, failures and v1 compatibility. Remote/browser matrix remains [5080 task 3](5080-terminal-websocket-live-evidence.md). |
+| 0375 task 4 — reduce advisory terminal acknowledgements (GW-16) | Done | `apps/web/src/lib/native/terminal-websocket-client.ts` default acknowledgement delay is 1 s; its owning tests cover coalescing; task 11 benchmark above records 100 to 5 acknowledgements in 5 seconds. |
+| 0610 task 1 — rebuild only unhealthy sockets on visibility return (WEB-11) | Done; device qualification moved | Client visibility probe and server ping handler; `apps/web/src/lib/native/terminal-websocket-client.visibility.test.ts` and `apps/backend/tests/gateway-terminal-liveness.test.ts`; [5080 task 2](5080-terminal-websocket-live-evidence.md) retains mobile/slow-link evidence. |
+
+| Original verification item or remaining qualification | Outcome / retained evidence |
+| --- | --- |
+| 0100: Bun `bufferedAmount`, send callbacks and quiet-channel desync reproduction | Done; task 11 measurements and backpressure / real stalled-peer tests above; terminal-flood workload reproduced the old desync. |
+| 0375: exercise `timer.refresh()` under Bun on these paths | Done; gateway and preview-forward owning tests exercise refresh, single allocation and cleanup. These real socket/wall-clock files are assigned to the slow tier; they remain runnable directly. |
+| 0610: how many users enabled the opt-in transport | Moved to [5080 task 1](5080-terminal-websocket-live-evidence.md); no real-install usage evidence collected. |
+| WEB-11 probe on a mobile WebView and slow link | Moved to [5080 task 2](5080-terminal-websocket-live-evidence.md). |
+| Negotiated results over Tailscale Serve, browser command-node relay, WebKit/mobile and a real-latency link | Moved to [5080 task 3](5080-terminal-websocket-live-evidence.md); earlier loopback Chromium evidence is recorded above. |
+
+### Task 11 review decisions (2026-11-04)
+
+**Task 11 — real-time validation.** Keep the actual socket and runtime timer tests and assign both owning files to the slow tier. This preserves integration evidence without making the deterministic default depend on host scheduling. A fake-clock rewrite could run in the default tier but would not exercise Bun's real `refresh()` and network paths. Silence assertions now measure from the final chunk.
+
+**Task 11 — compatibility usage.** Count the v1 path when an authenticated socket becomes ready, for both header and in-band authentication. Counting upgrades included peers that never authenticated; counting only input results would omit authenticated older peers before their first write. Tests cover unauthenticated, in-band and header-authenticated sockets.
+
+**Task 11 — coverage.** Added queue-saturation rejection between successful input results and a delayed successful result after channel unsubscribe. Corrected the flush comment to identify `queueControl` as the hard-limit owner.
+
+### Task 4: following a section that has not settled (2026-11-04)
+
+The analysis listed the triggers and a 30 s backstop. That alone would have stranded a view: the first read schedules at most two of the four sections per provider, so the rest stay `loading` until a later read asks again, and a refreshed section with an unchanged value is not announced, so a read that found it `stale` would have kept showing that until the next backstop, which would find it expired and `stale` again. A failed refresh announces nothing either. So a view with a section `loading` or `stale` looks again after 2 s, the backend's own section deadline, and one with a section `unavailable` after 5 s, the backend's retry. A provider that keeps failing costs one read every 2 s, down from two a second. No new backend announcement was added, since the read is what starts the refresh in any case.
+
+### Task 4: detecting the combined read by capability (2026-11-04)
+
+The analysis expected an older backend to be detected by the missing command. `get_native_agent_sync_capabilities` already carries this kind of answer (`transcriptPatchVersions`), so the backend advertises `liveUpdateVersions` and an older one is never sent a command it would refuse, which keeps its gateway's failure counts clean. The missing-command path stays only for a backend replaced by an older one before the next resync: both parts then answer `pending` in that round and are read on their own.
+
+### Task 4: a slow part answers `pending` (2026-11-04)
+
+The reads were separate, so a slow transcript could not delay session state, which carries pending approvals and the turn phase. Waiting for both would have traded that away, and the ticket asks for a running tab to stay as live as it is. A part still running after 250 ms answers `pending` and the client reads it alone, joining the provider read in flight. 250 ms is a judgment, half a round, not a measurement; the two reads took about 2 ms each in the runs above. First, manual and post-mutation reads stay two requests, so a cold transcript never travels with state.
+
+### Task 4: discovery causes instead of a new signal (2026-11-04)
+
+The analysis said an invalidation would have to start naming discovery. #1659 (2026-11-03) had already added a `cause` to each change, so the listener reads that and no event changed. A change with no cause (a backend before v2.36.0) or an unknown one counts as naming discovery, which keeps such a backend correct at the cost of some reads, and is listed in the compatibility register.

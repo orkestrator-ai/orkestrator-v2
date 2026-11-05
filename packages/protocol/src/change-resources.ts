@@ -170,7 +170,10 @@ export interface ChangeProjection {
     snapshotToken: string;
     rows: ChangeFileRow[];
     nextCursor: string | null;
+    /** Rows stored for this measurement; paging ends here. */
     totalRows: number | null;
+    /** Changed files with no stored row (past the cap); they cannot be paged to. */
+    omittedRows?: number;
   } | null;
   actions: ChangeAction[];
 }
@@ -325,6 +328,7 @@ export type ChangesGetFilesResult =
       nextCursor: string | null;
       totalRows: number | null;
       deliveredRows: number;
+      omittedRows?: number;
     }
   | { kind: "error"; error: ChangeError };
 

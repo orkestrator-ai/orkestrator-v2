@@ -46,6 +46,8 @@ const REASONS: Record<string, string> = {
   "changes.reason.untracked-scan-capped": "Too many untracked files to count them all",
   "changes.reason.ambiguous-index-membership": "A file was removed from Git but is still on disk",
   "changes.reason.count-omitted": "Some files were too large or unreadable to count",
+  "changes.reason.file-rows-capped": "Too many changed files to list; the totals count them all",
+  "changes.reason.file-list-truncated": "The provider listed only some of the changed files",
   "changes.reason.fragment-extent": "Counts the edited fragment, not the whole file",
   "changes.reason.provider-counts-disagree": "The provider's own counts disagree with its diff",
   "changes.reason.legacy-summary-only": "Recorded before full history was kept",

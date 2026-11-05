@@ -44,6 +44,9 @@ function response(command: string): unknown {
   }
 }
 beforeEach(() => {
+  // The previous test's sign-ins scheduled a debounced node refresh. Firing
+  // between tests, with no portal set, it lands on this mock after afterEach.
+  workspace.mockClear();
   workspace.mockImplementation(async (command: string) => response(command));
   portal.mockClear();
   window.orkestratorPortal = { invoke: portal } as never;

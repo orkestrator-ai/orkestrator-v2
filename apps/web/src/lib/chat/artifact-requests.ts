@@ -463,7 +463,7 @@ function errorInfo(error: unknown): { message: string; code?: string } {
   return { message: "The request failed" };
 }
 
-function useScopedRequest<T>(
+export function useScopedArtifactRead<T>(
   key: string | null,
   scope: ArtifactReadScope | null,
   run: () => Promise<T>,
@@ -537,7 +537,7 @@ function useScopedRequest<T>(
   return { ...value, retry };
 }
 
-function scopeParts(scope: ArtifactReadScope): string[] {
+export function artifactScopeKeyParts(scope: ArtifactReadScope): string[] {
   return [scope.backendId ?? "", scope.environmentId, scope.logicalSessionKey, scope.generation];
 }
 
@@ -547,9 +547,9 @@ export function useArtifactPublication(
 ): ArtifactRequestState<ArtifactPublicationView> & { retry: () => void } {
   const key =
     scope && publicationId
-      ? encodeRichKey(["publication", ...scopeParts(scope), publicationId])
+      ? encodeRichKey(["publication", ...artifactScopeKeyParts(scope), publicationId])
       : null;
-  return useScopedRequest(
+  return useScopedArtifactRead(
     key,
     scope,
     () =>
@@ -564,15 +564,20 @@ export function useArtifactPublication(
 
 /**
  * Read a whole representation. UTF-8 representations that the backend pages
- * are concatenated up to MAX_TEXT_REPRESENTATION_BYTES; base64 bodies are
- * read in one response.
+ * are concatenated up to `maxBytes` (default MAX_TEXT_REPRESENTATION_BYTES);
+ * base64 bodies are read in one response. A representation over the limit
+ * comes back partial, with `nextOffsetBytes` still set, so a caller that needs
+ * the whole document must check it. Every page must name the same artifact,
+ * revision, representation and whole-document hash as the first.
  */
 export async function readWholeRepresentation(
   scope: ArtifactReadScope,
   publicationId: string,
   representation: ArtifactRepresentation,
   captureIndex?: number,
+  options: { maxBytes?: number } = {},
 ): Promise<ArtifactRepresentationResponse> {
+  const maxBytes = options.maxBytes ?? MAX_TEXT_REPRESENTATION_BYTES;
   const base = {
     environmentId: scope.environmentId,
     logicalSessionKey: scope.logicalSessionKey,
@@ -580,21 +585,37 @@ export async function readWholeRepresentation(
     representation,
     ...(captureIndex !== undefined ? { captureIndex } : {}),
   };
-  const first = await readTranscriptArtifactRepresentation(base);
+  const first = await readTranscriptArtifactRepresentation(
+    options.maxBytes !== undefined
+      ? { ...base, sourceRange: { offsetBytes: 0, limitBytes: maxBytes } }
+      : base,
+  );
   if (first.encoding !== "utf8" || first.nextOffsetBytes === null) return first;
+  // Nothing more to fetch for a document the caller could not use anyway.
+  if (first.totalBytes > maxBytes) return first;
   let data = first.data;
   let next: number | null = first.nextOffsetBytes;
   let total = first.byteLength;
-  while (next !== null && total < MAX_TEXT_REPRESENTATION_BYTES) {
-    const page = await readTranscriptArtifactRepresentation({
+  while (next !== null && total < maxBytes) {
+    const offset: number = next;
+    const page: ArtifactRepresentationResponse = await readTranscriptArtifactRepresentation({
       ...base,
       sourceRange: {
-        offsetBytes: next,
-        limitBytes: Math.min(256 * 1024, MAX_TEXT_REPRESENTATION_BYTES - total),
+        offsetBytes: offset,
+        limitBytes: Math.min(256 * 1024, maxBytes - total),
       },
     });
-    if (page.sha256 !== first.sha256 || page.revision !== first.revision) {
+    if (
+      page.sha256 !== first.sha256 ||
+      page.revision !== first.revision ||
+      page.artifactId !== first.artifactId ||
+      page.representation !== first.representation ||
+      page.encoding !== first.encoding
+    ) {
       throw new Error("The representation changed while it was being read");
+    }
+    if (page.nextOffsetBytes !== null && page.nextOffsetBytes <= offset) {
+      throw new Error("The representation read did not advance");
     }
     data += page.data;
     total += page.byteLength;
@@ -614,13 +635,13 @@ export function useArtifactRepresentation(
     enabled && scope && publicationId
       ? encodeRichKey([
           "representation",
-          ...scopeParts(scope),
+          ...artifactScopeKeyParts(scope),
           publicationId,
           representation,
           options.captureIndex ?? null,
         ])
       : null;
-  return useScopedRequest(
+  return useScopedArtifactRead(
     key,
     scope,
     () => readWholeRepresentation(scope!, publicationId!, representation, options.captureIndex),

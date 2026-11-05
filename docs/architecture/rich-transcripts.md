@@ -488,6 +488,8 @@ and no interactive links. `TextPart` passes a stable `richPartId`
   newer bytes. When the file's modification time (known for host files) is
   later than the row's clock, the image is labelled **Changed since**; a
   live copy is labelled **Current file** (`lib/chat/media-snapshot.ts`).
+- **Static HTML documents**: a published `html-static` card displays its
+  verified effective HTML. See [Static document presentation](#static-document-presentation).
 - **Diffs**: edit and shell rows render backend-prepared change projections
   and hunks (raw-lines-v1 counts and bodies from one measurement); the client
   never counts or diffs. Bodies beyond their budget say so and keep exact
@@ -605,6 +607,9 @@ Options: `--runs N` (default 3, interleaved and order-alternated per run),
 `--cycles N` (20), `--keystrokes N` (240), `--cpu-throttle N` (CDP CPU
 throttling), `--no-stream` (diagnostic: no streaming response),
 `--cpu-profile` and `--no-minify` (CDP CPU profiles with readable names), and
+`--bundled-chromium` (Playwright's Chromium, for a host without Google Chrome;
+compare only runs of one browser), `--typing-at-message N` (type with message N
+on screen, such as a static document at index 25 + 150k, rather than the tail) and
 `--retained-mib N` (pads the same 3,000 messages to about N MiB of encoded
 JSON through `?retainedMiB=N`, so a large retained history stays under the
 4,096-message client cap; the 2026-10-24 run at 8 MiB is in
@@ -649,7 +654,8 @@ agent tab controller, over a seeded synthetic transcript of 3,000 messages:
 fences over five sources, `chart` fences, tables, `<details>` with nested
 code, callouts, inline data-URL images), 50 deferred image parts resolved
 through `loadToolDetails`, about 67 JSON payloads (tool output and bare JSON
-messages) and 20 published chart/Mermaid artifact parts. A fake
+messages), 20 published chart/Mermaid artifact parts and 20 published static HTML
+documents (each with a timeline per row). A fake
 `window.orkestrator.invoke` answers capabilities, publications,
 representations and Mermaid renders instantly. Highlighting uses the real
 Shiki worker. The page builds unchanged against the baseline: modules that
@@ -803,11 +809,148 @@ When the artifact frame reloads or tries to navigate, the shell removes it
 and notifies the host, which ends the channel and shows the saved preview
 with Reset.
 
+## Static document presentation
+
+A published `html-static` revision displays its stored effective HTML in the
+card (`StaticHtmlArtifactView`, `StaticHtmlFrame`), with the capture kept for
+geometry, loading, explicit preview and export, and eligible failures. The
+presentation is independent of the preview worker and of `liveInteractive`:
+replay needs an authorized read of the stored bytes and this runtime.
+
+**Reading (`lib/chat/static-html-document.ts`).** `readWholeRepresentation`
+stops at its limit and can return a partial result, so a settled read proves
+nothing. `readVerifiedEffectiveHtml` reads `effective-html` bounded by the
+display budget and refuses to show it unless the artifact, revision and
+representation match the publication, the encoding is `utf8`, `nextOffsetBytes`
+is null, `byteLength` and the actual encoded length both equal `totalBytes`, and
+both the response hash and a SHA-256 of the received bytes equal the receipt's
+`source.effectiveSha256`. Web Crypto is used where it exists; a plain-HTTP
+gateway is not a secure context, so `graphs/sha256` is the fallback rather than a
+reason to skip the check. Every page must also name the same artifact, revision,
+representation and whole-document hash, and a read must advance. The scope
+generation is rechecked after every asynchronous stage. Failures are typed
+(`static_identity`, `static_incomplete`, `static_integrity`,
+`static_over_budget`) and never cached.
+
+The result is cached under `[static-document, backend, environment, session,
+generation, publication, revision, hash, runtime version]` in the artifact read
+cache, so the protected content registry already clears it. Theme and width are
+presentation state and are not in the key. Stored bytes are never rewritten from
+a browser's reserialized DOM.
+
+**Runtime (`packages/protocol/src/static-html-presentation.ts`).** A
+self-contained function serialized into an opaque frame (`sandbox="allow-scripts"`,
+never `allow-same-origin`). It parses and sanitizes inside the frame, so
+artifact HTML is never parsed in the privileged application DOM, and enforces the
+byte and element budgets before the document becomes visible. Its click handling
+is deliberately narrower than the design runtime's: only `a` and `area` have their
+default prevented, so `<summary>` still toggles and text still selects.
+
+Its sanitizer is a copy of the design runtime's rules rather than a shared
+function, pinned line for line by `static-html-presentation.test.ts`, which
+compares both runtimes' output on the reference and hostile documents.
+`installDesignRuntime.toString()` is the identity of the static renderer
+(`STATIC_RENDERER_HASH`, compared at publication) and part of the preview worker
+image's context digest, so refactoring it would invalidate every unpublished
+receipt and every prepared worker image with no change in behaviour. Unifying them
+belongs with the next intentional change to the design runtime.
+
+**Channel.** `render` and `theme` from the host; `ready`, `rendered`, `size`,
+`error`, `interaction`, `link-request` and `escape` from the frame. Nothing else
+exists: no backend invocation, tool, clipboard or generic key forwarding. The
+frame's origin is `"null"` and proves nothing, so `StaticHtmlFrameSession` checks
+the exact sender window, the per-mount nonce and generation, the protocol version,
+the exact keys and the size of every message. `render` goes out once, after this
+mount's own `ready`. A second `load` or `ready` invalidates the mount without
+resending anything; **Retry** mounts a new iframe with a new identity. An
+oscillating height or a message flood stops the mount with a stated reason.
+`interaction` carries three booleans and never any selected text.
+
+**Theme.** `--ork-*` tokens and `--ork-chart-1…8` (`readStaticHtmlThemeTokens`).
+The application currently ships dark only (`class="dark"`), while verified
+captures default to a light profile. Authored documents often hard-code colours,
+and inheriting a dark theme's pale text would make them unreadable, so a document
+adopts the application theme only if its source names an `--ork-` variable. Any
+other keeps its receipt's appearance on an opaque canvas. The iframe element's
+`color-scheme` always matches the document's, because a mismatch makes the browser
+paint an opaque canvas over a transparent themed document.
+
+**Budgets (`STATIC_PRESENTATION_POLICY`).**
+
+| Budget | Value | Basis |
+| --- | --- | --- |
+| Displayed document | 256 KiB of UTF-8 | The design runtime's parse/serialize ceiling, which every stored effective document passed. Not `STATIC_HTML_POLICY.maxPreparedBytes` (16 MiB, source plus offline assets before rendering) or `MAX_TEXT_REPRESENTATION_BYTES` (the general text reader). |
+| Elements | 5,000 | Existing static limit |
+| Inline height | 120 to 1,600 px | `FRAME_CHANNEL_POLICY` |
+| Size updates applied | 4 per second, latest wins | `FRAME_CHANNEL_POLICY`; the host coalesces rather than drops, so the final height always lands |
+| Frames per window | 4 | Initial resource policy, qualified below; not a performance guarantee |
+| Render timeout | 15 s | Then released, with retry. The saved preview stays on screen meanwhile, so it errs long: a page under a saturated host took over 5 s |
+
+**Allocation (`stores/staticHtmlFrameSlots.ts`).** Ranks, highest first:
+expanded, interacting (focus, selection or pointer down, reported by the frame),
+visible, held (scrolled out of view but still mounted). A holder keeps its slot
+against an equal rank, so scrolling does not churn reloads; a held frame yields
+only when another block needs the slot. Nothing is read or framed until the block
+has been visible, so a long history preloads nothing. Retention is bounded by the
+allocator and by Virtuoso's render window: this feature does not change the
+virtualization, so a selection ends when Virtuoso unmounts its row, as it does for
+any transcript text.
+
+**Sizing.** The measured height is kept in the block's view state, so a revisit
+reserves it instead of growing from the capture. The frame reports its root's
+height rather than `documentElement.scrollHeight`, which can never shrink below
+the frame's own height and would ratchet after a disclosure closes. Height changes
+go through the row's normal measurement, so follow-to-end and a reader's position
+behave as for any other row growth.
+
+**States.** `loading`, `ready`, `deferred` (no free slot; saved preview, and
+expansion takes priority), `expanded`, `unavailable` (over budget or not readable),
+`failed` (integrity, incomplete, transport or runtime; retry offered) and `revoked`
+(protected content cleared, nothing protected shown). A transport failure keeps the
+valid saved preview and offers retry. A permission or deletion failure goes through
+`verifyArtifactConversation` and clears the conversation's content like any other
+revocation; stale cached content is never an offline fallback.
+
+**Performance (2026-11-04).** Bundled Chromium 156.0.8078.4, headless; Intel Core
+Ultra 9 285H, 16 threads, Linux, on a host shared with other running work; Vite
+production builds. Three interleaved runs per target against baseline `e198fd4a7`,
+over one dataset (the baseline shows the 20 static documents as saved previews),
+median of per-run values:
+
+| Metric (ms) | Typing at the tail: baseline → change | Typing with a document on screen: baseline → change |
+| --- | --- | --- |
+| Composer latency median | 11.85 → 12.2 (+3.0%) | 11.7 → 12.75 (+9.0%) |
+| Composer latency p95 | 19.1 → 19.52 (+2.2%) | 19.01 → 19.91 (+4.7%) |
+| Scroll frame interval median | 16.7 → 16.7 (0%) | 16.7 → 16.7 (0%) |
+| Scroll frame interval p95 | 16.8 → 16.7 (−0.6%) | 16.7 → 16.8 (+0.6%) |
+
+Both pass the 10% gate. The +9.0% is near the limit and the runs were noisy: per-run
+composer medians with a document on screen were 16.25, 12.75 and 11.85 ms against
+11.7, 14.1 and 11.35 ms, so a quieter five-run comparison would measure it better. No
+long tasks while typing or scrolling in any run. Convergence passed in every run:
+heap after the first rotation to the last cycle 18.8 → 19.3 MiB (baseline 18.5 →
+18.9), artifact request cache 38–47 KiB (baseline 15–18 KiB), 12–14 frames loaded
+over a run, none reloaded and none failed. The fixed convergence regions do not rest
+on a static document, so the frame bound is also asserted by
+`e2e/StaticHtmlTranscript.spec.ts`, which walks more reports than there are slots.
+The gate never held four frames on screen at once: the fixture's documents are 150
+messages apart, so four simultaneous frames are not separately measured.
+
+**Limits.** Text inside the frame does not participate in Find; the card's summary
+and source behaviour are unchanged. Multiple automatically executing JavaScript
+documents, more chart types and a convenience publishing tool are out of scope:
+[`4650`](../todo/transcripts-and-observation/4650-static-html-presentation-follow-ups.md).
+
 ## Rollout
 
-`transcript_artifact_capabilities.rolloutFlags` carries three switches. With
+`transcript_artifact_capabilities.rolloutFlags` carries four switches. With
 `richMarkdown` off, text renders and is indexed through the plain Markdown
 path. With `artifactPublication` off, `publish_artifact` is refused while
 existing publications stay readable. With `liveInteractive` off, Run
-interactive is unavailable and saved previews remain. No switch deletes or
-rewrites stored records.
+interactive is unavailable and saved previews remain. With `staticPresentation`
+off (`ORKESTRATOR_ARTIFACT_STATIC_PRESENTATION=0`), `html-static` cards show
+their saved preview and no document view; it is independent of `liveInteractive`,
+and an older backend that does not send it displays documents as usual. The hosted
+client (`apps/web-public`) declares the view unavailable at build time, because
+`vercel.json`'s policy cannot run its frame, so its cards stay on saved previews. No
+switch deletes or rewrites stored records.

@@ -232,6 +232,15 @@ Isolation (`ORKESTRATOR_ARTIFACT_PREVIEW_ISOLATION`):
 - `disabled`: HTML and Mermaid previews report `renderer_unavailable`;
   charts and workflow snapshots still verify.
 
+Isolation governs authoring only. A published `html-static` revision displays
+from its stored effective HTML in the renderer's own opaque frame
+([static document presentation](rich-transcripts.md#static-document-presentation)),
+needing no worker. Tool registration does not prove authoring works, so
+`authoringAvailability()` adds a statement to the tool server's instructions when
+this host cannot currently verify HTML and Mermaid, or prepare interactive
+documents. Instructions are read when a client connects, so `preview_artifact`'s
+`renderer_unavailable` stays the authority at call time.
+
 `PreviewRunnerStatus` reports the boundary honestly: `isolation` (where jobs
 run), `interactiveIsolation` (`container`, `process` only with the opt-in, or
 `unavailable` with `interactiveReason`), `isolationSelection`,
@@ -922,7 +931,7 @@ that the model saw it.
 | `ORKESTRATOR_ARTIFACT_CONTENT_ORIGIN`, `…_CONTENT_PORT` | Public content origin for hosted deployments; listener port |
 | `ORKESTRATOR_ARTIFACT_CONTENT_BIND` | Interface of the content listener, honoured only with `…_CONTENT_ORIGIN` and only for a loopback or Tailscale address (default `127.0.0.1`); wildcard or public addresses are refused with a warning |
 | `ORKESTRATOR_ARTIFACT_FRAME_ANCESTORS` | Trusted viewer origins replacing the application origins (the desktop shell is always added) |
-| `ORKESTRATOR_RICH_MARKDOWN`, `ORKESTRATOR_ARTIFACT_PUBLICATION`, `ORKESTRATOR_ARTIFACT_LIVE_INTERACTIVE` | Rollout switches (default on). Turning one off stops new rendering, publication or live execution; stored records, source and saved previews stay readable. |
+| `ORKESTRATOR_RICH_MARKDOWN`, `ORKESTRATOR_ARTIFACT_PUBLICATION`, `ORKESTRATOR_ARTIFACT_LIVE_INTERACTIVE`, `ORKESTRATOR_ARTIFACT_STATIC_PRESENTATION` | Rollout switches (default on). Turning one off stops new rendering, publication, live execution or the static document view; stored records, source and saved previews stay readable. |
 
 ## Operations
 

@@ -90,7 +90,9 @@ describe("standalone backend logging", () => {
     for (let index = 0; index < 100; index += 1) console.warn(`queued line ${index}.`);
     await stopStandaloneBackendLogging(logging, 30_000);
 
-    const files = await readdir(path.join(dataDir, "logs"));
+    const files = (await readdir(path.join(dataDir, "logs"))).filter(
+      (name) => name !== "essential",
+    );
     const contents = await readFile(path.join(dataDir, "logs", files[0]!), "utf8");
     for (let index = 0; index < 100; index += 1) {
       expect(contents).toContain(`queued line ${index}.`);

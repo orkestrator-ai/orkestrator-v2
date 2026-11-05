@@ -547,7 +547,7 @@ export class AgentMailInjects {
     return pending;
   }
 
-  /** Activity edges make a held delivery immediately eligible without announcing UI churn. */
+  /** Activity edges clear held delivery backoff in writer order. */
   async resetAgentMailInjectBackoff(mailboxId: string): Promise<void> {
     await this.store.enqueue(async () => {
       const store = await this.store.load();

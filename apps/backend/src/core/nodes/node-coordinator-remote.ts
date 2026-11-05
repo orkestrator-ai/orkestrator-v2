@@ -114,6 +114,7 @@ export class NodeCoordinatorRemote implements CoordinatorRemoteAccess {
       ...(name ? { name } : {}),
       requestPending,
       backgroundWorkPending: pending?.backgroundWorkPending === true,
+      goalRunning: entry?.goal?.running === true,
     };
   }
 

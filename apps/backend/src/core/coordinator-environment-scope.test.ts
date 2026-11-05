@@ -372,6 +372,26 @@ test("a build pipeline this coordinator started makes its environment its own", 
   expect((await tool("send_message", message(handMade))).isError).toBe(false);
 });
 
+test("a review this coordinator holds makes its environment its own", async () => {
+  await world.storage.coordinators.saveCoordinatorWorkflowAssociation({
+    id: crypto.randomUUID(),
+    projectId: scope.projectId,
+    coordinatorId: scope.coordinatorId,
+    conversationId: "closed-conversation",
+    kind: "multi-review",
+    resourceId: "review-1",
+    requestId: "review-1",
+    createdAt: new Date().toISOString(),
+  });
+  refused(await tool("send_message", message(handMade)));
+  await world.storage.saveMultiReviewWorkflow("review-1", handMade, 1, {
+    id: "review-1",
+    environmentId: handMade,
+    projectId: world.projectId,
+  } as never);
+  expect((await tool("send_message", message(handMade))).isError).toBe(false);
+});
+
 test("an older environment with no stored origin is treated as not this coordinator's", async () => {
   // No record at all.
   refused(await tool("send_message", message(handMade)));

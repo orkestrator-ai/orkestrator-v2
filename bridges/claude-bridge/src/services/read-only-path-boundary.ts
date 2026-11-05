@@ -20,7 +20,8 @@ import {
  * the conversation's own Claude home (saved tool results, memory; it never
  * holds a login, see `applyCoordinatorClaudeAccount`), its own attachments, the
  * skills it was given, the checkout, and the managed toolchains (executables
- * only, and a shell's `rg` execs the CLI from there).
+ * only, and a shell's `rg` execs the CLI from there). Only what lies inside the
+ * directory is carved out, so nothing can re-open the rest.
  *
  * Two layers hold it. The OS sandbox covers commands; this module's check
  * covers the CLI's own tools, which run outside the sandbox, and is all that
@@ -65,15 +66,18 @@ export function coordinatorReadBoundary(
 ): ReadBoundary | null {
   const dataDir = env[COORDINATOR_PROTECTED_DATA_DIR_ENV]?.trim();
   if (!dataDir || !isAbsolute(dataDir)) return null;
+  const deny = namedAndCanonical([dataDir]);
   return {
-    deny: namedAndCanonical([dataDir]),
+    deny,
+    // Only what lies strictly inside the denied directory. A checkout above it
+    // must not re-open the whole directory, since an allowance wins over a denial.
     allow: namedAndCanonical([
       env.CLAUDE_CONFIG_DIR,
       env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT,
       env[COORDINATOR_CLAUDE_USER_SKILLS_DIR_ENV],
       join(dataDir, "toolchains"),
       ...workspaces,
-    ]),
+    ]).filter((path) => !deny.includes(path) && deny.some((root) => isWithin(root, path))),
   };
 }
 

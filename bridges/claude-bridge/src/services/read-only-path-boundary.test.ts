@@ -81,6 +81,31 @@ describe("coordinatorReadBoundary", () => {
   });
 });
 
+describe("the allowance", () => {
+  const boundaryFor = (workspace: string, configDir = home) =>
+    coordinatorReadBoundary([workspace], {
+      [COORDINATOR_PROTECTED_DATA_DIR_ENV]: dataDir,
+      CLAUDE_CONFIG_DIR: configDir,
+    })!;
+
+  test("a checkout above the data directory does not re-open it", () => {
+    const above = boundaryFor(root);
+    expect(above.allow).not.toContain(root);
+    expect(readBoundaryRefuses(above, join(dataDir, "control-mcp.json"), root)).toBe(true);
+  });
+
+  test("a home that is the data directory itself does not re-open it", () => {
+    const whole = boundaryFor(checkout, dataDir);
+    expect(whole.allow).not.toContain(dataDir);
+    expect(readBoundaryRefuses(whole, join(dataDir, "control-mcp.json"), checkout)).toBe(true);
+  });
+
+  test("a checkout inside the data directory stays readable", () => {
+    const inside = join(dataDir, "workspaces", "project");
+    expect(readBoundaryRefuses(boundaryFor(inside), join(inside, "README.md"), inside)).toBe(false);
+  });
+});
+
 describe("readBoundaryRefuses", () => {
   test("refuses the operator credentials and the database", () => {
     expect(refuses(join(dataDir, "control-mcp.json"))).toBe(true);

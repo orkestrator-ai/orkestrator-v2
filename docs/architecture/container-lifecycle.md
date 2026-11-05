@@ -761,6 +761,21 @@ and the environment's inputs section says to rebuild (`unreadableOnRootless`,
   per directory unit, 20,000 entries and 512 MiB per revision. A skipped entry
   is counted by reason (`symlink`, `too-large`, `aggregate-budget`, …); names
   never leave the backend.
+- Writing: on Linux a file staged byte for byte is reflinked from the
+  descriptor that was checked (`FileCloner`, through `/proc/self/fd`), where
+  the data directory's filesystem can (btrfs, XFS, bcachefs). A reflink shares
+  the source's blocks until either side writes, so the revision stays an
+  independent copy: a write to it never reaches the host file or another
+  environment's revision, unlike a hard link. Its size is checked after the
+  clone, against the same bounds. A login restricted after staging is cloned
+  and then rewritten in place, which copy-on-write keeps local. A filtered or
+  guarded file (Claude's settings and `.claude.json`, the credential-guarded
+  skill and extension trees) is read and written as before, since cloning after
+  the read could stage bytes nobody checked. Anywhere else (another platform,
+  ext4, tmpfs, a source on another filesystem) the run copies, and after one
+  failed clone from a source device it copies the rest from that device. On a 300 MiB plugin fixture on
+  btrfs a revision took 162 ms and no new disk, against about 550 ms and 300 MiB
+  copied ([measurements](../reports/efficiency-logging-database/0000-index.md#closing-check-of-e25-container-start)).
 - Publication: a revision is written as `.<rev>.partial` and renamed into
   place, mode `0700`/`0600`. Binds use `--mount`, which fails on a missing
   source instead of creating a host directory. The container carries
@@ -1694,6 +1709,13 @@ need it once cloned.
   that reach it, compaction keeps old packs until new ones exist, and a build is a
   rename. Three fetch failures in a row (a lock left by a crash, say) rebuild the
   mirror rather than update it.
+- **Restricted containers.** A restricted container gets the mount only when its
+  firewall would let it reach the remote itself (`restrictedContainerReachesGitRemote`):
+  the host its clone connects to after `convert_ssh_to_https`, on GitHub's
+  always-open TCP 443 or an allowlist entry for that host and port (any port
+  under a network policy before 3). Otherwise it is withheld
+  (`git-mirror.mount-withheld`, reason `remote-unreachable`) and the clone goes to
+  the remote as before, so the mirror never hands it what its firewall would not.
 - **Credentials.** A refresh runs on the host through `runRemoteGit` and
   `gitHubGitCredentials`, the path project clones use. The URL and any credential
   are passed per transfer, and no `remote` section exists, so the config holds
@@ -1706,7 +1728,11 @@ need it once cloned.
   allows the foreign owner because everything uses an explicit `--git-dir`. Every
   environment of a project can read every branch of it through the mount, whatever
   credential that environment holds; a branch deleted on the remote leaves at the
-  next refresh, and its objects at a later compaction.
+  next refresh, and its objects at a later compaction. Because the mirror is
+  fetched with the backend's credential, a container given none (the default
+  container GitHub credential) can read a private repository's branches this way;
+  [6741](../todo/containers-and-environments/6741-git-mirror-access.md) holds the
+  fix, a mirror per kind of access fetched with what its readers hold.
 - **`-v`, not `--mount`.** Docker refuses to start a container whose `--mount`
   source is gone. With `-v` it recreates the source, so a stopped environment
   survives its mirror being removed by any route. If the project parent was

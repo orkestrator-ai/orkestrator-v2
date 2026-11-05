@@ -61,7 +61,7 @@ When one of these becomes ready, it joins the lane shown.
 
 ## Status of every efficiency finding
 
-107 done, 6 partly done, 7 open, 3 no action.
+109 done, 5 partly done, 6 open, 3 no action.
 
 | Finding | Disposition | Evidence |
 | --- | --- | --- |
@@ -182,8 +182,8 @@ When one of these becomes ready, it joins the lane shown.
 | DK-10 | Open | Left for a maintainer, 1202 task 14; pins at `docker/Dockerfile:207`, `bridges/claude-bridge/package.json:16`; see 0693. |
 | DK-11 | Done | One `apt-get update`, `docker/Dockerfile:82`; `util-linux` in that layer, `:111` (fd679c0e2). |
 | DK-12 | Done | `move_clone_into_workspace`, `docker/workspace-setup.sh:406`, `:500` (2525fc05c). |
-| DK-13 | Open | Direct clone only, `docker/workspace-setup.sh:385-397`; see 0500. |
-| DK-14 | Partly done | Start copy stamped, `import_agent_input` in `docker/entrypoint.sh` (`staged-inputs=5`, 1202 task 15); the per-environment staging copy remains, see 0490. |
+| DK-13 | Done | Per-project bare mirror bound read-only, `git clone --no-tags --reference <mirror> --dissociate`, `clone_from_git_mirror` in `docker/workspace-setup.sh:434` (26ff5925b, seeded from the host checkout by 0e8958f57); restricted containers that cannot reach the remote get no mount (`restrictedContainerReachesGitRemote`, E25). The mirror's credential is [6741](../../todo/containers-and-environments/6741-git-mirror-access.md); see the closing check of E25 below. |
+| DK-14 | Done | Start copy stamped, `import_agent_input` in `docker/entrypoint.sh` (`staged-inputs=5`, 1202 task 15); the staging copy reflinks on Linux where the filesystem can, `FileCloner` in `portable-inputs.ts` (E25). macOS and other filesystems still copy, [6740](../../todo/containers-and-environments/6740-input-staging-follow-ups.md); see the closing check of E25 below. |
 | DK-15 | Done | Rename, repair and `EXDEV` fallback, `environment-move.ts:428`, `:470`, `:559` (2525fc05c). |
 | DK-16 | Partly done | Transcript `knownToken`, `session.ts:1085`, `actions-transcript.ts:154` (b68b6e710); `attention --follow` stays unconditional on fixture measurements, with 32/80 KiB default/maximum-page fixture budgets in `public-api-attention.test.ts` (not universal bounds); a real follower's page size is left in [5560](../../todo/cli-and-slash-commands/5560-attention-follow-page-size.md). |
 | DK-17 | Done | One bounded read, `packages/cli/src/client/transport.ts:134` (b68b6e710). |
@@ -698,3 +698,57 @@ Store writes were 0 idle and 160 per window streaming (both tabs) in every varia
 | Task | Outcome | Left over |
 | --- | --- | --- |
 | 1. Retire joined paging, or add the interim map | The finding holds: a joined page records `history.joined-v1-page` or a cause id (`native-agent-transcript-projection.ts:4090`), runs a whole `sync-v1` `refreshProjection` (`:4091`) and SHA-256-hashes message ids in a `findIndex` (`:4116`). The support window has not passed: the floor is still v2.21.0, and v2.36.0 (2026-11-03), the first Stable release with 0232 tasks 1 to 3, enters the window on 2027-01-02; the `/messages` fallback row and direct recovery for the remaining no-cursor cases are also open. So joined paging stays, and the report's recommended option was taken: no interim map. No counter data was read (the split counters first shipped Stable on 2026-11-03, and no production instance was touched). | [0232](../../todo/transcripts-and-observation/0232-direct-history-cursor-minting.md) task 4: the removal, plus the decision on the interim map, what counter use would justify it, and how to read the counters |
+
+## Closing check of E25 (Container start)
+
+Built and checked back on 2026-11-05 on branch `20261105-225510-120411378c4f`, based on `main` at `cbe0f9a5b`, item by item against the batch file before it was deleted (its last version is in the parent of the commit that deletes it). The line numbers the file gave were from `a2bba9d8`; everything below was re-read against the branch. Part `0500` turned out to be built already by #1759 (`26ff5925b`) and #1804 (`0e8958f57`), after the file was analysed and before this batch; the file still listed it as open.
+
+| Part | Finding | Outcome |
+| --- | --- | --- |
+| `0490` | DK-14: agent-home inputs are copied in full per environment and again on every start | Done. Task 1 (stamps) was already done; task 2 is built, reflink where the filesystem can and copy otherwise; task 3 is not needed, on the numbers below. What is left is [6740](../../todo/containers-and-environments/6740-input-staging-follow-ups.md). |
+| `0500` | DK-13: each environment clones from the remote again | Done (#1759, #1804). This batch withholds the mount from restricted containers that could not reach the remote. How the mirror is fetched for a private repository is decided but not built: [6741](../../todo/containers-and-environments/6741-git-mirror-access.md). |
+
+**Measurements.** Beelink, Linux 7.1.8, btrfs on dm-crypt for the data directory and `/home`, tmpfs `/tmp`, Bun 1.4.4, rootful Docker 29.9.2 with `overlayfs`, image `orkestrator-v2:dev-c7e9a71b6680` (`staged-inputs=5`, `git-mirror=1`). Other builds were running: the load average was 47–58 for the first staging run and 3–19 for the rest, so compare variants within a run, not across runs. Fixture homes only, since this batch was not to touch real agent homes, and this host's data directory had no staged revisions to read counts from. Staging is `apps/backend/scripts/portable-input-staging-costs.ts` (median of 5 rounds after a warm-up round; `btrfs filesystem du` after a sync for the new disk). "Before" is `stagePortableInputs` from `main`; "copy" is this branch with `cloneFiles: false`, the same code path as before.
+
+| Fixture (Claude, Codex and shared skills) | Staged | Filesystem | Before | After, copy | After, clone | New disk before | New disk after |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `small`: 10 skills per root, 50 plugin files of 16 KiB per provider | 162 files, 1.7 MiB | btrfs | 21–25 ms | 27 ms | 27 ms | 1.6 MiB | 0 MiB |
+| `medium`: 200 skills per root, 2,000 plugin files of 16 KiB per provider | 5,202 files, 65 MiB | btrfs | 725–734 ms | 684 ms | 654 ms | 62.5 MiB | 0 MiB |
+| `plugins`: 20 skills per root, 600 plugin files of 256 KiB per provider | 1,322 files, 300 MiB | btrfs | 544–558 ms | 549 ms | 162 ms | 300 MiB | 0 MiB |
+| `medium` | 5,202 files, 65 MiB | tmpfs | 1,752–1,783 ms (loaded) | 987 ms | 966 ms | n/a | n/a |
+| `plugins` | 1,322 files, 300 MiB | tmpfs | 1,546–1,647 ms (loaded) | 761 ms | 758 ms | n/a | n/a |
+
+On tmpfs nothing clones (`ENOTSUP`), so both variants copy. Small skill files are inlined or compressed by btrfs, which is why `small` shows little new disk either way. Credential-guarded skills (Claude's and the shared root's) are still read, so the 4,402 of 5,202 `medium` files that cloned are the 4,000 plugin files, Codex's 400 skill files and two plain files.
+
+Container starts, from a throwaway script (`output/efficiency/e25-container-starts.ts`, not committed): stage, `docker create --network none -e NETWORK_MODE=full` with `stagedInputMountArguments`, then `docker start` until `waitForContainerBoot`, three starts per container, two containers per cell. The script removed its containers by ID; it created no network, image or volume.
+
+| Fixture | Staging | Stage | First start | Restarts | Inputs (unchanged/copied) |
+| --- | --- | --- | --- | --- | --- |
+| `medium` | Copy | 1,366–1,466 ms | 5,430–5,468 ms | 508–570 ms | 0/7 first, then 7/0 |
+| `medium` | Clone | 1,030–1,256 ms | 5,661–5,707 ms | 515–569 ms | 0/7 first, then 7/0 |
+| `plugins` | Copy | 763–791 ms | 1,174–1,277 ms | 568–618 ms | 0/7 first, then 7/0 |
+| `plugins` | Clone | 213–320 ms | 1,701–1,747 ms | 568–635 ms | 0/7 first, then 7/0 |
+
+Creation plus first start comes out even (about 2.0 s for `plugins`, 6.7–6.8 s for `medium`): a fresh clone has no cached pages, so the first start reads from disk what a just-written copy still had in the page cache. The saving that holds is disk, a whole revision per environment and per kept revision. 6740 task 2 records this.
+
+The detailed outcome is retained here so it survives squash merges:
+
+| Part | Item | Outcome | Code, evidence or to-do |
+| --- | --- | --- | --- |
+| 0490 | Task 1: skip the start copy with a stamp | Already done | `import_agent_input` in `docker/entrypoint.sh:830` (`staged-inputs=5`, 1202 task 15). Confirmed in real containers above: every restart reported 7 inputs unchanged and 0 copied. |
+| 0490 | Task 1 decision: a content digest compared with the stamp and the home | Already done, as taken on 2026-11-04 | Same code; tests `apps/backend/tests/portable-inputs-stamps.test.ts` (passed on this branch). |
+| 0490 | Task 2: shared host cache for staging | Done, recommended option | `FileCloner` (`apps/backend/src/core/portable-inputs.ts:620`), called from `copyRegularFile` (`:709`) for a file with no filter and no guard, cloning `/proc/self/fd/<fd>` of the descriptor already opened `O_NOFOLLOW` and checked, with `COPYFILE_EXCL | COPYFILE_FICLONE_FORCE`. Tests in `apps/backend/tests/portable-inputs-clone.test.ts`: "clones only files staged byte for byte, from the checked descriptor", "a clone and a copy stage the same files with the same accounting", "a filesystem that cannot clone falls back to a copy, asked once", "a file that grew past the limit before its clone is not staged", "a staged file stays independent of its source in both directions". The existing staging suites passed on tmpfs and again with `TMPDIR` on btrfs, where real reflinks ran. |
+| 0490 | Task 2 decision: reflink, not hard links | Done | A reflink is a new inode with copy-on-write blocks, so isolation is unchanged: the independence test writes to the revision and to the source and neither sees the other, and checks the inodes differ. No content-addressed cache was added, so there is no new store to bound or remove. |
+| 0490 | Task 2 cost: no saving without reflinks | Accepted | tmpfs, ext4, another filesystem than the source, and every platform but Linux copy as before. macOS is [6740](../../todo/containers-and-environments/6740-input-staging-follow-ups.md) task 1. |
+| 0490 | Task 3: bounded parallel copy | Not needed | After task 1 a restart copies nothing (above). After task 2 the host staging that task 3 was about takes 162 ms for 300 MiB and 654 ms for 5,202 files on a quiet host, once per environment creation, beside a clone of 1.4–7 s (1202 task 15) and a first start of 1.2–5.7 s. What remains is per-file work, which a pool could only shave, and a pool would have to reserve budget before each copy to keep `aggregate-budget` outcomes exact. The first start's cost for many files is in the entrypoint, not the host copy: [6740](../../todo/containers-and-environments/6740-input-staging-follow-ups.md) task 3. |
+| 0490 | Constraint: container storage rules, staged-input isolation | Holds | Nothing is removed outside the existing staging and prune paths; revisions stay private (`0700`/`0600`, checked by the clone tests) and are bound only as staged subtrees. |
+| 0490 | Constraint: byte and count bounds for a new cache | Holds | No cache was added. The clone's size is checked against `fileBytes`, and budgets are charged with the same sizes as the copy ("the same accounting" test compares summaries and manifests). |
+| 0490 | Needs verification: input sizes on real hosts | Moved to a to-do | Fixture homes only, for the reason above. [6740](../../todo/containers-and-environments/6740-input-staging-follow-ups.md) task 4. |
+| 0490 | Needs verification: whether the image relies on the copy recreating a removed file | Already answered | The file itself recorded that the stamp restores one. |
+| 0500 | Task 1: per-project mirror | Already done (#1759, #1804) | `apps/backend/src/core/project-git-mirror.ts`; `clone_from_git_mirror` in `docker/workspace-setup.sh:434`. |
+| 0500 | Decision: read-only bare mirror with `--reference-if-able --dissociate` | Done, with `--reference` | Bound `:ro` (`gitMirrorContainerArguments`, `project-git-mirror.ts:226`), `--dissociate` at `workspace-setup.sh:448`. `--reference` rather than `--reference-if-able`, so a mirror removed between the check and the clone fails over to the blobless clone instead of silently downloading full history; the reason is in `docs/architecture/container-lifecycle.md` ("Project Git mirror"). |
+| 0500 | Cost: a lifecycle to create, refresh, bound and clean up | Already done | Built and refreshed in the background (`refreshProjectGitMirror`, `:325`), bounded at 2 GiB with a free-disk floor (`GIT_MIRROR_MAX_BYTES`, `:71`), removed with its project (`removeProjectGitMirror`, `:805`) and by the orphan sweep (`sweepOrphanedProjectGitMirrors`, `:831`); nothing else removes one. `apps/backend/tests/project-git-mirror.integration.test.ts` passed on this branch. |
+| 0500 | Constraint: a mirror must not widen what a restricted container can read | Done for the network | A restricted container gets the mount only when its firewall would reach the remote itself: GitHub on TCP 443, or an allowlist entry for the clone's host and port (`restrictedContainerReachesGitRemote`, `project-git-mirror.ts:285`, called before the mount at `commands-containers.ts:352`). Tests: `apps/backend/src/core/project-git-mirror-reach.test.ts`, and in `apps/backend/tests/project-git-mirror-create.test.ts` "a restricted container that cannot reach the remote does not read it through the mirror" and its two counterparts. |
+| 0500 | Needs verification: how a host-side mirror fetches a private repository | Decided, not built | The mirror is fetched with the backend's credential, so a container given no GitHub credential (the default) can read a private repository's branches through it. Recommended fix: a mirror per kind of access, fetched with exactly what its readers hold, from an isolated Git configuration. [6741](../../todo/containers-and-environments/6741-git-mirror-access.md). |
+| 0500 | Needs verification: lazy round trips of blobless clones | Already answered | Yes, measured in 1202 task 15 (`git log -p -200`: 43 s against 0.1 s), which is why a mirror clone has no `--filter`. |
+| Both | Docker on this machine | Held | No prune, restart, firewall or network change. The only Docker resources made were the measurement containers (`--network none`, label `e25-measure`), each removed by ID; the image declares no volumes. |

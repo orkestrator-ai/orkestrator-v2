@@ -32,6 +32,7 @@ export interface TurnStartupSnapshot {
   readonly turnStartedAt: SessionState["turnStartedAt"];
   readonly abortController: SessionState["abortController"];
   readonly error: SessionState["error"];
+  readonly errorCode: SessionState["errorCode"];
   readonly interruption: SessionState["interruption"];
   readonly interruptedRequestId: SessionState["interruptedRequestId"];
   readonly lastActivity: SessionState["lastActivity"];
@@ -50,6 +51,7 @@ export function captureTurnStartup(session: SessionState): TurnStartupSnapshot {
     turnStartedAt: session.turnStartedAt,
     abortController: session.abortController,
     error: session.error,
+    errorCode: session.errorCode,
     interruption: session.interruption,
     interruptedRequestId: session.interruptedRequestId,
     lastActivity: session.lastActivity,
@@ -174,6 +176,11 @@ export interface TurnState {
    */
   settlingResult: boolean;
   localCommandOutputSeen: boolean;
+  /**
+   * A `rate_limit_event` of this turn said `rejected`: Claude refused the
+   * request because the plan allowance is used up. Read only if the turn fails.
+   */
+  rateLimitRejected: boolean;
   lastThinkingTokensEmitAt: number;
   compactedTokensBefore: number | undefined;
   /**
@@ -278,6 +285,7 @@ export function createTurnState(
     receivedPromptResult: false,
     settlingResult: false,
     localCommandOutputSeen: false,
+    rateLimitRejected: false,
     lastThinkingTokensEmitAt: 0,
     compactedTokensBefore: undefined,
     pendingPlanRejectionFeedback: null,

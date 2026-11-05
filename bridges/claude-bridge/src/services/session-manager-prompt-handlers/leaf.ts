@@ -47,6 +47,16 @@ function handlePromptSuggestion(turn: TurnState, message: SDKMessage): void {
 function handleRateLimitEvent(turn: TurnState, message: SDKMessage): void {
   const { session, sessionId } = turn;
   const info = (message as { rate_limit_info?: RateLimitEventInfo }).rate_limit_info;
+  if (info?.status) {
+    // Subscription rejection can still be served by extra usage. The newest
+    // event is authoritative, including a later allowed event.
+    turn.rateLimitRejected =
+      info.status === "rejected" &&
+      info.isUsingOverage !== true &&
+      info.overageInUse !== true &&
+      info.overageStatus !== "allowed" &&
+      info.overageStatus !== "allowed_warning";
+  }
   if (info) {
     const nextWindows = rateLimitsFromEventInfo(info);
     const nextLabels = new Set(nextWindows.map((window) => window.label));

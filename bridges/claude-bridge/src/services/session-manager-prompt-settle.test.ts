@@ -20,6 +20,7 @@ function preparedTurn(options?: PromptOptions) {
 describe("settleFailedTurn", () => {
   test("failed startup hands foreground back to a live runtime and removes only its prompt row", async () => {
     const { session, call, firstPrompt } = await releaseWithBackgroundWork("settle rollback");
+    session.errorCode = "usage-limit";
     const before = captureTurnStartup(session);
     const messages = Array.from(session.messages);
     const { turn } = createPromptTurnForTesting(session, { requestId: "startup-failure" });
@@ -40,6 +41,23 @@ describe("settleFailedTurn", () => {
       finalizeTurn(turn);
       call.finish();
       await firstPrompt;
+    }
+  });
+
+  test("a killed process after a rejected limit keeps the interruption code clear", () => {
+    const turn = preparedTurn();
+    turn.queryStarted = true;
+    turn.rateLimitRejected = true;
+    const error = Object.assign(new Error("Claude Code process terminated by signal SIGKILL"), {
+      errorClass: "process_killed_by_signal",
+      signal: "SIGKILL",
+    });
+    try {
+      expect(() => settleFailedTurn(turn, error)).toThrow();
+      expect(turn.session.errorCode).toBeUndefined();
+      expect(turn.session.interruption).toBe("restart");
+    } finally {
+      finalizeTurn(turn);
     }
   });
 

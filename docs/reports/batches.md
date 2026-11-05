@@ -48,7 +48,7 @@ Worked out on 2026-11-03 against `main` at `a44641cbc`, from the 167 work files 
 | Change tracking | 1. E3 (Retention and deletion) | `apps/backend/src/core/change-tracking/` |
 | Storage | 1. S-0190 (Provider secrets at rest) | `storage-database.ts`, `storage-backups.ts`, `storage-stores.ts` |
 | Git scans and file reads | 1. E-0580 (File RPC and usage report) | `commands-files.ts`, `git-scopes.ts`, `diff-stats-service.ts` |
-| Desktop | 1. E26 (Local desktop transport)<br>2. E-0691 (Preview capture data URLs) | `apps/desktop/electron/` windows, IPC and preloads, `backend-process.ts` |
+| Desktop | 1. E26 (Local desktop transport) | `apps/desktop/electron/` windows, IPC and preloads, `backend-process.ts` |
 | Gateway | 1. E18 (Gateway events)<br>2. E24 (Gateway static and preview)<br>3. S-0160 (Descriptor process binding) | `gateway-auth.ts`, `gateway-events.ts`, `gateway-proxy.ts`, `gateway-support-*.ts`, `terminal-websocket-server.ts` |
 | Logging and diagnostics | 1. E17 (Dead code)<br>2. E15 (Health and diagnostics)<br>3. E16 (Log controls) | `application-logging.ts`, the metrics route and the logging settings |
 
@@ -58,8 +58,6 @@ These batches don't share a protected area. They only have to respect the confli
 
 - **E1 (Baseline run):** the baseline task in `0150`, `0160`, `0180`, `0190` and `0400`, in efficiency-logging-database
 - **E20 (ACP bridge):** efficiency-logging-database `0270`, `0260`, `0240`
-- **E-0650 (Terminal container subscription):** efficiency-logging-database `0650`
-- **E-0694 (Attention follow polling):** efficiency-logging-database `0694`
 - **CI-0010 (Backend shard timeout):** ci-shard-validation `0010`
 
 ## Conflicts between lanes

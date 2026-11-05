@@ -655,7 +655,7 @@ export class AgentBranchRunner<B extends AgentBranchRecord> {
       platform: efficiencyPlatform(branch.agent),
       elapsedMs: Date.now() - statusStarted,
     });
-    const { status, error: statusDetail } = observation;
+    const { status, error: statusDetail, failureKind } = observation;
     await host.assertFence();
     // Kept once seen: the turn's commands ran without the sandbox even if a
     // later read no longer says so. The owner names the boundary.
@@ -732,6 +732,7 @@ export class AgentBranchRunner<B extends AgentBranchRecord> {
         environmentId: host.environmentId,
         requestId,
         error: statusDetail,
+        ...(failureKind ? { failureKind } : {}),
         resends: branch.usageLimitResends ?? 0,
         ...((branch.turnStartedAt ?? branch.startedAt)
           ? { turnStartedAt: branch.turnStartedAt ?? branch.startedAt }

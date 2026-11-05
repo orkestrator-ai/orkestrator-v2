@@ -336,7 +336,7 @@ describe("responsive capture sets", () => {
       ["Page · 390 px", { setId: result.setId, index: 0, count: 2, viewportWidth: 390 }],
       ["Page · 1280 px", { setId: result.setId, index: 1, count: 2, viewportWidth: 1280 }],
     ]);
-    const first = (await harness.manager.readPendingCapture(result.captures[0]!.captureId))!;
+    const first = (await harness.manager.readPendingCaptureWire(result.captures[0]!.captureId))!;
     expect(first.capture.geometry?.viewport.width).toBe(390);
     expect(result.captures[0]!.responsive).toEqual(first.capture.responsive);
     expect(first.capture.page.route).toBe("/settings");

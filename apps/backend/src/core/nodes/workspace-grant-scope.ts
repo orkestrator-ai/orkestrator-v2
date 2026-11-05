@@ -14,12 +14,22 @@ import { stripRendererCredentials } from "../commands-validation.js";
  * fails open until it is added here, so add it with the command.
  */
 export const WORKSPACE_ADMINISTRATION_COMMANDS: ReadonlySet<string> = new Set([
+  // Operator public API has no workspace renderer callers. Refuse the whole
+  // entrypoint, including indirect operation retries and node-targeted actions.
+  "public_action",
   // Global settings. An older realm's no-op echo is still answered; see
   // `isGlobalConfigEcho`.
   "save_config",
   "update_global_config",
   "patch_global_config",
   "update_notification_sound_settings",
+  "set_workflow_result_tools_rollout",
+  "web_annotations_rollout_set",
+  "save_desktop_connections",
+  // Installation-wide Docker budget and cleanup (including cleanup tokens).
+  "set_container_resource_limits",
+  "docker_cleanup_preview",
+  "docker_cleanup_execute",
   // Machine credentials stored in the global settings.
   "set_github_token",
   "set_cursor_api_key",

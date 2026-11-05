@@ -862,8 +862,12 @@ selected files across every node that has the project:
 - Data-plane grants for direct streams are short-lived, revocable and
   never the leaf's gateway token, and they cannot be used for
   administration (token rotation, attachment, grants, registry, the
-  machine's global settings and credentials, host updates). They do run the
-  workspace: agent chat, terminals, previews, files, repository settings and
+  machine's global settings and credentials, rollout switches, desktop
+  connections, installation-wide Docker limits and cleanup, host updates).
+  The operator `public_action` entrypoint is refused in full: workspace
+  renderers use the workspace commands, while public actions can also retry
+  operations and dispatch to other nodes under operator authority. Grants do
+  run the workspace: agent chat, terminals, previews, files, repository settings and
   the project boards. The relay refuses the same commands
   (`isWorkspaceExcludedCommand`, `nodes/workspace-grant-scope.ts`), which is
   a deny-list: a new administration command has to be added there. Settings

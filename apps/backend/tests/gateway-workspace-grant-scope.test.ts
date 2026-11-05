@@ -1,5 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
 import { createServer } from "node:http";
+import { redactGlobalConfig, stripRendererCredentials } from "../src/core/commands-validation.js";
 import type { BackendHelloIdentity } from "../src/gateway";
 import { requestUrl, startGateway } from "./gateway-test-harness.js";
 
@@ -23,12 +24,12 @@ const identity: BackendHelloIdentity = {
 };
 
 const leafConfig = {
-  global: {
+  global: redactGlobalConfig({
     terminalHistoryEnabled: true,
     allowedDomains: ["github.com"],
     favoriteModels: [{ platform: "claude", modelId: "leaf-model" }],
-    githubTokenConfigured: false,
-  },
+    githubToken: "",
+  } as Parameters<typeof redactGlobalConfig>[0]),
   repositories: {},
 };
 
@@ -41,6 +42,11 @@ const olderRealmFavouriteEcho = {
   preserveInheritedSettings: true,
 };
 
+const patchEcho = {
+  patch: stripRendererCredentials(leafConfig.global),
+  unset: ["absentSetting"],
+};
+
 const changingWrites: Array<[string, Record<string, unknown>]> = [
   [
     "update_global_config",
@@ -51,6 +57,30 @@ const changingWrites: Array<[string, Record<string, unknown>]> = [
   ],
   ["patch_global_config", { patch: { defaultNetworkMode: "full" } }],
   ["save_config", { config: leafConfig }],
+  ["set_workflow_result_tools_rollout", { mode: "enabled" }],
+  ["web_annotations_rollout_set", { mode: "enabled" }],
+  ["set_container_resource_limits", { memoryMb: 1024 }],
+  ["docker_cleanup_preview", {}],
+  ["docker_cleanup_execute", { token: "cleanup-token" }],
+  ["save_desktop_connections", { desktopConnections: [] }],
+  ...[
+    "host.update.apply",
+    "host.update.channel",
+    "host.update.cancel",
+    "host.toolchain.repair",
+    "host.image.update",
+    "host.gh.update",
+    "run.retry",
+  ].map((action): [string, Record<string, unknown>] => [
+    "public_action",
+    {
+      schemaVersion: 1,
+      actionVersion: 1,
+      action,
+      input: { confirm: true },
+      request: { namespace: "test", requestId: "update-1" },
+    },
+  ]),
   ["request_host_update", {}],
   ["request_host_update_check", {}],
   ["set_host_update_channel", { channel: "unstable" }],
@@ -117,6 +147,14 @@ describe("a client grant at the leaf's gateway", () => {
     expect(invoke.mock.calls.map(([command]) => command)).toEqual(["get_config"]);
   });
 
+  test("answers a no-op patch with realistic redacted settings without writing", async () => {
+    const { invoke, call } = await gatewayWithBackend();
+    const answered = await call("patch_global_config", patchEcho);
+    expect(answered.status).toBe(200);
+    expect(answered.json()).toEqual({ result: leafConfig });
+    expect(invoke.mock.calls.map(([command]) => command)).toEqual(["get_config"]);
+  });
+
   test("refuses a settings write when the settings cannot be read", async () => {
     const invoke = mock(async () => {
       throw new Error("storage unavailable");
@@ -136,7 +174,9 @@ describe("a client grant at the leaf's gateway", () => {
 });
 
 describe("the relay through the command node", () => {
-  async function relayToFakeLeaf() {
+  async function relayToFakeLeaf(
+    failure?: "disconnect" | "status" | "oversized" | "json" | "missing",
+  ) {
     const seen: Array<{ command: string; authorization?: string }> = [];
     const leaf = createServer((request, response) => {
       const chunks: Buffer[] = [];
@@ -146,8 +186,22 @@ describe("the relay through the command node", () => {
           command: string;
         };
         seen.push({ command, authorization: request.headers.authorization });
-        response.writeHead(200, { "content-type": "application/json" });
-        response.end(JSON.stringify({ result: command === "get_config" ? leafConfig : null }));
+        if (failure === "disconnect") {
+          request.socket.destroy();
+          return;
+        }
+        response.writeHead(failure === "status" ? 503 : 200, {
+          "content-type": "application/json",
+        });
+        response.end(
+          failure === "oversized"
+            ? JSON.stringify({ result: leafConfig, padding: "x".repeat(4 * 1024 * 1024) })
+            : failure === "json"
+              ? "invalid JSON"
+              : failure === "missing"
+                ? "{}"
+                : JSON.stringify({ result: command === "get_config" ? leafConfig : null }),
+        );
       });
     });
     await new Promise<void>((resolve) => leaf.listen(0, "127.0.0.1", resolve));
@@ -220,4 +274,33 @@ describe("the relay through the command node", () => {
       await close();
     }
   });
+  test("answers a no-op patch with realistic redacted leaf settings without writing", async () => {
+    const { seen, call, close } = await relayToFakeLeaf();
+    try {
+      const answered = await call("patch_global_config", patchEcho);
+      expect(answered.status).toBe(200);
+      expect(answered.json()).toEqual({ result: leafConfig });
+      expect(seen.map(({ command }) => command)).toEqual(["get_config"]);
+    } finally {
+      await close();
+    }
+  });
+
+  test.each(["disconnect", "status", "oversized", "json", "missing"] as const)(
+    "fails closed on a %s config read without forwarding writes",
+    async (failure) => {
+      const { seen, call, close } = await relayToFakeLeaf(failure);
+      try {
+        for (const [command, args] of [
+          ["update_global_config", olderRealmFavouriteEcho],
+          ["patch_global_config", patchEcho],
+        ] as const) {
+          expect((await call(command, args)).status).toBe(403);
+        }
+        expect(seen.map(({ command }) => command)).toEqual(["get_config", "get_config"]);
+      } finally {
+        await close();
+      }
+    },
+  );
 });

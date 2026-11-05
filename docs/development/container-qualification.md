@@ -723,13 +723,23 @@ hold when the host user maps to container root?
     firewall lets it. On rootless that needs no rule at all. On rootful, ufw was
     the only thing in the way here, and that is host configuration rather than
     something Orkestrator sets.
-  - A session bound to its peer address would not help: the peer is a container
-    address on rootful, the host's own address on rootless, and loopback through
-    Serve and on Docker Desktop.
+  - Peer binding could separate a rootful container's own address from a
+    browser signed in from loopback or LAN on a direct gateway bind. Coverage
+    would be partial: the peer is the host's own address on rootless, and
+    loopback through Serve and on Docker Desktop. The acceptance rests on the
+    observed restricted-firewall refusals within this run's limits, rather than
+    on peer binding being ineffective everywhere.
+  - Rootless observations apply with host loopback off. Enabling it is expected
+    to expose loopback-bound host services too, potentially including the
+    gateway. Neither that reach nor the restricted firewall's protection in
+    that configuration was qualified; the named service port also lacked a
+    positive control in this run.
 - **Not covered:** a real gateway on a Tailscale address (the restricted result
   does not depend on it, since the firewall rejects before any listener); a
-  rootful `full` container with no host firewall; a runtime with the firewall
-  inside it (an older image's); arm64.
+  rootless daemon with host loopback enabled, including a reachable named-port
+  positive control; a rootful `full` container with no host firewall; a runtime
+  with the firewall inside it (an older image's); arm64. These remaining checks
+  are tracked in [todo 5510](../todo/previews-and-annotations/5510-linux-gateway-qualification-gaps.md).
 
 ## Rootless Linux host (2026-10-25)
 

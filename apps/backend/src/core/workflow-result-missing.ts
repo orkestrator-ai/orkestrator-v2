@@ -97,6 +97,18 @@ export function workflowRestartContinuationPrompt(input: {
   ].join("\n\n");
 }
 
+/** The turn that continues a session the user's pause stopped partway. */
+export function workflowResumeContinuationPrompt(input: {
+  workLabel: string;
+  resultLabel: string;
+  toolName?: string;
+}): string {
+  return workflowRestartContinuationPrompt(input).replace(
+    "Orkestrator restarted while you were working, so",
+    "This work was paused and has now resumed, so",
+  );
+}
+
 /**
  * The turn sent after a five-hour or weekly limit stopped a workflow's turn and the machine
  * moved to another account. Like the restart continuation it continues the same

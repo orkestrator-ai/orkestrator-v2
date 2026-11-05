@@ -10,6 +10,10 @@ export const DOCKER_LOG_AREAS = defineLogAreas({
       "git-mirror.mount-unavailable":
         "A new container gets no project Git mirror, so its clone goes to the remote.",
       "git-mirror.refreshed": "A project's Git mirror was built or updated.",
+      "git-mirror.seeded":
+        "A project's Git mirror was built from its host checkout and only what the remote added to it.",
+      "git-mirror.seed-skipped":
+        "A project's host checkout could not seed its Git mirror, so the build downloads everything.",
       "git-mirror.refresh-failed":
         "A project's Git mirror could not be updated. New clones still work, from the mirror as it was or from the remote.",
       "git-mirror.low-disk": "A project's Git mirror was not updated: the disk is nearly full.",

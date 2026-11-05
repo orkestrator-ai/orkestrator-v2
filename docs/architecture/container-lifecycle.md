@@ -1551,6 +1551,29 @@ need it once cloned.
   second environment is the first to benefit. There is no timer: an idle project
   makes no network requests. Only branches are fetched: clones use `--no-tags`, and
   `refs/pull/*` can dwarf a repository.
+- **Seed.** A build, not an update, starts from the host checkout at
+  `project.localPath` when it has one (`seedMirror`), so the build downloads only
+  what the checkout lacks. The checkout can hold unpushed work, and its refs and
+  config are shaped by whatever ran in it, so it decides nothing:
+  - It is read only by a fetch of its `refs/remotes/*`, through `upload-pack`,
+    which restricts what a repository's config and hooks can run. Local branches
+    stay behind. `GIT_ALLOW_PROTOCOL=file` and `GIT_NO_LAZY_FETCH=1` stop an older
+    Git following a partial clone's promisor. Objects are hashed on the way in,
+    and the fetch checks each ref's whole history.
+  - That goes into a quarantine, `.building-*/seed.git`, outside the mount. The
+    remote is then fetched into it, so the remote says which branches exist and
+    where they point, and sends what it finds missing. A ref it does not recognise
+    only wastes a negotiation round.
+  - The mirror fetches `refs/heads/*` from the quarantine, so it receives what the
+    remote's branches reach and no other ref or object.
+
+  Anything else (no checkout, an unusable, damaged, shallow or partial one, more
+  in it than the size limit, or too little disk for the quarantine) discards the
+  seed and downloads as before. A remote that cannot be reached fails the build:
+  a checkout never makes a mirror on its own. The seed reads the checkout as the
+  backend's user, so what `upload-pack` still allows is the remaining exposure:
+  Git calls its attack surface large. A host agent running as that user gains
+  nothing from it, and a container cannot reach the checkout.
 - **Writers.** One refresh per mirror in a backend; a launch during a refresh joins
   it. A second backend on the same data directory holds no writer lease, so it
   creates no containers. Readers need no lock: Git publishes a pack before the refs
@@ -1589,6 +1612,25 @@ real repositories), `project-git-mirror.integration.test.ts` (build, refresh,
 credentials, concurrency, removal) and, in real containers,
 `project-git-mirror-docker.test.ts` (read-only mount, foreign owner, removal, a
 restart with the source gone).
+
+Not yet qualified:
+
+- A real rootless daemon. The mirror is world-readable inside an owner-only
+  directory for that case, and a clone as `--user 12345` passes, but the mount was
+  not run under rootless Docker, where a daemon recreating a removed source does
+  so as the host user rather than root.
+- Docker Desktop. Bind mounts there go through its file sharing, so the clone time
+  is likely to differ, and whether the data directory is shared by default was not
+  checked.
+- A restricted network. The measurements used the default bridge with
+  `NETWORK_MODE=full`. The clone still reaches the remote for its refs, through the
+  same allowlist as before, but this was not run behind a firewall.
+- A real-stack `dev:test` profile with a freshly built image. The live test binds
+  this checkout's script over an older image's copy and calls the mirror functions
+  directly, so the image's own capability probe and `createDockerContainer` were
+  not run together against real Docker.
+- A seed against a real network remote. It was measured against a local bare clone
+  (see [disk-usage.md](../development/disk-usage.md#project-git-mirrors)).
 
 ## Container lifecycle events
 

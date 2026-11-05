@@ -52,10 +52,60 @@ function deferred<T>() {
 beforeEach(() => {
   spyOn(backend, "getWorktreeLocations").mockResolvedValue(snapshot());
   spyOn(backend, "listDiskUsageEnvironments").mockResolvedValue([]);
+  spyOn(backend, "listProjectGitMirrorUsage").mockResolvedValue([]);
 });
 afterEach(() => {
   cleanup();
   mock.restore();
+});
+
+test("lists each project's Git mirror with its size, largest as the backend sends them", async () => {
+  spyOn(backend, "listProjectGitMirrorUsage").mockResolvedValue([
+    { projectId: "p1", projectName: "Project", path: "/data/git-mirrors/p1", bytes: GB },
+    { projectId: "gone", projectName: null, path: "/data/git-mirrors/gone", bytes: 2 * GB },
+    { projectId: "p3", projectName: "Unmeasured", path: "/data/git-mirrors/p3", bytes: null },
+  ]);
+  render(<DiskUsageSettings />);
+  await screen.findByText(/3 GB measured \(some sizes unavailable\) across 3 mirrors/);
+  const rows = screen
+    .getAllByRole("listitem")
+    .filter((item) => item.textContent?.includes("/data/git-mirrors/"));
+  expect(rows.map((item) => item.textContent)).toEqual([
+    "Project/data/git-mirrors/p11 GB",
+    "Removed project/data/git-mirrors/gone2 GB",
+    "Unmeasured/data/git-mirrors/p3Unknown",
+  ]);
+});
+
+test("no mirror yet says so and lists nothing", async () => {
+  render(<DiskUsageSettings />);
+  await screen.findByText(/clone from a mirror of their project once it exists/);
+  expect(screen.queryAllByRole("listitem")).toEqual([]);
+});
+
+test("a failed mirror read shows why, and a refresh recovers and re-measures", async () => {
+  const list = spyOn(backend, "listProjectGitMirrorUsage").mockRejectedValueOnce(
+    new Error("unknown command"),
+  );
+  render(<DiskUsageSettings />);
+  await screen.findByText("unknown command");
+  list.mockResolvedValueOnce([
+    { projectId: "p1", projectName: "Project", path: "/data/git-mirrors/p1", bytes: GB },
+  ]);
+  fireEvent.click(screen.getByRole("button", { name: "Refresh project Git mirrors" }));
+  await screen.findByText(/1 GB across 1 mirror\./);
+  expect(screen.queryByText("unknown command")).toBeNull();
+  expect(list).toHaveBeenCalledTimes(2);
+});
+
+test("a mirror read that lands after unmounting is ignored", async () => {
+  const pending = deferred<backend.ProjectGitMirrorUsage[]>();
+  spyOn(backend, "listProjectGitMirrorUsage").mockImplementation(() => pending.promise);
+  const view = render(<DiskUsageSettings />);
+  await screen.findByText("Measuring mirrors…");
+  view.unmount();
+  await act(async () => pending.resolve([]));
+  expect(screen.queryByText(/mirror/i)).toBeNull();
 });
 
 test("picks, saves and resets both locations; cancelled picks make no write", async () => {
@@ -216,6 +266,7 @@ for (const machine of [null, "leaf", "other"]) {
       row("selected-env"),
     ]);
     const update = spyOn(backend, "updateWorktreeLocations").mockResolvedValue(snapshot());
+    const mirrors = spyOn(backend, "listProjectGitMirrorUsage").mockResolvedValue([]);
     const measure = spyOn(backend, "getEnvironmentDiskUsage").mockResolvedValue(
       usage("selected-env"),
     );
@@ -229,6 +280,7 @@ for (const machine of [null, "leaf", "other"]) {
       expect((pick as HTMLButtonElement).disabled).toBe(machine !== "leaf");
       expect(read).toHaveBeenCalledWith(machine);
       expect(list).toHaveBeenCalledWith(machine);
+      expect(mirrors).toHaveBeenCalledWith(machine);
       fireEvent.click(
         screen.getByRole("button", { name: "Reset new environment worktrees to default" }),
       );

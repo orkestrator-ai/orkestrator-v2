@@ -22,7 +22,9 @@ import {
   type BuildPipeline,
 } from "@orkestrator/protocol/build-pipeline";
 import {
+  coordinatorDelegationBucket,
   pullRequestStateFromNotice,
+  type CoordinatorWorkBucket,
   type CoordinatorWorkflowAssociation,
 } from "@orkestrator/protocol/coordinator";
 import type { GraphRun } from "@orkestrator/protocol/graphs/run";
@@ -34,8 +36,8 @@ import type { PrCheckSummary, PrState } from "@orkestrator/protocol/pr-monitor";
 export const FINISHED_WORK_RETENTION_MS = 24 * 60 * 60 * 1000;
 
 export type CoordinatorWorkKind = "worker" | "build" | "review" | "graph-run" | "pull-request";
+export type { CoordinatorWorkBucket };
 /** Display order: what waits on the user, then running work, then finished work. */
-export type CoordinatorWorkBucket = "needs-you" | "running" | "finished";
 export const COORDINATOR_WORK_BUCKETS: readonly CoordinatorWorkBucket[] = [
   "needs-you",
   "running",
@@ -336,7 +338,9 @@ function workerItem(
     .map((association) => association.delegation)
     .filter((delegation) => delegation !== undefined)
     .sort((a, b) => (time(a.requestedAt) ?? 0) - (time(b.requestedAt) ?? 0));
-  const running = delegations.filter((delegation) => delegation.state === "running");
+  const running = delegations.filter(
+    (delegation) => coordinatorDelegationBucket(delegation) !== "finished",
+  );
   const latestDelegation = delegations.at(-1);
   const outcome = associations.find((association) => association.workerOutcome)?.workerOutcome;
   const createdAt = Math.min(
@@ -353,7 +357,7 @@ function workerItem(
     Boolean(remote?.environment?.deleting);
   const needsYou =
     !deleted &&
-    (running.some((delegation) => delegation.waiting) ||
+    (running.some((delegation) => coordinatorDelegationBucket(delegation) === "needs-you") ||
       (!first.nodeId && sources.promptEnvironmentIds.has(environmentId)) ||
       activity === "waiting");
 

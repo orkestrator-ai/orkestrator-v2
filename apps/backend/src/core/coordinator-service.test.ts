@@ -239,6 +239,28 @@ describe("project coordinator", () => {
     expect((await service.ensure(project.id)).workspace.selectedConversationId).toBeNull();
   });
 
+  test("the snapshot says whether agent messaging is on, read fresh", async () => {
+    const project = await storage.addProject(
+      createProject("https://example.invalid/repo.git", checkout),
+    );
+    const service = new CoordinatorService(storage, () => ({
+      enabled: true,
+      running: true,
+      error: null,
+    }));
+    const setMessaging = async (enabled: boolean) => {
+      const { global } = await storage.loadConfig();
+      await storage.updateGlobalConfig({
+        ...global,
+        agentMessaging: { ...global.agentMessaging!, enabled },
+      });
+    };
+    await setMessaging(false);
+    expect((await service.ensure(project.id)).agentMessaging).toEqual({ enabled: false });
+    await setMessaging(true);
+    expect((await service.get(project.id))!.agentMessaging).toEqual({ enabled: true });
+  });
+
   test("one main coordinator; new conversations are numbered side agents", async () => {
     const project = await storage.addProject(
       createProject("https://example.invalid/repo.git", checkout),

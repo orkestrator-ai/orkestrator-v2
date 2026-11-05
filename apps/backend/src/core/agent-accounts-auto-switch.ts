@@ -28,7 +28,7 @@ import {
   type AgentAccountsSnapshot,
   type AgentSessionAccount,
 } from "@orkestrator/protocol/agent-accounts";
-import { classifyUsageLimitError } from "@orkestrator/protocol/agent-usage-limits";
+import { usageLimitFailure, type TurnFailureKind } from "@orkestrator/protocol/agent-usage-limits";
 import type { CoordinatorAccountKeptReason } from "@orkestrator/protocol/coordinator-notices";
 import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
 import { createLogger } from "@orkestrator/protocol/logger";
@@ -134,6 +134,11 @@ export interface UsageLimitStopInput {
   requestId: string;
   /** The turn's error text. It says a limit was hit, never which. */
   error: string | undefined;
+  /**
+   * `usage-limit` when the bridge reported the provider's own signal; the error
+   * text is the fallback (`usageLimitFailure`). Like the text, it never says which limit.
+   */
+  failureKind?: TurnFailureKind;
   /** How many times this work has already been resent. */
   resends: number;
   /** When the turn is known to have been running by. Absent says nothing about its account. */
@@ -252,7 +257,7 @@ export class AgentAccountAutoSwitcher {
    * below that and the turn stays stopped, as does one with nowhere to go.
    */
   async handleLimitStop(input: UsageLimitStopInput): Promise<UsageLimitStopVerdict> {
-    const limit = classifyUsageLimitError(input.error);
+    const limit = usageLimitFailure(input);
     if (!limit) return "stop";
     // Read before deciding, because a move changes what the session reads next.
     const account = this.reportedStops.has(input.requestId)
@@ -277,10 +282,11 @@ export class AgentAccountAutoSwitcher {
     environmentId: string;
     requestId: string;
     error: string | undefined;
+    failureKind?: TurnFailureKind;
     turnStartedAt?: string;
     session?: UsageLimitStopSession;
   }): Promise<void> {
-    const limit = classifyUsageLimitError(input.error);
+    const limit = usageLimitFailure(input);
     if (!limit) return;
     const account =
       !this.reportedStops.has(input.requestId) && isAgentAccountPlatform(input.platform)

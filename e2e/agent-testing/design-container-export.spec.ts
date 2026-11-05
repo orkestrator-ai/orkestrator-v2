@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page } from "./browser-test";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import type { DesignCanvas } from "@orkestrator/protocol/design-canvas";

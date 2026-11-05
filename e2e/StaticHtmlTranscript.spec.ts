@@ -129,6 +129,45 @@ test.describe("static documents in the virtualized transcript", () => {
     await expect.poll(() => distanceFromBottom(page)).toBeLessThanOrEqual(1);
   });
 
+  test("Find matches a report's body once it has been shown, and leads back to its card", async ({
+    page,
+  }) => {
+    await open(page);
+    const n = 2;
+    // The fixture's report numbers: unique to this report's body, not in its summary.
+    const reportNumber = 1_000 + n;
+    const query = `Synthetic session ${reportNumber}-7`;
+    const input = page.getByRole("textbox", { name: "Find in chat" });
+    const result = page.getByRole("search", { name: "Find in agent chat" });
+    await page.keyboard.press("ControlOrMeta+f");
+    await input.fill(query);
+    await expect(result).toContainText("No results");
+    await page.keyboard.press("Escape");
+
+    await jumpToStatic(page, n);
+    await expect
+      .poll(() =>
+        page
+          .locator(staticCard(n))
+          .locator("[data-rich-search-mirror]")
+          .evaluate((element) => element.textContent),
+      )
+      .toContain(query);
+
+    await page.evaluate(() => window.__richPerf!.scrollToBottom());
+    await expect(page.locator(staticCard(n))).toHaveCount(0);
+    await page.keyboard.press("ControlOrMeta+f");
+    await input.fill("");
+    await input.fill(query);
+    await expect(result).toContainText("1 of 1");
+    await expect(page.locator(staticCard(n))).toBeVisible({ timeout: 30_000 });
+    // Inside a table cell and a closed disclosure alike, but never the styles.
+    await input.fill("Synthetic data for the performance gate.");
+    await expect(result).not.toContainText("No results");
+    await input.fill("border-top:1px");
+    await expect(result).toContainText("No results");
+  });
+
   test("a selection survives scrolling the frame out of view while its row is mounted", async ({
     page,
   }) => {

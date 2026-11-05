@@ -111,6 +111,7 @@ describe("launch_control_job command", () => {
       } as const;
       const input = withCoordinatorDelegationPresentation(
         {
+          agentDefaulted: true,
           requestId: "external-request-1",
           tabId: "untrusted-tab",
           environmentId: "env-1",
@@ -121,7 +122,10 @@ describe("launch_control_job command", () => {
         initialPromptPresentation,
       );
       const first = (await command(input, context)) as Record<string, unknown>;
-      const second = (await command(input, context)) as Record<string, unknown>;
+      const second = (await command(
+        { ...input, agent: "claude", agentDefaulted: true },
+        context,
+      )) as Record<string, unknown>;
       await command(
         {
           requestId: "untrusted-request-2",
@@ -140,6 +144,10 @@ describe("launch_control_job command", () => {
       });
       expect(first.tabId).not.toBe("untrusted-tab");
       expect(second.tabId).toBe(first.tabId);
+      expect(second.agent).toBe("codex");
+      await expect(
+        command({ ...input, agentDefaulted: false, agent: "claude" }, context),
+      ).rejects.toThrow("different agent platform");
       expect(String(first.tabId)).toStartWith("agent-job-");
       expect(ensured[0]).toMatchObject({
         environmentId: "env-1",

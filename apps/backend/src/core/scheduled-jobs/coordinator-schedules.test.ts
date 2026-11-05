@@ -97,6 +97,7 @@ beforeEach(async () => {
         return {} as T;
       case "get_environment_snapshots":
         return [] as T;
+      case "get_coordinator_launch_environment":
       case "get_opencode_model_catalog_cache":
         return null as T;
       case "get_environment":

@@ -104,6 +104,7 @@ import {
 } from "./host-agent-credentials.js";
 import { cursorSdkCredentialPath } from "./cursor-sdk-bridge.js";
 import { createBridgeOutputForwarder, relayBridgeOutput } from "./bridge-output-redaction.js";
+import { dropInheritedVendorDebug } from "./bridge-vendor-debug-env.js";
 import type { LocalServerKind } from "./local-server-runtime.js";
 import type { CommandContext } from "./commands-context.js";
 import { bugReportIdFromRuntimeId } from "@orkestrator/protocol/bug-report";
@@ -981,6 +982,8 @@ async function startLocalServerAttempt(
   // to every worker bridge. Only the branch below may name a root.
   delete env[ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT_ENV];
   delete env.CODEX_BRIDGE_STATE_DIR;
+  // Vendor debug printing bypasses every log level, and can quote prompts.
+  dropInheritedVendorDebug(env);
   // The same for coordinator research: read-only review turns in a worker
   // bridge consult these too, so only the coordinator branch may set them.
   delete env[COORDINATOR_WEB_RESEARCH_ENV];

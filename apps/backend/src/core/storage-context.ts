@@ -14,7 +14,9 @@ import {
   BACKUP_CHECK_INTERVAL_MS,
   BACKUP_FIRST_CHECK_DELAY_MS,
   removeStaleBackupTemporaries,
+  runDatabaseUpkeep,
   takeHourlySnapshotIfDue,
+  takeLedgerSnapshotIfDue,
 } from "./storage-backups.js";
 import { StorageChanges } from "./storage-changes.js";
 import {
@@ -100,13 +102,19 @@ export class StorageContext {
     }
     // Off the start-up path; then a cheap "is one due?" check every few
     // minutes. A copy can outlast the interval, so checks never overlap.
+    // After the copies: the change-tracking ledger's daily copy, then upkeep
+    // (planner statistics, free pages). Each step never throws.
     let running = false;
     const check = () => {
       if (running) return;
       running = true;
-      void takeHourlySnapshotIfDue(this.database, this.dataDir).finally(() => {
-        running = false;
-      });
+      const database = this.database;
+      void takeHourlySnapshotIfDue(database, this.dataDir)
+        .then(() => takeLedgerSnapshotIfDue(database, this.dataDir))
+        .then(() => runDatabaseUpkeep(database))
+        .finally(() => {
+          running = false;
+        });
     };
     const first = setTimeout(() => {
       check();

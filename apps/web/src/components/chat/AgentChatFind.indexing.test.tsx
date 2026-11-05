@@ -148,10 +148,11 @@ test("unchanged artifact rows refresh body text after publication and withdrawal
     );
   query("body");
   expect(hook.result.current.matches).toHaveLength(0);
-  rememberArtifactSearchBody(artifact, "body loaded");
+  const scope = { backendId: "backend", environmentId: "env", logicalSessionKey: "session" };
+  rememberArtifactSearchBody(artifact, "body loaded", scope);
   query("loaded");
   expect(hook.result.current.matches).toHaveLength(1);
-  rememberArtifactSearchBody(artifact, null);
+  rememberArtifactSearchBody(artifact, null, scope);
   query("body");
   expect(hook.result.current.matches).toHaveLength(0);
 });

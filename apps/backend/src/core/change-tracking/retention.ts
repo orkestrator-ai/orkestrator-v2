@@ -171,10 +171,14 @@ export class ChangeRetentionService {
     while (true) {
       const left = ledger.releaseFreePages(RELEASE_PAGES_PER_STEP);
       // Stop once nothing is left or a step makes no progress (a busy writer).
-      if (left === 0 || left >= previous) break;
+      if (left <= 0 || left >= previous) break;
       previous = left;
       await yieldToEventLoop();
     }
+    // The ledger is the database with joins and range scans, so keep its
+    // planner statistics current as it grows and shrinks. Cheap when nothing
+    // changed much.
+    ledger.optimize();
   }
 
   private async pruneBatches(

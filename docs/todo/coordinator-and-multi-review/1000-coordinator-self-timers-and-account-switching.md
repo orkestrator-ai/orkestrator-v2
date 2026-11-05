@@ -2,7 +2,7 @@
 
 ## Task analysis
 
-Analysed 2026-10-30 against `main` at `361dc0a6`.
+Analysed 2026-10-30 against `main` at `361dc0a6`; re-checked 2026-11-05 against `main` at `69a3b4ca5` for tasks 5 to 8, which were then built.
 
 ### Tasks
 
@@ -10,16 +10,16 @@ Analysed 2026-10-30 against `main` at `361dc0a6`.
 2. **List and switch provider accounts**: `list_provider_accounts` and `switch_provider_account` through the Settings switch path, with a user-approved request by default and a self-timer permission as the one exception. Status: done.
 3. **Usage-limit reader**: `get_usage_limits` across the project's environments without bridge or transcript reads. Status: done.
 4. **Live qualification of the scenario**: a real Claude and Codex coordinator sets a timer, is woken, finds a limited worker and switches, on an isolated `dev:test` profile with two logins. Status: open (depends on 1, 2 and 3; needs live providers).
-5. **Structured usage-limit signal from the bridges**: carry Codex's `usageLimitExceeded` code and Claude's rate-limit status to the backend instead of classifying error text. Status: open.
-6. **The user's zone when the coordinator's machine is not the user's**: absolute times use the backend host's zone. Status: open.
-7. **Show a timer's permission and a coordinator's switches to the user**: Settings → Schedules and the account views do not mark either. Status: open (switches under the standing permission in Settings are recorded and shown since 2026-11-04, see "Standing permission"; a timer's permission and the switches it allows are not).
-8. **Resume limited workers after a switch**: the coordinator must prompt each limited tab itself. Status: open (depends on 5).
+5. **Structured usage-limit signal from the bridges**: carry Codex's `usageLimitExceeded` code and Claude's rate-limit status to the backend instead of classifying error text. Status: done (2026-11-05; no live provider has sent either signal yet, see Needs verification).
+6. **The user's zone when the coordinator's machine is not the user's**: absolute times use the backend host's zone. Status: done (2026-11-05).
+7. **Show a timer's permission and a coordinator's switches to the user**: Settings → Schedules and the account views do not mark either. Status: done (2026-11-05; switches under the standing permission were already shown since 2026-11-04).
+8. **Resume limited workers after a switch**: the coordinator must prompt each limited tab itself. Status: done (2026-11-05, the recommended option: the coordinator resumes, guided by the tool results).
 
 ### 1. Self-timers on the existing scheduler
 
 **Problem.** Coordinators were woken only by mail and workflow notices. A reminder to `"coordinator"` already existed (`send_message` with `toEnvironmentId: "coordinator"`), but a side agent sending to `"coordinator"` reached the main coordinator, not itself; nothing bounded how many reminders or how far ahead; and the result did not say which zone an absolute time used.
 
-**Context.** `apps/backend/src/core/scheduled-jobs/tools.ts` (the `remind_me` type, `timeZoneUsed`, `nextFireLocal`, the default `Self-timer: …` name), `control-mcp-coordinator-tools.ts` (`coordinatorScheduleBackend().selfTimer`, which resolves the conversation's own address), `scheduled-jobs/service.ts:413` (`assertSelfTimerLimits`) and `:123` (`assertSelfTimerDelay`), `packages/protocol/src/scheduled-jobs.ts` (`maxSelfTimerDelayMs`, `maxPendingSelfTimers`). Delivery is the executor's `remind()` (`executor.ts`), a system `workflow` notice through `sendAgentMail`.
+**Context.** `apps/backend/src/core/scheduled-jobs/tools.ts` (the `remind_me` type, `timeZoneUsed`, `nextFireLocal`, the default `Self-timer: …` name), `control-mcp-coordinator-tools.ts` (`coordinatorScheduleBackend().selfTimer`, which resolves the conversation's own address), `scheduled-jobs/store.ts:109` (the pending self-timer cap) and `scheduled-jobs/service.ts:130` (`assertSelfTimerDelay`), `packages/protocol/src/scheduled-jobs.ts` (`maxSelfTimerDelayMs`, `maxPendingSelfTimers`). Delivery is the executor's `remind()` (`executor.ts`), a system `workflow` notice through `sendAgentMail`.
 
 **Investigation.** A schedule could already target a coordinator's own conversation through `isReminderToSelf`; one-shot `at` already took `+2h` and `14:30`; schedules already survive restarts (one store row each). Mid-turn, a system notice is held by the mail drain (`agent-mail-service.ts`, held reason `busy`) and delivered when the session is idle; system senders never steer. Tests: `coordinator-timers-and-accounts.test.ts` ("self-timers").
 
@@ -29,7 +29,7 @@ Analysed 2026-10-30 against `main` at `361dc0a6`.
 
 **Problem.** A worker that hit a usage limit stayed stuck until the user switched accounts by hand.
 
-**Context.** `apps/backend/src/core/control-mcp-account-tools.ts` (tools at `:183`, `:213`, `:315`; `machineFor` at `:79`; `timerPermission` at `:267`), `nodes/node-account-switch.ts` (the approved request's executor), the `switch-agent-account` kind in `nodes/node-action-requests.ts` and `node-coordination.ts`, and `NodeActionRequestsDialog.tsx`. The switch is `set_active_agent_account` (`agent-accounts.ts` `setActiveAgentAccount`), the command Settings calls.
+**Context.** `apps/backend/src/core/control-mcp-account-tools.ts` (tools registered from `:388`; `machineFor` at `:112`; `timerPermission` at `:574`), `nodes/node-account-switch.ts` (the approved request's executor), the `switch-agent-account` kind in `nodes/node-action-requests.ts` and `node-coordination.ts`, and `NodeActionRequestsDialog.tsx`. The switch is `set_active_agent_account` (`agent-accounts.ts` `setActiveAgentAccount`), the command Settings calls.
 
 **Investigation.** Accounts are per machine and per platform (`agent-accounts.json`, `active[platform]`); only Claude and Codex have them. A switch records the choice and kills nothing; idle bridges are replaced on next use, busy ones when idle (`localBridgeIsOnActiveAccount`). Todo 0722 decision (c) says a switch must be the user's act because it changes who is billed. Tests: `coordinator-timers-and-accounts.test.ts` ("provider accounts", the scenario), `nodes/node-account-switch.test.ts`, `nodes/node-coordination.test.ts` (the sanitizer and executor), `node-action-requests.test.tsx`.
 
@@ -39,9 +39,9 @@ Analysed 2026-10-30 against `main` at `361dc0a6`.
 
 **Problem.** Nothing classified a usage-limit failure; a coordinator would have had to read every tab live.
 
-**Context.** `apps/backend/src/core/agent-usage-limits.ts:79` (`readProjectUsageLimits`, command `get_project_usage_limits`), `packages/protocol/src/agent-usage-limits.ts` (`classifyUsageLimitError`, `exhaustedUsageWindows`).
+**Context.** `apps/backend/src/core/agent-usage-limits.ts:119` (`readProjectUsageLimits`, command `get_project_usage_limits`), `packages/protocol/src/agent-usage-limits.ts` (`classifyUsageLimitError`, `usageLimitFailure`, `exhaustedUsageWindows`).
 
-**Investigation.** The one durable record of a failed turn is the session's `turnOutcomes` (bounded error text, written for every backend-dispatched prompt). Bridges reduce usage limits to error strings: Codex's `codexErrorInfo` code is dropped at `bridges/codex-bridge/src/sessions/thread-registry.ts:664` (`setPhase` keeps a string), Claude's `rate_limit_event` status is not read. Plan windows are cached per platform for the active account (`plan-usage-cache.ts`). Tests: `agent-usage-limits.test.ts` (backend and protocol).
+**Investigation.** The one durable record of a failed turn is the session's `turnOutcomes` (bounded error text, written for every backend-dispatched prompt). When this was built, bridges reduced usage limits to error strings (Codex's `codexErrorInfo` code was dropped in `setPhase`, Claude's `rate_limit_event` status was not read); task 5 changed that. Plan windows are cached per platform for the active account (`plan-usage-cache.ts`). Tests: `agent-usage-limits.test.ts` (backend and protocol).
 
 **Decisions.** See Assumptions and decisions: "Usage-limit reader".
 
@@ -67,9 +67,9 @@ Analysed 2026-10-30 against `main` at `361dc0a6`.
 
 **Problem.** The reader matches error text. A provider rewording its message would hide a limit.
 
-**Context.** Codex `codexErrorInfoToCode` (`bridges/codex-bridge/src/app-server/errors.ts`), `EngineError.code`; Claude's `rate_limit_event` handling in the Claude bridge's prompt handlers; `ProviderSessionStateSnapshot.error` (`apps/backend/src/core/agent-provider-contract.ts`).
+**Context.** Codex `codexErrorInfoToCode` (`bridges/codex-bridge/src/app-server/errors.ts`), `EngineError.code`, `ThreadContext.errorCode` (`sessions/thread-registry.ts`) and `getStatus` (`app-server-runtime-sessions.ts`); Claude's `handleRateLimitEvent` (`session-manager-prompt-handlers/leaf.ts`), `TurnState.rateLimitRejected` and the failure path in `session-manager-prompt-settle.ts`, served by `GET /session/:id` (`routes/session.ts`); the backend's `throwExplainedTurnFailure` (`http-bridge-transport.ts`), `ProviderSessionFailedError.failureKind` and `readProviderStatus` (`agent-provider-contract.ts`), `PersistedNativeAgentTurnOutcome.failureKind` (`models.ts`, stored by `storage-native.ts`), `turnOutcomeFailureKind` (`agent-usage-limits.ts`).
 
-**Investigation.** The Codex code survives only in a transient `session.warning`; the Claude SDK's allowed/rejected status is not read. Both would need a protocol field (`errorCode`) on the session snapshot and on `PersistedNativeAgentTurnOutcome`.
+**Investigation.** Re-checked 2026-11-05: still open. The Codex code survived only in a transient `session.warning`; the Claude SDK's `rate_limit_info.status` (`allowed`, `allowed_warning`, `rejected`) was not read, although the bridge already carried a refusal's words as the turn's error when the text classified (`result.ts`). Besides the coordinator's reader, the automatic switcher (`handleLimitStop`, `noteUnresentStop`), the native resend and four workflow call sites classified the same text, so they were given the structured kind too. Tests: `bridges/codex-bridge/src/app-server-runtime-usage-limit.test.ts`, `bridges/claude-bridge/src/services/session-manager-prompt-usage-limit.test.ts`, `routes/session.test.ts` ("reports a usage-limit errorCode…"), `apps/backend/src/core/http-bridge-usage-limit-signal.test.ts` (including an older bridge without the code), `native-agent-service-turn-outcome.test.ts` ("the drain records a bridge's usage-limit code, and an older bridge's limit by its text", "an observer returns and keeps…"), `agent-usage-limits.test.ts` (backend and protocol), `agent-accounts-auto-switch.test.ts` ("the bridge's usage-limit code counts whatever the wording").
 
 **Decisions.**
 
@@ -85,9 +85,9 @@ Analysed 2026-10-30 against `main` at `361dc0a6`.
 
 **Problem.** `at: "14:30"` is read in the backend host's zone. For a coordinator on the user's own machine that is the user's zone; for one on a leaf in another zone it is not.
 
-**Context.** `ScheduledJobService` option `defaultTimeZone` (host zone), the tool description built from `hostTimeZone()` in `scheduled-jobs/tools.ts`.
+**Context.** `ScheduledJobService` option `defaultTimeZone` (host zone); `ScheduleToolBackend.defaultTimeZone` and `timeZoneUsed` in `scheduled-jobs/tools.ts`; `coordinatorScheduleBackend().defaultTimeZone` (`control-mcp-coordinator-tools.ts`); `CoordinatorWorkspace.userTimeZone` (`packages/protocol/src/coordinator.ts`), written in the coordinator dispatch mutation of `native-agent-service.ts`; `DispatchNativeAgentPromptInput.clientTimeZone` (validated in `commands-validation.ts`, carried by the queue drain); the renderer's `dispatchNativeAgentIntent` (`apps/web/src/lib/backend/workflows.ts`) and `enqueue` (`useNativeAgentSession.ts`).
 
-**Investigation.** No user or client time zone is stored anywhere; the renderer knows its own zone. The result's `timeZoneUsed` and `nextFireLocal` make the zone visible, so a wrong guess is reported rather than silent.
+**Investigation.** Re-checked 2026-11-05: still open; no user or client zone was stored anywhere. The result's `timeZoneUsed` and `nextFireLocal` already made the zone visible. Tests: `native-agent-service-base.test.ts` (the coordinator dispatch test records `Asia/Tokyo` from a user turn and keeps it on a mail turn), `coordinator-timers-and-accounts.test.ts` ("an absolute time is read in the zone of the device the user last prompted from"), `commands-validation.test.ts` ("keeps a client time zone this runtime can name…"), `native-agent-prompt-queue-dispatcher.test.ts` (the queued zone reaches dispatch), web `workflows.commands.test.ts`, `backend.test.ts` and `useNativeAgentSession.commands.test.tsx`.
 
 **Decisions.**
 
@@ -103,9 +103,9 @@ Analysed 2026-10-30 against `main` at `361dc0a6`.
 
 **Problem.** The user sees a granted timer only as an ordinary schedule in Settings → Schedules, and a switch made under a timer's permission only in the coordinator's report and the account views' new active account.
 
-**Context.** `SchedulesSettings.tsx`; the account views listen to `agent-accounts-changed`.
+**Context.** `SchedulesSettings.tsx` (`AccountSwitchPermissionBadge`); `CoordinatorAccountSwitchGrant.tsx` (the list under the tick) and `CoordinatorAccountSwitchNotices.tsx` (the toast); `run_timer_agent_account_switch` (`commands-registry-nodes.ts`) → `runTimerAccountSwitch` (`nodes/node-account-switch-grant.ts`) → `NodeActionRequests.runUnattended` (`authorizedBy: "self-timer"`, `selfTimer`); the `scheduleId` branch of `switch_provider_account`.
 
-**Investigation.** The permission is `action.input.grant` on the schedule; nothing in the renderer reads it. A switch with permission creates no request record.
+**Investigation.** Re-checked 2026-11-05: half done. The standing permission (2026-11-04) already recorded its switches as executed requests, toasted them and listed them under the tick, which was this task's recommended history. A timer's switch still called `set_active_agent_account` directly with no record, and nothing in the renderer read `action.input.grant`. Tests: `coordinator-timers-and-accounts.test.ts` (the scenario now checks the record, the event, the listing and a retry), `nodes/node-action-requests.test.ts` ("a self-timer's switch is recorded with the timer, outside the standing permission's limit"), web `SchedulesSettings.test.tsx` (the badge, its window and lapse) and `CoordinatorAccountSwitchGrant.test.tsx` ("a switch a self-timer's permission allowed says so…").
 
 **Decisions.**
 
@@ -121,9 +121,9 @@ Analysed 2026-10-30 against `main` at `361dc0a6`.
 
 **Problem.** A tab that stopped on a usage limit does not run again by itself after the switch.
 
-**Context.** `get_usage_limits` returns `nextStep` telling the coordinator to prompt each tab (`send_prompt_to_tab`).
+**Context.** `get_usage_limits` returns `nextStep` telling the coordinator to prompt each tab (`send_prompt_to_tab`); `resumeAfterSwitch` and the `resumeTabs` read in `control-mcp-account-tools.ts`; `requesterFollowUp` in `nodes/node-coordination.ts` (the mail for an approved switch); `COORDINATOR_TIMERS_AND_ACCOUNTS_RULE`.
 
-**Investigation.** The coordinator can already do it; the risk is a coordinator that forgets, or prompts a tab whose turn was not actually limited.
+**Investigation.** Re-checked 2026-11-05: still open for a coordinator's own switch. Automatic switching (built since) resends what the weekly limit stopped by itself (`NativeAgentUsageLimitResend`), but a coordinator's switch pins the account and turns that off, so its limited tabs still needed a prompt; the switch result only said "Tabs stopped on a usage limit need a new prompt". The risks were a coordinator that forgets, or prompts a tab whose turn was not limited; task 5's structured signal and the per-provider list address the second. Tests: `coordinator-timers-and-accounts.test.ts` (the switch lists only the limited Claude tab, not a limited Codex one), `coordinator-account-switch-grant.test.ts` (`resumeStep` on the standing permission's switch), `nodes/node-coordination.test.ts` (the approval mail), `agent-usage-limits.test.ts` ("after a switch the coordinator is told to resume exactly the limited tabs").
 
 **Decisions.**
 
@@ -199,6 +199,46 @@ Added 2026-11-04 after two approval requests waited about 4.5 hours overnight wh
 - **Choice.** (b), plus the plan-usage cache's exhausted windows for the active accounts.
 - **Why.** No schema change, works on records written before this change, and costs one storage listing. (c) costs a bridge read per tab. Task 5 records the stronger signal later.
 
+### Where the signal is carried (task 5)
+
+- **Options.** (a) The recommended `failureKind: "usage-limit"` on the persisted turn outcome, filled from a bridge `errorCode` when present and from the text classifier otherwise. (b) Text classification only.
+- **Choice.** (a). Each bridge answers `errorCode: "usage-limit"` beside `error` only while the session is failed, and clears it with the error. Readers use `usageLimitFailure`, which takes the kind when present and the text otherwise, so a record written before the field still classifies.
+- **Why.** As the file recommended. The contract-test cost turned out small: only the Claude and Codex snapshots gained a field, and the backend's single parse point (`throwExplainedTurnFailure`) reads it.
+
+### What counts as Claude's signal (task 5)
+
+- **Options.** (a) A `rate_limit_event` with `status: "rejected"` in the failed turn. (b) An assistant message with `error: "rate_limit"`.
+- **Choice.** (a), applied only if the turn then fails, and never for a killed process.
+- **Why.** The ticket names the rate-limit status. `rate_limit` on an assistant message also covers a transient 429 for an API-key user, which is not a plan allowance; the SDK sends `rate_limit_event` to subscription users only.
+
+### Which consumers take the signal (task 5)
+
+- **Options.** (a) The coordinator's reader only, as the problem statement names. (b) Also the automatic switcher, the native resend and the four workflow call sites, which classified the same text.
+- **Choice.** (b).
+- **Why.** Each is a one-field addition (`failureKind` beside `error`), and leaving them on text would keep the silent miss the task exists to remove for the path that acts without a coordinator.
+
+### Older bridges (task 5)
+
+- **Choice.** No version check: a snapshot without `errorCode` is classified by its text, as before. A Claude or Codex outcome recognised from text alone is counted (`usage-limit.text-classified`) and listed in the version-compatibility register. The text path itself is permanent, since four providers have no signal.
+
+### Where the user's zone comes from (task 6)
+
+- **Options.** (a) The recommended zone of the client that sent the user's latest prompt. (b) A global setting.
+- **Choice.** (a). The renderer sends `clientTimeZone` with every native dispatch and queued prompt; only a coordinator dispatch whose origin is `user` records it, on the workspace (`userTimeZone`), so any of its conversations sets it for all. An unknown zone is dropped at the command, never a refusal. Until one is seen the host's zone is used and `timeZoneUsed` says the user's zone is not known yet.
+- **Why.** As recommended. On the workspace rather than per conversation, because the zone belongs to the user, not to a conversation; a side agent's timer then uses the zone the user last typed from anywhere in that coordinator.
+
+### Recording a timer's switch (task 7)
+
+- **Options.** (a) The recommended executed `switch-agent-account` request plus a Schedules badge. (b) Rely on the coordinator's report.
+- **Choice.** (a). The standing permission had already built the "recent" view this option needed, so the timer's switch reuses it: `run_timer_agent_account_switch` records it with `authorizedBy: "self-timer"`, the timer id and the user's words, and runs the same executor. It is not counted against the standing permission's hourly limit. Settings → Schedules badges a timer that carries the permission and shows when it lapses.
+- **Why.** One history for every unattended switch, and a timer that may switch is visible, with the user's words, while it can still be cancelled.
+
+### Who resumes (task 8)
+
+- **Options.** (a) The recommended: the coordinator, guided by the tool results. (b) An option on `switch_provider_account` that prompts the listed tabs.
+- **Choice.** (a). A switch that ran returns `limitedTabs` (that provider's limited tabs of this project on that machine) and a `resumeStep`; an approved switch's mail says to read them with `get_usage_limits`; the coordinator rule names the step.
+- **Why.** As recommended: no automation that spends turns on its own, and the switch stays easy to approve. Listing only that provider's tabs, from the outcome's structured kind where the bridge gave one, guards against prompting a tab that was not limited.
+
 ## Current state
 
 A coordinator can set a timer that prompts itself later ("in 2 hours", "at
@@ -218,9 +258,17 @@ capability `environments`, the account tools with the new capability
 `accounts`. `remind_me` needs the experimental scheduling switch, like every
 schedule tool.
 
+Since 2026-11-05: the Claude and Codex bridges report a usage limit as a
+structured signal that the backend records and every usage-limit reader
+accepts, with the error text as the fallback; a self-timer's "14:30" is the
+user's own 14:30 once they have sent the coordinator a prompt; a timer that
+may switch accounts is marked in Settings → Schedules and the switches it
+allows are recorded and shown with the account; and a switch tells the
+coordinator exactly which tabs to resume.
+
 ## Outstanding work
 
-Tasks 4 to 8 above.
+Task 4 above.
 
 ## Constraints and rationale
 
@@ -230,6 +278,8 @@ Tasks 4 to 8 above.
 ## Needs verification
 
 - Task 4 in full. Until then nothing shows a real model choosing `remind_me`, or a real approval dialog for `switch-agent-account` on screen.
+- Task 5's signals have been seen in fixtures only: no real Codex turn has been observed reaching `turn/completed` with `codexErrorInfo: "usageLimitExceeded"`, nor a real Claude refusal preceded by `rate_limit_event` with `status: "rejected"`. Task 4's run, or the `usage-limit.text-classified` counter staying quiet on a machine that hits limits, would confirm them.
+- Task 6 has no browser check: the renderer change is a field on two requests, covered by unit tests.
 
 ## Related
 

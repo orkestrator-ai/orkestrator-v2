@@ -341,7 +341,10 @@ describe("container lifecycle operations", () => {
       [lifecycleEnvironment({ containerId: "container-1", allowedDomains: ["one.example"] })],
       await dataDir(),
     );
-    context.registryWriterLease = new BlockedRegistryWriter(new RegistrySchemaBlockedError());
+    context.registryWriterLease = new BlockedRegistryWriter(
+      new RegistrySchemaBlockedError(),
+      "schema-incompatible",
+    );
     await withDockerScript(
       '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$FAKE_DOCKER_LOG"\n',
       async (log) => {

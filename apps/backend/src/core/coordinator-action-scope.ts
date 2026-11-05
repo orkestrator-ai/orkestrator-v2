@@ -20,6 +20,26 @@ export function actionHash(value: unknown): string {
     .digest("hex");
 }
 
+/**
+ * What a coordinator environment launch's request id stands for.
+ *
+ * A launch that left `agent` out asked for "the default agent", not for the
+ * platform that default resolved to, so its fingerprint keeps that: a retry
+ * after the user changes their default still replays the original launch
+ * instead of being refused as a different request (the same rule
+ * `start_coordinator_build_pipeline` applies to its omitted choices).
+ */
+export function coordinatorLaunchIdentity(input: Record<string, unknown>, agentDefaulted: unknown) {
+  if (agentDefaulted !== true) return input;
+  const settings = input.agentSettings as
+    { defaultAgent?: unknown; platforms?: Record<string, unknown> } | undefined;
+  const agent = typeof settings?.defaultAgent === "string" ? settings.defaultAgent : "";
+  return {
+    ...input,
+    agentSettings: { defaultAgent: "default", platform: settings?.platforms?.[agent] },
+  };
+}
+
 export async function requireCoordinatorConversation(
   context: CommandContext,
   projectId: string,

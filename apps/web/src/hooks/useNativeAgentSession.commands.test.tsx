@@ -352,6 +352,8 @@ describe("useNativeAgentSession commands", () => {
         id: "req-2",
         text: "/review\tsrc/a.ts \n  second line  ",
         command: intent,
+        // A coordinator takes the user's zone from the prompt they queued.
+        clientTimeZone: expect.any(String),
       }),
     );
 

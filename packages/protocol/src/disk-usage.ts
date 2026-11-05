@@ -101,6 +101,16 @@ export interface EnvironmentDiskUsage {
   totalBytes: number | null;
 }
 
+/** A project's Git mirror, which belongs to the project rather than an environment. */
+export interface ProjectGitMirrorUsage {
+  projectId: string;
+  /** Null when the project is gone and the hourly sweep has yet to remove its mirror. */
+  projectName: string | null;
+  path: string;
+  /** Null when it could not be measured. */
+  bytes: number | null;
+}
+
 export interface DiskUsageEnvironmentSummary {
   environmentId: string;
   name: string;

@@ -12,6 +12,7 @@
  */
 import { COORDINATOR_AGENTS_MD_RULE } from "./agents-md-orkestrator.js";
 import {
+  COORDINATOR_REQUEST_ID_RULE,
   COORDINATOR_ASYNC_CONTRACT,
   COORDINATOR_CONTEXT_CLOSE_TAG,
   COORDINATOR_CONTEXT_OPEN_TAG,
@@ -165,7 +166,7 @@ function delegationLines(delegation: CoordinatorContextDelegation): string {
     `Delegation: create workers with the Orkestrator launch_environment tool. Provider sub-agents remain inside this coordinator session and are not worker environments. Report a worker as created only after launch_environment returns its environment id.\n` +
     `${COORDINATOR_ROUTING_RULE}\n` +
     `${COORDINATOR_ENVIRONMENT_CHOICE_RULE}\n` +
-    `Actions: prefer launch_multi_review for the complete environment Multi Review button action; start_multi_review starts backend work only and does not open a tab. Use open_multi_review and open_multi_review_fix to present saved work. Reuse requestId on retry, and inspect outcome, ui and recovery before reporting completion.\n` +
+    `Actions: launch_multi_review runs the environment's Multi Review button action; open_multi_review and open_multi_review_fix present saved work. ${COORDINATOR_REQUEST_ID_RULE} Inspect outcome, ui and recovery before reporting completion.\n` +
     `Workers: check a worker's work with get_worker_changes (its commits, changed files, uncommitted files and diff, local or container), not only its report. To try an alternative from where a worker got to, fork_worker starts a new worker from its last commit.\n` +
     // Workers start where a normal environment would: the latest commit of the
     // configured base branch, not wherever this checkout happens to be.

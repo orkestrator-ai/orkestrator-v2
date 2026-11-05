@@ -12,8 +12,11 @@ import type { BackendId } from "@orkestrator/protocol/federation";
  * - At most `MAX_GRANT_TTL_MS` per issue or renewal.
  * - Kept in memory as hashes only: a restart of the leaf revokes every grant
  *   and the command node issues a new one.
- * - Never valid for administration (see `NODE_EXCLUDED_COMMANDS`): token
- *   rotation, attachment, grants and registry commands.
+ * - Valid for the workspace only (see `isWorkspaceExcludedCommand`): agent
+ *   chat, terminals, previews, files and the project boards. Never for
+ *   administration: token rotation, attachment, grants, registry commands,
+ *   the machine's global settings and credentials, or host updates
+ *   (`WORKSPACE_ADMINISTRATION_COMMANDS`).
  */
 
 export const MAX_GRANT_TTL_MS = 15 * 60_000;

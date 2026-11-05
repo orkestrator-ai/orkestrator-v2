@@ -18,10 +18,12 @@ macOS and Linux, arm64 and x64. How the pin is selected and bumped is in
 [upgrade-agents.md](../development/upgrade-agents.md) § Support tools.
 
 - **Backend calls.** At startup the backend resolves the managed binary once
-  (`setManagedGitHubCli`) and every host-side call uses `gitHubCli()`: the
-  token read (`getHostGitHubToken`), the PR monitor, reviews, project creation
-  and the clone browser. Without a managed copy (Windows, or a failed
-  toolchain download) it falls back to `gh` on `PATH`.
+  into its runtime (`runtime.gitHubCli.pin`, a `GitHubCliSelection`), and
+  every host-side call runs `gitHubCli(selection)` with that backend's
+  selection: the token read (`getHostGitHubToken`), the PR monitor, reviews,
+  project creation and the clone browser. Two backends in one process each run
+  their own (`backend-runtime.md`). Without a managed copy (Windows, or a
+  failed toolchain download) it falls back to `gh` on `PATH`.
 - **Terminals and agents** find the managed copy first on `PATH`.
 - **Containers** use the image's distribution `gh`, which is not pinned.
 - Every host copy shares gh's own configuration and stored login (Keychain or

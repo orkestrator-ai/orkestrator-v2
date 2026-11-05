@@ -259,7 +259,8 @@ describe("PipelineKeyInformationTab", () => {
       const statement = section(tab, title);
       expect(within(tab).getAllByRole("region")[0]).toBe(statement);
       expect(within(tab).queryByRole("region", { name: "Summary" })).toBeNull();
-      const prose = within(statement).getByText(legacy.statement!);
+      // The paragraph sits in the prose block that carries the lead styling.
+      const prose = within(statement).getByText(legacy.statement!).parentElement!;
       expect(prose.classList.contains("text-[15px]")).toBe(true);
       expect(prose.classList.contains("leading-7")).toBe(true);
       expect(prose.parentElement!.classList.contains("border-blue-400/60")).toBe(true);
@@ -279,7 +280,8 @@ describe("PipelineKeyInformationTab", () => {
     const regions = within(tab).getAllByRole("region");
     expect(regions).toHaveLength(1);
     expect(regions[0]).toBe(section(tab, "Summary"));
-    const prose = within(regions[0]!).getByText(summary);
+    // The paragraph sits in the prose block that carries the lead styling.
+    const prose = within(regions[0]!).getByText(summary).parentElement!;
     expect(prose.classList.contains("text-[15px]")).toBe(true);
     expect(prose.classList.contains("leading-7")).toBe(true);
     expect(prose.parentElement!.classList.contains("border-blue-400/60")).toBe(true);

@@ -419,6 +419,7 @@ export function installStaticHtmlPresentationRuntime(config: {
     };
     if (document.body) visit(document.body);
     return text
+      .replace(/ +/g, " ")
       .replace(/ *\n[ \n]*/g, "\n")
       .trim()
       .slice(0, config.maxTextCharacters);

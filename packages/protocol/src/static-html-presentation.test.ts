@@ -218,6 +218,18 @@ describe("presentation runtime", () => {
     ).toBe("Total cost was $12.50 net\nOne\nTwo");
   });
 
+  test("reported text collapses whitespace across nested inline and comment boundaries", async () => {
+    const text = await reportedText(
+      "<p>Hello <strong> world</strong></p>" +
+        "<p><span>Status: </span> <b>ok</b> <!-- c --> done</p>" +
+        "<p>Nested <span> <em> inline </em> </span> text</p>",
+    );
+    expect(text).toBe("Hello world\nStatus: ok done\nNested inline text");
+    for (const phrase of ["Hello world", "Status: ok done", "Nested inline text"])
+      expect(text.match(new RegExp(phrase, "g"))).toHaveLength(1);
+    expect(text).not.toContain("world Status");
+  });
+
   test("a document with no text reports none", async () => {
     const frame = await frameWith();
     await frame.send(renderMessage("<svg><rect width='5' height='5'/></svg>"));

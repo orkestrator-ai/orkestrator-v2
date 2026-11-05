@@ -14,10 +14,9 @@ A batch file combines several reports as numbered parts and takes the rating of 
 
 | Rank | File | Criticality | Finished | Covers | Why this rating |
 | --- | --- | --- | --- | --- | --- |
-| 1 | [0100-m12-egress-sni-and-dns.md](0100-m12-egress-sni-and-dns.md) | High | No | M12: SNI enforcement, DNS filtering, default allowlist, user-facing statement | Shared edges, attacker credentials and DNS remain working exfiltration channels from a restricted container. |
-| 2 | [0170-l15-agent-tools-bind-address.md](0170-l15-agent-tools-bind-address.md) | Medium | No | L15: agent-tools server on `0.0.0.0` | The server is token-protected, so the wider bind adds reach for a leaked token rather than a direct way in. |
-| 3 | [0020-m1-isolated-preview-default.md](0020-m1-isolated-preview-default.md) | Low | No | M1: legacy route retirement, and the two-machine run the default flip went ahead without | The sandbox header already closes the top-level path. The default is flipped; retirement waits on the support window in todo 0042. |
-| 4 | [0110-l18-dependency-advisories.md](0110-l18-dependency-advisories.md) | Low | No | L18: `undici`, `postcss-selector-parser`, Electron 45.x | The advisories are already accepted and blocked upstream in todo 0032. |
+| 1 | [0170-l15-agent-tools-bind-address.md](0170-l15-agent-tools-bind-address.md) | Medium | No | L15: agent-tools server on `0.0.0.0` | The server is token-protected, so the wider bind adds reach for a leaked token rather than a direct way in. |
+| 2 | [0020-m1-isolated-preview-default.md](0020-m1-isolated-preview-default.md) | Low | No | M1: legacy route retirement, and the two-machine run the default flip went ahead without | The sandbox header already closes the top-level path. The default is flipped; retirement waits on the support window in todo 0042. |
+| 3 | [0110-l18-dependency-advisories.md](0110-l18-dependency-advisories.md) | Low | No | L18: `undici`, `postcss-selector-parser`, Electron 45.x | The advisories are already accepted and blocked upstream in todo 0032. |
 
 ## Parallel running
 
@@ -41,8 +40,7 @@ These still follow the lane and conflict rules above.
 
 | Batch | Name | Files | Lane and position | Finish first | Not at the same time as |
 | --- | --- | --- | --- | --- | --- |
-| S-0100 | [Egress SNI and DNS](0100-m12-egress-sni-and-dns.md) | `0100` | Containers, 1 of 3 | None | None |
-| S-0170 | [Agent-tools bind address](0170-l15-agent-tools-bind-address.md) | `0170` | Containers, 2 of 3 | None | None |
+| S-0170 | [Agent-tools bind address](0170-l15-agent-tools-bind-address.md) | `0170` | Containers, 1 of 2 | None | None |
 
 ### Not ready to start
 
@@ -55,7 +53,7 @@ When one of these becomes ready, it joins the lane shown.
 
 ## Status of every finding
 
-40 done, 10 partly done, 3 open, 12 no action.
+40 done, 11 partly done, 2 open, 12 no action.
 
 Batch X1 (Coordinator trust boundary) is closed. It was analysed against `a2bba9d8`, built from `main` at `af2e566e5` and rebased onto `main` at `4f7ca8231`; its task-by-task outcome table ends the report in the parent of the commit that deleted it. What it could not prove or close is in to-do [6080](../../todo/coordinator-and-multi-review/6080-x1-coordinator-trust-boundary-follow-ups.md).
 
@@ -77,7 +75,7 @@ Batch X1 (Coordinator trust boundary) is closed. It was analysed against `a2bba9
 | M9 | Done | A new container from an image without `staged-inputs` is refused by name (`requireStagedInputsImage`, `apps/backend/src/core/commands-containers.ts`); existing ones keep running and are listed in the cleanup review with a Rebuild action (`apps/backend/src/core/docker-cleanup-legacy-runtimes.ts`, `apps/web/src/components/docker/DockerCleanupReview.tsx`). Tests: `apps/backend/tests/container-legacy-host-mounts.test.ts`, `DockerCleanupReview.test.tsx`. The count of real environments and a real old-image run are in [todo 5860](../../todo/containers-and-environments/5860-legacy-host-mounts-live-evidence.md) |
 | M10 | Done | `apps/backend/src/core/coordinator-worker-mail.ts:417-434`, `docs/architecture/coordinator.md:1178-1205`; commit `5161688cf`; a reason and user approval replace the report's outright refusal, and a message within 3 hours of a sent one goes at once |
 | M11 | Done | `apps/backend/src/core/coordinator-environment-scope.ts`, `control-mcp-coordinator-environment-scope.ts`; `COORDINATOR_MAIL_ORIGIN_NOTE` in `packages/protocol/src/agent-mail.ts`; [coordinator.md](../../architecture/coordinator.md#which-environments-a-coordinator-may-act-on). What usage must show is in [6080](../../todo/coordinator-and-multi-review/6080-x1-coordinator-trust-boundary-follow-ups.md) |
-| M12 | Open | `docker/init-firewall.sh:140-155`, no proxy or resolver in `docker/Dockerfile`; [0100-m12-egress-sni-and-dns.md](0100-m12-egress-sni-and-dns.md) |
+| M12 | Partly done | The egress gateway checks TLS SNI, HTTP Host and DNS names against the allowlist and fails closed (`docker/orkestrator-egress-filter.pl`, `docker/init-firewall.sh`, `egress-filter=1`), proven in a real container (`apps/backend/tests/container-live-egress-filter.test.ts`; [container qualification](../../development/container-qualification.md#egress-name-checks-on-docker-desktop-2026-11-05)); the residual risk is stated in both network settings and the README. The default allowlist is unchanged until the telemetry hosts are checked ([todo 6100](../../todo/containers-and-environments/6100-default-allowlist-telemetry-hosts.md)); Linux Engine and rootless runs are [6101](../../todo/containers-and-environments/6101-egress-name-checks-platform-coverage.md), what name checks cannot see is [6102](../../todo/containers-and-environments/6102-egress-name-check-residual-channels.md) |
 | M13 | Done | `bridges/codex-bridge/src/codex-config.ts:521`, `bridges/acp-bridge/src/acp-policy.ts:144`, `bridges/acp-bridge/src/acp-context.ts:1146`; commit `4cdc39fb6`; the app-server's own `/proc` entry belongs to H4 |
 | L1 | Done | `apps/backend/src/core/commands-environment.ts:2303-2306`, `apps/backend/src/core/commands-project-files.ts:80`, `:94`; commit `f2f842514` |
 | L2 | Done | `launchContainerScript` (`apps/backend/src/core/container-bridge-credential.ts`); `apps/backend/tests/container-bridge-credential.test.ts`. Whether Docker Desktop exposes argv the same way no longer matters: the tokens are not in it |

@@ -150,10 +150,10 @@ import {
   withResumeCleanupNotices,
 } from "@/lib/chat/native-message-adapters";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
+import { isPeerMailCarrierContent } from "@orkestrator/protocol/agent-mail";
 import { hideMachineOutputText } from "@orkestrator/protocol/structured-review-transcript";
 import {
   presentPeerMailCarrierRow,
-  isPeerMailCarrierContent,
   createOptimisticNativeMessage,
   isClientOnlyNativeMessage,
   positionOptimisticNativeMessage,

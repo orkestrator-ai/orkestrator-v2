@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  isPeerMailCarrierContent,
   renderAgentMailCarrier,
   type AgentMailMessage,
   type MailActor,
@@ -10,7 +11,6 @@ import {
   ERROR_MESSAGE_PREFIX,
   createPeerMailNativeMessageFromCarrier,
   createPeerMailNativeMessagesFromCarrier,
-  isPeerMailCarrierContent,
   createOptimisticNativeMessage,
   isClientOnlyNativeMessage,
   isOptimisticNativeMessage,
@@ -401,24 +401,6 @@ describe("client-only optimistic messages", () => {
     const [row] = createPeerMailNativeMessagesFromCarrier({ content, createdAt: "x" });
     expect(row!.peerMail?.kind).toBe("notice");
     expect(row!.peerMail?.notice).toBeUndefined();
-  });
-
-  test("recognises an envelope, not a message that names its tag", () => {
-    expect(isPeerMailCarrierContent(renderAgentMailCarrier(mailMessage({})))).toBe(true);
-    expect(
-      isPeerMailCarrierContent(
-        '<orkestrator-peer-message version="2"><orkestrator-peer-payload-json>{"future":true}',
-      ),
-    ).toBe(true);
-    expect(isPeerMailCarrierContent("What is <orkestrator-peer-message>?")).toBe(false);
-    expect(isPeerMailCarrierContent('<orkestrator-peer-message version="1"> is what I see')).toBe(
-      false,
-    );
-    expect(
-      isPeerMailCarrierContent(
-        '<orkestrator-peer-message version="1"><orkestrator-peer-payload-json> is what I see',
-      ),
-    ).toBe(false);
   });
 
   test("does not throw on an address the mailbox helpers refuse", () => {

@@ -41,7 +41,7 @@ governs, marked "Decided".
 11. **Gateway and preview proxy**: GW-5, GW-6, GW-8 to GW-12 and GW-14 to GW-16. Status: done (GW-8 and GW-9 done; GW-4 done; GW-2 done in 0052; GW-5, GW-6, GW-12 and GW-14 done 2026-11-04, a flooding terminal channel no longer desyncs a quiet one; GW-16 done 2026-11-04, live checks beyond loopback Chromium are in [5080](5080-terminal-websocket-live-evidence.md); GW-11 done 2026-11-05, its live checks are in [5840](5840-relayed-events-live-evidence.md); GW-15 done 2026-11-05, a revalidation by date alone is [6160](6160-static-if-modified-since-compression.md); GW-10 declined 2026-11-05 on first-load numbers, with the rewriter unchanged).
 12. **Local desktop transport**: local windows on the filtered gateway transport, and the IPC payload costs (DK-1, DK-2, DK-5, DK-6). Status: done (DK-1, DK-2 and DK-5 on 2026-11-04 behind a setting that is off by default; DK-6 fixed on 2026-11-04 by tunnel v2, [4500](4500-preview-tunnel-one-socket-per-connection.md); the default flip is [4501](4501-local-window-transport-default.md)).
 13. **Toolchain startup and downloads**: stamp-based verification and resumable downloads (DK-3, DK-4). Status: done (2026-11-03; Electron launch-to-ready 10.2–13.8 s before, 1.6–1.9 s after; a cold-cache run still needs live evidence).
-14. **Docker image size**: layer order, the second Bun, npm caches, the leftover apt layer and the second Claude binary (DK-7 to DK-11). Status: open (DK-7, DK-8, DK-9 and DK-11 done 2026-11-02; amd64 image smoke and Docker qualification passed; DK-10 left for a maintainer decision).
+14. **Docker image size**: layer order, the second Bun, npm caches, the leftover apt layer and the second Claude binary (DK-7 to DK-11). Status: open (DK-7, DK-8, DK-9 and DK-11 done 2026-11-02; amd64 image smoke and Docker qualification passed; DK-10 left for a maintainer decision, now [6780](../containers-and-environments/6780-second-claude-binary-in-the-image.md)).
 15. **Container data transfer**: in-volume clone move, a per-project mirror, agent-home input stamps and same-device moves (DK-12 to DK-15). Status: done (2026-11-04; its follow-ups done 2026-11-05).
 16. **CLI and logging**: conditional `--follow` reads, transport buffering and the log sink (DK-16 to DK-18). Status: done (DK-16 and DK-17 done 2026-11-03; DK-18, the log sink, done 2026-11-04).
 
@@ -1489,7 +1489,7 @@ QEMU target signal 5). No arm64 final image or smoke result exists; a native
 runner is needed. The Chromium check was preserved. DK-10 remains outside
 this completed subset.
 
-DK-10 is still open. The SDK's `claude-agent-sdk-linux-x64/claude` (0.3.314) and the CLI's `claude-code/bin/claude.exe` (2.1.314) are the same file today: SHA-256 `4487042b…5f84594`, 298 MB each. [`upgrade-agents.md`](../../development/upgrade-agents.md) says the SDK deliberately does not track the CLI, so they can diverge.
+DK-10 is still open. The SDK's `claude-agent-sdk-linux-x64/claude` (0.3.314) and the CLI's `claude-code/bin/claude.exe` (2.1.314) are the same file today: SHA-256 `4487042b…5f84594`, 298 MB each. [`upgrade-agents.md`](../../development/upgrade-agents.md) says the SDK deliberately does not track the CLI, so they can diverge. Moved on 2026-11-05 to [6780](../containers-and-environments/6780-second-claude-binary-in-the-image.md), which re-verified both architectures at the same pins, found that the container bridge never runs the SDK's copy, and now recommends dropping it; the decision below is kept as it was recorded.
 
 Not addressed, for a later pass: the Playwright layer (1.07 GB: Chromium, the headless shell and `--with-deps` apt packages), and the bridge `src/` trees that ship next to `dist` (about 16 MB, unused at runtime).
 
@@ -1519,7 +1519,7 @@ Not addressed, for a later pass: the Playwright layer (1.07 GB: Chromium, the he
   - **Move the base binary into the mise directory.**
     - Pros: one real file.
     - Cons: a move in a later layer copies the 107 MB again, so nothing is saved.
-- **DK-10: the second Claude binary.** Open; needs the maintainer.
+- **DK-10: the second Claude binary.** Open; needs the maintainer. Superseded by [6780](../containers-and-environments/6780-second-claude-binary-in-the-image.md) task 1, which adds a third option and changes the recommendation.
   - **At build time, symlink the SDK binary to the CLI's when the two are byte-identical, otherwise copy it (recommended).** This needs a `RUN --mount=type=bind,from=bridge-build`. That is a bind mount, not the cache mount 0022 rejected.
     - Pros: saves 298 MB while the pins agree, as they do today; no change when they diverge.
     - Cons: the bridge's SDK would run whatever is at the CLI path, so a user's `npm i -g @anthropic-ai/claude-code@<other>` inside a container would change the bridge's engine too; adds BuildKit-only syntax.

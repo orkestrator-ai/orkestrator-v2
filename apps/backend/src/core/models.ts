@@ -1269,6 +1269,13 @@ export interface AppConfig {
     debugLogRetentionDays?: number;
     /** "Log detail": levels for every process, running bridges included. Applies live. */
     logDetail?: import("@orkestrator/protocol/log-policy").LogDetail;
+    /**
+     * Backend-owned: when raised "Log detail" reverts to `info` (ISO 8601). Every
+     * config write recomputes it; a value a client sends is ignored.
+     */
+    logDetailExpiresAt?: string;
+    /** Keep raised "Log detail" until it is changed back, instead of for 24 hours. */
+    logDetailKeepRaised?: boolean;
     webClientEnabled?: boolean;
     /** Audible cues for background events that need the user's attention. */
     notificationSounds?: import("@orkestrator/protocol/notification-sounds").NotificationSoundSettings;

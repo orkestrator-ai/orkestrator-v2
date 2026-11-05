@@ -5,7 +5,6 @@ import App from "./App";
 import { renderReactRoot } from "./lib/app-renderer";
 import { startApp } from "./lib/app-startup";
 import { createReactRootErrorOptions } from "./lib/react-root-errors";
-
 const runtimeProfile = import.meta.env.VITE_ORKESTRATOR_PROFILE?.trim();
 if (runtimeProfile) {
   document.body.dataset.orkestratorDevProfile = runtimeProfile;

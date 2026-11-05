@@ -18,6 +18,14 @@ export const DEFAULT_ALLOWLIST_PORT = 443;
 export const ALLOWLIST_ENTRY_HINT =
   "One per line. A domain allows HTTPS (port 443); name a port for anything else, such as db.example.com:5432, or example.com:443/udp for UDP. GitHub also allows SSH.";
 
+/**
+ * What the allowlist does not do, stated wherever it is edited (security
+ * finding M12). Never claim that it prevents exfiltration: it limits
+ * destinations, and an allowed service accepts what it is sent.
+ */
+export const ALLOWLIST_RESIDUAL_RISK =
+  "The allowlist limits where a restricted container can connect, not what it sends: an allowed service such as GitHub, npm or a model provider's API accepts whatever an agent sends it, including to an account or key that is not yours. Containers from current images also check the name each connection and DNS lookup asks for, so other sites sharing an allowed address are refused. That check cannot see a name hidden inside encrypted traffic (an encrypted ClientHello, domain fronting), and UDP entries and protocols other than HTTPS and HTTP are checked by address only.";
+
 export interface AllowlistEntry {
   domain: string;
   protocol: "tcp" | "udp";

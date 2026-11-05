@@ -15,6 +15,7 @@ import type {
   CoordinatorWebResearch,
 } from "@orkestrator/protocol/coordinator-web-research";
 import { isSessionTitleGenerationPolicy } from "@orkestrator/protocol/session-title-generation";
+import { resolveLogDetail } from "@orkestrator/protocol/log-policy";
 import type { Dispatch, SetStateAction } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -41,6 +42,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { LogDetailSettings } from "./LogDetailSettings";
+import { RendererDebugSettings } from "./RendererDebugSettings";
 import { appVersionSkew, BUNDLED_APP_VERSION, normalizeBackendVersion } from "@/lib/app-version";
 import { describeVersionReminder, versionClientKind } from "@/lib/version-reminder";
 import * as backend from "@/lib/backend";
@@ -102,7 +104,10 @@ import {
 import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 import { resolveDefaultAgent } from "@orkestrator/protocol/agent-settings";
 import { PLAN_USAGE_PLATFORMS } from "@orkestrator/protocol/plan-usage";
-import { ALLOWLIST_ENTRY_HINT } from "@orkestrator/protocol/network-allowlist";
+import {
+  ALLOWLIST_ENTRY_HINT,
+  ALLOWLIST_RESIDUAL_RISK,
+} from "@orkestrator/protocol/network-allowlist";
 import { DEFAULT_CLAUDE_BACKGROUND_COMMAND_LIMIT_HOURS } from "@orkestrator/protocol/claude-background-commands";
 import { AgentDefaultsPane } from "./agent/AgentDefaultsPane";
 import { MultiReviewDefaultsEditor } from "./agent/MultiReviewDefaultsEditor";
@@ -355,6 +360,8 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     setDebugLogRetentionDays,
     logDetail,
     setLogDetail,
+    logDetailKeepRaised,
+    setLogDetailKeepRaised,
     webClientEnabled,
     setWebClientEnabled,
     reviewInstruction,
@@ -1891,6 +1898,9 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
       description={<>Domains allowed in "Restricted" mode. {ALLOWLIST_ENTRY_HINT}</>}
     >
       <div className="space-y-4">
+        <p className="max-w-2xl text-sm leading-relaxed text-muted-foreground">
+          {ALLOWLIST_RESIDUAL_RISK}
+        </p>
         <Textarea
           value={allowedDomains}
           onChange={handleDomainsChange}
@@ -2443,7 +2453,16 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
           Changes apply straight away, with no restart and without interrupting running agents.
         </p>
       </div>
-      <LogDetailSettings value={logDetail} onChange={setLogDetail} />
+      <LogDetailSettings
+        value={logDetail}
+        onChange={setLogDetail}
+        stored={resolveLogDetail(global)}
+        expirySupported={!!global.logDetailExpiresAt || global.logDetailKeepRaised === true}
+        expiresAt={global.logDetailExpiresAt}
+        keepRaised={logDetailKeepRaised}
+        onKeepRaisedChange={setLogDetailKeepRaised}
+      />
+      <RendererDebugSettings />
     </SettingsPageLayout>
   );
 

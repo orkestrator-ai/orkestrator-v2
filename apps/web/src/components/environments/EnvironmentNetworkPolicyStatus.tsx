@@ -83,6 +83,50 @@ function DomainsState({
 }
 
 /**
+ * Whether the gateway also checks names (TLS SNI, HTTP Host, DNS), and what
+ * that still leaves open. Absent from a report means an image that predates
+ * the checks.
+ */
+function NameChecks({ policy }: { policy: EnvironmentNetworkPolicy }) {
+  const effective = policy.effective;
+  if (!effective || effective.mode !== "restricted" || effective.state !== "applied") return null;
+  if (effective.egressFilter === "enforced") {
+    return (
+      <div>
+        Names are checked too: HTTPS and HTTP must ask for an allowed name, and DNS answers only
+        allowed names. A name hidden inside encrypted traffic, UDP, and other protocols are checked
+        by address only.
+      </div>
+    );
+  }
+  if (effective.egressFilter === "off") {
+    return (
+      <div>
+        Name checks were switched off when this container was created: any site sharing an allowed
+        address is reachable, and any name resolves.
+      </div>
+    );
+  }
+  if (effective.egressFilter === "unavailable" && policy.enforcement === "gateway") {
+    return (
+      <div>
+        Name checks require network policy 3. This gateway uses address-only enforcement; rebuilding
+        with a current image adds name checks only when the network policy 2 override is removed.
+      </div>
+    );
+  }
+  // A backend that predates the field omits it; say nothing rather than
+  // guess. `null` is a report without it: an image from before the checks.
+  if (effective.egressFilter === undefined || policy.enforcement !== "gateway") return null;
+  return (
+    <div>
+      This container&apos;s image predates name checks: any site sharing an allowed address is
+      reachable, and any name resolves. Rebuilding it with a current image adds them.
+    </div>
+  );
+}
+
+/**
  * What the container's firewall actually applied, next to what is configured.
  * A difference (a stale container, a failed application, the legacy shared
  * network) is stated rather than implied.
@@ -174,6 +218,7 @@ export function EnvironmentNetworkPolicyStatus({ environmentId }: { environmentI
       ) : effective?.mode === "restricted" && policy.enforcement === "container" ? (
         <div>Enforced inside the container, so a root terminal can change these rules.</div>
       ) : null}
+      <NameChecks policy={policy} />
       {policy.network ? (
         <div>
           Network {policy.network.name}

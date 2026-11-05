@@ -160,6 +160,7 @@ export function storedCoreFields(global: GlobalConfig): CoreFieldsSnapshot {
     debugLogging: global.debugLogging ?? false,
     debugLogRetentionDays: normalizeDebugLogRetentionDays(global.debugLogRetentionDays),
     logDetail: resolveLogDetail(global),
+    logDetailKeepRaised: global.logDetailKeepRaised === true,
     webClientEnabled: global.webClientEnabled ?? true,
     reviewInstruction: getSavedReviewInstruction(global.reviewInstruction),
     reviewLensPresets: resolveReviewLensPresets(global.reviewLensPresets),
@@ -250,6 +251,7 @@ export function globalFormSignature(global: GlobalConfig): string {
     global.debugLogging ?? false,
     normalizeDebugLogRetentionDays(global.debugLogRetentionDays),
     resolveLogDetail(global),
+    global.logDetailKeepRaised === true,
     global.webClientEnabled ?? true,
     getSavedReviewInstruction(global.reviewInstruction),
     resolveReviewLensPresets(global.reviewLensPresets),
@@ -371,6 +373,9 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     normalizeDebugLogRetentionDays(global.debugLogRetentionDays),
   );
   const [logDetail, setLogDetail] = useState(resolveLogDetail(global));
+  const [logDetailKeepRaised, setLogDetailKeepRaised] = useState(
+    global.logDetailKeepRaised === true,
+  );
   const [webClientEnabled, setWebClientEnabled] = useState(global.webClientEnabled ?? true);
   const [reviewInstruction, setReviewInstruction] = useState(
     getSavedReviewInstruction(global.reviewInstruction),
@@ -486,6 +491,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     setDebugLogging(global.debugLogging ?? false);
     setDebugLogRetentionDays(normalizeDebugLogRetentionDays(global.debugLogRetentionDays));
     setLogDetail(resolveLogDetail(global));
+    setLogDetailKeepRaised(global.logDetailKeepRaised === true);
     setWebClientEnabled(global.webClientEnabled ?? true);
     setReviewInstruction(getSavedReviewInstruction(global.reviewInstruction));
     setReviewLensPresets(resolveReviewLensPresets(global.reviewLensPresets));
@@ -672,6 +678,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       debugLogging,
       debugLogRetentionDays,
       logDetail,
+      logDetailKeepRaised,
       webClientEnabled,
       reviewInstruction,
       reviewLensPresets,
@@ -714,6 +721,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       debugLogging,
       debugLogRetentionDays,
       logDetail,
+      logDetailKeepRaised,
       webClientEnabled,
       reviewInstruction,
       reviewLensPresets,
@@ -883,6 +891,9 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       // rejected edit. Keep a newer edit made while this request was in flight.
       setAutoSteer((current) =>
         current === autoSteer ? (newConfig.global.autoSteer ?? false) : current,
+      );
+      setLogDetailKeepRaised((current) =>
+        current === logDetailKeepRaised ? newConfig.global.logDetailKeepRaised === true : current,
       );
       syncedGlobalSignatureRef.current = globalFormSignature(newConfig.global);
       syncedGlobalRef.current = newConfig.global;
@@ -1138,6 +1149,8 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     setDebugLogRetentionDays,
     logDetail,
     setLogDetail,
+    logDetailKeepRaised,
+    setLogDetailKeepRaised,
     webClientEnabled,
     setWebClientEnabled,
     reviewInstruction,

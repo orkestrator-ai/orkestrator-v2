@@ -130,6 +130,14 @@ Main keeps unacknowledged captures in `<userData>/browser-preview-captures/`
 process, 64 MiB of images. A full spool rejects the new capture; older work is
 never evicted. Records expire after 24 hours with a content-free event.
 
+One spool serves every window of the process: a read names a capture id, and the
+IPC handler refuses any sender that is not a trusted renderer. Images and region
+crops cross IPC as PNG bytes, in both directions. The preload makes the data URLs
+`BrowserPreviewCaptureApi` returns, with native base64, so main never
+base64-encodes a capture. There is no custom scheme for spooled images: a real
+Electron run showed no renderer stall near the size limit, and a scheme would have
+to add a per-window check that the spool does not have today.
+
 The renderer:
 
 1. Reads the pending capture (reading never consumes it).

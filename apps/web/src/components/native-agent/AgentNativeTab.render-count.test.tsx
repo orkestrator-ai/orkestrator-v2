@@ -137,48 +137,67 @@ mock.module("@/lib/backend", () => ({
     active: { claude: "default", codex: "default" },
   }),
   getNativeAgentProjection: async () => null,
-  getNativeAgentTranscriptUpdate: async () =>
-    ({
-      viewVersion: 1,
-      status: "snapshot",
-      token: `transcript-${served.length}`,
-      value: {
-        identity,
-        freshness: served.length === 0 ? "empty" : "current",
-        messages: served,
-        historyEpoch: "epoch-1",
-        historyComplete: true,
-      },
-    }) satisfies NativeAgentTranscriptUpdate<NativeMessage>,
-  getNativeAgentSessionStateUpdate: async () =>
-    ({
-      viewVersion: 1,
-      status: "snapshot",
-      token: "state-1",
-      value: {
-        identity,
-        connection: "connected",
-        turn: { phase: "idle" },
-        interactions: [],
-        composerControls: [],
-        composer: {
-          models: [{ platform: "codex", id: "gpt-5.4", label: "GPT-5.4" }],
-          selectedModelId: "gpt-5.4",
-          fastModeEnabled: null,
-          fastModeAvailable: false,
-          modes: [],
+  // Metadata reads with the current token publish nothing, as the backend does.
+  // Re-sending snapshots makes polling look like work caused by the tested write.
+  getNativeAgentTranscriptUpdate: async (input: { knownToken?: string }) =>
+    input.knownToken === `transcript-${served.length}`
+      ? ({
+          viewVersion: 1,
+          status: "unchanged",
+          token: input.knownToken,
+          identity,
+        } satisfies NativeAgentTranscriptUpdate<NativeMessage>)
+      : ({
+          viewVersion: 1,
+          status: "snapshot",
+          token: `transcript-${served.length}`,
+          value: {
+            identity,
+            freshness: served.length === 0 ? "empty" : "current",
+            messages: served,
+            historyEpoch: "epoch-1",
+            historyComplete: true,
+          },
+        } satisfies NativeAgentTranscriptUpdate<NativeMessage>),
+  getNativeAgentSessionStateUpdate: async (input: { knownToken?: string }) =>
+    input.knownToken === "state-1"
+      ? ({
+          viewVersion: 1,
+          status: "unchanged",
+          token: input.knownToken,
+          identity,
+        } satisfies NativeAgentSessionStateUpdate)
+      : ({
+          viewVersion: 1,
+          status: "snapshot",
+          token: "state-1",
+          value: {
+            identity,
+            connection: "connected",
+            turn: { phase: "idle" },
+            interactions: [],
+            composerControls: [],
+            composer: {
+              models: [{ platform: "codex", id: "gpt-5.4", label: "GPT-5.4" }],
+              selectedModelId: "gpt-5.4",
+              fastModeEnabled: null,
+              fastModeAvailable: false,
+              modes: [],
+            },
+            capabilities: nativeAgentCapabilities(identity.platform),
+            notices: [],
+            ...(queuedItems.length > 0 ? { queue: { items: queuedItems } } : {}),
+          },
+        } satisfies NativeAgentSessionStateUpdate),
+  getNativeAgentDiscoveryUpdate: async (input: { knownToken?: string }) =>
+    input.knownToken === "discovery-1"
+      ? { viewVersion: 1, status: "unchanged", token: input.knownToken, identity }
+      : {
+          viewVersion: 1,
+          status: "snapshot",
+          token: "discovery-1",
+          value: { identity, sections: {} },
         },
-        capabilities: nativeAgentCapabilities(identity.platform),
-        notices: [],
-        ...(queuedItems.length > 0 ? { queue: { items: queuedItems } } : {}),
-      },
-    }) satisfies NativeAgentSessionStateUpdate,
-  getNativeAgentDiscoveryUpdate: async () => ({
-    viewVersion: 1,
-    status: "snapshot",
-    token: "discovery-1",
-    value: { identity, sections: {} },
-  }),
   getAgentHandoff: async () => null,
   dispatchNativeAgentIntent: dispatchMock,
   getNativeAgentModelCatalog: async (_environmentId: string, platform: string) =>

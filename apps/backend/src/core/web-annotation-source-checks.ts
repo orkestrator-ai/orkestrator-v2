@@ -11,7 +11,6 @@
  * the container's own `/workspace`; when that check cannot run, the paths are
  * reported as `unavailable` rather than guessed.
  */
-import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import type {
@@ -19,6 +18,7 @@ import type {
   WebAnnotationFileCheckStatus,
 } from "@orkestrator/protocol/web-annotations";
 import { isSafeRelativePath } from "@orkestrator/protocol/web-annotations-validation";
+import { CommandFailedError, type runCommand } from "./command-capture.js";
 import type { DispatchEnvironment } from "./web-annotation-contracts.js";
 
 export const MAX_WORKSPACE_PATH_CHECKS = 200;
@@ -135,64 +135,49 @@ process.stdin.on("end", () => {
 });
 `;
 
-type SpawnPipe = (command: string, args: string[]) => ChildProcessWithoutNullStreams;
+/** 200 statuses of at most 19 characters each fit in well under this. */
+const MAX_CONTAINER_CHECK_OUTPUT_BYTES = 64 * 1024;
 
 /**
  * Run `CONTAINER_PATH_CHECKER` in a container (`docker exec -i ... node -e`).
- * Bounded: stdout is capped, and the exec is killed after `timeoutMs`.
+ * Bounded: output is capped, and the exec is killed after `timeoutMs`.
  * Resolves with the parsed status array; rejects on any failure, which the
  * caller turns into `unavailable`.
  */
-export function runContainerPathCheck(
-  spawn: SpawnPipe,
+export async function runContainerPathCheck(
+  run: typeof runCommand,
   containerId: string,
   paths: readonly string[],
   options: { timeoutMs?: number; budgetMs?: number } = {},
 ): Promise<WebAnnotationFileCheckStatus[]> {
   const input = JSON.stringify(paths.slice(0, MAX_WORKSPACE_PATH_CHECKS));
-  return new Promise((resolvePromise, reject) => {
-    const child = spawn("docker", [
-      "exec",
-      "-i",
-      containerId,
-      "node",
-      "-e",
-      CONTAINER_PATH_CHECKER,
-      "--",
-      "/workspace",
-      String(options.budgetMs ?? WORKSPACE_PATH_CHECK_DEADLINE_MS),
-    ]);
-    let stdout = "";
-    let settled = false;
-    const finish = (error: Error | null, value?: WebAnnotationFileCheckStatus[]) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      if (error) reject(error);
-      else resolvePromise(value!);
-    };
-    const timer = setTimeout(() => {
-      child.kill("SIGKILL");
-      finish(new Error("Container path check timed out"));
-    }, options.timeoutMs ?? CONTAINER_PATH_CHECK_TIMEOUT_MS);
-    timer.unref?.();
-    child.stdout.on("data", (chunk: Buffer) => {
-      // 200 statuses of at most 19 characters each fit in well under 8 KiB.
-      if (stdout.length < 8_192) stdout += chunk.toString("utf8");
-    });
-    child.stderr.on("data", () => undefined);
-    child.once("error", (error) => finish(error));
-    child.once("close", (code) => {
-      if (code !== 0) return finish(new Error(`Container path check exited with ${code}`));
-      try {
-        finish(null, parseContainerPathStatuses(JSON.parse(stdout), paths.length));
-      } catch (error) {
-        finish(error instanceof Error ? error : new Error("Container path check failed"));
-      }
-    });
-    child.stdin.on("error", () => undefined);
-    child.stdin.end(input);
-  });
+  let stdout: string;
+  try {
+    ({ stdout } = await run(
+      "docker",
+      [
+        "exec",
+        "-i",
+        containerId,
+        "node",
+        "-e",
+        CONTAINER_PATH_CHECKER,
+        "--",
+        "/workspace",
+        String(options.budgetMs ?? WORKSPACE_PATH_CHECK_DEADLINE_MS),
+      ],
+      {
+        stdin: input,
+        timeoutMs: options.timeoutMs ?? CONTAINER_PATH_CHECK_TIMEOUT_MS,
+        maxOutputBytes: MAX_CONTAINER_CHECK_OUTPUT_BYTES,
+      },
+    ));
+  } catch (error) {
+    if (!(error instanceof CommandFailedError)) throw error;
+    if (error.timedOut) throw new Error("Container path check timed out");
+    throw new Error(`Container path check exited with ${error.exitCode}`);
+  }
+  return parseContainerPathStatuses(JSON.parse(stdout), paths.length);
 }
 
 /** Strict parse of the checker's answer: one known status per path, in order. */

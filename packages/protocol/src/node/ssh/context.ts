@@ -4,6 +4,7 @@ import { access, chmod, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "
 import { constants as fsConstants } from "node:fs";
 import os from "node:os";
 import type { Readable } from "node:stream";
+import { runCommand, type ExecResult } from "../command-capture.js";
 import {
   allocateLoopbackPort,
   probeLoopbackForward,
@@ -28,6 +29,22 @@ export type SshSpawn = (
   args: readonly string[],
   options: SpawnOptions,
 ) => SshChildProcess;
+
+/**
+ * Runs a short-lived helper to completion. It rejects with `CommandFailedError`
+ * for anything but a clean exit, as `runCommand` does.
+ */
+export type SshCommandCapture = (
+  command: string,
+  args: string[],
+  options: {
+    timeoutMs: number;
+    maxOutputBytes: number;
+    maxStderrBytes: number;
+    env: NodeJS.ProcessEnv;
+    signal?: AbortSignal;
+  },
+) => Promise<ExecResult>;
 
 /** File operations the adapter performs; injected so tests can observe them. */
 export interface SshFileSystem {
@@ -73,7 +90,10 @@ export interface AskpassRuntime {
  * every spawn, file write, clock read and port probe can be faked in tests.
  */
 export interface SshAdapterContext {
+  /** Starts the tunnel, a long-lived child whose stderr is followed as it runs. */
   spawn: SshSpawn;
+  /** Runs the one-shot helpers: `ssh -G`, the host-key probe, `ssh-keygen -l`. */
+  capture: SshCommandCapture;
   fs: SshFileSystem;
   clock: SshClock;
   logger: SshLogger;
@@ -136,6 +156,7 @@ export function createSshAdapterContext(options: {
 }): SshAdapterContext {
   const base: SshAdapterContext = {
     spawn: (command, args, spawnOptions) => nodeSpawn(command, [...args], spawnOptions),
+    capture: (command, args, captureOptions) => runCommand(command, args, captureOptions),
     fs: nodeSshFileSystem,
     clock: systemSshClock,
     logger: options.logger ?? silentLogger,

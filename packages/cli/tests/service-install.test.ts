@@ -19,6 +19,8 @@ import { parseOptions } from "../../../apps/backend/src/options.js";
 import { runClient } from "../src/client/main.js";
 import { captureIo, createSandbox, type ClientSandbox } from "./support/client-harness.js";
 
+import * as standalone from "@orkestrator/protocol/node/standalone-service";
+
 const realAwaitServiceConnection = connection.awaitServiceConnection;
 
 const TOKEN = "install-fixture-token-0123456789";
@@ -539,4 +541,30 @@ test("service allocation retries zero and reserved fixed ports", async () => {
   ).toBe("45000");
   expect(calls).toEqual([0, 34121, 34122, 45000]);
   await expect(freeServicePort(async () => 34121)).rejects.toThrow("Unable to allocate");
+});
+
+test("interruption during installation prevents launcher and release activation", async () => {
+  const f = await fixture();
+  const controller = new AbortController();
+  const install = spyOn(standalone, "installRelease").mockImplementation(
+    async (_layout, _version, options) => {
+      expect(options.signal).toBe(controller.signal);
+      controller.abort();
+      return "/unused-release";
+    },
+  );
+  const launcher = spyOn(standalone, "installLauncher");
+  const activate = spyOn(standalone, "activateRelease");
+  const config = spyOn(standalone, "writeServiceConfig");
+  restores.push(() => {
+    install.mockRestore();
+    launcher.mockRestore();
+    activate.mockRestore();
+    config.mockRestore();
+  });
+  const result = await f.run([], controller.signal);
+  expect(result.code).not.toBe(0);
+  expect(launcher).not.toHaveBeenCalled();
+  expect(activate).not.toHaveBeenCalled();
+  expect(config).not.toHaveBeenCalled();
 });

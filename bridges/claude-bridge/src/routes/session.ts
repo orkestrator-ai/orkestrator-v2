@@ -365,6 +365,10 @@ session.get("/:id", async (c) => {
     createdAt: sessionData.createdAt.toISOString(),
     lastActivity: sessionData.lastActivity.toISOString(),
     error: sessionData.error,
+    // The provider's own refusal for a used-up plan, beside the failure only.
+    ...(sessionData.status === "error" && sessionData.errorCode
+      ? { errorCode: sessionData.errorCode }
+      : {}),
     // Structured, so a workflow continues the turn without matching text.
     // Only beside the failure it explains; the next turn clears it.
     ...(sessionData.status === "error" && sessionData.interruption

@@ -18,10 +18,12 @@ import {
   transcriptWithToolResult,
   waitFor,
 } from "./session-manager-test-harness.js";
+import { WorkspaceChangeProbe } from "@orkestrator/protocol/node/workspace-change-probe";
 import {
   commandChangeJournal,
   deleteCommandChangeJournal,
   overlayCommandChanges,
+  setCommandChangeProbeForTests,
 } from "./command-changes.js";
 import { coordinatorProcessPolicy } from "./read-only-policy.js";
 
@@ -35,6 +37,12 @@ type Hooks = Record<string, Array<{ matcher?: string; hooks: Hook[] }>>;
 let repo: string;
 
 beforeAll(() => {
+  // Two slow snapshots in a row stop a repository being measured for the life
+  // of the probe, and every test here shares one repository. On a busy host
+  // that turned each later measurement in this file into a timeout.
+  setCommandChangeProbeForTests(
+    new WorkspaceChangeProbe({ slowSnapshotMs: Number.POSITIVE_INFINITY }),
+  );
   repo = mkdtempSync(join(tmpdir(), "claude-command-changes-"));
   const git = (...args: string[]) => execFileSync("git", args, { cwd: repo });
   git("init", "-q");
@@ -45,7 +53,10 @@ beforeAll(() => {
   git("commit", "-qm", "init");
 });
 
-afterAll(() => rmSync(repo, { recursive: true, force: true }));
+afterAll(() => {
+  setCommandChangeProbeForTests();
+  rmSync(repo, { recursive: true, force: true });
+});
 
 function hookCaller(hooks: Hooks, event: string) {
   return async (input: Record<string, unknown>) => {
@@ -179,6 +190,9 @@ describe("Bash command change measurement", () => {
     await waitFor(() => toolPart(turn.sessionId, "bash-denied")?.toolDenied !== undefined);
 
     turn.call.push(bashCall("bash-after"));
+    // A measurement that outruns its part lands only with the call's result,
+    // and this test delivers none.
+    await waitFor(() => toolPart(turn.sessionId, "bash-after") !== undefined);
     const next = { tool_name: "Bash", tool_input: { command: "x" }, tool_use_id: "bash-after" };
     await turn.pre(next);
     writeFileSync(join(repo, "after.txt"), "a\nb\n");
@@ -192,6 +206,7 @@ describe("Bash command change measurement", () => {
   test("an overlapping Edit marks the Bash measurement approximate", async () => {
     const turn = await startTurn("command-changes-overlap");
     turn.call.push(bashCall("bash-overlap"));
+    await waitFor(() => toolPart(turn.sessionId, "bash-overlap") !== undefined);
     const bash = { tool_name: "Bash", tool_input: { command: "x" }, tool_use_id: "bash-overlap" };
     const edit = {
       tool_name: "Edit",

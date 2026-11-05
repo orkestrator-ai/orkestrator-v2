@@ -1825,6 +1825,7 @@ export class CodexRuntimeLifecycle {
 
       const phaseBeforeRebind = context.phase;
       const errorBeforeRebind = context.error;
+      const errorCodeBeforeRebind = context.errorCode;
       const turn = context.activeTurn;
 
       try {
@@ -1862,6 +1863,7 @@ export class CodexRuntimeLifecycle {
             context,
             phaseBeforeRebind === "failed" ? "failed" : "idle",
             phaseBeforeRebind === "failed" ? errorBeforeRebind : undefined,
+            phaseBeforeRebind === "failed" ? errorCodeBeforeRebind : undefined,
           );
           this.emitStatus(context);
           continue;
@@ -2065,6 +2067,7 @@ export class CodexRuntimeLifecycle {
       context,
       turn.phase === "failed" ? "failed" : "idle",
       turn.error?.message,
+      turn.error?.code,
     );
     state.assistantMessageId = undefined;
     // A terminal turn is the event a pre-restart drain is waiting for.

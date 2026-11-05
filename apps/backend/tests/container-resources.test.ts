@@ -4,9 +4,11 @@ import {
   builtInResourceDefault,
   parseResourceLimits,
 } from "@orkestrator/protocol/container-resources";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import {
   dockerCapacity,
   dockerAdmissionCapacity,
+  logDriverArguments,
   environmentResourcePolicy,
   parseAppliedLimits,
   parseDockerInfo,
@@ -164,6 +166,39 @@ describe("resource limits", () => {
       pids: null,
     });
     expect(parseAppliedLimits("garbage")).toBeNull();
+  });
+});
+
+describe("container log driver", () => {
+  const BOUNDS = ["--log-opt", "max-size=10m", "--log-opt", "max-file=3"];
+
+  test("prefers local, else a bounded json-file, which every daemon ships", () => {
+    expect(logDriverArguments(["json-file", "local", "journald"])).toEqual([
+      "--log-driver",
+      "local",
+      ...BOUNDS,
+    ]);
+    // A daemon whose default is an uncapped json-file still gets a bound.
+    expect(logDriverArguments(["journald", "json-file"])).toEqual([
+      "--log-driver",
+      "json-file",
+      ...BOUNDS,
+    ]);
+  });
+
+  test("a failed probe names no driver; a daemon with neither is warned about once", () => {
+    const logs = captureLogs();
+    try {
+      expect(logDriverArguments([])).toEqual([]);
+      expect(logs.records()).toEqual([]);
+      expect(logDriverArguments(["k8s-file", "journald"])).toEqual([]);
+      expect(logDriverArguments(["k8s-file"])).toEqual([]);
+      expect(logs.records().map((record) => [record.level, record.event])).toEqual([
+        ["warn", "log-driver.unbounded"],
+      ]);
+    } finally {
+      logs.restore();
+    }
   });
 });
 

@@ -1,0 +1,129 @@
+import { expect, test, type Locator } from "@playwright/test";
+
+const VIEWS = [
+  {
+    name: "Build Pipeline",
+    url: "/pipeline-flow?scenario=building&longTranscript&paneControls",
+    showPane: "Activate build pane",
+    overview: "pipeline-flow-scroll",
+  },
+  {
+    // The report is the one container query container inside a transcript's scroller.
+    name: "Build Pipeline with a review report",
+    url: "/pipeline-flow?scenario=fanout&longTranscript=report&paneControls",
+    showPane: "Activate build pane",
+    overview: "pipeline-flow-scroll",
+  },
+  {
+    name: "Graph Run",
+    url: "/graph-run-flow?longTranscript",
+    showPane: "Activate graph pane",
+    overview: "graph-run-overview-scroll",
+  },
+];
+
+async function scrollHalfway(scroller: Locator): Promise<number> {
+  const range = await scroller.evaluate((element) => element.scrollHeight - element.clientHeight);
+  expect(range).toBeGreaterThan(50);
+  const offset = Math.floor(range / 2);
+  await scroller.evaluate((element, top) => {
+    element.scrollTop = top;
+  }, offset);
+  await expect.poll(() => scroller.evaluate((element) => element.scrollTop)).toBe(offset);
+  return offset;
+}
+
+async function expectStableEnd(transcript: Locator, overview: Locator, overviewOffset: number) {
+  // Wait for activation to reach latest, then observe every frame for 750 ms.
+  // A single successful poll can miss a later resize or footer layout shift.
+  await expect
+    .poll(() =>
+      transcript.evaluate(
+        (element) => element.scrollHeight - element.clientHeight - element.scrollTop,
+      ),
+    )
+    .toBeLessThanOrEqual(1);
+  const samples = await transcript.evaluate(
+    async (element, { overviewElement, expectedOverview }) => {
+      const samples: { bottomGap: number; overviewTop: number }[] = [];
+      const started = performance.now();
+      do {
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+        const sample = {
+          bottomGap: element.scrollHeight - element.clientHeight - element.scrollTop,
+          overviewTop: overviewElement!.scrollTop,
+        };
+        samples.push(sample);
+        if (sample.bottomGap > 1 || sample.overviewTop !== expectedOverview) break;
+      } while (performance.now() - started < 750);
+      return samples;
+    },
+    { overviewElement: await overview.elementHandle(), expectedOverview: overviewOffset },
+  );
+  expect(samples.length).toBeGreaterThan(1);
+  for (const sample of samples) {
+    expect(sample.bottomGap).toBeLessThanOrEqual(1);
+    expect(sample.overviewTop).toBe(overviewOffset);
+  }
+}
+
+// These transcripts use `activation: "latest"`, so showing the pane lands on the
+// newest message in every engine, and the overview around them stays put. WebKit
+// resets some hidden scrollers (0860); CI runs this in Chromium and WebKit.
+for (const view of VIEWS) {
+  test(`${view.name} shows the newest message when its pane returns`, async ({ page }) => {
+    await page.setViewportSize({ width: page.viewportSize()!.width, height: 700 });
+    await page.goto(view.url);
+    const transcript = page.locator("[data-transcript-scroller]");
+    const overview = page.getByTestId(view.overview);
+    const hidePane = page.getByRole("button", { name: "Activate other pane" });
+    const showPane = page.getByRole("button", { name: view.showPane });
+    const bottomGap = () =>
+      transcript.evaluate(
+        (element) => element.scrollHeight - element.clientHeight - element.scrollTop,
+      );
+    await expect(transcript).toContainText("Transcript entry 40.");
+    await expect.poll(bottomGap).toBeLessThanOrEqual(1);
+    const mounted = await transcript.elementHandle();
+
+    // A follower, with output arriving while hidden.
+    let overviewOffset = await scrollHalfway(overview);
+    await hidePane.click();
+    await expect(transcript).toBeHidden();
+    await page.getByRole("button", { name: "Append transcript entry" }).click();
+    await showPane.click();
+    await expect(transcript).toContainText("Transcript entry 41.");
+    await expectStableEnd(transcript, overview, overviewOffset);
+    expect(await transcript.evaluate((element, original) => element === original, mounted)).toBe(
+      true,
+    );
+
+    // A reader who scrolled up: the documented exception to returning to their place.
+    await transcript.scrollIntoViewIfNeeded();
+    await transcript.hover();
+    await page.mouse.wheel(0, -600);
+    await expect.poll(bottomGap).toBeGreaterThan(100);
+    overviewOffset = await scrollHalfway(overview);
+    const readerOffset = await transcript.evaluate((element) => element.scrollTop);
+    expect(readerOffset).toBeGreaterThan(100);
+    await hidePane.click();
+    await expect(transcript).toBeHidden();
+
+    // Arm before the click, ahead of activation's animation-frame callbacks.
+    // Sampling after click() returns would miss a reset followed by a jump to latest.
+    const firstVisibleFrame = await transcript.evaluateHandle((element) => {
+      const result = { top: null as number | null };
+      const sample = () => {
+        if (element.getClientRects().length > 0) result.top = element.scrollTop;
+        else requestAnimationFrame(sample);
+      };
+      requestAnimationFrame(sample);
+      return result;
+    });
+    await showPane.click();
+    await expect.poll(() => firstVisibleFrame.evaluate((result) => result.top)).not.toBeNull();
+    expect(await firstVisibleFrame.evaluate((result) => result.top)).toBe(readerOffset);
+    await firstVisibleFrame.dispose();
+    await expectStableEnd(transcript, overview, overviewOffset);
+  });
+}

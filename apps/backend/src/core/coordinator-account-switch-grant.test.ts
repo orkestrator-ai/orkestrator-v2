@@ -331,6 +331,8 @@ describe("standing permission to switch accounts", () => {
       previousAccountId: "default",
       accountId: "acct-work",
       authorizedBy: { setting: "standing-grant" },
+      // How to bring the limited tabs back on the new account.
+      resumeStep: expect.stringContaining("send_prompt_to_tab"),
     });
     expect(text(result)).toContain("nothing for them to approve");
     expect(switches).toEqual([{ machine: SELF, accountId: "acct-work" }]);

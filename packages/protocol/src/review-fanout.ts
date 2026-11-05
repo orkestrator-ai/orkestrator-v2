@@ -477,7 +477,7 @@ export function isReviewerRecord(value: unknown): value is ReviewerRecord {
       isWorkflowResultSubmissionState(value.resultSubmission)) &&
     optionalRepairAttempts(value.schemaRepairAttempts) &&
     optionalString(value.schemaRepairPrompt, 100_000) &&
-    optionalString(value.continuationPrompt, 4_096) &&
+    optionalString(value.continuationPrompt, 131_072) &&
     (value.resultReminderSent === undefined || typeof value.resultReminderSent === "boolean") &&
     (value.restartContinuationSent === undefined ||
       typeof value.restartContinuationSent === "boolean") &&

@@ -128,6 +128,7 @@ describe("prompt admission", () => {
         },
         turnStartedAt: "2026-01-01T00:00:00.000Z",
         error: "previous error",
+        errorCode: "usage-limit",
         structuredOutputRequestId: "previous",
         structuredOutput: structuredOutputFailure("claude", "interrupted", "Stopped", {
           requestId: "previous",

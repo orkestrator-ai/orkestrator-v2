@@ -172,6 +172,18 @@ export const retryReviewerMock = mock(
     backendRevision: 16,
   }),
 );
+export const restartReviewerMock = mock(
+  async (pipelineId: string, _reviewerId: string): Promise<BuildPipeline> => ({
+    ...useBuildPipelineStore.getState().pipelines.get(pipelineId)!,
+    backendRevision: 17,
+  }),
+);
+export const stopReviewerMock = mock(
+  async (pipelineId: string, _reviewerId: string): Promise<BuildPipeline> => ({
+    ...useBuildPipelineStore.getState().pipelines.get(pipelineId)!,
+    backendRevision: 17,
+  }),
+);
 export const previewCodeRewindMock = mock(
   async (pipelineId: string, stageId: string): Promise<BuildPipelineCodeRewindPreview> => ({
     pipelineId,
@@ -210,6 +222,8 @@ mock.module("@/lib/backend", () => ({
   rewindBuildPipelineCode: rewindCodeMock,
   skipBuildPipelineStep: skipStepMock,
   retryBuildPipelineReviewer: retryReviewerMock,
+  restartBuildPipelineReviewer: restartReviewerMock,
+  stopBuildPipelineReviewer: stopReviewerMock,
   retryBuildPipelineInteractionFailure: retryInteractionFailureMock,
   getBuildPipelineConditional: getBuildPipelineConditionalMock,
   getBuildPipelineControl: getBuildPipelineControlMock,

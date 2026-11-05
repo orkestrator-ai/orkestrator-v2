@@ -21,7 +21,11 @@ import {
   type RichTranscriptScope,
 } from "@/lib/chat/rich-identity";
 import { resetTranscriptArtifactCapabilities } from "@/hooks/useTranscriptArtifactCapabilities";
-import { cachedArtifactSearchBody, clearArtifactRequestCache } from "@/lib/chat/artifact-requests";
+import {
+  cachedArtifactSearchBody,
+  clearArtifactRequestCache,
+  rememberArtifactSearchBody,
+} from "@/lib/chat/artifact-requests";
 import {
   artifactBodySearchText,
   artifactPartSearchSegments,
@@ -279,6 +283,21 @@ describe("published artifact search beyond the summary", () => {
     fireEvent.click(screen.getByRole("button", { name: "Diagram" }));
     await waitFor(() => expect(projection(part)).toEqual(["A synthetic summary"]));
     expect(domSearchSegments(container)).toEqual(projection(part));
+  });
+
+  test("the body cache is bounded by total characters, dropping the oldest first", () => {
+    const body = "x".repeat(64 * 1024);
+    const refOfIndex = (index: number) => ({
+      publicationId: `pub_bound${index}`,
+      artifactId: `art_bound${index}`,
+      revision: 1,
+    });
+    // 129 bodies of 64 Ki characters pass 8 Mi characters, well inside the count limit.
+    for (let index = 0; index < 129; index++)
+      rememberArtifactSearchBody(refOfIndex(index), body, SCOPE);
+    expect(cachedArtifactSearchBody(refOfIndex(0))).toBeNull();
+    expect(cachedArtifactSearchBody(refOfIndex(1))).toBe(body);
+    expect(cachedArtifactSearchBody(refOfIndex(128))).toBe(body);
   });
 
   test("an invalid body contributes nothing, and a stale cache entry never matches another revision", () => {

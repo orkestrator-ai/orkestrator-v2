@@ -1,8 +1,23 @@
-import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  RegistryWriterLease,
+  REGISTRY_WRITER_LEASE_FILE,
+} from "../../../../backend/src/core/registry-writer-lease";
+import { StorageService } from "../../../../backend/src/core/storage";
+import { schedulerStatus } from "../../../../backend/src/core/commands-registry-scheduled-jobs";
+import { afterAll, afterEach, describe, expect, mock, test, spyOn, setSystemTime } from "bun:test";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
-import type { ScheduledJob, ScheduledJobSummary } from "@orkestrator/protocol/scheduled-jobs";
+import {
+  schedulerPausedMessage,
+  type ScheduledJob,
+  type ScheduledJobSummary,
+  type SchedulerStatus,
+} from "@orkestrator/protocol/scheduled-jobs";
 import * as realBackend from "@/lib/backend";
+import { dispatchResourceChange, requestViewSafetyChecks } from "@/lib/resource-sync";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
 import { useProjectStore } from "@/stores";
 import type { Project } from "@/types";
@@ -73,7 +88,11 @@ const failed = job({
 });
 
 let schedules = [job(), failed];
-const listScheduledJobs = mock(async () => ({ schedules: schedules.map(summary) }));
+let scheduler: SchedulerStatus | undefined;
+const listScheduledJobs = mock(async () => ({
+  schedules: schedules.map(summary),
+  ...(scheduler ? { scheduler } : {}),
+}));
 const getScheduledJob = mock(async (id: string) => schedules.find((item) => item.id === id)!);
 const runScheduledJob = mock(async (id: string) => ({ job: getScheduledJob(id), fire: {} }));
 const pauseScheduledJob = mock(async (id: string) => schedules.find((item) => item.id === id)!);
@@ -114,6 +133,7 @@ const { SchedulesSettings } = await import("./SchedulesSettings");
 afterEach(() => {
   cleanup();
   schedules = [job(), failed];
+  scheduler = undefined;
   for (const fn of [
     listScheduledJobs,
     runScheduledJob,
@@ -145,6 +165,228 @@ describe("SchedulesSettings", () => {
       "not-found: No such tab",
     );
     expect(within(nightly).getByTestId("schedule-next").textContent).toBe("—");
+  });
+
+  test("a timer carrying the user's account-switch permission is marked, and when it lapses", async () => {
+    const grant = {
+      kind: "switch-agent-account",
+      platforms: ["claude"],
+      userInstruction: "check in 2 hours and switch if they are limited",
+      grantedIn: "user-turn",
+      grantedAt: "2099-10-25T10:00:00.000Z",
+    };
+    const timer = job({
+      id: "sch_timer",
+      name: "Self-timer: check usage limits",
+      action: {
+        kind: "action",
+        action: "send_message",
+        input: { toEnvironmentId: "coordinator", body: "Check", grant },
+      },
+    });
+    schedules = [timer, failed];
+    render(<SchedulesSettings />);
+    const [row] = await screen.findAllByTestId("schedule-row");
+    const badge = within(row!).getByTestId("schedule-account-switch-permission");
+    expect(badge.textContent).toBe("May switch Claude accounts when it fires");
+    expect(badge.getAttribute("title")).toContain(
+      "You asked: “check in 2 hours and switch if they are limited”",
+    );
+    expect(badge.getAttribute("title")).toContain("for 2 hours after this timer fires");
+    // Only the timer that carries it is marked.
+    expect(
+      within(screen.getAllByTestId("schedule-row")[1]!).queryByTestId(
+        "schedule-account-switch-permission",
+      ),
+    ).toBeNull();
+  });
+
+  test("production badge expires while mounted and reschedules on a same-key reload", async () => {
+    const { AccountSwitchPermissionBadge } = await import("./SchedulesSettings");
+    const fired = Date.parse("2099-10-25T12:00:00Z");
+    let callback: (() => void) | undefined;
+    setSystemTime(fired);
+    const timer = spyOn(globalThis, "setTimeout").mockImplementation(((fn: () => void) => {
+      callback = fn;
+      return 123;
+    }) as typeof setTimeout);
+    const clear = spyOn(globalThis, "clearTimeout").mockImplementation(() => {});
+    try {
+      const action = {
+        kind: "action" as const,
+        action: "send_message",
+        input: {
+          grant: {
+            kind: "switch-agent-account",
+            platforms: ["claude"],
+            userInstruction: "switch",
+            grantedIn: "user-turn",
+            grantedAt: new Date(fired).toISOString(),
+          },
+        },
+      };
+      const lastFire = {
+        fireId: "f",
+        kind: "scheduled" as const,
+        state: "succeeded" as const,
+        scheduledFor: new Date(fired).toISOString(),
+        finishedAt: new Date(fired).toISOString(),
+        attempts: 1,
+      };
+      const view = (finishedAt: string) => (
+        <AccountSwitchPermissionBadge
+          key="same-job"
+          job={{ action, lastFire: { ...lastFire, finishedAt }, timeZone: "UTC" }}
+        />
+      );
+      const { rerender } = render(view(lastFire.finishedAt));
+      expect(screen.getByTestId("schedule-account-switch-permission").textContent).toContain(
+        "until",
+      );
+      expect(timer.mock.calls.at(-1)?.[1]).toBe(7_200_000);
+      setSystemTime(fired + 3_600_000);
+      rerender(view(new Date(fired + 3_600_000).toISOString()));
+      expect(clear).toHaveBeenCalled();
+      setSystemTime(fired + 10_800_001);
+      act(() => callback!());
+      expect(screen.getByTestId("schedule-account-switch-permission").textContent).toContain(
+        "lapsed",
+      );
+      rerender(view(new Date(fired + 3_600_000).toISOString()));
+      expect(screen.getByTestId("schedule-account-switch-permission").textContent).toContain(
+        "lapsed",
+      );
+      cleanup();
+    } finally {
+      timer.mockRestore();
+      clear.mockRestore();
+      setSystemTime();
+    }
+  });
+
+  test("the permission badge counts its window from the fire", async () => {
+    const { AccountSwitchPermissionBadge } = await import("./SchedulesSettings");
+    const action = {
+      kind: "action" as const,
+      action: "send_message",
+      input: {
+        toEnvironmentId: "coordinator",
+        body: "Check",
+        grant: {
+          kind: "switch-agent-account",
+          platforms: ["claude", "codex"],
+          nodeIds: ["bk_leaf"],
+          userInstruction: "switch if limited",
+          grantedIn: "user-turn",
+          grantedAt: "2099-10-25T10:00:00.000Z",
+        },
+      },
+    };
+    const lastFire = {
+      fireId: "f",
+      kind: "scheduled" as const,
+      scheduledFor: "2099-10-25T12:00:00.000Z",
+      finishedAt: "2099-10-25T12:00:00.000Z",
+      state: "succeeded" as const,
+      attempts: 1,
+    };
+    const fired = Date.parse("2099-10-25T12:00:00.000Z");
+    const { rerender } = render(
+      <AccountSwitchPermissionBadge
+        job={{ action, lastFire, timeZone: "UTC" }}
+        now={fired + 60_000}
+      />,
+    );
+    const badge = screen.getByTestId("schedule-account-switch-permission");
+    expect(badge.textContent).toBe(
+      "May switch Claude and Codex accounts until 2099-10-25 14:00 UTC",
+    );
+    expect(badge.getAttribute("title")).toContain("on this machine and 1 other");
+    rerender(
+      <AccountSwitchPermissionBadge
+        job={{ action, lastFire, timeZone: "UTC" }}
+        now={fired + 3 * 3_600_000}
+      />,
+    );
+    expect(screen.getByTestId("schedule-account-switch-permission").textContent).toBe(
+      "Claude and Codex switch permission lapsed",
+    );
+  });
+
+  test("says when this backend does not fire the schedules it lists", async () => {
+    scheduler = { firing: false, reason: "writer-lease-lost" };
+    render(<SchedulesSettings />);
+    const notice = await screen.findByTestId("scheduler-paused");
+    expect(notice.textContent).toBe(schedulerPausedMessage("writer-lease-lost"));
+    expect(notice.getAttribute("role")).toBe("status");
+  });
+
+  test("a lease lost while the view is open shows on its next read, and only with schedules", async () => {
+    scheduler = { firing: true };
+    render(<SchedulesSettings />);
+    await screen.findAllByTestId("schedule-row");
+    expectDomAbsent(screen.queryByTestId("scheduler-paused"), "scheduler notice while firing");
+
+    // The backend announces the loss; any reread picks the state up.
+    scheduler = { firing: false, reason: "another-backend" };
+    requestViewSafetyChecks("resource-gap");
+    const notice = await screen.findByTestId("scheduler-paused");
+    expect(notice.textContent).toBe(schedulerPausedMessage("another-backend"));
+
+    // Nobody with no schedules needs to hear that none fire.
+    schedules = [];
+    requestViewSafetyChecks("resource-gap");
+    await screen.findByText(/No schedules yet/);
+    expectDomAbsent(screen.queryByTestId("scheduler-paused"), "scheduler notice with no schedules");
+  });
+
+  test("lease loss reaches the mounted view through the storage resource feed and survives remount", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "schedule-view-lease-"));
+    const storage = new StorageService(directory);
+    await storage.init();
+    const lease = await RegistryWriterLease.acquire(directory, {
+      onLost: () => storage.announceSchedulerStatus(),
+    });
+    storage.setResourceChangeListener((change) => {
+      scheduler = schedulerStatus(lease);
+      dispatchResourceChange(change);
+    });
+    try {
+      scheduler = schedulerStatus(lease);
+      const view = render(<SchedulesSettings />);
+      await screen.findAllByTestId("schedule-row");
+      expectDomAbsent(screen.queryByTestId("scheduler-paused"), "held writer");
+      await writeFile(
+        join(directory, REGISTRY_WRITER_LEASE_FILE),
+        JSON.stringify({
+          token: "replacement",
+          pid: 1,
+          acquiredAt: new Date().toISOString(),
+        }),
+      );
+      expect(lease.isHeld()).toBe(false);
+      expect((await screen.findByTestId("scheduler-paused")).textContent).toBe(
+        schedulerPausedMessage("writer-lease-lost"),
+      );
+      view.unmount();
+      render(<SchedulesSettings />);
+      expect((await screen.findByTestId("scheduler-paused")).textContent).toBe(
+        schedulerPausedMessage("writer-lease-lost"),
+      );
+    } finally {
+      await lease.release();
+      storage.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("a backend that predates the field shows no notice", async () => {
+    render(<SchedulesSettings />);
+    await screen.findAllByTestId("schedule-row");
+    expectDomAbsent(
+      screen.queryByTestId("scheduler-paused"),
+      "scheduler notice from an old backend",
+    );
   });
 
   test("run now, pause and resume go to the backend and reload the list", async () => {

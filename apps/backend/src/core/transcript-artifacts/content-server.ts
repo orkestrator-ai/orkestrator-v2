@@ -47,6 +47,7 @@ import type { AddressInfo } from "node:net";
 
 import { INTERACTIVE_HTML_POLICY } from "@orkestrator/protocol/rich-content-policy";
 
+import { hostsShareSite } from "../host-site.js";
 import type { ArtifactContentServer } from "./contracts.js";
 import { sha256Hex } from "./dependency-manifest.js";
 import { artifactShellResponse } from "./content-shell.js";
@@ -70,42 +71,6 @@ const SHELL_PATTERN = /^\/s\/([A-Za-z0-9_-]{43})$/;
 const LOAD_TIMEOUT_MS = 10_000;
 const AUTHORIZE_TIMEOUT_MS = 5_000;
 const LOOPBACK_HOST_NAMES = ["localhost", "127.0.0.1"] as const;
-
-function isIpLiteral(hostname: string): boolean {
-  return /^\d{1,3}(\.\d{1,3}){3}$/.test(hostname) || hostname.includes(":");
-}
-
-/**
- * Approximate registrable domain ("site") of a host name without a public
- * suffix list: IP literals and one/two-label names are their own site;
- * otherwise the last two labels, or three when the second-level label is a
- * common public-suffix pattern (`co.uk`, `com.au`, …). The approximation errs
- * towards "same site", which only ever refuses a configuration.
- */
-export function approximateSite(hostname: string): string {
-  const host = hostname
-    .toLowerCase()
-    .replace(/^\[|\]$/g, "")
-    .replace(/\.$/, "");
-  if (isIpLiteral(host)) return host;
-  const labels = host.split(".");
-  if (labels.length <= 2) return host;
-  const second = labels.at(-2)!;
-  const take =
-    labels.at(-1)!.length === 2 && ["co", "com", "net", "org", "gov", "ac", "edu"].includes(second)
-      ? 3
-      : 2;
-  return labels.slice(-take).join(".");
-}
-
-/** Whether two host names could share cookies (same site, or one a domain of the other). */
-export function hostsShareSite(left: string, right: string): boolean {
-  const a = left.toLowerCase().replace(/^\[|\]$/g, "");
-  const b = right.toLowerCase().replace(/^\[|\]$/g, "");
-  if (a === b) return true;
-  if (a.endsWith(`.${b}`) || b.endsWith(`.${a}`)) return true;
-  return approximateSite(a) === approximateSite(b);
-}
 
 /** Exact origins (scheme://host[:port]) of the application's own pages; others are dropped. */
 export function normalizeApplicationOrigins(values: readonly string[]): string[] {

@@ -16,7 +16,8 @@ node-face and live-usage follow-up (2026-10-27), and the rewind follow-ups
 with the Git guard (2026-10-29), per-stage instructions (2026-10-29),
 reviewer lenses (2026-10-29), the CLI's `build launch` (2026-10-29), the
 header's key information panel (2026-11-01), delivery policies (2026-11-02),
-per-worker mailboxes (2026-11-03), and the Notes step (2026-11-04).
+per-worker mailboxes (2026-11-03), the Notes step (2026-11-04), and stopping
+one reviewer (2026-11-05).
 
 The build pipeline tab shows the pipeline as a left-to-right flow graph across
 the top and an inspector for the selected step below it, like the Multi Review
@@ -163,16 +164,14 @@ a transcript.
   its agent and error (`ReviewerStartFailureNotice`). The Multi Review
   overview shows the same notice. The rest of the panel carries on, and each
   round tries the reviewer again ([to-do 1090](../todo/coordinator-and-multi-review/1090-cursor-reviewer-cannot-start-on-standalone-backend.md)).
-- **Read-only review.** Reviewers, consolidation and Verify must leave HEAD
-  and the Git-visible paths as they found them. Reviewers and consolidation
-  also run in provider read-only mode, as Multi Review's do. The backend
-  checks at submit time, so an agent can undo a change within its turn, and
-  again when it uses the result; a change fails the step, and the failed node
-  shows the error naming the moved HEAD or the paths
+- **Read-only review.** Reviewers and consolidation run in provider read-only
+  mode, as Multi Review's do. A worktree that moves under them marks the review
+  stale and stops nothing. Verify must leave HEAD and the Git-visible paths as it
+  found them: the backend checks at submit time, so it can undo a change within
+  its turn, and again when it uses the verdict, and a change fails the step
   ([review preparation](review-preparation.md#read-only-reviewers-and-the-git-guard)).
   A step whose starting Git state cannot be observed fails before any of its
-  sessions starts. The launcher's Review and Verify cards state exactly this
-  scope.
+  sessions starts.
 - **Stops.** The current session carries a pause, failure or cancellation. A
   stage that failed or paused before its session existed gets a node of its
   own; a fan-out that failed without consolidating carries it on
@@ -490,7 +489,9 @@ and it is tried again a minute later; the stage is never failed for it.
 
 Actions sit in each node's context menu and in the inspector: open the session
 (Open Rework session on a Rework node), open the review pass as a Multi Review tab,
-retry a failed reviewer (`retry_build_pipeline_reviewer`), retry the failed
+retry a failed reviewer (`retry_build_pipeline_reviewer`), stop one reviewer
+(`stop_build_pipeline_reviewer`), restart one reviewer
+(`restart_build_pipeline_reviewer`), retry the failed
 step (`retry_build_pipeline_stage`), restart from a step
 (`restart_build_pipeline_step`), prepare the review package again
 ("Prepare package again", see [Restarting a step](#restarting-a-step)),
@@ -508,6 +509,33 @@ Verify, and Verify to delivery. Review preparation and the PR steps cannot be
 skipped; skipping Verify still follows the ticket's delivery policy. The skipped
 node reads "Skipped".
 
+"Stop reviewer" ends one queued, starting or running reviewer of the running
+review and keeps the rest of the panel, where "Skip review" ends the review.
+The reviewer reads "stopped", its session and transcript stay, and its result
+slot closes, so a late submission is denied. As in Multi Review the abort is
+best effort, because the usual reason to stop a reviewer is that it is not
+responding. Consolidation runs from the others' reports; stopping the last
+reviewer with no report fails the stage. A queued reviewer has no session, so it
+leaves no node once the pass is retired.
+
+A stop holds for the pass, across a pause, a resume, and a retry of another
+reviewer or of consolidation (`stoppedReviewerIds` on the pipeline, cleared with
+each new pass). Only Restart reviewer undoes it, or a stage retry of a panel with
+no report left to consolidate.
+
+"Restart reviewer" (`restart_build_pipeline_reviewer`) runs one reviewer again in
+any state, as in Multi Review. In the running review its peers carry on and a
+started consolidation is discarded. Once the pipeline has moved past the pass, it
+rewinds to the panel: the steps after it are superseded and the others' reports
+stay in use. Only the current round's panel can do this, because a later round
+has changed the code, and "Restart from here" reruns the whole pass.
+
+A worktree that moves during a review marks the review stale and stops nothing
+([review preparation](review-preparation.md#read-only-reviewers-and-the-git-guard)):
+a notice above the graph says so, from `reviewFanout.snapshotStale` and then the
+session's `reviewWorktreeChanged`. A reviewer's node shows its focus, and its
+inspector the findings it has reported so far through `report_finding`.
+
 The review pass tab is a `multi-review` tab whose data names the pipeline and a
 `pipelinePass`; it renders the same view narrowed to that pass. Layout restore
 keeps it while the pipeline exists.
@@ -515,8 +543,9 @@ keeps it while the pipeline exists.
 ## Restarting a step
 
 "Restart from here" (`restart_build_pipeline_step`) on any live step — Build,
-Rework, Prepare or its validation, a reviewer or consolidation (the whole review
-pass reruns), Review, Address Findings, Verify, Ship or conflict resolution — rewinds
+Rework, Prepare or its validation, a reviewer (the whole review pass reruns),
+consolidation (it alone reruns while its round's reports survive, otherwise the
+whole pass), Review, Address Findings, Verify, Ship or conflict resolution — rewinds
 the pipeline to that step's own round and position and runs it again. The
 backend (`restartLocatedStage` in `build-pipeline-service-lifecycle.ts`, rules
 in `build-pipeline-rewind.ts`):

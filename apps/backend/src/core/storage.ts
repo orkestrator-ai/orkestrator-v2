@@ -275,6 +275,11 @@ export class StorageService {
     this.context.changes.announce("human-prompt", environmentId);
   }
 
+  /** Whether this backend fires schedules changed (its writer lease was lost). */
+  announceSchedulerStatus(): void {
+    this.context.changes.announce("scheduled-job", "scheduler");
+  }
+
   scheduledJobStore(): ScheduledJobStore {
     return this.repos.scheduledJobs.store();
   }
@@ -898,6 +903,13 @@ export class StorageService {
 
   getMultiReviewWorkflow(workflowId: string): Promise<PersistedMultiReviewWorkflow | null> {
     return this.repos.reviews.getMultiReviewWorkflow(workflowId);
+  }
+
+  /** Reviewers of reviews in their reviewers' stage, as agent mail workers. */
+  listMultiReviewWorkers(
+    environmentId?: string,
+  ): ReturnType<StorageRepositories["reviews"]["listMultiReviewWorkers"]> {
+    return this.repos.reviews.listMultiReviewWorkers(environmentId);
   }
 
   listMultiReviewWorkflows(environmentId: string): Promise<PersistedMultiReviewWorkflow[]> {

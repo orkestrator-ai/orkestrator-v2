@@ -3,7 +3,11 @@
 // The storage layer imports node-store-format.js directly: routing it through
 // here would close a runtime import cycle with storage.
 export { parseNodeActionApproval } from "./node-action-requests.js";
-export { accountSwitchGrantState, runGrantedAccountSwitch } from "./node-account-switch-grant.js";
+export {
+  accountSwitchGrantState,
+  runGrantedAccountSwitch,
+  runTimerAccountSwitch,
+} from "./node-account-switch-grant.js";
 export { coordinatorNodeContext } from "./node-context.js";
 export { NodeCoordination, type NodeCoordinatorNotices } from "./node-coordination.js";
 export type { OutboxItem } from "./node-mail.js";
@@ -16,6 +20,7 @@ export { listProjectCopyCandidates, listProjectCopyFiles } from "./node-project-
 export { NODE_RELAY_PREFIX, parseRelayPath, relayHttp, relayUpgrade } from "./node-relay.js";
 export { approveSetupCommandsOnNodes } from "./node-setup-approvals.js";
 export { isWorkspaceExcludedCommand } from "./node-routing.js";
+export { isGlobalConfigEcho, isGlobalConfigWriteCommand } from "./workspace-grant-scope.js";
 export { readSeedManifest } from "./node-seed.js";
 export { errorCode, NodeService, type NodeServiceOptions } from "./node-service.js";
 export { createNodeSshFactory } from "./node-ssh.js";

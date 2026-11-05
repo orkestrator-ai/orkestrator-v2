@@ -68,6 +68,10 @@ export const BATCH_MAX_BYTES = 64 * 1024 * 1024;
 const MAX_CONCURRENT_SYNCS = 16;
 /** Renames per hold of the store lock, so a sweep or a renewal can interleave. */
 const RENAMES_PER_LOCK_HOLD = 256;
+/** Removals per hold of the store lock during a sweep, for the same reason. */
+const REMOVALS_PER_LOCK_HOLD = 64;
+/** Bound drift from external changes without rewalking on every hourly pass. */
+const BYTE_RECONCILIATION_MS = 24 * 60 * 60 * 1000;
 
 const deflateOffLoop = promisify(deflate);
 const inflateOffLoop = promisify(inflate);
@@ -144,6 +148,7 @@ export class ObjectStore {
   private readonly orphanGraceMs: () => number;
   private mutation: Promise<unknown> = Promise.resolve();
   private usedBytes: number | null = null;
+  private bytesReconciledAt = 0;
   private removedCount = 0;
   /** Bytes reserved by staged temporaries, charged against the hard budget. */
   private stagedBytes = 0;
@@ -296,8 +301,8 @@ export class ObjectStore {
     // against a sweep called after this put.
     const known = await this.exclusive(async () => {
       await this.init();
-      this.usedBytes ??= await this.storedBytes();
-      if (this.usedBytes + this.stagedBytes >= this.hardBudgetBytes())
+      const usedBytes = await this.reconcileBytesUnderLock();
+      if (usedBytes + this.stagedBytes >= this.hardBudgetBytes())
         throw new Error("capture-storage-quota");
       if (batch.objects.has(id)) return true;
       if (!(await this.has(id))) return false;
@@ -315,8 +320,8 @@ export class ObjectStore {
         : await this.zlibSlots.run(() => deflateOffLoop(raw));
 
     await this.exclusive(async () => {
-      this.usedBytes ??= await this.storedBytes();
-      if (this.usedBytes + this.stagedBytes + compressed.length > this.hardBudgetBytes())
+      const usedBytes = await this.reconcileBytesUnderLock();
+      if (usedBytes + this.stagedBytes + compressed.length > this.hardBudgetBytes())
         throw new Error("capture-storage-quota");
       this.stagedBytes += compressed.length;
     });
@@ -459,6 +464,12 @@ export class ObjectStore {
    * Remove objects not in `reachable` whose files are older than `graceMs`.
    * The grace fence keeps a concurrent publication (objects written, ledger
    * commit pending) from losing its objects.
+   *
+   * The walk runs without the store lock, so captures interleave with it. It
+   * only collects candidates; each one is read again and removed under the
+   * lock, a bounded number per hold. The mtime read under the lock is the one
+   * that decides, so a renewal that lands after the walk saw an old fence keeps
+   * the object. Candidates are held one fan-out directory at a time.
    */
   async sweep(
     reachable: ReadonlySet<string>,
@@ -468,43 +479,103 @@ export class ObjectStore {
     removed: number;
     bytes: number;
   }> {
-    return this.exclusive(async () => {
-      await this.init();
-      let removed = 0;
-      let bytes = 0;
-      let fanout: string[];
-      try {
-        fanout = await readdir(this.objects);
-      } catch {
-        return { removed, bytes };
+    await this.init();
+    const totals = { removed: 0, bytes: 0 };
+    let fanout: string[];
+    try {
+      fanout = await readdir(this.objects);
+    } catch {
+      return totals;
+    }
+    const expired = (info: { mtimeMs: number } | null) =>
+      info !== null && nowMs - info.mtimeMs > graceMs;
+    for (const prefix of fanout) {
+      if (!/^[0-9a-f]{2}$/.test(prefix)) continue;
+      const directory = join(this.objects, prefix);
+      const candidates: string[] = [];
+      for (const name of await readdir(directory).catch(() => [] as string[])) {
+        const id = `${prefix}${name}`;
+        if (!isObjectId(id) || reachable.has(id)) continue;
+        if (expired(await lstat(join(directory, name)).catch(() => null)))
+          candidates.push(join(directory, name));
       }
-      for (const prefix of fanout) {
-        if (!/^[0-9a-f]{2}$/.test(prefix)) continue;
-        const directory = join(this.objects, prefix);
-        for (const name of await readdir(directory).catch(() => [] as string[])) {
-          const id = `${prefix}${name}`;
-          if (!isObjectId(id) || reachable.has(id)) continue;
-          const info = await lstat(join(directory, name)).catch(() => null);
-          if (!info || nowMs - info.mtimeMs <= graceMs) continue;
-          await rm(join(directory, name), { force: true });
-          this.removedCount++;
-          removed++;
-          bytes += info.size;
-        }
-      }
-      // Abandoned temporaries from crashed writers.
-      for (const name of await readdir(join(this.root, "tmp")).catch(() => [] as string[])) {
-        if (this.stagedTemps.has(name)) continue;
-        const file = join(this.root, "tmp", name);
+      await this.removeUnderLock(candidates, async (file) => {
         const info = await lstat(file).catch(() => null);
-        if (info && nowMs - info.mtimeMs >= graceMs) await rm(file, { force: true });
-      }
+        if (info === null) {
+          // Only a sweep removes objects, and it holds the lock: something
+          // outside this store deleted it, so the running figure is wrong.
+          this.usedBytes = null;
+          return;
+        }
+        if (!expired(info)) return;
+        await rm(file, { force: true });
+        this.removedCount++;
+        totals.removed++;
+        totals.bytes += info.size;
+        if (this.usedBytes !== null) this.usedBytes -= info.size;
+      });
+    }
+    // Abandoned temporaries from crashed writers. A live batch's names are in
+    // `stagedTemps` from before their file exists until after it is gone.
+    const tmp = join(this.root, "tmp");
+    const abandoned: string[] = [];
+    for (const name of await readdir(tmp).catch(() => [] as string[])) {
+      if (this.stagedTemps.has(name)) continue;
+      const info = await lstat(join(tmp, name)).catch(() => null);
+      if (info && nowMs - info.mtimeMs >= graceMs) abandoned.push(name);
+    }
+    await this.removeUnderLock(abandoned, async (name) => {
+      if (this.stagedTemps.has(name)) return;
+      const info = await lstat(join(tmp, name)).catch(() => null);
+      if (info && nowMs - info.mtimeMs >= graceMs) await rm(join(tmp, name), { force: true });
+    });
+    return totals;
+  }
+
+  private async removeUnderLock<T>(
+    items: readonly T[],
+    remove: (item: T) => Promise<void>,
+  ): Promise<void> {
+    for (let index = 0; index < items.length; index += REMOVALS_PER_LOCK_HOLD) {
+      const chunk = items.slice(index, index + REMOVALS_PER_LOCK_HOLD);
+      await this.exclusive(async () => {
+        for (const item of chunk) await remove(item);
+      });
+    }
+  }
+
+  /** Invalidate accounting when a reader detects an externally missing object. */
+  async invalidateBytes(): Promise<void> {
+    await this.exclusive(async () => {
       this.usedBytes = null;
-      return { removed, bytes };
     });
   }
 
-  /** Total stored bytes (compressed), for quota accounting. */
+  /**
+   * Compressed bytes maintained by puts and sweeps. Recount under the lock on
+   * invalidation and at least daily when accessed, so external changes cannot
+   * leave quota decisions stale indefinitely. Ordinary hourly passes do no walk.
+   */
+  async currentBytes(): Promise<number> {
+    if (this.usedBytes !== null && Date.now() - this.bytesReconciledAt < BYTE_RECONCILIATION_MS)
+      return this.usedBytes;
+    return this.exclusive(async () => {
+      await this.init();
+      return this.reconcileBytesUnderLock();
+    });
+  }
+
+  /** Caller holds the mutation lock, including across the walk and publication. */
+  private async reconcileBytesUnderLock(): Promise<number> {
+    const now = Date.now();
+    if (this.usedBytes === null || now - this.bytesReconciledAt >= BYTE_RECONCILIATION_MS) {
+      this.usedBytes = await this.storedBytes();
+      this.bytesReconciledAt = now;
+    }
+    return this.usedBytes;
+  }
+
+  /** Total stored bytes (compressed), walking every object. */
   async storedBytes(): Promise<number> {
     let total = 0;
     for (const prefix of await readdir(this.objects).catch(() => [] as string[])) {

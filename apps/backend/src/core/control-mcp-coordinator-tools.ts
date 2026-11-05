@@ -1,11 +1,15 @@
+import { hostTimeZone, isValidTimeZone } from "@orkestrator/protocol/schedule-time";
 import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
+import { coordinatorReplayFields } from "./control-mcp-results.js";
 import {
-  AUTO_ADDRESS_FINDINGS_FIELD_DESCRIPTION,
-  AUTO_PR_FIELD_DESCRIPTION,
-  MULTI_REVIEW_AUTOMATION_DESCRIPTION,
+  pollKey,
+  workflowFingerprint,
+  workflowListFingerprint,
+  type CoordinatorPollGuard,
+} from "./control-mcp-poll-guard.js";
+import {
   registerControlReviewActions,
-  reviewSelection,
   workflowStatusWakeResult,
 } from "./control-mcp-review-actions.js";
 import { registerAccountTools } from "./control-mcp-account-tools.js";
@@ -20,7 +24,6 @@ import { registerNodeTools, type NodeTarget } from "./control-mcp-nodes.js";
 import {
   agentSelectionSchema,
   asArray,
-  reviewerSelectionSchema,
   assertCoordinatorLaunchBaseOnBranch,
   buildPipelineSelection,
   buildReviewerSchema,
@@ -88,11 +91,20 @@ export interface CoordinatorToolContext {
     environmentId: string,
   ): Promise<{ inv: ControlMcpInvoker; target: NodeTarget | null }>;
   onNodeResult(target: NodeTarget | null): JsonRecord;
+  /** This conversation's poll guard; absent outside a coordinator request. */
+  pollGuard?: CoordinatorPollGuard;
 }
 
 export function registerCoordinatorWorkflowTools(
   server: McpServer,
-  { invoke, coordinatorScope, onNode, environmentInvoker, onNodeResult }: CoordinatorToolContext,
+  {
+    invoke,
+    coordinatorScope,
+    onNode,
+    environmentInvoker,
+    onNodeResult,
+    pollGuard,
+  }: CoordinatorToolContext,
 ): void {
   registerControlReviewActions(server, invoke, coordinatorScope);
   registerCoordinatorSurfaceTools(server, invoke, coordinatorScope);
@@ -257,7 +269,11 @@ export function registerCoordinatorWorkflowTools(
           };
         }),
       );
-      return toolResult({ workflows, total: workflows.length });
+      const guidance = pollGuard?.(
+        pollKey("list_workflows", openOnly === true),
+        workflowListFingerprint(workflows),
+      );
+      return toolResult({ workflows, total: workflows.length, ...guidance });
     },
   );
   server.registerTool(
@@ -453,6 +469,7 @@ export function registerCoordinatorWorkflowTools(
       return toolResult({
         workflow: workflowSummary(record),
         ...onNodeResult(target),
+        ...coordinatorReplayFields(workflow),
         ...(await workflowStatusWakeResult(invoke)),
 
         selection: buildPipelineSelection(record, input),
@@ -474,10 +491,13 @@ export function registerCoordinatorWorkflowTools(
     },
     async ({ pipelineId, nodeId }) => {
       const target = await onNode(nodeId);
-      return toolResult({
-        workflow: workflowSummary(await scopedWorkflow("build", pipelineId, target)),
-        ...onNodeResult(target),
-      });
+      const workflow = workflowSummary(await scopedWorkflow("build", pipelineId, target));
+      // Re-reading an unchanged workflow is polling it; its status wake is the answer.
+      const guidance = pollGuard?.(
+        pollKey("get_build_pipeline", pipelineId, nodeId),
+        workflowFingerprint(workflow),
+      );
+      return toolResult({ workflow, ...onNodeResult(target), ...guidance });
     },
   );
 
@@ -597,77 +617,6 @@ export function registerCoordinatorWorkflowTools(
   );
 
   server.registerTool(
-    "start_multi_review",
-    {
-      title: "Start a multi-review",
-      description:
-        "Low-level build-gated recovery primitive: starts backend work only and does NOT create/select a root tab or reproduce the UI button. Prefer launch_multi_review for a complete environment-level Multi Review action. Omit reviewers, reviewModel and fixModel to use the user's saved Multi Review defaults; set them only when the user asks for specific models. " +
-        MULTI_REVIEW_AUTOMATION_DESCRIPTION +
-        " The result's selection reports the rows and auto-actions that will run and which were requested.",
-      inputSchema: z.object({
-        requestId: z.string().trim().min(1).max(256),
-        buildPipelineId: z.string().trim().min(1).max(200),
-        environmentId: z.string().trim().min(1).max(200),
-        targetBranch: z.string().trim().min(1).max(500),
-        reviewInstruction: z.string().max(100_000).optional(),
-        reviewers: z
-          .array(reviewerSelectionSchema)
-          .min(1)
-          .max(32)
-          .optional()
-          .describe(
-            "Optional. Omit to use the user's saved reviewer rows and their saved focus. Set only when the user asks for specific reviewers or a focus (lens) per reviewer.",
-          ),
-        reviewModel: agentSelectionSchema
-          .optional()
-          .describe(
-            "Optional. Omit to use the user's saved preparation/consolidation model. Set only when the user asks for one.",
-          ),
-        fixModel: agentSelectionSchema
-          .optional()
-          .describe(
-            "Optional. Omit to use the user's saved Address Findings model. Set only when the user asks for one.",
-          ),
-        autoFix: z.boolean().optional().describe(AUTO_ADDRESS_FINDINGS_FIELD_DESCRIPTION),
-        autoPr: z.boolean().optional().describe(AUTO_PR_FIELD_DESCRIPTION),
-        nodeId: nodeIdField,
-      }),
-      annotations: {
-        readOnlyHint: false,
-        destructiveHint: true,
-        idempotentHint: true,
-        openWorldHint: true,
-      },
-    },
-    async ({ requestId, buildPipelineId, nodeId, ...input }) => {
-      const target = await onNode(nodeId);
-      if (!target) await invoke("get_environment", { environmentId: input.environmentId });
-      const workflow = target
-        ? await invoke<unknown>("start_coordinator_node_multi_review", {
-            scope: coordinatorScope,
-            requestId,
-            nodeId: target.nodeId,
-            buildPipelineId,
-            input: { ...input, projectId: coordinatorScope.projectId },
-          })
-        : await invoke<unknown>("start_coordinator_multi_review", {
-            scope: coordinatorScope,
-            requestId,
-            buildPipelineId,
-            input: { ...input, projectId: coordinatorScope.projectId },
-          });
-      const record = normalizedWorkflow(workflow);
-      if (!record) throw new Error("Multi-review returned no result");
-      return toolResult({
-        workflow: workflowSummary(record),
-        ...onNodeResult(target),
-        selection: reviewSelection(record, input),
-        ...(await workflowStatusWakeResult(invoke)),
-      });
-    },
-  );
-
-  server.registerTool(
     "get_multi_review",
     {
       title: "Get a multi-review",
@@ -680,10 +629,13 @@ export function registerCoordinatorWorkflowTools(
     },
     async ({ workflowId, nodeId }) => {
       const target = await onNode(nodeId);
-      return toolResult({
-        workflow: workflowSummary(await scopedWorkflow("review", workflowId, target)),
-        ...onNodeResult(target),
-      });
+      const workflow = workflowSummary(await scopedWorkflow("review", workflowId, target));
+      // Re-reading an unchanged workflow is polling it; its status wake is the answer.
+      const guidance = pollGuard?.(
+        pollKey("get_multi_review", workflowId, nodeId),
+        workflowFingerprint(workflow),
+      );
+      return toolResult({ workflow, ...onNodeResult(target), ...guidance });
     },
   );
 
@@ -731,7 +683,11 @@ function coordinatorScheduleBackend(
   invoke: ControlMcpInvoker,
   scope: CoordinatorControlScope,
 ): Required<ScheduleToolBackend> {
-  const ownConversation = async (): Promise<{ owner: ScheduleOwner; record: JsonRecord }> => {
+  const ownConversation = async (): Promise<{
+    owner: ScheduleOwner;
+    record: JsonRecord;
+    workspace: JsonRecord;
+  }> => {
     const snapshot = await invoke<unknown>("get_project_coordinator", {
       projectId: scope.projectId,
     });
@@ -759,10 +715,17 @@ function coordinatorScheduleBackend(
         role,
       },
       record: conversation,
+      workspace,
     };
   };
   const owner = async (): Promise<ScheduleOwner> => (await ownConversation()).owner;
   return {
+    async defaultTimeZone() {
+      const { workspace } = await ownConversation();
+      return isValidTimeZone(workspace.userTimeZone)
+        ? { zone: workspace.userTimeZone, source: "user" as const }
+        : { zone: hostTimeZone(), source: "host" as const };
+    },
     async selfTimer({ body, subject, authorize }) {
       const { owner: self, record } = await ownConversation();
       if (self.kind !== "coordinator") throw new Error("Only coordinators set self-timers");

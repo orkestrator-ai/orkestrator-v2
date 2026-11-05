@@ -1,5 +1,5 @@
-import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { afterAll, afterEach, describe, expect, mock, test, spyOn, setSystemTime } from "bun:test";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 import type { ScheduledJob, ScheduledJobSummary } from "@orkestrator/protocol/scheduled-jobs";
 import * as realBackend from "@/lib/backend";
@@ -179,6 +179,69 @@ describe("SchedulesSettings", () => {
         "schedule-account-switch-permission",
       ),
     ).toBeNull();
+  });
+
+  test("production badge expires while mounted and reschedules on a same-key reload", async () => {
+    const { AccountSwitchPermissionBadge } = await import("./SchedulesSettings");
+    const fired = Date.parse("2099-10-25T12:00:00Z");
+    let callback: (() => void) | undefined;
+    setSystemTime(fired);
+    const timer = spyOn(globalThis, "setTimeout").mockImplementation(((fn: () => void) => {
+      callback = fn;
+      return 123;
+    }) as typeof setTimeout);
+    const clear = spyOn(globalThis, "clearTimeout").mockImplementation(() => {});
+    try {
+      const action = {
+        kind: "action" as const,
+        action: "send_message",
+        input: {
+          grant: {
+            kind: "switch-agent-account",
+            platforms: ["claude"],
+            userInstruction: "switch",
+            grantedIn: "user-turn",
+            grantedAt: new Date(fired).toISOString(),
+          },
+        },
+      };
+      const lastFire = {
+        fireId: "f",
+        kind: "scheduled" as const,
+        state: "succeeded" as const,
+        scheduledFor: new Date(fired).toISOString(),
+        finishedAt: new Date(fired).toISOString(),
+        attempts: 1,
+      };
+      const view = (finishedAt: string) => (
+        <AccountSwitchPermissionBadge
+          key="same-job"
+          job={{ action, lastFire: { ...lastFire, finishedAt }, timeZone: "UTC" }}
+        />
+      );
+      const { rerender } = render(view(lastFire.finishedAt));
+      expect(screen.getByTestId("schedule-account-switch-permission").textContent).toContain(
+        "until",
+      );
+      expect(timer.mock.calls.at(-1)?.[1]).toBe(7_200_000);
+      setSystemTime(fired + 3_600_000);
+      rerender(view(new Date(fired + 3_600_000).toISOString()));
+      expect(clear).toHaveBeenCalled();
+      setSystemTime(fired + 10_800_001);
+      act(() => callback!());
+      expect(screen.getByTestId("schedule-account-switch-permission").textContent).toContain(
+        "lapsed",
+      );
+      rerender(view(new Date(fired + 3_600_000).toISOString()));
+      expect(screen.getByTestId("schedule-account-switch-permission").textContent).toContain(
+        "lapsed",
+      );
+      cleanup();
+    } finally {
+      timer.mockRestore();
+      clear.mockRestore();
+      setSystemTime();
+    }
   });
 
   test("the permission badge counts its window from the fire", async () => {

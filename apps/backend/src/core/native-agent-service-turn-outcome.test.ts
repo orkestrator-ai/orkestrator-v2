@@ -1,3 +1,4 @@
+import { readProjectUsageLimits } from "./agent-usage-limits.js";
 import { openCodeAgentFor } from "./opencode-provider-helpers.js";
 import { bridgePromptBody } from "./http-bridge-prompt-body.js";
 import { PromptRejectedError } from "./agent-provider-contract.js";
@@ -331,7 +332,7 @@ describe("native turn outcomes", () => {
       // A bridge that predates the code: classified from the error text.
       [
         new ProviderSessionFailedError("codex", "You've hit your usage limit."),
-        { error: "You've hit your usage limit.", failureKind: "usage-limit" },
+        { error: "You've hit your usage limit." },
       ],
       // Neither: no kind.
       [new ProviderSessionFailedError("codex", "model overloaded"), { error: "model overloaded" }],
@@ -358,6 +359,15 @@ describe("native turn outcomes", () => {
         const [recorded] = (await storage.getNativeAgentSession(key))!.turnOutcomes!;
         expect(recorded).toMatchObject({ requestId: "r-1", outcome: "failed", ...expected });
         if (!("failureKind" in expected)) expect(recorded).not.toHaveProperty("failureKind");
+        const limits = await readProjectUsageLimits(
+          { storage, planUsage: () => undefined },
+          "project-1",
+        );
+        expect(limits.limitedTabs.map((tab) => tab.signal)).toEqual(
+          failure.message.includes("overloaded")
+            ? []
+            : ["failureKind" in expected ? "provider" : "text"],
+        );
       });
     }
   });

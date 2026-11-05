@@ -66,3 +66,24 @@ describe("usage-limit failure code", () => {
     expect(session.errorCode).toBeUndefined();
   });
 });
+
+test.each([
+  { isUsingOverage: true },
+  { overageInUse: true },
+  { overageStatus: "allowed" },
+  { overageStatus: "allowed_warning" },
+  { laterAllowed: true },
+])("overage or a later allowed event does not label an unrelated failure: %j", async (info) => {
+  const session = createSession("overage");
+  track(session.id);
+  const prompt = sendPrompt(session.id, "hello");
+  const call = await nextQueryCall();
+  call.push({ type: "rate_limit_event", rate_limit_info: { status: "rejected", ...info } });
+  if ("laterAllowed" in info) {
+    call.push({ type: "rate_limit_event", rate_limit_info: { status: "allowed" } });
+  }
+  call.push({ type: "result", subtype: "success", is_error: true, errors: ["Unrelated failure"] });
+  call.finish();
+  await expect(prompt).rejects.toThrow();
+  expect(session.errorCode).toBeUndefined();
+});

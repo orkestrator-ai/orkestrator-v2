@@ -102,19 +102,27 @@ export function AccountSwitchPermissionBadge({
   job: Pick<ScheduledJobSummary, "action" | "lastFire" | "timeZone">;
   now?: number;
 }) {
-  // Read once when the row mounts; the list reloads when schedules change.
-  const [mountedAt] = useState(() => Date.now());
-  const now = nowOverride ?? mountedAt;
+  const [clock, setClock] = useState(() => Date.now());
+  const now = nowOverride ?? clock;
   const grant = scheduleAccountSwitchGrant(job.action);
-  if (!grant) return null;
-  const providers = grant.platforms
-    .map((platform) => (platform === "codex" ? "Codex" : "Claude"))
-    .join(" and ");
+
   const fired =
     job.lastFire?.state === "succeeded" && job.lastFire.finishedAt
       ? Date.parse(job.lastFire.finishedAt)
       : Number.NaN;
   const until = fired + SCHEDULED_JOB_LIMITS.selfTimerGrantWindowMs;
+  useEffect(() => {
+    if (nowOverride !== undefined || !Number.isFinite(until)) return;
+    const update = () => setClock(Date.now());
+    const remaining = until - Date.now();
+    const timer = setTimeout(update, Math.max(0, remaining));
+    return () => clearTimeout(timer);
+  }, [until, nowOverride]);
+  if (!grant) return null;
+  const providers = grant.platforms
+    .map((platform) => (platform === "codex" ? "Codex" : "Claude"))
+    .join(" and ");
+
   const status = !Number.isFinite(fired)
     ? "when it fires"
     : until > now

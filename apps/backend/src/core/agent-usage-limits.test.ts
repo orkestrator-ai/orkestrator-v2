@@ -113,16 +113,16 @@ test("a bridge's structured usage-limit kind lists the tab whatever the error sa
   ]);
 });
 
-test("the recorded kind is the bridge's when it sent one, else the text's", () => {
+test("the recorded kind is the bridge's when it sent one, else leaves text classification to readers", () => {
   const before = compatibilityPathUsage.snapshot().paths["usage-limit.text-classified"]?.count;
   expect(turnOutcomeFailureKind("codex", "Your plan is paused.", "usage-limit")).toBe(
     "usage-limit",
   );
   expect(turnOutcomeFailureKind("codex", "Overloaded", undefined)).toBeUndefined();
   // An older Claude or Codex bridge: classified by text, and counted.
-  expect(turnOutcomeFailureKind("claude", "You've hit your limit", undefined)).toBe("usage-limit");
+  expect(turnOutcomeFailureKind("claude", "You've hit your limit", undefined)).toBeUndefined();
   // Grok has no structured signal; its text path is not a compatibility path.
-  expect(turnOutcomeFailureKind("grok", "USAGE_EXHAUSTED", undefined)).toBe("usage-limit");
+  expect(turnOutcomeFailureKind("grok", "USAGE_EXHAUSTED", undefined)).toBeUndefined();
   const after = compatibilityPathUsage.snapshot().paths["usage-limit.text-classified"]?.count;
   expect((after ?? 0) - (before ?? 0)).toBe(1);
 });

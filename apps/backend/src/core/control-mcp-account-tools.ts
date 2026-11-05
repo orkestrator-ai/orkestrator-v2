@@ -267,11 +267,6 @@ async function refuseExhausted(
 }
 
 /**
- * The answer for a switch that ran without asking, under the standing
- * permission or a self-timer's. Either way it is recorded where the user sees
- * it, and there is nothing for the user to approve.
- */
-/**
  * The tabs a switch should resume: this project's tabs on that machine whose
  * newest recorded turn stopped on that provider's usage limit, from the same
  * reader as `get_usage_limits`. `undefined` when it cannot be read.
@@ -300,6 +295,11 @@ export function resumeAfterSwitch(tabs: ResumeTabs): JsonRecord {
   };
 }
 
+/**
+ * The answer for a switch that ran without asking, under the standing
+ * permission or a self-timer's. Either way it is recorded where the user sees
+ * it, and there is nothing for the user to approve.
+ */
 async function unattendedResult(
   request: GrantedRequest,
   view: {

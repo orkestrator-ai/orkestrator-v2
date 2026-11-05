@@ -69,6 +69,7 @@ let usage: Record<string, Record<string, PlanUsageSnapshot>>;
 let environments: Environment[];
 let sessions: PersistedNativeAgentSession[];
 let invoke: ControlMcpInvoker;
+let remoteLimitsUnreadable = false;
 let autoSwitch: Record<string, AgentAccountAutoSwitchState | undefined>;
 const tickCalls: Array<{ machine: string; command: string; args: Record<string, unknown> }> = [];
 
@@ -215,6 +216,7 @@ beforeEach(async () => {
     ...(await storage.loadConfig()).global,
     experimentalScheduling: true,
   });
+  remoteLimitsUnreadable = false;
   currentWorkspace = initialWorkspace();
   // Real time: a timer's permission is checked against the wall clock.
   clock = { now: Date.now() };
@@ -287,6 +289,8 @@ beforeEach(async () => {
     const own = commands.get(command);
     if (own) return (await own(args, context)) as T;
     switch (command) {
+      case "get_projects":
+        return [{ id: PROJECT, gitUrl: "https://github.com/acme/site.git" }] as T;
       case "get_project_coordinator":
         return { workspace: currentWorkspace } as T;
       case "get_config":
@@ -308,10 +312,32 @@ beforeEach(async () => {
               nodeId,
               available: true,
               view: { displayName: "Leaf" },
-              projects: [],
+              projects: [
+                {
+                  ref: { backendId: LEAF, projectId: "p-leaf" },
+                  repositoryHint: "github.com/acme/site",
+                },
+              ],
             })),
         } as T;
       case "invoke_on_node":
+        if (args.command === "get_project_usage_limits") {
+          if (remoteLimitsUnreadable) throw new Error("Unavailable");
+          return {
+            outcome: "ok",
+            result: {
+              limitedTabs: [
+                {
+                  agent: "claude",
+                  environmentId: "remote-env",
+                  tabId: "remote-tab",
+                  signal: "text",
+                },
+                { agent: "codex", environmentId: "remote-env", tabId: "other-tab" },
+              ],
+            },
+          } as T;
+        }
         return {
           outcome: "ok",
           result: accountCommand(
@@ -1086,6 +1112,63 @@ test("scenario: check in 2 hours, find usage limits, switch to an account with a
   expect(text(elsewhere)).toContain("may not switch accounts on Leaf");
 });
 
+test.each(["pending", "standing-grant"] as const)(
+  "timer retry preserves an existing %s request",
+  async (existing) => {
+    const pending = await call("main", "switch_provider_account", {
+      requestId: "shared",
+      platform: "claude",
+      accountId: "acct-work",
+      reason: "switch",
+    });
+    expect(pending.isError).not.toBe(true);
+    const [record] = await actions.list();
+    if (existing === "standing-grant") {
+      await actions.runUnattended(
+        {
+          requestId: "switch-account:coordinator-1:standing",
+          kind: "switch-agent-account",
+          targets: record!.targets,
+          requestedBy: record!.requestedBy,
+          reason: "switch",
+          authorizedBy: "standing-grant",
+        },
+        { count: 3, windowMs: 3_600_000, scope: () => true },
+      );
+    }
+    const timer = await call("main", "create_schedule", {
+      requestId: "retry-timer",
+      at: "+1h",
+      action: {
+        type: "remind_me",
+        body: "Switch",
+        authorizeAccountSwitch: {
+          platforms: ["claude"],
+          userInstruction: "switch",
+        },
+      },
+    });
+    clock.now += 3_600_000;
+    await fire();
+    // Restore a different active account so the call reaches request replay.
+    accounts[SELF] = accounts[SELF]!.map((row) => ({ ...row, isActive: row.id === "default" }));
+    const result = await call("main", "switch_provider_account", {
+      requestId: existing === "pending" ? "shared" : "standing",
+      platform: "claude",
+      accountId: "acct-work",
+      reason: "switch",
+      scheduleId: timer.structuredContent!.scheduleId,
+    });
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      approvalRequestId:
+        existing === "pending" ? record!.requestId : "switch-account:coordinator-1:standing",
+      state: existing === "pending" ? "pending" : "executed",
+    });
+    expect(await actions.list()).toHaveLength(existing === "pending" ? 1 : 2);
+  },
+);
+
 test("a timer's permission lapses two hours after it fired", async () => {
   clock.now = Date.now() - 5 * 3_600_000;
   const timer = await call("main", "create_schedule", {
@@ -1116,36 +1199,48 @@ test("a timer's permission lapses two hours after it fired", async () => {
   expect(switches).toHaveLength(0);
 });
 
-test("a timer's permission can name another machine, switched through the node link", async () => {
-  const timer = await call("main", "create_schedule", {
-    requestId: "leaf-timer",
-    at: "+1h",
-    action: {
-      type: "remind_me",
-      body: "Switch the leaf if limited.",
-      authorizeAccountSwitch: {
-        platforms: ["claude"],
-        nodeIds: [LEAF],
-        userInstruction: "switch the leaf",
+test.each([false, true])(
+  "remote timer switch returns tabs or unreadable fallback (%s)",
+  async (unreadable) => {
+    remoteLimitsUnreadable = unreadable;
+    const timer = await call("main", "create_schedule", {
+      requestId: "leaf-timer",
+      at: "+1h",
+      action: {
+        type: "remind_me",
+        body: "Switch the leaf if limited.",
+        authorizeAccountSwitch: {
+          platforms: ["claude"],
+          nodeIds: [LEAF],
+          userInstruction: "switch the leaf",
+        },
       },
-    },
-  });
-  clock.now += 3_600_000;
-  await fire();
-  const switched = await call("main", "switch_provider_account", {
-    requestId: "leaf-switch",
-    platform: "claude",
-    accountId: "acct-leaf",
-    nodeId: LEAF,
-    reason: "switch the leaf",
-    scheduleId: timer.structuredContent!.scheduleId,
-  });
-  expect(switched.structuredContent).toMatchObject({
-    state: "switched",
-    machine: { nodeId: LEAF, self: false },
-  });
-  expect(switches).toEqual([{ machine: LEAF, platform: "claude", accountId: "acct-leaf" }]);
-});
+    });
+    clock.now += 3_600_000;
+    await fire();
+    const switched = await call("main", "switch_provider_account", {
+      requestId: "leaf-switch",
+      platform: "claude",
+      accountId: "acct-leaf",
+      nodeId: LEAF,
+      reason: "switch the leaf",
+      scheduleId: timer.structuredContent!.scheduleId,
+    });
+    expect(switched.structuredContent).toMatchObject({
+      state: "switched",
+      machine: { nodeId: LEAF, self: false },
+    });
+    expect(switches).toEqual([{ machine: LEAF, platform: "claude", accountId: "acct-leaf" }]);
+    if (unreadable) {
+      expect(switched.structuredContent).not.toHaveProperty("limitedTabs");
+      expect(switched.structuredContent!.resumeStep).toContain("Call get_usage_limits");
+    } else {
+      expect(switched.structuredContent!.limitedTabs).toEqual([
+        expect.objectContaining({ environmentId: "remote-env", tabId: "remote-tab", nodeId: LEAF }),
+      ]);
+    }
+  },
+);
 
 test.each([{ cron: "0 * * * *" }, { everyMinutes: 60 }])(
   "recurring self-timers cannot carry account-switch permission: %j",

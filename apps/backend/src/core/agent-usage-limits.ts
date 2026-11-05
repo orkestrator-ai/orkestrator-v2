@@ -1,7 +1,6 @@
 import {
   classifyUsageLimitError,
   exhaustedUsageWindows,
-  USAGE_LIMIT_ERROR_CODE,
   usageLimitFailure,
   usageWindowView,
   type TurnFailureKind,
@@ -87,7 +86,7 @@ function tabIdFromLogicalKey(environmentId: string, logicalSessionKey: string): 
 
 /**
  * The `failureKind` to record for a failed turn: the bridge's structured kind
- * when it reported one, otherwise the error text's classification. A Claude or
+ * when it reported one. Text-only failures keep their provenance at read time. A Claude or
  * Codex limit known from text alone is counted, since those bridges send the
  * code (`usage-limit.text-classified`, docs/architecture/version-compatibility.md).
  */
@@ -101,7 +100,7 @@ export function turnOutcomeFailureKind(
   if (agent === "claude" || agent === "codex") {
     compatibilityPathUsage.record("usage-limit.text-classified");
   }
-  return USAGE_LIMIT_ERROR_CODE;
+  return undefined;
 }
 
 /** `UsageLimitSources.planUsage` over a backend's cache. */

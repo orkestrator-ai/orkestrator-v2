@@ -133,6 +133,8 @@ for (const transport of ["http-sse", "websocket"] as const) {
     const stopTerminal = api.listen("terminal-output-one", output);
     const open = () => new Response(new ReadableStream({ start() {} }));
     try {
+      // The shared terminal stream opens on the next microtask.
+      await flush();
       mains[0]!.resolve(open());
       terminals[0]!.resolve(open());
       await flush();
@@ -140,6 +142,10 @@ for (const transport of ["http-sse", "websocket"] as const) {
       if (transport === "websocket") {
         // An open fallback upgrades to a ready channel before the silent outage.
         sockets[0]!.ready();
+        await flush();
+        // Narrowing the shared stream waits a moment, so channels that become
+        // ready together rebuild it once.
+        timers.fire(50);
         await flush();
         expect(terminals[0]!.signal.aborted).toBe(true);
       }
@@ -158,6 +164,7 @@ for (const transport of ["http-sse", "websocket"] as const) {
         timers.fire(100);
       }
       if (mains.length === 1) timers.fire(100);
+      await flush();
       expect(terminals).toHaveLength(2);
       expect(terminals[1]!.signal.aborted).toBe(false);
       mains[1]!.resolve(open());
@@ -213,6 +220,7 @@ test("unanswered direct terminal attempts keep retrying while the main stream is
   const stopTerminal = api.listen("terminal-output-one", () => undefined);
   const open = () => new Response(new ReadableStream({ start() {} }));
   try {
+    await flush();
     mains[0]!.resolve(open());
     terminals[0]!.resolve(open());
     await flush();

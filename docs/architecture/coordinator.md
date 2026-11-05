@@ -619,7 +619,11 @@ not yet reached a provider, so a failed start does not strand the conversation.
 
 There is no silent fallback and no silent provider substitution. Control MCP may
 be disabled globally; chat remains read-only and usable, while the page shows
-that delegation controls are unavailable.
+that delegation controls are unavailable. Agent messaging may be off too, and
+then every wake a delegation would need is held until it returns: the context
+tells the coordinator delegation is unavailable, and the toolbar says "Delegation
+unavailable: agent messaging is off" from the snapshot's `agentMessaging`
+([Delegation round trip](#delegation-round-trip)).
 
 ## Provider qualification
 
@@ -1443,6 +1447,14 @@ JSON result includes `delivery: "async"`, a wake sentence, and
 exported `COORDINATOR_ASYNC_CONTRACT` used in the coordinator context prompt
 and the mailbox poll guard.
 
+`list_workflows` carries each worker association's `delegation`: its `state`,
+`bucket` (`needs-you`, `running` or `finished`), `workerTabId`, `requestedAt`,
+`completedAt`, `waitingSince` and `stopRequestedAt`. With `openOnly` it lists only
+the workers still being waited on, filtered before the 200-row cap, so it answers
+"what am I waiting on?" without polling `list_environments` and `list_agents`.
+`coordinatorDelegationBucket` (`packages/protocol/src/coordinator.ts`) is the one
+definition of a delegation's bucket, shared with the [Work panel](#work-panel).
+
 Repeated unchanged reads of `read_messages`, `get_message_status` or
 `list_environments` return the authorized page with `repeatedRead: true` and
 the contract attached, after three identical answers inside 120 seconds. The
@@ -1487,13 +1499,35 @@ The main coordinator's context carries a short routing section,
 | Work | Route |
 | --- | --- |
 | Fully specified: it can be written up as a ticket with acceptance criteria | `create_ticket`, then `start_build_pipeline` for it |
-| Smaller or interactive | `launch_environment` with a prompt, then back and forth with that worker |
+| Smaller or interactive | An idle worker that already fits, through `send_prompt_to_tab` or `launch_job`; otherwise `launch_environment` with a prompt, then back and forth with that worker |
 | Anything that would run in the project home | Exceptional circumstances only, after telling the user why an environment will not do |
 
 All work runs in an environment with its own worktree or container. The
 project home is the user's own checkout, and an agent working there conflicts
 with the user's own work in it. The role line says the coordinator gets the
 project's work done through workers and never alters the checkout itself.
+
+### The context block
+
+Every coordinator turn, including mail wakes, starts with a context block built
+by the pure `buildCoordinatorContext`
+(`packages/protocol/src/coordinator-context.ts`). The service does the reads
+(`coordinator-context-reads.ts` and the existing helpers) and passes the answers
+in, so a test can check the block's content and size without a service. A test
+holds a main coordinator's block, before the research, node and checkout lines,
+under 9,000 characters: it is paid on every turn, so raising that limit is a
+decision about cost.
+
+The block names the project (`Project: <name> at <checkout> (id <id>)`), falling
+back to the id when the project cannot be read. A main coordinator that can
+delegate gets a last line, omitted when nothing is open: `Waiting on 5 workers:
+"a", "b", "c" and 2 more.`. It is what a model that has lost its history through
+compaction has left of what it launched. It counts each worker once, reads one
+environment per name it spells out (never more than
+`COORDINATOR_WAITING_ON_NAMES`), and costs the turn nothing when a read fails.
+It sits last so the changing line does not disturb the cached text ahead of it.
+Names, paths and titles from outside the backend go through
+`inlineCoordinatorContextText`, so none can add a line or close the block.
 
 ### Messaging the project home
 
@@ -1550,6 +1584,16 @@ and `{canPull,canSend,canInject}=true`: Claude, Codex, OpenCode, Pi, Cursor,
 and Grok. Cursor and Grok receive a per-tab `agentMcp` on create/prompt;
 the process-env token is only the fallback. Grok still needs the host
 safety setting to admit `advisory`.
+
+**It also needs agent messaging on.** `coordinatorDelegationAvailable`
+(`coordinator-context-reads.ts`) reads the setting on each turn. With it off, no
+surface promises a wake: the context prompt drops the delegation rules and says
+why (`COORDINATOR_MESSAGING_OFF_NOTE`), the Control MCP instructions carry that
+note instead of the contract, and `withoutWakePromise` replaces the `wake` field
+and `nextStep` of any coordinator tool result, and the poll guard's restated
+contract, with the same note. The tools themselves stay listed and still run; a
+wake they earn is held until messaging returns. Tool descriptions are static and
+may still mention being woken.
 
 Worker creation records an explicit base branch and commit. Uncommitted root
 changes are not copied, stashed, or committed into a worker, unless the user

@@ -18,7 +18,7 @@ Analysed 2026-11-05 against `main` at `1a66d95c3`. From efficiency report part `
 
 **Investigation.** Observed on 2026-11-05 on this Linux host: `log-controls-packaged-electron.spec.ts` against `release/packaged-test/linux-unpacked/` (`app.isPackaged` true, disposable profile, headless): the item is absent at start, the real Settings switch writes `orkestrator:debug` and reloads, the item appears, using it opens DevTools, and turning the switch off removes the item. `application-menu-electron.spec.ts`, "Help offers Open Developer Tools only while a renderer has debug logging on", passed on real Electron here, also headless. This host has no macOS or Windows machine and no disposable display (no Xvfb), so nothing here draws a native menu bar.
 
-`.github/workflows/native-application-menu.yml` now runs the Electron test on `ubuntu-latest` (under Xvfb), `windows-latest` and `macos-15`, and the packaged spec on `ubuntu-latest` and `macos-15`. Its path filter triggers it on the pull request. **None of those runs has happened yet, and the macOS package step (`mise run package:mac:unpacked:test`) has never been run.**
+`.github/workflows/native-application-menu.yml` now runs the Electron test on `ubuntu-latest` (under Xvfb), `windows-latest` and `macos-15`, and the packaged spec on `ubuntu-latest` and `macos-15`. Linux also runs `renderer-log-boundary-electron.spec.ts` under Xvfb, the first real-window evidence for that spec. Its path filter triggers it on the pull request. **None of those runs has happened yet, and the macOS package step (`mise run package:mac:unpacked:test`) has never been run.**
 
 **Decisions.**
 
@@ -69,6 +69,7 @@ Analysed 2026-11-05 against `main` at `1a66d95c3`. From efficiency report part `
 
 - [Application logging, live settings](../../architecture/logging.md#live-settings)
 - [Renderer failures in the essential log](../../architecture/logging.md#renderer-failures-in-the-essential-log)
+- [6303](6303-window-close-during-request-throws.md)
 - [6300](6300-renderer-error-ring-for-realms-and-web-clients.md)
 
 ## Assumptions and decisions

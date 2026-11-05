@@ -861,8 +861,14 @@ selected files across every node that has the project:
   addition.
 - Data-plane grants for direct streams are short-lived, revocable and
   never the leaf's gateway token, and they cannot be used for
-  administration (token rotation, attachment, grants, registry). The first
-  version is a workspace grant: one leaf, one controller and one client
+  administration (token rotation, attachment, grants, registry, the
+  machine's global settings and credentials, host updates). They do run the
+  workspace: agent chat, terminals, previews, files, repository settings and
+  the project boards. The relay refuses the same commands
+  (`isWorkspaceExcludedCommand`, `nodes/workspace-grant-scope.ts`), which is
+  a deny-list: a new administration command has to be added there. Settings
+  reaches another machine's settings through `invoke_on_node` instead. The
+  first version is a workspace grant: one leaf, one controller and one client
   session. Narrowing to one environment and one stream (one terminal
   session, one preview, one download) is a later hardening.
 - Leaves still enforce their own approval and execution policies.

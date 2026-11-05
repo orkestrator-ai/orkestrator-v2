@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { toNodeEnvironmentSummary } from "@orkestrator/protocol/node-summaries";
 import {
   environmentKey,
   environmentRef,
@@ -105,18 +106,18 @@ describe("aggregate projections", () => {
     const rows = activityRows([mini, vps, laptop]);
     expect(rows.map((row) => `${row.environment.ref.backendId}/${row.environment.name}`)).toEqual([
       "bk_vps/env-1",
-      "bk_mini/env-1",
       "bk_laptop/env-9",
+      "bk_mini/env-1",
     ]);
   });
 
-  test("newest and oldest first order by activity time alone", () => {
+  test("newest and oldest first order by activity time, with working rows below", () => {
     const names = (rows: ReturnType<typeof activityRows>) =>
       rows.map((row) => `${row.environment.ref.backendId}/${row.environment.name}`);
     expect(names(activityRows([mini, vps, laptop], "newest"))).toEqual([
-      "bk_mini/env-1",
       "bk_vps/env-1",
       "bk_laptop/env-9",
+      "bk_mini/env-1",
     ]);
     expect(names(activityRows([mini, vps, laptop], "oldest"))).toEqual([
       "bk_laptop/env-9",
@@ -128,11 +129,11 @@ describe("aggregate projections", () => {
   test("bound rows sort on the activity they display; remote rows on their summary", () => {
     const bound = environment("bk_a", "bound", "p", {
       activity: "idle",
-      lastActivityAt: "2026-10-21T09:00:00Z",
+      lastActivityAt: "2026-10-21T12:00:00Z",
     });
     const remote = environment("bk_b", "remote", "p", {
       activity: "idle",
-      lastActivityAt: "2026-10-21T12:00:00Z",
+      lastActivityAt: "2026-10-21T09:00:00Z",
     });
     const machines = [
       machine("a", "A", { bound: true, environmentsByProject: new Map([["p", [bound]]]) }),
@@ -140,10 +141,10 @@ describe("aggregate projections", () => {
     ];
     const ids = (shown?: (id: string) => "working" | undefined) =>
       activityRows(machines, "priority", shown).map((row) => row.environment.ref.environmentId);
-    expect(ids()).toEqual(["remote", "bound"]);
-    expect(ids(() => "working")).toEqual(["bound", "remote"]);
+    expect(ids()).toEqual(["bound", "remote"]);
+    expect(ids(() => "working")).toEqual(["remote", "bound"]);
     // A remote row never takes a local observation: its row shows its summary.
-    expect(ids((id) => (id === "remote" ? "working" : undefined))).toEqual(["remote", "bound"]);
+    expect(ids((id) => (id === "remote" ? "working" : undefined))).toEqual(["bound", "remote"]);
     expect(bound.activity).toBe("idle");
   });
 
@@ -250,9 +251,81 @@ test("build-active rows sort with working rows on bound and remote machines", ()
       ]),
     });
     expect(activityRows([view]).map((row) => row.environment.name)).toEqual([
+      "idle",
       "build",
       "working",
-      "idle",
+    ]);
+  }
+});
+
+test("merged and working rows sink the same way on every machine, in every order", () => {
+  const a = machine("a", "A", {
+    bound: true,
+    environmentsByProject: new Map([
+      [
+        "p",
+        [
+          environment("bk_a", "merged", "p", {
+            prState: "merged",
+            hasUnreadWork: true,
+            lastActivityAt: "2026-10-21T15:00:00Z",
+          }),
+          environment("bk_a", "idle", "p", { lastActivityAt: "2026-10-21T10:00:00Z" }),
+        ],
+      ],
+    ]),
+  });
+  const b = machine("b", "B", {
+    environmentsByProject: new Map([
+      [
+        "p",
+        [
+          environment("bk_b", "working", "p", {
+            activity: "working",
+            lastActivityAt: "2026-10-21T14:00:00Z",
+          }),
+          environment("bk_b", "open", "p", {
+            prState: "open",
+            lastActivityAt: "2026-10-21T11:00:00Z",
+          }),
+          // A machine that predates the field sends no PR state: unmerged here.
+          environment("bk_b", "unknown-pr", "p", { lastActivityAt: "2026-10-21T09:00:00Z" }),
+        ],
+      ],
+    ]),
+  });
+  const ids = (order: "priority" | "newest" | "oldest") =>
+    activityRows([a, b], order).map((row) => row.environment.name);
+  expect(ids("priority")).toEqual(["open", "idle", "unknown-pr", "working", "merged"]);
+  expect(ids("newest")).toEqual(["open", "idle", "unknown-pr", "working", "merged"]);
+  expect(ids("oldest")).toEqual(["unknown-pr", "idle", "open", "working", "merged"]);
+});
+
+test("raw remote PR readings survive normalization into every federated activity order", () => {
+  const raw = [
+    { id: "merged-unread", prState: "merged", hasUnreadWork: true },
+    { id: "working", prState: "open", agentActivityState: "working" },
+    { id: "closed", prState: "closed" },
+    { id: "legacy" },
+  ];
+  const environments = raw.map((row) =>
+    toNodeEnvironmentSummary("bk_remote" as BackendId, {
+      projectId: "p",
+      lastActivityAt: "2026-11-01T10:00:00Z",
+      ...row,
+    })!,
+  );
+  expect(environments.map((row) => row.prState)).toEqual(["merged", "open", "closed", undefined]);
+  const remote = machine("remote", "Remote", {
+    projects: [project("bk_remote", "p", "Project")],
+    environmentsByProject: new Map([["p", environments]]),
+  });
+  for (const order of ["priority", "newest", "oldest"] as const) {
+    expect(activityRows([remote], order).map((row) => row.environment.ref.environmentId)).toEqual([
+      "closed",
+      "legacy",
+      "working",
+      "merged-unread",
     ]);
   }
 });

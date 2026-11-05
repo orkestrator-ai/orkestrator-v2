@@ -11,6 +11,7 @@ are relative to `apps/backend/src/core/`.
 | `commands-files.ts` | `enableGitScanCaches` (new worktrees), `getLocalGitStatusDetailed` (diff stats), `buildContainerGitStatusScript` |
 | `git-diff-summary.ts` | The `git diff --raw --numstat -z` parser every scan uses |
 | `local-git-scan-caches.ts` | Per-worktree untracked line counts and the exclude-file memo |
+| `worktree-watcher.ts`, `worktree-watch-plan.ts` | The hints that start a scan, and which subtrees they leave out |
 | `git-fsmonitor.ts` | Daemon stop, removal of the legacy setting, timeout fallback |
 | `review-validation-worker.ts`, `review-worktree-fingerprint.ts` | Environment-side status reads with their own fallback |
 
@@ -37,8 +38,90 @@ workspace mutation, a new target, a periodic tick and a failure retry all scan
 straight away, and any scan that starts cancels the timer. Containers are not
 gapped here because their signal already spaces hints by the same 2 s
 (`CONTAINER_WORKTREE_SIGNAL_MIN_HINT_GAP_MS`). The gap limits how often git runs
-while a burst lasts, and hints under
-ignored directories still count, because a build directory can hold tracked files.
+while a burst lasts. A hint from an ignored `dist` or `.turbo` still counts, because
+the tree view shows those directories; a `node_modules` is left out altogether (see
+below).
+
+## What the worktree watch leaves out
+
+`startWorktreeWatcher` leaves out a `node_modules` once Git has proved it ignored
+and free of tracked files, at any depth, so an install there starts no scan.
+`listIgnoredDependencyTrees` reads that proof with two hardened processes:
+
+- `git ls-files -z --others --ignored --exclude-standard --directory` names a
+  directory only when nothing in it is tracked. A `node_modules` holding one tracked
+  file is not named, so it stays watched.
+- `git check-ignore -z --stdin` confirms the directory itself is matched.
+  `ls-files` also names a directory merely because everything in it is ignored today
+  (`*.js`, with only `.js` files inside), and a new file there would be visible.
+
+Only that name is left out, because the tree view skips `node_modules` at every depth
+and nothing a user sees depends on events from it. Other ignored directories appear
+in the tree view and the Files panel, so they stay watched. Git is asked again when
+the proof could change: on a settled burst that touched the index or a `.gitignore`,
+and at once when a `node_modules` appears, so it is left out before an install enters
+it. Any failure, or more than 256 subtrees or 1,024 watches, watches the whole
+worktree: too many events are a cost, too few a wrong count.
+
+What leaving out means depends on what a watch costs on the platform:
+
+| | Linux | macOS and other platforms |
+| --- | --- | --- |
+| A recursive watch | One inotify watch per directory, and Bun walks all of `node_modules` to place them | One FSEvents path, no per-directory cost |
+| An extra recursive watch | No measurable cost | Blocks the JS thread to start and close (below) |
+| What runs | A non-recursive watch on the root and on each ancestor of a left-out subtree, and a recursive watch on every other child of those | One recursive root |
+| A left-out subtree | Not watched | Watched by the OS; its events are dropped on arrival, before they count towards a burst |
+| A new directory | The non-recursive watch sees it, and a watch is added | Covered by the root |
+
+On Linux a watcher reports `qualified` only once the plan is applied, because until
+then its root sees only direct children, so the owner keeps polling. After adding any
+watch it sends a hint with unknown paths: a write before the watch began reached
+nothing, and the scan the hint causes starts after it. A directory removed and
+created again gets a new watch, because Bun's watch on the old one never reports
+again; each watch records its directory's device and inode to detect that.
+
+A rule added to or removed from `.git/info/exclude` or a global ignore file does not
+ask Git again, because those files are not watched in a linked worktree. The next
+index or `.gitignore` change does, and until then a safety scan still reports the
+right list. Events are hints either way.
+
+### Measured
+
+`bun scripts/benchmark-worktree-watch.ts`, workload `watch-nm-4k`: a linked worktree
+with 164 tracked directories and ignored `node_modules` trees of 4,000 and 400 package
+directories; the install writes 500 more directories of four files. Bun 1.4.4 in
+`oven/bun:1.4.4`, linux/arm64 on Docker Desktop, five interleaved rounds. Before is the
+same watcher with the plan off, which is what every worktree ran.
+
+| Linux | Before | After |
+| --- | --- | --- |
+| inotify watches held | 4,672 | 170 |
+| Event callbacks during the install | 4,467–4,593 | 0 (2 from the sentinel write) |
+| Hints during the install | 1 | 0 |
+| Start to qualified | 57–61 ms | 30–35 ms |
+| `startWorktreeWatcher` call on the event loop | 23–32 ms | 1–2 ms |
+| Git processes per plan | 0 | 2 (about 18 ms for this worktree's listing) |
+
+This worktree has 11,904 directories, of which 311 are outside `node_modules`.
+
+macOS was run on arktech-mini, where `fseventsd` was using 100–138% of a core with
+about 11 GB resident after seven days, and the first event took 3 to 35 s to arrive. Its
+callback counts are not usable: before was 54 and 6, after was 6 and 12. What holds
+there is the behaviour, from `worktree-watcher-real.test.ts`: the same write under
+`node_modules` is reported with the plan off and not with it on. The service-level
+`worktree-snapshots-git.test.ts` fails on that host even unchanged from `main`
+([flake 5061](../tests/flaky-tests/environments-and-containers/5061-real-git-owner-saturated-fseventsd.md)),
+so macOS is proved at the watcher only. The stall per extra
+recursive watch, in the same conditions, is why macOS keeps one watch:
+
+| Recursive watches started and closed in one process | Start, total (longest) | Close, total |
+| --- | --- | --- |
+| 1 | 2 ms | 0 ms |
+| 5 | 2,882 ms (1,453 ms) | 1,075 ms |
+| 20 | 19,836 ms (4,424 ms) | 994 ms; 15,415 ms in another run |
+
+Linux start and close for 20 watches took 6 ms and 0 ms. What is left is in
+[5060](../todo/cross-cutting/5060-worktree-watch-leftovers.md).
 
 ## What one scan costs
 

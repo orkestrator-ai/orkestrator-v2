@@ -63,7 +63,7 @@ the change journal.
 | `ReviewsRepository` | `storage-reviews.ts` | Looped and Multi Review workflows |
 | `NativeAgentSessionsRepository` | `storage-native.ts` | Native agent sessions: records and their lease, owners, controls and resume identity, the interaction journal, display tails, turn outcomes and interrupts |
 | `NativeAgentDeliveries` | `storage-native-deliveries.ts` | The dispatch and steer journals on a session record, and a queued steer's reservation and settlement in the prompt queue |
-| `PromptQueueStore` | `storage-prompt-queue-store.ts` | The prompt-queue lease, load and save, and recovery of claims older backends left |
+| `PromptQueueStore` | `storage-prompt-queue-store.ts` | The prompt-queue lease, row reads and row writes, and recovery of claims older backends left |
 | `PromptsRepository` | `storage-prompts.ts` | Prompt-queue operations for dispatch, the compose-draft lease |
 | `BuildPipelinesRepository` | `storage-build-pipelines.ts` | Build pipelines and their transcripts |
 | `DraftsRepository` | `storage-drafts.ts` | Compose and file drafts, agent handoffs, session buffers, and the session and pane-layout edits they make |
@@ -230,8 +230,10 @@ from that.
   write costs O(row) and holders of different keys' leases cannot overwrite each
   other. An array item keeps its position when updated, a new one goes last, and
   its value must carry the row's key in the layout's key field. A store held
-  whole as a document falls back to a whole-value read-modify-write.
-  `archiveCleanup` commits an attributable archive cleanup with the row.
+  whole as a document falls back to a whole-value read-modify-write. An
+  unparsable row refuses the write, unless `unreadableRow: "replace"` hands it
+  to `mutate` as absent. `archiveCleanup` commits an attributable archive cleanup
+  with the row.
   `updateSensitiveStoreRow` is the same for a record store holding sensitive
   content: it also prunes what the row's new value drops from the retired JSON
   archive, as `saveSensitiveJson` does (see "Retired JSON archive").
@@ -272,6 +274,23 @@ from that.
   draft's `revision` in its own transaction, so typing never decodes or
   rewrites the other drafts. An owner sweep is one `updateStore` that removes
   only that owner's rows and writes nothing when the owner has none.
+
+  Prompt queues keep the store's lease, because some writers await between the
+  read and the write (an idempotent append and a job reservation read the native
+  session in between) and all must stay ordered against deletion. A session lease
+  is taken before it, never under it. Inside it a mutation is one
+  `updateSensitiveStoreRow` that decodes and writes only its queue, so a queue
+  holding attachments (up to 32 MiB) costs only its own mutations. A row gets the
+  claim recovery and validation a load applies, and an unreadable or invalid row
+  reads as absent, so that queue's next write replaces it; another queue's row is
+  never read or rewritten, so a record this build cannot read survives. Only
+  what walks the store still decodes every row: the listings behind the drain
+  scans and environment deletion. Both parse row by row, because no write would
+  clear a bad row now, and read whole it would hide every queue for good.
+  Deletion writes one row per queue, so a crash part-way leaves the rest for the
+  caller's retry. It also removes rows that name no environment, and keeps a row
+  naming another one. `storage-writer-guards.test.ts` holds the lease on every
+  row write of this store (`LEASED_ROW_STORES`).
 
   Environments keep their store lease too, because a write awaits between its
   read and its commit (a caller's `shouldUpdate` observation, the removal's
@@ -550,10 +569,11 @@ One upgrade cannot run once: a backend up to v2.29.0-beta can write a
 prompt-queue claim (`outstandingClaim`), and one that opened the database before
 version 5 keeps writing until it stops, because the version is checked only at
 open. So `restoreLegacyPromptQueueClaims` (`storage-record-upgrades.ts`) runs on every
-load of the prompt queues (`loadPromptQueues`): live leases retain exclusion
+read of a prompt queue, one row or the whole list: live leases retain exclusion
 and survive queue writes until settlement or expiry. Expired or malformed
-leases restore their message to the head, and the next save persists that.
-Malformed message ids receive a stable recovery id.
+leases restore their message to the head, and the next write of that queue
+persists that; until then every read recovers it again. Malformed message ids
+receive a stable recovery id.
 
 Version 4 (`change-tracking/ledger-schema.ts`) adds the change-tracking
 ledger: the first engine with its own indexed tables (worktrees, evidence,

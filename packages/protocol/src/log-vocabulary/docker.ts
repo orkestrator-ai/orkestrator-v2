@@ -62,6 +62,8 @@ export const DOCKER_LOG_AREAS = defineLogAreas({
         essential: true,
         fields: { staleForMs: "number" },
       },
+      "writer-lease.listener-failed":
+        "The callback told about a lost registry writer lease threw, so the schedules settings learn of the loss only at their next read.",
       "writer-lease.not-acquired": {
         description:
           "This backend started without the registry writer lease, for the fixed `reason` given. A second backend on one data directory is normal: it serves reads, runs no schedules and refuses container changes.",

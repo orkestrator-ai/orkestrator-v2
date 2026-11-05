@@ -123,7 +123,7 @@ Analysed 2026-11-03 against `main` at `a2bba9d8`.
 
 ### Constraints and rationale
 
-- A failed scrub must leave evidence ([0720](0720-e13-silent-failures.md#0720-log-the-failures-that-are-still-silent) task 5) once it can be deferred for longer.
+- A failed scrub must keep leaving evidence once it can be deferred for longer. It writes `scrub.checkpoint-failed` today ([E13](0000-index.md#closing-check-of-e13-silent-failures) part `0720` task 5, [Application logging](../../architecture/logging.md#failures-that-would-otherwise-leave-no-trace)).
 - Other backends on the same data directory can also hold readers, so a "copy running" flag in this process is not a full answer. The retry must still tolerate failure.
 
 ### Needs verification

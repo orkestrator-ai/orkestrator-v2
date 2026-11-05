@@ -30,7 +30,7 @@ The report measured nothing, and the maintainer gated this work on numbers. Deci
 
 #### Tasks
 
-1. **Capture the baseline**: measure snapshot and delta rates with a lagging client and a second viewer. See [Shared baseline](#shared-baseline). Status: open.
+1. **Capture the baseline**: measure snapshot and delta rates with a lagging client and a second viewer. See [Shared baseline](#shared-baseline). Status: done 2026-11-05 with a fake bridge; the real-stack run is todo 6680 task 1.
 2. **Keep a small ring of recent views per key**: build a delta from whichever base the client holds. Status: done 2026-11-04 without the baseline, at the ticket's request; both decisions below took the recommended option.
 
 #### 2. Keep a small ring of recent views per key
@@ -73,9 +73,9 @@ The report measured nothing, and the maintainer gated this work on numbers. Deci
 
 #### Tasks
 
-1. **Capture the baseline**: measure bridge reads per state poll before changing the path. See [Shared baseline](#shared-baseline). Status: open.
-2. **Add a bridge state revision**: let the backend send `knownToken` to the bridge for state. Status: open (depends on 1).
-3. **Cache the composer catalogue separately**: stop hashing the model catalogue on every poll. Status: open (depends on 1).
+1. **Capture the baseline**: measure bridge reads per state poll before changing the path. See [Shared baseline](#shared-baseline). Status: done 2026-11-05 with a fake bridge; the real-stack run is todo 6680 task 1.
+2. **Add a bridge state revision**: let the backend send `knownToken` to the bridge for state. Status: not done 2026-11-05, measured and not worth building; todo 6680 task 2.
+3. **Cache the composer catalogue separately**: stop hashing the model catalogue on every poll. Status: not done 2026-11-05, measured and not worth building; todo 6680 task 3.
 
 #### 2. Add a bridge state revision
 
@@ -124,8 +124,8 @@ The report measured nothing, and the maintainer gated this work on numbers. Deci
 
 #### Tasks
 
-1. **Capture the baseline**: measure bridge transcript bytes while a turn streams. See [Shared baseline](#shared-baseline). Status: open.
-2. **Add a v2 `delta` answer**: a bridge answers with changed rows, the id order and `revisedMessages`. Status: open (depends on 1).
+1. **Capture the baseline**: measure bridge transcript bytes while a turn streams. See [Shared baseline](#shared-baseline). Status: done 2026-11-05 with a fake bridge; the real-stack run is todo 6680 task 1.
+2. **Add a v2 `delta` answer**: a bridge answers with changed rows, the id order and `revisedMessages`. Status: not done 2026-11-05, measured and not worth building yet; todo 6680 task 4.
 
 #### 2. Add a v2 `delta` answer
 
@@ -148,6 +148,10 @@ The report measured nothing, and the maintainer gated this work on numbers. Deci
 ### Constraints and rationale
 
 - [Report invariants](../2026-10-27-efficiency.md#invariants-every-fix-must-keep): a transcript row is one model response, so deltas must carry `revisedMessages` for rows outside the live tail; missed events stay detectable; any ring needs byte and count bounds.
+
+## Outcome
+
+Checked back on 2026-11-05 against `main` at `cbe0f9a5b`. The baseline was taken with `apps/backend/scripts/conditional-reads-baseline.ts` (the real backend and HTTP bridge client against a fake bridge; no provider turn), because a `dev:test` profile cannot stream a turn without one. Nothing was built: 0160 task 2 was already done and the baseline confirms it, and 0180 tasks 2 and 3 and 0190 task 2 each measured well under 1% of a core per streaming session. The figures, the decisions and the real-stack run are [todo 6680](../../todo/transcripts-and-observation/6680-conditional-reads-and-deltas-measured.md); the item-by-item outcome is the [closing check of E10](0000-index.md#closing-check-of-e10-conditional-reads-and-deltas).
 
 ## Related
 

@@ -1,6 +1,7 @@
 // SSE Events route
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
+import { eventMessageId } from "../services/event-message-id.js";
 import { eventEmitter } from "../services/event-emitter.js";
 import type { SSEEvent } from "../types/index.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
@@ -81,14 +82,6 @@ interface ReplayFrame extends SseFrame {
    * keeps the client's cursor dense; `event` keeps the original type.
    */
   superseded?: true;
-}
-
-/** The message a frame changes: a full `message.updated` or a `message.patched`. */
-function frameMessageId(event: SSEEvent): string | undefined {
-  if (event.type !== "message.updated" && event.type !== "message.patched") return undefined;
-  const data = event.data as { message?: { id?: unknown }; messageId?: unknown } | undefined;
-  const id = event.type === "message.updated" ? data?.message?.id : data?.messageId;
-  return typeof id === "string" && id.length > 0 ? id : undefined;
 }
 
 interface RetainedReplayFrame extends ReplayFrame {
@@ -192,7 +185,7 @@ export function createReplayBuffer(limits: { maxFrames?: number; maxBytes?: numb
   return {
     append(event: SSEEvent, revision: number, generation: string): void {
       const { data, dataBytes } = serializeEvent(event);
-      const messageId = frameMessageId(event);
+      const messageId = eventMessageId(event);
       ring.appendAt(revision, {
         revision,
         id: `${generation}:${revision}`,

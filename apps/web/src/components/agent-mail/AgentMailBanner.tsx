@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
-import { AlertTriangle, Inbox, RotateCcw, X } from "lucide-react";
+import { RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import * as backend from "@/lib/backend";
-import { cn } from "@/lib/utils";
 import { useAgentMailStore } from "@/stores/agentMailStore";
-import { deliverNowNotice, openAgentMailForTab } from "./agent-mail-ui";
+import { agentMailSenderLabel } from "@/lib/chat/client-only-messages";
+import { deliverNowNotice, formatAgentMailTime, openAgentMailForTab } from "./agent-mail-ui";
+import { AgentMailCard, type AgentMailCardTone } from "./AgentMailCard";
 import {
   AGENT_MAIL_HOURLY_LIMIT_REASON,
   agentMailAwaitingAgent,
@@ -86,7 +87,7 @@ export function AgentMailBanner({
       : null;
   const releasable = inInbox.filter((message) => !refusalOf(message));
   const blockedCount = inInbox.length - releasable.length;
-  // Wraps rather than truncates: the reason is what the person acts on.
+  // Nothing in the inbox can be delivered: the card shows the warning tone.
   const undeliverable = releasable.length === 0 && blockedCount > 0;
   if (
     !failed &&
@@ -190,58 +191,88 @@ export function AgentMailBanner({
   else
     text = `${entry.pendingInjectCount} message${entry.pendingInjectCount === 1 ? "" : "s"} waiting · delivers when this agent is idle`;
 
+  const tone: AgentMailCardTone = failed
+    ? "error"
+    : paused || awaitingAgent.length > 0 || undeliverable
+      ? "warning"
+      : "info";
+  const count = Math.max(
+    1,
+    awaitingAgent.length || inInbox.length || entry.pendingInjectCount + entry.failedInjectCount,
+  );
+  const newest =
+    failed ??
+    paused ??
+    pending ??
+    delegationHeld ??
+    awaitingAgent[0] ??
+    releasable[0] ??
+    inInbox[0];
+
   return (
-    <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-amber-400/25 bg-amber-400/[0.07] px-3 py-1.5 text-xs">
-      {failed || paused || awaitingAgent.length > 0 ? (
-        <AlertTriangle className="h-3.5 w-3.5 text-amber-400" />
-      ) : (
-        <Inbox className="h-3.5 w-3.5 text-cyan-300" />
-      )}
-      {/* Wraps when it tells the person what to do: that part must not be cut off. */}
-      <span
-        className={cn(
-          "min-w-0 flex-1",
-          awaitingAgent.length === 0 && !delegationHeld && !undeliverable && "truncate",
-        )}
-      >
-        {text}
-      </span>
-      {actionError && (
-        <span role="alert" className="max-w-48 truncate text-red-300" title={actionError}>
-          {actionError}
-        </span>
-      )}
+    <AgentMailCard
+      tone={tone}
+      count={count}
+      text={text}
+      newest={
+        newest
+          ? {
+              sender: agentMailSenderLabel(newest.from),
+              time: formatAgentMailTime(newest.createdAt),
+              subject: newest.subject,
+            }
+          : undefined
+      }
+      actionError={actionError}
+      onDismiss={() => setDismissedRevision(entry.revision)}
+    >
       {failed && (
         <>
-          <Button size="sm" variant="ghost" onClick={() => void retry(failed.id)}>
-            <RotateCcw className="mr-1 h-3 w-3" />
+          <Button
+            size="sm"
+            variant="secondary"
+            className={ACTION}
+            onClick={() => void retry(failed.id)}
+          >
+            <RotateCcw className="size-3" />
             Retry
           </Button>
-          <Button size="sm" variant="ghost" onClick={() => void discard(failed.id)}>
+          <Button
+            size="sm"
+            variant="ghost"
+            className={ACTION}
+            onClick={() => void discard(failed.id)}
+          >
             Discard
           </Button>
         </>
       )}
       {paused && (
-        <Button size="sm" variant="ghost" onClick={() => void retry(paused.id)}>
+        <Button
+          size="sm"
+          variant="secondary"
+          className={ACTION}
+          onClick={() => void retry(paused.id)}
+        >
           Resume
         </Button>
       )}
       {(pending || releasable.length > 0) && (
-        <Button size="sm" variant="ghost" onClick={() => void deliver()}>
+        <Button size="sm" variant="secondary" className={ACTION} onClick={() => void deliver()}>
           Deliver now
         </Button>
       )}
-      <Button size="sm" variant="ghost" onClick={() => openAgentMailForTab(environmentId, tabId)}>
+      <Button
+        size="sm"
+        variant="ghost"
+        className={ACTION}
+        onClick={() => openAgentMailForTab(environmentId, tabId)}
+      >
         View
       </Button>
-      <button
-        type="button"
-        aria-label="Dismiss agent mail notice"
-        onClick={() => setDismissedRevision(entry.revision)}
-      >
-        <X className="h-3.5 w-3.5" />
-      </button>
-    </div>
+    </AgentMailCard>
   );
 }
+
+/** The card's buttons: smaller than the default so the card stays compact. */
+const ACTION = "h-7 px-2.5 text-xs";

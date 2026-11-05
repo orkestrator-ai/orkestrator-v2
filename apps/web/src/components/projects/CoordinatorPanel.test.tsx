@@ -533,6 +533,8 @@ describe("CoordinatorPanel", () => {
               },
               messages: ["first", "second"].map((id) => ({
                 id,
+                from: { kind: "user" },
+                createdAt: "2026-11-05T12:00:00.000Z",
                 placement: "stored",
                 placementReason: "recipient-cannot-inject",
               })),

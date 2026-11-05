@@ -171,6 +171,142 @@ describe("EventRing", () => {
   });
 });
 
+describe("EventRing supersede", () => {
+  interface Frame {
+    kind: "full" | "patch";
+    id: string;
+    seq: number;
+    collapsed?: boolean;
+  }
+  /** A full frame collapses every frame of the same id since the last collapsed one. */
+  function ring(calls?: Frame[]) {
+    return new EventRing<Frame>(16, {
+      supersede: (incoming, retained) => {
+        calls?.push(retained);
+        if (incoming.kind !== "full" || incoming.id !== retained.id) return null;
+        if (retained.collapsed) return retained;
+        return { ...retained, collapsed: true };
+      },
+    });
+  }
+
+  test("a full frame collapses every earlier frame of its identity, patches included", () => {
+    const events = ring();
+    events.append({ kind: "full", id: "a", seq: 1 });
+    events.append({ kind: "patch", id: "a", seq: 2 });
+    events.append({ kind: "full", id: "b", seq: 3 });
+    events.append({ kind: "patch", id: "a", seq: 4 });
+    events.append({ kind: "full", id: "a", seq: 5 });
+
+    const replay = events.since(0);
+    expect(replay.complete).toBe(true);
+    expect(replay.events.map((entry) => [entry.revision, entry.event.collapsed === true])).toEqual([
+      [1, true],
+      [2, true],
+      [3, false],
+      [4, true],
+      [5, false],
+    ]);
+  });
+
+  test("the scan stops at the first entry returned unchanged", () => {
+    const calls: Frame[] = [];
+    const events = ring(calls);
+    events.append({ kind: "full", id: "b", seq: 0 });
+    events.append({ kind: "full", id: "a", seq: 1 });
+    events.append({ kind: "full", id: "a", seq: 2 });
+    events.append({ kind: "patch", id: "a", seq: 3 });
+    calls.length = 0;
+    events.append({ kind: "full", id: "a", seq: 4 });
+    // seq 3 and seq 2 collapse and the scan continues; seq 1, collapsed when
+    // seq 2 arrived, is returned unchanged and ends it before seq 0.
+    expect(calls.map((frame) => frame.seq)).toEqual([3, 2, 1]);
+    expect(events.since(0).events.map((entry) => entry.event.collapsed === true)).toEqual([
+      false,
+      true,
+      true,
+      true,
+      false,
+    ]);
+  });
+
+  test("collapse keeps revisions dense and re-weighs the replaced entry", () => {
+    const events = new EventRing<{ id: string; bytes: number }>(16, {
+      maxBytes: 1_000,
+      measureBytes: (event) => event.bytes,
+      supersede: (incoming, retained) =>
+        incoming.id !== retained.id
+          ? null
+          : retained.bytes === 1
+            ? retained
+            : { ...retained, bytes: 1 },
+    });
+    events.append({ id: "a", bytes: 400 });
+    events.append({ id: "a", bytes: 400 });
+    expect(events.getStats().retainedBytes).toBe(401);
+    expect(events.since(0).events.map((entry) => entry.revision)).toEqual([1, 2]);
+  });
+});
+
+describe("EventRing with an outside sequence", () => {
+  test("appendAt retains under the given revision", () => {
+    const events = new EventRing<string>();
+    events.appendAt(7, "seven");
+    events.appendAt(8, "eight");
+    expect(events.latestRevision).toBe(8);
+    expect(events.since(6)).toEqual({
+      events: [
+        { revision: 7, event: "seven" },
+        { revision: 8, event: "eight" },
+      ],
+      complete: true,
+      latestRevision: 8,
+    });
+  });
+
+  test("a jump past the next revision drops what a replay could no longer cover densely", () => {
+    const events = new EventRing<string>();
+    events.appendAt(1, "one");
+    events.appendAt(2, "two");
+    events.appendAt(5, "five");
+    expect(events.getStats()).toMatchObject({ retained: 1, dropped: 2, latestRevision: 5 });
+    // A client holding revision 1 missed 3 and 4, which were never recorded.
+    expect(events.since(1)).toMatchObject({ events: [], complete: false });
+    expect(events.since(4).events.map((entry) => entry.event)).toEqual(["five"]);
+  });
+
+  test("advanceTo moves the cursor without retaining and drops what it strands", () => {
+    const events = new EventRing<string>();
+    events.appendAt(1, "one");
+    events.advanceTo(3);
+    expect(events.getStats()).toMatchObject({ retained: 0, latestRevision: 3 });
+    expect(events.since(1)).toMatchObject({ complete: false });
+    expect(events.since(3)).toEqual({ events: [], complete: true, latestRevision: 3 });
+    // Re-advancing to the current revision is a no-op.
+    events.appendAt(4, "four");
+    events.advanceTo(4);
+    expect(events.getStats()).toMatchObject({ retained: 1, latestRevision: 4 });
+  });
+
+  test("advance drops retained events, which would otherwise hide its revision", () => {
+    const events = new EventRing<string>();
+    events.append("one");
+    events.advance();
+    events.append("three");
+    expect(events.since(1)).toMatchObject({ events: [], complete: false });
+    expect(events.since(2).events.map((entry) => entry.event)).toEqual(["three"]);
+  });
+
+  test("a revision that goes backwards is refused", () => {
+    const events = new EventRing<string>();
+    events.appendAt(5, "five");
+    expect(() => events.appendAt(5, "again")).toThrow(RangeError);
+    expect(() => events.advanceTo(4)).toThrow(RangeError);
+    expect(() => events.appendAt(Number.NaN, "nan")).toThrow(RangeError);
+    expect(events.getStats()).toMatchObject({ retained: 1, latestRevision: 5 });
+  });
+});
+
 describe("parseEventCursor", () => {
   test("accepts non-negative integers", () => {
     expect(parseEventCursor("0")).toBe(0);

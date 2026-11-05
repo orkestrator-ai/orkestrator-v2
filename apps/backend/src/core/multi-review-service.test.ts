@@ -4013,7 +4013,7 @@ test("MultiReviewService reports a clean worktree and dispatches without it when
   );
 });
 
-test("MultiReviewService notes snapshot changes between reviewers and continues", async () => {
+test("MultiReviewService notes snapshot changes after reviewer admission and continues", async () => {
   const provider = new Provider();
   provider.usageTokens = 444;
   const probes: Array<Record<string, unknown> | undefined> = [];
@@ -4046,14 +4046,10 @@ test("MultiReviewService notes snapshot changes between reviewers and continues"
       const initialReviewerPrompts = [...provider.sends.values()].filter((sent) =>
         sent.prompt.includes("You are independent reviewer"),
       );
+      // One check admits the whole panel, so both prompts share its answer;
+      // the change made after it is first seen by consolidation's check.
       expect(initialReviewerPrompts[0]?.prompt).toContain("**Authoritative worktree state**");
-      expect(initialReviewerPrompts[1]?.prompt).toContain(
-        "**Pinned worktree state (known stale)**",
-      );
-      expect(initialReviewerPrompts[1]?.prompt).toContain(
-        "This recorded path set is no longer authoritative",
-      );
-      expect(initialReviewerPrompts[1]?.prompt).not.toContain("**Authoritative worktree state**");
+      expect(initialReviewerPrompts[1]?.prompt).toContain("**Authoritative worktree state**");
       const consolidation = [...provider.sends.values()].find((sent) =>
         sent.prompt.includes("<multi-review-reports-json>"),
       );
@@ -4064,7 +4060,8 @@ test("MultiReviewService notes snapshot changes between reviewers and continues"
       expect(provider.aborted).toEqual([]);
 
       // Only the snapshot that becomes prompt evidence pays for content hashing;
-      // drift checks compare HEAD and the path set. Once drift is known, later
+      // drift checks compare HEAD and the path set: one for the reviewer
+      // admission pass, one for consolidation. Once drift is known, later
       // dispatches retain the original evidence without repeatedly probing.
       expect(probes[0]).toEqual({
         environmentId: "env-reviewer-snapshot-drift",
@@ -4090,6 +4087,8 @@ test("MultiReviewService notes snapshot changes between reviewers and continues"
         sent.prompt.includes("You are independent reviewer"),
       )[2]?.prompt;
       expect(restartedPrompt).toContain("**Pinned worktree state (known stale)**");
+      expect(restartedPrompt).toContain("This recorded path set is no longer authoritative");
+      expect(restartedPrompt).not.toContain("**Authoritative worktree state**");
       expect(restartedPrompt).toContain("Reconcile it against the live worktree");
     },
     {
@@ -4111,7 +4110,8 @@ test("MultiReviewService notes snapshot changes between reviewers and continues"
 
 test("MultiReviewService leaves live reviewer turns running when the snapshot changes", async () => {
   const provider = new Provider();
-  // Reviewer 1 never settles, so it is still running when reviewer 2 probes.
+  // Reviewer 1 never settles, so it is still running when the restarted
+  // reviewer 2 is admitted by a later pass whose check sees the change.
   provider.statusOverrides.set("session-1", "running");
   let probes = 0;
   await withService(
@@ -4123,13 +4123,22 @@ test("MultiReviewService leaves live reviewer turns running when the snapshot ch
         { agent: "claude", model: "sonnet" },
       ]);
       await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.reviewers[1]?.status === "completed";
+      });
+      expect((await snapshot(started.id))?.reviewSnapshotStale).toBeUndefined();
+      await service.restartReviewer(started.id, started.reviewers[1]!.id);
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
         const current = await snapshot(started.id);
         return (
           current?.reviewSnapshotStale === true && current.reviewers[1]?.status === "completed"
         );
       });
 
-      expect(provider.aborted).toEqual([]);
+      // Only the restart retired reviewer 2's earlier session; the drift did not
+      // abort the turn still running against the changed worktree.
+      expect(provider.aborted).toEqual(["session-2"]);
       const reviewing = (await snapshot(started.id))!;
       expect(reviewing.phase).toBe("reviewing");
       expect(reviewing.reviewers[0]?.status).toBe("running");
@@ -4199,15 +4208,13 @@ test("MultiReviewService preserves completed reports when retrying an unrelated 
     "env-drift-unrelated-retry",
     provider,
     async ({ service, start, snapshot }) => {
+      // Reviewers are admitted on the pinned snapshot; consolidation's own
+      // check is the first to see the change, and its reports never validate.
+      provider.invalidConsolidatedReports = 4;
       const started = await start([
         { agent: "claude", model: "opus" },
         { agent: "claude", model: "sonnet" },
       ]);
-      await waitUntil(async () => {
-        const current = await snapshot(started.id);
-        return current?.phase === "consolidating" && current.reviewSnapshotStale === true;
-      });
-      provider.invalidConsolidatedReports = 4;
       await waitUntil(async () => {
         await service.advanceNow(started.id);
         return (await snapshot(started.id))?.phase === "failed";

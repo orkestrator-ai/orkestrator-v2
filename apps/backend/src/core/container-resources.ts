@@ -1,3 +1,4 @@
+import { createLogger } from "@orkestrator/protocol/logger";
 import { detectDockerTopology } from "./docker-image.js";
 import {
   UNRESTRICTED_LIMITS,
@@ -27,6 +28,8 @@ import {
   runContainerOperation,
 } from "./container-lifecycle-service.js";
 import { parseDockerPsSize } from "./docker-cleanup-inventory.js";
+
+const resourcesLog = createLogger("docker");
 
 /**
  * Resource budgets and usage telemetry (containers plan step 10).
@@ -203,16 +206,35 @@ export function parseDockerInfo(text: string): Omit<DockerCapacity, "disk"> {
 /** Docker's container stdout/stderr bound for new runtimes. */
 export const CONTAINER_LOG_OPTIONS = { driver: "local", maxSize: "10m", maxFiles: 3 } as const;
 
+/** Every Docker daemon ships it, and it takes the same size and file bounds. */
+export const CONTAINER_LOG_FALLBACK_DRIVER = "json-file";
+
+let warnedUnboundedLogDriver = false;
+
 /**
- * `--log-driver local` with size and file bounds when the daemon offers it.
- * An existing container keeps its driver until it is rebuilt; the daemon's
- * own configuration is never changed.
+ * `--log-driver local` with size and file bounds when the daemon offers it,
+ * else `json-file` with the same bounds, so a daemon whose default is an
+ * uncapped `json-file` still gets a bounded log. That overrides a daemon's
+ * own default driver (`journald`, say) for these containers only. A daemon
+ * that lists neither (an empty list is a failed probe) keeps its default and
+ * is warned about once: naming a driver it may not have would fail the
+ * create. An existing container keeps its driver until it is rebuilt; the
+ * daemon's own configuration is never changed.
  */
 export function logDriverArguments(logDrivers: readonly string[]): string[] {
-  if (!logDrivers.includes(CONTAINER_LOG_OPTIONS.driver)) return [];
+  const driver = [CONTAINER_LOG_OPTIONS.driver, CONTAINER_LOG_FALLBACK_DRIVER].find((name) =>
+    logDrivers.includes(name),
+  );
+  if (!driver) {
+    if (logDrivers.length > 0 && !warnedUnboundedLogDriver) {
+      warnedUnboundedLogDriver = true;
+      resourcesLog.warn("log-driver.unbounded");
+    }
+    return [];
+  }
   return [
     "--log-driver",
-    CONTAINER_LOG_OPTIONS.driver,
+    driver,
     "--log-opt",
     `max-size=${CONTAINER_LOG_OPTIONS.maxSize}`,
     "--log-opt",

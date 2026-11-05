@@ -219,7 +219,7 @@ The ticket asks for the sentence, and for `get_log_storage_stats` to report the 
 - **Store?**
   - **A `health-summary` store on `StorageDatabase.rows()`, one row per sample, pruned in the write transaction (recommended; the report's choice).**
     - Pros: queryable; survives restarts; the raw writer guard covers it.
-    - Cons: a few more fsynced commits on a busy database; part of every hourly copy until [0760](0760-e5-database-upkeep.md#0760-take-the-change-ledger-out-of-hourly-snapshots).
+    - Cons: a few more fsynced commits on a busy database; part of every hourly copy, though since E5 moved the change ledger into its own file that copy holds the app stores only ([storage migrations](../../architecture/storage.md#migrations), version 7).
   - **A JSONL file beside the logs.**
     - Pros: no database writes; still readable when storage is the problem.
     - Cons: another bounded file to rotate, and nothing queries it.
@@ -504,10 +504,10 @@ The `shift()` fix has no real choice: a fixed ring of the same size.
 - [Logging and database report, R12](../2026-10-29-logging-and-database-efficiency.md#r12-persist-a-small-rolling-health-summary-m1) and [the metrics findings, M1](../2026-10-29-logging-and-database-efficiency.md#metrics-and-diagnostics-findings)
 - [0741 backend responsiveness under load](../../todo/cross-cutting/0741-backend-responsiveness-under-load.md), which collected process figures by hand
 - [Logging and database report, R19](../2026-10-29-logging-and-database-efficiency.md#r19-database-observability-m6-d9) and [the metrics findings, M6](../2026-10-29-logging-and-database-efficiency.md#metrics-and-diagnostics-findings)
-- [0720](0720-e13-silent-failures.md#0720-log-the-failures-that-are-still-silent), [0780](#0780-an-export-diagnostics-bundle), [0820](#0820-persist-a-small-rolling-health-summary)
+- [E13](0000-index.md#closing-check-of-e13-silent-failures) (`0720`, done), [0780](#0780-an-export-diagnostics-bundle), [0820](#0820-persist-a-small-rolling-health-summary)
 - [1202 efficiency follow-ups](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md) task 1 needs this kind of baseline number.
 - [Logging and database report, R13](../2026-10-29-logging-and-database-efficiency.md#r13-consolidate-metric-primitives-m3-m4-m5) and [the metrics findings](../2026-10-29-logging-and-database-efficiency.md#metrics-and-diagnostics-findings)
 - [Logging and database report, R11](../2026-10-29-logging-and-database-efficiency.md#r11-export-diagnostics-bundle-m2-l7) and [the metrics findings, M2](../2026-10-29-logging-and-database-efficiency.md#metrics-and-diagnostics-findings)
 - [Report a bug](../../architecture/bug-report.md)
 - [0017 CLI command surface](../../todo/cli-and-slash-commands/0017-cli-command-surface.md), which does not cover this command
-- [0740](0740-e14-docker-logs.md#0740-keep-the-previous-docker-bridge-log-across-a-relaunch), [0820](#0820-persist-a-small-rolling-health-summary)
+- 0740, built in E14: `getContainerServerLog` in `apps/web/src/lib/backend/docker-skills.ts` reads every container server's log and, with `previous`, the run before its last relaunch ([closing check](0000-index.md#closing-check-of-e14-docker-logs)), [0820](#0820-persist-a-small-rolling-health-summary)

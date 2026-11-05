@@ -1,5 +1,6 @@
 /**
- * Bounded replay buffer for the bridge's SSE stream.
+ * Bounded replay buffer for a bridge's SSE stream, shared by the Codex and
+ * Claude bridges.
  *
  * Why this exists: `/event/subscribe` is the only live channel, and an event
  * emitted while nobody is attached is gone. The chat tab already survives that —
@@ -45,13 +46,18 @@ export interface EventRingOptions<T> {
   /** Returns the retained byte cost for one event. Required with `maxBytes`. */
   measureBytes?: (event: T) => number;
   /**
-   * Collapses a retained event that `incoming` makes redundant.
+   * Collapses retained events that `incoming` makes redundant.
    *
-   * Returns the replacement payload for the retained entry, or null when the two
-   * are unrelated. Match on the entry's *identity* (its session and message, say)
-   * rather than on whether it has already been collapsed: the scan runs
-   * newest-first and stops at the first match, which is only sound if an already
-   * collapsed entry still counts as a match.
+   * Returns null when the two are unrelated, a replacement payload for the
+   * retained entry, or `retained` itself when it is already collapsed. The scan
+   * runs newest-first: it continues past an unrelated or a replaced entry and
+   * stops at the first one returned unchanged. Every older entry for the same
+   * identity was collapsed when an earlier successor was appended, so match an
+   * already collapsed entry on its *identity* (its session and message, say) and
+   * return it to end the scan there.
+   *
+   * Continuing past a replacement is what lets one full snapshot collapse every
+   * partial frame (a patch) since the previous snapshot, not just the newest.
    *
    * The entry keeps its revision, so the sequence stays dense and `since()`'s
    * completeness check is unaffected.
@@ -114,16 +120,23 @@ export class EventRing<T> {
   /** Assigns the next revision and retains the event. */
   append(event: T): number {
     this.revision += 1;
-    if (this.supersede) this.collapseSuperseded(event);
-    this.retainedBytes += Math.max(0, this.measureBytes(event));
-    this.buffer.push({ revision: this.revision, event });
-    while (this.buffer.length > this.capacity || this.retainedBytes > this.maxBytes) {
-      const removed = this.buffer.shift();
-      if (!removed) break;
-      this.retainedBytes -= Math.max(0, this.measureBytes(removed.event));
-      this.droppedEvents += 1;
-    }
+    this.retain(event);
     return this.revision;
+  }
+
+  /**
+   * Retains an event under a revision an outside sequence assigned.
+   *
+   * For a bridge whose emitter numbers its own events (Claude's), so the ring's
+   * revisions are the cursor the client holds. A revision past the next one
+   * means events went unrecorded, so what is retained can no longer be replayed
+   * as a dense range and is dropped: a client behind the gap is told to
+   * reconcile instead of being served a replay with a hole in it.
+   */
+  appendAt(revision: number, event: T): void {
+    this.skipTo(revision - 1);
+    this.revision = revision;
+    this.retain(event);
   }
 
   /**
@@ -135,15 +148,54 @@ export class EventRing<T> {
    * events occurred during the retention gap.
    */
   advance(): number {
-    this.revision += 1;
+    this.advanceTo(this.revision + 1);
     return this.revision;
   }
 
   /**
-   * Replaces the payload of the newest retained entry `incoming` supersedes.
+   * Moves the cursor to an outside sequence's revision without retaining a
+   * payload. Like `advance`, the skipped revisions make anything still retained
+   * unreplayable, so it is dropped.
+   */
+  advanceTo(revision: number): void {
+    this.skipTo(revision);
+    this.revision = revision;
+  }
+
+  /**
+   * Validates a revision from an outside sequence and drops what a jump to it
+   * would leave on the wrong side of a hole.
+   */
+  private skipTo(revision: number): void {
+    if (!Number.isSafeInteger(revision) || revision < this.revision) {
+      // A sequence running backwards would hand two events one cursor.
+      throw new RangeError("EventRing: revisions must not go backwards");
+    }
+    if (revision > this.revision && this.buffer.length > 0) {
+      this.droppedEvents += this.buffer.length;
+      this.clear();
+    }
+  }
+
+  private retain(event: T): void {
+    if (this.supersede) this.collapseSuperseded(event);
+    this.retainedBytes += Math.max(0, this.measureBytes(event));
+    this.buffer.push({ revision: this.revision, event });
+    while (this.buffer.length > this.capacity || this.retainedBytes > this.maxBytes) {
+      const removed = this.buffer.shift();
+      if (!removed) break;
+      this.retainedBytes -= Math.max(0, this.measureBytes(removed.event));
+      this.droppedEvents += 1;
+    }
+  }
+
+  /**
+   * Replaces the payload of every retained entry `incoming` supersedes since the
+   * last one already collapsed.
    *
-   * Newest-first with an early exit: every older entry for the same identity was
-   * already collapsed when *its* successor was appended, so one match is enough.
+   * Newest-first, stopping at the first entry `supersede` returns unchanged:
+   * every older entry for the same identity was already collapsed when an
+   * earlier successor was appended.
    */
   private collapseSuperseded(incoming: T): void {
     const supersede = this.supersede;
@@ -152,10 +204,10 @@ export class EventRing<T> {
       const entry = this.buffer[index]!;
       const replacement = supersede(incoming, entry.event);
       if (replacement === null) continue;
+      if (replacement === entry.event) return;
       this.retainedBytes -= Math.max(0, this.measureBytes(entry.event));
       entry.event = replacement;
       this.retainedBytes += Math.max(0, this.measureBytes(replacement));
-      return;
     }
   }
 

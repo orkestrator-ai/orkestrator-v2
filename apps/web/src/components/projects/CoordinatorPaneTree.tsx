@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
   type ComponentProps,
+  type KeyboardEvent,
   type ReactNode,
 } from "react";
 import {
@@ -27,6 +28,7 @@ import { cn } from "@/lib/utils";
 import {
   collectCoordinatorLeaves,
   findCoordinatorLeaf,
+  focusCoordinatorPane,
   moveCoordinatorConversation,
   reorderCoordinatorConversations,
   resizeCoordinatorSplit,
@@ -44,6 +46,7 @@ import {
 import {
   customCollisionDetection,
   getTerminalTabDragEndAction,
+  type TerminalTabDragEndAction,
 } from "@/components/terminal/TerminalContainer.helpers";
 import { DropZoneOverlay } from "@/components/pane-layout/DropZoneOverlay";
 import { MobilePaneSwitcher } from "@/components/pane-layout/MobilePaneSwitcher";
@@ -131,31 +134,7 @@ export function CoordinatorPaneTree({ layout, ...props }: CoordinatorPaneTreePro
           return leaf ? { tabs: leaf.conversationIds.map((id) => ({ id })) } : null;
         },
       });
-      if (action.type === "split") {
-        onLayoutChange((current) =>
-          splitCoordinatorPaneAtEdge(
-            current,
-            action.targetPaneId,
-            action.edge,
-            action.tabId,
-            action.fromPaneId,
-          ),
-        );
-      } else if (action.type === "move") {
-        onLayoutChange((current) =>
-          moveCoordinatorConversation(
-            current,
-            action.fromPaneId,
-            action.toPaneId,
-            action.tabId,
-            action.toIndex,
-          ),
-        );
-      } else if (action.type === "reorder") {
-        onLayoutChange((current) =>
-          reorderCoordinatorConversations(current, action.paneId, action.fromIndex, action.toIndex),
-        );
-      }
+      onLayoutChange(coordinatorDragEndChange(action, String(event.active.id)));
     },
     [dragOverPaneId, layout.root, onLayoutChange],
   );
@@ -306,22 +285,58 @@ function PaneLeafView({ pane }: { pane: CoordinatorPaneLeaf }) {
         // once there is more than one.
         isSplit && isFocused && "ring-1 ring-primary/20",
       )}
-      onPointerDownCapture={() => onFocusPane(pane.id)}
+      // A press in the tab strip leaves focusing to the control pressed: a tab
+      // selects itself (focusing here first would select this group's front
+      // tab, then the clicked one, two writes), and a drag focuses the group
+      // when it ends. A portalled menu or dialog reaches here through React
+      // only, and is not a press in the group either.
+      onPointerDownCapture={(event) => {
+        if (focusesPane(event.currentTarget, event.target)) onFocusPane(pane.id);
+      }}
       onFocusCapture={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget)) onFocusPane(pane.id);
+        if (!focusesPane(event.currentTarget, event.target)) return;
+        if (
+          !event.currentTarget.contains(event.relatedTarget) ||
+          (event.relatedTarget instanceof Element &&
+            event.relatedTarget.closest("[data-coordinator-tab-strip]"))
+        ) {
+          onFocusPane(pane.id);
+        }
       }}
       onClick={() => onFocusPane(pane.id)}
     >
       <div
         ref={setNodeRef}
+        data-coordinator-tab-strip=""
         className={cn(TAB_STRIP_CLASS, "shrink-0 pr-2", isOver && "bg-primary/10")}
       >
-        <SortableContext items={sortableIds} strategy={horizontalListSortingStrategy}>
-          {pane.conversationIds.map((id) => renderTab(id, pane, isFocused))}
-        </SortableContext>
+        {/* Own only tab controls, leaving adjacent action buttons outside
+            the tablist's accessibility ownership without changing the row. */}
+        <div
+          role="tablist"
+          aria-label="Coordinator conversations"
+          aria-orientation="horizontal"
+          aria-owns={pane.conversationIds
+            .map((id) => coordinatorTabElementId(pane.id, id))
+            .join(" ")}
+          className="sr-only"
+        />
+        <div className="flex shrink-0 items-center gap-0.5 self-stretch" onKeyDown={moveTabFocus}>
+          <SortableContext items={sortableIds} strategy={horizontalListSortingStrategy}>
+            {pane.conversationIds.map((id) => renderTab(id, pane, isFocused))}
+          </SortableContext>
+        </div>
         {renderStripActions(pane)}
       </div>
-      <div className="relative min-h-0 flex-1">
+      <div
+        className="relative min-h-0 flex-1"
+        {...(pane.activeConversationId
+          ? {
+              role: "tabpanel",
+              "aria-labelledby": coordinatorTabElementId(pane.id, pane.activeConversationId),
+            }
+          : {})}
+      >
         {renderContent(pane, isFocused)}
         <DropZoneOverlay paneId={pane.id} />
       </div>
@@ -329,7 +344,92 @@ function PaneLeafView({ pane }: { pane: CoordinatorPaneLeaf }) {
   );
 }
 
-/** A coordinator tab that can be dragged between groups. */
+/**
+ * The layout change a finished drag makes. Every drag focuses a group: the
+ * one the tab moved to, or the one it started in, because a drag does not
+ * click and the strip leaves focusing to a tab's own click.
+ */
+export function coordinatorDragEndChange(
+  action: TerminalTabDragEndAction,
+  activeId: string,
+): (layout: CoordinatorPaneLayout) => CoordinatorPaneLayout {
+  // A drop that changes nothing still focuses the group the drag started in.
+  const orFocusSource =
+    (paneId: string, change: (layout: CoordinatorPaneLayout) => CoordinatorPaneLayout) =>
+    (current: CoordinatorPaneLayout) => {
+      const next = change(current);
+      return next === current ? focusCoordinatorPane(current, paneId) : next;
+    };
+  switch (action.type) {
+    case "split":
+      return orFocusSource(action.fromPaneId, (current) =>
+        splitCoordinatorPaneAtEdge(
+          current,
+          action.targetPaneId,
+          action.edge,
+          action.tabId,
+          action.fromPaneId,
+        ),
+      );
+    case "move":
+      return orFocusSource(action.fromPaneId, (current) =>
+        moveCoordinatorConversation(
+          current,
+          action.fromPaneId,
+          action.toPaneId,
+          action.tabId,
+          action.toIndex,
+        ),
+      );
+    case "reorder":
+      return (current) =>
+        focusCoordinatorPane(
+          reorderCoordinatorConversations(current, action.paneId, action.fromIndex, action.toIndex),
+          action.paneId,
+        );
+    case "none": {
+      const sourcePaneId = parseDraggableTabId(activeId)?.paneId;
+      return (current) => (sourcePaneId ? focusCoordinatorPane(current, sourcePaneId) : current);
+    }
+  }
+}
+
+/** The element id of a conversation's tab, which its group's panel is labelled by. */
+export function coordinatorTabElementId(paneId: string, conversationId: string): string {
+  return `coordinator-tab-${paneId}-${conversationId}`;
+}
+
+function focusesPane(pane: HTMLElement, target: EventTarget | null): boolean {
+  return (
+    target instanceof Node &&
+    pane.contains(target) &&
+    !(target instanceof Element && target.closest("[data-coordinator-tab-strip]"))
+  );
+}
+
+/** Arrow keys, Home and End move focus between a strip's tabs; Enter or Space selects. */
+function moveTabFocus(event: KeyboardEvent<HTMLDivElement>) {
+  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+  const tabs = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('[role="tab"]'));
+  const current = tabs.findIndex((tab) => tab === event.target);
+  if (current < 0) return;
+  event.preventDefault();
+  const next =
+    event.key === "Home"
+      ? 0
+      : event.key === "End"
+        ? tabs.length - 1
+        : (current + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+  tabs[next]?.focus();
+}
+
+/**
+ * A coordinator tab that can be dragged between groups.
+ *
+ * The shell only carries the drag: the `role="tab"` control is the button the
+ * page renders inside it, so `useSortable`'s button role and tab stop are not
+ * applied here, which would nest the tab's controls inside another control.
+ */
 export function SortableCoordinatorTab({
   conversationId,
   paneId,
@@ -337,14 +437,14 @@ export function SortableCoordinatorTab({
   style,
   ...shell
 }: ComponentProps<typeof TabShell> & { conversationId: string; paneId: string }) {
-  const { setNodeRef, attributes, listeners, transform, transition, isDragging } = useSortable({
+  const { setNodeRef, listeners, transform, transition, isDragging } = useSortable({
     id: createDraggableTabId(conversationId, paneId),
   });
   return (
     <TabShell
       ref={setNodeRef}
+      role="presentation"
       style={{ ...style, transform: CSS.Translate.toString(transform), transition }}
-      {...attributes}
       {...listeners}
       className={cn(
         "cursor-grab active:cursor-grabbing",

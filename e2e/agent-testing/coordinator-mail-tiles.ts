@@ -1,7 +1,5 @@
-import {
-  createPeerMailNativeMessagesFromCarrier,
-  isPeerMailCarrierContent,
-} from "../../apps/web/src/lib/chat/client-only-messages";
+import { isPeerMailCarrierContent } from "@orkestrator/protocol/agent-mail";
+import { createPeerMailNativeMessagesFromCarrier } from "../../apps/web/src/lib/chat/client-only-messages";
 import type {
   CoordinatorLiveCheck,
   CoordinatorTranscriptMessage,

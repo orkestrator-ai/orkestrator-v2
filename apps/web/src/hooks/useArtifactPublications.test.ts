@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import {
   TRANSCRIPT_ARTIFACT_COMMANDS,
   type ArtifactPublicationView,
@@ -9,6 +9,7 @@ import { dispatchResourceChange, resetResourceSync } from "@/lib/resource-sync";
 import type { RichTranscriptScope } from "@/lib/chat/rich-identity";
 import {
   clearArtifactPublicationCache,
+  clearArtifactPublicationsForEnvironment,
   MAX_LEDGER_PAGES,
   MAX_RETAINED_PUBLICATIONS,
   readArtifactLedger,
@@ -113,6 +114,61 @@ describe("readArtifactLedger", () => {
 });
 
 describe("useArtifactPublications live updates", () => {
+  test("an environment clear drops all its ledgers while other environments retain theirs", async () => {
+    const sameEnvironment = { ...SCOPE, logicalSessionKey: "env-env-1:tab-2" };
+    const otherEnvironment = {
+      ...SCOPE,
+      environmentId: "env-2",
+      logicalSessionKey: "env-env-2:tab-1",
+    };
+    let holdReads = false;
+    const pending: Array<() => void> = [];
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command !== TRANSCRIPT_ARTIFACT_COMMANDS.listPublications) return undefined;
+      if (holdReads) {
+        await new Promise<void>((resolve) => pending.push(resolve));
+      }
+      return { publications: [publication(1)], nextSequence: null };
+    });
+    const first = renderHook(() => useArtifactPublications(SCOPE, []));
+    const second = renderHook(() => useArtifactPublications(sameEnvironment, []));
+    const other = renderHook(() => useArtifactPublications(otherEnvironment, []));
+    await waitFor(() => {
+      expect(first.result.current).toHaveLength(1);
+      expect(second.result.current).toHaveLength(1);
+      expect(other.result.current).toHaveLength(1);
+    });
+
+    holdReads = true;
+    try {
+      act(() => clearArtifactPublicationsForEnvironment(SCOPE.environmentId));
+      await waitFor(() => expect(pending).toHaveLength(3));
+      // None of the new-epoch reads has answered: only the cleared environment is empty.
+      expect(first.result.current).toHaveLength(0);
+      expect(second.result.current).toHaveLength(0);
+      expect(other.result.current).toHaveLength(1);
+
+      other.unmount();
+      const remountedOther = renderHook(() => useArtifactPublications(otherEnvironment, []));
+      const remountedCleared = renderHook(() => useArtifactPublications(SCOPE, []));
+      expect(remountedOther.result.current).toHaveLength(1);
+      expect(remountedCleared.result.current).toHaveLength(0);
+
+      holdReads = false;
+      await act(async () => {
+        for (const release of pending) release();
+      });
+      await waitFor(() => {
+        expect(first.result.current).toHaveLength(1);
+        expect(second.result.current).toHaveLength(1);
+        expect(remountedOther.result.current).toHaveLength(1);
+        expect(remountedCleared.result.current).toHaveLength(1);
+      });
+    } finally {
+      for (const release of pending) release();
+    }
+  });
+
   test("a transcript-artifact event for this conversation re-reads the ledger", async () => {
     let total = 1;
     const calls = serveLedger(() => total);

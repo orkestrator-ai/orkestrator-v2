@@ -51,6 +51,25 @@ desktop's Report a bug sheet ([bug-report.md](bug-report.md)) through
 `packages/protocol/src/node/bug-report-facts.ts`. Edit them there when the
 data-directory layout, log names or settings labels they cite change.
 
+### Log levels for `serve`
+
+There is no `--log-level` or `--log-category` flag. A service's log levels come from the
+`ORKESTRATOR_LOG_LEVEL` environment variable, set when it starts:
+
+```bash
+ORKESTRATOR_LOG_LEVEL=warn orkestrator serve
+ORKESTRATOR_LOG_LEVEL=info,bridge=debug,updater=trace orkestrator serve --port 4000
+```
+
+It takes a default level, areas, or both, in the syntax
+[logging.md](logging.md#live-settings) describes, sits on top of the stored
+**Log Detail** setting, and reaches every bridge the backend launches. Logging is
+configured before flags are parsed, so a flag would have to be read twice for no
+new ability; one syntax serves the desktop, `serve` and the bridges alike. A
+launcher that cannot set an environment (a service manager does: systemd's
+`Environment=`, launchd's `EnvironmentVariables`) can use **Log Detail** in
+Settings instead, which applies live.
+
 ## Selecting a backend
 
 Resolution is explicit and never falls back:

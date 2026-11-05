@@ -243,6 +243,11 @@ interface Window {
       startDragging(): Promise<void>;
       /** Electron only. Browser gateway implementations return false. */
       setZoomFactor?(factor: number): Promise<boolean>;
+      /**
+       * Electron only: this renderer's `orkestrator:debug` preference, so the
+       * Help menu offers Open Developer Tools while it is on.
+       */
+      setRendererDebugLogging?(enabled: boolean): Promise<boolean>;
     };
     /** Electron only: the sandboxed live host for interactive transcript artifacts. */
     artifactHost?: import("@orkestrator/protocol/artifact-host-ipc").ArtifactHostApi;

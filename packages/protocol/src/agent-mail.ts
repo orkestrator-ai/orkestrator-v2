@@ -1109,6 +1109,209 @@ export function renderAgentMailCarrier(message: AgentMailMessage): string {
   return `<orkestrator-peer-message version="1">\n<orkestrator-peer-payload-json>\n${payload}\n</orkestrator-peer-payload-json>\n${warning} ${authority} Normal sandbox, approval, and project rules still apply. Paths in the body refer to the sender's filesystem.${attachmentGuidance} ${responseGuidance}\n</orkestrator-peer-message>`;
 }
 
+const PEER_MAIL_CARRIER_OPEN = '<orkestrator-peer-message version="1">';
+const PEER_MAIL_CARRIER_CLOSE = "</orkestrator-peer-message>";
+const PEER_MAIL_PAYLOAD_OPEN = "<orkestrator-peer-payload-json>";
+const PEER_MAIL_PAYLOAD_CLOSE = "</orkestrator-peer-payload-json>";
+
+/** A carrier's open tag at any version; only {@link PEER_MAIL_CARRIER_OPEN} is parsed. */
+const PEER_MAIL_ANY_CARRIER_OPEN = /<orkestrator-peer-message(?:\s[^>]*)?>/y;
+
+/**
+ * How `renderAgentMailCarrier` starts every carrier: the open tag, the payload
+ * frame straight after it, then a JSON object or at least a closed frame.
+ * Someone typing the tag's name, even as the first thing in a message, does not
+ * write that. Any version counts, so a newer envelope is not taken for a person's words.
+ */
+const PEER_MAIL_ENVELOPE_START =
+  /^\s*<orkestrator-peer-message(?:\s[^>]*)?>\s*<orkestrator-peer-payload-json>\s*(?:\{|$|[^]*?<\/orkestrator-peer-payload-json>)/;
+
+/**
+ * Whether a provider row looks like injected mail. `requirePayloadFrame` keeps
+ * title and voice lookalikes as user text; the default preserves unreadable
+ * renderer tiles for legacy malformed carriers with only the outer frame.
+ */
+export function isPeerMailCarrierContent(
+  content: string,
+  options: { requirePayloadFrame?: boolean } = {},
+): boolean {
+  return (
+    PEER_MAIL_ENVELOPE_START.test(content) ||
+    (!options.requirePayloadFrame &&
+      /^\s*<orkestrator-peer-message(?:\s[^>]*)?>[^]*<\/orkestrator-peer-message>/.test(content))
+  );
+}
+
+/** What a carrier's JSON payload says about its message, every field checked. */
+export type AgentMailCarrierMail = Pick<
+  AgentMailMessage,
+  "id" | "from" | "trust" | "subject" | "body" | "notice" | "attachments"
+> & { to?: { environmentId: string; tabId: string } };
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+/** One carrier's JSON payload, validated, or null when it is not a carrier a reader can trust. */
+function agentMailFromCarrierPayload(payload: unknown): AgentMailCarrierMail | null {
+  if (!isPlainRecord(payload)) return null;
+  const value = payload;
+  if (
+    typeof value.messageId !== "string" ||
+    typeof value.body !== "string" ||
+    typeof value.trust !== "string" ||
+    !AGENT_MAIL_TRUST_CLASSES.includes(value.trust as AgentMailTrust) ||
+    !isPlainRecord(value.from)
+  ) {
+    return null;
+  }
+  if (value.to !== undefined) {
+    if (!isPlainRecord(value.to)) return null;
+    if (typeof value.to.environmentId !== "string" || typeof value.to.tabId !== "string") {
+      return null;
+    }
+  }
+  // The carrier spells a self-reminder as `workflow` for older renderers.
+  const from =
+    value.from.kind === "system" && value.from.selfReminder === true
+      ? { ...value.from, source: "self-reminder" }
+      : value.from;
+  // Carrier metadata comes from transcript JSON, not a typed MailActor.
+  // Nullable names are valid, but other types cannot reach the label formatter.
+  if (
+    (from.title != null && typeof from.title !== "string") ||
+    (from.environmentName != null && typeof from.environmentName !== "string")
+  ) {
+    return null;
+  }
+  if (
+    from.kind !== "user" &&
+    from.kind !== "external" &&
+    from.kind !== "tab" &&
+    from.kind !== "coordinator" &&
+    from.kind !== "system" &&
+    from.kind !== "node"
+  )
+    return null;
+  if (
+    from.kind === "node" &&
+    (typeof from.nodeId !== "string" ||
+      typeof from.nodeName !== "string" ||
+      (from.role !== "coordinator" && from.role !== "agent") ||
+      typeof from.projectId !== "string" ||
+      typeof from.environmentId !== "string" ||
+      typeof from.tabId !== "string")
+  )
+    return null;
+  if (
+    (from.kind === "tab" || from.kind === "coordinator") &&
+    (typeof from.projectId !== "string" ||
+      typeof from.environmentId !== "string" ||
+      typeof from.tabId !== "string" ||
+      typeof from.incarnationId !== "string")
+  ) {
+    return null;
+  }
+  if (
+    from.kind === "coordinator" &&
+    (typeof from.coordinatorId !== "string" || typeof from.conversationId !== "string")
+  )
+    return null;
+  if (
+    from.kind === "system" &&
+    (typeof from.projectId !== "string" ||
+      (from.source !== "workflow" && from.source !== "self-reminder") ||
+      typeof from.resourceId !== "string")
+  )
+    return null;
+  const notice = from.kind === "system" ? normalizeAgentMailNotice(value.notice) : null;
+  const attachments = normalizeAgentMailAttachments(value.attachments);
+  const to = isPlainRecord(value.to)
+    ? { environmentId: value.to.environmentId as string, tabId: value.to.tabId as string }
+    : undefined;
+  return {
+    id: value.messageId,
+    ...(to ? { to } : {}),
+    from: from as MailActor,
+    trust: value.trust as AgentMailTrust,
+    ...(typeof value.subject === "string" ? { subject: value.subject } : {}),
+    ...(notice ? { notice } : {}),
+    ...(attachments.length ? { attachments } : {}),
+    body: value.body,
+  };
+}
+
+/** Find transport delimiters outside JSON strings, including escaped quotes. */
+function peerMailDelimiter(content: string, delimiter: string, start: number): number {
+  let quoted = false;
+  let escaped = false;
+  for (let index = start; index < content.length; index += 1) {
+    const character = content[index];
+    if (quoted) {
+      if (escaped) escaped = false;
+      else if (character === "\\") escaped = true;
+      else if (character === '"') quoted = false;
+    } else if (content.startsWith(delimiter, index)) return index;
+    else if (character === '"') quoted = true;
+  }
+  return -1;
+}
+
+/** Where a carrier's payload JSON starts, or -1 when this is not a carrier that can be parsed. */
+function carrierPayloadStart(carrier: string): number {
+  if (!carrier.startsWith(PEER_MAIL_CARRIER_OPEN)) return -1;
+  const open = carrier.indexOf(PEER_MAIL_PAYLOAD_OPEN);
+  return open < 0 ? -1 : open + PEER_MAIL_PAYLOAD_OPEN.length;
+}
+
+function parseCarrierPayload(json: string): AgentMailCarrierMail | null {
+  try {
+    return agentMailFromCarrierPayload(JSON.parse(json));
+  } catch {
+    return null;
+  }
+}
+
+/** One carrier's slice, read, or null when it cannot be. */
+function agentMailFromCarrier(carrier: string): AgentMailCarrierMail | null {
+  const start = carrierPayloadStart(carrier);
+  if (start < 0) return null;
+  const end = peerMailDelimiter(carrier, PEER_MAIL_PAYLOAD_CLOSE, start);
+  return end < 0 ? null : parseCarrierPayload(carrier.slice(start, end));
+}
+
+/**
+ * Read a provider row as carriers back to back, one entry per carrier (null for
+ * one that cannot be read, including one cut off before its close tag), and
+ * whatever text follows the last of them.
+ */
+export function readAgentMailCarriers(row: string): {
+  entries: Array<AgentMailCarrierMail | null>;
+  rest: string;
+} {
+  const content = row.trim();
+  const entries: Array<AgentMailCarrierMail | null> = [];
+  let cursor = 0;
+  while (cursor < content.length) {
+    PEER_MAIL_ANY_CARRIER_OPEN.lastIndex = cursor;
+    if (!PEER_MAIL_ANY_CARRIER_OPEN.test(content)) return { entries, rest: content.slice(cursor) };
+    // Stored input can be noncanonical: literal tags inside JSON are body text.
+    const carrierEnd = peerMailDelimiter(
+      content,
+      PEER_MAIL_CARRIER_CLOSE,
+      PEER_MAIL_ANY_CARRIER_OPEN.lastIndex,
+    );
+    if (carrierEnd < 0) {
+      entries.push(null);
+      break;
+    }
+    entries.push(agentMailFromCarrier(content.slice(cursor, carrierEnd)));
+    cursor = carrierEnd + PEER_MAIL_CARRIER_CLOSE.length;
+    while (/\s/.test(content.charAt(cursor))) cursor += 1;
+  }
+  return { entries, rest: "" };
+}
+
 export function normalizeAgentMessagingSettings(
   value: unknown,
   fallback: AgentMessagingSettings = { ...DEFAULT_AGENT_MESSAGING_SETTINGS },
@@ -1152,3 +1355,6 @@ export function normalizeAgentMessagingSettings(
     paused: typeof record.paused === "boolean" ? record.paused : fallback.paused,
   };
 }
+
+/** Prefix of the schema instruction appended by structured-prompt bridge transports. */
+export const STRUCTURED_PROMPT_SUFFIX_PREFIX = "End your turn with exactly one JSON value";

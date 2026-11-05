@@ -1025,9 +1025,14 @@ describe("manifest reconciliation", () => {
 describe("scoped resource reconciliation", () => {
   test("delivers scoped changes and waits for asynchronous handlers", async () => {
     const completed: string[] = [];
+    let finish!: () => void;
+    const delivered = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
     onResourceChanged("project-notes", async (received) => {
       await tick(10);
       completed.push(received.id);
+      finish();
     });
     const manifest: ScopedResourceRevisionManifest = {
       generation: "a".repeat(32),
@@ -1042,7 +1047,7 @@ describe("scoped resource reconciliation", () => {
     const loadScopedManifest = mock(async () => manifest);
 
     startResourceSync({ loadScopedManifest });
-    await tick(30);
+    await delivered;
 
     expect(loadScopedManifest).toHaveBeenCalledTimes(1);
     expect(completed).toEqual(["project-1"]);

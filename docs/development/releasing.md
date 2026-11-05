@@ -62,7 +62,12 @@ Each suffix also names the release's updater feed (`latest-mac.yml`,
 
 `install.sh` on the website runs one stated Stable release rather than an npm
 tag, so a bad publish does not reach it until someone moves the pin (step 5
-below). Beta and Unstable users pick their own release:
+below). It runs that release from the lockfile the release publishes
+(`resources/release-runtime/`), the way the standalone service installs an
+update, and a host without Bun gets the `mise.toml` Bun checked against stated
+SHA-256s; a Bun bump moves those (see
+[upgrade-agents.md](upgrade-agents.md)). Beta and Unstable users pick their own
+release:
 
 ```bash
 curl -fsSL https://orkestrator.dev/install.sh | ORKESTRATOR_INSTALL_VERSION=alpha bash

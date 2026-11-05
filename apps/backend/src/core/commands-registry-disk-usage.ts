@@ -1,12 +1,20 @@
 import { assertOnlyKeys, asString } from "./commands-validation.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
-import { getEnvironmentDiskUsage, listDiskUsageEnvironments } from "./disk-usage.js";
+import {
+  getEnvironmentDiskUsage,
+  listDiskUsageEnvironments,
+  listProjectGitMirrorUsage,
+} from "./disk-usage.js";
 import { getWorktreeLocations, updateWorktreeLocations } from "./worktree-locations.js";
 
 export function registerDiskUsageCommands(register: CommandRegistrar): void {
   register("list_disk_usage_environments", (args, context) => {
     assertOnlyKeys(args, [], "arguments");
     return listDiskUsageEnvironments(context);
+  });
+  register("list_project_git_mirror_usage", (args, context) => {
+    assertOnlyKeys(args, [], "arguments");
+    return listProjectGitMirrorUsage(context);
   });
   register("get_environment_disk_usage", (args, context) => {
     assertOnlyKeys(args, ["environmentId", "refresh"], "arguments");

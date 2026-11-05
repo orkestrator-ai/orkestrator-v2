@@ -31,19 +31,8 @@ export function captureImageRepresentation(image: CaptureImageLike): {
   };
 }
 
-function pngDataUrlByteLength(dataUrl: string): number {
-  const prefix = "data:image/png;base64,";
-  if (!dataUrl.startsWith(prefix)) throw new Error("The browser frame did not return a PNG image");
-  const base64 = dataUrl.slice(prefix.length);
-  if (!base64 || base64.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(base64)) {
-    throw new Error("The browser frame returned an invalid PNG image");
-  }
-  const padding = base64.endsWith("==") ? 2 : base64.endsWith("=") ? 1 : 0;
-  return (base64.length / 4) * 3 - padding;
-}
-
 /** Longest side ≤ 2000 px and ≤ 8 MiB; shrinks further only when the PNG is too large. */
-export function boundedScreenshotDataUrl(image: CaptureImageLike): string {
+export function boundedScreenshotPng(image: CaptureImageLike): Buffer {
   const originalSize = captureImageRepresentation(image);
   const longestSide = Math.max(originalSize.width, originalSize.height);
   const initialScale = Math.min(1, MAX_SCREENSHOT_DIMENSION / longestSide);
@@ -53,11 +42,11 @@ export function boundedScreenshotDataUrl(image: CaptureImageLike): string {
   let scaleFactor = initialScale < 1 ? 1 : originalSize.scaleFactor;
 
   for (let attempt = 0; attempt < 12; attempt += 1) {
-    const dataUrl = candidate.toDataURL({ scaleFactor });
-    const byteLength = pngDataUrlByteLength(dataUrl);
-    if (byteLength <= MAX_SCREENSHOT_BYTES) return dataUrl;
+    const png = candidate.toPNG({ scaleFactor });
+    if (png.length === 0) throw new Error("The browser frame did not return a PNG image");
+    if (png.length <= MAX_SCREENSHOT_BYTES) return png;
     if (width === 1 && height === 1) break;
-    const byteScale = Math.sqrt(MAX_SCREENSHOT_BYTES / byteLength) * 0.92;
+    const byteScale = Math.sqrt(MAX_SCREENSHOT_BYTES / png.length) * 0.92;
     const scale = Math.min(0.85, Math.max(0.1, byteScale));
     const nextWidth = Math.max(1, Math.floor(width * scale));
     const nextHeight = Math.max(1, Math.floor(height * scale));
@@ -175,7 +164,7 @@ export function cropPng(
   png: Buffer,
   rect: WebAnnotationRect,
   api: CaptureNativeImageApi | undefined,
-): { dataUrl: string; width: number; height: number } | null {
+): { png: Buffer; width: number; height: number } | null {
   if (!api?.createFromBuffer) return null;
   try {
     const source = api.createFromBuffer(png);
@@ -194,9 +183,9 @@ export function cropPng(
     if (bounded.width < 1 || bounded.height < 1) return null;
     const cropped = source.crop(bounded);
     const croppedSize = cropped.getSize();
-    const dataUrl = cropped.toDataURL();
-    if (!dataUrl.startsWith("data:image/png;base64,")) return null;
-    return { dataUrl, width: croppedSize.width, height: croppedSize.height };
+    const croppedPng = cropped.toPNG();
+    if (croppedPng.length === 0) return null;
+    return { png: croppedPng, width: croppedSize.width, height: croppedSize.height };
   } catch {
     return null;
   }

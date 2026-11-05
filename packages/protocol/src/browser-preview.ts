@@ -362,15 +362,21 @@ export interface BrowserPreviewExpiredCaptureNotice {
   whileClosed: boolean;
 }
 
+/** A region crop as it crosses IPC: the PNG as bytes. */
+export type BrowserPreviewRegionCropWire = Omit<BrowserPreviewRegionCrop, "imageDataUrl"> & {
+  imageBytes: Uint8Array;
+};
+
 /**
- * A pending capture as it crosses IPC: the spooled PNG as bytes. A data URL is a
- * third larger and costs the main thread a base64 pass and a string clone per
- * read, so the preload makes it, on the renderer's side of the boundary.
+ * A pending capture as it crosses IPC: the spooled PNG and its region crop as
+ * bytes. A data URL is a third larger and costs the main thread a base64 pass
+ * and a string clone per read, so the preload makes them, on the renderer's side
+ * of the boundary.
  */
 export type BrowserPreviewPendingCaptureWire = Omit<
   BrowserPreviewPendingCapture,
-  "imageDataUrl"
-> & { imageBytes: Uint8Array | null };
+  "imageDataUrl" | "regionCrop"
+> & { imageBytes: Uint8Array | null; regionCrop?: BrowserPreviewRegionCropWire | null };
 
 export interface BrowserPreviewReplaceImageInput {
   imageDataUrl: string | null;

@@ -354,6 +354,20 @@ also one `bootstrap.<domain>` host. The operator provides:
 - a listen address. Only loopback or Tailscale addresses are accepted. Public
   binds are refused.
 
+Choose a preview domain on a different site from Orkestrator itself. A preview
+host that is same-site with the gateway can send it same-site requests and set
+cookies on the shared parent domain (cookie tossing). Publication compares the
+domain against the application's own origins (gateway, Tailscale Serve, web
+client and allowed origins) and, when they share a site, still serves but adds
+a `warning` to the publication status, shown under the publication settings,
+and logs `preview/publication.same-site` once per configuration. It warns
+rather than refuses because the site comparison is an approximation without a
+public suffix list and some tailnet deployments have no other domain. Each
+tailnet name under `ts.net` counts as its own site, as on the Public Suffix
+List: `preview.<tailnet>.ts.net` warns when Orkestrator is served from
+`<machine>.<tailnet>.ts.net`, and a different tailnet does not
+(`apps/backend/src/core/host-site.ts`).
+
 Opening a preview works like this:
 
 1. A trusted client creates a `browser-top-level` attachment and receives a

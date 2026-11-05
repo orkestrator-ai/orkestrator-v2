@@ -124,7 +124,7 @@ export function clearArtifactRequestCache(): void {
   settledBytes = 0;
   inflight.clear();
   latestGeneration.clear();
-  searchBodies.clear();
+  clearSearchBodiesWhere(() => true);
   bumpEpoch();
 }
 
@@ -155,6 +155,7 @@ function clearArtifactRequestsWhere(
 }
 
 export function clearArtifactRequestsForEnvironment(environmentId: string): void {
+  clearSearchBodiesWhere((scope) => scope.environmentId === environmentId);
   clearArtifactRequestsWhere(
     (parts) => parts[2] === environmentId,
     (parts) => parts[1] === environmentId,
@@ -162,6 +163,12 @@ export function clearArtifactRequestsForEnvironment(environmentId: string): void
 }
 
 export function clearArtifactRequestsForConversation(scope: RichConversationScope): void {
+  clearSearchBodiesWhere(
+    (held) =>
+      (held.backendId ?? "") === (scope.backendId ?? "") &&
+      held.environmentId === scope.environmentId &&
+      held.logicalSessionKey === scope.logicalSessionKey,
+  );
   clearArtifactRequestsWhere(
     (parts) =>
       parts[1] === (scope.backendId ?? "") &&
@@ -652,33 +659,78 @@ export function useArtifactRepresentation(
 /*
  * Searchable body text of published artifact cards, keyed by publication id.
  * A card writes it when it has loaded and is showing that body (chart or
- * workflow labels, Mermaid source while the source view is shown) and clears
- * it when it stops showing it. Find's message projection reads it
- * synchronously (`artifactPartSearchSegments` in `rich-search-text.ts`), so
- * an unloaded body contributes nothing and a loaded one matches the card's
- * body search root exactly. Bounded by count; each value is already bounded
- * by `MAX_ARTIFACT_BODY_SEARCH_CHARACTERS` (labels) or the representation
- * size (source).
+ * workflow labels, Mermaid source while the source view is shown, a static
+ * document's text once its frame reports it) and clears it when it stops
+ * showing it. Find's message projection reads it synchronously
+ * (`artifactPartSearchSegments` in `rich-search-text.ts`), so an unloaded body
+ * contributes nothing and a loaded one matches the card's body search root
+ * exactly. Each entry names its conversation, so clearing that conversation's
+ * protected content takes its text too. Bounded by count and total characters;
+ * each value is already bounded by `MAX_ARTIFACT_BODY_SEARCH_CHARACTERS`
+ * (labels, document text) or the representation size (source).
  */
 const MAX_SEARCH_BODIES = 256;
-const searchBodies = new Map<string, { artifactId: string; revision: number; text: string }>();
+const MAX_SEARCH_BODY_CHARACTERS = 8 * 1024 * 1024;
+const searchBodies = new Map<
+  string,
+  { artifactId: string; revision: number; text: string; scope: RichConversationScope }
+>();
+let searchBodyCharacters = 0;
+const searchBodyListeners = new Set<() => void>();
+
+function notifySearchBodies(): void {
+  for (const listener of Array.from(searchBodyListeners)) listener();
+}
+
+function subscribeSearchBodies(listener: () => void): () => void {
+  searchBodyListeners.add(listener);
+  return () => {
+    searchBodyListeners.delete(listener);
+  };
+}
+
+function dropSearchBody(publicationId: string): boolean {
+  const entry = searchBodies.get(publicationId);
+  if (!entry) return false;
+  searchBodies.delete(publicationId);
+  searchBodyCharacters -= entry.text.length;
+  return true;
+}
+
+function clearSearchBodiesWhere(matches: (scope: RichConversationScope) => boolean): void {
+  let changed = false;
+  for (const [publicationId, entry] of Array.from(searchBodies.entries())) {
+    if (matches(entry.scope)) changed = dropSearchBody(publicationId) || changed;
+  }
+  if (changed) notifySearchBodies();
+}
 
 export function rememberArtifactSearchBody(
   artifact: { publicationId: string; artifactId: string; revision: number },
   text: string | null,
+  scope: RichConversationScope,
 ): void {
-  searchBodies.delete(artifact.publicationId);
-  if (text === null || text.length === 0) return;
+  const dropped = dropSearchBody(artifact.publicationId);
+  if (text === null || text.length === 0) {
+    if (dropped) notifySearchBodies();
+    return;
+  }
   searchBodies.set(artifact.publicationId, {
     artifactId: artifact.artifactId,
     revision: artifact.revision,
     text,
+    scope,
   });
-  while (searchBodies.size > MAX_SEARCH_BODIES) {
+  searchBodyCharacters += text.length;
+  while (
+    searchBodies.size > MAX_SEARCH_BODIES ||
+    searchBodyCharacters > MAX_SEARCH_BODY_CHARACTERS
+  ) {
     const oldest = searchBodies.keys().next().value;
     if (oldest === undefined) break;
-    searchBodies.delete(oldest);
+    dropSearchBody(oldest);
   }
+  notifySearchBodies();
 }
 
 /** The loaded body text for an artifact part's reference, or null. */
@@ -689,4 +741,9 @@ export function cachedArtifactSearchBody(artifact: unknown): string | null {
   const entry = searchBodies.get(ref.publicationId);
   if (!entry || entry.artifactId !== ref.artifactId || entry.revision !== ref.revision) return null;
   return entry.text;
+}
+
+/** `cachedArtifactSearchBody`, for a card whose search root follows the cache. */
+export function useCachedArtifactSearchBody(artifact: unknown): string | null {
+  return useSyncExternalStore(subscribeSearchBodies, () => cachedArtifactSearchBody(artifact));
 }

@@ -79,12 +79,18 @@ export function useFederatedEnvironmentActions(
     });
   };
 
-  const run = async (label: string, action: () => Promise<void>) => {
-    if (!claimSidebarAction(environment.key)) return;
+  const attempt = async (label: string, action: () => Promise<void>) => {
     try {
       await action();
     } catch (error) {
       reportFederatedActionError(label, machine.name, error);
+    }
+  };
+
+  const run = async (label: string, action: () => Promise<void>) => {
+    if (!claimSidebarAction(environment.key)) return;
+    try {
+      await attempt(label, action);
     } finally {
       releaseSidebarAction(environment.key);
     }
@@ -150,7 +156,8 @@ export function useFederatedEnvironmentActions(
           environmentId: fork.environmentId,
           title: fork.name,
         });
-        await run(`Start fork ${fork.name}`, () =>
+        // Still under the fork's claim on this row: claiming again would refuse the start.
+        await attempt(`Start fork ${fork.name}`, () =>
           startFederatedEnvironment(portal, {
             backendId: ref.backendId,
             environmentId: fork.environmentId,

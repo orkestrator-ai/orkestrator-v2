@@ -449,7 +449,8 @@ export class AgentAccountAutoSwitcher {
     if (waiting && this.now() - waiting.checkedAt < USAGE_LIMIT_RECHECK_MS) return "wait";
     const state = await this.automaticState(platform);
     if (!state) return "stop";
-    if (waiting?.confirmedUntil !== undefined && this.now() < waiting.confirmedUntil) {
+    if (waiting?.confirmedUntil !== undefined) {
+      if (this.now() >= waiting.confirmedUntil) return "stop";
       return this.resendOnceBridgeIsFree(input);
     }
     const session = await this.deps.sessionAccount(environmentId, platform);
@@ -508,8 +509,11 @@ export class AgentAccountAutoSwitcher {
     const waiting = this.waitingSince.get(input.requestId)!;
     waiting.bridgeSince ??= this.now();
     // Attribution and limit proof belong to the stopped request, not the
-    // replacement bridge. Never reuse that proof beyond the limit's reset.
-    waiting.confirmedUntil ??= proofKey ? this.confirmed.get(proofKey)?.reset : undefined;
+    // replacement bridge. A reset restores quota but does not continue the
+    // stopped turn. Keep its attribution for this bridge wait only.
+    if (proofKey && this.confirmed.has(proofKey)) {
+      waiting.confirmedUntil ??= waiting.bridgeSince + USAGE_LIMIT_BRIDGE_WAIT_MS;
+    }
     return this.now() - waiting.bridgeSince < USAGE_LIMIT_BRIDGE_WAIT_MS ? "wait" : "stop";
   }
 

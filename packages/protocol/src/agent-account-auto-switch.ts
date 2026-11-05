@@ -570,6 +570,13 @@ export interface AgentAccountAutoSwitchedEvent {
   at: string;
 }
 
+/** Older event-stream consumers predate five-hour reasons; outbox/state keep the detail. */
+export function legacyAutoSwitchEvent(
+  notice: AgentAccountAutoSwitchedEvent,
+): AgentAccountAutoSwitchedEvent {
+  return notice.reason === "five-hour" ? { ...notice, reason: "limit" } : notice;
+}
+
 export function isAgentAccountAutoSwitchedEvent(
   value: unknown,
 ): value is AgentAccountAutoSwitchedEvent {

@@ -3,6 +3,7 @@ import {
   AUTO_SWITCH_RESET_TOLERANCE_MS,
   MAX_USAGE_LIMIT_RESENDS,
   autoSwitchNoticeText,
+  legacyAutoSwitchEvent,
   confirmedLimitResetsAt,
   decideAutoSwitch,
   fiveHourWindow,
@@ -1328,4 +1329,20 @@ test("signed-out active accounts yield to signed-in accounts, and signed-out des
     reason: "signed-out",
   });
   expect(decideAutoSwitch([a, b], "b")).toEqual({ action: "stay" });
+});
+
+test("legacy events use an older reason while the outbox notice keeps five-hour", () => {
+  const notice = {
+    platform: "claude" as const,
+    from: "first",
+    to: "second",
+    reason: "five-hour" as const,
+    at: "2026-11-01T12:00:00Z",
+  };
+  const legacy = legacyAutoSwitchEvent(notice);
+  const oldReasons = ["threshold", "limit", "soonest-reset", "not-included", "signed-out"];
+  expect(oldReasons.includes(legacy.reason)).toBe(true);
+  expect(legacy).toEqual({ ...notice, reason: "limit" });
+  expect(notice.reason).toBe("five-hour");
+  expect(legacyAutoSwitchEvent({ ...notice, reason: "limit" })).toEqual(legacy);
 });

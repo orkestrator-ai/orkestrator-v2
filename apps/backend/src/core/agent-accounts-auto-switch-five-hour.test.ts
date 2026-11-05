@@ -9,6 +9,7 @@ import {
   AUTO_SWITCH_EVALUATE_INTERVAL_MS,
   AgentAccountAutoSwitcher,
   USAGE_LIMIT_READ_WAIT_MS,
+  USAGE_LIMIT_BRIDGE_WAIT_MS,
   type AutoSwitchNotice,
   type UsageLimitStopReport,
 } from "./agent-accounts-auto-switch.js";
@@ -76,7 +77,7 @@ function reading(platform: AgentAccountPlatform, limits: Limits): PlanUsageSnaps
 
 function harness(platform: AgentAccountPlatform, limits: Record<string, Limits>, active: string) {
   let clock = NOW;
-  const state = { active, limits };
+  const state = { active, limits, busy: false };
   const notices: AutoSwitchNotice[] = [];
   const reports: UsageLimitStopReport[] = [];
   const summaries = Object.keys(limits).map((id): AgentAccountSummary => ({
@@ -112,7 +113,7 @@ function harness(platform: AgentAccountPlatform, limits: Record<string, Limits>,
       account: summaries.find((entry) => entry.id === state.active)!,
       running: true,
     }),
-    bridgeBusy: async () => false,
+    bridgeBusy: async () => state.busy,
     notify: (notice) => {
       notices.push(notice);
     },
@@ -193,6 +194,36 @@ describe.each(["claude", "codex"] as const)("the 5-hour limit on %s", (platform)
       resetsAt: Date.parse(inHours(3)),
       resetHint: "3pm",
     });
+  });
+
+  test("a confirmed stopped request survives a five-hour reset during a bridge wait", async () => {
+    const limits = three();
+    limits.first = { weeklyResetHours: 24, fiveHour: 100, fiveHourResetHours: 1 / 6 };
+    const h = harness(platform, limits, "first");
+    h.state.busy = true;
+    expect(await h.stop()).toBe("wait");
+    expect(h.state.active).toBe("second");
+    h.advance(11 * 60_000);
+    limits.first!.fiveHour = 0;
+    expect(await h.stop()).toBe("wait");
+    h.advance(60_000);
+    h.state.busy = false;
+    expect(await h.stop()).toBe("resend");
+    expect(h.switchAccount).toHaveBeenCalledTimes(1);
+    // A different request cannot borrow the first request's attribution.
+    expect(await h.stop("different-request")).toBe("stop");
+  });
+
+  test("confirmed attribution still expires at the bridge wait budget", async () => {
+    const limits = three();
+    limits.first = { weeklyResetHours: 24, fiveHour: 100, fiveHourResetHours: 1 / 6 };
+    const h = harness(platform, limits, "first");
+    h.state.busy = true;
+    expect(await h.stop()).toBe("wait");
+    h.advance(USAGE_LIMIT_BRIDGE_WAIT_MS);
+    limits.first!.fiveHour = 0;
+    h.state.busy = false;
+    expect(await h.stop()).toBe("stop");
   });
 
   test("a refusal reading just under 100% still counts from the threshold", async () => {

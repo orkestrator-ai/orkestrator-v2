@@ -48,7 +48,10 @@ import {
 } from "./nodes/index.js";
 import { isBackendId, type BackendId } from "@orkestrator/protocol/federation";
 import type { GatewayNodeHooks } from "../gateway-support-core.js";
-import { AGENT_ACCOUNT_AUTO_SWITCHED_EVENT } from "@orkestrator/protocol/agent-account-auto-switch";
+import {
+  AGENT_ACCOUNT_AUTO_SWITCHED_EVENT,
+  legacyAutoSwitchEvent,
+} from "@orkestrator/protocol/agent-account-auto-switch";
 import {
   AGENT_ACCOUNT_PLATFORMS,
   AGENT_ACCOUNTS_CHANGED_EVENT,
@@ -925,7 +928,7 @@ export class OrkestratorBackend {
       notify: async ({ quietProjectId, ...notice }) => {
         // An older command node hears through its event stream; a newer one
         // ignores that and takes this machine's notice from its outbox.
-        options.emit(AGENT_ACCOUNT_AUTO_SWITCHED_EVENT, notice);
+        options.emit(AGENT_ACCOUNT_AUTO_SWITCHED_EVENT, legacyAutoSwitchEvent(notice));
         await this.coordinators.noticeRouter.deliverAutoSwitch(notice, "this machine", {
           coalesceMs: COORDINATOR_STATUS_COALESCE_MS,
           ...(quietProjectId ? { quietProjectId } : {}),

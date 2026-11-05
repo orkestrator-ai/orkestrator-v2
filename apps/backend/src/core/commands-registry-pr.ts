@@ -234,7 +234,15 @@ export function registerPullRequestCommands(
   register(
     "merge_environment_pr",
     async (
-      { environmentId, method, deleteBranch, cleanupAfterMerge, expectedHeadSha, expectedPrUrl },
+      {
+        environmentId,
+        method,
+        deleteBranch,
+        cleanupAfterMerge,
+        expectedHeadSha,
+        expectedPrUrl,
+        autoMergeEnabledAt,
+      },
       context,
     ): Promise<MergeEnvironmentPrResult> => {
       const id = asString(environmentId, "environmentId");
@@ -258,7 +266,18 @@ export function registerPullRequestCommands(
       ) {
         throw new Error("The pull request or merge effects changed; confirm the merge again");
       }
-      if (requestedCleanup) {
+      const automaticCleanup = autoMergeEnabledAt !== undefined;
+      if (
+        automaticCleanup &&
+        (environment.autoMerge !== true ||
+          environment.autoMergeEnabledAt !== autoMergeEnabledAt ||
+          environment.autoMergeCleanup !== true)
+      ) {
+        throw new Error("Integration options changed; retry with current options");
+      }
+      // Automatic intent remains revocable until confirmation; manual requests
+      // retain their independent durable recovery timestamp.
+      if (requestedCleanup && !automaticCleanup) {
         await context.storage.updateEnvironment(id, {
           cleanupAfterMergeRequestedAt: new Date().toISOString(),
           cleanupAfterMergeError: null,
@@ -353,6 +372,7 @@ export function registerPullRequestCommands(
             }
           },
           expectedHeadSha as string | undefined,
+          autoMergeEnabledAt as string | undefined,
         );
       } catch (error) {
         if (cleanupRequested) {
@@ -416,12 +436,34 @@ export function registerPullRequestCommands(
    * Turns auto-merge on or off for an environment (`pr-auto-merge.ts`). The
    * flag is durable; turning it on also asks the monitor for a fresh reading
    * before acting, so a cached pre-request reading cannot authorize a merge.
+   *
+   * `cleanupAfterMerge` (the Integrate dialog's "Auto-merge & Cleanup") also
+   * deletes the environment once auto-merge has merged the PR. Every call
+   * restates it, so turning auto-merge on again without it withdraws it.
    */
   register("set_environment_auto_merge", async (args, context) => {
-    assertOnlyKeys(args, ["environmentId", "enabled"], "arguments");
+    assertOnlyKeys(args, ["environmentId", "enabled", "cleanupAfterMerge"], "arguments");
     const id = asString(args.environmentId, "environmentId");
     const enabled = asRequiredBoolean(args.enabled, "enabled");
-    const updated = await context.storage.updateEnvironment(id, { autoMerge: enabled });
+    const cleanupAfterMerge =
+      args.cleanupAfterMerge === undefined
+        ? false
+        : asRequiredBoolean(args.cleanupAfterMerge, "cleanupAfterMerge");
+    if (enabled && cleanupAfterMerge) {
+      const environment = await context.storage.getEnvironment(id);
+      if (!environment) throw new Error(`Environment not found: ${id}`);
+      if (isProjectHomeEnvironment(environment)) {
+        throw new Error("A project's home checkout cannot be deleted after merging");
+      }
+    }
+    const current = await context.storage.getEnvironment(id);
+    if (current?.lifecycleOperation === "merging" || context.runtime.environments?.isMerging(id)) {
+      throw new Error("A merge is in progress; wait for its result before changing integration");
+    }
+    const updated = await context.storage.updateEnvironment(id, {
+      autoMerge: enabled,
+      autoMergeCleanup: enabled && cleanupAfterMerge,
+    });
     if (enabled) {
       // Advisory: the durable flag stands even if the monitor cannot check now.
       await context.runtime.prMonitor.requestRefresh(id, context).catch((error) => {
@@ -469,6 +511,28 @@ export function registerPullRequestCommands(
     const id = asString(environmentId, "environmentId");
     const environment = await context.storage.getEnvironment(id);
     if (!environment?.prRecheckAfterAgentCompletionArmedAt) return;
+    const resolveCompleted =
+      environment.autoMerge &&
+      environment.autoMergeResolveRequestId &&
+      (await context.storage.listNativeAgentSessions()).some(
+        (session) =>
+          session.environmentId === id &&
+          session.turnOutcomes?.some(
+            (outcome) => outcome.requestId === environment.autoMergeResolveRequestId,
+          ),
+      );
+    if (resolveCompleted) {
+      await context.storage.updateEnvironment(
+        id,
+        {
+          autoMergeResolveCompletedAt: new Date().toISOString(),
+        },
+        (current) =>
+          current.autoMergeResolveRequestId === environment.autoMergeResolveRequestId &&
+          current.prRecheckAfterAgentCompletionArmedAt ===
+            environment.prRecheckAfterAgentCompletionArmedAt,
+      );
+    }
     await context.runtime.prMonitor.requestRefresh(id, context, "completion");
   });
   /**

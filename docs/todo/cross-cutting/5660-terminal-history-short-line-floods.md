@@ -22,9 +22,9 @@ Analysed 2026-11-05 against `main` at `69a3b4ca5` plus the change that closed to
   - **Queue raw output and split it into lines when writing (recommended).**
     - Pros: a queued line then costs nothing beyond its text, so 1 MiB holds about 190,000 lines of `seq` output; the existing byte bound stays the limit.
     - Cons: the sanitizer, line carry and sequence numbers move to the write side, and checkpoints and pages read `session.sequence` before that write has run, so those reads need rework.
-  - **Raise the byte bound.**
-    - Pros: one constant.
-    - Cons: more memory per session and across sessions for every session, to serve a rare shape; 20,000 lines of `seq` would need about 1.6 MiB.
+  - **Raise byte and record bounds together.**
+    - Pros: retains the existing record queue and write path.
+    - Cons: more memory per session and across sessions for every session, to serve a rare shape; 20,000 lines of `seq` would need about 1.6 MiB, a per-session record cap above 20,000, and corresponding increases to the global byte and record bounds. Raising only the byte bound still stops at 12,288 queued records.
   - **Leave it as it is.**
     - Pros: no change; the loss is reported to the user and the state snapshot keeps the end of the output.
     - Cons: the last lines of such a command are the ones lost from the archive.
@@ -32,3 +32,9 @@ Analysed 2026-11-05 against `main` at `69a3b4ca5` plus the change that closed to
 ## Related
 
 - Flake [2401](../../tests/flaky-tests/previews-annotations-and-gateway/2401-browser-smoke-terminal-history-marker.md), whose burst of 1,100 long lines the archive now keeps.
+
+## Assumptions and decisions
+
+### Task 1: capacity option accuracy
+
+The follow-up remains open. Its alternative now raises the independent per-session and global record bounds alongside the byte bounds: increasing bytes alone cannot admit a 20,000-line burst past the 12,288-record cap. The recommended raw-output approach is unchanged.

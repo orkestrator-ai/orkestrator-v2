@@ -666,7 +666,11 @@ describe.serial("terminal history", () => {
     });
     history.append("concurrent-pages", "line\r\n", 1, 1);
     await history.flush();
-    const reads = Array.from({ length: 12 }, () => history.page("concurrent-pages"));
+    // Different histories may read concurrently; reads of one history serialize
+    // with its writes and retention.
+    const ids = Array.from({ length: 12 }, (_, index) => `concurrent-${index}`);
+    for (const id of ids) await readySession(dataDir, id);
+    const reads = ids.map((id) => history.page(id));
     await Bun.sleep(10);
     expect(history.stats().pageReads).toBe(4);
     release();
@@ -794,6 +798,110 @@ describe.serial("terminal history", () => {
 
     await history.settled();
     expect((await history.page("failing-write"))?.historyGap).toBe(true);
+    expect(history.stats()).toMatchObject({ queuedBytes: 0, queuedRecords: 0 });
+  });
+
+  test("serializes pages with high-water writes through segment rollover", async () => {
+    let entered!: () => void;
+    let release!: () => void;
+    let hold = false;
+    history = createHistory({
+      pageReadHook: async () => {
+        if (!hold) return;
+        entered();
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+      },
+    });
+    const directory = await readySession(await temporaryDirectory(), "overlap");
+    const expected: string[] = [];
+    for (let burst = 0; burst < 6; burst += 1) {
+      const started = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      hold = true;
+      const reading = history.page("overlap");
+      await started;
+      const lines = Array.from({ length: 800 }, (_, index) =>
+        `${burst}:${index}`.padEnd(1_000, "x"),
+      );
+      history.append("overlap", `${lines.join("\r\n")}\r\n`, burst + 1, 1);
+      hold = false;
+      release();
+      const before = await reading;
+      expect(before?.historyGap).toBe(false);
+      // This page owns the I/O slot before the newly queued high-water write.
+      expect(before?.rows.map((row) => row.text)).toEqual(
+        before?.rows.length ? expected.slice(-before.rows.length) : [],
+      );
+      expected.push(...lines);
+      expect(await readAllRows("overlap")).toEqual(expected);
+      expect((await history.page("overlap"))?.historyGap).toBe(false);
+    }
+    const manifest = JSON.parse(await readFile(path.join(directory, "manifest.json"), "utf8"));
+    expect(manifest.segments.length).toBeGreaterThan(1);
+  });
+
+  test("recovers after a failed first batch and retains the explicit gap", async () => {
+    const directory = await readySession(await temporaryDirectory(), "retry-write");
+    const blocked = path.join(directory, "segment-000001.jsonl");
+    await mkdir(blocked);
+    history.append("retry-write", "lost\r\n".repeat(256), 1, 1);
+    await history.settled();
+    await rm(blocked, { recursive: true });
+    history.append("retry-write", "recovered\r\n", 2, 1);
+    expect(await readAllRows("retry-write")).toEqual(["recovered"]);
+    expect((await history.page("retry-write"))?.historyGap).toBe(true);
+    expect(history.stats()).toMatchObject({ queuedBytes: 0, queuedRecords: 0 });
+  });
+
+  test("keeps the successful part of a rollover batch when its next segment fails", async () => {
+    const directory = await readySession(await temporaryDirectory(), "partial-rollover");
+    const line = "x".repeat(1_000);
+    for (let burst = 0; burst < 4; burst += 1) {
+      history.append("partial-rollover", `${line}\r\n`.repeat(800), burst + 1, 1);
+      await history.settled();
+    }
+    const blocked = path.join(directory, "segment-000002.jsonl");
+    await mkdir(blocked);
+    history.append("partial-rollover", `${line}\r\n`.repeat(900), 5, 1);
+    await history.settled();
+    const committed = (await readFile(path.join(directory, "segment-000001.jsonl"), "utf8"))
+      .trimEnd()
+      .split("\n")
+      .map((row) => JSON.parse(row));
+    expect(committed.length).toBeGreaterThan(3_200);
+    expect(committed.length).toBeLessThan(4_100);
+    await rm(blocked, { recursive: true });
+    history.append("partial-rollover", "recovered\r\n", 6, 1);
+    expect(await readAllRows("partial-rollover")).toEqual([
+      ...committed.map((row) => row.text),
+      "recovered",
+    ]);
+    expect((await history.page("partial-rollover"))?.historyGap).toBe(true);
+    expect(history.stats()).toMatchObject({ queuedBytes: 0, queuedRecords: 0 });
+  });
+
+  test("bounds more than 256 small chunks before initialization and resumes afterward", async () => {
+    history.configure({
+      sessionId: "early-chunks",
+      dataDir: await temporaryDirectory(),
+      stableIdentity: "early-chunks",
+      cols: 80,
+      rows: 24,
+    });
+    for (let index = 0; index < 300; index += 1) {
+      history.append("early-chunks", `${index}\r\n`, index + 1, 1);
+    }
+    expect(history.stats().queuedRecords).toBe(256);
+    expect(history.stats().queuedBytes).toBeLessThanOrEqual(TERMINAL_HISTORY_PENDING_BYTES);
+    expect(await readAllRows("early-chunks")).toEqual(
+      Array.from({ length: 256 }, (_, index) => String(index)),
+    );
+    history.append("early-chunks", "after-init\r\n", 301, 1);
+    expect((await readAllRows("early-chunks")).at(-1)).toBe("after-init");
+    expect((await history.page("early-chunks"))?.historyGap).toBe(true);
     expect(history.stats()).toMatchObject({ queuedBytes: 0, queuedRecords: 0 });
   });
 

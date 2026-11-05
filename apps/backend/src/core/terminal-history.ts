@@ -1583,7 +1583,23 @@ export class TerminalHistory {
     session.flushTimer = null;
     await session.parseTail;
     this.flushPending(session);
-    await session.ioTail;
+    // Queue the entire read with writes and retention. Waiting for the current
+    // tail alone lets a later flush expose a partial batch or an empty segment.
+    let page: TerminalHistoryPage | null = null;
+    let failure: { error: unknown } | undefined;
+    await this.scheduleIo(session, async () => {
+      try {
+        page = await this.readPage(session, cursor);
+      } catch (error) {
+        failure = { error };
+      }
+    });
+    if (failure) throw failure.error;
+    if (session.manifest.completed) await this.evictCompletedSessions();
+    return page;
+  }
+
+  private async readPage(session: Session, cursor?: string): Promise<TerminalHistoryPage> {
     await this.acquirePageRead();
     try {
       await this.pageReadHook?.();
@@ -1664,7 +1680,6 @@ export class TerminalHistory {
       };
     } finally {
       this.releasePageRead();
-      if (session.manifest.completed) await this.evictCompletedSessions();
     }
   }
 

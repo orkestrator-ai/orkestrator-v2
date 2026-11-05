@@ -42,19 +42,30 @@ export function cliPublishCommand(version: string): string[] {
   ];
 }
 
+/** The runner is injectable so tests can exercise prepack without publishing. */
+export function publishCli(
+  repositoryRoot: string = root,
+  run: (
+    command: string[],
+    options: { cwd: string; env: NodeJS.ProcessEnv; stdio: ["inherit", "inherit", "inherit"] },
+  ) => { exitCode: number | null } = Bun.spawnSync,
+): number {
+  const { version } = JSON.parse(
+    readFileSync(path.join(repositoryRoot, "packages/cli/package.json"), "utf8"),
+  ) as { version: string };
+  const command = cliPublishCommand(version);
+  console.log(`\n$ ${command.join(" ")}`);
+  const result = run(command, {
+    cwd: repositoryRoot,
+    env: buildCommitEnv(repositoryRoot),
+    stdio: ["inherit", "inherit", "inherit"],
+  });
+  return result.exitCode ?? 1;
+}
+
 if (import.meta.main) {
   try {
-    const { version } = JSON.parse(
-      readFileSync(path.join(root, "packages/cli/package.json"), "utf8"),
-    ) as { version: string };
-    const command = cliPublishCommand(version);
-    console.log(`\n$ ${command.join(" ")}`);
-    const result = Bun.spawnSync(command, {
-      cwd: root,
-      env: buildCommitEnv(root),
-      stdio: ["inherit", "inherit", "inherit"],
-    });
-    process.exitCode = result.exitCode ?? 1;
+    process.exitCode = publishCli();
   } catch (error) {
     console.error(`publish-cli: ${error instanceof Error ? error.message : String(error)}`);
     process.exitCode = 1;

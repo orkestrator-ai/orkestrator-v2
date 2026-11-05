@@ -112,15 +112,15 @@ run = "bunx turbo --cwd . run build --filter=cursor-bridge"
 description = "Build every workspace package"
 run = "ORKESTRATOR_BUILD_COMMIT=\"$(bun scripts/build-commit.ts)\" bunx turbo --cwd . run build"
 
-# Test builds set no commit: they keep one Turbo cache entry across commits and
-# their backend reports `null`, as `dev:test` does.
+# Test builds remove any inherited commit to keep one cache entry across commits.
+# Their backend reports `null`, as `dev:test` does.
 [tasks."build:cli:test"]
 description = "Build the published CLI for tests, without a build commit"
-run = "bunx turbo --cwd . run build --filter=orkestrator"
+run = "env -u ORKESTRATOR_BUILD_COMMIT bunx turbo --cwd . run build --filter=orkestrator"
 
 [tasks."build:all:test"]
 description = "Build every workspace package for tests, without a build commit"
-run = "bunx turbo --cwd . run build"
+run = "env -u ORKESTRATOR_BUILD_COMMIT bunx turbo --cwd . run build"
 
 [tasks."download:bun"]
 description = "Download the pinned Bun runtime for desktop packaging"

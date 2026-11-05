@@ -82,6 +82,14 @@ describe("readBuildCommit against a real repository", () => {
     expect(readBuildCommit(repository)).toBeNull();
   });
 
+  test("untracked files report null even when status is configured to hide them", () => {
+    git(repository, "config", "status.showUntrackedFiles", "no");
+    expect(readBuildCommit(repository)).toBe(git(repository, "rev-parse", "HEAD"));
+    writeFileSync(path.join(repository, "new.ts"), "export {};\n");
+    expect(git(repository, "status", "--porcelain")).toBe("");
+    expect(readBuildCommit(repository)).toBeNull();
+  });
+
   test("an ignored file does not count as a modification", () => {
     writeFileSync(path.join(repository, "ignored.txt"), "build output\n");
     expect(readBuildCommit(repository)).toBe(git(repository, "rev-parse", "HEAD"));

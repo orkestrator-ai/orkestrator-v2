@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -571,8 +571,12 @@ describe("monorepo orchestration scripts", () => {
   test("test builds set no build commit, so they keep their cache and report null", () => {
     const tasks = miseTasks() as Record<string, MiseTask & { depends?: string[] }>;
     const commands = (name: string) => [tasks[name]?.run ?? []].flat().join("\n");
-    expect(commands("build:cli:test")).toBe("bunx turbo --cwd . run build --filter=orkestrator");
-    expect(commands("build:all:test")).toBe("bunx turbo --cwd . run build");
+    expect(commands("build:cli:test")).toBe(
+      "env -u ORKESTRATOR_BUILD_COMMIT bunx turbo --cwd . run build --filter=orkestrator",
+    );
+    expect(commands("build:all:test")).toBe(
+      "env -u ORKESTRATOR_BUILD_COMMIT bunx turbo --cwd . run build",
+    );
     for (const task of [
       "test:agent:browser",
       "test:agent:browser:isolated",
@@ -585,7 +589,6 @@ describe("monorepo orchestration scripts", () => {
       expect(commands(task), task).toContain("mise run build:all:test");
     }
     for (const entry of [
-      "scripts/test-all.ts",
       "apps/desktop/scripts/dev/bridge-builds.ts",
       "apps/desktop/scripts/dev-test.ts",
     ]) {
@@ -596,6 +599,50 @@ describe("monorepo orchestration scripts", () => {
       'path.join(options.appRoot, "apps", "backend", "src", "main.ts")',
     );
   });
+
+  test.each(["build:cli:test", "build:all:test"])(
+    "%s removes the parent's stamp before invoking Turbo and bundling",
+    (task) => {
+      const fixture = mkdtempSync(path.join(os.tmpdir(), "ork-test-build-env-"));
+      try {
+        // Execute the real task command, replacing only the expensive Turbo
+        // executable. Its replacement bundles the real backend constants.
+        writeFileSync(
+          path.join(fixture, "entry.ts"),
+          `import { BUILD_COMMIT } from ${JSON.stringify(path.join(root, "apps/backend/src/core/constants.ts"))};\nconsole.log(JSON.stringify(BUILD_COMMIT));\n`,
+        );
+        writeFileSync(
+          path.join(fixture, "capture.ts"),
+          `import { buildCommitDefine } from ${JSON.stringify(path.join(root, "packages/protocol/src/node/build-commit.ts"))};
+if ("ORKESTRATOR_BUILD_COMMIT" in process.env) throw new Error("Inherited stamp reached Turbo");
+const result = await Bun.build({entrypoints:["./entry.ts"],outdir:"./dist",target:"bun",define:buildCommitDefine()});
+if (!result.success) throw new Error("Bundle failed");
+`,
+        );
+        writeFileSync(
+          path.join(fixture, "bunx"),
+          "#!/bin/sh\nexec bun --no-env-file ./capture.ts\n",
+        );
+        chmodSync(path.join(fixture, "bunx"), 0o755);
+        const result = Bun.spawnSync(["sh", "-c", String(miseTasks()[task]?.run)], {
+          cwd: fixture,
+          env: {
+            ...process.env,
+            PATH: `${fixture}:${path.dirname(process.execPath)}:${process.env.PATH}`,
+            ORKESTRATOR_BUILD_COMMIT: "abc1234",
+          },
+        });
+        expect(result.exitCode, result.stderr.toString()).toBe(0);
+        const bundle = Bun.spawnSync([process.execPath, "--no-env-file", "dist/entry.js"], {
+          cwd: fixture,
+        });
+        expect(bundle.exitCode, bundle.stderr.toString()).toBe(0);
+        expect(JSON.parse(bundle.stdout.toString())).toBeNull();
+      } finally {
+        rmSync(fixture, { recursive: true, force: true });
+      }
+    },
+  );
 
   test("every Turbo task keeps the operator's temporary directory", () => {
     // Strict environment mode drops anything undeclared, so without this the

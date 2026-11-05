@@ -21,6 +21,7 @@ out/
 binaries/
 
 # Package outputs
+*.tgz
 *.dmg
 *.exe
 *.msi

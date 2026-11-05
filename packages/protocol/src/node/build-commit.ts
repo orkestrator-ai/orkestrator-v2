@@ -43,7 +43,8 @@ export function readBuildCommit(root: string, git: GitReader = readGit): string 
   const topLevel = git(root, ["rev-parse", "--show-toplevel"]);
   if (!topLevel || !sameDirectory(topLevel, root)) return null;
   // Reading must not take the index lock from a Git command running beside it.
-  if (git(root, ["--no-optional-locks", "status", "--porcelain"]) !== "") return null;
+  if (git(root, ["--no-optional-locks", "status", "--porcelain", "--untracked-files=all"]) !== "")
+    return null;
   return parseBuildCommit(git(root, ["rev-parse", "HEAD"]));
 }
 

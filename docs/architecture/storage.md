@@ -571,8 +571,12 @@ content they hold.
   of the data directory, or an image of an unencrypted disk. A copy made outside
   the app can also lose the 0600 mode.
 - Clearing or replacing a key does not remove the old value from the backup
-  ladder until five further config saves have rotated it out. A key that may have
-  leaked has to be revoked at its provider.
+  ladder until five further config saves have rotated it out. A staged Anthropic
+  key also remains in its `portable-inputs` revision while any container of that
+  environment references it, including stopped containers and recovery copies.
+  Changing the setting does not rewrite that revision or the key already copied
+  into the container. Unreferenced revisions are eligible for pruning; a key that
+  may have leaked has to be revoked at its provider.
 - The modes guard the file, not the value. A container is deliberately given the
   keys its settings allow: the Anthropic key as the staged file above, or an
   environment variable on an older image; the Cursor key as an owner-only file in

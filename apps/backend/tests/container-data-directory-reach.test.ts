@@ -18,6 +18,7 @@ import {
 
 const IMAGE_ID = `sha256:${"c".repeat(64)}`;
 const FAKE_ANTHROPIC_KEY = "fake-anthropic-key-for-reach-test";
+const FAKE_CURSOR_KEY = "fake-cursor-key-for-reach-test";
 const FAKE_STORED_SECRET = "fake-stored-secret-for-reach-test";
 const PROTECTED_FILES = ["config.json", "config.json.bak.1", "orkestrator.sqlite", "backups/x"];
 
@@ -76,9 +77,10 @@ async function manifestTar(capabilities: Record<string, number>): Promise<string
 /** A data directory holding the real names, an agent-test context, and no real host path. */
 async function fixture(
   capabilities: Record<string, number>,
-  options: { claude?: boolean } = {},
+  options: { claude?: boolean; legacyCredentials?: boolean } = {},
 ): Promise<{
   dataDir: string;
+  agentHome: string;
   tar: string;
   create: () => Promise<unknown>;
 }> {
@@ -87,11 +89,16 @@ async function fixture(
   for (const file of PROTECTED_FILES) {
     await fs.writeFile(path.join(dataDir, file), FAKE_STORED_SECRET, { mode: 0o600 });
   }
+  const providers: string[] = options.legacyCredentials
+    ? ["claude", "codex", "grok", "pi", "opencode", "cursor"]
+    : options.claude
+      ? ["claude"]
+      : [];
   const environment = lifecycleEnvironment();
   const { context } = memoryLifecycleContext([environment], dataDir);
   Object.assign(context, {
     runtimeFlavor: "agent-test",
-    credentialSources: new Set(options.claude ? ["claude"] : []),
+    credentialSources: new Set(providers),
   });
   Object.assign(context.storage, {
     getProject: async () => ({
@@ -102,9 +109,10 @@ async function fixture(
     loadConfig: async () => ({
       version: "1.0.0",
       global: {
-        enabledAgentPlatforms: options.claude ? ["claude"] : [],
+        enabledAgentPlatforms: providers,
         allowedDomains: ["one.example"],
-        ...(options.claude ? { anthropicApiKey: FAKE_ANTHROPIC_KEY } : {}),
+        ...(providers.includes("claude") ? { anthropicApiKey: FAKE_ANTHROPIC_KEY } : {}),
+        ...(providers.includes("cursor") ? { cursorApiKey: FAKE_CURSOR_KEY } : {}),
       },
       repositories: {},
     }),
@@ -116,8 +124,32 @@ async function fixture(
   const empty = await directory("ork-reach-home-");
   setEnvironment("ORKESTRATOR_AGENT_TEST_HOST_HOME", empty);
   setEnvironment(AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV, path.join(empty, ".claude"));
+  // Every legacy credential source is temporary, including providers whose
+  // defaults would otherwise resolve to this process's real agent homes.
+  setEnvironment("CODEX_HOME", path.join(empty, ".codex"));
+  setEnvironment("GROK_HOME", path.join(empty, ".grok"));
+  setEnvironment("XDG_CONFIG_HOME", path.join(empty, ".config"));
+  setEnvironment("XDG_DATA_HOME", path.join(empty, ".local", "share"));
+  setEnvironment("XDG_STATE_HOME", path.join(empty, ".local", "state"));
+  if (options.legacyCredentials) {
+    for (const dir of [
+      ".claude",
+      ".codex",
+      ".grok",
+      ".config/grok",
+      ".pi",
+      ".config/opencode",
+      ".local/share/opencode",
+      ".local/state/opencode",
+    ]) {
+      await fs.mkdir(path.join(empty, dir), { recursive: true });
+    }
+    await fs.writeFile(path.join(empty, ".claude.json"), "{}");
+    await fs.writeFile(path.join(empty, ".local/state/opencode/model.json"), "{}");
+  }
   return {
     dataDir,
+    agentHome: empty,
     tar: await manifestTar(capabilities),
     create: () => createDockerContainer(environment, context, { imageId: IMAGE_ID }),
   };
@@ -172,6 +204,47 @@ describe("a container's reach into the data directory", () => {
       expect(sources.some((source) => source.startsWith(dataDir))).toBe(true);
       expectNoBindReaches(sources, dataDir);
       expect(docker).not.toContain(FAKE_STORED_SECRET);
+    });
+  });
+
+  test("an older image binds isolated agent homes and forwards only the selected API keys", async () => {
+    const { dataDir, agentHome, tar, create } = await fixture(
+      { "git-mirror": 1, "network-policy": 2 },
+      { legacyCredentials: true },
+    );
+    const script = fakeDocker(tar).replace(
+      "  create) printf",
+      `  create)
+[ "$ANTHROPIC_API_KEY" = "${FAKE_ANTHROPIC_KEY}" ] && echo anthropic-key-forwarded >> "$FAKE_DOCKER_LOG"
+[ "$CURSOR_API_KEY" = "${FAKE_CURSOR_KEY}" ] && echo cursor-key-forwarded >> "$FAKE_DOCKER_LOG"
+printf`,
+    );
+    await withDockerScript(script, async (log) => {
+      await create();
+      const docker = await log.read();
+      const line = docker.split("\n").find((entry) => entry.startsWith("create --name"));
+      expect(line).toBeDefined();
+      for (const [source, target] of [
+        [".claude", "/claude-config"],
+        [".claude.json", "/claude-config.json"],
+        [".codex", "/codex-home"],
+        [".grok", "/grok-home"],
+        [".config/grok", "/grok-config"],
+        [".pi", "/pi-config"],
+        [".config/opencode", "/opencode-config"],
+        [".local/share/opencode", "/opencode-data"],
+        [".local/state/opencode/model.json", "/opencode-state/model.json"],
+      ]) {
+        expect(line).toContain(`-v ${path.join(agentHome, source!)}:${target}:ro`);
+      }
+      expect(line).toContain("-e ANTHROPIC_API_KEY ");
+      expect(line).toContain("-e CURSOR_API_KEY ");
+      expect(docker).toContain("anthropic-key-forwarded");
+      expect(docker).toContain("cursor-key-forwarded");
+      expect(docker).not.toContain(FAKE_ANTHROPIC_KEY);
+      expect(docker).not.toContain(FAKE_CURSOR_KEY);
+      expect(docker).not.toContain(FAKE_STORED_SECRET);
+      expectNoBindReaches(bindSources(line!), dataDir);
     });
   });
 

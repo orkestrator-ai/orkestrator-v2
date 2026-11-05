@@ -592,6 +592,70 @@ describe("useNativeAgentSession sync-v1 history paging", () => {
     ]);
   });
 
+  test.each([false, true])(
+    "drops paged history for an interior identity overlap when the part grew: %s",
+    async (grows) => {
+      const first = { type: "text", content: "first", sourcePartId: "part-1" };
+      const second = { type: "text", content: "second", sourcePartId: "part-2" };
+      const heldHead = { ...message("asst"), parts: [first, second] };
+      projectionUpdates = [
+        () =>
+          snapshot("token-1", [message("user"), heldHead], {
+            historyCursor: "cursor-before-user",
+          }),
+      ];
+      const { result } = await renderConnectedSession();
+      messagePages = [
+        () => ({
+          syncVersion: 1,
+          messages: [message("old")],
+          historyEpoch: "epoch-1",
+          complete: true,
+          truncated: false,
+        }),
+      ];
+      await act(async () => {
+        await result.current.loadEarlierMessages();
+      });
+      expect(result.current.projection?.messages.map(({ id }) => id)).toEqual([
+        "old",
+        "user",
+        "asst",
+      ]);
+      expect(
+        useNativeAgentProjectionStore.getState().syncCaches.get(SESSION_KEY)?.historyMessages,
+      ).toHaveLength(1);
+
+      const incoming = { ...first, content: grows ? "first and more" : "first" };
+      projectionUpdates = [
+        () =>
+          snapshot("token-2", [{ ...heldHead, parts: [incoming] }], {
+            projection: {
+              revision: 2,
+              messageWindow: {
+                limit: 1,
+                truncated: true,
+                truncationReason: "bytes",
+                omittedParts: 2,
+                canLoadEarlier: false,
+              },
+            },
+          }),
+      ];
+      await act(async () => {
+        await result.current.refresh();
+      });
+
+      // Neither held part supplies the missing beginning. Keeping earlier rows
+      // would stitch them across that gap, even if the held head did not change.
+      expect(result.current.projection?.messages.map(({ id }) => id)).toEqual(["asst"]);
+      expect(result.current.projection?.messages[0]?.parts).toEqual([incoming, second]);
+      const cache = useNativeAgentProjectionStore.getState().syncCaches.get(SESSION_KEY);
+      expect(cache?.historyMessages).toEqual([]);
+      expect(cache?.historyBytes).toBe(0);
+    },
+  );
+
   test("keeps paged history when a new part repeats content inside a fully omitted head", async () => {
     const prefix = ["a", "b", "c"].map((content) => ({ type: "text", content }));
     const heldHead = { ...message("asst"), parts: prefix };

@@ -67,11 +67,14 @@ function oldLocateIncomingParts(
     } = part as Record<string, unknown>;
     return JSON.stringify(content);
   };
-  const match = (localIndex: number, incomingIndex: number): "strict" | "loose" | false => {
+  const match = (
+    localIndex: number,
+    incomingIndex: number,
+  ): "identity" | "strict" | "loose" | false => {
     const held = oldDurablePartIdentity(local[localIndex]);
     const next = oldDurablePartIdentity(incoming[incomingIndex]);
     if (held !== undefined || next !== undefined) {
-      if (held === next) return "strict";
+      if (held === next) return "identity";
       // A bridge may reissue source ids for otherwise identical parts.
       return contentWithoutIdentity(local[localIndex]) ===
         contentWithoutIdentity(incoming[incomingIndex])
@@ -91,14 +94,18 @@ function oldLocateIncomingParts(
   };
   const overlapAt = (offset: number) => {
     const overlap = Math.min(local.length - offset, incoming.length);
-    // To-do 4520 review: only a suffix overlap overrides the length rule.
-    if (acceptGrowth && offset + overlap < local.length) return 0;
+    // To-do 4520 review: only content-only matches require a suffix.
+    let identity = false;
     let strict = 0;
     for (let index = 0; index < overlap; index += 1) {
       const result = match(offset + index, index);
       if (!result) return 0;
-      if (result === "strict") strict += 1;
+      if (result === "identity") identity = true;
+      if (result !== "loose") strict += 1;
     }
+    // Repeated content inside a true prefix is ambiguous, but a shared identity
+    // proves this is a copy even when the incoming window ends before local.
+    if (acceptGrowth && offset + overlap < local.length && !identity) return 0;
     return strict > 0 || acceptGrowth ? overlap : 0;
   };
   let bestOffset = -1;
@@ -151,7 +158,7 @@ function oldPreferCompleteLiveHead<TMessage>(
   const localParts = (local as { parts?: unknown } | undefined)?.parts;
   const headParts = (head as { parts?: unknown }).parts;
   if (!Array.isArray(localParts) || !Array.isArray(headParts)) return incomingOnly();
-  // To-do 4520: overlap comes first; for an omitted-length row it must be a suffix.
+  // To-do 4520: overlap comes first; content-only matches must be a suffix.
   const located =
     headParts.length === 0 && (omittedParts ?? 0) > 0
       ? localParts.length
@@ -309,6 +316,26 @@ describe("preferCompleteLiveHead", () => {
       const result = preferCompleteLiveHead<unknown>([held], [row([textPart(2)])], 2);
       expect(result.messages[0]).toBe(held);
       expect(result.restoredPrefix).toBe(false);
+    });
+
+    test.each([false, true])(
+      "uses an interior durable-identity overlap when the incoming part grew: %s",
+      (grows) => {
+        const held = row([textPart(1), textPart(2)]);
+        const first = textPart(1, grows ? "text 1 and more" : "text 1");
+        const result = preferCompleteLiveHead<unknown>([held], [row([first])], 2);
+        expect(result.messages[0]).toEqual(row([first, textPart(2)]));
+        expect(result.restoredPrefix).toBe(false);
+        if (!grows) expect(result.messages[0]).toBe(held);
+      },
+    );
+
+    test("does not confuse reissued ids with a shared interior durable identity", () => {
+      const prefix = [textPart(1, "same"), textPart(2)];
+      const next = textPart(3, "same");
+      const result = preferCompleteLiveHead<unknown>([row(prefix)], [row([next])], 2);
+      expect(result.messages[0]).toEqual(row([...prefix, next]));
+      expect(result.restoredPrefix).toBe(true);
     });
 
     test("restores a true cut prefix that does not overlap the incoming parts", () => {

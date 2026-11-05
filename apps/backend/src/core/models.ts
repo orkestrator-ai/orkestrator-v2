@@ -373,6 +373,8 @@ export interface Environment {
   autoMergeError?: string | null;
   /** Recoverable Resolve identity, retained across pre-dispatch failures. */
   autoMergeResolveRequestId?: string;
+  autoMergeResolveCompletedAt?: string;
+  autoMergeResolveAttempts?: number;
   createdAt: string;
   /** Last prompt dispatch or agent completion/waiting transition. */
   lastActivityAt?: string;

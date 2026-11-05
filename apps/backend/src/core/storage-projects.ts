@@ -1009,6 +1009,7 @@ export class ProjectsRepository {
         "deletionRequestedAt",
         "cleanupAfterMergeRequestedAt",
         "cleanupAfterMergeError",
+        "autoMergeResolveCompletedAt",
         "lifecycleOperationStartedAt",
         "setupSessionId",
         "setupStartedAt",
@@ -1201,7 +1202,29 @@ export class ProjectsRepository {
         // Cleared as an explicit `false`: renderers merge snapshots field-by-field.
         environment.setupApprovalRequired = updates.setupApprovalRequired === true;
       }
+      if (
+        typeof updates.autoMergeResolveAttempts === "number" &&
+        Number.isSafeInteger(updates.autoMergeResolveAttempts) &&
+        updates.autoMergeResolveAttempts >= 0 &&
+        updates.autoMergeResolveAttempts <= 3
+      ) {
+        environment.autoMergeResolveAttempts = updates.autoMergeResolveAttempts;
+      }
+      // Confirmed external merges must publish cleanup before disarming it.
+      if (
+        environment.autoMerge &&
+        environment.autoMergeCleanup &&
+        environment.prState === "merged" &&
+        environment.prUrl === previousPrUrl &&
+        environment.branch === previousBranch &&
+        !environment.projectHome
+      ) {
+        environment.cleanupAfterMergeRequestedAt ??= new Date().toISOString();
+        environment.cleanupAfterMergeError = undefined;
+      }
       if ("autoMerge" in updates) {
+        environment.autoMergeResolveAttempts = 0;
+        environment.autoMergeResolveCompletedAt = undefined;
         // Off is an explicit `false`, like lifecycleError's `null`: renderers
         // merge snapshots field-by-field, so a dropped key would leave it on.
         environment.autoMerge =
@@ -1236,6 +1259,16 @@ export class ProjectsRepository {
         environment.prUrl !== previousPrUrl
       ) {
         environment.autoMergeResolveRequestId = undefined;
+      }
+      if (
+        "prRecheckAfterAgentCompletionArmedAt" in updates &&
+        !environment.prRecheckAfterAgentCompletionArmedAt
+      ) {
+        environment.autoMergeResolveRequestId = undefined;
+      }
+      if (environment.hasMergeConflicts === false) {
+        environment.autoMergeResolveAttempts = 0;
+        environment.autoMergeResolveCompletedAt = undefined;
       }
       if ("tabTeardownIntents" in updates) {
         const intents = updates.tabTeardownIntents;

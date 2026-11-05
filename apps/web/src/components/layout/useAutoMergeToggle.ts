@@ -26,8 +26,8 @@ export function useAutoMergeToggle(
 
   /** Resolves to whether auto-merge is on afterwards, as the backend answered. */
   const set = useCallback(
-    async (next: boolean, cleanupAfterMerge?: boolean): Promise<boolean> => {
-      if (!environmentId || savingEnvironmentId === environmentId) return enabled;
+    async (next: boolean, cleanupAfterMerge?: boolean): Promise<boolean | null> => {
+      if (!environmentId || savingEnvironmentId === environmentId) return null;
       setSavingEnvironmentId(environmentId);
       try {
         const updated = await backend.setEnvironmentAutoMerge(
@@ -46,17 +46,21 @@ export function useAutoMergeToggle(
             description: "This environment has no open pull request.",
           });
         }
+        if (next && on && (updated?.autoMergeCleanup === true) !== (cleanupAfterMerge === true)) {
+          toast.error("Integration options were not saved");
+          return null;
+        }
         return on;
       } catch (error) {
         toast.error(next ? "Could not turn on auto-merge" : "Could not turn off auto-merge", {
           description: error instanceof Error ? error.message : String(error),
         });
-        return enabled;
+        return null;
       } finally {
         setSavingEnvironmentId((current) => (current === environmentId ? null : current));
       }
     },
-    [enabled, environmentId, savingEnvironmentId],
+    [environmentId, savingEnvironmentId],
   );
 
   const toggle = useCallback(() => set(!enabled), [enabled, set]);

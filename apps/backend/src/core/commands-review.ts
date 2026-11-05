@@ -1364,6 +1364,7 @@ export async function runStoredEnvironmentMerge<T>(
   context: CommandContext,
   onResult: (result: MergePrResult) => Promise<T>,
   expectedHeadSha?: string,
+  expectedAutoMergeEnabledAt?: string,
 ): Promise<T> {
   const release = environment.projectHome
     ? await context.projectGit?.beginTurnAfterMergeSync(environment.projectId)
@@ -1376,6 +1377,7 @@ export async function runStoredEnvironmentMerge<T>(
       context,
       onResult,
       expectedHeadSha,
+      expectedAutoMergeEnabledAt,
     );
   } finally {
     release?.();
@@ -1389,6 +1391,7 @@ async function runStoredEnvironmentMergeOnce<T>(
   context: CommandContext,
   onResult: (result: MergePrResult) => Promise<T>,
   expectedHeadSha?: string,
+  expectedAutoMergeEnabledAt?: string,
 ): Promise<T> {
   if (isProjectHomeEnvironment(environment)) {
     const previousPr = environment.prUrl;
@@ -1447,6 +1450,17 @@ async function runStoredEnvironmentMergeOnce<T>(
       lifecycleOperation: "merging",
       lifecycleOperationStartedAt: new Date().toISOString(),
     });
+    if (expectedAutoMergeEnabledAt !== undefined) {
+      const current = await context.storage.getEnvironment(environment.id);
+      if (
+        !current?.autoMerge ||
+        !current.autoMergeCleanup ||
+        current.prUrl !== environment.prUrl ||
+        current.autoMergeEnabledAt !== expectedAutoMergeEnabledAt
+      ) {
+        throw new Error("Integration options changed before merge dispatch");
+      }
+    }
     let result: MergePrResult;
     try {
       result =

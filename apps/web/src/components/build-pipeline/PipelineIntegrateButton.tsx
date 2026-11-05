@@ -74,6 +74,7 @@ export function PipelineIntegrateButton({ environmentId }: { environmentId: stri
   const label = autoMerge.enabled ? "Integrating" : "Integrate";
   const tooltip: ReactNode =
     disabledReason ??
+    environment?.autoMergeError ??
     (autoMerge.enabled
       ? autoMerge.cleanup
         ? "Auto-merge & Cleanup is on: merges when ready, then deletes this environment"

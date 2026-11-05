@@ -630,3 +630,61 @@ test("a conflict-free reading does not lift a pending merge's hold", async () =>
   expect(h.invocations).toHaveLength(1);
   expect(h.timers.at(-1)!.cancelled).toBe(false);
 });
+
+test("completed resolution retries only after a newer reading, then stops at three", async () => {
+  const completed = new Date(Date.now() - 100).toISOString();
+  const h = harness(
+    environment({
+      hasMergeConflicts: true,
+      prMergeability: "dirty",
+      prRecheckAfterAgentCompletionArmedAt: completed,
+      autoMergeResolveCompletedAt: completed,
+    }),
+  );
+  h.setMonitor(monitor(h.stored, { lastSuccessfulCheckStartedAt: completed }));
+  await h.controller.evaluate("env-1");
+  expect(h.invocations).toHaveLength(0);
+  h.setMonitor(monitor(h.stored));
+  await h.controller.evaluate("env-1");
+  expect(h.stored.autoMergeResolveAttempts).toBe(1);
+  await h.controller.evaluate("env-1");
+  expect(h.invocations[0]?.command).toBe("launch_native_agent_job");
+  h.set({
+    ...h.stored,
+    autoMergeResolveAttempts: 2,
+    prRecheckAfterAgentCompletionArmedAt: completed,
+    autoMergeResolveCompletedAt: completed,
+  });
+  await h.controller.evaluate("env-1");
+  expect(h.stored.autoMerge).toBe(false);
+  expect(h.stored.autoMergeError).toContain("three attempts");
+  h.controller.dispose();
+});
+
+test("a second Resolve can clear conflicts and continue to merge with cleanup", async () => {
+  const completed = new Date(Date.now() - 100).toISOString();
+  const h = harness(
+    environment({
+      autoMergeCleanup: true,
+      hasMergeConflicts: true,
+      prMergeability: "dirty",
+      prRecheckAfterAgentCompletionArmedAt: completed,
+      autoMergeResolveCompletedAt: completed,
+    }),
+  );
+  await h.controller.evaluate("env-1");
+  await h.controller.evaluate("env-1");
+  expect(h.invocations[0]?.command).toBe("launch_native_agent_job");
+  h.set({
+    ...h.stored,
+    hasMergeConflicts: false,
+    prMergeability: "clean",
+    prRecheckAfterAgentCompletionArmedAt: undefined,
+  });
+  await h.controller.evaluate("env-1");
+  expect(h.invocations[1]).toMatchObject({
+    command: "merge_environment_pr",
+    args: { cleanupAfterMerge: true },
+  });
+  h.controller.dispose();
+});

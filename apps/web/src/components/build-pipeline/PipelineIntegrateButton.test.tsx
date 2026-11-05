@@ -1,5 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, type Mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, type Mock, spyOn, test } from "bun:test";
+import { toast } from "sonner";
 import { invoke } from "@/lib/native/backend";
 import { useEnvironmentStore } from "@/stores";
 import type { Environment } from "@/types";
@@ -190,3 +191,25 @@ describe("Key information panel", () => {
     expect(screen.queryByRole("button", { name: "Integrate" })).toBeNull();
   });
 });
+
+for (const rejected of [true, false]) {
+  test(`failed option save emits no success, rejection=${rejected}`, async () => {
+    useEnvironmentStore.getState().setEnvironments([environment({ autoMerge: true })]);
+    invokeMock.mockImplementation(async () => {
+      if (rejected) throw new Error("save rejected");
+      return environment({ autoMerge: false });
+    });
+    const success = spyOn(toast, "success");
+    render(<PipelineIntegrateButton environmentId="env-1" />);
+    try {
+      const dialog = await openConfirmation();
+      await act(async () =>
+        fireEvent.click(within(dialog).getByRole("button", { name: "Auto-merge & Cleanup" })),
+      );
+      expect(success).not.toHaveBeenCalled();
+      expect(useEnvironmentStore.getState().environments[0]?.autoMergeCleanup).not.toBe(true);
+    } finally {
+      success.mockRestore();
+    }
+  });
+}

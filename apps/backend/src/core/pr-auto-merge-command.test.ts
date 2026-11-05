@@ -1,4 +1,4 @@
-import { expect, mock, test } from "bun:test";
+import { expect, mock, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -211,3 +211,123 @@ for (const update of [
     });
   });
 }
+
+for (const enabled of [true, false]) {
+  test(`failed automatic cleanup can be withdrawn with enabled=${enabled}`, async () => {
+    await withStorage(async (storage) => {
+      const env = await storage.addEnvironment({
+        ...createEnvironment("project"),
+        prUrl: "https://github.com/o/r/pull/1",
+        prState: "open",
+      });
+      await storage.updateEnvironment(env.id, { autoMerge: true, autoMergeCleanup: true });
+      const armed = (await storage.getEnvironment(env.id))!;
+      const context = {
+        storage,
+        emit: () => undefined,
+        runtime: {
+          prMonitor: { requestRefresh: async () => undefined, invalidate: async () => undefined },
+        },
+        prAutoMerge: { evaluate: async () => undefined },
+      } as unknown as CommandContext;
+      const commands = createCommandRegistry();
+      await expect(
+        commands.get("merge_environment_pr")!(
+          {
+            environmentId: env.id,
+            cleanupAfterMerge: true,
+            autoMergeEnabledAt: armed.autoMergeEnabledAt,
+          },
+          context,
+        ),
+      ).rejects.toThrow();
+      expect((await storage.getEnvironment(env.id))?.cleanupAfterMergeRequestedAt).toBeUndefined();
+      await commands.get("set_environment_auto_merge")!(
+        { environmentId: env.id, enabled },
+        context,
+      );
+      const merged = await storage.updateEnvironment(env.id, { prState: "merged" });
+      expect(merged.cleanupAfterMergeRequestedAt).toBeUndefined();
+    });
+  });
+}
+
+for (const prState of ["merged", "closed"] as const) {
+  test(`external ${prState} preserves cleanup only for confirmed merge`, async () => {
+    await withStorage(async (storage) => {
+      const env = await storage.addEnvironment({
+        ...createEnvironment("project"),
+        prUrl: "https://github.com/o/r/pull/1",
+        prState: "open",
+      });
+      await storage.updateEnvironment(env.id, { autoMerge: true, autoMergeCleanup: true });
+      const updated = await storage.updateEnvironment(env.id, { prState });
+      expect(Boolean(updated.cleanupAfterMergeRequestedAt)).toBe(prState === "merged");
+      expect(updated.autoMergeCleanup).toBe(false);
+    });
+  });
+}
+
+test("completion of another tab cannot release a running Resolve", async () => {
+  await withStorage(async (storage) => {
+    const env = await storage.addEnvironment({
+      ...createEnvironment("project"),
+      prUrl: "https://github.com/o/r/pull/1",
+      prState: "open",
+      autoMerge: true,
+      autoMergeResolveRequestId: "resolve-request",
+      prRecheckAfterAgentCompletionArmedAt: "armed",
+    });
+    const sessions = spyOn(storage, "listNativeAgentSessions");
+    const context = {
+      storage,
+      runtime: { prMonitor: { requestRefresh: async () => undefined } },
+    } as unknown as CommandContext;
+    const complete = createCommandRegistry().get("pr_monitor_agent_turn_completed")!;
+    try {
+      sessions.mockResolvedValue([
+        { environmentId: env.id, turnOutcomes: [{ requestId: "other-tab" }] },
+      ] as never);
+      await complete({ environmentId: env.id }, context);
+      expect((await storage.getEnvironment(env.id))?.autoMergeResolveCompletedAt).toBeUndefined();
+      sessions.mockResolvedValue([
+        { environmentId: env.id, turnOutcomes: [{ requestId: "resolve-request" }] },
+      ] as never);
+      await complete({ environmentId: env.id }, context);
+      expect((await storage.getEnvironment(env.id))?.autoMergeResolveCompletedAt).toEqual(
+        expect.any(String),
+      );
+    } finally {
+      sessions.mockRestore();
+    }
+  });
+});
+
+test("withdrawing automatic cleanup preserves an independent manual request", async () => {
+  await withStorage(async (storage) => {
+    const env = await storage.addEnvironment({
+      ...createEnvironment("project"),
+      prUrl: "https://github.com/o/r/pull/1",
+      prState: "open",
+    });
+    await storage.updateEnvironment(env.id, {
+      autoMerge: true,
+      autoMergeCleanup: true,
+      cleanupAfterMergeRequestedAt: "manual-request",
+    });
+    const context = {
+      storage,
+      runtime: { prMonitor: { requestRefresh: async () => undefined } },
+      prAutoMerge: { evaluate: async () => undefined },
+    } as unknown as CommandContext;
+    const command = createCommandRegistry().get("set_environment_auto_merge")!;
+    await command({ environmentId: env.id, enabled: false }, context);
+    expect((await storage.getEnvironment(env.id))?.cleanupAfterMergeRequestedAt).toBe(
+      "manual-request",
+    );
+    await storage.updateEnvironment(env.id, { lifecycleOperation: "merging" });
+    await expect(command({ environmentId: env.id, enabled: true }, context)).rejects.toThrow(
+      "merge is in progress",
+    );
+  });
+});

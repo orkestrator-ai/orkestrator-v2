@@ -234,7 +234,15 @@ export function registerPullRequestCommands(
   register(
     "merge_environment_pr",
     async (
-      { environmentId, method, deleteBranch, cleanupAfterMerge, expectedHeadSha, expectedPrUrl },
+      {
+        environmentId,
+        method,
+        deleteBranch,
+        cleanupAfterMerge,
+        expectedHeadSha,
+        expectedPrUrl,
+        autoMergeEnabledAt,
+      },
       context,
     ): Promise<MergeEnvironmentPrResult> => {
       const id = asString(environmentId, "environmentId");
@@ -258,7 +266,18 @@ export function registerPullRequestCommands(
       ) {
         throw new Error("The pull request or merge effects changed; confirm the merge again");
       }
-      if (requestedCleanup) {
+      const automaticCleanup = autoMergeEnabledAt !== undefined;
+      if (
+        automaticCleanup &&
+        (environment.autoMerge !== true ||
+          environment.autoMergeEnabledAt !== autoMergeEnabledAt ||
+          environment.autoMergeCleanup !== true)
+      ) {
+        throw new Error("Integration options changed; retry with current options");
+      }
+      // Automatic intent remains revocable until confirmation; manual requests
+      // retain their independent durable recovery timestamp.
+      if (requestedCleanup && !automaticCleanup) {
         await context.storage.updateEnvironment(id, {
           cleanupAfterMergeRequestedAt: new Date().toISOString(),
           cleanupAfterMergeError: null,
@@ -352,6 +371,7 @@ export function registerPullRequestCommands(
             }
           },
           expectedHeadSha as string | undefined,
+          autoMergeEnabledAt as string | undefined,
         );
       } catch (error) {
         if (cleanupRequested) {
@@ -435,6 +455,10 @@ export function registerPullRequestCommands(
         throw new Error("A project's home checkout cannot be deleted after merging");
       }
     }
+    const current = await context.storage.getEnvironment(id);
+    if (current?.lifecycleOperation === "merging" || context.runtime.environments?.isMerging(id)) {
+      throw new Error("A merge is in progress; wait for its result before changing integration");
+    }
     const updated = await context.storage.updateEnvironment(id, {
       autoMerge: enabled,
       autoMergeCleanup: enabled && cleanupAfterMerge,
@@ -486,6 +510,28 @@ export function registerPullRequestCommands(
     const id = asString(environmentId, "environmentId");
     const environment = await context.storage.getEnvironment(id);
     if (!environment?.prRecheckAfterAgentCompletionArmedAt) return;
+    const resolveCompleted =
+      environment.autoMerge &&
+      environment.autoMergeResolveRequestId &&
+      (await context.storage.listNativeAgentSessions()).some(
+        (session) =>
+          session.environmentId === id &&
+          session.turnOutcomes?.some(
+            (outcome) => outcome.requestId === environment.autoMergeResolveRequestId,
+          ),
+      );
+    if (resolveCompleted) {
+      await context.storage.updateEnvironment(
+        id,
+        {
+          autoMergeResolveCompletedAt: new Date().toISOString(),
+        },
+        (current) =>
+          current.autoMergeResolveRequestId === environment.autoMergeResolveRequestId &&
+          current.prRecheckAfterAgentCompletionArmedAt ===
+            environment.prRecheckAfterAgentCompletionArmedAt,
+      );
+    }
     await context.runtime.prMonitor.requestRefresh(id, context, "completion");
   });
   /**

@@ -2,7 +2,7 @@
 
 Which files under `docs/reports` can be built together, and which pieces of work must not run at the same time. Each folder's `0000-index.md` has the same information for its own files, in a **Parallel running** section.
 
-Worked out on 2026-11-03 against `main` at `a44641cbc`, from the 167 work files in the four folders. On 2026-11-04, 137 of them were combined into the 41 batch files listed under [Batch files](#batch-files), which keep each report as a numbered part, with repeated text removed. E8 goes further and merges its two reports into one. That leaves 71 files. The other 30 are built on their own, need a decision or measurement first, or are blocked. E1 is a set of baseline tasks inside other batch files, so it has no file of its own.
+Worked out on 2026-11-03 against `main` at `a44641cbc`, from the 167 work files in the four folders. On 2026-11-04, 137 of them were combined into the 41 batch files listed under [Batch files](#batch-files), which keep each report as a numbered part, with repeated text removed. That leaves 71 files. The other 30 are built on their own, need a decision or measurement first, or are blocked. E1 is a set of baseline tasks inside other batch files, so it has no file of its own. E8 (Agent tab polling) was built on 2026-11-04 and its file deleted, so this plan no longer lists it; its result is in [1202 task 4](../todo/cross-cutting/1202-efficiency-review-follow-ups.md).
 
 ## Rules
 
@@ -31,7 +31,6 @@ Worked out on 2026-11-03 against `main` at `a44641cbc`, from the 167 work files 
 | C10 | [coordinator/0240-c10-explanations.md](coordinator/0240-c10-explanations.md) | `0320`, `0330`, `0400`, `0240` |
 | E14 | [efficiency-logging-database/0740-e14-docker-logs.md](efficiency-logging-database/0740-e14-docker-logs.md) | `0740`, `0850` |
 | E25 | [efficiency-logging-database/0490-e25-container-start.md](efficiency-logging-database/0490-e25-container-start.md) | `0490`, `0500` |
-| E8 | [efficiency-logging-database/0170-e8-agent-tab-polling.md](efficiency-logging-database/0170-e8-agent-tab-polling.md) | `0170`, `0410` |
 | E9 | [efficiency-logging-database/0110-e9-transcript-reads.md](efficiency-logging-database/0110-e9-transcript-reads.md) | `0150`, `0200`, `0110` |
 | E10 | [efficiency-logging-database/0160-e10-conditional-reads-and-deltas.md](efficiency-logging-database/0160-e10-conditional-reads-and-deltas.md) | `0160`, `0180`, `0190` |
 | E11 | [efficiency-logging-database/0210-e11-projection-hashing.md](efficiency-logging-database/0210-e11-projection-hashing.md) | `0210`, `0220`, `0320`, `0330`, `0340`, `0345`, `0350`, `0380` |
@@ -62,7 +61,7 @@ Worked out on 2026-11-03 against `main` at `a44641cbc`, from the 167 work files 
 | Coordinator backend | 1. C1 (Wake reliability)<br>2. C5 (Prompt and context)<br>3. C4 (Tool surface)<br>4. X1 (Coordinator trust boundary)<br>5. C2 (Workflow records)<br>6. C3 (Sweep and reads) | `coordinator-service.ts`, `control-mcp-tools.ts`, the protocol's `coordinator.ts` and the context prompt in `native-agent-service.ts` |
 | Coordinator panel | 1. C9 (Panel split)<br>2. C7 (Work panel and navigation)<br>3. C8 (Tab strip)<br>4. C6 (Errors and dead ends)<br>5. C10 (Explanations)<br>6. C-0390 (Panel re-render cost, measure first) | `CoordinatorPanel.tsx`, `CoordinatorPanelNotices.tsx`, `TabShell.tsx` |
 | Containers | 1. S2 (Bridge credential)<br>2. S-0080 (Legacy host mounts)<br>3. S-0100 (Egress SNI and DNS)<br>4. S-0170 (Agent-tools bind address)<br>5. E14 (Docker logs)<br>6. E25 (Container start) | `commands-containers.ts`, `commands-registry-servers.ts` and the `docker/` entrypoint, setup and firewall scripts |
-| Transcript | 1. E8 (Agent tab polling)<br>2. E9 (Transcript reads)<br>3. E10 (Conditional reads and deltas)<br>4. E11 (Projection hashing)<br>5. E12 (Renderer store) | `native-agent-transcript-projection.ts` (5,570 lines), `useNativeAgentSession.ts` (3,870 lines), `nativeAgentProjectionStore.ts` |
+| Transcript | 1. E9 (Transcript reads)<br>2. E10 (Conditional reads and deltas)<br>3. E11 (Projection hashing)<br>4. E12 (Renderer store) | `native-agent-transcript-projection.ts` (5,570 lines), `useNativeAgentSession.ts` (3,870 lines), `nativeAgentProjectionStore.ts` |
 | Change tracking | 1. E2 (Measurement rows)<br>2. E3 (Retention and deletion)<br>3. E4 (Object store) | `apps/backend/src/core/change-tracking/` |
 | Storage | 1. E6 (Store writes)<br>2. E5 (Database upkeep)<br>3. S-0190 (Provider secrets at rest) | `storage-database.ts`, `storage-backups.ts`, `storage-stores.ts` |
 | Git scans and file reads | 1. E7 (Diff scans)<br>2. E-0580 (File RPC and usage report) | `commands-files.ts`, `git-scopes.ts`, `diff-stats-service.ts` |
@@ -75,7 +74,7 @@ Worked out on 2026-11-03 against `main` at `a44641cbc`, from the 167 work files 
 These batches don't share a protected area. They only have to respect the conflicts below.
 
 - **C-0410 (Leaf-mode gate):** coordinator `0410`
-- **E1 (Baseline run):** the baseline task in `0150`, `0160`, `0180`, `0190`, `0400` and E8, in efficiency-logging-database
+- **E1 (Baseline run):** the baseline task in `0150`, `0160`, `0180`, `0190` and `0400`, in efficiency-logging-database
 - **S5 (Release chain):** security `0140`, `0240`
 - **S-0230 (Preview publication domain):** security `0230`
 - **S-0270 (iOS app review):** security `0270`
@@ -106,7 +105,6 @@ Don't run these pairs at the same time.
 | C5 (Prompt and context) | C6 (Errors and dead ends) | `CoordinatorPanel.tsx`, `coordinator-service.ts`, protocol `coordinator.ts` |
 | C5 (Prompt and context) | C7 (Work panel and navigation) | `CoordinatorPanel.tsx`, `coordinator-service.ts`, protocol `coordinator.ts` |
 | C5 (Prompt and context) | C9 (Panel split) | `CoordinatorPanel.tsx` |
-| C6 (Errors and dead ends) | E8 (Agent tab polling) | `useNativeAgentSession.ts` |
 | C6 (Errors and dead ends) | E12 (Renderer store) | `useNativeAgentSession.ts`, `AgentNativeTab.controller.tsx` |
 | C7 (Work panel and navigation) | E23 (Renderer polling) | `useUserCommands.ts` |
 | S2 (Bridge credential) | E13 (Silent failures) | Bridge `http.ts` files, `acp-context.ts`, `acp-server.ts`, `commands-registry-servers.ts` |
@@ -114,8 +112,6 @@ Don't run these pairs at the same time.
 | S2 (Bridge credential) | E21 (Pi bridge) | `bridges/pi-bridge/src/http.ts` |
 | E3 (Retention and deletion) | E7 (Diff scans) | `change-tracking/service.ts` |
 | E5 (Database upkeep) | E15 (Health and diagnostics) | `storage-backups.ts` |
-| E8 (Agent tab polling) | E26 (Local desktop transport) | `web-gateway.ts` |
-| E8 (Agent tab polling) | E-0120 (Bearer terminal streams) | `web-gateway.ts` |
 | E26 (Local desktop transport) | E-0120 (Bearer terminal streams) | `web-gateway.ts` |
 | E13 (Silent failures) | E20 (ACP bridge) | `commands-servers.ts`, `acp-context.ts` |
 | E13 (Silent failures) | E21 (Pi bridge) | `agent-session.ts`, `bridges/pi-bridge/src/http.ts` |
@@ -124,7 +120,7 @@ Don't run these pairs at the same time.
 
 | Finish | Before |
 | --- | --- |
-| E1 (Baseline run) | E8, E9, E10 and E26, on code those batches have not changed yet |
+| E1 (Baseline run) | E9, E10 and E26, on code those batches have not changed yet |
 | E2 (Measurement rows) | E5, whose `0760`, `0910` and `0920` depend on the ledger shrinking |
 | `0040` in S2 | `0120` in S2, or do both together, because `0040` can change how the token reaches the bridge |
 | `0360` in C5 | `0170` in C5, so the new lines go into the extracted builder |

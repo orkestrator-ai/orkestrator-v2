@@ -29,7 +29,7 @@ governs, marked "Decided".
 1. **Baseline and before-and-after numbers**: capture the report's measurements for the work already done and before each structural task. Status: open.
 2. **Storage keyed reads and writes**: the lease-held native session mutations, one shared decoded snapshot, the agent mail remainder, keyed-array row writes and the position index (TX-4 rest, BG-5, ST-9 rest, ST-10, ST-11). Status: open (ST-7, ST-8, BG-5, ST-11 and ST-10's compose drafts and environment writers done; TX-4 rest, ST-9 rest and ST-10's session and project writers open).
 3. **Renderer re-renders and refetches**: WEB-6, WEB-7, WEB-9 to WEB-14 and WEB-16 to WEB-19, plus WEB-2's narrower subscriptions. Status: done (2026-11-04; WEB-2, WEB-3, WEB-4, WEB-5, WEB-8, WEB-15 and GW-13 earlier; WEB-7 and WEB-17 on 2026-11-03; WEB-2's third fix, WEB-6, WEB-9, WEB-10 and WEB-11, then WEB-12 to WEB-14, WEB-16, WEB-18 and WEB-19 on 2026-11-04; a React Profiler run stays with task 1).
-4. **Live agent view requests**: discovery out of the 500 ms round, a combined read, then bridge state ETags and transcript deltas (WEB-1, GW-1, GW-3, TX-5, TX-6). Status: open.
+4. **Live agent view requests**: discovery out of the 500 ms round, a combined read, then bridge state ETags and transcript deltas (WEB-1, GW-1, GW-3, TX-5, TX-6). Status: open (WEB-1 and GW-1 done 2026-11-04, a visible running tab from 3 requests per round to 1.04; GW-3, TX-5 and TX-6 open).
 5. **Transcript pipeline**: delta-base ring, unlimited post-dispatch reads, memoised fingerprints and the smaller items (TX-1 to TX-3, TX-7 to TX-9, TX-11 to TX-18). Status: open (TX-1 and TX-2 done 2026-11-04, focused tests only; live before-and-after numbers stay with task 1; TX-3, TX-7 to TX-9 and TX-11 to TX-18 open).
 6. **Bridge hot paths**: Codex config reads, cached transcript measurement, tool-card fast paths, Claude part identity, stream framing and shared helpers (BR-2, BR-4 to BR-16). Status: open (BR-1 and BR-3 done, without new tests; BR-4 to BR-6 and the transcript half of BR-15 done 2026-11-02; BR-2, BR-8, BR-9 and BR-11 done 2026-11-03; BR-7, BR-10, BR-12 to BR-14 and BR-16 done 2026-11-04; BR-15's SSE replay rings open).
 7. **Change tracking and git scans**: stamp short-circuit, count memo, manifest cache, off-loop zlib and the git scan costs (ST-1 to ST-6, ST-13 to ST-21). Status: open (ST-1, ST-2 and ST-4 done on 2026-11-02; ST-3, ST-14, ST-15, ST-16 and ST-18 done 2026-11-04, warm capture over 10,000 files with one changed from 681–797 ms to 211–319 ms p50, and a warm local diff scan from 7 git processes and every untracked file read to 4 and none; ST-2's directory-handle cache deliberately not done; ST-16's dropping of hints under ignored directories not done; ST-5 and ST-6 done 2026-11-04, longest event-loop stall during a capture storing a 16 MiB blob from 107–143 ms to 12–13 ms p50 and a cold durable capture of 1,000 files from 3.3–4.1 s to 0.6–1.1 s; ST-13, ST-17 and ST-19 to ST-21 open).
@@ -401,17 +401,44 @@ Left on their own timers, and why: `CAPTURE_RESUME_INTERVAL_MS` in `useAnnotatio
 
 **Context.** Decided 2026-11-01: take discovery out of the 500 ms round, then add a combined read; choose push or long-poll only if measurements still justify it, and keep a recovery poll either way. Quiet backoff already covers all six providers (0052 task 2).
 
-**Investigation.** The three reads are in `useNativeAgentSession.ts`; only `/invoke` exists (`gateway-auth.ts`). Bridge state reads have no conditional path and hash a state that includes the model catalogue (TX-5); transcript windows are always sent whole (TX-6). GW-3 is in `web-gateway.ts`.
+Done 2026-11-04 (WEB-1, GW-1): discovery left the timed round and a round is one request. Baseline taken first on an isolated `dev:test` profile at `e198fd4a7`, before any polling code changed, with `e2e/agent-testing/agent-tab-requests-live.spec.ts` (setup in [agent-testing.md](../../development/agent-testing.md#live-requests-of-a-running-agent-tab)). The named workload is `running-quiet`: one visible Claude tab whose turn is in a foreground wait, watched for 40 s. Two runs each, on the same machine:
+
+| Measure over 40 s | Before (`e198fd4a7`) | After |
+| --- | --- | --- |
+| Session requests | 246, 249 | 85, 85 |
+| Requests per round | 3.00, 3.00 | 1.04, 1.04 |
+| Requests per second | 6.15, 6.22 | 2.13, 2.12 |
+| Rounds (the cadence stayed 500 ms) | 82, 83 | 82, 82 |
+| Discovery reads | 82, 83 | 3, 3 |
+| Bytes on the wire, headers included | 463,918, 471,279 | 224,032, 225,611 |
+| Gateway request bodies | 78,392, 79,348 | 34,191, 34,191 |
+| Gateway response bodies | 223,533, 237,818 | 187,920, 201,261 |
+| Reconnect (offline 6 s, stream dropped): first read after online | 56 ms, 53 ms | 60 ms, 55 ms |
+
+Three of the discovery reads fall in a 40 s window because one section expiry sits inside it: the read that finds the sections expired, then follow-ups until they settle. Those are also about half of the remaining response bytes (93,620 of 187,920), since each is a whole discovery snapshot; the code says its availability flipped, which was not checked read by read.
+
+- Discovery (`NativeDiscoveryReadSchedule`, `native-session-read-policy.ts`): read on mount, a session or identity change, any read that is not a background round, a resync, a resume or reconnect, a phase change and an invalidation that names discovery (`nativeSessionInvalidationNamesDiscovery`, `native-agent-observation.ts`), and otherwise every 30 s with its token. `resource-sync.ts` now keeps a cause that names discovery when it coalesces a burst, which it previously overwrote with the newest. Tests: `useNativeAgentSession.read-round.test.tsx`, `native-session-read-policy.test.ts`, `resource-sync.test.ts`, `native-agent-observation.test.ts`.
+- Combined read (`get_native_agent_live_update`, `native-agent-live-update.ts`, `liveUpdateVersions` in `get_native_agent_sync_capabilities`): one request for transcript and state, used by a background round over tokens the view holds. Tests: `native-agent-live-update.test.ts`, `useNativeAgentSession.read-round.test.tsx`. Two rows added to the [version compatibility register](../../architecture/version-compatibility.md#register).
+- Real stack, profile `e8-agent-tab-polling` with real Claude turns: the requests spec above; its case that lets a turn end while the environment is off screen (no session request in 31 s inactive, the answer shown 251 ms after return, and again after a reload); its case that hides `liveUpdateVersions` from the page (2 reads a round, 60 in 15 s, no combined read sent, no failed session command); and `slash-command-picker.spec.ts` and `slash-command-inactive.spec.ts`. Claude only: the other platforms share this code path through unit tests, not a live run. `claude-revision-tokens-live.spec.ts` fails at its first case with and without this change, so it is no evidence either way; see [5040](../transcripts-and-observation/5040-revision-token-spec-background-output.md). Its page reader now counts a combined read as the two reads it answers.
+
+**Investigation.** The three reads are in `useNativeAgentSession.ts`; only `/invoke` exists (`gateway-auth.ts`). Bridge state reads have no conditional path and hash a state that includes the model catalogue (TX-5); transcript windows are always sent whole (TX-6). GW-3 is in `web-gateway.ts`. Push or long-poll: a running tab still sends two requests a second, each an `unchanged` answer of about 1.6 KB on the wire when nothing moved. Whether that justifies either is the maintainer's choice from these numbers; nothing here started it.
 
 **Decisions.**
 
-- **Where does the combined read live?**
+- **Where does the combined read live?** Done as recommended.
   - **One new progressive-update command that answers transcript and state with their `knownToken`s (recommended).**
     - Pros: one request; reuses the existing token contract; older backends are detected by the missing command.
     - Cons: a new protocol command that needs a version-compatibility entry.
   - **A generic bounded `/invoke-batch`.**
     - Pros: helps every caller.
     - Cons: new gateway surface with its own bounds, auth and error semantics.
+- **What triggers a discovery read?** Done 2026-11-04 with the first option, plus follow-ups for a section that has not settled (see Assumptions and decisions).
+  - **Mount, a session or identity change, a manual refresh, resync, a phase change and an invalidation that names discovery, with a 30 s backstop that reuses its `knownToken` (recommended).**
+    - Pros: covers both reports' lists; a new command or model still arrives; the backstop covers a missed hint and drives the refresh that produces announcements.
+    - Cons: a catalogue change not announced waits up to 30 s.
+  - **Only events, with no backstop.**
+    - Pros: fewest reads.
+    - Cons: the maintainer asked for a recovery poll to stay, and with no read the backend would not refresh discovery, so a change would never be announced.
 
 ### 5. Transcript pipeline
 
@@ -2215,3 +2242,19 @@ Verification named four desktop failures. None of them came from a gateway chang
 **Revoked-access recovery (three cases in `preview-transport-manager.test.ts`).** A real bug in tunnel v2: a pooled stream stayed reusable between the session `error` frame and the close frame, so a request after a revocation got a 502. Fixed in `PreviewTunnelSession`; the choice is recorded in [4500](4500-preview-tunnel-one-socket-per-connection.md).
 
 **Node pull-mode receive window (`preview-tunnel-session.test.ts`).** On Node 26.7.0 `read()` with no size returned one 64 KiB chunk of the four buffered, where the test expected all of them. The credit logic was correct, so the test now drains the stream until `read()` returns null. Only Node 26.7.0 is installed on the host, so the test was not run on an older Node.
+
+### Task 4: following a section that has not settled (2026-11-04)
+
+The analysis listed the triggers and a 30 s backstop. That alone would have stranded a view: the first read schedules at most two of the four sections per provider, so the rest stay `loading` until a later read asks again, and a refreshed section with an unchanged value is not announced, so a read that found it `stale` would have kept showing that until the next backstop, which would find it expired and `stale` again. A failed refresh announces nothing either. So a view with a section `loading` or `stale` looks again after 2 s, the backend's own section deadline, and one with a section `unavailable` after 5 s, the backend's retry. A provider that keeps failing costs one read every 2 s, down from two a second. No new backend announcement was added, since the read is what starts the refresh in any case.
+
+### Task 4: detecting the combined read by capability (2026-11-04)
+
+The analysis expected an older backend to be detected by the missing command. `get_native_agent_sync_capabilities` already carries this kind of answer (`transcriptPatchVersions`), so the backend advertises `liveUpdateVersions` and an older one is never sent a command it would refuse, which keeps its gateway's failure counts clean. The missing-command path stays only for a backend replaced by an older one before the next resync: both parts then answer `pending` in that round and are read on their own.
+
+### Task 4: a slow part answers `pending` (2026-11-04)
+
+The reads were separate, so a slow transcript could not delay session state, which carries pending approvals and the turn phase. Waiting for both would have traded that away, and the ticket asks for a running tab to stay as live as it is. A part still running after 250 ms answers `pending` and the client reads it alone, joining the provider read in flight. 250 ms is a judgment, half a round, not a measurement; the two reads took about 2 ms each in the runs above. First, manual and post-mutation reads stay two requests, so a cold transcript never travels with state.
+
+### Task 4: discovery causes instead of a new signal (2026-11-04)
+
+The analysis said an invalidation would have to start naming discovery. #1659 (2026-11-03) had already added a `cause` to each change, so the listener reads that and no event changed. A change with no cause (a backend before v2.36.0) or an unknown one counts as naming discovery, which keeps such a backend correct at the cost of some reads, and is listed in the compatibility register.

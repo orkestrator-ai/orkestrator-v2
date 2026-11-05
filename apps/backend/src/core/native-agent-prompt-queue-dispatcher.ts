@@ -803,6 +803,8 @@ export class NativeAgentPromptQueueDispatcher {
         attachments,
         prompt: message.text,
         requestId: reservation.requestId,
+        // The zone of the renderer that queued it; validated where it is recorded.
+        clientTimeZone: queueString(message, "clientTimeZone"),
         // Revalidated now, at dequeue: a selection whose binding changed while
         // queued fails with its reason instead of running something else.
         ...(parseNativeAgentCommandIntent(message.command)

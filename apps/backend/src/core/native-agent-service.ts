@@ -1,3 +1,4 @@
+import { isValidTimeZone } from "@orkestrator/protocol/schedule-time";
 import type { TurnFailureKind } from "@orkestrator/protocol/agent-usage-limits";
 import { turnOutcomeFailureKind } from "./agent-usage-limits.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
@@ -3901,6 +3902,12 @@ export class NativeAgentService {
               const owner = input.owner;
               const conversationId = coordinatorConversationIdFromRuntimeId(input.environmentId);
               const startedAt = new Date(this.now()).toISOString();
+              const userTurn = !(mailInject || recovery || durable.pendingDispatch);
+              // The user's own device's zone, for self-timers' absolute times.
+              const userTimeZone =
+                userTurn && isValidTimeZone(input.clientTimeZone)
+                  ? input.clientTimeZone
+                  : undefined;
               await this.storage.coordinators.mutateCoordinatorWorkspace(
                 owner.projectId,
                 (workspace) => {
@@ -3920,14 +3927,12 @@ export class NativeAgentService {
                       conversation.id === conversationId
                         ? {
                             ...conversation,
-                            lastTurnOrigin:
-                              mailInject || recovery || durable.pendingDispatch
-                                ? ("mail" as const)
-                                : ("user" as const),
+                            lastTurnOrigin: userTurn ? ("user" as const) : ("mail" as const),
                             lastTurnStartedAt: startedAt,
                           }
                         : conversation,
                     ),
+                    ...(userTimeZone ? { userTimeZone } : {}),
                     updatedAt: startedAt,
                   };
                 },

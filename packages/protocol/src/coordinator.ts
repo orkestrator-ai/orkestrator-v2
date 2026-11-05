@@ -776,6 +776,15 @@ export interface CoordinatorWorkspace {
   bridgePort?: number;
   bridgePid?: number;
   repositoryStatus?: ProjectGitStatus;
+  /**
+   * The IANA zone of the device that sent the newest prompt the user typed to
+   * any of this coordinator's conversations. A self-timer's absolute time
+   * (`at: "14:30"`) is read in it, so a coordinator on a machine in another
+   * zone still means the user's 14:30. Absent until a renderer that reports
+   * its zone sends a prompt; until then the backend host's zone is used. An
+   * older backend ignores it.
+   */
+  userTimeZone?: string;
 }
 
 export interface CoordinatorSnapshot {

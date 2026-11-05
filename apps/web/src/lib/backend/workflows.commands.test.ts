@@ -1,3 +1,4 @@
+import { hostTimeZone } from "@orkestrator/protocol/schedule-time";
 import { afterEach, describe, expect, test, type Mock } from "bun:test";
 import { invoke } from "@/lib/native/backend";
 import {
@@ -59,7 +60,10 @@ describe("native command wrappers", () => {
       command,
     };
     await dispatchNativeAgentIntent(base);
-    expect(invokeMock).toHaveBeenLastCalledWith("dispatch_native_agent_intent", base);
+    expect(invokeMock).toHaveBeenLastCalledWith("dispatch_native_agent_intent", {
+      ...base,
+      clientTimeZone: hostTimeZone(),
+    });
     await dispatchNativeAgentPrompt(base);
     expect(invokeMock).toHaveBeenLastCalledWith("dispatch_native_agent_prompt", base);
   });

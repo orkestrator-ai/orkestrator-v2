@@ -433,6 +433,44 @@ describe("self-timers", () => {
     });
   });
 
+  test("an absolute time is read in the zone of the device the user last prompted from", async () => {
+    // The coordinator's machine is in London; the user's last prompt came from New York.
+    currentWorkspace.userTimeZone = "America/New_York";
+    clock.now = Date.parse("2026-10-30T09:00:00Z");
+    const created = await call("main", "create_schedule", {
+      requestId: "at-1430-user",
+      at: "14:30",
+      action: { type: "remind_me", body: "Afternoon check, user's time." },
+    });
+    expect(created.structuredContent).toMatchObject({
+      timeZone: "America/New_York",
+      nextFireAt: "2026-10-30T18:30:00.000Z",
+      timeZoneUsed: expect.stringContaining("the device they last prompted you from"),
+    });
+    // An explicit zone still wins.
+    const zoned = await call("main", "create_schedule", {
+      requestId: "at-1430-given",
+      at: "14:30",
+      timeZone: "Europe/London",
+      action: { type: "remind_me", body: "London afternoon." },
+    });
+    expect(zoned.structuredContent).toMatchObject({
+      timeZone: "Europe/London",
+      timeZoneUsed: "Europe/London (as given)",
+    });
+    // A stored zone this runtime cannot name is ignored, as if none were known.
+    currentWorkspace.userTimeZone = "Mars/Olympus_Mons";
+    const fallback = await call("main", "create_schedule", {
+      requestId: "at-1430-unknown",
+      at: "14:30",
+      action: { type: "remind_me", body: "Fallback afternoon." },
+    });
+    expect(fallback.structuredContent).toMatchObject({
+      timeZone: "Europe/London",
+      timeZoneUsed: expect.stringContaining("not known yet"),
+    });
+  });
+
   test("a side agent's timer comes back to that side conversation, not the main one", async () => {
     await call("side", "create_schedule", {
       requestId: "side-timer",

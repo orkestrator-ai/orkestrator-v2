@@ -53,6 +53,12 @@ export interface ScheduleToolBackend {
   pause?(scheduleId: string): Promise<ScheduledJob>;
   resume?(scheduleId: string): Promise<ScheduledJob>;
   update?(scheduleId: string, input: ScheduleUpdateInput): Promise<ScheduledJob>;
+  /**
+   * Coordinators only: the zone a schedule without `timeZone` uses. `user` is
+   * the zone of the device the user last prompted the coordinator from; `host`
+   * is this machine's, used until any such prompt has been seen.
+   */
+  defaultTimeZone?(): Promise<{ zone: string; source: "user" | "host" }>;
 }
 
 export type ScheduleToolSurface = "agent" | "coordinator";
@@ -402,7 +408,17 @@ export function registerScheduleTools(
       .max(64)
       .optional()
       .describe("With everyMinutes: the first fire."),
-    timeZone: z.string().trim().min(1).max(64).optional().describe(`IANA zone; default ${zone}.`),
+    timeZone: z
+      .string()
+      .trim()
+      .min(1)
+      .max(64)
+      .optional()
+      .describe(
+        surface === "coordinator"
+          ? `IANA zone; default the user's zone (the device they last prompted you from), or ${zone} until they have.`
+          : `IANA zone; default ${zone}.`,
+      ),
     catchUpMinutes: z
       .number()
       .int()
@@ -416,9 +432,9 @@ export function registerScheduleTools(
       title: "Schedule an action",
       description:
         "Have the Orkestrator backend run an action later, once or repeatedly, even after this session ends or the backend restarts. " +
-        `Give exactly one of at (one-shot: "03:12" is the next 03:12, "2026-10-26T03:12", an ISO time with an offset, or "+30m"), cron (five fields, e.g. "0 9 * * 1-5") or everyMinutes. Times use timeZone (default ${zone}); DST is handled. ` +
+        `Give exactly one of at (one-shot: "03:12" is the next 03:12, "2026-10-26T03:12", an ISO time with an offset, or "+30m"), cron (five fields, e.g. "0 9 * * 1-5") or everyMinutes. Times use timeZone (default ${surface === "coordinator" ? "the user's zone" : zone}); DST is handled. ` +
         (surface === "coordinator"
-          ? `To wake yourself later (a self-timer: "in 2 hours" is at "+2h", "at 14:30" is at "14:30"), use action type remind_me: its body arrives in this conversation as a reminder that starts a new turn, and one that fires while you are mid-turn is queued until the turn ends. Absolute times are read in the user's local time zone, this machine's (${zone}), unless you pass timeZone; the result names the zone used and the local time. A self-timer is at most ${SCHEDULED_JOB_LIMITS.maxSelfTimerDelayMs / 86_400_000} days ahead and you may hold ${SCHEDULED_JOB_LIMITS.maxPendingSelfTimers} pending. `
+          ? `To wake yourself later (a self-timer: "in 2 hours" is at "+2h", "at 14:30" is at "14:30"), use action type remind_me: its body arrives in this conversation as a reminder that starts a new turn, and one that fires while you are mid-turn is queued until the turn ends. Absolute times are read in the user's local time zone, the zone of the device the user last sent you a prompt from (this machine's, ${zone}, until they have), unless you pass timeZone; the result names the zone used and the local time. A self-timer is at most ${SCHEDULED_JOB_LIMITS.maxSelfTimerDelayMs / 86_400_000} days ahead and you may hold ${SCHEDULED_JOB_LIMITS.maxPendingSelfTimers} pending. `
           : 'To wake yourself later, send_message to your own environment id: it arrives as a reminder that starts a turn. To wake your coordinator, send to "coordinator". ') +
         "The action runs as you, with your permissions at fire time; anything you could not do directly is refused. A fire missed while the backend was down runs once on return if no more than catchUpMinutes late (default 15), otherwise it is skipped. Reuse requestId when retrying. Returns scheduleId and nextFireAt; then finish your turn.",
       inputSchema: z.object({
@@ -445,9 +461,14 @@ export function registerScheduleTools(
       if (input.type === "remind_me" && timing.name === undefined) {
         timing.name = selfTimerName(input.body!);
       }
+      const given = typeof timing.timeZone === "string";
+      // A coordinator's default is the user's own zone once a prompt named it.
+      const fallback =
+        !given && resolved.defaultTimeZone ? await resolved.defaultTimeZone() : undefined;
       const created = await resolved.create(
         {
           ...timing,
+          ...(fallback?.source === "user" ? { timeZone: fallback.zone } : {}),
           ...(everyMinutes !== undefined ? { everySeconds: everyMinutes * 60 } : {}),
           action: scheduled,
         },
@@ -456,10 +477,13 @@ export function registerScheduleTools(
       );
       return textResult({
         ...scheduleView(created.schedule),
-        timeZoneUsed:
-          typeof timing.timeZone === "string"
-            ? `${created.schedule.timeZone} (as given)`
-            : `${created.schedule.timeZone} (the user's local time zone: this machine's)`,
+        timeZoneUsed: given
+          ? `${created.schedule.timeZone} (as given)`
+          : fallback?.source === "user"
+            ? `${created.schedule.timeZone} (the user's local time zone: the device they last prompted you from)`
+            : fallback
+              ? `${created.schedule.timeZone} (the user's local time zone is not known yet, so this machine's: pass timeZone if the user is elsewhere)`
+              : `${created.schedule.timeZone} (the user's local time zone: this machine's)`,
         ...(scheduleAccountSwitchGrant(created.schedule.action)
           ? { carriesAccountSwitchPermission: true }
           : {}),

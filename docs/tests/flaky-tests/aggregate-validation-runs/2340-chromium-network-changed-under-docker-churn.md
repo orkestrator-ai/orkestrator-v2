@@ -287,3 +287,25 @@ All six selected cases failed to launch: the installed WebKit binary lacks host
 libraries (`libicu74`, `libxml2`, `libflite1`). No WebKit behavior was tested.
 Log: `/tmp/orkestrator-test-run.WPpVnX/static-html-webkit.log.gz`.
 This launch failure is separate from Chromium's network-change failures.
+
+## Recurrence: an Electron spec's own window (2026-11-05)
+
+- **Test:** `a real window sends its startup markers to the main process and none
+  of its logger lines`, `e2e/agent-testing/renderer-log-boundary-electron.spec.ts`.
+- **Command:** `mise run test:logged -- --name e16-log-boundary-1 -- bunx playwright
+  test --config e2e/agent-testing/playwright.electron.config.ts
+  renderer-log-boundary-electron.spec.ts --workers=1 --retries=0`, one worker, at
+  `525c3c589` before its rebase, Electron on headless Ozone. Other worktrees' Docker
+  and Electron work was running.
+- **Failure:** `toHaveTitle` timed out after 60 s on "Orkestrator AI", with the
+  "Orkestrator couldn't connect" screen, `[DesktopStartup] renderer-load-failed` and
+  `net::ERR_NETWORK_CHANGED` module loads. Containers joined Docker's `bridge` at
+  22:00:44 and 22:00:45 and left at 22:00:50 and 22:00:51; the aborts came at about
+  22:00:50. The spec's own boot reachability probe was running then. Which run owned
+  those containers was not established.
+- **Rerun:** with `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`, the next four runs had no
+  `ERR_NETWORK_CHANGED`, although bridge events still occurred during at least two.
+  Those four failed later, for an unrelated reason
+  ([6303](../../../todo/cross-cutting/6303-window-close-during-request-throws.md)).
+- **Change:** the spec launches with the probe off. Its module loads still go through
+  Chromium, so other Docker work on the host can still cause this.

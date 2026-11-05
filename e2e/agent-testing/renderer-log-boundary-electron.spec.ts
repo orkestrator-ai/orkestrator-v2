@@ -233,6 +233,10 @@ test("a real window sends its startup markers to the main process and none of it
         ELECTRON_DEV: "1",
         VITE_DEV_SERVER_URL: rendererUrl,
         ORKESTRATOR_RUNTIME_PROFILE_FILE: profilePath,
+        // No startup container-to-host probe: its container changes an interface
+        // while the renderer is loading, and Chromium aborts the loopback module
+        // requests with ERR_NETWORK_CHANGED (flake 2340).
+        ORKESTRATOR_HOST_REACHABILITY_CHECK: "off",
       },
     });
     recordElectronDiagnostics(app);
@@ -416,6 +420,12 @@ test("a real window sends its startup markers to the main process and none of it
     // Reload immediately after the caught failure, before the old ten-second interval.
     await window.reload();
     await expect.poll(essential, { timeout: 30_000 }).toContain('"event":"error.recorded"');
+    // Let the reloaded page finish starting. Closing it mid-request throws in the
+    // main process and loses the shutdown lines checked below (6303).
+    await expect(window).toHaveTitle(profile.electronTitle, { timeout: 60_000 });
+    await expect(window.getByRole("button", { name: "Global settings", exact: true })).toBeVisible({
+      timeout: 60_000,
+    });
     const records = (await essential())
       .trim()
       .split("\n")

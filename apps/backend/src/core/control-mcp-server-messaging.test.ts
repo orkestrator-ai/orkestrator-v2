@@ -184,6 +184,16 @@ describe("Orkestrator control MCP server", () => {
       },
     });
     expect(differentlyFiltered.body.result?.structuredContent).not.toHaveProperty("repeatedRead");
+    // A different page size is the same question, so it does not reset the count.
+    const resized = await rpc(credential.url, credential.token, "tools/call", {
+      name: "read_messages",
+      arguments: {
+        environmentId: "coordinator:coordinator-1:conversation-1",
+        tabId: "coordinator-tab",
+        limit: 5,
+      },
+    });
+    expect(resized.body.result?.structuredContent).toHaveProperty("repeatedRead", true);
 
     // Real new mail clears the guard immediately; the budget never hides it.
     mailbox = {

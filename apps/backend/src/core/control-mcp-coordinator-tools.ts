@@ -2,6 +2,12 @@ import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { coordinatorReplayFields } from "./control-mcp-results.js";
 import {
+  pollKey,
+  workflowFingerprint,
+  workflowListFingerprint,
+  type CoordinatorPollGuard,
+} from "./control-mcp-poll-guard.js";
+import {
   AUTO_ADDRESS_FINDINGS_FIELD_DESCRIPTION,
   AUTO_PR_FIELD_DESCRIPTION,
   MULTI_REVIEW_AUTOMATION_DESCRIPTION,
@@ -89,11 +95,20 @@ export interface CoordinatorToolContext {
     environmentId: string,
   ): Promise<{ inv: ControlMcpInvoker; target: NodeTarget | null }>;
   onNodeResult(target: NodeTarget | null): JsonRecord;
+  /** This conversation's poll guard; absent outside a coordinator request. */
+  pollGuard?: CoordinatorPollGuard;
 }
 
 export function registerCoordinatorWorkflowTools(
   server: McpServer,
-  { invoke, coordinatorScope, onNode, environmentInvoker, onNodeResult }: CoordinatorToolContext,
+  {
+    invoke,
+    coordinatorScope,
+    onNode,
+    environmentInvoker,
+    onNodeResult,
+    pollGuard,
+  }: CoordinatorToolContext,
 ): void {
   registerControlReviewActions(server, invoke, coordinatorScope);
   registerCoordinatorSurfaceTools(server, invoke, coordinatorScope);
@@ -258,7 +273,11 @@ export function registerCoordinatorWorkflowTools(
           };
         }),
       );
-      return toolResult({ workflows, total: workflows.length });
+      const guidance = pollGuard?.(
+        pollKey("list_workflows", openOnly === true),
+        workflowListFingerprint(workflows),
+      );
+      return toolResult({ workflows, total: workflows.length, ...guidance });
     },
   );
   server.registerTool(
@@ -476,10 +495,13 @@ export function registerCoordinatorWorkflowTools(
     },
     async ({ pipelineId, nodeId }) => {
       const target = await onNode(nodeId);
-      return toolResult({
-        workflow: workflowSummary(await scopedWorkflow("build", pipelineId, target)),
-        ...onNodeResult(target),
-      });
+      const workflow = workflowSummary(await scopedWorkflow("build", pipelineId, target));
+      // Re-reading an unchanged workflow is polling it; its status wake is the answer.
+      const guidance = pollGuard?.(
+        pollKey("get_build_pipeline", pipelineId, nodeId),
+        workflowFingerprint(workflow),
+      );
+      return toolResult({ workflow, ...onNodeResult(target), ...guidance });
     },
   );
 
@@ -682,10 +704,13 @@ export function registerCoordinatorWorkflowTools(
     },
     async ({ workflowId, nodeId }) => {
       const target = await onNode(nodeId);
-      return toolResult({
-        workflow: workflowSummary(await scopedWorkflow("review", workflowId, target)),
-        ...onNodeResult(target),
-      });
+      const workflow = workflowSummary(await scopedWorkflow("review", workflowId, target));
+      // Re-reading an unchanged workflow is polling it; its status wake is the answer.
+      const guidance = pollGuard?.(
+        pollKey("get_multi_review", workflowId, nodeId),
+        workflowFingerprint(workflow),
+      );
+      return toolResult({ workflow, ...onNodeResult(target), ...guidance });
     },
   );
 

@@ -37,6 +37,16 @@ import type { AgentModel } from "@orkestrator/protocol/native-agent";
 import { z } from "zod";
 import { coordinatorReplayFields } from "./control-mcp-results.js";
 import {
+  agentRegistryFingerprint,
+  environmentFingerprint,
+  environmentListFingerprint,
+  mailboxFingerprint,
+  pollKey,
+  tabStateFingerprint,
+  transcriptFingerprint,
+  type CoordinatorPollGuard,
+} from "./control-mcp-poll-guard.js";
+import {
   ticketKindField,
   ticketSectionsField,
   ticketStructuredOutput,
@@ -465,61 +475,10 @@ async function tryOpenCoordinatorDelegation(
  * the same states are the same answer, however the page was paginated or how
  * unread counts happened to render.
  */
-function mailboxFingerprint(page: JsonRecord): string {
-  const messages = Array.isArray(page.messages) ? page.messages : [];
-  return JSON.stringify(
-    messages.map((message) =>
-      isRecord(message) ? [message.id, message.placement, message.ackedAt ?? null] : message,
-    ),
-  );
-}
-
-/**
- * What a worker-status poll would be watching for. `lastActivityAt` moves on
- * every turn event, so it is left out: a coordinator re-listing while a worker
- * is still `working` asks the same question each time.
- */
-function environmentListFingerprint(result: {
-  environments: JsonRecord[];
-  otherNodes?: JsonRecord[];
-}): string {
-  return JSON.stringify([
-    result.environments.map((environment) => [
-      environment.id,
-      environment.nodeId ?? null,
-      environment.status,
-      environment.setupPhase ?? null,
-      environment.lifecycleOperation ?? null,
-      environment.agentActivityState ?? null,
-      ...prFingerprint(environment),
-    ]),
-    (result.otherNodes ?? []).map((node) => [
-      node.nodeId,
-      node.available,
-      (Array.isArray(node.environments) ? node.environments : []).map((environment: JsonRecord) => [
-        environment.environmentId,
-        environment.status,
-        environment.activity ?? null,
-        ...prFingerprint(environment),
-      ]),
-    ]),
-  ]);
-}
 
 /** What a coordinator's environment reads say about a worker's pull request. */
 const COORDINATOR_PR_FIELDS_NOTE =
   " A worker with a pull request also has prHasMergeConflicts, prMergeability, prChecks (passed, failed, pending and total counts, and requiredFailed: how many failing checks GitHub requires, null when it did not say) and prReadyToMerge (with prNotReadyReason when false), from the PR monitor; ready means only the user's merge is left.";
-
-/** A PR that starts conflicting, fails a check or becomes ready is a different answer. */
-function prFingerprint(environment: JsonRecord): unknown[] {
-  return [
-    environment.prState ?? null,
-    environment.prHasMergeConflicts ?? null,
-    environment.prMergeability ?? null,
-    environment.prChecks ?? null,
-    environment.prReadyToMerge ?? null,
-  ];
-}
 
 /** The worker's half of the contract: one report, at the end, then stop. */
 function workerAsyncContract(): string {
@@ -529,17 +488,7 @@ function workerAsyncContract(): string {
   );
 }
 
-/**
- * Whether this read is a poll: the same answer, asked again, too many times.
- *
- * Returns the refusal to send back instead of the page, or null to answer
- * normally. Deliberately fingerprint-based rather than time-based — a model
- * that reads its inbox once at the start of a turn and once before finishing is
- * doing the right thing however fast it does it, while one asking the same
- * unchanged question a fifth time is waiting, which is the thing this design
- * removed the need for.
- */
-export type CoordinatorPollGuard = (key: string, fingerprint: string) => JsonRecord | null;
+export type { CoordinatorPollGuard };
 
 /**
  * Registers only the tools a credential may use, so `tools/list` never offers
@@ -1067,7 +1016,7 @@ export async function createControlMcp(
       };
       // A coordinator re-listing unchanged environments is polling its workers.
       const guidance = pollGuard?.(
-        `list_environments:${JSON.stringify({ projectId, status, nodeId })}`,
+        pollKey("list_environments", projectId, status, nodeId),
         environmentListFingerprint(result),
       );
       return toolResult(guidance ? { ...result, ...guidance } : result);
@@ -1102,13 +1051,16 @@ export async function createControlMcp(
       const health = target
         ? await nodePrHealth(invoke, target.nodeId)
         : await thisNodePrHealth(invoke, coordinatorScope?.projectId, [environment]);
-      return toolResult({
-        environment: {
-          ...environmentSummary(environment),
-          ...coordinatorPrFields(prReadingFrom(environment, health.get(environmentId))),
-          ...onNodeResult(target),
-        },
-      });
+      const summary = {
+        ...environmentSummary(environment),
+        ...coordinatorPrFields(prReadingFrom(environment, health.get(environmentId))),
+        ...onNodeResult(target),
+      };
+      const guidance = pollGuard?.(
+        pollKey("get_environment", environmentId, nodeId),
+        environmentFingerprint(summary),
+      );
+      return toolResult({ environment: summary, ...guidance });
     },
   );
 
@@ -1140,7 +1092,7 @@ export async function createControlMcp(
     {
       title: "List agents",
       description:
-        "Every agent tab in the project's environments, and its coordinator conversations, with what each is doing now: working, waiting (on a person), idle, stopped (its environment is not running) or unknown. Native tabs carry the sessionId the session tools take. Includes per-environment counts. Read this instead of polling tabs one by one.",
+        "Every agent tab in the project's environments, and its coordinator conversations, with what each is doing now: working, waiting (on a person), idle, stopped (its environment is not running) or unknown. Native tabs carry the sessionId the session tools take. Includes per-environment counts. Read it to answer a one-off question, not to wait: re-reading an unchanged answer is polling, and a delegated worker's answer comes back to you without it.",
       inputSchema: z.object({
         projectId: z.string().trim().min(1).max(200).optional(),
         environmentId: z.string().trim().min(1).max(200).optional(),
@@ -1170,7 +1122,12 @@ export async function createControlMcp(
         const entries = asArray(remote.entries).filter(
           (entry) => entry.ownerKind !== "coordinator",
         );
-        return toolResult({ ...remote, entries, ...onNodeResult(target) });
+        const result = { ...remote, entries, ...onNodeResult(target) };
+        const guidance = pollGuard?.(
+          pollKey("list_agents", nodeId, environmentId),
+          agentRegistryFingerprint(result),
+        );
+        return toolResult({ ...result, ...guidance });
       }
       const snapshot = await invoke<unknown>("get_agent_registry", {
         ...(coordinatorScope
@@ -1181,7 +1138,11 @@ export async function createControlMcp(
         ...(environmentId ? { environmentId } : {}),
       });
       if (!isRecord(snapshot)) throw new Error("Agent registry returned no result");
-      return toolResult(snapshot);
+      const guidance = pollGuard?.(
+        pollKey("list_agents", undefined, environmentId),
+        agentRegistryFingerprint(snapshot),
+      );
+      return toolResult({ ...snapshot, ...guidance });
     },
   );
 
@@ -1199,6 +1160,15 @@ export async function createControlMcp(
       annotations: readAnnotations(),
     },
     async ({ environmentId, tabId, nodeId }) => {
+      // Re-reading the same tab's state unchanged is polling the worker.
+      const answer = (result: JsonRecord) =>
+        toolResult({
+          ...result,
+          ...pollGuard?.(
+            pollKey("get_tab_state", environmentId, tabId, nodeId),
+            tabStateFingerprint(result),
+          ),
+        });
       const {
         inv,
         where: node,
@@ -1215,12 +1185,12 @@ export async function createControlMcp(
       if (!native) {
         if (!isRecord(environment)) throw new Error(`Environment not found: ${environmentId}`);
         if (typeof tab.type !== "string" || !TERMINAL_TAB_TYPES.has(tab.type)) {
-          return toolResult({ ...where, tab, state: { kind: "persisted" } });
+          return answer({ ...where, tab, state: { kind: "persisted" } });
         }
         const state = await inv<unknown>("get_terminal_session", {
           sessionId: terminalSessionId(environment, environmentId, tabId),
         });
-        return toolResult({ ...where, tab, state });
+        return answer({ ...where, tab, state });
       }
       const projection = await inv<unknown>("get_native_agent_projection", {
         environmentId,
@@ -1229,10 +1199,10 @@ export async function createControlMcp(
         messageLimit: 1,
       });
       if (!isRecord(projection)) {
-        return toolResult({ ...where, agent: native.agent, connection: "connecting" });
+        return answer({ ...where, agent: native.agent, connection: "connecting" });
       }
       const { messages: _messages, ...state } = projection;
-      return toolResult({
+      return answer({
         ...where,
         agent: native.agent,
         state: {
@@ -1261,6 +1231,15 @@ export async function createControlMcp(
       annotations: readAnnotations(),
     },
     async ({ environmentId, tabId, limit, nodeId }) => {
+      // Re-reading the same transcript unchanged is polling the worker.
+      const answer = (result: JsonRecord) =>
+        toolResult({
+          ...result,
+          ...pollGuard?.(
+            pollKey("get_tab_transcript", environmentId, tabId, nodeId),
+            transcriptFingerprint(result),
+          ),
+        });
       const { inv, where, layout: readLayout } = await environmentInvoker(nodeId, environmentId);
       if (isPipelineWorkerTabId(tabId)) {
         // A pipeline worker has no pane tab: its stage session's transcript.
@@ -1271,7 +1250,7 @@ export async function createControlMcp(
         });
         if (!isRecord(read)) throw new Error("The worker's transcript is unavailable");
         const { messages, ...rest } = read;
-        return toolResult({
+        return answer({
           ...rest,
           ...where,
           kind: "pipeline-worker",
@@ -1291,7 +1270,7 @@ export async function createControlMcp(
           messageLimit: limit,
         });
         if (!isRecord(projection)) {
-          return toolResult({
+          return answer({
             environmentId,
             tabId,
             ...where,
@@ -1304,7 +1283,7 @@ export async function createControlMcp(
         const compact = compactMessages(
           Array.isArray(projection.messages) ? projection.messages : [],
         );
-        return toolResult({
+        return answer({
           environmentId,
           tabId,
           ...where,
@@ -1330,7 +1309,7 @@ export async function createControlMcp(
       const output =
         isRecord(snapshot) && typeof snapshot.output === "string" ? snapshot.output : "";
       const stripped = output.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "");
-      return toolResult({
+      return answer({
         environmentId,
         tabId,
         ...where,
@@ -2054,6 +2033,7 @@ export async function createControlMcp(
       onNode,
       environmentInvoker,
       onNodeResult,
+      pollGuard,
     });
   }
 
@@ -2367,7 +2347,8 @@ export async function createControlMcp(
           const page = await invoke<unknown>("get_agent_mail_mailbox", input);
           if (!isRecord(page)) throw new Error("Mailbox returned no result");
           const guidance = pollGuard?.(
-            `read_messages:${JSON.stringify(input)}`,
+            // Paging and page size do not change the question being asked.
+            pollKey("read_messages", input.environmentId, input.tabId, input.unreadOnly),
             mailboxFingerprint(page),
           );
           return toolResult(guidance ? { ...page, ...guidance } : page);
@@ -2443,7 +2424,7 @@ export async function createControlMcp(
           // Guarded only after authorization, so a refusal can never answer for
           // a message this credential was not allowed to look at.
           const statusRefusal = pollGuard?.(
-            `get_message_status:${messageId}`,
+            pollKey("get_message_status", messageId),
             JSON.stringify({
               placement: status.placement,
               injectedAt: status.injectedAt,

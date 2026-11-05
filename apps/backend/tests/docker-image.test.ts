@@ -56,7 +56,7 @@ function validManifest(overrides: Record<string, unknown> = {}): string {
     runtimes: { bun: "1.4.3", node: "24.21.0" },
     agents: { claude: "2.1.280" },
     bridges: ["claude-bridge"],
-    capabilities: { "workspace-prepare": 1, "future-capability": 3 },
+    capabilities: { "workspace-prepare": 1, "staged-inputs": 5, "future-capability": 3 },
     stateFormats: {},
     ...overrides,
   });
@@ -81,7 +81,7 @@ describe("image manifest contract", () => {
     const parsed = parseImageManifest(validManifest());
     expect(parsed.ok).toBe(true);
     if (!parsed.ok) return;
-    expect(parsed.manifest.capabilities).toEqual({ "workspace-prepare": 1 });
+    expect(parsed.manifest.capabilities).toEqual({ "workspace-prepare": 1, "staged-inputs": 5 });
     expect(missingImageCapabilities(parsed.manifest, { "workspace-prepare": 1 })).toEqual([]);
     expect(missingImageCapabilities(parsed.manifest, { "boot-status": 1 })).toEqual([
       "boot-status",
@@ -280,7 +280,7 @@ esac
         expect(status.state).toBe("legacy");
         expect(status.imageId).toBe(IMAGE_ID);
         expect(status.registryDigest).toBeNull();
-        expect(status.missingCapabilities).toEqual(["workspace-prepare"]);
+        expect(status.missingCapabilities).toEqual(["workspace-prepare", "staged-inputs"]);
         expect(status.remediation).toContain("predates image manifests");
       },
     );
@@ -470,15 +470,17 @@ esac
         MemTotal: 32 * 1024 ** 3,
         ...extra,
       });
+    const tar = await tarOf("image-manifest.json", validManifest());
     const script = (info: string, endpoint: string) => `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 case "$1" in
   context) printf '${endpoint}\\n' ;;
   info) printf '%s\\n' '${info}' ;;
+  cp) cat '${tar}' ;;
 esac
 `;
     const createLine = async (log: { read: () => Promise<string> }) =>
-      (await log.read()).split("\n").find((line) => line.startsWith("create ")) ?? "";
+      (await log.read()).split("\n").find((line) => line.startsWith("create --name")) ?? "";
     try {
       resetResourceCaches();
       await withDockerScript(
@@ -487,7 +489,9 @@ esac
           "unix:///var/run/docker.sock",
         ),
         async (log) => {
-          await createDockerContainer(lifecycleEnvironment(), context).catch(() => undefined);
+          await createDockerContainer(lifecycleEnvironment(), context, {
+            imageId: IMAGE_ID,
+          }).catch(() => undefined);
           const line = await createLine(log);
           expect(line).toContain("--memory 8192m --memory-swap 8192m --pids-limit 4096");
           expect(line).toContain("--shm-size 1024m");
@@ -510,7 +514,9 @@ esac
           "unix:///run/user/1000/docker.sock",
         ),
         async (log) => {
-          await createDockerContainer(lifecycleEnvironment(), context).catch(() => undefined);
+          await createDockerContainer(lifecycleEnvironment(), context, {
+            imageId: IMAGE_ID,
+          }).catch(() => undefined);
           const line = await createLine(log);
           expect(line).toContain("--shm-size 1024m");
           expect(line).not.toMatch(/--memory|--pids-limit|--cpus/);
@@ -550,7 +556,9 @@ describe("pinned image identity", () => {
     );
     const tar = await tarOf(
       "image-manifest.json",
-      validManifest({ capabilities: { "network-policy": 3, "network-refresh": 1 } }),
+      validManifest({
+        capabilities: { "network-policy": 3, "network-refresh": 1, "staged-inputs": 2 },
+      }),
     );
     const { createDockerContainer } = await import("../src/core/commands-containers");
     const originalPolicy = process.env.ORKESTRATOR_NETWORK_POLICY;
@@ -830,7 +838,9 @@ esac
       const noGatewayImage = `sha256:${"e".repeat(64)}`;
       const noGatewayTar = await tarOf(
         "image-manifest.json",
-        validManifest({ capabilities: { "network-policy": 3, "network-refresh": 1 } }),
+        validManifest({
+          capabilities: { "network-policy": 3, "network-refresh": 1, "staged-inputs": 2 },
+        }),
       );
       await withDockerScript(
         script("printf 'created-workload\\n'").replace(`cat '${tar}'`, `cat '${noGatewayTar}'`),
@@ -896,7 +906,9 @@ esac
     );
     const tar = await tarOf(
       "image-manifest.json",
-      validManifest({ capabilities: { "network-policy": 3, "network-refresh": 1 } }),
+      validManifest({
+        capabilities: { "network-policy": 3, "network-refresh": 1, "staged-inputs": 2 },
+      }),
     );
     const { createDockerContainer } = await import("../src/core/commands-containers");
     resetDockerTopologyCache();
@@ -956,6 +968,7 @@ esac
     });
     const { createDockerContainer } = await import("../src/core/commands-containers");
     const retagged = `sha256:${"e".repeat(64)}`;
+    const tar = await tarOf("image-manifest.json", validManifest());
     await withDockerScript(
       `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
@@ -964,6 +977,7 @@ case "$1" in
   info) printf '{"OSType":"linux","OperatingSystem":"Debian","Architecture":"x86_64","ServerVersion":"29.7.2","SecurityOptions":[]}\\n' ;;
   image) printf '%s\\t[]\\tamd64\\n' '${retagged}' ;;
   create) printf 'created-from-pinned\\n' ;;
+  cp) cat '${tar}' ;;
 esac
 `,
       async (log) => {

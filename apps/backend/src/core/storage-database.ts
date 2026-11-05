@@ -277,6 +277,18 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function restrictCompanionFiles(databasePath: string): void {
+  for (const suffix of ["-wal", "-shm", "-journal"]) {
+    const companion = `${databasePath}${suffix}`;
+    try {
+      if (fs.lstatSync(companion).isFile()) fs.chmodSync(companion, 0o600);
+    } catch (error) {
+      // Another backend closing the database removes its WAL and SHM.
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+}
+
 export class StorageDatabase {
   readonly path: string;
   readonly db: Database;
@@ -314,8 +326,10 @@ export class StorageDatabase {
     this.db = new Database(this.path, { create: true, strict: true });
     try {
       // Sensitive stores (agent mail, prompt queues, credentials) share this
-      // file. SQLite creates -wal/-shm with the database file's mode.
+      // file. SQLite creates -wal/-shm with the database file's mode, but keeps
+      // the mode of ones already there.
       fs.chmodSync(this.path, 0o600);
+      restrictCompanionFiles(this.path);
       this.busyTimeoutMs = Math.max(0, options.busyTimeoutMs ?? 10_000);
       this.db.exec(`PRAGMA busy_timeout = ${this.busyTimeoutMs}`);
       // Only takes effect before the first table exists (a new database);
@@ -801,7 +815,9 @@ export class StorageDatabase {
    * in the layout's key field, since a row and its item cannot name different
    * keys. A store held whole as a document falls back to a full
    * read-modify-write; if that document is unreadable, `unreadable: "throw"`
-   * raises {@link StoreCorruptError} instead of replacing it.
+   * raises {@link StoreCorruptError} instead of replacing it. An unparsable row
+   * raises it too, unless `unreadableRow: "replace"`, where `mutate` sees that
+   * row as absent and may overwrite or delete it.
    */
   updateStoreRow<T>(
     store: string,
@@ -810,6 +826,7 @@ export class StorageDatabase {
     options: {
       collection?: string;
       unreadable?: "replace" | "throw";
+      unreadableRow?: "replace";
       /** Value to start from when the store is absent (or replaced); default `{}`. */
       initial?: () => Record<string, unknown>;
     } = {},
@@ -865,7 +882,7 @@ export class StorageDatabase {
       try {
         current = existing ? (JSON.parse(existing.value) as unknown) : undefined;
       } catch {
-        throw new StoreCorruptError(store);
+        if (options.unreadableRow !== "replace") throw new StoreCorruptError(store);
       }
       const update = mutate(current);
       if (layout.kind === "array" && !update.delete && "value" in update) {

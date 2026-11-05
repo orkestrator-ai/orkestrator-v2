@@ -1,5 +1,5 @@
 /**
- * Resends a native tab's turn the weekly limit stopped, on the account the
+ * Resends a native tab's turn a 5-hour or weekly limit stopped, on the account the
  * machine moved to. Like `NativeAgentTurnRecovery` it works from the backend's
  * activity sweep, so it needs no mounted renderer.
  *

@@ -183,7 +183,11 @@ describe("launch_coordinator_node_environment", () => {
       nodeId: "bk_leaf",
       pending: false,
       baseCommit: BASE,
-      delegation: { state: "running", workerTabId: "startup-agent" },
+      delegation: {
+        state: "running",
+        workerTabId: "startup-agent",
+        request: { summary: "Fix the parser", source: "default" },
+      },
     });
 
     // A retry of the same request finds the first launch.
@@ -290,6 +294,30 @@ describe("launch_coordinator_node_environment", () => {
   });
 });
 
+test("node delegation-open persists bounded request selection on the owning association", async () => {
+  const { run, scope, associations } = await setup();
+  const request = {
+    summary: "Inspect remote parser",
+    agent: "codex",
+    model: "model-a",
+    reasoning: "high",
+    source: "requested",
+  };
+  await run("open_coordinator_node_delegation", {
+    scope,
+    nodeId: "bk_leaf",
+    environmentId: "leaf-env",
+    tabId: "worker-tab",
+    requestId: "open-metadata",
+    request,
+  });
+  expect((await associations())[0]).toMatchObject({
+    nodeId: "bk_leaf",
+    resourceId: "leaf-env",
+    delegation: { workerTabId: "worker-tab", request },
+  });
+});
+
 describe("send_coordinator_node_mail", () => {
   test("side agents are denied before any remote mail side effect", async () => {
     const { world, run, scope, routed, associations } = await setup();
@@ -345,6 +373,9 @@ describe("send_coordinator_node_mail", () => {
       body: "Run the tests.",
     });
     expect(first).toMatchObject({ coordinatorDelegationOpened: true, toTabId: "startup-agent" });
+    expect((await associations())[0]?.delegation?.request).toMatchObject({
+      summary: "Run the tests.",
+    });
     expect(routed.find((entry) => entry.command === "deliver_node_mail")!.args).toMatchObject({
       controllerId: "bk_cmd",
       toEnvironmentId: "leaf-env",

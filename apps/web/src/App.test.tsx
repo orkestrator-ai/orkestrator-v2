@@ -111,7 +111,6 @@ const mockConfig: AppConfig = {
       backgroundColor: "#000000",
     },
     terminalScrollback: 5000,
-    experimentalCodexRawEventLogging: true,
   },
   repositories: {},
 };

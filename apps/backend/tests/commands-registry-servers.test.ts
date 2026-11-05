@@ -2117,6 +2117,7 @@ case "$1" in
   exec)
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
     case "$*" in
+      *refresh_token*) exit 0 ;;
       *"/run/orkestrator-bridge/"*) exit 0 ;;
       *"cat > /tmp/.orkestrator-start-"*) cat > "$FAKE_DOCKER_EXEC_LOG.secrets"; exit 0 ;;
     esac

@@ -152,7 +152,14 @@ export function registerCoordinatorGoalActions(
           environmentId: tab.environmentId,
           tabId: tab.tabId,
           goal: summaryOf(goal),
-          wakeOwed: await delegationCovers(context, caller, tab, requestId, dependencies),
+          wakeOwed: await delegationCovers(
+            context,
+            caller,
+            tab,
+            requestId,
+            String(input.objective),
+            dependencies,
+          ),
         };
       },
     );
@@ -217,6 +224,7 @@ async function delegationCovers(
   caller: CoordinatorCaller,
   tab: OwnedTab,
   requestId: string,
+  objective: string,
   dependencies: Pick<RegistryDependencies, "commands">,
 ): Promise<boolean> {
   const open = await context.storage.coordinators.listOpenCoordinatorDelegations();
@@ -237,6 +245,7 @@ async function delegationCovers(
         environmentId: tab.environmentId,
         tabId: tab.tabId,
         requestId: `goal:${requestId}`,
+        request: { summary: objective },
       },
       context,
     );

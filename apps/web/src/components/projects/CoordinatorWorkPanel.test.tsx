@@ -2,7 +2,11 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { CoordinatorWorkItem } from "@/lib/coordinator-work-items";
 import { useUIStore } from "@/stores/uiStore";
-import { CoordinatorWorkPanel, WORK_PANEL_WIDE_QUERY } from "./CoordinatorWorkPanel";
+import {
+  CoordinatorNextWakeLine,
+  CoordinatorWorkPanel,
+  WORK_PANEL_WIDE_QUERY,
+} from "./CoordinatorWorkPanel";
 
 const originalMatchMedia = window.matchMedia;
 let wideScreen = true;
@@ -301,5 +305,92 @@ describe("CoordinatorWorkPanel", () => {
       fireEvent.contextMenu(screen.getByText(name));
       expect(screen.queryByRole("menuitem", { name: "Clear" }) === null).toBe(true);
     }
+  });
+
+  test("a row shows what was asked, on what and since when; a record without them still renders", () => {
+    render(
+      <CoordinatorWorkPanel
+        items={[
+          {
+            ...items[0]!,
+            summary: "Fix the login redirect",
+            agent: "claude",
+            model: "opus",
+            overridden: true,
+            age: "12m",
+          },
+          { ...items[1]!, age: undefined },
+        ]}
+        counts={counts}
+        openDelegations={1}
+        onOpen={() => undefined}
+        onClearFinished={clearFinished}
+      />,
+    );
+    const [asked, plain] = screen.getAllByRole("listitem");
+    expect(asked!.querySelector("[data-work-summary]")?.textContent).toBe("Fix the login redirect");
+    expect(asked!.querySelector("[data-work-meta]")?.textContent).toBe(
+      "Claude Code · opus · requested · 12m",
+    );
+    expect(plain!.querySelector("[data-work-summary]")).toBeNull();
+    expect(plain!.querySelector("[data-work-meta]")).toBeNull();
+    expect(within(plain!).getByRole("button", { name: "Open Work panel" })).toBeTruthy();
+  });
+
+  test("Stop stops that row's worker and comes back when the stop settles", async () => {
+    let settle = () => {};
+    const stop = { environmentId: "asking", tabIds: ["t"] };
+    const onStop = mock(() => new Promise<void>((resolve) => (settle = resolve)));
+    render(
+      <CoordinatorWorkPanel
+        items={[{ ...items[0]!, stop }, items[1]!]}
+        counts={counts}
+        openDelegations={1}
+        onOpen={() => undefined}
+        onStop={onStop}
+        onClearFinished={clearFinished}
+      />,
+    );
+    // Only a row with something to stop offers it.
+    expect(screen.queryByRole("button", { name: "Stop Work panel" })).toBeNull();
+    const button = screen.getByRole("button", { name: "Stop fix-login" }) as HTMLButtonElement;
+    fireEvent.click(button);
+    expect(onStop).toHaveBeenCalledWith(stop);
+    expect(button.disabled).toBe(true);
+    settle();
+    await waitFor(() => expect(button.disabled).toBe(false));
+  });
+
+  test("offers no Stop while nothing can be stopped from here", () => {
+    render(
+      <CoordinatorWorkPanel
+        items={[{ ...items[0]!, stop: { environmentId: "asking", tabIds: ["t"] } }]}
+        counts={counts}
+        openDelegations={1}
+        onOpen={() => undefined}
+        onClearFinished={clearFinished}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "Stop fix-login" })).toBeNull();
+  });
+
+  test("the next wake line shows on a narrow screen only, while the coordinator is idle", () => {
+    const waiting = [{ ...items[0]!, name: "api-fix", openDelegations: 1 }];
+    wideScreen = false;
+    const narrow = render(<CoordinatorNextWakeLine items={waiting} quiet={false} />);
+    expect(screen.getByRole("status").textContent).toBe("Next wake when api-fix finishes");
+    narrow.unmount();
+
+    const busy = render(<CoordinatorNextWakeLine items={waiting} quiet={true} />);
+    expect(screen.queryByRole("status")).toBeNull();
+    busy.unmount();
+
+    const none = render(<CoordinatorNextWakeLine items={[items[1]!]} quiet={false} />);
+    expect(screen.queryByRole("status")).toBeNull();
+    none.unmount();
+
+    wideScreen = true;
+    render(<CoordinatorNextWakeLine items={waiting} quiet={false} />);
+    expect(screen.queryByRole("status")).toBeNull();
   });
 });

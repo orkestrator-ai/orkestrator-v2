@@ -14,9 +14,10 @@
  * model context.
  *
  * Messages, frame to host: `ready` (carries the per-mount nonce), `rendered`,
- * `text`, `size`, `error`, `interaction`, `link-request`, `escape`. Host to
- * frame: `render` (once per mount) and `theme`. Every message after `ready`
- * carries the mount's generation; the host also checks the sender window.
+ * `text`, `size`, `error`, `interaction`, `link-request`, `escape`, `find-match`.
+ * Host to frame: `render` (once per mount), `theme` and `find`. Every message
+ * after `ready` carries the mount's generation; the host also checks the sender
+ * window.
  */
 import { normalizeArtifactLink } from "./artifact-frame-channel.js";
 import { FRAME_CHANNEL_POLICY, STATIC_PRESENTATION_POLICY } from "./rich-content-policy.js";
@@ -28,7 +29,16 @@ export const STATIC_HTML_FRAME_PROTOCOL_VERSION = 1;
  * identity of a displayed document; it is not part of any verification
  * receipt, so changing it never re-verifies or rewrites a publication.
  */
-export const STATIC_HTML_PRESENTATION_RUNTIME_VERSION = "static-html-presentation:v2";
+export const STATIC_HTML_PRESENTATION_RUNTIME_VERSION = "static-html-presentation:v3";
+
+/**
+ * The longest Find query a frame is asked about. Three-byte characters this many
+ * still fit `FRAME_CHANNEL_POLICY.maxMessageBytes`. It lives here, not in
+ * `STATIC_PRESENTATION_POLICY`, because that table is part of the preview worker's
+ * bundle: a new value there would change the worker's context digest, and so ask
+ * every install to rebuild its image, for a limit the worker never reads.
+ */
+export const STATIC_HTML_MAX_FIND_QUERY_CHARACTERS = 1_024;
 
 /** Per-mount readiness nonce and render generation. */
 export const STATIC_HTML_MOUNT_ID = /^[A-Za-z0-9_-]{16,64}$/;
@@ -81,7 +91,14 @@ export type StaticHtmlFrameMessage =
       pointerSelecting: boolean;
     })
   | (Envelope & { type: "link-request"; generation: string; url: string; label: string })
-  | (Envelope & { type: "escape"; generation: string });
+  | (Envelope & { type: "escape"; generation: string })
+  | (Envelope & {
+      type: "find-match";
+      generation: string;
+      /** The active match's box in the frame's viewport; a height of 0 means it is not laid out. */
+      top: number;
+      height: number;
+    });
 
 export type StaticHtmlHostMessage =
   | (Envelope & {
@@ -92,7 +109,15 @@ export type StaticHtmlHostMessage =
       /** The receipt's profile: the appearance a document without tokens was verified under. */
       verifiedAppearance: "light" | "dark";
     })
-  | (Envelope & { type: "theme"; generation: string; theme: StaticHtmlFrameTheme });
+  | (Envelope & { type: "theme"; generation: string; theme: StaticHtmlFrameTheme })
+  | (Envelope & {
+      type: "find";
+      generation: string;
+      /** Empty clears Find from the document. Goes no further than the frame. */
+      query: string;
+      /** The active match, counted as Find counts this document's text; null when it is elsewhere. */
+      occurrence: number | null;
+    });
 
 export type StaticHtmlFrameRejection =
   | "not-object"
@@ -112,6 +137,7 @@ const MESSAGE_KEYS: Record<StaticHtmlFrameMessage["type"], readonly string[]> = 
   interaction: ["generation", "focused", "hasSelection", "pointerSelecting"],
   "link-request": ["generation", "url", "label"],
   escape: ["generation"],
+  "find-match": ["generation", "top", "height"],
 };
 
 const MAX_REPORTED_HEIGHT = 100_000;
@@ -198,6 +224,10 @@ export function parseStaticHtmlFrameMessage(
     case "size":
       if (!validHeight(record.height)) return { ok: false, reason: "bad-shape" };
       break;
+    case "find-match":
+      if (!validHeight(record.top) || !validHeight(record.height))
+        return { ok: false, reason: "bad-shape" };
+      break;
     case "error":
       if (
         typeof record.code !== "string" ||
@@ -244,6 +274,7 @@ export function installStaticHtmlPresentationRuntime(config: {
   maxReportedHeight: number;
   maxTextCharacters: number;
   textChunkCharacters: number;
+  maxFindQueryCharacters: number;
 }) {
   const CHANNEL = "orkestrator-static-html";
   const MOUNT_ID = /^[A-Za-z0-9_-]{16,64}$/;
@@ -353,6 +384,8 @@ export function installStaticHtmlPresentationRuntime(config: {
     ":where(img,video){max-width:100%;height:auto}" +
     ":where(svg){max-width:100%}" +
     ":where(summary){cursor:pointer}" +
+    "::highlight(ork-find-match){color:inherit;background-color:rgb(250 204 21/.32)}" +
+    "::highlight(ork-find-active){color:inherit;background-color:rgb(251 146 60/.78)}" +
     "[data-ork-reduced-motion=true] *{animation-duration:0s!important;transition-duration:0s!important}";
   const THEMED_STYLE =
     ":where(html){color:var(--ork-foreground,CanvasText);font-family:var(--ork-font-sans,system-ui,sans-serif)}" +
@@ -404,29 +437,58 @@ export function installStaticHtmlPresentationRuntime(config: {
   const INLINE_TEXT =
     /^(?:a|abbr|b|bdi|bdo|cite|code|data|del|dfn|em|font|i|ins|kbd|label|mark|q|rp|rt|ruby|s|samp|small|span|strike|strong|sub|sup|time|tspan|tt|u|var|wbr)$/;
   // Read from the sanitized tree, not layout: a closed disclosure's text counts,
-  // and a frame in a hidden tab reports the same text as a visible one.
-  function documentText(): string {
-    let text = "";
+  // and a frame in a hidden tab reports the same text as a visible one. Runs of
+  // whitespace become one space, boundaries become one line break, and neither
+  // starts or ends the text. Each character remembers where it came from, so the
+  // text Find searches and the ranges drawn here are one walk.
+  interface DocumentText {
+    text: string;
+    /** The text node of each character; null for a boundary's line break. */
+    nodes: Array<Node | null>;
+    offsets: number[];
+  }
+  function documentText(): DocumentText {
+    const result: DocumentText = { text: "", nodes: [], offsets: [] };
+    let space: { node: Node; offset: number } | null = null;
+    let boundary = false;
+    const emit = (character: string, node: Node | null, offset: number) => {
+      if (result.text.length >= config.maxTextCharacters) return;
+      result.text += character;
+      result.nodes.push(node);
+      result.offsets.push(offset);
+    };
     const visit = (node: Node) => {
-      if (node.nodeType === 3) text += (node.nodeValue ?? "").replace(/\s+/g, " ");
+      if (node.nodeType === 3) {
+        const value = node.nodeValue ?? "";
+        for (let offset = 0; offset < value.length; offset++) {
+          const character = value[offset]!;
+          if (/\s/.test(character)) {
+            space ??= { node, offset };
+            continue;
+          }
+          if (result.text.length > 0) {
+            if (boundary) emit("\n", null, 0);
+            else if (space) emit(" ", space.node, space.offset);
+          }
+          boundary = false;
+          space = null;
+          emit(character, node, offset);
+        }
+      }
       if (node.nodeType !== 1) return;
       const element = node as Element;
       if (/^(?:style|noscript)$/.test(element.localName) || element.hasAttribute("hidden")) return;
-      const boundary = INLINE_TEXT.test(element.localName) ? "" : "\n";
-      text += boundary;
+      const isBoundary = !INLINE_TEXT.test(element.localName);
+      if (isBoundary) boundary = true;
       for (const child of Array.from(element.childNodes)) visit(child);
-      text += boundary;
+      if (isBoundary) boundary = true;
     };
     if (document.body) visit(document.body);
-    return text
-      .replace(/ +/g, " ")
-      .replace(/ *\n[ \n]*/g, "\n")
-      .trim()
-      .slice(0, config.maxTextCharacters);
+    return result;
   }
   function reportText() {
     try {
-      const text = documentText();
+      const { text } = documentText();
       const size = config.textChunkCharacters;
       const count = Math.ceil(text.length / size);
       for (let index = 0; index < count; index++)
@@ -440,6 +502,107 @@ export function installStaticHtmlPresentationRuntime(config: {
     } catch {
       // Find only loses this document's body; the document itself stays on screen.
     }
+  }
+
+  // Find inside the document. Highlights are drawn over the text, not written
+  // into it, so the query never reaches the DOM, the height does not change and
+  // the walk above still reads the same text. The n-th match is the n-th match
+  // of `findAgentChatTextMatches` over the text this frame reported, which the
+  // matching below repeats and a test pins.
+  let findText: DocumentText | null = null;
+  let activeMatch: Range | null = null;
+  const revealed = new Set<HTMLDetailsElement>();
+
+  let findReportTimer: ReturnType<typeof setTimeout> | null = null;
+  function scheduleFindReport() {
+    if (!activeMatch || findReportTimer) return;
+    // Paced under the frame channel's rate however fast the reader steps. Only
+    // numbers leave the frame.
+    findReportTimer = setTimeout(() => {
+      findReportTimer = null;
+      if (!activeMatch || !generation) return;
+      const box = activeMatch.getBoundingClientRect();
+      const bound = (value: number) => Math.min(config.maxReportedHeight, Math.max(0, value));
+      post({ type: "find-match", generation, top: bound(box.top), height: bound(box.height) });
+    }, 100);
+  }
+
+  function findRanges(
+    query: string,
+    occurrence: number | null,
+  ): { ranges: Range[]; active: Range | null } {
+    findText ??= documentText();
+    const { text, nodes, offsets } = findText;
+    const expression = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "giu");
+    const ranges: Range[] = [];
+    let active: Range | null = null;
+    let ordinal = 0;
+    for (const match of text.matchAll(expression)) {
+      if (match.index === undefined || match[0].length === 0) continue;
+      const last = match.index + match[0].length - 1;
+      const startNode = nodes[match.index];
+      const endNode = nodes[last];
+      if (startNode && endNode) {
+        const range = document.createRange();
+        range.setStart(startNode, offsets[match.index]!);
+        range.setEnd(endNode, offsets[last]! + 1);
+        ranges.push(range);
+        if (ordinal === occurrence) active = range;
+      }
+      ordinal++;
+    }
+    return { ranges, active };
+  }
+
+  // Temporary, like Find's reveals in the transcript: a disclosure opened for one
+  // match closes when the match moves on, unless the reader has since toggled it.
+  function revealActiveMatch() {
+    const needed = new Set<HTMLDetailsElement>();
+    const start = activeMatch?.startContainer;
+    let holder = start instanceof Element ? start : (start?.parentElement ?? null);
+    while (holder) {
+      const details: HTMLDetailsElement | null = holder.closest("details");
+      if (!details) break;
+      needed.add(details);
+      holder = details.parentElement;
+    }
+    for (const details of Array.from(revealed)) {
+      if (needed.has(details)) continue;
+      details.open = false;
+      revealed.delete(details);
+    }
+    for (const details of Array.from(needed)) {
+      if (details.open) continue;
+      details.open = true;
+      revealed.add(details);
+    }
+  }
+
+  function applyFind(query: string, occurrence: number | null) {
+    const searching = query.trim().length > 0;
+    const { ranges, active } = searching
+      ? findRanges(query, occurrence)
+      : { ranges: [], active: null };
+    if (!searching) findText = null;
+    activeMatch = active;
+    if (typeof CSS !== "undefined" && "highlights" in CSS && typeof Highlight !== "undefined") {
+      const matchHighlight = new Highlight();
+      for (const range of ranges) matchHighlight.add(range);
+      const activeHighlight = new Highlight();
+      if (active) activeHighlight.add(active);
+      activeHighlight.priority = 1;
+      CSS.highlights.set("ork-find-match", matchHighlight);
+      CSS.highlights.set("ork-find-active", activeHighlight);
+    }
+    revealActiveMatch();
+    if (!active) return;
+    // A document taller than its frame scrolls inside it; the host brings the
+    // frame's part of the transcript on screen from the report below.
+    const box = active.getBoundingClientRect();
+    const scroller = document.scrollingElement;
+    if (scroller && box.height > 0 && (box.top < 0 || box.bottom > window.innerHeight))
+      scroller.scrollTop += box.top - (window.innerHeight - box.height) / 2;
+    scheduleFindReport();
   }
 
   function render(html: unknown, theme: unknown, verifiedAppearance: unknown): void {
@@ -507,6 +670,25 @@ export function installStaticHtmlPresentationRuntime(config: {
     ) {
       applyTheme(data.theme);
       scheduleSize();
+    } else if (data.type === "find" && generation !== null && data.generation === generation) {
+      // Exactly the host's six keys, bounded like the host's own limit.
+      const { query, occurrence } = data;
+      if (
+        Object.keys(data).length !== 6 ||
+        typeof query !== "string" ||
+        query.length > config.maxFindQueryCharacters ||
+        (occurrence !== null &&
+          (typeof occurrence !== "number" ||
+            !Number.isInteger(occurrence) ||
+            occurrence < 0 ||
+            occurrence > config.maxTextCharacters))
+      )
+        return;
+      try {
+        applyFind(query, occurrence as number | null);
+      } catch {
+        // Find only loses its highlight; the document itself stays on screen.
+      }
     }
   });
 
@@ -554,6 +736,17 @@ export function installStaticHtmlPresentationRuntime(config: {
   );
   document.addEventListener("submit", (event) => event.preventDefault(), true);
   document.addEventListener(
+    "click",
+    (event) => {
+      // The reader's own toggle ends a temporary reveal, so their choice stands.
+      const summary = event.target instanceof Element ? event.target.closest("summary") : null;
+      if (summary?.parentElement) revealed.delete(summary.parentElement as HTMLDetailsElement);
+    },
+    true,
+  );
+  // The host resizing the frame moves the match inside it.
+  window.addEventListener("resize", scheduleFindReport);
+  document.addEventListener(
     "keydown",
     (event) => {
       // Escape returns focus to the transcript; no other key leaves the frame.
@@ -589,6 +782,7 @@ function runtimeScript(nonce: string | null): string {
     maxReportedHeight: MAX_REPORTED_HEIGHT,
     maxTextCharacters: STATIC_PRESENTATION_POLICY.maxSearchTextCharacters,
     textChunkCharacters: STATIC_PRESENTATION_POLICY.searchTextChunkCharacters,
+    maxFindQueryCharacters: STATIC_HTML_MAX_FIND_QUERY_CHARACTERS,
   };
   return `(${installStaticHtmlPresentationRuntime.toString()})(${JSON.stringify(config)});`;
 }

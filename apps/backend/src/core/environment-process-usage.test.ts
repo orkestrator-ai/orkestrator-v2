@@ -19,6 +19,12 @@ import {
   type EnvironmentProcessGroup,
   type ProcessUsageEnvironment,
 } from "./environment-process-usage.js";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { StorageService } from "./storage.js";
+import { seedStore } from "./storage-test-support.js";
+import { databaseStoreForPath } from "./storage-stores.js";
 
 function environment(
   overrides: Partial<ProcessUsageEnvironment> & Pick<ProcessUsageEnvironment, "id" | "name">,
@@ -116,6 +122,53 @@ describe("environment process usage", () => {
     expect(read).toHaveBeenCalledTimes(1);
     await expect(handler({}, context)).resolves.toMatchObject({ environments: [] });
     expect(read).toHaveBeenCalledTimes(2);
+  });
+
+  // Why the shared read carries no deadline of its own: nothing it awaits can stay
+  // pending. Environments are a synchronous database read, and every probe has a
+  // timeout that `runCommand` honours even for a child that ignores its signals
+  // (shell.test.ts, "settles and escalates when a descendant ignores SIGTERM").
+  test("awaits nothing that can stay pending for ever", async () => {
+    expect(databaseStoreForPath("environments.json")).toBe("environments");
+    const timeouts: number[] = [];
+    const environments = [
+      environment({ id: "env-local", name: "local" }),
+      environment({
+        id: "env-box",
+        name: "box",
+        environmentType: "containerized",
+        containerId: "container-1",
+      }),
+    ];
+    const root = await mkdtemp(path.join(tmpdir(), "ork-process-handler-"));
+    try {
+      const storage = new StorageService(root);
+      await storage.init();
+      seedStore(root, "environments.json", environments);
+      const commands = new Map<string, CommandHandler>();
+      registerSystemCommands(
+        (name, handler) => commands.set(name, handler),
+        undefined,
+        (stored) =>
+          readEnvironmentProcessUsage(stored, {
+            platform: "linux",
+            runCommand: async (_command, _args, options) => {
+              timeouts.push(options.timeoutMs);
+              throw new Error("Command timed out");
+            },
+          }),
+      );
+      const result = await commands.get("get_environment_process_usage")!({}, {
+        storage,
+      } as unknown as CommandContext);
+      expect(result).toMatchObject({
+        environments: expect.any(Array),
+        sampledAt: expect.any(String),
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+    expect(timeouts).toEqual([2_000, 2_000]);
   });
 
   test("rejects when stored environments cannot be loaded", async () => {

@@ -1,7 +1,7 @@
 /**
- * Element targets inside open shadow roots (todo 0047 task 5): the backend
- * advertises `operations.shadowTargets`, stores the root path as captured,
- * refuses an unbounded one, and names the host components in the brief.
+ * Targets inside open shadow roots (todo 0047 task 5, todo 2580 task 2): the
+ * backend advertises `operations.shadowTargets`, stores the root path as
+ * captured, refuses an unbounded one, and names the host components in the brief.
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import {
@@ -40,6 +40,12 @@ function scoped(scope: WebAnnotationAnchorScope): WebAnnotationCaptureInput {
   return { ...base, target: { ...base.target, anchor: { ...base.target.anchor, scope } } };
 }
 
+function scopedQuote(scope: WebAnnotationAnchorScope): WebAnnotationCaptureInput {
+  const base = fixtureCaptureInput("text-range");
+  if (base.target.kind !== "text-range") throw new Error("expected a text fixture");
+  return { ...base, target: { ...base.target, container: { ...base.target.container, scope } } };
+}
+
 describe("shadow-root target capability", () => {
   test("is advertised with authoring and off when authoring is off", async () => {
     harness = await createHarness();
@@ -64,6 +70,19 @@ describe("shadow-root target storage", () => {
       kind: "shadow",
       hosts: HOSTS,
     });
+  });
+
+  test("a text range keeps its quote and its container's root path as captured", async () => {
+    harness = await createHarness();
+    const input = scopedQuote({ kind: "shadow", hosts: HOSTS });
+    const receipt = await harness.service.create({
+      environmentId: ENV_A,
+      operationId: "op-shadow-quote",
+      capture: input,
+      body: "Inside the settings panel.",
+    });
+    const capture = await harness.service.capture(ENV_A, receipt.captureId!);
+    expect(capture.target).toEqual(input.target);
   });
 
   test("a root path past the protocol limit is refused", async () => {

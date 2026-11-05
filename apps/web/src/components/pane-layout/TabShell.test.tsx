@@ -76,6 +76,22 @@ describe("TabShell", () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
+  test("a shell that is itself the tab can take the close button out of the tab order", () => {
+    const { rerender } = render(
+      <TabShell isActive onClose={() => {}} closeLabel="Close First">
+        First
+      </TabShell>,
+    );
+    expect(screen.getByRole("button", { name: "Close First" }).tabIndex).toBe(0);
+
+    rerender(
+      <TabShell isActive onClose={() => {}} closeLabel="Close First" closeTabIndex={-1}>
+        First
+      </TabShell>,
+    );
+    expect(screen.getByRole("button", { name: "Close First" }).tabIndex).toBe(-1);
+  });
+
   test("omits inactive and unavailable controls", () => {
     const { container } = render(<TabShell isActive={false}>Tab title</TabShell>);
 

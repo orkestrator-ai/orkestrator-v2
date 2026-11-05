@@ -107,6 +107,11 @@ export interface GatewayNodeHooks {
   noteControllerContact(controllerId: string): void;
   /** Expiry (ms) of a live client grant this token proves, else `null`. */
   authenticateGrant?(token: string): number | null;
+  /**
+   * Calls `listener` once when the client grant this token proves is removed and
+   * returns the unsubscribe; `null` when the token proves no grant held here.
+   */
+  onGrantRevoked?(token: string, listener: () => void): (() => void) | null;
   /** Where `/__orkestrator/nodes/<id>/…` relays to; `null` while that node is not connected. */
   relayTarget?(nodeId: import("@orkestrator/protocol/federation").BackendId): {
     baseUrl: string;

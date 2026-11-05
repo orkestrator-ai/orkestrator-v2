@@ -430,6 +430,8 @@ function EnvironmentProcessPanel() {
   }
 
   if (snapshot === null) {
+    // Polling continues either way, so a later answer replaces the message. The
+    // error itself is not shown: it can name hosts or paths.
     return processView.failed ? (
       <p className="text-xs text-muted-foreground" role="status">
         Couldn't read processes

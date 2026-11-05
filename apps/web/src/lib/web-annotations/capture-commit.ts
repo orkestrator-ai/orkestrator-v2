@@ -131,16 +131,15 @@ export function withAdvertisedShadowScope(
   advertised: boolean,
 ): WebAnnotationCaptureInput {
   const target = capture.target;
-  if (advertised || target.kind !== "element" || target.anchor.scope.kind !== "shadow") {
-    return capture;
+  if (advertised) return capture;
+  const older = { kind: "unsupported", reason: "shadow-root" } as const;
+  if (target.kind === "element" && target.anchor.scope.kind === "shadow") {
+    return { ...capture, target: { ...target, anchor: { ...target.anchor, scope: older } } };
   }
-  return {
-    ...capture,
-    target: {
-      ...target,
-      anchor: { ...target.anchor, scope: { kind: "unsupported", reason: "shadow-root" } },
-    },
-  };
+  if (target.kind === "text-range" && target.container.scope.kind === "shadow") {
+    return { ...capture, target: { ...target, container: { ...target.container, scope: older } } };
+  }
+  return capture;
 }
 
 function shadowTargetsAdvertised(environmentId: string): boolean {

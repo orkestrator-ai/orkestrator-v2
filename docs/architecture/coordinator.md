@@ -133,7 +133,10 @@ A record is never removed while something still reads it as live:
   coordinator the worker's creator for mail routing and puts the worker's
   sign-in prompts in the panel) while that environment exists, and every
   remote (`nodeId`) launch record, since whether a remote environment still
-  exists is not known locally;
+  exists is not known locally. A record whose node was released (see
+  [Work on a node that leaves](#work-on-a-node-that-leaves)) counts as local
+  work whose environment is gone, so it becomes clearable after its replay
+  window;
 - the newest delegation record for each worker tab while its environment
   exists, which goal and tab actions read as the coordinator's ownership of
   that tab;
@@ -144,9 +147,35 @@ A record is never removed while something still reads it as live:
 
 If nothing can be removed, the write is refused with an error saying that all
 2,000 records are still in use and that deleting finished worker environments
-or letting running work finish frees room. The limit stays shared across
-projects. Unknown remote state and legacy aliases can still consume capacity;
-cleanup never assumes that an unreachable remote resource has stopped.
+or letting running work finish frees room. Unknown remote state and legacy
+aliases can still consume capacity; cleanup never assumes that an unreachable
+remote resource has stopped.
+
+**Why the limit is shared, not per project.** Every project's records live in
+one store that is rewritten whole on each change, so the store's total size is
+what every write costs, and a per-project limit would not bound that total. A
+second, lower per-project limit would also refuse a user whose one busy
+project needs the room while the store has plenty. The cost is the
+noisy-neighbour case: one project holding many live or remote records can
+fill the store for every other. Two things soften it. When a refused record
+costs a coordinator its wake, `send_message` says so in its `warning`
+(below). And the panel says when the store is close to refusing:
+
+**`workflowStore` on the snapshot.** `ok`, `near-limit` or `full`
+(`getCoordinatorWorkflowStoreState`), from how many records cleanup could not
+clear. `near-limit` starts at `COORDINATOR_WORKFLOW_NEAR_LIMIT`, 1,800 records
+in use: from there a cleanup at the limit frees less than one batch of 200, so
+new work is refused within fewer than 200 launches unless something finishes
+or is deleted. Below it a cleanup at the limit always frees a whole batch and
+nobody needs to act. `full` is every record in use, the state in which the
+store refuses. Below 1,800 records in total the answer is `ok` with no further
+reads; above it the clearable records are counted with cleanup's own rules,
+and the answer is reused for a minute while the store is unchanged. The Work
+area shows a `CoordinatorWorkflowStoreBanner` at `near-limit` (warning) and
+`full` (alert), saying that deleting finished worker environments or letting
+running work finish frees room, and that clearing rows from the Work panel
+only hides them. The field is additive: an older renderer ignores it, and a
+renderer reading an older backend gets no field and shows no banner.
 
 What removal changes for the user:
 
@@ -180,7 +209,12 @@ earlier request:
 - `send_message` checks before sending: an id this coordinator already used to
   ask another worker is refused, because the message could open no delegation
   and no wake would come back. Any other failure to open the delegation after
-  the message is stored is reported in the result's `delegationNote`.
+  the message is stored, such as a full workflow store, comes back as the
+  result's `warning` (`coordinatorDelegationNotOpenedNote`): the message was
+  sent, no wake will come, why, and not to resend it. The send itself
+  succeeds, because the mail is durable and delivered; failing the call would
+  invite a retry under the same id with a surprising result. Mail to a worker
+  on another node says the same.
 
 A launch that leaves `agent` out is fingerprinted as "the default agent"
 (`coordinatorLaunchIdentity`), so a retry after the user changes their default
@@ -203,6 +237,45 @@ sessions, pending mail, and workflows continue. Closing a conversation settles
 live approvals, revokes its credential, and tombstones its mailbox without
 deleting provider history or the checkout. Removing the project stops
 Coordinator and deletes the isolated runtime, never the user's local repository.
+
+### Work on a node that leaves
+
+A node is released when this command node stops controlling it: the user
+forgets it (`forgetNode`), or a handover gives it, or the handover target, to
+another command node. `NodeService` calls `onNodesReleased` after the registry
+write, and `CoordinatorService.nodesReleased` closes the work there in one
+store write (`releaseCoordinatorNodeWorkflows`, `coordinator-node-release.ts`):
+
+- each running delegation closes as `stopped` with `wokenAt` set, so no
+  per-worker wake follows;
+- each unreported workflow or pull-request follow is marked reported, and
+  outcome watches end, so nothing on that node is read again;
+- every record gets `nodeRelease` (`at`, `reason`), which retention reads as
+  "its resources are gone here", so the records become clearable once their
+  replay window has passed.
+
+Each coordinator with live work there then hears one notice. A forgotten node's
+notice says the work was closed as stopped; a handover's says the node is no
+longer controlled here and its work may still be running under the new command
+node. A report already held for a closed delegation is released as ordinary
+mail on the sweep. A notice that could not be sent stays owed
+(`nodeRelease.notifiedAt` unset) and the sweep retries it.
+
+Records that name a node the registry no longer holds are released the same
+way on the sweep, with reason `unregistered`: this covers nodes forgotten
+before release existed, a release a restart interrupted, and any later path
+that removes a node without the hook. The registry read is skipped, never
+guessed, when it fails. An older backend ignores `nodeRelease` and keeps those
+records as it did before; their delegations are already closed and woken.
+
+**A node that stays unreachable.** An unreachable node is no news: its
+delegations stay open, because the worker may finish and collecting its mail on
+reconnect still delivers the report. The service keeps a first-unavailable
+time per node in memory beside its other maps; any answer from the node ends
+the episode. After `NODE_OFFLINE_NOTICE_MS` (24 hours) of failed reads, each
+coordinator waiting on the node hears one notice for that episode, saying the
+delegation stays open and that forgetting the machine closes it. A restart only
+restarts the clock.
 
 ## Multiple machines
 
@@ -641,6 +714,13 @@ because it claims Enter and Space, so moving a tab without a pointer goes
 through the tab's menu (right-click, the context-menu key or Shift+F10): **Move
 to new group** and **Move to group N** call the same layout functions a drop
 does (`splitCoordinatorPaneAtEdge`, `moveCoordinatorConversation`).
+
+An environment's strip (`DraggableTabBar`, `DraggableTab`) is also a `tablist`
+over a `tabpanel`, built differently: the draggable shell is itself the
+`role="tab"` element, with its close button out of the tab order, and it keeps
+the keyboard drag sensor. Arrow keys, Home and End move between tabs, Enter
+selects, Space picks the tab up to drag it, Delete closes it and the context-menu
+key or Shift+F10 opens its menu.
 
 The arrangement is presentation, edited by the renderer
 (`apps/web/src/lib/coordinator-pane-layout.ts`) and stored by the backend per
@@ -3552,8 +3632,14 @@ guarantee, not by one end-to-end scenario replayed per platform:
   `native-agent-service-reconciliation.test.ts`
 - one-wake invariant and crash recovery: `coordinator-service.test.ts`
 - the workflow record limit (cleanup when full, protected records, batch
-  removal, recent-request replay, the all-in-use refusal):
-  `coordinator-workflow-retention.test.ts`
+  removal, recent-request replay, the all-in-use refusal, the `workflowStore`
+  state, released-node records, the shared request-alias lookup):
+  `coordinator-workflow-retention.test.ts`; its banner:
+  `CoordinatorWorkflowStoreBanner.test.tsx`; the `send_message` warning:
+  `coordinator-worker-mail.test.ts`, `control-mcp-server-messaging.test.ts`
+- work on a forgotten, handed-over, unregistered or long-unreachable node:
+  `coordinator-node-release.test.ts`; the release hooks:
+  `nodes/node-service.test.ts`, `nodes/node-handover.test.ts`
 - status wakes (ownership, one wake per settled transition per resource kind,
   coalescing, budgets, restart, bounds): `coordinator-status-wakes.test.ts`;
   graph runs: `graph-run-coordinator-status.test.ts`,

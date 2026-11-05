@@ -1064,7 +1064,6 @@ describe("DraggableTab tooltip and context menu structure", () => {
   });
 
   test("wires pane-scoped dragging and omits non-unit scales from unequal-width tabs", () => {
-    sortableAttributes = { "data-sortable-attribute": "attached" };
     sortableListeners = { onPointerDown: sortablePointerDownMock };
     sortableTransform = { x: 12, y: 6, scaleX: 2.5, scaleY: 0.75 };
     sortableTransition = "transform 200ms ease";
@@ -1076,7 +1075,6 @@ describe("DraggableTab tooltip and context menu structure", () => {
     expect(sortableSetNodeRefMock).toHaveBeenCalledWith(tab);
     expect(tab.style.transform).toBe("translate3d(12px, 6px, 0)");
     expect(tab.style.transition).toBe("transform 200ms ease");
-    expect(tab.getAttribute("data-sortable-attribute")).toBe("attached");
 
     fireEvent.pointerDown(tab);
     expect(sortablePointerDownMock).toHaveBeenCalledTimes(1);
@@ -1246,6 +1244,249 @@ describe("DraggableTab tooltip and context menu structure", () => {
     fireEvent.contextMenu(screen.getByText("Terminal 1"));
 
     expect(screen.getByText("Close").getAttribute("aria-disabled")).toBe("true");
+  });
+});
+
+describe("DraggableTab tab semantics", () => {
+  beforeEach(() => {
+    cleanup();
+    resetSortableMock();
+    useSessionStore.setState({ sessions: new Map() });
+    useFileDirtyStore.setState({ dirtyFiles: new Map() });
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  function renderKeyboardTab(
+    props: Partial<Parameters<typeof DraggableTab>[0]> = {},
+    tab: TabInfo = { id: "tab-terminal", type: "plain" },
+  ) {
+    render(
+      <DraggableTab
+        tab={tab}
+        paneId="pane-1"
+        index={0}
+        isActive={false}
+        canClose
+        onSelect={() => {}}
+        {...props}
+      />,
+    );
+    return screen.getByRole("tab", { name: tab.type === "file" ? "Bar.tsx" : "Terminal 1" });
+  }
+
+  test("the shell is the one focusable tab, whatever useSortable's attributes say", () => {
+    sortableAttributes = {
+      role: "button",
+      tabIndex: 7,
+      "aria-pressed": true,
+      "aria-roledescription": "sortable",
+      "aria-describedby": "drag-instructions",
+    };
+
+    const tab = renderKeyboardTab({ isActive: true });
+
+    expect(tab.getAttribute("role")).toBe("tab");
+    expect(tab.getAttribute("tabindex")).toBe("0");
+    expect(tab.getAttribute("aria-selected")).toBe("true");
+    expect(tab.getAttribute("aria-pressed") === null).toBe(true);
+    expect(tab.getAttribute("aria-roledescription") === null).toBe(true);
+    expect(tab.getAttribute("aria-describedby")).toBe("drag-instructions");
+    // Named without the close button it holds.
+    expect(tab.getAttribute("aria-label")).toBe("Terminal 1");
+    expect(screen.getByRole("button", { name: "Close Terminal 1" }).getAttribute("tabindex")).toBe(
+      "-1",
+    );
+  });
+
+  test("an unselected tab says so", () => {
+    expect(renderKeyboardTab().getAttribute("aria-selected")).toBe("false");
+  });
+
+  test("names unsaved changes, which the label would otherwise hide", () => {
+    useFileDirtyStore.setState({
+      dirtyFiles: new Map([["tab-file", { content: "edited", originalContent: "on disk" }]]),
+    });
+    render(
+      <DraggableTab
+        tab={{ id: "tab-file", type: "file", fileData: { filePath: "src/Bar.tsx" } }}
+        paneId="pane-1"
+        index={0}
+        isActive={false}
+        canClose
+        onSelect={() => {}}
+      />,
+    );
+    expect(screen.getByRole("tab", { name: "Bar.tsx, unsaved changes" })).toBeTruthy();
+  });
+
+  test("Delete closes the focused tab through the keyboard route", () => {
+    const onClose = mock(() => {});
+    const onKeyboardClose = mock(() => {});
+    const tab = renderKeyboardTab({ onClose, onKeyboardClose });
+
+    expect(tab.getAttribute("aria-keyshortcuts")).toBe("Delete");
+    fireEvent.keyDown(tab, { key: "Delete" });
+
+    expect(onKeyboardClose).toHaveBeenCalledTimes(1);
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  test("the Mac delete key closes once and advertises Backspace", () => {
+    const original = Object.getOwnPropertyDescriptor(navigator, "platform");
+    Object.defineProperty(navigator, "platform", { configurable: true, value: "MacIntel" });
+    try {
+      const onKeyboardClose = mock(() => {});
+      const tab = renderKeyboardTab({ onKeyboardClose });
+      expect(tab.getAttribute("aria-keyshortcuts")).toBe("Delete Backspace");
+      fireEvent.keyDown(tab, { key: "Backspace" });
+      fireEvent.keyDown(tab, { key: "Backspace", repeat: true });
+      fireEvent.keyDown(tab, { key: "Backspace", metaKey: true });
+      expect(onKeyboardClose).toHaveBeenCalledTimes(1);
+    } finally {
+      if (original) Object.defineProperty(navigator, "platform", original);
+      else Reflect.deleteProperty(navigator, "platform");
+    }
+  });
+
+  test("Delete falls back to onClose when no keyboard route is given", () => {
+    const onClose = mock(() => {});
+    fireEvent.keyDown(renderKeyboardTab({ onClose }), { key: "Delete" });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  test("Delete leaves a tab that cannot close, a held key and a modified key alone", () => {
+    const onClose = mock(() => {});
+    const tab = renderKeyboardTab({ onClose });
+
+    fireEvent.keyDown(tab, { key: "Delete", repeat: true });
+    fireEvent.keyDown(tab, { key: "Delete", ctrlKey: true });
+    expect(onClose).not.toHaveBeenCalled();
+
+    cleanup();
+    const locked = renderKeyboardTab({ onClose, canClose: false });
+    expect(locked.getAttribute("aria-keyshortcuts") === null).toBe(true);
+    fireEvent.keyDown(locked, { key: "Delete" });
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  test("Enter selects with a real click, so the pane's click handling runs too", () => {
+    const onSelect = mock(() => {});
+    const onPaneClick = mock(() => {});
+    const onKeyDown = mock((_event: unknown) => {});
+    sortableListeners = { onKeyDown };
+    render(
+      <div onClick={onPaneClick}>
+        <DraggableTab
+          tab={{ id: "tab-terminal", type: "plain" }}
+          paneId="pane-1"
+          index={0}
+          isActive={false}
+          canClose
+          onSelect={onSelect}
+        />
+      </div>,
+    );
+
+    fireEvent.keyDown(screen.getByRole("tab", { name: "Terminal 1" }), { key: "Enter" });
+
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    expect(onPaneClick).toHaveBeenCalledTimes(1);
+    // It does not also pick the tab up.
+    expect(onKeyDown).not.toHaveBeenCalled();
+  });
+
+  test("Space stays with the sortable", () => {
+    const onSelect = mock(() => {});
+    const onKeyDown = mock((_event: unknown) => {});
+    sortableListeners = { onKeyDown };
+
+    fireEvent.keyDown(renderKeyboardTab({ onSelect }), { key: " ", code: "Space" });
+
+    expect(onKeyDown).toHaveBeenCalledTimes(1);
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  test("keys during a keyboard drag belong to the drag, not the tab", () => {
+    sortableIsDragging = true;
+    const onSelect = mock(() => {});
+    const onKeyboardClose = mock(() => {});
+    const onKeyDown = mock((_event: unknown) => {});
+    sortableListeners = { onKeyDown };
+    const tab = renderKeyboardTab({ onSelect, onKeyboardClose });
+
+    fireEvent.keyDown(tab, { key: "Enter", code: "Enter" });
+    fireEvent.keyDown(tab, { key: "Delete", code: "Delete" });
+
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(onKeyboardClose).not.toHaveBeenCalled();
+    expect(onKeyDown).toHaveBeenCalledTimes(2);
+  });
+
+  test("keys on the close button stay on the close button", () => {
+    const onSelect = mock(() => {});
+    const onKeyboardClose = mock(() => {});
+    const onKeyDown = mock((_event: unknown) => {});
+    sortableListeners = { onKeyDown };
+    renderKeyboardTab({ onSelect, onKeyboardClose });
+
+    const close = screen.getByRole("button", { name: "Close Terminal 1" });
+    fireEvent.keyDown(close, { key: "Enter" });
+    fireEvent.keyDown(close, { key: " ", code: "Space" });
+    fireEvent.keyDown(close, { key: "Delete" });
+
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(onKeyboardClose).not.toHaveBeenCalled();
+    expect(onKeyDown).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    ["the context-menu key", { key: "ContextMenu" }],
+    ["Shift+F10", { key: "F10", shiftKey: true }],
+  ])("%s opens the tab's menu", (_label, keys) => {
+    const tab = renderKeyboardTab({ onClose: () => {} });
+    expect(tab.getAttribute("aria-haspopup")).toBe("menu");
+
+    fireEvent.keyDown(tab, keys);
+
+    expect(screen.getByRole("menuitem", { name: "Close" })).toBeTruthy();
+  });
+
+  test("the menu's Close keeps focus in the strip only when chosen by keyboard", () => {
+    const onClose = mock(() => {});
+    const onKeyboardClose = mock(() => {});
+    const tab = renderKeyboardTab({ onClose, onKeyboardClose });
+
+    fireEvent.contextMenu(tab);
+    fireEvent.click(screen.getByText("Close"), { detail: 1 });
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(onKeyboardClose).not.toHaveBeenCalled();
+
+    fireEvent.contextMenu(tab);
+    fireEvent.click(screen.getByText("Close"), { detail: 0 });
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(onKeyboardClose).toHaveBeenCalledTimes(1);
+  });
+
+  test("the file tooltip still shows when the tab takes focus", async () => {
+    render(
+      <DraggableTab
+        tab={{ id: "tab-file", type: "file", fileData: { filePath: "src/lib/Bar.tsx" } }}
+        paneId="pane-1"
+        index={0}
+        isActive={false}
+        canClose
+        onSelect={() => {}}
+      />,
+    );
+
+    fireEvent.focus(screen.getByRole("tab", { name: "Bar.tsx" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("src/lib/Bar.tsx")).toBeTruthy();
+    });
   });
 });
 

@@ -4,6 +4,7 @@ import type { StorageService } from "./storage.js";
 /** Also checked by background status reconciliation, independent of visible tabs or opt-in. */
 export function needsPipelineCreationRepair(association: CoordinatorWorkflowAssociation): boolean {
   return (
+    !association.nodeRelease &&
     association.kind === "build-pipeline" &&
     Boolean(association.nodeId) &&
     !association.pending &&
@@ -21,6 +22,7 @@ export async function reconcilePipelineCreation(
   now = Date.now(),
 ): Promise<string | undefined> {
   if (
+    association.nodeRelease ||
     association.kind !== "build-pipeline" ||
     !association.nodeId ||
     association.pending ||

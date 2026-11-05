@@ -275,6 +275,7 @@ and no site logs a stderr tail.
 | `bridge.cursor` | `turn.timed-out`, `turn.send-failed`, `turn.recovery-failed` | `warn` | A turn outlived its budget; `send` rejected, so the outcome is unknown; a run recovered after a restart failed. |
 | `bridge.acp` | `agent.exited` | `warn` | An agent process exited, with `code`, `signal` and `requested` (true when the bridge closed it normally). |
 | `bridge.acp` | `http.route-failed` | `warn` | A route answered 500. A deliberate `HttpError` of another status and a client that hung up stay out. |
+| `native-agent` | `steer.qualification-failed` | `warn`, throttled per bridge connection | A bridge's steer qualification request failed or answered non-OK, so steering is not offered. Carries `agent` and `status` or the error class, never a session id or message. [To-do 4700](../todo/coordinator-and-multi-review/4700-coordinator-steer-missing-on-long-lived-coordinator.md#current-state) says how to read it. |
 | `storage` | `lease.heartbeat-failed` | `warn`, throttled by lease name | A lease heartbeat failed, which only shortens the lease. |
 | `storage` | `scrub.checkpoint-failed` | `warn`, throttled under `scrub` | The truncating checkpoint threw, or SQLite reported it blocked (`kind=busy`), which it does in a result row rather than as an error. Scrubbing is a [privacy step](storage.md#durability-and-deletion). |
 

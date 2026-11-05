@@ -148,6 +148,29 @@ describe("local desktop gateway transport", () => {
     });
   });
 
+  test("a per-node relayed event comes from its own stream, so main is never told of it", async () => {
+    const event = "relayed-node-event:bk_leaf";
+    globalThis.fetch = mock(async () => holdOpen()) as unknown as typeof fetch;
+    const host = desktopHost();
+    const api = installed(host);
+    const received: unknown[] = [];
+    const stop = api.listen(event, (payload) => received.push(payload));
+    await flush();
+
+    expect(host.hostListenerCount(event)).toBe(0);
+    const stream = ScriptedEventSource.instances.find(
+      (source) => new URL(source.url).searchParams.get("includeEvents") === event,
+    );
+    expect(stream).toBeDefined();
+    stream!.open();
+    stream!.onmessage?.({
+      data: JSON.stringify({ event, payload: { nodeId: "bk_leaf", kind: "resync" } }),
+      lastEventId: "relayed:1",
+    });
+    expect(received).toEqual([{ nodeId: "bk_leaf", kind: "resync" }]);
+    stop();
+  });
+
   test("hears backend events from its stream and main's own events from the preload", async () => {
     const encoder = new TextEncoder();
     const streamUrls: string[] = [];

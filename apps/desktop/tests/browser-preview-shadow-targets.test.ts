@@ -245,16 +245,6 @@ describe("capturing targets inside open shadow roots", () => {
     ]);
   });
 
-  test("a text selection inside a shadow root stays unsupported", () => {
-    const { harness, save } = shellPage();
-    const kit = harness.window.eval(`(${browserPreviewAnchorKit.toString()})()`) as {
-      describeRange: (range: unknown) => Json;
-    };
-    const range = harness.document.createRange();
-    range.selectNodeContents(save);
-    expect(kit.describeRange(range)).toEqual({ error: "unsupported" });
-  });
-
   test("Electron main keeps the root path and drops undeclared host fields", () => {
     const { harness, root } = shellPage();
     // The page is untrusted: add a field main must not pass on.

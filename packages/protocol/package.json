@@ -200,6 +200,7 @@
     "./testing/host-maintenance-fixtures": "./src/testing/host-maintenance-fixtures.ts",
     "./testing/fake-intervals": "./src/testing/fake-intervals.ts",
     "./reconnect-backoff": "./src/reconnect-backoff.ts",
+    "./relayed-event-stream": "./src/relayed-event-stream.ts",
     "./plan-usage": "./src/plan-usage.ts",
     "./pr-prompt": "./src/pr-prompt.ts",
     "./git-workflow-prompts": "./src/git-workflow-prompts.ts",

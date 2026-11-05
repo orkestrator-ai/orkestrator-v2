@@ -457,18 +457,30 @@ A command node attached to another command node operates in leaf mode:
     stream asks for none of them (`relayedEvents=per-node`) and reads them on
     one extra stream filtered to its watched nodes
     (`includeEvents=relayed-node-event:<nodeId>,…`,
-    `lib/native/relayed-event-stream.ts`). Changing the filter reopens that
-    stream from its cursor, so nothing is lost and nothing re-reads. A gap the
-    ring cannot cover reaches each watched node as a `resync` frame.
+    `@orkestrator/protocol/relayed-event-stream`). Changing the filter reopens
+    that stream from its cursor, so nothing is lost and nothing re-reads. A gap
+    the ring cannot cover reaches each watched node as a `resync` frame.
+  - *The desktop's relay does the same for its windows.* A renderer that takes
+    events through main (a realm's portal, or a window with
+    `localWindowGatewayTransport` off) keeps its listeners in the preload, which
+    tells main the per-node names it starts and stops listening to
+    (`orkestrator:relayed-events:*`) and resets them when a new document loads.
+    Main asks for none on its main stream and runs one filtered stream per
+    connection (`BackendHttpClient.setRelayedEvents`) for the union of what the
+    renderers bound to that connection listen to, on the channel each listens
+    on (`DesktopWindowContexts.syncRelayedEvents`), and forwards a frame only to
+    those renderers. A window or realm closing drops its listens, and a window
+    moving to another connection takes them along. A window on the direct gateway
+    transport adds nothing: it has its own stream.
   - *Older peers.* A stream that does not ask for per-node names, which is what
     an older renderer sends, gets each frame as `relayed-node-event` with no
     `id`, and is sent a `resync` for the nodes that relayed something since its
     cursor when it reconnects. An older command node answers `watch_node_events`
     with no `perNodeEvents` and sends only that name, which the renderer always
-    listens for. The desktop's main process also takes the old name
-    (`relayedEvents=legacy`), because it forwards to windows without tracking
-    their watches ([5841](../todo/cross-cutting/5841-desktop-main-relayed-stream.md)).
-    See the [register](version-compatibility.md#register).
+    listens for; main forwards it to every renderer on that connection. A desktop
+    from before its main process took per-node events asks for the old name
+    explicitly (`relayedEvents=legacy`). See the
+    [register](version-compatibility.md#register).
   - In the renderer, `lib/federation/node-events.ts` holds one lease per
     node for every view and tells each view when to read (first after its
     subscription, then after any possible gap). The sidebar's change badge
@@ -506,7 +518,10 @@ command node.
   session storage under the workspace's ID, which is all the frame's URL
   carries, and the frame boots its gateway against the node (direct first,
   then the relay). The window renews the grant while the realm is open and
-  revokes it when the realm closes.
+  revokes it when the realm closes. Removing a grant, by any route or because
+  it expired, closes the leaf's terminal sockets and event streams it authorized
+  and refuses their queued terminal operations
+  ([terminal transport](remote-gateway.md#compression-and-terminal-transport)).
 - **Switching** never reloads the window. Another environment of a node whose
   realm is open is a message to that realm and an instant selection there.
   The window keeps a few realms open, hidden (`MAX_OPEN_REALMS`), so going

@@ -55,7 +55,21 @@ import {
   type ScheduledJob,
   type ScheduledJobSummary,
 } from "@orkestrator/protocol/scheduled-jobs";
-import { COORDINATOR_MAIL_ADDRESS, coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
+import {
+  COORDINATOR_MAIL_ADDRESS,
+  coordinatorDelegationBucket,
+  coordinatorDelegationSummary,
+  coordinatorRuntimeId,
+  type CoordinatorDelegation,
+} from "@orkestrator/protocol/coordinator";
+
+/** An association's delegation as the snapshot's JSON carries it, if it has one. */
+function recordedDelegation(association: JsonRecord): CoordinatorDelegation | null {
+  const delegation = association.delegation;
+  return isRecord(delegation) && typeof delegation.state === "string"
+    ? (delegation as unknown as CoordinatorDelegation)
+    : null;
+}
 
 /**
  * The tools only a coordinator credential has: repository context, workflow
@@ -128,15 +142,30 @@ export function registerCoordinatorWorkflowTools(
     {
       title: "List coordinator workflows",
       description:
-        "List durable worker, build-pipeline, multi-review, graph-run, feature-plan and pull-request associations for this project with bounded authoritative summaries. A feature-plan association is one launch_feature_plan request: its resource is the plan as get_feature_plan reads it, and its follow says whether the reply was reported. A pull-request association is a worker's pull request this conversation follows for status wakes: its follow (what started it, the PR URL, whether it is still followed, the last state reported, a Resolve tab's progress) and the worker with its PR fields (prHasMergeConflicts, prMergeability, prChecks, prReadyToMerge).",
-      inputSchema: z.object({}),
+        "List durable worker, build-pipeline, multi-review, graph-run, feature-plan and pull-request associations for this project with bounded authoritative summaries. A feature-plan association is one launch_feature_plan request: its resource is the plan as get_feature_plan reads it, and its follow says whether the reply was reported. A pull-request association is a worker's pull request this conversation follows for status wakes: its follow (what started it, the PR URL, whether it is still followed, the last state reported, a Resolve tab's progress) and the worker with its PR fields (prHasMergeConflicts, prMergeability, prChecks, prReadyToMerge). A worker association carries its delegation: state, bucket (needs-you, running or finished), workerTabId and waitingSince. To answer \"what am I waiting on?\", call this with openOnly instead of polling list_environments or list_agents.",
+      inputSchema: z.object({
+        openOnly: z
+          .boolean()
+          .optional()
+          .describe("List only the workers this project's coordinator is still waiting on."),
+      }),
       annotations: readAnnotations(),
     },
-    async () => {
+    async ({ openOnly }) => {
       const snapshot = await invoke<unknown>("get_project_coordinator", {
         projectId: coordinatorScope.projectId,
       });
-      const associations = isRecord(snapshot) ? asArray(snapshot.workflows).slice(-200) : [];
+      const recorded = isRecord(snapshot) ? asArray(snapshot.workflows) : [];
+      // Filtered before the cap: rows are one per message, so an open delegation
+      // can sit behind 200 newer ones.
+      const associations = (
+        openOnly
+          ? recorded.filter((association) => {
+              const delegation = recordedDelegation(association);
+              return delegation && coordinatorDelegationBucket(delegation) !== "finished";
+            })
+          : recorded
+      ).slice(-200);
       // One resolution per node, shared by that node's workflows.
       const invokers = new Map<string, Promise<ControlMcpInvoker | null>>();
       const invokerOn = (nodeId: string | undefined): Promise<ControlMcpInvoker | null> => {
@@ -211,6 +240,7 @@ export function registerCoordinatorWorkflowTools(
           } catch {
             resource = { id: resourceId, status: "unavailable" };
           }
+          const delegation = recordedDelegation(association);
           return {
             id: association.id,
             kind,
@@ -220,6 +250,7 @@ export function registerCoordinatorWorkflowTools(
             baseBranch: association.baseBranch,
             baseCommit: association.baseCommit,
             createdAt: association.createdAt,
+            ...(delegation ? { delegation: coordinatorDelegationSummary(delegation) } : {}),
             ...(kind === "pull-request" ? { follow: pullRequestFollowSummary(association) } : {}),
             ...(kind === "feature-plan" ? { follow: featurePlanFollowSummary(association) } : {}),
             resource,

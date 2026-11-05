@@ -5,7 +5,7 @@
  * the walk, while a renewed fence still keeps its object.
  */
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
-import { mkdtempSync, rmSync, unlinkSync, utimesSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync, unlinkSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Manifest } from "./capture.js";
@@ -154,6 +154,53 @@ describe("the store's byte count", () => {
     expect(walks).toHaveBeenCalledTimes(1);
   });
 
+  test.each(["reachable", "young"])(
+    "daily reconciliation counts outside changes to %s objects",
+    async (kind) => {
+      const h = harness();
+      const store = h.service.objects;
+      const { id } = await store.put("blob", encode("externally removed"));
+      if (kind === "reachable") await snapshotOf(h, [id]);
+      await h.service.retention.run();
+      const originalBytes = await store.currentBytes();
+      const source = openStore();
+      const added = await source.put("blob", encode("externally added"));
+      const target = objectFile(store, added.id);
+      mkdirSync(join(store.root, "objects", added.id.slice(0, 2)), { recursive: true });
+      copyFileSync(objectFile(source, added.id), target);
+      unlinkSync(objectFile(store, id));
+      // Neither object is a sweep candidate: one was removed before enumeration,
+      // the other is young. No immediate recount is required for unseen changes.
+      expect(await store.currentBytes()).toBe(originalBytes);
+      const now = Date.now();
+      const clock = spyOn(Date, "now").mockReturnValue(now + 24 * 60 * 60 * 1000);
+      try {
+        const report = await h.service.retention.run(now); // keep the new object's grace fence
+        const actual = await store.storedBytes();
+        expect(report.storedBytes).toBe(actual);
+        expect(await store.currentBytes()).toBe(actual);
+        expect((await h.service.retention.run(now)).storedBytes).toBe(actual);
+      } finally {
+        clock.mockRestore();
+      }
+    },
+  );
+
+  test("a put reconciles an externally inflated hard-budget count after a day", async () => {
+    let budget = 100;
+    const store = openStore({ hardBudgetBytes: () => budget });
+    const { id } = await store.put("blob", encode("old"));
+    budget = await store.currentBytes();
+    unlinkSync(objectFile(store, id));
+    const clock = spyOn(Date, "now").mockReturnValue(Date.now() + 24 * 60 * 60 * 1000);
+    try {
+      await store.put("blob", encode("new"));
+      expect(await store.currentBytes()).toBe(await store.storedBytes());
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   test("a retention pass reads the figure instead of walking the store", async () => {
     const h = harness();
     await snapshotOf(h, await oldBlobs(h.service.objects, 5));
@@ -191,6 +238,22 @@ describe("a sweep's lock", () => {
     expect(await store.has(renewed!)).toBe(true);
     for (const id of others) expect(await store.has(id)).toBe(false);
     expect(swept.removed).toBe(others.length);
+  });
+
+  test("a removal that wins the lock makes a queued reuse report the object gone", async () => {
+    const store = openStore({ orphanGraceMs: () => GRACE_MS });
+    const [id] = await oldBlobs(store, 1);
+    let reused: Promise<boolean> | undefined;
+    // Queue reuse from inside the removal hold: it must wait until removal
+    // finishes, even though the file still exists when reuse is requested.
+    beforeFirstHold(store, () => {
+      reused = store.reuse(id!);
+    });
+    expect((await store.sweep(new Set(), GRACE_MS)).removed).toBe(1);
+    expect(reused).toBeDefined();
+    expect(await reused).toBe(false);
+    expect(await store.has(id!)).toBe(false);
+    expect(await store.currentBytes()).toBe(await store.storedBytes());
   });
 
   test("reuse during a sweep either keeps the object or reports it gone", async () => {
@@ -252,6 +315,11 @@ describe("reachability between passes", () => {
     const report = await h.service.retention.run();
     expect(report.removedObjects).toBe(blobs.length);
     expect(h.service.retention.reachabilityStats().entries).toBe(0);
+    expect(report.storedBytes).toBe(0);
+    expect(report.storedBytes).toBe(await store.storedBytes());
+    expect(await store.currentBytes()).toBe(await store.storedBytes());
+    expect((await h.service.retention.run()).storedBytes).toBe(await store.storedBytes());
+    expect(await store.currentBytes()).toBe(await store.storedBytes());
   });
 
   test("a full cache admits nothing new and a cold manifest is still walked", async () => {

@@ -436,7 +436,10 @@ that no live batch owns the name.
 
 The store keeps its compressed byte count current: a placed object adds its
 size and a sweep subtracts what it removed, so a retention pass reads the figure
-(`ObjectStore.currentBytes`) rather than walking every object twice. The store
+(`ObjectStore.currentBytes`) rather than walking every object twice. Missing
+manifests invalidate accounting immediately; a daily recount under the store
+lock also reconciles external changes to reachable or young objects. Puts use
+the same daily reconciliation before checking the hard budget. The store
 walks once when it has no figure yet (after a restart), and again after a sweep
 finds a candidate already gone, which only something outside the store can
 cause.

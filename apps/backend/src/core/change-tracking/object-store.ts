@@ -70,6 +70,8 @@ const MAX_CONCURRENT_SYNCS = 16;
 const RENAMES_PER_LOCK_HOLD = 256;
 /** Removals per hold of the store lock during a sweep, for the same reason. */
 const REMOVALS_PER_LOCK_HOLD = 64;
+/** Bound drift from external changes without rewalking on every hourly pass. */
+const BYTE_RECONCILIATION_MS = 24 * 60 * 60 * 1000;
 
 const deflateOffLoop = promisify(deflate);
 const inflateOffLoop = promisify(inflate);
@@ -146,6 +148,7 @@ export class ObjectStore {
   private readonly orphanGraceMs: () => number;
   private mutation: Promise<unknown> = Promise.resolve();
   private usedBytes: number | null = null;
+  private bytesReconciledAt = 0;
   private removedCount = 0;
   /** Bytes reserved by staged temporaries, charged against the hard budget. */
   private stagedBytes = 0;
@@ -298,8 +301,8 @@ export class ObjectStore {
     // against a sweep called after this put.
     const known = await this.exclusive(async () => {
       await this.init();
-      this.usedBytes ??= await this.storedBytes();
-      if (this.usedBytes + this.stagedBytes >= this.hardBudgetBytes())
+      const usedBytes = await this.reconcileBytesUnderLock();
+      if (usedBytes + this.stagedBytes >= this.hardBudgetBytes())
         throw new Error("capture-storage-quota");
       if (batch.objects.has(id)) return true;
       if (!(await this.has(id))) return false;
@@ -317,8 +320,8 @@ export class ObjectStore {
         : await this.zlibSlots.run(() => deflateOffLoop(raw));
 
     await this.exclusive(async () => {
-      this.usedBytes ??= await this.storedBytes();
-      if (this.usedBytes + this.stagedBytes + compressed.length > this.hardBudgetBytes())
+      const usedBytes = await this.reconcileBytesUnderLock();
+      if (usedBytes + this.stagedBytes + compressed.length > this.hardBudgetBytes())
         throw new Error("capture-storage-quota");
       this.stagedBytes += compressed.length;
     });
@@ -541,18 +544,35 @@ export class ObjectStore {
     }
   }
 
+  /** Invalidate accounting when a reader detects an externally missing object. */
+  async invalidateBytes(): Promise<void> {
+    await this.exclusive(async () => {
+      this.usedBytes = null;
+    });
+  }
+
   /**
-   * Stored bytes (compressed) from the running figure `put` and {@link sweep}
-   * keep, so retention need not walk the store. Walks it once, under the lock
-   * as `put` does, while no figure exists yet.
+   * Compressed bytes maintained by puts and sweeps. Recount under the lock on
+   * invalidation and at least daily when accessed, so external changes cannot
+   * leave quota decisions stale indefinitely. Ordinary hourly passes do no walk.
    */
   async currentBytes(): Promise<number> {
-    if (this.usedBytes !== null) return this.usedBytes;
+    if (this.usedBytes !== null && Date.now() - this.bytesReconciledAt < BYTE_RECONCILIATION_MS)
+      return this.usedBytes;
     return this.exclusive(async () => {
       await this.init();
-      this.usedBytes ??= await this.storedBytes();
-      return this.usedBytes;
+      return this.reconcileBytesUnderLock();
     });
+  }
+
+  /** Caller holds the mutation lock, including across the walk and publication. */
+  private async reconcileBytesUnderLock(): Promise<number> {
+    const now = Date.now();
+    if (this.usedBytes === null || now - this.bytesReconciledAt >= BYTE_RECONCILIATION_MS) {
+      this.usedBytes = await this.storedBytes();
+      this.bytesReconciledAt = now;
+    }
+    return this.usedBytes;
   }
 
   /** Total stored bytes (compressed), walking every object. */

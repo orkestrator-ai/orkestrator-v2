@@ -266,6 +266,7 @@ export class ChangeRetentionService {
     const { store } = this.deps;
     if (!(await store.has(manifestId))) {
       this.reachability.forget(manifestId);
+      await store.invalidateBytes();
       return;
     }
     if (this.reachability.addTo(manifestId, reachable)) {

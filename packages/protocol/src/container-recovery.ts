@@ -69,6 +69,23 @@ export interface CleanupPreviewRow {
   classification: CleanupClassification;
 }
 
+/**
+ * What an older runtime still exposes. `host-mounts`: whole host agent homes,
+ * bound read-only. `shared-bridge`: network policy 1, the shared Docker bridge
+ * with the host's `/24` open, siblings included.
+ */
+export type LegacyRuntimeExposure = "host-mounts" | "shared-bridge";
+
+/** An environment whose runtime only a rebuild can bring to the current shape. */
+export interface LegacyRuntimeRow {
+  environmentId: string;
+  environmentName: string;
+  containerId: string;
+  exposures: LegacyRuntimeExposure[];
+  /** A container operation is running for the environment; a rebuild has to wait. */
+  busy: boolean;
+}
+
 export interface CleanupPreview {
   /** Bound to this exact eligible set; expires. */
   selectionToken: string;
@@ -76,6 +93,10 @@ export interface CleanupPreview {
   rows: CleanupPreviewRow[];
   /** More resources exist than one preview enumerates. */
   truncated: boolean;
+  /** Absent from a backend older than the list, which cannot say either way. */
+  legacyRuntimes?: LegacyRuntimeRow[];
+  /** Assigned containers Docker did not answer for, so the list may be short. */
+  legacyRuntimesUnchecked?: number;
 }
 
 export type CleanupOutcomeKind = "removed" | "already-absent" | "skipped" | "conflict" | "failed";

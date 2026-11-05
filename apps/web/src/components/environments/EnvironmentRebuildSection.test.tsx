@@ -123,7 +123,7 @@ describe("environment rebuild section", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: /Rebuild \(keeps files\)/ }));
     await screen.findByText("Rebuild unavailable");
-    expect(screen.getByText(/predates persistent storage/)).toBeTruthy();
+    expect(screen.getByText(/too old to rebuild from/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Rebuild" }) === null).toBe(true);
     expect(onRestart).not.toHaveBeenCalled();
   });

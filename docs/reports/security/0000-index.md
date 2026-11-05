@@ -18,11 +18,10 @@ A batch file combines several reports as numbered parts and takes the rating of 
 | 2 | [0090-x1-coordinator-trust-boundary.md](0090-x1-coordinator-trust-boundary.md) | High | No | **X1, Coordinator trust boundary.**<br>`Security 0090`: M11: delegation scope and marking mail-originated delegations<br>`Security 0180`: L16: operator token reads, confirm token wording, self-reminder framing<br>`Security 0210`: I2: two stale statements about side agents<br>`Coordinator 0120`: Labelling the home in `list_environments` and a live read-only step for the message gate.<br>`Coordinator 0310`: Refusing `adopt_workflow` from a side agent. | From `Security 0090`: An injected worker can reach a user-created environment under its looser policy, limited only by framing and budgets. |
 | 3 | [0100-m12-egress-sni-and-dns.md](0100-m12-egress-sni-and-dns.md) | High | No | M12: SNI enforcement, DNS filtering, default allowlist, user-facing statement | Shared edges, attacker credentials and DNS remain working exfiltration channels from a restricted container. |
 | 4 | [0170-l15-agent-tools-bind-address.md](0170-l15-agent-tools-bind-address.md) | Medium | No | L15: agent-tools server on `0.0.0.0` | The server is token-protected, so the wider bind adds reach for a leaked token rather than a direct way in. |
-| 5 | [0260-live-checks-on-other-platforms.md](0260-live-checks-on-other-platforms.md) | Medium | No | §8: H1, M1 and M2 in shipping Safari, H3 on rootless Docker, and gateway reach on Linux Engine | The checks that could run here passed; what is left qualifies other platforms, and accepting a leaked session rests on the Linux Engine answer. |
-| 6 | [0020-m1-isolated-preview-default.md](0020-m1-isolated-preview-default.md) | Low | No | M1: legacy route retirement, and the two-machine run the default flip went ahead without | The sandbox header already closes the top-level path. The default is flipped; retirement waits on the support window in todo 0042. |
-| 7 | [0110-l18-dependency-advisories.md](0110-l18-dependency-advisories.md) | Low | No | L18: `undici`, `postcss-selector-parser`, Electron 45.x | The advisories are already accepted and blocked upstream in todo 0032. |
-| 8 | [0160-l12-descriptor-process-binding.md](0160-l12-descriptor-process-binding.md) | Low | No | L12: pid reuse by the same user | It needs a crashed backend, pid reuse and a co-tenant on the old port all at once. |
-| 9 | [0190-l17-provider-secrets-at-rest.md](0190-l17-provider-secrets-at-rest.md) | Low | No | L17: provider secrets in plaintext at 0600 | The report only says to consider it, and only a same-uid process can read the file. |
+| 5 | [0020-m1-isolated-preview-default.md](0020-m1-isolated-preview-default.md) | Low | No | M1: legacy route retirement, and the two-machine run the default flip went ahead without | The sandbox header already closes the top-level path. The default is flipped; retirement waits on the support window in todo 0042. |
+| 6 | [0110-l18-dependency-advisories.md](0110-l18-dependency-advisories.md) | Low | No | L18: `undici`, `postcss-selector-parser`, Electron 45.x | The advisories are already accepted and blocked upstream in todo 0032. |
+| 7 | [0160-l12-descriptor-process-binding.md](0160-l12-descriptor-process-binding.md) | Low | No | L12: pid reuse by the same user | It needs a crashed backend, pid reuse and a co-tenant on the old port all at once. |
+| 8 | [0190-l17-provider-secrets-at-rest.md](0190-l17-provider-secrets-at-rest.md) | Low | No | L17: provider secrets in plaintext at 0600 | The report only says to consider it, and only a same-uid process can read the file. |
 
 ## Parallel running
 
@@ -53,7 +52,6 @@ These still follow the lane and conflict rules above.
 | S-0170 | [Agent-tools bind address](0170-l15-agent-tools-bind-address.md) | `0170` | Containers, 3 of 4 | None | None |
 | S-0190 | [Provider secrets at rest](0190-l17-provider-secrets-at-rest.md) | `0190` | Storage, 2 of 2 | None | None |
 | S-0160 | [Descriptor process binding](0160-l12-descriptor-process-binding.md) | `0160` | Gateway, 3 of 3 | None | None |
-| S-0260 | [Live checks on other platforms](0260-live-checks-on-other-platforms.md) | `0260` | No lane | None | None |
 
 ### Not ready to start
 
@@ -125,7 +123,7 @@ When one of these becomes ready, it joins the lane shown.
 | §8 `tmux-hooks` `find` not reviewed | No action | Read for this split: the path is quoted and the other value is a number (`apps/backend/src/core/tmux-hooks.ts:966-968`, `apps/backend/src/core/tmux-shared.ts:299-301`, `:700`) |
 | §8 Pi's `grep` and `find` tools | No action | They live in the Pi SDK outside this repository, and the report asks for nothing |
 | §8 iOS app not reviewed | Partly done | Reviewed on 2026-11-05 against `69a3b4ca5`: `isTrustedBridgeOrigin` and `loginFormBody` (`apps/ios/OrkestratorMobile/Views/RemoteWebView.swift`), `GatewayRedirectBlocker` (`apps/ios/OrkestratorMobile/Networking/GatewayConnectionValidator.swift`), with tests in `apps/ios/OrkestratorMobileTests/OrkestratorMobileTests.swift`; remainder in [5600](../../todo/cross-cutting/5600-ios-bridge-user-consent.md), [5601](../../todo/cross-cutting/5601-ios-runtime-security-checks.md) (device and signed-build checks) and [5602](../../todo/cross-cutting/5602-ios-session-and-privacy-hardening.md) |
-| §8 Dynamic testing | Partly done | H1, M1 and M2 in Chromium, Firefox and WebKit (`e2e/preview/gateway-browser-security.spec.ts`); H3 on Docker Desktop (`docs/development/container-qualification.md`); remainder in [0260-live-checks-on-other-platforms.md](0260-live-checks-on-other-platforms.md) |
+| §8 Dynamic testing | Partly done | H1, M1 and M2 in Chromium, Firefox and WebKit (`e2e/preview/gateway-browser-security.spec.ts`); H3 on Docker Desktop and rootless, and gateway reach on Docker Desktop and Linux Engine (`docs/development/container-qualification.md`); shipping Safari remains in [todo 5500](../../todo/previews-and-annotations/5500-shipping-safari-gateway-security-checks.md) |
 | §9 step 1 (H1 + M1) | Partly done | [Todo 2960](../../todo/cross-cutting/2960-host-prefixed-gateway-cookie.md), [0020-m1-isolated-preview-default.md](0020-m1-isolated-preview-default.md) |
 | §9 step 2 (H3) | Done | See H3 |
 | §9 step 3 (H2) | Done | See H2 |

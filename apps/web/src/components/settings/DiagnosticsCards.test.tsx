@@ -5,6 +5,7 @@ import type {
   DiagnosticsBundlePlan,
 } from "@orkestrator/protocol/backend-diagnostics";
 import { DIAGNOSTICS_REDACTION_NOTICE } from "@orkestrator/protocol/backend-diagnostics";
+import { Z_FULLSCREEN_DIALOG } from "@/constants/z-index";
 import * as backend from "@/lib/backend";
 import * as downloads from "@/lib/chat/artifact-download";
 import { AccountMachineProvider } from "./account-machine";
@@ -162,6 +163,8 @@ test("export shows the manifest first, and saves only when asked", async () => {
 
   fireEvent.click(screen.getByRole("button", { name: "Export diagnostics" }));
   const dialog = await screen.findByRole("dialog");
+  // Settings is itself a full-screen dialog, so this has to sit above it.
+  expect(dialog.className).toContain(Z_FULLSCREEN_DIALOG);
   expect(plan).toHaveBeenCalledWith("other");
   expect(within(dialog).getByText("metrics.json")).toBeTruthy();
   expect(within(dialog).getByText("logs/essential/essential.jsonl")).toBeTruthy();

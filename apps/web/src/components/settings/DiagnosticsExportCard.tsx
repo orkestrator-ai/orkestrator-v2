@@ -10,8 +10,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Z_FULLSCREEN_DIALOG } from "@/constants/z-index";
 import * as backend from "@/lib/backend";
 import { base64ToBytes, downloadBlob } from "@/lib/chat/artifact-download";
+import { cn } from "@/lib/utils";
 import { useAccountMachine } from "./account-machine";
 import { formatDiagnosticsBytes } from "./DatabaseStorageCard";
 
@@ -124,7 +126,11 @@ export function DiagnosticsExportCard() {
           if (!open && !isSaving) setPlan(null);
         }}
       >
-        <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto">
+        <DialogContent
+          size="2xl"
+          className={cn("max-h-[85vh] overflow-y-auto", Z_FULLSCREEN_DIALOG)}
+          overlayClassName={Z_FULLSCREEN_DIALOG}
+        >
           <DialogHeader>
             <DialogTitle>Export diagnostics</DialogTitle>
             <DialogDescription>

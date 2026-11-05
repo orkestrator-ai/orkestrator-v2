@@ -140,7 +140,7 @@ describe("Orkestrator control MCP server", () => {
       agent: "codex",
       byAgent: { codex: { modelId: "gpt-5.6-codex", reasoningId: "medium" } },
     });
-    expect(options.defaults.guidance).toContain("Omit modelId and reasoningId");
+    expect(options.defaults.guidance).toContain("Omit agent, modelId and reasoningId");
     expect(options.models.map(({ id, isDefault }) => [id, isDefault === true])).toEqual([
       ["gpt-5.6-codex", true],
       ["gpt-5.6-mini", false],
@@ -926,5 +926,121 @@ describe("Orkestrator control MCP server", () => {
           command === "get_native_agent_model_catalog" && args.environmentId === "env-home",
       ),
     ).toBe(false);
+  });
+
+  describe("an omitted agent runs the user's default agent", () => {
+    // Claude is the built-in fallback and listed first; the saved default is Codex.
+    const settings = () => {
+      overrides.set("get_config", () => ({
+        global: { enabledAgentPlatforms: ["claude", "codex"], agentMessaging: { enabled: true } },
+      }));
+      overrides.set("get_repository_config", () => ({ agentSettings: { defaultAgent: "codex" } }));
+    };
+
+    test("neither launch tool requires agent", async () => {
+      const descriptor = coordinatorCredential(["discovery", "environments", "jobs"]);
+      const listed = await rpc(descriptor.url, descriptor.token, "tools/list", {});
+      const tools = listed.body.result?.tools as Array<{
+        name: string;
+        inputSchema: { required?: string[]; properties: Record<string, { description?: string }> };
+      }>;
+      for (const name of ["launch_environment", "launch_job"]) {
+        const schema = tools.find((tool) => tool.name === name)!.inputSchema;
+        expect(schema.required ?? []).not.toContain("agent");
+        expect(schema.properties.agent?.description).toContain("default agent");
+      }
+    });
+
+    test("launch_environment", async () => {
+      settings();
+      overrides.set("launch_coordinator_environment", () => ({
+        environment: { id: "env-new", projectId: "project-1", status: "creating" },
+      }));
+      const descriptor = coordinatorCredential(["discovery", "environments"]);
+      const launched = await rpc(descriptor.url, descriptor.token, "tools/call", {
+        name: "launch_environment",
+        arguments: {
+          requestId: "default-agent",
+          projectId: "project-1",
+          prompt: "Build it.",
+          ...BASE,
+        },
+      });
+      expect(launched.body.result?.isError).not.toBe(true);
+      expect(launched.body.result?.structuredContent?.selection).toMatchObject({
+        agent: "codex",
+        source: "default",
+      });
+      const call = invocations.findLast(
+        ({ command }) => command === "launch_coordinator_environment",
+      )?.args as { input: { agentSettings: { defaultAgent: string } }; agentDefaulted?: boolean };
+      expect(call.input.agentSettings.defaultAgent).toBe("codex");
+      // The request is recorded as "the default", so a retry survives a settings change.
+      expect(call.agentDefaulted).toBe(true);
+
+      // A named agent is the caller's choice and is not marked as defaulted.
+      await rpc(descriptor.url, descriptor.token, "tools/call", {
+        name: "launch_environment",
+        arguments: {
+          requestId: "named-agent",
+          projectId: "project-1",
+          agent: "claude",
+          prompt: "Build it.",
+          ...BASE,
+        },
+      });
+      const named = invocations.findLast(
+        ({ command }) => command === "launch_coordinator_environment",
+      )?.args as { input: { agentSettings: { defaultAgent: string } }; agentDefaulted?: boolean };
+      expect(named.input.agentSettings.defaultAgent).toBe("claude");
+      expect(named.agentDefaulted).toBeUndefined();
+    });
+
+    test("launch_job takes the environment's own default", async () => {
+      settings();
+      overrides.set("get_environment", () => ({
+        id: "env-1",
+        projectId: "project-1",
+        name: "Existing environment",
+        status: "running",
+        setupStatus: "ready",
+        environmentType: "local",
+        agentSettings: { defaultAgent: "claude" },
+      }));
+      const descriptor = coordinatorCredential(["discovery", "environments", "jobs"]);
+      const launched = await rpc(descriptor.url, descriptor.token, "tools/call", {
+        name: "launch_job",
+        arguments: { requestId: "job-default-agent", environmentId: "env-1", prompt: "Do work." },
+      });
+      expect(launched.body.result?.isError).not.toBe(true);
+      expect(launched.body.result?.structuredContent?.selection).toMatchObject({
+        agent: "claude",
+        source: "default",
+      });
+      expect(
+        invocations.findLast(({ command }) => command === "launch_control_job")?.args.agent,
+      ).toBe("claude");
+
+      // Without an environment tier the repository's default applies.
+      overrides.delete("get_environment");
+      await rpc(descriptor.url, descriptor.token, "tools/call", {
+        name: "launch_job",
+        arguments: { requestId: "job-repository-agent", environmentId: "env-1", prompt: "Go." },
+      });
+      expect(
+        invocations.findLast(({ command }) => command === "launch_control_job")?.args.agent,
+      ).toBe("codex");
+    });
+
+    test("no enabled platform is refused before anything launches", async () => {
+      overrides.set("get_config", () => ({ global: { enabledAgentPlatforms: [] } }));
+      const descriptor = coordinatorCredential(["discovery", "environments", "jobs"]);
+      const launched = await rpc(descriptor.url, descriptor.token, "tools/call", {
+        name: "launch_job",
+        arguments: { requestId: "job-no-agent", environmentId: "env-1", prompt: "Do work." },
+      });
+      expect(launched.body.result?.isError).toBe(true);
+      expect(invocations.some(({ command }) => command === "launch_control_job")).toBe(false);
+    });
   });
 });

@@ -634,7 +634,7 @@ export const COORDINATOR_WORKER_PROMPT_FORMAT_RULE =
  * user's configured default. Kept short: it is injected on every turn.
  */
 export const COORDINATOR_LAUNCH_DEFAULTS_RULE =
-  "Defaults: omit modelId, reasoningId, Multi Review model rows, Multi Review autoFix and autoPr, and build agentType, steps and reviewers so environments, jobs, builds and Multi Reviews run the user's saved defaults. Override one only when the user asks for a specific model, agent, effort, reviewers or auto-fix/auto-PR, or agrees to one the task needs.";
+  "Defaults: omit agent, modelId, reasoningId, Multi Review model rows, Multi Review autoFix and autoPr, and build agentType, steps and reviewers so environments, jobs, builds and Multi Reviews run the user's saved defaults. Override one only when the user asks for a specific model, agent, effort, reviewers or auto-fix/auto-PR, or agrees to one the task needs.";
 
 /**
  * How long after a coordinator's last sent message to a project home the next

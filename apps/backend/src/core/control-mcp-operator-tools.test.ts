@@ -91,6 +91,22 @@ describe("operator tools over public actions", () => {
     expect(!cli.ok && cli.error.code).toBe("not-found");
   });
 
+  test("launch_job without agent starts the default agent through session.start", async () => {
+    const harness = await open();
+    const launched = await harness.call(harness.defaultToken, "launch_job", {
+      requestId: "job-default-agent",
+      environmentId: "env-1",
+      prompt: "Fix the failing test.",
+    });
+    expect(launched.isError).not.toBe(true);
+    expect(launched.structuredContent).toMatchObject({
+      status: "accepted",
+      receipt: { action: "session.start", requestId: "job-default-agent" },
+      selection: { agent: "claude", source: "default" },
+    });
+    expect(harness.stub.sends).toHaveLength(1);
+  });
+
   test("launch_environment returns the created environment and replays its receipt", async () => {
     const harness = await open();
     const repository = await harness.harness.createRepository("operator-launch");

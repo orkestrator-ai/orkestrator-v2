@@ -9,7 +9,6 @@ import { coordinatorDeliverNowResult } from "./coordinator-deliver-now.js";
 import { nodeMailReplyTarget } from "./node-mail-reply-target.js";
 import { McpServer } from "@modelcontextprotocol/server";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
-import { resolveDefaultAgent } from "@orkestrator/protocol/agent-settings";
 import {
   AGENT_MAIL_MAX_ATTACHMENT_BYTES,
   AGENT_MAIL_MAX_ATTACHMENTS,
@@ -43,6 +42,7 @@ import {
 import {
   allEnvironments,
   compactMessages,
+  defaultLaunchAgent,
   environmentSummary,
   launchEnvironmentCreateInput,
   launchOptions,
@@ -53,6 +53,7 @@ import {
   paneTabs,
   platformLaunchDefault,
   projectSummary,
+  resolveLaunchAgent,
   terminalSessionId,
   validateSelection,
 } from "./control-shared-actions.js";
@@ -356,7 +357,13 @@ function ticketDetail(task: JsonRecord): JsonRecord {
  * what the model reads at the moment it decides, so the rule lives here too.
  */
 const LAUNCH_DEFAULTS_GUIDANCE =
-  "Omit modelId and reasoningId to use the user's configured defaults; set them only when the user asks for a specific model or effort, or agrees to one the task needs.";
+  "Omit agent, modelId and reasoningId to use the user's configured defaults; set them only when the user asks for a specific agent, model or effort, or agrees to one the task needs.";
+const AGENT_DESCRIPTION =
+  "Optional. Omit to use the user's default agent (defaults.agent in get_launch_options). Set only when the user asks for a specific agent.";
+const AGENT_PLATFORM_FIELD = z
+  .enum(["claude", "codex", "cursor", "grok", "opencode", "pi"])
+  .optional()
+  .describe(AGENT_DESCRIPTION);
 const MODEL_ID_DESCRIPTION =
   "Optional. Omit to use the user's configured default model. Set only when the user asks for a specific model.";
 const REASONING_ID_DESCRIPTION =
@@ -370,9 +377,8 @@ function launchDefaultsSummary(
   enabledAgents: readonly AgentPlatform[],
   models: readonly AgentModel[],
 ): JsonRecord {
-  const configuredAgent = resolveDefaultAgent(tiers);
   return {
-    agent: enabledAgents.includes(configuredAgent) ? configuredAgent : (enabledAgents[0] ?? null),
+    agent: defaultLaunchAgent(tiers, enabledAgents),
     byAgent: Object.fromEntries(
       enabledAgents.map((agent) => [agent, platformLaunchDefault(tiers, agent, models)]),
     ),
@@ -1594,7 +1600,7 @@ export async function createControlMcp(
         projectId: z.string().trim().min(1).max(200),
         environmentType: z.enum(["local", "containerized"]).default("local"),
         name: z.string().trim().min(1).max(200).optional(),
-        agent: z.enum(["claude", "codex", "cursor", "grok", "opencode", "pi"]),
+        agent: AGENT_PLATFORM_FIELD,
         modelId: z.string().trim().min(1).max(500).optional().describe(MODEL_ID_DESCRIPTION),
         reasoningId: z
           .string()
@@ -1657,10 +1663,17 @@ export async function createControlMcp(
       }
       const target = await onNode(input.nodeId);
       if (target && coordinatorScope) {
-        // The base, the agent and the model are checked against that node's copy.
+        // The base, the agent and the model are checked against that node's copy,
+        // and an omitted agent is that node's default.
         await assertCoordinatorLaunchBaseOnBranch(target.invoke, target.projectId, input);
+        const { agent, defaulted } = await resolveLaunchAgent(
+          target.invoke,
+          target.projectId,
+          input.agent,
+        );
         const options = await validateSelection(target.invoke, {
           ...input,
+          agent,
           projectId: target.projectId,
         });
         const { nodeId: _nodeId, ...launchInput } = input;
@@ -1668,7 +1681,8 @@ export async function createControlMcp(
           scope: coordinatorScope,
           requestId: input.requestId,
           nodeId: target.nodeId,
-          input: launchEnvironmentCreateInput(launchInput),
+          input: launchEnvironmentCreateInput({ ...launchInput, agent }),
+          ...(defaulted ? { agentDefaulted: true } : {}),
         });
         const environment = isRecord(launch) ? launch.environment : null;
         if (!isRecord(environment) || typeof environment.id !== "string") {
@@ -1678,7 +1692,7 @@ export async function createControlMcp(
           target.projectId,
           environment,
           options.models,
-          input,
+          { ...input, agent },
           false,
           target.invoke,
         );
@@ -1715,14 +1729,16 @@ export async function createControlMcp(
             Number(repository.trackedChanges ?? 0) + Number(repository.untrackedChanges ?? 0) > 0;
         }
       }
-      const options = await validateSelection(invoke, input);
-      // A new environment's own tier pins no model, so repository and app
-      // settings decide, exactly as the startup launch reads them.
-      const createInput = launchEnvironmentCreateInput(input);
+      // A new environment's own tier pins no model or agent, so repository and
+      // app settings decide, exactly as the startup launch reads them.
+      const { agent, defaulted } = await resolveLaunchAgent(invoke, input.projectId, input.agent);
+      const options = await validateSelection(invoke, { ...input, agent });
+      const createInput = launchEnvironmentCreateInput({ ...input, agent });
       const launch = await invoke<unknown>("launch_coordinator_environment", {
         scope: coordinatorScope,
         requestId: input.requestId,
         input: createInput,
+        ...(defaulted ? { agentDefaulted: true } : {}),
       });
       const environment = isRecord(launch) ? launch.environment : null;
       if (!isRecord(environment) || typeof environment.id !== "string") {
@@ -1738,7 +1754,7 @@ export async function createControlMcp(
         try {
           const session = await invoke<unknown>("get_native_agent_session", {
             environmentId: environment.id,
-            agent: input.agent,
+            agent,
             logicalSessionKey: `env-${environment.id}:${STARTUP_AGENT_TAB_ID}`,
           });
           if (isRecord(session) && isRecord(session.controls)) {
@@ -1767,6 +1783,7 @@ export async function createControlMcp(
             options.models,
             {
               ...input,
+              agent,
               modelId:
                 typeof environment.initialAgentModel === "string"
                   ? environment.initialAgentModel
@@ -1817,7 +1834,7 @@ export async function createControlMcp(
       inputSchema: z.object({
         requestId: z.string().trim().min(1).max(256),
         environmentId: z.string().trim().min(1).max(200),
-        agent: z.enum(["claude", "codex", "cursor", "grok", "opencode", "pi"]),
+        agent: AGENT_PLATFORM_FIELD,
         modelId: z.string().trim().min(1).max(500).optional().describe(MODEL_ID_DESCRIPTION),
         reasoningId: z
           .string()
@@ -1856,10 +1873,17 @@ export async function createControlMcp(
       if (!isRecord(environment) || typeof environment.projectId !== "string") {
         throw new Error(`Environment not found: ${input.environmentId}`);
       }
+      // An omitted agent is this environment's default, as its new-tab button picks.
+      const { agent } = await resolveLaunchAgent(
+        inv,
+        environment.projectId,
+        input.agent,
+        environment,
+      );
       const options = await validateSelection(inv, {
         projectId: environment.projectId,
         environmentId: input.environmentId,
-        agent: input.agent,
+        agent,
         modelId: input.modelId,
         reasoningId: input.reasoningId,
         fastMode: input.fastMode,
@@ -1868,7 +1892,7 @@ export async function createControlMcp(
         environment.projectId,
         environment,
         options.models,
-        input,
+        { ...input, agent },
         true,
         inv,
       );
@@ -1885,13 +1909,13 @@ export async function createControlMcp(
         : null;
       const launchArgs = delegation
         ? withCoordinatorDelegationPresentation(
-            { ...input, prompt: delegation.source, activateTab: false },
+            { ...input, agent, prompt: delegation.source, activateTab: false },
             {
               kind: COORDINATOR_DELEGATION_PRESENTATION,
               frame: delegation.frame,
             },
           )
-        : { ...input, activateTab: false };
+        : { ...input, agent, activateTab: false };
       const job = target
         ? await target.call<unknown>("launch_control_job", launchArgs, `job:${input.requestId}`)
         : await invoke<unknown>("launch_control_job", launchArgs);

@@ -107,7 +107,7 @@ describe("Orkestrator control MCP server", () => {
           }
         | undefined;
       expect(tool?.description).toContain(
-        "Omit modelId and reasoningId to use the user's configured defaults",
+        "Omit agent, modelId and reasoningId to use the user's configured defaults",
       );
       expect(tool?.inputSchema?.properties?.modelId?.description).toContain(
         "Omit to use the user's configured default model",

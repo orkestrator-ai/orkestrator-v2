@@ -50,6 +50,7 @@ import { asNonBlankString } from "./commands-helpers.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
 import {
   actionHash,
+  coordinatorLaunchIdentity,
   requireCoordinatorConversation,
   withCoordinatorReceipt,
 } from "./coordinator-action-scope.js";
@@ -322,7 +323,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
 
   register(
     "launch_coordinator_node_environment",
-    async ({ scope, requestId, nodeId, input }, context) => {
+    async ({ scope, requestId, nodeId, input, agentDefaulted }, context) => {
       const caller = await identity(scope, context);
       const stableRequestId = asNonBlankString(requestId, "requestId");
       const target = await coordinatorNodeTarget(
@@ -341,7 +342,10 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
       }
       const baseBranch = input.delegationBaseBranch;
       const baseCommit = input.delegationBaseCommit;
-      const payloadHash = actionHash({ nodeId: target.nodeId, input });
+      const payloadHash = actionHash({
+        nodeId: target.nodeId,
+        input: coordinatorLaunchIdentity(input, agentDefaulted),
+      });
       return once(`${caller.coordinatorId}\0${stableRequestId}`, async () => {
         const receipt = await context.storage.coordinators.reserveCoordinatorWorkflowAssociation({
           id: randomUUID(),

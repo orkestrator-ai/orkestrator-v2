@@ -23,6 +23,7 @@ import {
   launchOptions,
   launchSelectionReport,
   launchSettingsTiers,
+  resolveLaunchAgent,
   type ControlMcpInvoker,
 } from "./control-shared-actions.js";
 
@@ -423,7 +424,8 @@ interface LaunchInput {
   projectId: string;
   environmentType: "local" | "containerized";
   name?: string;
-  agent: AgentPlatform;
+  /** Omitted: the saved default agent, resolved here; the public action needs one. */
+  agent?: AgentPlatform;
   modelId?: string;
   reasoningId?: string;
   fastMode?: boolean;
@@ -434,7 +436,33 @@ interface LaunchInput {
   baseCommit?: string;
 }
 
-export async function operatorLaunchEnvironment(caller: ControlMcpCaller, input: LaunchInput) {
+/**
+ * The agent an operator launch runs. `environment.launch` and `session.start`
+ * take an explicit agent, so an omitted one is resolved here, from the same
+ * settings the coordinator path reads, on the node this caller targets.
+ */
+async function operatorLaunchAgent(
+  caller: ControlMcpCaller,
+  projectId: string,
+  requested: AgentPlatform | undefined,
+  environment?: JsonRecord,
+): Promise<AgentPlatform> {
+  if (requested) return requested;
+  try {
+    const read = caller.readInvoke ?? caller.invoke;
+    return (await resolveLaunchAgent(read, projectId, undefined, environment)).agent;
+  } catch (error) {
+    throw new Error(
+      `The default agent could not be read (${error instanceof Error ? error.message : "unknown error"}); pass agent explicitly`,
+    );
+  }
+}
+
+export async function operatorLaunchEnvironment(caller: ControlMcpCaller, launch: LaunchInput) {
+  const input = {
+    ...launch,
+    agent: await operatorLaunchAgent(caller, launch.projectId, launch.agent),
+  };
   const envelope = await runPublicAction(
     caller,
     "environment.launch",
@@ -477,7 +505,8 @@ export async function operatorLaunchEnvironment(caller: ControlMcpCaller, input:
 interface JobInput {
   requestId: string;
   environmentId: string;
-  agent: AgentPlatform;
+  /** Omitted: the environment's default agent, resolved here. */
+  agent?: AgentPlatform;
   modelId?: string;
   reasoningId?: string;
   fastMode?: boolean;
@@ -486,10 +515,20 @@ interface JobInput {
   prompt: string;
 }
 
-export async function operatorLaunchJob(caller: ControlMcpCaller, input: JobInput) {
+export async function operatorLaunchJob(caller: ControlMcpCaller, job: JobInput) {
   const environment = await dispatchAs<{ projectId: string }>(caller, "environment.get", {
-    environmentId: input.environmentId,
+    environmentId: job.environmentId,
   });
+  let agent = job.agent;
+  if (!agent) {
+    if (!environment.ok) return failure(environment);
+    const read = caller.readInvoke ?? caller.invoke;
+    const record = await read<unknown>("get_environment", { environmentId: job.environmentId })
+      .then((value) => (value && typeof value === "object" ? (value as JsonRecord) : undefined))
+      .catch(() => undefined);
+    agent = await operatorLaunchAgent(caller, environment.result.projectId, undefined, record);
+  }
+  const input = { ...job, agent };
   const envelope = await runPublicAction(
     caller,
     "session.start",

@@ -7,7 +7,7 @@ import { isHostIdle } from "@orkestrator/protocol/host-maintenance";
 import { BackendRuntime } from "./backend-runtime.js";
 import type { CommandContext } from "./commands-context.js";
 import type { PtyProcess } from "./pty.js";
-import { setManagedGitHubCli } from "./github-cli-binary.js";
+import { GitHubCliSelection } from "./github-cli-binary.js";
 import { readRestartImpact, readToolStatus } from "./host-maintenance-readers.js";
 
 let root: string;
@@ -17,7 +17,6 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  setManagedGitHubCli(undefined);
   await rm(root, { recursive: true, force: true });
 });
 
@@ -101,6 +100,7 @@ test("tools report the managed version from their versioned directory", async ()
     toolchainBinDir: binDir,
     resourceRoot: path.join(root, "resources"),
     appRoot: path.join(root, "app"),
+    runtime: { gitHubCli: new GitHubCliSelection() },
   } as unknown as CommandContext;
   const tools = await readToolStatus(context, "latest");
   expect(tools.find((tool) => tool.name === "claude")).toEqual({
@@ -127,6 +127,7 @@ test("a grok on PATH is missing: the backend never runs it from PATH", async () 
     const context = {
       resourceRoot: path.join(root, "resources"),
       appRoot: path.join(root, "app"),
+      runtime: { gitHubCli: new GitHubCliSelection() },
     } as unknown as CommandContext;
     const tools = await readToolStatus(context, "pinned");
     expect(tools.find((tool) => tool.name === "grok")?.source).toBe("missing");
@@ -174,14 +175,19 @@ test("gh-latest reports its actual installed version, and unknown layouts never 
   const executable = path.join(root, "toolchains", "gh-latest", "2.200.0", "gh");
   await mkdir(path.dirname(executable), { recursive: true });
   await writeFile(executable, "#!/bin/sh\n");
-  setManagedGitHubCli(executable);
-  const context = { resourceRoot: root, appRoot: root } as unknown as CommandContext;
+  const gitHubCli = new GitHubCliSelection();
+  gitHubCli.select(executable);
+  const context = {
+    resourceRoot: root,
+    appRoot: root,
+    runtime: { gitHubCli },
+  } as unknown as CommandContext;
   expect(
     (await readToolStatus(context, "latest")).find((tool) => tool.name === "gh")?.installedVersion,
   ).toBe("2.200.0");
   const unknown = path.join(root, "gh");
   await writeFile(unknown, "#!/bin/sh\n");
-  setManagedGitHubCli(unknown);
+  gitHubCli.select(unknown);
   expect(
     (await readToolStatus(context, "latest")).find((tool) => tool.name === "gh")?.installedVersion,
   ).toBeNull();

@@ -1,7 +1,7 @@
 # Tmux orphan reconciliation intermittently leaves the installed hook
 
 - **ID:** 0245
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-15
 - **Test:** `Electron tmux environment teardown > orphan reconciliation retains failed managed stops and cleans hooks when tmux has no server`
 - **File:** `apps/backend/tests/tmux-commands-teardown.test.ts:359`
@@ -27,3 +27,36 @@
   passed, exit 0, 1.2 s.
 - Artifact: `/tmp/orkestrator-test-run.1QvzPF/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
   Cause remains unconfirmed; no implementation, assertion, timeout or skip changed.
+
+
+## Root cause and fix — 2026-11-05
+
+- **Cause:** when the fake tmux runtime (`apps/backend/tests/tmux-test-harness.ts`)
+  has no sessions, its `list-sessions` prints `no server running`, and
+  `confirmTmuxSessionGone` (`apps/backend/src/core/tmux-shared.ts`) then runs a
+  real `ps -A -o pid=,comm=` census. Any tmux server on the host made that
+  census report a live tmux, so `cleanupEnvironmentTmux` treated teardown as
+  incomplete and rejected, leaving the installed hook in place. The case
+  passed or failed according to whether a tmux server happened to be running
+  on the host at that moment, which is why isolated reruns passed.
+- **Demonstration:** on macOS with a dev profile's tmux server running (pid
+  60760), `bun test --cwd apps/backend ./tests/tmux-commands-teardown.test.ts
+  ./tests/tmux-commands-mcp.test.ts` failed the same five cases every time
+  (27 passed, 5 failed). The four `Electron tmux environment teardown` cases
+  (0236, 0245, 0786 and `environment teardown kills live sessions, restores
+  settings and removes the runtime root`) and `does not hold the tmux install
+  lock while first-prompt naming is prepared` all failed. With a `ps` on PATH
+  that printed no tmux, those five passed. Only the private-tmux case then
+  failed, because it needs the real `ps -p`.
+- **Fix:** `a7cce0038` adds a `ps` shim to the fake runtime's PATH. It answers
+  only the `-A -o pid=,comm=` census, with no tmux in it, and passes every
+  other call to the real `ps`. `tmux-lifecycle-fixture.ts` already scoped its
+  census this way.
+- **Verification:** with the host tmux server still running, all ten suites
+  that import the harness passed together:
+  `mise run test:logged -- --name tmux-harness-r4 -- bun test --cwd apps/backend
+  <the ten tmux-*.test.ts files> --preload ../../tests/setup-node.ts
+  --parallel=4 --only-failures`, exit 0 in 18.0 s.
+- **Not proved:** the earlier Linux and aggregate occurrences above were not
+  re-run with a census log. They match this cause, but each one was not shown
+  to have had a host tmux server running.

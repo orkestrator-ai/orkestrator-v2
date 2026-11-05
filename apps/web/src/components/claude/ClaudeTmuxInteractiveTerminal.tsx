@@ -145,6 +145,8 @@ export function ClaudeTmuxInteractiveTerminal({
       },
       cursorBlink: true,
       cursorStyle: "block",
+      // Option+drag selects on macOS even when tmux has mouse reporting on.
+      macOptionClickForcesSelection: true,
       fontFamily: `"${terminalAppearance.fontFamily}", "Fira Code", "Menlo", "DejaVu Sans Mono", "Courier New", monospace`,
       fontSize: terminalAppearance.fontSize,
       lineHeight: 1.2,

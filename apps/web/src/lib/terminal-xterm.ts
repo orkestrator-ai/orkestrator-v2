@@ -49,6 +49,10 @@ export const createXtermTerminal: CreateXtermTerminal = (appearance, scrollback,
     linkHandler: { activate: activateLink },
     cursorBlink: true,
     cursorStyle: "block",
+    // A program with mouse reporting on (tmux `mouse on`, full-screen TUIs)
+    // receives every drag. Elsewhere Shift+drag still selects; on macOS xterm
+    // offers Option+drag only when this is set.
+    macOptionClickForcesSelection: true,
     fontFamily: `"${fontFamily}", "Fira Code", "Menlo", "DejaVu Sans Mono", "Courier New", monospace`,
     fontSize,
     lineHeight: 1.2,

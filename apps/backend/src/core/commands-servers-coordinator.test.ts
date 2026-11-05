@@ -414,6 +414,7 @@ const captured = {
   policy: process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY,
   mcpUrl: process.env.ORKESTRATOR_AGENT_MCP_URL,
   mcpToken: process.env.ORKESTRATOR_AGENT_MCP_TOKEN,
+  vendorDebug: ["DEBUG", "RUST_LOG", "DEBUG_CLAUDE_AGENT_SDK"].filter((name) => name in process.env),
 };
 await mkdir(process.env.CURSOR_BRIDGE_STATE_DIR, { recursive: true });
 await Bun.write(process.env.CURSOR_BRIDGE_STATE_DIR + "/captured.json", JSON.stringify(captured));
@@ -480,7 +481,22 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
     cleanupRuntimeId = runtimeId;
     cleanupKind = "cursor";
 
-    const started = await startLocalServerUnlocked(runtimeId, context, "cursor");
+    // A vendor debug switch exported in the launching shell stays out of the
+    // bridge: its output would bypass every log level.
+    const vendorDebug = { DEBUG: "*", RUST_LOG: "trace", DEBUG_CLAUDE_AGENT_SDK: "1" };
+    const previousVendorDebug = Object.fromEntries(
+      Object.keys(vendorDebug).map((name) => [name, process.env[name]]),
+    );
+    Object.assign(process.env, vendorDebug);
+    let started: Awaited<ReturnType<typeof startLocalServerUnlocked>>;
+    try {
+      started = await startLocalServerUnlocked(runtimeId, context, "cursor");
+    } finally {
+      for (const [name, value] of Object.entries(previousVendorDebug)) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
     expect(started).toMatchObject({ wasRunning: false, port: expect.any(Number) });
 
     const capturedPath = path.join(
@@ -493,6 +509,7 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
       policy: "coordinator-read-only",
       mcpUrl: "http://127.0.0.1:1234/mcp",
       mcpToken: "scoped-token",
+      vendorDebug: [],
     });
   });
 
@@ -708,10 +725,19 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
       "before becoming healthy",
     );
     expect(revoke).toHaveBeenCalledWith(snapshot.workspace.id, conversation.id);
-    expect(await storage.coordinators.getCoordinatorWorkspace(project.id)).toMatchObject({
-      lifecycleState: "error",
-      lastStartupError: expect.stringContaining("before becoming healthy"),
-    });
+    // The conversation that failed carries it. The workspace, which an older
+    // client reads as "the coordinator is down", stays up for everything else.
+    const failed = (await storage.coordinators.getCoordinatorWorkspace(project.id))!;
+    expect(failed.lifecycleState).toBe("ready");
+    expect(failed.lastStartupError).toBeUndefined();
+    expect(failed.conversations[0]!.startupError).toContain("before becoming healthy");
+    expect(failed.conversations[0]!.bridgePort).toBeUndefined();
+
+    // Nothing starts its bridge again until the user retries.
+    await expect(startLocalServerUnlocked(runtimeId, context, "codex")).rejects.toThrow(
+      "could not start",
+    );
+    expect(context.runtime.localServers.process(`codex:${runtimeId}`)).toBeUndefined();
   });
 
   test("revokes a coordinator credential when process spawn fails synchronously", async () => {
@@ -830,6 +856,21 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
     );
     cleanupContext = context;
     cleanupRuntimeId = runtimeId;
+    // A legacy workspace error is an admission fence, not a state that a
+    // successful bridge can silently overwrite. Headless callers must ensure.
+    await storage.coordinators.mutateCoordinatorWorkspace(project.id, (current) =>
+      current
+        ? { ...current, lifecycleState: "error", lastStartupError: "legacy failure" }
+        : current,
+    );
+    await expect(startLocalServerUnlocked(runtimeId, context, "codex")).rejects.toThrow(
+      "Coordinator workspace is not ready",
+    );
+    expect(context.runtime.localServers.process(`codex:${runtimeId}`)).toBeUndefined();
+    expect((await storage.coordinators.getCoordinatorWorkspace(project.id))?.lifecycleState).toBe(
+      "error",
+    );
+    await coordinator.ensure(project.id);
     await startLocalServerUnlocked(runtimeId, context, "codex");
     const isolatedHome = path.join(
       storage.getDataDir(),

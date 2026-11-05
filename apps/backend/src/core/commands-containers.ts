@@ -1,5 +1,6 @@
 import {
   boundedBackgroundLaunch,
+  boundedLaunchWithPrivateEnv,
   boundedTailCommand,
   boundDiagnosticTail,
   keepPreviousLogCommand,
@@ -7,14 +8,11 @@ import {
 } from "./container-log-bounds.js";
 import { persistentStateExports } from "./container-state-layout.js";
 import { mkdir, writeFile, rm } from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { randomBytes } from "node:crypto";
 import {
   CLAUDE_BRIDGE_PORT,
   CODEX_BRIDGE_PORT,
   CURSOR_BRIDGE_PORT,
-  DOCKER_IMAGE,
   DOCKER_LABEL_APP,
   DOCKER_LABEL_APP_VALUE,
   DOCKER_LABEL_ENVIRONMENT_ID,
@@ -57,9 +55,22 @@ import {
   OPENCODE_GITHUB_ENV_PLUGIN_FINGERPRINT_FILE,
   OPENCODE_GITHUB_ENV_PLUGIN_SOURCE,
   OPENCODE_GITHUB_ENV_PLUGIN_FINGERPRINT,
+  OPENCODE_CREDENTIAL_PLUGIN_PATH,
+  buildOpenCodeCredentialPluginSource,
 } from "./agent-credential-files.js";
-import { BRIDGE_TOKEN_PATTERN, retryableBridgeStartupError } from "./local-server-runtime.js";
-import { resolveAnthropicApiKey, resolveCursorApiKey } from "./commands-validation.js";
+import { retryableBridgeStartupError } from "./local-server-runtime.js";
+import { mintBridgeToken } from "@orkestrator/protocol/node/bridge-credential";
+import {
+  CONTAINER_TOKEN_FILES,
+  containerBridgeLaunch,
+  launchContainerScript,
+  readContainerBridgeToken,
+  removeContainerBridgeCredential,
+  type ContainerCredentialMode,
+  type ContainerScriptLaunch,
+} from "./container-bridge-credential.js";
+import { resolveAnthropicApiKey } from "./commands-validation.js";
+import { imageWithoutStagedInputsMessage, imageUnreadableMessage } from "./commands-error-text.js";
 import { quoteShell } from "./commands-agent-support.js";
 import {
   CLAUDE_BASH_MAX_TIMEOUT_ENV,
@@ -76,7 +87,6 @@ import {
 } from "./commands-project-files.js";
 import { dockerExec } from "./commands-container-exec.js";
 import {
-  dockerExecDetached,
   checkHttpHealth,
   isHttpServerReachable,
   waitForHealth,
@@ -92,10 +102,11 @@ import type { LocalServerKind } from "./local-server-runtime.js";
 import type { CommandContext } from "./commands-context.js";
 import { ContainerLifecycleError, findOperationContainers } from "./container-lifecycle-service.js";
 import {
+  configuredImageRef,
   detectDockerTopology,
-  imageCapabilities,
   imageStateFormats,
   imageWritesVolumeStorage,
+  readImageManifest,
 } from "./docker-image.js";
 import { storageMountArguments } from "./container-storage.js";
 import { readSeedManifest, seedFilesDir } from "./nodes/index.js";
@@ -130,8 +141,6 @@ import {
 import {
   STAGED_INPUT_RELAY_DIR,
   defaultInputSourceRoots,
-  grokStagingConfig,
-  grokStagingHome,
   stagePortableInputs,
   stagedInputMountArguments,
   withSharedSkillsInput,
@@ -141,7 +150,9 @@ import type { ContainerStorageIdentity } from "@orkestrator/protocol/container-l
 import {
   imageCopiesCursorMcpConfig,
   imageCopiesSharedSkills,
+  imageDeclaresStagedInputs,
   imageRelaysStagedInputs,
+  type ImageManifest,
 } from "@orkestrator/protocol/image-manifest";
 import { assertContainerNotDraining, ensureCurrentBootReady } from "./container-readiness.js";
 import { activeAgentAccountInputRoots } from "./agent-accounts-containers.js";
@@ -207,6 +218,39 @@ export class AmbiguousContainerCreateError extends Error {
   }
 }
 
+/**
+ * The image a new container is created from, once it is known to take staged
+ * inputs. Older images expected whole host agent homes bound into them, and no
+ * new container gets those: refused before anything is created. An existing
+ * runtime never comes through here, so it keeps its mounts until it is rebuilt.
+ */
+async function requireStagedInputsImage(
+  imageId: string | undefined,
+  context: CommandContext,
+): Promise<{ imageId: string; capabilities: ImageManifest["capabilities"] }> {
+  const named = imageId
+    ? `${configuredImageRef(context)} (${imageId.replace(/^sha256:/, "").slice(0, 12)})`
+    : configuredImageRef(context);
+  const read = imageId ? await readImageManifest(imageId, context) : null;
+  if (!imageId || !read || read.kind === "unavailable") {
+    throw new ContainerLifecycleError("daemon-unavailable", imageUnreadableMessage(named));
+  }
+  if (read.kind === "invalid") {
+    throw new ContainerLifecycleError(
+      "capability-unavailable",
+      `The environment image ${named} has a manifest that cannot be used by this Orkestrator version. Nothing was created. Update Orkestrator or rebuild the image with a supported manifest, then retry.`,
+    );
+  }
+  const capabilities = read.kind === "manifest" ? read.manifest.capabilities : null;
+  if (!capabilities || !imageDeclaresStagedInputs(capabilities)) {
+    throw new ContainerLifecycleError(
+      "capability-unavailable",
+      imageWithoutStagedInputsMessage(named),
+    );
+  }
+  return { imageId, capabilities };
+}
+
 export async function createDockerContainer(
   environment: Environment,
   context: CommandContext,
@@ -257,17 +301,6 @@ export async function createDockerContainer(
       topology.remediation ?? "The Docker daemon is not local to this backend.",
     );
   }
-  // Persistent storage is mounted read-write only into an image that declares
-  // it writes that format; an older image could corrupt newer state.
-  if (
-    identity.storage?.format === "volume-v1" &&
-    !imageWritesVolumeStorage(await imageStateFormats(identity.imageId, context))
-  ) {
-    throw new ContainerLifecycleError(
-      "unsupported-format",
-      "This image cannot write the environment's persistent storage format. Nothing was created; use the image the environment was built with or a newer one.",
-    );
-  }
   // An explicit budget the daemon cannot enforce is refused, never passed
   // through: a rootless daemon without cgroups records it and enforces
   // nothing. The built-in default leaves such an axis off instead. The
@@ -275,33 +308,43 @@ export async function createDockerContainer(
   const capacity = await dockerAdmissionCapacity(topology);
   const resourceLimits = resolveResourceLimits(environment, config.global, capacity).limits;
   refuseUnenforceableLimits(resourceLimits, capacity, "Nothing was created.");
+  const { imageId, capabilities: imageCapabilitySet } = await requireStagedInputsImage(
+    identity.imageId,
+    context,
+  );
+  // Persistent storage is mounted read-write only into an image that declares
+  // it writes that format; an older image could corrupt newer state.
+  if (
+    identity.storage?.format === "volume-v1" &&
+    !imageWritesVolumeStorage(await imageStateFormats(imageId, context))
+  ) {
+    throw new ContainerLifecycleError(
+      "unsupported-format",
+      "This image cannot write the environment's persistent storage format. Nothing was created; use the image the environment was built with or a newer one.",
+    );
+  }
   const runtimeGeneration = identity.runtimeGeneration ?? 1;
   const runtimeName = dockerContainerRuntimeName(dockerOwner, environment.id, runtimeGeneration);
-  const imageCapabilitySet = identity.imageId
-    ? await imageCapabilities(identity.imageId, context)
-    : null;
   // A runtime that will clone reads the project's Git mirror, read-only, when
   // its image knows how; an older image never sees the mount or the variable.
   // A stored local path is no remote a container could clone from.
   const gitMirrorArguments =
     !identity.reusesWorkspace &&
-    (imageCapabilitySet?.["git-mirror"] ?? 0) >= 1 &&
+    (imageCapabilitySet["git-mirror"] ?? 0) >= 1 &&
     (agentTestLocalGitRemote || isGitRemoteUrl(project.gitUrl))
       ? await gitMirrorContainerArguments(context.storage.getDataDir(), project)
       : [];
-  const networkPolicy = identity.imageId
-    ? containerNetworkPolicy(
-        imageCapabilitySet?.["network-policy"] ?? 0,
-        process.env.ORKESTRATOR_NETWORK_POLICY,
-      )
-    : 1;
+  const networkPolicy = containerNetworkPolicy(
+    imageCapabilitySet["network-policy"] ?? 0,
+    process.env.ORKESTRATOR_NETWORK_POLICY,
+  );
   // Where the firewall runs: in an egress gateway that owns the namespace
   // (the workload gets no capability), in the workload itself (NET_ADMIN), or
   // nowhere in full mode.
   const enforcement = egressEnforcement({
     networkMode: environment.networkAccessMode === "full" ? "full" : "restricted",
     networkPolicy,
-    imageGatewayVersion: imageCapabilitySet?.["egress-gateway"] ?? 0,
+    imageGatewayVersion: imageCapabilitySet["egress-gateway"] ?? 0,
   });
   const addHostGatewayAlias = shouldAddDockerHostGatewayAlias(process.platform, topology.kind);
   // Rootless: host-gateway is inside RootlessKit's namespace. Name its host
@@ -336,10 +379,7 @@ export async function createDockerContainer(
     "/workspace",
     // An image that implements the drain contract runs under Docker's init,
     // which forwards signals and reaps orphaned exec descendants.
-    ...(identity.imageId &&
-    (await imageCapabilities(identity.imageId, context))?.["graceful-shutdown"]
-      ? ["--init"]
-      : []),
+    ...(imageCapabilitySet["graceful-shutdown"] ? ["--init"] : []),
     // An in-container firewall needs NET_ADMIN. Full access never runs one,
     // and with an egress gateway the gateway holds the capability instead, so
     // nothing in the workload, root included, can change its rules.
@@ -403,14 +443,6 @@ export async function createDockerContainer(
     "TERM=xterm-256color",
   ];
 
-  // A staged-inputs image never needs the Cursor key in its immutable
-  // creation environment: the bridge launch reads the owner-only file the
-  // backend syncs, and nothing else in the container uses it.
-  const stagedInputCapable = Boolean(
-    identity.imageId && (await imageCapabilities(identity.imageId, context))?.["staged-inputs"],
-  );
-  const dockerEnvironment: NodeJS.ProcessEnv = { ...process.env };
-  const redactValues: string[] = [];
   // Credentials go only to providers that are enabled, authorized for
   // agent-test profiles and not revoked for this environment.
   const inputProviders = selectedInputProviders(
@@ -423,18 +455,6 @@ export async function createDockerContainer(
   const anthropicApiKey = allowClaudeCredentials
     ? resolveAnthropicApiKey(config.global).apiKey
     : undefined;
-  // Cursor's SDK accepts a headless API key in containers. The host-environment
-  // fallback inside `resolveCursorApiKey` is deliberate for headless runs, and
-  // the same helper reports its `source` to Settings so an inherited key is
-  // never forwarded invisibly.
-  const { apiKey: cursorApiKey } = !inputProviders.has("cursor")
-    ? { apiKey: undefined }
-    : resolveCursorApiKey(config.global);
-  if (cursorApiKey && !stagedInputCapable) {
-    dockerEnvironment.CURSOR_API_KEY = cursorApiKey;
-    redactValues.push(cursorApiKey);
-    args.push("-e", "CURSOR_API_KEY");
-  }
   const opencodeModel = config.global.agentSettings?.platforms?.opencode?.model;
   if (opencodeModel) args.push("-e", `OPENCODE_MODEL=${opencodeModel}`);
   let allowedDomainsValue = "";
@@ -445,46 +465,40 @@ export async function createDockerContainer(
     // environment that runs neither Cursor nor Grok keeps exactly the allowlist
     // the user configured; widening it would quietly undo their isolation.
     const domains = containerAllowedDomains(environment, config, networkPolicy);
-    const explicitNone = Boolean(identity.imageId && imageCapabilitySet?.["network-refresh"]);
+    const explicitNone = Boolean(imageCapabilitySet["network-refresh"]);
     allowedDomainsValue = allowedDomainsArgument(domains, explicitNone);
     args.push("-e", "NETWORK_MODE=restricted", "-e", `ALLOWED_DOMAINS=${allowedDomainsValue}`);
   }
 
-  const bindIfExists = async (source: string, target: string, readonly = true) => {
-    if (await pathExists(source)) args.push("-v", `${source}:${target}${readonly ? ":ro" : ""}`);
-  };
-  // Portable agent inputs. A staged-inputs image gets only the allowlisted
-  // files of enabled providers, copied into a private per-environment
-  // revision; older images keep the read-only home mounts their entrypoint
-  // expects. A running legacy container keeps its mounts until it is rebuilt.
-  // There is no switch back to home mounts for a capable image: they exposed
-  // whole host agent homes and put the Anthropic key in `docker inspect`.
-  const stagingCapabilities = identity.imageId
-    ? await imageCapabilities(identity.imageId, context)
-    : null;
+  // Portable agent inputs: only the allowlisted files of enabled providers,
+  // copied into a private per-environment revision. Credentials never go in the
+  // container's immutable environment, where `docker inspect` would show them;
+  // the Cursor key reaches the bridge through the owner-only file the backend
+  // syncs.
   // An entrypoint older than Cursor's copy would ignore `/cursor-config`, and
   // staging it anyway would report Cursor's MCP servers as delivered.
   // Likewise an entrypoint older than the shared-skills copy would ignore
   // `/agents-skills`.
   const stagedProviders = withSharedSkillsInput(
-    imageCopiesCursorMcpConfig(stagingCapabilities)
+    imageCopiesCursorMcpConfig(imageCapabilitySet)
       ? inputProviders
       : new Set([...inputProviders].filter((provider) => provider !== "cursor")),
-    imageCopiesSharedSkills(stagingCapabilities),
+    imageCopiesSharedSkills(imageCapabilitySet),
   );
-  const stagedInputs = stagingCapabilities?.["staged-inputs"]
-    ? await stagePortableInputs(context.storage.getDataDir(), environment.id, stagedProviders, {
-        ...defaultInputSourceRoots(context.runtimeFlavor, AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV),
-        ...(await activeAgentAccountInputRoots(context)),
-        includeClaudeCredentials: allowClaudeCredentials,
-      })
-    : null;
-  if (stagedInputs && topology.rootless && !imageRelaysStagedInputs(stagingCapabilities)) {
-    dockerLog.warn("portable-inputs.relay-missing", {
-      imageId: identity.imageId?.slice(0, 19) ?? null,
-    });
+  const stagedInputs = await stagePortableInputs(
+    context.storage.getDataDir(),
+    environment.id,
+    stagedProviders,
+    {
+      ...defaultInputSourceRoots(context.runtimeFlavor, AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV),
+      ...(await activeAgentAccountInputRoots(context)),
+      includeClaudeCredentials: allowClaudeCredentials,
+    },
+  );
+  if (topology.rootless && !imageRelaysStagedInputs(imageCapabilitySet)) {
+    dockerLog.warn("portable-inputs.relay-missing", { imageId: imageId.slice(0, 19) });
   }
-  if (anthropicApiKey && stagedInputs) {
+  if (anthropicApiKey) {
     const keyDir = path.join(stagedInputs.directory, "claude-config");
     await mkdir(keyDir, { recursive: true, mode: 0o700 });
     await writeFile(path.join(keyDir, ".orkestrator-anthropic-key"), anthropicApiKey, {
@@ -493,88 +507,12 @@ export async function createDockerContainer(
     if (!stagedInputs.mounts.some((mount) => mount.target === "/claude-config")) {
       stagedInputs.mounts.push({ source: keyDir, target: "/claude-config" });
     }
-  } else if (anthropicApiKey) {
-    dockerEnvironment.ANTHROPIC_API_KEY = anthropicApiKey;
-    redactValues.push(anthropicApiKey);
-    args.push("-e", "ANTHROPIC_API_KEY");
   }
-  if (stagedInputs) {
-    args.push(
-      ...stagedInputMountArguments(stagedInputs),
-      "--label",
-      `${DOCKER_LABEL_INPUTS_REVISION}=${stagedInputs.revision}`,
-    );
-  } else {
-    const home = os.homedir();
-    const agentTestHostHome = process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME?.trim();
-    if (context.runtimeFlavor !== "agent-test" || context.credentialSources?.has("claude")) {
-      const claudeConfigDir =
-        context.runtimeFlavor === "agent-test"
-          ? process.env[AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV]?.trim()
-          : path.join(home, ".claude");
-      const claudeConfigFile =
-        context.runtimeFlavor === "agent-test" && agentTestHostHome
-          ? path.join(agentTestHostHome, ".claude.json")
-          : path.join(home, ".claude.json");
-      if (claudeConfigDir) await bindIfExists(claudeConfigDir, "/claude-config");
-      await bindIfExists(claudeConfigFile, "/claude-config.json");
-    }
-    if (context.runtimeFlavor !== "agent-test" || context.credentialSources?.has("codex")) {
-      const codexHome =
-        context.runtimeFlavor === "agent-test"
-          ? process.env.CODEX_HOME?.trim()
-          : path.join(home, ".codex");
-      if (codexHome) await bindIfExists(codexHome, "/codex-home");
-    }
-    // Grok writes session databases during startup, so its host directory cannot
-    // replace the writable container home. Mount portable inputs separately;
-    // entrypoint.sh copies a bounded allowlist.
-    // An agent-test run's Grok login is its own restricted copy, as for
-    // staged inputs (`grokStagingHome`).
-    if (context.runtimeFlavor !== "agent-test" || context.credentialSources?.has("grok")) {
-      const grokRoots = defaultInputSourceRoots(
-        context.runtimeFlavor,
-        AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV,
-      );
-      await bindIfExists(grokStagingHome(grokRoots), "/grok-home");
-      await bindIfExists(grokStagingConfig(grokRoots), "/grok-config");
-    }
-    // Pi has no vendor account: its credentials are the user's own provider keys
-    // in `~/.pi/agent/auth.json`, alongside the model cache and settings. The
-    // whole directory is mounted as a portable input rather than over the home,
-    // because the bridge writes session transcripts back into it — entrypoint.sh
-    // copies the bounded allowlist, exactly as it does for Cursor and Grok.
-    if (context.runtimeFlavor !== "agent-test" || context.credentialSources?.has("pi")) {
-      const piHome =
-        context.runtimeFlavor === "agent-test" && agentTestHostHome ? agentTestHostHome : home;
-      await bindIfExists(path.join(piHome, ".pi"), "/pi-config");
-    }
-    if (context.runtimeFlavor !== "agent-test" || context.credentialSources?.has("opencode")) {
-      const configHome =
-        context.runtimeFlavor === "agent-test"
-          ? process.env.XDG_CONFIG_HOME?.trim()
-          : path.join(home, ".config");
-      const dataHome =
-        context.runtimeFlavor === "agent-test"
-          ? process.env.XDG_DATA_HOME?.trim()
-          : path.join(home, ".local", "share");
-      const stateHome =
-        context.runtimeFlavor === "agent-test"
-          ? process.env.XDG_STATE_HOME?.trim()
-          : path.join(home, ".local", "state");
-      if (configHome) await bindIfExists(path.join(configHome, "opencode"), "/opencode-config");
-      if (dataHome) await bindIfExists(path.join(dataHome, "opencode"), "/opencode-data");
-      if (stateHome) {
-        await bindIfExists(
-          path.join(stateHome, "opencode", "model.json"),
-          "/opencode-state/model.json",
-        );
-      }
-    }
-    if (context.runtimeFlavor !== "agent-test") {
-      await bindIfExists(path.join(home, ".gitconfig"), "/tmp/gitconfig");
-    }
-  }
+  args.push(
+    ...stagedInputMountArguments(stagedInputs),
+    "--label",
+    `${DOCKER_LABEL_INPUTS_REVISION}=${stagedInputs.revision}`,
+  );
 
   // The project's own `.env`, `.env.local` and `opencode.json` are read and
   // checked now and copied into the stopped container below, never bound: a
@@ -639,7 +577,7 @@ export async function createDockerContainer(
         workloadName: runtimeName,
         environmentId: environment.id,
         owner: dockerOwner,
-        image: identity.imageId ?? context.dockerImage ?? DOCKER_IMAGE,
+        image: imageId,
         network,
         publishArguments: publishArgs,
         addHostGateway: addHostGatewayAlias,
@@ -675,15 +613,11 @@ export async function createDockerContainer(
       ...Object.entries(policyEnvironment).flatMap(([name, value]) => ["-e", `${name}=${value}`]),
     );
   }
-  args.push(identity.imageId ?? context.dockerImage ?? DOCKER_IMAGE);
+  args.push(imageId);
 
   let containerId: string;
   try {
-    const { stdout } = await runCommand("docker", args, {
-      env: dockerEnvironment,
-      timeoutMs: 120_000,
-      redactValues,
-    });
+    const { stdout } = await runCommand("docker", args, { timeoutMs: 120_000 });
     containerId = stdout.trim();
   } catch (error) {
     context.runtime.containerStates.invalidate();
@@ -727,12 +661,10 @@ export async function createDockerContainer(
   // so this launch does not wait for it.
   if (gitMirrorArguments.length > 0) scheduleProjectGitMirrorRefresh(context, project);
   if (inContainerGithubSeed) await copyGithubRangesSeed(containerId, inContainerGithubSeed);
-  if (stagedInputs) {
-    // Earlier revisions no container binds any more (recovery copies keep
-    // theirs) are removed. Best effort: a failure only leaves a revision for
-    // the next creation or the environment's deletion to remove.
-    void pruneEnvironmentInputRevisions(environment.id, context).catch(() => undefined);
-  }
+  // Earlier revisions no container binds any more (recovery copies keep
+  // theirs) are removed. Best effort: a failure only leaves a revision for
+  // the next creation or the environment's deletion to remove.
+  void pruneEnvironmentInputRevisions(environment.id, context).catch(() => undefined);
   try {
     await copyProjectSeedFilesIntoContainer(containerId, projectSeedFiles.accepted);
     if (project.localPath) {
@@ -757,7 +689,7 @@ export async function startContainerServer(
   port: number,
   processName: LocalServerKind,
   command: string,
-  redactValues?: ReadonlyArray<string | null | undefined>,
+  launch?: ContainerScriptLaunch,
 ): Promise<{ hostPort: number; wasRunning: boolean }> {
   assertContainerNotDraining(containerId);
   if (!(await isContainerRunning(containerId))) {
@@ -769,16 +701,14 @@ export async function startContainerServer(
   // Launching into a container Docker restarted since readiness was checked
   // would start the bridge before this boot's configuration exists.
   await ensureCurrentBootReady(containerId);
-  await dockerExecDetached(containerId, command, redactValues);
+  await launchContainerScript(containerId, command, launch);
   dockerLog.info("bridge.launched", { provider: processName, containerPort: port });
   await waitForLocalServerHealth(hostPort, processName).catch(async (error) => {
     const logFile = containerServerLogFile(processName);
-    const log = await dockerExec(
-      containerId,
-      boundedTailCommand(logFile),
-      undefined,
-      redactValues,
-    ).then(boundDiagnosticTail, () => "");
+    const log = await dockerExec(containerId, boundedTailCommand(logFile), undefined, [
+      ...Object.values(launch?.secrets ?? {}),
+      launch?.rootCredential?.token,
+    ]).then(boundDiagnosticTail, () => "");
     throw new Error(
       `${error instanceof Error ? error.message : String(error)}${log.trim() ? `\n${log.trim()}` : ""}`,
     );
@@ -806,13 +736,16 @@ export function containerServerLogFile(processName: LocalServerKind): string {
 /**
  * Start OpenCode behind its supported HTTP Basic authentication.
  *
- * The password is persisted inside the container with owner-only permissions,
- * matching the bridge-token lifecycle used by Claude and Codex. A healthy
- * passwordless process from an older build is replaced before its port is
- * handed to the renderer.
+ * The password is persisted inside the container, matching the bridge-token
+ * lifecycle (`container-bridge-credential.ts`). OpenCode has no verifier form, so
+ * in `verifier` mode it takes the password itself, in its environment alone, and
+ * its credential plugin takes it back from the agent's reach before a tool can
+ * run. A healthy passwordless process from an older build is replaced before its
+ * port is handed to the renderer.
  */
 export async function startContainerOpenCodeServer(
   containerId: string,
+  credentialMode: ContainerCredentialMode | (() => Promise<ContainerCredentialMode>) = "token-file",
 ): Promise<{ hostPort: number; wasRunning: boolean; authToken: string }> {
   assertContainerNotDraining(containerId);
   if (!(await isContainerRunning(containerId))) {
@@ -821,12 +754,7 @@ export async function startContainerOpenCodeServer(
   const hostPort = await getHostPort(containerId, OPENCODE_SERVER_PORT);
   if (!hostPort) throw new Error(`Container port ${OPENCODE_SERVER_PORT} is not mapped`);
 
-  const readPersistedPassword = async (): Promise<string | null> => {
-    const password = (
-      await dockerExec(containerId, "cat /tmp/opencode-server-password 2>/dev/null || true")
-    ).trim();
-    return BRIDGE_TOKEN_PATTERN.test(password) ? password : null;
-  };
+  const readPersistedPassword = () => readContainerBridgeToken(containerId, "opencode");
   const hasCurrentGitHubEnvironmentPlugin = async (): Promise<boolean> => {
     const fingerprint = (
       await dockerExec(
@@ -839,8 +767,9 @@ export async function startContainerOpenCodeServer(
   const replaceRunningServer = async (): Promise<void> => {
     await dockerExec(
       containerId,
-      `pkill -f '[o]pencode serve' || true; rm -f /tmp/opencode-server-password ${OPENCODE_GITHUB_ENV_PLUGIN_FINGERPRINT_FILE}`,
+      `pkill -f '[o]pencode serve' || true; rm -f ${CONTAINER_TOKEN_FILES.opencode} ${OPENCODE_GITHUB_ENV_PLUGIN_FINGERPRINT_FILE}`,
     );
+    await removeContainerBridgeCredential(containerId, "opencode").catch(() => undefined);
     await waitForHttpServerExit(hostPort);
   };
 
@@ -861,11 +790,15 @@ export async function startContainerOpenCodeServer(
   }
 
   await ensureCurrentBootReady(containerId);
-  const authToken = randomBytes(32).toString("base64url");
-  await dockerExecDetached(
+  const authToken = mintBridgeToken();
+  const mode = typeof credentialMode === "function" ? await credentialMode() : credentialMode;
+  const keepPasswordFromAgent = mode === "verifier";
+  const serve = `opencode serve --port ${OPENCODE_SERVER_PORT} --hostname 0.0.0.0`;
+  await launchContainerScript(
     containerId,
     `
     set -e
+    ${keepPasswordFromAgent ? "export -n OPENCODE_SERVER_PASSWORD" : ""}
     cd /workspace
     ${keepPreviousLogCommand("/tmp/opencode-serve.log")}
     umask 077
@@ -873,16 +806,30 @@ export async function startContainerOpenCodeServer(
     printf '%s' ${quoteShell(OPENCODE_GITHUB_ENV_PLUGIN_SOURCE)} > ${OPENCODE_GITHUB_ENV_PLUGIN_PATH}
     chmod 600 ${OPENCODE_GITHUB_ENV_PLUGIN_PATH}
     printf '%s' ${quoteShell(OPENCODE_GITHUB_ENV_PLUGIN_FINGERPRINT)} > ${OPENCODE_GITHUB_ENV_PLUGIN_FINGERPRINT_FILE}
-    printf '%s' ${quoteShell(authToken)} > /tmp/opencode-server-password
+    ${
+      keepPasswordFromAgent
+        ? `printf '%s' ${quoteShell(buildOpenCodeCredentialPluginSource("refuse-tools"))} > ${OPENCODE_CREDENTIAL_PLUGIN_PATH}
+    chmod 600 ${OPENCODE_CREDENTIAL_PLUGIN_PATH}
+    rm -f ${CONTAINER_TOKEN_FILES.opencode}`
+        : `printf '%s' "$OPENCODE_SERVER_PASSWORD" > ${CONTAINER_TOKEN_FILES.opencode}`
+    }
     source /usr/local/bin/orkestrator-runtime-env.sh 2>/dev/null || true
     orkestrator_source_runtime_env 2>/dev/null || true
     unset GITHUB_TOKEN GH_TOKEN GITHUB_PERSONAL_ACCESS_TOKEN
     export OPENCODE_SERVER_USERNAME=opencode
-    export OPENCODE_SERVER_PASSWORD=${quoteShell(authToken)}
     ${persistentStateExports("opencode")}
-    ${boundedBackgroundLaunch(`opencode serve --port ${OPENCODE_SERVER_PORT} --hostname 0.0.0.0`, "/tmp/opencode-serve.log")}
+    ${
+      keepPasswordFromAgent
+        ? boundedLaunchWithPrivateEnv(serve, "/tmp/opencode-serve.log", "OPENCODE_SERVER_PASSWORD")
+        : boundedBackgroundLaunch(serve, "/tmp/opencode-serve.log")
+    }
   `,
-    [authToken],
+    {
+      secrets: { OPENCODE_SERVER_PASSWORD: authToken },
+      ...(keepPasswordFromAgent
+        ? { rootCredential: { kind: "opencode" as const, token: authToken } }
+        : { removeRootCredential: "opencode" as const }),
+    },
   );
   dockerLog.info("bridge.launched", { provider: "opencode", containerPort: OPENCODE_SERVER_PORT });
   await waitForHealth(hostPort, "/global/health", 75, openCodeHealthHeaders(authToken)).catch(
@@ -910,9 +857,9 @@ export async function startContainerOpenCodeServer(
 /**
  * Starts the in-container Claude bridge behind a per-container auth token, with
  * the same persistence and recovery contract as `start_codex_server`: the token
- * lives in `/tmp/claude-bridge-token` so later starts can return it, and a
- * healthy bridge without a readable token (from before per-process
- * authentication) is replaced rather than served unauthenticated.
+ * stays in the container (`container-bridge-credential.ts`) so later starts can
+ * return it, and a healthy bridge without a readable token (from before
+ * per-process authentication) is replaced rather than served unauthenticated.
  *
  * `backgroundCommandLimitHours` only reaches a bridge this call starts: a
  * running bridge is not replaced for it, since that would stop the background
@@ -923,17 +870,13 @@ export async function startContainerClaudeServer(
   agentToolConnection?: AgentToolConnection,
   debugLogging = false,
   backgroundCommandLimitHours?: number,
+  credentialMode: ContainerCredentialMode | (() => Promise<ContainerCredentialMode>) = "token-file",
 ): Promise<{ hostPort: number; wasRunning: boolean; authToken: string }> {
   const bashMaxTimeout = claudeBashMaxTimeoutEnvValue(backgroundCommandLimitHours);
   const expectedAgentToolsFingerprint = agentToolConnection
     ? agentToolConnectionFingerprint(agentToolConnection)
     : null;
-  const readPersistedToken = async (): Promise<string | null> => {
-    const persistedToken = (
-      await dockerExec(containerId, "cat /tmp/claude-bridge-token 2>/dev/null || true")
-    ).trim();
-    return BRIDGE_TOKEN_PATTERN.test(persistedToken) ? persistedToken : null;
-  };
+  const readPersistedToken = () => readContainerBridgeToken(containerId, "claude");
   const hasCurrentAgentTools = async (): Promise<boolean> => {
     if (!expectedAgentToolsFingerprint) return true;
     const persisted = (
@@ -959,7 +902,11 @@ export async function startContainerClaudeServer(
     wasRunning: boolean;
     authToken: string;
   }> => {
-    const authToken = randomBytes(32).toString("base64url");
+    const credential = containerBridgeLaunch(
+      "claude",
+      typeof credentialMode === "function" ? await credentialMode() : credentialMode,
+    );
+    const authToken = credential.token;
     const started = await startContainerServer(
       containerId,
       CLAUDE_BRIDGE_PORT,
@@ -969,7 +916,7 @@ export async function startContainerClaudeServer(
       ${keepPreviousLogCommand("/tmp/claude-bridge.log")}
       umask 077
       mkdir -p /tmp/orkestrator-ai
-      printf '%s' ${quoteShell(authToken)} > /tmp/claude-bridge-token
+      ${credential.script}
       printf '%s' ${quoteShell(CLAUDE_GITHUB_ENV_FINGERPRINT)} > ${CLAUDE_GITHUB_ENV_FINGERPRINT_FILE}
       ${
         expectedAgentToolsFingerprint
@@ -988,19 +935,23 @@ export async function startContainerClaudeServer(
       unset GITHUB_TOKEN GH_TOKEN GITHUB_PERSONAL_ACCESS_TOKEN
       export PORT=${CLAUDE_BRIDGE_PORT}
       export HOSTNAME=0.0.0.0
-      export CLAUDE_BRIDGE_TOKEN=${quoteShell(authToken)}
       export ORKESTRATOR_BRIDGE_DEBUG=${debugLogging ? "1" : "0"}
       ${bridgeLogEnvironmentExports()}
       ${bashMaxTimeout ? `export ${CLAUDE_BASH_MAX_TIMEOUT_ENV}=${quoteShell(bashMaxTimeout)}` : ""}
       ${
         agentToolConnection
-          ? `export ${ORKESTRATOR_AGENT_MCP_URL_ENV}=${quoteShell(agentToolConnection.url)}
-      export ${ORKESTRATOR_AGENT_MCP_TOKEN_ENV}=${quoteShell(agentToolConnection.token)}`
+          ? `export ${ORKESTRATOR_AGENT_MCP_URL_ENV}=${quoteShell(agentToolConnection.url)}`
           : ""
       }
-      ${boundedBackgroundLaunch("bun /opt/claude-bridge/dist/index.js", "/tmp/claude-bridge.log")}
+      ${boundedBackgroundLaunch(`${credential.bun} /opt/claude-bridge/dist/index.js`, "/tmp/claude-bridge.log")}
     `,
-      [authToken, agentToolConnection?.token],
+      {
+        ...credential.launch,
+        secrets: {
+          ...credential.launch.secrets,
+          [ORKESTRATOR_AGENT_MCP_TOKEN_ENV]: agentToolConnection?.token,
+        },
+      },
     );
     if (!started.wasRunning) {
       await waitForHealth(

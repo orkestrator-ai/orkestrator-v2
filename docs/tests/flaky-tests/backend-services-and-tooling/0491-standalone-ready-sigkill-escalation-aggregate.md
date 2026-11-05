@@ -192,3 +192,27 @@ Passing raw output was deleted by the logged runner. Aggregate evidence:
 This repeats the recorded elapsed-time sensitivity; scheduling pressure is a
 hypothesis, not an established cause. No implementation, assertion, deadline or
 skip changed. The isolated pass does not make the aggregate green.
+
+
+## Pipe captures main merge — 2026-11-05
+
+Merge parents `ec331798a5024fe0d3e49aa104a5b122917814b8` and
+`50d4916ca4244adfc921629e33210a5539a9d74e`.
+`mise run test:logged -- --name merge-default-tests -- mise run test`
+failed `waitForStandaloneBackendReady > escalates SIGTERM to SIGKILL after the grace period`
+in `apps/backend/tests/standalone-ready.test.ts:90` (84.85 ms): the first
+signal assertion expected `["SIGTERM"]` and received `["SIGTERM", "SIGKILL"]`.
+Workspace reserved six slots, root one and bridges two; backend used the default
+worker plan. Backend totals: 15,663 pass, 132 skip, one fail across 1,051 files
+(255.33 s). The aggregate exited 1 after 391.0 s. Its other failure was a
+duplicate flake ID in the root register, corrected by renumbering the newer
+prompt-navigator record from 5105 to 6063; that owning check then passed.
+
+The unchanged complete readiness owner passed alone (exit 0, 0.5 s):
+`mise run test:logged -- --name merge-standalone-ready-rerun -- bun test --cwd apps/backend ./tests/standalone-ready.test.ts --parallel=1 --only-failures`.
+
+Evidence: `/tmp/orkestrator-test-run.0dK9ZA/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`;
+aggregate wrapper: `/tmp/orkestrator-test-run.4TSHXn/merge-default-tests.log.gz`.
+This repeats the early-SIGKILL assertion; scheduling sensitivity remains a
+hypothesis. No readiness implementation, assertion, timeout or skip changed.
+The isolated pass does not make the aggregate green.

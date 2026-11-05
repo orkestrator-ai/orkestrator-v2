@@ -4,6 +4,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { ArrowDown, History, Sparkles, Terminal as TerminalIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useVirtuosoScrollState } from "@/hooks";
+import { useHeldTranscriptPlace, useRestoreHeldPlace } from "@/hooks/useHeldTranscriptPlace";
+import { useAutoLoadEarlier } from "@/components/native-agent/useAutoLoadEarlier";
 import { Button } from "@/components/ui/button";
 import { NativeComposeDock } from "@/components/chat/NativeComposeDock";
 import { AgentThinkingIndicator } from "@/components/chat/AgentThinkingIndicator";
@@ -20,7 +22,7 @@ import {
   answerPreToolUse,
   getPendingHooks,
   getStatus,
-  getTranscript,
+  getTranscriptPage,
   holdHook,
   interruptSession,
   replyHook,
@@ -34,6 +36,7 @@ import {
   type HookEventKind,
   type TmuxPendingHook,
   type TmuxEvent,
+  type TranscriptPage,
 } from "@/lib/claude-tmux-client";
 import type { AgentInteractionApplyOutcome } from "@orkestrator/protocol/agent-interactions";
 import { buildTmuxPromptWithAttachments } from "@orkestrator/protocol/tmux-prompt";
@@ -52,6 +55,7 @@ import {
   createClaudeTmuxStateKey,
   migrateLegacyClaudeTmuxState,
   useClaudeTmuxStore,
+  visibleTmuxMessages,
   type TmuxPendingElicitation,
   type TmuxPendingPermission,
   type TmuxPendingPlan,
@@ -63,6 +67,7 @@ import {
   findPreviousNativeMessage,
   normalizeClaudeMessagesForDisplay,
 } from "@/lib/chat/native-message-adapters";
+import { presentPeerMailRows } from "@/lib/chat/client-only-messages";
 import { resolveCatalogModelLabel } from "@/lib/chat/model-label";
 import { pinNativeAgentParts } from "@/lib/chat/native-agent-pinning";
 import { applyTmuxAgentUsageSummaries } from "@/lib/claude-tmux-usage";
@@ -80,6 +85,9 @@ import type { ClaudeTmuxData } from "@/types/paneLayout";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("web.claude-tmux");
+
+/** Every page of a tmux transcript is one bounded read, so automatic paging never waits. */
+const alwaysAvailable = () => true;
 
 interface Props {
   tabId: string;
@@ -169,6 +177,8 @@ export function ClaudeTmuxChatTab({
   const setRunning = useClaudeTmuxStore((s) => s.setRunning);
   const applyTranscriptLine = useClaudeTmuxStore((s) => s.applyTranscriptLine);
   const replaceTranscript = useClaudeTmuxStore((s) => s.replaceTranscript);
+  const applyTailPage = useClaudeTmuxStore((s) => s.applyTailPage);
+  const prependTranscriptPage = useClaudeTmuxStore((s) => s.prependTranscriptPage);
   const addPendingApproval = useClaudeTmuxStore((s) => s.addPendingApproval);
   const removePendingApproval = useClaudeTmuxStore((s) => s.removePendingApproval);
   const addPendingQuestion = useClaudeTmuxStore((s) => s.addPendingQuestion);
@@ -234,6 +244,7 @@ export function ClaudeTmuxChatTab({
   const [modeSwitching, setModeSwitching] = useState(false);
   const [planMode, setPlanMode] = useState(false);
   const [resumeDialogOpen, setResumeDialogOpen] = useState(false);
+  const [loadingEarlier, setLoadingEarlier] = useState(false);
   const promptControlBusyRef = useRef(false);
   const [backendHydrated, setBackendHydrated] = useState(false);
   const startedRef = useRef(false);
@@ -279,30 +290,35 @@ export function ClaudeTmuxChatTab({
     () => tabState?.observation.usage ?? [],
     [tabState?.observation.usage],
   );
+  const canLoadEarlier = typeof tabState?.earlierCursor === "string";
   const transcriptMessages = useMemo(
     () =>
       applyTmuxAgentUsageSummaries(
-        compactConsecutiveAssistantMessages(messages),
+        compactConsecutiveAssistantMessages(visibleTmuxMessages(messages, canLoadEarlier)),
         agentUsageSummaries,
       ),
-    [messages, agentUsageSummaries],
+    [messages, canLoadEarlier, agentUsageSummaries],
   );
   const displayMessages = useMemo(
-    () => pinNativeAgentParts(normalizeClaudeMessagesForDisplay(transcriptMessages)),
+    () =>
+      pinNativeAgentParts(
+        presentPeerMailRows(normalizeClaudeMessagesForDisplay(transcriptMessages)),
+      ),
     [transcriptMessages],
   );
   const hasMessageHistory = displayMessages.length > 0;
   const centerCompose =
     showStartScreen && !hasPendingHookCards && !hasMessageHistory && !running && !isThinking;
   const showAddressAll = Boolean(isReviewTab && running && !isThinking && messages.length > 0);
-  const { isAtBottom, scrollToBottom, virtuosoRef, scrollProps } = useVirtuosoScrollState({
-    isActive: isActive && !interactiveMode,
-    persistKey: `claude-tmux-${stateKey}`,
-    environmentId,
-    // Leaving for the interactive terminal and coming back keeps a detached
-    // reader's place; a follower catches up.
-    activation: "respect-intent",
-  });
+  const { isAtBottom, scrollToBottom, scrollToIndex, virtuosoRef, scrollProps } =
+    useVirtuosoScrollState({
+      isActive: isActive && !interactiveMode,
+      persistKey: `claude-tmux-${stateKey}`,
+      environmentId,
+      // Leaving for the interactive terminal and coming back keeps a detached
+      // reader's place; a follower catches up.
+      activation: "respect-intent",
+    });
   const queueLength = useClaudeTmuxStore(
     useCallback((state) => state.messageQueue.get(storeKey)?.length ?? 0, [storeKey]),
   );
@@ -382,9 +398,9 @@ export function ClaudeTmuxChatTab({
     sdkModels,
   ]);
 
-  // 0. Reconnect to any already-running backend session and replay the full
-  // transcript. backend events are only delivered to mounted listeners, so a
-  // tmux tab hidden behind another environment can miss transcript updates.
+  // 0. Reconnect to any already-running backend session and read the
+  // transcript's tail. backend events are only delivered to mounted listeners,
+  // so a tmux tab hidden behind another environment can miss transcript updates.
   useEffect(() => {
     let cancelled = false;
     setBackendHydrated(false);
@@ -398,11 +414,11 @@ export function ClaudeTmuxChatTab({
           const status = await getStatus(tabId, environmentId);
           if (cancelled) return;
 
-          let lines: Awaited<ReturnType<typeof getTranscript>> = [];
+          let page: TranscriptPage = { lines: [], earlierCursor: null };
           let hooks: TmuxPendingHook[] = [];
           if (status && status.environment_id === environmentId && status.session_id) {
-            [lines, hooks] = await Promise.all([
-              getTranscript(tabId, environmentId),
+            [page, hooks] = await Promise.all([
+              getTranscriptPage(tabId, environmentId),
               getPendingHooks(tabId, environmentId),
             ]);
             if (cancelled) return;
@@ -435,10 +451,17 @@ export function ClaudeTmuxChatTab({
             setFastModeEnabled(status.fast_mode);
 
             if (status.session_id) {
-              replaceTranscript(storeKey, lines);
-              for (const line of lines) {
-                if (line.type === "permission-mode" && typeof line.permissionMode === "string") {
-                  setPlanMode(line.permissionMode === "plan");
+              // A manual refresh is the authoritative rebuild, so it starts again
+              // from the tail rather than keeping what was paged in.
+              applyTailPage(storeKey, page, { retainHistory: refreshRequestId === 0 });
+              if (page.permissionMode !== undefined) {
+                setPlanMode(page.permissionMode === "plan");
+              } else {
+                // A backend that predates paging answers with every line instead.
+                for (const line of page.lines) {
+                  if (line.type === "permission-mode" && typeof line.permissionMode === "string") {
+                    setPlanMode(line.permissionMode === "plan");
+                  }
                 }
               }
               const hooksToRender = hooks.filter((hook) => !shouldAutoAllowPermissionHook(hook));
@@ -507,8 +530,62 @@ export function ClaudeTmuxChatTab({
     addPendingPermission,
     refreshRequestId,
     replaceTranscript,
+    applyTailPage,
     replacePendingHooks,
   ]);
+
+  const loadEarlierPage = useCallback(async () => {
+    const before = useClaudeTmuxStore.getState().tabs.get(storeKey)?.earlierCursor;
+    if (typeof before !== "string") return;
+    const page = await getTranscriptPage(tabId, environmentId, before);
+    if (page.expired) {
+      // The transcript was replaced under the cursor: start again from its tail.
+      const tail = await getTranscriptPage(
+        tabId,
+        environmentId,
+        undefined,
+        before.slice(0, before.lastIndexOf(":")),
+      );
+      if (tail.lines.length > 0) {
+        applyTailPage(storeKey, tail, { retainHistory: false });
+      } else {
+        // An unavailable file is not evidence that visible history was deleted.
+        prependTranscriptPage(storeKey, before, { lines: [], earlierCursor: null });
+      }
+      return;
+    }
+    prependTranscriptPage(storeKey, before, page);
+  }, [applyTailPage, environmentId, prependTranscriptPage, storeKey, tabId]);
+  const loadEarlierPlace = useHeldTranscriptPlace(storeKey);
+  useRestoreHeldPlace(loadEarlierPlace, displayMessages, scrollToIndex, loadingEarlier);
+  const loadEarlierAutomatically = useCallback(
+    async (scroller: HTMLElement | null) => {
+      // A page taken while following must leave the follow armed.
+      if (!scrollProps.controller.wantsFollow) {
+        loadEarlierPlace.hold(scroller, scrollProps.controller);
+      }
+      setLoadingEarlier(true);
+      try {
+        await loadEarlierPage();
+      } finally {
+        setLoadingEarlier(false);
+      }
+    },
+    [loadEarlierPage, loadEarlierPlace, scrollProps.controller],
+  );
+  // A reopen costs one bounded read, so history pages in only as the reader
+  // nears the top, not as the tab opens.
+  const autoLoadEarlierSentinel = useAutoLoadEarlier({
+    sessionKey: storeKey,
+    isActive: isActive && !interactiveMode,
+    settled: backendHydrated,
+    canLoadEarlier,
+    headId: messages[0]?.id,
+    loading: loadingEarlier,
+    available: alwaysAvailable,
+    openingPage: false,
+    load: loadEarlierAutomatically,
+  });
 
   // Rehydrate the authoritative backend-owned catalog even when no Claude
   // native tab has ever mounted for this environment.
@@ -1282,6 +1359,36 @@ export function ClaudeTmuxChatTab({
               messages={displayMessages}
               computeItemKey={(_index, message) => message.id}
               resolvePreviousMessage={findPreviousNativeMessage}
+              header={
+                canLoadEarlier ? (
+                  <div className="relative mx-auto flex max-w-3xl items-center justify-center px-2 py-3">
+                    {/* Out of flow, so it adds no gap to the header's layout. */}
+                    <div
+                      ref={autoLoadEarlierSentinel}
+                      aria-hidden="true"
+                      className="pointer-events-none absolute inset-x-0 top-0 h-px"
+                    />
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      disabled={loadingEarlier}
+                      onClick={(event) => {
+                        loadEarlierPlace.hold(
+                          event.currentTarget.closest<HTMLElement>("[data-virtuoso-scroller]"),
+                          scrollProps.controller,
+                        );
+                        setLoadingEarlier(true);
+                        void loadEarlierPage()
+                          .catch((e) => setError(`Failed to load earlier messages: ${String(e)}`))
+                          .finally(() => setLoadingEarlier(false));
+                      }}
+                    >
+                      {loadingEarlier ? "Loading…" : "Load earlier messages"}
+                    </Button>
+                  </div>
+                ) : undefined
+              }
               renderMessage={(_index, message, previousMessage) => (
                 <NativeMessage
                   message={message}

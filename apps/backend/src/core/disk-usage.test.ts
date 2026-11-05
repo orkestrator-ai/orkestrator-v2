@@ -7,8 +7,10 @@ import {
   findDevProfiles,
   getEnvironmentDiskUsage,
   listDiskUsageEnvironments,
+  listProjectGitMirrorUsage,
   measureEnvironmentDiskUsage,
   parseDuOutput,
+  runDu,
   summarizeEntries,
   type DiskUsageProbes,
 } from "./disk-usage.js";
@@ -386,6 +388,68 @@ test("overview projects local, container and home rows and excludes deleted proj
   expect(rows.find((row) => row.environmentId === "home")?.projectHome).toBe(true);
 });
 
+test("lists Git mirrors with their size, largest first, and names only live projects", async () => {
+  const root = await tempDir("ork-disk-mirrors-");
+  const service = new StorageService(root);
+  await service.init();
+  const small = await service.addProject(createProject("https://github.com/acme/small.git"));
+  const big = await service.addProject(createProject("https://github.com/acme/big.git"));
+  const empty = await service.addProject(createProject("https://github.com/acme/empty.git"));
+  const building = await service.addProject(createProject("https://github.com/acme/building.git"));
+  const mirrors = path.join(root, "git-mirrors");
+  const directory = (id: string) => path.join(mirrors, id);
+  await fs.mkdir(path.join(directory(small.id), "mount", "mirror.git"), { recursive: true });
+  await fs.mkdir(path.join(directory(big.id), "mount", "mirror.git"), { recursive: true });
+  await fs.mkdir(path.join(directory("gone"), "mount", "mirror.git"), { recursive: true });
+  // Only the bind source: this project has had no mirror built.
+  await fs.mkdir(path.join(directory(empty.id), "mount"), { recursive: true });
+  await fs.mkdir(path.join(directory(building.id), ".building-1", "mirror.git"), {
+    recursive: true,
+  });
+  const probes: DiskUsageProbes = {
+    du: fakeDu({
+      [directory(small.id)]: { ".": 10 },
+      [directory(big.id)]: { ".": 30 },
+      [directory("gone")]: { ".": 20 },
+    }),
+    containerSize: async () => null,
+    volumeSizes: async () => null,
+    profilesDirectory: () => null,
+  };
+
+  const rows = await listProjectGitMirrorUsage({ storage: service }, probes);
+
+  expect(rows.map((row) => [row.projectName, row.bytes])).toEqual([
+    [big.name, 30 * 1024],
+    [null, 20 * 1024],
+    [small.name, 10 * 1024],
+    [building.name, null],
+  ]);
+  expect(rows[0]?.path).toBe(directory(big.id));
+  expect(rows.some((row) => row.projectId === empty.id)).toBe(false);
+});
+
+test("no mirrors directory lists nothing", async () => {
+  const root = await tempDir("ork-disk-no-mirrors-");
+  const service = new StorageService(root);
+  await service.init();
+  expect(await listProjectGitMirrorUsage({ storage: service })).toEqual([]);
+});
+
+test("the real walk measures a mirror on disk", async () => {
+  const root = await tempDir("ork-disk-real-mirror-");
+  const service = new StorageService(root);
+  await service.init();
+  const project = await service.addProject(createProject("https://github.com/acme/a.git"));
+  const mirror = path.join(root, "git-mirrors", project.id, "mount", "mirror.git");
+  await fs.mkdir(mirror, { recursive: true });
+  await fs.writeFile(path.join(mirror, "pack"), Buffer.alloc(256 * 1024, 1));
+
+  const [row] = await listProjectGitMirrorUsage({ storage: service });
+
+  expect(row?.bytes).toBeGreaterThanOrEqual(256 * 1024);
+});
+
 test("container breakdown includes recovery copies and unique active and retained named volumes", async () => {
   const lifecycle = emptyContainerLifecycle();
   lifecycle.storage.volumes = [{ role: "workspace", name: "active-workspace" }];
@@ -434,4 +498,68 @@ test("container breakdown includes recovery copies and unique active and retaine
   expect(partial.primary.unavailable).toBeTruthy();
   probes.containerSize = async () => null;
   expect((await measureEnvironmentDiskUsage(env, probes)).totalBytes).toBeNull();
+});
+
+describe("runDu", () => {
+  async function fakeDuCommand(body: string): Promise<string> {
+    const command = path.join(await tempDir("ork-disk-usage-du-"), "du");
+    await fs.writeFile(command, `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+    return command;
+  }
+
+  test("measures a real directory", async () => {
+    const directory = await tempDir("ork-disk-usage-real-");
+    const sizes = parseDuOutput(await runDu(["-k", "-x", "-d", "1", directory]));
+    expect(sizes.has(directory)).toBe(true);
+  });
+
+  test("keeps what it could read when part of the tree was unreadable", async () => {
+    const command = await fakeDuCommand(`printf '4\\t/partial\\n'; exit 1`);
+    expect(await runDu([], { command })).toBe("4\t/partial\n");
+  });
+
+  test("rejects a failure that reported nothing", async () => {
+    await expect(runDu([], { command: await fakeDuCommand("exit 1") })).rejects.toThrow();
+  });
+
+  test("rejects a missing executable", async () => {
+    await expect(runDu([], { command: "ork-no-such-command-6060" })).rejects.toThrow();
+  });
+
+  test("rejects a killed walk, whose partial totals are too small", async () => {
+    const command = await fakeDuCommand(`printf '4\\t/partial\\n'; kill -KILL $$`);
+    await expect(runDu([], { command })).rejects.toThrow();
+  });
+
+  test("rejects a walk past its timeout, whatever it printed", async () => {
+    const command = await fakeDuCommand(`printf '4\\t/partial\\n'; exec sleep 30`);
+    await expect(runDu([], { command, timeoutMs: 100 })).rejects.toMatchObject({ timedOut: true });
+  });
+
+  test("rejects a walk past its output limit, also on a partial-read exit", async () => {
+    const command = await fakeDuCommand(`printf '4\\t/partial\\n'; exit 1`);
+    await expect(runDu([], { command, maxOutputBytes: 4 })).rejects.toMatchObject({
+      outputLimitExceeded: true,
+    });
+  });
+
+  test("a walk that fails measures as unknown, not as empty", async () => {
+    const worktree = await tempDir("ork-disk-usage-failed-");
+    const command = await fakeDuCommand("exit 1");
+    const usage = await measureEnvironmentDiskUsage(
+      {
+        id: "environment",
+        environmentType: "local",
+        worktreePath: worktree,
+      } as Environment,
+      {
+        du: (args) => runDu(args, { command }),
+        containerSize: async () => null,
+        volumeSizes: async () => null,
+        profilesDirectory: () => null,
+      },
+    );
+    expect(usage.primary.bytes).toBeNull();
+    expect(usage.primary.unavailable).toBe("The worktree could not be measured");
+  });
 });

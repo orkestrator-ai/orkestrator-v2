@@ -2157,7 +2157,7 @@ test("turn-end observation finishes before the same-edge prompt queue drain", as
   }
 });
 
-test("production activity wiring forwards only worker waiting/working edges and preserves the tab key", async () => {
+test("production activity wiring forwards worker waiting/idle/working edges and preserves the tab key", async () => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-worker-edges-"));
   const backend = new OrkestratorBackend({
     dataDir,
@@ -2179,12 +2179,14 @@ test("production activity wiring forwards only worker waiting/working edges and 
       owner: "environment",
     };
     const transition = internal.nativeAgents.options.onActivityTransition;
-    for (const state of ["waiting", "working"]) transition({ ...base, state });
-    for (const state of ["idle", "unknown"]) transition({ ...base, state });
+    for (const state of ["waiting", "idle", "waiting", "working"]) transition({ ...base, state });
+    for (const state of ["unknown"]) transition({ ...base, state });
     transition({ ...base, state: "waiting", owner: "coordinator" });
     transition({ ...base, state: "waiting", logicalSessionKey: "env-other:tab:two" });
     transition({ ...base, state: "waiting", logicalSessionKey: undefined });
     expect(note.mock.calls).toEqual([
+      [{ environmentId: "env:one", tabId: "tab:two", state: "waiting" }],
+      [{ environmentId: "env:one", tabId: "tab:two", state: "idle" }],
       [{ environmentId: "env:one", tabId: "tab:two", state: "waiting" }],
       [{ environmentId: "env:one", tabId: "tab:two", state: "working" }],
     ]);
@@ -2277,7 +2279,8 @@ test("production waiting-blocker wiring reads the worker's pending interactions"
   const internal = backend as unknown as {
     context: { storage: StorageService };
     nativeAgents: {
-      getProjection: (input: unknown) => Promise<{ messages: unknown[]; interactions: unknown[] }>;
+      getProjection: (input: unknown) => Promise<unknown>;
+      getSessionStateUpdate: (input: unknown) => Promise<unknown>;
     };
     coordinators: {
       options: {
@@ -2291,25 +2294,32 @@ test("production waiting-blocker wiring reads the worker's pending interactions"
   ).mockResolvedValue([
     { environmentId: "e", logicalSessionKey: "env-e:tab", agent: "claude" },
   ] as Awaited<ReturnType<StorageService["listNativeAgentSessions"]>>);
-  const projection = spyOn(internal.nativeAgents, "getProjection").mockResolvedValue({
-    messages: [],
-    interactions: [{ kind: "command-approval", state: "pending" }],
+  const projection = spyOn(internal.nativeAgents, "getProjection");
+  const state = spyOn(internal.nativeAgents, "getSessionStateUpdate").mockResolvedValue({
+    status: "snapshot",
+    value: { interactions: [{ kind: "command-approval", state: "pending" }] },
   });
   try {
     const blocker = internal.coordinators.options.waitingBlocker;
     expect(await blocker("e", "missing")).toBeUndefined();
     expect(await blocker("e", "tab")).toBe("approval");
-    expect(projection).toHaveBeenLastCalledWith({
+    // The interactions need no transcript: a state read, never a projection.
+    expect(state).toHaveBeenLastCalledWith({
       environmentId: "e",
       logicalSessionKey: "env-e:tab",
       agent: "claude",
-      messageLimit: 1,
+      viewVersion: 1,
+      forceSnapshot: true,
     });
-    projection.mockRejectedValueOnce(new Error("bridge offline"));
+    expect(projection).not.toHaveBeenCalled();
+    state.mockRejectedValueOnce(new Error("bridge offline"));
+    expect(await blocker("e", "tab")).toBeUndefined();
+    state.mockResolvedValueOnce({ status: "unavailable", error: "bridge offline" });
     expect(await blocker("e", "tab")).toBeUndefined();
   } finally {
     sessions.mockRestore();
     projection.mockRestore();
+    state.mockRestore();
     try {
       await backend.shutdown();
     } finally {

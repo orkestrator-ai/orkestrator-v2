@@ -3410,6 +3410,29 @@ describe("persisted session routes", () => {
       mockGetSession.mockImplementation(defaultGetSession);
     });
 
+    test("reports a usage-limit errorCode only beside the failure it names", async () => {
+      const limited = {
+        id: "s-1",
+        title: "Limited",
+        status: "error" as "error" | "idle",
+        error: "Request refused.",
+        errorCode: "usage-limit" as const,
+        createdAt: new Date("2026-01-01"),
+        lastActivity: new Date("2026-01-01"),
+      };
+      mockGetSession.mockImplementation(() => limited as ReturnType<typeof mockGetSession>);
+
+      expect(await jsonBody(await app.request("/session/s-1"))).toMatchObject({
+        status: "error",
+        error: "Request refused.",
+        errorCode: "usage-limit",
+      });
+
+      limited.status = "idle";
+      expect(await jsonBody(await app.request("/session/s-1"))).not.toHaveProperty("errorCode");
+      mockGetSession.mockImplementation(defaultGetSession);
+    });
+
     test("reports a read-only turn's missing command sandbox past the turn (todo 0190)", async () => {
       const reason = "Claude's command sandbox cannot run commands on this host: bwrap is missing.";
       const review = {

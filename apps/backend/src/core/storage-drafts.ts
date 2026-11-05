@@ -743,94 +743,129 @@ export class DraftsRepository {
   }
 
   // Every sessions-store mutation below is one synchronous SQLite transaction
-  // (`updateStore`), so concurrent tab creates, renames and reorders — in this
-  // or another backend — cannot overwrite each other's read-modify-write.
+  // over only the rows it names (`updateStoreRow`, and the environment's rows by
+  // their owner), so concurrent tab creates, renames and reorders, in this or
+  // another backend, cannot overwrite each other's read-modify-write.
   async updateSession(sessionId: string, updates: Partial<Session>): Promise<Session> {
-    const session = this.context.updateStore(
-      this.files.sessionsFile(),
-      (): Session[] => [],
-      (sessions) => {
-        const found = sessions.find((candidate) => candidate.id === sessionId);
-        if (!found) throw new Error(`Session not found: ${sessionId}`);
-        Object.assign(found, updates);
-        return found;
-      },
-    );
+    const session = this.context.updateStoreRow(this.files.sessionsFile(), sessionId, (current) => {
+      if (!isRecord(current)) throw new Error(`Session not found: ${sessionId}`);
+      const updated = { ...current, ...updates } as Session;
+      return { result: updated, value: updated };
+    });
     this.context.changes.announce("session", session.environmentId);
     return session;
   }
 
   async removeSession(sessionId: string): Promise<void> {
-    const removed = this.context.updateStore(
-      this.files.sessionsFile(),
-      (): Session[] => [],
-      (sessions) => {
-        const index = sessions.findIndex((session) => session.id === sessionId);
-        if (index < 0) throw new Error(`Session not found: ${sessionId}`);
-        return sessions.splice(index, 1)[0];
-      },
-    );
-    await this.deleteSessionBuffer(sessionId);
-    if (removed) this.context.changes.announce("session", removed.environmentId);
+    const removed = this.context.database.transaction(() => {
+      if (this.context.database.readStoreHeader("sessions")?.mode === "document") {
+        let removed: Session | undefined;
+        this.context.updateDocumentArrayRows<Session>(this.files.sessionsFile(), (sessions) => {
+          const index = sessions.findIndex((item) => item.id === sessionId);
+          if (index < 0) throw new Error(`Session not found: ${sessionId}`);
+          removed = sessions.splice(index, 1)[0];
+        });
+        return removed!;
+      }
+      return this.context.updateStoreRow(this.files.sessionsFile(), sessionId, (current) => {
+        if (!isRecord(current)) throw new Error(`Session not found: ${sessionId}`);
+        return { result: current as unknown as Session, delete: true };
+      });
+    });
+    if (!(await this.getSession(sessionId))) await this.deleteSessionBuffer(sessionId);
+    this.context.changes.announce("session", removed.environmentId);
+  }
+
+  /** One environment's rows, read inside the caller's transaction. */
+  private environmentSessionRows(environmentId: string): Session[] {
+    return this.context
+      .loadStoreRowsByOwner<Session>(this.files.sessionsFile(), environmentId, {
+        unreadable: "throw",
+      })
+      .filter((session) => session.environmentId === environmentId);
+  }
+
+  private mutateEnvironmentSessions<T>(
+    environmentId: string,
+    mutate: (sessions: Session[]) => T,
+  ): T {
+    return this.context.database.transaction(() => {
+      if (this.context.database.readStoreHeader("sessions")?.mode === "document") {
+        let result!: T;
+        this.context.updateDocumentArrayRows<Session>(this.files.sessionsFile(), (sessions) => {
+          result = mutate(sessions.filter((item) => item.environmentId === environmentId));
+        });
+        return result;
+      }
+      const sessions = this.environmentSessionRows(environmentId);
+      const result = mutate(sessions);
+      for (const session of sessions) this.writeSessionRow(session);
+      return result;
+    });
+  }
+
+  /** Keyed-store writes only; document bulk mutations preserve array entries directly. */
+  private writeSessionRow(session: Session): void {
+    this.context.updateStoreRow(this.files.sessionsFile(), session.id, () => ({
+      result: undefined,
+      value: session,
+    }));
   }
 
   async removeSessionsByEnvironment(environmentId: string): Promise<string[]> {
-    const removed = this.context.updateStore(
-      this.files.sessionsFile(),
-      (): Session[] => [],
-      (sessions) => {
-        const ids = sessions
-          .filter((session) => session.environmentId === environmentId)
-          .map((session) => session.id);
-        for (let index = sessions.length - 1; index >= 0; index -= 1) {
-          if (sessions[index]!.environmentId === environmentId) sessions.splice(index, 1);
-        }
+    const removed = this.context.database.transaction(() => {
+      const ids = this.environmentSessionRows(environmentId).map((session) => session.id);
+      if (this.context.database.readStoreHeader("sessions")?.mode === "document") {
+        this.context.updateDocumentArrayRows<Session>(this.files.sessionsFile(), (sessions) => {
+          for (let index = sessions.length - 1; index >= 0; index--) {
+            if (sessions[index]?.environmentId === environmentId) sessions.splice(index, 1);
+          }
+        });
         return ids;
-      },
+      }
+      for (const id of ids) {
+        this.context.updateStoreRow(this.files.sessionsFile(), id, () => ({
+          result: undefined,
+          delete: true,
+        }));
+      }
+      return ids;
+    });
+    await Promise.all(
+      removed.map(async (sessionId) => {
+        if (!(await this.getSession(sessionId))) await this.deleteSessionBuffer(sessionId);
+      }),
     );
-    await Promise.all(removed.map((sessionId) => this.deleteSessionBuffer(sessionId)));
     if (removed.length > 0) this.context.changes.announce("session", environmentId);
     return removed;
   }
 
   async disconnectEnvironmentSessions(environmentId: string): Promise<Session[]> {
-    const updated = this.context.updateStore(
-      this.files.sessionsFile(),
-      (): Session[] => [],
-      (sessions) => {
-        const changed: Session[] = [];
-        for (const session of sessions) {
-          if (session.environmentId === environmentId && session.status === "connected") {
-            session.status = "disconnected";
-            changed.push(session);
-          }
-        }
-        return changed;
-      },
-    );
+    const updated = this.mutateEnvironmentSessions(environmentId, (sessions) => {
+      const changed: Session[] = [];
+      for (const session of sessions) {
+        if (session.status !== "connected") continue;
+        session.status = "disconnected";
+        changed.push(session);
+      }
+      return changed;
+    });
     if (updated.length > 0) this.context.changes.announce("session", environmentId);
     return updated;
   }
 
   async reorderSessions(environmentId: string, sessionIds: string[]): Promise<Session[]> {
-    this.context.updateStore(
-      this.files.sessionsFile(),
-      (): Session[] => [],
-      (sessions) => {
-        const provided = new Set(sessionIds);
-        for (const [index, id] of sessionIds.entries()) {
-          const session = sessions.find(
-            (candidate) => candidate.id === id && candidate.environmentId === environmentId,
-          );
-          if (session) session.order = index;
-        }
-        let order = sessionIds.length;
-        for (const session of sessions) {
-          if (session.environmentId === environmentId && !provided.has(session.id))
-            session.order = order++;
-        }
-      },
-    );
+    this.mutateEnvironmentSessions(environmentId, (sessions) => {
+      const provided = new Set(sessionIds);
+      for (const [index, id] of sessionIds.entries()) {
+        const session = sessions.find((candidate) => candidate.id === id);
+        if (session) session.order = index;
+      }
+      let order = sessionIds.length;
+      for (const session of sessions) {
+        if (!provided.has(session.id)) session.order = order++;
+      }
+    });
     this.context.changes.announce("session", environmentId);
     return this.getSessionsByEnvironment(environmentId);
   }

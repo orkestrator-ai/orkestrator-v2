@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import {
   DESIGN_FRAME_DOCUMENT,
   RENDERER_CONTENT_SECURITY_POLICY,
+  STATIC_HTML_FRAME_DOCUMENT,
 } from "@orkestrator/protocol/renderer-content-security-policy";
 import {
   rendererSecurityPlugin,
@@ -35,12 +36,15 @@ describe("renderer security build plugin", () => {
     expect(plugin.config.call({} as never, {}, {} as never)).toEqual({
       define: {
         "import.meta.env.ORKESTRATOR_DESIGN_FRAME_DOCUMENT": JSON.stringify(DESIGN_FRAME_DOCUMENT),
+        "import.meta.env.ORKESTRATOR_STATIC_HTML_FRAME_DOCUMENT": JSON.stringify(
+          STATIC_HTML_FRAME_DOCUMENT,
+        ),
       },
     });
   });
 });
 
-test("generateBundle uses runnerImport and emits a hash-pinned production design document", async () => {
+test("generateBundle uses runnerImport and emits hash-pinned production frame documents", async () => {
   const plugin = rendererSecurityPlugin();
   const emitted: Array<{ type: string; fileName: string; source: string }> = [];
   const hook = plugin.generateBundle;
@@ -56,13 +60,17 @@ test("generateBundle uses runnerImport and emits a hash-pinned production design
     {},
     false,
   );
-  expect(emitted).toHaveLength(1);
-  const asset = emitted[0]!;
-  expect(asset.fileName).toBe(DESIGN_FRAME_DOCUMENT);
-  expect(asset.type).toBe("asset");
-  const script = /<script[^>]*>([\s\S]*?)<\/script>/.exec(asset.source)?.[1];
-  expect(script).toBeDefined();
-  const hash = createHash("sha256").update(script!).digest("base64");
-  expect(asset.source).toContain(`'sha256-${hash}'`);
-  expect(asset.source).not.toContain("script-src 'unsafe-inline'");
+  expect(emitted.map((asset) => asset.fileName)).toEqual([
+    DESIGN_FRAME_DOCUMENT,
+    STATIC_HTML_FRAME_DOCUMENT,
+  ]);
+  for (const asset of emitted) {
+    expect(asset.type).toBe("asset");
+    const script = /<script[^>]*>([\s\S]*?)<\/script>/.exec(asset.source)?.[1];
+    expect(script).toBeDefined();
+    const hash = createHash("sha256").update(script!).digest("base64");
+    expect(asset.source).toContain(`'sha256-${hash}'`);
+    expect(asset.source).not.toContain("script-src 'unsafe-inline'");
+    expect(asset.source).toContain("connect-src 'none'");
+  }
 });

@@ -3,6 +3,7 @@ import type { AgentActivityState } from "./agent-activity.js";
 import type { CoordinatorConversation, CoordinatorWorkspace } from "./coordinator.js";
 import {
   coordinatorActivityByProject,
+  parseCoordinatorCheckoutTurn,
   parseCoordinatorActivitySnapshot,
 } from "./coordinator-activity.js";
 
@@ -55,6 +56,30 @@ function observing(states: Record<string, AgentActivityState | "unknown">) {
 }
 
 describe("coordinatorActivityByProject", () => {
+  test("a conversation that failed to start is not observed, and its siblings are", () => {
+    const { observe, seen } = observing({ "session-main": "working" });
+    const projects = coordinatorActivityByProject(
+      [
+        workspace("p1", [
+          {
+            id: "side",
+            logicalSessionKey: "session-side",
+            agent: "codex",
+            startupError: "bridge failed",
+          } as CoordinatorConversation,
+          {
+            id: "main",
+            logicalSessionKey: "session-main",
+            agent: "codex",
+          } as CoordinatorConversation,
+        ]),
+      ],
+      observe,
+    );
+    expect(seen).toEqual(["main"]);
+    expect(projects).toEqual({ p1: "working" });
+  });
+
   test("reports a project working while any open conversation works", () => {
     const { observe } = observing({ "session-main": "idle", "session-side": "working" });
     expect(
@@ -142,5 +167,22 @@ describe("parseCoordinatorActivitySnapshot", () => {
     expect(parseCoordinatorActivitySnapshot(null)).toEqual({ projects: {} });
     expect(parseCoordinatorActivitySnapshot({ projects: [] })).toEqual({ projects: {} });
     expect(parseCoordinatorActivitySnapshot("working")).toEqual({ projects: {} });
+  });
+});
+
+describe("parseCoordinatorCheckoutTurn", () => {
+  test("keeps the two turns a backend can name", () => {
+    expect(parseCoordinatorCheckoutTurn({ kind: "project-home" })).toEqual({
+      kind: "project-home",
+    });
+    expect(
+      parseCoordinatorCheckoutTurn({ kind: "conversation", conversationId: "side-1", extra: 1 }),
+    ).toEqual({ kind: "conversation", conversationId: "side-1" });
+  });
+
+  test("anything else reads as no turn", () => {
+    for (const value of [null, undefined, "x", [], {}, { kind: "conversation" }, { kind: "x" }]) {
+      expect(parseCoordinatorCheckoutTurn(value)).toBeNull();
+    }
   });
 });

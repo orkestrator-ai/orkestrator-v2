@@ -193,6 +193,12 @@ export interface DispatchNativeAgentPromptInput extends EnsureNativeAgentSession
    * resolve typed commands, every other origin is literal.
    */
   command?: NativeAgentCommandIntent;
+  /**
+   * The IANA zone of the renderer that sent this prompt. A coordinator
+   * conversation records it as the user's zone when the user started the turn
+   * (`CoordinatorWorkspace.userTimeZone`); nothing else reads it.
+   */
+  clientTimeZone?: string;
 }
 
 export type MailInjectDispatchOutcome =
@@ -264,6 +270,18 @@ export interface NativeAgentProgressiveInput {
 
 export interface NativeAgentTranscriptUpdateInput extends NativeAgentProgressiveInput {
   liveWindow: NativeAgentLiveWindow;
+  /** Part-level message patches the client can apply (step 14); absent: none. */
+  patchVersion?: 2;
+}
+
+export interface NativeAgentLiveUpdateInput {
+  environmentId: string;
+  agent: BuildPipelineAgent;
+  logicalSessionKey: string;
+  viewVersion: 1;
+  liveWindow: NativeAgentLiveWindow;
+  transcriptToken?: string;
+  stateToken?: string;
   /** Part-level message patches the client can apply (step 14); absent: none. */
   patchVersion?: 2;
 }
@@ -582,7 +600,7 @@ export interface NativeAgentServiceOptions {
    * MCP client at all, so a prompt telling it to call `launch_environment`
    * would be instructing it to use a tool it does not have.
    */
-  coordinatorDelegationAvailable?: (platform: AgentPlatform) => boolean;
+  coordinatorDelegationAvailable?: (platform: AgentPlatform) => Promise<boolean>;
   /** The coordinator's node-role line (leaf mode or command node), or null. */
   coordinatorNodeContext?: () => Promise<string | null>;
   /** Test seam for exercising deterministic detail-cache capacity eviction. */

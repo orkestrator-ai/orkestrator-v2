@@ -17,6 +17,7 @@ import {
   KEY_INFORMATION_SECTION_LABELS,
   KEY_INFORMATION_TEST_RESULT,
 } from "./key-information-format";
+import { KeyInformationProse } from "./KeyInformationProse";
 
 /**
  * The sections of the full key information tab. They show the same records as
@@ -52,14 +53,13 @@ export function TabSection({
 
 export function TabProse({ text, lead = false }: { text: string; lead?: boolean }) {
   return (
-    <p
+    <KeyInformationProse
+      text={text}
       className={cn(
-        "max-w-[75ch] break-words whitespace-pre-wrap text-foreground",
-        lead ? "text-[15px] leading-7" : "text-sm leading-6 text-foreground/90",
+        "max-w-[75ch] text-foreground",
+        lead ? "gap-3 text-[15px] leading-7" : "text-sm leading-6 text-foreground/90",
       )}
-    >
-      {text}
-    </p>
+    />
   );
 }
 

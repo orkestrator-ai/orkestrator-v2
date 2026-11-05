@@ -101,9 +101,26 @@ export const IMAGE_CAPABILITIES = {
    * image gets neither the mount nor the variable.
    */
   "git-mirror": 1,
+  /**
+   * Every bridge in the image accepts `<TOKEN_ENV>_SHA256` in place of its
+   * token, marks itself non-dumpable, and runs from root-owned `/opt`, so the
+   * token can live in root-only `/run/orkestrator-bridge`. An older image keeps
+   * the token in a `node`-readable `/tmp` file and in the bridge's environment.
+   */
+  "bridge-credential": 1,
 } as const;
 
 export type ImageCapability = keyof typeof IMAGE_CAPABILITIES;
+
+/**
+ * Whether new containers may be created from this image: it takes staged
+ * inputs rather than expecting whole host agent homes bound into it.
+ */
+export function imageDeclaresStagedInputs(
+  capabilities: ImageManifest["capabilities"] | null | undefined,
+): boolean {
+  return (capabilities?.["staged-inputs"] ?? 0) >= 1;
+}
 
 /**
  * The `staged-inputs` version from which an image's entrypoint copies Cursor's

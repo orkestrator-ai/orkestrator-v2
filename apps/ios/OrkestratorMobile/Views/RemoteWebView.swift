@@ -244,8 +244,6 @@ struct RemoteWebView: UIViewRepresentable {
 
         func loginCookie(for connection: RemoteConnection) async throws -> HTTPCookie {
             let loginURL = connection.address.appending(path: "__orkestrator/login")
-            var components = URLComponents()
-            components.queryItems = [URLQueryItem(name: "token", value: connection.token)]
 
             var request = URLRequest(
                 url: loginURL,
@@ -253,7 +251,7 @@ struct RemoteWebView: UIViewRepresentable {
                 timeoutInterval: 20
             )
             request.httpMethod = "POST"
-            request.httpBody = components.percentEncodedQuery?.data(using: .utf8)
+            request.httpBody = Self.loginFormBody(token: connection.token)
             request.setValue("application/x-www-form-urlencoded; charset=utf-8", forHTTPHeaderField: "Content-Type")
             request.setValue("no-store", forHTTPHeaderField: "Cache-Control")
 
@@ -262,7 +260,7 @@ struct RemoteWebView: UIViewRepresentable {
             configuration.httpShouldSetCookies = false
             configuration.timeoutIntervalForRequest = 20
             if let loginProtocolClasses { configuration.protocolClasses = loginProtocolClasses }
-            let redirectBlocker = LoginRedirectBlocker()
+            let redirectBlocker = GatewayRedirectBlocker()
             let session = URLSession(configuration: configuration, delegate: redirectBlocker, delegateQueue: nil)
             defer { session.finishTasksAndInvalidate() }
 
@@ -274,6 +272,13 @@ struct RemoteWebView: UIViewRepresentable {
             }
 
             return try Self.loginCookie(from: response, loginURL: loginURL)
+        }
+
+        /// `URLComponents` leaves `+` as it is, which a form parser reads as a space,
+        /// so a token the status check accepts would then be refused at login.
+        static func loginFormBody(token: String) -> Data? {
+            let unreserved = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.~")
+            return token.addingPercentEncoding(withAllowedCharacters: unreserved).map { Data("token=\($0)".utf8) }
         }
 
         static func loginTransportError(for error: URLError, taskIsCancelled: Bool) -> Error {
@@ -534,6 +539,10 @@ struct RemoteWebView: UIViewRepresentable {
             connection: RemoteConnection?
         ) -> Bool {
             guard isMainFrame, let connection else { return false }
+            // A sandboxed document reports an empty origin, and assigning an empty
+            // scheme to `URLComponents` raises and ends the app rather than giving
+            // a nil URL.
+            guard !scheme.isEmpty, !host.isEmpty else { return false }
             var components = URLComponents()
             components.scheme = scheme
             components.host = host
@@ -692,18 +701,6 @@ struct RemoteWebView: UIViewRepresentable {
             }
             return json
         }
-    }
-}
-
-final class LoginRedirectBlocker: NSObject, URLSessionTaskDelegate {
-    func urlSession(
-        _ session: URLSession,
-        task: URLSessionTask,
-        willPerformHTTPRedirection response: HTTPURLResponse,
-        newRequest request: URLRequest,
-        completionHandler: @escaping (URLRequest?) -> Void
-    ) {
-        completionHandler(nil)
     }
 }
 

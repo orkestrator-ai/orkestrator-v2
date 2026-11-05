@@ -385,7 +385,6 @@ describe("GlobalSettings", () => {
             backgroundColor: "#000000",
           },
           terminalScrollback: 5000,
-          experimentalCodexRawEventLogging: true,
           debugLogging: false,
           debugLogRetentionDays: 7,
           webClientEnabled: true,
@@ -1379,7 +1378,8 @@ describe("GlobalSettings", () => {
     rerender(<GlobalSettings activeSection="container" />);
     expect(screen.getByText("Limit resources of new containers")).toBeTruthy();
     rerender(<GlobalSettings activeSection="experimental" />);
-    expect(screen.getByText("Codex Raw Event Logging")).toBeTruthy();
+    expect(screen.getByRole("switch", { name: "Enable scheduling" })).toBeTruthy();
+    expect(screen.queryByText("Codex Raw Event Logging")).toBeNull();
     rerender(<GlobalSettings activeSection="debug" />);
     expect(screen.getByText("App version")).toBeTruthy();
     expect(screen.getByText("Save Logs to Disk")).toBeTruthy();
@@ -1644,7 +1644,7 @@ describe("GlobalSettings", () => {
         },
       },
     }));
-    render(<GlobalSettings activeSection="platforms" />);
+    render(<GlobalSettings activeSection="coordinator" />);
     const choices = screen.getByRole("radiogroup", { name: "Coordinator web research" });
     expect(
       (within(choices).getByRole("radio", { name: /Web search only/ }) as HTMLInputElement).checked,
@@ -1691,7 +1691,7 @@ describe("GlobalSettings", () => {
   });
 
   test("persists a coordinator safety level change on its own", async () => {
-    render(<GlobalSettings activeSection="platforms" />);
+    render(<GlobalSettings activeSection="coordinator" />);
 
     const tiers = screen.getByRole("radiogroup", { name: "Coordinator safety level" });
     const providerConfigured = within(tiers).getByRole("radio", {
@@ -1720,7 +1720,7 @@ describe("GlobalSettings", () => {
         global: { ...state.config.global, coordinatorProviderTiers: "enforced" },
       },
     }));
-    render(<GlobalSettings activeSection="platforms" />);
+    render(<GlobalSettings activeSection="coordinator" />);
 
     const tiers = screen.getByRole("radiogroup", { name: "Coordinator safety level" });
     const providerConfigured = within(tiers).getByRole("radio", {
@@ -2935,22 +2935,6 @@ describe("GlobalSettings", () => {
       }),
     );
     expect(mockPatchGlobalConfig).toHaveBeenCalledTimes(1);
-  });
-
-  test("saves experimental Codex raw event logging changes", async () => {
-    render(<GlobalSettings activeSection="experimental" />);
-
-    fireEvent.click(screen.getByRole("button", { name: "Enabled" }));
-    await flushAutoSave();
-
-    await waitFor(() => {
-      expect(mockPatchGlobalConfig).toHaveBeenCalledWith(
-        expect.objectContaining({
-          experimentalCodexRawEventLogging: false,
-        }),
-        SAVE_OPTIONS,
-      );
-    });
   });
 
   test("saves the experimental scheduling switch, off by default", async () => {

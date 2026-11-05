@@ -90,7 +90,7 @@ The material risks are concentrated in four themes:
 | H1 | High | Gateway | Auth cookie is the durable token and leaks to other ports on the same host | Partly fixed: the token is out of the cookie; a leaked session is accepted, and the `__Host-` name waits on iOS (see §3) |
 | H2 | High | Container | `node` can get code executed as root (PATH hijack of root scripts, `node`-owned runtime-env sourced by root) | Fixed (see §3) |
 | H3 | High | Container | `.env` / `.env.local` / `opencode.json` symlinks bind-mount arbitrary host paths into the container | Fixed (see §3) |
-| H4 | High\* | Bridges | Agent can read its own bridge token, then self-approve or widen its execution policy | Partly fixed (see §3) |
+| H4 | High\* | Bridges | Agent can read its own bridge token, then self-approve or widen its execution policy | Fixed, with a stated limit (see §3) |
 | H5 | High (design) | Container | Host GitHub CLI token injected into every container by default | Reported |
 | M1 | Medium | Previews | Legacy loopback previews serve agent content on the gateway origin, CSP stripped, no server-side sandbox | Fixed (sandbox); default flipped on the branch, route retirement open (see §4) |
 | M2 | Medium | Previews | Legacy loopback route reaches any host loopback port; credentialed CORS for `Origin: null` | Fixed (see §4) |
@@ -100,7 +100,7 @@ The material risks are concentrated in four themes:
 | M6 | Medium | Web/Electron | No CSP on the main renderer or the gateway-served app, which hold a generic command bridge | Verified |
 | M7 | Medium | Electron | OS sandbox disabled for every window that loads the preload | Reported |
 | M8 | Medium | Container | Host `~/.claude.json` staged unfiltered and readable in the container | Fixed; running containers require stop/start (see §4) |
-| M9 | Medium | Container | Legacy images still mount whole host agent homes | Reported |
+| M9 | Medium | Container | Legacy images still mount whole host agent homes | Fixed for new containers; existing ones are listed for rebuild (see §4) |
 | M10 | Medium | Mail | Coordinator mail can target the project-home environment (local path) | Potential |
 | M11 | Medium (design) | Mail | Prompt injection can propagate worker → coordinator → other worker | Reported |
 | M12 | Medium (design) | Firewall | IP-based allowlist (shared CDN fronts), allowed APIs accept attacker credentials, DNS tunnelling | Reported |
@@ -125,9 +125,9 @@ reveals or rotates the token only for the token sent as a bearer header. A
 leaked cookie still authenticates as that session until it ends; this was
 accepted on 2026-11-04, because a restricted container was refused at the
 gateway's port on Docker Desktop and binding a session to its peer address would
-not help (`docs/architecture/remote-gateway.md`, Security notes). Linux Engine
-is still to check
-([0260](security/0260-live-checks-on-other-platforms.md)). The `__Host-` name is
+not help (`docs/architecture/remote-gateway.md`, Security notes). Linux Engine,
+rootful and rootless, gave the same refusal on 2026-11-05
+(`docs/development/container-qualification.md`). The `__Host-` name is
 read and stripped but not issued yet, because older iOS builds look the cookie
 up by its plain name (todo 2960).
 **Actors:** A1 (container agent), A5
@@ -250,7 +250,20 @@ realpath confinement, instead of bind-mounting them.
 
 ### H4. An agent can read its own bridge-control token, then self-approve or widen its execution policy
 
-**Status:** Partly fixed (2026-11-03). Every bridge now deletes its token from
+**Status:** Fixed, with a stated limit (2026-11-04). A bridge now holds only a
+SHA-256 of its token and is non-dumpable, on an image with `bridge-credential=1`
+the token is in a root-only file, and a user's wider policy restarts an idle
+bridge and resumes
+([todo 3930](../todo/containers-and-environments/3930-bridge-credential-out-of-agent-uid.md)).
+The agent's uid can no longer read a token, answer an approval or clear
+`readOnly`. It can still kill the bridge and catch a token on its port, or plant
+code for the next start
+([todo 4980](../todo/containers-and-environments/4980-agent-uid-process-control.md));
+OpenCode has no bridge, so its plain password is kept from the agent by a plugin
+inside its server
+([todo 4981](../todo/containers-and-environments/4981-opencode-password-readable-by-agent.md));
+and containers on older images keep the old behaviour until rebuilt.
+The rest of this status is the earlier state (2026-11-03). Every bridge now deletes its token from
 `process.env` at startup, so nothing it spawns through `node:child_process` or
 an explicit `env` inherits it (Codex, Pi, Cursor and ACP join Claude). Every
 bridge route that can change a live session's policy is narrow-only: a policy
@@ -557,7 +570,7 @@ does not sanitize it. The stopped-container start path filters the staged file
 in place and the entrypoint rebuilds the relay and imported copies. Until that
 stop/start, those running containers can still expose the old raw content.
 This does not revoke any secrets previously read; rotate exposed API keys or
-Control MCP tokens as needed. Legacy direct mounts still require the M9 fix.
+Control MCP tokens as needed. Legacy direct mounts persist only on runtimes created before the M9 fix, until they are rebuilt.
 
 Live qualification (`apps/backend/tests/claude-config-filter-docker.test.ts`,
 run by `mise run test:agent:docker:isolated` against the image it builds, so
@@ -583,7 +596,7 @@ the user configured are all exposed to the agent.
 
 ### M9. Legacy (pre-staged-inputs) images still mount whole host agent homes
 
-**Status:** Reported
+**Status:** Fixed for new containers on 2026-11-05: creating one from such an image is refused by name. Existing ones keep running until the user rebuilds them, and the cleanup review lists them with a Rebuild action.
 
 **Where:** `apps/backend/src/core/commands-containers.ts:470-535`. `~/.claude`,
 `~/.codex`, `~/.pi`, `~/.config/opencode` and `~/.local/share/opencode` are
@@ -671,7 +684,7 @@ write and terminal calls when the policy denies them.
 | ID | Title | Where | Notes / fix | Status |
 | --- | --- | --- | --- | --- |
 | L1 | `.env` seeding and `filesToCopy` write through symlinks in a fresh local worktree | `commands-environment.ts:2214-2221`, `commands-project-files.ts:80-82` | A branch-committed `.env` symlink to a non-existent path makes the backend copy the user's real `.env` there. `filesToCopy` can overwrite existing host files. Use `writeConfinedFile(..., {exclusive:true})` or `O_NOFOLLOW\|O_EXCL`. | Fixed: seeding checks with `lstat`, and `filesToCopy` refuses a destination with a link at or above it (`unlinkedDestination`) |
-| L2 | Bridge and agent-MCP tokens passed in `docker exec` argv | `commands-containers.ts:921-947`, `commands-registry-servers.ts:407-699` | Visible to local users via `ps`/`/proc` while the CLI runs. Use stdin, as `syncContainerCursorApiKey` already does. | Reported |
+| L2 | Bridge and agent-MCP tokens passed in `docker exec` argv | `commands-containers.ts:921-947`, `commands-registry-servers.ts:407-699` | Visible to local users via `ps`/`/proc` while the CLI runs. Use stdin, as `syncContainerCursorApiKey` already does. | Fixed (2026-11-04): `launchContainerScript` (`container-bridge-credential.ts`) delivers them on stdin |
 | L3 | Only the `runAsNode` Electron fuse is set | `package.json:52-54` | `--inspect` works in packaged builds, which lets a local process inherit the app's macOS TCC grants. Disable `enableNodeCliInspectArguments` and `enableNodeOptionsEnvironmentVariable`, and enable asar integrity and `onlyLoadAppFromAsar`. | Fixed (2026-11-03): `build.electronFuses` turns off `runAsNode`, `enableNodeOptionsEnvironmentVariable` and `enableNodeCliInspectArguments`, and turns on `enableEmbeddedAsarIntegrityValidation` and `onlyLoadAppFromAsar`; the release configs inherit them. Checked on a local ad-hoc `--mac --dir` build: `@electron/fuses read` shows those values, Info.plist carries `ElectronAsarIntegrity`, `--inspect=0` opens no inspector (stock Electron does), a tampered `app.asar` header aborts with "Integrity check failed", and an `app/` folder in place of `app.asar` is not loaded. Asar integrity has no effect on Linux (Electron supports it on macOS and Windows). Only `package:linux:unpacked:test`, the Playwright packaged spec's own uninstalled build, turns the inspect fuse back on. Repeatable check: `mise run test:package:security` builds the unsigned shipping `--dir` package, reads its fuse wire (`scripts/verify-packaged-security.ts`, report in `output/package-security/`) and runs `packaged-security-electron.spec.ts`. |
 | L4 | `ELECTRON_DEV=1` is honoured in packaged builds | `apps/desktop/electron/main.ts:177` | With `VITE_DEV_SERVER_URL`, a packaged app can load a remote page as the trusted renderer. Gate on `!app.isPackaged`. | Fixed (2026-11-03): `desktopDevMode` (`apps/desktop/electron/dev-mode.ts`) enables development mode, and returns the dev-server URL, only when `!app.isPackaged`; a packaged app logs `desktop dev-mode.ignored-packaged`. Checked on a local ad-hoc build: with `ELECTRON_DEV=1` and `VITE_DEV_SERVER_URL` pointed at a recording server, the packaged app loaded `Resources/web/index.html` and made no request to it, while the unpacked dev bundle still loaded the dev server. `mise run test:package:security` repeats the packaged half (`packaged-security-electron.spec.ts`). |
 | L5 | Renderer and realm sessions keep Electron's default permission handler, which grants every request | `browser-preview-startup.ts`, `artifact-host-session.ts` only | Default-deny on renderer partitions. | Reported |
@@ -686,7 +699,7 @@ write and terminal calls when the policy denies them.
 | L14 | Malformed relay credit frame can crash the backend | `preview-relay-supervisor.ts:389` | Relay is off by default. Validate frame lengths and catch errors in `onData`. | Fixed (2026-11-03): every fixed-size inbound frame must have its exact payload length (credit 4 bytes; opened, eof and close 0), and the `onData` frame loop is wrapped in try/catch; both paths shut the relay down with category `internal` instead of throwing out of the stdout listener. Tests: "a 0-byte / 2-byte / 5-byte credit frame shuts the relay down instead of throwing", "a 4-byte credit frame grants credit to its channel" and "an exception while handling a frame shuts the relay down, not the backend" in `apps/backend/src/preview-relay-supervisor.test.ts` |
 | L15 | Agent-tools MCP server binds `0.0.0.0` on the host | `apps/backend/src/core/agent-tools.ts:642` | Token-protected, but reachable from the LAN or tailnet. Bind to the Docker bridge or loopback addresses. | Verified |
 | L16 | Control MCP and scheduling soft spots | `control-mcp-confirm.ts`, `control-mcp-credentials.ts:330-345`, `scheduled-jobs/executor.ts:681-689`, `read-only-policy.ts:537` | **Confirmation:** the agent can complete it itself (HMAC-bound, but a speed bump, not human approval). **Operator token:** readable by the coordinator; add `denyRead` for the data directory. **Self-reminders:** presented as authenticated `system` notices. **Cursor/Pi:** accept some policy fields from the request body. | Reported |
-| L17 | Provider secrets stored in plaintext in SQLite (0600) | `storage-config.ts:786-824` | Consider `safeStorage`/libsecret. Remote-connection tokens already use `safeStorage`. | Reported |
+| L17 | Provider secrets stored in plaintext in SQLite (0600) | `storage-config.ts:786-824` | Consider `safeStorage`/libsecret. Remote-connection tokens already use `safeStorage`. | Accepted (2026-11-05): plaintext at 0600 is recorded as an accepted risk in [storage.md](../architecture/storage.md#provider-secrets-at-rest); no keychain or `safeStorage` path was built. Re-checking found the secrets in `config.json` and its backups, not SQLite. Two mode gaps were fixed: every start now tightens those files, and every open tightens the database's companion files. Tests: `apps/backend/src/core/storage-secrets-at-rest.test.ts`, `apps/backend/tests/container-data-directory-reach.test.ts` |
 | L18 | Dependency advisories | `bun audit` | `undici@8.10.2` (via `pi-bridge`): 1 high (DoS on excessive content-encodings), 2 moderate (GHSA-xjj6-f33q-929c, -4qv8-2p9j-2685, -f72v-6w45-q472). `postcss-selector-parser@6.0.10` (dev, moderate). Electron is locked at `45.0.0`; check for later 45.x security releases. Run `bun audit fix`. | Verified |
 
 ## 6. Informational
@@ -722,8 +735,9 @@ write and terminal calls when the policy denies them.
   covers the five `get_*_server_log` commands and the bridge startup-failure
   error in `commands-containers.ts`. The byte and line caps are unchanged. A
   token that the source's `tail -c` cut through has lost its prefix and is not
-  caught. Still open: the `okb_` prefix for internal tokens. Without it,
-  redaction cannot recognise a bridge, gateway or MCP token by its shape.
+  caught. The rest was fixed on 2026-11-04: bridge and agent-tools tokens carry
+  `okb_` and `oka_` prefixes and `secret-redaction.ts` catches them. The gateway
+  token keeps its format, which is part of the client contract.
 
 ## 7. Controls reviewed that look correct
 
@@ -796,8 +810,8 @@ write and terminal calls when the policy denies them.
 - The review validation worker was only spot-checked: commands are passed as argv to `bash -lc`.
 - `tmux-hooks` `find` invocations were not reviewed.
 - Pi's `grep`/`find` tools live in the Pi SDK, outside this repo.
-- The iOS app (`apps/ios`) was not reviewed.
-- The initial review did no dynamic testing. H2 has since been checked against locally built before/after images with the root-boundary smoke test (see its Status above). H1, M1 and M2 pass in Chromium, Firefox and WebKit (`e2e/preview/gateway-browser-security.spec.ts`) and H3 on Docker Desktop (`docs/development/container-qualification.md`). Shipping Safari and rootless Docker remain ([0260](security/0260-live-checks-on-other-platforms.md)).
+- The iOS app (`apps/ios`) was not reviewed at the time. It was reviewed on 2026-11-05 against `69a3b4ca5`, by reading the code and running it on simulators: three defects were fixed (a crash from a CSP-sandboxed page calling the native bridge, a status check that accepted an answer from a redirect target, and a sign-in that refused tokens containing `+`), and the rest is in to-dos [5600](../todo/cross-cutting/5600-ios-bridge-user-consent.md), [5601](../todo/cross-cutting/5601-ios-runtime-security-checks.md) (device and signed-build checks) and [5602](../todo/cross-cutting/5602-ios-session-and-privacy-hardening.md).
+- The initial review did no dynamic testing. H2 has since been checked against locally built before/after images with the root-boundary smoke test (see its Status above). H1, M1 and M2 pass in Chromium, Firefox and WebKit (`e2e/preview/gateway-browser-security.spec.ts`) and H3 on Docker Desktop and rootless Linux Engine (`docs/development/container-qualification.md`). Shipping Safari remains ([todo 5500](../todo/previews-and-annotations/5500-shipping-safari-gateway-security-checks.md)).
 
 ## 9. Recommended remediation order
 

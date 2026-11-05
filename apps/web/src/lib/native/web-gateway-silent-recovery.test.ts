@@ -95,7 +95,7 @@ class Socket {
   }
 }
 
-for (const transport of ["http-sse", "websocket"] as const) {
+for (const transport of ["http-sse", "websocket", "relayed"] as const) {
   test(`direct ${transport} replaces an unanswered terminal fallback when the main stream recovers`, async () => {
     const logs = captureLogs();
     restorers.push(() => logs.restore());
@@ -115,7 +115,7 @@ for (const transport of ["http-sse", "websocket"] as const) {
     const api = createBrowserGatewayApi({
       baseUrl: "https://gateway.test",
       token: "direct-token-123456",
-      terminalTransport: transport,
+      terminalTransport: transport === "relayed" ? "http-sse" : transport,
       terminalWebSocketFactory: () => {
         const socket = new Socket();
         sockets.push(socket);
@@ -130,16 +130,23 @@ for (const transport of ["http-sse", "websocket"] as const) {
     });
     const output = mock(() => undefined);
     const stopMain = api.listen("changed", () => undefined);
-    const stopTerminal = api.listen("terminal-output-one", output);
+    const event = transport === "relayed" ? "relayed-node-event:bk_leaf" : "terminal-output-one";
+    const stopTerminal = api.listen(event, output);
     const open = () => new Response(new ReadableStream({ start() {} }));
     try {
+      // The shared terminal stream opens on the next microtask.
+      await flush();
       mains[0]!.resolve(open());
       terminals[0]!.resolve(open());
       await flush();
-      await api.eventStreamReady("terminal-output-one");
+      await api.eventStreamReady(event);
       if (transport === "websocket") {
         // An open fallback upgrades to a ready channel before the silent outage.
         sockets[0]!.ready();
+        await flush();
+        // Narrowing the shared stream waits a moment, so channels that become
+        // ready together rebuild it once.
+        timers.fire(50);
         await flush();
         expect(terminals[0]!.signal.aborted).toBe(true);
       }
@@ -158,6 +165,7 @@ for (const transport of ["http-sse", "websocket"] as const) {
         timers.fire(100);
       }
       if (mains.length === 1) timers.fire(100);
+      await flush();
       expect(terminals).toHaveLength(2);
       expect(terminals[1]!.signal.aborted).toBe(false);
       mains[1]!.resolve(open());
@@ -176,7 +184,7 @@ for (const transport of ["http-sse", "websocket"] as const) {
       expect(terminals[2]!.signal.aborted).toBe(false);
       terminals[2]!.resolve(open());
       await flush();
-      expect(output).toHaveBeenCalledWith({ desynced: true });
+      if (transport !== "relayed") expect(output).toHaveBeenCalledWith({ desynced: true });
     } finally {
       stopTerminal();
       stopMain();
@@ -213,6 +221,7 @@ test("unanswered direct terminal attempts keep retrying while the main stream is
   const stopTerminal = api.listen("terminal-output-one", () => undefined);
   const open = () => new Response(new ReadableStream({ start() {} }));
   try {
+    await flush();
     mains[0]!.resolve(open());
     terminals[0]!.resolve(open());
     await flush();

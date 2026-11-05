@@ -481,11 +481,12 @@ export function registerProjectCommands(
       cloneOnly === undefined ? false : asRequiredBoolean(cloneOnly, "cloneOnly"),
     );
   });
-  register("create_project_from_scratch", (args, { storage }) => {
+  register("create_project_from_scratch", (args, { storage, runtime }) => {
     assertOnlyKeys(args, ["localPath"], "arguments");
     return createProjectFromScratch(
       asNonBlankString(args.localPath, "localPath"),
       storage,
+      runtime.gitHubCli,
       runProjectCreationCommand,
     );
   });
@@ -493,12 +494,17 @@ export function registerProjectCommands(
   // itself goes through `add_project`, which owns locking and rollback.
   register("list_github_clone_accounts", (args, context) => {
     assertOnlyKeys(args, [], "arguments");
-    return listGitHubCloneAccounts(context.storage, runProjectCreationCommand);
+    return listGitHubCloneAccounts(
+      context.storage,
+      context.runtime.gitHubCli,
+      runProjectCreationCommand,
+    );
   });
   register("list_github_clone_repositories", (args, context) => {
     assertOnlyKeys(args, ["owner", "cursor"], "arguments");
     return listGitHubCloneRepositories(
       context.storage,
+      context.runtime.gitHubCli,
       asNonBlankString(args.owner, "owner").trim(),
       runProjectCreationCommand,
       args.cursor === undefined ? undefined : asNonBlankString(args.cursor, "cursor"),
@@ -654,7 +660,8 @@ export function registerProjectCommands(
         : null;
       if (
         coordinator?.status === "unavailable" &&
-        (!workspace || coordinator.reason !== "unassigned")
+        (!workspace ||
+          (coordinator.reason !== "unassigned" && coordinator.reason !== "startup-failed"))
       ) {
         throw new Error(coordinatorRuntimeUnavailableMessage(coordinator));
       }

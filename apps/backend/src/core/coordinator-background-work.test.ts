@@ -104,7 +104,8 @@ describe("background-work delegation holds", () => {
           new Error("disk unavailable"),
         );
         try {
-          await expect(pause()).rejects.toThrow("disk unavailable");
+          // The failure stays with this delegation; the next pass retries it.
+          await pause();
         } finally {
           send.mockRestore();
         }

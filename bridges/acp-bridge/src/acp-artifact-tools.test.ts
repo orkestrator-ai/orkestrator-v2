@@ -52,7 +52,6 @@ function runningState(): SessionState {
     messages: [{ id: `${id}-user`, role: "user", content: "go", parts: [], createdAt: "" }],
     activeSubagentToolIds: new Set(),
     activeSubagentDescriptors: new Map(),
-    settledCursorAgentIds: new Set(),
     subagentLimitExceeded: false,
     subagentToolIds: new Map(),
     cursorTodos: [],

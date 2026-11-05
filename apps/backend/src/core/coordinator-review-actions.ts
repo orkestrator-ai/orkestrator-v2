@@ -1,3 +1,4 @@
+import { COORDINATOR_REQUEST_ID_REUSED_ERROR } from "@orkestrator/protocol/coordinator";
 import { createHash, randomUUID } from "node:crypto";
 import {
   isLaunchMultiReviewActionInput,
@@ -364,7 +365,7 @@ export function registerCoordinatorReviewActions(
           requestAssociation.projectId !== caller.projectId ||
           requestPayloadHash !== payloadHash)
       )
-        throw new Error("Coordinator request id was reused with a different payload");
+        throw new Error(COORDINATOR_REQUEST_ID_REUSED_ERROR);
       const active = (await context.storage.listMultiReviewWorkflows(environment.id)).find(
         (entry) =>
           isMultiReviewWorkflow(entry.snapshot) &&
@@ -439,7 +440,7 @@ export function registerCoordinatorReviewActions(
             });
       if (receipt.association.conversationId !== caller.conversationId)
         throw new Error(
-          "This request belongs to another conversation; adopt its workflow before opening it",
+          "This requestId belongs to another conversation; adopt its workflow to open it, or use a new unique requestId for a new review",
         );
       if (!receipt.claimed && receipt.association.pending)
         throw new Error(
@@ -451,6 +452,10 @@ export function registerCoordinatorReviewActions(
           "The associated review was removed; use a new requestId only to intentionally start another review",
         );
       let reused = Boolean(saved);
+      // The same request id again: this is that request's review, not a new one.
+      const replayed = Boolean(requestAssociation && !requestAssociation.pending);
+      const answer = (value: MultiReviewActionResult): MultiReviewActionResult =>
+        replayed ? { ...value, replayed: true } : value;
       if (!saved) {
         const started = await startMultiReviewAt(context, service, start, reservedId);
         saved = started.saved;
@@ -480,16 +485,20 @@ export function registerCoordinatorReviewActions(
             cancellation = " Cancellation could not be confirmed; the review may still be running.";
           }
         }
-        return result(
-          workflow,
-          reused,
-          { status: "unavailable" },
-          "The review was saved, but its coordinator receipt could not be completed. Retry launch_multi_review with the same requestId; do not start a new review. Inspect/cancel this workflow ID if recovery remains unavailable." +
-            cancellation,
+        return answer(
+          result(
+            workflow,
+            reused,
+            { status: "unavailable" },
+            "The review was saved, but its coordinator receipt could not be completed. Retry launch_multi_review with the same requestId; do not start a new review. Inspect/cancel this workflow ID if recovery remains unavailable." +
+              cancellation,
+          ),
         );
       }
       try {
-        return result(workflow, reused, await openMultiReviewTab(context.storage, workflow));
+        return answer(
+          result(workflow, reused, await openMultiReviewTab(context.storage, workflow)),
+        );
       } catch {
         let recovery =
           "The review is saved but its tab could not be opened. Start the environment, close a tab if needed, then use open_multi_review with this workflow ID.";
@@ -505,7 +514,7 @@ export function registerCoordinatorReviewActions(
               " Cancellation could not be confirmed. The review may still be running; inspect it and use cancel_multi_review before launching another.";
           }
         }
-        return result(workflow, reused, { status: "unavailable" }, recovery);
+        return answer(result(workflow, reused, { status: "unavailable" }, recovery));
       }
     });
   });

@@ -47,6 +47,7 @@ ignores `apps/backend/tests/**`, so a repository-root path matches no file.
 | Claude config allowlist (M8) | same command, `./tests/claude-config-filter-docker.test.ts`; also run by `mise run test:agent:docker:isolated` | A fake host `~/.claude.json` staged from a throwaway HOME reaches `node` only as its allowlist, and interactive Claude starts in `/workspace` on it with no network and fake credentials |
 | All staged mount consumers | same command, `./tests/staged-input-relay-docker.test.ts` | Every declared mount through the full root bootstrap, node entrypoint and workspace setup; rootless raw-mount denial, relayed imports and unchanged owner-only host files. |
 | Project Git mirror | same command, `./tests/project-git-mirror-docker.test.ts` | Clone from the mirror, read-only mount, a foreign owner, fallback, a start with the source gone |
+| Bridge credential (H4) | same command, `./tests/bridge-credential-docker.test.ts`; set `ORKESTRATOR_QUALIFICATION_OLDER_IMAGE` to add an image without `bridge-credential` | All five bridges start from the root-only token with a verifier; `node` finds the token nowhere, including `/proc`; what it can read gets 401 from the approval routes and the backend's token passes; planted `bunfig.toml` and `/opt` writes do nothing; a wider policy is refused live and taken after a restart; an older backend's unprefixed bridge keeps working; no credentials and no provider turns |
 | Live replacement | same command, `./tests/container-live-replacement.test.ts` | C14–C19 |
 | Live network | same command, `./tests/container-live-network.test.ts` | C22, C24, C26; on a gateway image C22 runs behind the egress gateway |
 | Live firewall | same command, `./tests/container-live-firewall.test.ts` | C23 and the policy 3 tuples; on a gateway image also root tampering from the runtime, published ports through the gateway and a gateway restart. Point `ORKESTRATOR_QUALIFICATION_IMAGE` at an image that does not declare `egress-gateway` for the in-container firewall |
@@ -630,9 +631,115 @@ a leaked gateway session (`docs/architecture/remote-gateway.md`, Security notes)
   A container's `Host` was `host.docker.internal:<port>`. The peer is loopback on
   this platform, so binding a session to its peer address would not separate a
   container from the browser that signed in.
-- **Not covered:** a rootless daemon, Linux Engine, and a real gateway on a
-  Tailscale address
-  ([0260](../reports/security/0260-live-checks-on-other-platforms.md)).
+- **Not covered here:** a rootless daemon and Linux Engine, both run on
+  2026-11-05 ([below](#gateway-reach-and-project-seed-files-on-linux-engine-2026-11-05)),
+  and a real gateway on a Tailscale address.
+
+## Gateway reach and project seed files on Linux Engine (2026-11-05)
+
+The same two checks on Linux Engine, rootful and rootless: can a container reach
+the gateway, which accepting a leaked session rests on, and does H3's delivery
+hold when the host user maps to container root?
+
+- **Host:** omarchy-hp, Omarchy (Arch), kernel 7.2.8, x86_64. Docker Engine
+  29.9.1: the rootful daemon and the user's existing rootless daemon (systemd
+  user service, cgroup v2). Neither was restarted or reconfigured. ufw is active
+  and drops unsolicited input; its rules were not changed. Tailscale is up, with
+  Tailscale Serve on the tailnet address's port 443.
+- **Image:** `orkestrator-v2:dev-a235cdb33b72`, built from `main` at `69a3b4ca5`
+  (`network-policy=3`, `egress-gateway=1`), loaded into the rootless daemon for
+  the run and removed from both afterwards.
+- **H3:** `apps/backend/tests/container-project-seed-docker.test.ts` passed with
+  `ORKESTRATOR_SEED_TEST_IMAGE` on the rootless daemon
+  (`DOCKER_HOST=unix:///run/user/1000/docker.sock`) and on the rootful daemon.
+  The rootless daemon's events list the test's `create`, `extract-to-dir` and
+  `start`, and a container there maps uid 0 to host uid 1000. Seed files arrive
+  by `docker cp` with private `node` ownership on both.
+- **Gateway reach, setup:**
+  - The real gateway was a credential-free `dev:test` profile's, bound to
+    loopback; it answered `401` from the host. Two throwaway listeners stood in
+    for the other bind modes: one on `0.0.0.0` (`--allow-non-tailscale-bind`)
+    and one on the Tailscale address (the default bind). Each returned a constant
+    and logged its peer. No provider turn ran.
+  - The rootful containers are the real product path: `environment create` and
+    `environment start` through the CLI, with a restricted runtime behind its
+    egress gateway (`node`'s `CapEff` 0, firewall report `applied`, policy 3).
+    The daemon had no address range to give: 29 leaked probe networks
+    ([todo 0241](../todo/containers-and-environments/0241-leaked-reach-probe-networks.md))
+    fill its pools, so `docker network create` fails with `all predefined address
+    pools have been fully subnetted`. Those networks were left alone. Each
+    environment's network was created beforehand with the expected name and
+    labels on an explicit `172.16.0.0/16` subnet, which `ensureEnvironmentNetwork`
+    adopted. A first try on `10.226.61.0/24` failed closed with `not-ready`
+    because ufw dropped the gateway's DNS from that range.
+  - The rootless containers were started by hand with the backend's arguments: a
+    gateway (`--user root`, `NET_ADMIN`, `/run` on tmpfs, `--init`, its own
+    network, IPv6 off, `ALLOWED_DOMAINS=none`, report `applied`, policy 3) with
+    the workload joining its namespace, and a plain container with the
+    `host-gateway` alias for `full`, where the firewall does nothing.
+  - Probes ran as `node` with `curl`. Port 443 was a TCP connect only, so no
+    request reached Serve. `curl` exit 7 is refused or rejected, 28 is a timeout.
+    Every `Rejected` cell below failed at once (exit 7, or a failed connect on
+    the TCP row).
+- **Rootful result:**
+
+  | Target, from inside the container | `restricted` | `full` |
+  | --- | --- | --- |
+  | Real gateway (loopback), by `host.docker.internal`, network gateway, `docker0`, LAN or Tailscale address | Rejected | Timed out: ufw |
+  | `0.0.0.0` stand-in, by `host.docker.internal`, network gateway, LAN or Tailscale address | Rejected | Timed out: ufw |
+  | Tailscale stand-in, by its address | Rejected | Timed out: ufw |
+  | Tailscale Serve, TCP connect to 443 | Rejected | Timed out: ufw |
+  | The container's own `127.0.0.1` at the gateway's port | Refused | Refused |
+  | Backend's named service port (positive control) | Timed out: passed the container firewall, then ufw | Timed out: ufw |
+  | A port ufw admits (the host's agent-tools port), TCP connect | Not tried | Connected |
+
+  The gateway container's `OUTPUT` `REJECT` counter rose from 4 to 17 over the
+  restricted probes, so the refusals came from the firewall. The ufw log for the
+  `full` probes reads `IN=br-… SRC=172.16.62.2 DST=172.16.62.1`: the host sees a
+  container's own address, not loopback as on Docker Desktop. It logged three of
+  the blocked probes, as ufw's logging is rate-limited.
+- **Rootless result:** slirp4netns dials from a host process, so ufw does not
+  stand in the way.
+
+  | Target, from inside the container | `restricted` | `full` |
+  | --- | --- | --- |
+  | Real gateway (loopback), by `host.docker.internal`, network gateway, `10.0.2.2`, LAN or Tailscale address | Rejected | Refused |
+  | `0.0.0.0` stand-in, by `host.docker.internal` or `10.0.2.2` | Rejected | Refused |
+  | `0.0.0.0` stand-in, by LAN or Tailscale address | Rejected | **Answered**, peer is the address dialled |
+  | Tailscale stand-in, by its address | Rejected | **Answered**, peer `100.71.88.77` |
+  | Tailscale Serve, TCP connect to 443 | Rejected | **Connected** |
+  | Backend's named service port, by `host.docker.internal` | Exit 7 | Exit 7 |
+
+  Host loopback is off on this daemon, which is the known gap in
+  [todo 0109](../todo/containers-and-environments/0109-rootless-linux-runtime-gaps.md);
+  the named port there cannot serve as a positive control. The `full` column is
+  the control: everything it reached, the restricted container could not. The
+  gateway's `OUTPUT` `REJECT` counter rose from 2 to 14 over these probes.
+- **What this means:**
+  - A restricted container is refused at the gateway on both daemons, whichever
+    host address it tries, so accepting a leaked session still holds. Nothing
+    needed fixing.
+  - A `full` container reaches a gateway bound to a host address when the host's
+    firewall lets it. On rootless that needs no rule at all. On rootful, ufw was
+    the only thing in the way here, and that is host configuration rather than
+    something Orkestrator sets.
+  - Peer binding could separate a rootful container's own address from a
+    browser signed in from loopback or LAN on a direct gateway bind. Coverage
+    would be partial: the peer is the host's own address on rootless, and
+    loopback through Serve and on Docker Desktop. The acceptance rests on the
+    observed restricted-firewall refusals within this run's limits, rather than
+    on peer binding being ineffective everywhere.
+  - Rootless observations apply with host loopback off. Enabling it is expected
+    to expose loopback-bound host services too, potentially including the
+    gateway. Neither that reach nor the restricted firewall's protection in
+    that configuration was qualified; the named service port also lacked a
+    positive control in this run.
+- **Not covered:** a real gateway on a Tailscale address (the restricted result
+  does not depend on it, since the firewall rejects before any listener); a
+  rootless daemon with host loopback enabled, including a reachable named-port
+  positive control; a rootful `full` container with no host firewall; a runtime
+  with the firewall inside it (an older image's); arm64. These remaining checks
+  are tracked in [todo 5510](../todo/previews-and-annotations/5510-linux-gateway-qualification-gaps.md).
 
 ## Rootless Linux host (2026-10-25)
 

@@ -30,6 +30,8 @@ import type { Environment } from "../../apps/web/src/types";
  *
  * - `fanout`: a multi-model review in progress — a running reviewer, a failed
  *   one, one queued and one starting — with Verify, Ship and the PR ahead.
+ * - `live-findings`: `fanout` with a focused reviewer that has reported findings,
+ *   in a review whose worktree moved.
  * - `loops`: a finished pipeline that went round the fix loop once, with its
  *   pull request open and CI failing.
  * - `new`: a pipeline still setting up its environment.
@@ -42,6 +44,8 @@ import type { Environment } from "../../apps/web/src/types";
  *   package plan and recorded the commit it started from, for "Rewind code to
  *   here" and "Prepare package again".
  *
+ * `&longTranscript` gives the current session a transcript that overflows its
+ * inspector; `&longTranscript=report` also files a review report in its footer.
  * `&restore=1` reloads the last saved snapshot into the review pass, or into the
  * build tab with `&view=build`. `&autoSteer=1` turns the Auto-steer setting on. `&steer=refused` makes the
  * backend refuse every steer, leaving the message queued.
@@ -62,6 +66,13 @@ const at = (seconds: number) => new Date(START + seconds * 1_000).toISOString();
 
 function message(id: string, text: string) {
   return { id, role: "assistant", parts: [{ type: "text", content: text }] };
+}
+
+function transcriptEntry(key: string, entry: number) {
+  return message(
+    `${key}-${entry}`,
+    `Transcript entry ${entry}. ${"This line gives the transcript enough height to scroll. ".repeat(6)}`,
+  );
 }
 
 function stage(
@@ -356,6 +367,36 @@ function scenario(): BuildPipeline {
   if (name === "nested-rewinds") return nestedRewinds();
   if (name === "validation-rewind") return validationRewind(false);
   if (name === "review-after-validation-rewind") return validationRewind(true);
+  if (name === "live-findings") {
+    // A focused reviewer with findings so far, in a review whose worktree moved.
+    const pipeline = fanout();
+    const issue = TEST_STRUCTURED_REVIEW_REPORT.issues[0] ?? {
+      severity: "P2" as const,
+      confidence: 90,
+      category: "correctness" as const,
+      title: "Retry drops the queued message",
+      file: "src/queue.ts",
+      line: 12,
+      symbol: "retry",
+      description: "The retry clears the queue.",
+      evidence: "src/queue.ts:12",
+      suggestion: "Keep the queue.",
+      verification: "Run the queue test.",
+    };
+    pipeline.reviewFanout!.snapshotStale = true;
+    pipeline.reviewFanout!.reviewers[0] = {
+      ...pipeline.reviewFanout!.reviewers[0]!,
+      lens: { label: "Security", instruction: "Look for injection." },
+      provisionalFindings: [
+        {
+          id: "a".repeat(24),
+          reportedAt: at(900),
+          issue: { ...issue, title: "Retry drops the queued message" },
+        },
+      ],
+    };
+    return pipeline;
+  }
   if (name === "failed-review") {
     const pipeline = fanout();
     pipeline.phase = "failed";
@@ -658,6 +699,26 @@ function installBackend(pipeline: BuildPipeline) {
           useBuildPipelineStore.setState({ pipelines: new Map() });
           return nextPipeline as T;
         }
+        case "fixture_append_transcript": {
+          const nextPipeline = save({
+            ...current,
+            backendRevision: current.backendRevision + 1,
+            sessions: current.sessions.map((session, index) =>
+              index === current.currentSessionIndex
+                ? {
+                    ...session,
+                    messages: [
+                      ...session.messages!,
+                      transcriptEntry(session.sessionKey, session.messages!.length + 1),
+                    ],
+                    messageRevision: session.messageRevision! + 1,
+                  }
+                : session,
+            ),
+          });
+          useBuildPipelineStore.getState().replacePipeline(nextPipeline);
+          return nextPipeline as T;
+        }
         case "pause_build_pipeline":
           return next({ phase: "paused", pausedFromPhase: "reviewing" });
         case "resume_build_pipeline":
@@ -673,6 +734,31 @@ function installBackend(pipeline: BuildPipeline) {
                       model: reviewer.model,
                       status: "pending",
                     }
+                  : reviewer,
+              ),
+            },
+          });
+        case "restart_build_pipeline_reviewer":
+          return next({
+            reviewFanout: {
+              reviewers: current.reviewFanout!.reviewers.map((reviewer) =>
+                reviewer.id === args?.reviewerId
+                  ? {
+                      id: reviewer.id,
+                      agent: reviewer.agent,
+                      model: reviewer.model,
+                      status: "pending",
+                    }
+                  : reviewer,
+              ),
+            },
+          });
+        case "stop_build_pipeline_reviewer":
+          return next({
+            reviewFanout: {
+              reviewers: current.reviewFanout!.reviewers.map((reviewer) =>
+                reviewer.id === args?.reviewerId
+                  ? { ...reviewer, status: "cancelled", completedAt: at(1000) }
                   : reviewer,
               ),
             },
@@ -706,6 +792,7 @@ function seed(): BuildPipeline {
   const params = new URLSearchParams(window.location.search);
   const stored = params.has("restore") ? sessionStorage.getItem("pipeline-flow-snapshot") : null;
   const pipeline: BuildPipeline = stored ? JSON.parse(stored) : scenario();
+  if (params.has("unfinished")) pipeline.phase = "verifying";
   const delivered = params.get("delivered");
   if (delivered === "push-no-pr" || delivered === "commit-only") {
     // A build that ended on the ticket's policy instead of a pull request.
@@ -745,6 +832,15 @@ function seed(): BuildPipeline {
       },
       listen: () => () => undefined,
     } as unknown as Window["orkestratorPortal"];
+  }
+  if (params.has("longTranscript")) {
+    const session = pipeline.sessions[pipeline.currentSessionIndex]!;
+    session.messages = Array.from({ length: 40 }, (_, index) =>
+      transcriptEntry(session.sessionKey, index + 1),
+    );
+    if (params.get("longTranscript") === "report") {
+      session.reviewReport = TEST_STRUCTURED_REVIEW_REPORT;
+    }
   }
   installBackend(pipeline);
   if (params.has("autoSteer")) {
@@ -880,15 +976,36 @@ function SplitPipelineViews({ pipeline }: { pipeline: BuildPipeline }) {
 /** Hides the tab with `display: none`, as `PaneLeafContainer` does when another tab takes over. */
 function BuildPaneControls({ pipeline }: { pipeline: BuildPipeline }) {
   const [isActive, setIsActive] = useState(true);
+  const [mount, setMount] = useState(0);
   return (
     <div className="flex h-screen flex-col">
       <div className="shrink-0">
         <button onClick={() => setIsActive(!isActive)}>
           {isActive ? "Activate other pane" : "Activate build pane"}
         </button>
+        <button onClick={() => setMount(mount + 1)}>Reopen the tab</button>
+        <button
+          onClick={() => {
+            const { pipelines, replacePipeline } = useBuildPipelineStore.getState();
+            const current = pipelines.get(pipeline.id)!;
+            replacePipeline({
+              ...current,
+              phase: "complete",
+              backendRevision: current.backendRevision + 1,
+            });
+          }}
+        >
+          Finish the run
+        </button>
+        {new URLSearchParams(window.location.search).has("longTranscript") ? (
+          <button onClick={() => void window.orkestrator!.invoke("fixture_append_transcript")}>
+            Append transcript entry
+          </button>
+        ) : null}
       </div>
       <div hidden={!isActive} className="relative flex min-h-0 flex-1 flex-col">
         <BuildChatTab
+          key={mount}
           data={{
             pipelineId: pipeline.id,
             environmentId: pipeline.environmentId,

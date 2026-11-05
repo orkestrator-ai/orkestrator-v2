@@ -1,11 +1,24 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
-import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { ContainerLogService, LOG_LIMITS, recordCut } from "../src/core/container-log-service";
-import { boundedBackgroundLaunch } from "../src/core/container-log-bounds";
+import {
+  boundedBackgroundLaunch,
+  boundedLaunchWithPrivateEnv,
+  CONTAINER_LOG_MAX_BYTES,
+  CONTAINER_LOG_WRITER,
+} from "../src/core/container-log-bounds";
 
 class FakeChild extends EventEmitter {
   stdout = new PassThrough();
@@ -189,14 +202,46 @@ describe("container log service", () => {
 });
 
 describe("bounded bridge output", () => {
-  test("launch uses the rotating writer when the image has it, else the plain redirect", () => {
+  test("launch uses the rotating writer when the image has it, else a capped redirect", () => {
     const shell = boundedBackgroundLaunch("bun /opt/x/index.js", "/tmp/x.log");
     expect(shell).toContain("if [ -x /usr/local/bin/orkestrator-log-writer ]; then");
     expect(shell).toContain(
       "setsid sh -c 'bun /opt/x/index.js 2>&1 | /usr/local/bin/orkestrator-log-writer /tmp/x.log'",
     );
-    expect(shell).toContain("setsid bun /opt/x/index.js > /tmp/x.log 2>&1 &");
+    expect(shell).toContain(
+      `setsid sh -c 'bun /opt/x/index.js 2>&1 | { head -c ${CONTAINER_LOG_MAX_BYTES}; cat >/dev/null; }' > /tmp/x.log 2>&1 &`,
+    );
   });
+
+  test.skipIf(process.platform !== "linux")(
+    "an image without the writer keeps the first 5 MiB and drains the rest",
+    async () => {
+      const dir = mkdtempSync(path.join(tmpdir(), "ork-log-cap-"));
+      try {
+        const file = path.join(dir, "bridge.log");
+        const done = path.join(dir, "done");
+        const producer = path.join(dir, "producer.sh");
+        // The producer can only finish once `cat` is reading, which is after
+        // `head` has written its 5 MiB and exited.
+        writeFileSync(
+          producer,
+          `head -c ${CONTAINER_LOG_MAX_BYTES + 1024 * 1024} /dev/zero\necho stderr >&2\ntouch ${done}\n`,
+        );
+        const shell = boundedBackgroundLaunch(`bash ${producer}`, file).replaceAll(
+          CONTAINER_LOG_WRITER,
+          path.join(dir, "no-writer"),
+        );
+        expect(Bun.spawnSync({ cmd: ["bash", "-c", shell] }).exitCode).toBe(0);
+        const deadline = Date.now() + 10_000;
+        while (!existsSync(done) && Date.now() < deadline) await Bun.sleep(25);
+        expect(existsSync(done)).toBe(true);
+        expect(statSync(file).size).toBe(CONTAINER_LOG_MAX_BYTES);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+    15_000,
+  );
 
   const WRITER = path.resolve(import.meta.dir, "../../../docker/orkestrator-log-writer.sh");
 
@@ -374,3 +419,46 @@ describe("bounded log tails", () => {
     expect(bounded).not.toContain("�");
   });
 });
+
+test.skipIf(process.platform !== "linux")(
+  "a private-environment launch gives the secret to the server alone",
+  async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "ork-private-launch-"));
+    try {
+      const seen = path.join(root, "seen");
+      const writer = path.join(root, "writer");
+      const server = path.join(root, "server");
+      writeFileSync(
+        writer,
+        `#!/bin/bash\nprintf 'writer:[%s]\\n' "$SECRET" >> ${seen}\ncat >> ${seen}\n`,
+        { mode: 0o755 },
+      );
+      writeFileSync(
+        server,
+        `#!/bin/bash\nprintf 'server:[%s]\\n' "$SECRET"\nif [ -e /proc/$$/fd/3 ]; then echo fd3:1; else echo fd3:0; fi\n`,
+        { mode: 0o755 },
+      );
+      const script = boundedLaunchWithPrivateEnv("SERVER", "LOG", "SECRET")
+        .replaceAll(CONTAINER_LOG_WRITER, writer)
+        .replace("SERVER", server)
+        .replace("LOG", path.join(root, "log"));
+      const launched = Bun.spawnSync([
+        "bash",
+        "-c",
+        `export SECRET=fake-secret\nexport -n SECRET\n${script}\nprintf 'shell:[%s]\\n' "$(env | grep -c '^SECRET=' || true)" >> ${seen}`,
+      ]);
+      expect(launched.exitCode).toBe(0);
+      let text = "";
+      for (let attempt = 0; attempt < 200 && !text.includes("fd3:"); attempt += 1) {
+        await Bun.sleep(20);
+        text = readFileSync(seen, "utf8");
+      }
+      expect(text).toContain("server:[fake-secret]");
+      expect(text).toContain("writer:[]");
+      expect(text).toContain("shell:[0]");
+      expect(text).toContain("fd3:0");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  },
+);

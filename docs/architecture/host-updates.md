@@ -113,9 +113,14 @@ map to them). A channel also installs every more stable channel's releases.
      downloaded update, or checks and downloads one. It suppresses the
      Restart / Later prompt for that version.
    - **Standalone:**
-     1. `installRelease` runs `bun install orkestrator@<version>` into
-        `<dataDir>/backend/releases/<version>`. Bun checks the registry's
-        integrity hash.
+     1. `installRelease` installs `orkestrator@<version>` into
+        `<dataDir>/backend/releases/<version>`. A first install fetches the
+        package, with scripts off, and keeps only the package. A second runs
+        `bun install --frozen-lockfile` on the `package.json` and `bun.lock`
+        the release publishes in `resources/release-runtime/`, so every host
+        gets the same dependency versions. Bun checks each tarball's integrity
+        hash. A release older than that lockfile installs with a plain
+        `bun install`, so its dependencies resolve afresh.
      2. The release's `engines.bun` must accept the service's recorded Bun.
      3. `bin/orkestrator.js --version` must print the version.
      4. The release's `toolchain install` runs before any downtime.
@@ -288,7 +293,7 @@ The launcher works like this:
 | --- | --- | --- |
 | `toolchain-repair` | Reinstalls missing or corrupt pinned binaries through the shared manager, under its install lock. A desktop-hosted backend leaves `bin/current` alone; a standalone one moves it. | At once when the set is unchanged. `restartRequired` when the enabled platforms changed. |
 | `image-update` | Pulls `ghcr.io/orkestrator-ai/orkestrator-v2:<backend version>`, requires `compatible`, and tags it as the configured image. Lists environments whose container runs another image. Also started (or joined) automatically by `ensureEnvironmentImage` when a container create finds the default image missing, before it takes an admission slot; a custom `--docker-image` is never pulled. The image panel in Settings → Docker offers the same download. | New environments. Rebuild existing ones from their environment menu. |
-| `gh-update` | `latest`: downloads the newest `gh` release, checks it against GitHub's published `gh_<v>_checksums.txt`, probes `--version`, and installs it under `toolchains/gh-latest/<v>`. `pinned`: goes back to the managed pin. Unqualified. | At once (`setManagedGitHubCli`). Re-applied at startup from the stored channel. |
+| `gh-update` | `latest`: downloads the newest `gh` release, checks it against GitHub's published `gh_<v>_checksums.txt`, probes `--version`, and installs it under `toolchains/gh-latest/<v>`. `pinned`: goes back to the managed pin. Unqualified. | At once (`runtime.gitHubCli`, this backend's `GitHubCliSelection`). Re-applied at startup from the stored channel. |
 
 - **One task of each kind runs at a time.** A task that a restart cuts short is
   marked failed at startup.

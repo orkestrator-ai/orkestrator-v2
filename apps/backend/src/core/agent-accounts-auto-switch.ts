@@ -1,7 +1,8 @@
 /**
- * Automatic account switching: keeps a machine on the included account whose
- * general weekly limit resets soonest, and decides what a turn the limit stopped
- * does next. It runs in the backend, so it needs no client and no coordinator.
+ * Automatic account switching: keeps a machine on the included account with room
+ * whose general weekly limit resets soonest, leaving an account while its 5-hour
+ * limit is out and coming back when that resets, and decides what a turn one of
+ * those limits stopped does next. It runs in the backend, so it needs no client and no coordinator.
  * See docs/architecture/agent-accounts.md ("Automatic switching").
  *
  * The rule itself is in `@orkestrator/protocol/agent-account-auto-switch`. This
@@ -10,15 +11,17 @@
  */
 import {
   MAX_USAGE_LIMIT_RESENDS,
+  confirmedLimitResetsAt,
   decideAutoSwitch,
+  limitConfirmedUsedUp,
+  nextFiveHourRefresh,
   rankAutoSwitchAccounts,
-  weeklyLimitConfirmedUsedUp,
-  weeklyLimitReading,
+  usageLimitReading,
   type AgentAccountAutoSwitchSettings,
   type AutoSwitchAccount,
   type AutoSwitchReason,
+  type UsageLimitReading,
   type UsageLimitStopVerdict,
-  type WeeklyLimitReading,
 } from "@orkestrator/protocol/agent-account-auto-switch";
 import {
   AGENT_ACCOUNT_PLATFORMS,
@@ -28,15 +31,23 @@ import {
   type AgentAccountsSnapshot,
   type AgentSessionAccount,
 } from "@orkestrator/protocol/agent-accounts";
-import { classifyUsageLimitError } from "@orkestrator/protocol/agent-usage-limits";
+import { usageLimitFailure, type TurnFailureKind } from "@orkestrator/protocol/agent-usage-limits";
 import type { CoordinatorAccountKeptReason } from "@orkestrator/protocol/coordinator-notices";
 import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
 import { createLogger } from "@orkestrator/protocol/logger";
 
 const log = createLogger("agent-accounts");
 
-/** The backstop for work no turn-end edge reports, such as an unattended stage. */
-export const AUTO_SWITCH_EVALUATE_INTERVAL_MS = 10 * 60_000;
+/**
+ * The backstop for work no turn-end edge reports, such as an unattended stage. A
+ * 5-hour limit can go from room to refusal in minutes, so this has to be short
+ * enough to catch it between the threshold and the refusal.
+ */
+export const AUTO_SWITCH_EVALUATE_INTERVAL_MS = 5 * 60_000;
+/** Look just after an account's 5-hour limit resets, once the provider has caught up. */
+const FIVE_HOUR_WAKE_GRACE_MS = 15_000;
+/** A 5-hour limit resets within this; a reading saying otherwise only costs a check. */
+const FIVE_HOUR_WAKE_MAX_MS = 6 * 60 * 60_000;
 /** Turn-end edges come in bursts; each evaluation reads every included account's usage. */
 const AUTO_SWITCH_EDGE_SPACING_MS = 60_000;
 /** A stop waits this long for a reading while the usage endpoint will not answer. */
@@ -134,6 +145,11 @@ export interface UsageLimitStopInput {
   requestId: string;
   /** The turn's error text. It says a limit was hit, never which. */
   error: string | undefined;
+  /**
+   * `usage-limit` when the bridge reported the provider's own signal; the error
+   * text is the fallback (`usageLimitFailure`). Like the text, it never says which limit.
+   */
+  failureKind?: TurnFailureKind;
   /** How many times this work has already been resent. */
   resends: number;
   /** When the turn is known to have been running by. Absent says nothing about its account. */
@@ -172,6 +188,8 @@ export class AgentAccountAutoSwitcher {
   /** When each account's sign-in may next be renewed, and the failures in a row. */
   private readonly renewals = new Map<string, { next: number; failures: number }>();
   private timer: ReturnType<typeof setInterval> | undefined;
+  /** Per provider, the check due when an account's 5-hour limit resets. */
+  private readonly fiveHourWakes = new Map<AgentAccountPlatform, ReturnType<typeof setTimeout>>();
   private stopped = false;
 
   constructor(private readonly deps: AgentAccountAutoSwitcherDeps) {}
@@ -202,6 +220,8 @@ export class AgentAccountAutoSwitcher {
     this.stopped = true;
     if (this.timer) clearInterval(this.timer);
     this.timer = undefined;
+    for (const wake of this.fiveHourWakes.values()) clearTimeout(wake);
+    this.fiveHourWakes.clear();
   }
 
   /** Whether automatic switching is on here, for callers that would otherwise read a provider. */
@@ -216,7 +236,7 @@ export class AgentAccountAutoSwitcher {
     });
   }
 
-  /** A turn ended on this machine, which is when the weekly limit has moved. */
+  /** A turn ended on this machine, which is when the limits have moved. */
   noteTurnEnded(platform: AgentAccountPlatform): void {
     const last = this.lastEvaluated.get(platform);
     if (last !== undefined && this.now() - last < AUTO_SWITCH_EDGE_SPACING_MS) return;
@@ -235,12 +255,41 @@ export class AgentAccountAutoSwitcher {
       if (!state) return;
       const accounts = await this.readings(platform, state, new Set(), false);
       const decision = decideAutoSwitch(accounts, state.activeId);
-      if (decision.action !== "switch") return;
-      await this.moveTo(platform, state.snapshot, state.activeId, {
-        accountId: decision.accountId,
-        reason: decision.reason,
-      });
+      const moved =
+        decision.action === "switch" &&
+        (await this.moveTo(platform, state.snapshot, state.activeId, {
+          accountId: decision.accountId,
+          reason: decision.reason,
+        }));
+      this.armFiveHourWake(platform, accounts, moved ? decision.accountId : state.activeId);
     });
+  }
+
+  /**
+   * The timer would notice an account's 5-hour limit resetting within minutes; this
+   * looks as it happens, so the machine is back on the soonest weekly reset straight
+   * away. Only one is due per provider, and each check replaces it.
+   */
+  private armFiveHourWake(
+    platform: AgentAccountPlatform,
+    accounts: readonly AutoSwitchAccount[],
+    activeId: string,
+  ): void {
+    const previous = this.fiveHourWakes.get(platform);
+    if (previous) clearTimeout(previous);
+    this.fiveHourWakes.delete(platform);
+    if (!this.timer) return;
+    const refresh = nextFiveHourRefresh(accounts, activeId);
+    if (refresh === undefined) return;
+    const wake = setTimeout(
+      () => {
+        this.fiveHourWakes.delete(platform);
+        this.nudge(platform);
+      },
+      Math.min(Math.max(0, refresh - this.now()) + FIVE_HOUR_WAKE_GRACE_MS, FIVE_HOUR_WAKE_MAX_MS),
+    );
+    wake.unref?.();
+    this.fiveHourWakes.set(platform, wake);
   }
 
   /**
@@ -248,11 +297,12 @@ export class AgentAccountAutoSwitcher {
    *
    * The error text cannot say which limit it was, so nothing moves on the text
    * alone. A fresh reading of the account the turn ran on has to show the general
-   * weekly limit used up. A Fable, other model-specific or 5-hour limit reads
-   * below that and the turn stays stopped, as does one with nowhere to go.
+   * weekly limit used up or the 5-hour limit at the threshold. A Fable or other
+   * model-specific limit reads below that and the turn stays stopped, as does one
+   * with nowhere to go.
    */
   async handleLimitStop(input: UsageLimitStopInput): Promise<UsageLimitStopVerdict> {
-    const limit = classifyUsageLimitError(input.error);
+    const limit = usageLimitFailure(input);
     if (!limit) return "stop";
     // Read before deciding, because a move changes what the session reads next.
     const account = this.reportedStops.has(input.requestId)
@@ -277,10 +327,11 @@ export class AgentAccountAutoSwitcher {
     environmentId: string;
     requestId: string;
     error: string | undefined;
+    failureKind?: TurnFailureKind;
     turnStartedAt?: string;
     session?: UsageLimitStopSession;
   }): Promise<void> {
-    const limit = classifyUsageLimitError(input.error);
+    const limit = usageLimitFailure(input);
     if (!limit) return;
     const account =
       !this.reportedStops.has(input.requestId) && isAgentAccountPlatform(input.platform)
@@ -398,7 +449,8 @@ export class AgentAccountAutoSwitcher {
     if (waiting && this.now() - waiting.checkedAt < USAGE_LIMIT_RECHECK_MS) return "wait";
     const state = await this.automaticState(platform);
     if (!state) return "stop";
-    if (waiting?.confirmedUntil !== undefined && this.now() < waiting.confirmedUntil) {
+    if (waiting?.confirmedUntil !== undefined) {
+      if (this.now() >= waiting.confirmedUntil) return "stop";
       return this.resendOnceBridgeIsFree(input);
     }
     const session = await this.deps.sessionAccount(environmentId, platform);
@@ -456,9 +508,12 @@ export class AgentAccountAutoSwitcher {
     this.waitFor(input.requestId, USAGE_LIMIT_BRIDGE_WAIT_MS);
     const waiting = this.waitingSince.get(input.requestId)!;
     waiting.bridgeSince ??= this.now();
-    // Attribution and weekly proof belong to the stopped request, not the
-    // replacement bridge. Never reuse that proof beyond the weekly reset.
-    waiting.confirmedUntil ??= proofKey ? this.confirmed.get(proofKey)?.reset : undefined;
+    // Attribution and limit proof belong to the stopped request, not the
+    // replacement bridge. A reset restores quota but does not continue the
+    // stopped turn. Keep its attribution for this bridge wait only.
+    if (proofKey && this.confirmed.has(proofKey)) {
+      waiting.confirmedUntil ??= waiting.bridgeSince + USAGE_LIMIT_BRIDGE_WAIT_MS;
+    }
     return this.now() - waiting.bridgeSince < USAGE_LIMIT_BRIDGE_WAIT_MS ? "wait" : "stop";
   }
 
@@ -496,17 +551,18 @@ export class AgentAccountAutoSwitcher {
     } catch {
       return "unreadable";
     }
-    const reading = weeklyLimitReading(platform, snapshot, this.now());
-    if (reading.freshness !== "fresh") return "unreadable";
-    if (!weeklyLimitConfirmedUsedUp(reading)) {
+    const reading = usageLimitReading(platform, snapshot, this.now());
+    if (!limitConfirmedUsedUp(reading)) {
+      if (reading.freshness !== "fresh") return "unreadable";
       this.confirmed.delete(key);
       return "room";
     }
+    const resetsAt = confirmedLimitResetsAt(reading);
     if (this.confirmed.size >= MAX_TRACKED_STOPS) this.confirmed.clear();
     this.confirmed.set(key, {
-      until: Math.min(this.now() + CONFIRMATION_REUSE_MS, reading.resetsAt ?? Infinity),
-      reset: reading.resetsAt ?? this.now() + USAGE_LIMIT_BRIDGE_WAIT_MS,
-      ...(reading.resetsAt !== undefined ? { resetsAt: reading.resetsAt } : {}),
+      until: Math.min(this.now() + CONFIRMATION_REUSE_MS, resetsAt ?? Infinity),
+      reset: resetsAt ?? this.now() + USAGE_LIMIT_BRIDGE_WAIT_MS,
+      ...(resetsAt !== undefined ? { resetsAt } : {}),
       identity,
     });
     return "used-up";
@@ -584,17 +640,17 @@ export class AgentAccountAutoSwitcher {
     force: boolean,
   ): Promise<AutoSwitchAccount[]> {
     const includedIds = state.snapshot.autoSwitch?.[platform]?.includedAccountIds ?? [];
-    const read = (accountId: string, forced: boolean): Promise<WeeklyLimitReading> =>
+    const read = (accountId: string, forced: boolean): Promise<UsageLimitReading> =>
       this.deps.readUsage(platform, accountId, { force: forced }).then(
-        (snapshot) => weeklyLimitReading(platform, snapshot, this.now()),
-        (): WeeklyLimitReading => ({ freshness: "none", wouldPay: false }),
+        (snapshot) => usageLimitReading(platform, snapshot, this.now()),
+        (): UsageLimitReading => ({ freshness: "none", wouldPay: false }),
       );
     return Promise.all(
       state.snapshot.accounts
         .filter((account) => account.platform === platform)
         .map(async (account) => {
           const included = includedIds.includes(account.id);
-          let reading: WeeklyLimitReading = { freshness: "none", wouldPay: false };
+          let reading: UsageLimitReading = { freshness: "none", wouldPay: false };
           if (confirmedOut.has(account.id)) {
             reading = { freshness: "fresh", usedPercent: 100, wouldPay: false };
           } else if (account.signedIn && (included || account.id === state.activeId)) {

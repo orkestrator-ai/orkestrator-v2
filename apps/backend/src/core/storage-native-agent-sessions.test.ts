@@ -23,13 +23,16 @@ import {
   hasStore,
   readStoredValue,
   seedStore,
+  storageDatabase,
   storageFilesContain,
+  storageInternals,
   writeLegacyStore,
 } from "./storage-test-support.js";
 import { NativeAgentSessionsRepository } from "./storage-native.js";
 
 const SESSIONS_STORE = "native-agent-sessions.json";
 const JOURNAL_STORE = "agent-interaction-resolution-journal.json";
+const JOURNAL_STORE_NAME = "agent-interaction-resolution-journal";
 
 async function withStorage(
   run: (first: StorageService, second: StorageService) => Promise<void>,
@@ -484,28 +487,34 @@ describe("StorageService native agent sessions", () => {
     });
   });
 
-  test("orders a journal read against an in-flight update", async () => {
+  test("a journal read takes no lease and writes nothing", async () => {
     await withStorage(async (first, second) => {
-      let releaseUpdate!: () => void;
-      const barrier = new Promise<void>((resolve) => {
-        releaseUpdate = resolve;
+      const saved = await first.updateAgentInteractionResolutionJournal((journal) => ({
+        ...journal,
+        entries: [...journal.entries, terminalJournalEntry(7)],
+      }));
+      const { context } = storageInternals(first);
+      const database = storageDatabase(second);
+      const revision = database.storeRevision(JOURNAL_STORE_NAME);
+      database.db.exec("CREATE TEMP TABLE lease_writes (name TEXT)");
+      for (const event of ["INSERT", "UPDATE", "DELETE"]) {
+        database.db.exec(`CREATE TEMP TRIGGER lease_write_${event} AFTER ${event} ON main.leases
+          BEGIN INSERT INTO lease_writes VALUES ('write'); END`);
+      }
+
+      // Another backend holds the journal's lease for as long as it likes: the
+      // read neither waits for it nor takes one, and sees the last commit.
+      const release = await context.acquireLease(
+        path.join(first.getDataDir(), `${JOURNAL_STORE_NAME}.json`),
+        "test",
+      );
+      expect(await second.getAgentInteractionResolutionJournal()).toEqual(saved);
+      await release();
+
+      expect(database.db.query("SELECT count(*) AS count FROM lease_writes").get()).toEqual({
+        count: 0,
       });
-      const update = first.updateAgentInteractionResolutionJournal((journal) => {
-        // The updater runs while the lock is held; the read must not observe
-        // the pre-update journal after this point.
-        queueMicrotask(releaseUpdate);
-        return {
-          ...journal,
-          entries: [...journal.entries, terminalJournalEntry(7)],
-        };
-      });
-      await barrier;
-      const [updated, read] = await Promise.all([
-        update,
-        second.getAgentInteractionResolutionJournal(),
-      ]);
-      expect(updated.entries.map((entry) => entry.id)).toEqual(["claim-7"]);
-      expect(read).toEqual(updated);
+      expect(database.storeRevision(JOURNAL_STORE_NAME)).toBe(revision);
     });
   });
 

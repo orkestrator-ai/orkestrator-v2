@@ -16,7 +16,8 @@ the limits that apply.
 | Images and files | Thumbnails and file cards; images keep their size while loading and say whether they are loading, blocked, denied, unavailable, too large, unsupported or could not be decoded | Gallery viewer (previous/next, zoom, fit, original size), Copy image, Download original; video and audio previews load only when you press **Load video** / **Load audio** and never autoplay; they stream from the environment (seeking fetches only what is needed; up to 2 GiB for local files, 512 MiB for container files), and where streaming is not available (for example a remote browser without a hosted content origin) files over 8 MiB offer Download original instead |
 | Charts | Bar, line, area, scatter and donut charts | Legend toggles, hover/focus values, Data table, Source JSON, Copy CSV, Download CSV / JSON / SVG, Reset view, Expand |
 | Workflow snapshots | A historical **Snapshot** of a review or build run | Open live workflow, node links, table view |
-| HTML artifacts | A saved preview image | Source, Download, Print, Expand; interactive artifacts add **Run interactive** |
+| Static HTML reports | The verified document itself: selectable text, sharp vector graphics, working disclosures, sized to the transcript | Document, Saved preview, Source, Expand document, Download PNG, Print saved preview, Download PDF, HTML source, Diagnostics |
+| Interactive HTML artifacts | A saved preview image until you press **Run interactive** | Run interactive, Preview, Source, Enlarge preview, Download, Print |
 
 ## Expanded views
 
@@ -61,6 +62,46 @@ published from here.
 Find matches an artifact's summary at once, and its chart labels, workflow
 labels or Mermaid source (while the source view is open) once the card has
 loaded them.
+
+## Static HTML reports
+
+A published static report appears in the conversation as a real document, not
+a picture of one. You can select and copy its text, open its disclosures, zoom
+without blur and resize the window; it fits the width of the transcript.
+
+- **Isolated.** It runs in a sandbox with no network access, and only
+  Orkestrator's own display code runs. Scripts, frames and event handlers the
+  author wrote were removed when it was verified and are removed again here.
+- **Theme.** A report written with Orkestrator's theme variables follows your
+  theme. One written without them keeps the appearance it was verified under,
+  so hard-coded colours stay readable.
+- **Links.** Clicking a link never navigates. Orkestrator shows the destination
+  host and opens it only when you click **Open**. Press **Escape** inside a
+  report to return focus to the conversation.
+- **Tall reports.** Up to 1,600 px of a report shows inline. A taller one says
+  so, scrolls inside its frame and offers **Expand**. Nothing is cut off
+  silently.
+- **Saved preview.** The image saved at verification shows while the document
+  loads, under **Saved preview**, and when the document cannot be shown. The
+  card says why: over the 256 KiB or 5,000-element display limit, not matching
+  its verification receipt, read incompletely, or the view failed (with
+  **Retry**).
+- **Several reports.** At most four documents are open per window. Others keep
+  their saved preview and say so; **Open this report** shows one at once.
+  Static reports do not count against the single interactive artifact.
+- **Replay.** A published report reopens from its stored bytes, including when
+  the preview renderer is unavailable. Reopening shows the published revision,
+  never a later draft.
+- **Find.** Find matches a report's summary immediately. Once the document has
+  been displayed in this session, Find also includes its text up to 64 Ki
+  characters, and an open Find bar picks that text up as soon as it arrives. In a
+  displayed report, Find highlights every match and scrolls to the current one,
+  opening a closed section around it until you move on or close Find. A report
+  waiting for a free frame shows its saved preview, so a match there leads to its
+  card.
+
+Selecting text keeps a report open while it stays in the transcript's rendered
+range. As with any message, scrolling far enough away ends the selection.
 
 ## Interactive HTML artifacts
 
@@ -107,6 +148,9 @@ unavailable.
 - Browser access runs them in a sandboxed frame on a separate content origin.
   Browsers isolate origins but cannot guarantee CPU isolation: a runaway
   artifact can slow the tab until you press Stop.
+- The hosted web client shows static reports as their saved preview, with Source
+  and export, because its security policy cannot run the document frame.
 - Previews, Mermaid diagrams and HTML verification need the backend's
-  headless Chromium. Without it, diagrams and HTML show their source with an
-  explanation; charts, tables, code and workflow snapshots still render.
+  headless Chromium. Without it, new diagrams and HTML cannot be verified, and
+  agents are told so; charts, tables, code and workflow snapshots still render,
+  and published static reports still display.

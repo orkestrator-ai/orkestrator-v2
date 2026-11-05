@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import {
   Code2,
   Download,
   Expand,
+  FileText,
   Image as ImageIcon,
   Info,
   Play,
@@ -27,6 +28,7 @@ import {
   readWholeRepresentation,
   rememberArtifactSearchBody,
   useArtifactRepresentation,
+  useCachedArtifactSearchBody,
   type ArtifactReadScope,
   type ArtifactRequestState,
 } from "@/lib/chat/artifact-requests";
@@ -47,6 +49,8 @@ import {
 } from "@/stores/artifactLiveHostStore";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
+import { StaticHtmlArtifactView } from "./StaticHtmlArtifactView";
+import { staticHtmlPresentationSupported } from "./static-html-frame-source";
 import { NativeChart } from "./NativeChart";
 import { NativeChartSource } from "./NativeChartData";
 import { WorkflowSnapshotCard } from "./WorkflowSnapshotCard";
@@ -257,16 +261,37 @@ function downloadPdfRepresentation(
     .finally(onSettled);
 }
 
+function useArtifactSearchBodyPublisher(
+  artifactRef: TranscriptArtifactRef,
+  scope: ArtifactReadScope,
+): (text: string | null) => void {
+  const { publicationId, artifactId, revision } = artifactRef;
+  const { backendId, environmentId, logicalSessionKey } = scope;
+  return useCallback(
+    (text) =>
+      rememberArtifactSearchBody({ publicationId, artifactId, revision }, text, {
+        backendId,
+        environmentId,
+        logicalSessionKey,
+      }),
+    [artifactId, backendId, environmentId, logicalSessionKey, publicationId, revision],
+  );
+}
+
 /**
  * Publish the body text this card shows to find's synchronous cache, and
  * withdraw it when the card stops showing it (e.g. Mermaid back to preview).
  * Unmounting (scrolling away) keeps it: the body is still the card's content.
  */
-function useArtifactSearchBody(artifactRef: TranscriptArtifactRef, text: string | null): void {
-  const { publicationId, artifactId, revision } = artifactRef;
+function useArtifactSearchBody(
+  artifactRef: TranscriptArtifactRef,
+  scope: ArtifactReadScope,
+  text: string | null,
+): void {
+  const publish = useArtifactSearchBodyPublisher(artifactRef, scope);
   useEffect(() => {
-    rememberArtifactSearchBody({ publicationId, artifactId, revision }, text);
-  }, [artifactId, publicationId, revision, text]);
+    publish(text);
+  }, [publish, text]);
 }
 
 /**
@@ -298,7 +323,7 @@ export function ChartArtifactBody({ artifactRef, scope, occurrenceKey }: BodyPro
         : null,
     [artifactRef, parsed, representation],
   );
-  useArtifactSearchBody(artifactRef, searchText);
+  useArtifactSearchBody(artifactRef, scope, searchText);
   if (representation.status !== "ready")
     return <BodyStatus state={representation} label="Loading chart data" />;
   if (!sameRevision(representation.value, artifactRef)) return <RevisionMismatch />;
@@ -348,7 +373,7 @@ export function MermaidArtifactBody({ artifactRef, scope, occurrenceKey }: BodyP
     showSource && source.status === "ready" && sameRevision(source.value, artifactRef)
       ? artifactBodySearchText("mermaid-source", source.value.data)
       : null;
-  useArtifactSearchBody(artifactRef, sourceSearchText);
+  useArtifactSearchBody(artifactRef, scope, sourceSearchText);
   const sanitized = useMemo(() => {
     if (svg.status !== "ready" || !sameRevision(svg.value, artifactRef)) return null;
     try {
@@ -450,7 +475,7 @@ export function WorkflowArtifactBody({ artifactRef, scope, occurrenceKey }: Body
         : null,
     [artifactRef, parsed, representation],
   );
-  useArtifactSearchBody(artifactRef, searchText);
+  useArtifactSearchBody(artifactRef, scope, searchText);
   if (representation.status !== "ready")
     return <BodyStatus state={representation} label="Loading workflow snapshot" />;
   if (!sameRevision(representation.value, artifactRef)) return <RevisionMismatch />;
@@ -483,11 +508,39 @@ export function HtmlArtifactBody({
   scope,
   occurrenceKey,
 }: BodyProps & { view: ArtifactPublicationView }) {
-  const [choice, setChoice] = useRichViewField(occurrenceKey, "view", "preview" as RichViewChoice);
+  const capabilities = useTranscriptArtifactCapabilities();
+  const interactive = artifactRef.kind === "html-interactive";
+  // Replay needs only stored bytes: not the preview worker or `liveInteractive`.
+  const presentsDocument =
+    artifactRef.kind === "html-static" &&
+    capabilities?.rolloutFlags?.staticPresentation !== false &&
+    staticHtmlPresentationSupported();
+  const [choice, setChoice] = useRichViewField(
+    occurrenceKey,
+    "view",
+    (presentsDocument ? "document" : "preview") as RichViewChoice,
+  );
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [enlarged, setEnlarged] = useState(false);
+  const [expanded, setExpanded] = useState(false);
   const [pdfBusy, setPdfBusy] = useState(false);
   const showSource = choice === "source";
+  const showDocument = presentsDocument && choice === "document";
+  const closeExpanded = useCallback(() => setExpanded(false), []);
+  const openExpanded = useCallback(() => setExpanded(true), []);
+  // A static document's text exists only in its frame, so it arrives from there
+  // rather than from a representation. Leaving the document view withdraws it;
+  // scrolling away does not, and a remounted card finds it still in the cache.
+  const publishSearchBody = useArtifactSearchBodyPublisher(artifactRef, scope);
+  const publishDocumentText = useCallback(
+    (text: string | null) =>
+      publishSearchBody(text === null ? null : artifactBodySearchText("static-document", text)),
+    [publishSearchBody],
+  );
+  useEffect(() => {
+    if (!showDocument) publishSearchBody(null);
+  }, [publishSearchBody, showDocument]);
+  const documentSearchText = useCachedArtifactSearchBody(artifactRef);
   const firstCapture = view.receipt.captures[0] ?? null;
   const capture = useArtifactRepresentation(scope, artifactRef.publicationId, "capture", {
     enabled: firstCapture !== null,
@@ -504,8 +557,6 @@ export function HtmlArtifactBody({
       ? capture.value.data
       : null;
   const captureUrl = captureBase64 ? `data:image/png;base64,${captureBase64}` : null;
-  const interactive = artifactRef.kind === "html-interactive";
-  const capabilities = useTranscriptArtifactCapabilities();
   const liveEnabled = Boolean(
     capabilities?.liveInteractive && capabilities.rolloutFlags.liveInteractive,
   );
@@ -587,9 +638,17 @@ export function HtmlArtifactBody({
             />
           )
         ) : null}
+        {presentsDocument ? (
+          <ToolbarAction
+            label="Document"
+            pressed={showDocument}
+            onClick={() => setChoice("document")}
+            icon={<FileText aria-hidden="true" />}
+          />
+        ) : null}
         <ToolbarAction
-          label="Preview"
-          pressed={!showSource}
+          label={presentsDocument ? "Saved preview" : "Preview"}
+          pressed={!showSource && !showDocument}
           onClick={() => setChoice("preview")}
           icon={<ImageIcon aria-hidden="true" />}
         />
@@ -599,12 +658,20 @@ export function HtmlArtifactBody({
           onClick={() => setChoice("source")}
           icon={<Code2 aria-hidden="true" />}
         />
-        <ToolbarAction
-          label="Enlarge preview"
-          disabled={!captureUrl}
-          onClick={() => setEnlarged(true)}
-          icon={<Expand aria-hidden="true" />}
-        />
+        {showDocument ? (
+          <ToolbarAction
+            label="Expand document"
+            onClick={openExpanded}
+            icon={<Expand aria-hidden="true" />}
+          />
+        ) : (
+          <ToolbarAction
+            label="Enlarge preview"
+            disabled={!captureUrl}
+            onClick={() => setEnlarged(true)}
+            icon={<Expand aria-hidden="true" />}
+          />
+        )}
         <ToolbarAction
           label="Download PNG"
           disabled={!captureBase64}
@@ -673,6 +740,18 @@ export function HtmlArtifactBody({
           ) : (
             <BodyStatus state={source} label="Loading source" />
           )
+        ) : showDocument ? (
+          <StaticHtmlArtifactView
+            artifactRef={artifactRef}
+            view={view}
+            scope={scope}
+            occurrenceKey={occurrenceKey}
+            preview={preview}
+            expanded={expanded}
+            onExpand={openExpanded}
+            onCloseExpanded={closeExpanded}
+            onDocumentText={publishDocumentText}
+          />
         ) : (
           <>
             {!live && ended ? (
@@ -698,6 +777,7 @@ export function HtmlArtifactBody({
         {showDiagnostics ? <ArtifactDiagnostics view={view} /> : null}
         {interactive ? <ArtifactWorkerPrepareAction /> : null}
       </div>
+      {showDocument ? <BodySearchRoot text={documentSearchText} /> : null}
       {enlarged && captureUrl ? (
         <Dialog open onOpenChange={setEnlarged}>
           <DialogContent size="6xl">

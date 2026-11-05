@@ -32,8 +32,28 @@ const log = createLogger("storage");
 
 export { STORAGE_DATABASE_FILE };
 
+/**
+ * The change-tracking ledger's own database file, beside
+ * {@link STORAGE_DATABASE_FILE} (`change-tracking/ledger-schema.ts`).
+ */
+export const CHANGE_LEDGER_DATABASE_FILE = "change-tracking.sqlite";
+
 /** Freed pages returned per scrub (4 KiB pages: at most 16 MiB at a time). */
 const INCREMENTAL_VACUUM_PAGES = 4096;
+
+/**
+ * First wait before a deferred scrub tries again ({@link StorageDatabase.scrubDeletedContent}).
+ * It doubles per busy attempt up to {@link SCRUB_RETRY_MAX_MS}.
+ */
+export const SCRUB_RETRY_FIRST_MS = 5_000;
+/** The longest wait between attempts of a deferred scrub. */
+export const SCRUB_RETRY_MAX_MS = 60_000;
+
+/**
+ * Rows `PRAGMA optimize` samples per index (`analysis_limit`), which bounds its
+ * cost on a large table. SQLite recommends a few hundred.
+ */
+const OPTIMIZE_ANALYSIS_LIMIT = 400;
 
 /** How a store's JSON value maps onto rows. Fixed per store name. */
 export type StoreLayout =
@@ -218,6 +238,11 @@ export interface StorageDatabaseOptions {
   migrations?: readonly StorageMigration[];
   /** Resolves a store's layout; unknown stores are documents. */
   layoutFor?: (store: string) => StoreLayout;
+  /**
+   * The database file in `dataDir`, {@link STORAGE_DATABASE_FILE} by default.
+   * The change-tracking ledger has its own file (`change-tracking/ledger-schema.ts`).
+   */
+  file?: string;
   busyTimeoutMs?: number;
   /**
    * Called before migrating a database that already has data (outside any
@@ -252,6 +277,18 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function restrictCompanionFiles(databasePath: string): void {
+  for (const suffix of ["-wal", "-shm", "-journal"]) {
+    const companion = `${databasePath}${suffix}`;
+    try {
+      if (fs.lstatSync(companion).isFile()) fs.chmodSync(companion, 0o600);
+    } catch (error) {
+      // Another backend closing the database removes its WAL and SHM.
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+}
+
 export class StorageDatabase {
   readonly path: string;
   readonly db: Database;
@@ -264,16 +301,22 @@ export class StorageDatabase {
    * foreign commit reusing that revision number would be shadowed by it.
    */
   private pendingCache: Map<string, CachedStore | null> | null = null;
+  /** {@link rowBytesExpression} for this connection's SQLite library. */
+  private rowBytesSql: string | null = null;
   /** Revision each store was bumped to by row writes in the open transaction. */
   private readonly touchedRevisions = new Map<string, number>();
   private readonly layoutFor: (store: string) => StoreLayout;
   private readonly observe: ((event: StorageReadEvent) => void) | undefined;
   private readonly observeFetch: ((length: number) => void) | undefined;
+  private readonly busyTimeoutMs: number;
+  /** The timer of a deferred scrub, while one is pending. */
+  private scrubRetry: ReturnType<typeof setTimeout> | null = null;
+  private scrubRetryDelayMs = SCRUB_RETRY_FIRST_MS;
   private closed = false;
 
   constructor(dataDir: string, options: StorageDatabaseOptions = {}) {
     fs.mkdirSync(dataDir, { recursive: true });
-    this.path = path.join(dataDir, STORAGE_DATABASE_FILE);
+    this.path = path.join(dataDir, options.file ?? STORAGE_DATABASE_FILE);
     if (fs.existsSync(this.path) && fs.lstatSync(this.path).isSymbolicLink()) {
       throw new Error("Storage database must not be a symbolic link");
     }
@@ -283,9 +326,12 @@ export class StorageDatabase {
     this.db = new Database(this.path, { create: true, strict: true });
     try {
       // Sensitive stores (agent mail, prompt queues, credentials) share this
-      // file. SQLite creates -wal/-shm with the database file's mode.
+      // file. SQLite creates -wal/-shm with the database file's mode, but keeps
+      // the mode of ones already there.
       fs.chmodSync(this.path, 0o600);
-      this.db.exec(`PRAGMA busy_timeout = ${Math.max(0, options.busyTimeoutMs ?? 10_000)}`);
+      restrictCompanionFiles(this.path);
+      this.busyTimeoutMs = Math.max(0, options.busyTimeoutMs ?? 10_000);
+      this.db.exec(`PRAGMA busy_timeout = ${this.busyTimeoutMs}`);
       // Only takes effect before the first table exists (a new database);
       // switching later needs a full VACUUM. Lets deletes give space back.
       this.db.exec("PRAGMA auto_vacuum = INCREMENTAL");
@@ -294,7 +340,9 @@ export class StorageDatabase {
       this.db.exec("PRAGMA synchronous = FULL");
       // Deleting user content must not leave it readable in free pages.
       this.db.exec("PRAGMA secure_delete = ON");
-      this.db.exec("PRAGMA foreign_keys = ON");
+      // No table declares a foreign key, so `foreign_keys` is left off: setting
+      // it would promise referential checks that nothing enforces. A migration
+      // that declares keys must turn it on here.
       this.db.exec("PRAGMA journal_size_limit = 8388608");
       const migrations = [SCHEMA, ...(options.migrations ?? [])];
       const target = migrations.reduce((max, migration) => Math.max(max, migration.version), 0);
@@ -325,8 +373,19 @@ export class StorageDatabase {
     }
   }
 
+  /**
+   * Closes the connection. Planner statistics are refreshed first for the
+   * tables this connection queried ({@link optimize}), as SQLite recommends,
+   * and a deferred scrub is tried once more without waiting.
+   */
   close(): void {
     if (this.closed) return;
+    this.optimize();
+    if (this.scrubRetry) {
+      clearTimeout(this.scrubRetry);
+      this.scrubRetry = null;
+      this.tryTruncateWal();
+    }
     this.closed = true;
     this.cache.clear();
     this.db.close();
@@ -702,6 +761,22 @@ export class StorageDatabase {
     return revision;
   }
 
+  /** Mutate legacy array documents without reducing duplicate IDs to a keyed row.
+   * The mode check and mutation share a write transaction; normal row writers
+   * must continue using updateStoreRow.
+   */
+  updateDocumentArrayRows<T>(store: string, mutate: (items: T[]) => void): void {
+    this.transaction(() => {
+      if (this.readStoreHeader(store)?.mode !== "document") {
+        throw new Error("Expected an array document");
+      }
+      const current = this.readStoreValueInTransaction(store, { unreadable: "throw" })!
+        .value as T[];
+      mutate(current);
+      this.writeStoreInTransaction(store, current);
+    });
+  }
+
   /**
    * Synchronous read-modify-write in one IMMEDIATE transaction: SQLite's write
    * lock serializes it against every other connection, so no lease is needed.
@@ -740,7 +815,9 @@ export class StorageDatabase {
    * in the layout's key field, since a row and its item cannot name different
    * keys. A store held whole as a document falls back to a full
    * read-modify-write; if that document is unreadable, `unreadable: "throw"`
-   * raises {@link StoreCorruptError} instead of replacing it.
+   * raises {@link StoreCorruptError} instead of replacing it. An unparsable row
+   * raises it too, unless `unreadableRow: "replace"`, where `mutate` sees that
+   * row as absent and may overwrite or delete it.
    */
   updateStoreRow<T>(
     store: string,
@@ -749,6 +826,7 @@ export class StorageDatabase {
     options: {
       collection?: string;
       unreadable?: "replace" | "throw";
+      unreadableRow?: "replace";
       /** Value to start from when the store is absent (or replaced); default `{}`. */
       initial?: () => Record<string, unknown>;
     } = {},
@@ -804,7 +882,7 @@ export class StorageDatabase {
       try {
         current = existing ? (JSON.parse(existing.value) as unknown) : undefined;
       } catch {
-        throw new StoreCorruptError(store);
+        if (options.unreadableRow !== "replace") throw new StoreCorruptError(store);
       }
       const update = mutate(current);
       if (layout.kind === "array" && !update.delete && "value" in update) {
@@ -952,22 +1030,114 @@ export class StorageDatabase {
   /**
    * Makes deleted content unrecoverable from the WAL. `secure_delete` zeroes
    * freed pages in the main file; a truncating checkpoint moves the deleting
-   * transaction there and discards the old frames. Busy readers can defer
-   * truncation, so this is best effort and never throws. SQLite reports that
-   * deferral in the checkpoint's result row rather than as an error.
+   * transaction there and discards the old frames.
+   *
+   * The checkpoint never waits. A reader holding an older snapshot (an hourly
+   * snapshot copy, another backend's long read) would make a truncating
+   * checkpoint call the busy handler for the whole busy timeout, blocking the
+   * event loop, so it runs with `busy_timeout = 0`: it copies what it can and
+   * reports the rest busy. A busy or failed scrub is then retried from a timer,
+   * also without waiting, {@link SCRUB_RETRY_FIRST_MS} later and doubling up to
+   * {@link SCRUB_RETRY_MAX_MS}, until the WAL truncates or the connection
+   * closes. So deleted content leaves the WAL within a minute of the last
+   * older reader finishing. Never throws.
    */
   scrubDeletedContent(): void {
     try {
-      // Return a bounded number of freed pages to the filesystem first, so a
-      // large delete shrinks the file without one long blocking vacuum.
-      this.db.exec(`PRAGMA incremental_vacuum(${INCREMENTAL_VACUUM_PAGES})`);
-      const { busy } = this.db.query("PRAGMA wal_checkpoint(TRUNCATE)").get() as { busy: number };
-      if (busy === 0) log.recovered("scrub.checkpoint-failed", "scrub");
-      else log.throttled("warn", "scrub.checkpoint-failed", { scope: "scrub", kind: "busy" });
+      if (this.releaseFreePages() >= 0) log.recovered("scrub.vacuum-failed", "scrub-vacuum");
     } catch (error) {
-      // A concurrent reader keeps the WAL alive; the next checkpoint scrubs it.
+      log.throttled("warn", "scrub.vacuum-failed", {
+        scope: "scrub-vacuum",
+        error,
+        fields: () => ({ error: formatLogError(error, { message: false, stack: false }) }),
+      });
+    }
+    if (this.tryTruncateWal()) {
+      this.cancelScrubRetry();
+      return;
+    }
+    this.scheduleScrubRetry();
+  }
+
+  /** Whether a scrub is waiting for readers to move on. */
+  hasDeferredScrub(): boolean {
+    return this.scrubRetry !== null;
+  }
+
+  /**
+   * One truncating checkpoint that never invokes the busy handler. True when
+   * the WAL was truncated. A failure is logged (throttled) and reported false.
+   */
+  private tryTruncateWal(): boolean {
+    if (this.closed) return false;
+    try {
+      this.db.exec("PRAGMA busy_timeout = 0");
+      try {
+        const { busy } = this.db.query("PRAGMA wal_checkpoint(TRUNCATE)").get() as {
+          busy: number;
+        };
+        if (busy === 0) {
+          log.recovered("scrub.checkpoint-failed", "scrub");
+          return true;
+        }
+        log.throttled("warn", "scrub.checkpoint-failed", { scope: "scrub", kind: "busy" });
+        return false;
+      } finally {
+        this.db.exec(`PRAGMA busy_timeout = ${this.busyTimeoutMs}`);
+      }
+    } catch (error) {
       log.throttled("warn", "scrub.checkpoint-failed", {
         scope: "scrub",
+        error,
+        fields: () => ({ error: formatLogError(error, { message: false, stack: false }) }),
+      });
+      return false;
+    }
+  }
+
+  private scheduleScrubRetry(): void {
+    if (this.closed || this.scrubRetry) return;
+    const delay = this.scrubRetryDelayMs;
+    this.scrubRetryDelayMs = Math.min(delay * 2, SCRUB_RETRY_MAX_MS);
+    this.scrubRetry = setTimeout(() => {
+      this.scrubRetry = null;
+      if (this.closed) return;
+      if (this.tryTruncateWal()) this.scrubRetryDelayMs = SCRUB_RETRY_FIRST_MS;
+      else this.scheduleScrubRetry();
+    }, delay);
+    this.scrubRetry.unref?.();
+  }
+
+  private cancelScrubRetry(): void {
+    if (this.scrubRetry) clearTimeout(this.scrubRetry);
+    this.scrubRetry = null;
+    this.scrubRetryDelayMs = SCRUB_RETRY_FIRST_MS;
+  }
+
+  /**
+   * Refreshes the query planner's statistics for the tables this connection
+   * has queried, with `PRAGMA optimize` bounded by `analysis_limit`. Cheap when
+   * nothing changed much, which is the usual case, so it runs from the
+   * periodic backup check and at close. It never waits for another writer and
+   * never throws: stale statistics only cost plan quality.
+   */
+  optimize(): void {
+    if (this.closed) return;
+    try {
+      // Statistics are written in a write transaction. Never wait for another
+      // writer here: a busy database just keeps its statistics until next time.
+      this.db.exec("PRAGMA busy_timeout = 0");
+      try {
+        this.db.exec(`PRAGMA analysis_limit = ${OPTIMIZE_ANALYSIS_LIMIT}`);
+        this.db.exec("PRAGMA optimize");
+      } finally {
+        this.db.exec(`PRAGMA busy_timeout = ${this.busyTimeoutMs}`);
+      }
+      log.recovered("optimize.failed", "optimize");
+    } catch (error) {
+      if ((error as { code?: unknown }).code === "SQLITE_BUSY") return;
+      log.throttled("warn", "optimize.failed", {
+        scope: "optimize",
         error,
         fields: () => ({ error: formatLogError(error, { message: false, stack: false }) }),
       });
@@ -987,14 +1157,19 @@ export class StorageDatabase {
 
   /**
    * Returns up to `maxPages` free pages to the filesystem (with incremental
-   * auto-vacuum; a no-op otherwise) and the number of free pages left. A
-   * bounded step, so a caller freeing much space can yield between steps.
+   * auto-vacuum; a no-op otherwise) and the number of free pages left (-1 on
+   * contention). A bounded step, so a caller freeing much space can yield between steps.
    */
   releaseFreePages(maxPages = INCREMENTAL_VACUUM_PAGES): number {
+    this.db.exec("PRAGMA busy_timeout = 0");
     try {
       this.db.exec(`PRAGMA incremental_vacuum(${Math.max(1, Math.floor(maxPages))})`);
-    } catch {
-      // A concurrent writer holds the lock; the next step retries.
+    } catch (error) {
+      const code = (error as { code?: string }).code;
+      if (code === "SQLITE_BUSY" || code === "SQLITE_LOCKED") return -1;
+      throw error;
+    } finally {
+      this.db.exec(`PRAGMA busy_timeout = ${this.busyTimeoutMs}`);
     }
     const { auto_vacuum } = this.db.query("PRAGMA auto_vacuum").get() as { auto_vacuum: number };
     // Without incremental auto-vacuum free pages are only reused, never released.
@@ -1126,6 +1301,8 @@ export class StorageDatabase {
       throw new Error(`Row access requires a record or envelope store: ${store}`);
     }
     const db = this.db;
+    this.rowBytesSql ??= rowBytesExpression(db);
+    const rowBytes = this.rowBytesSql;
     const ownerOf = layout.kind === "record" ? layout.owner : undefined;
     // Uncached, so every query that returns rows or keys is a database read;
     // the write paths below charge nothing here.
@@ -1193,7 +1370,7 @@ export class StorageDatabase {
       entry(key, collection = "") {
         const row = db
           .query(
-            `SELECT collection, key, position, owner, value, length(CAST(value AS BLOB)) AS bytes
+            `SELECT collection, key, position, owner, value, ${rowBytes} AS bytes
              FROM store_rows WHERE store = ? AND collection = ? AND key = ?`,
           )
           .get(store, collection, key) as StoreRowEntry | null;
@@ -1221,16 +1398,19 @@ export class StorageDatabase {
           clauses.push("owner = ?");
           parameters.push(options.owner);
         }
-        const columns =
-          options.values === false
-            ? "collection, key, position, owner, NULL AS value"
-            : "collection, key, position, owner, value";
+        // Sizes only: scan the primary key and sort here. Ordering in SQL walks
+        // `store_rows_position` and seeks each row, and a seek in this WITHOUT
+        // ROWID table reads whole cells, overflow pages included, to compare
+        // keys, which costs as much as reading the values.
+        const sizesOnly = options.values === false;
         const entries = db
           .query(
-            `SELECT ${columns}, length(CAST(value AS BLOB)) AS bytes FROM store_rows
-             WHERE ${clauses.join(" AND ")} ORDER BY collection, position, key`,
+            `SELECT collection, key, position, owner, ${sizesOnly ? "NULL AS value" : "value"},
+               ${rowBytes} AS bytes FROM store_rows
+             WHERE ${clauses.join(" AND ")}${sizesOnly ? "" : " ORDER BY collection, position, key"}`,
           )
           .all(...parameters) as StoreRowEntry[];
+        if (sizesOnly) entries.sort(compareRowEntries);
         read(entries.reduce((length, entry) => length + (entry.value?.length ?? 0), 0));
         return entries;
       },
@@ -1392,6 +1572,28 @@ function isUnchanged(
     if (!before || before.value !== row.value || before.position !== row.position) return false;
   }
   return true;
+}
+
+/** `ORDER BY collection, position, key`; a position is unique within its collection. */
+function compareRowEntries(left: StoreRowEntry, right: StoreRowEntry): number {
+  if (left.collection !== right.collection) return left.collection < right.collection ? -1 : 1;
+  if (left.position !== right.position) return left.position - right.position;
+  return left.key < right.key ? -1 : left.key > right.key ? 1 : 0;
+}
+
+/**
+ * The SQL for a row value's UTF-8 length. `octet_length` (SQLite 3.43) reads the
+ * length from the record header, so sizing a value never reads its overflow
+ * pages. Bun on macOS loads the system library, which varies with the macOS
+ * version, so the slower cast stays as the fallback.
+ */
+export function rowBytesExpression(db: Pick<Database, "query">): string {
+  try {
+    db.query("SELECT octet_length('')").get();
+    return "octet_length(value)";
+  } catch {
+    return "length(CAST(value AS BLOB))";
+  }
 }
 
 function rowId(collection: string, key: string): string {

@@ -55,6 +55,11 @@ the environment's worktree. The same breakdown is under the environment's own
 settings, in General. Sizes are allocated bytes from `du -x`, kept for five
 minutes unless refreshed.
 
+The same page has a **Project Git mirrors** section: one line per project with
+a [Git mirror](#project-git-mirrors) or a build of one, with its size, measured
+each time the page opens. A mirror whose project has gone shows as *Removed
+project* until the hourly sweep takes it.
+
 ## Where new worktrees go
 
 | Worktree | Default | Changed by |
@@ -144,6 +149,16 @@ What it costs, on the two repositories measured:
   blobless clone. A build needs 3 GiB free on the data directory's disk and a
   fetch 1 GiB; otherwise it is skipped and logged. Fetches compact themselves past
   30 packs.
+- **A first build reuses the host checkout.** A project with a host checkout
+  downloads only what the checkout lacks, on 7 GiB free or more; with less, or if
+  the checkout cannot help, the build downloads everything. The result is the same
+  mirror either way
+  ([how](../architecture/container-lifecycle.md#project-git-mirror)). What the
+  remote sent for this repository, from a local bare clone at 76 MiB: 72 MiB with
+  no checkout, 6 MiB from a checkout 50 commits behind, nothing from a current one.
+  On that same disk, with no network to wait for, a seeded build took longer: 16 s
+  without a checkout, 36 s and 55 s with one, one run each. It was not measured
+  against a real network remote. It runs in the background either way.
 - **It is only a cache.** To reclaim it by hand, delete only
   `<project id>/mount/mirror.git`, keeping the project directory and `mount/`.
   Existing clones are self-contained and the next creation rebuilds the mirror.
@@ -176,8 +191,9 @@ What it costs, on the two repositories measured:
 | Isolated graph branch worktrees, `<environment>/.orkestrator/graph-branches/<run>/…`, and their branches `orkestrator-graph/<run>/…` (item 403) | The graph run service's branch janitor; `select-workspace`; environment deletion | A branch's worktree when its activation finishes (complete, failed, cancelled or superseded); the run's branches and anything left when the run ends; a select's candidates at once; finished runs that still list some at backend start-up. At most 16 branch worktrees run at once per environment |
 | Orphaned bridge state, empty workspace directories, merged branches of deleted environments, abandoned store temp files | Backend orphan sweeps | At start-up and hourly; branches at most daily per project |
 | `<data dir>/legacy-json/<timestamp>/` (JSON stores archived by the one-time SQLite import) | Backend database open | 14 days after the import |
-| `<data dir>/backups/` (database snapshots) | The backend's snapshot rotation | Newest 6 hourly (taken only after a change), one about 1 and one about 3 days old, and 2 pre-migration kept; none older than 7 days; at most 16 GiB together (the newest hourly always kept). No copy when the disk lacks the live-page copy estimate plus equal headroom (at least 2 GiB). Existing non-incremental databases reuse freed pages without shrinking. Temporary copies of dead processes removed at start-up and before each copy |
-| Superseded change-tracking measurements in `orkestrator.sqlite` (`change_measurements`, `change_measurement_files`) | Measurement publication and the change-tracking retention pass | On each publication (bounded) and two minutes after start, then hourly, in batches; the newest two per owner and scope, and any selected or restorable one, stay |
+| `<data dir>/backups/` (database snapshots) | The backend's snapshot rotation | Newest 6 hourly (taken only after a change), one about 1 and one about 3 days old, and 2 pre-migration kept; of the change-tracking ledger, 2 daily and 2 pre-migration; none older than 7 days; at most 16 GiB together (the newest hourly always kept, ledger copies give way first). No copy when the disk lacks the live-page copy estimate plus equal headroom (at least 2 GiB). Existing non-incremental databases reuse freed pages without shrinking. Temporary copies of dead processes removed at start-up and before each copy |
+| Superseded change-tracking measurements in `change-tracking.sqlite` (`change_measurements`, `change_measurement_files`) | Measurement publication and the change-tracking retention pass | On each publication (bounded) and two minutes after start, then hourly, in batches; the newest two per owner and scope, and any selected or restorable one, stay |
+| The rest of the change ledger, its objects and its evidence bodies (`change-tracking.sqlite`, `<data dir>/change-tracking/`) | Deleting an environment and the change-tracking retention pass | A deleted environment's rows within a minute or so of the delete and its content past the orphan grace, except what another environment still names; everything of finished work past `archivedBodyRetentionDays` (90), except turn boundary rows and open thread segments |
 | Artifact preview worker scratch, `ork-artifact-preview-<pid>-*` in the system temp dir | The job itself after a verified exit (which includes any Chromium still running with the scratch as its profile, even one the worker was still launching); otherwise the next backend start with process isolation | At start-up, once the owner has exited or its recorded process start identity differs from the current PID, and the directory is over an hour old. Scratch without a recorded identity uses a day-long limit if its PID is live; names without a PID also use a day. An inspection failure retains recorded scratch for a live PID. |
 | Design renderer browser profiles, `playwright_chromiumdev_profile-*` in the backend's temp dir | Playwright, when the browser exits; otherwise the next backend start, from the ledger in `<data dir>/design-browser-profiles/` | At start-up, only for profiles that ledger recorded, once their backend and browser have both exited (recorded start identities), the profile is over an hour old, and no live process names it. Profiles of other tools share the prefix and are never touched |
 | Design renderer artifacts directories, `<data dir>/design-browser-profiles/artifacts-<pid>-*` (Playwright's `artifactsDir`, so no `playwright-artifacts-*` in the temp dir) | The backend, with the browser's ledger record; a failed launch at once | With its record, as for the profile; one without a record (its backend was killed while launching) at start-up once that backend has exited and the directory is over an hour old |

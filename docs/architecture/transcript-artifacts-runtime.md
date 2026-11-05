@@ -232,6 +232,15 @@ Isolation (`ORKESTRATOR_ARTIFACT_PREVIEW_ISOLATION`):
 - `disabled`: HTML and Mermaid previews report `renderer_unavailable`;
   charts and workflow snapshots still verify.
 
+Isolation governs authoring only. A published `html-static` revision displays
+from its stored effective HTML in the renderer's own opaque frame
+([static document presentation](rich-transcripts.md#static-document-presentation)),
+needing no worker. Tool registration does not prove authoring works, so
+`authoringAvailability()` adds a statement to the tool server's instructions when
+this host cannot currently verify HTML and Mermaid, or prepare interactive
+documents. Instructions are read when a client connects, so `preview_artifact`'s
+`renderer_unavailable` stays the authority at call time.
+
 `PreviewRunnerStatus` reports the boundary honestly: `isolation` (where jobs
 run), `interactiveIsolation` (`container`, `process` only with the opt-in, or
 `unavailable` with `interactiveReason`), `isolationSelection`,
@@ -615,6 +624,16 @@ capabilities that are random 256-bit table keys, revocable, never logged.
   the environment's own container. The response is `{ url, mimeType,
   byteLength, expiresAt, streamId }`; `transcript_media_close_stream
   { streamId }` revokes it and removes any staged copy.
+- **No environment.** A request without `environmentId` (a detached
+  transcript's absolute host path) is confined to the roots `read_file_base64`
+  reads (`readableHostFileRoots`, `readable-host-roots.ts`: the worktree base,
+  custom worktrees one by one, coordinator attachments), rebuilt on every
+  served request, so the route never reads more than that command. A relative
+  path or a `containerId` without an environment is refused. These streams
+  are revoked as one group (`readable-host-roots`) and the environment sweep
+  leaves them alone. The file viewer's image tab also loads from a stream
+  when the origin is reachable (`environment-image-source.ts`), falling back
+  to `read_environment_file_base64` / `read_container_file_base64`.
 - **Type.** Sniffed from the leading bytes (`media-stream-sniff.ts`), never
   the file name: MP4/M4A/QuickTime, WebM/Matroska, Ogg, WAV, FLAC, MP3, AAC
   and PNG/JPEG/GIF/WebP/AVIF/BMP. SVG, HTML, PDF and anything unrecognised
@@ -922,7 +941,7 @@ that the model saw it.
 | `ORKESTRATOR_ARTIFACT_CONTENT_ORIGIN`, `…_CONTENT_PORT` | Public content origin for hosted deployments; listener port |
 | `ORKESTRATOR_ARTIFACT_CONTENT_BIND` | Interface of the content listener, honoured only with `…_CONTENT_ORIGIN` and only for a loopback or Tailscale address (default `127.0.0.1`); wildcard or public addresses are refused with a warning |
 | `ORKESTRATOR_ARTIFACT_FRAME_ANCESTORS` | Trusted viewer origins replacing the application origins (the desktop shell is always added) |
-| `ORKESTRATOR_RICH_MARKDOWN`, `ORKESTRATOR_ARTIFACT_PUBLICATION`, `ORKESTRATOR_ARTIFACT_LIVE_INTERACTIVE` | Rollout switches (default on). Turning one off stops new rendering, publication or live execution; stored records, source and saved previews stay readable. |
+| `ORKESTRATOR_RICH_MARKDOWN`, `ORKESTRATOR_ARTIFACT_PUBLICATION`, `ORKESTRATOR_ARTIFACT_LIVE_INTERACTIVE`, `ORKESTRATOR_ARTIFACT_STATIC_PRESENTATION` | Rollout switches (default on). Turning one off stops new rendering, publication, live execution or the static document view; stored records, source and saved previews stay readable. |
 
 ## Operations
 

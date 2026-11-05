@@ -10,6 +10,7 @@ import {
   TERMINAL_WEBSOCKET_CHANNEL_HARD_BUFFER_BYTES,
   TERMINAL_WEBSOCKET_CHANNEL_SOFT_BUFFER_BYTES,
   TERMINAL_WEBSOCKET_CLOSE,
+  TERMINAL_WEBSOCKET_INPUT_RESULTS_SUBPROTOCOL,
   TERMINAL_WEBSOCKET_MAX_BINARY_BYTES,
   TERMINAL_WEBSOCKET_MAX_CONTROL_BYTES,
   TERMINAL_WEBSOCKET_PATH,
@@ -21,6 +22,7 @@ import {
   type TerminalWebSocketServerControlFrame,
 } from "@orkestrator/protocol/terminal-websocket";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { compatibilityPathUsage } from "./core/compatibility-path-usage.js";
 
 const log = createLogger("gateway.terminal");
 
@@ -106,6 +108,14 @@ type SocketState = {
   inFlightSends: number;
   /** Channel backlog is waiting on the socket; a send callback will resume it. */
   flushPaused: boolean;
+  /** The client took the input-results subprotocol; an older one gets a frame per input. */
+  cumulativeInputResults: boolean;
+  /**
+   * Newest input that succeeded per channel since the last flush. It holds one
+   * entry per channel with a completed operation, so the pending-operation
+   * bounds bound it too.
+   */
+  pendingInputResults: Map<number, number>;
   invalidChannelFrames: number;
   pendingOperations: number;
 };
@@ -156,6 +166,9 @@ function rawDataBytes(data: RawData): Uint8Array {
 }
 
 const sharedEncoder = new TextEncoder();
+// Neither decode streams, so neither decoder carries anything between messages.
+const controlFrameDecoder = new TextDecoder("utf-8", { fatal: true });
+const inputDecoder = new TextDecoder();
 
 function terminalEvent(payload: unknown): TerminalEvent | null {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
@@ -208,7 +221,11 @@ export class TerminalWebSocketGateway {
     noServer: true,
     maxPayload: TERMINAL_WEBSOCKET_MAX_BINARY_BYTES,
     handleProtocols: (protocols) =>
-      protocols.has(TERMINAL_WEBSOCKET_SUBPROTOCOL) ? TERMINAL_WEBSOCKET_SUBPROTOCOL : false,
+      protocols.has(TERMINAL_WEBSOCKET_INPUT_RESULTS_SUBPROTOCOL)
+        ? TERMINAL_WEBSOCKET_INPUT_RESULTS_SUBPROTOCOL
+        : protocols.has(TERMINAL_WEBSOCKET_SUBPROTOCOL)
+          ? TERMINAL_WEBSOCKET_SUBPROTOCOL
+          : false,
   });
   private readonly sockets = new Set<SocketState>();
   private readonly upgradeSockets = new Set<Duplex>();
@@ -254,7 +271,10 @@ export class TerminalWebSocketGateway {
     const protocols = String(request.headers["sec-websocket-protocol"] ?? "")
       .split(",")
       .map((value) => value.trim());
-    if (!protocols.includes(TERMINAL_WEBSOCKET_SUBPROTOCOL)) {
+    if (
+      !protocols.includes(TERMINAL_WEBSOCKET_SUBPROTOCOL) &&
+      !protocols.includes(TERMINAL_WEBSOCKET_INPUT_RESULTS_SUBPROTOCOL)
+    ) {
       this.rejectUpgrade(socket, 426, "Terminal WebSocket protocol required", {
         "Sec-WebSocket-Protocol": TERMINAL_WEBSOCKET_SUBPROTOCOL,
       });
@@ -339,6 +359,7 @@ export class TerminalWebSocketGateway {
 
   private accept(ws: WebSocket, request: IncomingMessage): void {
     const authenticated = this.options.tokenMatches(request);
+    const cumulativeInputResults = ws.protocol === TERMINAL_WEBSOCKET_INPUT_RESULTS_SUBPROTOCOL;
     const state: SocketState = {
       ws,
       authenticated,
@@ -355,6 +376,8 @@ export class TerminalWebSocketGateway {
       flushScheduled: false,
       inFlightSends: 0,
       flushPaused: false,
+      cumulativeInputResults,
+      pendingInputResults: new Map(),
       invalidChannelFrames: 0,
       pendingOperations: 0,
     };
@@ -422,9 +445,7 @@ export class TerminalWebSocketGateway {
     }
     let frame;
     try {
-      frame = parseTerminalWebSocketClientControlFrame(
-        new TextDecoder("utf-8", { fatal: true }).decode(bytes),
-      );
+      frame = parseTerminalWebSocketClientControlFrame(controlFrameDecoder.decode(bytes));
     } catch (error) {
       this.options.metrics?.recordTerminalWebSocketReceived(bytes.byteLength, false);
       const code =
@@ -583,7 +604,7 @@ export class TerminalWebSocketGateway {
       return;
     }
     channel.inputSequence = frame.revision;
-    const data = new TextDecoder().decode(frame.bytes);
+    const data = inputDecoder.decode(frame.bytes);
     this.enqueueOperation({
       state,
       channelId: channel.id,
@@ -862,6 +883,9 @@ export class TerminalWebSocketGateway {
   }
 
   private ready(state: SocketState): void {
+    if (!state.cumulativeInputResults) {
+      compatibilityPathUsage.record("terminal-websocket.per-input-results");
+    }
     this.sendControl(state, {
       type: "ready",
       version: TERMINAL_WEBSOCKET_PROTOCOL_VERSION,
@@ -871,6 +895,22 @@ export class TerminalWebSocketGateway {
   }
 
   private sendControl(state: SocketState, frame: TerminalWebSocketServerControlFrame): void {
+    // Results collected so far go ahead of this frame, so a client still sees
+    // every control frame in the order it would have without the coalescing.
+    this.queueInputResults(state);
+    this.queueControl(state, frame);
+  }
+
+  private queueInputResults(state: SocketState): void {
+    if (state.pendingInputResults.size === 0) return;
+    const results = Array.from(state.pendingInputResults);
+    state.pendingInputResults.clear();
+    for (const [channelId, throughOperationId] of results) {
+      this.queueControl(state, { type: "input-results", channelId, throughOperationId });
+    }
+  }
+
+  private queueControl(state: SocketState, frame: TerminalWebSocketServerControlFrame): void {
     if (state.ws.readyState !== WebSocket.OPEN) return;
     const data = JSON.stringify(frame);
     const queued: QueuedFrame = { data, bytes: Buffer.byteLength(data) };
@@ -930,12 +970,14 @@ export class TerminalWebSocketGateway {
   }
 
   private flush(state: SocketState): void {
+    // While the flag is still set, so these go out in this pass with no extra one.
+    this.queueInputResults(state);
     state.flushScheduled = false;
     if (state.ws.readyState !== WebSocket.OPEN) return;
     let budget = 64 * 1024;
     // Control frames ignore the watermark: a keystroke's result or a desync notice
     // must not wait behind another terminal's output. Their own hard limit is in
-    // `sendControl`.
+    // `queueControl`.
     while (state.controlQueue.length > 0 && budget > 0) {
       const frame = state.controlQueue.shift()!;
       state.queuedBytes -= frame.bytes;
@@ -1106,6 +1148,14 @@ export class TerminalWebSocketGateway {
     ok: boolean,
     message?: string,
   ): void {
+    if (ok && operation === "input" && state.cumulativeInputResults) {
+      if (state.ws.readyState !== WebSocket.OPEN) return;
+      // No wait of its own: the flush this schedules is the one a single
+      // `operation-result` would have gone out in.
+      state.pendingInputResults.set(channelId, operationId);
+      this.scheduleFlush(state);
+      return;
+    }
     this.sendControl(
       state,
       ok
@@ -1192,6 +1242,7 @@ export class TerminalWebSocketGateway {
     state.channels.clear();
     state.sessions.clear();
     state.controlQueue = [];
+    state.pendingInputResults.clear();
     state.queuedBytes = 0;
     this.sockets.delete(state);
     this.channelCount = Math.max(0, this.channelCount - channelCount);

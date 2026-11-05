@@ -3,11 +3,7 @@ import { afterAll, afterEach, describe, expect, spyOn, test } from "bun:test";
 import { setLiveBridgeDiagnostics } from "@orkestrator/protocol/node/bridge-diagnostics";
 import type { SDKAgent } from "@cursor/sdk";
 import { newSessionState } from "./agent-session.js";
-import {
-  createRunDiagnostics,
-  cursorDebugEnabled,
-  CursorRunDiagnostics,
-} from "./run-diagnostics.js";
+import { createRunDiagnostics, CursorRunDiagnostics } from "./run-diagnostics.js";
 import { resetSdkDiagnosticsForTests } from "./sdk-diagnostics.js";
 import { dispatchPrompt, followRun, type FollowableRun } from "./prompt.js";
 
@@ -57,10 +53,7 @@ describe("Cursor stall diagnostics", () => {
     }
   });
 
-  test("the stream and SDK snapshots are off by default and when the launcher passes off", () => {
-    for (const flag of ["", "0", "false", "off", "true", "secret"])
-      expect(cursorDebugEnabled(flag)).toBe(false);
-    expect(cursorDebugEnabled("1")).toBe(true);
+  test("the stream and SDK snapshots are off by default", () => {
     const previousShared = process.env.ORKESTRATOR_BRIDGE_DEBUG;
     const previousCursor = process.env.CURSOR_BRIDGE_DEBUG;
     try {

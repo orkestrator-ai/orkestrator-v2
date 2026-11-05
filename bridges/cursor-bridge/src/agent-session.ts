@@ -74,7 +74,7 @@ import {
   rewindTranscriptTo,
   startTranscriptEpoch,
 } from "./transcript.js";
-import { applyInteractionUpdate } from "./translate.js";
+import { appendResumeFallbackNotice, applyInteractionUpdate } from "./translate.js";
 import { trackTurnEvidence, type TurnEvidence } from "./change-evidence.js";
 import {
   assertSessionOpen,
@@ -620,6 +620,7 @@ async function attach(state: SessionState): Promise<SDKAgent> {
           error: formatLogError(error, { message: false }),
         });
         state.agentId = undefined;
+        appendResumeFallbackNotice(state);
       }
     }
 

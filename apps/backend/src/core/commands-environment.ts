@@ -149,6 +149,7 @@ import {
   ensureContainerProjectFilesAccess,
 } from "./commands-files.js";
 import { syncRuntimeGitHubCredential } from "./container-github-credential.js";
+import type { GitHubCliSelection } from "./github-cli-binary.js";
 import { resolveContainerGitHubToken, type GitHubCliConfigSource } from "./github-credentials.js";
 import { AmbiguousContainerCreateError, createDockerContainer } from "./commands-containers.js";
 import {
@@ -1367,7 +1368,7 @@ async function recordSetupCompletion(
  * The id is persisted with the operation and used for the create, so a tag
  * moved mid-operation cannot change what the candidate runs. A missing image
  * fails here with the image-unavailable classification; an answer that cannot
- * be read leaves the create to report the daemon's own error.
+ * be read leaves the create to refuse, since it cannot check the image.
  */
 export async function resolveOperationImage(
   context: Pick<CommandContext, "dockerImage">,
@@ -1694,7 +1695,10 @@ export async function startEnvironmentOnce(
     }
     const config = await storage.loadConfig();
     if (context.runtimeFlavor !== "agent-test") {
-      const githubToken = await resolveContainerGitHubToken(config.global);
+      const githubToken = await resolveContainerGitHubToken(
+        config.global,
+        context.runtime.gitHubCli,
+      );
       const credentialEnvironmentId = environment.id;
       await context.runtime.prMonitor.viewerPermissions.rotateScope(
         `container:${containerId}`,
@@ -2374,6 +2378,7 @@ export async function removeLocalWorktree(
 export async function deleteMergedEnvironmentRemoteBranch(
   environment: Environment,
   gitHubConfig: GitHubCliConfigSource,
+  gitHubCliSelection: GitHubCliSelection | undefined,
 ): Promise<void> {
   if (isProjectHomeEnvironment(environment)) return;
   if (environment.prState !== "merged" || !environment.prUrl) return;
@@ -2382,7 +2387,7 @@ export async function deleteMergedEnvironmentRemoteBranch(
     if (!environment.worktreePath) return;
     await deletePullRequestHeadBranchViaGitHubApi(
       environment.prUrl,
-      createLocalGhRunner(environment.worktreePath, gitHubConfig),
+      createLocalGhRunner(environment.worktreePath, gitHubConfig, gitHubCliSelection),
     );
     return;
   }

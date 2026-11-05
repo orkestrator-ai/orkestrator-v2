@@ -1,6 +1,10 @@
 import { PolicyWideningRefusedError } from "@orkestrator/protocol/execution-policy-narrowing";
 import { BRIDGE_LOG_POLICY_ROUTE } from "@orkestrator/protocol/log-policy";
 import {
+  bridgeCredentialFromToken,
+  loadBridgeCredential,
+} from "@orkestrator/protocol/node/bridge-credential";
+import {
   applyBridgeLogPolicy,
   readBridgeLogPolicyBody,
 } from "@orkestrator/protocol/node/bridge-log-policy";
@@ -9,8 +13,7 @@ import {
   type BridgeRunDiagnostics,
 } from "@orkestrator/protocol/node/bridge-diagnostics";
 import { execFile as execFileCallback } from "node:child_process";
-import { randomBytes, timingSafeEqual } from "node:crypto";
-import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { serve } from "@hono/node-server";
@@ -50,7 +53,7 @@ import { redactSecrets } from "@orkestrator/protocol/secret-redaction";
 import { parseInteractionAnswer, type InteractionAnswer } from "./app-server/interactions.js";
 import type { ParkedHoldResponse } from "./app-server-runtime-approvals.js";
 import type { AgentInteractionHold } from "@orkestrator/protocol/agent-interactions";
-import { EventRing, parseEventCursor } from "./event-ring.js";
+import { EventRing, parseEventCursor } from "@orkestrator/protocol/node/event-ring";
 import {
   commandUnavailableResponse,
   readBridgePromptCommandFields,
@@ -72,10 +75,7 @@ import {
   listPersistedSessionsForCwd,
   mergePersistedSessionMeta,
 } from "./history/rollout.js";
-import {
-  readTextFileIfPresent,
-  stringifyUnknown as stringifyUnknownValue,
-} from "./messages/normalization.js";
+import { readTextFileIfPresent } from "./messages/normalization.js";
 import type { NormalizedMessage } from "./messages/types.js";
 
 import { CODEX_FALLBACK_MODEL_CATALOG } from "@orkestrator/protocol/codex-model-catalog";
@@ -223,12 +223,10 @@ export function boundCodexTranscriptResponse(
 }
 const BRIDGE_TOKEN_ENV = "CODEX_BRIDGE_TOKEN";
 const BRIDGE_ALLOWED_ORIGINS_ENV = "CODEX_BRIDGE_ALLOWED_ORIGINS";
-let bridgeAuthToken =
-  process.env[BRIDGE_TOKEN_ENV]?.trim() || randomBytes(32).toString("base64url");
-// The token authenticates callers of this bridge; nothing this process spawns
-// needs it. Capture it once and remove it so the app-server child, and every
-// shell the agent runs through it, cannot inherit the credential (H4).
-delete process.env[BRIDGE_TOKEN_ENV];
+// The credential authenticates callers of this bridge; nothing this process
+// spawns needs it. Captured once and removed so the app-server child, and every
+// shell the agent runs through it, cannot inherit it (H4).
+let bridgeCredential = loadBridgeCredential(BRIDGE_TOKEN_ENV);
 let bridgeAuthEnabledOverrideForTesting: boolean | null = null;
 interface SseRouteTestHooks {
   afterSubscriberRegistered?: () => Promise<void> | void;
@@ -380,12 +378,6 @@ function acquireReplayRetention(): () => void {
 scheduleReplayRetentionDrop();
 /** Interval for the idle-thread sweep. */
 const CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
-const codexRawLogDir = normalizeOptionalEnvPath("ORKESTRATOR_CODEX_RAW_LOG_DIR");
-
-function normalizeOptionalEnvPath(name: string): string | null {
-  const value = process.env[name]?.trim();
-  return value ? value : null;
-}
 
 function isBridgeAuthEnabled(): boolean {
   if (bridgeAuthEnabledOverrideForTesting !== null) {
@@ -400,10 +392,7 @@ function isBridgeAuthEnabled(): boolean {
 }
 
 function tokenMatches(candidate: string | undefined): boolean {
-  if (!candidate) return false;
-  const expected = Buffer.from(bridgeAuthToken);
-  const actual = Buffer.from(candidate);
-  return expected.length === actual.length && timingSafeEqual(expected, actual);
+  return bridgeCredential.matches(candidate);
 }
 
 function bearerToken(header: string | undefined): string | undefined {
@@ -438,44 +427,6 @@ function isTrustedBridgeOrigin(origin: string | undefined): boolean {
 
 function isPublicHealthRequest(method: string, path: string): boolean {
   return method === "GET" && path === "/global/health";
-}
-
-function sanitizeLogFileComponent(value: string): string {
-  return value.replace(/[^a-zA-Z0-9._-]/g, "_");
-}
-
-function normalizeLogPayload(value: unknown): unknown {
-  try {
-    return JSON.parse(JSON.stringify(value));
-  } catch {
-    return stringifyUnknownValue(value);
-  }
-}
-
-async function writeCodexRawLog(
-  sessionId: string,
-  entry: Record<string, unknown>,
-  logDir: string | null = codexRawLogDir,
-): Promise<void> {
-  if (!logDir) {
-    return;
-  }
-
-  try {
-    await mkdir(logDir, { recursive: true });
-    const filename = `${sanitizeLogFileComponent(sessionId)}.jsonl`;
-    await appendFile(
-      join(logDir, filename),
-      `${JSON.stringify({
-        timestamp: new Date().toISOString(),
-        sessionId,
-        ...entry,
-      })}\n`,
-      "utf8",
-    );
-  } catch (error) {
-    log.warn("raw-log.write-failed", { error: formatLogError(error) });
-  }
 }
 
 function createShutdownHandler(
@@ -939,7 +890,6 @@ export const __testing = {
   hydrateMessagesFromPersistedSessionForTesting: hydrateMessagesFromPersistedSession,
   listPersistedSessionsForCwdForTesting: listPersistedSessionsForCwd,
   mergePersistedSessionMetaForTesting: mergePersistedSessionMeta,
-  normalizeLogPayloadForTesting: normalizeLogPayload,
   readPersistedBridgeCache,
   readCodexCliModelCache,
   readTextFileIfPresentForTesting: readTextFileIfPresent,
@@ -950,11 +900,10 @@ export const __testing = {
       bridgeAuthEnabledOverrideForTesting = null;
       return;
     }
-    bridgeAuthToken = token;
+    bridgeCredential = bridgeCredentialFromToken(token);
     bridgeAuthEnabledOverrideForTesting = true;
   },
   isTrustedBridgeOriginForTesting: isTrustedBridgeOrigin,
-  sanitizeLogFileComponentForTesting: sanitizeLogFileComponent,
   serializeSseEventDataForTesting: serializeSseEventData,
   setSseRouteTestHooksForTesting: (hooks: SseRouteTestHooks | null) => {
     sseRouteTestHooks = hooks;
@@ -972,7 +921,6 @@ export const __testing = {
       releaseReplayRetention();
     };
   },
-  writeCodexRawLogForTesting: writeCodexRawLog,
   writePersistedBridgeCache,
 };
 

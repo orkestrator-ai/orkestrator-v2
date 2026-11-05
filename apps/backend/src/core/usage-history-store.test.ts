@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -6,7 +6,13 @@ import type { NativeAgentTurnUsage } from "@orkestrator/protocol/native-agent";
 import { usageDayKey } from "@orkestrator/protocol/usage-history";
 import type { StorageDatabase } from "./storage-database.js";
 import { openBackendDatabase } from "./storage-stores.js";
-import { UsageHistoryStore } from "./usage-history-store.js";
+import { USAGE_HISTORY_STORE } from "./usage-history-layout.js";
+import {
+  USAGE_HISTORY_PRUNE_BATCH_ROWS,
+  USAGE_REPORT_CACHE_MAX_BYTES,
+  USAGE_REPORT_CACHE_MAX_ENTRIES,
+  UsageHistoryStore,
+} from "./usage-history-store.js";
 import { MAX_RECORDED_TURN_IDS } from "./usage-history-record.js";
 
 const directories: string[] = [];
@@ -192,7 +198,7 @@ test("prunes day buckets past retention and drops rows left empty", async () => 
     turns: [turn("t1")],
   });
   clock.value = new Date(2026, 0, 10, 9, 0, 0);
-  expect(store.prune().prunedRows).toBe(1);
+  expect((await store.prune()).prunedRows).toBe(1);
   expect(store.report({ days: 30 }).sessions).toBe(0);
 });
 
@@ -261,7 +267,7 @@ test("drops the least recently used rows above the row limit", async () => {
     });
   }
   // The oldest row by `lastSeenAt` goes; the two newest survive intact.
-  expect(store.prune()).toEqual({ prunedRows: 1, prunedDays: 0 });
+  expect(await store.prune()).toEqual({ prunedRows: 1, prunedDays: 0 });
   expect(store.report({ days: 7 }).sessions).toBe(2);
   expect(store.report({ days: 7 }).totals.turns).toBe(2);
 });
@@ -325,7 +331,7 @@ test("a report never prunes; retention is swept from the write path", async () =
   expect(reader.report({ days: 30 }).recordingSince).toBe("2026-01-01");
   expect(reader.report({ days: 30 }).recordingSince).toBe("2026-01-01");
   // The sweep is what drops it.
-  expect(reader.prune().prunedRows).toBe(1);
+  expect((await reader.prune()).prunedRows).toBe(1);
   expect(reader.report({ days: 30 }).recordingSince).toBeUndefined();
 });
 
@@ -460,3 +466,345 @@ for (const label of [{ environmentName: "New environment" }, { projectName: "New
     }
   });
 }
+
+describe("the retention sweep's batches", () => {
+  const NOW = new Date(2026, 9, 20, 9, 0, 0);
+  const OLD_DAY = "2025-01-01";
+  const LIVE_DAY = usageDayKey(NOW);
+  const bucket = { models: { model: { inputTokens: 1, totalTokens: 1, turns: 1 } } };
+
+  function seed(database: StorageDatabase, count: number, days: (index: number) => string[]) {
+    const rows: Record<string, unknown> = {};
+    for (let index = 0; index < count; index += 1) {
+      rows[`row-${String(index).padStart(5, "0")}`] = {
+        version: 1,
+        environmentId: `env-${index % 3}`,
+        platform: "claude",
+        firstSeenAt: "2026-01-01T00:00:00.000Z",
+        lastSeenAt: `2026-01-01T00:${String(index % 60).padStart(2, "0")}:00.000Z`,
+        days: Object.fromEntries(days(index).map((day) => [day, bucket])),
+        turnIds: [],
+      };
+    }
+    database.writeStore(USAGE_HISTORY_STORE, rows);
+  }
+
+  /** Counts outermost transactions, each one commit, and the rows each writes. */
+  function countCommits(database: StorageDatabase): {
+    commits: () => number;
+    restore: () => void;
+  } {
+    const transaction = database.transaction.bind(database);
+    let depth = 0;
+    let commits = 0;
+    const spy = spyOn(database, "transaction").mockImplementation((<T>(run: () => T): T => {
+      if (depth === 0) commits += 1;
+      depth += 1;
+      try {
+        return transaction(run);
+      } finally {
+        depth -= 1;
+      }
+    }) as typeof database.transaction);
+    return { commits: () => commits, restore: () => spy.mockRestore() };
+  }
+
+  async function fixture(limits?: { maxRows?: number }) {
+    const database = connect(await dataDirectory());
+    const store = new UsageHistoryStore({ database: () => database, now: () => NOW, limits });
+    return { database, store };
+  }
+
+  const stored = (database: StorageDatabase, key: string) =>
+    JSON.parse(database.rows(USAGE_HISTORY_STORE).get(key) ?? "null") as {
+      days: Record<string, unknown>;
+      turnIds: string[];
+      lastSeenAt: string;
+    } | null;
+
+  test("commits a bounded batch at a time and frees the event loop between them", async () => {
+    const { database, store } = await fixture();
+    const count = USAGE_HISTORY_PRUNE_BATCH_ROWS * 2 + 50;
+    seed(database, count, (index) => (index % 2 === 0 ? [OLD_DAY] : [OLD_DAY, LIVE_DAY]));
+    const { commits, restore } = countCommits(database);
+    let turns = 0;
+    const counting = setInterval(() => {
+      turns += 1;
+    }, 0);
+    try {
+      const pruned = await store.prune();
+      expect(pruned).toEqual({
+        prunedRows: Math.ceil(count / 2),
+        prunedDays: Math.floor(count / 2),
+      });
+    } finally {
+      clearInterval(counting);
+      restore();
+    }
+    // One read-free commit per batch, not one per changed row.
+    expect(commits()).toBe(3);
+    expect(turns).toBeGreaterThan(0);
+    expect(database.rows(USAGE_HISTORY_STORE).list({ values: false })).toHaveLength(
+      Math.floor(count / 2),
+    );
+  });
+
+  test("a turn recorded during the sweep is not lost", async () => {
+    const { database, store } = await fixture();
+    const count = USAGE_HISTORY_PRUNE_BATCH_ROWS + 10;
+    seed(database, count, () => [OLD_DAY, LIVE_DAY]);
+    const later = `row-${String(count - 1).padStart(5, "0")}`;
+
+    // The first batch ran before `prune` first yields; `later` is in the second.
+    const sweep = store.prune();
+    store.recordTurns({
+      sessionKey: later,
+      environmentId: "env-1",
+      platform: "claude",
+      turns: [turn("recorded-during-sweep")],
+    });
+    await sweep;
+
+    const row = stored(database, later)!;
+    expect(row.turnIds).toEqual(["recorded-during-sweep"]);
+    expect(Object.keys(row.days)).toEqual([LIVE_DAY]);
+  });
+
+  test("a row refreshed during the sweep is not dropped as least recently used", async () => {
+    const { database, store } = await fixture({ maxRows: 5 });
+    const count = USAGE_HISTORY_PRUNE_BATCH_ROWS + 10;
+    seed(database, count, () => [LIVE_DAY]);
+    // The oldest by `lastSeenAt`, and already visited by the first batch.
+    const oldest = "row-00000";
+
+    const original = stored(database, oldest)!;
+    const clock = spyOn(store as unknown as { now: () => Date }, "now").mockReturnValue(
+      new Date(original.lastSeenAt),
+    );
+    const sweep = store.prune();
+    store.recordTurns({
+      sessionKey: oldest,
+      environmentId: "env-0",
+      platform: "claude",
+      turns: [turn("refreshing")],
+    });
+    clock.mockRestore();
+    const { prunedRows } = await sweep;
+
+    expect(stored(database, oldest)?.turnIds).toEqual(["refreshing"]);
+    expect(prunedRows).toBe(count - 5 - 1);
+  });
+
+  test("an unreadable row is left alone and the rest are swept", async () => {
+    const { database, store } = await fixture();
+    seed(database, 3, () => [OLD_DAY]);
+    database.db
+      .query("UPDATE store_rows SET value = '{ not json' WHERE store = ? AND key = 'row-00001'")
+      .run(USAGE_HISTORY_STORE);
+    database.db
+      .query("UPDATE store_rows SET value = '[1]' WHERE store = ? AND key = 'row-00002'")
+      .run(USAGE_HISTORY_STORE);
+    database.db
+      .query("UPDATE stores SET revision = revision + 1 WHERE name = ?")
+      .run(USAGE_HISTORY_STORE);
+
+    expect(await store.prune()).toEqual({ prunedRows: 1, prunedDays: 0 });
+    expect(
+      database
+        .rows(USAGE_HISTORY_STORE)
+        .list({ values: false })
+        .map((entry) => entry.key),
+    ).toEqual(["row-00001", "row-00002"]);
+  });
+
+  test("a failure rolls back its batch, leaves the store readable and the next sweep finishes", async () => {
+    const { database, store } = await fixture();
+    const count = USAGE_HISTORY_PRUNE_BATCH_ROWS * 2;
+    seed(database, count, () => [OLD_DAY]);
+    const update = database.updateStoreRow.bind(database);
+    let calls = 0;
+    const failing = spyOn(database, "updateStoreRow").mockImplementation(((
+      ...args: Parameters<typeof update>
+    ) => {
+      calls += 1;
+      if (calls === USAGE_HISTORY_PRUNE_BATCH_ROWS + 5) throw new Error("disk full");
+      return update(...args);
+    }) as typeof update);
+    try {
+      await expect(store.prune()).rejects.toThrow("disk full");
+    } finally {
+      failing.mockRestore();
+    }
+    // The first batch stays committed; none of the second does.
+    expect(database.rows(USAGE_HISTORY_STORE).list({ values: false })).toHaveLength(
+      USAGE_HISTORY_PRUNE_BATCH_ROWS,
+    );
+    expect(database.readStore(USAGE_HISTORY_STORE)).not.toBeNull();
+    expect((await store.prune()).prunedRows).toBe(USAGE_HISTORY_PRUNE_BATCH_ROWS);
+  });
+
+  test("the write path survives a sweep that fails", async () => {
+    const { database, store } = await fixture();
+    seed(database, 2, () => [OLD_DAY]);
+    const failing = spyOn(database, "transaction");
+    const update = database.updateStoreRow.bind(database);
+    const row = spyOn(database, "updateStoreRow");
+    let calls = 0;
+    row.mockImplementation(((...args: Parameters<typeof update>) => {
+      calls += 1;
+      if (calls > 1) throw new Error("disk full");
+      return update(...args);
+    }) as typeof update);
+    try {
+      expect(
+        store.recordTurns({
+          sessionKey: "row-new",
+          environmentId: "env-0",
+          platform: "claude",
+          turns: [turn("t1")],
+        }),
+      ).toBe(1);
+      await new Promise((resolve) => setImmediate(resolve));
+    } finally {
+      row.mockRestore();
+      failing.mockRestore();
+    }
+    expect(stored(database, "row-new")?.turnIds).toEqual(["t1"]);
+  });
+
+  test("a connection closed between batches ends the sweep without reopening", async () => {
+    const directory = await dataDirectory();
+    const database = connect(directory);
+    let opened = 0;
+    const store = new UsageHistoryStore({
+      database: () => {
+        opened += 1;
+        return database;
+      },
+      now: () => NOW,
+    });
+    seed(database, USAGE_HISTORY_PRUNE_BATCH_ROWS + 10, () => [OLD_DAY]);
+
+    const sweep = store.prune();
+    database.close();
+
+    expect(await sweep).toEqual({ prunedRows: USAGE_HISTORY_PRUNE_BATCH_ROWS, prunedDays: 0 });
+    expect(opened).toBe(1);
+    const reopened = connect(directory);
+    expect(reopened.rows(USAGE_HISTORY_STORE).list({ values: false })).toHaveLength(10);
+  });
+});
+
+describe("the finished report cache", () => {
+  async function seeded(clock: Clock) {
+    const directory = await dataDirectory();
+    const database = connect(directory);
+    const store = new UsageHistoryStore({ database: () => database, now: () => clock.value });
+    store.recordTurns({
+      sessionKey: "env-1:claude:tab-1",
+      environmentId: "env-1",
+      platform: "claude",
+      turns: [turn("t1")],
+    });
+    const rows = spyOn(database, "rows");
+    return { directory, database, store, rows };
+  }
+
+  function cacheOf(store: UsageHistoryStore) {
+    return store as unknown as {
+      reportCache: Map<string, unknown>;
+      reportCacheBytes: number;
+    };
+  }
+
+  test("a repeat query answers from the finished report without reading a row", async () => {
+    const clock: Clock = { value: new Date(2026, 9, 20, 9, 0, 0) };
+    const { store, rows } = await seeded(clock);
+    const first = store.report({ days: 7 });
+    expect(rows).toHaveBeenCalledTimes(1);
+    clock.value = new Date(2026, 9, 20, 9, 5, 0);
+    const second = store.report({ days: 7 });
+    expect(rows).toHaveBeenCalledTimes(1);
+    expect({ ...second, generatedAt: first.generatedAt }).toEqual(first);
+    expect(second.generatedAt).toBe(clock.value.toISOString());
+    // Each query keeps its own report; filters are part of the key.
+    expect(store.report({ days: 7, environmentId: "env-2" }).sessions).toBe(0);
+    expect(rows).toHaveBeenCalledTimes(2);
+    expect(store.report({ days: 30 }).sessions).toBe(1);
+    expect(rows).toHaveBeenCalledTimes(3);
+  });
+
+  test("a caller changing its copy cannot change the next answer", async () => {
+    const clock: Clock = { value: new Date(2026, 9, 20, 9, 0, 0) };
+    const { store } = await seeded(clock);
+    const first = store.report({ days: 7 });
+    first.totals.turns = 999;
+    first.environments.length = 0;
+    const second = store.report({ days: 7 });
+    expect(second.totals.turns).toBe(1);
+    expect(second.environments).toHaveLength(1);
+    second.days.length = 0;
+    expect(store.report({ days: 7 }).days).toHaveLength(7);
+  });
+
+  test("every write, from this connection or another, invalidates it", async () => {
+    const clock: Clock = { value: new Date(2026, 9, 20, 9, 0, 0) };
+    const { store, directory } = await seeded(clock);
+    expect(store.report({ days: 7 }).totals.turns).toBe(1);
+
+    store.recordTurns({
+      sessionKey: "env-1:claude:tab-1",
+      environmentId: "env-1",
+      platform: "claude",
+      turns: [turn("t2")],
+    });
+    expect(store.report({ days: 7 }).totals.turns).toBe(2);
+
+    store.labelEnvironment("env-1", { environmentName: "renamed" });
+    expect(store.report({ days: 7 }).environments[0]?.name).toBe("renamed");
+
+    const other = await storeWithClock(clock, directory);
+    other.store.recordTurns({
+      sessionKey: "env-3:codex:tab-1",
+      environmentId: "env-3",
+      platform: "codex",
+      turns: [turn("t9")],
+    });
+    expect(store.report({ days: 7 }).sessions).toBe(2);
+
+    store.deleteByEnvironment("env-3");
+    expect(store.report({ days: 7 }).sessions).toBe(1);
+  });
+
+  test("a day rollover invalidates it with no write", async () => {
+    const clock: Clock = { value: new Date(2026, 9, 20, 23, 59, 0) };
+    const { store, rows } = await seeded(clock);
+    const before = store.report({ days: 1 });
+    expect(before.totals.turns).toBe(1);
+    clock.value = new Date(2026, 9, 21, 0, 1, 0);
+    const after = store.report({ days: 1 });
+    expect(rows).toHaveBeenCalledTimes(2);
+    expect(after.toDay).toBe(usageDayKey(clock.value));
+    expect(after.totals.turns).toBe(0);
+  });
+
+  test("is bounded by entry count and bytes", async () => {
+    const clock: Clock = { value: new Date(2026, 9, 20, 9, 0, 0) };
+    const { store } = await seeded(clock);
+    for (let index = 0; index < USAGE_REPORT_CACHE_MAX_ENTRIES + 8; index++) {
+      store.report({ days: 7, environmentId: `env-${index}` });
+    }
+    const cache = cacheOf(store);
+    expect(cache.reportCache.size).toBe(USAGE_REPORT_CACHE_MAX_ENTRIES);
+    expect(cache.reportCacheBytes).toBeGreaterThan(0);
+    expect(cache.reportCacheBytes).toBeLessThanOrEqual(USAGE_REPORT_CACHE_MAX_BYTES);
+    // The oldest queries were evicted, the newest kept.
+    expect(cache.reportCache.has(JSON.stringify([7, null, "env-0"]))).toBe(false);
+    expect(
+      cache.reportCache.has(JSON.stringify([7, null, `env-${USAGE_REPORT_CACHE_MAX_ENTRIES + 7}`])),
+    ).toBe(true);
+    store.clearReportCache();
+    expect(cache.reportCache.size).toBe(0);
+    expect(cache.reportCacheBytes).toBe(0);
+  });
+});

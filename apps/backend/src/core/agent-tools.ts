@@ -4,7 +4,8 @@ import {
   type GoalReportStatus,
 } from "@orkestrator/protocol/native-agent-goal";
 import { createDesignMcp, resolveDesignDestination, type DesignService } from "./design/index.js";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash } from "node:crypto";
+import { mintAgentToolsToken } from "@orkestrator/protocol/node/bridge-credential";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { toNodeHandler } from "@modelcontextprotocol/node";
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
@@ -58,6 +59,7 @@ import { registerWebAnnotationTools, WebAnnotationToolLimiter } from "./web-anno
 import {
   ARTIFACT_ONLY_SERVER_INSTRUCTIONS,
   ARTIFACT_TOOL_INSTRUCTIONS,
+  artifactAuthoringNotice,
   registerTranscriptArtifactTools,
   type TranscriptArtifactToolHost,
 } from "./transcript-artifacts/index.js";
@@ -858,7 +860,10 @@ async function createAgentToolServer(
         (annotationTools
           ? " Browser annotation tools read the annotation request assigned to this session and optionally report its result; they never resolve annotations."
           : "") +
-        (artifactTools ? ARTIFACT_TOOL_INSTRUCTIONS : ""),
+        (artifactTools
+          ? ARTIFACT_TOOL_INSTRUCTIONS +
+            artifactAuthoringNotice(artifactTools.authoringAvailability?.())
+          : ""),
     },
   );
 
@@ -936,7 +941,10 @@ function createArtifactOnlyServer(
 ): McpServer {
   const server = new McpServer(
     { name: ORKESTRATOR_ARTIFACT_MCP_SERVER_NAME, version: "1.0.0" },
-    { instructions: ARTIFACT_ONLY_SERVER_INSTRUCTIONS },
+    {
+      instructions:
+        ARTIFACT_ONLY_SERVER_INSTRUCTIONS + artifactAuthoringNotice(host.authoringAvailability?.()),
+    },
   );
   registerTranscriptArtifactTools(
     server,
@@ -1065,7 +1073,7 @@ export class AgentToolsServer {
         environmentId,
         projectId,
         ...(tabId ? { tabId } : {}),
-        token: randomBytes(32).toString("base64url"),
+        token: mintAgentToolsToken(),
       };
       this.credentialsByEnvironment.set(credentialKey, credential);
       this.scopesByDigest.set(credentialDigest(credential.token), {
@@ -1108,7 +1116,7 @@ export class AgentToolsServer {
           environmentId,
           projectId,
           workflowResultBroker: true,
-          token: randomBytes(32).toString("base64url"),
+          token: mintAgentToolsToken(),
         };
         this.credentialsByEnvironment.set(credentialKey, credential);
         this.scopesByDigest.set(credentialDigest(credential.token), {
@@ -1189,7 +1197,7 @@ export class AgentToolsServer {
     ring: (reason: WorktreeSignalReason) => void,
   ): StateSignalCredential | null {
     if (!this.server || !this.port) return null;
-    const token = randomBytes(32).toString("base64url");
+    const token = mintAgentToolsToken();
     const digest = credentialDigest(token);
     const entry = { path, ring };
     this.stateSignalsByDigest.set(digest, entry);

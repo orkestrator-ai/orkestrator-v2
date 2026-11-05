@@ -111,8 +111,21 @@ same host can therefore lose Vite module loads and render a blank page or the
 "Orkestrator couldn't connect" screen; see
 flake [2340](../tests/flaky-tests/aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md).
 When a browser run fails, it prints which failed cases have that error in their
-trace; the run's result does not change. `headless-profile.spec.ts` fetches its
-modules outside Chromium's network stack, so this does not fail the headless check.
+trace; the run's result does not change.
+
+The browser suite's specs therefore take `test` from
+`e2e/agent-testing/browser-test.ts` rather than `@playwright/test`. Its
+`context` fixture fetches every loopback script and stylesheet through
+Playwright (`route.fetch()`), which no interface change aborts, and keeps them
+in memory for that context, because routing turns Chromium's HTTP cache off and
+refetching every module on each reload made reloaded pages miss their
+assertions on a loaded host. Navigations, commands and event streams still go
+through Chromium. A spec that opens a
+second context calls `fetchModulesOutsideChromium(context)` on it.
+`browser-gateway.spec.ts` and `client-outage.spec.ts` keep Chromium's own path
+for module loads, because the browser's network path is what they test.
+`browser-test.test.ts` fails when a new spec in `playwright.browser.config.ts`
+uses neither, or creates a context it does not route.
 
 Both full browser tasks (`test:agent:browser` and its isolated variant) build
 the packaged CLI first (`build:cli`), because `cli-ui.spec.ts` drives
@@ -1106,6 +1119,31 @@ SIGKILL regression independently qualifies pre-acceptance same-request-id retry.
 The restarts leave the profile running under a detached launcher; stop it
 with `dev:stop` as usual. `dev:status` no longer reports `testProject` after a
 restart, so the spec falls back to the profile's seeded copy.
+
+### Live requests of a running agent tab
+
+`e2e/agent-testing/agent-tab-requests-live.spec.ts` counts what one visible
+Claude tab sends while its turn is in a foreground wait (the `running-quiet`
+workload), then drops the page's connection during a second running turn and
+checks the view recovers without a reload. It has its own opt-in and uses the
+host's Claude credentials:
+
+```bash
+mise run dev:test --profile qa-tab-requests --fixture --credential-source claude --agent-platforms claude
+# In a second terminal:
+ORKESTRATOR_AGENT_TEST_PROFILE=qa-tab-requests ORKESTRATOR_AGENT_TEST_RUN_ID=qa-tab-requests \
+  ORKESTRATOR_AGENT_TEST_LIVE_TAB_REQUESTS=1 \
+  mise run test:logged -- --name tab-requests -- bunx playwright test \
+  --config e2e/agent-testing/playwright.browser.config.ts agent-tab-requests-live.spec.ts --workers=1
+mise run dev:stop --profile qa-tab-requests
+mise run dev:reset --profile qa-tab-requests
+```
+
+It knows nothing about which commands the renderer sends, so the same file
+measures two commits. Results are appended to
+`output/agent-testing/<run id>/agent-tab-requests.json`: command names, counts
+and byte totals, per round and per second, from both the page and the gateway's
+`/__orkestrator/metrics`.
 
 ### Live revision tokens with inactive views
 

@@ -7,7 +7,8 @@
  * controller holds it — over a seeded synthetic transcript of 3,000 messages:
  * 100 rich blocks (code fences in mixed languages, Mermaid and chart fences,
  * tables, details, callouts, inline data-URL images), deferred image parts,
- * JSON payloads and published artifact parts, plus a response that streams
+ * JSON payloads and published artifact parts (chart, Mermaid and static HTML
+ * documents; the baseline shows the last as saved previews), plus a response that streams
  * tokens into a code fence at a steady rate on request.
  *
  * Backend calls are answered deterministically and instantly by a fake
@@ -27,6 +28,7 @@ import type {
   NativeMessage as Message,
   NativeMessagePart,
 } from "../../apps/web/src/lib/chat/native-message-types";
+import { sha256Hex } from "../../packages/protocol/src/graphs/sha256";
 
 // ---------------------------------------------------------------------------
 // Feature-detected modules (absent at the baseline commit).
@@ -38,6 +40,7 @@ type CapabilitiesModule =
 type IdentityModule = typeof import("../../apps/web/src/lib/chat/rich-identity");
 type ArtifactRequestsModule = typeof import("../../apps/web/src/lib/chat/artifact-requests");
 type ViewStoreModule = typeof import("../../apps/web/src/stores/richContentViewStore");
+type StaticFrameSlotsModule = typeof import("../../apps/web/src/stores/staticHtmlFrameSlots");
 
 function optionalModule<T>(modules: Record<string, unknown>): T | null {
   const values = Object.values(modules);
@@ -63,6 +66,9 @@ const artifactRequestsModule = optionalModule<ArtifactRequestsModule>(
 );
 const viewStoreModule = optionalModule<ViewStoreModule>(
   import.meta.glob("../../apps/web/src/stores/richContentViewStore.ts", { eager: true }),
+);
+const staticFrameSlotsModule = optionalModule<StaticFrameSlotsModule>(
+  import.meta.glob("../../apps/web/src/stores/staticHtmlFrameSlots.ts", { eager: true }),
 );
 
 // ---------------------------------------------------------------------------
@@ -365,6 +371,8 @@ const RICH_EVERY = 30; // 100 rich blocks
 const IMAGE_EVERY = 60; // 50 deferred image parts
 const JSON_EVERY = 45; // ~67 JSON payloads
 const ARTIFACT_EVERY = 150; // 20 artifact parts
+const STATIC_ARTIFACT_EVERY = 150; // 20 more: published static HTML documents
+const STATIC_ARTIFACT_OFFSET = 1_000;
 const ENVIRONMENT_ID = "perf-environment";
 const SESSION_KEY = "perf-environment:perf-session";
 const BACKEND_ID = "perf-backend";
@@ -396,7 +404,7 @@ function richMarkdown(random: () => number, r: number): string {
 }
 
 function artifactRef(k: number) {
-  const kind = k % 2 === 0 ? "chart" : "mermaid";
+  const kind = k >= STATIC_ARTIFACT_OFFSET ? "html-static" : k % 2 === 0 ? "chart" : "mermaid";
   const suffix = String(k).padStart(8, "0");
   return {
     schemaVersion: 1 as const,
@@ -420,6 +428,24 @@ function textMessage(id: string, role: Message["role"], content: string, at: num
   };
 }
 
+/** `?staticTail=1`: a static document as the last row, for follow-to-end behaviour. */
+function staticTailMessage(): Message {
+  const ref = artifactRef(STATIC_ARTIFACT_OFFSET + 900);
+  const at = MESSAGE_COUNT;
+  return {
+    ...textMessage("perf-static-tail", "assistant", `Published ${ref.title}.`, at),
+    parts: [
+      {
+        type: "artifact",
+        content: `Published ${ref.title}.`,
+        artifact: ref,
+        publishedAt: new Date(Date.UTC(2026, 9, 1) + at * 60_000).toISOString(),
+        conversationSequence: 2_000,
+      } as unknown as NativeMessagePart,
+    ],
+  };
+}
+
 function buildTranscript(): Message[] {
   const random = seeded(0x5eed);
   const messages: Message[] = [];
@@ -427,11 +453,13 @@ function buildTranscript(): Message[] {
   let imageIndex = 0;
   let jsonIndex = 0;
   let artifactIndex = 0;
+  let staticArtifactIndex = 0;
   for (let i = 0; i < MESSAGE_COUNT; i++) {
     const id = `perf-msg-${i}`;
     const at = i;
-    if (i % ARTIFACT_EVERY === 75) {
-      const k = artifactIndex++;
+    const isStaticArtifact = i % STATIC_ARTIFACT_EVERY === 25;
+    if (i % ARTIFACT_EVERY === 75 || isStaticArtifact) {
+      const k = isStaticArtifact ? STATIC_ARTIFACT_OFFSET + staticArtifactIndex++ : artifactIndex++;
       const ref = artifactRef(k);
       const summary = `Published ${ref.title}.`;
       messages.push({
@@ -504,6 +532,9 @@ function buildTranscript(): Message[] {
     }
   }
   padToRetainedBytes(messages, random);
+  if (new URLSearchParams(window.location.search).get("staticTail") === "1") {
+    messages.push(staticTailMessage());
+  }
   return messages;
 }
 
@@ -559,9 +590,27 @@ const MERMAID_SVG = [
 
 const SHA = "a".repeat(64);
 
+/** A representative synthetic report: rows, a timeline per row, a chart and a table. */
+function staticReport(k: number): string {
+  const rows = Array.from({ length: 12 }, (_, row) => {
+    const bars = Array.from(
+      { length: 6 },
+      (_, bar) =>
+        `<rect x="${bar * 40 + (row % 5) * 3}" y="2" width="${20 + ((row * bar) % 13)}" height="10" fill="var(--ork-chart-1,#2563eb)"/>`,
+    ).join("");
+    return `<tr><td>Synthetic session ${k}-${row}</td><td><svg viewBox="0 0 260 14" width="260" height="14">${bars}</svg></td><td>${(row + 1) * 3}.5M</td></tr>`;
+  }).join("");
+  return `<!doctype html><html><head><title>Report ${k}</title><style>body{font:13px system-ui;color:var(--ork-foreground,#111)}td{padding:3px 8px;border-top:1px solid var(--ork-border,#ccc)}</style></head><body><h2>Synthetic report ${k}</h2><table>${rows}</table><details><summary>Notes</summary><p>Synthetic data for the performance gate.</p></details></body></html>`;
+}
+
+// A small valid PNG, so the baseline's image path is real work too.
+const CAPTURE_PNG =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+
 function publicationFor(publicationId: string) {
   const k = Number.parseInt(publicationId.slice("pub_perf".length), 10);
   const ref = artifactRef(k);
+  const isStatic = ref.kind === "html-static";
   return {
     ref,
     publishedAt: "2026-10-01T00:00:00.000Z",
@@ -570,11 +619,19 @@ function publicationFor(publicationId: string) {
     receipt: {
       receiptId: `rcpt_perf${String(k).padStart(8, "0")}`,
       completedAt: "2026-10-01T00:00:00.000Z",
-      profile: null,
-      captures: [],
+      profile: isStatic
+        ? { theme: "light", viewport: { width: 960, height: 640, deviceScaleFactor: 1 } }
+        : null,
+      captures: isStatic
+        ? [{ assetId: `asset_perf${k}`, sha256: SHA, width: 960, height: 420, byteLength: 70 }]
+        : [],
       semantics: "not-assessed",
     },
-    source: { sha256: SHA, byteLength: 512, effectiveSha256: SHA },
+    source: {
+      sha256: SHA,
+      byteLength: 512,
+      effectiveSha256: isStatic ? sha256Hex(staticReport(k)) : SHA,
+    },
     availability: "available",
   };
 }
@@ -582,6 +639,40 @@ function publicationFor(publicationId: string) {
 function representationFor(publicationId: string, representation: string) {
   const k = Number.parseInt(publicationId.slice("pub_perf".length), 10);
   const ref = artifactRef(k);
+  if (ref.kind === "html-static" && representation === "capture") {
+    return {
+      artifactId: ref.artifactId,
+      revision: ref.revision,
+      representation,
+      mimeType: "image/png",
+      filename: `artifact-${k}.png`,
+      encoding: "base64",
+      data: CAPTURE_PNG,
+      sha256: SHA,
+      byteLength: CAPTURE_PNG.length,
+      totalBytes: CAPTURE_PNG.length,
+      nextOffsetBytes: null,
+      executableOutsideOrkestrator: false,
+    };
+  }
+  if (ref.kind === "html-static") {
+    const html = staticReport(k);
+    const bytes = new TextEncoder().encode(html).byteLength;
+    return {
+      artifactId: ref.artifactId,
+      revision: ref.revision,
+      representation,
+      mimeType: "text/html; charset=utf-8",
+      filename: `artifact-${k}.html`,
+      encoding: "utf8",
+      data: html,
+      sha256: sha256Hex(html),
+      byteLength: bytes,
+      totalBytes: bytes,
+      nextOffsetBytes: null,
+      executableOutsideOrkestrator: true,
+    };
+  }
   const data =
     representation === "rendered-svg"
       ? MERMAID_SVG
@@ -815,6 +906,12 @@ function PerfConversation({ onRemount }: { onRemount: () => void }) {
           result.artifactRequests = artifactRequestsModule.artifactRequestCacheStats();
         }
         if (viewStoreModule) result.viewStore = viewStoreModule.richViewStoreStats();
+        if (staticFrameSlotsModule) {
+          result.staticFrames = {
+            ...staticFrameSlotsModule.staticFrameSlotStats(),
+            mounted: document.querySelectorAll("iframe[data-artifact-static-document]").length,
+          };
+        }
         return result;
       },
       startStream,

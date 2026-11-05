@@ -32,14 +32,24 @@ lists are the reason these engines are built the way they are. In short:
 2. **One process set per environment.** Environments differ in filesystem,
    container, `PATH`, credentials, and installed toolchains, so they never share
    an agent process.
-3. **Every child is authenticated.** The backend generates a 32-byte token per
-   environment and passes it in as `CLAUDE_BRIDGE_TOKEN`, `CODEX_BRIDGE_TOKEN`,
-   `CURSOR_BRIDGE_TOKEN`, `ACP_BRIDGE_TOKEN`, `PI_BRIDGE_TOKEN`, or
-   `OPENCODE_SERVER_PASSWORD`. A missing or blank token
-   makes a bridge fall back to a random value nobody holds, so it fails closed
-   rather than open. The Claude and Codex bridges delete the variable from
-   `process.env` after reading it, so a spawned agent child cannot inherit the
-   bridge's own credential.
+3. **Every child is authenticated.** The backend generates a 32-byte `okb_` token
+   per environment and gives a bridge only its SHA-256, as `CLAUDE_BRIDGE_TOKEN_SHA256`,
+   `CODEX_BRIDGE_TOKEN_SHA256`, `CURSOR_BRIDGE_TOKEN_SHA256`, `ACP_BRIDGE_TOKEN_SHA256`
+   or `PI_BRIDGE_TOKEN_SHA256`. (OpenCode takes `OPENCODE_SERVER_PASSWORD`, which it
+   compares itself. A plugin running inside the server removes the variable and marks
+   the server non-dumpable before a tool can run, and the launch gives it to that one
+   process: `buildOpenCodeCredentialPluginSource`, to-do
+   [4981](../todo/containers-and-environments/4981-opencode-password-readable-by-agent.md).)
+   The agent shares the bridge's uid, so the bridge holds no token for it to read,
+   and marks itself non-dumpable so it cannot read one from a request in flight. On
+   an image with `bridge-credential=1` the token is in root-only
+   `/run/orkestrator-bridge`; an older image's bridge keeps its token in `/tmp` and in
+   its environment until the container is rebuilt. `bridges/AGENTS.md` has the rules.
+   Startup, including model discovery, selects credentials from the image capability.
+   An unavailable capability read refuses startup so a transient failure cannot
+   silently leave an agent-readable token. Retry once the image is readable.
+   A missing or blank credential makes a bridge fall back to a random value nobody
+   holds, so it fails closed rather than open.
 4. **Live events are incremental updates over authoritative snapshots.** Each
    engine exposes both a stream and a way to re-read current state, because a
    tab that was inactive must be able to catch up from the snapshot instead of
@@ -427,6 +437,13 @@ Claude also has a second, unrelated execution mode: `apps/backend/src/core/tmux.
 drives the Claude Code CLI inside a tmux session and observes its terminal
 output. That path does not use the bridge or the SDK at all.
 
+Its chat tab reads the session's JSONL through `TmuxTranscriptReader`
+(`tmux-transcript-reader.ts`). A reopen reads one bounded page from the tail, and
+earlier history pages in on request, in one `docker exec` per page in a container.
+The file is read from its start only by the poll loop's tail, once per session in
+each backend process; that pass keeps the task list current and records each task
+call's snapshot, so a page from anywhere can stamp its lines without a replay.
+
 ## Codex
 
 **Bridge:** `bridges/codex-bridge/` · **Transport:** JSON-RPC over private stdio
@@ -462,8 +479,14 @@ other consumer — notifications go to a per-thread serial queue and fan out fro
 there. A slow consumer on one thread therefore cannot stall every other thread
 in the environment.
 
-SSE frames carry `id: <revision>`, and `event-ring.ts` keeps a bounded replay
-buffer so a reconnecting client can ask for exactly what it missed. The
+SSE frames carry `id: <revision>`, and `EventRing`
+(`packages/protocol/src/node/event-ring.ts`, shared with the Claude bridge)
+keeps a bounded replay buffer so a reconnecting client can ask for exactly what
+it missed. A newer full `message.updated` snapshot collapses the older frames
+for the same message to `bridge.cursor` frames that only keep the cursor dense;
+on the Claude bridge that includes the `message.patched` frames since the
+previous snapshot. An observation subscriber (`?observe=1`) of the Claude bridge
+still gets one content-free frame per revision. The
 `connected` frame echoes the client's own cursor rather than the latest
 revision, because a browser `EventSource` adopts every id it sees.
 
@@ -573,7 +596,7 @@ Default tiers:
 | `provider-configured` | The SDK is told to deny, with no independent verification | OpenCode; Cursor; Claude when the sandbox cannot start |
 | `advisory` | The agent is asked to request permission first; a tool that does not ask is not stopped | Grok |
 
-**Settings → Agent platforms → Coordinator safety level** chooses the weakest
+**Settings → Coordinator → Coordinator safety level** chooses the weakest
 tier this install will offer. It defaults to `provider-configured`, so Grok
 stays opt-in. There is no silent fallback or provider substitution.
 
@@ -697,6 +720,12 @@ first one after each dispatch (`dispatchFailure`), and
 history holds no message for the request.
 
 ### Maintaining the OpenCode integration
+
+The credential plugin depends on three things a bump can change, all exercised by
+`apps/backend/tests/bridge-credential-docker.test.ts`: OpenCode reads its password
+once at startup, so removing the variable leaves authentication on; plugins load
+before the first tool; and nothing it spawns uses a bare `Bun.spawn`, which passes on
+the variable a deleted `process.env` entry no longer shows.
 
 Upstream is building a goal plugin into OpenCode core, unreleased at 1.19.5. If a pin
 ships it, reserve its command and record how to keep it off, because Orkestrator's

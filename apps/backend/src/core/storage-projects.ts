@@ -467,8 +467,10 @@ export class ProjectsRepository {
       if (validate) await validate(projects);
 
       project.order = Math.max(-1, ...projects.map((item) => item.order)) + 1;
-      projects.push(project);
-      await this.context.saveJson(this.files.projectsFile(), projects);
+      this.context.updateStoreRow(this.files.projectsFile(), project.id, (current) => {
+        if (current !== undefined) throw new Error(`Project exists: ${project.id}`);
+        return { result: undefined, value: project };
+      });
       return project;
     });
     this.context.changes.announce("project", project.id);
@@ -477,10 +479,10 @@ export class ProjectsRepository {
 
   async removeProject(projectId: string): Promise<void> {
     await this.enqueueProjectMutation(async () => {
-      const projects = await this.loadProjects();
-      const filtered = projects.filter((project) => project.id !== projectId);
-      if (filtered.length === projects.length) throw new Error(`Project not found: ${projectId}`);
-      await this.context.saveJson(this.files.projectsFile(), filtered);
+      this.context.updateStoreRow(this.files.projectsFile(), projectId, (current) => {
+        if (current === undefined) throw new Error(`Project not found: ${projectId}`);
+        return { result: undefined, delete: true };
+      });
     });
     await this.repos.drafts.deleteComposeDraftsByProject(projectId);
     // A project's permission rules have nothing left to answer for (todo 0723).
@@ -504,7 +506,32 @@ export class ProjectsRepository {
   }
 
   async getProject(projectId: string): Promise<Project | null> {
-    return (await this.loadProjects()).find((project) => project.id === projectId) ?? null;
+    const stored = this.context.loadStoreRow(this.files.projectsFile(), projectId);
+    return isRecord(stored) && stored.id === projectId ? (stored as unknown as Project) : null;
+  }
+
+  /**
+   * Commits one project as its own row, for a writer holding the project lease
+   * that read it under that lease. A row gone since the read stays gone.
+   */
+  saveProject(project: Project): void {
+    this.context.updateStoreRow(this.files.projectsFile(), project.id, (current) => {
+      if (current === undefined) throw new Error(`Project not found: ${project.id}`);
+      return { result: undefined, value: project };
+    });
+  }
+
+  /** {@link saveProject} for several projects: one commit, and only changed rows are written. */
+  private saveProjects(projects: readonly Project[]): void {
+    this.context.database.transaction(() => {
+      if (this.context.database.readStoreHeader("projects")?.mode === "document") {
+        this.context.updateDocumentArrayRows<Project>(this.files.projectsFile(), (stored) => {
+          stored.splice(0, stored.length, ...projects);
+        });
+      } else {
+        for (const project of projects) this.saveProject(project);
+      }
+    });
   }
 
   async updateProject(
@@ -512,16 +539,19 @@ export class ProjectsRepository {
     updates: Partial<Pick<Project, "name" | "gitUrl" | "localPath" | "folder" | "icon">>,
   ): Promise<Project> {
     const project = await this.enqueueProjectMutation(async () => {
-      const projects = await this.loadProjects();
-      const project = projects.find((candidate) => candidate.id === projectId);
+      const project = await this.getProject(projectId);
       if (!project) throw new Error(`Project not found: ${projectId}`);
       if (typeof updates.gitUrl === "string") {
         // A repository that moved keeps its project: settings, environments,
         // and history are keyed by project id, not by remote URL.
         const gitUrl = withoutUrlCredentials(updates.gitUrl.trim());
         if (!gitUrl) throw new Error("Git URL cannot be empty");
+        // Only a new remote has to be checked against the other projects.
         if (
-          projects.some((candidate) => candidate.id !== projectId && candidate.gitUrl === gitUrl)
+          gitUrl !== project.gitUrl &&
+          (await this.loadProjects()).some(
+            (candidate) => candidate.id !== projectId && candidate.gitUrl === gitUrl,
+          )
         ) {
           throw new Error(`Duplicate project URL: ${gitUrl}`);
         }
@@ -531,7 +561,7 @@ export class ProjectsRepository {
       if ("localPath" in updates) project.localPath = updates.localPath ?? null;
       if ("folder" in updates) applyProjectFolder(project, updates.folder);
       if ("icon" in updates) applyProjectIcon(project, updates.icon);
-      await this.context.saveJson(this.files.projectsFile(), projects);
+      this.saveProject(project);
       return project;
     });
     this.context.changes.announce("project", projectId);
@@ -558,7 +588,7 @@ export class ProjectsRepository {
     const projects = await this.enqueueProjectMutation(async () => {
       const projects = await this.loadProjects();
       applyProjectArrangement(projects, { projectIds, folders });
-      await this.context.saveJson(this.files.projectsFile(), projects);
+      this.saveProjects(projects);
       return projects.sort((a, b) => a.order - b.order);
     });
     for (const project of projects) this.context.changes.announce("project", project.id);
@@ -580,7 +610,7 @@ export class ProjectsRepository {
       if (!arrangement) return ordered;
       changed = true;
       applyProjectArrangement(projects, arrangement);
-      await this.context.saveJson(this.files.projectsFile(), projects);
+      this.saveProjects(projects);
       return projects.sort((a, b) => a.order - b.order);
     });
     if (changed) {
@@ -979,6 +1009,7 @@ export class ProjectsRepository {
         "deletionRequestedAt",
         "cleanupAfterMergeRequestedAt",
         "cleanupAfterMergeError",
+        "autoMergeResolveCompletedAt",
         "lifecycleOperationStartedAt",
         "setupSessionId",
         "setupStartedAt",
@@ -1171,7 +1202,30 @@ export class ProjectsRepository {
         // Cleared as an explicit `false`: renderers merge snapshots field-by-field.
         environment.setupApprovalRequired = updates.setupApprovalRequired === true;
       }
+      if (
+        typeof updates.autoMergeResolveAttempts === "number" &&
+        Number.isSafeInteger(updates.autoMergeResolveAttempts) &&
+        updates.autoMergeResolveAttempts >= 0 &&
+        updates.autoMergeResolveAttempts <= 3
+      ) {
+        environment.autoMergeResolveAttempts = updates.autoMergeResolveAttempts;
+      }
+      // Confirmed external merges must publish cleanup before disarming it.
+      if (
+        environment.autoMerge &&
+        environment.autoMergeCleanup &&
+        environment.autoMergePrUrl === environment.prUrl &&
+        environment.prState === "merged" &&
+        environment.prUrl === previousPrUrl &&
+        environment.branch === previousBranch &&
+        !environment.projectHome
+      ) {
+        environment.cleanupAfterMergeRequestedAt ??= new Date().toISOString();
+        environment.cleanupAfterMergeError = undefined;
+      }
       if ("autoMerge" in updates) {
+        environment.autoMergeResolveAttempts = 0;
+        environment.autoMergeResolveCompletedAt = undefined;
         // Off is an explicit `false`, like lifecycleError's `null`: renderers
         // merge snapshots field-by-field, so a dropped key would leave it on.
         environment.autoMerge =
@@ -1179,6 +1233,9 @@ export class ProjectsRepository {
         environment.autoMergePrUrl = environment.autoMerge ? environment.prUrl : null;
         environment.autoMergeEnabledAt = environment.autoMerge ? new Date().toISOString() : null;
         environment.autoMergeError = null;
+        // Set only together with `autoMerge`, so a later toggle that does not
+        // ask for cleanup withdraws an earlier request.
+        environment.autoMergeCleanup = environment.autoMerge && updates.autoMergeCleanup === true;
       }
       if ("autoMergeError" in updates) {
         environment.autoMergeError =
@@ -1195,6 +1252,7 @@ export class ProjectsRepository {
         environment.autoMergePrUrl = null;
         environment.autoMergeEnabledAt = null;
         environment.autoMergeError = null;
+        environment.autoMergeCleanup = false;
       }
       if (
         !environment.autoMerge ||
@@ -1202,6 +1260,16 @@ export class ProjectsRepository {
         environment.prUrl !== previousPrUrl
       ) {
         environment.autoMergeResolveRequestId = undefined;
+      }
+      if (
+        "prRecheckAfterAgentCompletionArmedAt" in updates &&
+        !environment.prRecheckAfterAgentCompletionArmedAt
+      ) {
+        environment.autoMergeResolveRequestId = undefined;
+      }
+      if (environment.hasMergeConflicts === false) {
+        environment.autoMergeResolveAttempts = 0;
+        environment.autoMergeResolveCompletedAt = undefined;
       }
       if ("tabTeardownIntents" in updates) {
         const intents = updates.tabTeardownIntents;
@@ -1443,6 +1511,12 @@ export class ProjectsRepository {
           !isEnvironmentReadyForAgents(environment))
       )
         return { environment, armedAt: null };
+      // A manual Resolve owns its own completion; an older automatic outcome
+      // must never release its armed token while that manual turn is running.
+      if (!claim?.autoMergePrUrl) {
+        environment.autoMergeResolveRequestId = undefined;
+        environment.autoMergeResolveCompletedAt = undefined;
+      }
       if (claim?.autoMergePrUrl && !environment.autoMergeResolveRequestId)
         environment.autoMergeResolveRequestId = claim.requestId;
       const previousArmedAt = environment.prRecheckAfterAgentCompletionArmedAt;

@@ -1,6 +1,6 @@
 /**
- * ChangeLedger: indexed durable records for change tracking, on the shared
- * `orkestrator.sqlite` (tables from ledger-schema.ts).
+ * ChangeLedger: indexed durable records for change tracking, in their own
+ * `change-tracking.sqlite` (tables and file from ledger-schema.ts).
  *
  * Every method is synchronous and short. Callers never hold a transaction
  * across an await: read the filesystem and write immutable objects first,
@@ -112,13 +112,46 @@ export interface SegmentRow {
   closed_at: string | null;
 }
 
+/**
+ * Every turn lifecycle state and what it means for the turn. A new state has to
+ * be classified here before a turn row can hold it, so it cannot silently fall
+ * out of {@link ChangeLedger.activeTurns}.
+ */
+const TURN_LIFECYCLES = {
+  "preparing-start": "active",
+  "start-ready": "active",
+  "start-unavailable": "active",
+  running: "active",
+  settling: "active",
+  "capturing-end": "active",
+  finalized: "terminal",
+  interrupted: "terminal",
+  "end-unavailable": "terminal",
+  abandoned: "terminal",
+} as const satisfies Record<string, "active" | "terminal">;
+
+export type TurnLifecycle = keyof typeof TURN_LIFECYCLES;
+
+const lifecyclesWhere = (kind: "active" | "terminal"): TurnLifecycle[] =>
+  (Object.keys(TURN_LIFECYCLES) as TurnLifecycle[]).filter(
+    (lifecycle) => TURN_LIFECYCLES[lifecycle] === kind,
+  );
+
+export const TERMINAL_TURN_LIFECYCLES: ReadonlySet<string> = new Set(lifecyclesWhere("terminal"));
+
+/** The lifecycle states of one kind, as a SQL list. They are literals from this file. */
+export const turnLifecycleSqlList = (kind: "active" | "terminal"): string =>
+  lifecyclesWhere(kind)
+    .map((lifecycle) => `'${lifecycle}'`)
+    .join(", ");
+
 export interface TurnBoundaryRow {
   turn_id: string;
   segment_id: string;
   thread_id: string;
   environment_id: string;
   worktree_id: string;
-  lifecycle: string;
+  lifecycle: TurnLifecycle;
   start_attempt_id: string | null;
   start_snapshot_id: string | null;
   end_snapshot_id: string | null;
@@ -207,8 +240,16 @@ export interface CaptureAttemptRow {
 
 const now = () => new Date().toISOString();
 
+/** `[age, turn id]` of the newest turn age-based retention has retired. */
+export const TURN_RETENTION_CURSOR_KEY = "retention:turn-cursor";
+
 export class ChangeLedger {
   private readonly measurementReaders = new Map<string, number>();
+
+  /** Measurements a request is reading right now. */
+  pinnedMeasurements(): Iterable<string> {
+    return this.measurementReaders.keys();
+  }
 
   /** Holds a measurement across asynchronous reads, including nested readers. */
   pinMeasurement(id: string): () => void {
@@ -225,7 +266,7 @@ export class ChangeLedger {
 
   constructor(private readonly storage: () => StorageDatabase) {}
 
-  private get db(): Database {
+  get db(): Database {
     return this.storage().db;
   }
 
@@ -259,6 +300,23 @@ export class ChangeLedger {
       value: string;
     } | null;
     return row?.value ?? null;
+  }
+
+  /** Persist source ownership before any cursor, acknowledgment or malformed-frame gap. */
+  recordEvidenceSource(environmentId: string, sourceKey: string): void {
+    this.setMeta(
+      `evidence-source:${encodeURIComponent(environmentId)}:${encodeURIComponent(sourceKey)}`,
+      sourceKey,
+    );
+  }
+
+  evidenceSources(environmentId: string): string[] {
+    const prefix = `evidence-source:${encodeURIComponent(environmentId)}:`;
+    return (
+      this.db
+        .query("SELECT value FROM change_ledger_meta WHERE key >= ? AND key < ?")
+        .all(prefix, `${prefix}￿`) as Array<{ value: string }>
+    ).map((row) => row.value);
   }
 
   setMeta(key: string, value: string): void {
@@ -313,9 +371,18 @@ export class ChangeLedger {
     return this.worktree(row.id)!;
   }
 
+  /**
+   * Retires a worktree row, and its identity with it: a later checkout at the
+   * same path gets a new row rather than colliding with this one, whose
+   * identity and incarnation may be identical (a kept project home).
+   */
   tombstoneWorktree(id: string): void {
     this.db
-      .query("UPDATE change_worktrees SET tombstoned_at = ?2, updated_at = ?2 WHERE id = ?1")
+      .query(
+        `UPDATE change_worktrees SET tombstoned_at = ?2, updated_at = ?2,
+           identity_key = identity_key || '#tombstoned:' || id
+         WHERE id = ?1 AND tombstoned_at IS NULL`,
+      )
       .run(id, now());
   }
 
@@ -802,6 +869,13 @@ export class ChangeLedger {
       .all() as SnapshotRow[];
   }
 
+  /** What a retention pass needs of every snapshot, without its coverage documents. */
+  snapshotAges(): Array<Pick<SnapshotRow, "id" | "tree_oid" | "created_at">> {
+    return this.db
+      .query("SELECT id, tree_oid, created_at FROM change_snapshots ORDER BY created_at")
+      .all() as Array<Pick<SnapshotRow, "id" | "tree_oid" | "created_at">>;
+  }
+
   deleteSnapshot(id: string): void {
     this.db.query("DELETE FROM change_snapshots WHERE id = ?").run(id);
   }
@@ -928,12 +1002,23 @@ export class ChangeLedger {
     return (row.n ?? 0) + 1;
   }
 
+  /** Seeks the lifecycle index: the provisional pass calls this per hint. */
   activeTurns(): TurnBoundaryRow[] {
     return this.db
       .query(
-        "SELECT * FROM change_turn_boundaries WHERE lifecycle NOT IN ('finalized', 'interrupted', 'end-unavailable', 'abandoned')",
+        `SELECT * FROM change_turn_boundaries WHERE lifecycle IN (${turnLifecycleSqlList("active")})`,
       )
       .all() as TurnBoundaryRow[];
+  }
+
+  /** Whether age-based retention has retired this turn, leaving only its boundary row. */
+  turnRetired(turn: TurnBoundaryRow): boolean {
+    if (!TERMINAL_TURN_LIFECYCLES.has(turn.lifecycle)) return false;
+    const stored = this.meta(TURN_RETENTION_CURSOR_KEY);
+    if (!stored) return false;
+    const [age, id] = JSON.parse(stored) as [string, string];
+    const own = turn.finished_at ?? turn.started_at;
+    return own < age || (own === age && turn.turn_id <= id);
   }
 
   latestTurnForThread(threadId: string): TurnBoundaryRow | null {
@@ -942,13 +1027,6 @@ export class ChangeLedger {
         "SELECT * FROM change_turn_boundaries WHERE thread_id = ? ORDER BY ordinal DESC LIMIT 1",
       )
       .get(threadId) as TurnBoundaryRow | null;
-  }
-
-  /** Terminal turns, oldest first (retention order). */
-  turnsByAge(): TurnBoundaryRow[] {
-    return this.db
-      .query("SELECT * FROM change_turn_boundaries ORDER BY COALESCE(finished_at, started_at) ASC")
-      .all() as TurnBoundaryRow[];
   }
 
   insertWindow(row: ToolWindowRow): void {
@@ -1207,6 +1285,11 @@ export class ChangeLedger {
     return this.storage().releaseFreePages(maxPages);
   }
 
+  /** Refreshes the ledger file's planner statistics (`StorageDatabase.optimize`). */
+  optimize(): void {
+    this.storage().optimize();
+  }
+
   insertDiffIdentity(identity: DiffIdentity): void {
     this.db
       .query(
@@ -1215,30 +1298,55 @@ export class ChangeLedger {
       .run(identity.id, identity.measurementId, JSON.stringify(identity), now());
   }
 
-  /** Blobs referenced by file-pair identities (live details). */
-  diffIdentityBlobs(): string[] {
-    const blobs: string[] = [];
-    const rows = this.db
+  /** One page of diff identities in row order, so a walk over them can yield. */
+  private diffIdentityPage(afterRowid: number, limit: number) {
+    return this.db
       .query(
-        'SELECT identity_json FROM change_diff_identities WHERE identity_json LIKE \'%"kind":"file"%\'',
+        "SELECT rowid AS row, id, identity_json, created_at FROM change_diff_identities WHERE rowid > ? ORDER BY rowid LIMIT ?",
       )
-      .all() as Array<{ identity_json: string }>;
+      .all(afterRowid, limit) as Array<{
+      row: number;
+      id: string;
+      identity_json: string;
+      created_at: string;
+    }>;
+  }
+
+  /**
+   * Blobs one page of file-pair identities (live details) names, and where the
+   * next page starts; null once the walk is over.
+   */
+  diffIdentityBlobsPage(
+    afterRowid: number,
+    limit: number,
+  ): { blobs: string[]; next: number | null } {
+    const rows = this.diffIdentityPage(afterRowid, limit);
+    const blobs: string[] = [];
     for (const row of rows) {
+      if (!row.identity_json.includes('"kind":"file"')) continue;
       const identity = JSON.parse(row.identity_json) as DiffIdentity;
       if (identity.kind !== "file") continue;
       for (const side of [identity.before, identity.after])
         if (side.state === "present") blobs.push(side.blobId);
     }
-    return blobs;
+    return { blobs, next: rows.length < limit ? null : rows.at(-1)!.row };
   }
 
-  /** Live-detail identities are transient views; prune them after `olderThan`. */
-  pruneLiveIdentities(olderThan: string): number {
-    return this.db
-      .query(
-        'DELETE FROM change_diff_identities WHERE created_at < ? AND identity_json LIKE \'%"kind":"file"%\'',
-      )
-      .run(olderThan).changes;
+  /**
+   * Live-detail identities are transient views; prunes one page's worth past
+   * `olderThan` in its own transaction. Returns where the next page starts, null
+   * once the walk is over.
+   */
+  pruneLiveIdentitiesPage(olderThan: string, afterRowid: number, limit: number): number | null {
+    return this.transaction(() => {
+      const rows = this.diffIdentityPage(afterRowid, limit);
+      const remove = this.db.query("DELETE FROM change_diff_identities WHERE id = ?");
+      for (const row of rows) {
+        if (row.created_at < olderThan && row.identity_json.includes('"kind":"file"'))
+          remove.run(row.id);
+      }
+      return rows.length < limit ? null : rows.at(-1)!.row;
+    });
   }
 
   diffIdentity(id: string): DiffIdentity | null {

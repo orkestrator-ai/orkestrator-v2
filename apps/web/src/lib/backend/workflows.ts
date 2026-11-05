@@ -1,4 +1,5 @@
 import { invoke } from "@/lib/native/backend";
+import { hostTimeZone } from "@orkestrator/protocol/schedule-time";
 import { terminalWriteWasDelivered } from "@/lib/backend/shared";
 import type {
   CreateFeatureBuildInput,
@@ -32,6 +33,9 @@ import {
   type MultiReviewStepTranscript,
   type StartMultiReviewCustomAddressFindingsInput,
   type StartMultiReviewInput,
+  type MultiReviewModelSelection,
+  type MultiReviewRewindStep,
+  type MultiReviewSkippableStep,
 } from "@orkestrator/protocol/multi-review";
 import type {
   Environment,
@@ -64,6 +68,7 @@ import type {
   NativeAgentTranscriptUpdate,
   NativeAgentSessionStateUpdate,
   NativeAgentDiscoveryUpdate,
+  NativeAgentLiveUpdate,
   NativeAgentDiscoverySection,
   NativeAgentCommandIntent,
   NativeAgentCommandRefreshOutcome,
@@ -110,6 +115,7 @@ import {
   isNativeAgentTranscriptUpdate,
   isNativeAgentSessionStateUpdate,
   isNativeAgentDiscoveryUpdate,
+  isNativeAgentLiveUpdate,
   NATIVE_AGENT_SYNC_MAX_PAGE_BYTES,
   NATIVE_AGENT_SYNC_MAX_SNAPSHOT_BYTES,
 } from "@orkestrator/protocol/native-agent";
@@ -237,13 +243,48 @@ export async function stopMultiReviewValidation(
   return invoke<BackendMultiReviewWorkflow>("stop_multi_review_validation", { workflowId });
 }
 
+/** A `model` is "Restart in…": the reviewer runs on it from now on. */
 export async function restartMultiReviewReviewer(
   workflowId: string,
   reviewerId: string,
+  model?: MultiReviewModelSelection,
 ): Promise<BackendMultiReviewWorkflow> {
   return invoke<BackendMultiReviewWorkflow>("restart_multi_review_reviewer", {
     workflowId,
     reviewerId,
+    ...(model ? { model } : {}),
+  });
+}
+
+/** Moves on without a step's result: the reviewers still working, or Address Findings. */
+export async function skipMultiReviewStep(
+  workflowId: string,
+  step: MultiReviewSkippableStep,
+): Promise<BackendMultiReviewWorkflow> {
+  return invoke<BackendMultiReviewWorkflow>("skip_multi_review_step", { workflowId, step });
+}
+
+/** What "Rewind code to here" on a step would drop, and why it cannot run now, if it cannot. */
+export async function previewMultiReviewCodeRewind(
+  workflowId: string,
+  step: MultiReviewRewindStep,
+): Promise<BuildPipelineCodeRewindPreview> {
+  return invoke<BuildPipelineCodeRewindPreview>("preview_multi_review_code_rewind", {
+    workflowId,
+    step,
+  });
+}
+
+/** Resets the worktree to the commit a step started from and restarts that step. */
+export async function rewindMultiReviewCode(
+  workflowId: string,
+  step: MultiReviewRewindStep,
+  expectedHead: string,
+): Promise<BackendMultiReviewWorkflow> {
+  return invoke<BackendMultiReviewWorkflow>("rewind_multi_review_code", {
+    workflowId,
+    step,
+    expectedHead,
   });
 }
 
@@ -463,6 +504,8 @@ export async function getNativeAgentSyncCapabilities(): Promise<{
   observationEventVersions?: number[];
   /** Part-level patches inside transcript deltas (efficiency step 14). */
   transcriptPatchVersions?: number[];
+  /** One request for transcript and state (`get_native_agent_live_update`). */
+  liveUpdateVersions?: number[];
 }> {
   const response = await invoke<unknown>("get_native_agent_sync_capabilities");
   if (!response || typeof response !== "object" || Array.isArray(response)) {
@@ -487,7 +530,11 @@ export async function getNativeAgentSyncCapabilities(): Promise<{
     (candidate.transcriptPatchVersions !== undefined &&
       (!Array.isArray(candidate.transcriptPatchVersions) ||
         candidate.transcriptPatchVersions.length > 16 ||
-        !candidate.transcriptPatchVersions.every(Number.isSafeInteger)))
+        !candidate.transcriptPatchVersions.every(Number.isSafeInteger))) ||
+    (candidate.liveUpdateVersions !== undefined &&
+      (!Array.isArray(candidate.liveUpdateVersions) ||
+        candidate.liveUpdateVersions.length > 16 ||
+        !candidate.liveUpdateVersions.every(Number.isSafeInteger)))
   ) {
     throw new Error("Invalid native agent sync capabilities response");
   }
@@ -497,6 +544,7 @@ export async function getNativeAgentSyncCapabilities(): Promise<{
     progressiveViewVersions?: number[];
     observationEventVersions?: number[];
     transcriptPatchVersions?: number[];
+    liveUpdateVersions?: number[];
   };
 }
 
@@ -537,6 +585,30 @@ export async function getNativeAgentSessionStateUpdate(input: {
     throw new Error("Invalid native agent session-state update response");
   }
   return response;
+}
+
+export async function getNativeAgentLiveUpdate<TMessage = unknown>(input: {
+  environmentId: string;
+  agent: NativeAgentClientPlatform;
+  logicalSessionKey: string;
+  viewVersion: 1;
+  liveWindow: NativeAgentLiveWindow;
+  transcriptToken?: string;
+  stateToken?: string;
+  /** Ask for part-level patches; only when the backend advertised them. */
+  patchVersion?: 2;
+}): Promise<NativeAgentLiveUpdate<TMessage>> {
+  const response = await invoke<unknown>("get_native_agent_live_update", input);
+  if (
+    new TextEncoder().encode(JSON.stringify(response)).byteLength >
+    NATIVE_AGENT_SYNC_MAX_SNAPSHOT_BYTES
+  ) {
+    throw new Error("Native agent live update response exceeded 20 MiB");
+  }
+  if (!isNativeAgentLiveUpdate(response)) {
+    throw new Error("Invalid native agent live update response");
+  }
+  return response as NativeAgentLiveUpdate<TMessage>;
 }
 
 export async function getNativeAgentDiscoveryUpdate(input: {
@@ -917,8 +989,13 @@ export async function dispatchNativeAgentIntent(input: {
    * leading whitespace, so a command's arguments arrive exactly as typed.
    */
   command?: NativeAgentCommandIntent;
+  /** Defaults to this device's zone; a coordinator reads its user's zone from it. */
+  clientTimeZone?: string;
 }): Promise<NativeAgentDispatchOutcome> {
-  return invoke<NativeAgentDispatchOutcome>("dispatch_native_agent_intent", input);
+  return invoke<NativeAgentDispatchOutcome>("dispatch_native_agent_intent", {
+    ...input,
+    clientTimeZone: input.clientTimeZone ?? hostTimeZone(),
+  });
 }
 
 export async function retryNativeAgentDispatch(input: {
@@ -1047,6 +1124,28 @@ export async function retryBuildPipelineReviewer(
   reviewerId: string,
 ): Promise<BackendBuildPipeline> {
   return invoke<BackendBuildPipeline>("retry_build_pipeline_reviewer", { pipelineId, reviewerId });
+}
+
+/**
+ * Runs one reviewer again whatever state it is in, keeping the rest of the panel.
+ * `reviewerId` names a live reviewer, or the session of one whose pass has ended.
+ */
+export async function restartBuildPipelineReviewer(
+  pipelineId: string,
+  reviewerId: string,
+): Promise<BackendBuildPipeline> {
+  return invoke<BackendBuildPipeline>("restart_build_pipeline_reviewer", {
+    pipelineId,
+    reviewerId,
+  });
+}
+
+/** Stops one reviewer of the running review, keeping the rest of the panel. */
+export async function stopBuildPipelineReviewer(
+  pipelineId: string,
+  reviewerId: string,
+): Promise<BackendBuildPipeline> {
+  return invoke<BackendBuildPipeline>("stop_build_pipeline_reviewer", { pipelineId, reviewerId });
 }
 
 /**

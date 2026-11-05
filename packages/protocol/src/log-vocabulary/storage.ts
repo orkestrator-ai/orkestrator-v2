@@ -49,13 +49,26 @@ export const STORAGE_LOG_AREAS = defineLogAreas({
         "Pruning agent handoffs that nothing references failed; a later prune retries.",
       "desktop-connections.malformed":
         "Stored desktop connection settings were malformed, so the local connection is used.",
+      "config.restrict-mode-failed":
+        "A config file holding provider secrets could not be set to owner-only; the backend carries on.",
       "legacy-json.moved":
         "JSON store files written after the SQLite migration were archived, not imported.",
       "legacy-json.archive-failed": "Imported JSON store files could not be archived.",
       "lease.heartbeat-failed":
         "A held lease's heartbeat failed, which shortens the lease; the next one retries.",
+      "scrub.vacuum-failed":
+        "Deleted-content page reclamation failed; the checkpoint is attempted independently.",
       "scrub.checkpoint-failed":
-        "Deleted content could not be scrubbed from the WAL because the truncating checkpoint failed or was blocked; the next checkpoint retries.",
+        "Deleted content could not be scrubbed from the WAL yet because the truncating checkpoint failed or a reader held an older snapshot; it is retried without waiting until it succeeds.",
+      "upkeep.vacuum-failed": "Periodic page reclamation failed; the next upkeep pass retries.",
+      "optimize.failed":
+        "Refreshing the query planner's statistics failed; queries still run and the next check retries.",
+      "ledger.moved":
+        "The change-tracking ledger was moved out of the main database into its own file; `rows` and `durationMs` say how much and how long.",
+      "snapshot.ledger-skipped":
+        "The daily change-tracking ledger snapshot was skipped because the disk or the snapshot budget lacks room; `retryAt` says when it tries again.",
+      "snapshot.ledger-failed":
+        "The daily change-tracking ledger snapshot failed; `retryAt` says when it tries again, if known.",
       ...THROTTLE_LOG_EVENTS,
     },
   },

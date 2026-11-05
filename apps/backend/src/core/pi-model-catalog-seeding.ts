@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { randomBytes } from "node:crypto";
+import { mintBridgeToken } from "@orkestrator/protocol/node/bridge-credential";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
 import type { CommandContext } from "./commands-context.js";
 import { resolveBunBinary } from "./commands-agent-support.js";
@@ -47,7 +47,7 @@ async function runDiscovery(context: CommandContext): Promise<AgentModel[]> {
   if (!existsSync(entrypoint)) throw new Error(`pi bridge entrypoint not found: ${entrypoint}`);
 
   const port = await allocateLocalPort();
-  const authToken = randomBytes(32).toString("base64url");
+  const authToken = mintBridgeToken();
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     PORT: String(port),

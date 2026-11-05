@@ -1,7 +1,11 @@
 import http, { type Server } from "node:http";
 import type { Socket } from "node:net";
 import { randomBytes } from "node:crypto";
-import { GatewayEventReplay } from "./gateway-event-replay.js";
+import {
+  DEFAULT_GATEWAY_RELAYED_REPLAY_FRAME_CAPACITY,
+  DEFAULT_GATEWAY_RELAYED_REPLAY_MAX_BYTES,
+  GatewayEventReplay,
+} from "./gateway-event-replay.js";
 import { TerminalWebSocketGateway } from "./terminal-websocket-server.js";
 import type { LegacyLoopbackPortAccess, PreviewRuntime } from "./core/preview-runtime.js";
 import { PreviewAdmission } from "./preview-admission.js";
@@ -76,6 +80,8 @@ export class GatewayContext {
   readonly keepaliveMs: number;
   readonly proxyBodyIdleTimeoutMs: number;
   readonly eventReplay: GatewayEventReplay;
+  /** Relayed node events only, with its own generation and revisions. */
+  readonly relayedEventReplay: GatewayEventReplay;
   readonly replayHandshakeFrameCapacity: number;
   readonly replayHandshakeMaxBytes: number;
   readonly metrics: GatewayMetricsStore;
@@ -173,6 +179,11 @@ export class GatewayContext {
       );
     }
     this.eventReplay = new GatewayEventReplay(randomBytes(16).toString("hex"), options.eventReplay);
+    this.relayedEventReplay = new GatewayEventReplay(randomBytes(16).toString("hex"), {
+      frameCapacity: DEFAULT_GATEWAY_RELAYED_REPLAY_FRAME_CAPACITY,
+      maxBytes: DEFAULT_GATEWAY_RELAYED_REPLAY_MAX_BYTES,
+      ...options.relayedEventReplay,
+    });
     this.replayHandshakeFrameCapacity = Math.max(
       1,
       options.eventReplay?.handshakeFrameCapacity ??

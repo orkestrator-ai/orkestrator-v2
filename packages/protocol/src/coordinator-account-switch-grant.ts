@@ -18,6 +18,9 @@ import { AGENT_ACCOUNT_PLATFORMS, type AgentAccountPlatform } from "./agent-acco
 export const GET_COORDINATOR_ACCOUNT_SWITCH_GRANT_COMMAND = "get_coordinator_account_switch_grant";
 export const SET_COORDINATOR_ACCOUNT_SWITCH_GRANT_COMMAND = "set_coordinator_account_switch_grant";
 
+/** Command: run and record a switch a self-timer's permission allows. */
+export const RUN_TIMER_AGENT_ACCOUNT_SWITCH_COMMAND = "run_timer_agent_account_switch";
+
 /** Emitted with a `CoordinatorAccountSwitchRecord` when a switch ran without asking. */
 export const COORDINATOR_ACCOUNT_SWITCHED_EVENT = "coordinator-account-switched";
 
@@ -60,8 +63,19 @@ export function withCoordinatorAccountSwitchGrant(
   return next;
 }
 
-/** One switch a coordinator made under the permission, as the user sees it. */
+/**
+ * One switch a coordinator made without asking, as the user sees it: under the
+ * standing permission, or under the permission the user gave one self-timer.
+ */
 export interface CoordinatorAccountSwitchRecord {
+  /**
+   * Which permission let it run. Absent on records from a backend that only
+   * had the standing permission.
+   */
+  authorizedBy?: "standing-grant" | "self-timer";
+  /** `self-timer`: the timer, and what the user asked in their own words. */
+  scheduleId?: string;
+  userInstruction?: string;
   requestId: string;
   at: string;
   platform: AgentAccountPlatform;

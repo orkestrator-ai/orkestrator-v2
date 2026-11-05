@@ -50,7 +50,7 @@ test("Graph Run retains its view behind another pane and centres a background se
   await expect.poll(inView).toBe(true);
 });
 
-// WebKit resets a hidden scroller that holds a container query container (0860, 1080).
+// WebKit resets a hidden scroller that holds a container query container (0860).
 test("Graph Run keeps its overview scroll position behind another pane", async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
   // Short enough that the wide layout overflows too.

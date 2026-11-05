@@ -19,10 +19,14 @@
  * each path's owner and removal condition.
  */
 export const COMPATIBILITY_PATH_IDS = [
+  /** A container bridge's token was read from its `node`-readable `/tmp` file. */
+  "bridge-credential.token-file",
   /** A session-route 404 was rejected as an outdated bridge, without reading a legacy route. */
   "slash-catalogue.outdated-bridge",
   /** A bridge without `POST /session/:id/close` got the restart notice. */
   "bridge-close.upgrade-required",
+  /** A renderer that predates paged tmux transcripts read a whole transcript. */
+  "tmux-transcript.whole-read",
   /** A bridge without `/transcript` was read through its whole `/messages` body. */
   "bridge-transcript.messages-fallback",
   /**
@@ -70,6 +74,11 @@ export const COMPATIBILITY_PATH_IDS = [
    */
   "coordinator-notices.older-leaf",
   /**
+   * A renderer that predates per-conversation startup errors opened the panel,
+   * which is how it recovers: `ensure_project_coordinator` cleared them.
+   */
+  "coordinator-ensure.conversation-errors-cleared",
+  /**
    * A coordinator's mail with images was refused: the node does not advertise
    * `node-mail-attachments`.
    */
@@ -84,11 +93,30 @@ export const COMPATIBILITY_PATH_IDS = [
    * on a leaf that does not advertise `ticket-sync`.
    */
   "ticket-sync.older-node",
+  /** A terminal WebSocket client offered no input-results subprotocol: a frame per input. */
+  "terminal-websocket.per-input-results",
   /**
    * `/compact` sent instructions and the bridge compacted without confirming
    * them: it predates compaction instructions and ignored the body.
    */
   "compact.instructions-ignored",
+  /**
+   * A Claude or Codex turn outcome was recorded as a usage limit from its error
+   * text alone: the bridge sent no `errorCode` (it predates the code, or the
+   * provider refused without its structured signal).
+   */
+  "usage-limit.text-classified",
+  /**
+   * A workspace client (a client grant or the relay) sent a global-settings
+   * write that changed nothing and was answered with the current settings: a
+   * realm from before `patch_global_config` saving a model favourite.
+   */
+  "workspace-grant.config-echo",
+  /**
+   * A stream that did not say how it wants relayed node events got one under the
+   * old shared name: a renderer or desktop from before per-node names.
+   */
+  "relayed-node-event.legacy-stream",
 ] as const;
 
 export type CompatibilityPathId = (typeof COMPATIBILITY_PATH_IDS)[number];
@@ -100,7 +128,7 @@ export interface CompatibilityPathUsageEntry {
   lastSeenAt: string;
 }
 
-/** The persisted document, also what the command and `/api/metrics` return. */
+/** The persisted document, also what the command and `/__orkestrator/metrics` return. */
 export interface CompatibilityPathUsageSnapshot {
   version: 1;
   paths: Partial<Record<CompatibilityPathId, CompatibilityPathUsageEntry>>;

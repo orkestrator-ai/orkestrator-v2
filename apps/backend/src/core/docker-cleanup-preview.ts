@@ -27,6 +27,7 @@ import {
 import { inspectVolume } from "./container-storage.js";
 import { inspectNetwork } from "./container-network.js";
 import type { DockerCleanupGrant } from "./docker-cleanup-grants.js";
+import { listLegacyRuntimes } from "./docker-cleanup-legacy-runtimes.js";
 
 /**
  * Reviewed cleanup: a preview enumerates this registry's containers and
@@ -124,6 +125,7 @@ export async function previewDockerCleanup(context: CleanupContext): Promise<Cle
     loadProtection(context),
   ]);
   const networks = await listAppResources("network").catch(() => [] as ListedVolume[]);
+  const legacy = await listLegacyRuntimes(protection);
   const rows: CleanupPreviewRow[] = [];
   const grant: DockerCleanupGrant = {
     owner,
@@ -193,7 +195,10 @@ export async function previewDockerCleanup(context: CleanupContext): Promise<Cle
     truncated:
       containers.length >= MAX_CLEANUP_CANDIDATES ||
       volumes.length >= MAX_CLEANUP_CANDIDATES ||
-      networks.length >= MAX_CLEANUP_CANDIDATES,
+      networks.length >= MAX_CLEANUP_CANDIDATES ||
+      legacy.truncated,
+    legacyRuntimes: legacy.rows,
+    legacyRuntimesUnchecked: legacy.unchecked,
   };
 }
 

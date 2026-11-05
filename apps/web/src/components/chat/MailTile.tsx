@@ -3,10 +3,12 @@ import {
   useContext,
   useId,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type ComponentType,
 } from "react";
+import { useStore } from "zustand";
 import {
   Bell,
   ChevronRight,
@@ -19,6 +21,7 @@ import {
   MessagesSquare,
   Network,
   Send,
+  SquareArrowOutUpRight,
   ShieldAlert,
   UserRound,
 } from "lucide-react";
@@ -26,6 +29,7 @@ import type { Components } from "react-markdown";
 import {
   agentMailAddressLabel,
   type AgentMailKind,
+  type AgentMailNotice,
   type AgentMailNoticeTone,
 } from "@orkestrator/protocol/agent-mail";
 import { mailMarkdownComponents } from "@/components/agent-mail/mail-markdown-components";
@@ -35,6 +39,10 @@ import {
   useAgentMailEnvironmentName,
 } from "@/components/agent-mail/agent-mail-ui";
 import { agentMailAddressText } from "@/lib/chat/client-only-messages";
+import { workerTabTarget, type CoordinatorWorkTarget } from "@/lib/coordinator-work-items";
+import { openCoordinatorWorkTarget } from "@/lib/coordinator-work-navigation";
+import { portalStore } from "@/lib/portal/portal-store";
+import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useMessagePartExpansion } from "@/lib/chat/message-part-expansion";
 import { formatBytes } from "@/lib/chat/rich-markdown/media-types";
 import type { PeerMailAttachment, PeerMailPresentation } from "@/lib/chat/native-message-types";
@@ -206,6 +214,49 @@ function MailTileAttachments({ attachments }: { attachments: PeerMailAttachment[
   );
 }
 
+/**
+ * Where a notice about a worker opens, or null when it names no worker this
+ * client can reach. A notice without `nodeId` names a worker on this machine, so
+ * an older notice about another node's worker finds nothing here and offers
+ * nothing, and the tile says nothing it cannot act on.
+ */
+function useNoticeWorkerTarget(notice: AgentMailNotice | undefined): CoordinatorWorkTarget | null {
+  const resource = notice?.resource;
+  const environmentId =
+    resource?.kind === "agent-tab" || resource?.kind === "environment"
+      ? (resource.environmentId ?? (resource.kind === "environment" ? resource.id : undefined))
+      : undefined;
+  const nodeId = resource?.nodeId;
+  const tabId = resource?.tabId;
+  const label = resource?.label;
+  const environment = useEnvironmentStore((state) =>
+    environmentId && !nodeId
+      ? state.environments.find((item) => item.id === environmentId)
+      : undefined,
+  );
+  const node = useStore(portalStore.store, (state) =>
+    environmentId && nodeId ? state.nodes.find((item) => item.nodeId === nodeId) : undefined,
+  );
+  return useMemo(
+    () =>
+      environmentId
+        ? workerTabTarget(
+            {
+              environmentId,
+              ...(tabId ? { tabId } : {}),
+              ...(nodeId ? { nodeId } : {}),
+              title: label ?? environmentId,
+            },
+            {
+              environments: environment ? [environment] : [],
+              nodes: node ? [node] : [],
+            },
+          )
+        : null,
+    [environment, environmentId, label, node, nodeId, tabId],
+  );
+}
+
 export interface MailTileProps {
   mail: PeerMailPresentation;
   /**
@@ -242,6 +293,7 @@ export const MailTile = memo(function MailTile({
   // claiming an outcome it cannot know.
   const Icon = mail.kind === "notice" && !mail.notice ? Bell : style.icon;
   const participants = mail.participants;
+  const workerTarget = useNoticeWorkerTarget(mail.kind === "notice" ? mail.notice : undefined);
 
   // Fade the clipped edge only when the clamp actually hides something; a
   // one-line message should read as complete, not cut off.
@@ -306,6 +358,19 @@ export const MailTile = memo(function MailTile({
               )}
             />
           </button>
+          {workerTarget ? (
+            <button
+              type="button"
+              aria-label={`Open worker${mail.notice?.resource.label ? ` ${mail.notice.resource.label}` : ""}`}
+              title="Open the worker"
+              data-mail-open-worker="true"
+              onClick={() => openCoordinatorWorkTarget(workerTarget)}
+              className="mt-1 mr-1 flex shrink-0 items-center gap-1 rounded px-1 py-1 text-[11px] leading-none text-muted-foreground transition-colors hover:bg-foreground/[0.05] hover:text-foreground focus-hairline"
+            >
+              <SquareArrowOutUpRight className="size-3.5" aria-hidden="true" />
+              <span className="hidden @sm:inline">Open</span>
+            </button>
+          ) : null}
           {participants ? (
             <button
               type="button"

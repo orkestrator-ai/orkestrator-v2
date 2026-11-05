@@ -1,3 +1,4 @@
+import { turnFailureKind } from "@orkestrator/protocol/agent-usage-limits";
 import * as shared from "./storage-shared.js";
 import path from "node:path";
 import type { NativeSessionInvalidationCause } from "@orkestrator/protocol/native-agent-observation";
@@ -103,6 +104,7 @@ import {
   type NativeAgentDisplayTailDeletion,
 } from "./native-agent-display-tail-store.js";
 import type { StorageContext } from "./storage-context.js";
+import { StoreCorruptError } from "./storage-database.js";
 import { FrozenStoreSnapshot } from "./storage-frozen-snapshot.js";
 import type { StorageFiles } from "./storage-files.js";
 import type { StorageRepositories } from "./storage-repositories.js";
@@ -207,7 +209,7 @@ export class NativeAgentSessionsRepository {
     for (const [key, session] of Object.entries(loaded.sessions)) {
       if (session.owner || !environmentById.has(session.environmentId)) continue;
       await this.enqueueNativeAgentSessionMutation(key, async () => {
-        const current = (await this.loadNativeAgentSessions()).sessions[key];
+        const current = this.peekNativeAgentSession(key);
         const environment = current && environmentById.get(current.environmentId);
         if (!current || current.owner || !environment) return;
         await this.saveNativeAgentSession(key, {
@@ -310,11 +312,15 @@ export class NativeAgentSessionsRepository {
     );
   }
 
+  /**
+   * Lock-free: the load is one committed snapshot and the prune only filters
+   * the copy it returns. A lease held for this read would be released before
+   * the caller acted on the answer, so it would cost two commits and protect
+   * nothing; {@link updateAgentInteractionResolutionJournal} re-reads under it.
+   */
   async getAgentInteractionResolutionJournal(): Promise<AgentInteractionResolutionJournal> {
-    return this.enqueueAgentInteractionJournalMutation(async () =>
-      pruneAgentInteractionResolutionJournal(
-        await this.repos.reviews.loadAgentInteractionResolutionJournal(),
-      ),
+    return pruneAgentInteractionResolutionJournal(
+      await this.repos.reviews.loadAgentInteractionResolutionJournal(),
     );
   }
 
@@ -412,6 +418,44 @@ export class NativeAgentSessionsRepository {
     if (key in loaded.opaque) throw new Error(UNREADABLE_NATIVE_SESSION);
   }
 
+  /**
+   * One session's record for a mutation holding its key's lease, without
+   * decoding any other row. Refuses this key's unreadable record, and only
+   * this key's: another key's bad row is not read at all. The value is a fresh
+   * parse the caller may change; it never aliases a frozen snapshot.
+   */
+  async readNativeAgentSessionUnderLease(
+    key: string,
+  ): Promise<PersistedNativeAgentSession | undefined> {
+    const file = this.files.nativeAgentSessionsFile();
+    // A store held whole may not be a record at all, which must still refuse
+    // rather than read as "no session".
+    if (this.context.storeHeldAsDocument(file)) {
+      const loaded = await this.loadNativeAgentSessions();
+      this.assertReadableNativeAgentSession(loaded, key);
+      return loaded.sessions[key];
+    }
+    let stored: unknown;
+    try {
+      stored = this.context.loadStoreRow(file, key, { unreadable: "throw" });
+    } catch (error) {
+      if (error instanceof StoreCorruptError) throw new Error(UNREADABLE_NATIVE_SESSION);
+      throw error;
+    }
+    if (stored === undefined) return undefined;
+    if (!isPersistedNativeAgentSession(stored, key)) throw new Error(UNREADABLE_NATIVE_SESSION);
+    return stored;
+  }
+
+  /**
+   * {@link readNativeAgentSessionUnderLease} for the sweeps that must pass over
+   * an unreadable record rather than refuse it.
+   */
+  private peekNativeAgentSession(key: string): PersistedNativeAgentSession | undefined {
+    const stored = this.context.loadStoreRow(this.files.nativeAgentSessionsFile(), key);
+    return isPersistedNativeAgentSession(stored, key) ? stored : undefined;
+  }
+
   async getNativeAgentSession(key: string): Promise<PersistedNativeAgentSession | null> {
     if (!isNonBlankString(key)) {
       throw new Error("Native agent session key must not be blank");
@@ -502,10 +546,7 @@ export class NativeAgentSessionsRepository {
         input.environmentId,
         "Native agent session",
       );
-      const loaded = await this.loadNativeAgentSessions();
-      const { sessions } = loaded;
-      this.assertReadableNativeAgentSession(loaded, input.key);
-      const existing = sessions[input.key];
+      const existing = await this.readNativeAgentSessionUnderLease(input.key);
       if (existing) {
         if (
           existing.environmentId !== input.environmentId ||
@@ -539,8 +580,7 @@ export class NativeAgentSessionsRepository {
               : {}),
             updatedAt: nowIso(),
           };
-          sessions[input.key] = migratedOwner;
-          await this.saveNativeAgentSession(input.key, sessions[input.key]);
+          await this.saveNativeAgentSession(input.key, migratedOwner);
           return migratedOwner;
         }
         return existing;
@@ -563,8 +603,7 @@ export class NativeAgentSessionsRepository {
         createdAt: now,
         updatedAt: now,
       };
-      sessions[input.key] = saved;
-      await this.saveNativeAgentSession(input.key, sessions[input.key], {
+      await this.saveNativeAgentSession(input.key, saved, {
         requireLiveEnvironment: input.environmentId,
       });
       this.announceNativeAgentRecord(saved, "record-created");
@@ -583,9 +622,7 @@ export class NativeAgentSessionsRepository {
         expected.environmentId,
         "Native agent session",
       );
-      const loaded = await this.loadNativeAgentSessions();
-      this.assertReadableNativeAgentSession(loaded, expected.key);
-      const current = loaded.sessions[expected.key];
+      const current = await this.readNativeAgentSessionUnderLease(expected.key);
       const alreadyApplied =
         current &&
         JSON.stringify(current.policy) === JSON.stringify(policy) &&
@@ -658,10 +695,7 @@ export class NativeAgentSessionsRepository {
         input.environmentId,
         "Native agent session",
       );
-      const loaded = await this.loadNativeAgentSessions();
-      const { sessions } = loaded;
-      this.assertReadableNativeAgentSession(loaded, input.key);
-      const existing = sessions[input.key];
+      const existing = await this.readNativeAgentSessionUnderLease(input.key);
       if (existing) {
         if (
           existing.environmentId !== input.environmentId ||
@@ -715,8 +749,7 @@ export class NativeAgentSessionsRepository {
                 : {}),
               updatedAt: nowIso(),
             };
-            sessions[input.key] = updated;
-            await this.saveNativeAgentSession(input.key, sessions[input.key]);
+            await this.saveNativeAgentSession(input.key, updated);
             this.announceNativeAgentRecord(updated, "record-created");
             return updated;
           }
@@ -759,8 +792,7 @@ export class NativeAgentSessionsRepository {
         createdAt: existing?.createdAt ?? now,
         updatedAt: now,
       };
-      sessions[input.key] = saved;
-      await this.saveNativeAgentSession(input.key, sessions[input.key], {
+      await this.saveNativeAgentSession(input.key, saved, {
         requireLiveEnvironment: input.environmentId,
       });
       if (existing?.pendingDispatch) {
@@ -789,10 +821,7 @@ export class NativeAgentSessionsRepository {
   ): Promise<PersistedNativeAgentSession | undefined> {
     if (!isNonBlankString(key)) throw new Error("Native agent goal update key is invalid");
     return this.enqueueNativeAgentSessionMutation(key, async () => {
-      const loaded = await this.loadNativeAgentSessions();
-      const { sessions } = loaded;
-      this.assertReadableNativeAgentSession(loaded, key);
-      const session = sessions[key];
+      const session = await this.readNativeAgentSessionUnderLease(key);
       if (!session) return undefined;
       const current = sessionGoal(session);
       const next = update(current, session);
@@ -805,7 +834,6 @@ export class NativeAgentSessionsRepository {
         ...(replaced ? { goalHistory: goalHistoryWith(session.goalHistory, current) } : {}),
         updatedAt: nowIso(),
       };
-      sessions[key] = updated;
       await this.saveNativeAgentSession(key, updated);
       this.announceNativeAgentRecord(updated, "record-goal");
       return updated;
@@ -822,10 +850,7 @@ export class NativeAgentSessionsRepository {
       throw new Error("Native agent control update identity is invalid");
     }
     return this.enqueueNativeAgentSessionMutation(key, async () => {
-      const loaded = await this.loadNativeAgentSessions();
-      const { sessions } = loaded;
-      this.assertReadableNativeAgentSession(loaded, key);
-      const existing = sessions[key];
+      const existing = await this.readNativeAgentSessionUnderLease(key);
       if (!existing || existing.providerSessionId !== expectedProviderSessionId) {
         throw new Error("Native agent control update target is stale");
       }
@@ -833,8 +858,7 @@ export class NativeAgentSessionsRepository {
       // that guards prompt delivery; neither side may overtake a send.
       await applyControls?.();
       const updated = nativeAgentSessionWithControls(existing, update);
-      sessions[key] = updated;
-      await this.saveNativeAgentSession(key, sessions[key]);
+      await this.saveNativeAgentSession(key, updated);
       this.announceNativeAgentRecord(updated, "record-controls");
       return updated;
     });
@@ -858,10 +882,7 @@ export class NativeAgentSessionsRepository {
       throw new Error("Native agent inferred composer selection is invalid");
     }
     return this.enqueueNativeAgentSessionMutation(key, async () => {
-      const loaded = await this.loadNativeAgentSessions();
-      const { sessions } = loaded;
-      this.assertReadableNativeAgentSession(loaded, key);
-      const existing = sessions[key];
+      const existing = await this.readNativeAgentSessionUnderLease(key);
       if (!existing || existing.providerSessionId !== expectedProviderSessionId) {
         throw new Error("Native agent control update target is stale");
       }
@@ -881,8 +902,7 @@ export class NativeAgentSessionsRepository {
         },
         updatedAt: nowIso(),
       };
-      sessions[key] = updated;
-      await this.saveNativeAgentSession(key, sessions[key]);
+      await this.saveNativeAgentSession(key, updated);
       this.announceNativeAgentRecord(updated, "record-controls");
       return updated;
     });
@@ -910,9 +930,7 @@ export class NativeAgentSessionsRepository {
     }
     resumableSessionId = resumableSessionId.trim();
     return this.enqueueNativeAgentSessionMutation(key, async () => {
-      const loaded = await this.loadNativeAgentSessions();
-      this.assertReadableNativeAgentSession(loaded, key);
-      const existing = loaded.sessions[key];
+      const existing = await this.readNativeAgentSessionUnderLease(key);
       if (!existing || existing.providerSessionId !== providerSessionId) return false;
       if (nativeAgentSessionResumeIdentity(existing) === resumableSessionId) return false;
       const updated: PersistedNativeAgentSession = {
@@ -941,9 +959,7 @@ export class NativeAgentSessionsRepository {
     }
     if (!isNonBlankString(title.title)) throw new Error("Native agent backend title is blank");
     return this.enqueueNativeAgentSessionMutation(key, async () => {
-      const loaded = await this.loadNativeAgentSessions();
-      this.assertReadableNativeAgentSession(loaded, key);
-      const existing = loaded.sessions[key];
+      const existing = await this.readNativeAgentSessionUnderLease(key);
       if (!existing || existing.providerSessionId !== title.providerSessionId) return false;
       const current = nativeAgentSessionBackendTitle(existing);
       if (current?.source === "generated" && title.source === "fallback") return false;
@@ -965,7 +981,6 @@ export class NativeAgentSessionsRepository {
         },
         updatedAt: nowIso(),
       };
-      loaded.sessions[key] = updated;
       await this.saveNativeAgentSession(key, updated);
       this.announceNativeAgentRecord(updated, "record-title");
       return true;
@@ -977,15 +992,11 @@ export class NativeAgentSessionsRepository {
       throw new Error("Native agent session identity must not be blank");
     }
     return this.enqueueNativeAgentSessionMutation(key, async () => {
-      const loaded = await this.loadNativeAgentSessions();
-      const { sessions } = loaded;
-      this.assertReadableNativeAgentSession(loaded, key);
-      const existing = sessions[key];
+      const existing = await this.readNativeAgentSessionUnderLease(key);
       if (!existing || existing.providerSessionId !== providerSessionId) {
         return false;
       }
-      delete sessions[key];
-      await this.saveNativeAgentSession(key, sessions[key]);
+      await this.saveNativeAgentSession(key, undefined);
       await this.context.scrubSensitiveJsonBackups(
         this.files.nativeAgentSessionsFile(),
         (storedKey) => storedKey !== key,
@@ -1073,8 +1084,7 @@ export class NativeAgentSessionsRepository {
     for (const key of keys) {
       removed =
         (await this.enqueueNativeAgentSessionMutation(key, async () => {
-          const { sessions } = await this.loadNativeAgentSessions();
-          if (sessions[key]?.environmentId !== environmentId) return false;
+          if (this.peekNativeAgentSession(key)?.environmentId !== environmentId) return false;
           await this.saveNativeAgentSession(key, undefined);
           return true;
         })) || removed;
@@ -1124,10 +1134,7 @@ export class NativeAgentSessionsRepository {
       throw new Error("Incomplete-turn notice is invalid");
     }
     return this.enqueueNativeAgentSessionMutation(key, async () => {
-      const loaded = await this.loadNativeAgentSessions();
-      const { sessions } = loaded;
-      this.assertReadableNativeAgentSession(loaded, key);
-      const session = sessions[key];
+      const session = await this.readNativeAgentSessionUnderLease(key);
       if (!session || session.providerSessionId !== providerSessionId) {
         return false;
       }
@@ -1139,8 +1146,7 @@ export class NativeAgentSessionsRepository {
         openCodeIncompleteTurnNotice: notice ?? undefined,
         updatedAt: nowIso(),
       };
-      sessions[key] = updated;
-      await this.saveNativeAgentSession(key, sessions[key]);
+      await this.saveNativeAgentSession(key, updated);
       this.announceNativeAgentRecord(updated, "record-notice");
       return true;
     });
@@ -1191,10 +1197,11 @@ export class NativeAgentSessionsRepository {
   }> {
     return this.enqueueNativeAgentSessionMutation(key, () =>
       this.repos.promptQueues.enqueuePromptQueueMutation(async () => {
-        const loaded = await this.loadNativeAgentSessions();
-        this.assertReadableNativeAgentSession(loaded, key);
-        const queues = await this.repos.promptQueues.loadPromptQueues();
-        return { session: loaded.sessions[key] ?? null, queue: queues[queueKey] ?? null };
+        const session = await this.readNativeAgentSessionUnderLease(key);
+        return {
+          session: session ?? null,
+          queue: this.repos.promptQueues.loadPromptQueue(queueKey),
+        };
       }),
     );
   }
@@ -1205,9 +1212,7 @@ export class NativeAgentSessionsRepository {
     state: "active" | "settled",
   ): Promise<void> {
     await this.enqueueNativeAgentSessionMutation(expected.key, async () => {
-      const loaded = await this.loadNativeAgentSessions();
-      this.assertReadableNativeAgentSession(loaded, expected.key);
-      const session = loaded.sessions[expected.key];
+      const session = await this.readNativeAgentSessionUnderLease(expected.key);
       const requestId =
         expected.pendingDispatch?.requestId ?? expected.dispatchedRequestIds?.at(-1);
       if (
@@ -1246,10 +1251,7 @@ export class NativeAgentSessionsRepository {
       throw new Error("Native agent turn outcome is invalid");
     }
     return this.enqueueNativeAgentSessionMutation(key, async () => {
-      const loaded = await this.loadNativeAgentSessions();
-      const { sessions } = loaded;
-      this.assertReadableNativeAgentSession(loaded, key);
-      const session = sessions[key];
+      const session = await this.readNativeAgentSessionUnderLease(key);
       if (
         !session ||
         session.providerSessionId !== providerSessionId ||
@@ -1258,7 +1260,7 @@ export class NativeAgentSessionsRepository {
       ) {
         return false;
       }
-      sessions[key] = {
+      await this.saveNativeAgentSession(key, {
         ...session,
         turnOutcomes: [
           ...(session.turnOutcomes ?? []).slice(-49),
@@ -1266,12 +1268,14 @@ export class NativeAgentSessionsRepository {
             requestId: outcome.requestId,
             outcome: outcome.outcome,
             ...(outcome.error ? { error: outcome.error.slice(0, 500) } : {}),
+            ...(outcome.outcome === "failed" && turnFailureKind(outcome.failureKind)
+              ? { failureKind: turnFailureKind(outcome.failureKind) }
+              : {}),
             observedAt: outcome.observedAt,
           },
         ],
         updatedAt: nowIso(),
-      };
-      await this.saveNativeAgentSession(key, sessions[key]);
+      });
       return true;
     });
   }
@@ -1295,10 +1299,7 @@ export class NativeAgentSessionsRepository {
       throw new Error("Native agent turn interrupt is invalid");
     }
     return this.enqueueNativeAgentSessionMutation(key, async () => {
-      const loaded = await this.loadNativeAgentSessions();
-      const { sessions } = loaded;
-      this.assertReadableNativeAgentSession(loaded, key);
-      const session = sessions[key];
+      const session = await this.readNativeAgentSessionUnderLease(key);
       if (
         !session ||
         session.providerSessionId !== providerSessionId ||
@@ -1309,12 +1310,11 @@ export class NativeAgentSessionsRepository {
       }
       // True means the marker is durable, including an idempotent retry.
       if (session.interruptedRequestIds?.includes(requestId)) return true;
-      sessions[key] = {
+      await this.saveNativeAgentSession(key, {
         ...session,
         interruptedRequestIds: [...(session.interruptedRequestIds ?? []).slice(-49), requestId],
         updatedAt: nowIso(),
-      };
-      await this.saveNativeAgentSession(key, sessions[key]);
+      });
       return true;
     });
   }

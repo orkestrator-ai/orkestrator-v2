@@ -23,12 +23,12 @@ function composerInUse(draft: NativeComposeDraft | undefined): boolean {
  * milliseconds that the backend has not saved yet; the backend still checks
  * its saved drafts, mail and owned work before closing anything. The main
  * coordinator is never offered, and neither is a conversation whose first
- * prompt is being sent (`launchingConversationId`).
+ * prompt is being sent (`launching`).
  */
 export function unusedCoordinatorConversationIds(
   workspace: CoordinatorWorkspace,
   drafts: ReadonlyMap<string, NativeComposeDraft>,
-  launchingConversationId?: string,
+  launching: Pick<ReadonlySet<string>, "has">,
 ): string[] {
   return workspace.conversations
     .filter(
@@ -36,7 +36,7 @@ export function unusedCoordinatorConversationIds(
         !item.closedAt &&
         item.role === "side" &&
         !item.agent &&
-        item.id !== launchingConversationId &&
+        !launching.has(item.id) &&
         !composerInUse(
           drafts.get(createSessionKey(coordinatorRuntimeId(workspace.id, item.id), item.tabId)),
         ),

@@ -39,6 +39,7 @@ describe("NodeCoordinatorRemote", () => {
       name: "feature",
       requestPending: false,
       backgroundWorkPending: false,
+      goalRunning: false,
     });
     expect(calls.find((call) => call.command === "get_agent_registry")?.args).toEqual({
       projectId: "p-leaf",
@@ -51,7 +52,7 @@ describe("NodeCoordinatorRemote", () => {
     expect(await access.nodeName("bk_leaf")).toBe("Build box");
   });
 
-  test("reads a worker's excerpt and waiting blocker from its projection on the node", async () => {
+  test("reads a worker's excerpt from its projection and its blocker from its state", async () => {
     const layout = {
       root: {
         kind: "leaf",
@@ -65,29 +66,37 @@ describe("NodeCoordinatorRemote", () => {
       get_pane_layout: layout,
       get_native_agent_projection: {
         messages: [{ role: "assistant", content: "Need to run the migration." }],
-        interactions: [{ kind: "question", state: "pending" }],
+      },
+      get_native_agent_session_state_update: {
+        status: "snapshot",
+        value: { interactions: [{ kind: "question", state: "pending" }] },
       },
     });
     expect(await access.lastAssistantExcerpt("bk_leaf", "e1", "startup-agent")).toBe(
       "Need to run the migration.",
     );
     expect(await access.waitingBlocker("bk_leaf", "e1", "startup-agent")).toBe("question");
-    expect(
-      calls
-        .filter((call) => call.command === "get_native_agent_projection")
-        .map((call) => call.args),
-    ).toEqual([
+    const reads = calls.filter((call) => call.command !== "get_pane_layout");
+    expect(reads).toEqual([
       {
-        environmentId: "e1",
-        agent: "codex",
-        logicalSessionKey: "env-e1:startup-agent",
-        messageLimit: 5,
+        command: "get_native_agent_projection",
+        args: {
+          environmentId: "e1",
+          agent: "codex",
+          logicalSessionKey: "env-e1:startup-agent",
+          messageLimit: 5,
+        },
       },
       {
-        environmentId: "e1",
-        agent: "codex",
-        logicalSessionKey: "env-e1:startup-agent",
-        messageLimit: 1,
+        // The blocker needs no transcript: a state read, not a projection.
+        command: "get_native_agent_session_state_update",
+        args: {
+          environmentId: "e1",
+          agent: "codex",
+          logicalSessionKey: "env-e1:startup-agent",
+          viewVersion: 1,
+          forceSnapshot: true,
+        },
       },
     ]);
     expect(await access.waitingBlocker("bk_leaf", "e1", "missing-tab")).toBeUndefined();
@@ -117,6 +126,26 @@ describe("NodeCoordinatorRemote", () => {
       tab: "idle",
       requestPending: false,
       backgroundWorkPending: true,
+    });
+  });
+
+  test("reads a running goal from the leaf's registry entry for that tab", async () => {
+    const { access } = remote({
+      get_environment: { status: "running" },
+      get_agent_registry: {
+        entries: [
+          { environmentId: "e1", tabId: "t", state: "idle", goal: { running: true } },
+          { environmentId: "e1", tabId: "stopped-goal", state: "idle", goal: { running: false } },
+          { environmentId: "e1", tabId: "no-goal", state: "idle" },
+        ],
+      },
+    });
+    expect(await access.workerState("bk_leaf", "e1", "t")).toMatchObject({ goalRunning: true });
+    expect(await access.workerState("bk_leaf", "e1", "stopped-goal")).toMatchObject({
+      goalRunning: false,
+    });
+    expect(await access.workerState("bk_leaf", "e1", "no-goal")).toMatchObject({
+      goalRunning: false,
     });
   });
 

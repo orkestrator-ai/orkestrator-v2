@@ -8,7 +8,9 @@ import {
   StorageDatabase,
   StorageDatabaseVersionError,
   StoreConflictError,
+  StoreCorruptError,
   StoreTooLargeError,
+  rowBytesExpression,
   type StoreLayout,
 } from "./storage-database.js";
 
@@ -57,6 +59,78 @@ afterEach(async () => {
 });
 
 describe("StorageDatabase", () => {
+  test("a library without octet_length falls back to the cast, with the same answer", async () => {
+    const db = database(await dataDir());
+    const selected = rowBytesExpression(db.db);
+    const fallback = rowBytesExpression({
+      query() {
+        throw new Error("no such function: octet_length");
+      },
+    });
+    expect(fallback).toBe("length(CAST(value AS BLOB))");
+    const value = JSON.stringify("é€😀\u0000 and a long tail ".repeat(5_000));
+    db.transaction(() => db.rows("records").put("unicode", value));
+    for (const expression of [selected, fallback]) {
+      expect(
+        db.db.query(`SELECT ${expression} AS bytes FROM store_rows WHERE store = 'records'`).get(),
+      ).toEqual({ bytes: Buffer.byteLength(value) });
+    }
+  });
+
+  test("production sizing falls back when the connection rejects octet_length", async () => {
+    const db = database(await dataDir());
+    const query = db.db.query.bind(db.db);
+    const probe = spyOn(db.db, "query").mockImplementation(((sql: string) => {
+      if (sql.includes("octet_length")) throw new Error("no such function: octet_length");
+      return query(sql);
+    }) as typeof db.db.query);
+    try {
+      const value = JSON.stringify({ owner: "one", text: "é😀" });
+      db.transaction(() => db.rows("owned").put("unicode", value));
+      expect(db.rows("owned").list({ values: false })[0]?.bytes).toBe(Buffer.byteLength(value));
+      expect(db.rows("owned").entry("unicode")?.bytes).toBe(Buffer.byteLength(value));
+    } finally {
+      probe.mockRestore();
+    }
+  });
+
+  test("a sizes-only listing keeps the listing's order without an ordered scan", async () => {
+    const db = database(await dataDir());
+    const rows = db.rows("owned");
+    db.transaction(() => {
+      rows.put("b", JSON.stringify({ owner: "one" }), { position: 2 });
+      rows.put("a", JSON.stringify({ owner: "two", text: "é" }), { position: 3 });
+      rows.put("c", JSON.stringify({ owner: "one" }), { position: 1 });
+      rows.put("z", JSON.stringify({ owner: "one" }), { position: 7 });
+      rows.put("y", JSON.stringify({ owner: "two" }), { position: 7 });
+    });
+    const queries = spyOn(db.db, "query");
+    const sizes = rows.list({ values: false });
+    const listingSql = queries.mock.calls
+      .map(([sql]) => sql)
+      .filter((sql) => sql.includes("NULL AS value") && sql.includes("FROM store_rows"));
+    queries.mockRestore();
+    expect(listingSql).toHaveLength(1);
+    expect(sizes.map((entry) => entry.key)).toEqual(["c", "b", "a", "y", "z"]);
+    expect(sizes.map(({ key, position }) => [key, position])).toEqual(
+      rows.list().map(({ key, position }) => [key, position]),
+    );
+    expect(sizes.every((entry) => entry.value === null)).toBe(true);
+    expect(sizes.find((entry) => entry.key === "a")?.bytes).toBe(
+      Buffer.byteLength(JSON.stringify({ owner: "two", text: "é" })),
+    );
+    expect(rows.list({ values: false, owner: "two" }).map((entry) => entry.key)).toEqual([
+      "a",
+      "y",
+    ]);
+
+    // The plan is the point: the listing must not seek each row by its position.
+    const plan = db.db.query(`EXPLAIN QUERY PLAN ${listingSql[0]}`).all("owned") as Array<{
+      detail: string;
+    }>;
+    expect(plan.map((row) => row.detail).join("\n")).not.toContain("store_rows_position");
+  });
+
   test("row byte counts use portable SQLite SQL and count UTF-8 bytes", async () => {
     const db = database(await dataDir());
     const value = JSON.stringify({ text: "café 🐙" });
@@ -809,8 +883,10 @@ describe("StorageDatabase failure logging", () => {
   test("a scrub checkpoint that throws is logged without its message and never throws", async () => {
     const db = database(await dataDir());
     const logs = captureLogs();
-    const exec = spyOn(db.db, "exec").mockImplementation(() => {
-      throw failure();
+    const original = db.db.query.bind(db.db);
+    const exec = spyOn(db.db, "query").mockImplementation((sql) => {
+      if (sql.includes("wal_checkpoint")) throw failure();
+      return original(sql);
     });
     try {
       expect(() => db.scrubDeletedContent()).not.toThrow();
@@ -832,6 +908,56 @@ describe("StorageDatabase failure logging", () => {
       logs.restore();
     }
   });
+
+  test("vacuum faults are throttled separately from successful checkpoints", async () => {
+    const db = database(await dataDir());
+    const original = db.db.exec.bind(db.db);
+    const exec = spyOn(db.db, "exec").mockImplementation((sql) => {
+      if (sql.includes("incremental_vacuum")) throw failure();
+      return original(sql);
+    });
+    const logs = captureLogs();
+    try {
+      db.scrubDeletedContent();
+      db.scrubDeletedContent();
+      expect(logs.records()).toMatchObject([
+        { event: "scrub.vacuum-failed", fields: { error: { code: "SQLITE_IOERR" } } },
+      ]);
+      expect(logs.records()).toHaveLength(1);
+      expect(JSON.stringify(logs.records())).not.toContain(SENTINEL);
+      exec.mockRestore();
+      db.scrubDeletedContent();
+      expect(logs.records().at(-1)).toMatchObject({
+        event: "throttle.recovered",
+        fields: { site: "scrub.vacuum-failed", failures: 2 },
+      });
+    } finally {
+      exec.mockRestore();
+      logs.restore();
+    }
+  });
+
+  test.each(["SQLITE_BUSY", "SQLITE_LOCKED"])(
+    "vacuum %s stops promptly without a warning",
+    async (code) => {
+      const db = database(await dataDir());
+      const original = db.db.exec.bind(db.db);
+      const exec = spyOn(db.db, "exec").mockImplementation((sql) => {
+        if (sql.includes("incremental_vacuum")) throw Object.assign(new Error(SENTINEL), { code });
+        return original(sql);
+      });
+      const logs = captureLogs();
+      try {
+        expect(db.releaseFreePages()).toBe(-1);
+        db.scrubDeletedContent();
+        expect(db.db.query("PRAGMA busy_timeout").get()).toEqual({ timeout: 10000 });
+        expect(logs.records()).toEqual([]);
+      } finally {
+        exec.mockRestore();
+        logs.restore();
+      }
+    },
+  );
 
   test("a successful scrub with no fault writes nothing", async () => {
     const db = database(await dataDir());
@@ -939,6 +1065,42 @@ describe("StorageDatabase.updateStoreRow", () => {
       b: { n: 2 },
       a: { n: 1 },
     });
+  });
+
+  test("an unparsable row refuses a write unless the caller replaces it", async () => {
+    const db = database(await dataDir());
+    db.writeStore("records", { a: { n: 1 }, b: { n: 2 } });
+    db.db
+      .query("UPDATE store_rows SET value = '{ torn' WHERE store = 'records' AND key = 'a'")
+      .run();
+    const seen: unknown[] = [];
+    const replace = { unreadableRow: "replace" as const };
+
+    expect(() =>
+      db.updateStoreRow("records", "a", () => ({ result: null, value: { n: 3 } })),
+    ).toThrow(StoreCorruptError);
+
+    db.updateStoreRow(
+      "records",
+      "a",
+      (current) => {
+        seen.push(current);
+        return { result: null };
+      },
+      replace,
+    );
+    expect(seen).toEqual([undefined]);
+
+    db.updateStoreRow("records", "a", () => ({ result: null, value: { n: 3 } }), replace);
+    expect(db.readStore("records")?.value).toEqual({ a: { n: 3 }, b: { n: 2 } });
+
+    db.db
+      .query("UPDATE store_rows SET value = '{ torn' WHERE store = 'records' AND key = 'a'")
+      .run();
+    db.updateStoreRow("records", "a", () => ({ result: null, delete: true }), replace);
+    expect(db.db.query("SELECT key FROM store_rows WHERE store = 'records'").all()).toEqual([
+      { key: "b" },
+    ]);
   });
 
   test("reads the committed row, deletes it, and skips no-op writes", async () => {

@@ -74,6 +74,45 @@ export const STATIC_HTML_POLICY = {
   maxElements: 5_000,
 } as const;
 
+/**
+ * Automatic display of a published `html-static` artifact's verified
+ * effective HTML in the transcript (`static-html-presentation.ts`).
+ *
+ * The document budget is the design runtime's parse/serialize ceiling, which
+ * every stored effective document already passed (the preview serializes it
+ * through the same runtime). It is deliberately not `maxPreparedBytes`: that
+ * bounds authored source plus offline assets before rendering, and the
+ * renderer's whole-text reader has its own, larger ceiling. A document over
+ * this budget keeps its saved preview and source; it is never shown in part.
+ *
+ * `maxFramesPerWindow` is an initial resource policy, qualified with the
+ * rich-transcript performance fixture, not a performance guarantee. The
+ * single executable interactive host (`FRONTEND_RENDER_POLICY`) is separate.
+ */
+export const STATIC_PRESENTATION_POLICY = {
+  maxDocumentBytes: STATIC_HTML_POLICY.maxSourceBytes,
+  maxElements: STATIC_HTML_POLICY.maxElements,
+  maxFramesPerWindow: 4,
+  /**
+   * From mount to the frame's `rendered` report. The saved preview stays on
+   * screen meanwhile, so this errs long: a busy machine is not a failed view.
+   */
+  renderTimeoutMs: 15_000,
+  /** More applied height changes than this within the window stop the view. */
+  maxSizeChangesPerWindow: 16,
+  sizeChangeWindowMs: 5_000,
+  /** Messages refused by the rate limiter before the view is stopped. */
+  maxRefusedMessages: 100,
+  /**
+   * Document text the frame reports for Find, and the characters per message
+   * that carry it. A chunk of three-byte characters still fits
+   * `FRAME_CHANNEL_POLICY.maxMessageBytes`, and a full report's chunks fit its
+   * burst alongside `ready` and `rendered`.
+   */
+  maxSearchTextCharacters: 64 * KIB,
+  searchTextChunkCharacters: 2 * KIB,
+} as const;
+
 export const INTERACTIVE_HTML_POLICY = {
   maxAuthoredBytes: 512 * KIB,
   maxAssets: 32,

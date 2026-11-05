@@ -1,7 +1,11 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import type { ControlMcpServer, ControlMcpInvoker } from "./control-mcp-server.js";
-import { coordinatorRoleCapabilities } from "./control-mcp-tools.js";
+import { coordinatorRoleCapabilities, withoutWakePromise } from "./control-mcp-tools.js";
 import {
+  COORDINATOR_ASYNC_CONTRACT,
+  COORDINATOR_TIMERS_AND_ACCOUNTS_RULE,
+  COORDINATOR_MESSAGING_OFF_NOTE,
+  COORDINATOR_PR_RULE,
   COORDINATOR_PR_STATUS_WAKE,
   COORDINATOR_WORKER_PROMPT_FORMAT_RULE,
 } from "@orkestrator/protocol/coordinator";
@@ -416,13 +420,7 @@ describe("Orkestrator control MCP server", () => {
 
     expect(listed.response.status).toBe(200);
     expect(listed.body.error).toBeUndefined();
-    for (const name of [
-      "launch_environment",
-      "launch_job",
-      "send_prompt_to_tab",
-      "launch_node_environment",
-      "send_prompt_to_node_tab",
-    ]) {
+    for (const name of ["launch_environment", "launch_job", "send_prompt_to_tab"]) {
       const tool = listed.body.result?.tools?.find((candidate) => candidate.name === name);
       expect(tool).toBeDefined();
       expect(tool?.inputSchema?.properties?.prompt?.description).toContain(
@@ -600,22 +598,6 @@ describe("Orkestrator control MCP server", () => {
     };
     expect(launchedSelection.reviewers[0]).toMatchObject({ lens: lensSummary });
     expect(JSON.stringify(launchedSelection)).not.toContain(lens.instruction);
-
-    const started = await call("start_multi_review", {
-      requestId: "start-lens",
-      buildPipelineId: "pipeline-1",
-      environmentId: "env-1",
-      targetBranch: "main",
-      reviewers,
-    });
-    expect(started.body.result?.isError).not.toBe(true);
-    expect(
-      invocations.findLast((entry) => entry.command === "start_coordinator_multi_review")?.args
-        .input,
-    ).toMatchObject({ reviewers });
-    expect(
-      (started.body.result!.structuredContent!.selection as { reviewers: unknown[] }).reviewers[0],
-    ).toMatchObject({ lens: lensSummary });
 
     const launches = () =>
       invocations.filter((entry) => entry.command === "launch_coordinator_multi_review_action")
@@ -815,6 +797,207 @@ describe("Orkestrator control MCP server", () => {
     expect(
       (await call("address_multi_review", { workflowId: "review-1" })).body.result?.isError,
     ).not.toBe(true);
+  });
+
+  test("list_workflows answers what the coordinator is waiting on", async () => {
+    const now = new Date(0).toISOString();
+    const worker = (id: string, delegation?: Record<string, unknown>) => ({
+      id: `association-${id}`,
+      kind: "environment",
+      resourceId: `env-${id}`,
+      requestId: `request-${id}`,
+      createdAt: now,
+      ...(delegation
+        ? { delegation: { requestedAt: now, workerTabId: `tab-${id}`, ...delegation } }
+        : {}),
+    });
+    const running = worker("running", { state: "running" });
+    const waiting = worker("waiting", {
+      state: "running",
+      waiting: { since: now, notifiedAt: now },
+    });
+    const finished = worker("finished", { state: "completed", completedAt: now, wokenAt: now });
+    const plain = worker("plain");
+    overrides.set("get_project_coordinator", () => ({
+      workspace: {
+        id: "coordinator-1",
+        lifecycleState: "ready",
+        conversations: [{ id: "conversation-1", mailboxIncarnationId: "incarnation-1" }],
+      },
+      workflows: [
+        // Older than the 200 rows the unfiltered list keeps.
+        running,
+        waiting,
+        ...Array.from({ length: 200 }, (_, index) =>
+          worker(`old-${index}`, { state: "completed", completedAt: now }),
+        ),
+        finished,
+        plain,
+      ],
+    }));
+    overrides.set("get_environment", (args) => ({
+      id: args.environmentId,
+      name: args.environmentId,
+      status: "running",
+    }));
+    const credential = server.issueCoordinatorCredential({
+      role: "coordinator",
+      projectId: "project-1",
+      coordinatorId: "coordinator-1",
+      conversationId: "conversation-1",
+      mailboxIncarnationId: "incarnation-1",
+      capabilities: coordinatorRoleCapabilities("main"),
+    });
+    const list = async (args: Record<string, unknown> = {}) => {
+      invocations.length = 0;
+      const result = await rpc(credential.url, credential.token, "tools/call", {
+        name: "list_workflows",
+        arguments: args,
+      });
+      return result.body.result?.structuredContent as {
+        workflows: Array<Record<string, unknown>>;
+        total: number;
+      };
+    };
+
+    const open = await list({ openOnly: true });
+    expect(open.workflows.map((row) => row.resourceId)).toEqual(["env-running", "env-waiting"]);
+    expect(open.workflows[0]?.delegation).toEqual({
+      state: "running",
+      bucket: "running",
+      workerTabId: "tab-running",
+      requestedAt: now,
+    });
+    expect(open.workflows[1]?.delegation).toEqual({
+      state: "running",
+      bucket: "needs-you",
+      workerTabId: "tab-waiting",
+      requestedAt: now,
+      waitingSince: now,
+    });
+    // The filter is what spares the per-row resource reads.
+    expect(invocations.filter((call) => call.command === "get_environment")).toHaveLength(2);
+
+    const all = await list();
+    expect(all.total).toBe(200);
+    expect(all.workflows.at(-2)?.delegation).toEqual({
+      state: "completed",
+      bucket: "finished",
+      workerTabId: "tab-finished",
+      requestedAt: now,
+      completedAt: now,
+    });
+    expect(all.workflows.at(-1)).not.toHaveProperty("delegation");
+
+    const tools = (await rpc(credential.url, credential.token, "tools/list")).body.result!.tools!;
+    expect(tools.find((tool) => tool.name === "list_workflows")?.description).toContain(
+      "instead of polling list_environments or list_agents",
+    );
+  });
+
+  test("with agent messaging off no coordinator surface promises a wake", async () => {
+    let enabled = false;
+    overrides.set("get_config", () => ({
+      global: {
+        enabledAgentPlatforms: ["codex"],
+        agentMessaging: { enabled },
+        experimentalScheduling: true,
+      },
+    }));
+    overrides.set("get_project_coordinator", () => ({
+      workspace: {
+        id: "coordinator-1",
+        lifecycleState: "ready",
+        conversations: [{ id: "conversation-1", mailboxIncarnationId: "incarnation-1" }],
+      },
+      workflows: [],
+    }));
+    overrides.set("launch_coordinator_feature_plan", () => ({
+      featureId: "plan-1",
+      phase: "dispatching",
+      reused: false,
+    }));
+    const credential = server.issueCoordinatorCredential({
+      role: "coordinator",
+      projectId: "project-1",
+      coordinatorId: "coordinator-1",
+      conversationId: "conversation-1",
+      mailboxIncarnationId: "incarnation-1",
+      capabilities: coordinatorRoleCapabilities("main"),
+    });
+    const instructions = async () => {
+      const initialized = await rpc(credential.url, credential.token, "initialize", {
+        protocolVersion: "2025-06-18",
+        capabilities: {},
+        clientInfo: { name: "test", version: "1.0.0" },
+      });
+      return (initialized.body.result as unknown as { instructions: string }).instructions;
+    };
+    expect(await instructions()).toContain(COORDINATOR_MESSAGING_OFF_NOTE);
+    expect(await instructions()).not.toContain(COORDINATOR_ASYNC_CONTRACT);
+    expect(await instructions()).not.toContain(COORDINATOR_PR_RULE);
+    expect(await instructions()).not.toContain(COORDINATOR_TIMERS_AND_ACCOUNTS_RULE);
+    const launchPlan = async (requestId: string) => {
+      const launched = await rpc(credential.url, credential.token, "tools/call", {
+        name: "launch_feature_plan",
+        arguments: { requestId, message: "Add dark mode" },
+      });
+      return launched.body.result?.structuredContent as Record<string, unknown>;
+    };
+    expect(await launchPlan("plan-off")).toMatchObject({
+      featureId: "plan-1",
+      wake: COORDINATOR_MESSAGING_OFF_NOTE,
+    });
+
+    enabled = true;
+    expect(await instructions()).toContain(COORDINATOR_ASYNC_CONTRACT);
+    expect(await instructions()).toContain(COORDINATOR_PR_RULE);
+    expect(await instructions()).toContain(COORDINATOR_TIMERS_AND_ACCOUNTS_RULE);
+    expect(await instructions()).not.toContain(COORDINATOR_MESSAGING_OFF_NOTE);
+    expect((await launchPlan("plan-on")).wake).toContain("woken once");
+  });
+
+  test("withoutWakePromise rewrites a promised wake in both copies of a result", () => {
+    const rewritten = withoutWakePromise({
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({ accepted: true, wake: "You will be woken.", nextStep: "Finish." }),
+        },
+      ],
+      structuredContent: {
+        accepted: true,
+        delivery: "async",
+        wake: "You will be woken.",
+        nextStep: "Finish.",
+      },
+    }) as { content: Array<{ text: string }>; structuredContent: Record<string, unknown> };
+    expect(rewritten.structuredContent).toEqual({
+      accepted: true,
+      delivery: "async",
+      wake: COORDINATOR_MESSAGING_OFF_NOTE,
+    });
+    expect(JSON.parse(rewritten.content[0]!.text)).toEqual({
+      accepted: true,
+      wake: COORDINATOR_MESSAGING_OFF_NOTE,
+    });
+
+    // The poll guard's refusal restates the contract under another name.
+    const refusal = withoutWakePromise({
+      content: [],
+      structuredContent: { repeatedRead: true, instruction: COORDINATOR_ASYNC_CONTRACT },
+    }) as { structuredContent: Record<string, unknown> };
+    expect(refusal.structuredContent).toEqual({
+      repeatedRead: true,
+      wake: COORDINATOR_MESSAGING_OFF_NOTE,
+    });
+
+    // A result with no promise, or one that is not JSON, comes back as it went in.
+    const plain = {
+      content: [{ type: "text", text: "not json" }],
+      structuredContent: { accepted: true, instruction: "Read the file." },
+    };
+    expect(withoutWakePromise(plain)).toEqual(plain);
   });
 
   test("list_workflows shows a followed pull request with its follow and PR fields", async () => {

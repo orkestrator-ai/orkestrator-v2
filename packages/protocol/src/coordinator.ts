@@ -127,6 +127,13 @@ export interface CoordinatorConversation {
   bridgePort?: number;
   bridgePid?: number;
   /**
+   * Why this conversation's bridge last failed to start, already sanitized for
+   * display. While set, this conversation has no runtime: no credential, no
+   * mail, no bridge start. Every other conversation carries on. Cleared by a
+   * successful start or an explicit retry. An older backend ignores the field.
+   */
+  startupError?: string;
+  /**
    * `main` is the project's one coordinator: every worker reports to it and it
    * owns all delegation. A `side` agent (Side 1, Side 2…) can read the project
    * and exchange mail with the main coordinator only. Absent on records written
@@ -283,16 +290,25 @@ export interface CoordinatorDelegation {
    *
    * Distinct from `completedAt` so a crash between observing the edge and
    * delivering the wake retries rather than losing it, and so a delivered wake
-   * is never sent twice.
+   * is never sent twice. Also stamped when no wake is owed any more: its
+   * coordinator is gone, or delivery was given up on (`wakeFailedAt`).
    */
   wokenAt?: string;
+  /**
+   * Delivering the wake kept failing, so it was given up on once one notice to
+   * the coordinator was stored. A mark on the wake, not on the work: `state`
+   * still says how the worker ended.
+   */
+  wakeFailedAt?: string;
+  /** Retirement was selected durably; retry only its notice until receipted. */
+  wakeRetirement?: { attempts: number; kind: string };
   /**
    * The worker has been waiting on input or an approval since `since`.
    *
    * Waiting does not close a delegation, but once it has lasted past a short
    * debounce the coordinator gets one status notice for it (`notifiedAt`).
-   * Cleared when the worker is seen working again, so a later wait is a new
-   * episode with its own notice.
+   * Cleared when the worker is seen idle, working or stopped, so a later wait is
+   * a new episode with its own notice. An unreadable state does not clear it.
    */
   waiting?: { since: string; notifiedAt?: string };
   /**
@@ -302,6 +318,110 @@ export interface CoordinatorDelegation {
    * bounded hold for background work is skipped.
    */
   stopRequestedAt?: string;
+  /** The user stopped it from the Work panel, so the notice does not credit the coordinator. */
+  stopRequestedBy?: "user";
+  /** What was asked and on what, for the Work panel. Absent on older records. */
+  request?: CoordinatorDelegationRequest;
+}
+
+/**
+ * What the Work panel shows about one request: a one-line summary of the ask and
+ * the selection it ran with. The coordinator store is rewritten whole and holds
+ * up to `MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS` records, so every field is short
+ * and bounded by {@link normalizeCoordinatorDelegationRequest}. Never read back
+ * as the prompt: it is a display line, cut at the bound.
+ */
+export interface CoordinatorDelegationRequest {
+  summary?: string;
+  agent?: AgentPlatform;
+  /** Null when no tier pins a model and the agent picks its own. */
+  model?: string | null;
+  reasoning?: string | null;
+  /** `requested` when the coordinator overrode the saved default. */
+  source?: "requested" | "default";
+}
+
+export const COORDINATOR_DELEGATION_SUMMARY_MAX = 140;
+const COORDINATOR_DELEGATION_SELECTION_MAX = 120;
+
+function boundedSelection(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const text = value.trim();
+  return text && text.length <= COORDINATOR_DELEGATION_SELECTION_MAX ? text : undefined;
+}
+
+/** One line of at most {@link COORDINATOR_DELEGATION_SUMMARY_MAX} characters, or nothing. */
+export function coordinatorDelegationSummaryLine(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const text = value.trim().replace(/\s+/g, " ");
+  if (!text) return undefined;
+  if (text.length <= COORDINATOR_DELEGATION_SUMMARY_MAX) return text;
+  // Never leave half of a surrogate pair at the cut.
+  const cut = text.slice(0, COORDINATOR_DELEGATION_SUMMARY_MAX - 1).replace(/[\ud800-\udbff]$/, "");
+  return `${cut}…`;
+}
+
+/** A request with every field checked and bounded, or undefined when nothing is left. */
+export function normalizeCoordinatorDelegationRequest(
+  value: unknown,
+): CoordinatorDelegationRequest | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const source = value as Record<string, unknown>;
+  const summary = coordinatorDelegationSummaryLine(source.summary);
+  const model = boundedSelection(source.model);
+  const reasoning = boundedSelection(source.reasoning);
+  const request: CoordinatorDelegationRequest = {
+    ...(summary ? { summary } : {}),
+    ...(isAgentPlatform(source.agent) ? { agent: source.agent } : {}),
+    ...(model ? { model } : source.model === null ? { model: null } : {}),
+    ...(reasoning ? { reasoning } : source.reasoning === null ? { reasoning: null } : {}),
+    ...(source.source === "requested" || source.source === "default"
+      ? { source: source.source }
+      : {}),
+  };
+  return Object.keys(request).length > 0 ? request : undefined;
+}
+
+/** What coordinator-started work asks of the user, for the panel and for the agent. */
+export type CoordinatorWorkBucket = "needs-you" | "running" | "finished";
+
+/**
+ * The bucket one delegation alone puts its worker in. The one definition of
+ * "needs you" for a delegation, so the Work panel and `list_workflows` cannot
+ * disagree. The panel also joins what only it can read (its prompt mirrors and
+ * a worker's live activity), which can move a row but never this answer.
+ */
+export function coordinatorDelegationBucket(
+  delegation: Pick<CoordinatorDelegation, "state" | "waiting">,
+): CoordinatorWorkBucket {
+  if (delegation.state !== "running") return "finished";
+  return delegation.waiting ? "needs-you" : "running";
+}
+
+/** A delegation as the agent reads it from `list_workflows`. */
+export interface CoordinatorDelegationSummary {
+  state: CoordinatorDelegation["state"];
+  bucket: CoordinatorWorkBucket;
+  workerTabId: string;
+  requestedAt: string;
+  completedAt?: string;
+  /** When the worker began waiting on input or an approval. */
+  waitingSince?: string;
+  stopRequestedAt?: string;
+}
+
+export function coordinatorDelegationSummary(
+  delegation: CoordinatorDelegation,
+): CoordinatorDelegationSummary {
+  return {
+    state: delegation.state,
+    bucket: coordinatorDelegationBucket(delegation),
+    workerTabId: delegation.workerTabId,
+    requestedAt: delegation.requestedAt,
+    ...(delegation.completedAt ? { completedAt: delegation.completedAt } : {}),
+    ...(delegation.waiting ? { waitingSince: delegation.waiting.since } : {}),
+    ...(delegation.stopRequestedAt ? { stopRequestedAt: delegation.stopRequestedAt } : {}),
+  };
 }
 
 /** The last status a coordinator was sent for one workflow or worker. */
@@ -512,13 +632,11 @@ export const COORDINATOR_CONTROL_TOOL_NAMES = Object.freeze([
   "launch_graph",
   "launch_job",
   "launch_multi_review",
-  "launch_node_environment",
   "launch_terminal",
   "list_agents",
   "list_environments",
   "list_graph_templates",
   "list_mailboxes",
-  "list_node_environments",
   "list_nodes",
   "list_projects",
   "list_provider_accounts",
@@ -547,16 +665,11 @@ export const COORDINATOR_CONTROL_TOOL_NAMES = Object.freeze([
   "resume_schedule",
   "run_worker_command",
   "send_message",
-  "send_node_message",
-  "send_prompt_to_node_tab",
   "send_prompt_to_tab",
   "set_worker_goal",
   "start_build_pipeline",
   "start_environment",
-  "start_multi_review",
-  "start_node_environment",
   "stop_environment",
-  "stop_node_environment",
   "stop_worker_turn",
   "switch_provider_account",
   "set_account_auto_switch",
@@ -576,6 +689,31 @@ export const COORDINATOR_WORKER_PROMPT_FORMAT_RULE =
   "Worker prompts: the user reads them in the worker's transcript, so write Markdown with line breaks, not one long paragraph. Put the task first, then separate paragraphs or short bulleted sections for context, constraints and the expected report, with a blank line between them.";
 
 /**
+ * The request-id rule every coordinator is told, in the operator's wording.
+ *
+ * Request ids are namespaced by coordinator, across its conversations, so a
+ * fresh main that was only told to "reuse requestId on retry" picks `launch-1`
+ * again and collides with an earlier conversation's request.
+ */
+export const COORDINATOR_REQUEST_ID_RULE =
+  "Every mutation needs a new unique requestId; reuse one only to retry the same call after an ambiguous response.";
+
+/**
+ * What every coordinator request-id collision says: the id named another
+ * request (another payload, worker or tab), possibly an earlier
+ * conversation's, nothing was done, and a new id is the way out.
+ */
+export const COORDINATOR_REQUEST_ID_REUSED_ERROR =
+  "This requestId was already used for a different request (a different payload or target), possibly by an earlier conversation, so nothing was done. Use a new unique requestId for each new action; reuse one only to retry the same call.";
+
+/**
+ * Carried beside `replayed: true` when a request id named a request that had
+ * already run, so a replay never reads as fresh work.
+ */
+export const COORDINATOR_REPLAYED_NOTE =
+  "This requestId was already used, so this is the earlier request's result and nothing new was started. If you meant a new action, call again with a new unique requestId.";
+
+/**
  * The launch-selection rule every coordinator is told, verbatim.
  *
  * Coordinators otherwise fill every model and effort field `get_launch_options`
@@ -583,7 +721,7 @@ export const COORDINATOR_WORKER_PROMPT_FORMAT_RULE =
  * user's configured default. Kept short: it is injected on every turn.
  */
 export const COORDINATOR_LAUNCH_DEFAULTS_RULE =
-  "Defaults: omit modelId, reasoningId, Multi Review model rows, Multi Review autoFix and autoPr, and build agentType, steps and reviewers so environments, jobs, builds and Multi Reviews run the user's saved defaults. Override one only when the user asks for a specific model, agent, effort, reviewers or auto-fix/auto-PR, or agrees to one the task needs.";
+  "Defaults: omit agent, modelId, reasoningId, Multi Review model rows, Multi Review autoFix and autoPr, and build agentType, steps and reviewers so environments, jobs, builds and Multi Reviews run the user's saved defaults. Override one only when the user asks for a specific model, agent, effort, reviewers or auto-fix/auto-PR, or agrees to one the task needs.";
 
 /**
  * How long after a coordinator's last sent message to a project home the next
@@ -599,7 +737,7 @@ export const COORDINATOR_PROJECT_HOME_MESSAGE_WINDOW_MS = 3 * 60 * 60_000;
  * checkout. `send_message` enforces the project-home half (reason, approval).
  */
 export const COORDINATOR_ROUTING_RULE =
-  "Routing: run all work in an isolated environment with its own worktree or container. Fully specified work, which can be written up as a ticket with acceptance criteria: create the ticket with create_ticket, then start_build_pipeline for it. Smaller or interactive work: launch_environment with a prompt, then work with that worker back and forth. The project home is the user's own checkout, and an agent working there conflicts with the user's own work in it, so use it only in exceptional circumstances and first tell the user why an environment will not do. send_message to the project home needs projectHomeReason, and waits for the user's approval unless you messaged it in the last 3 hours.";
+  "Routing: run all work in an isolated environment with its own worktree or container. Fully specified work, which can be written up as a ticket with acceptance criteria: create the ticket with create_ticket, then start_build_pipeline for it. Smaller or interactive work: when an idle worker already fits, reuse it with send_prompt_to_tab or launch_job; otherwise launch_environment with a prompt, then work with that worker back and forth. The project home is the user's own checkout, and an agent working there conflicts with the user's own work in it, so use it only in exceptional circumstances and first tell the user why an environment will not do. send_message to the project home needs projectHomeReason, and waits for the user's approval unless you messaged it in the last 3 hours.";
 /**
  * Which kind of worker environment to use, told to every main coordinator
  * verbatim.
@@ -644,7 +782,7 @@ export const COORDINATOR_VALIDATION_RULE =
  * when it fires (nobody may be there) or switch without asking.
  */
 export const COORDINATOR_TIMERS_AND_ACCOUNTS_RULE =
-  'Timers and accounts: for "in 2 hours" or "at 14:30" call create_schedule with action type remind_me (times are the user\'s local time) and put the whole instruction in its body; it wakes you with that text, queued until you are idle. If the user\'s own message asks you to switch accounts then, add authorizeAccountSwitch. When woken: get_usage_limits, list_provider_accounts, then switch_provider_account with the timer\'s scheduleId; without one the user approves the switch, unless Settings lets coordinators switch without asking: then it runs at once (state switched), so tell the user what you switched and never ask them to approve it. Never switch accounts on your own initiative. Automatic switching is separate: when the user asks, set_account_auto_switch turns it on, the backend then moves accounts by itself and you get a notice each time, and your own switch would pin the account and turn it off.';
+  'Timers and accounts: for "in 2 hours" or "at 14:30" call create_schedule with action type remind_me (times are the user\'s local time) and put the whole instruction in its body; it wakes you with that text, queued until you are idle. If the user\'s own message asks you to switch accounts then, add authorizeAccountSwitch. When woken: get_usage_limits, list_provider_accounts, then switch_provider_account with the timer\'s scheduleId; without one the user approves the switch, unless Settings lets coordinators switch without asking: then it runs at once (state switched), so tell the user what you switched and never ask them to approve it. After switching, resume each limitedTabs tab (after approval, read get_usage_limits) with a short send_prompt_to_tab, e.g. "continue"; they do not restart themselves. Never switch accounts on your own initiative. Automatic switching is separate: when the user asks, set_account_auto_switch turns it on, the backend then moves accounts by itself and you get a notice each time, and your own switch would pin the account and turn it off.';
 
 /** The mail-store hold reason that keeps worker progress from waking anyone. */
 export const COORDINATOR_DELEGATION_HOLD_REASON = "delegation-running";
@@ -659,6 +797,15 @@ export const COORDINATOR_DELEGATION_HOLD_REASON = "delegation-running";
  */
 export const COORDINATOR_ASYNC_CONTRACT =
   "Delegation is asynchronous. After launching a worker, sending it a message, or starting a workflow, finish this turn with a short summary of what was delegated and what you expect back. Do not wait, sleep, poll the mailbox, or repeatedly check message status: you will be woken with a new message when the worker has finished, and that message starts a new turn. Workers do not send progress updates, so silence means the work is still running.";
+
+/**
+ * What a coordinator is told instead of `COORDINATOR_ASYNC_CONTRACT` while agent
+ * messaging is off, on the same surfaces. Every wake is mail, and a wake held
+ * while messaging is off goes out only when it is turned back on, so promising
+ * one would leave the coordinator waiting on the user's setting.
+ */
+export const COORDINATOR_MESSAGING_OFF_NOTE =
+  "Agent messaging is off, so nothing wakes this conversation and no worker can report back until the user turns it on in Settings. Do not launch workers or wait for a wake: tell the user. Read a worker's state with list_workflows or get_environment when asked.";
 
 /**
  * What `create_pr` and `resolve_conflicts` tell a coordinator about being woken.
@@ -712,10 +859,24 @@ export interface CoordinatorWorkspace {
   repositoryContextEvents?: CoordinatorRepositoryContextEvent[];
   createdAt: string;
   updatedAt: string;
+  /**
+   * Written only by backends before `CoordinatorConversation.startupError`,
+   * which also set `lifecycleState: "error"`. Read for such a backend, and for
+   * a record it stored (version-compatibility.md).
+   */
   lastStartupError?: string;
   bridgePort?: number;
   bridgePid?: number;
   repositoryStatus?: ProjectGitStatus;
+  /**
+   * The IANA zone of the device that sent the newest prompt the user typed to
+   * any of this coordinator's conversations. A self-timer's absolute time
+   * (`at: "14:30"`) is read in it, so a coordinator on a machine in another
+   * zone still means the user's 14:30. Absent until a renderer that reports
+   * its zone sends a prompt; until then the backend host's zone is used. An
+   * older backend ignores it.
+   */
+  userTimeZone?: string;
 }
 
 export interface CoordinatorSnapshot {
@@ -723,6 +884,8 @@ export interface CoordinatorSnapshot {
   projectPath: string;
   providerAvailability: Partial<Record<AgentPlatform, CoordinatorProviderQualification>>;
   controlMcp: { enabled: boolean; running: boolean; error: string | null };
+  /** Absent from a backend older than this field, which says nothing about the setting. */
+  agentMessaging?: { enabled: boolean };
   workflows: CoordinatorWorkflowAssociation[];
 }
 
@@ -791,6 +954,18 @@ export interface ProjectGitSwitchConfirmation {
 export interface ProjectGitSwitchOptions {
   confirmationToken?: string;
   includeNestedRepositories?: boolean;
+}
+
+/**
+ * Whether this conversation may run: hold a credential, receive mail, start a
+ * bridge. Every "is this coordinator up?" question goes through this, because
+ * `lifecycleState` alone no longer answers it for one conversation.
+ */
+export function coordinatorConversationRunnable(
+  workspace: Pick<CoordinatorWorkspace, "lifecycleState">,
+  conversation: Pick<CoordinatorConversation, "startupError">,
+): boolean {
+  return workspace.lifecycleState === "ready" && !conversation.startupError;
 }
 
 export function coordinatorRuntimeId(coordinatorId: string, conversationId?: string): string {
@@ -871,6 +1046,7 @@ export function isCoordinatorWorkspace(value: unknown): value is CoordinatorWork
           item.lastTurnOrigin === "user" ||
           item.lastTurnOrigin === "mail") &&
         (item.lastTurnStartedAt === undefined || typeof item.lastTurnStartedAt === "string") &&
+        (item.startupError === undefined || typeof item.startupError === "string") &&
         (item.sideOrdinal === undefined ||
           (Number.isSafeInteger(item.sideOrdinal) && (item.sideOrdinal as number) > 0))
       );

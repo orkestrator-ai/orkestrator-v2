@@ -14,7 +14,9 @@ import {
   BACKUP_CHECK_INTERVAL_MS,
   BACKUP_FIRST_CHECK_DELAY_MS,
   removeStaleBackupTemporaries,
+  runDatabaseUpkeep,
   takeHourlySnapshotIfDue,
+  takeLedgerSnapshotIfDue,
 } from "./storage-backups.js";
 import { StorageChanges } from "./storage-changes.js";
 import {
@@ -100,13 +102,19 @@ export class StorageContext {
     }
     // Off the start-up path; then a cheap "is one due?" check every few
     // minutes. A copy can outlast the interval, so checks never overlap.
+    // After the copies: the change-tracking ledger's daily copy, then upkeep
+    // (planner statistics, free pages). Each step never throws.
     let running = false;
     const check = () => {
       if (running) return;
       running = true;
-      void takeHourlySnapshotIfDue(this.database, this.dataDir).finally(() => {
-        running = false;
-      });
+      const database = this.database;
+      void takeHourlySnapshotIfDue(database, this.dataDir)
+        .then(() => takeLedgerSnapshotIfDue(database, this.dataDir))
+        .then(() => runDatabaseUpkeep(database))
+        .finally(() => {
+          running = false;
+        });
     };
     const first = setTimeout(() => {
       check();
@@ -292,15 +300,19 @@ export class StorageContext {
     filePath: string,
     key: string,
     mutate: (current: unknown) => RowUpdate<T>,
-    options: { collection?: string; archiveCleanup?: LegacyJsonItemCleanup } = {},
+    options: {
+      collection?: string;
+      archiveCleanup?: LegacyJsonItemCleanup;
+      unreadableRow?: "replace";
+    } = {},
   ): T {
     const store = this.storeForFile(filePath);
     if (store === null) throw new Error("updateStoreRow requires a database store");
-    const { archiveCleanup, collection } = options;
+    const { archiveCleanup, collection, unreadableRow } = options;
     if (archiveCleanup && hasLegacyJsonStore(this.dataDir, archiveCleanup.store)) {
       const scope = this.openAtomicScope();
       if (scope) {
-        const result = this.updateStoreRow(filePath, key, mutate, { collection });
+        const result = this.updateStoreRow(filePath, key, mutate, { collection, unreadableRow });
         scope.archiveCleanups.push(archiveCleanup);
         return result;
       }
@@ -309,7 +321,7 @@ export class StorageContext {
         this.database,
         this.dataDir,
         () => {
-          result = this.updateStoreRow(filePath, key, mutate, { collection });
+          result = this.updateStoreRow(filePath, key, mutate, { collection, unreadableRow });
         },
         [archiveCleanup],
       );
@@ -465,7 +477,7 @@ export class StorageContext {
    * A lease only excludes other holders of the same lease. Every whole-value
    * writer of a store (`saveJson`, `saveSensitiveJson`, `deleteStore`) must
    * hold that store's lease, and so must every row writer of the environment
-   * store; `storage-writer-guards.test.ts` enforces both.
+   * and project stores; `storage-writer-guards.test.ts` enforces both.
    */
   serialize<T>(
     target: string,
@@ -525,6 +537,13 @@ export class StorageContext {
 
   private backupPath(filePath: string, index: number): string {
     return path.join(path.dirname(filePath), `${path.basename(filePath)}.bak.${index}`);
+  }
+
+  /** The backup ladder of a store that remains a file, newest first. */
+  jsonBackupPaths(filePath: string): string[] {
+    return Array.from({ length: MAX_JSON_BACKUPS }, (_, index) =>
+      this.backupPath(filePath, index + 1),
+    );
   }
 
   private async rotateBackups(filePath: string, mode?: number): Promise<void> {
@@ -618,12 +637,23 @@ export class StorageContext {
     return this.readStoreOr(store, fallback);
   }
 
+  /** Transactional fallback for legacy arrays whose IDs are not unique. */
+  updateDocumentArrayRows<T>(filePath: string, mutate: (items: T[]) => void): void {
+    const store = this.storeForFile(filePath);
+    if (store === null) throw new Error("Expected a database store");
+    this.database.updateDocumentArrayRows(store, mutate);
+  }
+
   /**
    * The items of an array/record store whose indexed owner column equals
    * `owner` (e.g. one project's Kanban tickets), without assembling the whole
    * store. Inside an atomic scope it filters the buffered value instead.
    */
-  loadStoreRowsByOwner<T>(filePath: string, owner: string): T[] {
+  loadStoreRowsByOwner<T>(
+    filePath: string,
+    owner: string,
+    options: { unreadable?: "throw" } = {},
+  ): T[] {
     const store = this.storeForFile(filePath);
     if (store === null) throw new Error("loadStoreRowsByOwner requires a database store");
     const scope = this.openAtomicScope();
@@ -642,7 +672,7 @@ export class StorageContext {
     try {
       return (this.database.readStoreRowsByOwner(store, owner) ?? []) as T[];
     } catch (error) {
-      if (error instanceof StoreCorruptError) return [];
+      if (error instanceof StoreCorruptError && options.unreadable !== "throw") return [];
       throw error;
     }
   }
@@ -651,10 +681,16 @@ export class StorageContext {
    * One row of a database store by key (an array item, a record key, or a key
    * of one envelope collection) without assembling the whole store, so a
    * lookup costs the row, not every other record. `undefined` when absent or
-   * unreadable, as {@link loadJson} treats an unreadable store. Inside an
-   * atomic scope it reads the buffered value instead.
+   * unreadable, as {@link loadJson} treats an unreadable store, unless
+   * `unreadable: "throw"`, which raises `StoreCorruptError` for a caller that
+   * must refuse rather than read "absent". Inside an atomic scope it reads the
+   * buffered value instead.
    */
-  loadStoreRow(filePath: string, key: string, options: { collection?: string } = {}): unknown {
+  loadStoreRow(
+    filePath: string,
+    key: string,
+    options: { collection?: string; unreadable?: "absent" | "throw" } = {},
+  ): unknown {
     const store = this.storeForFile(filePath);
     if (store === null) throw new Error("loadStoreRow requires a database store");
     const scope = this.openAtomicScope();
@@ -675,7 +711,7 @@ export class StorageContext {
     try {
       return this.database.readStoreRow(store, key, options.collection);
     } catch (error) {
-      if (error instanceof StoreCorruptError) return undefined;
+      if (error instanceof StoreCorruptError && options.unreadable !== "throw") return undefined;
       throw error;
     }
   }
@@ -919,16 +955,19 @@ export class StorageContext {
    * every copy against the whole new value, as a whole-value save does. The
    * pruning intent commits with the row and replays after failure or restart.
    * Deletes journal removal of the whole archived key, even if already absent.
+   * `unreadableRow: "replace"` hands an unparsable row to `mutate` as absent; see
+   * {@link StorageDatabase.updateStoreRow}.
    */
   updateSensitiveStoreRow<T>(
     filePath: string,
     key: string,
     mutate: (current: unknown) => RowUpdate<T>,
+    options: { unreadableRow?: "replace" } = {},
   ): T {
     const store = this.storeForFile(filePath);
     if (store === null) throw new Error("updateSensitiveStoreRow requires a database store");
     if (!hasLegacyJsonStore(this.dataDir, store)) {
-      return this.updateStoreRow(filePath, key, mutate);
+      return this.updateStoreRow(filePath, key, mutate, options);
     }
     const cleanups: LegacyJsonCleanup[] = [];
     let result!: T;
@@ -942,20 +981,25 @@ export class StorageContext {
           unreadable = true;
         }
       }
-      result = this.updateStoreRow(filePath, key, (previous) => {
-        const update = mutate(previous);
-        if (update.delete) {
-          cleanups.push({ store, kind: "delete-row", key });
-        } else if (
-          "value" in update &&
-          (unreadable ||
-            previous === undefined ||
-            pruneRemovedContent(previous, update.value) !== previous)
-        ) {
-          cleanups.push({ store, kind: "prune-row", key, next: structuredClone(update.value) });
-        }
-        return update;
-      });
+      result = this.updateStoreRow(
+        filePath,
+        key,
+        (previous) => {
+          const update = mutate(previous);
+          if (update.delete) {
+            cleanups.push({ store, kind: "delete-row", key });
+          } else if (
+            "value" in update &&
+            (unreadable ||
+              previous === undefined ||
+              pruneRemovedContent(previous, update.value) !== previous)
+          ) {
+            cleanups.push({ store, kind: "prune-row", key, next: structuredClone(update.value) });
+          }
+          return update;
+        },
+        options,
+      );
       if (unreadable && cleanups.length > 0) {
         cleanups.splice(0, cleanups.length, {
           store,

@@ -1,12 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import { AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
+import type { NativeAgentDiscoveryView } from "@orkestrator/protocol/native-agent";
 import { DATA_SAVING_ACTIVE_PROJECTION_REFRESH_MS } from "./data-saving-policy";
 import {
   ACTIVE_PROJECTION_REFRESH_MS,
+  DISCOVERY_BACKSTOP_MS,
   IDLE_PROJECTION_REFRESH_MS,
   NATIVE_QUIET_BACKOFF_CONTENT_REVISION_PROVIDERS,
   NATIVE_QUIET_BACKOFF_QUALIFIED_PROVIDERS,
   NATIVE_QUIET_BACKOFF_TRIAL_MS,
+  NativeDiscoveryReadSchedule,
   nativeSessionReadDemand,
 } from "./native-session-read-policy";
 
@@ -115,5 +118,83 @@ describe("native session read policy", () => {
           .dataSaving,
       ).toBeNull();
     }
+  });
+});
+
+describe("NativeDiscoveryReadSchedule", () => {
+  const view = (
+    availability: "ready" | "loading" | "stale" | "unavailable",
+  ): NativeAgentDiscoveryView =>
+    ({
+      identity: {},
+      sections: {
+        models: { availability: "ready", revision: 1 },
+        runtime: { availability, revision: 1 },
+      },
+    }) as unknown as NativeAgentDiscoveryView;
+
+  /** A schedule that already read once at time 0 and holds a settled view. */
+  function settled(phase = "running") {
+    const schedule = new NativeDiscoveryReadSchedule();
+    expect(schedule.claim(0, phase)).toBe(true);
+    schedule.observe(view("ready"));
+    return schedule;
+  }
+
+  test("reads on the first round, then only at the backstop", () => {
+    const schedule = settled();
+    expect(schedule.claim(500, "running")).toBe(false);
+    expect(schedule.claim(DISCOVERY_BACKSTOP_MS - 1, "running")).toBe(false);
+    expect(schedule.claim(DISCOVERY_BACKSTOP_MS, "running")).toBe(true);
+    expect(schedule.claim(DISCOVERY_BACKSTOP_MS + 500, "running")).toBe(false);
+    expect(DISCOVERY_BACKSTOP_MS).toBe(30_000);
+  });
+
+  test("a due mark is spent by exactly one read", () => {
+    const schedule = settled();
+    schedule.markDue();
+    schedule.markDue();
+    expect(schedule.claim(500, "running")).toBe(true);
+    expect(schedule.claim(1_000, "running")).toBe(false);
+  });
+
+  test("a phase change reads once", () => {
+    const schedule = settled();
+    expect(schedule.claim(500, "idle")).toBe(true);
+    expect(schedule.claim(2_000, "idle")).toBe(false);
+  });
+
+  test("learning the phase for the first time is not a change", () => {
+    const schedule = new NativeDiscoveryReadSchedule();
+    expect(schedule.claim(0, undefined)).toBe(true);
+    expect(schedule.claim(500, "running")).toBe(false);
+    expect(schedule.claim(1_000, "idle")).toBe(true);
+  });
+
+  test("an explicit read restarts the backstop and spends the due mark", () => {
+    const schedule = settled();
+    schedule.markDue();
+    schedule.claimExplicit(10_000, "running");
+    expect(schedule.claim(10_500, "running")).toBe(false);
+    expect(schedule.claim(39_999, "running")).toBe(false);
+    expect(schedule.claim(40_000, "running")).toBe(true);
+  });
+
+  test("a loading or stale section is looked at again until it settles", () => {
+    for (const availability of ["loading", "stale"] as const) {
+      const schedule = settled();
+      schedule.observe(view(availability));
+      expect(schedule.claim(1_999, "running")).toBe(false);
+      expect(schedule.claim(2_000, "running")).toBe(true);
+      schedule.observe(view("ready"));
+      expect(schedule.claim(4_000, "running")).toBe(false);
+    }
+  });
+
+  test("an unavailable section waits for the backend's own retry", () => {
+    const schedule = settled();
+    schedule.observe(view("unavailable"));
+    expect(schedule.claim(4_999, "running")).toBe(false);
+    expect(schedule.claim(5_000, "running")).toBe(true);
   });
 });

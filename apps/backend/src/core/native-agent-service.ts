@@ -1,3 +1,6 @@
+import { isValidTimeZone } from "@orkestrator/protocol/schedule-time";
+import type { TurnFailureKind } from "@orkestrator/protocol/agent-usage-limits";
+import { turnOutcomeFailureKind } from "./agent-usage-limits.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("native-agent");
@@ -5,6 +8,7 @@ const nativeAgentGoalLog = createLogger("native-agent.goal");
 export * from "./native-agent-service-shared.js";
 import { STARTUP_AGENT_TAB_ID } from "@orkestrator/protocol/tab-initial-prompt";
 import * as shared from "./native-agent-service-shared.js";
+import { readNativeAgentLiveUpdate } from "./native-agent-live-update.js";
 import type {
   BuildPipelineAgent,
   TaskSnapshotImage,
@@ -45,6 +49,7 @@ import type {
   NativeAgentTranscriptUpdateInput,
   NativeAgentProgressiveInput,
   NativeAgentDiscoveryUpdateInput,
+  NativeAgentLiveUpdateInput,
   NativeAgentMessagePage,
   MailInjectDispatchOutcome,
   MailSteerDispatchOutcome,
@@ -80,19 +85,12 @@ import {
   coordinatorResearchLine,
   loadCoordinatorResearch,
 } from "./coordinator-research-context.js";
-import { COORDINATOR_AGENTS_MD_RULE } from "@orkestrator/protocol/agents-md-orkestrator";
+import { agentMessagingEnabled, readCoordinatorWaitingOn } from "./coordinator-context-reads.js";
 import {
-  COORDINATOR_ASYNC_CONTRACT,
-  COORDINATOR_ENVIRONMENT_CHOICE_RULE,
-  COORDINATOR_TIMERS_AND_ACCOUNTS_RULE,
-  COORDINATOR_LAUNCH_DEFAULTS_RULE,
-  COORDINATOR_PR_RULE,
-  COORDINATOR_ROUTING_RULE,
-  COORDINATOR_VALIDATION_RULE,
-  COORDINATOR_WORKER_PROMPT_FORMAT_RULE,
-  COORDINATOR_CONTEXT_CLOSE_TAG,
-  COORDINATOR_CONTEXT_OPEN_TAG,
-  COORDINATOR_MAIL_ADDRESS,
+  buildCoordinatorContext,
+  type CoordinatorContextDelegation,
+} from "@orkestrator/protocol/coordinator-context";
+import {
   COORDINATOR_EXECUTION_POLICY,
   coordinatorIdFromRuntimeId,
   stripCoordinatorContext,
@@ -114,6 +112,7 @@ import {
   dispatchOutcomeLostMessage,
   nativeAsyncQuestionItemId,
   type NativeAgentDiscoveryUpdate,
+  type NativeAgentLiveUpdate,
   type NativeAgentSessionStateUpdate,
   type NativeAgentTranscriptUpdate,
   resolveNativeAgentApprovalMode,
@@ -172,6 +171,7 @@ import {
   PromptRejectedError,
   type ProviderMcpConfigEvidenceRead,
 } from "./agent-provider-contract.js";
+import { localServerStopCommandName } from "./local-server-runtime.js";
 import { claudeReasoningSelection } from "@orkestrator/protocol/claude-model-catalog";
 import { type AgentInteractionRequest } from "@orkestrator/protocol/agent-interactions";
 import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
@@ -318,6 +318,10 @@ export class NativeAgentService {
     input: NativeAgentProgressiveInput,
   ): Promise<NativeAgentSessionStateUpdate> {
     return this.projections.getSessionStateUpdate(input);
+  }
+
+  getLiveUpdate(input: NativeAgentLiveUpdateInput): Promise<NativeAgentLiveUpdate> {
+    return readNativeAgentLiveUpdate(this.projections, input);
   }
 
   getDiscoveryUpdate(input: NativeAgentDiscoveryUpdateInput): Promise<NativeAgentDiscoveryUpdate> {
@@ -728,8 +732,8 @@ export class NativeAgentService {
       dispatchPrompt: (input) => this.dispatchPrompt(input),
       dispatchQueuedAsyncQuestionAnswer: (input, resolved, text, requestId) =>
         this.dispatchQueuedAsyncQuestionAnswer(input, resolved, text, requestId),
-      recordObservedTurnOutcome: (session, status, detail, provider) =>
-        this.recordObservedTurnOutcome(session, status, detail, provider),
+      recordObservedTurnOutcome: (session, status, detail, provider, failureKind) =>
+        this.recordObservedTurnOutcome(session, status, detail, provider, failureKind),
       usageLimitResendPending: (key) => this.usageLimitResend.isPending(key),
       settleAmbiguousDispatch: (input, key, requestId, provider) =>
         this.settleAmbiguousDispatch(input, key, requestId, provider),
@@ -866,6 +870,7 @@ export class NativeAgentService {
       assertProjectionInput: (input) => this.assertProjectionInput(input),
       resolveProjectionSession: (input) => this.resolveProjectionSession(input),
       provider: (input) => this.provider(input),
+      replaceBridgeForWiderPolicy: (input) => this.replaceBridgeForWiderPolicy(input),
       observeProvider: (input) => this.observeProvider(input),
       trustedSessionInput: (input) => this.trustedSessionInput(input),
       adoptSession: (input) => this.adoptSession(input),
@@ -914,9 +919,60 @@ export class NativeAgentService {
     return this.options.now?.() ?? Date.now();
   }
 
+  private readonly bridgeReplacements = new Set<string>();
+  private readonly bridgeAdmissions = new Map<string, number>();
+
+  private bridgeKey(input: NativeAgentProjectionInput): string {
+    return JSON.stringify([input.environmentId, input.agent]);
+  }
+
+  private beginBridgeWork(input: NativeAgentProjectionInput): () => void {
+    const key = this.bridgeKey(input);
+    if (this.bridgeReplacements.has(key))
+      throw new Error("Bridge replacement in progress; retry after it finishes");
+    this.bridgeAdmissions.set(key, (this.bridgeAdmissions.get(key) ?? 0) + 1);
+    return () => {
+      const count = (this.bridgeAdmissions.get(key) ?? 1) - 1;
+      if (count) this.bridgeAdmissions.set(key, count);
+      else this.bridgeAdmissions.delete(key);
+    };
+  }
+
   /** Resolve a provider, starting its bridge if needed. */
   private provider(input: EnsureNativeAgentSessionInput): Promise<NativeAgentRuntimeProvider> {
     return this.providerRegistry.resolve(input);
+  }
+
+  /**
+   * Stop a bridge so the provider resolved next starts a fresh one. A bridge
+   * with live work keeps it: the user's change to one conversation must not end
+   * another's turn, so the resume fails with what to do instead.
+   */
+  private async replaceBridgeForWiderPolicy(input: NativeAgentProjectionInput): Promise<void> {
+    const key = this.bridgeKey(input);
+    if (this.bridgeReplacements.has(key) || this.bridgeAdmissions.has(key)) {
+      throw new Error("Cannot replace a bridge with admitted work or a replacement in progress");
+    }
+    this.bridgeReplacements.add(key);
+    try {
+      if (await this.hasObservedLiveWork(input.environmentId, input.agent)) {
+        throw new Error(
+          `The wider execution policy cannot apply while a ${input.agent} turn is running in this environment. Resume this conversation again once it has finished.`,
+        );
+      }
+      const environment = await this.assertEnvironmentLive(input.environmentId);
+      if (environment.environmentType === "local") {
+        await this.invoke(localServerStopCommandName(input.agent), {
+          environmentId: environment.id,
+        });
+      } else {
+        if (!environment.containerId) throw new Error("Native agent container is unavailable");
+        await this.invoke(`stop_${input.agent}_server`, { containerId: environment.containerId });
+      }
+      await this.provider(input);
+    } finally {
+      this.bridgeReplacements.delete(key);
+    }
   }
 
   /** Resolve a provider for observation only, never starting a bridge. */
@@ -1294,53 +1350,51 @@ export class NativeAgentService {
         .getRepositoryConfig(workspace.projectId)
         .then((config) => config.defaultBranch?.trim() || "main")
         .catch(() => "main");
-      const launchBaseLine =
-        `Launch base: every launch_environment call must include baseBranch and baseCommit. By default start workers from the latest commit of the base branch ${baseBranch}: call get_launch_options and pass coordinatorBase.baseBranch and coordinatorBase.baseCommit unchanged. ` +
-        `Use checkoutBase, the branch and commit of this checkout shown below, only when the user asks to build on the current checkout. If coordinatorBase is unavailable, report that instead of guessing values.\n`;
       const side = coordinator.conversation.role === "side";
       const checkoutUpdate = await this.coordinatorCheckoutUpdate(
         workspace,
         coordinator.conversation,
       );
       const nodeLine = (await this.options.coordinatorNodeContext?.().catch(() => null)) ?? "";
-      const delegation = side
-        ? `Side agent: you are ${coordinator.conversation.title}, a side agent of this project's coordinator. You can read the project and Orkestrator state, including a worker's changes with get_worker_changes, but you cannot launch environments or jobs. Exchange mail only with the main coordinator: send_message to toEnvironmentId "${COORDINATOR_MAIL_ADDRESS}". Workers and other agents cannot reach you.\n`
-        : this.options.coordinatorDelegationAvailable?.(coordinator.conversation.agent)
-          ? `Main coordinator: every worker in this project reports to you. Side agents (Side 1, Side 2…) may mail you; reach one with send_message to its environment id from list_mailboxes. Message a worker by its environment id; toTabId is optional.\n` +
-            `Delegation: create workers with the Orkestrator launch_environment tool. Provider sub-agents remain inside this coordinator session and are not worker environments. Report a worker as created only after launch_environment returns its environment id.\n` +
-            `${COORDINATOR_ROUTING_RULE}\n` +
-            `${COORDINATOR_ENVIRONMENT_CHOICE_RULE}\n` +
-            `Actions: prefer launch_multi_review for the complete environment Multi Review button action; start_multi_review starts backend work only and does not open a tab. Use open_multi_review and open_multi_review_fix to present saved work. Reuse requestId on retry, and inspect outcome, ui and recovery before reporting completion.\n` +
-            `Workers: check a worker's work with get_worker_changes (its commits, changed files, uncommitted files and diff, local or container), not only its report. To try an alternative from where a worker got to, fork_worker starts a new worker from its last commit.\n` +
-            launchBaseLine +
-            `${COORDINATOR_WORKER_PROMPT_FORMAT_RULE}\n` +
-            `${COORDINATOR_LAUNCH_DEFAULTS_RULE}\n` +
-            `${COORDINATOR_PR_RULE}\n` +
-            `${COORDINATOR_VALIDATION_RULE}\n` +
-            `${COORDINATOR_AGENTS_MD_RULE}\n` +
-            ((await schedulingEnabled(this.storage))
-              ? `${COORDINATOR_TIMERS_AND_ACCOUNTS_RULE}\n`
-              : "") +
-            `${COORDINATOR_ASYNC_CONTRACT}\n`
-          : `Delegation: Orkestrator worker controls are unavailable in this session. Provider sub-agents remain inside this coordinator session and are not worker environments; do not report them as workers.\n`;
+      const delegation: CoordinatorContextDelegation = side
+        ? {
+            kind: "side",
+            title: coordinator.conversation.title,
+            messagingEnabled: await agentMessagingEnabled(this.storage),
+          }
+        : (await this.options.coordinatorDelegationAvailable?.(coordinator.conversation.agent))
+          ? {
+              kind: "main",
+              baseBranch,
+              schedulingEnabled: await schedulingEnabled(this.storage),
+              waitingOn: await readCoordinatorWaitingOn(this.storage, coordinatorId),
+            }
+          : {
+              kind: "unavailable",
+              messagingEnabled: await agentMessagingEnabled(this.storage),
+            };
+      const project = await this.storage.getProject(workspace.projectId).catch(() => null);
+      const context = buildCoordinatorContext({
+        project: {
+          id: workspace.projectId,
+          name: project?.name,
+          checkoutPath: project?.localPath ?? status?.repositoryRoot,
+        },
+        coordinatorId,
+        repository: {
+          contextRevision: workspace.repositoryContextRevision,
+          branch: status?.branch,
+          headCommit: status?.headCommit,
+        },
+        researchLine: coordinatorResearchLine(research),
+        nodeLine,
+        checkoutUpdate,
+        delegation,
+      });
       return {
         ...trusted,
         [COORDINATOR_CONTEXT_APPLIED]: true,
-        prompt:
-          `${COORDINATOR_CONTEXT_OPEN_TAG}\n` +
-          `Project: ${workspace.projectId}\n` +
-          `Coordinator: ${coordinatorId}\n` +
-          `Role: read-only coordinator. You get the project's work done: research and plan here, then have workers make every file change, checkout-mutating command, build and fix in isolated environments through approved Orkestrator controls. Never attempt to alter the project checkout directly.\n` +
-          `Scope: keep your own work to quick reads, searches and lookups. Anything more serious (a multi-file investigation, running builds or tests, reproducing a bug, writing or reviewing code in depth) belongs in a worker environment you launch, even when it only reads.\n` +
-          coordinatorResearchLine(research) +
-          nodeLine +
-          `Tools: report a tool as unavailable or denied only after you called it and the call was refused; never assume a refusal you have not seen.\n` +
-          delegation +
-          `Repository context revision: ${workspace.repositoryContextRevision}\n` +
-          `Branch: ${status?.branch ?? "unknown"}\n` +
-          `Commit: ${status?.headCommit ?? "unknown"}\n` +
-          checkoutUpdate +
-          `${COORDINATOR_CONTEXT_CLOSE_TAG}\n\n${input.prompt}`,
+        prompt: `${context}\n\n${input.prompt}`,
       } as T;
     }
     return trusted;
@@ -1932,7 +1986,17 @@ export class NativeAgentService {
     try {
       // Reserve before identity/session reads: a close must see even a prompt
       // whose asynchronous preflight has not reached provider dispatch yet.
-      release = this.environmentFence.beginAgentWork(input.environmentId);
+      const releaseBridge = this.beginBridgeWork(input);
+      try {
+        const releaseEnvironment = this.environmentFence.beginAgentWork(input.environmentId);
+        release = () => {
+          releaseEnvironment();
+          releaseBridge();
+        };
+      } catch (error) {
+        releaseBridge();
+        throw error;
+      }
     } catch (error) {
       return { outcome: "rejected", error: error instanceof Error ? error.message : String(error) };
     }
@@ -2821,9 +2885,11 @@ export class NativeAgentService {
    * until the next turn, so `error` then is this turn's error. `pending` means
    * "ask again later"; `unknown` means the outcome cannot be established.
    */
-  async sessionTurnOutcome(
-    input: NativeAgentProjectionInput & { requestId: string },
-  ): Promise<{ outcome: "completed" | "failed" | "pending" | "unknown"; error?: string }> {
+  async sessionTurnOutcome(input: NativeAgentProjectionInput & { requestId: string }): Promise<{
+    outcome: "completed" | "failed" | "pending" | "unknown";
+    error?: string;
+    failureKind?: TurnFailureKind;
+  }> {
     const key = nativeAgentSessionStorageKey(
       input.environmentId,
       input.agent,
@@ -2833,7 +2899,11 @@ export class NativeAgentService {
     if (!session) return { outcome: "unknown" };
     const recorded = session.turnOutcomes?.find((entry) => entry.requestId === input.requestId);
     if (recorded) {
-      return { outcome: recorded.outcome, ...(recorded.error ? { error: recorded.error } : {}) };
+      return {
+        outcome: recorded.outcome,
+        ...(recorded.error ? { error: recorded.error } : {}),
+        ...(recorded.failureKind ? { failureKind: recorded.failureKind } : {}),
+      };
     }
     const ids = session.dispatchedRequestIds ?? [];
     if (ids[ids.length - 1] !== input.requestId) return { outcome: "unknown" };
@@ -2895,18 +2965,27 @@ export class NativeAgentService {
         : ("completed" as const);
     const error =
       outcome === "failed" ? (terminalError ?? observation.error)?.slice(0, 500) : undefined;
+    const failureKind =
+      outcome === "failed"
+        ? turnOutcomeFailureKind(
+            session.agent,
+            error,
+            terminalError === null ? observation.failureKind : undefined,
+          )
+        : undefined;
     this.settleArtifactTurn(session, input.requestId);
     try {
       await this.storage.recordNativeAgentTurnOutcome(key, session.providerSessionId, {
         requestId: input.requestId,
         outcome,
         ...(error ? { error } : {}),
+        ...(failureKind ? { failureKind } : {}),
         observedAt: new Date(this.now()).toISOString(),
       });
     } catch {
       // The answer is still correct for this call; a later call re-reads.
     }
-    return { outcome, ...(error ? { error } : {}) };
+    return { outcome, ...(error ? { error } : {}), ...(failureKind ? { failureKind } : {}) };
   }
 
   /**
@@ -2977,6 +3056,7 @@ export class NativeAgentService {
     status: string,
     detail: string | undefined,
     provider?: Pick<NativeAgentRuntimeProvider, "turnTerminalError">,
+    reportedFailureKind?: TurnFailureKind,
   ): Promise<number | void> {
     const requestId = session.dispatchedRequestIds?.at(-1);
     if (!requestId || session.turnOutcomes?.some((entry) => entry.requestId === requestId)) return;
@@ -3005,11 +3085,20 @@ export class NativeAgentService {
     }
     this.settleArtifactTurn(session, requestId);
     this.signInResends.noteTurnEnded(session);
+    const failed = status === "error" || failure !== undefined;
+    const failureKind = failed
+      ? turnOutcomeFailureKind(
+          session.agent,
+          failure,
+          status === "error" ? reportedFailureKind : undefined,
+        )
+      : undefined;
     try {
       await this.storage.recordNativeAgentTurnOutcome(session.key, session.providerSessionId, {
         requestId,
-        outcome: status === "error" || failure !== undefined ? "failed" : "completed",
+        outcome: failed ? "failed" : "completed",
         ...(failure ? { error: failure.slice(0, 500) } : {}),
+        ...(failureKind ? { failureKind } : {}),
         observedAt: new Date(this.now()).toISOString(),
       });
     } catch {
@@ -3393,8 +3482,10 @@ export class NativeAgentService {
     recovery = false,
     onInstructionsIgnored?: () => void,
   ): Promise<PersistedNativeAgentSession> {
-    const releaseAgentWork = this.environmentFence.beginAgentWork(input.environmentId);
+    const releaseBridge = this.beginBridgeWork(input);
+    let releaseAgentWork: (() => void) | undefined;
     try {
+      releaseAgentWork = this.environmentFence.beginAgentWork(input.environmentId);
       return await this.promptQueues.withSessionMutationFence(input, () =>
         this.dispatchAdmittedPrompt(
           input,
@@ -3406,7 +3497,8 @@ export class NativeAgentService {
         ),
       );
     } finally {
-      releaseAgentWork();
+      releaseAgentWork?.();
+      releaseBridge();
     }
   }
 
@@ -3810,6 +3902,12 @@ export class NativeAgentService {
               const owner = input.owner;
               const conversationId = coordinatorConversationIdFromRuntimeId(input.environmentId);
               const startedAt = new Date(this.now()).toISOString();
+              const userTurn = !(mailInject || recovery || durable.pendingDispatch);
+              // The user's own device's zone, for self-timers' absolute times.
+              const userTimeZone =
+                userTurn && isValidTimeZone(input.clientTimeZone)
+                  ? input.clientTimeZone
+                  : undefined;
               await this.storage.coordinators.mutateCoordinatorWorkspace(
                 owner.projectId,
                 (workspace) => {
@@ -3829,14 +3927,12 @@ export class NativeAgentService {
                       conversation.id === conversationId
                         ? {
                             ...conversation,
-                            lastTurnOrigin:
-                              mailInject || recovery || durable.pendingDispatch
-                                ? ("mail" as const)
-                                : ("user" as const),
+                            lastTurnOrigin: userTurn ? ("user" as const) : ("mail" as const),
                             lastTurnStartedAt: startedAt,
                           }
                         : conversation,
                     ),
+                    ...(userTimeZone ? { userTimeZone } : {}),
                     updatedAt: startedAt,
                   };
                 },

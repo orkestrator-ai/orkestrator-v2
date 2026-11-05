@@ -414,6 +414,17 @@ persists it on the message (`AgentMailMessage.notice`, only for system senders,
 checked by `normalizeAgentMailNotice`), so `read_messages` and `get_message`
 return it too.
 
+Views for a person draw a stored carrier as a mail tile, and one they cannot
+read as a plain notice, through `presentPeerMailCarrierRow`. That covers native
+tabs, stored pipeline, Multi Review and graph-run transcripts, and the Claude
+tmux chat (`presentPeerMailRows`, over the rows of Claude's own transcript).
+Reads for a consumer keep the stored text: `get_tab_transcript` on a native tab
+or a pipeline worker and the public `session.transcript` return the envelope,
+so an agent keeps the message id it replies with and the framing that says the
+text is untrusted. The payload holds `messageId` before `body`, so a read's
+length cap cuts a long body and never the id. On a `claude-tmux` tab
+`get_tab_transcript` reads the terminal tail, not stored rows.
+
 **Presence.** Native inject uses `mailInjectPresence` (queue, compose draft,
 pending dispatch, environment readiness, then turn activity). Drain admits
 `idle` and `unknown` (never-prompted tab). The dispatch fence rechecks the

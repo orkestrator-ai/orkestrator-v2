@@ -505,3 +505,8 @@ run = "bun scripts/release-desktop.ts build"
 description = "Publish the draft GitHub release once macOS and Linux are both uploaded"
 run = "bun scripts/release-desktop.ts publish"
 
+[tasks."release:pin-installer"]
+description = "Pin the site's install.sh to a published Stable release"
+raw_args = true
+run = "bun scripts/pin-install-script.ts"
+

@@ -3,7 +3,8 @@
 The backend's authoritative state lives in one SQLite database,
 `orkestrator.sqlite`, in the data directory (`~/Library/Application
 Support/orkestrator-v2/` on macOS, `${XDG_CONFIG_HOME:-~/.config}/orkestrator-v2/`
-on Linux). It replaced 29 JSON store files (plus one file per public-operation
+on Linux). The change-tracking ledger has its own file beside it,
+`change-tracking.sqlite` (see [Version 7](#migrations)). It replaced 29 JSON store files (plus one file per public-operation
 namespace), their per-file lock files and five-deep backup ladders.
 
 | File | Purpose |
@@ -62,7 +63,7 @@ the change journal.
 | `ReviewsRepository` | `storage-reviews.ts` | Looped and Multi Review workflows |
 | `NativeAgentSessionsRepository` | `storage-native.ts` | Native agent sessions: records and their lease, owners, controls and resume identity, the interaction journal, display tails, turn outcomes and interrupts |
 | `NativeAgentDeliveries` | `storage-native-deliveries.ts` | The dispatch and steer journals on a session record, and a queued steer's reservation and settlement in the prompt queue |
-| `PromptQueueStore` | `storage-prompt-queue-store.ts` | The prompt-queue lease, load and save, and recovery of claims older backends left |
+| `PromptQueueStore` | `storage-prompt-queue-store.ts` | The prompt-queue lease, row reads and row writes, and recovery of claims older backends left |
 | `PromptsRepository` | `storage-prompts.ts` | Prompt-queue operations for dispatch, the compose-draft lease |
 | `BuildPipelinesRepository` | `storage-build-pipelines.ts` | Build pipelines and their transcripts |
 | `DraftsRepository` | `storage-drafts.ts` | Compose and file drafts, agent handoffs, session buffers, and the session and pane-layout edits they make |
@@ -129,7 +130,7 @@ a primitive or a repository helper the facade does not expose use
   toolchain installer read them, and on first run write them, before the
   backend starts. Those run under Node, which has no `bun:sqlite`. They keep
   the atomic-rename writer and backup ladder; `config.json` is written 0600
-  because it holds API keys.
+  because it holds API keys (see [Provider secrets at rest](#provider-secrets-at-rest)).
 - Descriptor files other processes read: `backend-instance.json`,
   `control-mcp.json`, `gateway-auth.json`.
 - Design canvases (records, pending operations, intent queues, history
@@ -162,11 +163,21 @@ These keep their own modules but store their state as database rows:
 | Compatibility-path usage | `compatibility-path-usage` (document: per path id, a count and the first and last use) | Counts are merged at most once a minute, on read and at shutdown, in one transaction; content-free ([version-compatibility.md](version-compatibility.md#usage-counters)) |
 | Host maintenance | `host-maintenance` (document: the current or last update job, the pending check request, the last check) | Each change is one transaction; a job left in progress by the previous process is settled at startup from the running version, never resumed |
 | Scheduled jobs | `scheduled-jobs` (one row per schedule, owner = the owner key) | Every write is one `updateStoreRow`, which is also the exactly-once fire claim across backends; bounded history inside the row; an environment's agent schedules are deleted with it ([scheduled-jobs.md](scheduled-jobs.md)) |
-| Agent usage history | `usage-history` (one row per agent session, owner = environment) | Each recorded turn is one `updateStoreRow`; reports walk every row uncached and never prune (retention is swept from the write path); day buckets past 400 days and the least recently used rows above 20,000 are pruned hourly. Turn ids are scoped by provider session, because a row outlives the conversation in its tab. A turn is bucketed by the day its bridge finalized it (`NativeAgentTurnUsage.at`), falling back to the day it was first seen. Rows outlive the environment they came from and are deleted only on request |
+| Agent usage history | `usage-history` (one row per agent session, owner = environment) | Each recorded turn is one `updateStoreRow`; reports walk every row uncached and never prune (retention is swept from the write path); day buckets past 400 days and the least recently used rows above 20,000 are pruned hourly, 250 rows per transaction with the event loop free between batches. Each row is read and decided inside its transaction, so a turn recorded during the sweep stays and a row it refreshed is not dropped. Turn ids are scoped by provider session, because a row outlives the conversation in its tab. A turn is bucketed by the day its bridge finalized it (`NativeAgentTurnUsage.at`), falling back to the day it was first seen. Rows outlive the environment they came from and are deleted only on request |
 
 Large engines read and write through `database.rows(store)`, an uncached
 row API, so they never hold a whole store in memory; the cached APIs stay
 correct because every row write bumps the store's revision.
+
+`list({ values: false })` reports each row's size without reading its value. It
+uses `octet_length(value)`, which reads the length from the record header, and
+falls back to `length(CAST(value AS BLOB))` on a SQLite older than 3.43: Bun on
+macOS loads the system library, so the version follows the macOS release (3.54.0
+on macOS 27 and 3.53.4 in Bun's Linux image, both with Bun 1.4.4). It also scans
+the primary key and sorts in JavaScript instead of using `ORDER BY`, because
+`store_rows` is `WITHOUT ROWID`: a seek compares whole cells, reading their
+overflow pages, so seeking each row through `store_rows_position` costs as much
+as reading the values whichever size expression is used.
 
 ## Stores and layouts
 
@@ -211,16 +222,18 @@ from that.
 - **`updateStore(file, fallback, mutate)`**: a synchronous read-modify-write in
   one `BEGIN IMMEDIATE` transaction. SQLite's write lock serializes it across
   every connection and process; no lease or queue is involved. Use it whenever
-  the mutation does not await (sessions, project notes, feature plans,
-  completion comments).
+  the mutation does not await (project notes, feature plans, completion
+  comments).
 - **`updateStoreRow(file, key, mutate, { collection, archiveCleanup })`**: the
   same for one row of a `record` store, of a keyed `array` store or of one
   `envelope` collection. It neither parses nor rewrites the other rows, so a
   write costs O(row) and holders of different keys' leases cannot overwrite each
   other. An array item keeps its position when updated, a new one goes last, and
   its value must carry the row's key in the layout's key field. A store held
-  whole as a document falls back to a whole-value read-modify-write.
-  `archiveCleanup` commits an attributable archive cleanup with the row.
+  whole as a document falls back to a whole-value read-modify-write. An
+  unparsable row refuses the write, unless `unreadableRow: "replace"` hands it
+  to `mutate` as absent. `archiveCleanup` commits an attributable archive cleanup
+  with the row.
   `updateSensitiveStoreRow` is the same for a record store holding sensitive
   content: it also prunes what the row's new value drops from the retired JSON
   archive, as `saveSensitiveJson` does (see "Retired JSON archive").
@@ -240,7 +253,13 @@ from that.
   Native agent sessions take **one lease per session key**
   (`native-agent-session-leases/<sha256(key)>`), and every write under it is a
   single-row `updateStoreRow`, so a slow provider call for one session never
-  stalls another. Order: the service's per-key work fence, then the session
+  stalls another. A mutation reads its record with
+  `readNativeAgentSessionUnderLease`, which fetches that one row and refuses that
+  key's unreadable record; another key's bad row is neither read nor rewritten.
+  The value is a fresh parse, never a frozen snapshot object. Whole-store loads
+  remain for what walks the store and holds no key's lease: the owner migration,
+  the catalogue list, the environment sweep's key search and a store held as a
+  document. Order: the service's per-key work fence, then the session
   lease, then leaf leases (prompt queue, display tails); never hold two
   session leases at once. Deleting an environment's sessions takes each key's
   lease in turn, and inserts check the environment's deletion tombstone inside
@@ -256,6 +275,23 @@ from that.
   rewrites the other drafts. An owner sweep is one `updateStore` that removes
   only that owner's rows and writes nothing when the owner has none.
 
+  Prompt queues keep the store's lease, because some writers await between the
+  read and the write (an idempotent append and a job reservation read the native
+  session in between) and all must stay ordered against deletion. A session lease
+  is taken before it, never under it. Inside it a mutation is one
+  `updateSensitiveStoreRow` that decodes and writes only its queue, so a queue
+  holding attachments (up to 32 MiB) costs only its own mutations. A row gets the
+  claim recovery and validation a load applies, and an unreadable or invalid row
+  reads as absent, so that queue's next write replaces it; another queue's row is
+  never read or rewritten, so a record this build cannot read survives. Only
+  what walks the store still decodes every row: the listings behind the drain
+  scans and environment deletion. Both parse row by row, because no write would
+  clear a bad row now, and read whole it would hide every queue for good.
+  Deletion writes one row per queue, so a crash part-way leaves the rest for the
+  caller's retry. It also removes rows that name no environment, and keeps a row
+  naming another one. `storage-writer-guards.test.ts` holds the lease on every
+  row write of this store (`LEASED_ROW_STORES`).
+
   Environments keep their store lease too, because a write awaits between its
   read and its commit (a caller's `shouldUpdate` observation, the removal's
   usage label) and must stay ordered against other writers and against
@@ -268,6 +304,23 @@ from that.
   store (`LEASED_ROW_STORES`), since a row transaction alone would not serialize
   the read before it.
 
+  Projects keep their store lease for the same reason: a write can await between
+  its read and its commit (`addProject`'s caller-supplied validation), and the
+  uniqueness of a remote and a checkout path is decided against the other
+  projects. Inside it a writer commits one row (`saveProject`), or the rows an
+  arrangement changed, in one transaction. A one-field edit reads one row; only
+  an add, a new remote or a new checkout path reads the whole store, and those
+  still write one row. The store is in `LEASED_ROW_STORES` too. A gesture that
+  moves a project to the far end of a long list changes every row's `order`, so
+  it costs one row write each, slower than the whole-value diff it replaced
+  (about 6 ms against 3 ms at 500 projects).
+
+  Terminal sessions take no lease, because no writer awaits. Each mutation is one
+  transaction over only the rows it names: `updateStoreRow` for one session, and
+  the environment's rows by their owner column for a create, a reorder, a
+  disconnect or a removal, read inside that transaction so the order and the
+  per-environment cap are decided against what it commits next to.
+
   Looped and Multi Review workflows keep **one lease per store for writers**:
   a save awaits its environment check, and launch and the environment sweep
   scan every workflow. Each write is still a single-row `updateStoreRow` that
@@ -277,7 +330,11 @@ from that.
   lease. A lease held for a read is released before the caller acts on the
   answer, so it would cost two write transactions per check and protect
   nothing; the commit's own check is what stops a controller that lost its
-  lease.
+  lease. The same rule applies to the interaction journal's read
+  (`getAgentInteractionResolutionJournal`, whose prune only filters the copy it
+  returns). Agent mail backoff resets always take the writer lease, even when
+  nothing needs clearing, so a reset observes earlier queued backoff writes.
+  A reset with no matching backoff leaves the store revision unchanged.
 - **`atomically(operation)`**: buffers every database-store write and delete
   made inside it and commits them in one transaction. Resource announcements
   made inside are published only after that commit. Reads inside see the
@@ -390,17 +447,43 @@ primitives above serialize their writes.
   their backups) returns up to 16 MiB of freed pages to the filesystem
   (`auto_vacuum = INCREMENTAL`, set when the database is created) and runs a
   truncating WAL checkpoint so old frames do not keep the content either.
-  `storageFilesContain(dataDir, marker)` checks this in tests. It never throws:
-  a checkpoint that fails or that a reader blocks is logged as `[storage]
-  scrub.checkpoint-failed`, throttled, and the next one retries.
-- The database file is 0600; SQLite gives `-wal` and `-shm` the same mode.
+  `storageFilesContain(dataDir, marker)` checks this in tests. It never throws.
+- The scrub's checkpoint never waits. A truncating checkpoint calls the busy
+  handler until every reader has moved past it, so a reader holding an older
+  snapshot (an hourly copy in progress, another backend's long read) used to
+  block the event loop for the whole ten-second busy timeout
+  (`storage-database-upkeep.test.ts` shows the wait). It now runs with
+  `busy_timeout = 0`: it checkpoints what it can and reports the rest busy. A
+  busy or failed scrub is retried from a timer, also without waiting, five
+  seconds later and doubling up to a minute, until the WAL truncates or the
+  connection closes (one last try). So deleted content leaves the WAL within
+  a minute of the last older reader finishing. Each deferral and failure is
+  logged as `[storage] scrub.checkpoint-failed`, throttled, with a
+  `throttle.recovered` line once it succeeds.
+- `foreign_keys` is off: no table declares a foreign key, so the PRAGMA would
+  promise checks nothing enforces. A migration that declares keys turns it on
+  in `StorageDatabase`'s constructor.
+- `PRAGMA optimize` keeps the planner's statistics current, bounded by
+  `analysis_limit = 400` and never waiting for another writer: on the main
+  database after every snapshot check, on the ledger after every retention
+  pass, and on every connection as it closes. On a generated 666 MB ledger the
+  first run took under a millisecond.
+- Cache sizes (`cache_size`, `mmap_size`, `temp_store`) are SQLite's defaults.
+  They are revisited only with a measured read problem
+  ([5181](../todo/cross-cutting/5181-sqlite-cache-sizes.md)).
+- Every open sets the database file to 0600, along with any `-wal`, `-shm` or
+  `-journal` already beside it, because SQLite only gives the file's mode to
+  companions it creates. A new database's file exists at the default mode only
+  until that first open sets it, before any content is written.
 
 ### Snapshots
 
 WAL covers crashes and torn writes, not a bad migration, a bug that deletes
 data or damage to the file. `storage-backups.ts` keeps snapshots in
 `<dataDir>/backups/` (0700, files 0600), each a consistent `VACUUM INTO` copy
-verified with `quick_check` before it is renamed into place:
+verified with `quick_check` before it is renamed into place. The hourly copies
+hold `orkestrator.sqlite` only; the change-tracking ledger has its own file
+and its own, daily, best-effort copies (below):
 
 - `pre-migration-v<from>-<stamp>.sqlite` before an existing database is
   migrated to a newer schema (a failed snapshot aborts the open instead of
@@ -440,10 +523,113 @@ verified with `quick_check` before it is renamed into place:
 - Anything older than seven days is deleted. That is also the privacy cost:
   content deleted from the live database can survive in a snapshot until it
   ages out.
+- `change-tracking-daily-<stamp>.sqlite` copies `change-tracking.sqlite`, by
+  the same check, after the hourly one and under the same lease: when the
+  newest is a day old. Each due interval creates a recovery point, including
+  ownership and binding-only edits; no ingestion fingerprint gates it. Same child-process copy and
+  `quick_check`; its own backoff file, `backups/.ledger-backoff.json`. The
+  newest two are kept. They are best effort: they give way first to the 16 GiB
+  budget, and a copy that would not fit beside every other snapshot is skipped
+  (`[storage] snapshot.ledger-skipped`) rather than displacing one.
+  `change-tracking-pre-migration-v<from>-<stamp>.sqlite` is taken before the
+  ledger file's own schema migrates; the newest two are kept.
+- Neither ledger copy holds `<dataDir>/change-tracking/` (objects and
+  evidence bodies), so a restored ledger can name bodies that are gone;
+  readers report those as expired, as they do for a pruned body.
 
-Restore: stop the app, replace `orkestrator.sqlite` with a snapshot and delete
-`orkestrator.sqlite-wal` and `-shm`. Snapshots are off by default under the
+Restore: stop the app, replace `orkestrator.sqlite` with an `hourly-` or
+`pre-migration-` snapshot and delete `orkestrator.sqlite-wal` and `-shm`. The
+ledger restores the same way and independently: `change-tracking.sqlite` from
+a `change-tracking-` snapshot, deleting its `-wal` and `-shm`. Nothing joins or
+writes across the two files, so either can be restored alone. A ledger older
+than the app database lacks the measurements newer transcript rows and
+handoffs name, which then read as not retained; a newer ledger holds rows
+nothing names yet, which retention prunes as usual. Restoring a
+`pre-migration-v6-` snapshot (from before the ledger moved) brings the old
+ledger back inside `orkestrator.sqlite`, and the next start moves it out again,
+replacing `change-tracking.sqlite`. Snapshots are off by default under the
 test runner (`new StorageService(dir, { snapshots: true })` turns them on).
+
+## Provider secrets at rest
+
+**Accepted risk (2026-11-05, security finding L17):** the stored provider secrets
+are plaintext in owner-only files. No keychain or `safeStorage` storage path
+exists for them, and none is planned while the reasoning below holds.
+
+The fields are `githubToken`, `anthropicApiKey`, `cursorApiKey` and
+`openCodeZenApiKey`, in `global` of the app config. They live here and nowhere
+else in the data directory:
+
+| File | Holds | Mode |
+| --- | --- | --- |
+| `config.json` | All four | 0600, set by every save and every backend start (`restrictConfigFileModes`) |
+| `config.json.bak.1` to `.bak.5` | Earlier values of all four | The same |
+| `.config.json.<uuid>.tmp` (also recovery and backup atomic-save remnants) | All four, if a save was interrupted | Created 0600; existing regular remnants tightened to 0600 at backend start |
+| `portable-inputs/<environment>/<revision>/claude-config/.orkestrator-anthropic-key` | `anthropicApiKey`, for a container whose image takes staged inputs | 0600 in a 0700 directory |
+
+`orkestrator.sqlite`, `change-tracking.sqlite`, their `-wal` and `-shm` and the
+snapshots in `backups/` do not hold these fields, because `config.json` is not a
+database store. They are 0600 (the directory 0700) for the other sensitive
+content they hold.
+
+**What protects them:**
+
+- The file modes above, against other users on the machine.
+- A container has no bind that reaches these files. Its binds are the project's
+  Git mirror directory, its own `portable-inputs` revision and, on an image older
+  than staged inputs, individual agent homes; none is the data directory.
+- Answers to clients leave them out. `redactGlobalConfig` reports only whether
+  each is configured, `stripRendererCredentials` ignores them in a settings save,
+  and a leaf node never inherits them from its command node.
+
+**What does not protect them:**
+
+- Anything running as the same user can read them, including an agent in a local
+  environment and any other program that user runs. So can root.
+- Backups and disk images hold them in plaintext: a Time Machine or `rsync` copy
+  of the data directory, or an image of an unencrypted disk. A copy made outside
+  the app can also lose the 0600 mode.
+- Clearing or replacing a key does not remove the old value from the backup
+  ladder until five further config saves have rotated it out. Interrupted-save
+  remnants are retained and tightened at startup, rather than deleted because
+  another backend may still be writing one. They can retain old keys indefinitely
+  until manually removed while all backends are stopped. A staged Anthropic
+  key also remains in its `portable-inputs` revision while any container of that
+  environment references it, including stopped containers and recovery copies.
+  Changing the setting does not rewrite that revision or the key already copied
+  into the container. Unreferenced revisions are eligible for pruning; a key that
+  may have leaked has to be revoked at its provider.
+- The modes guard the file, not the value. A container is deliberately given the
+  keys its settings allow: the Anthropic key as the staged file above, or an
+  environment variable on an older image; the Cursor key as an owner-only file in
+  the container, or an environment variable on an older image; `githubToken` when
+  [`containerGitHubCredential`](github-cli.md#container-credential) is `pat`. An
+  agent in that container can read what it was given. `openCodeZenApiKey` stays on
+  the host, where it reads plan usage.
+
+**Why this is accepted:**
+
+- A process running as the same user can already read the host logins and tokens
+  beside these files (`~/.claude`, `~/.codex`, `gateway-auth.json`,
+  `control-mcp.json`). Encrypting four fields would not change what it can reach,
+  and on Linux libsecret does not separate applications of one user either.
+- The backend also runs standalone. `safeStorage` belongs to Electron, and a
+  headless host has no session keyring, so a keychain would be a second storage
+  path with a migration, and either a backend that cannot start alone with its
+  config or a standalone install that gains nothing.
+- It matches Control MCP's credentials, which stay in plaintext at 0600 so Copy
+  setup works at any time
+  ([decision 2](../todo/mcp/0041-control-mcp-voice-surface.md#decisions)).
+
+Look at this again if a same-user process stops being able to read those host
+logins (for example, if every local agent runs in a sandbox that denies them), or
+if a container gains a bind on the data directory.
+
+`storage-secrets-at-rest.test.ts` checks the modes and scans a data directory to
+show that only `config.json` and its backups hold the fields.
+`container-data-directory-reach.test.ts` checks a container's binds and the staged
+key, and `commands-secret-sweep.test.ts` plants canaries and calls every
+registered command.
 
 ## Migrations
 
@@ -467,18 +653,20 @@ One upgrade cannot run once: a backend up to v2.29.0-beta can write a
 prompt-queue claim (`outstandingClaim`), and one that opened the database before
 version 5 keeps writing until it stops, because the version is checked only at
 open. So `restoreLegacyPromptQueueClaims` (`storage-record-upgrades.ts`) runs on every
-load of the prompt queues (`loadPromptQueues`): live leases retain exclusion
+read of a prompt queue, one row or the whole list: live leases retain exclusion
 and survive queue writes until settlement or expiry. Expired or malformed
-leases restore their message to the head, and the next save persists that.
-Malformed message ids receive a stable recovery id.
+leases restore their message to the head, and the next write of that queue
+persists that; until then every read recovers it again. Malformed message ids
+receive a stable recovery id.
 
 Version 4 (`change-tracking/ledger-schema.ts`) adds the change-tracking
 ledger: the first engine with its own indexed tables (worktrees, evidence,
 snapshots, turn boundaries, measurements, selections, outbox, restore
-records) because its queries need joins and range scans. Its file contents
-live under `<dataDir>/change-tracking/` (a content-addressed object store and
-evidence bodies), so a backup of change history must include that directory
-as well as `orkestrator.sqlite`. See [change-tracking.md](change-tracking.md).
+records) because its queries need joins and range scans. Version 7 moves them
+to their own file. Its file contents live under `<dataDir>/change-tracking/`
+(a content-addressed object store and evidence bodies), so a backup of change
+history must include that directory as well as `change-tracking.sqlite`. See
+[change-tracking.md](change-tracking.md).
 
 Version 5 (`retire-looped-reviews`) retires the removed Looped Review
 feature's data: it deletes the `looped-reviews` store, prunes looped-review
@@ -497,6 +685,27 @@ Version 6 (`backfill-build-pipeline-review-reports`,
 review reports a stored pipeline carries, written before the field existed. The
 current contract requires it, and the renderer no longer repairs a report it
 reads. The legacy localStorage import applies the same backfill.
+
+Version 7 (`move-change-ledger`, `change-tracking/ledger-schema.ts`) moves the
+change-tracking ledger out of `orkestrator.sqlite` into
+`change-tracking.sqlite`, so the hourly snapshot no longer copies it with every
+small change to an app store (on one machine, 6.2 GB of snapshots for stores
+of about 0.6 MB). A second connection attaches the main file and copies the
+committed ledger rows in one transaction on the ledger file, replacing what it
+held; the migration then drops the tables with `secure_delete` enabled so
+legacy databases cannot retain recoverable ledger bytes on free pages. A crash before the commit
+repeats the copy. A new database creates no ledger file here: the ledger
+opens it on first use. The ledger file is versioned on its own (`user_version`
+2, `CHANGE_LEDGER_FILE_SCHEMA_VERSION`), refuses to open when newer than the
+build, and takes its own pre-migration snapshot. Change tracking opens the
+main database before the ledger, so the move has always run before the ledger
+is first written. On a generated ledger of 2 million file rows (666 MB) the
+move took about 8 s with secure deletion disabled (a historical measurement;
+the corrected migration keeps it enabled and has not been remeasured); the hourly
+copy afterwards was 48 KB in 19 ms. The pages the ledger freed are returned to
+the filesystem after start-up, 4 MiB at a time with the event loop free
+between steps (about 30 ms each), by the snapshot check's upkeep
+(`runDatabaseUpkeep`).
 
 Every startup also extracts identities from stray `looped-reviews.json` files
 and their retained `legacy-json/` copies, including backups and interrupted

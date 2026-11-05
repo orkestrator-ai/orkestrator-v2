@@ -152,6 +152,7 @@ export const EnvironmentItem = memo(function EnvironmentItem({
       selected={isSelected}
       subtitle={subtitle}
       multiSelect={{
+        id: environment.id,
         active: isMultiSelectMode,
         checked: isChecked,
         // Toggle individual item selection (Cmd/Ctrl+Click behavior).

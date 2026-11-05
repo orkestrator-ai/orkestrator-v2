@@ -8775,17 +8775,28 @@ describe("ActionBar auto-merge", () => {
     const toggle = screen.getByRole("button", { name: "Auto-merge" }) as HTMLButtonElement;
     expect(toggle.getAttribute("aria-pressed")).toBe("false");
     fireEvent.click(toggle);
-    expect(setEnvironmentAutoMergeMock).toHaveBeenCalledWith(currentEnvironment.id, true);
+    expect(setEnvironmentAutoMergeMock).toHaveBeenCalledWith(
+      currentEnvironment.id,
+      true,
+      undefined,
+    );
     expect(toggle.disabled).toBe(true);
     await act(async () => finish({ ...currentEnvironment, autoMerge: true }));
-    expect(updateEnvironmentMock).toHaveBeenCalledWith(currentEnvironment.id, { autoMerge: true });
+    expect(updateEnvironmentMock).toHaveBeenCalledWith(currentEnvironment.id, {
+      autoMerge: true,
+      autoMergeCleanup: false,
+    });
     currentEnvironment = { ...currentEnvironment, autoMerge: true };
     view.rerender(<ActionBar />);
     expect(toggle.disabled).toBe(false);
     expect(toggle.getAttribute("aria-pressed")).toBe("true");
     fireEvent.click(toggle);
     await waitFor(() =>
-      expect(setEnvironmentAutoMergeMock).toHaveBeenLastCalledWith(currentEnvironment.id, false),
+      expect(setEnvironmentAutoMergeMock).toHaveBeenLastCalledWith(
+        currentEnvironment.id,
+        false,
+        undefined,
+      ),
     );
   });
 

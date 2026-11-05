@@ -6,7 +6,7 @@ import { ChangeFileRowItem, changeRowPath, changeRowStatusLetter } from "./Chang
 import { useEnvironmentChangeRows } from "./useEnvironmentChangeRows";
 import { Loader2, GitBranch } from "lucide-react";
 import { useMediaQuery } from "@/hooks";
-import { changeReason, projectionTitle } from "@/lib/changes/labels";
+import { changeReason, formatFileCount, projectionTitle } from "@/lib/changes/labels";
 import { Button } from "@/components/ui/button";
 
 interface ChangesViewProps {
@@ -148,6 +148,15 @@ export function ChangesView({
                 ? `Show more files (${rows.length} of ${changeRows.totalRows})`
                 : "Show more files"}
           </Button>
+        )}
+        {changeRows.omittedRows > 0 && !changeRows.hasMore && (
+          <p
+            role="note"
+            className="mt-1 px-2 text-[11px] text-muted-foreground"
+            data-testid="change-rows-omitted"
+          >
+            {formatFileCount(changeRows.omittedRows)} not listed. The totals count them all.
+          </p>
         )}
       </div>
     );

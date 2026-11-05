@@ -51,6 +51,7 @@ export function sortEnvironmentsByActivity(
       hasUnreadWork: environment.hasUnreadWork,
       lastActivityAt: environment.lastActivityAt,
       activityUpdatedAt: environment.agentActivityUpdatedAt,
+      prState: environment.prState,
     },
   }));
   entries.sort(

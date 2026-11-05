@@ -38,7 +38,6 @@ import { grokQuestionTimeoutFromEnv } from "./acp-question-timeout.js";
 import { syncPromptTurnClock } from "./acp-prompt-clock.js";
 import {
   AcpProcess,
-  bumpCursorDiscoveryRevision,
   catalogCache,
   MAX_APPROVALS_PER_SESSION,
   MAX_MESSAGES,
@@ -338,7 +337,6 @@ export async function resumeSessionReserved(
       messages: [],
       activeSubagentToolIds: new Set(),
       activeSubagentDescriptors: new Map(),
-      settledCursorAgentIds: new Set(),
       subagentLimitExceeded: false,
       subagentToolIds: new Map(),
       cursorTodos: [],
@@ -408,10 +406,7 @@ export async function resumeSessionReserved(
     await persistState();
     return state;
   } catch (error) {
-    if (state && sessions.get(state.id) === state) {
-      sessions.delete(state.id);
-      bumpCursorDiscoveryRevision();
-    }
+    if (state && sessions.get(state.id) === state) sessions.delete(state.id);
     if (state) clearApprovals(state);
     await child.close();
     await persistState().catch(() => undefined);
@@ -557,10 +552,7 @@ export async function createSessionReserved(
       return state;
     } catch (error) {
       state.dispatching = false;
-      if (sessions.get(id) === state) {
-        sessions.delete(id);
-        bumpCursorDiscoveryRevision();
-      }
+      if (sessions.get(id) === state) sessions.delete(id);
       if (clientSessionKey && clientSessionKeys.get(clientSessionKey) === id) {
         clientSessionKeys.delete(clientSessionKey);
       }
@@ -589,7 +581,6 @@ function newSessionState(
     messages: [],
     activeSubagentToolIds: new Set(),
     activeSubagentDescriptors: new Map(),
-    settledCursorAgentIds: new Set(),
     subagentLimitExceeded: false,
     subagentToolIds: new Map(),
     cursorTodos: [],

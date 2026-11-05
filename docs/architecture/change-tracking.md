@@ -125,7 +125,7 @@ Backend services (one composition root, `service.ts`):
 
 | Service | File | Role |
 | --- | --- | --- |
-| `ChangeLedger` | `change-ledger.ts`, schema `ledger-schema.ts` (storage migration 4) | Indexed rows, fences, selections, outbox |
+| `ChangeLedger` | `change-ledger.ts`, schema and file `ledger-schema.ts` (`change-tracking.sqlite`; storage migration 4 created the tables, migration 7 moved them out of `orkestrator.sqlite`) | Indexed rows, fences, selections, outbox |
 | `ObjectStore` | `object-store.ts`, `manifest-cache.ts` | Content-addressed Git-format objects under `<dataDir>/change-tracking/objects`, staged writes, parsed-manifest cache |
 | capture | `capture.ts` | Raw-byte capture with stability rechecks (host and container executors) |
 | DiffEngine | `snapshot-diff.ts` | Manifest comparison and body rendering |
@@ -139,7 +139,7 @@ Backend services (one composition root, `service.ts`):
 | `DiffBodyService` | `diff-bodies.ts` | Immutable bodies, live detail resolution |
 | `ChangeHandoffSerializer` | `handoff.ts` | Agent handoff text |
 | `ChangeRestoreService` | `restore.ts` | Conditional restore |
-| `ChangeRetentionService` | `retention.ts` | Reachability GC, quotas |
+| `ChangeRetentionService` | `retention.ts`, `reachability-cache.ts`, `ledger-retirement.ts` | Reachability GC, quotas, per-manifest object ids between passes, environment purges and age-based ledger retention |
 | `ChangeTrackingPolicyRegistry` | `policy-registry.ts` | Every budget and cadence |
 | shared physical work | `shared-physical-work.ts` | Alias scan joins, refcounted watchers |
 | `GitScopeService` | `git-scopes.ts` | `uncommitted-net`, `committed-net`, `staged`, `unstaged`, `commit`, `pull-request` |
@@ -236,7 +236,8 @@ parsed on every read. A capture leaves its own manifest there.
   copy was verified when it was read.
 - **Retention does not fill it.** `readManifest(store, id, { scan: true })` uses a
   hit but keeps nothing, so one pass over every snapshot cannot evict what live
-  views are using.
+  views are using. Retention keeps its own, smaller cache instead (see
+  [Retention and backup](#retention-and-backup)).
 
 Entries are sorted by path bytes, as every stored manifest has been since the
 first capture. `findManifestEntry` binary-searches on that order for diff pages
@@ -301,7 +302,12 @@ then captures the end and publishes `turn-net` and `thread-net`. If the
 provider's terminal turn report still says `may-write`, or one of the turn's
 background tasks is still running, writers have not settled: the turn is
 published `interrupted` with a running-observation end, never silently final. While a turn runs, watcher hints drive provisional captures at
-most once per second locally (five remotely).
+most once per second locally (five remotely). A provisional capture whose tree
+and consistency match both the turn's and thread's latest published provisional
+measurements publishes nothing:
+every capture has a new snapshot id, so a publish would store the whole file
+list again. Its snapshot row is unreferenced and goes with the retention sweep
+after `orphanGraceMs`. A turn's end always publishes.
 
 A thread moving to a different worktree lineage opens a new segment; segments
 are never compared to each other as one history.
@@ -341,6 +347,18 @@ Commands (`commands-registry-changes.ts`):
 Events: `change-projection-changed` carries `projection`, `deleted`, `reset`
 or `content-invalidated` (file bytes may have changed with equal counts).
 
+A measurement past the file row cap (see
+[Retention and backup](#retention-and-backup)) is `partial` with reason
+`file-rows-capped`, and its totals and `changedFiles` still count every file.
+`filePage.totalRows` is the rows stored, where paging ends, and
+`filePage.omittedRows` is the files with no row, which no cursor reaches. The
+field is optional, so an older client keeps paging to `totalRows` and reads the
+reason. A diff of a capped comparison ends at the same rows. An explicit
+current-file action on `environment-net` still opens a path with no row, with
+its unknown side marked. A Git scope refuses one with `not-found` and the
+`file-rows-capped` reason, because it cannot tell whether the path is in the
+scope.
+
 Clients format numbers and localize label keys (`apps/web/src/lib/changes/labels.ts`).
 They never count lines, choose evidence, sum pages or treat a missing count as
 zero. `tests/unit/change-tracking-boundaries.test.ts` enforces this for the
@@ -374,7 +392,7 @@ version `change-tracking-policy-v1`. Starting values: shared admission is the
 existing `git-docker-scan` pool (4 jobs, 1 per target) with at most 2 remote
 captures; 10 s foreground boundary; 100,000 candidates; 16 MiB/file and
 256 MiB/capture retained; 1 s/5 s provisional spacing; 250 ms live-body
-coalescing; 2 min Git-scope demand; 200 rows / 256 KiB pages; 1 GiB soft / 4 GiB hard snapshot
+coalescing; 2 min Git-scope demand; 200 rows / 256 KiB pages; 2,000 file rows per measurement; 1 GiB soft / 4 GiB hard snapshot
 storage; 90-day archived retention (a maximum subject to quota, not a
 guarantee). Changing a policy affects future work only.
 
@@ -386,6 +404,9 @@ after-state (content and mode) and issues a fenced, expiring token.
 re-checks each file at the executor immediately before writing (temporary
 sibling + rename), skips anything the user changed since, and records a
 partial outcome honestly. There is no blind reset and no all-or-nothing claim.
+A measurement past the file row cap takes its plan from the same two manifests
+(`compareManifests` with `pathsOnly`, which reads no blob), so a restore stays
+complete whatever the list shows, and an expired manifest refuses as before.
 
 ## Retention and backup
 
@@ -406,9 +427,48 @@ check skips objects it wrote or proved present in the same pass, unless
 `capture-orphan-fence.test.ts` races retention against a capture on both sides
 of the half-grace boundary.
 
-Measurements are pruned too. Every re-measurement stores its whole file list
-(an environment's net diff against its base can be thousands of files), so
-superseded ones would otherwise grow `change_measurement_files` without bound.
+A sweep walks the store without the lock, collecting old unreachable objects one
+fan-out directory at a time, then takes the lock per 64 candidates to `lstat`
+each again and remove it. The mtime read under the lock decides, so a renewal
+that lands after the walk saw an old fence keeps its object, and captures write
+while a sweep walks. Abandoned temporaries are removed the same way, re-checking
+that no live batch owns the name.
+
+The store keeps its compressed byte count current: a placed object adds its
+size and a sweep subtracts what it removed, so a retention pass reads the figure
+(`ObjectStore.currentBytes`) rather than walking every object twice. Missing
+manifests invalidate accounting immediately; a daily recount under the store
+lock also reconciles external changes to reachable or young objects. Puts use
+the same daily reconciliation before checking the hard budget. The store
+walks once when it has no figure yet (after a restart), and again after a sweep
+finds a candidate already gone, which only something outside the store can
+cause.
+
+Reachability comes from the ledger's snapshots, each manifest read once per pass
+even when several snapshots share a tree. `ReachabilityCache`
+(`reachability-cache.ts`) keeps the object ids each manifest names, 20 bytes
+each, between passes: at most 4,096 manifests and 32 MiB. A pass reads every
+manifest in the same order, which would make least-recently-used eviction miss
+every time once the history outgrows the bound, so an entry is admitted only
+while there is room, and one that a completed pass did not walk (no snapshot
+names that tree any more) is dropped at the end of that pass. A hit still
+requires the manifest object, so a manifest that is gone contributes nothing,
+as a read would. `retention-store-walks.test.ts` covers the byte count, the lock
+and the cache.
+
+File rows are bounded per measurement. `measurementFileRowCap` (2,000) applies
+when a snapshot pair, an environment scan or a Git scope is measured, never
+afterwards, because a sealed measurement is immutable. Past it the rows with
+text changes are kept first, then the rest, each by path. `status: unknown` rows
+count against the cap, and each dropped file adds to `omittedFileCount` unless
+the comparison already counted it there. The measurement id still digests the
+full list, so a change past the cap makes a new measurement. Rows an earlier
+build stored stay readable as complete and go when they are superseded, so no
+migration exists. Provider-reported lists (payloads, observations, legacy
+summaries) carry their own bound and are not capped here.
+
+Measurements are pruned too. Every re-measurement stores its file list again,
+so superseded ones would otherwise grow `change_measurement_files` without bound.
 `ChangeLedger.pruneSupersededMeasurements` deletes a measurement, its file
 rows and diff identities once two newer ones of the same owner and scope
 exist, unless a selection, an unexpired restore token or a running restore
@@ -416,12 +476,110 @@ still holds it. In-flight diff requests pin their measurement until the read
 finishes, including errors. Retired identities are removed before file rows
 are drained, so new requests cannot start reading a partially deleted measurement
 (a handoff naming a pruned one says "not retained"). Each publication prunes
-up to two of its owner's; the retention pass (two minutes after start, then hourly) prunes any backlog in batches of
-at most 256 file rows, including partial deletion of a large measurement,
-yielding between transactions. It then releases free pages in 128-page steps.
-The publication path has the same 256-row ceiling. Existing databases created
+up to two of its owner's, at most 256 file rows, inside its own transaction. When
+that does not finish, `ChangeRetentionService.drainOwner` drains the rest right
+after the commit: one drain per owner and scope, in batches of at most 256 file
+rows, yielding between transactions, and it stops at shutdown. Its failure is
+logged and left to the retention pass. The retention pass (two minutes after
+start, then hourly) prunes any other backlog the same way, then releases free
+pages in 128-page steps, whoever freed them. Existing databases created
 without incremental auto-vacuum reuse freed pages but do not physically shrink;
 backup headroom is calculated from live pages rather than allocated file size.
+
+The ledger lives in its own database, `change-tracking.sqlite`, beside
+`orkestrator.sqlite`, with the same settings (WAL, full sync, secure delete)
+and its own schema version. Nothing joins or writes across the two files.
+Hourly snapshots copy `orkestrator.sqlite` only, so a small app-store change no
+longer copies the ledger. The ledger has its own best-effort snapshots in
+`<dataDir>/backups/`: `change-tracking-daily-<stamp>.sqlite` once a day when it
+changed (the newest two kept, and the first to give way to the 16 GiB
+budget), and `change-tracking-pre-migration-v<from>-<stamp>.sqlite` before its
+schema migrates. See [storage.md, Snapshots](storage.md#snapshots) for
+rotation and restore. The retention pass runs `PRAGMA optimize` on the ledger
+after it returns free pages.
+
+Neither snapshot holds `<dataDir>/change-tracking/` (objects and evidence
+bodies), and metadata alone cannot serve historical bodies, so a full backup
+of change history needs that directory as well as `change-tracking.sqlite`.
+A ledger restored without it, or older than the app database, answers the
+bodies and measurements it lacks as expired or not retained.
+
+### Deleting an environment
+
+`deleteEnvironment` calls `ChangeTrackingService.environmentDeleted`, which never
+deletes a ledger row itself, so a delete does not hold the write lock for a large
+ledger. It tombstones the worktrees only that environment's rows name, records
+a durable `purge-env:<id>` entry and asks for a pass in 30 seconds. From then on
+the service drops the environment's late scans, evidence pulls and turn starts
+(`removed` still reaches clients); a restart reloads that list from the entries.
+
+The pass deletes the environment's bindings, frames, operations, evidence,
+chunks, gaps, turn boundaries, segments, windows, measurements, selections,
+references, restore records and its `conv:`, `fork:`, `opturn:`, `turnops:` and
+`pturn:` keys, at most 256 rows per transaction, yielding between them. It deletes
+rows and references only: the sweeps then take the snapshots, objects and evidence
+bodies nothing names any more. So content another environment still names stays,
+and a checkout another environment uses is not tombstoned. An entry stays until
+the orphan grace has passed, so a late write that was already under way when the
+environment was deleted is found by the next pass. Content can therefore outlive a
+delete by up to an hour past its own grace fence.
+
+A measurement a restore or reader still needs (an unexpired token, an `applying`
+operation, a pinned read) defers that environment's whole purge to a later pass;
+tokens last five minutes. The sweep also keeps those measurements' endpoints
+whatever released their references, so quota pressure cannot take them either.
+
+A tombstone also retires the row's identity key, so a new environment at a kept
+checkout (same path, inode and birth time) gets a fresh row instead of colliding
+with it. Source keys of evidence cursors name no environment, so a purge removes
+only the cursors of sources this process saw; the rest age out with the window.
+
+`retention-deletion.test.ts` proves these boundaries. Removing a project does not
+touch any of this directly; what happens to a removed project's own stores is
+[5820](../todo/cross-cutting/5820-removed-project-kanban-notes-plans.md).
+
+### Age-based retention
+
+`archivedBodyRetentionDays` (90) is the one window, measured from `finished_at`.
+Past it a terminal turn loses its measurements, selections, references, capture
+attempts and `turnops:` and `pturn:` keys, oldest first from a durable cursor
+(`retention:turn-cursor`), so a pass never walks a retired turn again. Its boundary
+row stays, because ordinals and the thread's history list read it. `getHistory`
+lists the turn with a null measurement, and its view answers `unavailable` with
+`changes.reason.history-expired`; an older renderer shows that reason's generic
+fallback. A restore that holds a turn ends the walk until a later pass.
+
+An operation has no time of its own, so frames set its age: they are deleted
+oldest first (row order is age order, so no index is needed), and the newest
+sequence deleted (`retention:expired-seq`) says which operations have had no frame
+inside the window. Such an operation goes with its evidence, chunks, windows,
+measurements and selections, unless its turn is still retained. Provider turn
+diffs age the same way, by their newest evidence. A transcript row whose operation
+has gone reads as an untracked call. Capture attempts, gaps, restore tokens and
+finished restore operations, cursors with nothing left to acknowledge and bindings
+with nothing left under them go once they are past the window too.
+
+A closed segment goes with its baseline pin once none of its turns is retained. An
+open segment stays whatever its age, because its thread can take another turn and
+thread-net would otherwise lose its baseline, so a very long-lived thread holds a
+baseline for as long as its environment lives. Finished boundaries are not pruned
+until a measured table size justifies a policy
+([5821](../todo/cross-cutting/5821-ledger-retention-live-evidence.md)).
+
+Evidence bodies are swept like objects: `EvidenceBodyStore.sweep` walks without the
+store lock, and the mtime read under the lock decides. Adopting a stored body
+renews its fence, and `retainBodies` fetches it again if it has gone. Reachability
+comes from `change_evidence` and `change_evidence_chunks`, a page at a time. A
+frame's `raw` slice has no row naming it, so it goes at the grace; no producer
+sends one today and nothing reads one.
+
+A pass works through at most 4,096 batches, so a first run on an old ledger takes
+several passes. Each transaction is bounded (256 rows, 32 snapshots, 16 quota
+releases, one page of diff identities) and followed by a yield. The indexes behind
+purges and the age walk (`change_turn_boundaries_environment`,
+`change_thread_segments_environment`, `change_turn_boundaries_age`) are created on
+first use without a schema version, as `store_rows_position` is
+([storage](storage.md#stores-and-layouts)), so an older build still opens the ledger.
 
 Backups must include both `orkestrator.sqlite` and
 `<dataDir>/change-tracking/` (objects and evidence bodies); metadata alone
@@ -431,7 +589,7 @@ cannot serve historical bodies.
 
 - **Identify an owner**: `changes_get_diagnostics` lists active owners, open
   windows, active turns and publisher counters (no paths or contents).
-- **Inspect a capture failure**: query `change_capture_attempts` by id
+- **Inspect a capture failure**: query `change_capture_attempts` in `change-tracking.sqlite` by id
   (`status`, `error_code`, `purpose`); reasons are finite codes.
 - **Pause new tracking**: set the policy `restoreEnabled: false` and/or
   `strictCheckpoints: false`; environment scans continue independently.
@@ -457,6 +615,29 @@ measurements for tuning, not guarantees:
 
 Warm captures reuse stat-identical blobs (`metadataReused` in coverage) and
 store only the changed blob and the new manifest.
+
+`--only=measurement-rows` runs one environment through the whole service on a
+temporary database: a turn adds `--bulk-files` files under one directory, runs 6
+provisional passes that move the tree and 6 that do not, and ends, and the
+environment scan then reports the bulk list 12 times with one path changing.
+One run each, on 2026-11-04 on a shared Linux host, against an export of the
+base commit `e198fd4a7` and the code with the row cap. Peak and "before the
+retention pass" include the backlog the hourly pass would clear.
+
+| Measure | 20,000 files, before | 20,000 files, after | 58,051 files, before | 58,051 files, after |
+| --- | --- | --- | --- | --- |
+| Measurements written | 38 | 26 | 36 | 24 |
+| File rows written | 760,026 | 52,000 | 2,089,860 | 48,000 |
+| Peak file rows kept | 751,834 | 12,000 | 2,082,180 | 12,000 |
+| Peak database file | 173.5 MiB | 3.5 MiB | 479.1 MiB | 3.5 MiB |
+| File rows after the retention pass | 120,004 | 12,000 | 348,310 | 12,000 |
+| Database file after the retention pass | 27.8 MiB | 3.1 MiB | 80.3 MiB | 3.1 MiB |
+
+The 12,000 is the bound: three owners (turn, segment, environment), two kept
+measurements each, 2,000 rows each. It does not grow with the bulk size. At
+58,051 files two provisional passes published nothing on either side; why was
+not investigated. Proof on a real busy profile is
+[todo 4960](../todo/cross-cutting/4960-measurement-rows-live-soak.md).
 
 A host capture does not read or hash a file whose stat stamp
 (size, mtime, ctime, inode) matches a *settled* stat-cache entry: one whose
@@ -510,6 +691,27 @@ A capture of a large file takes longer in total because compression runs through
 the thread pool; it no longer holds up every other client while it does. The
 first read of a large manifest pays for freezing it, once.
 
+The hourly retention pass (`--only=retention`): 400 referenced snapshots, each a
+distinct tree of `--retention-files` real blobs, 8 manifests open as diff views
+would leave them, nothing removable. Measured on 2026-11-05 on the macOS
+development machine (temporary directory on the internal disk, load average
+about 20 to 34 from other worktrees' suites), one run of the code before ST-20
+and one after at 2,000 files, two (the ranges) at 10,000. Each row is the second
+of two passes in a row unless stated:
+
+| Workload | Before | After |
+| --- | --- | --- |
+| 2,000 files: pass duration | 565 ms | 87 ms |
+| Same: manifests parsed | 392 | 0 (400 reachability hits) |
+| 10,000 files: pass duration | 2,760 ms | 1,682–1,718 ms |
+| Same: manifests parsed | 392 | 225 (167 reachability hits; the 32 MiB bound holds 167 such manifests) |
+| Both: hits in the parsed-manifest cache | 8 of 400 | 8 of 400 |
+| 10,000 files: a 64-byte put issued while a sweep runs | 400–435 ms | 0.7–2.1 ms |
+
+The first pass after a start parses every manifest, as before. Before ST-20 the
+parsed-manifest cache served only the manifests live views had open, so every
+other one was parsed on every pass.
+
 ## Known limitations
 
 Recorded so no capability is advertised beyond what is implemented:
@@ -545,3 +747,7 @@ Recorded so no capability is advertised beyond what is implemented:
   paths `git-filter-unsupported`.
 - Two live identities whose counts are equal share one measurement row; the
   identity id hashes the endpoint blobs, so bodies never mix.
+- A thread segment's recorded edit activity (`operation-volume`) is summed from
+  the operations still retained, so a thread older than the archive window reports
+  only its recent activity once it next publishes one. Its net result is
+  unaffected, because that comes from the pinned baseline.

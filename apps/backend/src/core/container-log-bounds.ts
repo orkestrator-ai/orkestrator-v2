@@ -83,21 +83,45 @@ export function bridgeLogEnvironmentExports(env: NodeJS.ProcessEnv = process.env
 /** In-image rotating writer (`bounded-logs=1`). */
 export const CONTAINER_LOG_WRITER = "/usr/local/bin/orkestrator-log-writer";
 
+/** The writer's default file size, and the cap on an image without it. */
+export const CONTAINER_LOG_MAX_BYTES = 5 * 1024 * 1024;
+
 /**
  * Shell that starts `command` detached with its output in `logFile`. Where the
- * image ships the rotating writer, output goes through it (5 MiB, 3 files);
- * an older image keeps the plain redirect it always had. The whole pipeline
- * is `setsid`, so the writer outlives the exec session exactly like the
- * process it drains.
+ * image ships the rotating writer, output goes through it (5 MiB, 3 files).
+ * An older image has no writer, so its output is cut at the same 5 MiB with
+ * no rotation: `head` keeps the start and `cat` drains the rest, so the
+ * producer never writes into a closed pipe. The whole pipeline is `setsid`,
+ * so whatever drains it outlives the exec session exactly like the process.
  */
 export function boundedBackgroundLaunch(command: string, logFile: string): string {
   const pipeline = `${command} 2>&1 | ${CONTAINER_LOG_WRITER} ${logFile}`;
+  const capped = `${command} 2>&1 | { head -c ${CONTAINER_LOG_MAX_BYTES}; cat >/dev/null; }`;
   return [
     `if [ -x ${CONTAINER_LOG_WRITER} ]; then`,
     `  setsid sh -c ${shellQuote(pipeline)} >/dev/null 2>&1 &`,
     "else",
-    `  setsid ${command} > ${logFile} 2>&1 &`,
+    `  setsid sh -c ${shellQuote(capped)} > ${logFile} 2>&1 &`,
     "fi",
+  ].join("\n");
+}
+
+/**
+ * {@link boundedBackgroundLaunch} for a server that compares a plain secret. The
+ * `sh -c` wrapper and the writer run as long as the server does and nothing
+ * protects their environments, so neither may inherit `secretEnv`: the script
+ * un-exports it, starts the writer first, and hands it to `command` alone. For
+ * an image with the writer, which every `bridge-credential=1` image has.
+ */
+export function boundedLaunchWithPrivateEnv(
+  command: string,
+  logFile: string,
+  secretEnv: string,
+): string {
+  return [
+    `exec 3> >(setsid ${CONTAINER_LOG_WRITER} ${logFile} >/dev/null 2>&1)`,
+    `${secretEnv}="$${secretEnv}" setsid ${command} >&3 2>&3 3>&- &`,
+    "exec 3>&-",
   ].join("\n");
 }
 

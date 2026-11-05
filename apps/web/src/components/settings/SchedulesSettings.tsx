@@ -1,5 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { CalendarClock, Loader2, Pause, Pencil, Play, Plus, RotateCw, Trash2 } from "lucide-react";
+import {
+  AlertTriangle,
+  CalendarClock,
+  Loader2,
+  Pause,
+  Pencil,
+  Play,
+  Plus,
+  RotateCw,
+  Trash2,
+} from "lucide-react";
 import { toast } from "sonner";
 import type { MailboxDescriptor } from "@orkestrator/protocol/agent-mail";
 import { AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
@@ -10,10 +20,13 @@ import {
   normalizeScheduleTrigger,
   normalizeTimeZone,
   SCHEDULED_JOB_LIMITS,
+  scheduleAccountSwitchGrant,
+  schedulerPausedMessage,
   type ScheduleAction,
   type ScheduleFire,
   type ScheduledJob,
   type ScheduledJobSummary,
+  type SchedulerStatus,
 } from "@orkestrator/protocol/scheduled-jobs";
 import {
   AlertDialog,
@@ -89,6 +102,66 @@ function OutcomeBadge({ fire }: { fire: ScheduleFire | null }) {
   );
 }
 
+/**
+ * A self-timer that carries the user's permission to switch accounts: which
+ * providers and machines, what the user asked, and whether it still applies
+ * (it does for a while after the timer fires, and then lapses).
+ */
+export function AccountSwitchPermissionBadge({
+  job,
+  now: nowOverride,
+}: {
+  job: Pick<ScheduledJobSummary, "action" | "lastFire" | "timeZone">;
+  now?: number;
+}) {
+  const [clock, setClock] = useState(() => Date.now());
+  const now = nowOverride ?? clock;
+  const grant = scheduleAccountSwitchGrant(job.action);
+
+  const fired =
+    job.lastFire?.state === "succeeded" && job.lastFire.finishedAt
+      ? Date.parse(job.lastFire.finishedAt)
+      : Number.NaN;
+  const until = fired + SCHEDULED_JOB_LIMITS.selfTimerGrantWindowMs;
+  useEffect(() => {
+    if (nowOverride !== undefined || !Number.isFinite(until)) return;
+    const update = () => setClock(Date.now());
+    const remaining = until - Date.now();
+    const timer = setTimeout(update, Math.max(0, remaining));
+    return () => clearTimeout(timer);
+  }, [until, nowOverride]);
+  if (!grant) return null;
+  const providers = grant.platforms
+    .map((platform) => (platform === "codex" ? "Codex" : "Claude"))
+    .join(" and ");
+
+  const status = !Number.isFinite(fired)
+    ? "when it fires"
+    : until > now
+      ? `until ${formatInstantInZone(until, job.timeZone)}`
+      : "lapsed";
+  const machines = grant.nodeIds?.length
+    ? `this machine and ${grant.nodeIds.length} other${grant.nodeIds.length === 1 ? "" : "s"}`
+    : "this machine";
+  const hours = SCHEDULED_JOB_LIMITS.selfTimerGrantWindowMs / 3_600_000;
+  return (
+    <span
+      className={cn(
+        "max-w-full rounded border px-1.5 py-0.5 text-[11px]",
+        status === "lapsed"
+          ? "border-zinc-600 text-zinc-400"
+          : "border-amber-500/40 text-amber-300",
+      )}
+      data-testid="schedule-account-switch-permission"
+      title={`You asked: “${grant.userInstruction}”. The coordinator may switch the active ${providers} account on ${machines} without asking, for ${hours} hours after this timer fires. Cancel the timer to withdraw it.`}
+    >
+      {status === "lapsed"
+        ? `${providers} switch permission lapsed`
+        : `May switch ${providers} accounts ${status}`}
+    </span>
+  );
+}
+
 function actionLabel(action: ScheduleAction): string {
   switch (action.kind) {
     case "action":
@@ -108,6 +181,8 @@ function actionLabel(action: ScheduleAction): string {
 
 export function SchedulesSettings() {
   const [schedules, setSchedules] = useState<ScheduledJobSummary[] | null>(null);
+  // Absent from a backend that predates it, which then shows no notice.
+  const [scheduler, setScheduler] = useState<SchedulerStatus | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<{ job?: ScheduledJob } | null>(null);
   const [deleting, setDeleting] = useState<ScheduledJobSummary | null>(null);
@@ -119,8 +194,9 @@ export function SchedulesSettings() {
   const reload = useCallback(
     () =>
       backend.listScheduledJobs().then(
-        ({ schedules: list }) => {
+        ({ schedules: list, scheduler: status }) => {
           setSchedules(list);
+          setScheduler(status);
           setError(null);
         },
         (cause: unknown) => setError(errorText(cause)),
@@ -194,6 +270,17 @@ export function SchedulesSettings() {
         </div>
       ) : null}
 
+      {scheduler?.firing === false && schedules && schedules.length > 0 ? (
+        <p
+          className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-sm text-amber-200"
+          role="status"
+          data-testid="scheduler-paused"
+        >
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+          <span>{schedulerPausedMessage(scheduler.reason)}</span>
+        </p>
+      ) : null}
+
       {schedules?.length === 0 ? (
         <div className="rounded-lg border border-dashed border-zinc-800 p-8 text-center text-sm text-muted-foreground">
           <CalendarClock className="mx-auto mb-2 h-6 w-6" aria-hidden="true" />
@@ -210,8 +297,9 @@ export function SchedulesSettings() {
               data-testid="schedule-row"
             >
               <div className="min-w-0 flex-[1_1_16rem]">
-                <div className="flex items-center gap-2">
-                  <span className="truncate font-medium">{job.name}</span>
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <span className="max-w-full truncate font-medium">{job.name}</span>
+                  <AccountSwitchPermissionBadge job={job} />
                   {job.state !== "active" ? (
                     <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[11px] text-zinc-300">
                       {job.state}

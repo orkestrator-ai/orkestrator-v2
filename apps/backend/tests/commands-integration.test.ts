@@ -1,3 +1,9 @@
+import {
+  seedStore,
+  seedUnreadableStore,
+  storageDatabase,
+  withTemporaryStorage,
+} from "../src/core/storage-test-support";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { describe, expect, mock, test, setDefaultTimeout } from "bun:test";
 
@@ -1330,6 +1336,39 @@ exit 0
     ASYNC_TEST_BUDGET_MS,
   );
 
+  for (const damage of ["row", "document"] as const) {
+    test("environment deletion finishes despite damaged session " + damage, async () => {
+      await withTemporaryStorage(async (storage) => {
+        const environment = createEnvironment({
+          id: "env-damaged-sessions",
+          environmentType: "local",
+          worktreePath: undefined,
+          containerId: undefined,
+        });
+        const { context } = createContext(environment);
+        if (damage === "document") seedUnreadableStore(storage.getDataDir(), "sessions.json");
+        else {
+          seedStore(storage.getDataDir(), "sessions.json", [
+            {
+              id: "broken",
+              environmentId: environment.id,
+            },
+          ]);
+          storageDatabase(storage)
+            .db.query(
+              "UPDATE store_rows SET value = '{' WHERE store = 'sessions' AND key = 'broken'",
+            )
+            .run();
+        }
+        context.storage.removeSessionsByEnvironment =
+          storage.removeSessionsByEnvironment.bind(storage);
+        const commands = createCommandRegistry();
+        await commands.get("delete_environment")?.({ environmentId: environment.id }, context);
+        expect(context.storage.removeEnvironment).toHaveBeenCalledWith(environment.id);
+      });
+    });
+  }
+
   test(
     "clears retained setup state when the environment is deleted",
     async () => {
@@ -1530,7 +1569,7 @@ exit 0
     );
   });
 
-  test("forwards a host-inherited Cursor API key but reports its source to the renderer", async () => {
+  test("keeps a host-inherited Cursor API key out of Docker argv but reports its source to the renderer", async () => {
     const hostCursorApiKey = "cursor_host_env_key";
     const previousCursorApiKey = process.env.CURSOR_API_KEY;
     process.env.CURSOR_API_KEY = hostCursorApiKey;
@@ -1573,8 +1612,11 @@ exit 0
             commands.get("provision_environment")?.({ environmentId: environment.id }, context),
           ).catch(() => undefined);
 
+          // The bridge reads the owner-only file the backend syncs; a value in the
+          // creation environment would show in `docker inspect`.
           const dockerCalls = await fs.readFile(logs.all, "utf8");
-          expect(dockerCalls).toContain("-e CURSOR_API_KEY");
+          expect(dockerCalls).toContain("create --name");
+          expect(dockerCalls).not.toContain("CURSOR_API_KEY");
           expect(dockerCalls).not.toContain(hostCursorApiKey);
         },
       );
@@ -2821,7 +2863,7 @@ exit 1
             approveProjectMcps: process.env.ACP_APPROVE_PROJECT_MCPS ?? "",
             stateDir: process.env.ACP_STATE_DIR ?? "",
             hostname: process.env.HOSTNAME ?? "",
-            hasToken: Boolean(process.env.ACP_BRIDGE_TOKEN),
+            hasToken: Boolean(process.env.ACP_BRIDGE_TOKEN_SHA256) && !process.env.ACP_BRIDGE_TOKEN,
             hasCursorApiKey: Boolean(process.env.CURSOR_API_KEY),
             home: process.env.HOME ?? "",
             credentialStore: process.env.AGENT_CLI_CREDENTIAL_STORE ?? "",
@@ -2903,7 +2945,7 @@ exit 1
       )) as { port: number; pid: number; wasRunning: boolean; authToken: string };
       try {
         expect(started.wasRunning).toBe(false);
-        expect(started.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+        expect(started.authToken).toMatch(/^okb_[A-Za-z0-9_-]{43}$/);
         const marker = JSON.parse(await fs.readFile(markerPath, "utf8")) as Record<string, unknown>;
         // Every bridge bootstraps from its own package directory and learns the
         // worktree from `CWD`. Only the Cursor SDK bridge then enters it, and
@@ -4007,6 +4049,7 @@ exec node -e 'const http=require("node:http");http.createServer((req,res)=>{res.
       `#!/bin/sh
 printf 'used %s\\n' "$*" >> "${markerPath}"
 printf '%s' "$OPENCODE_CONFIG_CONTENT" > "${configMarkerPath}"
+printf '%s' "$OPENCODE_CONFIG_DIR" > "${configMarkerPath}.dir"
 PORT=""
 HOST="127.0.0.1"
 while [ "$#" -gt 0 ]; do
@@ -4053,7 +4096,7 @@ exec env PORT_ARG="$PORT" HOST_ARG="$HOST" node -e 'const http = require("node:h
       };
       expect(result.wasRunning).toBe(false);
       expect(result.port).toBeGreaterThan(0);
-      expect(result.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      expect(result.authToken).toMatch(/^okb_[A-Za-z0-9_-]{43}$/);
       await expect(requestOk(result.port, "/global/health")).resolves.toBe(false);
       await expect(
         requestOk(result.port, "/global/health", {
@@ -4063,6 +4106,13 @@ exec env PORT_ARG="$PORT" HOST_ARG="$HOST" node -e 'const http = require("node:h
       expect(await fs.readFile(markerPath, "utf8")).toContain("used serve --port");
       expect(await fs.readFile(configMarkerPath, "utf8")).toBe(userOpenCodeConfigContent);
       expect(updates).toContainEqual({ localOpencodePort: result.port, opencodePid: result.pid });
+      // Nothing was named, so the server gets the plugin that keeps its password from its tools.
+      const configDirectory = await fs.readFile(`${configMarkerPath}.dir`, "utf8");
+      expect(configDirectory).toBe(path.join(context.storage.getDataDir(), "opencode-host-config"));
+      const plugin = path.join(configDirectory, "plugins", "orkestrator-credential.js");
+      expect(await fs.readFile(plugin, "utf8")).toContain(
+        "delete process.env.OPENCODE_SERVER_PASSWORD",
+      );
     } finally {
       await commands.get("stop_local_opencode_server_cmd")?.(
         { environmentId: environment.id },

@@ -12,7 +12,8 @@ Status: Living — `apps/backend/src/core/backend-runtime.ts`,
 `container-log-service.ts`,
 `docker-cleanup-grants.ts`, `integration-locks.ts`, `feature-build-tasks.ts`,
 `public-api/reconciliations.ts`, `keyed-single-flight.ts`,
-`coordinator-request-flights.ts`, `opencode-coordinator-research.ts`.
+`coordinator-request-flights.ts`, `opencode-coordinator-research.ts`,
+`github-cli-binary.ts`, `host-catalog-seeds.ts`.
 
 One backend instance owns its process state through one `BackendRuntime`.
 The backend builds it in `core/index.ts` (`options.runtime ?? new
@@ -26,9 +27,10 @@ environment operations (`backend-runtime.test.ts`; the state moved by todo 1070 
 
 | Property | Class | Owns |
 | --- | --- | --- |
+| `gitHubCli` | `GitHubCliSelection` | The `gh` this backend runs: its toolchain's pin, recorded at startup (`pin`), or the newest release under its data directory when the gh channel follows upstream (`select`, from `applyGhChannel` and `startGhUpdate`). Host `gh` runs take it as an argument (`gitHubCli(selection)`), beside `gitHubCliEnv`'s config source; `PrMonitorRuntime` and `CoordinatorPullRequestWatches` are handed it at construction. |
 | `diffStats` | `DiffStatsTracking` | Diff-stats tracking, Git freshness, worktree watchers. |
-| `terminals` | `TerminalRuntime` | PTYs, session configs, bounded replay buffers and deltas, stable tab keys, orphan reaping, terminal activity timers, and the account homes terminals were launched on (`recordAccountHome`, `isAccountHomeInUse`). `history` (`TerminalHistory`) owns durable terminal history: collectors, configurations, I/O tails, retention and page-read concurrency. |
-| `localServers` | `LocalServerRuntime` | Owned bridge processes and their launch facts (worktree, account, token expiry, loginless), renderer bridge tokens, Cursor credential fingerprints, reuse-health markers, stale-login flags, the per-environment and per-container operation queues, and the shutdown gate. `openCodeAgentTools` (`OpenCodeAgentToolsReconciler`) owns OpenCode MCP reconciliation and, as `research` (`OpenCodeCoordinatorResearch`), the coordinator research registrations it forgets with the same keys; `openCodeHostStart` (`OpenCodeHostStartGate`) takes host OpenCode starts one at a time and holds the locked-database retry delays; `piCatalog` (`PiCatalogProbes`) owns the Pi catalogue probe's single flight, empty-result backoff and generation counter; `cursorSdkLogin` (`CursorSdkLoginSlot`) holds the single in-flight Cursor SDK sign-in; `gitHubCliLogin` (`GitHubCliLoginSlot`) the single in-flight GitHub CLI sign-in, which isolates progress and cancellation only, since `gh auth login` writes the host's `gh` configuration; `openCodeProviderLogin` (`OpenCodeProviderLoginSlot`) the OpenCode provider sign-in, the reservation that lets one login change run at a time and the provider list single flight. |
+| `terminals` | `TerminalRuntime` | PTYs, session configs, bounded replay buffers and deltas, stable tab keys, orphan reaping, terminal activity timers, and the account homes terminals were launched on (`recordAccountHome`, `isAccountHomeInUse`). `history` (`TerminalHistory`) owns durable terminal history: collectors, configurations, I/O tails, retention and page-read concurrency. Its write queue is bounded per session and overall, by bytes (each record also charged for its in-memory overhead) and by records; output past a bound is dropped and reported as `historyGap`. A flush starts at a high-water mark as well as on its timer, and writes its records once per segment. |
+| `localServers` | `LocalServerRuntime` | Owned bridge processes and their launch facts (worktree, account, token expiry, loginless), renderer bridge tokens, Cursor credential fingerprints, reuse-health markers, stale-login flags, the per-environment and per-container operation queues, and the shutdown gate. `openCodeAgentTools` (`OpenCodeAgentToolsReconciler`) owns OpenCode MCP reconciliation and, as `research` (`OpenCodeCoordinatorResearch`), the coordinator research registrations it forgets with the same keys; `openCodeHostStart` (`OpenCodeHostStartGate`) takes host OpenCode starts one at a time and holds the locked-database retry delays; `piCatalog` (`PiCatalogProbes`) owns the Pi catalogue probe's single flight, empty-result backoff and generation counter; `catalogSeeds` (`HostCatalogSeeds`) owns the host model catalogue seeds (`host-model-catalog-seed.ts`): one flight per platform (and project, for OpenCode), the failure cooldown and the generation a sign-in bumps (`resetHostModelCatalogSeedCooldown(context, agent)`); `cursorSdkLogin` (`CursorSdkLoginSlot`) holds the single in-flight Cursor SDK sign-in; `gitHubCliLogin` (`GitHubCliLoginSlot`) the single in-flight GitHub CLI sign-in, which isolates progress and cancellation only, since `gh auth login` writes the host's `gh` configuration; `openCodeProviderLogin` (`OpenCodeProviderLoginSlot`) the OpenCode provider sign-in, the reservation that lets one login change run at a time and the provider list single flight. |
 | `environments` | `EnvironmentOperations` | Setup sessions, the start/setup/baseline dedupe tasks, the per-environment lifecycle queue, the project-home ensures per project, the allowlist apply queue per environment, the environments a stop is draining (`container-readiness.ts` fences their containers), container replacement cancellations, and the delete and merge guards. `fence` (`EnvironmentMutationFence`) admits agent work, file writes and worker starts against a runtime replacement or a worktree move. |
 | `prMonitor` | `PrMonitorRuntime` | The `PrMonitorService` and its timers, its `external-pr` admission pool (both created on first use, because every pool registers in the process-wide diagnostics registry, capped at `MAX_DIAGNOSTIC_SOURCES` = 32, and most test runtimes never monitor a PR), the storage/emit binding of the latest caller (not the runtime's own `emit`, so tests that capture events through their context still see them), and the serialised sync queue. Merge cleanup is a construction option (`prMonitor.scheduleMergeCleanup`). |
 | `tmux` | `TmuxRuntime` | claude-tmux sessions and their install locks (`sessions`), interactive pane terminals (`interactiveTerminals`), Claude state polls (`claudeStatePolls`, registered as the `claude-state-signal` diagnostics source), per-container claude-tmux hook doorbells (`hookSignals`, the `tmux-hook-signal` source), the serialised activity writes, and the orphaned-session sweep's clock and first-seen times. A session's poll loop reaches it through the context it was started with. |
@@ -70,7 +72,9 @@ whether lifecycle work may be admitted and drains it on shutdown, while
   `openCoordinatorDelegation(coordinatorRequests.workerTabs, ...)`) or a narrow option
   (`NativeAgentService`'s `localBridgeAccountId`, `environmentFence` and
   `openCodeCoordinatorResearch`, a
-  bridge provider's `planUsage`, `gitHubCliEnv`'s config source), not the whole
+  bridge provider's `planUsage`, `gitHubCliEnv`'s config source, the
+  `GitHubCliSelection` that `gitHubCli`, the token readers and the `gh`
+  runners take), not the whole
   context. An object that outlives one call may keep the cluster it
   was handed at call time (a tmux session keeps the `TerminalRuntime` it
   recorded its account home in).
@@ -191,7 +195,7 @@ declaration:
 | `environment-cleanup-reconciler.ts` | `reportedStrayWithContent`, `scheduled` | Keyed by the resolved data directory. |
 | `bug-report-service.ts` | `filingFlights` | Keyed by data directory and report id. |
 | `git-fsmonitor.ts` | `fsmonitorMigrations` | Keyed by worktree path: the migration edits that worktree's config file on the host. |
-| `shell.ts` | `commandInvocations`, `commandObservers` | Count this process's own subprocesses for benchmarks; `runCommand` has no backend in reach. |
+| `command-capture.ts` | `commandInvocations`, `commandObservers` | Count this process's own subprocesses for benchmarks; `runCommand` has no backend in reach. |
 | `transcript-artifacts/preview-supervisor.ts` | `backendStartIdentity` | The start identity of this process, which names the preview scratch it owns. |
 | `transcript-artifacts/dependency-manifest.ts` | `cache` | Verified bytes of a pinned bundle file, keyed by bundle and directory. |
 | `control-mcp-direct-tools.ts` | `compiled` | Schemas compiled from constants. |
@@ -202,8 +206,3 @@ at module load, the same for every backend: code wiring, not state.
 The export-writer locks and `activeDynamicCompressions` were once proposed
 to move per backend; they stay because each bounds or orders host
 resources, not one backend's work.
-
-Two pieces of module state are per backend but not yet moved, each marked
-next to its declaration: `github-cli-binary.ts` (`managedGitHubCli`) and
-`host-model-catalog-seed.ts` (`failedAt`, `generations`, `flights`). They are tracked in
-[1070-backend-module-state-beyond-0390.md](../todo/backend-structure/1070-backend-module-state-beyond-0390.md).

@@ -349,6 +349,11 @@ type ScanAttempt = {
   epoch: number;
   qualified: boolean;
   watcherGeneration: number;
+  /**
+   * Aborted when the attempt is superseded (retarget, resume, pause, release).
+   * It cancels a queued admission and releases parked readers; a running scan
+   * keeps its lease until its promise settles.
+   */
   abort: AbortController;
   promise: Promise<void>;
 };
@@ -895,11 +900,11 @@ export class DiffStatsService {
   }
 
   private beginLineage(entry: DiffStatsEntry): void {
+    // Aborting releases readers already parked on the superseded attempt; see
+    // `awaitAttempt`. Detaching it stops new reads joining it. Admission still
+    // serializes work on the same worktree until the old scan settles, which
+    // may take as long as its slowest child's timeout; its result is thrown away.
     entry.inFlight?.abort.abort();
-    // Detach the superseded promise so new reads do not join it. Admission still
-    // serializes scans of the same worktree until the old work settles, and
-    // readers already awaiting that promise retain their wait. It may take as
-    // long as its slowest child's timeout, and its result is thrown away.
     entry.inFlight = undefined;
     entry.targetGeneration = this.nextTargetGeneration++;
     entry.mutationGeneration += 1;
@@ -978,6 +983,7 @@ export class DiffStatsService {
       },
       onCoverageChange: () => {
         if (!current()) return;
+        if (this.isQualified(entry)) entry.watcherFailures = 0;
         this.restartTimer(entry);
         this.publishSnapshot(entry);
       },
@@ -1001,6 +1007,7 @@ export class DiffStatsService {
       return;
     }
     entry.watcher = watcher;
+    if (this.isQualified(entry)) entry.watcherFailures = 0;
   }
 
   /**
@@ -1067,7 +1074,6 @@ export class DiffStatsService {
       this.attachWatcher(entry);
       const reattached = entry.watcher as WorktreeWatcher | undefined;
       if (!reattached?.watching) return;
-      entry.watcherFailures = 0;
       this.restartTimer(entry);
       this.tree.hint(entry.target.environmentId);
       this.request(entry, "hint");
@@ -1374,7 +1380,7 @@ export class DiffStatsService {
       entry.urgentEpoch = entry.dirtyEpoch;
     }
     const required = entry.dirtyEpoch;
-    const lineage = entry.targetGeneration;
+    let lineage = entry.targetGeneration;
     let counted = false;
     const count = (outcome: "hit" | "join" | "miss") => {
       if (counted) return;
@@ -1385,14 +1391,16 @@ export class DiffStatsService {
     };
 
     for (let pass = 0; pass < MAX_READ_PASSES; pass += 1) {
-      if (
-        !entry.active ||
-        entry.targetGeneration !== lineage ||
-        this.entries.get(entry.target.environmentId) !== entry
-      ) {
-        // Retargeted, paused or dropped mid-read: the requested identity is no
-        // longer this owner's, so read it as what it now is.
+      if (!entry.active || this.entries.get(entry.target.environmentId) !== entry) {
+        // Paused or dropped mid-read: no owner serves this identity now.
         return this.readAdhocFileList(request);
+      }
+      if (entry.targetGeneration !== lineage) {
+        // Retargeted mid-read. A resume keeps the identity this request asked
+        // for, so the new lineage serves it; any other retarget leaves it to an
+        // ad hoc read of what it now is.
+        if (!this.servesFileListRequest(entry, request)) return this.readAdhocFileList(request);
+        lineage = entry.targetGeneration;
       }
       const body = entry.fileList;
       if (body && body.epoch >= required && this.isFileListValid(entry, body)) {
@@ -1411,17 +1419,26 @@ export class DiffStatsService {
       }
       if (entry.inFlight) {
         count("join");
-        await entry.inFlight.promise;
+        await awaitAttempt(entry.inFlight);
         continue;
       }
       count("miss");
       this.request(entry, "read");
-      if (entry.inFlight) await (entry.inFlight as ScanAttempt).promise;
+      if (entry.inFlight) await awaitAttempt(entry.inFlight as ScanAttempt);
     }
     const body = entry.fileList;
     if (body && body.epoch >= required) return this.fileListResult(entry, body);
     if (entry.failure) throw entry.failure.error;
     throw new Error("Worktree changed faster than its file list could be read");
+  }
+
+  /** Whether this owner's current target is the identity `request` names. */
+  private servesFileListRequest(entry: DiffStatsEntry, request: FileListReadRequest): boolean {
+    return (
+      request.includeUncommitted &&
+      entry.target.comparisonRef === request.comparisonRef &&
+      this.findEntry(request.lookup) === entry
+    );
   }
 
   private isFileListValid(entry: DiffStatsEntry, body: FileListBody): boolean {
@@ -1592,6 +1609,29 @@ function priorityFor(reason: ScanReason): Exclude<RecurringPriorityClass, "criti
       return "progress";
     default:
       return "discovery";
+  }
+}
+
+/**
+ * Waits for a scan attempt to settle or be superseded, whichever is first.
+ *
+ * A reader parked here holds the promise itself, so detaching the attempt does
+ * not reach it; the abort does. Releasing the reader leaves the scan and its
+ * admission lease alone: any read it makes next on the same worktree still
+ * queues until the old work has physically settled.
+ */
+async function awaitAttempt(attempt: ScanAttempt): Promise<void> {
+  const signal = attempt.abort.signal;
+  if (signal.aborted) return;
+  let release!: () => void;
+  const superseded = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  signal.addEventListener("abort", release, { once: true });
+  try {
+    await Promise.race([attempt.promise, superseded]);
+  } finally {
+    signal.removeEventListener("abort", release);
   }
 }
 

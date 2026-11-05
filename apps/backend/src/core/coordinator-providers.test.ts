@@ -78,6 +78,11 @@ describe("coordinator provider qualification", () => {
     expect(claude.tier).toBe("provider-configured");
     expect(claude.available).toBe(false);
     expect(claude.reason).toContain("sandbox is unavailable");
+    // What the user can change comes first, then the platform's own caveat.
+    expect(claude.reason).toStartWith(
+      "This platform's read-only boundary is weaker than the coordinator safety level allows.",
+    );
+    expect(claude.reason).toContain("Settings → Coordinator");
     expect(
       coordinatorProviderQualification("claude", {
         tierSetting: "provider-configured",

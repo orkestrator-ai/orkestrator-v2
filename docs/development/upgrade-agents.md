@@ -491,7 +491,15 @@ time**, and it is easy to miss. That package is the standalone `orkestrator`
 backend published to npm, and its `dependencies` list is deliberately only the
 modules `packages/cli/scripts/build.ts` leaves unbundled — so the Agent SDK
 there is a real
-runtime pin for CLI users, not a stale duplicate. Bump it with the bridge's.
+runtime pin for CLI users, not a stale duplicate. Bump it with the bridge's, then
+regenerate the lockfile standalone services install from, and commit
+`packages/cli/release-runtime/` (`packages/cli/tests/cli.test.ts` fails until it
+matches). The script also re-resolves the on-demand bridge lockfiles; keep only
+the changes this bump needs:
+
+```bash
+bun packages/cli/scripts/lock-bridge-runtimes.ts
+```
 
 `bridges/claude-bridge/src/services/session-manager.ts` is only a barrel. The
 compatibility surface is `services/session-manager-prompt-handlers/*` (one
@@ -1892,7 +1900,10 @@ published under a line tag (electron-builder 26 publishes under `v26`).
   every later change regenerates lockfiles with the Bun `mise.toml` pins. Bun is
   pinned in `mise.toml`, root `packageManager`, `packages/cli` `engines`,
   `scripts/download-bun.sh` (version and four SHA-256s; this Bun ships inside
-  the desktop app), both `oven/bun` base images and version checks in
+  the desktop app), the site's `apps/web-public/public/install.sh`
+  (`PINNED_BUN` and nine SHA-256s from the release's `SHASUMS256.txt`: the
+  four above plus the `-baseline` and `-musl` archives; this Bun is what a new
+  standalone host gets, and the change deploys with the site), both `oven/bun` base images and version checks in
   `docker/Dockerfile`, and the `@types/bun` ranges. `version-drift.test.ts`
   enforces them, `mise run docker:check-base` resolves the new base digest,
   and `.github/workflows/validate-bun-runtime.yml` runs on the change.

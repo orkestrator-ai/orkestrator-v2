@@ -5,11 +5,11 @@
  * and authentication; it rebuilds this server for every request.
  */
 import { STARTUP_AGENT_TAB_ID } from "@orkestrator/protocol/tab-initial-prompt";
+import { savedControlJobAgent } from "./control-job-identity.js";
 import { coordinatorDeliverNowResult } from "./coordinator-deliver-now.js";
 import { nodeMailReplyTarget } from "./node-mail-reply-target.js";
 import { McpServer } from "@modelcontextprotocol/server";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
-import { resolveDefaultAgent } from "@orkestrator/protocol/agent-settings";
 import {
   AGENT_MAIL_MAX_ATTACHMENT_BYTES,
   AGENT_MAIL_MAX_ATTACHMENTS,
@@ -17,10 +17,12 @@ import {
 import {
   COMMAND_NODE_COORDINATOR_MAIL_ADDRESS,
   COORDINATOR_ASYNC_CONTRACT,
+  COORDINATOR_MESSAGING_OFF_NOTE,
   COORDINATOR_ENVIRONMENT_CHOICE_RULE,
   COORDINATOR_LAUNCH_DEFAULTS_RULE,
   COORDINATOR_PR_RULE,
   COORDINATOR_MAIL_ADDRESS,
+  COORDINATOR_REQUEST_ID_RULE,
   COORDINATOR_TIMERS_AND_ACCOUNTS_RULE,
   COORDINATOR_VALIDATION_RULE,
   COORDINATOR_WORKER_PROMPT_FORMAT_RULE,
@@ -34,6 +36,17 @@ import {
 } from "@orkestrator/protocol/review-evidence-frames";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
 import { z } from "zod";
+import { coordinatorReplayFields } from "./control-mcp-results.js";
+import {
+  agentRegistryFingerprint,
+  environmentFingerprint,
+  environmentListFingerprint,
+  mailboxFingerprint,
+  pollKey,
+  tabStateFingerprint,
+  transcriptFingerprint,
+  type CoordinatorPollGuard,
+} from "./control-mcp-poll-guard.js";
 import {
   ticketKindField,
   ticketSectionsField,
@@ -42,6 +55,7 @@ import {
 import {
   allEnvironments,
   compactMessages,
+  defaultLaunchAgent,
   environmentSummary,
   launchEnvironmentCreateInput,
   launchOptions,
@@ -52,6 +66,7 @@ import {
   paneTabs,
   platformLaunchDefault,
   projectSummary,
+  resolveLaunchAgent,
   terminalSessionId,
   validateSelection,
 } from "./control-shared-actions.js";
@@ -154,7 +169,6 @@ export const COORDINATOR_TOOL_CAPABILITY = new Map<string, string>([
   ["resume_build_pipeline", "build-pipelines"],
   ["cancel_build_pipeline", "build-pipelines"],
   ["restart_build_pipeline_step", "build-pipelines"],
-  ["start_multi_review", "multi-review"],
   ["launch_multi_review", "multi-review"],
   ["open_multi_review", "multi-review"],
   ["open_multi_review_fix", "multi-review"],
@@ -189,6 +203,25 @@ export const COORDINATOR_TOOL_CAPABILITY = new Map<string, string>([
   ...COORDINATOR_SUBORK_TOOL_CAPABILITIES,
 ]);
 export const COORDINATOR_CAPABILITIES = new Set(COORDINATOR_TOOL_CAPABILITY.values());
+
+/**
+ * Coordinator tools that were removed, with what does the same job now.
+ *
+ * Each duplicated a tool that takes nodeId (or, for start_multi_review, the
+ * complete launch_multi_review) and did less. A saved schedule naming one is
+ * refused at fire time with this replacement, and paused, rather than
+ * failing as an unknown tool. The backend commands behind them stay, so an
+ * older command node or leaf that calls them is unaffected.
+ */
+export const RETIRED_COORDINATOR_TOOLS: ReadonlyMap<string, string> = new Map([
+  ["list_node_environments", "list_environments with nodeId"],
+  ["launch_node_environment", "launch_environment with nodeId"],
+  ["start_node_environment", "start_environment with nodeId"],
+  ["stop_node_environment", "stop_environment with nodeId"],
+  ["send_prompt_to_node_tab", "send_prompt_to_tab with nodeId"],
+  ["send_node_message", "send_message with nodeId"],
+  ["start_multi_review", "launch_multi_review"],
+]);
 
 /**
  * What a conversation's credential may do. A side agent reads the project,
@@ -355,7 +388,13 @@ function ticketDetail(task: JsonRecord): JsonRecord {
  * what the model reads at the moment it decides, so the rule lives here too.
  */
 const LAUNCH_DEFAULTS_GUIDANCE =
-  "Omit modelId and reasoningId to use the user's configured defaults; set them only when the user asks for a specific model or effort, or agrees to one the task needs.";
+  "Omit agent, modelId and reasoningId to use the user's configured defaults; set them only when the user asks for a specific agent, model or effort, or agrees to one the task needs.";
+const AGENT_DESCRIPTION =
+  "Optional. Omit to use the user's default agent (defaults.agent in get_launch_options). Set only when the user asks for a specific agent.";
+const AGENT_PLATFORM_FIELD = z
+  .enum(["claude", "codex", "cursor", "grok", "opencode", "pi"])
+  .optional()
+  .describe(AGENT_DESCRIPTION);
 const MODEL_ID_DESCRIPTION =
   "Optional. Omit to use the user's configured default model. Set only when the user asks for a specific model.";
 const REASONING_ID_DESCRIPTION =
@@ -369,9 +408,8 @@ function launchDefaultsSummary(
   enabledAgents: readonly AgentPlatform[],
   models: readonly AgentModel[],
 ): JsonRecord {
-  const configuredAgent = resolveDefaultAgent(tiers);
   return {
-    agent: enabledAgents.includes(configuredAgent) ? configuredAgent : (enabledAgents[0] ?? null),
+    agent: defaultLaunchAgent(tiers, enabledAgents),
     byAgent: Object.fromEntries(
       enabledAgents.map((agent) => [agent, platformLaunchDefault(tiers, agent, models)]),
     ),
@@ -421,7 +459,13 @@ async function ownConversationMailbox(
 async function tryOpenNodeDelegation(
   invoke: ControlMcpInvoker,
   scope: CoordinatorControlScope,
-  worker: { nodeId: string; environmentId: string; tabId: string; requestId: string },
+  worker: {
+    nodeId: string;
+    environmentId: string;
+    tabId: string;
+    requestId: string;
+    request: unknown;
+  },
 ): Promise<boolean> {
   try {
     const result = await invoke<unknown>("open_coordinator_node_delegation", {
@@ -438,7 +482,7 @@ async function tryOpenNodeDelegation(
 async function tryOpenCoordinatorDelegation(
   invoke: ControlMcpInvoker,
   scope: CoordinatorControlScope,
-  input: { environmentId: string; tabId: string; requestId: string },
+  input: { environmentId: string; tabId: string; requestId: string; request: unknown },
 ): Promise<boolean> {
   try {
     const result = await invoke<unknown>("open_coordinator_delegation", { scope, ...input });
@@ -456,61 +500,10 @@ async function tryOpenCoordinatorDelegation(
  * the same states are the same answer, however the page was paginated or how
  * unread counts happened to render.
  */
-function mailboxFingerprint(page: JsonRecord): string {
-  const messages = Array.isArray(page.messages) ? page.messages : [];
-  return JSON.stringify(
-    messages.map((message) =>
-      isRecord(message) ? [message.id, message.placement, message.ackedAt ?? null] : message,
-    ),
-  );
-}
-
-/**
- * What a worker-status poll would be watching for. `lastActivityAt` moves on
- * every turn event, so it is left out: a coordinator re-listing while a worker
- * is still `working` asks the same question each time.
- */
-function environmentListFingerprint(result: {
-  environments: JsonRecord[];
-  otherNodes?: JsonRecord[];
-}): string {
-  return JSON.stringify([
-    result.environments.map((environment) => [
-      environment.id,
-      environment.nodeId ?? null,
-      environment.status,
-      environment.setupPhase ?? null,
-      environment.lifecycleOperation ?? null,
-      environment.agentActivityState ?? null,
-      ...prFingerprint(environment),
-    ]),
-    (result.otherNodes ?? []).map((node) => [
-      node.nodeId,
-      node.available,
-      (Array.isArray(node.environments) ? node.environments : []).map((environment: JsonRecord) => [
-        environment.environmentId,
-        environment.status,
-        environment.activity ?? null,
-        ...prFingerprint(environment),
-      ]),
-    ]),
-  ]);
-}
 
 /** What a coordinator's environment reads say about a worker's pull request. */
 const COORDINATOR_PR_FIELDS_NOTE =
   " A worker with a pull request also has prHasMergeConflicts, prMergeability, prChecks (passed, failed, pending and total counts, and requiredFailed: how many failing checks GitHub requires, null when it did not say) and prReadyToMerge (with prNotReadyReason when false), from the PR monitor; ready means only the user's merge is left.";
-
-/** A PR that starts conflicting, fails a check or becomes ready is a different answer. */
-function prFingerprint(environment: JsonRecord): unknown[] {
-  return [
-    environment.prState ?? null,
-    environment.prHasMergeConflicts ?? null,
-    environment.prMergeability ?? null,
-    environment.prChecks ?? null,
-    environment.prReadyToMerge ?? null,
-  ];
-}
 
 /** The worker's half of the contract: one report, at the end, then stop. */
 function workerAsyncContract(): string {
@@ -520,17 +513,7 @@ function workerAsyncContract(): string {
   );
 }
 
-/**
- * Whether this read is a poll: the same answer, asked again, too many times.
- *
- * Returns the refusal to send back instead of the page, or null to answer
- * normally. Deliberately fingerprint-based rather than time-based — a model
- * that reads its inbox once at the start of a turn and once before finishing is
- * doing the right thing however fast it does it, while one asking the same
- * unchanged question a fifth time is waiting, which is the thing this design
- * removed the need for.
- */
-export type CoordinatorPollGuard = (key: string, fingerprint: string) => JsonRecord | null;
+export type { CoordinatorPollGuard };
 
 /**
  * Registers only the tools a credential may use, so `tools/list` never offers
@@ -562,12 +545,21 @@ function withNodeTag<T extends { structuredContent?: unknown; content: unknown[]
   };
 }
 
-function filteredToolServer(server: McpServer, listed: (tool: string) => boolean): McpServer {
+function filteredToolServer(
+  server: McpServer,
+  listed: (tool: string) => boolean,
+  finishResult: (result: unknown) => unknown = (result) => result,
+): McpServer {
   return {
-    registerTool: ((name: string, ...rest: unknown[]) =>
-      listed(name)
-        ? (server.registerTool as (...args: unknown[]) => unknown)(name, ...rest)
-        : undefined) as McpServer["registerTool"],
+    registerTool: ((name: string, ...rest: unknown[]) => {
+      if (!listed(name)) return undefined;
+      const handler = rest.at(-1) as (...args: unknown[]) => unknown;
+      return (server.registerTool as (...args: unknown[]) => unknown)(
+        name,
+        ...rest.slice(0, -1),
+        async (...args: unknown[]) => finishResult(await handler(...args)),
+      );
+    }) as McpServer["registerTool"],
   } as McpServer;
 }
 
@@ -576,6 +568,40 @@ const OPERATOR_INSTRUCTIONS =
   "Every mutation needs a new requestId; reuse one only to retry after an ambiguous response. " +
   "When a result is confirmation-required, read its description aloud, get explicit confirmation, then repeat the identical call with confirmToken. " +
   "Report that work started and check back later with run_status rather than waiting. find_actions and describe_action reveal every other action; run_action runs one.";
+
+/**
+ * A coordinator tool result while agent messaging is off: tools still run, but
+ * every wake they would promise is mail, so the promise (`wake`, the next step
+ * it implies, the poll guard's restated contract) becomes the note saying so.
+ */
+export function withoutWakePromise(result: unknown): unknown {
+  if (!isRecord(result)) return result;
+  const rewrite = (value: JsonRecord): JsonRecord => {
+    if (typeof value.wake !== "string" && value.instruction !== COORDINATOR_ASYNC_CONTRACT) {
+      return value;
+    }
+    const rewritten: JsonRecord = { ...value, wake: COORDINATOR_MESSAGING_OFF_NOTE };
+    delete rewritten.nextStep;
+    if (value.instruction === COORDINATOR_ASYNC_CONTRACT) delete rewritten.instruction;
+    return rewritten;
+  };
+  const rewriteBlock = (block: unknown): unknown => {
+    if (!isRecord(block) || block.type !== "text" || typeof block.text !== "string") return block;
+    try {
+      const parsed: unknown = JSON.parse(block.text);
+      return isRecord(parsed) ? { ...block, text: JSON.stringify(rewrite(parsed)) } : block;
+    } catch {
+      return block;
+    }
+  };
+  return {
+    ...result,
+    ...(Array.isArray(result.content) ? { content: result.content.map(rewriteBlock) } : {}),
+    ...(isRecord(result.structuredContent)
+      ? { structuredContent: rewrite(result.structuredContent) }
+      : {}),
+  };
+}
 
 /** A coordinator's worker prompts ask for commits and focused checks, never a pull request (see COORDINATOR_PR_RULE, COORDINATOR_VALIDATION_RULE). */
 const COORDINATOR_WORKER_PROMPT_NOTE =
@@ -605,32 +631,46 @@ export async function createControlMcp(
         "Use launch_environment for a new workspace and launch_job for an independent " +
         "agent tab in an existing ready environment. " +
         (coordinatorScope
-          ? "Every launch_environment call requires baseBranch and baseCommit; copy coordinatorBase from get_launch_options, the latest commit of the repository's base branch, unless the user asks to build on the current checkout (checkoutBase). Prefer launch_multi_review for the complete environment Multi Review button action; start_multi_review is a backend-only recovery primitive. Use open_multi_review or open_multi_review_fix to focus saved work. "
+          ? "Every launch_environment call requires baseBranch and baseCommit; copy coordinatorBase from get_launch_options, the latest commit of the repository's base branch, unless the user asks to build on the current checkout (checkoutBase). Use launch_multi_review for a Multi Review, and open_multi_review or open_multi_review_fix to focus saved work. "
           : "") +
-        "Reuse requestId when retrying mutations. " +
+        // Operator instructions below carry the operator's own request-id rule.
+        (coordinatorScope
+          ? `${COORDINATOR_REQUEST_ID_RULE} `
+          : operator
+            ? ""
+            : "Every mutation needs a new requestId; reuse one only to retry after an ambiguous response. ") +
         (coordinatorScope ? COORDINATOR_LAUNCH_DEFAULTS_RULE : LAUNCH_DEFAULTS_GUIDANCE) +
         // Side agents launch nothing, so these rules are the main coordinator's.
-        (coordinatorScope?.capabilities.includes("environments")
+        // With messaging off they promise wakes, so the note below stands instead.
+        (coordinatorScope?.capabilities.includes("environments") && messagingEnabled
           ? ` ${COORDINATOR_ENVIRONMENT_CHOICE_RULE} ${COORDINATOR_PR_RULE} ${COORDINATOR_VALIDATION_RULE}`
           : "") +
-        (coordinatorScope?.capabilities.includes("accounts") && schedulingEnabled
+        (coordinatorScope?.capabilities.includes("accounts") &&
+        schedulingEnabled &&
+        messagingEnabled
           ? ` ${COORDINATOR_TIMERS_AND_ACCOUNTS_RULE}`
           : "") +
-        (coordinatorScope ? ` ${COORDINATOR_ASYNC_CONTRACT}` : "") +
+        (coordinatorScope
+          ? ` ${messagingEnabled ? COORDINATOR_ASYNC_CONTRACT : COORDINATOR_MESSAGING_OFF_NOTE}`
+          : "") +
         (operator ? ` ${OPERATOR_INSTRUCTIONS}` : ""),
     },
   );
-  const server = filteredToolServer(mcp, (tool) => {
-    if (coordinatorScope) {
-      const capability = COORDINATOR_TOOL_CAPABILITY.get(tool);
-      if (capability === "schedules" && !schedulingEnabled) return false;
-      return capability !== undefined && coordinatorScope.capabilities.includes(capability);
-    }
-    // Operator credentials: the original tools are part of every profile
-    // except voice, and each needs the public actions it runs.
-    if (!operator) return true;
-    return operator.profile !== "voice" && operatorToolListed(operator, tool);
-  });
+  const server = filteredToolServer(
+    mcp,
+    (tool) => {
+      if (coordinatorScope) {
+        const capability = COORDINATOR_TOOL_CAPABILITY.get(tool);
+        if (capability === "schedules" && !schedulingEnabled) return false;
+        return capability !== undefined && coordinatorScope.capabilities.includes(capability);
+      }
+      // Operator credentials: the original tools are part of every profile
+      // except voice, and each needs the public actions it runs.
+      if (!operator) return true;
+      return operator.profile !== "voice" && operatorToolListed(operator, tool);
+    },
+    coordinatorScope && !messagingEnabled ? withoutWakePromise : undefined,
+  );
 
   /**
    * Launch options plus what an omitted model and effort resolve to.
@@ -1001,7 +1041,7 @@ export async function createControlMcp(
       };
       // A coordinator re-listing unchanged environments is polling its workers.
       const guidance = pollGuard?.(
-        `list_environments:${JSON.stringify({ projectId, status, nodeId })}`,
+        pollKey("list_environments", projectId, status, nodeId),
         environmentListFingerprint(result),
       );
       return toolResult(guidance ? { ...result, ...guidance } : result);
@@ -1036,13 +1076,16 @@ export async function createControlMcp(
       const health = target
         ? await nodePrHealth(invoke, target.nodeId)
         : await thisNodePrHealth(invoke, coordinatorScope?.projectId, [environment]);
-      return toolResult({
-        environment: {
-          ...environmentSummary(environment),
-          ...coordinatorPrFields(prReadingFrom(environment, health.get(environmentId))),
-          ...onNodeResult(target),
-        },
-      });
+      const summary = {
+        ...environmentSummary(environment),
+        ...coordinatorPrFields(prReadingFrom(environment, health.get(environmentId))),
+        ...onNodeResult(target),
+      };
+      const guidance = pollGuard?.(
+        pollKey("get_environment", environmentId, nodeId),
+        environmentFingerprint(summary),
+      );
+      return toolResult({ environment: summary, ...guidance });
     },
   );
 
@@ -1074,7 +1117,7 @@ export async function createControlMcp(
     {
       title: "List agents",
       description:
-        "Every agent tab in the project's environments, and its coordinator conversations, with what each is doing now: working, waiting (on a person), idle, stopped (its environment is not running) or unknown. Native tabs carry the sessionId the session tools take. Includes per-environment counts. Read this instead of polling tabs one by one.",
+        "Every agent tab in the project's environments, and its coordinator conversations, with what each is doing now: working, waiting (on a person), idle, stopped (its environment is not running) or unknown. Native tabs carry the sessionId the session tools take. Includes per-environment counts. Read it to answer a one-off question, not to wait: re-reading an unchanged answer is polling, and a delegated worker's answer comes back to you without it.",
       inputSchema: z.object({
         projectId: z.string().trim().min(1).max(200).optional(),
         environmentId: z.string().trim().min(1).max(200).optional(),
@@ -1104,7 +1147,12 @@ export async function createControlMcp(
         const entries = asArray(remote.entries).filter(
           (entry) => entry.ownerKind !== "coordinator",
         );
-        return toolResult({ ...remote, entries, ...onNodeResult(target) });
+        const result = { ...remote, entries, ...onNodeResult(target) };
+        const guidance = pollGuard?.(
+          pollKey("list_agents", nodeId, environmentId),
+          agentRegistryFingerprint(result),
+        );
+        return toolResult({ ...result, ...guidance });
       }
       const snapshot = await invoke<unknown>("get_agent_registry", {
         ...(coordinatorScope
@@ -1115,7 +1163,11 @@ export async function createControlMcp(
         ...(environmentId ? { environmentId } : {}),
       });
       if (!isRecord(snapshot)) throw new Error("Agent registry returned no result");
-      return toolResult(snapshot);
+      const guidance = pollGuard?.(
+        pollKey("list_agents", undefined, environmentId),
+        agentRegistryFingerprint(snapshot),
+      );
+      return toolResult({ ...snapshot, ...guidance });
     },
   );
 
@@ -1133,6 +1185,15 @@ export async function createControlMcp(
       annotations: readAnnotations(),
     },
     async ({ environmentId, tabId, nodeId }) => {
+      // Re-reading the same tab's state unchanged is polling the worker.
+      const answer = (result: JsonRecord) =>
+        toolResult({
+          ...result,
+          ...pollGuard?.(
+            pollKey("get_tab_state", environmentId, tabId, nodeId),
+            tabStateFingerprint(result),
+          ),
+        });
       const {
         inv,
         where: node,
@@ -1149,12 +1210,12 @@ export async function createControlMcp(
       if (!native) {
         if (!isRecord(environment)) throw new Error(`Environment not found: ${environmentId}`);
         if (typeof tab.type !== "string" || !TERMINAL_TAB_TYPES.has(tab.type)) {
-          return toolResult({ ...where, tab, state: { kind: "persisted" } });
+          return answer({ ...where, tab, state: { kind: "persisted" } });
         }
         const state = await inv<unknown>("get_terminal_session", {
           sessionId: terminalSessionId(environment, environmentId, tabId),
         });
-        return toolResult({ ...where, tab, state });
+        return answer({ ...where, tab, state });
       }
       const projection = await inv<unknown>("get_native_agent_projection", {
         environmentId,
@@ -1163,10 +1224,10 @@ export async function createControlMcp(
         messageLimit: 1,
       });
       if (!isRecord(projection)) {
-        return toolResult({ ...where, agent: native.agent, connection: "connecting" });
+        return answer({ ...where, agent: native.agent, connection: "connecting" });
       }
       const { messages: _messages, ...state } = projection;
-      return toolResult({
+      return answer({
         ...where,
         agent: native.agent,
         state: {
@@ -1195,6 +1256,15 @@ export async function createControlMcp(
       annotations: readAnnotations(),
     },
     async ({ environmentId, tabId, limit, nodeId }) => {
+      // Re-reading the same transcript unchanged is polling the worker.
+      const answer = (result: JsonRecord) =>
+        toolResult({
+          ...result,
+          ...pollGuard?.(
+            pollKey("get_tab_transcript", environmentId, tabId, nodeId),
+            transcriptFingerprint(result),
+          ),
+        });
       const { inv, where, layout: readLayout } = await environmentInvoker(nodeId, environmentId);
       if (isPipelineWorkerTabId(tabId)) {
         // A pipeline worker has no pane tab: its stage session's transcript.
@@ -1205,7 +1275,7 @@ export async function createControlMcp(
         });
         if (!isRecord(read)) throw new Error("The worker's transcript is unavailable");
         const { messages, ...rest } = read;
-        return toolResult({
+        return answer({
           ...rest,
           ...where,
           kind: "pipeline-worker",
@@ -1225,7 +1295,7 @@ export async function createControlMcp(
           messageLimit: limit,
         });
         if (!isRecord(projection)) {
-          return toolResult({
+          return answer({
             environmentId,
             tabId,
             ...where,
@@ -1238,7 +1308,7 @@ export async function createControlMcp(
         const compact = compactMessages(
           Array.isArray(projection.messages) ? projection.messages : [],
         );
-        return toolResult({
+        return answer({
           environmentId,
           tabId,
           ...where,
@@ -1264,7 +1334,7 @@ export async function createControlMcp(
       const output =
         isRecord(snapshot) && typeof snapshot.output === "string" ? snapshot.output : "";
       const stripped = output.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "");
-      return toolResult({
+      return answer({
         environmentId,
         tabId,
         ...where,
@@ -1535,13 +1605,13 @@ export async function createControlMcp(
         (coordinatorScope
           ? `Coordinator launches require baseBranch and baseCommit from get_launch_options. Use a prompt environment for investigation or interactive work; when the whole spec is known, start a pipeline environment with start_build_pipeline instead. ${COORDINATOR_WORKER_PROMPT_NOTE} `
           : "") +
-        "Reuse requestId when retrying.",
+        "Use a new requestId for each new launch; reuse one only to retry the same launch.",
       inputSchema: z.object({
         requestId: z.string().trim().min(1).max(256),
         projectId: z.string().trim().min(1).max(200),
         environmentType: z.enum(["local", "containerized"]).default("local"),
         name: z.string().trim().min(1).max(200).optional(),
-        agent: z.enum(["claude", "codex", "cursor", "grok", "opencode", "pi"]),
+        agent: AGENT_PLATFORM_FIELD,
         modelId: z.string().trim().min(1).max(500).optional().describe(MODEL_ID_DESCRIPTION),
         reasoningId: z
           .string()
@@ -1604,32 +1674,66 @@ export async function createControlMcp(
       }
       const target = await onNode(input.nodeId);
       if (target && coordinatorScope) {
-        // The base, the agent and the model are checked against that node's copy.
+        // The base, the agent and the model are checked against that node's copy,
+        // and an omitted agent is that node's default.
         await assertCoordinatorLaunchBaseOnBranch(target.invoke, target.projectId, input);
-        const options = await validateSelection(target.invoke, {
-          ...input,
-          projectId: target.projectId,
+        const saved = await invoke<unknown>("get_coordinator_node_launch_environment", {
+          scope: coordinatorScope,
+          requestId: input.requestId,
+          nodeId: target.nodeId,
         });
+        const savedSettings =
+          isRecord(saved) && isRecord(saved.agentSettings) ? saved.agentSettings : undefined;
+        const { agent } = await resolveLaunchAgent(
+          target.invoke,
+          target.projectId,
+          input.agent ??
+            (isRecord(saved) && isRecord(saved.startupAgentSession)
+              ? (saved.startupAgentSession.agent as AgentPlatform)
+              : isRecord(saved) && typeof saved.initialAgentPlatform === "string"
+                ? (saved.initialAgentPlatform as AgentPlatform)
+                : (savedSettings?.defaultAgent as AgentPlatform | undefined)),
+        );
+        const options = saved
+          ? { models: [] }
+          : await validateSelection(target.invoke, {
+              ...input,
+              agent,
+              projectId: target.projectId,
+            });
         const { nodeId: _nodeId, ...launchInput } = input;
         const launch = await invoke<unknown>("launch_coordinator_node_environment", {
           scope: coordinatorScope,
           requestId: input.requestId,
           nodeId: target.nodeId,
-          input: launchEnvironmentCreateInput(launchInput),
+          input: launchEnvironmentCreateInput({ ...launchInput, agent }),
+          ...(input.agent === undefined ? { agentDefaulted: true } : {}),
         });
         const environment = isRecord(launch) ? launch.environment : null;
         if (!isRecord(environment) || typeof environment.id !== "string") {
           throw new Error("Environment creation returned no environment");
         }
-        const selection = await selectionReport(
-          target.projectId,
-          environment,
-          options.models,
-          input,
-          false,
-          target.invoke,
-        );
-        if (isRecord(selection.selection)) selection.selection.advisory = true;
+        const startup = isRecord(environment.startupAgentSession)
+          ? environment.startupAgentSession
+          : undefined;
+        const selection = startup
+          ? {
+              selection: {
+                agent: startup.agent,
+                model: startup.model ?? null,
+                reasoning: startup.reasoningEffort ?? null,
+                source: input.modelId || input.reasoningId ? "requested" : "default",
+              },
+            }
+          : await selectionReport(
+              target.projectId,
+              environment,
+              options.models,
+              { ...input, agent },
+              false,
+              target.invoke,
+            );
+        if (!startup && isRecord(selection.selection)) selection.selection.advisory = true;
         const startError =
           isRecord(launch) && typeof launch.startError === "string" ? launch.startError : undefined;
         const delegationOpened =
@@ -1639,6 +1743,7 @@ export async function createControlMcp(
           ...onNodeResult(target),
           tabId: STARTUP_AGENT_TAB_ID,
           status: startError ? "created" : "accepted",
+          ...coordinatorReplayFields(launch),
           ...selection,
           ...(delegationOpened ? asyncDelegationResult() : {}),
           delegationBaseBranch: input.baseBranch,
@@ -1662,14 +1767,31 @@ export async function createControlMcp(
             Number(repository.trackedChanges ?? 0) + Number(repository.untrackedChanges ?? 0) > 0;
         }
       }
-      const options = await validateSelection(invoke, input);
-      // A new environment's own tier pins no model, so repository and app
-      // settings decide, exactly as the startup launch reads them.
-      const createInput = launchEnvironmentCreateInput(input);
+      // A new environment's own tier pins no model or agent, so repository and
+      // app settings decide, exactly as the startup launch reads them.
+      const saved = await invoke<unknown>("get_coordinator_launch_environment", {
+        scope: coordinatorScope,
+        requestId: input.requestId,
+      });
+      const savedSettings =
+        isRecord(saved) && isRecord(saved.agentSettings) ? saved.agentSettings : undefined;
+      const { agent } = await resolveLaunchAgent(
+        invoke,
+        input.projectId,
+        input.agent ??
+          (isRecord(saved) && isRecord(saved.startupAgentSession)
+            ? (saved.startupAgentSession.agent as AgentPlatform)
+            : isRecord(saved) && typeof saved.initialAgentPlatform === "string"
+              ? (saved.initialAgentPlatform as AgentPlatform)
+              : (savedSettings?.defaultAgent as AgentPlatform | undefined)),
+      );
+      const options = saved ? { models: [] } : await validateSelection(invoke, { ...input, agent });
+      const createInput = launchEnvironmentCreateInput({ ...input, agent });
       const launch = await invoke<unknown>("launch_coordinator_environment", {
         scope: coordinatorScope,
         requestId: input.requestId,
         input: createInput,
+        ...(input.agent === undefined ? { agentDefaulted: true } : {}),
       });
       const environment = isRecord(launch) ? launch.environment : null;
       if (!isRecord(environment) || typeof environment.id !== "string") {
@@ -1685,7 +1807,7 @@ export async function createControlMcp(
         try {
           const session = await invoke<unknown>("get_native_agent_session", {
             environmentId: environment.id,
-            agent: input.agent,
+            agent,
             logicalSessionKey: `env-${environment.id}:${STARTUP_AGENT_TAB_ID}`,
           });
           if (isRecord(session) && isRecord(session.controls)) {
@@ -1714,6 +1836,7 @@ export async function createControlMcp(
             options.models,
             {
               ...input,
+              agent,
               modelId:
                 typeof environment.initialAgentModel === "string"
                   ? environment.initialAgentModel
@@ -1737,6 +1860,7 @@ export async function createControlMcp(
         environmentId: environment.id,
         tabId: STARTUP_AGENT_TAB_ID,
         status: startError ? "created" : "accepted",
+        ...coordinatorReplayFields(launch),
         ...selection,
         ...(delegationOpened ? asyncDelegationResult() : {}),
         ...(coordinatorScope
@@ -1764,7 +1888,7 @@ export async function createControlMcp(
       inputSchema: z.object({
         requestId: z.string().trim().min(1).max(256),
         environmentId: z.string().trim().min(1).max(200),
-        agent: z.enum(["claude", "codex", "cursor", "grok", "opencode", "pi"]),
+        agent: AGENT_PLATFORM_FIELD,
         modelId: z.string().trim().min(1).max(500).optional().describe(MODEL_ID_DESCRIPTION),
         reasoningId: z
           .string()
@@ -1803,10 +1927,25 @@ export async function createControlMcp(
       if (!isRecord(environment) || typeof environment.projectId !== "string") {
         throw new Error(`Environment not found: ${input.environmentId}`);
       }
+      // An omitted agent is this environment's default, as its new-tab button picks.
+      const savedAgent =
+        input.agent === undefined
+          ? savedControlJobAgent(
+              await inv("get_pane_layout", { environmentId: input.environmentId }),
+              input.environmentId,
+              input.requestId,
+            )
+          : undefined;
+      const { agent } = await resolveLaunchAgent(
+        inv,
+        environment.projectId,
+        input.agent ?? savedAgent,
+        environment,
+      );
       const options = await validateSelection(inv, {
         projectId: environment.projectId,
         environmentId: input.environmentId,
-        agent: input.agent,
+        agent,
         modelId: input.modelId,
         reasoningId: input.reasoningId,
         fastMode: input.fastMode,
@@ -1815,7 +1954,7 @@ export async function createControlMcp(
         environment.projectId,
         environment,
         options.models,
-        input,
+        { ...input, agent },
         true,
         inv,
       );
@@ -1832,17 +1971,27 @@ export async function createControlMcp(
         : null;
       const launchArgs = delegation
         ? withCoordinatorDelegationPresentation(
-            { ...input, prompt: delegation.source, activateTab: false },
+            {
+              ...input,
+              agent,
+              agentDefaulted: input.agent === undefined,
+              prompt: delegation.source,
+              activateTab: false,
+            },
             {
               kind: COORDINATOR_DELEGATION_PRESENTATION,
               frame: delegation.frame,
             },
           )
-        : { ...input, activateTab: false };
+        : { ...input, agent, agentDefaulted: input.agent === undefined, activateTab: false };
       const job = target
         ? await target.call<unknown>("launch_control_job", launchArgs, `job:${input.requestId}`)
         : await invoke<unknown>("launch_control_job", launchArgs);
       if (!isRecord(job)) throw new Error("Job launch returned no result");
+      const jobRequest = {
+        summary: input.prompt,
+        ...(isRecord(selection.selection) ? selection.selection : {}),
+      };
       // Only against the tab the job actually landed in. A guessed tab id would
       // open a delegation nothing can ever close, leaving the conversation
       // shown as waiting on a worker that does not exist.
@@ -1854,18 +2003,27 @@ export async function createControlMcp(
                 environmentId: input.environmentId,
                 tabId: job.tabId,
                 requestId: input.requestId,
+                request: jobRequest,
               })
             : await tryOpenCoordinatorDelegation(invoke, coordinatorScope, {
                 environmentId: input.environmentId,
                 tabId: job.tabId,
                 requestId: input.requestId,
+                request: jobRequest,
               })
           : false;
       return toolResult({
         ...job,
         ...onNodeResult(target),
         ...selection,
-        ...(delegationOpened ? asyncDelegationResult() : {}),
+        ...(delegationOpened
+          ? asyncDelegationResult()
+          : coordinatorScope
+            ? {
+                delegationNote:
+                  "The request was dispatched, but no delegation was opened (the request ID may already belong to another worker). Do not dispatch again under a new ID; inspect the existing job. You will not be woken automatically.",
+              }
+            : {}),
       });
     },
   );
@@ -1945,11 +2103,13 @@ export async function createControlMcp(
               environmentId,
               tabId,
               requestId,
+              request: { summary: prompt, agent: native.agent },
             })
           : await tryOpenCoordinatorDelegation(invoke, coordinatorScope, {
               environmentId,
               tabId,
               requestId,
+              request: { summary: prompt, agent: native.agent },
             });
       return toolResult({
         environmentId,
@@ -1968,6 +2128,7 @@ export async function createControlMcp(
       onNode,
       environmentInvoker,
       onNodeResult,
+      pollGuard,
     });
   }
 
@@ -2281,7 +2442,8 @@ export async function createControlMcp(
           const page = await invoke<unknown>("get_agent_mail_mailbox", input);
           if (!isRecord(page)) throw new Error("Mailbox returned no result");
           const guidance = pollGuard?.(
-            `read_messages:${JSON.stringify(input)}`,
+            // Paging and page size do not change the question being asked.
+            pollKey("read_messages", input.environmentId, input.tabId, input.unreadOnly),
             mailboxFingerprint(page),
           );
           return toolResult(guidance ? { ...page, ...guidance } : page);
@@ -2357,7 +2519,7 @@ export async function createControlMcp(
           // Guarded only after authorization, so a refusal can never answer for
           // a message this credential was not allowed to look at.
           const statusRefusal = pollGuard?.(
-            `get_message_status:${messageId}`,
+            pollKey("get_message_status", messageId),
             JSON.stringify({
               placement: status.placement,
               injectedAt: status.injectedAt,

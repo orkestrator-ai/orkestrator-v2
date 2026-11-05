@@ -23,7 +23,6 @@ import type {
   BrowserPreviewCaptureMode,
   BrowserPreviewCapturePurpose,
   BrowserPreviewExpiredCaptureNotice,
-  BrowserPreviewPendingCapture,
   BrowserPreviewPendingCaptureWire,
   BrowserPreviewPendingCaptureDescriptor,
   BrowserPreviewReplaceImageInput,
@@ -48,7 +47,7 @@ import {
   browserPreviewCaptureStartScript,
 } from "./browser-preview-annotation-script.js";
 import {
-  boundedScreenshotDataUrl,
+  boundedScreenshotPng,
   captureImageRepresentation,
   clampRect,
   cropPng,
@@ -81,8 +80,7 @@ import {
 import {
   BrowserPreviewCaptureSpoolError,
   createBrowserPreviewCaptureId,
-  decodePngDataUrl,
-  pendingCaptureWithDataUrl,
+  decodePngBytes,
   type BrowserPreviewCaptureStore,
 } from "./browser-preview-capture-store.js";
 import {
@@ -108,7 +106,7 @@ export {
   type CaptureWebContents,
 } from "./browser-preview-capture-page.js";
 export { parseCaptureProbe, parseCaptureRuntimeStatus } from "./browser-preview-capture-parse.js";
-export { boundedScreenshotDataUrl, maskCaptureImage } from "./browser-preview-capture-image.js";
+export { boundedScreenshotPng, maskCaptureImage } from "./browser-preview-capture-image.js";
 
 const DEFAULT_POLL_INTERVAL_MS = 250;
 /** Result captures: the whole stability window, and the quiet period that ends it early. */
@@ -122,7 +120,6 @@ export type CaptureStoreLike = Pick<
   | "create"
   | "list"
   | "readWire"
-  | "read"
   | "replaceImage"
   | "acknowledge"
   | "discard"
@@ -335,7 +332,7 @@ export class BrowserPreviewCaptureSessions {
     let initialTarget: Record<string, unknown> | null = null;
     let recaptureOf: string | null = null;
     if (input.recaptureCaptureId) {
-      const previous = await store.read(input.recaptureCaptureId);
+      const previous = await store.readWire(input.recaptureCaptureId);
       if (!previous) {
         return this.error(
           input.tabId,
@@ -597,7 +594,7 @@ export class BrowserPreviewCaptureSessions {
             painted.push(documentMask(rect, view.scroll, "sensitive-field"));
           }
           for (const entry of reapplied) painted.push(entry.mask);
-          const decoded = decodePngDataUrl(boundedScreenshotDataUrl(maskedImage.image));
+          const decoded = decodePngBytes(boundedScreenshotPng(maskedImage.image));
           png = {
             png: decoded.bytes,
             width: decoded.width,
@@ -827,19 +824,13 @@ export class BrowserPreviewCaptureSessions {
     return this.store().list();
   }
 
-  /** Non-consuming read; region captures include a crop derived from the current image. */
-  async readPending(captureId: string): Promise<BrowserPreviewPendingCapture | null> {
-    const pending = await this.readPendingWire(captureId);
-    return pending && pendingCaptureWithDataUrl(pending);
-  }
-
-  /** The same read with the spooled image as bytes, for IPC. */
+  /** Non-consuming byte read; region captures include a crop of the current image. */
   async readPendingWire(captureId: string): Promise<BrowserPreviewPendingCaptureWire | null> {
     const pending = await this.store().readWire(validCaptureId(captureId));
     if (!pending) return null;
     const target = pending.capture.target;
     if (target.kind !== "region") return pending;
-    let regionCrop: BrowserPreviewPendingCapture["regionCrop"] = null;
+    let regionCrop: BrowserPreviewPendingCaptureWire["regionCrop"] = null;
     if (pending.imageBytes && target.imageRect) {
       try {
         const cropped = cropPng(
@@ -849,7 +840,7 @@ export class BrowserPreviewCaptureSessions {
         );
         if (cropped) {
           regionCrop = {
-            imageDataUrl: cropped.dataUrl,
+            imageBytes: cropped.png,
             width: cropped.width,
             height: cropped.height,
             sourceRect: { ...target.imageRect },

@@ -220,9 +220,10 @@ export interface ResourceChange {
   deleted?: boolean;
   /**
    * Why a `native-agent-session` change was announced: a content-free tag
-   * from `NATIVE_SESSION_INVALIDATION_CAUSES`. Diagnostic only; a client
-   * re-reads the same way whatever it says, and a newer backend may send one
-   * this client does not know.
+   * from `NATIVE_SESSION_INVALIDATION_CAUSES`. A client re-reads transcript and
+   * state whatever it says, and reads discovery when it names discovery
+   * (`nativeSessionInvalidationNamesDiscovery`). A newer backend may send one
+   * this client does not know, which counts as naming discovery.
    */
   cause?: string;
   /**

@@ -1,5 +1,5 @@
 import type { AgentActivityState } from "./agent-activity.js";
-import type { CoordinatorWorkspace } from "./coordinator.js";
+import { coordinatorConversationRunnable, type CoordinatorWorkspace } from "./coordinator.js";
 
 /**
  * What a project's coordinator icon shows, the same states an environment
@@ -44,6 +44,8 @@ export function coordinatorActivityByProject(
     if (workspace.lifecycleState !== "ready") continue;
     for (const conversation of workspace.conversations) {
       if (conversation.closedAt || !conversation.agent) continue;
+      // A conversation that failed to start is not swept either.
+      if (!coordinatorConversationRunnable(workspace, conversation)) continue;
       const state = observe(workspace, {
         conversationId: conversation.id,
         agent: conversation.agent,
@@ -69,4 +71,25 @@ export function parseCoordinatorActivitySnapshot(value: unknown): CoordinatorAct
     if (projectId && (state === "working" || state === "waiting")) projects[projectId] = state;
   }
   return { projects };
+}
+
+/**
+ * The turn keeping a project's checkout from changing: the backend refuses a
+ * branch switch or sync while one exists. The project home holds it as well as
+ * any coordinator conversation.
+ */
+export type CoordinatorCheckoutTurn =
+  { kind: "conversation"; conversationId: string } | { kind: "project-home" };
+
+export const COORDINATOR_CHECKOUT_TURN_COMMAND = "get_coordinator_checkout_turn";
+
+/** Accepts an answer from any backend; anything malformed reads as no turn. */
+export function parseCoordinatorCheckoutTurn(value: unknown): CoordinatorCheckoutTurn | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const turn = value as { kind?: unknown; conversationId?: unknown };
+  if (turn.kind === "project-home") return { kind: "project-home" };
+  if (turn.kind === "conversation" && typeof turn.conversationId === "string") {
+    return { kind: "conversation", conversationId: turn.conversationId };
+  }
+  return null;
 }

@@ -5,11 +5,15 @@ import { createHash, randomUUID } from "node:crypto";
 
 import type { AgentMailAttachment } from "@orkestrator/protocol/agent-mail";
 import {
+  COORDINATOR_REQUEST_ID_REUSED_ERROR,
   COORDINATOR_MAIL_ADDRESS,
   coordinatorIdFromRuntimeId,
   coordinatorRuntimeId,
+  normalizeCoordinatorDelegationRequest,
+  type CoordinatorDelegationRequest,
   type CoordinatorWorkflowAssociation,
 } from "@orkestrator/protocol/coordinator";
+import { launchDelegationRequest } from "./coordinator-delegation-request.js";
 import {
   isLaunchMultiReviewActionInput,
   isMultiReviewModelSelection,
@@ -50,6 +54,7 @@ import { asNonBlankString } from "./commands-helpers.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
 import {
   actionHash,
+  coordinatorLaunchIdentity,
   requireCoordinatorConversation,
   withCoordinatorReceipt,
 } from "./coordinator-action-scope.js";
@@ -235,6 +240,7 @@ async function openNodeDelegation(
   environmentId: string,
   tabId: string,
   requestId: string,
+  request?: CoordinatorDelegationRequest,
 ): Promise<boolean> {
   const association = await context.storage.coordinators.saveCoordinatorWorkflowAssociation({
     id: randomUUID(),
@@ -250,12 +256,14 @@ async function openNodeDelegation(
     association.resourceId !== environmentId ||
     association.nodeId !== nodeId
   ) {
-    throw new Error("Coordinator request id was reused with a different delegation target");
+    throw new Error(COORDINATOR_REQUEST_ID_REUSED_ERROR);
   }
   const opened = await context.storage.coordinators.openCoordinatorDelegation(
     context.runtime.coordinatorRequests.workerTabs,
     association.id,
     tabId,
+    undefined,
+    request,
   );
   if (!opened) throw new Error("Coordinator delegation association was not found");
   await startRemoteRequest(context, caller, association.id, { nodeId, environmentId, tabId });
@@ -321,8 +329,33 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
   };
 
   register(
+    "get_coordinator_node_launch_environment",
+    async ({ scope, requestId, nodeId }, context) => {
+      const caller = await identity(scope, context);
+      const target = await coordinatorNodeTarget(
+        context,
+        caller.projectId,
+        asNonBlankString(nodeId, "nodeId"),
+      );
+      const association = (
+        await context.storage.coordinators.listCoordinatorWorkflowAssociations(caller.projectId)
+      ).find(
+        (item) =>
+          item.coordinatorId === caller.coordinatorId &&
+          item.conversationId === caller.conversationId &&
+          item.requestId === requestId &&
+          item.nodeId === target.nodeId &&
+          item.kind === "environment" &&
+          !item.pending,
+      );
+      return association
+        ? target.call("get_environment", { environmentId: association.resourceId })
+        : null;
+    },
+  );
+  register(
     "launch_coordinator_node_environment",
-    async ({ scope, requestId, nodeId, input }, context) => {
+    async ({ scope, requestId, nodeId, input, agentDefaulted }, context) => {
       const caller = await identity(scope, context);
       const stableRequestId = asNonBlankString(requestId, "requestId");
       const target = await coordinatorNodeTarget(
@@ -341,7 +374,10 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
       }
       const baseBranch = input.delegationBaseBranch;
       const baseCommit = input.delegationBaseCommit;
-      const payloadHash = actionHash({ nodeId: target.nodeId, input });
+      const payloadHash = actionHash({
+        nodeId: target.nodeId,
+        input: coordinatorLaunchIdentity(input, agentDefaulted),
+      });
       return once(`${caller.coordinatorId}\0${stableRequestId}`, async () => {
         const receipt = await context.storage.coordinators.reserveCoordinatorWorkflowAssociation({
           id: randomUUID(),
@@ -361,6 +397,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
               environmentId: receipt.association.resourceId,
             }),
             coordinatorDelegationOpened: receipt.association.delegation?.state === "running",
+            replayed: true,
           };
         }
         if (!receipt.claimed) {
@@ -431,6 +468,8 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
               context.runtime.coordinatorRequests.workerTabs,
               receipt.association.id,
               STARTUP_AGENT_TAB_ID,
+              undefined,
+              launchDelegationRequest(input, environment),
             ),
           );
           await startRemoteRequest(context, caller, receipt.association.id, {
@@ -472,7 +511,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
 
   register(
     "open_coordinator_node_delegation",
-    async ({ scope, nodeId, environmentId, tabId, requestId }, context) => {
+    async ({ scope, nodeId, environmentId, tabId, requestId, request }, context) => {
       const caller = await identity(scope, context);
       const target = await coordinatorNodeTarget(
         context,
@@ -497,6 +536,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
             worker,
             workerTab,
             asNonBlankString(requestId, "requestId"),
+            normalizeCoordinatorDelegationRequest(request),
           ),
         };
       } finally {
@@ -612,6 +652,23 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
           asNonBlankString(args.nodeId, "nodeId"),
         );
         const requestId = asNonBlankString(args.requestId, "requestId");
+        const prior = (
+          await context.storage.coordinators.listCoordinatorWorkflowAssociations(caller.projectId)
+        ).find(
+          (item) =>
+            item.coordinatorId === caller.coordinatorId &&
+            item.requestId === `delegation:${requestId}`,
+        );
+        if (
+          prior &&
+          (prior.conversationId !== caller.conversationId ||
+            prior.nodeId !== target.nodeId ||
+            prior.resourceId !== toEnvironmentId ||
+            (typeof args.toTabId === "string" &&
+              prior.delegation?.workerTabId &&
+              prior.delegation.workerTabId !== args.toTabId.trim()))
+        )
+          throw new Error(COORDINATOR_REQUEST_ID_REUSED_ERROR);
         // deliverNow reaches the worker only through a leaf that knows `steer`;
         // an older one would refuse the whole message over the unknown field.
         const steer =
@@ -675,18 +732,27 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
             delivered.placement === "pending-inject" ||
             (steer && delivered.placement === "injected");
           let coordinatorDelegationOpened = false;
+          let delegationNote: string | undefined;
           if (joining && scheduled) {
             context.coordinators?.noteRemoteRequest(joining.id);
             coordinatorDelegationOpened = true;
           } else if (workerTab && scheduled) {
-            coordinatorDelegationOpened = await openNodeDelegation(
-              context,
-              caller,
-              target.nodeId,
-              toEnvironmentId,
-              workerTab,
-              requestId,
-            );
+            try {
+              coordinatorDelegationOpened = await openNodeDelegation(
+                context,
+                caller,
+                target.nodeId,
+                toEnvironmentId,
+                workerTab,
+                requestId,
+                {
+                  summary: (typeof args.subject === "string" && args.subject) || String(args.body),
+                },
+              );
+            } catch {
+              delegationNote =
+                "The message was delivered, but no delegation was opened. Do not resend it under a new requestId; you will not be woken automatically when the worker answers.";
+            }
           }
           return {
             nodeId: target.nodeId,
@@ -709,6 +775,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
               ? { deliverNow: delivered.deliverNow, deliverNowNote: delivered.deliverNowNote }
               : {}),
             coordinatorDelegationOpened,
+            ...(delegationNote ? { delegationNote } : {}),
             // Said plainly, as for a worker here: "pending" alone reads as delivered.
             ...(recipient.status === "stopped"
               ? {
@@ -852,7 +919,9 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
             pipelineId: receipt.association.resourceId,
           });
           if (!record(existing)) throw new Error("Associated build pipeline was not found");
-          return existing.snapshot;
+          return record(existing.snapshot)
+            ? { ...existing.snapshot, replayed: true }
+            : existing.snapshot;
         }
         if (!receipt.claimed) {
           throw new Error("Build pipeline creation is already in progress; retry this requestId");
@@ -948,11 +1017,11 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
                 ? existing.payloadHash
                 : requestAlias(existing, input.requestId)?.payloadHash) !== payloadHash)
           ) {
-            throw new Error("Coordinator request id was reused with a different payload");
+            throw new Error(COORDINATOR_REQUEST_ID_REUSED_ERROR);
           }
           if (existing && existing.conversationId !== caller.conversationId) {
             throw new Error(
-              "This request belongs to another conversation; adopt its workflow before opening it",
+              "This requestId belongs to another conversation; adopt its workflow to open it, or use a new unique requestId for a new review",
             );
           }
           if (existing && !existing.pending) {
@@ -1051,7 +1120,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
               result.workflow.id,
             );
           }
-          return result;
+          return existing && !existing.pending ? { ...result, replayed: true as const } : result;
         },
       ),
     );

@@ -174,6 +174,9 @@ export class ProviderEvidenceIngress {
     capabilities: readonly ProviderChangeCapabilities[],
     fetchBody: (id: string) => Promise<Uint8Array | null>,
   ): Promise<IngestResult> {
+    this.ledger.transaction(() =>
+      this.ledger.recordEvidenceSource(context.environmentId, context.sourceKey),
+    );
     const result: IngestResult = {
       acks: [],
       retainedBodyIds: [],
@@ -210,7 +213,7 @@ export class ProviderEvidenceIngress {
     for (const ref of refs) {
       if (ref.state !== "available") continue;
       const known = this.ledger.body(ref.id);
-      if (known?.state === "available") {
+      if (known?.state === "available" && (await this.bodies.reuse(ref.id))) {
         result.retainedBodyIds.push(ref.id);
         continue;
       }

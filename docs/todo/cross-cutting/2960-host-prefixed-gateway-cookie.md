@@ -60,11 +60,21 @@ run there.
 
 **Investigation.** Tried on 2026-11-04 on a Mac with Xcode 27.2, without a
 result. `mise run test:ios` printed nothing while `xcodebuild -runFirstLaunch`
-ran; it was stopped after 15 minutes, so the Swift change has still never been
-compiled. Complete Xcode's first launch by hand first, because it installs
-system components. The commit with the change (`4f9cf3b32`) is in the tags
-`v2.35.5-beta`, `v2.36.0` and `v2.36.1`. Whether an iOS build has shipped from
-them, and how long the iOS support window is, were not established.
+ran; it was stopped after 15 minutes. Complete Xcode's first launch by hand first,
+because it installs system components. The commit with the change
+(`4f9cf3b32`) is in the tags `v2.35.5-beta`, `v2.36.0` and `v2.36.1`. Whether
+an iOS build has shipped from them, and how long the iOS support window is,
+were not established.
+
+Compiled and run on 2026-11-05 on a Mac with Xcode 26.6, in the iOS app review
+(security report part `0270`): `loginCookie` accepts either name, and a new
+test shows a real `WKHTTPCookieStore` keeps `HttpOnly`, `Secure` and
+`SameSite=Strict` on both. All 66 tests in `OrkestratorMobileTests` passed on
+the iOS 17.5, 18.2 and 26.2 simulators. That run used `swiftc` and a throwaway
+host app, because `xcodebuild` found no destination without the iOS 26.5
+simulator platform, so `mise run test:ios` itself is still to run
+([5601](5601-ios-runtime-security-checks.md) task 1). What is left of this task
+is recording the first release that contains the change.
 
 **Decisions.**
 
@@ -77,7 +87,20 @@ them, and how long the iOS support window is, were not established.
     - Pros: no hardware.
     - Cons: the Swift change has never been compiled.
 
+## Assumptions and decisions
+
+### Task 2: how to verify (2026-11-05)
+
+- **Chose:** the recommended option's first half, running the tests on macOS,
+  through a stand-in build rather than the Xcode scheme. The task stays open
+  until a release is recorded in the version-compatibility register.
+- **Why:** installing the matching simulator platform is a system change the
+  review's brief did not cover. The stand-in compiles the same sources and runs
+  the same assertions, so it answers whether the Swift change compiles and
+  works; it does not prove the project's own build settings.
+
 ## Related
 
 - `docs/reports/2-26-10-27-security.md` (H1)
 - `docs/architecture/remote-gateway.md` (Security notes)
+- [5601-ios-runtime-security-checks.md](5601-ios-runtime-security-checks.md)

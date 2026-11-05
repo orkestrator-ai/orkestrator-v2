@@ -39,6 +39,7 @@ test("scope banners name the owner of each section in a leaf window", () => {
   installScope();
   for (const section of [
     "platforms",
+    "coordinator",
     "network",
     "docker",
     "container",

@@ -1,6 +1,7 @@
 import type { GatewayContext } from "./gateway-context.js";
 import {
   DESIGN_FRAME_DOCUMENT,
+  STATIC_HTML_FRAME_DOCUMENT,
   GATEWAY_DESIGN_FRAME_CONTENT_SECURITY_POLICY,
   GATEWAY_RENDERER_CONTENT_SECURITY_POLICY,
 } from "@orkestrator/protocol/renderer-content-security-policy";
@@ -62,7 +63,7 @@ import {
   browserPreviewContentDecoder,
   rewriteBrowserPreviewBody,
 } from "./gateway-internals.js";
-import type { StaticContentEncoding } from "./gateway-internals.js";
+import type { StaticCompressionEncoding, StaticContentEncoding } from "./gateway-internals.js";
 import { compatibilityPathUsage } from "./core/compatibility-path-usage.js";
 import { createLogger } from "@orkestrator/protocol/logger";
 
@@ -79,8 +80,38 @@ const log = createLogger("gateway");
 function staticDocumentContentSecurityPolicy(root: string, filePath: string): string | null {
   const relativePath = path.relative(root, filePath).toLowerCase();
   if (relativePath === "index.html") return GATEWAY_RENDERER_CONTENT_SECURITY_POLICY;
-  if (relativePath === DESIGN_FRAME_DOCUMENT) return GATEWAY_DESIGN_FRAME_CONTENT_SECURITY_POLICY;
+  if (relativePath === DESIGN_FRAME_DOCUMENT || relativePath === STATIC_HTML_FRAME_DOCUMENT)
+    return GATEWAY_DESIGN_FRAME_CONTENT_SECURITY_POLICY;
   return null;
+}
+
+/**
+ * The on-the-fly variant a revalidation already holds, found without compressing.
+ * Only the source file's identity goes into these tags, so a match costs a string
+ * comparison. A holder keeps valid bytes for its tag even if compressing again
+ * would now fail or choose another coding. `*` names no variant, so the answer's
+ * coding is not known until the normal path has run.
+ */
+function heldStaticFallbackEncoding(
+  ifNoneMatch: string | string[] | undefined,
+  source: { mtimeMs: number; size: number },
+  encodings: StaticCompressionEncoding[],
+  identityAcceptable: boolean,
+): StaticContentEncoding | null {
+  const value = Array.isArray(ifNoneMatch) ? ifNoneMatch.join(",") : ifNoneMatch;
+  // With no encoding to try, or a source over the cap, compressing is a no-op.
+  if (!value || encodings.length === 0 || source.size > MAX_STATIC_FALLBACK_SOURCE_BYTES) {
+    return null;
+  }
+  if (value.split(",").some((entry) => entry.trim() === "*")) return null;
+  const variants: StaticContentEncoding[] = identityAcceptable
+    ? [...encodings, "identity"]
+    : encodings;
+  return (
+    variants.find((encoding) =>
+      ifNoneMatchMatches(value, etagForStaticVariant(source.mtimeMs, source.size, encoding)),
+    ) ?? null
+  );
 }
 
 export function createSseGzipCompressor(): Gzip {
@@ -310,23 +341,16 @@ export class GatewayProxy {
 
             // A stalled rewrite would hold its decode budget indefinitely:
             // bound the time between upstream chunks, not the whole body.
-            let rewriteIdle: ReturnType<typeof setTimeout> | null = null;
-            const resetRewriteIdle = () => {
-              if (rewriteIdle) clearTimeout(rewriteIdle);
-              rewriteIdle = setTimeout(
-                () => abortBody(new Error("Browser preview response stalled")),
-                this.ctx.proxyBodyIdleTimeoutMs,
-              );
-              rewriteIdle.unref?.();
-            };
-            resetRewriteIdle();
-            releaseReservationOnResponseSettled(response, () => {
-              if (rewriteIdle) clearTimeout(rewriteIdle);
-            });
-            proxyResponse.on("data", resetRewriteIdle);
-            proxyResponse.once("end", () => {
-              if (rewriteIdle) clearTimeout(rewriteIdle);
-            });
+            const rewriteIdle = setTimeout(
+              () => abortBody(new Error("Browser preview response stalled")),
+              this.ctx.proxyBodyIdleTimeoutMs,
+            );
+            rewriteIdle.unref?.();
+            releaseReservationOnResponseSettled(response, () => clearTimeout(rewriteIdle));
+            // A refresh after the clears below does nothing, and one after the
+            // timer fired cannot abort twice: `abortBody` has already settled.
+            proxyResponse.on("data", () => rewriteIdle.refresh());
+            proxyResponse.once("end", () => clearTimeout(rewriteIdle));
 
             if (decoder) {
               proxyResponse.on("data", (chunk: Buffer | string) => {
@@ -561,7 +585,10 @@ export class GatewayProxy {
             // client gave up, starving every other proxied response of a slot.
             const idleTimeoutMs = this.ctx.proxyBodyIdleTimeoutMs;
             const armIdleTimer = () => {
-              clearIdleTimer();
+              if (idleTimer) {
+                idleTimer.refresh();
+                return;
+              }
               idleTimer = setTimeout(() => {
                 idleTimer = null;
                 abortBody(new Error(`Proxied response stalled for ${idleTimeoutMs} ms`));
@@ -805,7 +832,21 @@ export class GatewayProxy {
       }
     }
 
-    if (selectedEncoding === "identity" && request.method !== "HEAD") {
+    const heldEncoding =
+      selectedEncoding === "identity" && request.method !== "HEAD"
+        ? heldStaticFallbackEncoding(
+            request.headers["if-none-match"],
+            fileStat,
+            preferredEncodings,
+            identityQuality > 0,
+          )
+        : null;
+    if (heldEncoding) {
+      // The 304 below answers this. Its headers are the ones the client's 200
+      // carried, except a coded length, which only compressing would tell us.
+      selectedEncoding = heldEncoding;
+      omitContentLength = heldEncoding !== "identity";
+    } else if (selectedEncoding === "identity" && request.method !== "HEAD") {
       const outcome = await compressStaticFileWithinLimits(
         filePath,
         fileStat.mtimeMs,

@@ -1,14 +1,14 @@
 # Settings sign-in routing receives background node calls
 
 - **ID:** 1321
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-30
 - **Test:** `Settings sign-in controls deliver command node to their backend calls`
 - **File:** `apps/web/src/components/settings/machine-sign-in-routing.test.tsx:102`
 - **Original command:** `mise run test`
 - **Failure:** the exact workspace command-call assertion received `get_node_status` and `get_node_summaries` before the expected `open_in_browser` call. Web reported 10,840 passed, ten skipped and one failed; backend reported zero failures, and the root, bridges and protocol groups passed. Desktop's bridge startup timeout is tracked separately in case 1202.
 - **Owning file rerun:** `mise run test:logged -- --name machine-sign-in-owner -- bun test --cwd apps/web ./src/components/settings/machine-sign-in-routing.test.tsx --parallel=1 --only-failures` passed unchanged in 1.3 s.
-- **Cause:** unconfirmed; background node polling may share the command mock. No settings behavior, test assertion, timeout or skip changed.
+- **Cause:** confirmed on 2026-11-05, see [Root cause and fix](#root-cause-and-fix--2026-11-05). When first observed it was unconfirmed; background node polling may share the command mock. No settings behavior, test assertion, timeout or skip changed.
 - **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.7r8HZm/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 
 ## Settings sign-in routing: session history review — 2026-10-31
@@ -68,3 +68,17 @@
 - **Assessment:** recurrence of the existing intermittent failure; no owning
   implementation, assertion, timeout or skip changed. Shared-host contention
   remains a hypothesis, and the aggregate remains non-green.
+
+## Bridge credential repair validation — 2026-11-05
+
+- Original command: `mise run test:logged -- --name review-default-tests -- mise run test`; default workspace group reserved six worker slots.
+- Failure: 73.23 ms: exact call assertion received background node-status and summary calls. Evidence: `/tmp/orkestrator-test-run.8nVKRg/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log` (compressed on aggregate completion).
+- Complete unchanged owner: `NODE_ENV=test mise run test:logged -- --name triage-sign-in -- bun test --cwd apps/web ./src/components/settings/machine-sign-in-routing.test.tsx --parallel=1 --only-failures` passed, exit 0, in 1.1 s. Passing output was removed by the logged runner.
+- Owning code and assertions were unchanged. This repeats the open case; no new root cause established. Aggregate totals were not yet available when the owner reran.
+
+## Root cause and fix — 2026-11-05
+
+- **Cause:** each sign-in that goes through `portalStore.invokeOnNode` schedules a debounced refresh (`scheduleRefresh`, 100 ms in `portal-store.ts`). When the previous test's timer fired after `afterEach` had removed `window.orkestratorPortal`, `portalInvoke` fell back to `invoke`, the mock under assertion. `afterEach` had already reset that mock and `beforeEach` did not clear it, so `get_node_status` and `get_node_summaries` were still recorded when the next test began. Only the `command node` case runs second among the exact-call cases, which is why it alone failed. The gap between tests has to reach the timer, which fits the failure appearing only in loaded aggregate runs.
+- **Reproduction:** a temporary copy that held `beforeEach` open for 2.5 s failed with the same two calls before `open_in_browser`. It passed with the fix, and was deleted.
+- **Fix:** `beforeEach` now clears the mock's calls. A refresh firing later goes to the portal fake, not this mock, because `beforeEach` sets the portal in the same synchronous step. The exact-call assertion is unchanged. No settings implementation, timeout or skip changed.
+- **Verification:** the owner ran 20 times in rounds of four concurrent copies, each round alongside four concurrent runs of `useNativeAgentSession.background-flags.test.tsx`, on a shared host. All 40 runs passed.

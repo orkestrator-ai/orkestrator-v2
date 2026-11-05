@@ -23,6 +23,7 @@ import {
   claudeModelWeeklyWindow,
 } from "@orkestrator/protocol/plan-usage";
 import { type StructuredOutputResult } from "@orkestrator/protocol/structured-output";
+import { eventMessageId } from "./event-message-id.js";
 import { eventEmitter } from "./event-emitter.js";
 import { RecentlyRevisedRows } from "@orkestrator/protocol/node/revised-rows";
 import {
@@ -42,10 +43,8 @@ export const sessions = new Map<string, SessionState>();
 // each path that edits a row — including late updates to rows newer ones have
 // pushed out of the live transcript window (`SessionState.revisedRows`).
 eventEmitter.subscribe((event) => {
-  if (event.type !== "message.updated" && event.type !== "message.patched") return;
-  const data = event.data as { message?: { id?: unknown }; messageId?: unknown } | undefined;
-  const id = event.type === "message.updated" ? data?.message?.id : data?.messageId;
-  if (typeof id !== "string" || !event.sessionId) return;
+  const id = eventMessageId(event);
+  if (id === undefined || !event.sessionId) return;
   const session = sessions.get(event.sessionId);
   // The newest row is always inside the live window; only a row that changes
   // once a newer one exists can be outside it.
@@ -486,6 +485,11 @@ const UNIFIED_RATE_LIMIT_WINDOW_KEYS = ["five_hour", "seven_day"] as const;
 
 /** The `rate_limit_info` fields the bridge reads from a `rate_limit_event`. */
 export interface RateLimitEventInfo {
+  isUsingOverage?: boolean;
+  overageInUse?: boolean;
+  overageStatus?: string;
+  /** `rejected`: the request was refused because the limit is reached. */
+  status?: string;
   rateLimitType?: string;
   utilization?: number;
   resetsAt?: number;

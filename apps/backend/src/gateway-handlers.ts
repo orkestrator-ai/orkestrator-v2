@@ -1,4 +1,5 @@
 import { withRelayController } from "./core/public-api/index.js";
+import { isGlobalConfigEcho, isGlobalConfigWriteCommand } from "./core/nodes/index.js";
 import type { GatewayAuth } from "./gateway-auth.js";
 import type { GatewayContext } from "./gateway-context.js";
 import type { GatewayEvents } from "./gateway-events.js";
@@ -13,7 +14,9 @@ import { parseGatewayCursor } from "./gateway-event-replay.js";
 import {
   GATEWAY_KEEPALIVE_EVENT,
   GATEWAY_KEEPALIVE_EVENTS_PARAM,
+  GATEWAY_RELAYED_EVENTS_PARAM,
 } from "@orkestrator/protocol/gateway-event-stream";
+import { isPerNodeRelayedEvent } from "@orkestrator/protocol/node-events";
 import { gatewayRequestCredential } from "./gateway-sessions.js";
 import {
   API_PREFIX,
@@ -36,6 +39,7 @@ import {
   IdentityEventClientWriter,
   GzipEventClientWriter,
   parseEventSubscriptionFilter,
+  parseRelayedEventsMode,
 } from "./gateway-internals.js";
 import type {
   GatewayRequestMetrics,
@@ -104,6 +108,19 @@ export class GatewayHandlers {
       return;
     }
     if (options.refuseCommand?.(command)) {
+      // A refused settings write that would change nothing is answered with
+      // the current settings: an older realm sends one when it saves a model
+      // favourite (`isGlobalConfigEcho`). Anything else stays refused.
+      if (isGlobalConfigWriteCommand(command)) {
+        const current: unknown = await Promise.resolve()
+          .then(() => this.ctx.backend.invoke("get_config", {}))
+          .catch(() => null);
+        if (current && isGlobalConfigEcho(command, args, current)) {
+          compatibilityPathUsage.record("workspace-grant.config-echo");
+          serializedJsonResponse(response, 200, JSON.stringify({ result: current }));
+          return;
+        }
+      }
       jsonResponse(response, 403, { error: "This credential cannot run that command." });
       return;
     }
@@ -228,6 +245,7 @@ export class GatewayHandlers {
       prefixes: parseEventSubscriptionFilter(url.searchParams.get("events")),
       includedPrefixes: parseEventSubscriptionFilter(url.searchParams.get("includeEvents")),
       excludedPrefixes: parseEventSubscriptionFilter(url.searchParams.get("excludeEvents")),
+      relayedEvents: parseRelayedEventsMode(url.searchParams.get(GATEWAY_RELAYED_EVENTS_PARAM)),
       desyncedSessions: new Set(),
       handshake: { events: [], bytes: 0 },
       tracksReplayCursor: false,
@@ -249,6 +267,12 @@ export class GatewayHandlers {
       state.prefixes === null &&
       state.includedPrefixes?.every((prefix) => prefix.startsWith(DROPPABLE_EVENT_PREFIX)) &&
       state.excludedPrefixes?.some((prefix) => DROPPABLE_EVENT_PREFIX.startsWith(prefix));
+    // A stream asking only for per-node relayed events resumes against their
+    // ring, with its own cursor. A main stream's window never holds them.
+    state.relayedStream =
+      state.prefixes === null &&
+      state.includedPrefixes !== null &&
+      state.includedPrefixes.every(isPerNodeRelayedEvent);
     // Subscribe before inspecting the ring. `emit()` buffers into this state
     // until replay drains, closing the replay/live race. Everything from here
     // until the handshake settles is guarded: a throw after the client is in the
@@ -345,7 +369,11 @@ export class GatewayHandlers {
       ...snapshot,
       // Ring occupancy and eviction are otherwise invisible: a ring dropping
       // every gap looks exactly like one that never needed to retain anything.
-      replay: { ...snapshot.replay, ring: this.ctx.eventReplay.getStats() },
+      replay: {
+        ...snapshot.replay,
+        ring: this.ctx.eventReplay.getStats(),
+        relayedRing: this.ctx.relayedEventReplay.getStats(),
+      },
       // Additive: bounded, content-free recurring-work counters (kinds only).
       recurringWork: recurringWorkDiagnostics(),
       // Additive: content-free mixed-version compatibility-path usage.

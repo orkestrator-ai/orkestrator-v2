@@ -124,7 +124,7 @@ export function clearArtifactRequestCache(): void {
   settledBytes = 0;
   inflight.clear();
   latestGeneration.clear();
-  searchBodies.clear();
+  clearSearchBodiesWhere(() => true);
   bumpEpoch();
 }
 
@@ -155,6 +155,7 @@ function clearArtifactRequestsWhere(
 }
 
 export function clearArtifactRequestsForEnvironment(environmentId: string): void {
+  clearSearchBodiesWhere((scope) => scope.environmentId === environmentId);
   clearArtifactRequestsWhere(
     (parts) => parts[2] === environmentId,
     (parts) => parts[1] === environmentId,
@@ -162,6 +163,12 @@ export function clearArtifactRequestsForEnvironment(environmentId: string): void
 }
 
 export function clearArtifactRequestsForConversation(scope: RichConversationScope): void {
+  clearSearchBodiesWhere(
+    (held) =>
+      (held.backendId ?? "") === (scope.backendId ?? "") &&
+      held.environmentId === scope.environmentId &&
+      held.logicalSessionKey === scope.logicalSessionKey,
+  );
   clearArtifactRequestsWhere(
     (parts) =>
       parts[1] === (scope.backendId ?? "") &&
@@ -463,7 +470,7 @@ function errorInfo(error: unknown): { message: string; code?: string } {
   return { message: "The request failed" };
 }
 
-function useScopedRequest<T>(
+export function useScopedArtifactRead<T>(
   key: string | null,
   scope: ArtifactReadScope | null,
   run: () => Promise<T>,
@@ -537,7 +544,7 @@ function useScopedRequest<T>(
   return { ...value, retry };
 }
 
-function scopeParts(scope: ArtifactReadScope): string[] {
+export function artifactScopeKeyParts(scope: ArtifactReadScope): string[] {
   return [scope.backendId ?? "", scope.environmentId, scope.logicalSessionKey, scope.generation];
 }
 
@@ -547,9 +554,9 @@ export function useArtifactPublication(
 ): ArtifactRequestState<ArtifactPublicationView> & { retry: () => void } {
   const key =
     scope && publicationId
-      ? encodeRichKey(["publication", ...scopeParts(scope), publicationId])
+      ? encodeRichKey(["publication", ...artifactScopeKeyParts(scope), publicationId])
       : null;
-  return useScopedRequest(
+  return useScopedArtifactRead(
     key,
     scope,
     () =>
@@ -564,15 +571,20 @@ export function useArtifactPublication(
 
 /**
  * Read a whole representation. UTF-8 representations that the backend pages
- * are concatenated up to MAX_TEXT_REPRESENTATION_BYTES; base64 bodies are
- * read in one response.
+ * are concatenated up to `maxBytes` (default MAX_TEXT_REPRESENTATION_BYTES);
+ * base64 bodies are read in one response. A representation over the limit
+ * comes back partial, with `nextOffsetBytes` still set, so a caller that needs
+ * the whole document must check it. Every page must name the same artifact,
+ * revision, representation and whole-document hash as the first.
  */
 export async function readWholeRepresentation(
   scope: ArtifactReadScope,
   publicationId: string,
   representation: ArtifactRepresentation,
   captureIndex?: number,
+  options: { maxBytes?: number } = {},
 ): Promise<ArtifactRepresentationResponse> {
+  const maxBytes = options.maxBytes ?? MAX_TEXT_REPRESENTATION_BYTES;
   const base = {
     environmentId: scope.environmentId,
     logicalSessionKey: scope.logicalSessionKey,
@@ -580,21 +592,37 @@ export async function readWholeRepresentation(
     representation,
     ...(captureIndex !== undefined ? { captureIndex } : {}),
   };
-  const first = await readTranscriptArtifactRepresentation(base);
+  const first = await readTranscriptArtifactRepresentation(
+    options.maxBytes !== undefined
+      ? { ...base, sourceRange: { offsetBytes: 0, limitBytes: maxBytes } }
+      : base,
+  );
   if (first.encoding !== "utf8" || first.nextOffsetBytes === null) return first;
+  // Nothing more to fetch for a document the caller could not use anyway.
+  if (first.totalBytes > maxBytes) return first;
   let data = first.data;
   let next: number | null = first.nextOffsetBytes;
   let total = first.byteLength;
-  while (next !== null && total < MAX_TEXT_REPRESENTATION_BYTES) {
-    const page = await readTranscriptArtifactRepresentation({
+  while (next !== null && total < maxBytes) {
+    const offset: number = next;
+    const page: ArtifactRepresentationResponse = await readTranscriptArtifactRepresentation({
       ...base,
       sourceRange: {
-        offsetBytes: next,
-        limitBytes: Math.min(256 * 1024, MAX_TEXT_REPRESENTATION_BYTES - total),
+        offsetBytes: offset,
+        limitBytes: Math.min(256 * 1024, maxBytes - total),
       },
     });
-    if (page.sha256 !== first.sha256 || page.revision !== first.revision) {
+    if (
+      page.sha256 !== first.sha256 ||
+      page.revision !== first.revision ||
+      page.artifactId !== first.artifactId ||
+      page.representation !== first.representation ||
+      page.encoding !== first.encoding
+    ) {
       throw new Error("The representation changed while it was being read");
+    }
+    if (page.nextOffsetBytes !== null && page.nextOffsetBytes <= offset) {
+      throw new Error("The representation read did not advance");
     }
     data += page.data;
     total += page.byteLength;
@@ -614,13 +642,13 @@ export function useArtifactRepresentation(
     enabled && scope && publicationId
       ? encodeRichKey([
           "representation",
-          ...scopeParts(scope),
+          ...artifactScopeKeyParts(scope),
           publicationId,
           representation,
           options.captureIndex ?? null,
         ])
       : null;
-  return useScopedRequest(
+  return useScopedArtifactRead(
     key,
     scope,
     () => readWholeRepresentation(scope!, publicationId!, representation, options.captureIndex),
@@ -631,33 +659,93 @@ export function useArtifactRepresentation(
 /*
  * Searchable body text of published artifact cards, keyed by publication id.
  * A card writes it when it has loaded and is showing that body (chart or
- * workflow labels, Mermaid source while the source view is shown) and clears
- * it when it stops showing it. Find's message projection reads it
- * synchronously (`artifactPartSearchSegments` in `rich-search-text.ts`), so
- * an unloaded body contributes nothing and a loaded one matches the card's
- * body search root exactly. Bounded by count; each value is already bounded
- * by `MAX_ARTIFACT_BODY_SEARCH_CHARACTERS` (labels) or the representation
- * size (source).
+ * workflow labels, Mermaid source while the source view is shown, a static
+ * document's text once its frame reports it) and clears it when it stops
+ * showing it. Find's message projection reads it synchronously
+ * (`artifactPartSearchSegments` in `rich-search-text.ts`), so an unloaded body
+ * contributes nothing and a loaded one matches the card's body search root
+ * exactly. Each entry names its conversation, so clearing that conversation's
+ * protected content takes its text too. Bounded by count and total characters;
+ * each value is already bounded by `MAX_ARTIFACT_BODY_SEARCH_CHARACTERS`
+ * (labels, document text) or the representation size (source).
  */
 const MAX_SEARCH_BODIES = 256;
-const searchBodies = new Map<string, { artifactId: string; revision: number; text: string }>();
+const MAX_SEARCH_BODY_CHARACTERS = 8 * 1024 * 1024;
+const searchBodies = new Map<
+  string,
+  { artifactId: string; revision: number; text: string; scope: RichConversationScope }
+>();
+let searchBodyCharacters = 0;
+let searchBodyRevision = 0;
+const searchBodyListeners = new Set<() => void>();
+
+function notifySearchBodies(): void {
+  searchBodyRevision += 1;
+  for (const listener of Array.from(searchBodyListeners)) listener();
+}
+
+/** Changes whenever a body arrives or leaves; nothing else moves it. */
+export function artifactSearchBodyRevision(): number {
+  return searchBodyRevision;
+}
+
+export function subscribeArtifactSearchBodies(listener: () => void): () => void {
+  searchBodyListeners.add(listener);
+  return () => {
+    searchBodyListeners.delete(listener);
+  };
+}
+
+function dropSearchBody(publicationId: string): boolean {
+  const entry = searchBodies.get(publicationId);
+  if (!entry) return false;
+  searchBodies.delete(publicationId);
+  searchBodyCharacters -= entry.text.length;
+  return true;
+}
+
+function clearSearchBodiesWhere(matches: (scope: RichConversationScope) => boolean): void {
+  let changed = false;
+  for (const [publicationId, entry] of Array.from(searchBodies.entries())) {
+    if (matches(entry.scope)) changed = dropSearchBody(publicationId) || changed;
+  }
+  if (changed) notifySearchBodies();
+}
 
 export function rememberArtifactSearchBody(
   artifact: { publicationId: string; artifactId: string; revision: number },
   text: string | null,
+  scope: RichConversationScope,
 ): void {
-  searchBodies.delete(artifact.publicationId);
-  if (text === null || text.length === 0) return;
+  const previous = searchBodies.get(artifact.publicationId);
+  const dropped = dropSearchBody(artifact.publicationId);
+  if (text === null || text.length === 0) {
+    if (dropped) notifySearchBodies();
+    return;
+  }
+  // A card that mounts again republishes what it published before. Its place in
+  // the eviction order moves, but an open Find bar has nothing to recompute.
+  let changed =
+    previous?.text !== text ||
+    previous.artifactId !== artifact.artifactId ||
+    previous.revision !== artifact.revision;
   searchBodies.set(artifact.publicationId, {
     artifactId: artifact.artifactId,
     revision: artifact.revision,
     text,
+    scope,
   });
-  while (searchBodies.size > MAX_SEARCH_BODIES) {
+  searchBodyCharacters += text.length;
+  while (
+    searchBodies.size > MAX_SEARCH_BODIES ||
+    searchBodyCharacters > MAX_SEARCH_BODY_CHARACTERS
+  ) {
     const oldest = searchBodies.keys().next().value;
     if (oldest === undefined) break;
-    searchBodies.delete(oldest);
+    dropSearchBody(oldest);
+    changed = true;
   }
+  if (changed) notifySearchBodies();
 }
 
 /** The loaded body text for an artifact part's reference, or null. */
@@ -668,4 +756,11 @@ export function cachedArtifactSearchBody(artifact: unknown): string | null {
   const entry = searchBodies.get(ref.publicationId);
   if (!entry || entry.artifactId !== ref.artifactId || entry.revision !== ref.revision) return null;
   return entry.text;
+}
+
+/** `cachedArtifactSearchBody`, for a card whose search root follows the cache. */
+export function useCachedArtifactSearchBody(artifact: unknown): string | null {
+  return useSyncExternalStore(subscribeArtifactSearchBodies, () =>
+    cachedArtifactSearchBody(artifact),
+  );
 }

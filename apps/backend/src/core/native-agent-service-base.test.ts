@@ -45,13 +45,15 @@ import {
 } from "./native-agent-service.js";
 
 import { StorageService } from "./storage.js";
-import { createProject } from "./storage.js";
+import { createEnvironment, createProject } from "./storage.js";
+import { coordinatorDelegationAvailable } from "./coordinator-context-reads.js";
 import {
   COORDINATOR_EXECUTION_POLICY,
   COORDINATOR_WORKSPACE_VERSION,
   COORDINATOR_ASYNC_CONTRACT,
   COORDINATOR_ENVIRONMENT_CHOICE_RULE,
   COORDINATOR_LAUNCH_DEFAULTS_RULE,
+  COORDINATOR_MESSAGING_OFF_NOTE,
   COORDINATOR_PR_RULE,
   COORDINATOR_ROUTING_RULE,
   COORDINATOR_TIMERS_AND_ACCOUNTS_RULE,
@@ -3467,6 +3469,138 @@ describe("NativeAgentService", () => {
     }
   });
 
+  test("a coordinator with agent messaging off is not told to wait for a wake", async () => {
+    const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-native-coordinator-"));
+    const storage = await createStorage(dataDir);
+    const checkout = path.join(dataDir, "checkout");
+    await fs.mkdir(checkout);
+    const project = await storage.addProject(createProject("remote", checkout));
+    const now = new Date(0).toISOString();
+    const conversation = {
+      id: "conversation-1",
+      tabId: "coordinator-tab",
+      logicalSessionKey: "coordinator-coordinator-1:conversation-1",
+      agent: "codex" as const,
+      title: "Coordinator",
+      createdAt: now,
+      mailboxIncarnationId: "incarnation-1",
+    };
+    await storage.coordinators.mutateCoordinatorWorkspace(project.id, () => ({
+      version: COORDINATOR_WORKSPACE_VERSION,
+      id: "coordinator-1",
+      projectId: project.id,
+      executionPolicy: COORDINATOR_EXECUTION_POLICY,
+      lifecycleState: "ready",
+      conversations: [
+        conversation,
+        {
+          ...conversation,
+          id: "side-1",
+          tabId: "side-tab",
+          logicalSessionKey: "coordinator-coordinator-1:side-1",
+          title: "Side 1",
+          mailboxIncarnationId: "incarnation-2",
+          role: "side",
+        },
+      ],
+      selectedConversationId: "conversation-1",
+      repositoryContextRevision: 1,
+      createdAt: now,
+      updatedAt: now,
+      repositoryStatus: {
+        projectId: project.id,
+        repositoryRoot: checkout,
+        revision: 1,
+        branch: "main",
+        detached: false,
+        unborn: false,
+        headCommit: "a".repeat(40),
+        upstream: null,
+        remote: null,
+        ahead: null,
+        behind: null,
+        remoteState: "unknown",
+        fetchedAt: null,
+        trackedChanges: 0,
+        untrackedChanges: 0,
+        conflicts: 0,
+        mergeInProgress: false,
+        rebaseInProgress: false,
+        sequencerInProgress: false,
+        operationState: "idle",
+        repositoryOperationBlockedReason: null,
+        branches: [],
+        lastError: null,
+      },
+    }));
+    const setMessaging = async (enabled: boolean) => {
+      const { global } = await storage.loadConfig();
+      await storage.updateGlobalConfig({
+        ...global,
+        agentMessaging: { ...global.agentMessaging!, enabled },
+      });
+    };
+    const provider = createProviderStub("codex");
+    const service = new NativeAgentService(storage, refusingInvoke, {
+      provider: async () => provider.provider,
+      beginCoordinatorTurn: () => () => undefined,
+      coordinatorDelegationAvailable: (platform) =>
+        coordinatorDelegationAvailable(platform, { controlMcpRunning: () => true, storage }),
+    });
+    const send = async (conversationId: string, requestId: string) => {
+      await service.dispatchPrompt({
+        environmentId: coordinatorRuntimeId("coordinator-1", conversationId),
+        agent: "codex",
+        logicalSessionKey: `coordinator-coordinator-1:${conversationId}`,
+        requestId,
+        prompt: "Build this",
+      });
+      return provider.send.mock.calls.at(-1)![1];
+    };
+    try {
+      await setMessaging(false);
+      const off = await send("conversation-1", "off");
+      expect(off).not.toContain(COORDINATOR_ASYNC_CONTRACT);
+      expect(off).not.toContain("launch_environment");
+      expect(off).toContain("Orkestrator worker controls are unavailable in this session");
+      expect(off).toContain(COORDINATOR_MESSAGING_OFF_NOTE);
+      const sideOff = await send("side-1", "side-off");
+      expect(sideOff).not.toContain("send_message");
+      expect(sideOff).toContain("Agent messaging is off");
+
+      // The setting is read per turn: turning it on applies from the next one.
+      await setMessaging(true);
+      const on = await send("conversation-1", "on");
+      expect(on).toContain(COORDINATOR_ASYNC_CONTRACT);
+      expect(on).toContain("launch_environment");
+      expect(on).not.toContain(COORDINATOR_MESSAGING_OFF_NOTE);
+
+      // The open-work line is the last thing in the block.
+      const environment = createEnvironment(project.id, { name: "fix-login" });
+      await storage.addEnvironment(environment);
+      await storage.coordinators.saveCoordinatorWorkflowAssociation({
+        id: "association-1",
+        coordinatorId: "coordinator-1",
+        projectId: project.id,
+        conversationId: "conversation-1",
+        kind: "environment",
+        resourceId: environment.id,
+        requestId: "request-worker",
+        createdAt: now,
+        delegation: { requestedAt: now, workerTabId: "tab-1", state: "running" },
+      });
+      const waiting = await send("conversation-1", "waiting");
+      expect(waiting).toContain(
+        `Waiting on 1 worker: "fix-login". list_workflows with openOnly shows each one's state.\n</orkestrator-coordinator-context>`,
+      );
+      // A side agent launches nothing and has nothing of its own to wait on.
+      expect(await send("side-1", "side-waiting")).not.toContain("Waiting on");
+    } finally {
+      await service.shutdown();
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
   test("derives coordinator authority, prepends context once, and uses turn admission", async () => {
     const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-native-coordinator-"));
     const storage = await createStorage(dataDir);
@@ -3532,7 +3666,7 @@ describe("NativeAgentService", () => {
     // Records the argument: delegation is not only a Control MCP question, and
     // answering it without the platform is what would let the prompt promise
     // `launch_environment` on a provider that cannot receive the worker's reply.
-    const delegationFor = mock((_platform: string) => delegationAvailable);
+    const delegationFor = mock(async (_platform: string) => delegationAvailable);
     const service = new NativeAgentService(storage, refusingInvoke, {
       provider: async () => provider.provider,
       beginCoordinatorTurn: admit,
@@ -3547,6 +3681,7 @@ describe("NativeAgentService", () => {
         requestId: "request-1",
         prompt: "Inspect this",
         owner: { kind: "environment", projectId: "forged", environmentId: runtimeId },
+        clientTimeZone: "Asia/Tokyo",
       });
       expect(session).toMatchObject({
         origin: "coordinator",
@@ -3569,6 +3704,10 @@ describe("NativeAgentService", () => {
       );
       expect(sent).toContain("Branch: main");
       expect(sent).toContain(`Commit: ${"a".repeat(40)}`);
+      // The project by name and checkout, not only its id.
+      expect(sent).toContain(`Project: remote at ${checkout} (id ${project.id})\n`);
+      // Nothing is open, so nothing is said about open work.
+      expect(sent).not.toContain("Waiting on");
       // A coordinator that can delegate is told, in the same breath, that
       // delegating ends its turn. Without this it has every reason to sit and
       // poll its mailbox, which is what the composer lock used to look like.
@@ -3611,6 +3750,10 @@ describe("NativeAgentService", () => {
       expect(
         (await storage.coordinators.getCoordinatorWorkspace(project.id))!.conversations[0],
       ).toMatchObject({ lastTurnOrigin: "user", lastTurnStartedAt: expect.any(String) });
+      // The user's device named its zone; a self-timer's "14:30" is read in it.
+      expect((await storage.coordinators.getCoordinatorWorkspace(project.id))!.userTimeZone).toBe(
+        "Asia/Tokyo",
+      );
       await storage.coordinators.mutateCoordinatorWorkspace(project.id, (workspace) => ({
         ...workspace!,
         repositoryContextRevision: 4,
@@ -3707,6 +3850,7 @@ describe("NativeAgentService", () => {
           logicalSessionKey: "coordinator-coordinator-1:conversation-1",
           requestId: "request-mail",
           prompt: "<orkestrator-peer-message>timer</orkestrator-peer-message>",
+          clientTimeZone: "Europe/Paris",
         },
         undefined,
         false,
@@ -3716,6 +3860,10 @@ describe("NativeAgentService", () => {
         (await storage.coordinators.getCoordinatorWorkspace(project.id))!.conversations[0]
           ?.lastTurnOrigin,
       ).toBe("mail");
+      // Only a turn the user started says where the user is.
+      expect((await storage.coordinators.getCoordinatorWorkspace(project.id))!.userTimeZone).toBe(
+        "Asia/Tokyo",
+      );
 
       delegationAvailable = false;
       await service.dispatchPrompt({

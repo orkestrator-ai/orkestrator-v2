@@ -46,6 +46,7 @@ describe("refreshClaudeModelCatalog", () => {
           _containerId: string,
           operation: () => Promise<unknown>,
         ) => operation(),
+        containerCredentialMode: async () => "verifier",
         startContainerClaudeServer: startContainer,
         startLocalServer: async () => {
           throw new Error("local server should not start");
@@ -56,7 +57,7 @@ describe("refreshClaudeModelCatalog", () => {
     );
     expect(fetchCatalog).toHaveBeenCalledWith(43123, "catalog-token", true);
 
-    expect(startContainer).toHaveBeenCalledWith("container-123", undefined, true, 6);
+    expect(startContainer).toHaveBeenCalledWith("container-123", undefined, true, 6, "verifier");
     expect(bridgeStarted).toHaveBeenCalledTimes(1);
     expect(snapshot).toMatchObject({
       environmentId: "docker-env",
@@ -78,6 +79,7 @@ describe("refreshClaudeModelCatalog", () => {
           _containerId: string,
           operation: () => Promise<unknown>,
         ) => operation(),
+        containerCredentialMode: async () => "verifier",
         startContainerClaudeServer: startContainer,
         startLocalServer: async () => {
           throw new Error("unexpected local start");

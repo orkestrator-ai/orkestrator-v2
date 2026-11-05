@@ -1512,7 +1512,10 @@ describe("web gateway browser API", () => {
     expect(String(directSocket.url)).toBe(
       "wss://workstation.tailnet.ts.net/__orkestrator/terminal",
     );
-    expect(directSocket.protocols).toBe("orkestrator-terminal.v1");
+    expect(directSocket.protocols).toEqual([
+      "orkestrator-terminal.v1.input-results",
+      "orkestrator-terminal.v1",
+    ]);
     directSocket.open();
     expect(sentControlFrames(directSocket)[0]).toEqual({
       type: "authenticate",
@@ -1546,8 +1549,9 @@ describe("web gateway browser API", () => {
     const fallbackSignals = new Map<string, AbortSignal>();
     globalThis.fetch = mock(async (input, init) => {
       if (String(input).includes("/__orkestrator/events?")) {
-        const event = new URL(String(input)).searchParams.get("includeEvents");
-        if (event && init?.signal) fallbackSignals.set(event, init.signal);
+        // One shared stream carries every terminal; track each event's newest.
+        const events = new URL(String(input)).searchParams.get("includeEvents")?.split(",") ?? [];
+        for (const event of events) if (init?.signal) fallbackSignals.set(event, init.signal);
         return new Response(new ReadableStream({ start() {} }), { status: 200 });
       }
       const body = JSON.parse(String(init?.body)) as { command: string };
@@ -1706,8 +1710,9 @@ describe("web gateway browser API", () => {
         );
       try {
         await waitForCondition(
-          () => activeFallbacks() === (transport === "direct" ? 2 : 1),
-          "Initial fallback streams did not start",
+          // Both transports carry every terminal on one shared stream.
+          () => activeFallbacks() === 1,
+          "Initial fallback stream did not start",
         );
         if (transport === "same-origin") browserStream().open();
         const first = MockWebSocket.instances[0]!;
@@ -1766,8 +1771,8 @@ describe("web gateway browser API", () => {
         first.close(1006, "backend outage");
         expect(socketRetry.pendingCount()).toBe(1);
         await waitForCondition(
-          () => activeFallbacks() === (transport === "direct" ? 2 : 1),
-          "Socket outage did not activate all fallbacks",
+          () => activeFallbacks() === 1,
+          "Socket outage did not activate the shared fallback",
         );
         if (transport === "same-origin") browserStream().open();
         const desyncCounts = {
@@ -1781,16 +1786,16 @@ describe("web gateway browser API", () => {
             stream.controller.close();
         } else browserStream().fail();
         await waitForCondition(
-          () => streamRetry.pendingCount() === (transport === "direct" ? 2 : 1),
-          "Failed fallbacks did not arm their retries",
+          () => streamRetry.pendingCount() === 1,
+          "The failed fallback did not arm its retry",
         );
         const previousStreamCount = directStreams.length;
         const previousBrowserStreamCount = MockEventSource.instances.length;
         streamRetry.advance();
         if (transport === "direct")
           await waitForCondition(
-            () => directStreams.length === previousStreamCount + 2,
-            "Direct fallbacks did not reopen",
+            () => directStreams.length === previousStreamCount + 1,
+            "Direct fallback did not reopen",
           );
         else {
           await waitForCondition(
@@ -1820,7 +1825,9 @@ describe("web gateway browser API", () => {
           });
           if (transport === "direct") {
             directStreams
-              .findLast((stream) => stream.event === event && !stream.signal.aborted)!
+              .findLast(
+                (stream) => stream.event.split(",").includes(event) && !stream.signal.aborted,
+              )!
               .controller.enqueue(new TextEncoder().encode(`data: ${frame}\n\n`));
           } else browserStream().onmessage!(new MessageEvent("message", { data: frame }));
         }
@@ -2410,6 +2417,8 @@ describe("web gateway browser API", () => {
     await expect(ready).resolves.toBeUndefined();
     expect(fallbackSignal?.aborted).toBe(false);
     stop();
+    // The shared terminal stream drops its last terminal on the next microtask.
+    await Promise.resolve();
     expect(fallbackSignal?.aborted).toBe(true);
   });
 
@@ -2659,7 +2668,7 @@ describe("web gateway browser API", () => {
       platform: unknown;
     }> = [];
     globalThis.fetch = mock(async (input, init) => {
-      if (String(input).endsWith("/events?excludeEvents=terminal-output-")) {
+      if (String(input).endsWith("/events?excludeEvents=terminal-output-&relayedEvents=per-node")) {
         return new Response(new ReadableStream({ start() {} }), { status: 200 });
       }
       const headers = new Headers(init?.headers);
@@ -3518,7 +3527,7 @@ describe("web gateway browser API", () => {
     const source = MockEventSource.instances[0];
     if (!source) throw new Error("EventSource was not created");
     expect(source.url).toBe(
-      "/__orkestrator/events?excludeEvents=terminal-output-&keepaliveEvents=1",
+      "/__orkestrator/events?excludeEvents=terminal-output-&relayedEvents=per-node&keepaliveEvents=1",
     );
     expect(source.options).toEqual({ withCredentials: true });
 
@@ -3597,7 +3606,7 @@ describe("web gateway browser API", () => {
       );
       const secondSource = MockEventSource.instances[1]!;
       expect(secondSource.url).toBe(
-        "/__orkestrator/events?excludeEvents=terminal-output-&since=12345678%3A5&keepaliveEvents=1",
+        "/__orkestrator/events?excludeEvents=terminal-output-&since=12345678%3A5&relayedEvents=per-node&keepaliveEvents=1",
       );
       secondSource.onmessage?.(
         new MessageEvent("message", {
@@ -3616,7 +3625,7 @@ describe("web gateway browser API", () => {
       const stopReplacement = api.listen("menu-zoom", () => undefined);
       expect(MockEventSource.instances).toHaveLength(3);
       expect(MockEventSource.instances[2]?.url).toBe(
-        "/__orkestrator/events?excludeEvents=terminal-output-&since=12345678%3A8&keepaliveEvents=1",
+        "/__orkestrator/events?excludeEvents=terminal-output-&since=12345678%3A8&relayedEvents=per-node&keepaliveEvents=1",
       );
       stopReplacement();
     } finally {
@@ -3649,7 +3658,7 @@ describe("web gateway browser API", () => {
         "The authoritative stream was not rebuilt after a fatal error",
       );
       expect(MockEventSource.instances[1]?.url).toBe(
-        "/__orkestrator/events?excludeEvents=terminal-output-&since=12345678%3A4&keepaliveEvents=1",
+        "/__orkestrator/events?excludeEvents=terminal-output-&since=12345678%3A4&relayedEvents=per-node&keepaliveEvents=1",
       );
 
       // The abandoned socket must not keep dispatching into the live listeners.
@@ -3740,7 +3749,7 @@ describe("web gateway browser API", () => {
     const stopReplacement = api.listen("menu-zoom", () => undefined);
     const replacement = MockEventSource.instances.at(-1);
     expect(replacement?.url).toBe(
-      "/__orkestrator/events?excludeEvents=terminal-output-&since=12345678%3A3&keepaliveEvents=1",
+      "/__orkestrator/events?excludeEvents=terminal-output-&since=12345678%3A3&relayedEvents=per-node&keepaliveEvents=1",
     );
     stopReplacement();
   });
@@ -3861,6 +3870,8 @@ describe("web gateway browser API", () => {
     expect(requestSignal?.aborted).toBe(false);
 
     unsubscribe();
+    // The shared terminal stream drops its last terminal on the next microtask.
+    await Promise.resolve();
 
     expect(requestSignal?.aborted).toBe(true);
     await expect(ready).resolves.toBeUndefined();
@@ -4183,7 +4194,7 @@ describe("web gateway browser API", () => {
     stop();
   });
 
-  test("reconnects a direct terminal stream on its configured delay and stops once its listener leaves", async () => {
+  test("reconnects the direct terminal stream on its configured delay and stops once its listener leaves", async () => {
     const logs = captureLogs();
     let attempt = 0;
     globalThis.fetch = mock(async () => {
@@ -4233,7 +4244,7 @@ describe("web gateway browser API", () => {
     }
   });
 
-  test("retries direct terminal streams after non-ok and bodyless responses, then cleans up", async () => {
+  test("retries the direct terminal stream after non-ok and bodyless responses, then cleans up", async () => {
     const logs = captureLogs();
     const signals: AbortSignal[] = [];
     let attempt = 0;
@@ -4282,6 +4293,8 @@ describe("web gateway browser API", () => {
       expect(signals[2]?.aborted).toBe(false);
 
       stop();
+      // The shared terminal stream drops its last terminal on the next microtask.
+      await Promise.resolve();
       expect(signals[2]?.aborted).toBe(true);
       await new Promise((resolve) => originalSetTimeout(resolve, 2));
       expect(attempt).toBe(3);

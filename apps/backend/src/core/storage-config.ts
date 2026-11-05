@@ -33,6 +33,7 @@ import {
   firstEnabledAgentPlatform,
   fs,
   getUnscopedLegacyOpenCodeModelCatalog,
+  isMissingFileError,
   isRecord,
   normalizeAcpModelCatalogEntries,
   normalizeAgentPlatforms,
@@ -56,7 +57,7 @@ import {
 } from "@orkestrator/protocol/review-lens";
 import type { StorageContext } from "./storage-context.js";
 import type { StorageFiles } from "./storage-files.js";
-import { createLogger } from "@orkestrator/protocol/logger";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("storage");
 type AgentInteractionOrigin = shared.AgentInteractionOrigin;
@@ -314,6 +315,44 @@ export class ConfigRepository {
             },
           },
         };
+  }
+
+  /**
+   * `config.json` holds the provider secrets and each backup copies them. Saves
+   * write both 0600, but a file left wider by an older build or a restore would
+   * stay that way until the next save, so every start tightens them. A mode that
+   * cannot be changed is logged rather than stopping the backend.
+   */
+  async restrictConfigFileModes(): Promise<void> {
+    const config = this.files.configFile();
+    const files = [config, ...this.context.jsonBackupPaths(config)];
+    // Atomic saves can survive a crash before rename/cleanup. Keep remnants
+    // (another backend may still be writing one), but restrict their modes too.
+    try {
+      const entries = await fs.readdir(path.dirname(config), { withFileTypes: true });
+      for (const entry of entries) {
+        if (
+          entry.isFile() &&
+          /^\.config\.json(?:\.bak\.[1-5])?\.(?:recovery\.)?[0-9a-f-]{36}\.tmp$/i.test(entry.name)
+        ) {
+          files.push(path.join(path.dirname(config), entry.name));
+        }
+      }
+    } catch (error) {
+      if (!isMissingFileError(error)) {
+        log.warn("config.restrict-mode-failed", {
+          error: formatLogError(error, { message: false }),
+        });
+      }
+    }
+    for (const file of files) {
+      await fs.chmod(file, 0o600).catch((error: unknown) => {
+        if (isMissingFileError(error)) return;
+        log.warn("config.restrict-mode-failed", {
+          error: formatLogError(error, { message: false }),
+        });
+      });
+    }
   }
 
   /**

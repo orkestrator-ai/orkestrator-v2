@@ -398,6 +398,7 @@ export async function createHarness(
     richMarkdown: true,
     artifactPublication: true,
     liveInteractive: true,
+    staticPresentation: true,
   };
   const services: TranscriptArtifactService[] = [];
   const announcements: Array<{ environmentId: string; conversationKey: string }> = [];

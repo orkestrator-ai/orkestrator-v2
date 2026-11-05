@@ -4,10 +4,13 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 
 import {
+  COORDINATOR_REQUEST_ID_REUSED_ERROR,
   COORDINATOR_WORKSPACE_VERSION,
   isCoordinatorWorkspace,
+  normalizeCoordinatorDelegationRequest,
   normalizeCoordinatorRoles,
   normalizeCoordinatorSessionKeys,
+  type CoordinatorDelegationRequest,
   type CoordinatorWorkflowAssociation,
   type CoordinatorWorkspace,
 } from "@orkestrator/protocol/coordinator";
@@ -266,10 +269,12 @@ export class CoordinatorsRepository {
           existing.projectId !== input.projectId ||
           existing.payloadHash !== input.payloadHash
         ) {
-          throw new Error("Coordinator request id was reused with a different payload");
+          throw new Error(COORDINATOR_REQUEST_ID_REUSED_ERROR);
         }
         if (existing.conversationId !== input.conversationId) {
-          throw new Error("This request belongs to another coordinator conversation");
+          throw new Error(
+            "This requestId was used by another conversation of this coordinator, so nothing was done. Use a new unique requestId for a new action.",
+          );
         }
         if (existing.state === "completed") return { receipt: existing, claimed: false };
         // This process included: a pending receipt it owns is still running
@@ -454,7 +459,7 @@ export class CoordinatorsRepository {
             association.payloadHash &&
             duplicate.payloadHash !== association.payloadHash)
         ) {
-          throw new Error("Coordinator request id was reused with a different payload");
+          throw new Error(COORDINATOR_REQUEST_ID_REUSED_ERROR);
         }
         return duplicate;
       }
@@ -483,7 +488,7 @@ export class CoordinatorsRepository {
           existing.nodeId !== association.nodeId ||
           existing.payloadHash !== association.payloadHash
         ) {
-          throw new Error("Coordinator request id was reused with a different payload");
+          throw new Error(COORDINATOR_REQUEST_ID_REUSED_ERROR);
         }
         if (!existing.pending) return { association: existing, claimed: false };
         let ownerAlive = false;
@@ -630,7 +635,7 @@ export class CoordinatorsRepository {
                 )?.payloadHash
               : undefined;
         if (existingRequest.id !== associationId || existingHash !== payloadHash) {
-          throw new Error("Coordinator request id was reused with a different payload");
+          throw new Error(COORDINATOR_REQUEST_ID_REUSED_ERROR);
         }
         return existingRequest;
       }
@@ -670,15 +675,18 @@ export class CoordinatorsRepository {
     associationId: string,
     workerTabId: string,
     at = new Date().toISOString(),
+    /** What was asked and on what; bounded here, because this store is rewritten whole. */
+    request?: CoordinatorDelegationRequest,
   ): Promise<CoordinatorWorkflowAssociation | null> {
     if (!workerTabId.trim()) throw new Error("Coordinator delegation worker tab id is required");
+    const boundedRequest = normalizeCoordinatorDelegationRequest(request);
     return this.enqueueCoordinatorMutation(async () => {
       const store = await this.loadCoordinatorStore();
       const association = store.workflows.find((item) => item.id === associationId);
       if (!association) return null;
       if (association.delegation) {
         if (association.delegation.workerTabId !== workerTabId) {
-          throw new Error("Coordinator request id was reused for a different worker tab");
+          throw new Error(COORDINATOR_REQUEST_ID_REUSED_ERROR);
         }
         // A retry of the same request must neither reset a running delegation
         // nor reopen one that already produced its wake.
@@ -713,7 +721,12 @@ export class CoordinatorsRepository {
         if (overlapping) {
           throw new Error("That worker tab already has an outstanding coordinator delegation");
         }
-        association.delegation = { requestedAt: at, workerTabId, state: "running" };
+        association.delegation = {
+          requestedAt: at,
+          workerTabId,
+          state: "running",
+          ...(boundedRequest ? { request: boundedRequest } : {}),
+        };
         store.revision += 1;
         await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
         this.context.changes.announce("coordinator", association.projectId, association.projectId);
@@ -810,6 +823,27 @@ export class CoordinatorsRepository {
       const association = store.workflows.find((item) => item.id === associationId);
       if (!association?.delegation || association.delegation.wokenAt) return;
       association.delegation = { ...association.delegation, wokenAt: at };
+      store.revision += 1;
+      await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
+      this.context.changes.announce("coordinator", association.projectId, association.projectId);
+    });
+  }
+
+  /**
+   * Give up on a wake that keeps failing. `wokenAt` is stamped with it because
+   * nothing further is owed: retention, adoption and the wake pass all read it
+   * that way, as they do for a delegation whose coordinator is gone. The
+   * worker's own outcome in `state` is left as it was.
+   */
+  async markCoordinatorDelegationWakeFailed(
+    associationId: string,
+    at = new Date().toISOString(),
+  ): Promise<void> {
+    await this.enqueueCoordinatorMutation(async () => {
+      const store = await this.loadCoordinatorStore();
+      const association = store.workflows.find((item) => item.id === associationId);
+      if (!association?.delegation || association.delegation.wokenAt) return;
+      association.delegation = { ...association.delegation, wokenAt: at, wakeFailedAt: at };
       store.revision += 1;
       await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
       this.context.changes.announce("coordinator", association.projectId, association.projectId);
@@ -943,7 +977,7 @@ export class CoordinatorsRepository {
           same.resourceId !== input.environmentId ||
           same.nodeId !== input.nodeId
         )
-          throw new Error("Coordinator request id was reused with a different payload");
+          throw new Error(COORDINATOR_REQUEST_ID_REUSED_ERROR);
         return same;
       }
       const live = store.workflows.find(
@@ -1227,6 +1261,7 @@ export type CoordinatorsStorage = Pick<
   | "closeCoordinatorDelegation"
   | "prepareCoordinatorDelegationWake"
   | "markCoordinatorDelegationWoken"
+  | "markCoordinatorDelegationWakeFailed"
   | "updateCoordinatorWorkflowAssociation"
   | "updateCoordinatorWorkflowAssociations"
   | "hideCoordinatorWork"

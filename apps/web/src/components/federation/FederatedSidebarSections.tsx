@@ -700,6 +700,7 @@ export function FederatedActivityList({
   boundWaitingCount?: number;
 }) {
   const active = useRemoteWorkspaceStore((state) => state.active);
+  const multiSelecting = useUIStore((state) => state.selectedEnvironmentIds.length > 0);
   const rows = activityRows(machines, order, boundActivity);
   const mixed = machines.length > 1;
   const createTargets: ActivityCreateTarget[] = machines.flatMap((machine) =>
@@ -758,6 +759,7 @@ export function FederatedActivityList({
               key: row.environment.key,
               environmentId,
               selected:
+                !multiSelecting &&
                 active?.nodeId === row.machine.connectionId &&
                 active.environmentId === environmentId,
               offline: row.machine.transport !== "connected",
@@ -811,6 +813,7 @@ function activitySortKey(
     activity: environment.buildActive ? "working" : environment.activity,
     activityUpdatedAt: environment.activityUpdatedAt,
     lastActivityAt: environment.lastActivityAt,
+    prState: environment.prState,
     machineId: machine.backendId,
     projectOrder,
     order: environment.order,

@@ -7,7 +7,9 @@ import {
   type ProjectGitStatus,
   type ProjectGitSwitchConfirmation,
 } from "@orkestrator/protocol/coordinator";
+import type { HumanPromptEntry } from "@orkestrator/protocol/human-prompts";
 import type { NativeAgentSessionProjection } from "@orkestrator/protocol/native-agent";
+import type { Environment } from "@/types";
 import * as realBackend from "@/lib/backend";
 import * as realNativeAgent from "@/components/native-agent";
 import type { AgentMailMailboxSnapshot } from "@orkestrator/protocol/agent-mail";
@@ -44,6 +46,10 @@ import { dispatchResourceChange } from "@/lib/resource-sync";
 import { resetNativeAgentSyncCapabilityForTests } from "@/hooks/useNativeAgentSession";
 import * as paneTree from "./CoordinatorPaneTree";
 import { createSessionKey } from "@/lib/utils";
+
+import { portalStore } from "@/lib/portal/portal-store";
+import * as nodeEvents from "@/lib/federation/node-events";
+import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 
 const backendSnapshot = { ...realBackend };
 const nativeAgentSnapshot = { ...realNativeAgent };
@@ -264,8 +270,11 @@ async function refreshCoordinator(assignedSnapshot: CoordinatorSnapshot, revisio
     });
   });
   await waitFor(() => expect(getCoordinatorView.mock.calls.length).toBeGreaterThan(reads));
-  await screen.findByRole("button", { name: `Refreshed ${revision}, Claude Code` });
+  await screen.findByRole("tab", { name: `Refreshed ${revision}, Claude Code` });
 }
+
+let workerPromptsForTest: HumanPromptEntry[] = [];
+const stopWorkerTurn = mock(async () => ({ stopped: true }));
 
 mock.module("@/lib/backend", () => ({
   ...backendSnapshot,
@@ -288,6 +297,8 @@ mock.module("@/lib/backend", () => ({
   createCoordinatorConversation: createConversation,
   closeCoordinatorConversation: closeConversation,
   hideCoordinatorWork: hideWork,
+  stopCoordinatorWorkerTurn: stopWorkerTurn,
+  listHumanPrompts: async () => ({ prompts: workerPromptsForTest }),
   assignCoordinatorConversationAgent: assignAgent,
   getNativeAgentSyncCapabilities: async () => ({ projectionSyncVersions: [] }),
   ensureNativeAgentSession: async (
@@ -569,7 +580,7 @@ describe("CoordinatorPanel", () => {
     // as "locked to codex".
     expect(agent.getAttribute("data-platform")).toBe("");
     expect(agent.getAttribute("data-available-platforms")).toBe("claude,codex");
-    const unassignedTab = screen.getByRole("button", { name: "First, no agent chosen yet" });
+    const unassignedTab = screen.getByRole("tab", { name: "First, no agent chosen yet" });
     expect(unassignedTab.querySelector("svg.text-muted-foreground")).toBeTruthy();
     expect(screen.getByText("Choose agent")).toBeTruthy();
 
@@ -730,6 +741,57 @@ describe("CoordinatorPanel", () => {
     expect(notes.cursor).toContain("cannot verify this boundary independently");
     expect(notes.codex).toBeUndefined();
     expect(notes.grok).toBeUndefined();
+  });
+
+  test("refreshes the messaging notice after config changes without remounting", async () => {
+    const notice = /Delegation unavailable: agent messaging is off/;
+    ensuredSnapshot = { ...snapshot, agentMessaging: { enabled: true } };
+    render(<CoordinatorPanel projectId="project-1" />);
+    await screen.findByRole("button", { name: /^Pause$/ });
+    expect(screen.queryByText(notice)).toBeNull();
+    for (const enabled of [false, true]) {
+      const reads = getCoordinatorView.mock.calls.length;
+      act(() => {
+        ensuredSnapshot = { ...snapshot, agentMessaging: { enabled } };
+        dispatchResourceChange({ resource: "config", id: "global", revision: enabled ? 2 : 1 });
+      });
+      await waitFor(() => expect(getCoordinatorView.mock.calls.length).toBeGreaterThan(reads));
+      await waitFor(() => expect(screen.queryByText(notice) !== null).toBe(!enabled));
+    }
+  });
+
+  test("says delegation is unavailable while agent messaging is off", async () => {
+    const notice = /Delegation unavailable: agent messaging is off/;
+    // An older backend says nothing about the setting, which is not "off".
+    ensuredSnapshot = { ...snapshot, agentMessaging: undefined };
+    const { unmount } = render(<CoordinatorPanel projectId="project-1" />);
+    await screen.findByRole("button", { name: /^Pause$/ });
+    expect(screen.queryByText(notice)).toBeNull();
+    unmount();
+    cleanup();
+
+    ensuredSnapshot = { ...snapshot, agentMessaging: { enabled: true } };
+    const second = render(<CoordinatorPanel projectId="project-1" />);
+    await screen.findByRole("button", { name: /^Pause$/ });
+    expect(screen.queryByText(notice)).toBeNull();
+    second.unmount();
+    cleanup();
+
+    ensuredSnapshot = { ...snapshot, agentMessaging: { enabled: false } };
+    render(<CoordinatorPanel projectId="project-1" />);
+    expect(await screen.findByText(notice)).toBeTruthy();
+    // It stands alongside the Control MCP warning rather than replacing it.
+    expect(screen.queryByText(/Orchestration controls are unavailable/)).toBeNull();
+    cleanup();
+
+    ensuredSnapshot = {
+      ...snapshot,
+      agentMessaging: { enabled: false },
+      controlMcp: { enabled: false, running: false, error: null },
+    };
+    render(<CoordinatorPanel projectId="project-1" />);
+    expect(await screen.findByText(notice)).toBeTruthy();
+    expect(screen.getByText(/Orchestration controls are unavailable/)).toBeTruthy();
   });
 
   test("explains an assigned conversation whose platform became unavailable", async () => {
@@ -1475,7 +1537,7 @@ describe("CoordinatorPanel", () => {
   test("reports selection and pause failures", async () => {
     const first = render(<CoordinatorPanel projectId="project-1" />);
     await screen.findByTestId("native-agent");
-    fireEvent.click(screen.getByRole("button", { name: "First, Codex" }));
+    fireEvent.click(screen.getByRole("tab", { name: "First, Codex" }));
     expect(await screen.findByText("select failed")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Pause" }));
     await waitFor(() => expect(pause).toHaveBeenCalledTimes(1));
@@ -1528,8 +1590,8 @@ describe("CoordinatorPanel", () => {
       },
     };
     render(<CoordinatorPanel projectId="project-1" />);
-    const main = await screen.findByRole("button", { name: "Coordinator, Codex" });
-    const side = screen.getByRole("button", { name: "Side 1, Codex" });
+    const main = await screen.findByRole("tab", { name: "Coordinator, main, Codex" });
+    const side = screen.getByRole("tab", { name: "Side 1, Codex" });
     expect(main.compareDocumentPosition(side) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.getByRole("button", { name: "New side agent" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Start coordinator" }) === null).toBe(true);
@@ -1538,7 +1600,7 @@ describe("CoordinatorPanel", () => {
   test("selects a conversation from the full tab shell and shows its agent brand", async () => {
     render(<CoordinatorPanel projectId="project-1" />);
 
-    const selectionButton = await screen.findByRole("button", { name: "First, Codex" });
+    const selectionButton = await screen.findByRole("tab", { name: "First, Codex" });
     expect(selectionButton.querySelector("svg.text-emerald-400")).toBeTruthy();
 
     const tabShell = selectionButton.parentElement;
@@ -1849,7 +1911,7 @@ describe("CoordinatorPanel", () => {
       });
     });
     await waitFor(() => expect(getCoordinatorView.mock.calls.length).toBeGreaterThan(reads));
-    await screen.findAllByRole("button", { name: "After context change, Codex" });
+    await screen.findAllByRole("tab", { name: "After context change, Codex" });
     expectNoContextNotice();
     cleanup();
 
@@ -1953,6 +2015,140 @@ describe("CoordinatorPanel", () => {
     expect(within(panel).getByText("Worker worker-for-first")).toBeTruthy();
     expect(within(panel).getByText("Worker worker-for-second")).toBeTruthy();
     expect(within(panel).queryByText("Worker worker-for-other") === null).toBe(true);
+  });
+
+  describe("acting on a worker from the panel", () => {
+    const running = {
+      id: "running",
+      coordinatorId: "coordinator-1",
+      projectId: "project-1",
+      conversationId: "conversation-1",
+      kind: "environment" as const,
+      resourceId: "worker-env",
+      requestId: "running",
+      createdAt: new Date().toISOString(),
+      delegation: {
+        requestedAt: new Date().toISOString(),
+        workerTabId: "worker-tab",
+        state: "running" as const,
+        request: { summary: "Fix the parser", agent: "claude" as const },
+      },
+    };
+    const worker = { id: "worker-env", projectId: "project-1", name: "api-fix" } as Environment;
+    const previousEnvironments = useEnvironmentStore.getState().environments;
+
+    beforeEach(() => {
+      stopWorkerTurn.mockClear();
+      workerPromptsForTest = [];
+      useEnvironmentStore.setState({ environments: [worker] });
+      ensuredSnapshot = { ...snapshot, workflows: [running] };
+    });
+    afterEach(() => {
+      workerPromptsForTest = [];
+      useEnvironmentStore.setState({ environments: previousEnvironments });
+    });
+
+    test("Stop on a Work row stops that worker through the coordinator's command", async () => {
+      render(<CoordinatorPanel projectId="project-1" />);
+      await screen.findByTestId("native-agent");
+      fireEvent.click(screen.getByRole("button", { name: /^Show work/ }));
+      const panel = screen.getByRole("complementary", { name: "Work" });
+      expect(within(panel).getByText("Fix the parser")).toBeTruthy();
+      fireEvent.click(within(panel).getByRole("button", { name: "Stop api-fix" }));
+      await waitFor(() => expect(stopWorkerTurn).toHaveBeenCalledTimes(1));
+      expect(stopWorkerTurn.mock.calls[0]).toMatchObject([
+        {
+          projectId: "project-1",
+          coordinatorId: "coordinator-1",
+          conversationId: "conversation-1",
+        },
+        { environmentId: "worker-env", tabId: "worker-tab" },
+      ]);
+    });
+
+    test("remote prompt Open targets its node, project, environment and tab and disconnect removes it", async () => {
+      const priorPortal = portalStore.getState();
+      const priorRemote = useRemoteWorkspaceStore.getState();
+      const node = {
+        nodeId: "bk_leaf",
+        available: true,
+        loadedAt: 1,
+        view: { displayName: "Build box" },
+        environments: [
+          {
+            ref: { backendId: "bk_leaf", environmentId: "worker-env" },
+            projectId: "leaf-project",
+            name: "remote-api",
+            status: "running",
+          },
+        ],
+      };
+      const invoke = spyOn(portalStore, "invokeOnNode").mockResolvedValue({
+        prompts: [
+          {
+            id: "remote-prompt",
+            environmentId: "worker-env",
+            tabId: "worker-tab",
+            source: "agent-tool",
+            since: new Date().toISOString(),
+            prompt: {
+              kind: "secret",
+              wantsEnter: false,
+              text: "Remote password:",
+              key: "remote-secret",
+            },
+          },
+        ],
+      });
+      const subscribe = spyOn(nodeEvents, "subscribeNodeEvents").mockReturnValue(() => {});
+      portalStore.store.setState({ selfId: "bk_cmd" as never, nodes: [node] as never });
+      ensuredSnapshot = { ...snapshot, workflows: [{ ...running, nodeId: "bk_leaf" }] };
+      try {
+        render(<CoordinatorPanel projectId="project-1" />);
+        const open = await screen.findByRole("button", { name: "Open remote-api on Build box" });
+        expect(invoke).toHaveBeenCalledWith("bk_leaf", "list_human_prompts", {
+          environmentIds: ["worker-env"],
+        });
+        fireEvent.click(open);
+        expect(useRemoteWorkspaceStore.getState().active).toMatchObject({
+          nodeId: "bk_leaf",
+          projectId: "leaf-project",
+          environmentId: "worker-env",
+        });
+        expect(
+          useRemoteWorkspaceStore.getState().requests["bk_leaf"]?.request.workTarget,
+        ).toMatchObject({
+          environmentId: "worker-env",
+          tabId: "worker-tab",
+        });
+        act(() => portalStore.store.setState({ nodes: [{ ...node, available: false }] as never }));
+        await waitFor(() => expect(screen.queryByText(/Remote password:/)).toBeNull());
+        expect(screen.queryByRole("button", { name: "Open remote-api on Build box" })).toBeNull();
+      } finally {
+        cleanup();
+        invoke.mockRestore();
+        subscribe.mockRestore();
+        portalStore.store.setState(priorPortal, true);
+        useRemoteWorkspaceStore.setState(priorRemote, true);
+      }
+    });
+
+    test("the prompt banner's Open goes to the waiting worker's tab", async () => {
+      workerPromptsForTest = [
+        {
+          id: "tool-1",
+          environmentId: "worker-env",
+          tabId: "worker-tab",
+          source: "agent-tool",
+          since: new Date().toISOString(),
+          prompt: { kind: "secret", wantsEnter: false, text: "Password:", key: "secret" },
+        },
+      ];
+      render(<CoordinatorPanel projectId="project-1" />);
+      await screen.findByTestId("native-agent");
+      fireEvent.click(await screen.findByRole("button", { name: "Open api-fix" }));
+      await waitFor(() => expect(useUIStore.getState().selectedEnvironmentId).toBe("worker-env"));
+    });
   });
 
   test("moves a worker to Needs you when its waiting episode is announced, without a coordinator turn", async () => {
@@ -2244,14 +2440,6 @@ describe("CoordinatorPanel", () => {
 
   test("New side agent from a non-focused group places and focuses the created conversation there", async () => {
     const layout = setupGroups();
-    const beforeCreate = ensuredSnapshot;
-    let resolveFocus!: (value: CoordinatorSnapshot) => void;
-    select.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          resolveFocus = resolve;
-        }),
-    );
     select.mockImplementationOnce(async () => ensuredSnapshot);
     const [, right] = collectCoordinatorLeaves(layout.root);
     const created = {
@@ -2278,21 +2466,17 @@ describe("CoordinatorPanel", () => {
     const newButton = Array.from(sidePane.querySelectorAll("button")).find((button) =>
       button.textContent?.includes("New side agent"),
     )!;
+    select.mockClear();
     fireEvent.pointerDown(newButton);
+    fireEvent.focus(newButton);
     fireEvent.click(newButton);
-    await waitFor(() => expect(screen.getByRole("button", { name: "Side 3, Codex" })).toBeTruthy());
-    await act(async () => {
-      resolveFocus({
-        ...beforeCreate,
-        workspace: { ...beforeCreate.workspace, selectedConversationId: "side-1" },
-      });
-    });
-    await waitFor(() => expect(select).toHaveBeenLastCalledWith("project-1", "side-3"));
+    await waitFor(() => expect(screen.getByRole("tab", { name: "Side 3, Codex" })).toBeTruthy());
     await waitFor(() => expect(focusedCoordinatorConversationId(storedLayout())).toBe("side-3"));
     const stored = storedLayout();
     expect(stored.activePaneId).toBe(right!.id);
     expect(collectCoordinatorLeaves(stored.root)[1]!.conversationIds).toEqual(["side-1", "side-3"]);
-    expect(focusedCoordinatorConversationId(stored)).toBe("side-3");
+    // Pressing in the strip no longer selects the group's front tab on the way.
+    expect(select.mock.calls.some((call) => (call as unknown[])[1] === "side-1")).toBe(false);
   });
 
   test("New side agent names the empty unassigned side agents for the backend to close", async () => {

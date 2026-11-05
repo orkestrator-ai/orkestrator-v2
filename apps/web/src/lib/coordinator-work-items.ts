@@ -22,9 +22,13 @@ import {
   type BuildPipeline,
 } from "@orkestrator/protocol/build-pipeline";
 import {
+  coordinatorDelegationBucket,
   pullRequestStateFromNotice,
+  type CoordinatorDelegation,
+  type CoordinatorWorkBucket,
   type CoordinatorWorkflowAssociation,
 } from "@orkestrator/protocol/coordinator";
+import { isAgentPlatform, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { GraphRun } from "@orkestrator/protocol/graphs/run";
 import type { MultiReviewPhase, MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
 import type { NodeEnvironmentSummary, NodeSummary } from "@orkestrator/protocol/node-summaries";
@@ -34,8 +38,8 @@ import type { PrCheckSummary, PrState } from "@orkestrator/protocol/pr-monitor";
 export const FINISHED_WORK_RETENTION_MS = 24 * 60 * 60 * 1000;
 
 export type CoordinatorWorkKind = "worker" | "build" | "review" | "graph-run" | "pull-request";
+export type { CoordinatorWorkBucket };
 /** Display order: what waits on the user, then running work, then finished work. */
-export type CoordinatorWorkBucket = "needs-you" | "running" | "finished";
 export const COORDINATOR_WORK_BUCKETS: readonly CoordinatorWorkBucket[] = [
   "needs-you",
   "running",
@@ -80,6 +84,17 @@ export interface CoordinatorWorkItem {
   stage: string;
   /** Builds: acceptance criteria passed out of the total. */
   criteria?: { passed: number; total: number };
+  /** One line on what was asked (worker rows); absent on records older than the field. */
+  summary?: string;
+  /** What it runs on, where the record or the pipeline knows. */
+  agent?: AgentPlatform;
+  model?: string;
+  /** The coordinator overrode the saved default for this launch. */
+  overridden?: boolean;
+  /** How long it has run, or how long ago it finished, in words. */
+  age?: string;
+  /** The running turns Stop would end (worker rows); absent when there is nothing to stop. */
+  stop?: CoordinatorWorkStop;
   /** Null when there is nothing to go to (deleted, or not readable from here). */
   target: CoordinatorWorkTarget | null;
   /** Why Open is unavailable, when `target` is null. */
@@ -92,6 +107,13 @@ export interface CoordinatorWorkItem {
   prOpen: boolean;
   /** Ordering within a bucket: newest first. */
   sortAt: number;
+}
+
+/** The worker tabs a row's Stop action covers, on this machine or `nodeId`. */
+export interface CoordinatorWorkStop {
+  environmentId: string;
+  tabIds: string[];
+  nodeId?: string;
 }
 
 /** The smallest slice of a renderer environment record the projection reads. */
@@ -134,7 +156,10 @@ export interface CoordinatorWorkSources {
   remoteReviews: ReadonlyMap<string, MultiReviewWorkflow>;
   /** Graph runs on other nodes, keyed by {@link remoteWorkKey}. */
   remoteGraphRuns: ReadonlyMap<string, GraphRun>;
-  /** Environments with a question, approval or input waiting on the user. */
+  /**
+   * Environments with a question, approval or input waiting on the user: by id
+   * on this machine, by {@link remoteWorkKey} on another node.
+   */
   promptEnvironmentIds: ReadonlySet<string>;
   /**
    * Successful reads that confirmed a resource no longer exists:
@@ -336,7 +361,9 @@ function workerItem(
     .map((association) => association.delegation)
     .filter((delegation) => delegation !== undefined)
     .sort((a, b) => (time(a.requestedAt) ?? 0) - (time(b.requestedAt) ?? 0));
-  const running = delegations.filter((delegation) => delegation.state === "running");
+  const running = delegations.filter(
+    (delegation) => coordinatorDelegationBucket(delegation) !== "finished",
+  );
   const latestDelegation = delegations.at(-1);
   const outcome = associations.find((association) => association.workerOutcome)?.workerOutcome;
   const createdAt = Math.min(
@@ -353,8 +380,10 @@ function workerItem(
     Boolean(remote?.environment?.deleting);
   const needsYou =
     !deleted &&
-    (running.some((delegation) => delegation.waiting) ||
-      (!first.nodeId && sources.promptEnvironmentIds.has(environmentId)) ||
+    (running.some((delegation) => coordinatorDelegationBucket(delegation) === "needs-you") ||
+      sources.promptEnvironmentIds.has(
+        first.nodeId ? remoteWorkKey(first.nodeId, environmentId) : environmentId,
+      ) ||
       activity === "waiting");
 
   let bucket: CoordinatorWorkBucket;
@@ -431,6 +460,18 @@ function workerItem(
     };
   } else unavailableReason = "The environment is not loaded.";
 
+  const summary = latestDelegation?.request?.summary;
+  const selection = selectionOf(delegations);
+  // A tab already told to stop has nothing more to ask of it.
+  const stoppable = deleted
+    ? []
+    : Array.from(
+        new Set(
+          running
+            .filter((delegation) => !delegation.stopRequestedAt)
+            .map((delegation) => delegation.workerTabId),
+        ),
+      );
   return {
     key: `worker:${first.nodeId ?? ""}:${environmentId}`,
     associationIds: associations.map((association) => association.id),
@@ -439,6 +480,19 @@ function workerItem(
     name,
     ...(remote ? { machine: remote.machine } : {}),
     stage,
+    ...(summary ? { summary } : {}),
+    ...(selection?.agent ? { agent: selection.agent } : {}),
+    ...(selection?.model ? { model: selection.model } : {}),
+    ...(selection?.source === "requested" ? { overridden: true } : {}),
+    ...(stoppable.length > 0
+      ? {
+          stop: {
+            environmentId,
+            tabIds: stoppable,
+            ...(first.nodeId ? { nodeId: first.nodeId } : {}),
+          },
+        }
+      : {}),
     target,
     ...(unavailableReason ? { unavailableReason } : {}),
     openDelegations: running.length,
@@ -446,6 +500,22 @@ function workerItem(
     prOpen,
     sortAt: finishedAt ?? latest(...delegations.map((d) => time(d.requestedAt))) ?? createdAt,
   };
+}
+
+/** Never carry a selection across tabs, agents, or an explicit model reset. */
+function selectionOf(delegations: readonly CoordinatorDelegation[]) {
+  const latestTab = delegations.at(-1)?.workerTabId;
+  const newest = delegations.toReversed().filter((item) => item.workerTabId === latestTab);
+  const selected = newest.find((item) => item.request?.agent || item.request?.model !== undefined);
+  if (!selected?.request) return undefined;
+  if (selected.request.model !== undefined) return selected.request;
+  const previous = newest.find(
+    (item) =>
+      item.workerTabId === selected.workerTabId &&
+      item.request?.agent === selected.request?.agent &&
+      item.request?.model !== undefined,
+  );
+  return previous?.request ? { ...previous.request, ...selected.request } : selected.request;
 }
 
 function missingItem(
@@ -579,6 +649,7 @@ function buildItem(
     bucket,
     stage,
     ...(criteria ? { criteria } : {}),
+    ...(isAgentPlatform(pipeline.agentType) ? { agent: pipeline.agentType } : {}),
     target,
     ...(target ? {} : { unavailableReason: "Its environment is still being created." }),
     ...(finishedAt !== undefined ? { finishedAt } : {}),
@@ -935,6 +1006,73 @@ function pullRequestItem(
   };
 }
 
+/** "just now", "12m", "3h", "2d"; finished work reads "12m ago". */
+export function workAge(sortAt: number, finished: boolean, now: number): string | undefined {
+  if (sortAt <= 0) return undefined;
+  const minutes = Math.floor(Math.max(0, now - sortAt) / 60_000);
+  if (minutes < 1) return finished ? "just now" : "under 1m";
+  const span =
+    minutes < 60
+      ? `${minutes}m`
+      : minutes < 24 * 60
+        ? `${Math.floor(minutes / 60)}h`
+        : `${Math.floor(minutes / (24 * 60))}d`;
+  return finished ? `${span} ago` : span;
+}
+
+/**
+ * What the coordinator's next wake waits for, for a conversation whose Work
+ * panel is folded away: one worker by name, several by count. Null when no
+ * delegation is open, so an idle coordinator with nothing out says nothing.
+ */
+export function nextWakeLine(items: readonly CoordinatorWorkItem[]): string | null {
+  const waitingOn = items.filter((item) => item.kind === "worker" && item.openDelegations > 0);
+  const [first, ...others] = waitingOn;
+  if (!first) return null;
+  if (others.length === 0) return `Next wake when ${first.name} finishes`;
+  const more = others.length === 1 ? "1 other" : `${others.length} others`;
+  return `Next wake when ${first.name} or ${more} finish`;
+}
+
+/**
+ * The target for one worker tab named by a notice or a waiting prompt, or null
+ * when this client cannot reach it: an environment it does not know (deleted, or
+ * on another node with no `nodeId` to say so), one being deleted, or a node that
+ * is not connected.
+ */
+export function workerTabTarget(
+  worker: { environmentId: string; tabId?: string; nodeId?: string; title: string },
+  lookup: {
+    environments: readonly (Pick<WorkEnvironment, "id" | "projectId"> & {
+      deletionRequestedAt?: string;
+    })[];
+    nodes: readonly Pick<NodeSummary, "nodeId" | "available" | "environments">[];
+  },
+): CoordinatorWorkTarget | null {
+  const { environmentId, tabId, nodeId, title } = worker;
+  if (nodeId) {
+    const node = lookup.nodes.find((item) => item.nodeId === nodeId);
+    const environment = node?.available
+      ? node.environments.find((item) => item.ref.environmentId === environmentId)
+      : undefined;
+    if (!environment || environment.deleting) return null;
+    return remoteTarget(nodeId, { projectId: environment.projectId, environmentId }, title, {
+      type: "worker-tab",
+      projectId: environment.projectId,
+      environmentId,
+      ...(tabId ? { tabId } : {}),
+    });
+  }
+  const environment = lookup.environments.find((item) => item.id === environmentId);
+  if (!environment || environment.deletionRequestedAt) return null;
+  return {
+    type: "worker-tab",
+    projectId: environment.projectId,
+    environmentId,
+    ...(tabId ? { tabId } : {}),
+  };
+}
+
 /**
  * Finished work drops off 24 hours after it finishes, or once its pull
  * request is merged or closed, whichever is later.
@@ -986,6 +1124,10 @@ export function deriveCoordinatorWorkItems(sources: CoordinatorWorkSources): Coo
     isClearableWorkItem(item) && item.associationIds.every((id) => hidden.has(id));
   return items
     .filter((item) => !isWorkItemExpired(item, sources.now) && !cleared(item))
+    .map((item) => {
+      const age = workAge(item.sortAt, item.finishedAt !== undefined, sources.now);
+      return age ? { ...item, age } : item;
+    })
     .sort(
       (a, b) =>
         order.get(a.bucket)! - order.get(b.bucket)! ||

@@ -62,6 +62,7 @@ async function setup(
     create_controller_environment: { id: "leaf-env", status: "stopped" },
     deliver_node_mail: { messageId: "m1", toTabId: "startup-agent" },
     start_controller_build_pipeline: { id: "pipeline-leaf", projectId: "p-leaf" },
+    get_build_pipeline: { snapshot: { id: "pipeline-leaf", projectId: "p-leaf" }, revision: 1 },
     ...options.answers,
   };
   const context = {
@@ -182,12 +183,16 @@ describe("launch_coordinator_node_environment", () => {
       nodeId: "bk_leaf",
       pending: false,
       baseCommit: BASE,
-      delegation: { state: "running", workerTabId: "startup-agent" },
+      delegation: {
+        state: "running",
+        workerTabId: "startup-agent",
+        request: { summary: "Fix the parser", source: "default" },
+      },
     });
 
     // A retry of the same request finds the first launch.
     const creates = routed.filter((entry) => entry.command === "create_controller_environment");
-    await run("launch_coordinator_node_environment", {
+    const replay = await run("launch_coordinator_node_environment", {
       scope,
       requestId: "launch-1",
       nodeId: "bk_leaf",
@@ -196,6 +201,7 @@ describe("launch_coordinator_node_environment", () => {
     expect(routed.filter((entry) => entry.command === "create_controller_environment")).toEqual(
       creates,
     );
+    expect(replay.replayed).toBe(true);
     expect(await associations()).toHaveLength(1);
   });
 
@@ -288,6 +294,30 @@ describe("launch_coordinator_node_environment", () => {
   });
 });
 
+test("node delegation-open persists bounded request selection on the owning association", async () => {
+  const { run, scope, associations } = await setup();
+  const request = {
+    summary: "Inspect remote parser",
+    agent: "codex",
+    model: "model-a",
+    reasoning: "high",
+    source: "requested",
+  };
+  await run("open_coordinator_node_delegation", {
+    scope,
+    nodeId: "bk_leaf",
+    environmentId: "leaf-env",
+    tabId: "worker-tab",
+    requestId: "open-metadata",
+    request,
+  });
+  expect((await associations())[0]).toMatchObject({
+    nodeId: "bk_leaf",
+    resourceId: "leaf-env",
+    delegation: { workerTabId: "worker-tab", request },
+  });
+});
+
 describe("send_coordinator_node_mail", () => {
   test("side agents are denied before any remote mail side effect", async () => {
     const { world, run, scope, routed, associations } = await setup();
@@ -343,6 +373,9 @@ describe("send_coordinator_node_mail", () => {
       body: "Run the tests.",
     });
     expect(first).toMatchObject({ coordinatorDelegationOpened: true, toTabId: "startup-agent" });
+    expect((await associations())[0]?.delegation?.request).toMatchObject({
+      summary: "Run the tests.",
+    });
     expect(routed.find((entry) => entry.command === "deliver_node_mail")!.args).toMatchObject({
       controllerId: "bk_cmd",
       toEnvironmentId: "leaf-env",
@@ -609,6 +642,22 @@ describe("workflows on a node", () => {
       },
     });
     expect(workflow).toMatchObject({ id: "pipeline-leaf" });
+    const replay = await run("start_coordinator_node_build_pipeline", {
+      scope,
+      requestId: "build-1",
+      nodeId: "bk_leaf",
+      input: {
+        projectId: scope.projectId,
+        taskId: "t1",
+        taskTitle: "Address Findings",
+        delegationBaseBranch: "main",
+        delegationBaseCommit: BASE,
+      },
+    });
+    expect(replay.replayed).toBe(true);
+    expect(
+      routed.filter((item) => item.command === "start_controller_build_pipeline"),
+    ).toHaveLength(1);
     expect(
       routed.find((entry) => entry.command === "start_controller_build_pipeline")!.args.input,
     ).toMatchObject({
@@ -625,6 +674,7 @@ describe("workflows on a node", () => {
   test("a Multi Review launch reattaches its receipt to the review the node ran", async () => {
     const { run, scope, routed, associations } = await setup({
       answers: {
+        get_multi_review_workflow: { snapshot: review("active-review", "preparing"), revision: 1 },
         launch_controller_multi_review: () => ({
           workflow: review("active-review", "preparing"),
           reused: true,
@@ -639,6 +689,20 @@ describe("workflows on a node", () => {
       input: { requestId: "review-1", environmentId: "leaf-env" },
     });
     expect(result).toMatchObject({ reused: true, outcome: "opened" });
+    const replay = await run("launch_coordinator_node_multi_review", {
+      scope,
+      nodeId: "bk_leaf",
+      input: { requestId: "review-1", environmentId: "leaf-env" },
+    });
+    expect(replay.replayed).toBe(true);
+    expect(
+      routed
+        .filter((item) => item.command === "launch_controller_multi_review")
+        .map((item) => item.requestKey),
+    ).toEqual([
+      "review:" + scope.coordinatorId + ":review-1",
+      "review:" + scope.coordinatorId + ":review-1",
+    ]);
     const launch = routed.find((entry) => entry.command === "launch_controller_multi_review")!;
     expect(String(launch.args.reservedId)).toMatch(/^action-[0-9a-f]{32}$/);
     expect(await associations()).toEqual([
@@ -822,4 +886,28 @@ describe("deliverNow through a linked command and leaf handler", () => {
       expect((await associations())[0]!.delegation?.state).toBe("completed");
     });
   }
+});
+
+describe("node mail request collisions", () => {
+  test("refuses a different worker before delivering mail", async () => {
+    const { run, scope, routed } = await setup();
+    await run("send_coordinator_node_mail", {
+      scope,
+      requestId: "same-mail",
+      nodeId: "bk_leaf",
+      toEnvironmentId: "leaf-env",
+      body: "Go",
+    });
+    const delivered = routed.filter((item) => item.command === "deliver_node_mail").length;
+    await expect(
+      run("send_coordinator_node_mail", {
+        scope,
+        requestId: "same-mail",
+        nodeId: "bk_leaf",
+        toEnvironmentId: "other-env",
+        body: "Go",
+      }),
+    ).rejects.toThrow("requestId");
+    expect(routed.filter((item) => item.command === "deliver_node_mail")).toHaveLength(delivered);
+  });
 });

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ChangeEvidenceSpool } from "@orkestrator/protocol/node/change-tracking/evidence-spool";
 import type { StorageDatabase } from "../storage-database.js";
-import { openBackendDatabase } from "../storage-stores.js";
+import { openChangeLedgerDatabase } from "./ledger-schema.js";
 import { ChangeTrackingService, type EvidenceSource } from "./service.js";
 import type { ChangeTrackingPolicy } from "./policy-registry.js";
 
@@ -36,6 +36,8 @@ export function createHarness(
     policy?: Partial<ChangeTrackingPolicy>;
     repo?: boolean;
     manualScheduling?: boolean;
+    /** More environments whose worktree is the same checkout as `env-1`. */
+    aliases?: readonly string[];
   } = {},
 ): Harness {
   const dataDir = mkdtempSync(join(tmpdir(), "ork-ct-data-"));
@@ -50,10 +52,12 @@ export function createHarness(
   const events: Array<{ event: string; payload: unknown }> = [];
   const service = new ChangeTrackingService({
     dataDir,
-    database: () => (database ??= openBackendDatabase(dataDir)),
+    database: () => (database ??= openChangeLedgerDatabase(dataDir)),
     emit: (event, payload) => events.push({ event, payload }),
     environmentTarget: async (environmentId) =>
-      environmentId === "env-1" ? { kind: "local", worktreePath: repo } : null,
+      environmentId === "env-1" || options.aliases?.includes(environmentId)
+        ? { kind: "local", worktreePath: repo }
+        : null,
     durable: false,
     manualScheduling: options.manualScheduling ?? true,
     policy: options.policy,
@@ -64,7 +68,7 @@ export function createHarness(
     repo,
     dataDir,
     events,
-    database: () => (database ??= openBackendDatabase(dataDir)),
+    database: () => (database ??= openChangeLedgerDatabase(dataDir)),
     cleanup() {
       service.shutdown();
       database?.close();

@@ -6,15 +6,30 @@ import type {
 } from "@orkestrator/protocol/coordinator";
 import {
   COORDINATOR_ACTIVITY_COMMAND,
+  COORDINATOR_CHECKOUT_TURN_COMMAND,
   parseCoordinatorActivitySnapshot,
+  parseCoordinatorCheckoutTurn,
   type CoordinatorActivitySnapshot,
+  type CoordinatorCheckoutTurn,
 } from "@orkestrator/protocol/coordinator-activity";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { ViewRevisionStamp } from "@orkestrator/protocol/view-sync";
 import { invoke } from "@/lib/native/backend";
 
+/**
+ * `keepConversationErrors`: this panel offers Retry for a conversation that
+ * failed to start, so opening it must not clear the failure. An older backend
+ * ignores the argument.
+ */
 export const ensureProjectCoordinator = (projectId: string): Promise<CoordinatorSnapshot> =>
-  invoke("ensure_project_coordinator", { projectId });
+  invoke("ensure_project_coordinator", { projectId, keepConversationErrors: true });
+
+/** Clears a conversation's startup failure so its pane can connect again. */
+export const retryCoordinatorConversation = (
+  projectId: string,
+  conversationId: string,
+): Promise<CoordinatorSnapshot> =>
+  invoke("retry_coordinator_conversation", { projectId, conversationId });
 
 export const getProjectCoordinator = (projectId: string): Promise<CoordinatorSnapshot | null> =>
   invoke("get_project_coordinator", { projectId });
@@ -38,6 +53,14 @@ export const getProjectCoordinatorView = (
 /** Every project whose coordinator is working or waiting. Older backends answer "Unknown backend command". */
 export const listCoordinatorActivity = (): Promise<CoordinatorActivitySnapshot> =>
   invoke<unknown>(COORDINATOR_ACTIVITY_COMMAND).then(parseCoordinatorActivitySnapshot);
+
+/** The turn holding this project's checkout. Older backends answer "Unknown backend command". */
+export const getCoordinatorCheckoutTurn = (
+  projectId: string,
+): Promise<CoordinatorCheckoutTurn | null> =>
+  invoke<unknown>(COORDINATOR_CHECKOUT_TURN_COMMAND, { projectId }).then(
+    parseCoordinatorCheckoutTurn,
+  );
 
 /**
  * `closeUnused` names unassigned side agents whose composer is empty here; the
@@ -72,6 +95,16 @@ export const closeCoordinatorConversation = (
   conversationId: string,
 ): Promise<CoordinatorSnapshot> =>
   invoke("close_coordinator_conversation", { projectId, conversationId });
+
+/**
+ * The coordinator's `stop_worker_turn`, from the Work panel: one tab's running
+ * turn, on this machine or `nodeId`. `requestId` is the at-most-once key.
+ */
+export const stopCoordinatorWorkerTurn = (
+  scope: { projectId: string; coordinatorId: string; conversationId: string },
+  input: { requestId: string; environmentId: string; tabId: string; nodeId?: string },
+): Promise<{ stopped?: boolean }> =>
+  invoke("stop_coordinator_worker_turn", { scope, input: { ...input, stoppedBy: "user" } });
 
 /** Hide finished rows from the Work panel. Older backends answer "Unknown backend command". */
 export const hideCoordinatorWork = (

@@ -60,6 +60,25 @@ Each suffix also names the release's updater feed (`latest-mac.yml`,
 `bunx orkestrator` likewise only installs `latest`; try a prerelease with
 `bunx orkestrator@beta`.
 
+`install.sh` on the website runs one stated Stable release rather than an npm
+tag, so a bad publish does not reach it until someone moves the pin (step 5
+below). It runs that release from the lockfile the release publishes
+(`resources/release-runtime/`), the way the standalone service installs an
+update, and a host without Bun gets the `mise.toml` Bun checked against stated
+SHA-256s; a Bun bump moves those (see
+[upgrade-agents.md](upgrade-agents.md)). Beta and Unstable users pick their own
+release:
+
+```bash
+curl -fsSL https://orkestrator.dev/install.sh | ORKESTRATOR_INSTALL_VERSION=alpha bash
+```
+
+`alpha` and `beta` are moving tags, so that command takes the same risk as
+`bunx orkestrator@alpha`. A host started on a prerelease defaults to that
+prerelease's channel. A host already installed from the pinned release moves
+with `orkestrator host update channel unstable` or **Settings → Machines →
+Updates → Channel**, then updates as usual.
+
 ## Cutting a release
 
 1. Set the version, then merge the change through a pull request. The suffix
@@ -93,6 +112,23 @@ Each suffix also names the release's updater feed (`latest-mac.yml`,
    mise run release:publish
    ```
 
+5. After a **Stable** release only, pin the installer to it and merge the change
+   through a pull request:
+
+   ```bash
+   mise run release:pin-installer
+   ```
+
+   It stamps the version from `package.json` into
+   `apps/web-public/public/install.sh`. It refuses a prerelease, a version older
+   than the current pin, and one npm does not have, because a pin to an
+   unpublished version would break every install. Do not move the pin in the
+   version bump: the hosted site follows `main`, so that merge would go live
+   before the release exists on npm. Until this merge reaches the site, the
+   installer keeps running the previous Stable release, and hosts update
+   themselves from there. Confirm the deploy with
+   `curl -fsSL https://orkestrator.dev/install.sh | grep PINNED_RELEASE`.
+
 Every command first prints the channel it releases to, for example
 `Releasing v2.23.0-beta to the Beta channel: Beta and Unstable users.`
 
@@ -123,6 +159,15 @@ the same version under the channel's dist-tag, so standalone services and
 desktop apps update to the same release. The step is skipped when the version
 is already on npm. Pass `mise run release:publish -- --skip-npm` to leave npm
 alone.
+
+The package carries the lockfile standalone services install its dependencies
+from (`packages/cli/release-runtime/`, copied to
+`resources/release-runtime/`). It only changes when someone regenerates it, so
+the versions a release ships are in the diff that changed them, and
+`mise run smoke:cli` installs and runs them before each publish. Regenerate it
+with `bun packages/cli/scripts/lock-bridge-runtimes.ts` after changing a
+dependency of `packages/cli`, or to take a transitive security fix;
+`packages/cli/tests/cli.test.ts` fails when it no longer matches the package.
 
 `bun publish` asks for npm web authentication on every publish, even when
 `npm whoami` succeeds. It prints an `https://www.npmjs.com/auth/cli/...` URL

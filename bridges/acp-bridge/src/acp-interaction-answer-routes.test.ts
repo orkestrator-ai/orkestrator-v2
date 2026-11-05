@@ -59,7 +59,6 @@ beforeEach(() => {
     messages: [],
     activeSubagentToolIds: new Set(),
     activeSubagentDescriptors: new Map(),
-    settledCursorAgentIds: new Set(),
     subagentLimitExceeded: false,
     subagentToolIds: new Map(),
     cursorTodos: [],

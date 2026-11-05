@@ -180,6 +180,25 @@ describe("coordinator account-switch permission in Settings", () => {
     expect(row.textContent).toContain("5m ago");
   });
 
+  test("a switch a self-timer's permission allowed says so, with the user's words", async () => {
+    const timed = {
+      ...record,
+      requestId: "timed",
+      authorizedBy: "self-timer" as const,
+      scheduleId: "schedule-1",
+      userInstruction: "check in 2 hours and switch if they are limited",
+    };
+    state = { ...state, recentSwitches: [timed] };
+    show();
+    const row = await screen.findByRole("listitem", { name: "Switch on beelink" });
+    expect(row.textContent).toContain(
+      "Allowed by a timer you set: you asked “check in 2 hours and switch if they are limited”",
+    );
+    expect(describeCoordinatorAccountSwitch(timed)).toContain(
+      "A timer you set allowed it: you asked “check in 2 hours and switch if they are limited”.",
+    );
+  });
+
   test("a machine that predates the permission shows nothing", async () => {
     unknown = true;
     const { container } = show();

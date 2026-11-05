@@ -2,6 +2,7 @@ import {
   createBridgeDiagnostics,
   type BridgeRunDiagnostics,
 } from "@orkestrator/protocol/node/bridge-diagnostics";
+import { loadBridgeCredential } from "@orkestrator/protocol/node/bridge-credential";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { resolve } from "node:path";
@@ -154,8 +155,6 @@ export interface BridgeToolPart {
    * does for Codex collaboration items.
    */
   agentState?: "active" | "finished" | "failed";
-  /** Internal provenance marker retained across restart for Cursor prompt correlation. */
-  cursorTaskPromptReported?: true;
   toolTitle?: string;
   toolOutput?: string;
   toolError?: string;
@@ -267,25 +266,8 @@ export interface ActiveSubagentDescriptor {
   /** Bounded launch metadata used to correlate Grok's child-id notification. */
   description?: string;
   subagentType?: string;
-  /** Prompt received from Cursor's own `cursor/task`, never from JSONL recovery. */
-  reportedPrompt?: string;
   /** Distinguishes a completed background launch from an abandoned pending one. */
   toolState?: BridgeToolPart["toolState"];
-  /**
-   * Cursor Task `agentId`. Used only by the Cursor background-continuation
-   * waiter to find the child's transcript; Grok correlates through
-   * `subagent_id` instead.
-   */
-  agentId?: string;
-  /**
-   * True when `agentId` was inferred from a transcript directory rather than
-   * reported by `cursor/task`. Good enough to project the child's activity into
-   * its card, deliberately *not* good enough to hold a parent turn open: a
-   * mis-inferred id would block `session/prompt` for the whole wait budget.
-   */
-  agentIdDiscovered?: boolean;
-  /** The inferred directory came from a complete global pairing or unique prompt match. */
-  agentIdSettlementSafe?: boolean;
 }
 
 export interface SessionState {
@@ -303,24 +285,6 @@ export interface SessionState {
    * display concern and must not decide whether background work still exists.
    */
   activeSubagentDescriptors: Map<string, ActiveSubagentDescriptor>;
-  /**
-   * Cursor child directories this session has already consumed, kept after the
-   * card that owned them settled.
-   *
-   * `bindDiscoveredCursorChildren` treats a directory as claimed while it can
-   * still see the `agentId` — on a live descriptor, on the launch part, or on a
-   * JSONL projection attached to the card. A background child settled from the
-   * `/activity` probe leaves none of those: the probe never projects, the
-   * descriptor is deleted as the card settles, and Cursor never named the child
-   * on the wire in the first place. Without this the directory looks free again
-   * and the next unnamed launch inside the discovery skew window adopts it,
-   * reading a finished child's `turn_ended` as its own.
-   *
-   * Persisted and bounded by `MAX_CURSOR_SETTLED_CLAIMS`. A fast restart can
-   * occur inside the discovery skew window, so dropping these would let the
-   * next launch reuse a recently consumed terminal directory.
-   */
-  settledCursorAgentIds: Set<string>;
   /** Fatal latch: once the bound trips, later provider frames cannot reopen work. */
   subagentLimitExceeded: boolean;
   /** Grok's terminal sub-agent notifications identify the child, not its tool call. */
@@ -648,7 +612,6 @@ export interface PersistedSession {
   commandsTruncated?: boolean;
   title?: string;
   subagentLimitExceeded?: boolean;
-  settledCursorAgentIds?: string[];
 }
 
 export interface PersistedState {
@@ -665,31 +628,19 @@ export const provider = providerConfig.id as Provider;
 export const port = parsePort(process.env.PORT);
 export const hostname = process.env.HOSTNAME?.trim() || "127.0.0.1";
 export const workingDirectory = resolve(process.env.CWD?.trim() || process.cwd());
-export const authToken =
-  process.env.ACP_BRIDGE_TOKEN?.trim() || randomBytes(32).toString("base64url");
-// The token authenticates callers of this bridge; nothing this process spawns
-// needs it. Captured once above and removed so the ACP agent child, and the
-// terminals it runs, cannot inherit the credential through process.env (H4).
-delete process.env.ACP_BRIDGE_TOKEN;
+// The credential authenticates callers of this bridge; nothing this process
+// spawns needs it. Captured once and removed so the ACP agent child, and the
+// terminals it runs, cannot inherit it through process.env (H4).
+export const bridgeCredential = loadBridgeCredential("ACP_BRIDGE_TOKEN");
+/** The token, when given one rather than its verifier: only test harnesses read it. */
+export const authToken = bridgeCredential.plainToken ?? "";
+// Signs external session ids for the life of this process. Not the credential:
+// the bridge holds only that token's verifier, which a reader could sign with.
+const externalSessionKey = randomBytes(32);
 export const executable = providerConfig.executable;
 export const stateDirectory = process.env.ACP_STATE_DIR?.trim();
 export const stateFile = stateDirectory ? resolve(stateDirectory, "state.json") : null;
 export const sessions = new Map<string, SessionState>();
-let cursorDiscoveryRevision = 0;
-
-/**
- * Cheap invalidation token for Cursor's process-wide child-directory pairing.
- * Pairing reads every session's active launches and claims, so a per-session
- * memo cannot infer validity from its own counts alone.
- */
-export function currentCursorDiscoveryRevision(): number {
-  return cursorDiscoveryRevision;
-}
-
-export function bumpCursorDiscoveryRevision(): void {
-  cursorDiscoveryRevision =
-    cursorDiscoveryRevision >= Number.MAX_SAFE_INTEGER ? 0 : cursorDiscoveryRevision + 1;
-}
 export const acpToolSourceStates = new WeakMap<BridgeToolPart, AcpToolSourceState>();
 /**
  * Parts and messages whose text already sits at its byte cap, marker included.
@@ -953,48 +904,6 @@ export const CLOSE_CANCEL_WAIT_MS = parseDuration(process.env.ACP_CLOSE_CANCEL_W
 export const CLOSE_SESSION_WAIT_MS = parseDuration(process.env.ACP_CLOSE_SESSION_WAIT_MS, 2_000);
 /** Fixed, content-free refusal for work aimed at a session that is closing. */
 export const SESSION_CLOSING_ERROR = "Session is closing";
-/**
- * How long a Cursor parent generation may wait for live background children
- * before continuing without them. Grok never reads this: it settles through
- * `subagent_finished` and does not hold `session/prompt`.
- */
-export const CURSOR_BACKGROUND_WAIT_MS = parseDuration(
-  process.env.ACP_CURSOR_BACKGROUND_WAIT_MS,
-  30 * 60_000,
-);
-export const MAX_CURSOR_BACKGROUND_CONTINUATIONS = 4;
-export const MAX_CURSOR_CHILD_RESULT_BYTES = 64 * 1024;
-/** Recent child JSONL activity projected into the parent Task card. */
-export const MAX_CURSOR_CHILD_PARTS = 64;
-export const MAX_CURSOR_TRANSCRIPT_HYDRATE_CHILDREN = 8;
-/**
- * Cap on `SessionState.settledCursorAgentIds`. Claims are only load-bearing
- * against launches inside `CURSOR_CHILD_DISCOVERY_SKEW_MS`, so the useful
- * window is a handful of directories; this is generous enough to cover a burst
- * of background Tasks and small enough that a long-lived session cannot grow
- * the set without bound. Oldest claims are evicted first.
- */
-export const MAX_CURSOR_SETTLED_CLAIMS = 64;
-export const CURSOR_JSONL_SOURCE_PREFIX = "cursor-jsonl:";
-/**
- * Cap on the transcript-root entries one discovery scan will stat. The scan is
- * gated on the root's mtime, so it runs when a child appears rather than per
- * poll, but a project with more children than this stops yielding new
- * candidates rather than growing an unbounded syscall pass.
- */
-export const MAX_CURSOR_DISCOVERY_ENTRIES = 4_096;
-/**
- * How far *before* a Task tool call a transcript directory may have been
- * created and still be considered that call's child. Cursor writes the
- * directory seconds after the call, so this only absorbs filesystem timestamp
- * granularity — it is not a matching window.
- */
-export const CURSOR_CHILD_DISCOVERY_SKEW_MS = 5_000;
-/** Prompt recovered from a child's own transcript when Cursor reported none. */
-export const MAX_CURSOR_CHILD_PROMPT_BYTES = 4 * 1024;
-/** Leading records of a child transcript scanned for that prompt. */
-export const MAX_CURSOR_CHILD_PROMPT_RECORDS = 8;
-export const CURSOR_BACKGROUND_CONTINUATION_PREFIX = "Background subagent finished.";
 /**
  * Continuations of one turn the agent ended on a policy refusal. A read-only
  * coordinator turn that tries each kind of mutation once (create, edit, shell,
@@ -1497,7 +1406,7 @@ export const EXTERNAL_SESSION_PREFIX = "acp-session:";
 
 export function externalSessionToken(acpSessionId: string): string {
   const encoded = Buffer.from(acpSessionId).toString("base64url");
-  const signature = createHmac("sha256", authToken).update(encoded).digest("base64url");
+  const signature = createHmac("sha256", externalSessionKey).update(encoded).digest("base64url");
   return `${EXTERNAL_SESSION_PREFIX}${encoded}.${signature}`;
 }
 
@@ -1509,7 +1418,7 @@ export function parseExternalSessionToken(value: string): string | null {
   const encoded = token.slice(0, separator);
   const signature = token.slice(separator + 1);
   if (!encoded || encoded.length > 1_024 || !signature) return null;
-  const expected = createHmac("sha256", authToken).update(encoded).digest();
+  const expected = createHmac("sha256", externalSessionKey).update(encoded).digest();
   let supplied: Buffer;
   try {
     supplied = Buffer.from(signature, "base64url");

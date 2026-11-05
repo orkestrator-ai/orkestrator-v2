@@ -62,7 +62,7 @@ decisions.
 | Shimmer `id` for `aria-describedby` | set (`EI:531`) | not set (`RMT:902`) | — |
 | Row element | `div role=button`, modifier-click selection | `<button>` with machine in `aria-label`, `aria-current` | — |
 
-Intended differences, not defects: clicking a remote row opens the owner's workspace; "Open workspace" and "Copy link" exist only remotely; writes are disabled while the owner is unavailable; a remote row has no multi-select.
+Intended differences, not defects: clicking a remote row opens the owner's workspace; "Open workspace" and "Copy link" exist only remotely; writes are disabled while the owner is unavailable. A remote row had no multi-select when this was written; it has since joined it ([federation.md](../../architecture/federation.md#one-presentation-for-both-paths)).
 
 **Decisions.**
 
@@ -331,8 +331,9 @@ three cases before the fix. `MergedProjectList` and the sidebar's range now
 build the same tree through `mergedProjectView`, and the range runs over
 `visibleBoundProjectIds` (this window's projects as drawn, skipping collapsed
 merged folders), then each project's environments unless the project is
-collapsed. Another machine's rows still take no part in multi-select, as
-recorded under task 2.
+collapsed. Another machine's rows took no part in multi-select then. They do
+now, and a range reads the rows as drawn instead of rebuilding this order
+([federation.md](../../architecture/federation.md#one-presentation-for-both-paths)).
 
 ### Task 7: empty states
 

@@ -140,3 +140,60 @@ export class TranscriptTaskTracker {
     return this.registry.snapshot();
   }
 }
+
+/** Task calls whose snapshot one session keeps. */
+export const TASK_SNAPSHOT_HISTORY_MAX_ENTRIES = 4_096;
+/** Serialized snapshot bytes one session keeps; one snapshot holds up to 200 tasks. */
+export const TASK_SNAPSHOT_HISTORY_MAX_BYTES = 16 * 1024 * 1024;
+
+/**
+ * The list as it stood after each task call, keyed by `tool_use_id`, so a line
+ * read out of order (a history page) can carry its snapshot without replaying
+ * the file up to it.
+ *
+ * Past either bound the oldest calls are forgotten. Their lines then carry no
+ * snapshot and render from the call's own args, as a call the backend could not
+ * parse does: less complete, and never a list that was not true at that point.
+ */
+export class TaskSnapshotHistory {
+  private readonly entries = new Map<string, { snapshot: TaskListSnapshot; bytes: number }>();
+  private bytes = 0;
+
+  constructor(
+    private readonly maxEntries = TASK_SNAPSHOT_HISTORY_MAX_ENTRIES,
+    private readonly maxBytes = TASK_SNAPSHOT_HISTORY_MAX_BYTES,
+  ) {}
+
+  record(snapshots: Record<string, TaskListSnapshot>): void {
+    for (const [id, snapshot] of Object.entries(snapshots)) {
+      this.forget(id);
+      const bytes = JSON.stringify(snapshot).length;
+      this.entries.set(id, { snapshot, bytes });
+      this.bytes += bytes;
+    }
+    for (const id of Array.from(this.entries.keys())) {
+      if (this.entries.size <= this.maxEntries && this.bytes <= this.maxBytes) break;
+      this.forget(id);
+    }
+  }
+
+  /** The snapshots of the task calls this line completed, as `applyLine` answered them. */
+  forLine(line: unknown): Record<string, TaskListSnapshot> | undefined {
+    let snapshots: Record<string, TaskListSnapshot> | undefined;
+    for (const block of contentBlocks(line)) {
+      if (block.type !== "tool_result" || typeof block.tool_use_id !== "string") continue;
+      const entry = this.entries.get(block.tool_use_id);
+      if (!entry) continue;
+      snapshots ??= {};
+      snapshots[block.tool_use_id] = entry.snapshot;
+    }
+    return snapshots;
+  }
+
+  private forget(id: string): void {
+    const entry = this.entries.get(id);
+    if (!entry) return;
+    this.entries.delete(id);
+    this.bytes -= entry.bytes;
+  }
+}

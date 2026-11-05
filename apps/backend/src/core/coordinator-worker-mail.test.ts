@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import {
   COORDINATOR_PROJECT_HOME_MESSAGE_WINDOW_MS,
+  COORDINATOR_REQUEST_ID_REUSED_ERROR,
   COORDINATOR_ROUTING_RULE,
 } from "@orkestrator/protocol/coordinator";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
@@ -157,6 +158,19 @@ const homeMessage = (overrides: Record<string, unknown> = {}) => ({
 });
 
 describe("coordinator messages to the project home", () => {
+  test("a conversation that failed to start cannot send; nothing is sent", async () => {
+    await storage.coordinators.mutateCoordinatorWorkspace(scope.projectId, (current) => ({
+      ...current!,
+      conversations: current!.conversations.map((item) =>
+        item.id === scope.conversationId ? { ...item, startupError: "bridge failed" } : item,
+      ),
+    }));
+    await expect(
+      send({ requestId: "failed-sender", toEnvironmentId: workerId, body: "Hello" }),
+    ).rejects.toThrow("unavailable");
+    expect(await mailTo(workerId)).toHaveLength(0);
+  });
+
   test("ordinary workers are messaged exactly as before: no approval, no warning", async () => {
     const sent = await send({ requestId: "worker-1", toEnvironmentId: workerId, body: "Go." });
     expect(sent).toMatchObject({ placement: "pending-inject", coordinatorDelegationOpened: true });
@@ -164,6 +178,9 @@ describe("coordinator messages to the project home", () => {
     expect(sent).not.toHaveProperty("projectHomeWarning");
     expect(await pendingRequests()).toEqual([]);
     expect(await mailTo(workerId)).toHaveLength(1);
+    expect(
+      (await storage.coordinators.listOpenCoordinatorDelegations())[0]?.delegation?.request,
+    ).toMatchObject({ summary: "Go." });
   });
 
   test("a message without a reason is refused and nothing is sent or held", async () => {
@@ -579,10 +596,51 @@ describe("coordinator messages to the project home", () => {
   test("the routing rule names both routes, isolation and the project home rule", () => {
     expect(COORDINATOR_ROUTING_RULE).toContain("create_ticket");
     expect(COORDINATOR_ROUTING_RULE).toContain("start_build_pipeline");
+    expect(COORDINATOR_ROUTING_RULE).toContain("send_prompt_to_tab or launch_job");
     expect(COORDINATOR_ROUTING_RULE).toContain("launch_environment with a prompt");
     expect(COORDINATOR_ROUTING_RULE).toContain("isolated environment");
     expect(COORDINATOR_ROUTING_RULE).toContain("exceptional circumstances");
     expect(COORDINATOR_ROUTING_RULE).toContain("why an environment will not do");
     expect(COORDINATOR_ROUTING_RULE).toContain("projectHomeReason");
+  });
+});
+
+describe("coordinator request ids on worker mail", () => {
+  test("a request id used to ask one worker is refused for another, before anything is sent", async () => {
+    const other = createEnvironment(scope.projectId, { name: "other", environmentType: "local" });
+    Object.assign(other, { status: "running", setupPhase: "ready", setupScriptsComplete: true });
+    await storage.addEnvironment(other);
+    await agentTab(other.id);
+    await storage.synchronizeAgentMailboxes();
+    const first = await send({ requestId: "ask-1", toEnvironmentId: workerId, body: "Go." });
+    expect(first).toMatchObject({ coordinatorDelegationOpened: true });
+    // Retrying the same message is still idempotent.
+    await expect(
+      send({ requestId: "ask-1", toEnvironmentId: workerId, body: "Go." }),
+    ).resolves.toMatchObject({ id: first.id });
+    // Reusing the id for a different worker used to send the mail and silently
+    // open no delegation, so no wake ever came back.
+    await expect(
+      send({ requestId: "ask-1", toEnvironmentId: other.id, body: "Go too." }),
+    ).rejects.toThrow(COORDINATOR_REQUEST_ID_REUSED_ERROR);
+    expect(await mailTo(other.id)).toHaveLength(0);
+  });
+  test("stored mail reports delegation failure without inviting a duplicate delivery", async () => {
+    const opening = spyOn(storage.coordinators, "openCoordinatorDelegation").mockRejectedValue(
+      new Error(COORDINATOR_REQUEST_ID_REUSED_ERROR),
+    );
+    try {
+      const result = await send({
+        requestId: "delegation-fails",
+        toEnvironmentId: workerId,
+        body: "Go.",
+      });
+      expect(result.delegationNote).toContain("The message was sent");
+      expect(result.delegationNote).toContain("Do not resend");
+      expect(result.delegationNote).not.toContain("Nothing was");
+      expect(await mailTo(workerId)).toHaveLength(1);
+    } finally {
+      opening.mockRestore();
+    }
   });
 });

@@ -1,54 +1,43 @@
+import { flushSync } from "react-dom";
 import { HumanPromptBanner } from "@/components/chat/HumanPromptBanner";
 import { useHumanPrompts } from "@/hooks/useUserCommands";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import {
-  AlertCircle,
-  CheckCircle2,
-  GitBranch,
-  Loader2,
-  Pause,
-  Play,
-  Plus,
-  MessagesSquare,
-  RefreshCw,
-  RotateCcw,
-} from "lucide-react";
-import {
-  coordinatorRuntimeId,
-  type ProjectGitStatus,
-  type ProjectGitSwitchConfirmation,
-} from "@orkestrator/protocol/coordinator";
+import { useRemoteHumanPrompts, type RemoteHumanPromptEntry } from "@/hooks/useRemoteHumanPrompts";
+import type { HumanPromptEntry } from "@orkestrator/protocol/human-prompts";
+import { useEffect, useMemo, useState } from "react";
+import { toast } from "sonner";
+import { useStore } from "zustand";
+import { AlertCircle, GitBranch, Loader2, Pause, Play, Plus, RotateCcw } from "lucide-react";
+import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
+import { useCoordinatorActions } from "./useCoordinatorActions";
+import { useCoordinatorActiveTurn } from "./useCoordinatorActiveTurn";
+import { useCoordinatorGitActions } from "./useCoordinatorGitActions";
+import { useCoordinatorLaunches } from "./useCoordinatorLaunches";
+import { useCoordinatorSelection } from "./useCoordinatorSelection";
 import { useCoordinatorPanelData } from "./useCoordinatorPanelData";
 import { useCoordinatorWorkItems } from "./useCoordinatorWorkItems";
-import { CoordinatorWorkPanel } from "./CoordinatorWorkPanel";
+import { CoordinatorConversationPane } from "./CoordinatorConversationPane";
+import { CoordinatorToolbar } from "./CoordinatorToolbar";
+import { CoordinatorNextWakeLine, CoordinatorWorkPanel } from "./CoordinatorWorkPanel";
 import { openCoordinatorWorkTarget } from "@/lib/coordinator-work-navigation";
+import {
+  remoteWorkKey,
+  workerTabTarget,
+  type CoordinatorWorkStop,
+} from "@/lib/coordinator-work-items";
+import { portalStore } from "@/lib/portal/portal-store";
+import { useCoordinatorPaneLayoutStore } from "@/stores/coordinatorPaneLayoutStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
+import { CoordinatorActionAlert, CoordinatorBanner } from "./CoordinatorPanelNotices";
+import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import { CoordinatorPaneTree } from "./CoordinatorPaneTree";
+import { CoordinatorConversationTab } from "./CoordinatorConversationTab";
+import { isCoordinatorTurnPhaseActive } from "@/lib/coordinator-active-turn";
 import {
-  COORDINATOR_COMPOSER_PLACEHOLDER,
-  COORDINATOR_STARTER_PROMPTS,
-  CoordinatorBanner,
-  CoordinatorErrorDetails,
-  CoordinatorIsolationBadge,
-} from "./CoordinatorPanelNotices";
-import {
-  AGENT_PLATFORM_LABELS,
-  AGENT_PLATFORMS,
-  type AgentPlatform,
-} from "@orkestrator/protocol/agent-platforms";
-import { AgentMailBanner } from "@/components/agent-mail/AgentMailBanner";
-import { LazyLoadBoundary, LazyLoadInlineErrorFallback } from "@/components/LazyLoadBoundary";
-import { LazyAgentNativeTab } from "@/components/native-agent/LazyAgentNativeTab";
-import { TAB_ICON_CLASS } from "@/components/pane-layout/TabShell";
-import { CoordinatorPaneTree, SortableCoordinatorTab } from "./CoordinatorPaneTree";
-import {
+  collectCoordinatorLeaves,
   focusCoordinatorPane,
   focusedCoordinatorConversationId,
-  reconcileCoordinatorLayout,
-  revealCoordinatorConversation,
-  type CoordinatorPaneLayout,
 } from "@/lib/coordinator-pane-layout";
-import { AgentPlatformIcon } from "@/components/icons/AgentIcons";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -60,46 +49,19 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import * as backend from "@/lib/backend";
-import { cn, createSessionKey } from "@/lib/utils";
+import { useAppDialogStore } from "@/stores/appDialogStore";
+import { createSessionKey } from "@/lib/utils";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { useNativeComposeStore } from "@/stores/nativeComposeStore";
 import { useActiveCoordinatorConversationStore } from "@/stores/activeCoordinatorConversationStore";
 import { unusedCoordinatorConversationIds } from "@/lib/coordinator-unused-conversations";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useProjectStore } from "@/stores/projectStore";
-import {
-  selectCoordinatorPaneLayout,
-  selectCoordinatorPaneLayoutReady,
-  useCoordinatorPaneLayoutStore,
-} from "@/stores/coordinatorPaneLayoutStore";
-import { checkUpstreamMergeOffer } from "@/lib/coordinator-upstream-check";
 import { CoordinatorPullRequestWatchProvider } from "@/lib/coordinator-pull-request-watch";
-
-/** How long a message waits on the pre-send fetch before it is sent without merging. */
-const UPSTREAM_CHECK_TIMEOUT_MS = 5_000;
 
 interface CoordinatorPanelProps {
   projectId: string;
-}
-
-function gitSummary(status: ProjectGitStatus | null): string {
-  if (!status) return "Reading repository…";
-  if (!status.upstream) return status.detached ? "Detached HEAD" : "No upstream configured";
-  if (status.remoteState !== "fresh") return "Remote status is stale";
-  if ((status.ahead ?? 0) > 0 && (status.behind ?? 0) > 0) {
-    return `${status.ahead} ahead, ${status.behind} behind — diverged`;
-  }
-  if ((status.behind ?? 0) > 0) return `${status.behind} commits behind`;
-  if ((status.ahead ?? 0) > 0) return `${status.ahead} commits ahead`;
-  return "Up to date";
 }
 
 export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
@@ -109,76 +71,40 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
     git,
     loading,
     error: loadError,
+    clearError: clearLoadError,
+    freshness,
     load,
     applySnapshot: setSnapshot,
     applyGit: setGit,
     invalidateView,
     refreshView,
   } = useCoordinatorPanelData(projectId);
-  const [operation, setOperation] = useState<"fetch" | "sync" | "switch" | "conversation" | null>(
-    null,
-  );
-  const [pendingSwitch, setPendingSwitch] = useState<ProjectGitSwitchConfirmation | null>(null);
+  const {
+    runAction,
+    actionError,
+    setActionError: setError,
+    gitBusy,
+    fetching,
+    conversationBusy,
+  } = useCoordinatorActions();
   // Closing the main conversation is confirmed; side agents close at once.
-  const [pendingMainClose, setPendingMainClose] = useState<{ id: string; title: string } | null>(
-    null,
-  );
-  const upstreamCheckLifetimeRef = useRef<AbortController | null>(null);
-  useEffect(() => {
-    const lifetime = new AbortController();
-    upstreamCheckLifetimeRef.current = lifetime;
-    return () => lifetime.abort();
-  }, [projectId]);
-  const [actionError, setError] = useState<string | null>(null);
-  const error = actionError ?? loadError;
-  const [pendingLaunch, setPendingLaunch] = useState<{
-    conversationId: string;
-    prompt: string;
-    modelId?: string;
-    reasoningId?: string;
-    fastMode: boolean;
-    mode?: "build" | "plan";
-    executionProfileId?: string;
+  // Change agent is the same close, followed by a new, unassigned main.
+  const [pendingMainClose, setPendingMainClose] = useState<{
+    id: string;
+    title: string;
+    paneId: string;
+    changeAgent: boolean;
   } | null>(null);
+  const [replacement, setReplacement] = useState<{ projectId: string; id: string } | null>(null);
+  const error = actionError ?? loadError;
 
-  const runGit = useCallback(
-    async (
-      kind: "fetch" | "sync" | "switch",
-      ref?: string,
-      confirmation?: ProjectGitSwitchConfirmation,
-    ) => {
-      setOperation(kind);
-      setError(null);
-      try {
-        const next =
-          kind === "fetch"
-            ? await backend.fetchProjectGit(projectId, true)
-            : kind === "sync"
-              ? await backend.syncProjectGit(projectId)
-              : await backend.switchProjectGitBranch(
-                  projectId,
-                  ref!,
-                  confirmation
-                    ? {
-                        confirmationToken: confirmation.token,
-                        includeNestedRepositories: confirmation.requiresEnhancedConfirmation,
-                      }
-                    : {},
-                );
-        setGit(next);
-        await refreshView();
-      } catch (cause) {
-        setError(cause instanceof Error ? cause.message : `Git ${kind} failed`);
-        void backend
-          .getProjectGitStatus(projectId)
-          .then(setGit)
-          .catch(() => undefined);
-      } finally {
-        setOperation(null);
-      }
-    },
-    [projectId, refreshView, setGit],
-  );
+  const { runGit, prepareSwitch, confirmUpstreamMerge } = useCoordinatorGitActions({
+    projectId,
+    snapshot,
+    setGit,
+    refreshView,
+    runAction,
+  });
 
   // The main coordinator first, then side agents in number order.
   const conversations = useMemo(
@@ -190,132 +116,28 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
       ),
     [snapshot],
   );
-  const conversationIds = useMemo(() => conversations.map((item) => item.id), [conversations]);
-  const conversationIdsRef = useRef(conversationIds);
-  /*
-   * Tab groups. The layout is stored by the backend per project so every
-   * client shows the same groups, and is presentation over the backend's open
-   * conversations: reconciling adds conversations no group holds yet to the
-   * focused group and drops closed ones, so it never decides what is open.
-   * Nothing is reconciled before the first snapshot and the stored layout are
-   * both read, which would otherwise read as "every conversation closed" (or
-   * "no layout") and discard the remembered one.
-   */
-  const storedLayout = useCoordinatorPaneLayoutStore(selectCoordinatorPaneLayout(projectId));
-  const storedLayoutReady = useCoordinatorPaneLayoutStore(
-    selectCoordinatorPaneLayoutReady(projectId),
-  );
-  const setStoredLayout = useCoordinatorPaneLayoutStore((state) => state.setLayout);
-  useEffect(() => {
-    void useCoordinatorPaneLayoutStore.getState().hydrate(projectId);
-  }, [projectId]);
-  const layout = useMemo(
-    () =>
-      snapshot && storedLayoutReady
-        ? reconcileCoordinatorLayout(storedLayout, conversationIds)
-        : null,
-    [conversationIds, snapshot, storedLayout, storedLayoutReady],
-  );
-  const layoutRef = useRef(layout);
-  const snapshotRef = useRef(snapshot);
-  // Before the effects and handlers below read them.
-  useLayoutEffect(() => {
-    conversationIdsRef.current = conversationIds;
-    layoutRef.current = layout;
-    snapshotRef.current = snapshot;
-  });
-  const updateLayout = useCallback(
-    (change: (layout: CoordinatorPaneLayout) => CoordinatorPaneLayout) => {
-      const current = selectCoordinatorPaneLayout(projectId)(
-        useCoordinatorPaneLayoutStore.getState(),
-      );
-      if (!current && !layoutRef.current) return;
-      setStoredLayout(
-        projectId,
-        change(
-          reconcileCoordinatorLayout(current ?? layoutRef.current, conversationIdsRef.current),
-        ),
-      );
-    },
-    [projectId, setStoredLayout],
-  );
-  const backendSelectedId = snapshot?.workspace.selectedConversationId ?? null;
-  useEffect(() => {
-    if (layout && layout !== storedLayout) setStoredLayout(projectId, layout);
-  }, [layout, projectId, setStoredLayout, storedLayout]);
-  // Selection intent outlives an individual request. Serialize writes so an
-  // older answer (or its reconciliation read) cannot reveal a superseded pane.
-  const selectionRef = useRef<{
-    projectId: string;
-    desired: string | null;
-    pending: boolean;
-    live: boolean;
-  } | null>(null);
-  useLayoutEffect(() => {
-    const selection = { projectId, desired: null as string | null, pending: false, live: true };
-    selectionRef.current = selection;
-    return () => {
-      selection.live = false;
-    };
-  }, [projectId]);
-  useEffect(() => {
-    const selection = selectionRef.current;
-    if (!selection || selection.pending) return;
-    if (backendSelectedId) {
-      updateLayout((current) => revealCoordinatorConversation(current, backendSelectedId));
+  const conversationIds = useMemo(() => {
+    const ids = conversations.map((item) => item.id);
+    if (replacement?.projectId === projectId && !ids.includes(replacement.id)) {
+      ids.push(replacement.id);
     }
-  }, [backendSelectedId, snapshot, updateLayout]);
-  const selectConversation = useCallback(
-    (conversationId: string) => {
-      const selection = selectionRef.current;
-      if (!selection || selection.projectId !== projectId) return;
-      selection.desired = conversationId;
-      if (selection.pending) return;
-      selection.pending = true;
-      setError(null);
-      void (async () => {
-        while (selection.live && selection.desired !== null) {
-          const requested = selection.desired;
-          try {
-            const next = await backend.selectCoordinatorConversation(projectId, requested);
-            if (!selection.live) return;
-            if (selection.desired === requested) {
-              setSnapshot(next);
-              updateLayout((current) => revealCoordinatorConversation(current, requested));
-              selection.desired = null;
-            }
-          } catch (cause) {
-            if (!selection.live) return;
-            if (selection.desired !== requested) continue;
-            selection.desired = null;
-            setError(cause instanceof Error ? cause.message : "Could not select conversation");
-            invalidateView();
-            break;
-          }
-        }
-        selection.pending = false;
-      })();
-    },
-    [invalidateView, projectId, setSnapshot, updateLayout],
-  );
-  /**
-   * Applies a layout change, then keeps the backend's selection on the
-   * conversation in the focused group. That selection is what the header, the
-   * pause check, and the next visit follow.
-   */
-  const changeLayout = useCallback(
-    (change: (layout: CoordinatorPaneLayout) => CoordinatorPaneLayout) => {
-      updateLayout(change);
-      const current = selectCoordinatorPaneLayout(projectId)(
-        useCoordinatorPaneLayoutStore.getState(),
-      );
-      const focused = current ? focusedCoordinatorConversationId(current) : null;
-      if (focused && focused !== (selectionRef.current?.desired ?? backendSelectedId)) {
-        selectConversation(focused);
-      }
-    },
-    [backendSelectedId, projectId, selectConversation, updateLayout],
-  );
+    return ids;
+  }, [conversations, projectId, replacement]);
+  const {
+    layout,
+    backendSelectedId,
+    updateLayout,
+    changeLayout,
+    selectConversation,
+    selectionPending,
+  } = useCoordinatorSelection({
+    projectId,
+    snapshot,
+    conversationIds,
+    setSnapshot,
+    invalidateView,
+    setError,
+  });
   const hasMain = conversations.some((item) => item.role === "main");
   const newConversationLabel = hasMain ? "New side agent" : "Start coordinator";
   const availablePlatforms = useMemo(
@@ -343,164 +165,12 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
     }
     return notes;
   }, [availablePlatforms, snapshot]);
-  const assignAgent = useCallback(
-    async (
-      conversationId: string,
-      platform: AgentPlatform,
-      launch: {
-        modelId?: string;
-        reasoningId?: string;
-        fastMode: boolean;
-        mode?: "build" | "plan";
-        executionProfileId?: string;
-      },
-      prompt: string,
-    ) => {
-      const next = await backend.assignCoordinatorConversationAgent(
-        projectId,
-        conversationId,
-        platform,
-      );
-      // Held only until the assigned tab mounts and consumes them. They are not
-      // durable state: the backend owns the conversation, and a reload before
-      // the first dispatch legitimately returns the user to the composer with
-      // their draft rather than replaying a prompt that was never sent.
-      setPendingLaunch({ conversationId, prompt, ...launch });
-      setSnapshot(next);
-    },
-    [projectId, setSnapshot],
-  );
-  /*
-   * The main coordinator reads this checkout, so a message sent while the
-   * branch is behind its upstream is answered from older code. Before each
-   * message to the main coordinator (its first prompt included), the backend
-   * refreshes the "behind" state with a cooldown-bound fetch and decides
-   * whether the upstream commits can be merged
-   * (`check_coordinator_upstream_merge`). Whenever Git can fast-forward the
-   * checkout cleanly, the panel does so without asking. When the fetch is
-   * slow or fails, the backend itself fast-forwards to the upstream commit
-   * already fetched and answers `fast-forwarded`, so a slow remote does not
-   * leave the checkout behind commits it already has.
-   *
-   * Merging resolves only after the fast-forward, so the message then reads
-   * the merged code. A fast-forward that fails anyway (the remote moved, the
-   * network dropped) is reported in the toolbar and the message is still
-   * sent: nobody is asked any more, so a failure must not strand the draft
-   * with no way to send it. A blocked checkout (local commits, uncommitted
-   * changes, an unfinished operation) is left alone: the header already says
-   * why it cannot sync. So is one while any of this coordinator's
-   * conversations or the project home is running a turn, since the backend
-   * refuses to change the checkout under it.
-   */
-  const confirmUpstreamMerge = useCallback(
-    async (conversation: { role?: string }) => {
-      const lifetime = upstreamCheckLifetimeRef.current;
-      if (!lifetime || lifetime.signal.aborted) return false;
-      if (conversation.role === "side") return;
-      // Only an older backend needs this panel to judge running turns itself.
-      const turnRunning = () => {
-        const current = snapshotRef.current;
-        const projections = useNativeAgentProjectionStore.getState().projections;
-        const active = (phase: string | undefined) =>
-          phase === "running" ||
-          phase === "blocked" ||
-          phase === "cancelling" ||
-          phase === "recovering";
-        const conversationRunning = current?.workspace.conversations.some(
-          (item) =>
-            !item.closedAt &&
-            item.agent &&
-            active(
-              projections.get(
-                createSessionKey(coordinatorRuntimeId(current.workspace.id, item.id), item.tabId),
-              )?.turn.phase,
-            ),
-        );
-        const homeIds = new Set(
-          useEnvironmentStore
-            .getState()
-            .environments.filter(
-              (environment) => environment.projectId === projectId && environment.projectHome,
-            )
-            .map((environment) => environment.id),
-        );
-        return (
-          conversationRunning === true ||
-          Array.from(projections.values()).some(
-            (projection) => homeIds.has(projection.environmentId) && active(projection.turn.phase),
-          )
-        );
-      };
-      let cancel!: () => void;
-      const cancelled = new Promise<false>((resolve) => {
-        cancel = () => resolve(false);
-        lifetime.signal.addEventListener("abort", cancel, { once: true });
-      });
-      try {
-        // An unreachable or slow remote is no reason to hold the message: past
-        // the bound it is sent without merging, and the fetch still lands.
-        let timer: ReturnType<typeof setTimeout> | undefined;
-        const check = await Promise.race([
-          cancelled,
-          checkUpstreamMergeOffer(projectId, {
-            turnRunning,
-            onStatus: (fetched) => {
-              if (!lifetime.signal.aborted) setGit(fetched);
-            },
-          }).catch(() => null),
-          new Promise<null>((resolve) => {
-            timer = setTimeout(() => resolve(null), UPSTREAM_CHECK_TIMEOUT_MS);
-          }),
-        ]).finally(() => clearTimeout(timer));
-        if (lifetime.signal.aborted || check === false) return false;
-        if (check && !check.offer && check.reason === "fast-forwarded") {
-          // The backend already merged what it had fetched; the header has the
-          // status, and the view picks up the new commit before sending.
-          await refreshView().catch(() => undefined);
-          return lifetime.signal.aborted ? false : undefined;
-        }
-        if (!check?.offer) return;
-        setOperation("sync");
-        setError(null);
-        try {
-          const synced = await backend.syncProjectGit(projectId);
-          if (lifetime.signal.aborted) return false;
-          setGit(synced);
-          await refreshView();
-          if (lifetime.signal.aborted) return false;
-        } catch (cause) {
-          if (lifetime.signal.aborted) return false;
-          if (
-            cause instanceof Error &&
-            cause.message === "Stop the active coordinator turn before changing the checkout"
-          )
-            return;
-          setError(cause instanceof Error ? cause.message : "Could not merge the upstream commits");
-          void backend
-            .getProjectGitStatus(projectId)
-            .then(setGit)
-            .catch(() => undefined);
-        } finally {
-          if (!lifetime.signal.aborted) setOperation(null);
-        }
-      } finally {
-        lifetime.signal.removeEventListener("abort", cancel);
-      }
-    },
-    [projectId, refreshView, setGit],
-  );
-  const startConversation = useCallback(
-    async (
-      conversation: { id: string; role?: string },
-      platform: AgentPlatform,
-      launch: Parameters<typeof assignAgent>[2],
-      prompt: string,
-    ) => {
-      if ((await confirmUpstreamMerge(conversation)) === false) return;
-      await assignAgent(conversation.id, platform, launch, prompt);
-    },
-    [assignAgent, confirmUpstreamMerge],
-  );
+  const { pendingLaunches, startConversation } = useCoordinatorLaunches({
+    projectId,
+    snapshot,
+    setSnapshot,
+    confirmUpstreamMerge,
+  });
   // The conversation in the focused group; the backend's selection until the
   // layout has caught up with it.
   const focusedId = layout ? focusedCoordinatorConversationId(layout) : null;
@@ -538,6 +208,8 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
    * its builds and reviews run in. Read once: the Work panel marks those rows
    * as needing the user, and the banner shows the workers' own prompts so the
    * person talking to the coordinator sees them without opening the worker.
+   * Workers on other nodes are read through each node's link, while a request
+   * to them is open (`useRemoteHumanPrompts`).
    */
   const workerEnvironmentIds = useMemo(
     () =>
@@ -572,14 +244,38 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
     return Array.from(ids);
   }, [snapshot, workerEnvironmentIds, pipelines, multiReviews]);
   const workPrompts = useHumanPrompts(workEnvironmentIds);
-  const workerPrompts = useMemo(
-    () => workPrompts.filter((entry) => workerEnvironmentIds.has(entry.environmentId)),
-    [workPrompts, workerEnvironmentIds],
+  const remoteWorkers = useMemo(
+    () =>
+      snapshot
+        ? snapshot.workflows.flatMap((association) =>
+            association.kind === "environment" &&
+            association.coordinatorId === snapshot.workspace.id &&
+            association.nodeId &&
+            !association.pending &&
+            association.delegation?.state === "running"
+              ? [{ nodeId: association.nodeId, environmentId: association.resourceId }]
+              : [],
+          )
+        : [],
+    [snapshot],
+  );
+  const remotePrompts = useRemoteHumanPrompts(remoteWorkers);
+  const workerPrompts = useMemo<Array<HumanPromptEntry | RemoteHumanPromptEntry>>(
+    () => [
+      ...workPrompts.filter((entry) => workerEnvironmentIds.has(entry.environmentId)),
+      ...remotePrompts,
+    ],
+    [workPrompts, workerEnvironmentIds, remotePrompts],
   );
   const promptEnvironmentIds = useMemo(
-    () => new Set(workPrompts.map((entry) => entry.environmentId)),
-    [workPrompts],
+    () =>
+      new Set([
+        ...workPrompts.map((entry) => entry.environmentId),
+        ...remotePrompts.map((entry) => remoteWorkKey(entry.nodeId, entry.environmentId)),
+      ]),
+    [workPrompts, remotePrompts],
   );
+  const nodes = useStore(portalStore.store, (state) => state.nodes);
   // Everything this coordinator started, from every conversation and node.
   const work = useCoordinatorWorkItems(snapshot, promptEnvironmentIds);
   const selectedSessionKey =
@@ -589,71 +285,29 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
   const selectedTurnPhase = useNativeAgentProjectionStore((state) =>
     selectedSessionKey ? state.projections.get(selectedSessionKey)?.turn.phase : undefined,
   );
-  // The conversation's own tab id, never a reconstructed one: the workspace
-  // assigns it, and a key that does not match leaves the prompt held for good.
-  const launchConversation = pendingLaunch
-    ? snapshot?.workspace.conversations.find((item) => item.id === pendingLaunch.conversationId)
-    : undefined;
-  const launchSessionKey =
-    snapshot && launchConversation
-      ? createSessionKey(
-          coordinatorRuntimeId(snapshot.workspace.id, launchConversation.id),
-          launchConversation.tabId,
-        )
-      : null;
-  // Either half is enough: a turn that has started, or a message already in the
-  // transcript. A slow first read shows neither, which is precisely when the
-  // prompt still has to be held. Only phases a turn produces count: the first
-  // read of a new session is the backend's `recovering` placeholder while the
-  // provider mapping settles, and an `error` with no transcript is a failed
-  // start. Releasing on either dropped the prompt before it was ever sent.
-  const launchObserved = useNativeAgentProjectionStore((state) => {
-    if (!launchSessionKey) return false;
-    const projection = state.projections.get(launchSessionKey);
-    if (!projection) return false;
-    const phase = projection.turn.phase;
-    return (
-      phase === "running" ||
-      phase === "blocked" ||
-      phase === "cancelling" ||
-      projection.messages.length > 0
-    );
-  });
-  const coordinatorTurnActive =
-    selectedTurnPhase === "running" ||
-    selectedTurnPhase === "blocked" ||
-    selectedTurnPhase === "cancelling" ||
-    selectedTurnPhase === "recovering";
-  const blocked = git?.repositoryOperationBlockedReason ?? null;
-  const dirty = Boolean(git && (git.trackedChanges > 0 || git.untrackedChanges > 0));
-  const discardableDirty = Boolean(
-    dirty &&
-    git &&
-    !git.mergeInProgress &&
-    !git.rebaseInProgress &&
-    !git.sequencerInProgress &&
-    git.conflicts === 0,
-  );
-  const switchBlocked = Boolean(blocked && !discardableDirty);
-  const pendingSwitchBranch = git?.branches.find((branch) => branch.ref === pendingSwitch?.ref);
-
-  /*
-   * Held until the turn is observed, not until the tab has rendered once.
-   *
-   * The agent tab dispatches an opening prompt only after its first
-   * authoritative read, so dropping the prompt on the next render — which the
-   * snapshot poll triggers within a second or two — raced that read and left
-   * the text sitting in the composer unsent. Evidence of the turn is the
-   * authoritative signal, and re-dispatch is safe in the meantime because the
-   * opening submit carries a deterministic idempotency key.
-   */
-  if (pendingLaunch && launchObserved) setPendingLaunch(null);
+  const selectedTurnActive = isCoordinatorTurnPhaseActive(selectedTurnPhase);
 
   // A settled turn may have changed delegations: one coalesced conditional read.
   useEffect(() => {
-    if (!selectedSessionKey || coordinatorTurnActive) return;
+    if (!selectedSessionKey || selectedTurnActive) return;
     invalidateView();
-  }, [coordinatorTurnActive, invalidateView, selectedSessionKey]);
+  }, [invalidateView, selectedSessionKey, selectedTurnActive]);
+  const mountedConversationIds = useMemo(
+    () =>
+      new Set(
+        layout
+          ? collectCoordinatorLeaves(layout.root).flatMap((pane) =>
+              pane.activeConversationId ? [pane.activeConversationId] : [],
+            )
+          : [],
+      ),
+    [layout],
+  );
+  const activeTurn = useCoordinatorActiveTurn(
+    projectId,
+    snapshot?.workspace,
+    mountedConversationIds,
+  );
 
   if (!project?.localPath) {
     return (
@@ -669,6 +323,15 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
             Coordinator reads the project’s real local checkout. Set a valid local path in
             Repository settings to continue.
           </p>
+          <Button
+            className="mt-4"
+            variant="outline"
+            onClick={() =>
+              useAppDialogStore.getState().open({ kind: "repository-settings", projectId })
+            }
+          >
+            Repository settings
+          </Button>
         </div>
       </div>
     );
@@ -681,7 +344,10 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
         role="tabpanel"
         className="grid h-full place-items-center"
       >
-        <Loader2 className="size-6 animate-spin text-muted-foreground" />
+        <div role="status">
+          <Loader2 className="size-6 animate-spin text-muted-foreground" aria-hidden="true" />
+          <span className="sr-only">Loading coordinator</span>
+        </div>
       </div>
     );
   }
@@ -707,171 +373,137 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
   }
 
   const conversationById = new Map(conversations.map((item) => [item.id, item]));
-  const createConversation = () => {
-    setOperation("conversation");
-    setError(null);
+  /**
+   * Opens a conversation: the main when none is open, else a side agent.
+   * `replacingMain` closes that main first, so the new one is a fresh,
+   * unassigned main whose composer offers every qualified platform.
+   */
+  const createConversation = (replacingMain?: string) => {
     // Empty, unassigned side agents close as the new one opens, so unused
     // composers cannot use up the open-conversation limit.
     const closeUnused = unusedCoordinatorConversationIds(
       snapshot.workspace,
       useNativeComposeStore.getState().drafts,
-      pendingLaunch?.conversationId,
+      pendingLaunches,
     );
-    void backend
-      .createCoordinatorConversation(projectId, undefined, closeUnused)
-      .then((createdSnapshot) => {
-        setSnapshot(createdSnapshot);
+    void runAction(
+      "conversation",
+      async () => {
+        const originalPane =
+          replacingMain && layout
+            ? collectCoordinatorLeaves(layout.root).find((pane) =>
+                pane.conversationIds.includes(replacingMain),
+              )
+            : null;
+        const originalIndex = originalPane?.conversationIds.indexOf(replacingMain!) ?? 0;
+        let closedSnapshot = null;
+        let createdSnapshot;
+        setReplacement(replacingMain ? { projectId, id: replacingMain } : null);
+        try {
+          closedSnapshot = replacingMain
+            ? await backend.closeCoordinatorConversation(projectId, replacingMain)
+            : null;
+          createdSnapshot = await backend.createCoordinatorConversation(
+            projectId,
+            undefined,
+            closeUnused,
+          );
+        } catch (cause) {
+          // Closing succeeded even though creation failed; never leave a
+          // closed conversation visible as though it were still usable.
+          if (closedSnapshot) setSnapshot(closedSnapshot);
+          setReplacement(null);
+          throw cause;
+        }
+        if (replacingMain) {
+          // Mail can ensure a main between close and create. In that case
+          // create returns a side: keep it, but replacement and focus belong
+          // to the actual main, never to the API's selected side.
+          const main = createdSnapshot.workspace.conversations.find(
+            (item) => item.role === "main" && !item.closedAt,
+          );
+          if (!main) {
+            setSnapshot(createdSnapshot);
+            setReplacement(null);
+            throw new Error("No open main conversation after changing agent");
+          }
+          createdSnapshot = {
+            ...createdSnapshot,
+            workspace: { ...createdSnapshot.workspace, selectedConversationId: main.id },
+          };
+        }
+        // Read after the requests, before publishing the new open set can
+        // reconcile away the placeholder. Keep moves and divider edits made
+        // while the backend was busy.
+        const latestLayout = useCoordinatorPaneLayoutStore.getState().entries[projectId]?.layout;
+        const replacementLayout =
+          replacingMain && latestLayout ? structuredClone(latestLayout) : null;
+        const replacementId = createdSnapshot.workspace.selectedConversationId;
+        if (replacementLayout && replacementId) {
+          const panes = collectCoordinatorLeaves(replacementLayout.root);
+          const target =
+            panes.find((pane) => pane.conversationIds.includes(replacingMain!)) ??
+            panes.find((pane) => pane.id === originalPane?.id) ??
+            panes.find((pane) => pane.id === replacementLayout.activePaneId) ??
+            panes[0];
+          if (target) {
+            // A newer snapshot may already have inserted the new ID.
+            for (const pane of panes) {
+              pane.conversationIds = pane.conversationIds.filter((id) => id !== replacementId);
+            }
+            const index = target.conversationIds.indexOf(replacingMain!);
+            if (index >= 0) target.conversationIds[index] = replacementId;
+            else
+              target.conversationIds.splice(
+                Math.min(originalIndex, target.conversationIds.length),
+                0,
+                replacementId,
+              );
+            target.activeConversationId = replacementId;
+            replacementLayout.activePaneId = target.id;
+          }
+        }
+        // Publish the open set before the external layout store: a store
+        // notification can synchronously render and reconcile the new ID.
+        flushSync(() => {
+          setSnapshot(createdSnapshot);
+          setReplacement(null);
+        });
+        if (replacementLayout && replacementId) {
+          useCoordinatorPaneLayoutStore.getState().setLayout(projectId, replacementLayout);
+        }
         const createdId = createdSnapshot.workspace.selectedConversationId;
-        if (createdId && selectionRef.current?.pending) selectConversation(createdId);
-      })
-      .catch((cause) =>
-        setError(cause instanceof Error ? cause.message : "Could not create conversation"),
-      )
-      .finally(() => setOperation(null));
-  };
-  // One group's front conversation. Only the front tab of each group is
-  // mounted; the backend owns the session, so a tab brought forward rehydrates.
-  const renderConversation = (conversationId: string | null, paneFocused: boolean) => {
-    const conversation = conversationId ? conversationById.get(conversationId) : undefined;
-    if (!conversation) {
-      return (
-        <div className="grid h-full place-items-center text-center">
-          <div>
-            <p className="text-sm text-muted-foreground">
-              No coordinator is open. Mail for the coordinator will start one with the default
-              agent.
-            </p>
-            <Button
-              className="mt-3"
-              variant="outline"
-              disabled={operation !== null}
-              onClick={createConversation}
-            >
-              <Plus className="size-4" />
-              {newConversationLabel}
-            </Button>
-          </div>
-        </div>
-      );
-    }
-    const providerState = conversation.agent
-      ? snapshot.providerAvailability[conversation.agent]
-      : undefined;
-    // A banner over the transcript rather than a replacement for it: the
-    // conversation stays readable while its platform is unavailable.
-    const providerUnavailable = Boolean(conversation.agent && !providerState?.available);
-    // Scoped to the conversation that produced it, so another group cannot
-    // replay one conversation's first prompt into its own.
-    const launch = pendingLaunch?.conversationId === conversation.id ? pendingLaunch : null;
-    const environmentId = coordinatorRuntimeId(snapshot.workspace.id, conversation.id);
-    return (
-      <div key={conversation.id} className="flex h-full min-h-0 flex-col">
-        {providerUnavailable && conversation.agent ? (
-          <CoordinatorBanner
-            tone="warning"
-            action={
-              <Button size="sm" variant="outline" onClick={() => void load()}>
-                <RotateCcw className="size-3.5" />
-                Retry
-              </Button>
-            }
-          >
-            <span className="font-medium">
-              {AGENT_PLATFORM_LABELS[conversation.agent]} is unavailable for Coordinator.
-            </span>{" "}
-            <span className="text-muted-foreground">
-              {providerState?.reason ?? snapshot.workspace.lastStartupError}
-            </span>
-          </CoordinatorBanner>
-        ) : null}
-        <AgentMailBanner
-          environmentId={environmentId}
-          tabId={conversation.tabId}
-          agentAvailable={availablePlatforms.length > 0}
-        />
-        <div className="relative min-h-0 flex-1">
-          <LazyLoadBoundary
-            loadingFallback={
-              <div className="grid h-full place-items-center">
-                <Loader2 className="size-6 animate-spin text-muted-foreground" />
-              </div>
-            }
-            renderError={(details) => <LazyLoadInlineErrorFallback {...details} />}
-          >
-            <LazyAgentNativeTab
-              tabId={conversation.tabId}
-              data={{
-                platform: conversation.agent,
-                environmentId,
-                isLocal: true,
-                sessionId: conversation.providerSessionId,
-              }}
-              isActive
-              ownsGlobalShortcuts={paneFocused}
-              executionPolicy="coordinator-read-only"
-              coordinatorProjectId={projectId}
-              coordinatorWorkspacePath={snapshot.projectPath}
-              availablePlatforms={availablePlatforms}
-              platformNotes={platformNotes}
-              composerPlaceholder={COORDINATOR_COMPOSER_PLACEHOLDER}
-              connectionEnabled={
-                snapshot.workspace.lifecycleState === "ready" && providerState?.available !== false
-              }
-              // Only the main coordinator delegates, so only it is offered work
-              // that has to run in a pipeline or environment.
-              {...(conversation.role === "main"
-                ? { unassignedStarterPrompts: COORDINATOR_STARTER_PROMPTS }
-                : {})}
-              emptyPlatformsMessage="No agent platform meets this coordinator's read-only requirement on this machine. Enable a qualified platform, or lower the coordinator safety level in Settings."
-              onAssignPlatform={
-                conversation.agent
-                  ? undefined
-                  : (platform, prompt, options) =>
-                      startConversation(conversation, platform, options, prompt)
-              }
-              beforeSend={
-                conversation.role === "side" ? undefined : () => confirmUpstreamMerge(conversation)
-              }
-              {...(launch
-                ? {
-                    initialPrompt: launch.prompt,
-                    initialAgentModel: launch.modelId,
-                    initialReasoningEffort: launch.reasoningId,
-                    initialConversationMode: launch.mode,
-                    initialFastMode: launch.fastMode,
-                    initialExecutionProfileId: launch.executionProfileId,
-                  }
-                : {})}
-            />
-          </LazyLoadBoundary>
-        </div>
-      </div>
+        if (createdId && (replacingMain || selectionPending())) selectConversation(createdId);
+      },
+      {
+        failureMessage: replacingMain
+          ? "Could not change the coordinator's agent"
+          : "Could not create conversation",
+      },
     );
   };
-  const branchSwitchDisabled = operation !== null || switchBlocked || coordinatorTurnActive;
-  const syncDisabled = branchSwitchDisabled || dirty;
-  const canSync = Boolean(git?.upstream && git.behind && git.behind > 0 && !git.ahead && !blocked);
   const paused = snapshot.workspace.lifecycleState === "paused";
   const setPaused = (pause: boolean) => {
-    setOperation("conversation");
-    setError(null);
     const action = pause ? backend.pauseProjectCoordinator : backend.resumeProjectCoordinator;
-    void action(projectId)
-      .then(setSnapshot)
-      .catch((cause) =>
-        setError(cause instanceof Error ? cause.message : "Could not update Coordinator"),
-      )
-      .finally(() => setOperation(null));
+    void runAction("conversation", async () => setSnapshot(await action(projectId)), {
+      failureMessage: "Could not update Coordinator",
+    });
   };
   const closeConversation = (conversationId: string) => {
-    setOperation("conversation");
-    void backend
-      .closeCoordinatorConversation(projectId, conversationId)
-      .then(setSnapshot)
-      .catch((cause) =>
-        setError(cause instanceof Error ? cause.message : "Could not close conversation"),
-      )
-      .finally(() => setOperation(null));
+    void runAction(
+      "conversation",
+      async () =>
+        setSnapshot(await backend.closeCoordinatorConversation(projectId, conversationId)),
+      { failureMessage: "Could not close conversation" },
+    );
+  };
+  const retryConversation = (conversationId: string) => {
+    void runAction(
+      "conversation",
+      async () =>
+        setSnapshot(await backend.retryCoordinatorConversation(projectId, conversationId)),
+      { failureMessage: "Could not retry conversation" },
+    );
   };
   const clearFinishedWork = (associationIds: string[]) => {
     setError(null);
@@ -882,18 +514,62 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
         setError(cause instanceof Error ? cause.message : "Could not clear finished work"),
       );
   };
-  // The badge speaks for the conversation in front: its platform's read-only
-  // boundary is either enforced or only something the agent is asked to keep.
-  const selectedQualification = selected?.agent
-    ? snapshot.providerAvailability[selected.agent]
-    : undefined;
-  const advisoryPlatform =
-    selected?.agent && selectedQualification && selectedQualification.tier !== "enforced"
-      ? AGENT_PLATFORM_LABELS[selected.agent]
-      : null;
-  const gitError = git?.lastError ? git.lastError.stderr || git.lastError.message : null;
-  // An action failure that only repeats the repository's own error is shown once.
-  const coordinatorError = error && error !== gitError ? error : null;
+  // Any open conversation can carry the stop; the backend checks it belongs here.
+  const stopConversation = conversations[0];
+  const stopWorker = async (stop: CoordinatorWorkStop) => {
+    if (!stopConversation) return;
+    setError(null);
+    const scope = {
+      projectId,
+      coordinatorId: snapshot.workspace.id,
+      conversationId: stopConversation.id,
+    };
+    try {
+      const results = await Promise.all(
+        stop.tabIds.map((tabId) =>
+          backend.stopCoordinatorWorkerTurn(scope, {
+            // A new click is a new request: it stops whatever turn is running then.
+            requestId: `work-panel-stop:${crypto.randomUUID()}`,
+            environmentId: stop.environmentId,
+            tabId,
+            ...(stop.nodeId ? { nodeId: stop.nodeId } : {}),
+          }),
+        ),
+      );
+      if (!results.some((result) => result.stopped === true)) {
+        toast.info("That worker has no running turn to stop");
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not stop the worker");
+    } finally {
+      invalidateView();
+    }
+  };
+  const promptTarget = (entry: HumanPromptEntry | RemoteHumanPromptEntry) =>
+    workerTabTarget(
+      {
+        environmentId: entry.environmentId,
+        tabId: entry.tabId,
+        ...("nodeId" in entry ? { nodeId: entry.nodeId } : {}),
+        title: promptLabel(entry),
+      },
+      { environments, nodes },
+    );
+  const promptLabel = (entry: HumanPromptEntry | RemoteHumanPromptEntry) => {
+    if (!("nodeId" in entry)) {
+      return (
+        environments.find((item) => item.id === entry.environmentId)?.name ?? entry.environmentId
+      );
+    }
+    const node = nodes.find((item) => item.nodeId === entry.nodeId);
+    const name =
+      node?.environments.find((item) => item.ref.environmentId === entry.environmentId)?.name ??
+      entry.environmentId;
+    return `${name} on ${node?.view.displayName ?? entry.nodeId}`;
+  };
+
+  // Keep action failures announced even when the repository retains the same error.
+  const actionAlert = error;
 
   return (
     <CoordinatorPullRequestWatchProvider projectId={projectId}>
@@ -903,140 +579,47 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
         data-agent-scope=""
         className="flex h-full min-h-0 flex-col bg-background"
       >
-        <div className="shrink-0 border-b border-border/70 bg-chrome px-3 py-2">
-          <div className="flex min-w-0 flex-wrap items-center gap-2">
-            <CoordinatorIsolationBadge
-              projectPath={snapshot.projectPath}
-              contextRevision={snapshot.workspace.repositoryContextRevision}
-              advisoryPlatform={advisoryPlatform}
-            />
-            <div className="min-w-3 flex-1" />
-            <Select
-              value={git?.branch ? `refs/heads/${git.branch}` : undefined}
-              onValueChange={(value) => {
-                if (!discardableDirty) {
-                  void runGit("switch", value);
-                  return;
-                }
-                setOperation("switch");
-                setError(null);
-                void backend
-                  .prepareProjectGitBranchSwitch(projectId, value)
-                  .then(setPendingSwitch)
-                  .catch((cause) => {
-                    setError(
-                      cause instanceof Error ? cause.message : "Could not prepare branch switch",
-                    );
-                    void backend
-                      .getProjectGitStatus(projectId)
-                      .then(setGit)
-                      .catch(() => undefined);
-                  })
-                  .finally(() => setOperation(null));
-              }}
-              disabled={branchSwitchDisabled}
-            >
-              <SelectTrigger
-                size="sm"
-                className="max-w-56"
-                title={
-                  (switchBlocked ? blocked : null) ??
-                  (dirty
-                    ? "Switch branch and choose whether to discard local changes"
-                    : "Switch branch")
-                }
-              >
-                <GitBranch className="size-3.5" />
-                <SelectValue placeholder={git?.detached ? "Detached HEAD" : "Choose branch"} />
-              </SelectTrigger>
-              <SelectContent align="end">
-                {git?.branches.map((branch) => (
-                  <SelectItem
-                    key={branch.ref}
-                    value={branch.ref}
-                    disabled={Boolean(branch.occupiedWorktreePath)}
-                  >
-                    {branch.name}
-                    {branch.occupiedWorktreePath ? " (in another worktree)" : ""}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <span
-              className={cn(
-                "text-xs text-muted-foreground",
-                git?.remoteState === "fresh" && !git.lastError && "text-emerald-300",
-              )}
-            >
-              {git?.remoteState === "fresh" && !git.lastError ? (
-                <CheckCircle2 className="mr-1 inline size-3.5" />
-              ) : null}
-              {gitSummary(git)}
-            </span>
-            {canSync ? (
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={syncDisabled}
-                onClick={() => void runGit("sync")}
-              >
-                <RotateCcw className="size-3.5" />
-                Sync
-              </Button>
-            ) : null}
-            <Button
-              size="icon"
-              variant="ghost"
-              aria-label="Refresh repository status"
-              title="Fetch and refresh"
-              disabled={operation !== null}
-              onClick={() => void runGit("fetch")}
-            >
-              <RefreshCw className={cn("size-4", operation === "fetch" && "animate-spin")} />
-            </Button>
-            {/* While paused, the banner below the header offers Resume. */}
-            {paused ? null : (
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={operation !== null}
-                onClick={() => setPaused(true)}
-              >
-                <Pause className="size-3.5" />
-                Pause
-              </Button>
-            )}
-          </div>
-          {dirty ? (
-            <p className="mt-1 text-xs text-amber-300">
-              The checkout has {git?.trackedChanges} tracked and {git?.untrackedChanges} untracked
-              changes. Sync is blocked
-              {discardableDirty ? "; switching branches will ask before discarding them." : "."}
-            </p>
-          ) : null}
-          {blocked && switchBlocked ? (
-            <p className="mt-1 text-xs text-amber-300">{blocked}</p>
-          ) : null}
-          {gitError ? (
-            <CoordinatorErrorDetails label="Repository error" message={gitError} />
-          ) : null}
-          {coordinatorError ? (
-            <CoordinatorErrorDetails label="Coordinator error" message={coordinatorError} />
-          ) : null}
-          {!snapshot.controlMcp.enabled || !snapshot.controlMcp.running ? (
-            <p className="mt-1 text-xs text-amber-300">
-              Orchestration controls are unavailable because Control MCP is{" "}
-              {snapshot.controlMcp.enabled ? "not running" : "disabled"}
-              {snapshot.controlMcp.error ? `: ${snapshot.controlMcp.error}` : "."}
-            </p>
-          ) : null}
-        </div>
+        <CoordinatorToolbar
+          snapshot={snapshot}
+          git={git}
+          announcedError={actionAlert}
+          gitBusy={gitBusy}
+          fetching={fetching}
+          conversationBusy={conversationBusy}
+          freshness={freshness}
+          runGit={runGit}
+          prepareSwitch={prepareSwitch}
+          activeTurn={activeTurn}
+          selectedAgent={selected?.agent}
+          paused={paused}
+          onPause={() => setPaused(true)}
+        />
 
+        {actionAlert ? (
+          <CoordinatorActionAlert
+            message={actionAlert}
+            onDismiss={() => {
+              setError(null);
+              clearLoadError();
+            }}
+          />
+        ) : null}
+        {/* Only from a backend that predates per-conversation startup errors,
+        or a record one stored (version-compatibility.md). */}
         {snapshot.workspace.lifecycleState === "error" ? (
           <CoordinatorBanner
             tone="error"
             action={
-              <Button size="sm" variant="outline" onClick={() => void load()}>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={conversationBusy}
+                onClick={() =>
+                  void runAction("conversation", load, {
+                    failureMessage: "Could not open Coordinator",
+                  })
+                }
+              >
                 <RotateCcw className="size-3.5" />
                 Retry
               </Button>
@@ -1056,7 +639,7 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
               <Button
                 size="sm"
                 variant="outline"
-                disabled={operation !== null}
+                disabled={conversationBusy}
                 onClick={() => setPaused(false)}
               >
                 <Play className="size-3.5" />
@@ -1064,16 +647,19 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
               </Button>
             }
           >
-            Coordination is paused. Messages will wait until you resume.
+            Coordination is paused. Mail and new turns wait until you resume; conversations stay
+            readable.
           </CoordinatorBanner>
         ) : null}
 
         <HumanPromptBanner
           prompts={workerPrompts}
-          label={(entry) =>
-            environments.find((item) => item.id === entry.environmentId)?.name ??
-            entry.environmentId
-          }
+          label={promptLabel}
+          canOpen={(entry) => promptTarget(entry) !== null}
+          onOpen={(entry) => {
+            const target = promptTarget(entry);
+            if (target) openCoordinatorWorkTarget(target);
+          }}
         />
 
         <div className="relative flex min-h-0 flex-1">
@@ -1089,65 +675,32 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
                 renderTab={(id, pane, paneFocused) => {
                   const item = conversationById.get(id);
                   if (!item) return null;
+                  const requestMainClose = (changeAgent: boolean) =>
+                    setPendingMainClose({
+                      id: item.id,
+                      title: item.title,
+                      paneId: pane.id,
+                      changeAgent,
+                    });
                   return (
-                    <SortableCoordinatorTab
+                    <CoordinatorConversationTab
                       key={id}
-                      conversationId={id}
-                      paneId={pane.id}
-                      isActive={pane.activeConversationId === id}
-                      isFocused={paneFocused}
-                      onClick={(event) => {
-                        // Selecting is the whole action; the pane's own focus
-                        // handler would only repeat it with the previous tab.
-                        event.stopPropagation();
+                      conversation={item}
+                      pane={pane}
+                      layout={layout}
+                      paneFocused={paneFocused}
+                      markMain={conversations.length > 1}
+                      conversationBusy={conversationBusy}
+                      onSelect={() => {
                         updateLayout((current) => focusCoordinatorPane(current, pane.id, id));
                         selectConversation(id);
                       }}
-                      closeLabel={
-                        item.role === "main"
-                          ? `Close ${item.title}. The next message for the coordinator starts a new one with the default agent.`
-                          : `Close ${item.title}`
+                      onClose={() =>
+                        item.role === "main" ? requestMainClose(false) : closeConversation(item.id)
                       }
-                      onClose={() => {
-                        if (item.role === "main") {
-                          setPendingMainClose({ id: item.id, title: item.title });
-                          return;
-                        }
-                        closeConversation(item.id);
-                      }}
-                    >
-                      <button
-                        type="button"
-                        className="flex max-w-44 items-center gap-1.5"
-                        // The badge is part of what identifies the tab, so it belongs in
-                        // the accessible name rather than being read as loose text after it.
-                        aria-label={
-                          item.agent
-                            ? `${item.title}, ${AGENT_PLATFORM_LABELS[item.agent]}`
-                            : `${item.title}, no agent chosen yet`
-                        }
-                      >
-                        {/* Which agent a conversation belongs to is fixed at its first
-                        prompt and cannot be changed afterwards, so the tab strip is
-                        where that has to be legible: the brand mark once assigned,
-                        and an explicit prompt while it is not. */}
-                        {item.agent ? (
-                          <AgentPlatformIcon
-                            platform={item.agent}
-                            accent
-                            className={TAB_ICON_CLASS}
-                          />
-                        ) : (
-                          <MessagesSquare className={cn(TAB_ICON_CLASS, "text-muted-foreground")} />
-                        )}
-                        <span className="truncate">{item.title}</span>
-                        {item.agent ? null : (
-                          <span className="shrink-0 text-[10px] text-muted-foreground">
-                            Choose agent
-                          </span>
-                        )}
-                      </button>
-                    </SortableCoordinatorTab>
+                      onChangeAgent={() => requestMainClose(true)}
+                      onLayoutChange={changeLayout}
+                    />
                   );
                 }}
                 renderStripActions={(pane) => (
@@ -1155,7 +708,7 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
                     size="sm"
                     variant="ghost"
                     className="ml-1 shrink-0"
-                    disabled={operation !== null}
+                    disabled={conversationBusy}
                     onClick={(event) => {
                       // The new conversation joins the focused group, so focus
                       // this one without selecting the tab it is about to replace.
@@ -1163,14 +716,47 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
                       updateLayout((current) => focusCoordinatorPane(current, pane.id));
                       createConversation();
                     }}
+                    title={newConversationLabel}
                   >
                     <Plus className="size-3.5" />
-                    {newConversationLabel}
+                    {/* The strip scrolls, so on a phone the action is its icon. */}
+                    <span className="max-sm:sr-only">{newConversationLabel}</span>
                   </Button>
                 )}
-                renderContent={(pane, paneFocused) =>
-                  renderConversation(pane.activeConversationId, paneFocused)
-                }
+                renderContent={(pane, paneFocused) => {
+                  const conversationId = pane.activeConversationId;
+                  return (
+                    <CoordinatorConversationPane
+                      conversation={
+                        conversationId ? conversationById.get(conversationId) : undefined
+                      }
+                      paneFocused={paneFocused}
+                      projectId={projectId}
+                      snapshot={snapshot}
+                      availablePlatforms={availablePlatforms}
+                      platformNotes={platformNotes}
+                      launch={conversationId ? pendingLaunches.get(conversationId) : undefined}
+                      startConversation={startConversation}
+                      confirmUpstreamMerge={confirmUpstreamMerge}
+                      conversationBusy={conversationBusy}
+                      newConversationLabel={newConversationLabel}
+                      onCreateConversation={() => createConversation()}
+                      onRetry={() => void load()}
+                      onRetryConversation={retryConversation}
+                      onCloseConversation={(id) => {
+                        const item = conversationById.get(id);
+                        if (item?.role === "main") {
+                          setPendingMainClose({
+                            id,
+                            title: item.title,
+                            paneId: pane.id,
+                            changeAgent: false,
+                          });
+                        } else closeConversation(id);
+                      }}
+                    />
+                  );
+                }}
               />
             ) : null}
           </div>
@@ -1179,49 +765,16 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
             counts={work.counts}
             openDelegations={work.openDelegations}
             onOpen={(target) => openCoordinatorWorkTarget(target)}
+            {...(snapshot.workspace.lifecycleState === "ready" && stopConversation
+              ? { onStop: stopWorker }
+              : {})}
             onClearFinished={clearFinishedWork}
           />
         </div>
+        <CoordinatorNextWakeLine items={work.items} quiet={paused || selectedTurnActive} />
         <div className="shrink-0 border-t border-border/60 px-3 py-1 text-center text-[11px] text-muted-foreground">
           Code changes, commands, builds and fixes run in build pipelines or prompt environments.
         </div>
-        <AlertDialog
-          open={pendingSwitch !== null}
-          onOpenChange={(open) => {
-            if (!open) setPendingSwitch(null);
-          }}
-        >
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>Discard changes and switch branch?</AlertDialogTitle>
-              <AlertDialogDescription>
-                Switching to {pendingSwitchBranch?.name ?? "the selected branch"} will permanently
-                discard {pendingSwitch?.trackedChanges ?? 0} tracked changes and{" "}
-                {pendingSwitch?.untrackedFiles ?? 0} untracked files from this checkout, including
-                files inside untracked directories. Ignored files are kept.
-                {pendingSwitch?.nestedRepositories.length
-                  ? ` This will also permanently delete nested repositories: ${pendingSwitch.nestedRepositories.join(", ")}.`
-                  : ""}
-                {pendingSwitch?.dirtySubmodules.length
-                  ? ` This will also reset dirty submodules: ${pendingSwitch.dirtySubmodules.join(", ")}.`
-                  : ""}
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel>Keep changes</AlertDialogCancel>
-              <AlertDialogAction
-                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                onClick={() => {
-                  const confirmation = pendingSwitch;
-                  setPendingSwitch(null);
-                  if (confirmation) void runGit("switch", confirmation.ref, confirmation);
-                }}
-              >
-                Discard and switch
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
         <AlertDialog
           open={pendingMainClose !== null}
           onOpenChange={(open) => {
@@ -1230,10 +783,19 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
         >
           <AlertDialogContent>
             <AlertDialogHeader>
-              <AlertDialogTitle>Close the main conversation?</AlertDialogTitle>
+              <AlertDialogTitle>
+                {pendingMainClose?.changeAgent
+                  ? "Change the coordinator's agent?"
+                  : "Close the main conversation?"}
+              </AlertDialogTitle>
               <AlertDialogDescription>
-                {pendingMainClose?.title ?? "The main conversation"} will close. The next message to
-                the coordinator starts a new main conversation with the default agent.
+                {pendingMainClose?.changeAgent
+                  ? `${pendingMainClose.title} will close and a new main conversation opens, where you choose its agent. Open delegations move to the new main. A report that arrives before you choose starts it with the default agent.`
+                  : `${pendingMainClose?.title ?? "The main conversation"} will close. The next message to the coordinator starts a new main conversation with the default agent, and open delegations move to it.${
+                      pendingMainClose && conversationById.get(pendingMainClose.id)?.agent
+                        ? " To choose the agent yourself, use Change agent instead."
+                        : ""
+                    }`}
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
@@ -1242,10 +804,17 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
                 onClick={() => {
                   const target = pendingMainClose;
                   setPendingMainClose(null);
-                  if (target) closeConversation(target.id);
+                  if (!target) return;
+                  if (!target.changeAgent) {
+                    closeConversation(target.id);
+                    return;
+                  }
+                  // The next main joins the group the old one was in.
+                  updateLayout((current) => focusCoordinatorPane(current, target.paneId));
+                  createConversation(target.id);
                 }}
               >
-                Close conversation
+                {pendingMainClose?.changeAgent ? "Change agent" : "Close conversation"}
               </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>

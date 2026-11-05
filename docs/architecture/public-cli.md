@@ -702,6 +702,10 @@ page holds; it stops at `--timeout` or Ctrl+C and never affects the session.
 Transcript reads are explicit content access; status reads and waits never
 read transcripts.
 
+A delivered agent mail is the stored user row, envelope included, in `--json`
+and human output alike: an agent reading the page replies with the message id
+in it ([agent-messaging.md](agent-messaging.md#how-a-message-moves)).
+
 A newest-page read may pass the `token` of the page it already holds as
 `knownToken`. Tokens are scoped to the session, effective `limit`, and live
 window revision. While the same newest page still has that token the action answers

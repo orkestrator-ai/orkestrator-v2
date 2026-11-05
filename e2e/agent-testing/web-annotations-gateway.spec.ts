@@ -14,7 +14,14 @@
  * passed. Each prints how its request settled (`[annotation-live] outcome`).
  */
 import { acknowledgeDockerReachabilityWarning } from "../docker-reachability-warning";
-import { expect, test, type Browser, type Page, type TestInfo } from "@playwright/test";
+import {
+  expect,
+  test,
+  type Browser,
+  type Page,
+  type TestInfo,
+  fetchModulesOutsideChromium,
+} from "./browser-test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
@@ -80,6 +87,7 @@ async function client(browser: Browser, status: Status): Promise<{ page: Page; i
   if (login.status !== 0) throw new Error("dev:login failed");
   const { loginUrl } = JSON.parse(login.stdout) as { loginUrl: string };
   const context = await browser.newContext();
+  await fetchModulesOutsideChromium(context);
   const page = await context.newPage();
   const response = await page.goto(loginUrl, { waitUntil: "domcontentloaded" });
   expect(response?.ok() ?? false).toBe(true);

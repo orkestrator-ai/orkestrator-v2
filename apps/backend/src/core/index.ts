@@ -1,3 +1,5 @@
+import { findCoordinatorCheckoutTurn } from "./coordinator-checkout-turn.js";
+import { combineWorkerMailPorts } from "./build-pipeline-worker-mail.js";
 import { usageLimitAccountRouting } from "./coordinator-usage-limit-account-routing.js";
 import { stopProjectGitMirrorRefreshes } from "./project-git-mirror.js";
 import { runCoordinatorMaintenance } from "./coordinator-maintenance.js";
@@ -47,7 +49,10 @@ import {
 } from "./nodes/index.js";
 import { isBackendId, type BackendId } from "@orkestrator/protocol/federation";
 import type { GatewayNodeHooks } from "../gateway-support-core.js";
-import { AGENT_ACCOUNT_AUTO_SWITCHED_EVENT } from "@orkestrator/protocol/agent-account-auto-switch";
+import {
+  AGENT_ACCOUNT_AUTO_SWITCHED_EVENT,
+  legacyAutoSwitchEvent,
+} from "@orkestrator/protocol/agent-account-auto-switch";
 import {
   AGENT_ACCOUNT_PLATFORMS,
   AGENT_ACCOUNTS_CHANGED_EVENT,
@@ -55,7 +60,6 @@ import {
 import { pickInheritedGlobalSettings } from "@orkestrator/protocol/controller-settings";
 import type { NodeMode } from "@orkestrator/protocol/command-nodes";
 import { stoppedWorkerMailHook } from "./agent-mail-stopped-worker.js";
-import { setManagedGitHubCli } from "./github-cli-binary.js";
 import { resolveManagedBinary } from "./commands-agent-support.js";
 import { closeEnvironmentCleanupStorage } from "./environment-cleanup-ledger.js";
 import {
@@ -128,7 +132,10 @@ import {
   composeWebAnnotationDispatchText,
 } from "./web-annotation-brief.js";
 import type { WebAnnotationToolHost } from "./web-annotation-contracts.js";
-import type { ProvisionalFindingSink } from "./review-provisional-findings.js";
+import {
+  combineProvisionalFindingSinks,
+  type ProvisionalFindingSink,
+} from "./review-provisional-findings.js";
 import {
   createMcpRuntimeProbe,
   mcpRolloutLoader,
@@ -210,17 +217,15 @@ import {
   waitingBlocker,
   type CoordinatorWaitingBlocker,
 } from "./coordinator-status-wakes.js";
-import {
-  coordinatorProviderQualification,
-  defaultCoordinatorHostCapabilities,
-} from "./coordinator-providers.js";
+import { coordinatorDelegationAvailable } from "./coordinator-context-reads.js";
+import { defaultCoordinatorHostCapabilities } from "./coordinator-providers.js";
 import { ProjectGitService } from "./project-git-service.js";
 import {
   coordinatorConversationIdFromRuntimeId,
   coordinatorIdFromRuntimeId,
   coordinatorRuntimeId,
 } from "@orkestrator/protocol/coordinator";
-import type { Environment } from "./models.js";
+import type { Environment, PersistedNativeAgentSession } from "./models.js";
 import {
   ENVIRONMENT_LIFECYCLE_DRAIN_TIMEOUT_MS,
   EnvironmentLifecycleTaskTracker,
@@ -683,8 +688,7 @@ export class OrkestratorBackend {
     context.deleteWorkflowResultsByEnvironment = (environmentId: string) =>
       this.workflowResults.deleteByEnvironment(environmentId);
     this.context = context;
-    context.pinnedGitHubCli = resolveManagedBinary(context, "gh");
-    setManagedGitHubCli(context.pinnedGitHubCli);
+    context.runtime.gitHubCli.pin(resolveManagedBinary(context, "gh"));
     this.hostMaintenance.setReaders({
       impact: () => readRestartImpact(context),
       tools: () => readToolStatus(context, this.hostMaintenance.ghChannel()),
@@ -764,7 +768,9 @@ export class OrkestratorBackend {
         // A build pipeline worker's turn, read from its pipeline: an ended
         // worker reads idle, so a delegation to it settles.
         if (isPipelineWorkerTabId(tabId)) {
-          const status = await this.buildPipelines.workerMail.state(environmentId, tabId);
+          const status =
+            (await this.buildPipelines.workerMail.state(environmentId, tabId)) ??
+            (await this.multiReviews.workerMail.state(environmentId, tabId));
           return status === "running" ? "working" : status === null ? "unknown" : "idle";
         }
         return (await workerSessionActivity(storage, this.nativeAgents, environmentId, tabId)).turn;
@@ -786,6 +792,7 @@ export class OrkestratorBackend {
           };
         },
         workerGoal: (environmentId, tabId) => workerSessionGoal(storage, environmentId, tabId),
+        gitHubCli: this.runtime.gitHubCli,
       },
     );
     context.coordinators = this.coordinators;
@@ -927,7 +934,7 @@ export class OrkestratorBackend {
       notify: async ({ quietProjectId, ...notice }) => {
         // An older command node hears through its event stream; a newer one
         // ignores that and takes this machine's notice from its outbox.
-        options.emit(AGENT_ACCOUNT_AUTO_SWITCHED_EVENT, notice);
+        options.emit(AGENT_ACCOUNT_AUTO_SWITCHED_EVENT, legacyAutoSwitchEvent(notice));
         await this.coordinators.noticeRouter.deliverAutoSwitch(notice, "this machine", {
           coalesceMs: COORDINATOR_STATUS_COALESCE_MS,
           ...(quietProjectId ? { quietProjectId } : {}),
@@ -1031,11 +1038,11 @@ export class OrkestratorBackend {
           if (event.owner !== "coordinator") {
             this.wakeWorkflows(event.environmentId, "provider-transition");
           }
-          // A delegated tab blocked on input or an approval, or working again:
-          // the edges a coordinator's waiting-worker status wake hangs off.
+          // Forward readable worker activity edges so leaving waiting ends its
+          // episode immediately, including a brief idle gap before waiting again.
           if (
             event.owner !== "coordinator" &&
-            (event.state === "waiting" || event.state === "working") &&
+            (event.state === "waiting" || event.state === "working" || event.state === "idle") &&
             event.logicalSessionKey?.startsWith(`env-${event.environmentId}:`)
           ) {
             void this.coordinators
@@ -1216,8 +1223,10 @@ export class OrkestratorBackend {
           );
         },
         coordinatorDelegationAvailable: (platform) =>
-          this.controlMcp.getSettings().running &&
-          coordinatorProviderQualification(platform).delegation,
+          coordinatorDelegationAvailable(platform, {
+            controlMcpRunning: () => this.controlMcp.getSettings().running,
+            storage,
+          }),
       },
     );
     context.nativeAgents = this.nativeAgents;
@@ -1303,42 +1312,15 @@ export class OrkestratorBackend {
     this.transcriptArtifacts.onLedgerChange((change) =>
       storage.announceNativeAgentSessionProjection(change.environmentId, "transcript-artifact"),
     );
-    this.projectGit = new ProjectGitService(storage, async (projectId) => {
-      for (const home of await storage.getEnvironmentsByProject(projectId)) {
-        if (home.projectHome && (await this.nativeAgents.hasActiveCheckoutWork(home.id)))
-          return true;
-      }
-      const workspace = await storage.coordinators.getCoordinatorWorkspace(projectId);
-      if (!workspace) return false;
-      for (const conversation of workspace.conversations) {
-        if (conversation.closedAt || !conversation.agent) continue;
-        const runtimeId = coordinatorRuntimeId(workspace.id, conversation.id);
-        // The turn view, not the indicator view: a coordinator conversation
-        // whose composer is free is not holding this project's git, even when
-        // a background task it launched keeps the environment pulsing.
-        const observed = this.nativeAgents.sessionTurnActivitySnapshot(
-          runtimeId,
-          conversation.agent,
-          conversation.logicalSessionKey,
-        );
-        if (observed === "working" || observed === "waiting") return true;
-        const projection = await this.nativeAgents
-          .getProjection({
-            environmentId: runtimeId,
-            agent: conversation.agent,
-            logicalSessionKey: conversation.logicalSessionKey,
-            messageLimit: 1,
-          })
-          .catch(() => null);
-        if (
-          projection &&
-          ["running", "blocked", "cancelling", "recovering"].includes(projection.turn.phase)
-        ) {
-          return true;
-        }
-      }
-      return false;
-    });
+    this.projectGit = new ProjectGitService(
+      storage,
+      async (projectId) =>
+        (await findCoordinatorCheckoutTurn(projectId, {
+          storage,
+          nativeAgents: this.nativeAgents,
+          confirmWithProjections: true,
+        })) !== null,
+    );
     context.projectGit = this.projectGit;
     // D3 across engines: graph runs and Build Pipelines consult one projection
     // of who uses each checkout (bespoke Multi Reviews are tracked too).
@@ -1377,7 +1359,11 @@ export class OrkestratorBackend {
         branchPushState: (environmentId) =>
           readEnvironmentBranchPushState(
             storage,
-            createGraphEnvironmentShell(context.runtime.environments.fence, storage),
+            createGraphEnvironmentShell(
+              context.runtime.environments.fence,
+              storage,
+              context.runtime.gitHubCli,
+            ),
             environmentId,
           ),
         workspaceWriters,
@@ -1413,9 +1399,20 @@ export class OrkestratorBackend {
           usageLimitStops: this.accountAutoSwitch,
         },
         resolveAgentToolConnection,
+        resolveWorkerToolConnection: (environmentId, projectId, target, tabId) =>
+          this.agentTools.connection(environmentId, projectId, target, tabId),
         assertAgentToolsReachable,
         artifactDispatch,
         artifactLedger,
+        environmentFence: context.runtime.environments.fence,
+        assertEnvironmentQuiescent: async (environmentId) => {
+          if (await this.nativeAgents.hasActiveCheckoutWork(environmentId)) {
+            throw new Error(
+              "An agent may still write to this environment. Stop it before rewinding code.",
+            );
+          }
+        },
+        environmentGit: createPipelineEnvironmentGit(storage, context.runtime.environments.fence),
         dispatchAddressFindingsPrompt: (workflow, presentation) =>
           dispatchMultiReviewAddressFindingsPrompt(
             this.nativeAgents,
@@ -1470,10 +1467,11 @@ export class OrkestratorBackend {
         workspaceHead: async (environment) => ({
           branch: environment.branch,
           headRef: (
-            await createGraphEnvironmentShell(context.runtime.environments.fence, storage).git(
-              environment,
-              ["rev-parse", "--verify", "HEAD^{commit}"],
-            )
+            await createGraphEnvironmentShell(
+              context.runtime.environments.fence,
+              storage,
+              context.runtime.gitHubCli,
+            ).git(environment, ["rev-parse", "--verify", "HEAD^{commit}"])
           ).trim(),
         }),
       }),
@@ -1515,7 +1513,11 @@ export class OrkestratorBackend {
     this.buildPipelineActivity = new BuildPipelineActivity(storage);
     context.graphRuns = this.graphRuns;
     // System nodes (item 207): backend side effects, journaled per run.
-    const graphShell = createGraphEnvironmentShell(context.runtime.environments.fence, storage);
+    const graphShell = createGraphEnvironmentShell(
+      context.runtime.environments.fence,
+      storage,
+      context.runtime.gitHubCli,
+    );
     this.graphSystemExecutor = new GraphNodeSystemExecutor({
       storage,
       invoke: invokeCommand,
@@ -1704,7 +1706,12 @@ export class OrkestratorBackend {
       this.agentTools as {
         setProvisionalFindingSink?: (sink: ProvisionalFindingSink | null) => void;
       }
-    ).setProvisionalFindingSink?.(this.multiReviews.provisionalFindingSink());
+    ).setProvisionalFindingSink?.(
+      combineProvisionalFindingSinks([
+        this.multiReviews.provisionalFindingSink(),
+        this.buildPipelines.provisionalFindingSink(),
+      ]),
+    );
     this.featurePlanning = new FeaturePlanningService(
       storage,
       async <T>(command: string, args: Record<string, unknown> = {}) => {
@@ -1742,15 +1749,24 @@ export class OrkestratorBackend {
           if (handler) await handler({ environmentId }, context);
         },
       ),
-      pipelineWorkers: this.buildPipelines.workerMail,
+      pipelineWorkers: combineWorkerMailPorts([
+        this.buildPipelines.workerMail,
+        this.multiReviews.workerMail,
+      ]),
     });
-    // A pipeline worker's queued mail becomes its next turn at its turn end.
-    this.buildPipelines.setWorkerMailbox({
-      claim: (environmentId, tabId, requestId) =>
+    // A worker's queued mail becomes its next turn at its turn end.
+    const workerMailbox = {
+      claim: (environmentId: string, tabId: string, requestId: string) =>
         this.agentMail.claimPipelineWorkerMail(environmentId, tabId, requestId),
-      settle: (environmentId, tabId, messageIds, outcome) =>
-        this.agentMail.settlePipelineWorkerMail(environmentId, tabId, messageIds, outcome),
-    });
+      settle: (
+        environmentId: string,
+        tabId: string,
+        messageIds: readonly string[],
+        outcome: "accepted" | "returned",
+      ) => this.agentMail.settlePipelineWorkerMail(environmentId, tabId, messageIds, outcome),
+    };
+    this.buildPipelines.setWorkerMailbox(workerMailbox);
+    this.multiReviews.setWorkerMailbox(workerMailbox);
     context.drainAgentMail = () => this.agentMail.drainInjects();
     // Scoped workflow wakeups (step 08), subscribed before any owner's first
     // discovery so nothing that commits during startup is missed. Each wake
@@ -1830,26 +1846,44 @@ export class OrkestratorBackend {
     environmentId: string,
     tabId: string,
   ): Promise<string | undefined> {
-    return lastAssistantText((await this.workerProjection(environmentId, tabId, 6))?.messages);
+    const projection = await this.workerRead(environmentId, tabId, (agent, logicalSessionKey) =>
+      this.nativeAgents.getProjection({
+        environmentId,
+        agent,
+        logicalSessionKey,
+        messageLimit: 6,
+      }),
+    );
+    return lastAssistantText(projection?.messages);
   }
 
   /**
    * Whether a waiting worker tab is blocked on an approval or a question, from
    * its pending interactions rather than its activity state, which cannot say.
+   * Reads session state only: the interactions need no transcript.
    */
   private async waitingBlocker(
     environmentId: string,
     tabId: string,
   ): Promise<CoordinatorWaitingBlocker | undefined> {
-    return waitingBlocker((await this.workerProjection(environmentId, tabId, 1))?.interactions);
+    const state = await this.workerRead(environmentId, tabId, (agent, logicalSessionKey) =>
+      this.nativeAgents.getSessionStateUpdate({
+        environmentId,
+        agent,
+        logicalSessionKey,
+        viewVersion: 1,
+        forceSnapshot: true,
+      }),
+    );
+    return waitingBlocker(state?.status === "snapshot" ? state.value.interactions : undefined);
   }
 
-  /** A short projection read of one worker tab with a deadline; null when unavailable. */
-  private async workerProjection(
+  /** A short read of one worker tab's session with a deadline; null when unavailable. */
+  private async workerRead<T>(
     environmentId: string,
     tabId: string,
-    messageLimit: number,
-  ): Promise<{ messages?: unknown; interactions?: unknown } | null | undefined> {
+    read: (agent: PersistedNativeAgentSession["agent"], logicalSessionKey: string) => Promise<T>,
+  ): Promise<T | null | undefined> {
     const logicalSessionKey = `env-${environmentId}:${tabId}`;
     const session = (await this.context.storage.readNativeAgentSessionsSnapshot()).find(
       (candidate) =>
@@ -1864,14 +1898,7 @@ export class OrkestratorBackend {
     });
     try {
       return await Promise.race([
-        this.nativeAgents
-          .getProjection({
-            environmentId,
-            agent: session.agent,
-            logicalSessionKey,
-            messageLimit,
-          })
-          .catch(() => null),
+        read(session.agent, logicalSessionKey).catch(() => null),
         deadline,
       ]);
     } finally {
@@ -1913,11 +1940,7 @@ export class OrkestratorBackend {
     // what restarted this backend.
     try {
       this.hostMaintenance.init();
-      await applyGhChannel(
-        this.context,
-        this.hostMaintenance.ghChannel(),
-        this.context.pinnedGitHubCli,
-      );
+      await applyGhChannel(this.context, this.hostMaintenance.ghChannel());
     } catch (error) {
       log.warn("startup.step-failed", { step: "host-update-record", error: formatLogError(error) });
     }
@@ -1991,6 +2014,8 @@ export class OrkestratorBackend {
     // while every container mutation is refused.
     this.context.registryWriterLease ??= await openRegistryWriter(
       this.context.storage.getDataDir(),
+      // Schedules stop with the lease; Settings → Schedules reads why.
+      { onLost: () => this.context.storage.announceSchedulerStatus() },
     );
     const lifecycleRecovery = await reconcileInterruptedEnvironmentLifecycleTasks(
       this.context.storage,
@@ -2898,6 +2923,7 @@ export class OrkestratorBackend {
       noteControllerContact: (id) => this.nodes.noteControllerContact(id),
       authenticateGrant: (token) => this.nodePortal.grants.authenticate(token)?.expiresAt ?? null,
       relayTarget: (nodeId) => this.nodePortal.relayTarget(nodeId),
+      isRelayedNodeWatched: (nodeId) => this.nodePortal.events.isWatched(nodeId),
     };
   }
 

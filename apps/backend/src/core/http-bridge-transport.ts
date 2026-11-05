@@ -1,4 +1,6 @@
+import { turnFailureKind } from "@orkestrator/protocol/agent-usage-limits";
 import { AGENT_INTERACTION_LIMITS } from "@orkestrator/protocol/agent-interactions";
+import { POLICY_WIDENING_REFUSED_CODE } from "@orkestrator/protocol/execution-policy-narrowing";
 import { isContentRevision } from "@orkestrator/protocol/session-activity-batch";
 import {
   NATIVE_AGENT_SIGN_IN_KINDS,
@@ -16,6 +18,7 @@ import {
   type ProviderSendOptions,
   ProviderSessionFailedError,
   type ProviderTurnInterruption,
+  BridgePolicyWideningRefusedError,
   ProviderUnavailableError,
   ProviderUnreachableError,
 } from "./agent-provider-contract.js";
@@ -302,7 +305,13 @@ export function throwExplainedTurnFailure(
       : undefined;
   const detail = typeof body.error === "string" ? body.error.trim().slice(0, 4_000) : "";
   if (detail) {
-    throw new ProviderSessionFailedError(agent, detail, { interruption, interruptedRequestId });
+    // Bridges that predate `errorCode` send none; the text still classifies.
+    const failureKind = turnFailureKind(body.errorCode);
+    throw new ProviderSessionFailedError(agent, detail, {
+      interruption,
+      interruptedRequestId,
+      ...(failureKind ? { failureKind } : {}),
+    });
   }
   return interruption
     ? { interruption, ...(interruptedRequestId ? { interruptedRequestId } : {}) }
@@ -504,12 +513,17 @@ export async function assertOkWithErrorDetail(
   operation: string,
 ): Promise<void> {
   if (response.ok) return;
-  const detail = await bridgeErrorDetail(response, operation);
+  const payload = asRecord(await boundedJson(response, operation).catch(() => null));
+  const rawDetail = nonEmptyString(payload?.error)?.trim();
+  const detail = rawDetail ? rawDetail.replace(/[\r\n\t]+/g, " ").slice(0, 500) : "";
   const message = `${operation} ${
     isTransientHttpStatus(response.status) ? "is temporarily unavailable" : "failed"
   } (HTTP ${response.status})${detail ? `: ${detail}` : ""}`;
   if (isTransientHttpStatus(response.status)) {
     throw new ProviderUnavailableError(message);
+  }
+  if (response.status === 403 && payload?.code === POLICY_WIDENING_REFUSED_CODE) {
+    throw new BridgePolicyWideningRefusedError(message);
   }
   throw new Error(message);
 }

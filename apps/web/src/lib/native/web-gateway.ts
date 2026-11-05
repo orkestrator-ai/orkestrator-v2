@@ -15,6 +15,7 @@ import {
   GATEWAY_EVENT_CURSOR_PARAM,
   GATEWAY_KEEPALIVE_EVENT,
   GATEWAY_KEEPALIVE_EVENTS_PARAM,
+  GATEWAY_RELAYED_EVENTS_PARAM,
   GATEWAY_STREAM_CONNECT_TIMEOUT_MS,
   GATEWAY_STREAM_SILENCE_LIMIT_MS,
   GatewayEventStreamState,
@@ -22,13 +23,20 @@ import {
   NATIVE_EVENT_STREAM_CONNECTED_EVENT,
   parseGatewayEventData,
   readSseStream,
+  type GatewayRelayedEventsMode,
 } from "@orkestrator/protocol/gateway-event-stream";
+import { isPerNodeRelayedEvent } from "@orkestrator/protocol/node-events";
 import { TerminalInputSequencer } from "@orkestrator/protocol/terminal-input-sequencer";
 import {
   TerminalWebSocketClient,
   terminalWebSocketUrl,
   type TerminalSocketPayload,
 } from "@/lib/native/terminal-websocket-client";
+import {
+  RelayedEventStream,
+  type RelayedEventConnection,
+  type RelayedEventConnectionHandlers,
+} from "@/lib/native/relayed-event-stream";
 import { ReconnectBackoff } from "@orkestrator/protocol/reconnect-backoff";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
@@ -148,11 +156,13 @@ export interface BrowserGatewayOptions {
   terminalWebSocketFactory?: (url: string, protocols: string | string[]) => WebSocket;
   terminalWebSocketReconnectDelayMs?: number;
   /**
-   * Carry every terminal on one stream even with a `baseUrl`. A plain-HTTP
-   * gateway has about six connections per origin, so one stream per terminal
-   * would leave commands waiting behind them.
+   * Carry the shared terminal stream on an `EventSource` even with a
+   * `baseUrl`, as the local desktop window does: main adds its credential at
+   * the network layer, so the page has no bearer token to send. A client with
+   * a bearer token always reads that stream with `fetch`, because an
+   * `EventSource` cannot send one.
    */
-  sharedTerminalStream?: boolean;
+  terminalEventSource?: boolean;
   /**
    * Let a command sent while the page goes away finish after it, as one
    * through Electron main always did (a final pane layout write, for example).
@@ -251,20 +261,6 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
   const mainStream = new GatewayEventStreamState();
   type TerminalEventStream = {
     event: string;
-    /**
-     * Direct/bearer clients use one fetch stream per terminal. Same-origin
-     * browser clients leave this null and share `browserTerminalEventSource`.
-     */
-    source: EventSource | null;
-    controller: AbortController | null;
-    reconnectTimer: ReturnType<typeof setTimeout> | null;
-    /**
-     * The direct fetch stream's own reconnect ladder. Each terminal has its
-     * own socket, so a shared ladder would climb one rung per terminal when a
-     * backend restart drops them all at once. A new stream for the same event
-     * (the user's Reconnect re-listens) starts a fresh ladder.
-     */
-    backoff: ReconnectBackoff;
     socketUnlisten: (() => void) | null;
     ready: Promise<void>;
     resolveReady: () => void;
@@ -276,8 +272,6 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
      * this socket and the consumer has to re-read the authoritative snapshot.
      */
     connectedBefore: boolean;
-    /** Whether this direct stream's current attempt got an answer. */
-    fetchOpen: boolean;
     /**
      * Whether this terminal is currently consuming the compatibility SSE
      * transport. WebSocket readiness is channel-scoped: an authenticated
@@ -286,36 +280,48 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     fallbackActive: boolean;
     closed: boolean;
   };
-  const terminalEventStreams = new Map<string, TerminalEventStream>();
-  let browserTerminalEventSource: EventSource | null = null;
-  let browserTerminalRefreshQueued = false;
-  let browserTerminalNarrowTimer: ReturnType<typeof setTimeout> | null = null;
   /**
-   * The sorted event list backing `browserTerminalEventSource`. Rebuilding the
+   * The one connection carrying every terminal this client consumes over SSE:
+   * an `EventSource`, or a `fetch` reader for a client that has to send a
+   * bearer token. Either way `close()` is a deliberate stop and reports no
+   * error.
+   */
+  type SharedTerminalConnection = { close(): void };
+  const terminalEventStreams = new Map<string, TerminalEventStream>();
+  let sharedTerminalConnection: SharedTerminalConnection | null = null;
+  let sharedTerminalRefreshQueued = false;
+  let sharedTerminalNarrowTimer: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * The sorted event list backing `sharedTerminalConnection`. Rebuilding the
    * socket costs every already-connected terminal a full snapshot reconcile, so
    * a refresh that resolves to the same filter must not touch the socket.
    */
-  let browserTerminalSubscribedEvents: string[] | null = null;
+  let sharedTerminalSubscribedEvents: string[] | null = null;
   /**
    * The terminal streams the shared socket was opened for, kept after a fatal
    * error. A refresh while that socket is dead rebuilds early only for a
    * stream it did not carry: a newly mounted terminal, or one the user
    * reconnected (re-listening creates a new stream object).
    */
-  let browserTerminalSocketStreams: ReadonlySet<TerminalEventStream> = new Set();
-  let browserTerminalReconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let sharedTerminalSocketStreams: ReadonlySet<TerminalEventStream> = new Set();
+  let sharedTerminalReconnectTimer: ReturnType<typeof setTimeout> | null = null;
   /** One ladder for the one shared socket, however many terminals it carries. */
-  const browserTerminalBackoff = createStreamBackoff();
+  const sharedTerminalBackoff = createStreamBackoff();
   /**
-   * Whether `browserTerminalEventSource` has actually opened. A stream that
-   * attaches to an already-open shared socket gets no `onopen` of its own, so
+   * Whether `sharedTerminalConnection` has actually opened. A stream that
+   * attaches to an already-open shared socket gets no open of its own, so
    * this is what tells it to latch readiness instead of waiting forever.
    */
-  let browserTerminalEventSourceOpen = false;
+  let sharedTerminalConnectionOpen = false;
   let bearerToken = options.token?.trim() || undefined;
   const baseUrl = normalizedBaseUrl(options.baseUrl);
-  const usesSharedTerminalStream = () =>
-    options.sharedTerminalStream === true || (!bearerToken && !baseUrl);
+  /**
+   * A same-origin page (or one whose credential is added below it) reads a
+   * filtered stream with an `EventSource`; a bearer or cross-origin client reads
+   * the same stream with `fetch`.
+   */
+  const filteredStreamsUseEventSource = () =>
+    !bearerToken && (!baseUrl || options.terminalEventSource === true);
   const apiUrl = (pathname: string): string => {
     if (options.unavailableReason) throw new Error(options.unavailableReason);
     return baseUrl ? `${baseUrl}${pathname}` : resolveGatewayApiUrl(pathname);
@@ -521,6 +527,12 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
       if (included) params.set("includeEvents", included);
     }
     if (!terminalEvents && since) params.set(GATEWAY_EVENT_CURSOR_PARAM, since);
+    // Relayed node events have their own stream. A gateway that predates this
+    // ignores the parameter and sends them here under the one old name, which is
+    // why `lib/federation/node-events.ts` keeps listening for that name.
+    if (!terminalEvents) {
+      params.set(GATEWAY_RELAYED_EVENTS_PARAM, "per-node" satisfies GatewayRelayedEventsMode);
+    }
     // Only an `EventSource` needs it, and only the main stream is watched.
     if (!terminalEvents && !bearerToken && !baseUrl) {
       params.set(GATEWAY_KEEPALIVE_EVENTS_PARAM, "1");
@@ -532,7 +544,9 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     event.startsWith(TERMINAL_OUTPUT_EVENT_PREFIX);
 
   const hasMainEventListeners = (): boolean =>
-    [...listeners.keys()].some((event) => !isTerminalOutputEvent(event));
+    [...listeners.keys()].some(
+      (event) => !isTerminalOutputEvent(event) && !isPerNodeRelayedEvent(event),
+    );
 
   const deliver = (event: string, payload: unknown) => {
     const callbacks = listeners.get(event);
@@ -699,22 +713,18 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     }, 15_000);
   };
 
-  const consumeFetchEventStream = (
+  const consumeMainFetchEventStream = (
     response: Response,
     controller: AbortController,
-    mainStreamFrames = false,
-    terminalFallback = false,
   ): Promise<void> =>
     readSseStream(
       response.body!,
       controller.signal,
       (frame) => {
-        if (!frame.data) return;
-        if (mainStreamFrames) dispatchMainFrame(frame.data, frame.id);
-        else dispatchMessage(frame.data, { terminalFallback });
+        if (frame.data) dispatchMainFrame(frame.data, frame.id);
       },
       undefined,
-      mainStreamFrames ? () => watchMainStream(streamSilenceLimitMs) : undefined,
+      () => watchMainStream(streamSilenceLimitMs),
     );
 
   /** The main stream the watchdog gave up on, while its abort unwinds. */
@@ -755,7 +765,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
           bootMetricsEventStreamConnectedMs = performance.now();
           maybeSendBootMetrics();
         }
-        await consumeFetchEventStream(response, controller, true);
+        await consumeMainFetchEventStream(response, controller);
       } catch (error) {
         if (!controller.signal.aborted) {
           log.warn("events.disconnected", { transport: "fetch", error: formatLogError(error) });
@@ -859,11 +869,11 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
       silentMainStream = streamAbortController;
       streamAbortController.abort();
     }
-    if (browserTerminalEventSource) {
-      closeBrowserTerminalEventSource();
-      scheduleBrowserTerminalReconnect();
+    if (sharedTerminalConnection) {
+      closeSharedTerminalConnection();
+      scheduleSharedTerminalReconnect();
     }
-    for (const stream of terminalEventStreams.values()) stream.controller?.abort();
+    relayedEvents.dropConnection();
     terminalSocket?.dropConnection();
   };
 
@@ -875,17 +885,11 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     silentDropSinceMainOpen = false;
     // An attempt made while the link was silent will never be answered, and
     // only its own TCP timeout would end it. The link is back, so try again.
-    if (browserTerminalEventSource && !browserTerminalEventSourceOpen) {
-      closeBrowserTerminalEventSource();
-      refreshBrowserTerminalEventSource();
+    if (sharedTerminalConnection && !sharedTerminalConnectionOpen) {
+      closeSharedTerminalConnection();
+      refreshSharedTerminalConnection();
     }
-    for (const stream of terminalEventStreams.values()) {
-      if (!stream.controller || stream.fetchOpen) continue;
-      const controller = stream.controller;
-      stream.controller = null;
-      controller.abort();
-      startTerminalEventFallback(stream);
-    }
+    relayedEvents.retryUnanswered();
     terminalSocket?.reconnectIfNotReady();
   };
 
@@ -915,7 +919,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
   };
 
   /**
-   * Announce that a per-terminal stream is open.
+   * Announce that a terminal's stream is open.
    *
    * `resolveTerminalStreamReady` is a one-shot latch, so on its own a stream
    * that drops and reconnects tells the consumer nothing — none of `useTerminal`'s
@@ -933,17 +937,17 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     dispatchMessage(JSON.stringify({ event: stream.event, payload: { desynced: true } }));
   };
 
-  const closeBrowserTerminalEventSource = () => {
-    browserTerminalEventSource?.close();
-    browserTerminalEventSource = null;
-    browserTerminalSubscribedEvents = null;
-    browserTerminalEventSourceOpen = false;
+  const closeSharedTerminalConnection = () => {
+    sharedTerminalConnection?.close();
+    sharedTerminalConnection = null;
+    sharedTerminalSubscribedEvents = null;
+    sharedTerminalConnectionOpen = false;
   };
 
-  const clearBrowserTerminalReconnectTimer = () => {
-    if (!browserTerminalReconnectTimer) return;
-    clearTimeout(browserTerminalReconnectTimer);
-    browserTerminalReconnectTimer = null;
+  const clearSharedTerminalReconnectTimer = () => {
+    if (!sharedTerminalReconnectTimer) return;
+    clearTimeout(sharedTerminalReconnectTimer);
+    sharedTerminalReconnectTimer = null;
   };
 
   /**
@@ -951,12 +955,12 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
    * terminal on it a snapshot read, so a backend that keeps failing must not
    * be retried at a fixed interval by every open tab at once.
    */
-  const scheduleBrowserTerminalReconnect = () => {
-    if (browserTerminalReconnectTimer) return;
-    browserTerminalReconnectTimer = setTimeout(() => {
-      browserTerminalReconnectTimer = null;
-      refreshBrowserTerminalEventSource();
-    }, browserTerminalBackoff.nextDelayMs());
+  const scheduleSharedTerminalReconnect = () => {
+    if (sharedTerminalReconnectTimer) return;
+    sharedTerminalReconnectTimer = setTimeout(() => {
+      sharedTerminalReconnectTimer = null;
+      refreshSharedTerminalConnection();
+    }, sharedTerminalBackoff.nextDelayMs());
   };
 
   /**
@@ -965,8 +969,14 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
    * terminals with only their initial snapshot and no live output. Mobile keeps
    * every pane mounted intentionally, so this is easy to hit.
    *
-   * Share one filtered EventSource for every terminal the same-origin browser
-   * currently consumes. Changing the filter reconnects this one stream; opening
+   * A plain-HTTP/1.1 gateway gives a browser about six connections per host,
+   * so a bearer or cross-origin client holding one fetch per terminal would leave
+   * commands queued behind them, and with streaming compression on each one
+   * also takes one of the gateway's few gzip slots.
+   *
+   * Share one filtered stream for every terminal this client currently
+   * consumes, whichever transport carries it (`openSharedTerminalConnection`
+   * picks). Changing the filter reconnects this one stream; opening
    * the replacement emits a scoped desync notice for terminals that were
    * already connected, causing their authoritative snapshot reconciliation to
    * cover the brief subscription gap.
@@ -983,24 +993,24 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
    * terminal a snapshot reconcile. Widening it is urgent: that terminal has no
    * output until the socket carries it. So defer removals and coalesce them.
    */
-  const refreshBrowserTerminalEventSource = (refresh: { defer?: boolean } = {}) => {
+  const refreshSharedTerminalConnection = (refresh: { defer?: boolean } = {}) => {
     if (refresh.defer) {
-      if (browserTerminalRefreshQueued || browserTerminalNarrowTimer) return;
-      browserTerminalNarrowTimer = setTimeout(() => {
-        browserTerminalNarrowTimer = null;
-        refreshBrowserTerminalEventSource();
+      if (sharedTerminalRefreshQueued || sharedTerminalNarrowTimer) return;
+      sharedTerminalNarrowTimer = setTimeout(() => {
+        sharedTerminalNarrowTimer = null;
+        refreshSharedTerminalConnection();
       }, TERMINAL_FILTER_NARROW_DELAY_MS);
-      browserTerminalNarrowTimer.unref?.();
+      sharedTerminalNarrowTimer.unref?.();
       return;
     }
-    if (browserTerminalRefreshQueued) return;
-    browserTerminalRefreshQueued = true;
-    if (browserTerminalNarrowTimer) {
-      clearTimeout(browserTerminalNarrowTimer);
-      browserTerminalNarrowTimer = null;
+    if (sharedTerminalRefreshQueued) return;
+    sharedTerminalRefreshQueued = true;
+    if (sharedTerminalNarrowTimer) {
+      clearTimeout(sharedTerminalNarrowTimer);
+      sharedTerminalNarrowTimer = null;
     }
     queueMicrotask(() => {
-      browserTerminalRefreshQueued = false;
+      sharedTerminalRefreshQueued = false;
 
       const streams = [...terminalEventStreams.values()].filter(
         (stream) => !stream.closed && stream.fallbackActive,
@@ -1011,17 +1021,17 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
       // null check matters: a fatal error clears the source but leaves the
       // event list, and that retry has to be able to rebuild.
       if (
-        browserTerminalEventSource &&
-        browserTerminalSubscribedEvents?.length === events.length &&
-        browserTerminalSubscribedEvents.every((event, index) => event === events[index])
+        sharedTerminalConnection &&
+        sharedTerminalSubscribedEvents?.length === events.length &&
+        sharedTerminalSubscribedEvents.every((event, index) => event === events[index])
       ) {
         // The filter is unchanged but a stream object behind it may not be: a
         // terminal that unsubscribed and resubscribed the same event has a
         // fresh, unlatched stream riding an already-open socket, and no further
         // `onopen` is coming for it. Latch it as a first connect — it has not
         // missed anything it will not pick up in its own initial snapshot.
-        browserTerminalSocketStreams = new Set(streams);
-        if (browserTerminalEventSourceOpen) {
+        sharedTerminalSocketStreams = new Set(streams);
+        if (sharedTerminalConnectionOpen) {
           for (const event of events) {
             const stream = terminalEventStreams.get(event);
             if (stream && !stream.closed && !stream.readyResolved) {
@@ -1038,146 +1048,157 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
       // than retrying early. A new terminal stream rebuilds now: it has no
       // output until the socket carries it.
       if (
-        !browserTerminalEventSource &&
-        browserTerminalReconnectTimer &&
+        !sharedTerminalConnection &&
+        sharedTerminalReconnectTimer &&
         streams.length > 0 &&
-        streams.every((stream) => browserTerminalSocketStreams.has(stream))
+        streams.every((stream) => sharedTerminalSocketStreams.has(stream))
       ) {
         return;
       }
 
-      clearBrowserTerminalReconnectTimer();
-      if (browserTerminalEventSource) {
+      clearSharedTerminalReconnectTimer();
+      if (sharedTerminalConnection) {
         // Replacing the socket is not a failure, but its uptime ends here: the
         // replacement's health counts only from its own open, so time spent
         // connecting it cannot pass as a healthy interval.
-        browserTerminalEventSource.close();
-        browserTerminalBackoff.disconnected();
+        sharedTerminalConnection.close();
+        sharedTerminalBackoff.disconnected();
       }
-      browserTerminalEventSource = null;
-      browserTerminalSubscribedEvents = null;
-      browserTerminalSocketStreams = new Set();
-      browserTerminalEventSourceOpen = false;
+      sharedTerminalConnection = null;
+      sharedTerminalSubscribedEvents = null;
+      sharedTerminalSocketStreams = new Set();
+      sharedTerminalConnectionOpen = false;
       if (events.length === 0) {
         // A later terminal starts a fresh connection, not the tail of an old
         // outage.
-        browserTerminalBackoff.reset();
+        sharedTerminalBackoff.reset();
         return;
       }
 
-      const source = new EventSource(apiUrl(eventStreamPath(events)), {
-        withCredentials: credentials !== "omit",
-      });
-      browserTerminalEventSource = source;
-      browserTerminalSubscribedEvents = events;
-      browserTerminalSocketStreams = new Set(streams);
       const subscribedEvents = new Set(events);
-      source.onopen = () => {
-        if (browserTerminalEventSource !== source) return;
-        browserTerminalEventSourceOpen = true;
-        browserTerminalBackoff.connected();
-        for (const event of subscribedEvents) {
-          const stream = terminalEventStreams.get(event);
-          if (stream && !stream.closed && stream.fallbackActive) announceTerminalStreamOpen(stream);
-        }
-      };
-      source.onmessage = (message) => {
-        if (browserTerminalEventSource === source) {
-          dispatchMessage(message.data, { terminalFallback: true });
-        }
-      };
-      source.onerror = () => {
-        if (browserTerminalEventSource !== source) return;
-        log.warn("terminal-stream.disconnected", { transport: "event-source" });
-        // As for the main stream: the jittered ladder owns the retry, rather
-        // than the browser's fixed one, and one shared socket means one ladder
-        // however many terminals it strands.
-        closeBrowserTerminalEventSource();
-        scheduleBrowserTerminalReconnect();
-      };
+      const connection: SharedTerminalConnection = openSharedTerminalConnection(events, {
+        onOpen: () => {
+          if (sharedTerminalConnection !== connection) return;
+          sharedTerminalConnectionOpen = true;
+          sharedTerminalBackoff.connected();
+          for (const event of subscribedEvents) {
+            const stream = terminalEventStreams.get(event);
+            if (stream && !stream.closed && stream.fallbackActive) {
+              announceTerminalStreamOpen(stream);
+            }
+          }
+        },
+        onMessage: (data) => {
+          if (sharedTerminalConnection === connection) {
+            dispatchMessage(data, { terminalFallback: true });
+          }
+        },
+        onError: () => {
+          if (sharedTerminalConnection !== connection) return;
+          // As for the main stream: the jittered ladder owns the retry, rather
+          // than the browser's fixed one, and one shared socket means one ladder
+          // however many terminals it strands.
+          closeSharedTerminalConnection();
+          scheduleSharedTerminalReconnect();
+        },
+      });
+      sharedTerminalConnection = connection;
+      sharedTerminalSubscribedEvents = events;
+      sharedTerminalSocketStreams = new Set(streams);
     });
   };
+
+  /**
+   * Open the shared terminal stream for `events`. The handlers run only after
+   * this returns, never synchronously, and `onError` means the connection
+   * failed or ended by itself: `close()` reports nothing.
+   */
+  const openSharedTerminalConnection = (
+    events: readonly string[],
+    handlers: RelayedEventConnectionHandlers,
+  ): SharedTerminalConnection =>
+    openFilteredConnection(apiUrl(eventStreamPath(events)), "terminal", handlers);
+
+  /** One filtered stream, on whichever transport this client can authenticate. */
+  const openFilteredConnection = (
+    url: string,
+    kind: "terminal" | "relayed",
+    handlers: RelayedEventConnectionHandlers,
+  ): RelayedEventConnection => {
+    const logEvent =
+      kind === "terminal" ? "terminal-stream.disconnected" : "relayed-stream.disconnected";
+    if (filteredStreamsUseEventSource()) {
+      const source = new EventSource(url, { withCredentials: credentials !== "omit" });
+      source.onopen = handlers.onOpen;
+      source.onmessage = (message) => handlers.onMessage(message.data, message.lastEventId);
+      source.onerror = () => {
+        log.warn(logEvent, { transport: "event-source" });
+        handlers.onError();
+      };
+      return source;
+    }
+    const controller = new AbortController();
+    void (async () => {
+      try {
+        const response = await fetch(url, {
+          credentials,
+          headers: requestHeaders(),
+          signal: controller.signal,
+        });
+        if (!response.ok || !response.body) {
+          throw new Error(`Gateway ${kind} event stream failed with HTTP ${response.status}`);
+        }
+        if (controller.signal.aborted) return;
+        handlers.onOpen();
+        await readSseStream(response.body, controller.signal, (frame) => {
+          if (frame.data) handlers.onMessage(frame.data, frame.id);
+        });
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          log.warn(logEvent, {
+            transport: "fetch",
+            error: formatLogError(error),
+          });
+        }
+      } finally {
+        // An abort is `close()`; anything else, a clean end included, is a
+        // failure the ladder retries.
+        const stoppedOnPurpose = controller.signal.aborted;
+        controller.abort();
+        if (!stoppedOnPurpose) handlers.onError();
+      }
+    })();
+    return { close: () => controller.abort() };
+  };
+
+  const relayedEvents = new RelayedEventStream({
+    open: (events, since, handlers) => {
+      const params = new URLSearchParams({ includeEvents: events.join(",") });
+      if (since) params.set(GATEWAY_EVENT_CURSOR_PARAM, since);
+      return openFilteredConnection(
+        apiUrl(`${GATEWAY_PREFIX}/events?${params.toString()}`),
+        "relayed",
+        handlers,
+      );
+    },
+    deliver,
+    backoff: createStreamBackoff(),
+  });
 
   const startTerminalEventFallback = (stream: TerminalEventStream) => {
     if (stream.closed) return;
     stream.fallbackActive = true;
-    // A pending backed-off retry owns the next attempt. Without this, every
-    // failed terminal WebSocket attempt would restart the fetch at once and
-    // the fallback would retry at the socket's pace instead of its own.
-    if (stream.source || stream.controller || stream.reconnectTimer) return;
-    if (!usesSharedTerminalStream()) {
-      const controller = new AbortController();
-      stream.controller = controller;
-      stream.fetchOpen = false;
-      void (async () => {
-        try {
-          const response = await fetch(apiUrl(eventStreamPath(stream.event)), {
-            credentials,
-            headers: requestHeaders(),
-            signal: controller.signal,
-          });
-          if (!response.ok || !response.body) {
-            throw new Error(`Gateway terminal event stream failed with HTTP ${response.status}`);
-          }
-          if (
-            controller.signal.aborted ||
-            stream.closed ||
-            !stream.fallbackActive ||
-            terminalEventStreams.get(stream.event) !== stream
-          )
-            return;
-          stream.fetchOpen = true;
-          stream.backoff.connected();
-          announceTerminalStreamOpen(stream);
-          await consumeFetchEventStream(response, controller, false, true);
-        } catch (error) {
-          if (!controller.signal.aborted) {
-            log.warn("terminal-stream.disconnected", {
-              transport: "fetch",
-              error: formatLogError(error),
-            });
-          }
-        } finally {
-          controller.abort();
-          if (stream.controller === controller) {
-            stream.controller = null;
-            stream.fetchOpen = false;
-          }
-          if (
-            !stream.closed &&
-            // A newer attempt replaced this one and owns the stream now.
-            !stream.controller &&
-            // Stopping the fallback works by aborting this controller, which is
-            // what runs this block. Without this check the stop schedules its
-            // own replacement and the terminal ends up on both transports.
-            stream.fallbackActive &&
-            terminalEventStreams.get(stream.event) === stream &&
-            listeners.has(stream.event) &&
-            !stream.reconnectTimer
-          ) {
-            stream.reconnectTimer = setTimeout(() => {
-              stream.reconnectTimer = null;
-              startTerminalEventFallback(stream);
-            }, stream.backoff.nextDelayMs());
-          }
-        }
-      })();
-      return;
-    }
-    refreshBrowserTerminalEventSource();
+    // The shared stream decides whether this needs any work: a filter it
+    // already carries, or a dead socket waiting out its backoff, is left alone,
+    // so a terminal WebSocket asking for fallback on every failed attempt does
+    // not retry at the socket's pace.
+    refreshSharedTerminalConnection();
   };
 
   const stopTerminalEventFallback = (stream: TerminalEventStream) => {
     if (!stream.fallbackActive) return;
     stream.fallbackActive = false;
-    stream.source?.close();
-    stream.source = null;
-    stream.controller?.abort();
-    stream.controller = null;
-    stream.fetchOpen = false;
-    if (stream.reconnectTimer) clearTimeout(stream.reconnectTimer);
-    stream.reconnectTimer = null;
-    if (usesSharedTerminalStream()) refreshBrowserTerminalEventSource({ defer: true });
+    refreshSharedTerminalConnection({ defer: true });
   };
 
   const stopTerminalEventFallbacks = () => {
@@ -1187,16 +1208,16 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
       stream.closed = true;
       stopTerminalEventFallback(stream);
     }
-    clearBrowserTerminalReconnectTimer();
-    if (browserTerminalNarrowTimer) {
-      clearTimeout(browserTerminalNarrowTimer);
-      browserTerminalNarrowTimer = null;
+    clearSharedTerminalReconnectTimer();
+    if (sharedTerminalNarrowTimer) {
+      clearTimeout(sharedTerminalNarrowTimer);
+      sharedTerminalNarrowTimer = null;
     }
-    browserTerminalEventSource?.close();
-    browserTerminalEventSource = null;
-    browserTerminalSubscribedEvents = null;
-    browserTerminalSocketStreams = new Set();
-    browserTerminalEventSourceOpen = false;
+    sharedTerminalConnection?.close();
+    sharedTerminalConnection = null;
+    sharedTerminalSubscribedEvents = null;
+    sharedTerminalSocketStreams = new Set();
+    sharedTerminalConnectionOpen = false;
   };
 
   /**
@@ -1208,15 +1229,9 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
    * again waits for the next rung.
    */
   const retryWaitingTerminalFallbacks = () => {
-    if (browserTerminalReconnectTimer) {
-      clearBrowserTerminalReconnectTimer();
-      refreshBrowserTerminalEventSource();
-    }
-    for (const stream of terminalEventStreams.values()) {
-      if (!stream.reconnectTimer) continue;
-      clearTimeout(stream.reconnectTimer);
-      stream.reconnectTimer = null;
-      startTerminalEventFallback(stream);
+    if (sharedTerminalReconnectTimer) {
+      clearSharedTerminalReconnectTimer();
+      refreshSharedTerminalConnection();
     }
   };
 
@@ -1235,6 +1250,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
       ensureEventStream();
     }
     retryWaitingTerminalFallbacks();
+    relayedEvents.retryWaiting();
   };
   const retryWaitingStreamsWhenVisible = () => {
     if (document.visibilityState === "visible") retryWaitingStreams();
@@ -1314,16 +1330,11 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     });
     const stream: TerminalEventStream = {
       event,
-      source: null,
-      controller: null,
-      reconnectTimer: null,
-      backoff: createStreamBackoff(),
       socketUnlisten: null,
       ready,
       resolveReady,
       readyResolved: false,
       connectedBefore: false,
-      fetchOpen: false,
       fallbackActive: false,
       closed: false,
     };
@@ -1336,20 +1347,14 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     const stream = terminalEventStreams.get(event);
     if (!stream) return;
     stream.closed = true;
-    stream.source?.close();
-    stream.source = null;
-    stream.controller?.abort();
-    stream.controller = null;
     stream.socketUnlisten?.();
     stream.socketUnlisten = null;
-    if (stream.reconnectTimer) clearTimeout(stream.reconnectTimer);
-    stream.reconnectTimer = null;
     resolveTerminalStreamReady(stream);
     terminalEventStreams.delete(event);
     // Unlike a channel moving to the WebSocket, closing a terminal is a
     // discrete user action rather than one of a burst, so it is not deferred:
     // the socket should stop carrying a terminal nobody is watching at once.
-    if (stream.fallbackActive && usesSharedTerminalStream()) refreshBrowserTerminalEventSource();
+    if (stream.fallbackActive) refreshSharedTerminalConnection();
   };
 
   const readGatewayResponse = async <T>(response: Response, fallback: string): Promise<T> => {
@@ -1470,6 +1475,8 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
       callbackSet.add(callback as EventCallback<unknown>);
       if (isTerminalOutputEvent(event)) {
         ensureTerminalEventStream(event);
+      } else if (isPerNodeRelayedEvent(event)) {
+        relayedEvents.add(event);
       } else {
         ensureEventStream();
       }
@@ -1478,12 +1485,14 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
         if (callbackSet.size === 0) {
           listeners.delete(event);
           if (isTerminalOutputEvent(event)) closeTerminalEventStream(event);
+          else if (isPerNodeRelayedEvent(event)) relayedEvents.remove(event);
         }
         closeEventStreamIfIdle();
       };
     },
 
     eventStreamReady(event: string): Promise<void> {
+      if (isPerNodeRelayedEvent(event)) return relayedEvents.ready(event);
       if (!isTerminalOutputEvent(event)) return Promise.resolve();
       return ensureTerminalEventStream(event).ready;
     },
@@ -1604,6 +1613,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     terminalSocket?.dispose();
     terminalSocket = null;
     stopTerminalEventFallbacks();
+    relayedEvents.dispose();
   });
   return api;
 }
@@ -1659,7 +1669,7 @@ export function installLocalDesktopGateway(
     baseUrl: host.baseUrl,
     // Not tied to the terminal WebSocket: to-do 1202 task 12 starts with SSE.
     terminalTransport: "http-sse",
-    sharedTerminalStream: true,
+    terminalEventSource: true,
     keepaliveOnPageHide: true,
     ...overrides,
   });

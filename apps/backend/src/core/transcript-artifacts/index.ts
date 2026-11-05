@@ -17,6 +17,7 @@ export type { TranscriptArtifactService } from "./service.js";
 export {
   ARTIFACT_ONLY_SERVER_INSTRUCTIONS,
   ARTIFACT_TOOL_INSTRUCTIONS,
+  artifactAuthoringNotice,
   registerTranscriptArtifactTools,
   type TranscriptArtifactToolHost,
 } from "./tools.js";

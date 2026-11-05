@@ -80,3 +80,19 @@ test("setup approval: the fan-out stays on the command node, each node's record 
   // The user approving in a leaf's realm acts on that leaf through their grant.
   expect(isWorkspaceExcludedCommand("approve_environment_setup")).toBe(false);
 });
+
+test("workspace Stop is allowed locally while peer routing and controller stop stay fenced", async () => {
+  expect(isWorkspaceExcludedCommand("stop_coordinator_worker_turn")).toBe(false);
+  expect(isWorkspaceExcludedCommand("stop_controller_worker_turn")).toBe(true);
+  const invoke = mock(async () => ({}));
+  await expect(
+    routeToNode({
+      nodeId: "bk_leaf" as never,
+      link: { connected: true, invoke: invoke as never },
+      command: "stop_coordinator_worker_turn",
+      args: {},
+      outcomes: new NodeOutcomeLedger(),
+    }),
+  ).rejects.toThrow("cannot be run on another node");
+  expect(invoke).not.toHaveBeenCalled();
+});

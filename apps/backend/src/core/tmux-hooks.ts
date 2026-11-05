@@ -576,7 +576,14 @@ fi
 
 export async function ensureClaudeSettingsGitIgnored(backend: TmuxBackend): Promise<void> {
   await backend
-    .exec(["bash", "-lc", gitExcludeSetupScript(CLAUDE_SETTINGS_LOCAL_GIT_EXCLUDE_PATTERN)])
+    .exec(
+      ["bash", "-lc", gitExcludeSetupScript(CLAUDE_SETTINGS_LOCAL_GIT_EXCLUDE_PATTERN)],
+      undefined,
+      undefined,
+      // Login profiles may launch redirected long-lived helpers. Setup only
+      // needs the shell to finish; those helpers do not belong to this capture.
+      { waitForDescendants: false },
+    )
     .catch((error) =>
       log.warn("hooks.git-exclude-failed", {
         ...classifyCommandFailure(error, { tools: ["docker", "git"] }),
@@ -1204,6 +1211,11 @@ export class TranscriptTail {
   private partial: Buffer = Buffer.alloc(0);
 
   constructor(readonly filePath: string) {}
+
+  /** How far into the file this tail has read. */
+  get bytesRead(): number {
+    return this.offset;
+  }
 
   /**
    * Parses whatever has been appended since the last call.

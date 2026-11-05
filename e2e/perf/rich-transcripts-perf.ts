@@ -41,7 +41,10 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { chromium, type Browser, type CDPSession, type Page } from "@playwright/test";
-import { FRONTEND_RENDER_POLICY } from "../../packages/protocol/src/rich-content-policy";
+import {
+  FRONTEND_RENDER_POLICY,
+  STATIC_PRESENTATION_POLICY,
+} from "../../packages/protocol/src/rich-content-policy";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 
@@ -53,6 +56,8 @@ interface Options {
   basePort: number;
   cpuProfile: boolean;
   headed: boolean;
+  bundledChromium: boolean;
+  typingAtMessage: number | null;
   cpuThrottle: number;
   minify: boolean;
   stream: boolean;
@@ -69,6 +74,8 @@ function parseOptions(argv: string[]): Options {
     basePort: 1460,
     cpuProfile: false,
     headed: false,
+    bundledChromium: false,
+    typingAtMessage: null,
     cpuThrottle: 1,
     minify: true,
     stream: true,
@@ -91,6 +98,10 @@ function parseOptions(argv: string[]): Options {
     else if (arg === "--port") options.basePort = Number(value());
     else if (arg === "--cpu-profile") options.cpuProfile = true;
     else if (arg === "--headed") options.headed = true;
+    // For a host without installed Google Chrome. Compare only runs of one browser.
+    else if (arg === "--bundled-chromium") options.bundledChromium = true;
+    // Type with this message on screen, for example a static document, not the tail.
+    else if (arg === "--typing-at-message") options.typingAtMessage = Number(value());
     else if (arg === "--cpu-throttle") options.cpuThrottle = Number(value());
     else if (arg === "--no-minify") options.minify = false;
     // Diagnostic: measure typing and scrolling without the streaming response.
@@ -527,6 +538,13 @@ async function measureRun(
       [STREAM_INTERVAL_MS, STREAM_CHARS_PER_TICK],
     );
   }
+  if (options.typingAtMessage !== null) {
+    await page.evaluate(
+      (index) => window.__richPerf!.scrollToIndex(index),
+      options.typingAtMessage,
+    );
+    await sleep(2_000);
+  }
   const composer = page.locator('[role="textbox"][aria-label="Send a message"]');
   await composer.click();
   await sleep(1_000);
@@ -767,6 +785,11 @@ interface CycleSample {
   artifactRequestEntries: number | null;
   artifactRequestBytes: number | null;
   viewStoreEntries: number | null;
+  staticFramesMounted: number | null;
+  staticFramesGranted: number | null;
+  staticFramesLoaded: number | null;
+  staticFramesReloaded: number | null;
+  staticFramesFailed: number | null;
 }
 
 /** History regions revisited by the cycles; a leak shows as growth after the first rotation. */
@@ -780,6 +803,15 @@ async function sampleStats(page: Page, cdp: CDPSession, cycle: number): Promise<
     { settled: number; settledBytes: number; queued: number; inflight: number } | undefined;
   const artifactRequests = stats.artifactRequests as { entries: number; bytes: number } | undefined;
   const viewStore = stats.viewStore as { entries: number } | undefined;
+  const staticFrames = stats.staticFrames as
+    | {
+        mounted: number;
+        granted: number;
+        framesMounted: number;
+        framesReloaded: number;
+        framesFailed: number;
+      }
+    | undefined;
   return {
     cycle,
     liveWorkers: stats.liveWorkers as number,
@@ -793,6 +825,11 @@ async function sampleStats(page: Page, cdp: CDPSession, cycle: number): Promise<
     artifactRequestEntries: artifactRequests?.entries ?? null,
     artifactRequestBytes: artifactRequests?.bytes ?? null,
     viewStoreEntries: viewStore?.entries ?? null,
+    staticFramesMounted: staticFrames?.mounted ?? null,
+    staticFramesGranted: staticFrames?.granted ?? null,
+    staticFramesLoaded: staticFrames?.framesMounted ?? null,
+    staticFramesReloaded: staticFrames?.framesReloaded ?? null,
+    staticFramesFailed: staticFrames?.framesFailed ?? null,
   };
 }
 
@@ -923,6 +960,13 @@ function convergence(
   }
   if (last.artifactRequestEntries !== null) grows("artifactRequestEntries", 0);
   if (last.viewStoreEntries !== null) grows("viewStoreEntries", 0.1);
+  if (last.staticFramesMounted !== null) {
+    bound("staticFramesMounted", STATIC_PRESENTATION_POLICY.maxFramesPerWindow);
+    bound("staticFramesGranted", STATIC_PRESENTATION_POLICY.maxFramesPerWindow);
+    // A frame that reloads or fails under ordinary scrolling is a bug, not churn.
+    bound("staticFramesReloaded", 0);
+    bound("staticFramesFailed", 0);
+  }
   return { converged: failures.length === 0, failures };
 }
 
@@ -975,7 +1019,7 @@ async function main() {
       const order = runIndex % 2 === 1 ? servers : [...servers].reverse();
       for (const server of order) {
         const browser = await chromium.launch({
-          channel: "chrome",
+          ...(options.bundledChromium ? {} : { channel: "chrome" }),
           headless: !options.headed,
           args: [
             "--disable-renderer-backgrounding",

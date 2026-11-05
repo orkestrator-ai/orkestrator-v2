@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import {
   nativeAgentCapabilities,
@@ -74,7 +75,14 @@ export interface AgentNativeTabProps {
   composerPlaceholder?: string;
   /** Keep presentation mounted while the owning runtime cannot accept connections. */
   connectionEnabled?: boolean;
+  /**
+   * Why this conversation cannot send right now. The transcript still loads, and
+   * nothing that could start a provider runs while this is set.
+   */
+  sendingHeldReason?: string;
   emptyPlatformsMessage?: string;
+  /** A control beside `emptyPlatformsMessage`, for the setting it names. */
+  emptyPlatformsAction?: ReactNode;
   /** Example requests the unassigned composer offers while it is empty. */
   unassignedStarterPrompts?: readonly string[];
   /** Open the shared resume dialog as soon as the controller mounts. */

@@ -262,7 +262,7 @@ and no site logs a stderr tail.
 
 | Area | Event | Level | Written when |
 | --- | --- | --- | --- |
-| `docker` | `writer-lease.lost` | `warn` | The one held-to-lost transition, with `reason` (`reclaimed`, `unreadable`). Schedules stop and container changes are refused. A lost lease is final for the process; the backend that takes it over writes `writer-lease.regained`. |
+| `docker` | `writer-lease.lost` | `warn` | The one held-to-lost transition, with `reason` (`reclaimed`, `unreadable`). Schedules stop and container changes are refused; Settings → Schedules says so ([scheduled jobs](scheduled-jobs.md#exactly-once)). A lost lease is final for the process; the backend that takes it over writes `writer-lease.regained`. |
 | `docker` | `writer-lease.regained` | `info` | A backend took the lease over from a holder that stopped refreshing it (crashed, killed or stalled), with `staleForMs` since that holder's last refresh. A lease a clean shutdown released is acquired silently. |
 | `storage` | `migration.failed` | `error` | The database could not reach this build's schema and did not open, with `fromVersion`, `toVersion` and `step` (`snapshot` for the safety copy, `migrate`). |
 | `process` | `rejection.unhandled` | `error`, throttled | A rejection reached the fatal rejection guard, beside the guard's own line. |
@@ -726,7 +726,7 @@ Text is the default: one line per entry, in the old `[tag] message` shape.
 ```
 
 - Every entry is one line in either format. Newlines, control characters and
-  U+2028/9 in a value are escaped, because Node's readline ends a line at those.
+  U+2028/9 in a value are escaped, because Bun's readline ends a line at those (Node's does not).
 - In JSON mode the saved log file is JSON lines throughout. A console call that
   did not come from the logger is wrapped as `{"orklog":1,"ts","level","message"}`
   with no area or event, and an entry over the 64 KiB bound becomes a shortened
@@ -887,7 +887,9 @@ every bridge line is on the logger, in `bridge.claude`, `bridge.codex`,
 covers them all. [The bridge hop](#the-bridge-hop) never filters, so a local bridge's
 line keeps the level it was written at whatever the backend's own levels are. Output
 that is not a logger call (a native crash, a runtime panic, a vendor's own printing)
-is captured as text whatever the level is.
+is captured as text whatever the level is. That is why a local bridge does not
+inherit vendor debug switches from the shell that launched Orkestrator
+([the bridge hop](#the-bridge-hop)).
 
 `error` cannot be filtered, because no level is below it. A stall of 10 seconds or
 more uses that: `event-loop` `stalled`, and the desktop's `main-thread.stalled`, are
@@ -941,8 +943,21 @@ own backpressure and no ordering against stdout and stderr.
 The relay carries the [essential log](#the-essential-event-log) too, and its
 `essentialOnly` entries are the one thing it does not write to the normal log.
 
-The rest of the relay work (a line length bound, skipping the relay when nothing
-consumes it) is undecided and not built.
+**Lines are bounded.** The relay reads stdout and stderr through
+`forEachBoundedLine` (`packages/protocol/src/node/bounded-line-splitter.ts`), the
+same splitter the [bridge hop](#the-bridge-hop) uses, in place of `readline`, which
+held a whole line however long it grew. A line over 64 KiB (the file writer's
+per-entry bound) is passed on in 64 KiB pieces rather than held or dropped; a record
+cut that way stays as `[Backend]` text. Lines end where Node's `readline` ended them:
+at `\n`, `\r\n` and a lone `\r`. UTF-8 is decoded across chunk boundaries.
+
+**The relay runs even when nothing reads it.** With Save Logs to Disk off in a
+packaged app, every backend line is still parsed and written to a stdout nobody
+reads. It stays that way: it costs about 1–2.5 µs of CPU a line under Node
+(measured 2026-11-05 on macOS, 100,000 relayed record and raw lines with stdout at
+`/dev/null`), so the 12.5k lines a day one machine logged cost tens of milliseconds
+a day. The policy hint and the ready message arrive on the same lines, so a skip
+would not be a one-line change either.
 
 `writeProcessOutputLine` is how raw text enters the log. Only a stdio relay may
 call it: it bypasses levels because such text has none.
@@ -970,9 +985,21 @@ flowchart LR
   The bridge retains its level override privately so live policy updates still
   respect the value supplied at launch.
   OpenCode runs its own server and receives no relay flag, including an inherited one.
+- **Vendor debug switches are dropped.** `DEBUG`, `RUST_LOG` and
+  `DEBUG_CLAUDE_AGENT_SDK` turn on a vendor's own printing, which is not a logger
+  call: the hop captures it whatever the level is, and it can quote prompts and tool
+  content. A local launch removes them from the bridge's environment, and so from the
+  vendor CLI and the commands it runs (`bridge-vendor-debug-env.ts`). To keep them,
+  start the backend with `ORKESTRATOR_KEEP_VENDOR_DEBUG=1`. A project command that
+  sets its own `DEBUG` is unaffected, and container bridges never inherit the host
+  environment.
   A bridge whose output nobody reads as records (one started by hand, or a model
   catalogue probe) stays on the format its environment asks for.
-- **Redaction runs before and after decoding.** Raw output is scrubbed per chunk.
+- **Redaction runs before and after decoding.** Raw output is scrubbed per bounded
+  line. A constant-size continuation flag carries a pending credential introducer (such as `password:` or `Bearer`)
+  across line endings and blank lines. The next value is scrubbed using the
+  shared assignment rule, conservatively including values of six or seven
+  characters after an auth scheme.
   Recognized records then have every decoded string scrubbed, including formatted
   errors, stack frames and causes, because JSON escaping can hide credential syntax.
   If the raw pass breaks a record's JSON, the line is kept as plain output.
@@ -980,7 +1007,9 @@ flowchart LR
   it, overriding anything the bridge claimed, and puts it first so a record already
   at the field limit keeps it through the next relay.
 - **Each line is its own entry.** A chunk used to be one call, so only its first
-  line carried the prefix. Every line of a stack now has it.
+  line carried the prefix. Every line of a stack now has it. Lines are split by
+  the bounded splitter the Electron relay uses, so a line over 64 KiB arrives in
+  64 KiB pieces, and a token cut at that boundary is not redacted.
 - **Nothing is lost.** Unstructured output, and a record from another build naming an
   area or event this one does not list, stay captured as text. The hop never filters.
 - **Ordering.** stdout and stderr are read separately, as before, so an `info` and a
@@ -996,7 +1025,10 @@ older image's bridge ignores both variables and keeps its plain lines.
 
 A relaunch keeps the run before it in `/tmp/<provider>-bridge.prev.log`, read with
 `previous: true` on the `get_*_server_log` commands
-([container-lifecycle.md](container-lifecycle.md#the-previous-run)).
+([container-lifecycle.md](container-lifecycle.md#the-previous-run)). Lines the
+writer could not write (a full disk, a failed rotation) are counted and reported
+by an `[orkestrator-log-writer] dropped N lines` line at its next successful write
+([container-lifecycle.md](container-lifecycle.md#bounded-logs-bounded-logs1)).
 
 ### A level replaced at runtime
 
@@ -1220,7 +1252,8 @@ record what was observed at the time and are left as they are.
   summary of identifier-shaped tokens and a byte count, never the line. `recorder.notice` is dynamic and ours: it warns that notification recording is
   on or refused, naming the directory the developer set in
   `CODEX_BRIDGE_RECORD_NOTIFICATIONS`. It is loud on purpose, and a recording's content
-  never reaches it.
+  never reaches it. That recorder is the only capture of raw Codex events, and it is a
+  developer's tool with no Settings control.
 
 ## Adding to later processes
 

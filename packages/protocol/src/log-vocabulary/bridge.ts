@@ -33,6 +33,8 @@ export const BRIDGE_LOG_AREAS = defineLogAreas({
     events: {
       "idle-sweep.failed": "An idle sweep threw; the next tick retries.",
       "shutdown.failed": "Releasing the bridge failed during shutdown; it still exits.",
+      "credential.not-hardened":
+        "The bridge could not mark itself non-dumpable, so a same-uid process can read its memory; `reason` says why.",
     },
   },
   "bridge.acp": {
@@ -200,7 +202,6 @@ export const BRIDGE_LOG_AREAS = defineLogAreas({
         "The backend that launched this bridge has gone; stopping turns and shutting down.",
       "queue.overflow": "The notification queue passed a bound and dropped its backlog.",
       "queue.task-failed": "A task on a per-thread queue failed.",
-      "raw-log.write-failed": "Appending to the raw Codex log failed.",
       "recorder.notice":
         "The notification recorder needs attention: it is on, or was asked for without its confirmation.",
       "recorder.threw": "The notification recorder threw.",

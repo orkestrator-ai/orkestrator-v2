@@ -5,20 +5,20 @@
  * the lifetime of an environment and serves it to a renderer over HTTP. An
  * unbounded field is a way for one long agent turn to exhaust the backend.
  */
-import { randomBytes, timingSafeEqual } from "node:crypto";
 import { resolve } from "node:path";
+import { loadBridgeCredential } from "@orkestrator/protocol/node/bridge-credential";
 
 export const PROVIDER = "cursor" as const;
 
 export const port = parsePort(process.env.PORT);
 export const hostname = process.env.HOSTNAME?.trim() || "127.0.0.1";
 export const workingDirectory = resolve(process.env.CWD?.trim() || process.cwd());
-export const authToken =
-  process.env.CURSOR_BRIDGE_TOKEN?.trim() || randomBytes(32).toString("base64url");
-// The token authenticates callers of this bridge; nothing this process spawns
-// needs it. Captured once above and removed so the SDK's shells and MCP
-// servers cannot inherit the credential through process.env (H4).
-delete process.env.CURSOR_BRIDGE_TOKEN;
+// The credential authenticates callers of this bridge; nothing this process
+// spawns needs it. Captured once and removed so the SDK's shells and MCP servers
+// cannot inherit it through process.env (H4).
+const bridgeCredential = loadBridgeCredential("CURSOR_BRIDGE_TOKEN");
+/** The token, when given one rather than its verifier: only test harnesses read it. */
+export const authToken = bridgeCredential.plainToken ?? "";
 
 /**
  * Pin `process.cwd()` to the workspace so Shell calls that omit
@@ -226,11 +226,7 @@ export function authenticate(headers: {
     ? bearer.slice("bearer ".length)
     : firstHeader(headers.token);
   if (presented === undefined) return false;
-  const expected = Buffer.from(authToken);
-  const actual = Buffer.from(presented.trim());
-  // timingSafeEqual throws on a length mismatch, which is itself leak-free,
-  // but comparing lengths first keeps the throw out of the hot path.
-  return actual.length === expected.length && timingSafeEqual(actual, expected);
+  return bridgeCredential.matches(presented.trim());
 }
 
 function firstHeader(value: string | string[] | undefined): string | undefined {

@@ -5,42 +5,19 @@ import type {
   HostCatalog,
   refreshHostModelCatalog as RefreshHostModelCatalog,
 } from "./host-model-catalog-refresh.js";
-import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
-
-const log = createLogger("models");
-
-/**
- * How long a failed seed suppresses the next one. A signed-out host fails every
- * time, and each attempt spawns a whole bridge, so a picker that asks on every
- * focus must not turn that into a respawn loop. A completed sign-in clears it.
- */
-export const HOST_CATALOG_SEED_FAILURE_COOLDOWN_MS = 30_000;
 
 // Reserved scope for host-only conversations with no project configuration.
 export const HOST_OPENCODE_CATALOG_SCOPE = "host:opencode";
 
-// Per backend but still module state: keyed by platform (and project), so two
-// backends share one seed flight and cooldown. Not moved yet: the sign-in reset
-// is called from account code
-// (docs/todo/backend-structure/1070-backend-module-state-beyond-0390.md).
-const failedAt = new Map<string, number>();
-const generations = new Map<string, number>();
-const flights = new Map<string, { generation: number; promise: Promise<boolean> }>();
-
-/** OpenCode's catalogue is per project; every other platform's is host-wide. */
-function seedKey(agent: AgentPlatform, projectId?: string): string {
-  return agent === "opencode" ? `opencode:${projectId ?? ""}` : agent;
-}
-
-/** Forget recorded failures for a platform, for example because the user just signed in. */
-export function resetHostModelCatalogSeedCooldown(agent: AgentPlatform): void {
-  const keys = new Set([...failedAt.keys(), ...flights.keys(), agent]);
-  for (const key of keys) {
-    if (key === agent || key.startsWith(`${agent}:`)) {
-      failedAt.delete(key);
-      generations.set(key, (generations.get(key) ?? 0) + 1);
-    }
-  }
+/**
+ * Forget recorded failures for a platform in this backend, for example because
+ * the user just signed in.
+ */
+export function resetHostModelCatalogSeedCooldown(
+  context: CommandContext,
+  agent: AgentPlatform,
+): void {
+  context.runtime.localServers.catalogSeeds.resetCooldown(agent);
 }
 
 /** Save a freshly downloaded host catalogue where the pickers read it from. */
@@ -106,43 +83,11 @@ export function seedHostModelCatalogIfMissing(
   options: { projectId?: string; now?: () => number } = {},
 ): Promise<boolean> {
   const { projectId, now = Date.now } = options;
-  const key = seedKey(agent, projectId);
-  const generation = generations.get(key) ?? 0;
-  const existing = flights.get(key);
-  if (existing?.generation === generation) return existing.promise;
-
-  const run = async (): Promise<boolean> => {
-    try {
-      if (await hasCachedModels(context, agent, projectId)) return true;
-      const lastFailure = failedAt.get(key);
-      if (
-        lastFailure !== undefined &&
-        now() - lastFailure < HOST_CATALOG_SEED_FAILURE_COOLDOWN_MS
-      ) {
-        return false;
-      }
-      await persistHostCatalog(context, await refresh(context, agent), projectId);
-      if ((generations.get(key) ?? 0) === generation) failedAt.delete(key);
-      return true;
-    } catch (error) {
-      // A sign-in may invalidate this attempt while its old credentials are
-      // still in use. Do not let that stale failure reinstate the cooldown.
-      if ((generations.get(key) ?? 0) === generation) failedAt.set(key, now());
-      // The message is the bridge's own error text; it carries no credentials.
-      log.warn("download.deferred", { agent, error: formatLogError(error) });
-      return false;
-    }
-  };
-
-  // A reset during an in-flight pre-login probe queues exactly one fresh
-  // attempt behind it. This avoids concurrent writers while ensuring the
-  // authenticated request is not absorbed by the stale flight.
-  const started = existing ? existing.promise.then(run, run) : run();
-  const flight = started.finally(() => {
-    if (flights.get(key)?.promise === flight) flights.delete(key);
+  return context.runtime.localServers.catalogSeeds.seed(agent, projectId, {
+    cached: () => hasCachedModels(context, agent, projectId),
+    download: async () => persistHostCatalog(context, await refresh(context, agent), projectId),
+    now,
   });
-  flights.set(key, { generation, promise: flight });
-  return flight;
 }
 
 /**
@@ -163,11 +108,3 @@ export async function seedEnabledHostModelCatalogs(
     await seedHostModelCatalogIfMissing(context, agent, refresh, options);
   }
 }
-
-export const __testing = {
-  reset(): void {
-    failedAt.clear();
-    generations.clear();
-    flights.clear();
-  },
-};

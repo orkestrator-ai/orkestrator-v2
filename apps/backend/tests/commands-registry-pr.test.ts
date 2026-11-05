@@ -1319,15 +1319,17 @@ exit 1
     );
   });
 
-  shimTest(
-    "persists merge cleanup intent before dispatch and completes local cleanup in the backend",
-    async () => {
+  for (const automatic of [false, true]) {
+    shimTest(`completes local cleanup in the backend, automatic=${automatic}`, async () => {
       const worktreePath = await createTempDir("ork-electron-merge-cleanup-local-");
       const environment = createEnvironment({
         id: "env-merge-cleanup-local",
         worktreePath,
         prUrl: "https://github.com/acme/repo/pull/42",
         prState: "open",
+        autoMerge: automatic,
+        autoMergeCleanup: automatic,
+        autoMergeEnabledAt: "automatic-generation",
       });
       const { context, updates } = createContext(environment);
       const commands = createCommandRegistry();
@@ -1411,6 +1413,7 @@ exit 1
                 method: "squash",
                 deleteBranch: true,
                 cleanupAfterMerge: true,
+                ...(automatic ? { autoMergeEnabledAt: "automatic-generation" } : {}),
               },
               context,
             ),
@@ -1425,8 +1428,11 @@ exit 1
           const mergingIndex = updates.findIndex(
             (update) => update.lifecycleOperation === "merging",
           );
-          expect(intentIndex).toBeGreaterThanOrEqual(0);
-          expect(mergingIndex).toBeGreaterThan(intentIndex);
+          if (automatic) expect(intentIndex).toBe(-1);
+          else {
+            expect(intentIndex).toBeGreaterThanOrEqual(0);
+            expect(mergingIndex).toBeGreaterThan(intentIndex);
+          }
           expect(updates).toContainEqual(
             expect.objectContaining({
               prState: "merged",
@@ -1460,12 +1466,9 @@ exit 1
           );
         },
       );
-    },
-  );
+    });
 
-  shimTest(
-    "keeps an unconfirmed container merge cleanup pending without deleting the environment",
-    async () => {
+    shimTest(`keeps unconfirmed container cleanup pending, automatic=${automatic}`, async () => {
       const environment = createEnvironment({
         id: "env-merge-cleanup-container-pending",
         environmentType: "containerized",
@@ -1474,6 +1477,9 @@ exit 1
         status: "stopped",
         prUrl: "https://github.com/acme/repo/pull/42",
         prState: "open",
+        autoMerge: automatic,
+        autoMergeCleanup: automatic,
+        autoMergeEnabledAt: "automatic-generation",
       });
       const { context } = createContext(environment);
       const commands = createCommandRegistry();
@@ -1510,6 +1516,7 @@ exit 1
               method: "rebase",
               deleteBranch: true,
               cleanupAfterMerge: true,
+              ...(automatic ? { autoMergeEnabledAt: "automatic-generation" } : {}),
             },
             context,
           );
@@ -1519,10 +1526,19 @@ exit 1
           });
 
           await expect(context.storage.getEnvironment(environment.id)).resolves.toMatchObject({
-            cleanupAfterMergeRequestedAt: expect.any(String),
-            cleanupAfterMergeError: null,
+            ...(automatic
+              ? {}
+              : { cleanupAfterMergeRequestedAt: expect.any(String), cleanupAfterMergeError: null }),
             prState: "open",
+            autoMerge: automatic,
+            autoMergeCleanup: automatic,
+            autoMergeEnabledAt: "automatic-generation",
           });
+          if (automatic) {
+            expect(
+              (await context.storage.getEnvironment(environment.id))?.cleanupAfterMergeRequestedAt,
+            ).toBeUndefined();
+          }
           const execLog = await fs.readFile(logs.exec, "utf8");
           expect(execLog).toContain(
             "'gh' 'pr' 'merge' 'https://github.com/acme/repo/pull/42' '--rebase'",
@@ -1531,9 +1547,8 @@ exit 1
           expect(existsSync(logs.rm)).toBe(false);
         },
       );
-    },
-  );
-
+    });
+  }
   shimTest("continues confirmed cleanup when persisting merged PR state fails once", async () => {
     const worktreePath = await createTempDir("ork-electron-merge-cleanup-persist-fail-");
     const environment = createEnvironment({
@@ -2354,7 +2369,7 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
     expect(result.wasRunning).toBe(false);
     expect(result.port).toBeGreaterThan(0);
     expect(result.pid).toBeGreaterThan(0);
-    expect(result.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(result.authToken).toMatch(/^okb_[A-Za-z0-9_-]{43}$/);
     expect(updates).toContainEqual({ localCodexPort: result.port, codexBridgePid: result.pid });
     await expect(
       commands.get("get_local_codex_server_status")?.({ environmentId: environment.id }, context),
@@ -2886,7 +2901,7 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
     try {
       expect(result.wasRunning).toBe(false);
       expect(result.port).toBeGreaterThan(0);
-      expect(result.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      expect(result.authToken).toMatch(/^okb_[A-Za-z0-9_-]{43}$/);
       await expect(requestOk(result.port, "/global/health")).resolves.toBe(true);
       expect(await fs.readFile(markerPath, "utf8")).toContain("used");
       // The Claude CLI the bridge spawns reads this to raise its 2-hour ceiling.
@@ -3024,7 +3039,7 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
       { environmentId: environment.id },
       context,
     )) as { port: number; pid: number; authToken: string };
-    expect(first.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(first.authToken).toMatch(/^okb_[A-Za-z0-9_-]{43}$/);
 
     // A bridge inherited from a previous backend process: still healthy, but its
     // token was never handed to us, so the renderer could not authenticate.
@@ -3037,7 +3052,7 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
     try {
       expect(second.wasRunning).toBe(false);
       expect(second.pid).not.toBe(first.pid);
-      expect(second.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      expect(second.authToken).toMatch(/^okb_[A-Za-z0-9_-]{43}$/);
       expect(second.authToken).not.toBe(first.authToken);
       expect(isProcessRunning(first.pid)).toBe(false);
       await expect(requestOk(second.port, "/global/health")).resolves.toBe(true);
@@ -3186,7 +3201,7 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
       { environmentId: environment.id },
       context,
     )) as { port: number; pid: number; authToken: string };
-    expect(first.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(first.authToken).toMatch(/^okb_[A-Za-z0-9_-]{43}$/);
 
     // A bridge inherited from a previous backend process: still healthy, but its
     // token was never handed to us, so the renderer could not authenticate.
@@ -3199,7 +3214,7 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
     try {
       expect(second.wasRunning).toBe(false);
       expect(second.pid).not.toBe(first.pid);
-      expect(second.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      expect(second.authToken).toMatch(/^okb_[A-Za-z0-9_-]{43}$/);
       expect(second.authToken).not.toBe(first.authToken);
       expect(isProcessRunning(first.pid)).toBe(false);
       await expect(requestOk(second.port, "/global/health")).resolves.toBe(true);
@@ -3263,7 +3278,7 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
       )) as { port: number; pid: number; wasRunning: boolean; authToken: string };
       expect(restarted.wasRunning).toBe(false);
       expect(restarted.pid).toBeGreaterThan(0);
-      expect(restarted.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      expect(restarted.authToken).toMatch(/^okb_[A-Za-z0-9_-]{43}$/);
       await expect(requestOk(restarted.port, "/global/health")).resolves.toBe(true);
     } finally {
       localServerHooks.spawn = spawnCommand;

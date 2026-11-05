@@ -37,6 +37,8 @@ export interface AutoLoadEarlierInput {
   loading: boolean;
   /** Whether an automatic page would be served cheaply (a direct cursor). */
   available: () => boolean;
+  /** Load one page as the tab opens, as well as near the top. On unless false. */
+  openingPage?: boolean;
   /**
    * Load one page. The caller holds the reader's place and owns `loading`;
    * `scroller` is the transcript's scroll container when the head is on screen.
@@ -69,6 +71,7 @@ export function useAutoLoadEarlier({
   headId,
   loading,
   available,
+  openingPage = true,
   load,
 }: AutoLoadEarlierInput): (element: HTMLElement | null) => void {
   const [sentinel, setSentinel] = useState<HTMLElement | null>(null);
@@ -117,7 +120,7 @@ export function useAutoLoadEarlier({
     }
     if (openedAtRef.current?.sessionKey !== sessionKey)
       openedAtRef.current = { sessionKey, headId };
-    const opening = openedAtRef.current.headId === headId;
+    const opening = openingPage && openedAtRef.current.headId === headId;
     if (!canLoadEarlier || stalled || !(opening || (sentinel && headInView)) || !available()) {
       return;
     }
@@ -154,6 +157,7 @@ export function useAutoLoadEarlier({
     isActive,
     load,
     loading,
+    openingPage,
     sentinel,
     sessionKey,
     settled,

@@ -39,7 +39,7 @@ test.describe("coordinator tab groups", () => {
     const box = (await panes.first().boundingBox())!;
     await dragTo(
       page,
-      page.getByRole("button", { name: "Side 1" }),
+      page.getByRole("tab", { name: "Side 1, Codex" }),
       box.x + box.width - 10,
       box.y + box.height / 2,
     );
@@ -50,19 +50,19 @@ test.describe("coordinator tab groups", () => {
     const left = (await panes.nth(0).boundingBox())!;
     const right = (await panes.nth(1).boundingBox())!;
     expect(right.x).toBeGreaterThan(left.x + left.width / 2);
-    await expect(panes.nth(1).getByRole("button", { name: "Side 1" })).toBeVisible();
-    await expect(panes.nth(0).getByRole("button", { name: "Side 1" })).toHaveCount(0);
+    await expect(panes.nth(1).getByRole("tab", { name: "Side 1, Codex" })).toBeVisible();
+    await expect(panes.nth(0).getByRole("tab", { name: "Side 1, Codex" })).toHaveCount(0);
 
     // Drop it back onto the first group's tab strip: the emptied group closes.
-    const strip = (await panes.nth(0).getByRole("button", { name: "Side 2" }).boundingBox())!;
+    const strip = (await panes.nth(0).getByRole("tab", { name: "Side 2, Codex" }).boundingBox())!;
     await dragTo(
       page,
-      panes.nth(1).getByRole("button", { name: "Side 1" }),
+      panes.nth(1).getByRole("tab", { name: "Side 1, Codex" }),
       strip.x + strip.width + 30,
       strip.y + strip.height / 2,
     );
     await expect(panes).toHaveCount(1);
-    await expect(page.getByRole("button", { name: "Side 1" })).toBeVisible();
+    await expect(page.getByRole("tab", { name: "Side 1, Codex" })).toBeVisible();
   });
 });
 
@@ -72,7 +72,7 @@ async function splitSide(page: Page) {
   const box = (await pane.boundingBox())!;
   await dragTo(
     page,
-    page.getByRole("button", { name: "Side 1", exact: true }),
+    page.getByRole("tab", { name: "Side 1, Codex", exact: true }),
     box.x + box.width - 10,
     box.y + box.height / 2,
   );
@@ -84,10 +84,12 @@ test("sortable tab exposes its accessibility attributes and pointer listener", a
 }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium", "desktop drag only");
   await page.goto("/coordinator-pane-tree");
-  const tab = page.getByRole("button", { name: "Side 1", exact: true });
-  await expect(tab).toHaveAttribute("tabindex", "0");
-  await expect(tab).toHaveAttribute("aria-roledescription", "sortable");
-  await expect(tab).toHaveAttribute("aria-describedby", /DndDescribedBy/);
+  const tab = page.getByRole("tab", { name: "Side 1, Codex", exact: true });
+  await expect(tab).toHaveAttribute("aria-selected", "false");
+  const shell = tab.locator("..");
+  await expect(shell).toHaveAttribute("role", "presentation");
+  await expect(shell).not.toHaveAttribute("tabindex");
+  await expect(shell).not.toHaveAttribute("aria-roledescription");
   await splitSide(page);
 });
 
@@ -212,12 +214,12 @@ test("drops in the mobile switcher land in the group on screen, not the one stac
 
   // Dropped on its own strip, Side 1 stays put rather than joining the
   // Coordinator group whose strip lies underneath.
-  const side1 = visible.getByRole("button", { name: "Side 1", exact: true });
+  const side1 = visible.getByRole("tab", { name: "Side 1, Codex", exact: true });
   const tab = (await side1.boundingBox())!;
   await dragTo(page, side1, tab.x + tab.width + 60, tab.y + tab.height / 2);
   await expect(panes).toHaveCount(2);
   await expect(switcherTabs).toHaveText(["1. Coordinator", "2. Side 1"]);
-  await expect(visible.getByRole("button", { name: "Side 1", exact: true })).toBeVisible();
+  await expect(visible.getByRole("tab", { name: "Side 1, Codex", exact: true })).toBeVisible();
 
   // Dropped on the visible group's right edge, Side 2 splits that group, not
   // the hidden Side 1 group, so its new group comes before Side 1's.
@@ -226,10 +228,83 @@ test("drops in the mobile switcher land in the group on screen, not the one stac
   const panel = (await visible.boundingBox())!;
   await dragTo(
     page,
-    visible.getByRole("button", { name: "Side 2", exact: true }),
+    visible.getByRole("tab", { name: "Side 2, Codex", exact: true }),
     panel.x + panel.width - 10,
     panel.y + panel.height / 2,
   );
   await expect(panes).toHaveCount(3);
   await expect(switcherTabs).toHaveText(["1. Coordinator", "2. Side 2", "3. Side 1"]);
+});
+
+test("keyboard menu moves keep focus and tablists own only tabs", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium", "concurrent desktop panes");
+  await page.goto("/coordinator-pane-tree");
+  const tab = page.getByRole("tab", { name: "Side 1, Codex", exact: true });
+  await tab.focus();
+  await page.keyboard.press("Shift+F10");
+  await page.getByRole("menuitem", { name: "Move to new group", exact: true }).focus();
+  await page.keyboard.press("Enter");
+  await expect(page.locator("[data-coordinator-pane]")).toHaveCount(2);
+  await expect(tab).toBeFocused();
+  await page.keyboard.press("Shift+F10");
+  await page.getByRole("menuitem", { name: "Move to group 1", exact: true }).focus();
+  await page.keyboard.press("Enter");
+  await expect(page.locator("[data-coordinator-pane]")).toHaveCount(1);
+  await expect(tab).toBeFocused();
+  const ownership = await page
+    .getByRole("tablist", { name: "Coordinator conversations" })
+    .evaluate((list) =>
+      (list.getAttribute("aria-owns") ?? "")
+        .split(" ")
+        .map((id) => document.getElementById(id)?.getAttribute("role")),
+    );
+  expect(ownership).toEqual(["tab", "tab", "tab"]);
+});
+
+test("Change agent is visible without hovering the main tab", async ({ page }, testInfo) => {
+  await page.goto("/coordinator-pane-tree");
+  await page.mouse.move(1, 800);
+  const changeAgent = page.getByRole("button", { name: "Change agent", exact: true });
+  await expect(changeAgent).toBeVisible();
+  await expect(changeAgent).toHaveCSS("opacity", "1");
+  // Capture the reviewed fine-pointer reveal state for comparison, without
+  // keeping an old source checkout or changing the fixture implementation.
+  if (testInfo.project.name === "desktop-chromium") {
+    const oldReveal = await page.addStyleTag({
+      content: 'button[aria-label="Change agent"] { opacity: 0 !important; }',
+    });
+    await page.screenshot({
+      path: "output/visual-previews/c8/round2-before-reconstructed-desktop.png",
+    });
+    await oldReveal.evaluate((element) => element.parentNode?.removeChild(element));
+    await expect(changeAgent).toHaveCSS("opacity", "1");
+  }
+  await page.screenshot({
+    path: `output/visual-previews/c8/round2-after-${testInfo.project.name}.png`,
+  });
+});
+
+test("busy close controls keep their width and focus", async ({ page }, testInfo) => {
+  await page.goto("/coordinator-pane-tree");
+  const close = page.getByRole("button", { name: "Close Side 1", exact: true });
+  const tab = page.getByRole("tab", { name: "Side 1, Codex", exact: true }).locator("..");
+  await close.focus();
+  const before = (await tab.boundingBox())!;
+  await page.screenshot({
+    path: `output/visual-previews/close-before-${testInfo.project.name}.png`,
+  });
+  // Programmatic activation keeps focus on the close control while state changes.
+  await page
+    .getByRole("button", { name: "Toggle conversation busy" })
+    .evaluate((button: HTMLButtonElement) => button.click());
+  await expect(close).toHaveAttribute("aria-disabled", "true");
+  await expect(close).toBeFocused();
+  expect((await tab.boundingBox())!.width).toBe(before.width);
+  await close.press("Enter");
+  await expect(close).toBeFocused();
+  await page.screenshot({ path: `output/visual-previews/close-busy-${testInfo.project.name}.png` });
+  await page
+    .getByRole("button", { name: "Toggle conversation busy" })
+    .evaluate((button: HTMLButtonElement) => button.click());
+  await expect(close).not.toHaveAttribute("aria-disabled", "true");
 });

@@ -13,6 +13,8 @@ export const BUILD_PIPELINE_LOG_AREAS = defineLogAreas({
       "dispatch.prepare-failed":
         "Attaching the agent before dispatch failed; the prompt request does the same work and answers authoritatively.",
       "interaction.resolved": "A human interaction on a pipeline stage resolved. Metadata only.",
+      "user-message.background-send-refused":
+        "The bridge refused a queued user message during a background wait; it stays queued and is retried.",
       "transcripts.migrated": "A transcript migration pass moved stage transcripts; counts only.",
       "transcripts.maintenance-failed":
         "Migrating or sweeping stage transcripts failed; the next start retries.",

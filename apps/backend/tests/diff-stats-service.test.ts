@@ -26,6 +26,7 @@ interface Harness {
   watcherClosed: (environmentId: string) => boolean;
   watcherClosedAtPath: (worktreePath: string) => boolean;
   failWatch: (environmentId: string) => void;
+  qualifyWatch: (environmentId: string) => void;
   failWatchAtPath: (worktreePath: string) => void;
   setScan: (scan: (target: DiffStatsTarget) => Promise<DiffScanResult>) => void;
   clock: { value: number };
@@ -40,6 +41,7 @@ function createHarness(
     admission?: WorkAdmissionPool;
     watchable?: boolean;
     watcherStartError?: Error;
+    pendingCoverage?: boolean;
     emit?: (event: string, payload: unknown) => void;
   } = {},
 ): Harness {
@@ -57,6 +59,8 @@ function createHarness(
     {
       onChange: () => void;
       onError?: (error: unknown) => void;
+      onCoverageChange?: () => void;
+      qualified: boolean;
       closed: boolean;
       watching: boolean;
     }
@@ -111,6 +115,8 @@ function createHarness(
       const record = {
         onChange: watcherOptions.onChange,
         onError: watcherOptions.onError,
+        onCoverageChange: watcherOptions.onCoverageChange,
+        qualified: !options.pendingCoverage,
         closed: false,
         watching: watchable,
       };
@@ -120,6 +126,9 @@ function createHarness(
         watcherOptions.onError?.(options.watcherStartError);
       }
       return {
+        get qualified() {
+          return record.qualified;
+        },
         get watching() {
           return record.watching && !record.closed;
         },
@@ -185,6 +194,13 @@ function createHarness(
     },
     watcherClosedAtPath(worktreePath) {
       return watchers.get(worktreePath)?.closed === true;
+    },
+    qualifyWatch(environmentId) {
+      const key = watcherKeyFor(environmentId);
+      const record = key ? watchers.get(key) : undefined;
+      if (!record) throw new Error("No watcher");
+      record.qualified = true;
+      record.onCoverageChange?.();
     },
     failWatch(environmentId) {
       const key = watcherKeyFor(environmentId);
@@ -337,6 +353,42 @@ describe("DiffStatsService", () => {
     expect(harness.warnings).toEqual([
       expect.objectContaining({ event: "scan.watcher-failed", environmentId: "env-local" }),
     ]);
+  });
+
+  test("asynchronous unqualified watch failures retain capped retry backoff", async () => {
+    const harness = createHarness({ pendingCoverage: true });
+    try {
+      harness.service.track(localTarget());
+      await settle();
+      for (const [index, delayMs] of [30_000, 60_000, 120_000, 240_000, 480_000].entries()) {
+        harness.failWatch("env-local");
+        expect(harness.delayed).toHaveLength(index + 1);
+        const timer = harness.delayed[index]!;
+        expect(timer.delayMs).toBe(delayMs);
+        timer.callback();
+        await settle();
+      }
+      harness.failWatch("env-local");
+      expect(harness.delayed).toHaveLength(5);
+    } finally {
+      harness.service.shutdown();
+    }
+  });
+
+  test("qualified recovery resets the watcher retry budget", async () => {
+    const harness = createHarness({ pendingCoverage: true });
+    try {
+      harness.service.track(localTarget());
+      await settle();
+      harness.failWatch("env-local");
+      harness.delayed[0]!.callback();
+      await settle();
+      harness.qualifyWatch("env-local");
+      harness.failWatch("env-local");
+      expect(harness.delayed.map((timer) => timer.delayMs)).toEqual([30_000, 30_000]);
+    } finally {
+      harness.service.shutdown();
+    }
   });
 
   test("falls back cleanly when watcher setup reports an error synchronously", async () => {
@@ -562,7 +614,7 @@ describe("DiffStatsService", () => {
     });
   }
 
-  test("a reader parked before retarget waits for the old scan then reads its original identity", async () => {
+  test("a reader parked before a path-changing retarget reads its original identity once the old scan releases the worktree", async () => {
     const admission = new WorkAdmissionPool({ name: "git-docker-scan", diagnostics: null });
     const harness = createHarness({ admission });
     let releaseOld!: () => void;
@@ -594,7 +646,14 @@ describe("DiffStatsService", () => {
       );
       for (let i = 0; i < 8; i++) await settle();
       expect(harness.service.snapshot()[0]?.comparisonRef).toBe("develop");
+      // Released from the old scan, the reader's own read of its identity
+      // waits in admission behind the old scan's lease on that worktree.
       expect(completed).toBe(false);
+      expect(admission.status()).toMatchObject({
+        active: 1,
+        waiting: 1,
+        waitingByPriority: { interactive: 1 },
+      });
       releaseOld();
       await expect(read).resolves.toMatchObject({ changes: [{ path: "main.ts" }] });
       expect(harness.scans.map((target) => [target.worktreePath, target.comparisonRef])).toEqual([
@@ -607,6 +666,286 @@ describe("DiffStatsService", () => {
       harness.service.shutdown();
       admission.close();
     }
+  });
+
+  describe("readers parked on a superseded scan", () => {
+    const readMain = (harness: Harness) =>
+      harness.service.readFileList({
+        lookup: { worktreePath: "/tmp/env-local-worktree" },
+        comparisonRef: "main",
+        includeUncommitted: true,
+      });
+    const settleMany = async () => {
+      for (let i = 0; i < 8; i++) await settle();
+    };
+
+    test("a retarget releases the reader without waiting out the old scan", async () => {
+      const harness = createHarness();
+      let oldCalls = 0;
+      harness.setScan((target) =>
+        target.comparisonRef === "main" && oldCalls++ === 0
+          ? new Promise(() => undefined)
+          : Promise.resolve({ stats: stats(), changes: [{ path: `${target.comparisonRef}.ts` }] }),
+      );
+      try {
+        harness.service.track(localTarget());
+        await settleMany();
+        let result: unknown;
+        void readMain(harness).then((value) => {
+          result = value;
+        });
+        await settleMany();
+        expect(result).toBeUndefined();
+
+        harness.service.track(localTarget({ comparisonRef: "develop" }));
+        await settleMany();
+
+        // The old scan never settles; the reader was answered after the
+        // retarget by a read of its own identity, not by the old attempt.
+        expect(result).toMatchObject({ changes: [{ path: "main.ts" }] });
+        expect(harness.scans.map((target) => target.comparisonRef).sort()).toEqual([
+          "develop",
+          "main",
+          "main",
+        ]);
+      } finally {
+        harness.service.shutdown();
+      }
+    });
+
+    test("a resume that keeps the identity lets the reader join the new lineage", async () => {
+      const harness = createHarness();
+      let calls = 0;
+      harness.setScan(() =>
+        ++calls === 1
+          ? new Promise(() => undefined)
+          : Promise.resolve({ stats: stats(), changes: [{ path: "resumed.ts" }] }),
+      );
+      try {
+        harness.service.track(localTarget());
+        await settleMany();
+        let result: { view: { targetGeneration: number } } | undefined;
+        void readMain(harness).then((value) => {
+          result = value as typeof result;
+        });
+        await settleMany();
+
+        harness.service.pause("env-local");
+        harness.service.track(localTarget());
+        await settleMany();
+
+        expect(result).toMatchObject({ changes: [{ path: "resumed.ts" }] });
+        // Served by the resumed owner's scan: no extra ad hoc read.
+        expect(harness.scans).toHaveLength(2);
+        const fresh = await readMain(harness);
+        expect(fresh.view).toBeDefined();
+        expect(result?.view.targetGeneration).toBe(fresh.view?.targetGeneration);
+        expect(harness.scans).toHaveLength(2);
+      } finally {
+        harness.service.shutdown();
+      }
+    });
+
+    test.each(["pause", "untrack"] as const)(
+      "%s releases a parked reader to an ad hoc read without resuming",
+      async (operation) => {
+        const harness = createHarness();
+        let calls = 0;
+        harness.setScan(() =>
+          ++calls === 1
+            ? new Promise(() => undefined)
+            : Promise.resolve({ stats: stats(), changes: [{ path: "adhoc.ts" }] }),
+        );
+        try {
+          harness.service.track(localTarget());
+          await settleMany();
+          let result: unknown;
+          void readMain(harness).then((value) => {
+            result = value;
+          });
+          await settleMany();
+          expect(result).toBeUndefined();
+          expect(harness.scans).toHaveLength(1);
+
+          harness.service[operation]("env-local");
+          await settleMany();
+
+          // The old scan never resolves, so only abort can release this read.
+          expect(result).toMatchObject({ changes: [{ path: "adhoc.ts" }] });
+          expect(harness.scans).toHaveLength(2);
+          expect(harness.scans[1]).toMatchObject({ comparisonRef: "main" });
+          expect(harness.emitted).toHaveLength(0);
+        } finally {
+          harness.service.shutdown();
+        }
+      },
+    );
+
+    test("a resumed reader shares the new lineage queued behind the old scan's lease", async () => {
+      const admission = new WorkAdmissionPool({ name: "git-docker-scan", diagnostics: null });
+      const harness = createHarness({ admission });
+      let releaseOld: (() => void) | undefined;
+      let releaseResumed: (() => void) | undefined;
+      harness.setScan(
+        () =>
+          new Promise((resolve) => {
+            if (harness.scans.length === 1) {
+              releaseOld = () =>
+                resolve({ stats: stats({ additions: 99 }), changes: [{ path: "obsolete.ts" }] });
+            } else {
+              releaseResumed = () =>
+                resolve({ stats: stats({ additions: 7 }), changes: [{ path: "resumed.ts" }] });
+            }
+          }),
+      );
+      try {
+        harness.service.track(localTarget());
+        await settleMany();
+        let result: unknown;
+        void readMain(harness).then((value) => {
+          result = value;
+        });
+        await settleMany();
+        expect(result).toBeUndefined();
+
+        harness.service.pause("env-local");
+        harness.service.track(localTarget());
+        await settleMany();
+        expect(harness.scans).toHaveLength(1);
+        expect(admission.status()).toMatchObject({
+          active: 1,
+          waiting: 1,
+          waitingByPriority: { discovery: 1 },
+        });
+        expect(result).toBeUndefined();
+
+        releaseOld?.();
+        await settleMany();
+        expect(harness.scans).toHaveLength(2);
+        expect(admission.status()).toMatchObject({ active: 1, waiting: 0 });
+        expect(result).toBeUndefined();
+        expect(harness.emitted).toHaveLength(0);
+
+        releaseResumed?.();
+        await settleMany();
+        const fresh = await readMain(harness);
+        expect(fresh.view).toBeDefined();
+        expect(result).toMatchObject({ changes: [{ path: "resumed.ts" }], view: fresh.view });
+        expect(harness.service.snapshot()).toEqual([
+          expect.objectContaining({ stats: stats({ additions: 7 }) }),
+        ]);
+        expect(harness.scans).toHaveLength(2);
+        expect(admission.status()).toMatchObject({ active: 0, waiting: 0 });
+      } finally {
+        releaseOld?.();
+        releaseResumed?.();
+        harness.service.shutdown();
+        admission.close();
+      }
+    });
+
+    test("the running scan keeps its lease and nothing overlaps it on the worktree", async () => {
+      const admission = new WorkAdmissionPool({ name: "git-docker-scan", diagnostics: null });
+      const harness = createHarness({ admission });
+      let releaseOld!: () => void;
+      let releaseReplacement!: () => void;
+      let mainCalls = 0;
+      harness.setScan((target) => {
+        if (target.comparisonRef === "develop") {
+          return new Promise((resolve) => {
+            releaseReplacement = () =>
+              resolve({ stats: stats({ additions: 7 }), changes: [{ path: "develop.ts" }] });
+          });
+        }
+        if (mainCalls++ === 0) {
+          return new Promise((resolve) => {
+            releaseOld = () => resolve({ stats: stats(), changes: [{ path: "obsolete.ts" }] });
+          });
+        }
+        return Promise.resolve({ stats: stats(), changes: [{ path: "main.ts" }] });
+      });
+      try {
+        harness.service.track(localTarget());
+        await settleMany();
+        let result: unknown;
+        void readMain(harness).then((value) => {
+          result = value;
+        });
+        harness.service.track(localTarget({ comparisonRef: "develop" }));
+        await settleMany();
+
+        // Aborting the superseded attempt released the reader but not the
+        // lease: the replacement scan and the reader's own read both wait.
+        expect(harness.scans.map((target) => target.comparisonRef)).toEqual(["main"]);
+        expect(admission.status()).toMatchObject({
+          active: 1,
+          waiting: 2,
+          waitingByPriority: { discovery: 1, interactive: 1 },
+        });
+        expect(result).toBeUndefined();
+
+        releaseOld();
+        await settleMany();
+
+        // The reader no longer waits behind the replacement scan either: its
+        // interactive read takes the worktree first, and only then the scan.
+        expect(result).toMatchObject({ changes: [{ path: "main.ts" }] });
+        expect(harness.scans.map((target) => target.comparisonRef)).toEqual([
+          "main",
+          "main",
+          "develop",
+        ]);
+        expect(admission.status()).toMatchObject({ active: 1, waiting: 0 });
+
+        releaseReplacement();
+        await settleMany();
+        expect(harness.service.snapshot()).toEqual([
+          expect.objectContaining({ comparisonRef: "develop", stats: stats({ additions: 7 }) }),
+        ]);
+        expect(admission.status()).toMatchObject({ active: 0, waiting: 0 });
+      } finally {
+        releaseOld?.();
+        releaseReplacement?.();
+        harness.service.shutdown();
+        admission.close();
+      }
+    });
+
+    test("without a retarget the reader still waits for and returns its scan", async () => {
+      const admission = new WorkAdmissionPool({ name: "git-docker-scan", diagnostics: null });
+      const harness = createHarness({ admission });
+      let calls = 0;
+      let release!: () => void;
+      harness.setScan(() => {
+        calls += 1;
+        if (calls === 1) return Promise.resolve({ stats: stats(), changes: [{ path: "a.ts" }] });
+        return new Promise((resolve) => {
+          release = () => resolve({ stats: stats(), changes: [{ path: "b.ts" }] });
+        });
+      });
+      try {
+        harness.service.track(localTarget());
+        await settleMany();
+        harness.service.refresh("env-local");
+        await settleMany();
+        let result: unknown;
+        void readMain(harness).then((value) => {
+          result = value;
+        });
+        await settleMany();
+        expect(result).toBeUndefined();
+        expect(admission.status()).toMatchObject({ active: 1, waiting: 0 });
+
+        release();
+        await settleMany();
+        expect(result).toMatchObject({ changes: [{ path: "b.ts" }] });
+        expect(harness.scans).toHaveLength(2);
+      } finally {
+        release?.();
+        harness.service.shutdown();
+        admission.close();
+      }
+    });
   });
 
   test("a superseded scan settling late neither publishes nor rescans", async () => {

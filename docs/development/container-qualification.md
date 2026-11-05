@@ -122,6 +122,53 @@ Live tests start runtimes through `tests/container-live-start.ts`
 running, so a bare `docker start` of a restricted runtime fails on a gateway
 image.
 
+## Egress name-check review repairs (2026-11-05)
+
+Image `orkestrator-review-egress:6833fa71`, built from worktree
+`egress-sni-dns` after validated commit `328e511c9`, passed the final-image
+smoke and the expanded `container-live-egress-filter.test.ts` on Docker Desktop.
+The last live run (`egress-live-auth`) completed with exit 0 in 47 seconds.
+The older-image case remains optional and was skipped because no older image
+was supplied; its original evidence below is retained.
+
+The added cases exercise:
+
+- First HTTP requests with leading CRLF, lowercase/custom methods and tabs,
+  sent a byte at a time; forbidden Hosts get 403 and the fixture's request
+  count does not increase. Client-first EHLO, USER and AUTH commands pass on
+  the explicit non-443 port.
+- TCP DNS to a fixture address whose TCP port 53 is allowlisted still goes
+  through the resolver and returns REFUSED for a forbidden name.
+- Both `node` and workload root fail to bind the daemon's UDP port on
+  loopback or the namespace address, even with `SO_REUSEADDR`, and cannot set
+  `SO_MARK`. The supervisor retains the listening sockets across worker
+  restart; 200 bind attempts during that interval all fail.
+- Direct UDP/TCP queries to Docker's actual embedded resolver ports, found
+  through procfs, receive no answer. Normal allowed resolution still works.
+- Two firewall initializations retain the same supervisor and worker, with
+  exactly one worker and blocked DNS still enforced.
+- Removing a name closes its live HTTP connection while another stays usable,
+  without restarting the worker. Unit tests use socket pairs to advance past
+  the 30/60-second classification deadlines without waiting in real time.
+- A workload sends a forged reply with the exact pending transaction ID and
+  socket port from `127.0.0.11` on an unrelated source port; it is ignored.
+  A controlled addressed-upstream fixture also sends replies from the wrong
+  port, queries masquerading as replies, wrong IDs and mismatched questions
+  before its genuine response. Only the genuine response reaches the client.
+- A failed primary UDP resolver falls through to the second; truncated UDP
+  falls back to TCP; a primary TCP refusal or a primary that accepts without
+  answering falls through to the second protected resolver. Forbidden names
+  never reach the fixtures.
+
+The daemon keeps non-reusable UDP listeners in its supervisor and uses one
+connected, marked UDP socket per pending query (bounded by 1,024), with a
+cryptographic transaction ID and response/question validation. TCP retries
+are bounded by the protected resolver list and a per-attempt timeout.
+Native rootful Linux and rootless Docker were not run on this Mac; the existing
+Linux CI workflow and [6101](../todo/containers-and-environments/6101-egress-name-checks-platform-coverage.md)
+retain those qualification requirements. These results do not claim prevention
+of domain fronting, encrypted names or data sent to an allowed service.
+
 ## Egress name checks on Docker Desktop (2026-11-05)
 
 S-0100 (security finding M12): the egress gateway's name checks

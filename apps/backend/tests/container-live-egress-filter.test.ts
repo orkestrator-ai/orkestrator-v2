@@ -137,6 +137,9 @@ Bun.serve({ hostname: "0.0.0.0", port: 8080, async fetch(request) {
   const sha256 = new Bun.CryptoHasher("sha256").update(body).digest("hex");
   return Response.json({ host: request.headers.get("host"), length: body.length, sha256 });
 } });
+Bun.listen({ hostname: "0.0.0.0", port: 2526, socket: {
+  data(socket, data) { socket.write(data); },
+} });
 Bun.listen({ hostname: "0.0.0.0", port: 2525, socket: {
   open(socket) { socket.write("220 fixture ready\\r\\n"); },
   data(socket, data) { socket.write(data); },
@@ -198,6 +201,8 @@ async function createRuntime(
       `${FIXTURE}:8080`,
       `${ALIAS}:8080`,
       `${FIXTURE}:2525`,
+      `${FIXTURE}:2526`,
+      `${FIXTURE}:53`,
     ],
   });
   const { context } = filterContext([environment]);
@@ -266,6 +271,119 @@ describe("M12 name checks at the egress gateway", () => {
       expect(refused).toContain("egress gateway refused this request");
       expect(refused).toMatch(/403\nrc=0$/);
       expect(await fixtureRequests(fixture)).toBe(before + 1);
+      for (const request of [
+        "\r\nGET / HTTP/1.1\r\n",
+        "\r\n\r\nget / HTTP/1.1\r\n",
+        "GET\t/\tHTTP/1.1\r\n",
+        "custom / HTTP/1.1\r\n",
+      ]) {
+        const response = await docker([
+          "exec",
+          "-u",
+          "node",
+          containerId,
+          "perl",
+          "-MIO::Socket::INET",
+          "-e",
+          `my $s = IO::Socket::INET->new(PeerAddr => $ARGV[0], PeerPort => 8080, Timeout => 5) or die $!;
+           $s->autoflush(1); my $request = $ARGV[1] . "Host: tenant.invalid\\r\\n\\r\\n";
+           for my $byte (split //, $request) { syswrite($s, $byte); select undef, undef, undef, 0.001; }
+           alarm 5; my $line = <$s>; print $line // '';`,
+          fixtureAddress,
+          request,
+        ]);
+        expect(response).toContain("403 Forbidden");
+      }
+      expect(await fixtureRequests(fixture)).toBe(before + 1);
+      for (const command of ["EHLO mail.test", "USER alice", "AUTH fixture"]) {
+        expect(
+          await docker([
+            "exec",
+            "-u",
+            "node",
+            containerId,
+            "perl",
+            "-MIO::Socket::INET",
+            "-e",
+            `my $s = IO::Socket::INET->new(PeerAddr => $ARGV[0], PeerPort => 2526, Timeout => 5) or die $!;
+           $s->autoflush(1); print {$s} "$ARGV[1]\\r\\n"; alarm 5; print scalar <$s>;`,
+            fixtureAddress,
+            command,
+          ]),
+        ).toBe(command);
+      }
+
+      // The tuple proxy must never take port 53 ahead of the DNS filter.
+      expect(await dig(containerId, `+tcp @${fixtureAddress} ${BLOCKED} A`)).toContain(
+        "status: REFUSED",
+      );
+      // Workloads share the namespace but cannot reuse the held UDP listener
+      // or create sockets bearing the gateway mark, even as workload root.
+      for (const user of ["node", "orkroot"]) {
+        expect(
+          await docker([
+            "exec",
+            "-u",
+            user,
+            containerId,
+            "perl",
+            "-MSocket",
+            "-e",
+            `for my $ip ('127.0.0.1', $ARGV[0]) {
+             socket(my $s, PF_INET, SOCK_DGRAM, 0) or die $!;
+             setsockopt($s, SOL_SOCKET, SO_REUSEADDR, 1) or die $!;
+             die 'DNS listener hijacked' if bind($s, sockaddr_in(31453, inet_aton($ip)));
+             die "wrong bind error: $!" unless $!{EADDRINUSE};
+           }
+           socket(my $s, PF_INET, SOCK_DGRAM, 0) or die $!;
+           die 'workload set SO_MARK' if setsockopt($s, SOL_SOCKET, 36, pack('L', 0x6f726b));
+           die "wrong mark error: $!" unless $!{EPERM}; print 'protected';`,
+            (await inGateway(gateway, "hostname", "-i")).split(" ")[0]!,
+          ]),
+        ).toBe("protected");
+      }
+      // Query the actual embedded DNS listening ports, not its port-53 alias.
+      const embeddedPorts = await docker([
+        "exec",
+        "-u",
+        "node",
+        containerId,
+        "perl",
+        "-e",
+        `for my $file ('/proc/net/udp', '/proc/net/tcp') {
+           open(my $f, '<', $file) or die $!;
+           while (<$f>) { print hex($1), "\\n" if /0B00007F:([0-9A-F]{4})/; }
+         }`,
+      ]);
+      expect(embeddedPorts).not.toBe("");
+      for (const port of new Set(embeddedPorts.split("\n"))) {
+        expect(await dig(containerId, `@127.0.0.11 -p ${port} ${BLOCKED} A`)).toContain(
+          "no servers could be reached",
+        );
+        expect(await dig(containerId, `+tcp @127.0.0.11 -p ${port} ${BLOCKED} A`)).toContain(
+          "no servers could be reached",
+        );
+      }
+      const supervisor = await inGateway(
+        gateway,
+        "cat",
+        "/run/orkestrator-firewall/egress-filter.pid",
+      );
+      const worker = await inGateway(
+        gateway,
+        "cat",
+        "/run/orkestrator-firewall/egress-filter.ready",
+      );
+      await inGateway(gateway, "/usr/local/bin/init-firewall.sh");
+      await inGateway(gateway, "/usr/local/bin/init-firewall.sh");
+      expect(await inGateway(gateway, "cat", "/run/orkestrator-firewall/egress-filter.pid")).toBe(
+        supervisor,
+      );
+      expect(await inGateway(gateway, "cat", "/run/orkestrator-firewall/egress-filter.ready")).toBe(
+        worker,
+      );
+      expect(await inGateway(gateway, "pgrep", "-P", supervisor)).toBe(worker);
+      expect(await dig(containerId, `${BLOCKED} A`)).toContain("status: REFUSED");
 
       // Bodies pass intact both ways, and a server-first protocol on a
       // named port gets its banner before the client says anything.
@@ -302,10 +420,56 @@ describe("M12 name checks at the egress gateway", () => {
 
       // An edit applies in place: a name added resolves and connects; a name
       // removed is refused although its address stays allowed for another.
+      // Keep two classified connections open through removal. Revoking one
+      // must close only it, with no worker restart or loss of the other.
+      await docker([
+        "exec",
+        "-d",
+        "-u",
+        "node",
+        containerId,
+        "perl",
+        "-MIO::Socket::INET",
+        "-e",
+        `eval {
+           $SIG{PIPE} = 'IGNORE'; alarm 30;
+           my @sockets;
+           for my $host (@ARGV) {
+             my $s = IO::Socket::INET->new(PeerAddr => $host, PeerPort => 8080, Timeout => 5) or die $!;
+             $s->autoflush(1); print {$s} "GET / HTTP/1.1\\r\\nHost: $host:8080\\r\\n\\r\\n";
+             my $buffer = ''; my $head;
+             while ($buffer !~ /\\r\\n\\r\\n/) { sysread($s, my $byte, 1) == 1 or die 'no response'; $buffer .= $byte; }
+             my ($size) = $buffer =~ /content-length: (\\d+)/i;
+             read($s, my $body, $size) == $size or die 'short response'; push @sockets, $s;
+           }
+           open(my $ready, '>', '/tmp/revoke.ready') or die $!; print {$ready} 'ready'; close $ready;
+           my $read = sysread($sockets[0], my $data, 1);
+           die 'revoked socket stayed open' if $read;
+           print {$sockets[1]} "GET / HTTP/1.1\\r\\nHost: $ARGV[1]:8080\\r\\n\\r\\n";
+           sysread($sockets[1], $data, 128) > 0 or die 'unrelated connection lost';
+           open(my $done, '>', '/tmp/revoke.result') or die $!; print {$done} 'ok'; close $done;
+           1;
+         } or do { open(my $f, '>', '/tmp/revoke.result'); print {$f} 'failed'; };`,
+        ALIAS,
+        FIXTURE,
+      ]);
+      for (let i = 0; i < 30; i++) {
+        if ((await inRuntime(containerId, "cat /tmp/revoke.ready")).startsWith("ready")) break;
+        await Bun.sleep(100);
+      }
+      expect(await inRuntime(containerId, "cat /tmp/revoke.ready")).toContain("ready");
       await context.storage.updateEnvironment(environment.id, {
         allowedDomains: ["registry.npmjs.org", "nodejs.org", `${FIXTURE}:8080`, `${FIXTURE}:2525`],
       });
       expect((await applyEnvironmentAllowedDomains(environment.id, context)).kind).toBe("applied");
+      for (let i = 0; i < 30; i++) {
+        if ((await inRuntime(containerId, "cat /tmp/revoke.result")).startsWith("ok")) break;
+        await Bun.sleep(100);
+      }
+      expect(await inRuntime(containerId, "cat /tmp/revoke.result")).toContain("ok");
+      expect(await inGateway(gateway, "cat", "/run/orkestrator-firewall/egress-filter.ready")).toBe(
+        worker,
+      );
       expect(await dig(containerId, "nodejs.org A")).toContain("status: NOERROR");
       expect(
         await inRuntime(
@@ -378,7 +542,24 @@ describe("M12 name checks at the egress gateway", () => {
         "-c",
         'kill -KILL $(pgrep -P "$(cat /run/orkestrator-firewall/egress-filter.pid)")',
       );
-      await Bun.sleep(2_000);
+      expect(
+        await docker([
+          "exec",
+          "-u",
+          "node",
+          containerId,
+          "perl",
+          "-MSocket",
+          "-e",
+          `for (1 .. 200) {
+           socket(my $s, PF_INET, SOCK_DGRAM, 0) or die $!;
+           setsockopt($s, SOL_SOCKET, SO_REUSEADDR, 1) or die $!;
+           die 'restart listener gap' if bind($s, sockaddr_in(31453, inet_aton('127.0.0.1')));
+           die "wrong bind error: $!" unless $!{EADDRINUSE};
+           close $s; select undef, undef, undef, 0.01;
+         } print 'held';`,
+        ]),
+      ).toBe("held");
       expect(await dig(containerId, "registry.npmjs.org A")).toContain("status: NOERROR");
 
       // A restart keeps the recorded shape and the checks.
@@ -387,6 +568,132 @@ describe("M12 name checks at the egress gateway", () => {
         (await environmentNetworkPolicy(environment.id, context)).effective?.egressFilter,
       ).toBe("enforced");
       expect(await dig(containerId, `${BLOCKED} A`)).toContain("status: REFUSED");
+    },
+    LIVE_TIMEOUT_MS,
+  );
+
+  live(
+    "addressed DNS upstreams reject forged replies and fail over after refusal or timeout",
+    async () => {
+      const { containerId, gateway } = await createRuntime("dns-upstreams");
+      await startRuntime(containerId);
+      // Controlled addressed upstreams in this test's namespace. The first
+      // has no listener, the second sends bad packets before a real answer.
+      await docker([
+        "exec",
+        "-d",
+        "-u",
+        "root",
+        gateway,
+        "perl",
+        "-MSocket",
+        "-e",
+        `socket(my $udp, PF_INET, SOCK_DGRAM, 0) or die $!;
+         bind($udp, sockaddr_in(53, inet_aton('127.0.0.3'))) or die $!;
+         socket(my $tcp, PF_INET, SOCK_STREAM, 0) or die $!;
+         setsockopt($tcp, SOL_SOCKET, SO_REUSEADDR, 1);
+         bind($tcp, sockaddr_in(53, inet_aton('127.0.0.3'))) or die $!;
+         listen($tcp, 8) or die $!;
+         my $child = fork(); die $! unless defined $child;
+         if (!$child) {
+           while (my $peer = accept(my $s, $tcp)) {
+             read($s, my $length, 2) == 2 or next;
+             read($s, my $query, unpack('n', $length)) == unpack('n', $length) or next;
+             my $answer = substr($query, 0, 2) . pack('n5', 0x8180, 1, 1, 0, 0) . substr($query, 12)
+               . pack('n n n N n C4', 0xc00c, 1, 1, 60, 4, 198, 51, 100, 7);
+             syswrite($s, pack('n', length($answer)) . $answer); close $s;
+           } exit;
+         }
+         open(my $ready, '>', '/tmp/dns-fixture.ready'); print {$ready} $child; close $ready;
+         while (my $from = recv($udp, my $query, 4096, 0)) {
+           open(my $seen, '>>', '/tmp/dns-fixture.queries'); print {$seen} unpack('H*', $query), "\\n"; close $seen;
+           my $forged = substr($query, 0, 2) . pack('n5', 0x8180, 1, 1, 0, 0) . substr($query, 12)
+             . pack('n n n N n C4', 0xc00c, 1, 1, 60, 4, 203, 0, 113, 99);
+           socket(my $wrong, PF_INET, SOCK_DGRAM, 0) or die $!;
+           bind($wrong, sockaddr_in(0, inet_aton('127.0.0.3'))) or die $!;
+           send($wrong, $forged, 0, $from); close $wrong;
+           # Even from the right endpoint a query, wrong ID or wrong
+           # question must not consume the pending request.
+           send($udp, $query, 0, $from);
+           my $bad_id = pack('n', (unpack('n', $query) + 1) % 65536) . substr($forged, 2);
+           send($udp, $bad_id, 0, $from);
+           my $bad_question = $forged; substr($bad_question, 13, 1, 'x'); send($udp, $bad_question, 0, $from);
+           select undef, undef, undef, 0.1;
+           # Truncated UDP requires a new TCP query, which must also fail
+           # over past the unavailable first resolver.
+           my $tc = substr($query, 0, 2) . pack('n5', 0x8380, 1, 0, 0, 0) . substr($query, 12);
+           send($udp, $tc, 0, $from);
+         }`,
+      ]);
+      for (let i = 0; i < 30; i++) {
+        if (
+          await inGateway(gateway, "test", "-s", "/tmp/dns-fixture.ready").then(
+            () => true,
+            () => false,
+          )
+        )
+          break;
+        await Bun.sleep(100);
+      }
+      await inGateway(
+        gateway,
+        "sh",
+        "-c",
+        "printf 'nameserver 127.0.0.11\\n# ExtServers: [127.0.0.2 127.0.0.3]\\n' > /etc/orkestrator/trusted-network/resolv.conf",
+      );
+      // Only this fixture gateway's worker is restarted to load its new
+      // protected resolver snapshot; its supervisor still holds listeners.
+      await inGateway(
+        gateway,
+        "sh",
+        "-c",
+        `p=$(cat /run/orkestrator-firewall/egress-filter.pid); w=$(cat /run/orkestrator-firewall/egress-filter.ready); test "$(awk '/PPid:/ {print $2}' /proc/$w/status)" = "$p" && grep -q orkestrator-egress-filter /proc/$w/cmdline && kill -TERM "$w"`,
+      );
+      await Bun.sleep(1_500);
+      const answer = await inRuntime(
+        containerId,
+        "dig +noedns +time=8 +tries=1 @192.0.2.53 registry.npmjs.org A",
+      );
+      expect(answer).toContain("198.51.100.7");
+      expect(answer).not.toContain("203.0.113.99");
+      expect(answer).toContain("Truncated, retrying in TCP mode");
+      // Now the primary accepts TCP but never answers before the per-attempt
+      // deadline. The secondary must still answer the same query.
+      await docker([
+        "exec",
+        "-d",
+        "-u",
+        "root",
+        gateway,
+        "perl",
+        "-MSocket",
+        "-e",
+        `socket(my $tcp, PF_INET, SOCK_STREAM, 0) or die $!;
+         setsockopt($tcp, SOL_SOCKET, SO_REUSEADDR, 1);
+         bind($tcp, sockaddr_in(53, inet_aton('127.0.0.2'))) or die $!; listen($tcp, 8) or die $!;
+         open(my $ready, '>', '/tmp/dns-primary.ready'); print {$ready} 'ready'; close $ready;
+         while (my $from = accept(my $s, $tcp)) { select undef, undef, undef, 4; close $s; }`,
+      ]);
+      for (let i = 0; i < 30; i++) {
+        if (
+          await inGateway(gateway, "test", "-s", "/tmp/dns-primary.ready").then(
+            () => true,
+            () => false,
+          )
+        )
+          break;
+        await Bun.sleep(100);
+      }
+      expect(
+        await inRuntime(
+          containerId,
+          "dig +tcp +noedns +time=8 +tries=1 @192.0.2.53 registry.npmjs.org A",
+        ),
+      ).toContain("198.51.100.7");
+      const before = await inGateway(gateway, "wc", "-l", "/tmp/dns-fixture.queries");
+      expect(await dig(containerId, `@192.0.2.53 ${BLOCKED} A`)).toContain("status: REFUSED");
+      expect(await dig(containerId, `+tcp @192.0.2.53 ${BLOCKED} A`)).toContain("status: REFUSED");
+      expect(await inGateway(gateway, "wc", "-l", "/tmp/dns-fixture.queries")).toBe(before);
     },
     LIVE_TIMEOUT_MS,
   );

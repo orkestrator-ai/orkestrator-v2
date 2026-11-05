@@ -1,7 +1,3 @@
-# The gateway's name checks on Linux Engine and rootless Docker
-
-Carried from the security report's S-0100 file (finding M12) when it was closed on 2026-11-05. The name checks (TLS SNI, HTTP Host and DNS at the egress gateway, `egress-filter=1`) were qualified on Docker Desktop only.
-
 ## Task analysis
 
 Analysed 2026-11-05 against `main` at `704809a20`.
@@ -10,7 +6,7 @@ Analysed 2026-11-05 against `main` at `704809a20`.
 
 1. **Run the live suite on rootful Linux Engine**: CI's container workflow on x64 and arm64. Status: open.
 2. **Run the live suite on rootless Docker**: a real rootless host. Status: open.
-3. **Exercise the path where Docker names its upstreams by address**: the daemon then asks them itself. Status: open (depends on 1).
+3. **Exercise the path where Docker names its upstreams by address**: controlled addressed upstreams, forged UDP replies and TCP failover. Status: done (Docker Desktop, 2026-11-05; native Linux qualification remains task 1).
 
 ### 1. Run the live suite on rootful Linux Engine
 
@@ -54,17 +50,34 @@ Analysed 2026-11-05 against `main` at `704809a20`.
 
 **Context.** `query_resolvers` and `load_resolvers` in `docker/orkestrator-egress-filter.pl`; `tests/unit/egress-filter-daemon.test.ts` covers the selection.
 
-**Investigation.** Unit-tested only. The live suite exercises it as soon as it runs on a daemon whose host resolver is not loopback, which a GitHub runner usually is not.
+**Investigation.** The live suite now replaces a fixture gateway's protected resolver snapshot with two controlled loopback addresses. The first resolver refuses TCP or accepts without answering; the second sends invalid UDP replies, then a truncated response followed by a valid TCP answer. This passed on Docker Desktop on 2026-11-05, including UDP timeout, TCP refusal and TCP timeout failover. Forbidden names reach neither upstream. It proves the addressed-upstream selection and transport paths independently of the host's resolver configuration. Native Linux and rootless results remain tasks 1 and 2.
 
 **Decisions.**
 
 - **How to prove it?**
-  - **Record the gateway's `resolv.conf` in the CI run and check the DNS cases passed with addressed upstreams (recommended).**
+  - **Record the gateway's `resolv.conf` in the CI run and check the DNS cases passed with addressed upstreams.**
     - Pros: no new test.
     - Cons: depends on the runner's resolver setup.
-  - **Add a case that points the trusted `resolv.conf` at a local upstream by address.**
+  - **Add a case that points the trusted `resolv.conf` at a local upstream by address (recommended).**
     - Pros: deterministic on any host.
     - Cons: a second resolver fixture to maintain.
+
+## Assumptions and decisions
+
+### Task 3: controlled addressed upstreams
+
+Chose a local two-resolver fixture in the existing opt-in live suite. This makes
+failure and timeout behavior reproducible on Docker Desktop and in the existing
+Linux CI job. The alternative of relying on CI's ambient resolver configuration
+needs less fixture code but cannot force a failed primary or forged reply.
+The fixture does not qualify a rootless or native Linux host.
+
+## Current state
+
+The Docker Desktop review-fix run passed the expanded name-check suite and image
+smoke. Native rootful Linux and rootless Docker are not available through this
+host's selected Docker Desktop daemon; those platform claims remain open.
+The existing workflow runs this suite on rootful Linux x64 and arm64.
 
 ## Related
 

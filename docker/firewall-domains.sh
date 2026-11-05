@@ -129,11 +129,32 @@ ork_filter_running() {
     tr '\0' ' ' 2>/dev/null < "/proc/$pid/cmdline" | grep -q -- "$ORK_FILTER_BIN"
 }
 
+# Readiness belongs to a live worker of the recorded supervisor, not a
+# previous worker's stale readiness file.
+ork_filter_ready() {
+    local supervisor="" worker=""
+    IFS= read -r supervisor < "$ORK_FILTER_PID" 2>/dev/null || return 1
+    IFS= read -r worker < "$ORK_FILTER_READY" 2>/dev/null || return 1
+    [[ "$supervisor" =~ ^[0-9]+$ && "$worker" =~ ^[0-9]+$ ]] || return 1
+    awk -v parent="$supervisor" '$1 == "PPid:" { found = ($2 == parent) } END { exit !found }' \
+        "/proc/$worker/status" 2>/dev/null
+}
+
 # Starts the daemon under its own supervisor, detached from the caller's
 # locks, and waits until its worker listens. The redirects send traffic to
 # it only once they are installed, so a daemon that never starts leaves the
 # namespace closed rather than open.
 ork_start_filter() {
+    # Reinitialization holds the firewall lock. Reuse the existing supervisor
+    # and wait for its worker instead of competing for its listening sockets.
+    if ork_filter_running; then
+        local retry
+        for retry in $(seq 1 100); do
+            ork_filter_ready && return 0
+            sleep 0.1
+        done
+        return 1
+    fi
     rm -f "$ORK_FILTER_READY"
     # Started from a subshell, so it is not a job of the caller: the caller's
     # `wait` (ork_resolve_all) must never wait for the daemon.

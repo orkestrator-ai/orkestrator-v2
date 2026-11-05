@@ -41,3 +41,10 @@ the replacement event after the filesystem mutation, retaining both hint and
 updated-proof assertions, so it tests proof invalidation independently of native
 delivery. Its focused rerun passed in 6.6 s. Existing native-delivery tests remain
 unchanged. This does not close the healthy-host qualification gap.
+
+Final combined run after explicit event delivery in the Git-proof regression:
+15 pass, 1 skip, 5 fail in 163.13 s, with the Git-proof regression passing.
+The remaining failures were service new-directory detection, ignored-write then
+source detection, minimum-gap detection, staging, and ref movement.
+Artifact: `orkestrator-test-run.ynvykA/watcher-real-recovery.log.gz`.
+All remain delivery deadlines; healthy-host service qualification is still open.

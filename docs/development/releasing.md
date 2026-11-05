@@ -231,7 +231,7 @@ What each build path reports:
 | Any path above from a modified tree, or with no Git repository | `null` |
 | `dev`, `dev:web`, `dev:test`, and the qualification scripts that start `apps/backend/src/main.ts` | `null`: they run from source |
 | `mise run test` and its variants, and `build:cli:test`, `build:all:test` and the tasks that use them (`test:agent:browser`, `test:agent:browser:isolated`, `test:cli:scenarios`, `package:linux:unpacked:test`, `test:package:security`) | `null`, and they keep one cache entry across commits |
-| `smoke:cli`, a bare `bun run build`, a bare `bunx turbo run build`, `scripts/qualify-preview-worker-upgrade.ts` | `null`: nothing sets the variable |
+| `smoke:cli`, a package's build script run directly, a bare `bunx turbo run build`, `scripts/qualify-preview-worker-upgrade.ts` | `null`: nothing sets the variable |
 | `start:web`, `start:web-public` | `null`: they pass `ORKESTRATOR_*` on to the running backend, and so to what it starts, where a stale commit would stamp later builds |
 
 `build:renderer`, `build:web-public`, the bridge builds and `setup` do not build

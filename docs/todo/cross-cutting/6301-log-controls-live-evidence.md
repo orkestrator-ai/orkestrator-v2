@@ -6,27 +6,36 @@ Analysed 2026-11-05 against `main` at `1a66d95c3`. From efficiency report part `
 
 ### Tasks
 
-1. **Help → Open Developer Tools in a packaged app**: see the item appear, open and disappear on macOS, Windows and Linux. Status: open.
+1. **Help → Open Developer Tools in a packaged app**: packaged Linux seen; packaged macOS, real Windows Electron and an on-screen native menu bar not yet observed. Status: open.
 2. **A desktop window's own error ring reaching the essential log**: one real renderer failure, end to end. Status: done.
-3. **A raised setting reverting on the timer in a running app**: the one-minute check, not only the start check. Status: open.
+3. **A raised setting reverting on the timer in a running app**: the one-minute check, not only the start check. Status: done.
 
 ### 1. Help → Open Developer Tools in a packaged app
 
-**Problem.** The menu is built from a template that unit tests check on all three platforms, but no native menu was seen.
+**Problem.** The packaged app's Help item was proven on Linux only, and read from Electron's `Menu` object rather than from a drawn menu bar. Nothing has been seen on macOS or Windows.
 
-**Context.** `createApplicationMenuTemplate` (`apps/desktop/electron/application-menu.ts`) adds Help on every platform (the system Help menu on macOS) and **Open Developer Tools** only while `RendererDebugTools` (`renderer-debug-tools.ts`) holds a renderer that reported debug logging on through `orkestrator:window:set-renderer-debug`. The renderer reports at start (`reportRendererDebugLogging`, `renderer-entry.tsx`). See `docs/architecture/logging.md`, "The renderer".
+**Context.** `createApplicationMenuTemplate` (`apps/desktop/electron/application-menu.ts`) adds Help on every platform (the system Help menu on macOS) and **Open Developer Tools** only while `RendererDebugTools` (`renderer-debug-tools.ts`) holds a renderer that reported debug logging on through `orkestrator:window:set-renderer-debug`. The renderer reports at start (`reportRendererDebugLogging`, `renderer-bootstrap.ts`). See `docs/architecture/logging.md`, "The renderer". `package.json` has `mac` and `linux` build targets and no `win` one, and `docs/development/releasing.md` says Windows releases are not yet covered, so no packaged Windows app exists to check; Windows can only be checked on real Electron until a target is added.
 
-**Investigation.** Tests: `application-menu.test.ts` (each platform, with and without the item), `renderer-debug-tools.test.ts`, `main-ipc.test.ts` (trusted sender, boolean only) and `preload-api.test.ts`. The E16 build ran a headless `dev:test` profile, where the native menu cannot be seen, and had no packaged build, Mac or Windows machine.
+**Investigation.** Observed on 2026-11-05 on this Linux host: `log-controls-packaged-electron.spec.ts` against `release/packaged-test/linux-unpacked/` (`app.isPackaged` true, disposable profile, headless): the item is absent at start, the real Settings switch writes `orkestrator:debug` and reloads, the item appears, using it opens DevTools, and turning the switch off removes the item. `application-menu-electron.spec.ts`, "Help offers Open Developer Tools only while a renderer has debug logging on", passed on real Electron here, also headless. This host has no macOS or Windows machine and no disposable display (no Xvfb), so nothing here draws a native menu bar.
+
+`.github/workflows/native-application-menu.yml` now runs the Electron test on `ubuntu-latest` (under Xvfb), `windows-latest` and `macos-15`, and the packaged spec on `ubuntu-latest` and `macos-15`. Its path filter triggers it on the pull request. **None of those runs has happened yet, and the macOS package step (`mise run package:mac:unpacked:test`) has never been run.**
 
 **Decisions.**
 
-- **How to check?**
-  - **Run a packaged build on each platform: turn Renderer Debug Logging on, confirm Help shows the item and that it opens DevTools for the focused window; turn it off and confirm the item goes (recommended).**
-    - Pros: the claim is about a packaged app's native menu, and only that shows it.
-    - Cons: needs three platforms and a packaged build of each.
-  - **Rely on the template tests.**
-    - Pros: nothing to do.
-    - Cons: says nothing about Electron's rendering of an empty macOS Help menu or of a rebuilt menu.
+- **How to finish the check?**
+  - **Read the workflow's results on the pull request, then look once at a real menu bar on a Mac and on Linux (recommended).**
+    - Pros: the workflow gives repeatable macOS and Windows evidence; one look covers what no test draws.
+    - Cons: needs a person with a Mac for the last step.
+  - **Accept the workflow's results alone.**
+    - Pros: nothing manual.
+    - Cons: says nothing about how an otherwise empty macOS Help menu is drawn.
+- **Windows packaged evidence?**
+  - **Keep to real Electron on Windows until the repository has a Windows package target (recommended).**
+    - Pros: claims only what exists.
+    - Cons: a future Windows package needs this check again.
+  - **Add a Windows target for this check.**
+    - Pros: a real package.
+    - Cons: a release decision far outside log controls.
 
 ### 2. A desktop window's own error ring reaching the essential log
 
@@ -52,17 +61,9 @@ Analysed 2026-11-05 against `main` at `1a66d95c3`. From efficiency report part `
 
 **Context.** `LogPolicyService.startExpiryChecks` runs `reconcileLogDetailExpiry` at start and every 60 seconds.
 
-**Investigation.** Live: with `logDetailExpiresAt` set in the past while the profile was stopped, the next start reverted `bridge=debug` to `info`, removed the expiry, left `debugLogging` alone and wrote `[logging] policy.detail-expired`. The timer path is covered by `log-detail-expiry.test.ts` with a real `StorageService` and bridge delivery, but a 24-hour expiry was not waited out in a running app.
+**Investigation.** Closed on 2026-11-05 by `log-controls-packaged-electron.spec.ts`, "reverts raised log detail on the timer", in the running packaged Linux app: raising detail stored an expiry, the stored expiry was moved into the past while the app ran (the config read follows the file's fingerprint, so no hook was needed), and within the minute's check `logDetail` went back to `info`, the expiry was removed, `debugLogging` stayed on, `[logging] policy.detail-expired` reached the desktop's output and `get_config` returned the reverted value. No bridge was running, so the push to a live bridge remains covered only by `log-detail-expiry.test.ts`.
 
-**Decisions.**
-
-- **How to check?**
-  - **A test-only hook that sets a short expiry through the config write in a running profile, then watching for the revert and the bridge push (recommended).**
-    - Pros: minutes; exercises the timer, the config announcement and the desktop's re-read.
-    - Cons: a new hook; a hand edit of `config.json` may not be seen, because the backend reads the config through a cache.
-  - **Rely on the integration test.**
-    - Pros: already passes.
-    - Cons: not a running app.
+**Decisions.** None left.
 
 ## Related
 
@@ -80,3 +81,16 @@ for the normal scheduled uploader and checks the isolated profile's essential
 file for all five metadata fields and the absence of synthetic message and stack
 text. This exercises the selected transport, backend recorder and desktop relay.
 Task 1 still requires packaged native-menu checks on all three operating systems.
+
+### Task 3: no test-only hook
+
+Moving the stored expiry in `config.json` replaced the recommended hook. The
+earlier note that a hand edit might not be seen was wrong for this path:
+`loadJsonCached` re-reads when the file's fingerprint changes. This adds no
+production code.
+
+### Task 1: extend the existing workflow
+
+The checks went into `native-application-menu.yml`, which already qualifies this
+menu on real desktops, rather than a new workflow. Windows stays on real Electron
+because the repository has no Windows package target.

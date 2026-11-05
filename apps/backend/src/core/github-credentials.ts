@@ -1,14 +1,17 @@
-import { gitHubCli } from "./github-cli-binary.js";
+import { gitHubCli, type GitHubCliSelection } from "./github-cli-binary.js";
 import { runCommand } from "./shell.js";
 import type { AppConfig } from "./models.js";
 
 export type GitHubCredentialSource = "host-cli" | "pat";
 export type ContainerGitHubCredentialSource = GitHubCredentialSource | "none";
 
-export async function getHostGitHubToken(): Promise<string | undefined> {
+/** The host's `gh auth login` token, read with the backend's `gh`. */
+export async function getHostGitHubToken(
+  gitHubCliSelection: GitHubCliSelection | undefined,
+): Promise<string | undefined> {
   try {
     const { stdout } = await runCommand(
-      gitHubCli(),
+      gitHubCli(gitHubCliSelection),
       ["auth", "token", "--hostname", "github.com"],
       {
         timeoutMs: 10_000,
@@ -32,9 +35,10 @@ export function gitHubCredentialSource(globalConfig: AppConfig["global"]): GitHu
  */
 export async function resolveGitHubToken(
   globalConfig: AppConfig["global"],
+  gitHubCliSelection: GitHubCliSelection | undefined,
 ): Promise<string | undefined> {
   if (gitHubCredentialSource(globalConfig) === "host-cli") {
-    return getHostGitHubToken();
+    return getHostGitHubToken(gitHubCliSelection);
   }
   return globalConfig.githubToken?.trim() || undefined;
 }
@@ -52,19 +56,21 @@ export function containerGitHubCredentialSource(
  */
 export async function resolveContainerGitHubToken(
   globalConfig: AppConfig["global"],
+  gitHubCliSelection: GitHubCliSelection | undefined,
 ): Promise<string | undefined> {
   const source = containerGitHubCredentialSource(globalConfig);
-  if (source === "host-cli") return getHostGitHubToken();
+  if (source === "host-cli") return getHostGitHubToken(gitHubCliSelection);
   if (source === "pat") return globalConfig.githubToken?.trim() || undefined;
   return undefined;
 }
 
 export async function getContainerGitHubCredentialStatus(
   globalConfig: AppConfig["global"],
+  gitHubCliSelection: GitHubCliSelection | undefined,
 ): Promise<{ source: ContainerGitHubCredentialSource; available: boolean }> {
   return {
     source: containerGitHubCredentialSource(globalConfig),
-    available: Boolean(await resolveContainerGitHubToken(globalConfig)),
+    available: Boolean(await resolveContainerGitHubToken(globalConfig, gitHubCliSelection)),
   };
 }
 

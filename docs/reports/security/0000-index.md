@@ -39,7 +39,7 @@ This index only changes when a branch merges, so it can't show what is running n
 
 | Batch | Name | Parts | Lane and position | Finish first | Not at the same time as |
 | --- | --- | --- | --- | --- | --- |
-| X1 | [Coordinator trust boundary](0090-x1-coordinator-trust-boundary.md) | `0090`, `0180`, `0210`; also coordinator `0120` task 1, `0310` | Coordinator backend, 3 of 5 | None | None |
+| X1 | [Coordinator trust boundary](0090-x1-coordinator-trust-boundary.md) | `0090`, `0180`, `0210`; also coordinator `0120` task 1, `0310` | Coordinator backend, 2 of 4 | None | None |
 
 Why these are grouped:
 

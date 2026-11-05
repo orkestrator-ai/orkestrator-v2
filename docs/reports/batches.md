@@ -17,7 +17,6 @@ Worked out on 2026-11-03 against `main` at `a44641cbc`, from the 167 work files 
 | Batch | File | Parts |
 | --- | --- | --- |
 | X1 | [security/0090-x1-coordinator-trust-boundary.md](security/0090-x1-coordinator-trust-boundary.md) | `Security 0090`, `Security 0180`, `Security 0210`, `Coordinator 0120`, `Coordinator 0310` |
-| C5 | [coordinator/0030-c5-prompt-and-context.md](coordinator/0030-c5-prompt-and-context.md) | `0360`, `0170`, `0140`, `0030`, `0460` |
 | C4 | [coordinator/0040-c4-tool-surface.md](coordinator/0040-c4-tool-surface.md) | `0040`, `0130`, `0150`, `0160` |
 | C2 | [coordinator/0080-c2-workflow-records.md](coordinator/0080-c2-workflow-records.md) | `0080`, `0100`, `0380` |
 | C3 | [coordinator/0110-c3-sweep-and-reads.md](coordinator/0110-c3-sweep-and-reads.md) | `0110`, `0370` |
@@ -50,7 +49,7 @@ Worked out on 2026-11-03 against `main` at `a44641cbc`, from the 167 work files 
 
 | Lane | Run order | Code it protects |
 | --- | --- | --- |
-| Coordinator backend | 1. C5 (Prompt and context)<br>2. C4 (Tool surface)<br>3. X1 (Coordinator trust boundary)<br>4. C2 (Workflow records)<br>5. C3 (Sweep and reads) | `coordinator-service.ts`, `control-mcp-tools.ts`, the protocol's `coordinator.ts` and the context prompt in `native-agent-service.ts` |
+| Coordinator backend | 1. C4 (Tool surface)<br>2. X1 (Coordinator trust boundary)<br>3. C2 (Workflow records)<br>4. C3 (Sweep and reads) | `coordinator-service.ts`, `control-mcp-tools.ts`, the protocol's `coordinator.ts` and the context prompt in `native-agent-service.ts` |
 | Coordinator panel | 1. C7 (Work panel and navigation)<br>2. C8 (Tab strip)<br>3. C6 (Errors and dead ends)<br>4. C10 (Explanations)<br>5. C-0390 (Panel re-render cost, measure first) | `CoordinatorPanel.tsx`, `CoordinatorPanelNotices.tsx`, `TabShell.tsx` |
 | Containers | 1. S-0080 (Legacy host mounts)<br>2. S-0100 (Egress SNI and DNS)<br>3. S-0170 (Agent-tools bind address)<br>4. E14 (Docker logs)<br>5. E25 (Container start) | `commands-containers.ts`, `commands-registry-servers.ts` and the `docker/` entrypoint, setup and firewall scripts |
 | Transcript | 1. E9 (Transcript reads)<br>2. E10 (Conditional reads and deltas)<br>3. E11 (Projection hashing)<br>4. E12 (Renderer store) | `native-agent-transcript-projection.ts` (5,570 lines), `useNativeAgentSession.ts` (3,870 lines), `nativeAgentProjectionStore.ts` |
@@ -90,8 +89,6 @@ Don't run these pairs at the same time.
 | Batch | Batch | Shared code |
 | --- | --- | --- |
 | C3 (Sweep and reads) | C6 (Errors and dead ends) | `coordinator-service.ts`, `control-mcp-server.ts` |
-| C5 (Prompt and context) | C6 (Errors and dead ends) | `CoordinatorPanel.tsx`, `coordinator-service.ts`, protocol `coordinator.ts` |
-| C5 (Prompt and context) | C7 (Work panel and navigation) | `CoordinatorPanel.tsx`, `coordinator-service.ts`, protocol `coordinator.ts` |
 | C6 (Errors and dead ends) | E12 (Renderer store) | `useNativeAgentSession.ts`, `AgentNativeTab.controller.tsx` |
 | C7 (Work panel and navigation) | E23 (Renderer polling) | `useUserCommands.ts` |
 | E3 (Retention and deletion) | E7 (Diff scans) | `change-tracking/service.ts` |
@@ -105,7 +102,6 @@ Don't run these pairs at the same time.
 | Finish | Before |
 | --- | --- |
 | E1 (Baseline run) | E9, E10 and E26, on code those batches have not changed yet |
-| `0360` in C5 | `0170` in C5, so the new lines go into the extracted builder |
 | `0530` in E4 | `0550` in E4 |
 | `0490` in E25 | `0500` in E25 |
 
@@ -115,10 +111,10 @@ These files are named by several batches that can still run together. The report
 
 | File | Batches |
 | --- | --- |
-| `apps/backend/src/core/index.ts` | C5, E9, E13, E15, S-0170 |
+| `apps/backend/src/core/index.ts` | E9, E13, E15, S-0170 |
 | `gateway-support-core.ts` | E15, E17, E18, E24, E-0120 |
 | `native-agent-transcript-projection.ts` | E15 (`0880` task 1) with the Transcript lane |
-| `native-agent-service.ts`, `control-mcp-tools.ts` | E9 with C2, C3, C4, C5 and X1 |
+| `native-agent-service.ts`, `control-mcp-tools.ts` | E9 with C2, C3, C4 and X1 |
 | `commands-files.ts` | E7, E-0580 |
 | `commands-servers.ts` | C6, E3, E13, E20 |
 | `GlobalSettings.sections.tsx` | C6, E15, E17 |

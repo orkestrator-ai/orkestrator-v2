@@ -1,6 +1,6 @@
 # Pi session-list timeout before the mocked read
 
-- **ID:** 5105
+- **ID:** 5201
 - **Status:** open
 - **Observed:** 2026-11-05
 - **Test:** `the resumable session list > a timeout is reported, not an empty history, and stops the read`

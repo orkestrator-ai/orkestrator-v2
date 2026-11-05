@@ -116,7 +116,7 @@ What it left is in to-do
 | U1: waiting chip with Open buttons | Done | Replaced by the Work panel, `CoordinatorWorkPanel.tsx` (`eb6bf887a`, #1698). |
 | U1: Open from mail tiles and the banner | Open | [C7 part 0060](0060-c7-work-panel-and-navigation.md#0060-open-the-worker-from-mail-tiles-and-the-prompt-banner) |
 | U2: confirm closing the main | Done | `CoordinatorPanel.tsx:473-478`, `:569-596` (`e5245dfd6`, #1644). |
-| U2: Change agent and main-tab marker | Done | Change agent and the Main label, `CoordinatorConversationTab.tsx`, tested in `CoordinatorPanel.tabs.test.tsx`. Where the new main lands in its group: [5200](../../todo/coordinator-and-multi-review/5200-c8-tab-strip-follow-ups.md). |
+| U2: Change agent and main-tab marker | Done | Change agent and the Main label, `CoordinatorConversationTab.tsx`, tested in `CoordinatorPanel.tabs.test.tsx`. The replacement main retains the original group and tab index, including layout edits made while creation is pending. |
 | U3: failure replaces the main's transcript | Done | Now a banner, `CoordinatorPanel.tsx:397-412` (`e5245dfd6`, #1644). |
 | U3: failure scoped to the conversation | Open | [C6 part 0020](0020-c6-errors-and-dead-ends.md#0020-one-conversations-startup-failure-takes-down-the-whole-coordinator) |
 | U4: Git error masks action errors | Done | Separate lines, `CoordinatorToolbar.tsx:109-111`, `:213-216` (`e5245dfd6`, #1644). |

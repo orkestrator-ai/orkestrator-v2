@@ -260,3 +260,26 @@ test("keyboard menu moves keep focus and tablists own only tabs", async ({ page 
     );
   expect(ownership).toEqual(["tab", "tab", "tab"]);
 });
+
+test("Change agent is visible without hovering the main tab", async ({ page }, testInfo) => {
+  await page.goto("/coordinator-pane-tree");
+  await page.mouse.move(1, 800);
+  const changeAgent = page.getByRole("button", { name: "Change agent", exact: true });
+  await expect(changeAgent).toBeVisible();
+  await expect(changeAgent).toHaveCSS("opacity", "1");
+  // Capture the reviewed fine-pointer reveal state for comparison, without
+  // keeping an old source checkout or changing the fixture implementation.
+  if (testInfo.project.name === "desktop-chromium") {
+    const oldReveal = await page.addStyleTag({
+      content: 'button[aria-label="Change agent"] { opacity: 0 !important; }',
+    });
+    await page.screenshot({
+      path: "output/visual-previews/c8/round2-before-reconstructed-desktop.png",
+    });
+    await oldReveal.evaluate((element) => element.parentNode?.removeChild(element));
+    await expect(changeAgent).toHaveCSS("opacity", "1");
+  }
+  await page.screenshot({
+    path: `output/visual-previews/c8/round2-after-${testInfo.project.name}.png`,
+  });
+});

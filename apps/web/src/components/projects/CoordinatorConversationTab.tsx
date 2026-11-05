@@ -22,9 +22,9 @@ import {
 import { cn } from "@/lib/utils";
 import { coordinatorTabElementId, SortableCoordinatorTab } from "./CoordinatorPaneTree";
 
-/** Same reveal as the shell's close button: on hover or focus with a fine pointer. */
+/** Always visible so changing agent is discoverable without hovering. */
 const TAB_ACTION_CLASS =
-  "flex h-7 w-7 items-center justify-center text-muted-foreground opacity-100 transition-opacity hover:text-foreground focus-hairline disabled:pointer-events-none disabled:opacity-40 md:h-auto md:w-auto md:hover-fine:opacity-0 md:hover-fine:group-focus-within:opacity-100 md:hover-fine:group-hover:opacity-100 md:hover-fine:focus-visible:opacity-100";
+  "flex h-7 w-7 items-center justify-center text-muted-foreground opacity-100 transition-opacity hover:text-foreground focus-hairline disabled:pointer-events-none disabled:opacity-40 md:h-auto md:w-auto";
 
 /** A keyboard move owns focus until the user leaves its destination tab. */
 function focusMovedTab(elementId: string) {

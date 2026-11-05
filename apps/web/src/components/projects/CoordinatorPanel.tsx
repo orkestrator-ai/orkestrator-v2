@@ -341,7 +341,13 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
     void runAction(
       "conversation",
       async () => {
-        const replacementLayout = replacingMain && layout ? structuredClone(layout) : null;
+        const originalPane =
+          replacingMain && layout
+            ? collectCoordinatorLeaves(layout.root).find((pane) =>
+                pane.conversationIds.includes(replacingMain),
+              )
+            : null;
+        const originalIndex = originalPane?.conversationIds.indexOf(replacingMain!) ?? 0;
         let closedSnapshot = null;
         let createdSnapshot;
         setReplacement(replacingMain ? { projectId, id: replacingMain } : null);
@@ -361,25 +367,44 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
           setReplacement(null);
           throw cause;
         }
+        // Read after the requests, before publishing the new open set can
+        // reconcile away the placeholder. Keep moves and divider edits made
+        // while the backend was busy.
+        const latestLayout = useCoordinatorPaneLayoutStore.getState().entries[projectId]?.layout;
+        const replacementLayout =
+          replacingMain && latestLayout ? structuredClone(latestLayout) : null;
+        const replacementId = createdSnapshot.workspace.selectedConversationId;
+        if (replacementLayout && replacementId) {
+          const panes = collectCoordinatorLeaves(replacementLayout.root);
+          const target =
+            panes.find((pane) => pane.conversationIds.includes(replacingMain!)) ??
+            panes.find((pane) => pane.id === originalPane?.id) ??
+            panes.find((pane) => pane.id === replacementLayout.activePaneId) ??
+            panes[0];
+          if (target) {
+            // A newer snapshot may already have inserted the new ID.
+            for (const pane of panes) {
+              pane.conversationIds = pane.conversationIds.filter((id) => id !== replacementId);
+            }
+            const index = target.conversationIds.indexOf(replacingMain!);
+            if (index >= 0) target.conversationIds[index] = replacementId;
+            else
+              target.conversationIds.splice(
+                Math.min(originalIndex, target.conversationIds.length),
+                0,
+                replacementId,
+              );
+            target.activeConversationId = replacementId;
+            replacementLayout.activePaneId = target.id;
+          }
+        }
         // Publish the open set before the external layout store: a store
         // notification can synchronously render and reconcile the new ID.
         flushSync(() => {
           setSnapshot(createdSnapshot);
           setReplacement(null);
         });
-        const replacementId = createdSnapshot.workspace.selectedConversationId;
         if (replacementLayout && replacementId) {
-          // Restore from the pre-close layout even if a background snapshot
-          // reconciled the empty group while creation was pending.
-          for (const pane of collectCoordinatorLeaves(replacementLayout.root)) {
-            pane.conversationIds = pane.conversationIds.map((id) =>
-              id === replacingMain ? replacementId : id,
-            );
-            if (pane.conversationIds.includes(replacementId)) {
-              pane.activeConversationId = replacementId;
-              replacementLayout.activePaneId = pane.id;
-            }
-          }
           useCoordinatorPaneLayoutStore.getState().setLayout(projectId, replacementLayout);
         }
         const createdId = createdSnapshot.workspace.selectedConversationId;

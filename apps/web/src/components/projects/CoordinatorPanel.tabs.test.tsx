@@ -27,6 +27,7 @@ import {
   focusCoordinatorPane,
   moveCoordinatorConversation,
   reconcileCoordinatorLayout,
+  resizeCoordinatorSplit,
   splitCoordinatorPaneAtEdge,
 } from "@/lib/coordinator-pane-layout";
 import { dispatchResourceChange } from "@/lib/resource-sync";
@@ -444,6 +445,31 @@ describe("CoordinatorPanel tab strip", () => {
         expect(screen.getByRole("tab", { name: "Side 1, Codex" })).toBeTruthy();
         return;
       }
+      // Rearrange a side tab and resize while creation is still pending.
+      // The replacement must merge into this tree, not restore the old split.
+      const beforeEdit = storedLayout();
+      const sidePane = collectCoordinatorLeaves(beforeEdit.root).find((pane) =>
+        pane.conversationIds.includes("side-1"),
+      )!;
+      const joined = moveCoordinatorConversation(
+        beforeEdit,
+        "side-1",
+        sidePane.id,
+        originalMainPane,
+      );
+      let edited = splitCoordinatorPaneAtEdge(
+        joined,
+        originalMainPane,
+        "bottom",
+        "side-1",
+        originalMainPane,
+      );
+      if (edited.root.kind !== "split") throw new Error("Expected split");
+      edited = resizeCoordinatorSplit(edited, edited.root.id, [0.35, 0.65]);
+      act(() => useCoordinatorPaneLayoutStore.getState().setLayout("project-1", edited));
+      const editedSidePane = collectCoordinatorLeaves(edited.root).find((pane) =>
+        pane.conversationIds.includes("side-1"),
+      )!.id;
       const created = withWorkspace({
         conversations: [
           ...closed.workspace.conversations,
@@ -466,6 +492,13 @@ describe("CoordinatorPanel tab strip", () => {
           "main-2",
         ]);
         expect(storedLayout().activePaneId).toBe(originalMainPane);
+        expect(leaves.find((pane) => pane.conversationIds.includes("side-1"))!.id).toBe(
+          editedSidePane,
+        );
+        expect(storedLayout().root.kind).toBe("split");
+        if (storedLayout().root.kind === "split") {
+          expect(storedLayout().root).toMatchObject({ id: edited.root.id, sizes: [0.35, 0.65] });
+        }
       });
       expect(screen.getByRole("button", { name: "Close Side 1" })).toBeTruthy();
     });

@@ -88,7 +88,7 @@ async function runScenario(
     const evidence = JSON.parse(line.slice(STACK_EVIDENCE_PREFIX.length)) as StackEvidence;
     // --only-failures suppresses passing tests; keep the bounded runner informed
     // that this multi-scenario suite is progressing without printing call content.
-    console.info(`Completed account-switch scenario: ${platform}/${scenario}`);
+    process.stderr.write(`Completed account-switch scenario: ${platform}/${scenario}\n`);
     return evidence;
   } finally {
     await removeStackPaths(paths);

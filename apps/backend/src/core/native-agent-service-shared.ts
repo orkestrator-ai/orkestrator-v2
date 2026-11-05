@@ -594,7 +594,7 @@ export interface NativeAgentServiceOptions {
    * MCP client at all, so a prompt telling it to call `launch_environment`
    * would be instructing it to use a tool it does not have.
    */
-  coordinatorDelegationAvailable?: (platform: AgentPlatform) => boolean;
+  coordinatorDelegationAvailable?: (platform: AgentPlatform) => Promise<boolean>;
   /** The coordinator's node-role line (leaf mode or command node), or null. */
   coordinatorNodeContext?: () => Promise<string | null>;
   /** Test seam for exercising deterministic detail-cache capacity eviction. */

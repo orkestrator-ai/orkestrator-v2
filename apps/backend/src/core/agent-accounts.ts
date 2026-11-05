@@ -681,7 +681,7 @@ async function finishLogin(context: CommandContext, entry: AgentAccountLogin): P
       // A first-run user who was never signed in has no model list yet; fetch it
       // now rather than waiting for the picker to be reopened.
       if (platform === "claude") {
-        resetHostModelCatalogSeedCooldown(platform);
+        resetHostModelCatalogSeedCooldown(context, platform);
         void seedHostModelCatalogIfMissing(context, platform, refreshHostModelCatalog).catch(
           () => undefined,
         );

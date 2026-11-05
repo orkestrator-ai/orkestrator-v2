@@ -161,7 +161,7 @@ Still true but minor: every renderer `console.*` raises a `console-message` even
 
 **Context.** Current copy does not. It says how much each part writes and that this does not decide saving.
 
-**Investigation.** `LogDetailSettings.tsx` holds the header text. One exception needs care: raw output that is not a logger call is captured as text (`logging.md:583-584`), and [0830](0720-e13-silent-failures.md#0830-stop-inherited-vendor-debug-variables-reaching-local-bridges) addresses the main way that could hold content.
+**Investigation.** `LogDetailSettings.tsx` holds the header text. One exception needs care: raw output that is not a logger call is captured as text (`logging.md:583-584`), and `0830`, done in [E13](0000-index.md#closing-check-of-e13-silent-failures) ([the bridge hop](../../architecture/logging.md#the-bridge-hop)), removed the main way that could hold content.
 
 **Decisions.**
 
@@ -169,7 +169,7 @@ Still true but minor: every renderer `console.*` raises a `console-message` even
   - **"Logs are designed to leave out prompts, terminal output, file contents and credentials", with no "never" (recommended).**
     - Pros: true given that a string field and raw vendor output cannot be proved clean (`logging.md:211-213`).
     - Cons: weaker than the report's wording.
-  - **The report's "no level ever records" after [0830](0720-e13-silent-failures.md#0830-stop-inherited-vendor-debug-variables-reaching-local-bridges) lands.**
+  - **The report's "no level ever records", now that `0830` has landed.**
     - Pros: clear.
     - Cons: a claim the code cannot enforce.
 

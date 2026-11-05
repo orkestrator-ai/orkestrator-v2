@@ -2,7 +2,7 @@ import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { invoke } from "@/lib/native/backend";
 import { portalStore } from "@/lib/portal/portal-store";
-import { useProjectStore } from "@/stores";
+import { useProjectStore, useUIStore } from "@/stores";
 import { useRealmShellStore } from "@/stores/realmShellStore";
 import type { Project } from "@/types";
 import { LeafModeCoordinatorGate } from "./LeafModeCoordinatorGate";
@@ -21,7 +21,25 @@ afterEach(() => {
   portalStore.store.setState({ status: null, loaded: false, self: null, selfId: null });
   useProjectStore.setState({ projects: [], hasLoaded: false, error: null, isLoading: false });
   useRealmShellStore.setState({ grouping: null });
+  useUIStore.setState({ openedLeafCoordinators: [] });
 });
+
+/** This node's own portal status: leaf mode under the given controllers. */
+function leafStatus(controllers: string[]) {
+  return {
+    nodeId: "bk_middle" as never,
+    mode: "leaf" as const,
+    registrationEnabled: true,
+    controllers: controllers.map((displayName, order) => ({
+      controllerId: `bk_top_${order}` as never,
+      displayName,
+      attachedAt: "",
+      lastContactAt: "",
+    })),
+    detachedControllers: [],
+    suspendedSubordinateCount: 0,
+  };
+}
 
 /** A window whose workspace is a realm on a leaf, with the command node's own projects. */
 function onLeafWindow(commandRepositories: string[]) {
@@ -187,6 +205,118 @@ describe("LM-04 coordinator conversations in leaf mode", () => {
     });
     renderGate();
     expect(screen.getByTestId("leaf-mode-coordinator-gate")).toBeTruthy();
+  });
+});
+
+describe("0410 leaf-mode gate edge cases", () => {
+  test("a node shows neither the notice nor its coordinator until its portal status loads", () => {
+    const refresh = spyOn(portalStore, "refresh").mockResolvedValue(undefined);
+    try {
+      renderGate();
+      expect(refresh).toHaveBeenCalled();
+      expect(screen.getByTestId("leaf-mode-coordinator-pending").textContent).toContain(
+        "Checking repository coordination",
+      );
+      expect(screen.queryByTestId("coordinator-chat") === null).toBe(true);
+      expect(screen.queryByTestId("leaf-mode-coordinator-gate") === null).toBe(true);
+      act(() =>
+        portalStore.store.setState({ loaded: true, status: leafStatus(["Office desktop"]) }),
+      );
+      expect(screen.getByTestId("leaf-mode-coordinator-gate")).toBeTruthy();
+      expect(screen.queryByTestId("coordinator-chat") === null).toBe(true);
+    } finally {
+      refresh.mockRestore();
+    }
+  });
+
+  test("a node that is not in leaf mode opens its coordinator once its status loads", () => {
+    const refresh = spyOn(portalStore, "refresh").mockResolvedValue(undefined);
+    try {
+      renderGate();
+      expect(screen.queryByTestId("coordinator-chat") === null).toBe(true);
+      act(() =>
+        portalStore.store.setState({
+          loaded: true,
+          status: { ...leafStatus([]), mode: "standalone" },
+        }),
+      );
+      expect(screen.getByTestId("coordinator-chat")).toBeTruthy();
+    } finally {
+      refresh.mockRestore();
+    }
+  });
+
+  test("a failed portal status read falls through to the coordinator", async () => {
+    nativeInvoke.mockImplementation(async (command: string) => {
+      if (command === "get_node_status") throw new Error("portal unavailable");
+      if (command === "get_node_summaries") throw new Error("portal unavailable");
+    });
+    renderGate();
+    expect(screen.getByTestId("leaf-mode-coordinator-pending")).toBeTruthy();
+    expect(await screen.findByTestId("coordinator-chat")).toBeTruthy();
+    expect(portalStore.getState().status).toBeNull();
+    expect(screen.queryByTestId("leaf-mode-coordinator-gate") === null).toBe(true);
+  });
+
+  for (const [label, controllers] of [
+    ["an empty controller list", []],
+    ["blank controller names", ["", "  "]],
+  ] as const) {
+    test(`${label} names the command node`, () => {
+      portalStore.store.setState({ loaded: true, status: leafStatus([...controllers]) });
+      renderGate();
+      const notice = screen.getByTestId("leaf-mode-coordinator-gate").textContent ?? "";
+      expect(notice).toContain("It is controlled by the command node.");
+      expect(notice).not.toContain("controlled by .");
+    });
+  }
+
+  test("several controllers are listed by name, skipping blank ones", () => {
+    portalStore.store.setState({
+      loaded: true,
+      status: leafStatus(["Office desktop", " ", "Laptop"]),
+    });
+    renderGate();
+    expect(screen.getByTestId("leaf-mode-coordinator-gate").textContent).toContain(
+      "It is controlled by Office desktop, Laptop.",
+    );
+  });
+
+  test("opening anyway is remembered per project for the app session, not persisted", () => {
+    portalStore.store.setState({ loaded: true, status: leafStatus(["Office desktop"]) });
+    renderGate();
+    fireEvent.click(screen.getByRole("button", { name: /Open this node's coordinator anyway/ }));
+    expect(screen.getByTestId("coordinator-chat")).toBeTruthy();
+    cleanup();
+
+    // Returning to the same project's coordinator skips the notice.
+    renderGate();
+    expect(screen.getByTestId("coordinator-chat")).toBeTruthy();
+    cleanup();
+
+    // Another project on the same node still shows it.
+    render(
+      <LeafModeCoordinatorGate projectId="other-project">
+        <div data-testid="coordinator-chat">chat</div>
+      </LeafModeCoordinatorGate>,
+    );
+    expect(screen.getByTestId("leaf-mode-coordinator-gate")).toBeTruthy();
+    expect(screen.queryByTestId("coordinator-chat") === null).toBe(true);
+
+    expect(useUIStore.getState().openedLeafCoordinators).toEqual(["local:leaf-project"]);
+    const persisted = useUIStore.persist.getOptions().partialize?.(useUIStore.getState());
+    expect(Object.keys(persisted ?? {})).not.toContain("openedLeafCoordinators");
+  });
+
+  test("a leaf window keys the choice by the leaf node, so the same project id elsewhere is not opened", () => {
+    useUIStore.setState({ openedLeafCoordinators: ["local:leaf-project"] });
+    onLeafWindow(["github.com/acme/app"]);
+    useRealmShellStore.setState({ grouping: "repository" });
+    renderGate();
+    expect(screen.getByTestId("leaf-mode-coordinator-gate")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /Open this node's coordinator anyway/ }));
+    expect(screen.getByTestId("coordinator-chat")).toBeTruthy();
+    expect(useUIStore.getState().openedLeafCoordinators).toContain("bk_leaf:leaf-project");
   });
 });
 

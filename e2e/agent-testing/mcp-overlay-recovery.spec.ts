@@ -1,5 +1,5 @@
 /** Corrupt-record recovery through the real renderer and backend on a disposable container. */
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./browser-test";
 import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import path from "node:path";

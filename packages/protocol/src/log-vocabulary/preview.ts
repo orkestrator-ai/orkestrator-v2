@@ -24,6 +24,8 @@ export const PREVIEW_LOG_AREAS = defineLogAreas({
       "publication.start-failed": "Private preview publication did not start.",
       "publication.reconfigure-failed": "Preview publication could not be reconfigured.",
       "publication.listening": "Private preview origins are listening.",
+      "publication.same-site":
+        "The preview domain is the same site as the application; publication runs with a warning.",
       "certificate.reloaded": "The preview certificate was reloaded.",
       "access.revoked-close-failed":
         "A revoked preview resource could not be closed. Error class only.",

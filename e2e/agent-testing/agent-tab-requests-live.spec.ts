@@ -21,7 +21,7 @@
  * Measurements are command names, counts and byte totals. Prompts, transcript
  * text, tokens and session ids never reach the output.
  */
-import { expect, test, type Page, type Request } from "@playwright/test";
+import { expect, test, type Page, type Request } from "./browser-test";
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { appendFileSync, mkdirSync } from "node:fs";

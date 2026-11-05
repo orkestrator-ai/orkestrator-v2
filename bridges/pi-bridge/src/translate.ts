@@ -716,6 +716,43 @@ export function appendTurnFailure(state: SessionState, reason: string): void {
   rowChanged(state, message);
 }
 
+/** The transcript's note that a resume fell back. Fixed text, never Pi's error. */
+export const RESUME_FELL_BACK_NOTICE =
+  "Could not resume the previous Pi conversation, so a new one was started. The agent does not remember the earlier messages.";
+
+/**
+ * Tell the user, in the transcript, that the agent forgot the conversation.
+ *
+ * Written where `session.resume-fell-back` is logged, which is before a turn,
+ * so it is its own row between turns rather than a part of the response
+ * above it. It rides in the rendered transcript the state file keeps, so a
+ * reload or a bridge restart still shows it.
+ */
+export function appendResumeFallbackNotice(state: SessionState): void {
+  closeTextParts(state);
+  state.currentAssistantMessageId = undefined;
+  const messageId = randomBytes(12).toString("hex");
+  const createdAt = new Date().toISOString();
+  const part: BridgeStatusPart = {
+    type: "status",
+    content: RESUME_FELL_BACK_NOTICE,
+    severity: "warning",
+    sourcePartId: `${messageId}:0`,
+    sourceMessageId: messageId,
+    createdAt,
+  };
+  const message: BridgeMessage = {
+    id: messageId,
+    role: "assistant",
+    content: RESUME_FELL_BACK_NOTICE,
+    parts: [part],
+    createdAt,
+  };
+  state.messages.push(message);
+  chargeNewEntry(state, message);
+  rowChanged(state, message);
+}
+
 /**
  * Pi retrying a compaction's summary request, as the retry row a turn's own
  * retries use, on the row the compaction lands on. One row per compaction: a

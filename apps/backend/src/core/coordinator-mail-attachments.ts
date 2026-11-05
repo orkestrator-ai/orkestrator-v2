@@ -144,6 +144,7 @@ function excludeFromGit(
       environment,
       context.runtime.environments.fence,
       undefined,
+      undefined,
       execute,
     ),
     `${AGENT_MAIL_ATTACHMENT_DIRECTORY}/${batch}`,

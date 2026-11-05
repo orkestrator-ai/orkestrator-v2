@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { setManagedGitHubCli } from "./github-cli-binary.js";
+import { GitHubCliSelection } from "./github-cli-binary.js";
 import {
   getContainerGitHubCredentialStatus,
   getHostGitHubToken,
@@ -22,6 +22,7 @@ function useGlobal(global: Partial<AppConfig["global"]>): void {
 describe("selected GitHub credentials", () => {
   let root: string;
   let previous: NodeJS.ProcessEnv;
+  let selection: GitHubCliSelection;
   beforeEach(async () => {
     previous = { ...process.env };
     root = await fs.mkdtemp(path.join(os.tmpdir(), "ork-github-credentials-"));
@@ -35,13 +36,13 @@ if test -n "$GH_TOKEN$GITHUB_TOKEN"; then echo inherited_identity; else echo hos
 `,
       { mode: 0o755 },
     );
-    setManagedGitHubCli(gh);
+    selection = new GitHubCliSelection();
+    selection.pin(gh);
     process.env.GH_TOKEN = "inherited_gh";
     process.env.GITHUB_TOKEN = "inherited_github";
   });
   afterEach(async () => {
     source = undefined;
-    setManagedGitHubCli(undefined);
     for (const key of ["GH_TOKEN", "GITHUB_TOKEN"]) {
       if (previous[key] === undefined) delete process.env[key];
       else process.env[key] = previous[key];
@@ -76,25 +77,34 @@ if test -n "$GH_TOKEN$GITHUB_TOKEN"; then echo inherited_identity; else echo hos
     "missing PAT %j fails closed despite a host login",
     async (githubToken) => {
       useGlobal({ useHostGitHubCredentials: false, githubToken });
-      expect(await getHostGitHubToken()).toBe("host_identity");
+      expect(await getHostGitHubToken(selection)).toBe("host_identity");
       await expect(gitHubCliEnv(source)).rejects.toThrow("personal access token is missing");
       await expect(gitHubCliEnv(source, { GH_TOKEN: "host" })).rejects.toThrow("Settings");
       expect(
-        await resolveGitHubToken(config({ useHostGitHubCredentials: false, githubToken })),
+        await resolveGitHubToken(
+          config({ useHostGitHubCredentials: false, githubToken }),
+          selection,
+        ),
       ).toBeUndefined();
       expect(
         await getContainerGitHubCredentialStatus(
           config({ containerGitHubCredential: "pat", githubToken }),
+          selection,
         ),
       ).toEqual({ source: "pat", available: false });
     },
   );
 
   test("host token lookup, resolution and container status use the stored login", async () => {
-    expect(await getHostGitHubToken()).toBe("host_identity");
-    expect(await resolveGitHubToken(config({ githubToken: "unused_pat" }))).toBe("host_identity");
+    expect(await getHostGitHubToken(selection)).toBe("host_identity");
+    expect(await resolveGitHubToken(config({ githubToken: "unused_pat" }), selection)).toBe(
+      "host_identity",
+    );
     expect(
-      await getContainerGitHubCredentialStatus(config({ containerGitHubCredential: "host-cli" })),
+      await getContainerGitHubCredentialStatus(
+        config({ containerGitHubCredential: "host-cli" }),
+        selection,
+      ),
     ).toEqual({
       source: "host-cli",
       available: true,
@@ -104,20 +114,23 @@ if test -n "$GH_TOKEN$GITHUB_TOKEN"; then echo inherited_identity; else echo hos
   });
 
   test("PAT resolution and status do not require gh", async () => {
-    setManagedGitHubCli(path.join(root, "missing"));
+    selection.pin(path.join(root, "missing"));
     const global = config({
       useHostGitHubCredentials: false,
       containerGitHubCredential: "pat",
       githubToken: " stored_pat ",
     });
-    expect(await resolveGitHubToken(global)).toBe("stored_pat");
-    expect(await getContainerGitHubCredentialStatus(global)).toEqual({
+    expect(await resolveGitHubToken(global, selection)).toBe("stored_pat");
+    expect(await getContainerGitHubCredentialStatus(global, selection)).toEqual({
       source: "pat",
       available: true,
     });
-    expect(await getHostGitHubToken()).toBeUndefined();
+    expect(await getHostGitHubToken(selection)).toBeUndefined();
     expect(
-      await getContainerGitHubCredentialStatus(config({ containerGitHubCredential: "host-cli" })),
+      await getContainerGitHubCredentialStatus(
+        config({ containerGitHubCredential: "host-cli" }),
+        selection,
+      ),
     ).toEqual({
       source: "host-cli",
       available: false,
@@ -134,8 +147,8 @@ if test -n "$GH_TOKEN$GITHUB_TOKEN"; then echo inherited_identity; else echo hos
       config({}),
       config({ containerGitHubCredential: "none", githubToken: "stored_pat" }),
     ]) {
-      expect(await resolveContainerGitHubToken(global)).toBeUndefined();
-      expect(await getContainerGitHubCredentialStatus(global)).toEqual({
+      expect(await resolveContainerGitHubToken(global, selection)).toBeUndefined();
+      expect(await getContainerGitHubCredentialStatus(global, selection)).toEqual({
         source: "none",
         available: false,
       });
@@ -152,23 +165,30 @@ if test -n "$GH_TOKEN$GITHUB_TOKEN"; then echo inherited_identity; else echo hos
       containerGitHubCredential: "pat",
       githubToken: " stored_pat ",
     });
-    expect(await resolveGitHubToken(hostBackendPatContainers)).toBe("host_identity");
-    expect(await resolveContainerGitHubToken(hostBackendPatContainers)).toBe("stored_pat");
+    expect(await resolveGitHubToken(hostBackendPatContainers, selection)).toBe("host_identity");
+    expect(await resolveContainerGitHubToken(hostBackendPatContainers, selection)).toBe(
+      "stored_pat",
+    );
 
     const patBackendHostContainers = config({
       useHostGitHubCredentials: false,
       containerGitHubCredential: "host-cli",
       githubToken: "stored_pat",
     });
-    expect(await resolveGitHubToken(patBackendHostContainers)).toBe("stored_pat");
-    expect(await resolveContainerGitHubToken(patBackendHostContainers)).toBe("host_identity");
+    expect(await resolveGitHubToken(patBackendHostContainers, selection)).toBe("stored_pat");
+    expect(await resolveContainerGitHubToken(patBackendHostContainers, selection)).toBe(
+      "host_identity",
+    );
   });
 
   test("empty host token is unavailable", async () => {
     await fs.writeFile(path.join(root, "gh"), "#!/bin/sh\nprintf '  \\n'\n", { mode: 0o755 });
-    expect(await resolveGitHubToken(config({}))).toBeUndefined();
+    expect(await resolveGitHubToken(config({}), selection)).toBeUndefined();
     expect(
-      await getContainerGitHubCredentialStatus(config({ containerGitHubCredential: "host-cli" })),
+      await getContainerGitHubCredentialStatus(
+        config({ containerGitHubCredential: "host-cli" }),
+        selection,
+      ),
     ).toEqual({
       source: "host-cli",
       available: false,

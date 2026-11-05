@@ -25,3 +25,15 @@ Evidence: `/tmp/orkestrator-test-run.J1rBxn/browser-findings-isolated.log.gz`.
 
 The default suite was running concurrently on this shared host. No cause has
 been established. No image implementation, assertion, timeout or skip changed.
+
+## File-only follow-up
+
+A further run of only the owner file used
+`ORKESTRATOR_E2E_PORT=15430 ORKESTRATOR_VALIDATION_GRANTED_WORKERS=2 mise run test:logged -- --name change-tracking-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/ChangeTracking.spec.ts`.
+It passed seven cases, including the fallback case above on both viewports,
+but failed the mobile `live images decode, refresh, recover after missed edits,
+and fall back on deletion or corrupt bytes` case at line 37: `page.reload`
+exceeded 30 seconds waiting for load. Total: 7 passed, 1 failed, 112.9 seconds.
+Evidence: `/tmp/orkestrator-test-run.VM1uHH/change-tracking-owner.log.gz`.
+This additional failure is unclassified; no cause or isolated pass for it is
+established. The browser check remains non-green.

@@ -10,6 +10,7 @@ Analysed 2026-11-05 against `main` at `50d4916ca`, with the delete fix on its br
 2. **See a real failed delete in a real window**: drive one actual delete failure through the UI, across a reload. Status: open.
 3. **Per-step delete progress**: tell the user which step a slow delete is on. Status: open.
 4. **Bound a delete that hangs**: a delete that neither fails nor finishes spins with only its elapsed time. Status: open (depends on 3).
+5. **Watch readiness before `fseventsd` delivers**: a watch reports `established` before events are known to flow. Status: open.
 
 ### 1. Confirm the fix on the machine that reported it
 
@@ -82,6 +83,24 @@ Analysed 2026-11-05 against `main` at `50d4916ca`, with the delete fix on its br
   - **Offer a user-driven "give up" after a long wait.**
     - Pros: no timing guess.
     - Cons: needs its own proof that the abandoned work stopped, or it risks two deletes in one worktree.
+
+### 5. Watch readiness before `fseventsd` delivers
+
+**Problem.** `established`, and with it a worktree watcher's `qualified`, means the helper's `fs.watch` call returned, not that events are flowing. On a loaded Mac a change made soon after it can go unreported until the owner's safety scan.
+
+**Context.** `watch-host.ts` sends `ready` right after `fs.watch` returns, while Bun starts its FSEvents stream afterwards on another thread. The in-process `fs.watch` this replaced counted as covered at the same point, so this is not a regression. The owner rescans at `established`, and treats events as hints throughout.
+
+**Investigation.** With `fseventsd` at 100% of a core, five probes (Bun and Node, recursive and not, the temporary directory and the checkout), each writing one new file a second, all received their first event 72 s in, naming the ninth file. Each received 42 to 44 events by 149 s for the 107 files up to the last one named. So files were lost after the stream was running as well as before, which means late registration alone does not explain the loss. How long registration itself took was not measured.
+
+**Decisions.**
+
+- **What should readiness mean?**
+  - **Leave it as the call returning, with the safety scan as the backstop (recommended).**
+    - Pros: no new moving parts; the backstop is needed anyway, because events are lost even on a running stream.
+    - Cons: a change in the gap shows only at the next safety scan.
+  - **Have the helper hold `ready` until an event arrives from a private directory it writes to.**
+    - Pros: `qualified` then means the stream has delivered something, and a slow host keeps polling for longer.
+    - Cons: a temporary directory and repeated writes in the helper; a host that delivers nothing leaves every watch unqualified; a delivered event still does not prove later ones arrive.
 
 ## Current state
 

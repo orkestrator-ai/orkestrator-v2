@@ -204,10 +204,20 @@ every one of its samples.
 On macOS the watches therefore live in one helper process (`watch-host.ts`,
 started with `bun -e`). The backend only exchanges messages with it, so a start
 or close returns at once and events arrive as bounded batches. A watch reports
-`established` when it is set up; until then its watcher is not `qualified` and
-its owner keeps polling. A lost helper fails every open watch, whose owner falls
-back to polling and retries; the next start spawns a new helper. Linux keeps
-`fs.watch` in the backend: inotify has no shared stream to rebuild.
+`established` once the helper's `fs.watch` has returned; until then its watcher
+is not `qualified` and its owner keeps polling. A lost helper fails every open
+watch, whose owner falls back to polling and retries; the next start spawns a new
+helper. Linux keeps `fs.watch` in the backend: inotify has no shared stream to
+rebuild.
+
+The helper takes the blocking out of the backend; it does not make `fseventsd`
+any faster. With it at 100% of a core, independent Bun and Node processes writing
+one new file a second each saw their first event 72 s in, and about 44 events for
+the first 107 files, so `established` does not prove that a later change will be
+reported ([6120](../todo/containers-and-environments/6120-environment-delete-follow-ups.md),
+task 5). Events stay hints, and the owner's safety scan covers what they miss.
+`watch-host-events.live.test.ts` proves delivery through the real helper by
+repeating each change until an event names it.
 
 Measured on an 18-core Mac (macOS 26.6.2, 128 GB) with `fseventsd` at about 100%
 of a core throughout, on an isolated `dev:test` profile with 130 idle local

@@ -29,8 +29,11 @@ export interface WatchHandle {
   on(event: "error", listener: (error: Error) => void): unknown;
   close(): void;
   /**
-   * Present when the watch is set up after the call returns. Resolves once it
-   * has been; a failure rejects and also reports through the `error` listener.
+   * Present when the watch is set up after the call returns. Resolves once the
+   * helper's `fs.watch` has returned; a failure rejects and also reports through
+   * the `error` listener. `fseventsd` can start delivering well after that, and
+   * can lose events at any time, so it is not proof that a later change will be
+   * reported: that remains the owner's safety scan's job.
    */
   established?: Promise<void>;
 }

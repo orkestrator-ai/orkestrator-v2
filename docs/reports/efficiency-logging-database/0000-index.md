@@ -341,6 +341,8 @@ The outcome of every task in the E13 batch file, checked back against the code o
 
 The outcome of every item in the E17 batch file, checked back against the code on 2026-11-05 before the file was deleted. Base commit `af2e566e5`; the file's last version, ending in this table, is the parent of the commit that deleted it. R9 and the L10 and M2 row in the table above summarise this. No finding had stopped holding, and no to-do was needed.
 
+History correction (2026-11-05): the messages of outcome commit `19de22bab` and deletion commit `cbfd96eda` incorrectly cite `3baeaacf6` as the base. Both refer to base `af2e566e5849ff15cf1124de487e7570bcfd0a58`, as recorded in this closing check. This correction is appended rather than rewording those commits so that the validated commit `cbfd96eda9047e4c72f945818b8e4ca19a678946` stays in the branch's history.
+
 | Part | Item | Outcome | Code, evidence or to-do |
 | --- | --- | --- | --- |
 | 0770 | 1. Remove the toggle, default, types and allowlist entries | Done | Gone from `GlobalSettings.sections.tsx`, `GlobalSettings.tsx`, `global-settings-patch.ts`, `types/index.ts`, `models.ts` and `app-config-defaults.ts`. Tests: `renders every settings section` in `GlobalSettings.test.tsx` now asserts the heading is absent; `uses the shared section defaults rather than copies` (`app-config-defaults.test.ts`); `a new install does not write it` (`storage-config-patch.test.ts`). |

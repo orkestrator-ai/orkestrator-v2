@@ -19,22 +19,20 @@ export const TERMINAL_HISTORY_PAGE_MAX_ROWS = 1_000;
 export const TERMINAL_HISTORY_SEGMENT_BYTES = 4 * 1024 * 1024;
 export const TERMINAL_HISTORY_PENDING_BYTES = 1024 * 1024;
 export const TERMINAL_HISTORY_GLOBAL_PENDING_BYTES = 16 * 1024 * 1024;
-// One PTY chunk becomes one record per line, all queued in a single event-loop
-// turn, before any write can return a slot. So these must hold a large chunk of
-// short lines; the memory limit is the byte bounds above, which charge
-// TERMINAL_HISTORY_RECORD_OVERHEAD_BYTES per record. Each stays just under what
-// its byte bound allows for empty lines.
-export const TERMINAL_HISTORY_PENDING_RECORDS = 12_288;
-export const TERMINAL_HISTORY_GLOBAL_PENDING_RECORDS = 196_608;
-// Rounded up from the 73 bytes a queued record measured beyond its text, so
-// empty lines cannot queue uncounted memory.
-const TERMINAL_HISTORY_RECORD_OVERHEAD_BYTES = 80;
-// Output received before the session's archive is ready, counted in chunks.
-const TERMINAL_HISTORY_PREINIT_CHUNKS = 256;
-const TERMINAL_HISTORY_GLOBAL_PREINIT_CHUNKS = 4_096;
+// Output queues as the raw chunks it arrived in and becomes rows only when
+// written, so a queued line costs no more than its text and the byte bounds above
+// are the limit. Every chunk is also charged TERMINAL_HISTORY_CHUNK_OVERHEAD_BYTES,
+// so many tiny chunks stay bounded; each count stays just under what its byte
+// bound allows for one-byte chunks.
+export const TERMINAL_HISTORY_PENDING_CHUNKS = 12_288;
+export const TERMINAL_HISTORY_GLOBAL_PENDING_CHUNKS = 196_608;
+const TERMINAL_HISTORY_CHUNK_OVERHEAD_BYTES = 80;
 // A flush starts at this much queued output rather than waiting for the timer.
-const TERMINAL_HISTORY_FLUSH_RECORDS = 256;
+const TERMINAL_HISTORY_FLUSH_CHUNKS = 256;
 const TERMINAL_HISTORY_FLUSH_BYTES = 256 * 1024;
+// One write holds about this much. Rows grow several times over when written, so
+// a full queue of short lines must not become one string in memory.
+const TERMINAL_HISTORY_WRITE_BATCH_BYTES = 256 * 1024;
 const TERMINAL_HISTORY_SCROLLBACK = 2_000;
 const TERMINAL_STATE_MAX_BYTES = 2 * 1024 * 1024;
 const TERMINAL_HISTORY_RECORD_MAX_BYTES = 128 * 1024;
@@ -54,6 +52,17 @@ const MAX_TERMINAL_HISTORY_SEGMENTS = 256;
 const TERMINAL_CELL_ESTIMATED_BYTES = 96;
 
 type HistoryRecord = { sequence: number; at: number; text: string };
+/** How output dropped at the queue's bound ended: where the next kept chunk starts. */
+type DroppedOutputEnding = "line-start" | "mid-line";
+type QueuedChunk = {
+  text: string;
+  at: number;
+  generationChanged: boolean;
+  afterDrop: DroppedOutputEnding | null;
+  charge: number;
+};
+/** One chunk's numbered rows, joined by newlines, still holding its queue charge. */
+type NumberedRows = { first: number; at: number; text: string; charge: number };
 type ParserState = "normal" | "escape" | "csi" | "string" | "string-escape";
 
 type Manifest = {
@@ -89,10 +98,11 @@ type Session = {
   initialized: Promise<void>;
   parseTail: Promise<void>;
   ioTail: Promise<void>;
-  pending: HistoryRecord[];
+  pending: QueuedChunk[];
+  numbered: NumberedRows[];
   pendingBytes: number;
   queuedBytes: number;
-  queuedRecords: number;
+  queuedChunks: number;
   flushTimer: ReturnType<typeof setTimeout> | null;
   flushQueued: boolean;
   lastCheckpointAt: number;
@@ -110,9 +120,8 @@ type Session = {
   archivePendingCr: boolean;
   archiveHighSurrogate: string;
   archiveLineCarry: string;
-  archiveInitialized: boolean;
-  preinitArchiveChunks: Array<{ text: string; at: number; generationChanged: boolean }>;
-  preinitArchiveBytes: number;
+  archiveSkipLine: boolean;
+  archiveDropped: DroppedOutputEnding | null;
   completedAt: number | null;
   disposed: boolean;
   acceptingOutput: boolean;
@@ -488,6 +497,16 @@ function sanitizeHistoryChunk(session: Session, text: string, final = false): st
   return output;
 }
 
+/** The longest prefix within `maximumBytes`: whole lines if any fit, else whole characters. */
+function outputPrefix(text: string, maximumBytes: number): string {
+  const encoded = Buffer.from(text, "utf8");
+  const limit = Math.min(encoded.length, maximumBytes);
+  const newline = encoded.subarray(0, limit).lastIndexOf(0x0a);
+  let end = newline >= 0 ? newline + 1 : limit;
+  while (end > 0 && end < encoded.length && (encoded[end]! & 0xc0) === 0x80) end -= 1;
+  return encoded.subarray(0, end).toString("utf8");
+}
+
 export type TerminalHistoryOptions = {
   /** Awaited inside each page read's concurrency slot. Tests hold reads open with it. */
   pageReadHook?: () => Promise<void>;
@@ -495,6 +514,10 @@ export type TerminalHistoryOptions = {
   serializeHook?: () => void;
   /** Most history directories one root keeps (and scans twice that per prune pass). */
   maxHistoryDirectories?: number;
+  /** Most chunks one session queues. Tests lower it instead of appending thousands of chunks. */
+  maxPendingChunks?: number;
+  /** Most chunks all sessions queue. Tests lower it the same way. */
+  maxGlobalPendingChunks?: number;
 };
 
 /**
@@ -514,9 +537,7 @@ export class TerminalHistory {
   private readonly pruneContinuationTimers = new Set<ReturnType<typeof setTimeout>>();
   private stateEstimatedBytes = 0;
   private queuedBytes = 0;
-  private queuedRecords = 0;
-  private preinitBytes = 0;
-  private preinitRecords = 0;
+  private queuedChunks = 0;
   private pageReads = 0;
   private readonly pageWaiters: Array<() => void> = [];
   private enabled = true;
@@ -524,6 +545,8 @@ export class TerminalHistory {
   private globalBytes = DEFAULT_TERMINAL_HISTORY_GLOBAL_RETENTION_MB * 1024 * 1024;
   private completedMaxAgeMs = DEFAULT_TERMINAL_HISTORY_RETENTION_DAYS * 24 * 60 * 60_000;
   private readonly maxDirectories: number;
+  private readonly maxPendingChunks: number;
+  private readonly maxGlobalPendingChunks: number;
   private readonly pageReadHook: (() => Promise<void>) | null;
   private readonly serializeHook: (() => void) | null;
 
@@ -532,6 +555,9 @@ export class TerminalHistory {
       1,
       Math.floor(options.maxHistoryDirectories ?? DEFAULT_MAX_HISTORY_DIRECTORIES),
     );
+    this.maxPendingChunks = options.maxPendingChunks ?? TERMINAL_HISTORY_PENDING_CHUNKS;
+    this.maxGlobalPendingChunks =
+      options.maxGlobalPendingChunks ?? TERMINAL_HISTORY_GLOBAL_PENDING_CHUNKS;
     this.pageReadHook = options.pageReadHook ?? null;
     this.serializeHook = options.serializeHook ?? null;
   }
@@ -824,7 +850,6 @@ export class TerminalHistory {
     } else if (checkpoint) {
       session.manifest.historyGap = true;
     }
-    this.initializeArchive(session);
     await atomicWrite(manifestPath(session), `${JSON.stringify(session.manifest)}\n`);
   }
 
@@ -925,9 +950,10 @@ export class TerminalHistory {
       parseTail: Promise.resolve(),
       ioTail: Promise.resolve(),
       pending: [],
+      numbered: [],
       pendingBytes: 0,
       queuedBytes: 0,
-      queuedRecords: 0,
+      queuedChunks: 0,
       flushTimer: null,
       flushQueued: false,
       lastCheckpointAt: 0,
@@ -945,16 +971,14 @@ export class TerminalHistory {
       archivePendingCr: false,
       archiveHighSurrogate: "",
       archiveLineCarry: "",
-      archiveInitialized: false,
-      preinitArchiveChunks: [],
-      preinitArchiveBytes: 0,
+      archiveSkipLine: false,
+      archiveDropped: null,
       completedAt: null,
       disposed: false,
       acceptingOutput: active,
     } satisfies Session;
     session.initialized = this.initialize(session, active).catch(() => {
       session.manifest.historyGap = true;
-      this.initializeArchive(session);
     });
     session.parseTail = session.initialized;
     session.ioTail = session.initialized;
@@ -1024,16 +1048,12 @@ export class TerminalHistory {
     session.flushTimer.unref?.();
   }
 
-  private releaseQueuedRecords(session: Session, records: HistoryRecord[]): void {
-    const bytes = records.reduce(
-      (sum, record) =>
-        sum + Buffer.byteLength(record.text, "utf8") + TERMINAL_HISTORY_RECORD_OVERHEAD_BYTES,
-      0,
-    );
-    session.queuedBytes = Math.max(0, session.queuedBytes - bytes);
-    session.queuedRecords = Math.max(0, session.queuedRecords - records.length);
-    this.queuedBytes = Math.max(0, this.queuedBytes - bytes);
-    this.queuedRecords = Math.max(0, this.queuedRecords - records.length);
+  private releaseQueuedChunk(session: Session, charge: number): void {
+    if (charge === 0) return;
+    session.queuedBytes = Math.max(0, session.queuedBytes - charge);
+    session.queuedChunks = Math.max(0, session.queuedChunks - 1);
+    this.queuedBytes = Math.max(0, this.queuedBytes - charge);
+    this.queuedChunks = Math.max(0, this.queuedChunks - 1);
   }
 
   private activeSessionSegmentBudget(): number {
@@ -1070,19 +1090,22 @@ export class TerminalHistory {
   }
 
   private flushPending(session: Session): void {
-    if (session.pending.length === 0 || session.flushQueued) return;
+    if ((session.pending.length === 0 && session.numbered.length === 0) || session.flushQueued) {
+      return;
+    }
     session.flushQueued = true;
     this.scheduleIo(session, async () => {
       // Takes what is pending when it runs, so a backlog becomes one larger
       // write instead of a queue of small ones that each rewrite the manifest.
       session.flushQueued = false;
-      const records = session.pending.splice(0);
-      session.pendingBytes = 0;
+      this.numberQueuedOutput(session);
+      const blocks = session.numbered.splice(0);
+      let released = 0;
       try {
         let segment = session.manifest.segments.at(-1);
         let createdSegment = false;
-        // One write per segment per flush: a write for each record is what
-        // made a queue slow to drain, and its slots only return after the write.
+        // Few writes per flush: a write for each record is what made a queue slow
+        // to drain.
         let batch = "";
         let batchBytes = 0;
         let batchLast = 0;
@@ -1104,23 +1127,32 @@ export class TerminalHistory {
           batch = "";
           batchBytes = 0;
         };
-        for (const record of records) {
-          const line = `${JSON.stringify(record)}\n`;
-          const bytes = Buffer.byteLength(line, "utf8");
-          if (!segment || segment.bytes + batchBytes + bytes > TERMINAL_HISTORY_SEGMENT_BYTES) {
-            if (segment && batchBytes > 0) await writeBatch(segment);
-            segment = {
-              number: (segment?.number ?? 0) + 1,
-              bytes: 0,
-              first: record.sequence,
-              last: record.sequence,
-            };
-            session.manifest.segments.push(segment);
-            createdSegment = true;
+        for (const block of blocks) {
+          let sequence = block.first;
+          for (const text of block.text.split("\n")) {
+            const line = `${JSON.stringify({ sequence, at: block.at, text })}\n`;
+            const bytes = Buffer.byteLength(line, "utf8");
+            if (!segment || segment.bytes + batchBytes + bytes > TERMINAL_HISTORY_SEGMENT_BYTES) {
+              if (segment && batchBytes > 0) await writeBatch(segment);
+              segment = {
+                number: (segment?.number ?? 0) + 1,
+                bytes: 0,
+                first: sequence,
+                last: sequence,
+              };
+              session.manifest.segments.push(segment);
+              createdSegment = true;
+            }
+            batch += line;
+            batchBytes += bytes;
+            batchLast = sequence;
+            sequence += 1;
+            if (batchBytes >= TERMINAL_HISTORY_WRITE_BATCH_BYTES) await writeBatch(segment);
           }
-          batch += line;
-          batchBytes += bytes;
-          batchLast = record.sequence;
+          // Its rows are written or in the bounded batch, so output arriving
+          // during this flush can use its slot.
+          released += 1;
+          this.releaseQueuedChunk(session, block.charge);
         }
         if (segment && batchBytes > 0) await writeBatch(segment);
         await this.pruneSessionSegments(session);
@@ -1129,122 +1161,137 @@ export class TerminalHistory {
         if (createdSegment)
           void this.scheduleRootPrune(path.dirname(session.directory), session.historyId);
       } finally {
-        this.releaseQueuedRecords(session, records);
+        for (const block of blocks.slice(released)) this.releaseQueuedChunk(session, block.charge);
       }
     });
   }
 
-  private archiveText(session: Session, text: string, at: number): void {
-    session.archiveLineCarry += sanitizeHistoryChunk(session, text);
-    let newline = session.archiveLineCarry.indexOf("\n");
+  /** Runs sanitized text through the line carry, adding each row it completes to `rows`. */
+  private takeArchiveLines(session: Session, sanitized: string, rows: string[]): void {
+    let text = sanitized;
+    if (session.archiveSkipLine) {
+      const lineEnd = text.indexOf("\n");
+      if (lineEnd < 0) return;
+      text = text.slice(lineEnd + 1);
+      session.archiveSkipLine = false;
+    }
+    const carried = `${session.archiveLineCarry}${text}`;
+    let start = 0;
+    let newline = carried.indexOf("\n");
     while (newline >= 0) {
-      const line = session.archiveLineCarry.slice(0, newline);
-      for (const chunk of splitHistoryRecords(line)) this.enqueueHistoryRecord(session, chunk, at);
-      if (line.length === 0) this.enqueueHistoryRecord(session, "", at);
-      session.archiveLineCarry = session.archiveLineCarry.slice(newline + 1);
-      newline = session.archiveLineCarry.indexOf("\n");
+      const line = carried.slice(start, newline);
+      // A character is at most 3 UTF-8 bytes, so most lines need no encoding.
+      if (line.length * 3 <= TERMINAL_HISTORY_RECORD_MAX_BYTES) rows.push(line);
+      else rows.push(...splitHistoryRecords(line));
+      start = newline + 1;
+      newline = carried.indexOf("\n", start);
     }
-    while (
-      Buffer.byteLength(session.archiveLineCarry, "utf8") > TERMINAL_HISTORY_RECORD_MAX_BYTES
-    ) {
-      const [chunk = "", ...remaining] = splitHistoryRecords(session.archiveLineCarry);
-      this.enqueueHistoryRecord(session, chunk, at);
-      session.archiveLineCarry = remaining.join("");
+    let rest = carried.slice(start);
+    while (Buffer.byteLength(rest, "utf8") > TERMINAL_HISTORY_RECORD_MAX_BYTES) {
+      const [chunk = "", ...remaining] = splitHistoryRecords(rest);
+      rows.push(chunk);
+      rest = remaining.join("");
     }
+    session.archiveLineCarry = rest;
+  }
+
+  /** Ends the line and any escape sequence in progress, adding what they held to `rows`. */
+  private finishArchiveLine(session: Session, rows: string[]): void {
+    this.takeArchiveLines(session, sanitizeHistoryChunk(session, "", true), rows);
+    if (session.archiveLineCarry.length > 0) rows.push(session.archiveLineCarry);
+    session.archiveLineCarry = "";
+    session.archiveParserState = "normal";
+    session.archiveSkipLine = false;
+  }
+
+  private numberRows(session: Session, rows: string[], at: number, charge: number): void {
+    if (rows.length === 0) {
+      this.releaseQueuedChunk(session, charge);
+      return;
+    }
+    const first = session.sequence + 1;
+    session.sequence += rows.length;
+    session.manifest.latestSequence = session.sequence;
+    session.numbered.push({ first, at, text: rows.join("\n"), charge });
+  }
+
+  /**
+   * Sanitizes queued output, splits it into rows and numbers them, without
+   * touching disk. A flush does this when it writes; anything that reads
+   * `session.sequence` does it first, because output still queued has no number.
+   * Numbered rows keep their chunk's charge, and sanitizing never makes text
+   * larger beyond what the line carry already holds, so the byte bound still holds.
+   */
+  private numberQueuedOutput(session: Session): void {
+    for (const chunk of session.pending.splice(0)) {
+      const rows: string[] = [];
+      if (chunk.generationChanged || chunk.afterDrop) {
+        // Either way the output before this chunk has ended. Dropped output may
+        // have held the end of an escape sequence, so without this reset the
+        // sanitizer could swallow everything after it.
+        this.finishArchiveLine(session, rows);
+        session.archiveSkipLine = !chunk.generationChanged && chunk.afterDrop === "mid-line";
+      }
+      this.takeArchiveLines(session, sanitizeHistoryChunk(session, chunk.text), rows);
+      this.numberRows(session, rows, chunk.at, chunk.charge);
+    }
+    session.pendingBytes = 0;
   }
 
   private flushArchiveLine(session: Session): void {
-    const at = Date.now();
-    session.archiveLineCarry += sanitizeHistoryChunk(session, "", true);
-    if (session.archiveLineCarry.length > 0) {
-      for (const chunk of splitHistoryRecords(session.archiveLineCarry)) {
-        this.enqueueHistoryRecord(session, chunk, at);
+    this.numberQueuedOutput(session);
+    const rows: string[] = [];
+    this.finishArchiveLine(session, rows);
+    // Already in memory as the line carry, whose size is bounded, so uncharged.
+    this.numberRows(session, rows, Date.now(), 0);
+  }
+
+  private enqueueOutput(
+    session: Session,
+    text: string,
+    at: number,
+    generationChanged: boolean,
+  ): void {
+    const room =
+      Math.min(
+        TERMINAL_HISTORY_PENDING_BYTES - session.queuedBytes,
+        TERMINAL_HISTORY_GLOBAL_PENDING_BYTES - this.queuedBytes,
+      ) - TERMINAL_HISTORY_CHUNK_OVERHEAD_BYTES;
+    const hasSlot =
+      session.queuedChunks < this.maxPendingChunks &&
+      this.queuedChunks < this.maxGlobalPendingChunks;
+    let admitted = "";
+    if (hasSlot && room > 0) {
+      admitted = Buffer.byteLength(text, "utf8") > room ? outputPrefix(text, room) : text;
+    }
+    if (admitted.length > 0) {
+      const bytes = Buffer.byteLength(admitted, "utf8");
+      const charge = bytes + TERMINAL_HISTORY_CHUNK_OVERHEAD_BYTES;
+      session.pending.push({
+        text: admitted,
+        at,
+        generationChanged,
+        afterDrop: session.archiveDropped,
+        charge,
+      });
+      session.archiveDropped = null;
+      session.pendingBytes += charge;
+      session.queuedBytes += charge;
+      session.queuedChunks += 1;
+      this.queuedBytes += charge;
+      this.queuedChunks += 1;
+      this.scheduleFlush(session);
+      if (
+        session.pending.length >= TERMINAL_HISTORY_FLUSH_CHUNKS ||
+        session.pendingBytes >= TERMINAL_HISTORY_FLUSH_BYTES
+      ) {
+        this.flushPending(session);
       }
     }
-    session.archiveLineCarry = "";
-    session.archiveParserState = "normal";
-  }
-
-  private archiveOutput(
-    session: Session,
-    text: string,
-    at: number,
-    generationChanged: boolean,
-  ): void {
-    if (generationChanged) {
-      this.flushArchiveLine(session);
-      session.archiveParserState = "normal";
-      session.archivePendingCr = false;
-      session.archiveHighSurrogate = "";
-      session.archiveLineCarry = "";
-    }
-    this.archiveText(session, text, at);
-  }
-
-  private initializeArchive(session: Session): void {
-    if (session.archiveInitialized) return;
-    session.archiveInitialized = true;
-    const chunks = session.preinitArchiveChunks.splice(0);
-    this.preinitBytes = Math.max(0, this.preinitBytes - session.preinitArchiveBytes);
-    this.preinitRecords = Math.max(0, this.preinitRecords - chunks.length);
-    session.preinitArchiveBytes = 0;
-    for (const chunk of chunks) {
-      this.archiveOutput(session, chunk.text, chunk.at, chunk.generationChanged);
-    }
-  }
-
-  private archiveOrQueueOutput(
-    session: Session,
-    text: string,
-    at: number,
-    generationChanged: boolean,
-  ): void {
-    if (session.archiveInitialized) {
-      this.archiveOutput(session, text, at, generationChanged);
-      return;
-    }
-    const bytes = Buffer.byteLength(text, "utf8");
-    if (
-      session.preinitArchiveChunks.length >= TERMINAL_HISTORY_PREINIT_CHUNKS ||
-      session.preinitArchiveBytes + bytes > TERMINAL_HISTORY_PENDING_BYTES ||
-      this.preinitRecords >= TERMINAL_HISTORY_GLOBAL_PREINIT_CHUNKS ||
-      this.preinitBytes + bytes > TERMINAL_HISTORY_GLOBAL_PENDING_BYTES
-    ) {
+    if (admitted.length < text.length) {
+      const last = text.at(-1);
+      session.archiveDropped = last === "\n" || last === "\r" ? "line-start" : "mid-line";
       this.markHistoryGap(session);
-      return;
-    }
-    session.preinitArchiveChunks.push({ text, at, generationChanged });
-    session.preinitArchiveBytes += bytes;
-    this.preinitBytes += bytes;
-    this.preinitRecords += 1;
-  }
-
-  private enqueueHistoryRecord(session: Session, text: string, at: number): void {
-    const bytes = Buffer.byteLength(text, "utf8") + TERMINAL_HISTORY_RECORD_OVERHEAD_BYTES;
-    const hasCapacity =
-      session.queuedRecords < TERMINAL_HISTORY_PENDING_RECORDS &&
-      session.queuedBytes + bytes <= TERMINAL_HISTORY_PENDING_BYTES &&
-      this.queuedRecords < TERMINAL_HISTORY_GLOBAL_PENDING_RECORDS &&
-      this.queuedBytes + bytes <= TERMINAL_HISTORY_GLOBAL_PENDING_BYTES;
-    if (!hasCapacity) {
-      this.markHistoryGap(session);
-      return;
-    }
-    session.sequence += 1;
-    session.manifest.latestSequence = session.sequence;
-    const record = { sequence: session.sequence, at, text };
-    session.pending.push(record);
-    session.pendingBytes += bytes;
-    session.queuedBytes += bytes;
-    session.queuedRecords += 1;
-    this.queuedBytes += bytes;
-    this.queuedRecords += 1;
-    this.scheduleFlush(session);
-    if (
-      session.pending.length >= TERMINAL_HISTORY_FLUSH_RECORDS ||
-      session.pendingBytes >= TERMINAL_HISTORY_FLUSH_BYTES
-    ) {
-      this.flushPending(session);
     }
   }
 
@@ -1262,6 +1309,7 @@ export class TerminalHistory {
       .then(async () => {
         if (session.disposed) return;
         if (session.parserCarryOverflow) return;
+        this.numberQueuedOutput(session);
         const output = this.serializedState(session);
         const checkpoint = {
           formatVersion: TERMINAL_STATE_FORMAT_VERSION,
@@ -1309,7 +1357,7 @@ export class TerminalHistory {
     const bytes = Buffer.byteLength(text, "utf8");
     const at = Date.now();
     session.bytesSinceCheckpoint += bytes;
-    this.archiveOrQueueOutput(session, text, at, generationChanged);
+    this.enqueueOutput(session, text, at, generationChanged);
     session.parseTail = session.parseTail
       .then(async () => {
         if (session.disposed) return;
@@ -1381,6 +1429,7 @@ export class TerminalHistory {
       this.markHistoryGap(session);
     });
     if (session.disposed) return;
+    this.numberQueuedOutput(session);
     let checkpoint: string | null = null;
     if (!session.parserCarryOverflow) {
       try {
@@ -1437,6 +1486,7 @@ export class TerminalHistory {
         if (session.parserCarryOverflow) {
           throw new Error("Terminal snapshot is unavailable during an oversized control sequence");
         }
+        this.numberQueuedOutput(session);
         return {
           formatVersion: TERMINAL_STATE_FORMAT_VERSION,
           mode: "state",
@@ -1732,15 +1782,15 @@ export class TerminalHistory {
     configurations: number;
     estimatedStateBytes: number;
     queuedBytes: number;
-    queuedRecords: number;
+    queuedChunks: number;
     pageReads: number;
   } {
     return {
       sessions: this.sessions.size,
       configurations: this.sessionConfigurations.size,
       estimatedStateBytes: this.stateEstimatedBytes,
-      queuedBytes: this.queuedBytes + this.preinitBytes,
-      queuedRecords: this.queuedRecords + this.preinitRecords,
+      queuedBytes: this.queuedBytes,
+      queuedChunks: this.queuedChunks,
       pageReads: this.pageReads,
     };
   }

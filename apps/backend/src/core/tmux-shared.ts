@@ -663,6 +663,70 @@ export function tailFromOffsetCommand(filePath: string, offset: number): string 
   return `tail -c +${Math.max(0, Math.floor(offset)) + 1} ${shellArg(filePath)} 2>/dev/null || true`;
 }
 
+export class AsyncMutex {
+  private chain = Promise.resolve();
+
+  async runExclusive<T>(fn: () => Promise<T>): Promise<T> {
+    const prior = this.chain;
+    let release: () => void = () => undefined;
+    this.chain = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await prior;
+    try {
+      return await fn();
+    } finally {
+      release();
+    }
+  }
+}
+
+/** A slice of a transcript and the file's size, read together. */
+export type TranscriptWindow = { size: number; start: number; bytes: Buffer };
+
+/** {@link transcriptWindowCommand}'s status when the file does not exist. */
+export const TRANSCRIPT_WINDOW_MISSING_STATUS = 3;
+
+/**
+ * Prints `<size> <start>` and then up to `maxBytes` ending at `end` (the end of
+ * the file when undefined), in one `docker exec`. `wc -c` on a regular file
+ * takes the size from `fstat`, and `tail -c +N` seeks, so neither reads what the
+ * window leaves out.
+ */
+export function transcriptWindowCommand(
+  filePath: string,
+  end: number | undefined,
+  maxBytes: number,
+): string {
+  const quoted = shellArg(filePath);
+  const limit = Math.max(1, Math.floor(maxBytes));
+  return [
+    `[ -f ${quoted} ] || exit ${TRANSCRIPT_WINDOW_MISSING_STATUS}`,
+    `size=$(wc -c < ${quoted})`,
+    "size=$((size))",
+    `end=${end === undefined ? "$size" : Math.max(0, Math.floor(end))}`,
+    'if [ "$end" -gt "$size" ]; then echo "$size 0"; exit 0; fi',
+    `start=$(( end > ${limit} ? end - ${limit} : 0 ))`,
+    'echo "$size $start"',
+    `[ "$end" -gt "$start" ] || exit 0`,
+    `tail -c +$((start + 1)) ${quoted} | head -c $((end - start))`,
+  ].join("\n");
+}
+
+/** Parses {@link transcriptWindowCommand} output, keeping the slice as bytes. */
+export function parseTranscriptWindowOutput(stdout: Buffer): TranscriptWindow {
+  const headerEnd = stdout.indexOf(0x0a);
+  const [size, start] = stdout
+    .subarray(0, Math.max(0, headerEnd))
+    .toString("utf8")
+    .split(" ")
+    .map(Number);
+  if (!Number.isSafeInteger(size) || !Number.isSafeInteger(start)) {
+    throw new Error("unreadable transcript window");
+  }
+  return { size: size!, start: start!, bytes: stdout.subarray(headerEnd + 1) };
+}
+
 /** Separates the line count from the head bytes in {@link transcriptHeadCommand} output. */
 export const TRANSCRIPT_HEAD_MARKER = "__ork_head__";
 

@@ -77,11 +77,15 @@ The check moved from the renderer to `packages/protocol/src/agent-mail.ts`, and 
 Took the recommended option: a short phrase read from the payload, with the stored text kept in `messages`. Only a `user` row counts, as in the renderer, so an assistant quoting an envelope reads as before.
 
 - **Where the payload is read.** The carrier scan and payload validation moved to the protocol package as `readAgentMailCarriers`, and the renderer now builds its rows from it. A separate backend reader was not written, because it would be a third copy of the validation.
-- **A carrier the read's cap cut.** `session.transcript` caps text at 20,000 characters and may hide whole later carriers. Voice now reports that the latest sender and batch size cannot be determined. Recovering an earlier heading with `keepCutBody` would risk naming an older mail as newest; the shared option remains available but voice no longer uses it.
+- **A carrier the read's cap cut.** `session.transcript` caps text at 20,000 characters and may hide whole later carriers. Voice now reports that the latest sender and batch size cannot be determined. Recovering an earlier heading with `keepCutBody` would risk naming an older mail as newest; the unused partial-body reader and its option were removed in review.
 - **How the sender is named.** Voice has its own wording rather than the renderer's `agentMailSenderLabel`. A carrier has no environment name for a tab, and that label falls back to the short environment id, which is poor to say aloud.
 - **What else is said.** A complete batch names its final message and counts the others; an unreadable final carrier uses the unreadable-mail fallback rather than an earlier sender. Trailing user words are spoken within a 400-character bound, excluding the structured-prompt transport suffix. A sender outside the project is called untrusted, because the carrier's own warning is not spoken. A carrier that cannot be read says so and never speaks markup.
 
 Neither task has been seen in a running tab: no real mail was delivered, because that needs a provider turn (task 1). The tests use carriers from `renderAgentMailCarrier`. A row stored in a different form, for example with a prefix before the carrier, would not be recognised and would title or be spoken as before.
+
+### Tasks 2 and 3: wrapped frames and transport suffix (review repair)
+
+Title eligibility and rendering now use the same system-frame-stripped text. Voice also strips system frames from its fallback excerpt, while leaving returned messages unchanged. The schema-instruction suffix prefix lives in the protocol package and is imported by both surfaces, so their handling cannot drift. The existing wrapped-title assertion and an exact spoken-fallback assertion cover the two leaks.
 
 ## Related
 

@@ -869,7 +869,8 @@ describe("Control MCP voice core", () => {
       const wrapped = await readNewest(
         `<orkestrator-system-instructions>${mailCarrier()}</orkestrator-system-instructions>\nActual request`,
       );
-      expect(wrapped.say).not.toContain("Latest message is mail");
+      expect(wrapped.say).toContain("Latest user message: Actual request");
+      expect(wrapped.say).not.toContain("orkestrator-");
     });
 
     test("speaks a closed-tag lookalike without a payload as user text", async () => {

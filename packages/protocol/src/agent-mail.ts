@@ -1281,29 +1281,14 @@ function agentMailFromCarrier(carrier: string): AgentMailCarrierMail | null {
 }
 
 /**
- * A carrier a read's length cap cut, without its body. The payload holds `body`
- * after everything else, so a cap that cuts a long body leaves the rest whole.
- */
-function agentMailFromCutCarrier(carrier: string): AgentMailCarrierMail | null {
-  const start = carrierPayloadStart(carrier);
-  if (start < 0) return null;
-  const end = peerMailDelimiter(carrier, '"body":', start);
-  return end < 0 ? null : parseCarrierPayload(`${carrier.slice(start, end)}"body":""}`);
-}
-
-/**
  * Read a provider row as carriers back to back, one entry per carrier (null for
  * one that cannot be read, including one cut off before its close tag), and
  * whatever text follows the last of them.
- *
- * With `keepCutBody`, a carrier cut inside its body is read with an empty body,
- * for a reader that wants only who sent it and the subject. A view that shows
- * the body leaves this off, so it never presents a part of a message as the whole.
  */
-export function readAgentMailCarriers(
-  row: string,
-  options: { keepCutBody?: boolean } = {},
-): { entries: Array<AgentMailCarrierMail | null>; rest: string } {
+export function readAgentMailCarriers(row: string): {
+  entries: Array<AgentMailCarrierMail | null>;
+  rest: string;
+} {
   const content = row.trim();
   const entries: Array<AgentMailCarrierMail | null> = [];
   let cursor = 0;
@@ -1317,7 +1302,7 @@ export function readAgentMailCarriers(
       PEER_MAIL_ANY_CARRIER_OPEN.lastIndex,
     );
     if (carrierEnd < 0) {
-      entries.push(options.keepCutBody ? agentMailFromCutCarrier(content.slice(cursor)) : null);
+      entries.push(null);
       break;
     }
     entries.push(agentMailFromCarrier(content.slice(cursor, carrierEnd)));
@@ -1370,3 +1355,6 @@ export function normalizeAgentMessagingSettings(
     paused: typeof record.paused === "boolean" ? record.paused : fallback.paused,
   };
 }
+
+/** Prefix of the schema instruction appended by structured-prompt bridge transports. */
+export const STRUCTURED_PROMPT_SUFFIX_PREFIX = "End your turn with exactly one JSON value";

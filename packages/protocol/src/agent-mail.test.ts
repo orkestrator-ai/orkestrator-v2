@@ -788,21 +788,11 @@ describe("reading a carrier back", () => {
     expect(entries.map((entry) => entry?.body)).toEqual([body]);
   });
 
-  test("a carrier cut in its body is unreadable unless the reader wants only its heading", () => {
+  test("a carrier cut in its body is unreadable", () => {
     const carrier = renderAgentMailCarrier(mailMessage({ body: "x".repeat(1_000) }));
     const cut = carrier.slice(0, carrier.indexOf("xxx") + 100);
 
     expect(readAgentMailCarriers(cut).entries).toEqual([null]);
-    expect(readAgentMailCarriers(cut, { keepCutBody: true }).entries).toEqual([
-      expect.objectContaining({ id: "mail", subject: "Report", body: "" }),
-    ]);
-  });
-
-  test("a carrier cut before its body has no heading to keep", () => {
-    const carrier = renderAgentMailCarrier(mailMessage());
-    const cut = carrier.slice(0, carrier.indexOf('"from"') + 20);
-
-    expect(readAgentMailCarriers(cut, { keepCutBody: true }).entries).toEqual([null]);
   });
 
   test("refuses a payload that does not hold up", () => {

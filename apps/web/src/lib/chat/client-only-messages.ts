@@ -8,6 +8,7 @@ import {
   isPeerMailCarrierContent,
   normalizeAgentMailNotice,
   readAgentMailCarriers,
+  STRUCTURED_PROMPT_SUFFIX_PREFIX,
   type AgentMailCarrierMail,
   type AgentMailMessage,
   type MailActor,
@@ -331,7 +332,7 @@ export const PEER_MAIL_UNREADABLE_TEXT =
  * a prompt (`STRUCTURED_PROMPT_INSTRUCTION_PREFIX`). A reloaded row can carry it
  * after the carrier; it is transport, like the carrier's own instructions.
  */
-export const STRUCTURED_PROMPT_SUFFIX_PREFIX = "End your turn with exactly one JSON value";
+export { STRUCTURED_PROMPT_SUFFIX_PREFIX } from "@orkestrator/protocol/agent-mail";
 
 /**
  * A stored user row as a transcript presents it, or null when it is not mail.

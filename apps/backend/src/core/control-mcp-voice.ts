@@ -4,6 +4,7 @@ import {
   agentMailKind,
   isPeerMailCarrierContent,
   readAgentMailCarriers,
+  STRUCTURED_PROMPT_SUFFIX_PREFIX,
   type MailActor,
 } from "@orkestrator/protocol/agent-mail";
 import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
@@ -279,7 +280,7 @@ function spokenMailRow(text: string, textTruncated = false): string | null {
     return "Latest message contains delivered mail, but the transcript is cut off. The latest sender and batch size cannot be determined here.";
   const { entries, rest } = readAgentMailCarriers(content);
   const trailing =
-    rest && !rest.startsWith("End your turn with exactly one JSON value")
+    rest && !rest.startsWith(STRUCTURED_PROMPT_SUFFIX_PREFIX)
       ? ` User message: ${short(rest, 400)}`
       : "";
   const newest = entries.at(-1);
@@ -786,7 +787,7 @@ export function registerVoiceTools(server: McpServer, caller: ControlMcpCaller):
           say:
             spokenMail ??
             (last
-              ? `Latest ${last.role} message: ${short(last.text, brief ? 400 : 1_200)}`
+              ? `Latest ${last.role} message: ${short(stripSystemInstructions(newest?.text ?? last.text), brief ? 400 : 1_200)}`
               : "The session has no messages yet."),
           ids: { sessionId },
         });

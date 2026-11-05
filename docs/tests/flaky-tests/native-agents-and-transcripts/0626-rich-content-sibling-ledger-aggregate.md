@@ -164,3 +164,16 @@ remains unknown. No rich-content implementation or assertions changed.
 ## Static Find review recurrence, 2026-11-05
 
 Preparation at `c0808605ddf1d4ecb421db6493f91018f1199b56` repeated the sibling ledger length mismatch (expected 1, received 0). Evidence: `.orkestrator/review-artifacts/review-validation-72ace150-e330-4d03-bde1-fdc95c60e6e0/validation-04.stdout.txt`; web group reported six failures. Complete unchanged owner rerun: `mise run test:logged -- --name revocation-alone -- bun --cwd=apps/web test ./src/lib/chat/rich-conversation-revocation.test.tsx --parallel=1 --only-failures`, passed, exit 0, 1.7 s. No cause established; preserve assertions.
+
+## Mail-envelope review repair — 2026-11-05
+
+Preparation's `mise run test` at `13aa5a949` repeated the sibling-ledger
+mismatch (169.58 ms): expected length 1, received 0 at line 187. The saved
+output is `.orkestrator/review-artifacts/review-validation-c7db4275-291a-4691-8733-69745a6cf87c/validation-04.stdout.txt`;
+the web workspace ran with two workers. The complete unchanged owner passed
+alone (exit 0, 1.5 s):
+`NODE_ENV=test mise run test:logged -- --name rich-revocation-alone -- bun test --cwd apps/web ./src/lib/chat/rich-conversation-revocation.test.tsx --parallel=1 --only-failures`.
+No assertion or implementation in this owner changed. Cause remains unknown.
+A first focused invocation without explicit `NODE_ENV=test` loaded React's
+production build and failed with `React.act is not a function`; that invocation
+is separate from the recorded sibling-ledger failure.

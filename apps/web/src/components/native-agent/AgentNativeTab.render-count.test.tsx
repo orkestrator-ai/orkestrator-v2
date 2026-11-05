@@ -9,7 +9,7 @@
  */
 import { afterAll, afterEach, beforeEach, expect, mock, test } from "bun:test";
 import { Profiler } from "react";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type {
   NativeAgentSessionStateUpdate,
   NativeAgentTabData,
@@ -25,6 +25,7 @@ import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { useNativeComposeStore } from "@/stores/nativeComposeStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { createSessionKey } from "@/lib/utils";
 import type { Environment } from "@/types";
 
 const realBackendSnapshot = { ...realBackend };
@@ -104,6 +105,9 @@ const ensureMock = mock(async (_input: Record<string, unknown>) => {
     agent: identity.platform,
   };
 });
+const getLocalFileTreeMock = mock(async (_worktreePath: string) => [
+  { name: "image.png", path: "src/image.png", isDirectory: false },
+]);
 
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
@@ -145,6 +149,13 @@ mock.module("@/lib/backend", () => ({
         turn: { phase: "idle" },
         interactions: [],
         composerControls: [],
+        composer: {
+          models: [{ platform: "codex", id: "gpt-5.4", label: "GPT-5.4" }],
+          selectedModelId: "gpt-5.4",
+          fastModeEnabled: null,
+          fastModeAvailable: false,
+          modes: [],
+        },
         capabilities: nativeAgentCapabilities(identity.platform),
         notices: [],
       },
@@ -165,7 +176,7 @@ mock.module("@/lib/backend", () => ({
     ].filter((model) => model.platform === platform),
   listNativeAgentResumableSessions: async () => [],
   getFileTree: async () => [],
-  getLocalFileTree: async () => [],
+  getLocalFileTree: getLocalFileTreeMock,
 }));
 
 const { AgentNativeTab } = await import("./AgentNativeTab");
@@ -174,6 +185,7 @@ const { resetNativeAgentSyncCapabilityForTests } = await import("@/hooks/useNati
 const realClearTabInitialPrompt = usePaneLayoutStore.getState().clearTabInitialPrompt;
 const clearTabInitialPromptMock = mock((_tabId: string, _environmentId?: string) => {});
 const initialGlobalConfig = useConfigStore.getState().config.global;
+const initialRepositories = useConfigStore.getState().config.repositories;
 
 afterAll(() => {
   resetNativeAgentSyncCapabilityForTests();
@@ -235,6 +247,7 @@ beforeEach(() => {
   resetNativeAgentSyncCapabilityForTests();
   dispatchMock.mockClear();
   ensureMock.mockClear();
+  getLocalFileTreeMock.mockClear();
   clearTabInitialPromptMock.mockClear();
   useNativeComposeStore.setState({ drafts: new Map() });
   useNativeAgentProjectionStore.getState().reset();
@@ -252,6 +265,9 @@ afterEach(() => {
   useNativeAgentProjectionStore.getState().reset();
   usePaneLayoutStore.setState({ clearTabInitialPrompt: realClearTabInitialPrompt });
   useConfigStore.getState().updateGlobalConfig(initialGlobalConfig);
+  useConfigStore.setState((state) => ({
+    config: { ...state.config, repositories: initialRepositories },
+  }));
 });
 
 /** Lets pending reads land, until the tab has gone quiet. */
@@ -406,6 +422,32 @@ test("settings that arrive during setup reach the session the tab creates", asyn
   expect(ensureMock).not.toHaveBeenCalled();
 
   await writeEnvironment({ setupPhase: "ready" });
+  await waitFor(() => expect(ensureMock).toHaveBeenCalled());
+  expect(ensureMock.mock.calls.at(-1)?.[0]).toMatchObject({ model: "o3" });
+});
+
+test("a project arriving during setup supplies the repository settings for session creation", async () => {
+  served = [];
+  for (const [projectId, model] of [
+    ["project-1", "gpt-5.4"],
+    ["project-2", "o3"],
+  ] as const) {
+    useConfigStore.getState().setRepositoryConfig(projectId, {
+      defaultBranch: "main",
+      prBaseBranch: "main",
+      agentSettings: { platforms: { codex: { model } } },
+    });
+  }
+  useEnvironmentStore.setState({
+    environments: [environment({ setupPhase: "running", projectId: undefined })],
+  });
+  await renderTab(OWN_TAB, freshTab);
+  expect(ensureMock).not.toHaveBeenCalled();
+
+  await writeEnvironment({ projectId: "project-1" });
+  await writeEnvironment({ projectId: "project-2" });
+  await writeEnvironment({ setupPhase: "ready" });
+
   await waitFor(() => expect(ensureMock).toHaveBeenCalled());
   expect(ensureMock.mock.calls.at(-1)?.[0]).toMatchObject({ model: "o3" });
 });
@@ -596,3 +638,69 @@ test("the unassigned composer still follows the environment's default agent", as
     expect(document.querySelector("[data-native-model-platform='claude']")).toBeTruthy(),
   );
 });
+
+test.each(["environmentType", "networkAccessMode"] as const)(
+  "%s arriving after mount updates the composer's sandbox policy description",
+  async (field) => {
+    useConfigStore.getState().updateGlobalConfig({ enabledAgentPlatforms: ["codex"] });
+    useEnvironmentStore.setState({
+      environments: [
+        environment({
+          environmentType: field === "environmentType" ? undefined : "containerized",
+          agentSettings: {
+            defaultAgent: "codex",
+            executionPolicy: { networkAccess: "restricted" },
+          },
+        }),
+      ],
+    });
+    await renderTab(OWN_TAB, unassignedTab);
+    fireEvent.pointerDown(await screen.findByTestId("launch-approval-mode-picker"));
+    const description = () =>
+      screen.getByRole("menuitemradio", { name: "On request" }).getAttribute("title");
+    await screen.findByRole("menuitemradio", { name: "On request" });
+    if (field === "environmentType") {
+      expect(description()).toContain("asks before stepping outside");
+      await writeEnvironment({ environmentType: "containerized" });
+      expect(description()).toContain("never asks; choose Untrusted");
+    } else {
+      expect(description()).toContain("never asks; choose Untrusted");
+      await writeEnvironment({ networkAccessMode: "full" });
+      expect(description()).toContain("asks before stepping outside");
+    }
+  },
+);
+
+test.each(["locked", "unassigned"] as const)(
+  "a worktree path arriving after mount updates %s file search and attachment resolution",
+  async (kind) => {
+    useEnvironmentStore.setState({
+      environments: [environment({ environmentType: "local", worktreePath: undefined })],
+    });
+    await renderTab(
+      OWN_TAB,
+      kind === "locked" ? { ...lockedTab, containerId: undefined, isLocal: true } : unassignedTab,
+    );
+    expect(getLocalFileTreeMock).not.toHaveBeenCalled();
+
+    for (const worktreePath of ["/workspace/one", "/workspace/two"]) {
+      getLocalFileTreeMock.mockClear();
+      await writeEnvironment({ worktreePath });
+      await waitFor(() => expect(getLocalFileTreeMock).toHaveBeenCalledWith(worktreePath));
+      fireEvent.pointerDown(screen.getByRole("button", { name: "Add attachment" }));
+      fireEvent.click(await screen.findByRole("menuitem", { name: "Attach file from workspace" }));
+      await act(async () => {
+        fireEvent.click(await screen.findByRole("button", { name: /image.png/ }));
+      });
+      await waitFor(() => {
+        const draft = useNativeComposeStore
+          .getState()
+          .drafts.get(createSessionKey("env-1", OWN_TAB));
+        expect(draft?.attachments.at(-1)).toMatchObject({
+          type: "image",
+          path: `${worktreePath}/src/image.png`,
+        });
+      });
+    }
+  },
+);

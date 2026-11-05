@@ -1,7 +1,5 @@
 # Each render of the native agent tab does avoidable work
 
-Found while measuring [5580](5580-agent-native-tab-environment-subscription.md). That work removed the renders caused by unrelated environment writes; these two costs remain on every render the tab still has, such as a streaming transcript.
-
 ## Task analysis
 
 Analysed 2026-11-05 against `main` at `6e796ca32`, with 5580 applied.
@@ -38,7 +36,7 @@ Analysed 2026-11-05 against `main` at `6e796ca32`, with 5580 applied.
 
 **Context.** The unassigned composer does not do this: it committed once per write in the 5580 measurement.
 
-**Investigation.** Measured on 2026-11-05 in Chromium with development React and a 100-row fixture: the update took about 2.6 ms and the nested update about 0.9 ms with one tab, and about 4.7 ms and 1.2 ms for two tabs together. The source was not identified. `VirtualizedMessageList` has several layout effects and is the first place to look, then `AgentNativeTab.controller.tsx:2759`; `NativeChatShell`'s dock measurement only sets state when the height changes, so it should not be the cause.
+**Investigation.** Measured on 2026-11-05 in Chromium with development React and a 100-row fixture: the update took about 2.6 ms and the nested update about 0.9 ms with one tab, and about 4.7 ms and 1.2 ms for two tabs together. The source was not identified. Start with `VirtualizedMessageList` and other child components that can schedule state updates from layout effects. The controller's only `useLayoutEffect` assigns `forkPlanRef.current`; that ref write cannot schedule a nested update and is an eliminated lead. `NativeChatShell`'s dock measurement only sets state when the height changes, so it should not be the cause.
 
 **Decisions.**
 
@@ -50,7 +48,15 @@ Analysed 2026-11-05 against `main` at `6e796ca32`, with 5580 applied.
     - Pros: about 1 ms per render under development React is small.
     - Cons: it is paid on every streamed frame of every visible tab.
 
+## Assumptions and decisions
+
+### Task 2: Remove the ref-only layout effect as an investigation target
+
+The controller's effect updates a ref without scheduling React state. Keep it as an eliminated lead and investigate child components with state-writing layout effects instead. The source of the measured nested update remains open; this correction does not claim to identify it.
+
 ## Constraints and rationale
+
+Found while measuring [5580](5580-agent-native-tab-environment-subscription.md). That work removed the renders caused by unrelated environment writes; these two costs remain on every render the tab still has, such as a streaming transcript.
 
 Startup and initial-prompt behaviour must not change; `AgentNativeTab.render-count.test.tsx` pins it. Anything measured needs a fixture transcript and no provider turn.
 

@@ -132,3 +132,28 @@ Done, checked in code:
 - [1202 task 6](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md)
 - [1202 task 6](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md), which lists BR-1 as done
 - BR-14, the same pattern in Pi, is done: `encodeStateWithinBudget` in `bridges/pi-bridge/src/persistence.ts` ([1202 task 6](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md#6-bridge-hot-paths))
+
+## Outcome
+
+Checked item by item on 2026-11-05 against `main` at `3baeaacf6`. "Fixed" means the check found it not done and this batch finished it, in the bridge commit just before this table. Line numbers are at that commit.
+
+| Part | Item | Result | Evidence |
+| --- | --- | --- | --- |
+| 0270 | Replay removed | Done before this batch | No `provider === "cursor"` gate in non-test source; the gates the report cites (`acp-tools.ts:570`, `:688`, `:810`) and `reconcileCursorToolMetadata` are gone. Test: `acp-context.test.ts`, "a turn's generic tool calls spawn no replay child, live or after the turn", run under the id `cursor`. |
+| 0270 | Provider labels (`acp-errors.ts:47`, `session-config.ts:84`) | Done before this batch | Both name Grok or the configured provider only. Tests: `acp-errors.test.ts`, `session-config.test.ts`. |
+| 0270 | Harness default | Fixed | `acp-test-harness.ts:249` and `testing/unit-test-env.ts:16` used `acp-fixture`, but `testing/fake-agent-context.ts:7` still fell back to `cursor`. Now `acp-fixture`; `cursorConfig` renamed `genericConfig`. Bridge suite passes in both tiers. |
+| 0270 | Anything only the replay used | Fixed | Twelve constants, `ACP_CURSOR_BACKGROUND_WAIT_MS`, the discovery counter, `settledCursorAgentIds`, `cursorTaskPromptReported`, `recordCursorTaskPrompt`, `toolPartAgentId`, four descriptor fields, and the fake agent's relaunch branch and orphaned comments had no reader. Removed. Test: `acp-persist-writer.test.ts`, "a state file carrying the removed Cursor fields still loads". |
+| 0270 | Production never launches Cursor here | Confirmed | `commands-servers.ts:1174` gives Cursor its own bridge and `:1180` is reached only by its later branch; the container path exports `ACP_PROVIDER=grok` (`commands-registry-servers.ts:599`); `host-model-catalog-refresh.ts:282` follows the same split. |
+| 0270 | Constraint: generic ACP stays | Kept | Handlers gated by method are untouched and stay in [4540](../../todo/agent-engines/4540-acp-bridge-cursor-extension-leftovers.md). Tests: `acp-generalization.test.ts`, `acp-transcript.test.ts`, `acp-rows.test.ts`. |
+| 0270 | Open question: `ACP_PROVIDER_CONFIG` set to a Cursor id by hand | Answered | Nothing in the repository does outside tests. If someone did, it now runs generic ACP, which the no-replay test exercises. |
+| 0260 | Chunk list and scan offset | Done before this batch | `acp-jsonl-framer.ts:26` searches only the new chunk and `:56` joins once per frame, wired at `acp-context.ts:968` and `:1250`. New test: "copies and searches each byte of a frame once, whatever the chunk size", 4 MiB in 1 KiB chunks. |
+| 0260 | Decision: where the code lives | Taken, in a sibling file | ACP's own helper as recommended, in `acp-jsonl-framer.ts` rather than `acp-context.ts`, which is near its size limit. |
+| 0260 | Constraint: same limit, terminated and unterminated | Kept, gap closed | `MAX_LINE_BYTES` is still 4 MiB (`acp-context.ts:789`). The only tests used a 256-byte limit and a 2 MiB frame. New: framer tests one byte either side of 4 MiB, and `testing/stdout-frame-limit-probe.ts` driving a real `AcpProcess` over a real pipe. Making either check `>=` fails them. |
+| 0260 | Needs verification: frame sizes in practice | Not done | Needs a real provider turn, not allowed here. Framing is now linear, so it no longer decides a fix. [5900](../../todo/agent-engines/5900-acp-state-write-cost-at-the-cap.md) task 4. |
+| 0240 | Needs verification: cost of a write at the cap | Measured | Intel Core Ultra 9 285H, 16 CPUs, 62 GiB, Linux 7.1.8, Bun 1.4.4, btrfs, load 28 to 53; two rounds of six fresh processes. Median synchronous stall per write [lowest to highest run median]: 8 sessions, 1.2 MB: 6.7 ms [4.6-13.2]. 32 sessions, 4.3 MB: 16-17 ms [12.9-22.7]. 256 sessions, 15.9 MB, nothing trimmed: 84-112 ms [74-158]. 256 sessions, 16.4 MB, all windowed: 178-195 ms [143-323]. File work about 60 ms at the cap, asynchronous. Full table in 5900. |
+| 0240 | Decision: build the cache | Not built; not conclusive | The bar was a median stall over 100 ms, a tenth of the interval, at sizes a real bridge holds, set after the first trial. The figures straddle it and moved by about two with load; under 2 percent of the interval at plausible sizes; nothing shows a real bridge at the bound. `state.revision` is also not a complete dirty mark (`setPromptJournal`, `setStructuredResult`). [5900](../../todo/agent-engines/5900-acp-state-write-cost-at-the-cap.md) tasks 1 to 3. |
+| 0240 | Current state: one write per second | Kept | `acp-persist-writer.ts:231-241`, timer later chunks do not reset. Tests: `acp-persist-writer.test.ts`, "streaming bursts share a non-resetting timer and write the latest output". |
+| 0240 | Current state: `persistState()` barriers | Kept | `acp-persist-writer.ts:276`, 12 call sites across `acp-http.ts`, `acp-session.ts` and `acp-session-close.ts`. New test: "a barrier writes the current state now, without waiting for the streaming timer". |
+| 0240 | Constraint: a crash loses at most one interval | Kept | The interval and its timer are unchanged. Nothing new holds output back. |
+| 0240 | Constraint: byte and count bounds on a cache | Does not apply | No cache was built. |
+| 0240 | 1202's note that BR-1 has no new test | Closed | `acp-persist-writer.test.ts` holds five tests. |

@@ -746,6 +746,7 @@ export class NativeAgentLaunchActivityReconciler {
         if (!project?.localPath) continue;
         for (const conversation of workspace.conversations) {
           if (conversation.closedAt || !conversation.agent) continue;
+          if (conversation.startupError) continue;
           const runtimeId = coordinatorRuntimeId(workspace.id, conversation.id);
           if (!coordinatorRuntimeIds.has(runtimeId)) continue;
           environmentsById.set(

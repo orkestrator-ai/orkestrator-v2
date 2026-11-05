@@ -203,6 +203,27 @@ describe("Coordinator conversations are public sessions", () => {
     });
   }
 
+  test("a conversation that failed to start refuses a prompt as not-ready, and lists it stopped", async () => {
+    const { harness, sessionId, projectId, environmentId, tabId } = await coordinatorSetup();
+    await harness.storage.coordinators.mutateCoordinatorWorkspace(projectId, (current) => ({
+      ...current!,
+      conversations: current!.conversations.map((item) =>
+        item.id === "main" ? { ...item, startupError: "bridge failed" } : item,
+      ),
+    }));
+    const refused = await harness.call(
+      "session.prompt",
+      { sessionId, prompt: "Hello" },
+      { requestId: "failed" },
+    );
+    expect(!refused.ok && refused.error.code).toBe("not-ready");
+    await harness.storage.synchronizeAgentMailboxes();
+    const mailbox = (await harness.storage.listAgentMailboxes()).mailboxes.find(
+      (item) => item.environmentId === environmentId && item.tabId === tabId,
+    );
+    expect(mailbox?.environmentStatus).toBe("stopped");
+  });
+
   test("small paused transcript windows preserve wider cached and persisted history", async () => {
     const { harness, service, stub, environmentId, tabId, projectId } = await coordinatorSetup();
     const identity = {

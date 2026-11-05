@@ -53,3 +53,13 @@
 - **Isolated rerun:** `mise run test:logged -- --name move-terminal-isolated -- bun test ./apps/backend/tests/commands-registry-terminal.test.ts --parallel=1 --only-failures` passed, exit 0, in 39.5 seconds.
 - **Evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.DTErJR/` (compressed group logs).
 - **Hypothesis:** subprocess deadlines under concurrent host load remain plausible; the isolated pass does not establish a root cause. No timeout, assertion or skip was changed.
+
+
+## Folder-delete review validation recurrence — 2026-11-05
+
+- **Original command:** `mise run test:logged -- --name folder-delete-registry -- bun test --cwd apps/backend ./tests/commands-registry-terminal.test.ts --parallel=1 --only-failures`, concurrent with package typechecks and later the default aggregate/browser validation.
+- **Failures:** `maps rename stats to the new path in local git status` (5,005.45 ms), `uses HEAD and omits worktree scanning for committed-only container status` (5,001.56 ms), and `rejects unsafe container target refs before invoking Docker` (5,172.84 ms) exceeded the five-second deadline. There were 78 passes, two skips, three failures and three unhandled errors in 151.04 s. Errors included a terminated fixture Git push and failure to write the fake-Docker manifest archive.
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.doUKr3/folder-delete-registry.log.gz`.
+- **Further isolated attempts under the same concurrent load:** the same command reported 55 passes, two skips, 28 failures and five errors in 187.83 s (`orkestrator-test-run.MRWGab`), then 56 passes, two skips, 27 failures and two errors in 107.92 s (`orkestrator-test-run.N4vaJr`). The first fixture timeout left Git configuration locks and cascaded into later template setup failures. These are failed observations, not isolated passes.
+- **Final isolated rerun:** the exact original command passed, exit 0, in 8.583 s after the aggregate run stopped. Its retained passing summary is `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.4PVxhY/summary.json`. No timeout, assertion or skip was loosened. The new local invalidation test now uses a directory-only fixture because its nested-repository preflight rejects before Git is invoked; all pre-existing failing cases were unchanged.
+- **Hypothesis:** shared-host filesystem stalls remain plausible. A contemporaneous sample of the web typecheck showed a worker blocked in `fstatat` while its other workers waited on semaphores (`output/agent-testing/folder-delete-fixes/web-typecheck-sample.txt`). That observation does not identify a filesystem fault or prove the registry failures had the same cause. The case remains open.

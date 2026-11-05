@@ -207,7 +207,7 @@ for (const fails of [false, true]) {
         new Error("Cannot delete docs: nested Git repository at docs/vendor"),
       );
     else remainingTree = [];
-    fireEvent.click(screen.getByRole("button", { name: "Delete folder", exact: true }));
+    fireEvent.click(screen.getByRole("button", { name: /^Delete folder$/ }));
     await waitFor(() => expect(deleteLocalFile).toHaveBeenCalledWith("env-folder", "docs"));
     if (fails) {
       await waitFor(() =>
@@ -216,11 +216,11 @@ for (const fails of [false, true]) {
         }),
       );
       expect(screen.getByRole("alertdialog")).toBeTruthy();
-      expect(
-        screen.getByRole("button", { name: "Delete folder", exact: true }).hasAttribute("disabled"),
-      ).toBe(false);
+      expect(screen.getByRole("button", { name: /^Delete folder$/ }).hasAttribute("disabled")).toBe(
+        false,
+      );
       remainingTree = [];
-      fireEvent.click(screen.getByRole("button", { name: "Delete folder", exact: true }));
+      fireEvent.click(screen.getByRole("button", { name: /^Delete folder$/ }));
     }
     await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
     expect(useFilesPanelStore.getState().expandedFolders).not.toContain("docs");

@@ -75,7 +75,7 @@ const mockGetLocalFileTreeSnapshot = mock<
   ) => Promise<realBackend.ConditionalSnapshot<FileNode[]>>
 >(async (worktreePath: string) => snapshot(await mockGetLocalFileTree(worktreePath)));
 const mockGetFileSubtreeSnapshot = mock<typeof realBackend.getFileSubtreeSnapshot>(async () =>
-  snapshot({ directory: "docs", children: [], truncated: false }),
+  snapshot({ children: [], truncated: false }),
 );
 const mockRevertContainerFile = mock<
   (environmentId: string, filePath: string, targetBranch: string) => Promise<string>
@@ -1004,14 +1004,15 @@ describe("useFilesPanel", () => {
       useUIStore.setState({ selectedEnvironmentId: "env-b" });
     });
     await waitFor(() => expect(result.current.environmentId).toBe("env-b"));
+    const pendingLoadToken = Symbol("env-b-load");
     act(() => {
       useFilesPanelStore.setState({
         changes: [secondChange],
         fileTree: secondTree,
         expandedFolders: ["src"],
-        fileSubtrees: { src: { directory: "src", children: secondTree, truncated: false } },
+        fileSubtrees: { src: { children: secondTree, truncated: false } },
         fileSubtreeDigests: { src: "env-b-digest" },
-        folderLoadTokens: new Map([["src/loading", 123]]),
+        folderLoadTokens: new Map([["src/loading", pendingLoadToken]]),
         loadingFolders: ["src/loading"],
       });
     });
@@ -1028,7 +1029,9 @@ describe("useFilesPanel", () => {
     expect(useFilesPanelStore.getState().expandedFolders).toEqual(["src"]);
     expect(useFilesPanelStore.getState().fileSubtrees.src?.children).toEqual(secondTree);
     expect(useFilesPanelStore.getState().fileSubtreeDigests).toEqual({ src: "env-b-digest" });
-    expect(useFilesPanelStore.getState().folderLoadTokens.get("src/loading")).toBe(123);
+    expect(useFilesPanelStore.getState().folderLoadTokens.get("src/loading")).toBe(
+      pendingLoadToken,
+    );
     expect(useFilesPanelStore.getState().loadingFolders).toEqual(["src/loading"]);
     expect(result.current.fileActionPending).toBeNull();
   });
@@ -1618,13 +1621,12 @@ describe("useFilesPanel", () => {
       { name: "docs", path: "docs", isDirectory: true, truncated: true },
     ];
     const remaining = {
-      directory: "docs",
       children: [{ name: "vendor", path: "docs/vendor", isDirectory: true }],
       truncated: false,
     };
     useFilesPanelStore.setState({
       fileTree: survivingTree,
-      fileSubtrees: { docs: { directory: "docs", children: tree, truncated: false } },
+      fileSubtrees: { docs: { children: tree, truncated: false } },
     });
     mockGetFileTree.mockResolvedValue(survivingTree);
     mockGetGitStatus.mockResolvedValue([{ ...change, status: "D" }]);

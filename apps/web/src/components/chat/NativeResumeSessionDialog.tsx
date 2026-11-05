@@ -248,7 +248,7 @@ export function NativeResumeSessionDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="mt-2">
+        <div className="mt-2 min-w-0">
           {!isLoading && !error && archivedCount > 0 && (
             <div className="mb-2 flex items-center justify-end gap-2">
               <Label htmlFor="resume-show-archived" className="text-xs text-muted-foreground">

@@ -114,7 +114,7 @@ The spinner showed for the whole wait, and neither viewport overflowed sideways.
 | 1 MiB | 6.5 GB, read again at once | 6,144 | 2.2 M | 52.0 s | 1.6 GB | 44 |
 | 1 MiB | 26.9 GB | 25,600 | 9.3 M | 194 to 212 s | 5.4 to 6.0 GB | 52 |
 
-The result is that the history size depends on how busy the host is, by a factor of about six:
+On this shared Apple M1 Max, the estimated history size at the 30 s ceiling varied with the measured listing throughput by a factor of about six. The cause of that throughput difference was not isolated:
 
 - **While the listing ran at about 820 MB/s (the first pass): about 24.5 GB**, or some 23,000 of these 1 MiB sessions. That is interpolated between 21 s at 17.2 GB and 43 to 45 s at 34.5 GB.
 - **While it ran at about 120 to 150 MB/s (later, on the same machine): about 3.5 to 4.5 GB**, extrapolated from the 6.5 GB and 26.9 GB rows. A list that took over 30 s was seen directly at 6.5 GB.
@@ -162,6 +162,14 @@ The backend cuts a bridge's reason at 500 characters, but other failures reach t
 ### Task 2: live check through the browser client only
 
 The desktop client's path was read in code and has its own preload test. Driving the Electron window would have added nothing the dialog can show differently, and the to-do asks for a real browser.
+
+### Task 2: automated failure-layout coverage
+
+Review follow-up (2026-11-05): the browser fixture now covers short, blank and long unbroken failure messages at 1280 and 390 pixels, including reload and horizontal overflow checks. The long-message case exposed the dialog grid child's automatic minimum width: `min-w-0` now lets the existing word wrapping constrain the content to the dialog.
+
+### Task 3: describe rates without attributing their cause
+
+Review correction (2026-11-05): use the measured 820 MB/s and 120 to 150 MB/s rates, not quiet/busy host labels. The fast rate also occurred at the highest recorded load average, so these shared-machine measurements cannot establish host load as the cause. No new timings were taken for this correction.
 
 ### Task 3: no timing script committed
 

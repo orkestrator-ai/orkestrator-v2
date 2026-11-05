@@ -16,7 +16,7 @@ Analysed 2026-11-05 against `main` at `6e796ca32`.
 
 **Context.** `readResumableSessions` in `bridges/pi-bridge/src/agent-session.ts` calls `SessionManager.list`, then keeps only the newest `MAX_RESUME_ENTRIES` (200). In Pi 1.4.0, `buildSessionInfo` reads each whole file and keeps every session's `allMessagesText`, which the bridge does not use. Sessions are ordered by their last message, which is only known after reading them. `session-list-cache.ts` can only keep the whole result.
 
-**Investigation.** Measured on an Apple M1 Max with 32 GiB and generated files (5480 task 3): peak RSS was 5.8 to 6.1 GB at 17.2 GB of history and 7.7 to 8.3 GB at 34.5 GB, and reads given up on at 30 s had reached 6.6 GB on one run and 0.9 GB on another. The ceiling is reached at about 24.5 GB on a quiet host and about 3.5 to 4.5 GB on a busy one (extrapolated). How much of the memory is `allMessagesText` was not isolated, and how many real users have a history this large is unknown. The dialog only reads this when opened, so it is not a background cost.
+**Investigation.** Measured on an Apple M1 Max with 32 GiB and generated files (5480 task 3): peak RSS was 5.8 to 6.1 GB at 17.2 GB of history and 7.7 to 8.3 GB at 34.5 GB, and reads given up on at 30 s had reached 6.6 GB on one run and 0.9 GB on another. On this shared machine, the estimated 30 s crossing was about 24.5 GB at 820 MB/s (interpolated) and about 3.5 to 4.5 GB at 120 to 150 MB/s (extrapolated). The cause of the throughput difference was not isolated; load average alone did not predict it. How much of the memory is `allMessagesText` was not isolated, and how many real users have a history this large is unknown. The dialog only reads this when opened, so it is not a background cost.
 
 **Decisions.**
 
@@ -30,6 +30,12 @@ Analysed 2026-11-05 against `main` at `6e796ca32`.
   - **Leave it until a user reports it.**
     - Pros: no work for a history size nobody has been seen to reach.
     - Cons: the user who reaches it cannot resume from the dialog at all.
+
+## Assumptions and decisions
+
+### Task 1: retain measured rates and uncertainty
+
+Review correction (2026-11-05): describe the crossing estimates by measured throughput on the shared Apple M1 Max, without attributing the difference to host load. The measurements in 5480 did not isolate its cause; no new measurements were taken.
 
 ## Related
 

@@ -257,6 +257,17 @@ const getTranscriptMock = mock(
   async (_tabId: string, _environmentId: string): Promise<realTmuxClient.TranscriptLine[]> => [],
 );
 
+const getTranscriptPageMock = mock(
+  async (
+    tabId: string,
+    environmentId: string,
+    _before?: string,
+  ): Promise<realTmuxClient.TranscriptPage> => ({
+    lines: await getTranscriptMock(tabId, environmentId),
+    earlierCursor: null,
+  }),
+);
+
 const getPendingHooksMock = mock(
   async (_tabId: string, _environmentId: string): Promise<realTmuxClient.TmuxPendingHook[]> => [],
 );
@@ -367,7 +378,10 @@ mock.module("@/lib/claude-tmux-client", () => ({
   ...realTmuxClientSnapshot,
   startSession: startSessionMock,
   getStatus: getStatusMock,
-  getTranscript: getTranscriptMock,
+  // These fixtures answer the way a backend that predates paging does; the
+  // client reads that array as a page with nothing before it.
+  getTranscriptPage: (tabId: string, environmentId: string, before?: string) =>
+    getTranscriptPageMock(tabId, environmentId, before),
   getPendingHooks: getPendingHooksMock,
   subscribe: subscribeMock,
   stopSession: stopSessionMock,
@@ -476,10 +490,12 @@ mock.module("react-virtuoso", () => ({
     const offset = Math.max(0, data.length - VIRTUOSO_WINDOW_SIZE);
     const visibleData = data.slice(offset);
     const Footer = props.components?.Footer;
+    const Header = props.components?.Header;
     const EmptyPlaceholder = props.components?.EmptyPlaceholder;
 
     return (
       <div data-testid="virtuoso-mock" ref={scrollerRef}>
+        {Header ? <Header context={props.context} /> : null}
         {data.length === 0 && EmptyPlaceholder ? (
           <EmptyPlaceholder context={props.context} />
         ) : (
@@ -1812,6 +1828,184 @@ Running 1 Explore agent...
     await screen.findByText("Updated by another client");
     expect(screen.queryByText("Stale client copy") === null).toBe(true);
     expect(getStatusMock).toHaveBeenCalledTimes(2);
+  });
+
+  describe("paged transcript", () => {
+    const line = (uuid: string, content: string): realTmuxClient.TranscriptLine => ({
+      type: "assistant",
+      uuid,
+      message: { role: "assistant", content },
+    });
+    const renderTab = (refreshRequestId = 0) => (
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+        refreshRequestId={refreshRequestId}
+      />
+    );
+    const button = () => screen.queryByRole("button", { name: "Load earlier messages" });
+
+    beforeEach(() => {
+      seedPane();
+      mockRunningTmuxStatus();
+      getTranscriptPageMock.mockClear();
+    });
+    afterEach(() => {
+      getTranscriptPageMock.mockReset();
+      getTranscriptPageMock.mockImplementation(async (tabId, environmentId) => ({
+        lines: await getTranscriptMock(tabId, environmentId),
+        earlierCursor: null,
+      }));
+    });
+
+    test("opens on the tail with one read, and pages earlier history in on request", async () => {
+      getTranscriptPageMock.mockImplementation(async (_tab, _env, before) =>
+        before === undefined
+          ? { lines: [line("tail", "Tail message")], earlierCursor: "s:200" }
+          : { lines: [line("older", "Older message")], earlierCursor: null },
+      );
+
+      render(renderTab());
+
+      await screen.findByText("Tail message");
+      expect(getTranscriptPageMock).toHaveBeenCalledTimes(1);
+      expect(getTranscriptPageMock.mock.calls[0]).toEqual(["tab-1", "env-1", undefined]);
+      expect(screen.queryByText("Older message")).toBeNull();
+
+      fireEvent.click(button()!);
+
+      await screen.findByText("Older message");
+      expect(getTranscriptPageMock.mock.calls[1]).toEqual(["tab-1", "env-1", "s:200"]);
+      expect(screen.getByText("Tail message")).toBeTruthy();
+      // That page reached the file's start.
+      await waitFor(() => expect(button()).toBeNull());
+    });
+
+    test("earlier history remains loadable after a stopped event", async () => {
+      getTranscriptPageMock.mockImplementation(async (_tab, _env, before) =>
+        before === undefined
+          ? { lines: [line("tail", "Tail message")], earlierCursor: "s:200" }
+          : { lines: [line("older", "Older message")], earlierCursor: null },
+      );
+      render(renderTab());
+      await screen.findByText("Tail message");
+      await act(async () => {
+        subscribedHandler?.({ kind: "stopped", tab_id: "tab-1", environment_id: "env-1" });
+      });
+      fireEvent.click(button()!);
+      await screen.findByText("Older message");
+      await waitFor(() => expect(button()).toBeNull());
+    });
+
+    test("a transcript that fits one page offers nothing earlier", async () => {
+      getTranscriptPageMock.mockImplementation(async () => ({
+        lines: [line("only", "The whole transcript")],
+        earlierCursor: null,
+      }));
+
+      render(renderTab());
+
+      await screen.findByText("The whole transcript");
+      expect(button()).toBeNull();
+    });
+
+    test("a backend that predates paging answers whole, with no earlier history", async () => {
+      getTranscriptMock.mockImplementation(async () => [
+        line("whole-1", "First of everything"),
+        line("whole-2", "Last of everything"),
+      ]);
+
+      render(renderTab());
+
+      await screen.findByText(/Last of everything/);
+      expect(screen.getByText(/First of everything/)).toBeTruthy();
+      expect(button()).toBeNull();
+    });
+
+    test("restarts from the tail when the transcript was replaced under its cursor", async () => {
+      getTranscriptPageMock.mockImplementation(async () => ({
+        lines: [line("tail", "Tail message")],
+        earlierCursor: "s:200",
+      }));
+      render(renderTab());
+      await screen.findByText("Tail message");
+
+      getTranscriptPageMock.mockImplementation(async (_tab, _env, before) =>
+        before === undefined
+          ? { lines: [line("new-tail", "New tail message")], earlierCursor: null }
+          : { lines: [], earlierCursor: null, expired: true },
+      );
+      fireEvent.click(button()!);
+
+      await screen.findByText("New tail message");
+      expect(screen.queryByText("Tail message")).toBeNull();
+    });
+
+    test("an empty tail after cursor expiry preserves visible history", async () => {
+      getTranscriptPageMock.mockImplementation(async () => ({
+        lines: [line("tail", "Tail message")],
+        earlierCursor: "s:200",
+      }));
+      render(renderTab());
+      await screen.findByText("Tail message");
+      getTranscriptPageMock.mockImplementation(async (_tab, _env, before) =>
+        before === undefined
+          ? { lines: [], earlierCursor: null }
+          : { lines: [], earlierCursor: null, expired: true },
+      );
+      fireEvent.click(button()!);
+      await waitFor(() => expect(button()).toBeNull());
+      expect(screen.getByText("Tail message")).toBeTruthy();
+    });
+
+    test("reports a failed page and leaves the control to retry", async () => {
+      getTranscriptPageMock.mockImplementation(async (_tab, _env, before) => {
+        if (before !== undefined) throw new Error("exec failed");
+        return { lines: [line("tail", "Tail message")], earlierCursor: "s:200" };
+      });
+      render(renderTab());
+      await screen.findByText("Tail message");
+
+      fireEvent.click(button()!);
+
+      await screen.findByText(/Failed to load earlier messages: .*exec failed/);
+      expect(screen.getByText("Tail message")).toBeTruthy();
+      await waitFor(() => expect(button()?.hasAttribute("disabled")).toBe(false));
+    });
+
+    test("takes the session's mode from the page when no line in it set one", async () => {
+      getTranscriptPageMock.mockImplementation(async () => ({
+        lines: [line("tail", "Tail message")],
+        earlierCursor: "s:200",
+        permissionMode: "plan",
+      }));
+
+      render(renderTab());
+
+      await screen.findByText("Tail message");
+      await screen.findByRole("button", { name: "Plan" });
+    });
+
+    test("a reopen on a mounted store keeps the rows the reader paged in", async () => {
+      getTranscriptPageMock.mockImplementation(async (_tab, _env, before) =>
+        before === undefined
+          ? { lines: [line("tail", "Tail message")], earlierCursor: "s:200" }
+          : { lines: [line("older", "Older message")], earlierCursor: "s:100" },
+      );
+      const first = render(renderTab());
+      await screen.findByText("Tail message");
+      fireEvent.click(button()!);
+      await screen.findByText("Older message");
+      first.unmount();
+
+      render(renderTab());
+
+      await waitFor(() => expect(getTranscriptPageMock.mock.calls.at(-1)?.[2]).toBeUndefined());
+      await screen.findByText("Tail message");
+      expect(screen.getByText("Older message")).toBeTruthy();
+      expect(button()).toBeTruthy();
+    });
   });
 
   test("reports manual refresh failures without clearing the current transcript", async () => {

@@ -5,6 +5,7 @@ import { claudeCliReasoningSelection } from "@orkestrator/protocol/claude-model-
 import { LOW_PRIORITY_SHELL_PREFIX } from "./process-priority.js";
 import * as hooks from "./tmux-hooks.js";
 import {
+  AsyncMutex,
   CLAUDE_TMUX_EVENT,
   COMMAND_AFTER_IDLE_SETTLE_MS,
   COMMAND_IDLE_TIMEOUT_MS,
@@ -47,7 +48,7 @@ import {
   tmuxSessionName,
 } from "./tmux-shared.js";
 import { TmuxBackend } from "./tmux-backend.js";
-import { transcriptToolDiffs } from "./tmux-transcript-tool-diffs.js";
+import { TmuxTranscriptReader, type TmuxTranscriptPage } from "./tmux-transcript-reader.js";
 import type { TerminalRuntime } from "./terminal-runtime.js";
 import {
   TMUX_INFO_EVENT_LIMIT,
@@ -149,11 +150,11 @@ export class TmuxSession {
   private stopRequested = false;
   private transcriptPath: string | undefined;
   /**
-   * Task list derived from this session's transcript. The backend owns it so
-   * the renderer never re-derives it, and so a tab that was not mounted while
-   * tasks changed can rehydrate rather than replay.
+   * The transcript's tail, pages and the task list derived from it. The backend
+   * owns the list so the renderer never re-derives it, and so a tab that was not
+   * mounted while tasks changed can rehydrate rather than replay.
    */
-  private taskTracker = new TranscriptTaskTracker();
+  private readonly transcript: TmuxTranscriptReader;
   private busy = false;
   private busyStartedAt: number | null = null;
   private readonly infoEvents: TmuxStatus["info_events"] = [];
@@ -219,6 +220,7 @@ export class TmuxSession {
     // even if its transcript has not been discovered by this backend yet.
     this.firstPromptClaimed = this.resumed;
     this.sessionId = resumeSessionId ?? randomUUID();
+    this.transcript = new TmuxTranscriptReader(backend, this.sessionId);
     this.tmuxSession = tmuxSessionName(environmentId, tabId);
     this.pollLogScope = `${randomUUID()}:${this.tmuxSession}`;
     this.workspace = backend.kind === "local" ? (backend.cwd ?? process.cwd()) : "/workspace";
@@ -282,53 +284,44 @@ export class TmuxSession {
     return found;
   }
 
+  /** The whole transcript, for a renderer that predates paging. */
   async transcriptLines(): Promise<unknown[]> {
     const transcriptPath = await this.discoverTranscriptPath();
     if (!transcriptPath) return [];
-    const content = (await this.backend.readFile(transcriptPath)) ?? "";
-
-    // Replay task tools from scratch: the file is authoritative for everything
-    // written so far, and each historical line must carry the list as it stood
-    // *then*, not as it stands now. Overlapping with the live tail is safe —
-    // every operation the registry models is idempotent.
-    const tracker = new TranscriptTaskTracker();
-    const lines: unknown[] = [];
-    for (const raw of content.split("\n")) {
-      const trimmed = raw.trim();
-      if (!trimmed) continue;
-      try {
-        const line = JSON.parse(trimmed);
-        lines.push(this.withTaskSnapshot(line, tracker));
-        const permissionMode = permissionModeFromTranscriptLine(line);
-        if (permissionMode) this.permissionMode = permissionMode;
-      } catch {
-        // Continue reading later lines.
-      }
-    }
-    this.taskTracker = tracker;
+    const { lines, permissionMode } = await this.transcript.readWhole(transcriptPath);
+    if (permissionMode) this.permissionMode = permissionMode;
     return lines;
+  }
+
+  /** A bounded page of the transcript: its tail, or what comes before `before`. */
+  async transcriptPage(context: CommandContext, before?: string): Promise<TmuxTranscriptPage> {
+    const transcriptPath = await this.discoverTranscriptPath();
+    if (!transcriptPath) {
+      return before === undefined
+        ? { lines: [], earlierCursor: null, permissionMode: this.permissionMode }
+        : { lines: [], earlierCursor: null, expired: true };
+    }
+    const page = await this.transcript.readPage(transcriptPath, before, (line, stamped) =>
+      this.publishTranscriptLine(context, line, stamped),
+    );
+    return { ...page, permissionMode: this.permissionMode };
   }
 
   /** The session's task list, for callers that want it without the transcript. */
   taskList(): TaskListSnapshot {
-    return this.taskTracker.snapshot();
+    return this.transcript.taskList();
   }
 
-  /**
-   * Attach the resulting task list to a line that completed a task tool call,
-   * keyed by `tool_use_id` so it reaches that tool's part and no other, and
-   * the diff sides of each tool call it started (`toolDiffs`, keyed by tool
-   * use id), leaving every other line untouched.
-   */
-  private withTaskSnapshot(line: unknown, tracker: TranscriptTaskTracker): unknown {
-    const taskSnapshots = tracker.applyLine(line);
-    const toolDiffs = transcriptToolDiffs(line);
-    if ((!taskSnapshots && !toolDiffs) || typeof line !== "object" || line === null) return line;
-    return {
-      ...(line as Record<string, unknown>),
-      ...(taskSnapshots ? { taskSnapshots } : {}),
-      ...(toolDiffs ? { toolDiffs } : {}),
-    };
+  private publishTranscriptLine(context: CommandContext, line: unknown, stamped: unknown): void {
+    const permissionMode = permissionModeFromTranscriptLine(line);
+    if (permissionMode) this.setPermissionMode(permissionMode, context);
+    context.emit(CLAUDE_TMUX_EVENT, {
+      kind: "transcript-line",
+      tab_id: this.tabId,
+      environment_id: this.environmentId,
+      session_id: this.sessionId,
+      line: stamped,
+    });
   }
 
   pendingHooks(): Promise<PendingHookEvent[]> {
@@ -679,7 +672,6 @@ export class TmuxSession {
     this.pollLoopRunning = true;
     this.stopRequested = false;
     const emittedBlockingIds = new Set<string>();
-    let tail: TranscriptTail | undefined;
 
     let tick = 0;
     let quietTicks = 0;
@@ -734,9 +726,11 @@ export class TmuxSession {
 
           let snapshot: TmuxPollSnapshot | undefined;
           this.lastSnapshotStartedAt = Date.now();
+          const tailEpoch = this.transcript.tailEpoch;
+          const tailPath = this.transcript.tailFilePath;
           try {
-            snapshot = await this.backend.pollSnapshot(this.sessionHookPaths, tail?.filePath, {
-              ...(tail ? {} : { candidatePath: this.expectedTranscriptPath() }),
+            snapshot = await this.backend.pollSnapshot(this.sessionHookPaths, tailPath, {
+              ...(tailPath ? {} : { candidatePath: this.expectedTranscriptPath() }),
               tmux: {
                 command: this.tmuxCommand,
                 session: this.tmuxSession,
@@ -750,9 +744,13 @@ export class TmuxSession {
             this.warnPollFailed("poll.snapshot-failed", error);
           }
 
-          if (snapshot && !tail && typeof snapshot.candidateSize === "number") {
+          if (
+            snapshot &&
+            !this.transcript.tailFilePath &&
+            typeof snapshot.candidateSize === "number"
+          ) {
             this.transcriptPath ??= this.expectedTranscriptPath();
-            tail = new TranscriptTail(this.transcriptPath);
+            this.transcript.bindTail(this.transcriptPath);
             if (this.transcriptPath === this.expectedTranscriptPath()) {
               snapshot.transcriptSize = snapshot.candidateSize;
             }
@@ -762,10 +760,10 @@ export class TmuxSession {
           // session id, on its backoff. The expected file is in every snapshot,
           // so a tab it binds never searches. A transcript found here is
           // tailed from the next tick.
-          if (!tail && Date.now() >= nextDiscoveryAt) {
+          if (!this.transcript.tailFilePath && Date.now() >= nextDiscoveryAt) {
             try {
               const transcriptPath = await this.discoverTranscriptPath({ exactChecked: true });
-              if (transcriptPath) tail = new TranscriptTail(transcriptPath);
+              if (transcriptPath) this.transcript.bindTail(transcriptPath);
               log.recovered("poll.discovery-failed", this.pollLogScope);
             } catch (error) {
               this.warnPollFailed("poll.discovery-failed", error);
@@ -828,21 +826,14 @@ export class TmuxSession {
               this.warnPollFailed("poll.drain-timeouts-failed", error);
             }
 
-            if (tail) {
+            if (this.transcript.tailFilePath) {
               try {
-                const lines = await tail.readNew(this.backend, snapshot.transcriptSize);
-                if (lines.length > 0) quietTicks = 0;
-                for (const line of lines) {
-                  const permissionMode = permissionModeFromTranscriptLine(line);
-                  if (permissionMode) this.setPermissionMode(permissionMode, context);
-                  context.emit(CLAUDE_TMUX_EVENT, {
-                    kind: "transcript-line",
-                    tab_id: this.tabId,
-                    environment_id: this.environmentId,
-                    session_id: this.sessionId,
-                    line: this.withTaskSnapshot(line, this.taskTracker),
-                  });
-                }
+                const lines = await this.transcript.drainTail(
+                  (line, stamped) => this.publishTranscriptLine(context, line, stamped),
+                  snapshot.transcriptSize,
+                  tailEpoch,
+                );
+                if (lines > 0) quietTicks = 0;
                 log.recovered("poll.tail-failed", this.pollLogScope);
               } catch (error) {
                 this.warnPollFailed("poll.tail-failed", error);
@@ -1651,23 +1642,7 @@ export function paneHasClaudeExited(snapshot: string): boolean {
   return stripAnsi(snapshot).includes("[claude exited]");
 }
 
-export class AsyncMutex {
-  private chain = Promise.resolve();
-
-  async runExclusive<T>(fn: () => Promise<T>): Promise<T> {
-    const prior = this.chain;
-    let release: () => void = () => undefined;
-    this.chain = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    await prior;
-    try {
-      return await fn();
-    } finally {
-      release();
-    }
-  }
-}
+export { AsyncMutex };
 
 export class TmuxSessionManager {
   private readonly sessions = new Map<string, TmuxSession>();

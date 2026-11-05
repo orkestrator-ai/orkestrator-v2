@@ -188,7 +188,7 @@ serves. No other spec changed then; see below for the whole suite.
 A run's output now names the failed cases whose trace has this error
 (`e2e/agent-testing/network-churn-report.ts`). The suite's result does not change.
 
-## The whole browser suite, 2026-11-05 (to-do 4222 task 3)
+## The whole browser suite, 2026-11-05 (to-do [4222](../../../todo/cross-cutting/4222-browser-failures-left-after-headless-qualification.md) task 3)
 
 The isolated browser suite's specs now take `test` from
 `e2e/agent-testing/browser-test.ts`. Its `context` fixture fetches every loopback
@@ -222,7 +222,7 @@ events in each 10-minute run, so these runs show the fixture costs nothing that
 breaks a case, not that it removes this failure from the whole suite. The single-spec
 measurement above (0 of 3 before, 3 of 3 after under network churn) is the evidence
 for the mechanism. Record a recurrence here if a browser-suite case still fails with
-`net::ERR_NETWORK_CHANGED` in its trace.
+`net::ERR_NETWORK_CHANGED` in its trace. That suite-wide run is the open part of to-do 4222 task 3.
 
 ## Static HTML review repair, 2026-11-05
 

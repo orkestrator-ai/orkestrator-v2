@@ -336,6 +336,41 @@ describe("startWorktreeWatcher, per-directory platforms", () => {
     expect(context.live()).not.toContain("recursive /wt/src");
   });
 
+  for (const operation of ["childDirectories", "directoryIdentity"] as const) {
+    for (const phase of ["setup", "replan"]) {
+      test.each(["EACCES", "EIO"])(
+        `${operation} ${phase} failure (%s) closes coverage`,
+        async (code) => {
+          const context = standardTree();
+          let fail = phase === "setup";
+          const error = Object.assign(new Error("read failed"), { code });
+          const wrap =
+            <T>(read: (root: string, relative: string) => Promise<T>) =>
+            async (root: string, relative: string): Promise<T> => {
+              if (fail && relative === "apps/web") throw error;
+              return read(root, relative);
+            };
+          if (operation === "childDirectories") {
+            context.io.childDirectories = wrap(context.io.childDirectories);
+          } else {
+            context.io.directoryIdentity = wrap(context.io.directoryIdentity);
+          }
+          const { watcher, errors } = split(context);
+          if (!fail) {
+            await until(() => watcher.qualified === true);
+            fail = true;
+            context.watchOn("/wt").emit("change", ".gitignore");
+          }
+          await until(() => errors.length === 1);
+          expect(errors).toEqual([error]);
+          expect(watcher.qualified).toBe(false);
+          expect(watcher.watching).toBe(false);
+          expect(context.live()).toEqual([]);
+        },
+      );
+    }
+  }
+
   test.each(["EACCES", "EPERM"])("an unreadable child (%s) falls back to polling", async (code) => {
     const context = standardTree();
     context.state.refuse.set("/wt/src", Object.assign(new Error("denied"), { code }));

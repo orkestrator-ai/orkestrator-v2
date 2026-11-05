@@ -118,7 +118,7 @@ export async function planWatchTargets(
     try {
       children = await childDirectories(directory);
     } catch (error) {
-      if (directory === "") throw error;
+      if (directory === "" || !isAbsent(error)) throw error;
       // It went away; the event in its parent that says so plans again.
       continue;
     }
@@ -136,6 +136,11 @@ export async function planWatchTargets(
   return targets;
 }
 
+function isAbsent(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException)?.code;
+  return code === "ENOENT" || code === "ENOTDIR";
+}
+
 export const worktreeWatchPlanIo: WorktreeWatchPlanIo = {
   listExcluded: listIgnoredDependencyTrees,
   async childDirectories(worktreePath, relative) {
@@ -143,7 +148,10 @@ export const worktreeWatchPlanIo: WorktreeWatchPlanIo = {
     return entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name);
   },
   async directoryIdentity(worktreePath, relative) {
-    const stat = await fs.lstat(path.join(worktreePath, relative)).catch(() => null);
+    const stat = await fs.lstat(path.join(worktreePath, relative)).catch((error: unknown) => {
+      if (isAbsent(error)) return null;
+      throw error;
+    });
     return stat?.isDirectory() ? `${stat.dev}:${stat.ino}` : null;
   },
 };

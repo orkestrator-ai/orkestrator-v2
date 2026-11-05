@@ -1,5 +1,7 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test, spyOn } from "bun:test";
+import { promises as fs } from "node:fs";
 import {
+  worktreeWatchPlanIo,
   planWatchTargets,
   WATCH_PLAN_MAX_TARGETS,
   WHOLE_WORKTREE,
@@ -39,11 +41,17 @@ describe("planWatchTargets", () => {
     ]);
   });
 
-  test("a split directory that went away is skipped, not fatal", async () => {
-    const targets = await planWatchTargets(["gone/deep/node_modules"], children);
-    expect(targets.map((target) => target.relative)).not.toContain("gone/deep");
-    expect(targets).toContainEqual({ relative: "src", recursive: true });
-  });
+  test.each(["ENOENT", "ENOTDIR"])(
+    "a split directory that went away (%s) is skipped",
+    async (code) => {
+      const targets = await planWatchTargets(["gone/deep/node_modules"], async (relative) => {
+        if (relative.startsWith("gone")) throw Object.assign(new Error("gone"), { code });
+        return children(relative);
+      });
+      expect(targets.map((target) => target.relative)).not.toContain("gone/deep");
+      expect(targets).toContainEqual({ relative: "src", recursive: true });
+    },
+  );
 
   test("a root that went away rejects, because nothing can be planned", async () => {
     await expect(
@@ -65,5 +73,26 @@ describe("planWatchTargets", () => {
   test("a directory name that did not decode keeps the whole worktree under one", async () => {
     const lossy = async () => ["src", "caf�"];
     expect(await planWatchTargets(["node_modules"], lossy)).toEqual(WHOLE_WORKTREE);
+  });
+});
+
+describe("directoryIdentity", () => {
+  test.each(["ENOENT", "ENOTDIR"])("%s is absence", async (code) => {
+    const read = spyOn(fs, "lstat").mockRejectedValue(Object.assign(new Error("gone"), { code }));
+    try {
+      expect(await worktreeWatchPlanIo.directoryIdentity("/wt", "src")).toBeNull();
+    } finally {
+      read.mockRestore();
+    }
+  });
+
+  test.each(["EACCES", "EIO"])("%s propagates to the watcher owner", async (code) => {
+    const error = Object.assign(new Error("unreadable"), { code });
+    const read = spyOn(fs, "lstat").mockRejectedValue(error);
+    try {
+      await expect(worktreeWatchPlanIo.directoryIdentity("/wt", "src")).rejects.toBe(error);
+    } finally {
+      read.mockRestore();
+    }
   });
 });

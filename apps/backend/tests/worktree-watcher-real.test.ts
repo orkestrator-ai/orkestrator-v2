@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { promises as fs, readdirSync, readFileSync, watch } from "node:fs";
 import path from "node:path";
-import { worktreeWatchPlanIo, listIgnoredDependencyTrees } from "../src/core/worktree-watch-plan";
+import {
+  worktreeWatchPlanIo,
+  listIgnoredDependencyTrees,
+  WATCH_PLAN_MAX_EXCLUDED,
+} from "../src/core/worktree-watch-plan";
 import {
   startWorktreeWatcher,
   type WorktreeChangeHint,
@@ -113,6 +117,42 @@ async function expectNoticed(
   throw new Error(`no change noticed in ${directory}`);
 }
 
+/** Observe both native delivery and completed Git proof before testing writes. */
+async function watchProof(worktree: string) {
+  const raw = new Set<string>();
+  let proof: readonly string[] | undefined;
+  const result = await watchWorktree(worktree, {
+    startWatch: (target, listener, options) =>
+      watch(target, { ...options, persistent: false }, (event, filename) => {
+        if (filename)
+          raw.add(
+            path
+              .relative(worktree, path.join(target, filename.toString()))
+              .split(path.sep)
+              .join("/"),
+          );
+        listener(event, filename?.toString() ?? null);
+      }),
+    plan: {
+      ...worktreeWatchPlanIo,
+      listExcluded: async (root) => {
+        proof = await listIgnoredDependencyTrees(root);
+        return proof;
+      },
+    },
+  });
+  return { ...result, raw, proof: () => proof };
+}
+
+async function refreshUntil(mutate: () => Promise<void>, ready: () => boolean) {
+  const deadline = Date.now() + DELIVERY_DEADLINE_MS;
+  while (!ready() && Date.now() < deadline) {
+    await mutate();
+    await Bun.sleep(250);
+  }
+  expect(ready()).toBe(true);
+}
+
 /** Inotify watches this process holds. Linux only. */
 function inotifyWatches(): number {
   let total = 0;
@@ -154,10 +194,27 @@ describe("listIgnoredDependencyTrees", () => {
   });
 
   test("a directory that is not a repository has no answer", async () => {
+    const elsewhere = await fs.mkdtemp(
+      path.join(await fs.realpath(process.env.TMPDIR ?? "/tmp"), "not-repo-"),
+    );
+    cleanups.push(() => fs.rm(elsewhere, { recursive: true, force: true }));
+    expect(await listIgnoredDependencyTrees(elsewhere)).toBeUndefined();
+  });
+
+  test("too many exclusion candidates declines the proof", async () => {
     const worktree = await makeWorktree();
-    await fs.rm(path.join(worktree, ".git"));
-    const elsewhere = path.dirname(path.dirname(worktree));
-    expect(await listIgnoredDependencyTrees(path.join(elsewhere, "missing"))).toBeUndefined();
+    for (let index = 0; index <= WATCH_PLAN_MAX_EXCLUDED; index += 1) {
+      await fs.mkdir(path.join(worktree, `wide-${index}/node_modules`), { recursive: true });
+    }
+    expect(await listIgnoredDependencyTrees(worktree)).toBeUndefined();
+  });
+
+  test("a lossy directory name stays watched", async () => {
+    const worktree = await makeWorktree();
+    await fs.mkdir(path.join(worktree, "caf�/node_modules"), { recursive: true });
+    const listed = await listIgnoredDependencyTrees(worktree);
+    expect(listed).toContain("node_modules");
+    expect(listed).not.toContain("caf�/node_modules");
   });
 
   // A worktree's config is whatever ran in it wrote. These reads must not run it.
@@ -275,8 +332,11 @@ describe("worktree watcher on this platform's real watch", () => {
     "removing the ignore rule makes node_modules visible again",
     async () => {
       const worktree = await makeWorktree();
-      const { seen } = await watchWorktree(worktree);
-      await write(worktree, ".gitignore", "\n");
+      const { seen, raw, proof } = await watchProof(worktree);
+      await refreshUntil(
+        () => write(worktree, ".gitignore", "\n"),
+        () => raw.has(".gitignore") && proof() !== undefined && !proof()!.includes("node_modules"),
+      );
       await expectNoticed(worktree, seen, "node_modules/pkg-2/lib");
     },
     DELIVERY_DEADLINE_MS * 2,
@@ -300,17 +360,22 @@ describe("worktree watcher on this platform's real watch", () => {
     "an install into a new node_modules goes unreported",
     async () => {
       const worktree = await makeWorktree();
-      const { seen } = await watchWorktree(worktree);
+      const { seen, raw, proof } = await watchProof(worktree);
       await expectNoticed(worktree, seen, "packages/app/src");
-      await fs.mkdir(path.join(worktree, "packages/app/src/node_modules"));
-      // Give the plan its read of Git, as an install's own start-up does.
-      await new Promise((resolve) => setTimeout(resolve, 1_000));
+      const dependency = "packages/app/src/node_modules";
+      await refreshUntil(
+        async () => {
+          await fs.rm(path.join(worktree, dependency), { recursive: true, force: true });
+          await fs.mkdir(path.join(worktree, dependency));
+        },
+        () => raw.has(dependency) && proof()?.includes(dependency) === true,
+      );
       await write(worktree, "packages/app/src/node_modules/pkg/lib/installed.js");
       await expectNoticed(worktree, seen, "src");
       await expectNoticed(worktree, seen, "packages/app/src/later");
       expect([...seen].filter((name) => name.includes("/installed.js"))).toEqual([]);
     },
-    DELIVERY_DEADLINE_MS * 2,
+    DELIVERY_DEADLINE_MS * 4,
   );
 
   test.skipIf(process.platform !== "linux")(

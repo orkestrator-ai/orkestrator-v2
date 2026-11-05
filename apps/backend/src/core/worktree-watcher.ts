@@ -186,12 +186,6 @@ function isVanishedPath(error: unknown): boolean {
   return code === "ENOENT" || code === "ENOTDIR";
 }
 
-/** A child this process cannot read has no status either: Git cannot see into it. */
-function isUnwatchableChild(error: unknown): boolean {
-  const code = (error as NodeJS.ErrnoException | null)?.code;
-  return isVanishedPath(error) || code === "EACCES" || code === "EPERM";
-}
-
 export function startWorktreeWatcher(options: WorktreeWatcherOptions): WorktreeWatcher {
   const settleMs = options.settleMs ?? WATCH_SETTLE_MS;
   const start = options.startWatch ?? defaultStartWatch;
@@ -301,7 +295,21 @@ export function startWorktreeWatcher(options: WorktreeWatcherOptions): WorktreeW
     const relative = filename === null ? null : filename.replaceAll(path.sep, "/");
     const name =
       relative === null ? null : target.relative ? `${target.relative}/${relative}` : relative;
-    if (name !== null && excluded.some((entry) => isInsideTree(entry, name))) return;
+    // The entry itself can have become a file or symlink; only descendants
+    // still have a valid directory exclusion.
+    if (name !== null && excluded.some((entry) => entry !== name && isInsideTree(entry, name)))
+      return;
+    // A renamed ancestor can remove the .gitignore that proved a descendant
+    // safe to omit. Drop that proof immediately on both platform strategies.
+    if (plan && (name === null || eventType === "rename")) {
+      const affected = excluded.filter((entry) => name === null || isInsideTree(name, entry));
+      if (affected.length > 0) {
+        excluded = excluded.filter((entry) => !affected.includes(entry));
+        replanQueued = true;
+        schedule({ fileList: true, tree: true }, null);
+        reconcile();
+      }
+    }
     const hint = classifyWorktreeChange(name, refs);
     if (plan && name !== null && canChangeExclusions(name)) {
       // A new `node_modules` must be left out before anything enters it. The
@@ -397,10 +405,13 @@ export function startWorktreeWatcher(options: WorktreeWatcherOptions): WorktreeW
       try {
         attach(target, identity);
         added = true;
+        // Listing preceded attachment. Once a new direct watch is live, list
+        // again to pick up any child created in that gap.
+        if (!target.recursive) applyQueued = true;
       } catch (error) {
         // It went away between the listing and the watch, and the event in its
         // parent that says so plans again. The root has no parent to say so.
-        if (target.relative === "" || !isUnwatchableChild(error)) throw error;
+        if (target.relative === "" || !isVanishedPath(error)) throw error;
       }
     }
     return added;

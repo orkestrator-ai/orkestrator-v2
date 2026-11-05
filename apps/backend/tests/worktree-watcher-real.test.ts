@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { promises as fs, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
-import { listIgnoredDependencyTrees } from "../src/core/worktree-watch-plan";
+import { worktreeWatchPlanIo, listIgnoredDependencyTrees } from "../src/core/worktree-watch-plan";
 import {
   startWorktreeWatcher,
   type WorktreeChangeHint,
@@ -183,6 +183,37 @@ describe("worktree watcher on this platform's real watch", () => {
       expect([...seen].filter((name) => name.includes("/installed.js"))).toEqual([]);
     },
     DELIVERY_DEADLINE_MS * 4,
+  );
+
+  test(
+    "replacing an ignored directory with a symlink refreshes proof and reports it",
+    async () => {
+      const worktree = await makeWorktree();
+      let proof: readonly string[] | undefined;
+      const { seen } = await watchWorktree(worktree, {
+        plan: {
+          ...worktreeWatchPlanIo,
+          listExcluded: async (root) => {
+            proof = await listIgnoredDependencyTrees(root);
+            return proof;
+          },
+        },
+      });
+      await expectNoticed(worktree, seen, "src");
+      expect(proof).toContain("node_modules");
+      await fs.rm(path.join(worktree, "node_modules"), { recursive: true });
+      await fs.symlink("src", path.join(worktree, "node_modules"));
+      const deadline = Date.now() + DELIVERY_DEADLINE_MS;
+      while (
+        (!seen.has("node_modules") || proof?.includes("node_modules")) &&
+        Date.now() < deadline
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      expect(seen.has("node_modules")).toBe(true);
+      expect(proof).not.toContain("node_modules");
+    },
+    DELIVERY_DEADLINE_MS * 2,
   );
 
   // The control for the test above: the same write, with nothing left out.

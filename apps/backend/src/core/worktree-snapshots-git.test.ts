@@ -32,6 +32,8 @@ let metrics: RecurringWorkMetrics;
 const events: Array<{ fileListRevision?: number; watched?: boolean }> = [];
 const hintedPaths: string[] = [];
 let watchingSupported = true;
+let scansStarted = 0;
+let scansFinished = 0;
 
 function run(cwd: string, ...args: string[]): void {
   const result = Bun.spawnSync(["git", "-c", "user.email=a@b", "-c", "user.name=a", ...args], {
@@ -111,12 +113,14 @@ beforeAll(async () => {
           }),
       }),
     scan: async (target) => {
+      scansStarted++;
       const detailed = await getLocalGitStatusDetailed(
         target.worktreePath!,
         target.comparisonRef,
         true,
         gitFetches,
       );
+      scansFinished++;
       return {
         stats: {
           additions: detailed.changes.reduce((sum, row) => sum + row.additions, 0),
@@ -223,12 +227,21 @@ describe("real Git through the shared owner", () => {
 
   test("a write under the ignored node_modules reaches no hint", async () => {
     if (!watchingSupported) return;
+    await until(() => scansStarted === scansFinished);
+    // Let the previous test's settled hints finish before counting this write.
+    await new Promise((resolve) => setTimeout(resolve, LOCAL_SCAN_MIN_GAP_MS + 100));
+    const scansBefore = scansStarted;
+    const hintsBefore = hintedPaths.length;
     await fs.writeFile(path.join(linked, "node_modules", "pkg", "index.js"), "x\n");
+    await new Promise((resolve) => setTimeout(resolve, LOCAL_SCAN_MIN_GAP_MS + 100));
+    expect(scansStarted).toBe(scansBefore);
+    expect(hintedPaths.length).toBe(hintsBefore);
     // A later source edit proves the watch delivered past the write above.
     const before = latestRevision();
     await fs.appendFile(path.join(linked, "a.txt"), "three\n");
     await until(() => latestRevision() > before);
-    expect(hintedPaths).toContain("a.txt");
+    expect(scansStarted).toBeGreaterThan(scansBefore);
+    expect(hintedPaths.slice(hintsBefore)).toContain("a.txt");
     expect(hintedPaths).not.toContain("node_modules/pkg/index.js");
     expect((await readRows()).map((row) => row.path)).not.toContain("node_modules/pkg/index.js");
   });

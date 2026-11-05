@@ -336,13 +336,76 @@ describe("startWorktreeWatcher, per-directory platforms", () => {
     expect(context.live()).not.toContain("recursive /wt/src");
   });
 
-  test("a directory this process cannot read is skipped, not a failure", async () => {
+  test.each(["EACCES", "EPERM"])("an unreadable child (%s) falls back to polling", async (code) => {
     const context = standardTree();
-    context.state.refuse.set("/wt/src", Object.assign(new Error("denied"), { code: "EACCES" }));
+    context.state.refuse.set("/wt/src", Object.assign(new Error("denied"), { code }));
     const { watcher, errors } = split(context);
+    await until(() => errors.length === 1);
+    expect(watcher.qualified).toBe(false);
+    expect(watcher.watching).toBe(false);
+    expect(context.live()).toEqual([]);
+    // Restoring permissions cannot leave a qualified watcher with a hole:
+    // its owner has already been told to poll.
+    context.state.refuse.delete("/wt/src");
+    expect(watcher.qualified).toBe(false);
+  });
+
+  test.each([true, false])(
+    "ancestor replacement refreshes proof (split=%s)",
+    async (perDirectoryWatches) => {
+      const context = standardTree();
+      const { watcher, hints } = split(context, { perDirectoryWatches });
+      await until(() => watcher.qualified === true && context.state.listCalls === 1);
+      context.replaceDirectory("apps/web");
+      context.state.excluded = ["node_modules"];
+      context
+        .watchOn(perDirectoryWatches ? "/wt/apps" : "/wt")
+        .emit("rename", perDirectoryWatches ? "web" : "apps/web");
+      await until(() => context.state.listCalls === 2);
+      if (perDirectoryWatches) await until(() => context.live().includes("recursive /wt/apps"));
+      await until(() => hints.length > 0);
+      hints.length = 0;
+      context
+        .watchOn(perDirectoryWatches ? "/wt/apps" : "/wt")
+        .emit(
+          "change",
+          perDirectoryWatches ? "web/node_modules/a.js" : "apps/web/node_modules/a.js",
+        );
+      await until(() => hints.length === 1);
+      expect(hints[0]!.paths).toEqual(["apps/web/node_modules/a.js"]);
+    },
+  );
+
+  test.each([true, false])(
+    "an excluded entry itself refreshes proof (split=%s)",
+    async (perDirectoryWatches) => {
+      const context = standardTree();
+      const { watcher, hints } = split(context, { perDirectoryWatches });
+      await until(() => watcher.qualified === true && context.state.listCalls === 1);
+      context.state.excluded = ["apps/web/node_modules"];
+      context.directories.delete("node_modules");
+      context.watchOn("/wt").emit("rename", "node_modules");
+      await until(() => context.state.listCalls >= 2);
+      await until(() => hints.some((hint) => hint.fileList));
+    },
+  );
+
+  test("a child created between listing and direct attachment is watched", async () => {
+    const context = standardTree();
+    const list = context.io.childDirectories;
+    let inserted = false;
+    context.io.childDirectories = async (root, relative) => {
+      const result = await list(root, relative);
+      if (relative === "apps/web" && !inserted) {
+        inserted = true;
+        context.directories.set(relative, [...result, "raced"]);
+        context.directories.set("apps/web/raced", []);
+      }
+      return result;
+    };
+    const { watcher } = split(context);
     await until(() => watcher.qualified === true);
-    expect(errors).toEqual([]);
-    expect(context.live()).toContain("direct /wt/apps");
+    await until(() => context.live().includes("recursive /wt/apps/web/raced"));
   });
 
   test("a root that cannot be re-watched fails, because nothing else covers it", async () => {

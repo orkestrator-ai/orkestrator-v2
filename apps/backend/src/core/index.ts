@@ -2935,6 +2935,7 @@ export class OrkestratorBackend {
       isPortalOriginAllowed: (origin) => this.nodes.isPortalOriginAllowed(origin),
       noteControllerContact: (id) => this.nodes.noteControllerContact(id),
       authenticateGrant: (token) => this.nodePortal.grants.authenticate(token)?.expiresAt ?? null,
+      onGrantRevoked: (token, listener) => this.nodePortal.grants.onRevoke(token, listener),
       relayTarget: (nodeId) => this.nodePortal.relayTarget(nodeId),
       isRelayedNodeWatched: (nodeId) => this.nodePortal.events.isWatched(nodeId),
     };

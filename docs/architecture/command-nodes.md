@@ -518,7 +518,10 @@ command node.
   session storage under the workspace's ID, which is all the frame's URL
   carries, and the frame boots its gateway against the node (direct first,
   then the relay). The window renews the grant while the realm is open and
-  revokes it when the realm closes.
+  revokes it when the realm closes. Removing a grant, by any route or because
+  it expired, closes the leaf's terminal sockets and event streams it authorized
+  and refuses their queued terminal operations
+  ([terminal transport](remote-gateway.md#compression-and-terminal-transport)).
 - **Switching** never reloads the window. Another environment of a node whose
   realm is open is a message to that realm and an instant selection there.
   The window keeps a few realms open, hidden (`MAX_OPEN_REALMS`), so going

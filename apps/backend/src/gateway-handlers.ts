@@ -363,7 +363,7 @@ export class GatewayHandlers {
       );
       credentialExpiryTimer.unref?.();
     };
-    if (credential) unsubscribeRevocation = this.ctx.browserSessions.onRevoke(credential, close);
+    if (credential) unsubscribeRevocation = this.ctx.onCredentialRevoked(credential, close);
     request.once("close", close);
     response.once("close", close);
     scheduleCredentialExpiry();

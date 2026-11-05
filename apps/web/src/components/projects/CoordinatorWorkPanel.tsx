@@ -146,7 +146,7 @@ function WorkRow({
           </p>
         ) : null}
         {meta.length > 0 ? (
-          <div className="mt-0.5 truncate text-[10px] text-muted-foreground" data-work-meta="">
+          <div className="mt-0.5 break-words text-[10px] text-muted-foreground" data-work-meta="">
             {meta.join(" · ")}
           </div>
         ) : null}

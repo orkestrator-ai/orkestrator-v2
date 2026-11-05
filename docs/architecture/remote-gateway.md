@@ -529,11 +529,16 @@ reconnects on its own capped, jittered ladder (`ReconnectBackoff` from
   This is accepted rather than closed: a restricted container is refused at the
   gateway's port, and binding a session to the peer address would not help,
   because Tailscale Serve and Docker Desktop both show their clients as
-  loopback. A `full` mode container can reach the gateway, so `full` mode gives
-  up this protection. Observed on Docker Desktop only
-  ([qualification record](../development/container-qualification.md#project-seed-files-and-gateway-reach-on-docker-desktop-2026-11-04));
-  if a restricted container reaches the gateway elsewhere, revisit this
-  ([0260](../reports/security/0260-live-checks-on-other-platforms.md)).
+  loopback, and Linux Engine shows a container's own address (rootful) or the
+  host's own (rootless). A `full` mode container can reach a gateway the host's
+  firewall lets it reach, so `full` mode gives up this protection: on Docker
+  Desktop even at a loopback bind, on rootless Linux at a non-loopback bind and
+  at Tailscale Serve's port, and on rootful Linux as far as a host firewall such
+  as ufw allows. Observed on Docker Desktop
+  ([record](../development/container-qualification.md#project-seed-files-and-gateway-reach-on-docker-desktop-2026-11-04))
+  and on Linux Engine
+  ([record](../development/container-qualification.md#gateway-reach-and-project-seed-files-on-linux-engine-2026-11-05));
+  if a restricted container reaches the gateway elsewhere, revisit this.
 - The cookie is `HttpOnly; SameSite=Strict; Path=/`, plus `Secure` when the
   browser reached the gateway over HTTPS (TLS, `X-Forwarded-Proto: https`, or
   a same-host `https:` `Origin`). The gateway reads and strips the

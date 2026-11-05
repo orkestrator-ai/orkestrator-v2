@@ -2,6 +2,8 @@ import type { GatewayTokenSettings, WebClientStatus } from "@orkestrator/protoco
 import type {
   BrowserPreviewCaptureApi,
   BrowserPreviewPendingCaptureWire,
+  BrowserPreviewRegionCrop,
+  BrowserPreviewRegionCropWire,
   BrowserPreviewServiceTarget,
   BrowserPreviewAttachInput,
   BrowserPreviewBounds,
@@ -220,6 +222,13 @@ function pngBytesToDataUrl(bytes: Uint8Array): string {
   return `${PNG_DATA_URL_PREFIX}${btoa(binary)}`;
 }
 
+function regionCropWithDataUrl({
+  imageBytes,
+  ...crop
+}: BrowserPreviewRegionCropWire): BrowserPreviewRegionCrop {
+  return { ...crop, imageDataUrl: pngBytesToDataUrl(imageBytes) };
+}
+
 /** Bytes for a well-formed PNG data URL; anything else is main's to refuse. */
 function pngDataUrlToBytes(value: string): Uint8Array | null {
   if (!value.startsWith(PNG_DATA_URL_PREFIX)) return null;
@@ -243,15 +252,21 @@ export function createBrowserPreviewCaptureApi(
       ipcRenderer.invoke("orkestrator:browser-preview:capture-cancel", tabId),
     listPendingCaptures: () =>
       ipcRenderer.invoke("orkestrator:browser-preview:capture-pending-list"),
-    // The PNG crosses IPC as bytes; this API's data URLs are made on this side.
+    // The PNGs cross IPC as bytes; this API's data URLs are made on this side.
     readPendingCapture: async (captureId) => {
       const pending = await ipcRenderer.invoke<BrowserPreviewPendingCaptureWire | null>(
         "orkestrator:browser-preview:capture-pending-read",
         captureId,
       );
       if (!pending) return null;
-      const { imageBytes, ...rest } = pending;
-      return { ...rest, imageDataUrl: imageBytes ? pngBytesToDataUrl(imageBytes) : null };
+      const { imageBytes, regionCrop, ...rest } = pending;
+      return {
+        ...rest,
+        imageDataUrl: imageBytes ? pngBytesToDataUrl(imageBytes) : null,
+        ...(regionCrop === undefined
+          ? {}
+          : { regionCrop: regionCrop && regionCropWithDataUrl(regionCrop) }),
+      };
     },
     replacePendingCaptureImage: (captureId, input) => {
       const imageBytes = input.imageDataUrl ? pngDataUrlToBytes(input.imageDataUrl) : null;

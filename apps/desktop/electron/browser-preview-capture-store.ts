@@ -125,10 +125,21 @@ export function decodePngDataUrl(value: unknown): DecodedPng {
 export function pendingCaptureWithDataUrl(
   pending: BrowserPreviewPendingCaptureWire,
 ): BrowserPreviewPendingCapture {
-  const { imageBytes, ...rest } = pending;
+  const { imageBytes, regionCrop, ...rest } = pending;
+  const dataUrl = (bytes: Uint8Array) => `${PNG_PREFIX}${Buffer.from(bytes).toString("base64")}`;
   return {
     ...rest,
-    imageDataUrl: imageBytes ? `${PNG_PREFIX}${Buffer.from(imageBytes).toString("base64")}` : null,
+    imageDataUrl: imageBytes ? dataUrl(imageBytes) : null,
+    ...(regionCrop === undefined
+      ? {}
+      : {
+          regionCrop: regionCrop && {
+            width: regionCrop.width,
+            height: regionCrop.height,
+            sourceRect: regionCrop.sourceRect,
+            imageDataUrl: dataUrl(regionCrop.imageBytes),
+          },
+        }),
   };
 }
 

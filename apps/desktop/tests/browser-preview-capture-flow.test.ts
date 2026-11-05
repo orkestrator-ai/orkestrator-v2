@@ -9,6 +9,7 @@ import {
   type CaptureContents,
   type Json,
 } from "./browser-preview-capture-harness";
+import { pngBytes, pngDataUrl } from "./png-fixture";
 
 const MASK = [0x28, 0x23, 0x1f, 0xff];
 
@@ -161,6 +162,42 @@ describe("geometry at multiple zoom levels, device scales, and scroll offsets", 
       expect(validateWebAnnotationCaptureInput(pending.capture).ok).toBe(true);
     });
   }
+});
+
+describe("a region crop across IPC", () => {
+  test("the wire read carries PNG bytes and no data URL; the data URL read keeps its crop", async () => {
+    const harness = createHarness({ cropping: true });
+    const contents = await harness.attach();
+    const viewport = { width: 1_000, height: 600 };
+    contents.image = { width: viewport.width, height: viewport.height };
+    contents.probe = {
+      connected: true,
+      rect: { x: 100, y: 50, width: 320, height: 120 },
+      viewport,
+      scroll: { x: 0, y: 0 },
+      devicePixelRatio: 1,
+      sensitive: [],
+      sensitiveComplete: true,
+    };
+    await start(harness.manager, "region");
+    contents.selection = regionSelection(viewport, { x: 0, y: 0 }, 1);
+    const { pending } = await captured(harness);
+    const captureId = pending.descriptor.captureId;
+
+    const wire = await harness.manager.readPendingCaptureWire(captureId);
+    const sourceRect = { x: 100, y: 50, width: 320, height: 120 };
+    const crop = wire!.regionCrop!;
+    expect(Buffer.from(crop.imageBytes).equals(pngBytes(320, 120))).toBe(true);
+    expect(crop).toMatchObject({ width: 320, height: 120, sourceRect });
+    expect("imageDataUrl" in crop).toBe(false);
+
+    expect(pending.regionCrop).toEqual({
+      imageDataUrl: pngDataUrl(320, 120),
+      width: 320,
+      height: 120,
+      sourceRect,
+    });
+  });
 });
 
 describe("capture lifecycle hazards", () => {

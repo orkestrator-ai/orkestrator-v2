@@ -122,6 +122,20 @@ Live tests start runtimes through `tests/container-live-start.ts`
 running, so a bare `docker start` of a restricted runtime fails on a gateway
 image.
 
+## S-0100 carried onto main at `0db245422` (2026-11-05)
+
+The S-0100 commits from branch `egress-sni-dns-6833fa71be7b-r1` (HEAD
+`2f4574175`) were cherry-picked without conflicts onto `main` at
+`0db245422` as branch `egress-sni-dns-1-97b4de25d674-r1`. Commit IDs in the
+S-0100 sections below name the earlier branch. `main`'s commits between
+`cbe0f9a5b` and `0db245422` change no egress, firewall, gateway, image or
+container code, so the Docker Desktop runs below were not repeated. The
+focused owners passed on the carried branch through `mise run test:logged`:
+the daemon, firewall, policy and version-drift unit tests; the gateway,
+container-network and live-suite files (live cases skipped without
+opt-in); the network status and global settings tests; the backend and web
+typechecks; and lint.
+
 ## Remaining validation blockers repaired (2026-11-05)
 
 Follow-up source commit `4bf05e1e840e0258ee7e43e928b2a96d87bd760a`

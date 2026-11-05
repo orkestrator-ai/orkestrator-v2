@@ -423,8 +423,8 @@ describe("BuildChatTab presentation", () => {
   test("marks the shown stage as selected in the graph", async () => {
     renderTab(reviewed);
 
-    // The pipeline is followed to its current stage until the user picks one.
-    expect(selectedTitle()).toBe("Verify");
+    // A finished pipeline lands on Notes until the user picks a stage.
+    expect(selectedTitle()).toBe("Notes");
 
     selectNode("Build");
     await waitFor(() => expect(selectedTitle()).toBe("Build"));

@@ -59,4 +59,4 @@ Analysed 2026-11-05 against `main` at `69a3b4ca5`, with the E4 change applied.
 - Batch file E4: `docs/reports/efficiency-logging-database/0430-e4-object-store.md` at base commit `5ba05c977c2b8affdfdeab52e47b962a4965e828` (`git show 5ba05c977:docs/reports/efficiency-logging-database/0430-e4-object-store.md`); its outcome table is at the end.
 - [Change tracking](../../architecture/change-tracking.md#retention-and-backup)
 - [1202 efficiency follow-ups](1202-efficiency-review-follow-ups.md), task 7
-- E3 (retention and deletion) changes what a pass retires, not how it walks: [0540](../../reports/efficiency-logging-database/0540-e3-retention-and-deletion.md)
+- E3 (retention and deletion) changed what a pass retires, not how it walks the store: [change tracking](../../architecture/change-tracking.md#age-based-retention), and its table sizes are [5821](5821-ledger-retention-live-evidence.md)

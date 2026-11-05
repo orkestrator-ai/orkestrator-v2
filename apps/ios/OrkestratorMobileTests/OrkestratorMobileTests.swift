@@ -5,11 +5,11 @@ import WebKit
 import XCTest
 @testable import OrkestratorMobile
 
-private enum TestFailure: Error, Equatable {
+enum TestFailure: Error, Equatable {
     case expected
 }
 
-private final class MemoryCredentialStore: ConnectionCredentialStoring, @unchecked Sendable {
+final class MemoryCredentialStore: ConnectionCredentialStoring, @unchecked Sendable {
     var vault: ConnectionVault
     var loadError: Error?
     var saveError: Error?
@@ -39,7 +39,7 @@ private final class MemoryCredentialStore: ConnectionCredentialStoring, @uncheck
     }
 }
 
-private final class MockValidator: GatewayConnectionValidating, @unchecked Sendable {
+final class MockValidator: GatewayConnectionValidating, @unchecked Sendable {
     var checkError: Error?
     var checkHandler: ((URL, String) async throws -> Void)?
     private(set) var checks: [(URL, String)] = []
@@ -63,7 +63,7 @@ private final class MockValidator: GatewayConnectionValidating, @unchecked Senda
     }
 }
 
-private func connection(
+func connection(
     id: UUID = UUID(),
     address: String = "https://desk.example",
     token: String = "gateway-token-123456",
@@ -2067,7 +2067,7 @@ final class RemoteWebViewPolicyTests: XCTestCase {
     }
 }
 
-private func XCTAssertThrowsErrorAsync<T>(
+func XCTAssertThrowsErrorAsync<T>(
     _ expression: @autoclosure () async throws -> T,
     file: StaticString = #filePath,
     line: UInt = #line
@@ -2078,7 +2078,7 @@ private func XCTAssertThrowsErrorAsync<T>(
     } catch {}
 }
 
-private func assertAsyncErrorContains(
+func assertAsyncErrorContains(
     _ expected: String,
     operation: () async throws -> Void,
     file: StaticString = #filePath,

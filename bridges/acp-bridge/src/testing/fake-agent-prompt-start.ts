@@ -69,34 +69,6 @@ export function handlePromptStart(message: JsonObject): boolean {
       beginClientMethodExercise(message.id, process.env.FAKE_ACP_CLIENT_FILE);
       return true;
     }
-    if (prompt.startsWith("Background subagent finished.")) {
-      if (process.env.FAKE_ACP_BACKGROUND_RELAUNCH === "1") {
-        state.backgroundRelaunches += 1;
-        const index = state.backgroundRelaunches + 1;
-        writeCursorBackgroundChild({
-          toolCallId: `cursor-subagent-${index}`,
-          agentId: `child-wait-${index}`,
-        });
-        write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
-        return true;
-      }
-      write({
-        jsonrpc: "2.0",
-        method: "session/update",
-        params: {
-          sessionId: "fake-session",
-          update: {
-            sessionUpdate: "agent_message_chunk",
-            content: {
-              type: "text",
-              text: "Validation passed. The child reported success.",
-            },
-          },
-        },
-      });
-      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
-      return true;
-    }
     if (prompt.startsWith("CREDITSEXHAUSTED:")) {
       write({
         jsonrpc: "2.0",

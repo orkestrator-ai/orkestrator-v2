@@ -5,15 +5,56 @@ import {
   COORDINATOR_CONTEXT_CLOSE_TAG,
   COORDINATOR_CONTEXT_OPEN_TAG,
   coordinatorConversationIdFromRuntimeId,
+  coordinatorConversationRunnable,
   coordinatorConversationSessionKey,
   coordinatorIdFromRuntimeId,
+  COORDINATOR_DELEGATION_SUMMARY_MAX,
   coordinatorRuntimeId,
   isCoordinatorWorkspace,
+  normalizeCoordinatorDelegationRequest,
   stripCoordinatorContext,
   normalizeCoordinatorRoles,
   normalizeCoordinatorSessionKeys,
   type CoordinatorWorkspace,
 } from "./coordinator.js";
+
+describe("normalizeCoordinatorDelegationRequest", () => {
+  test("keeps one bounded line of the ask and the selection", () => {
+    const request = normalizeCoordinatorDelegationRequest({
+      summary: `  Fix the\n\nlogin   flow ${"x".repeat(1_000)}`,
+      agent: "claude",
+      model: "opus",
+      reasoning: null,
+      source: "requested",
+      advisory: true,
+    });
+    expect(request?.summary?.startsWith("Fix the login flow x")).toBe(true);
+    expect(request?.summary).toHaveLength(COORDINATOR_DELEGATION_SUMMARY_MAX);
+    expect(request?.summary?.endsWith("…")).toBe(true);
+    expect(request).toMatchObject({ agent: "claude", model: "opus", reasoning: null });
+    expect(request).not.toHaveProperty("advisory");
+  });
+
+  test("never cuts a surrogate pair in half", () => {
+    const request = normalizeCoordinatorDelegationRequest({
+      summary: `${"a".repeat(COORDINATOR_DELEGATION_SUMMARY_MAX - 2)}😀😀😀`,
+    });
+    expect(request?.summary).toBe(`${"a".repeat(COORDINATOR_DELEGATION_SUMMARY_MAX - 2)}…`);
+  });
+
+  test("drops what it cannot trust and answers nothing when nothing is left", () => {
+    expect(normalizeCoordinatorDelegationRequest(undefined)).toBeUndefined();
+    expect(normalizeCoordinatorDelegationRequest({})).toBeUndefined();
+    expect(
+      normalizeCoordinatorDelegationRequest({
+        summary: "   ",
+        agent: "unknown-agent",
+        model: "m".repeat(121),
+        source: "later",
+      }),
+    ).toBeUndefined();
+  });
+});
 
 describe("coordinator runtime identities", () => {
   test("keeps workspace and conversation identity explicit", () => {
@@ -245,4 +286,15 @@ test("coordinator sandbox launch authority fails closed unless explicitly unavai
   expect(
     coordinatorCommandSandboxFromEnv({ [COORDINATOR_COMMAND_SANDBOX_ENV]: "unavailable" }),
   ).toBe("unavailable");
+});
+
+describe("coordinatorConversationRunnable", () => {
+  test("needs a ready workspace and no startup error of its own", () => {
+    expect(coordinatorConversationRunnable({ lifecycleState: "ready" }, {})).toBe(true);
+    expect(
+      coordinatorConversationRunnable({ lifecycleState: "ready" }, { startupError: "failed" }),
+    ).toBe(false);
+    expect(coordinatorConversationRunnable({ lifecycleState: "paused" }, {})).toBe(false);
+    expect(coordinatorConversationRunnable({ lifecycleState: "error" }, {})).toBe(false);
+  });
 });

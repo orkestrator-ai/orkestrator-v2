@@ -49,9 +49,57 @@ never shows it. Records with the older `coordinator-<id>:<conversation>` key
 migrate when read.
 
 One workspace is persisted per project: conversations, selected tab, immutable
-`coordinator-read-only` execution policy, repository-context revision, lifecycle
-state, and sanitized last startup error. Workflow associations are stored
-separately so their lifetime is independent of an open chat tab.
+`coordinator-read-only` execution policy, repository-context revision and
+lifecycle state. Each conversation holds its own sanitized startup error.
+Workflow associations are stored separately so their lifetime is independent of
+an open chat tab.
+
+### When a conversation fails to start
+
+Each conversation has its own bridge, so a failed start belongs to that
+conversation. `startLocalServerUnlocked` writes `startupError` on it and leaves
+the workspace alone. A start that backend shutdown cut short records nothing.
+
+While `startupError` is set (`coordinatorConversationRunnable` answers false),
+that conversation has no runtime: `resolveCoordinatorRuntime` answers
+`startup-failed`, Control MCP refuses its credential with 409, its mail waits
+(`environment_unready`), it cannot send mail, and the registry and mailbox
+directory list it as stopped. Every other conversation carries on, because
+none of those checks look past the conversation they were asked about.
+
+**When the main fails**, the same rule applies. Its credential and mail are
+refused, so mail from workers, side agents and status wakes waits in its
+mailbox. Side agents keep running, but no new delegation starts, because only
+the main delegates. Retry delivers the waiting mail once its bridge is up.
+Closing the failed main works as any close does: the next mail starts a new
+main with the default agent, and open delegations move to it.
+
+**No failure is workspace-wide any more.** A new backend never writes
+`lifecycleState: "error"`. The value stays readable for a record an older
+backend stored, which `ensure` recovers when the panel opens, and for a client
+connected to such a backend, which keeps its toolbar banner
+([version-compatibility.md](version-compatibility.md#register)). A missing
+checkout or a disabled Control MCP is reported as itself, not as a failed start.
+
+The pane shows the failure above its transcript, naming the conversation, with
+**Retry**, **Close conversation** and **Copy error**. Retry
+(`retry_coordinator_conversation`) only clears the error: the pane then
+connects, and connecting is what starts the bridge. A second failure records
+itself again. Opening the panel does not clear the error, so a reload cannot
+hide it.
+
+### Reading while paused or after a failed start
+
+A paused coordinator, or a conversation that failed to start, can be read but
+not run. `sendingHeldReason` on the tab holds sending and tells
+`useNativeAgentSession` not to establish a session: it never calls adopt or
+ensure, both of which resolve a provider, and that is what starts a bridge. It
+still reads, and the backend answers those reads from saved data without
+resolving a provider (`heldCoordinatorConversation`): the transcript from the
+display tail or a cached view, the session state from the session record
+(`idle`, nothing parked), and discovery as `missing`. Enter in the composer
+says why nothing was sent and keeps the draft. Resume or Retry connects the
+same pane without a remount.
 
 ### Workflow record limit and cleanup
 
@@ -112,6 +160,32 @@ What removal changes for the user:
 - A retry of a request older than 24 hours whose record was removed is treated
   as new.
 
+**Request ids.** A coordinator's request ids share one namespace across all of
+its conversations (`coordinatorId` + `requestId`), so a retry still replays
+after the main conversation is replaced. The context block and the server
+instructions therefore say `COORDINATOR_REQUEST_ID_RULE`
+(`packages/protocol/src/coordinator.ts`): every mutation needs a new unique
+`requestId`; reuse one only to retry the same call. When an id names an
+earlier request:
+
+- the same payload replays it, and the launch, build and Multi Review results
+  say so with `replayed: true` and `replayNote` (`COORDINATOR_REPLAYED_NOTE`),
+  so a replay never reads as fresh work. Surface actions already answered
+  `replayed: true`;
+- a different payload, worker or tab is refused with
+  `COORDINATOR_REQUEST_ID_REUSED_ERROR`, which says the id was used before,
+  possibly by an earlier conversation, that nothing was done, and to use a new
+  one; an id held by another conversation of the same coordinator says the
+  same;
+- `send_message` checks before sending: an id this coordinator already used to
+  ask another worker is refused, because the message could open no delegation
+  and no wake would come back. Any other failure to open the delegation after
+  the message is stored is reported in the result's `delegationNote`.
+
+A launch that leaves `agent` out is fingerprinted as "the default agent"
+(`coordinatorLaunchIdentity`), so a retry after the user changes their default
+still replays, as an omitted build choice already did.
+
 The working directory is the canonical `Project.localPath`. A project without a
 valid local path shows a checkout setup state; it does not silently use an
 environment worktree, a container, or a temporary clone. Bridge state,
@@ -155,6 +229,15 @@ works across the nodes that node controls:
   prompts and messages open delegations that wake this conversation once,
   and build pipelines and Multi Reviews there send status wakes. See
   [command-nodes.md](command-nodes.md#one-tool-family-every-node).
+  The older `*_node_*` forms (`list_node_environments`,
+  `launch_node_environment`, `start_node_environment`, `stop_node_environment`,
+  `send_prompt_to_node_tab`, `send_node_message`) were removed because they
+  did less; `read_node_environment` stays, as the only way to read a file in
+  another node's environment. `RETIRED_COORDINATOR_TOOLS`
+  (`control-mcp-tools.ts`) names each replacement: a saved schedule that names
+  a retired tool is paused with it. The backend commands behind them stay, so
+  older command nodes and leaves are unaffected
+  ([version-compatibility.md](version-compatibility.md)).
 - Tickets are shared: the project's board syncs to every node with a copy,
   under the same ids. `create_ticket` (with or without `nodeId`) and then
   `start_build_pipeline` with a `nodeId` builds a ticket on that node by its
@@ -674,7 +757,7 @@ capability profile is rated by exactly the same rules as a coordinator.
 | `provider-configured` | The SDK is told to deny, and exposes no way to verify it | OpenCode, Cursor; Claude where the command sandbox cannot run commands (Windows; Linux without `bwrap` or `socat`, or whose policy refuses the nested namespace, such as Ubuntu's AppArmor `bwrap-userns-restrict`) |
 | `advisory` | The agent is asked to request permission first; a tool that does not ask is not stopped | Grok |
 
-**Settings → Agent platforms → Coordinator safety level** chooses the weakest
+**Settings → Coordinator → Coordinator safety level** chooses the weakest
 tier this installation will offer. It defaults to `provider-configured`:
 `enforced` and `provider-configured` platforms are offered, and `advisory`
 stays opt-in.
@@ -761,7 +844,7 @@ the network off. So a `network` denial (`nativeAgentPolicyDeniesNetwork`)
 covers hosted tools as well as commands, and each bridge removes them in its
 provider's own terms.
 
-**Settings → Agent platforms → Coordinator web research** reopens one part of
+**Settings → Coordinator → Coordinator web research** reopens one part of
 that on purpose. Commands stay off the network and hosted page fetches stay
 off in every mode, because a URL the agent opens can carry data out to
 whoever owns the page:
@@ -1348,6 +1431,34 @@ node activates that surface after its layout hydrates. A row with nothing to
 open (a deleted worker, a PR not yet opened) has a disabled button whose title
 and accessible name say why.
 
+A worker row also says what was asked, on what and since when: one line of the
+request (`delegation.request.summary`, the newest request's), then the agent,
+the model, "requested" when the coordinator overrode the saved default, and the
+age ("12m", or "3h ago" once finished). Build rows show the pipeline's agent and
+every row with a known time shows its age. Each delegation keeps its request on
+the record because a transcript read per row would cost a read each and be
+unavailable for an offline node. The coordinator store is rewritten whole, so
+`normalizeCoordinatorDelegationRequest` bounds it where it is stored: 140
+characters of summary on one line, 120 for a model or reasoning id. It is a
+display line, not the prompt, and never reaches `list_workflows`. Launches, jobs,
+prompts, messages, forks, goals and slash commands all record one; only launches
+and jobs know a model. A launch that took its default has no model until startup
+resolves it, so the row shows the agent alone rather than guess. A record from
+before the field has none of this and renders as it did; an older release that
+reads a newer record ignores the field.
+
+**Stop.** A worker row with a running turn it has not already stopped offers
+**Stop**, one click with no confirmation, like the tab's own Stop button. It calls
+`stop_coordinator_worker_turn` for each such tab, with `stoppedBy: "user"`, on this
+machine or through the worker's node (see
+[Stopping a worker's turn](#stopping-a-workers-turn)). The environment and its
+conversation stay, and the coordinator is still woken once. Each click is a new
+request, so a retry stops whatever is running then. A tab found idle answers with
+a toast; a failure shows as the panel's error. Stop is not offered while
+coordination is paused or no conversation is open, because the command requires a
+ready coordinator. Answer and Address stay in their own views:
+[4940](../todo/coordinator-and-multi-review/4940-work-row-answer-and-address.md).
+
 **Order.** Sections in this order, each headed in words so status never
 depends on colour: **Needs you** (a worker whose delegation has a waiting
 episode, a worker, build or review environment with a question, approval or input
@@ -1356,7 +1467,9 @@ failed review, a graph run waiting on a person, paused or failed), **Running**,
 then **Finished**; newest first within each. Remote build and review waiting
 summaries count as Needs you without consulting local environment IDs. A ready
 review with findings needs a decision; a clean report is finished, unless its
-automatic PR launch is pending (Running) or failed (Needs you).
+automatic PR launch is pending (Running) or failed (Needs you). A remote worker
+with a prompt the banner holds (below) counts as Needs you too, by its
+node-qualified key.
 
 **Finished work** stays listed for 24 hours after it finishes, or while its
 pull request is open, whichever is later; then it drops off. A build's finish
@@ -1418,6 +1531,39 @@ row therefore has the same stage words, buckets and expiry (from the run's
 environment on that node. A remote run its node reports `not-found` is
 unavailable under Finished, like a deleted local record. Successful empty local reads mark deleted builds, reviews and graph runs as unavailable under Finished, using association creation for bounded retention; failed reads never prove deletion. Review and graph rows also retain finished work while the environment PR is open. Review Open restores a closed main tab after authoritative layout hydration.
 
+**Waiting prompts.** `HumanPromptBanner` above the conversation shows the
+prompts of this coordinator's workers, with an **Open** that goes to the waiting
+tab. Local workers are read from this backend. Workers on another node, while a
+request to them is open, are read with `list_human_prompts` through that node's
+link (`useRemoteHumanPrompts`), on the node's `human-prompt` hint, on its resync,
+whenever its summaries refresh, and on resync and safety checks.
+
+The link and code do cross nodes, checked against what node summaries omit.
+Summaries carry no prompts because every client receives them and the command
+node keeps them as last-known state; this read does neither, since the answer
+lives only in the panel's React state and `invoke_on_node` logs no arguments or
+results. It widens nothing: `list_human_prompts` is not in
+`NODE_EXCLUDED_COMMANDS` or `isWorkspaceExcludedCommand`, a window opened on that
+node already shows the same banner, and `get_native_agent_projection` crosses the
+same link with the tool output the prompt was detected in. A remote answer is
+still untrusted, so `normalizeRemoteHumanPromptEntry` bounds every field, drops
+any link that fails `isSignInLink` (a node cannot put an arbitrary "Open link"
+here) and drops `userCommandId`, because a remote command cannot be answered from
+this banner. Entries for other environments and more than 32 per node are
+dropped. A node that predates the command, or fails a read, shows nothing new; a
+failed read keeps the last reading until the node is reported unavailable, when
+its prompts drop out. A remote worker's prompt still does not produce a notice to
+the coordinator: `noteWorkerHumanPrompt` is local. Two real nodes have not
+exercised this:
+[4942](../todo/coordinator-and-multi-review/4942-c7-live-checks.md).
+
+**Next wake.** Below 1280px, where the panel is folded to its strip, a line under
+the conversation says what the next wake waits for ("Next wake when api-fix
+finishes", "… or 2 others finish"), while the focused conversation is idle and
+coordination is not paused. Wide screens already show this in the panel. It sits
+below the conversation group rather than directly under the last message, because
+a transcript row would be per conversation while delegations are per coordinator.
+
 **Layout.** At 1280px and wider the panel is open by default beside the
 conversation. Narrower, it is a strip with the running and needs-you counts;
 clicking it opens the list over the conversation, and Escape or the hide
@@ -1426,6 +1572,28 @@ window crosses the threshold. The strip, hide button and every Open button are
 ordinary buttons with accessible names, so the panel works by keyboard. The
 panel root carries `data-open-delegations` (every open delegation of this
 coordinator) for end-to-end checks.
+
+### Mail tiles and the report cue
+
+A workflow notice about a worker (an `agent-tab` or `environment` resource) gets
+an **Open** beside its Open conversation button, through the same
+`openCoordinatorWorkTarget` as a Work row. `notice.resource.nodeId` names the node
+of a worker elsewhere; it is additive, and a notice without it means this machine.
+`workerTabTarget` resolves the worker against this client's own stores, so a
+deleted environment, one being deleted, a node that is not connected, or an older
+notice about another node's worker (an id no local store knows) offers no action.
+The tile renders in any transcript, not only a coordinator's.
+
+The "Coordinator report" cue (`coordinatorReport` in the sound settings, on by
+default; a config without it gets the default) plays when a delegation's wake was
+delivered: `CoordinatorService` raises `coordinator-wake-attention`, which
+`installStorageEventFanout` sends to every client. It is presentation only, like
+`environment-attention`: content-free, with a fixed id per wake so a client acts
+once, not replayed to a client that was away, and quiet while that coordinator's
+page is on screen in a visible window. A worker's "agent stopped" cue and its wake
+within 500 ms are one sound. A backend that predates the event never sends it, and
+an older client ignores it. A desktop notification is a wider feature:
+[4941](../todo/coordinator-and-multi-review/4941-coordinator-report-desktop-notification.md).
 
 ## User `!` commands
 
@@ -1486,15 +1654,34 @@ the workers still being waited on, filtered before the 200-row cap, so it answer
 `coordinatorDelegationBucket` (`packages/protocol/src/coordinator.ts`) is the one
 definition of a delegation's bucket, shared with the [Work panel](#work-panel).
 
-Repeated unchanged reads of `read_messages`, `get_message_status` or
-`list_environments` return the authorized page with `repeatedRead: true` and
-the contract attached, after three identical answers inside 120 seconds. The
-guard never withholds data. For `list_environments` "identical" means the same
-filters and the same lifecycle, setup, activity and PR state for every listed
-environment (and every other node's rows); `lastActivityAt` is left out, so
-re-listing while a worker is still `working` counts as the same answer. PR
-state there is the whole reading below: a PR that starts conflicting, has a
-check finish or fail, or becomes ready to merge is a different answer.
+The poll guard (`apps/backend/src/core/control-mcp-poll-guard.ts`) covers
+`read_messages`, `get_message_status`, `list_environments`, `list_agents`,
+`get_environment`, `get_tab_state`, `get_tab_transcript`, `get_build_pipeline`,
+`get_multi_review` and `list_workflows`. After three identical answers, the
+next one still returns the whole authorized result, with `repeatedRead: true`
+and the contract attached; the guard never withholds data. Two rules decide
+what is identical:
+
+- **The key is the question.** Each read is keyed on the tool, its target and
+  the filters that change what is asked (`status`, `unreadOnly`, `openOnly`),
+  never on paging or size (`limit`, `offset`), so asking for a different page
+  size does not reset the count.
+- **The fingerprint is the state a poll watches.** For `list_environments` and
+  `get_environment`, lifecycle, setup, activity and PR state for every listed
+  environment (and every other node's rows), leaving out `lastActivityAt`, so
+  re-listing while a worker is still `working` counts as the same answer. PR
+  state there is the whole reading below: a PR that starts conflicting, has a
+  check finish or fail, or becomes ready to merge is a different answer.
+  `list_agents` compares each tab's state and goal; `get_tab_state` the
+  connection, turn phase and error, open interactions and goal, not the
+  streaming revision; `get_tab_transcript` its newest row (a row is one model
+  response), whatever `limit` asked for; a workflow its summary without
+  timestamps and revisions; `list_workflows` each association's delegation,
+  follow and resource state.
+
+The window slides: each identical read extends it by 120 seconds, so slow
+polling is caught too. Entries are bounded (256) and dropped with the
+conversation's credential.
 
 A coordinator's `get_environment` and `list_environments` rows for a worker
 with a pull request carry, besides `prUrl` and `prState`,
@@ -1932,6 +2119,15 @@ every round. There is no pane tab for any of them; the mailbox is the worker.
 - **Delegations.** A coordinator message to a worker opens a delegation like
   any other; it settles when that worker's turn ends or the worker ends
   (`workerActivity` reads the pipeline for a `pipeline-worker:` tab).
+- **Multi Review reviewers.** Each reviewer of a Multi Review has the same kind
+  of mailbox while its review is in its reviewers' stage, under the same address
+  scheme, so `list_mailboxes`, `send_message` and `get_tab_transcript` treat it
+  alike (`multiReviewWorkers`, `multi-review-worker-mail.ts`). Queued mail becomes
+  its next turn before its result is accepted, and `deliverNow` steers under the
+  workflow lock. A restart rotates the session key, so it is a new address and
+  mail never follows. Preparation, consolidation and Address Findings keep their
+  own sessions and have no worker mailbox. A send naming only the environment is
+  still routed as usual: a Multi Review does not make it a pipeline environment.
 
 Decisions:
 
@@ -2014,7 +2210,7 @@ Decisions:
   `unsupported, queued` for scheduled pending mail, `not queued` with the
   leaf's placement and reason otherwise. A lost answer is the ordinary
   outcome-unknown error with no `deliverNow` claim; retrying the same
-  `requestId` replays on the leaf. `send_node_message` has no `deliverNow`.
+  `requestId` replays on the leaf.
   Live qualification is in
   [0740](../todo/coordinator-and-multi-review/0740-coordinator-deliver-now-live-qualification.md).
 
@@ -2035,7 +2231,9 @@ is asked, then the turn end settles the delegation as any other: the
 coordinator is woken once, with the worker's held report if it sent one, or
 with a notice that says it stopped the turn itself ("… stopped because you
 stopped its turn with stop_worker_turn, before it sent a report") and the
-worker's last message. On this node a stop the agent confirms settles the
+worker's last message. A stop from the Work panel records `stopRequestedBy: "user"`
+as well, and the notice says "the user stopped its turn from the Work panel"
+instead; the tool's schema is strict, so a coordinator cannot claim that. On this node a stop the agent confirms settles the
 delegation at once rather than on the next edge or sweep, so the tab takes a
 `send_prompt_to_tab` straight away, in that turn or the next; an unconfirmed
 one settles on the turn end. For a worker on another node, after any stop
@@ -2208,7 +2406,7 @@ or prompted **settles**, so it can keep track and respond without polling
 
 **Ownership.** Only resources with a coordinator workflow association: the
 durable record written at launch or prompt time with the coordinator and
-conversation ids (`launch_multi_review`, `start_multi_review`,
+conversation ids (`launch_multi_review`,
 `start_build_pipeline`, `launch_graph` (a `graph-run` association),
 `create_pr` and `resolve_conflicts` (a `pull-request` association),
 `launch_feature_plan` (a `feature-plan` association per message), and the
@@ -2437,7 +2635,7 @@ worker, wake an observation within seconds; the
 every owned workflow, followed pull request and open delegation, which
 recovers a missed save, a timer lost to a restart, or bookkeeping that never
 landed.
-`launch_multi_review`, `address_multi_review`, `start_multi_review`,
+`launch_multi_review`, `address_multi_review`,
 `start_build_pipeline` and `launch_graph` return `delivery: "async"` with
 `COORDINATOR_WORKFLOW_STATUS_WAKE`, so the model is told it will be woken
 rather than left to poll `get_multi_review`; `create_pr` (when it launched)
@@ -2562,9 +2760,10 @@ three places that agree:
 - `COORDINATOR_LAUNCH_DEFAULTS_RULE` (`packages/protocol/src/coordinator.ts`)
   is a single line in the coordinator context prompt and the Control MCP server
   instructions.
-- The descriptions of `launch_environment`, `launch_job`, `launch_multi_review`,
-  `start_multi_review` and `start_build_pipeline`, and of each model, effort and
-  agent field, say that omitting the field uses the saved default.
+- The descriptions of `launch_environment`, `launch_job`, `launch_multi_review`
+  and `start_build_pipeline`, and of each model, effort and agent field, say
+  that omitting the field uses the saved default. `agent` is optional on
+  `launch_environment` and `launch_job` too.
 - `get_launch_options` returns `defaults` (`agent`, per-agent
   `byAgent[agent] = { modelId, reasoningId }`, `guidance`) and marks each
   agent's default catalogue row with `isDefault: true`.
@@ -2573,9 +2772,10 @@ What an omitted choice resolves to:
 
 | Tool | Omitted | Resolves to |
 | --- | --- | --- |
+| `launch_environment`, `launch_job` | `agent` | The saved default agent (environment → repository → app settings; a job reads its environment's tier) when it is enabled, else the first enabled platform: `defaults.agent` from `get_launch_options` (`defaultLaunchAgent`, `control-shared-actions.ts`). A launch on another node resolves on that node |
 | `launch_environment`, `launch_job` | `modelId`, `reasoningId`, `fastMode` | The platform column across environment → repository → app settings, else the agent's own default (`defaultReasoningId` for effort) |
-| `launch_multi_review`, `start_multi_review` | `reviewers`, `reviewModel`, `fixModel` | The Multi Review button's rows: Review, Review 2, saved extra reviewers and reviewer count, each reviewer with its position's saved focus (`multiReview.reviewerLenses`); Review preparation and Address Findings review issues, each falling back to Review |
-| `launch_multi_review`, `start_multi_review` | `autoFix`, `autoPr` | The saved app-level Auto-fix and Auto-PR, which the button reads; a requested `autoPr: true` turns an omitted `autoFix` on |
+| `launch_multi_review` | `reviewers`, `reviewModel`, `fixModel` | The Multi Review button's rows: Review, Review 2, saved extra reviewers and reviewer count, each reviewer with its position's saved focus (`multiReview.reviewerLenses`); Review preparation and Address Findings review issues, each falling back to Review |
+| `launch_multi_review` | `autoFix`, `autoPr` | The saved app-level Auto-fix and Auto-PR, which the button reads; a requested `autoPr: true` turns an omitted `autoFix` on |
 | `start_build_pipeline` | `agentType`, `steps`, `reviewers`, `reviewPreparation` | `buildPipelineConfiguredDefaults` (`packages/protocol/src/build-pipeline-defaults.ts`), the resolver the Build button uses |
 
 Every one of these can be overridden. A coordinator is told to override only
@@ -2620,7 +2820,7 @@ Overrides layer the way the launchers do. For `start_build_pipeline`:
 
 Each Multi Review row field is replaced independently.
 
-A reviewer row, in `launch_multi_review`, `start_multi_review` or
+A reviewer row, in `launch_multi_review` or
 `start_build_pipeline`'s `reviewers`, may carry `lens: { label, instruction }`:
 the reviewer's focus, a label of at most 64 characters and an instruction of at
 most 4 KiB ([reviewer lenses](review-preparation.md#reviewer-lenses)). The
@@ -2649,12 +2849,13 @@ if the call set `modelId` or `reasoningId` and `default` otherwise. `model` is
 null when no tier pins one and the agent picks its own. The Multi Review result
 reports its rows the same way, plus `autoFix` and `autoPr` with a source of
 `default`, `requested` or `implied` (auto-fix turned on by a requested auto-PR).
-`start_multi_review` reports the same `selection`. `start_build_pipeline` reports the pipeline's
+`start_build_pipeline` reports the pipeline's
 `agentType`, `steps`, `reviewers` and `reviewPreparation`, with a per-step and
 per-field `source`; a step's stored instructions are reported as
 `instructionsBytes`, not echoed. A reviewer's lens is reported in every
-`selection` as `{ label, instructionBytes }`. The environment and tab UI do not show a marker
-for overrides yet; that is a tracked follow-up.
+`selection` as `{ label, instructionBytes }`. A Work row marks an override
+("requested"). The environment and tab UI do not show a marker yet:
+[4943](../todo/coordinator-and-multi-review/4943-launch-override-marker-in-environment-ui.md).
 
 ## Complete application actions
 
@@ -2756,7 +2957,7 @@ authoritative reconciliation load referenced workflows before installing tabs.
 
 | Existing control / button family | Durable consequences and disposition |
 | --- | --- |
-| `start_multi_review` / Multi Review | Backend-only and build-gated; retained for diagnostics/recovery. Its metadata explicitly prefers `launch_multi_review`, which adds root-tab publication, focus, readiness checks, reattachment, and truthful recovery. |
+| `start_multi_review` / Multi Review | Backend-only and build-gated. No longer offered to coordinators (`RETIRED_COORDINATOR_TOOLS`); `launch_multi_review` adds root-tab publication, focus, readiness checks, reattachment, and truthful recovery. Operator credentials keep their own `start_multi_review` over `review.launch`. |
 | Multi Review open / Open Address Findings session | Added `open_multi_review` and `open_multi_review_fix`; operate entirely through backend snapshots and pane persistence. No additional provider turn. |
 | `address_multi_review` / Address findings | Upgraded to the complete action above. Existing backend handoff already owns session adoption, turn idempotency, and eventual Address Findings publication; it now selects that tab when published and reports queued/partial outcomes. |
 | `start_build_pipeline` / Build | Already complete: `BuildPipelineService` owns environment provisioning, workflow persistence, Kanban/feature ownership, root-tab creation and selection, with supervisor repair. Reuse it; no duplicate wrapper added. |

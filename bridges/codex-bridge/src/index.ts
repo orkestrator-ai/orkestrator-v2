@@ -13,7 +13,7 @@ import {
   type BridgeRunDiagnostics,
 } from "@orkestrator/protocol/node/bridge-diagnostics";
 import { execFile as execFileCallback } from "node:child_process";
-import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { serve } from "@hono/node-server";
@@ -75,10 +75,7 @@ import {
   listPersistedSessionsForCwd,
   mergePersistedSessionMeta,
 } from "./history/rollout.js";
-import {
-  readTextFileIfPresent,
-  stringifyUnknown as stringifyUnknownValue,
-} from "./messages/normalization.js";
+import { readTextFileIfPresent } from "./messages/normalization.js";
 import type { NormalizedMessage } from "./messages/types.js";
 
 import { CODEX_FALLBACK_MODEL_CATALOG } from "@orkestrator/protocol/codex-model-catalog";
@@ -381,12 +378,6 @@ function acquireReplayRetention(): () => void {
 scheduleReplayRetentionDrop();
 /** Interval for the idle-thread sweep. */
 const CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
-const codexRawLogDir = normalizeOptionalEnvPath("ORKESTRATOR_CODEX_RAW_LOG_DIR");
-
-function normalizeOptionalEnvPath(name: string): string | null {
-  const value = process.env[name]?.trim();
-  return value ? value : null;
-}
 
 function isBridgeAuthEnabled(): boolean {
   if (bridgeAuthEnabledOverrideForTesting !== null) {
@@ -436,44 +427,6 @@ function isTrustedBridgeOrigin(origin: string | undefined): boolean {
 
 function isPublicHealthRequest(method: string, path: string): boolean {
   return method === "GET" && path === "/global/health";
-}
-
-function sanitizeLogFileComponent(value: string): string {
-  return value.replace(/[^a-zA-Z0-9._-]/g, "_");
-}
-
-function normalizeLogPayload(value: unknown): unknown {
-  try {
-    return JSON.parse(JSON.stringify(value));
-  } catch {
-    return stringifyUnknownValue(value);
-  }
-}
-
-async function writeCodexRawLog(
-  sessionId: string,
-  entry: Record<string, unknown>,
-  logDir: string | null = codexRawLogDir,
-): Promise<void> {
-  if (!logDir) {
-    return;
-  }
-
-  try {
-    await mkdir(logDir, { recursive: true });
-    const filename = `${sanitizeLogFileComponent(sessionId)}.jsonl`;
-    await appendFile(
-      join(logDir, filename),
-      `${JSON.stringify({
-        timestamp: new Date().toISOString(),
-        sessionId,
-        ...entry,
-      })}\n`,
-      "utf8",
-    );
-  } catch (error) {
-    log.warn("raw-log.write-failed", { error: formatLogError(error) });
-  }
 }
 
 function createShutdownHandler(
@@ -937,7 +890,6 @@ export const __testing = {
   hydrateMessagesFromPersistedSessionForTesting: hydrateMessagesFromPersistedSession,
   listPersistedSessionsForCwdForTesting: listPersistedSessionsForCwd,
   mergePersistedSessionMetaForTesting: mergePersistedSessionMeta,
-  normalizeLogPayloadForTesting: normalizeLogPayload,
   readPersistedBridgeCache,
   readCodexCliModelCache,
   readTextFileIfPresentForTesting: readTextFileIfPresent,
@@ -952,7 +904,6 @@ export const __testing = {
     bridgeAuthEnabledOverrideForTesting = true;
   },
   isTrustedBridgeOriginForTesting: isTrustedBridgeOrigin,
-  sanitizeLogFileComponentForTesting: sanitizeLogFileComponent,
   serializeSseEventDataForTesting: serializeSseEventData,
   setSseRouteTestHooksForTesting: (hooks: SseRouteTestHooks | null) => {
     sseRouteTestHooks = hooks;
@@ -970,7 +921,6 @@ export const __testing = {
       releaseReplayRetention();
     };
   },
-  writeCodexRawLogForTesting: writeCodexRawLog,
   writePersistedBridgeCache,
 };
 

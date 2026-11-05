@@ -97,8 +97,20 @@ export function workflowRestartContinuationPrompt(input: {
   ].join("\n\n");
 }
 
+/** The turn that continues a session the user's pause stopped partway. */
+export function workflowResumeContinuationPrompt(input: {
+  workLabel: string;
+  resultLabel: string;
+  toolName?: string;
+}): string {
+  return workflowRestartContinuationPrompt(input).replace(
+    "Orkestrator restarted while you were working, so",
+    "This work was paused and has now resumed, so",
+  );
+}
+
 /**
- * The turn sent after the weekly limit stopped a workflow's turn and the machine
+ * The turn sent after a five-hour or weekly limit stopped a workflow's turn and the machine
  * moved to another account. Like the restart continuation it continues the same
  * conversation rather than sending the step's prompt a second time.
  */
@@ -109,7 +121,7 @@ export function workflowUsageLimitContinuationPrompt(input: {
 }): string {
   const { workLabel, resultLabel, toolName } = input;
   return [
-    `Your last turn stopped because the account's weekly usage limit ran out, and this session has moved to another account. Your earlier messages and tool results are still in this conversation.`,
+    `Your last turn stopped because the account's five-hour or weekly usage limit ran out, and this session has moved to another account. Your earlier messages and tool results are still in this conversation.`,
     `Continue the ${workLabel} from where it stopped. Do not start over: repeat a step only if you no longer have its result.`,
     toolName
       ? `When you are done, submit your ${resultLabel} by calling \`${toolName}\`. The earlier resultKey is closed. Use only the resultKey (and capability, when one is given) from the instructions below.`

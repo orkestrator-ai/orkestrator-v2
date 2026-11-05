@@ -316,5 +316,4 @@ The checksum covers a positional array rather than the record's JSON, and old ro
 
 - [Efficiency report, B](../2026-10-27-efficiency.md#b-native-agent-transcript-pipeline) (TX-3, TX-9, TX-13, TX-7, TX-11, TX-12, TX-14, TX-16, TX-17)
 - [1202 task 5](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md)
-- [0150](0110-e9-transcript-reads.md#0150-dispatches-and-control-changes-trigger-an-unlimited-raw-transcript-read): fewer legacy refreshes would also lower this cost
-- [0150](0110-e9-transcript-reads.md#0150-dispatches-and-control-changes-trigger-an-unlimited-raw-transcript-read)
+- [E9's closing check](0000-index.md#closing-check-of-e9-transcript-reads) (part 0150, built 2026-11-05): fewer legacy refreshes also lower this cost

@@ -10,6 +10,18 @@ import {
   type PublicActionResponse,
   type PublicErrorCode,
 } from "@orkestrator/protocol/public-api";
+import { COORDINATOR_REPLAYED_NOTE } from "@orkestrator/protocol/coordinator";
+
+/**
+ * What a coordinator start says when its request id had already run: the
+ * backend answers with `replayed: true`, and the result keeps that and says
+ * what it means, so a replay never reads as fresh work.
+ */
+export function coordinatorReplayFields(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && (value as { replayed?: unknown }).replayed === true
+    ? { replayed: true, replayNote: COORDINATOR_REPLAYED_NOTE }
+    : {};
+}
 
 /**
  * From a public envelope to an MCP tool result.

@@ -1,5 +1,6 @@
 import { MOBILE_SHELL_MEDIA_QUERY } from "@/lib/mobile-shell";
 import { useSidebarHydration } from "./useSidebarHydration";
+import { useSelectedEnvironmentActions } from "./useSelectedEnvironmentActions";
 import { onCreateEnvironmentRequest, openMachineWorkspace } from "@/lib/federation/open-workspace";
 import { startsOnSelection } from "@/lib/environment-auto-start";
 import { lazy, useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from "react";
@@ -68,17 +69,13 @@ import {
   FederatedActivityList,
   MachineSectionList,
   MergedProjectList,
-  mergedFolderCollapseKey,
 } from "@/components/federation/FederatedSidebarSections";
 import { useBoundCollapseSync } from "@/components/federation/useBoundCollapseSync";
 import { useMachineViews } from "@/components/federation/useMachineViews";
 import { ALL_MACHINES, filterMachines, type MachineView } from "@/lib/federation/aggregate";
-import {
-  isMachineShown,
-  mergedProjectView,
-  visibleBoundProjectIds,
-} from "@/lib/federation/sidebar-layout";
-import { usePortalLayout } from "@/lib/portal/portal-layout";
+import { isMachineShown } from "@/lib/federation/sidebar-layout";
+import { isSelectedEnvironmentReachable } from "@/lib/federation/selected-environments";
+import { applySidebarModifierSelection } from "@/lib/sidebar-selection";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import {
   nextSidebarView,
@@ -140,51 +137,11 @@ export type SidebarReorderResult = {
   ids: string[];
 };
 
-export type SidebarSelectionResult =
-  | { type: "toggle"; environmentId: string }
-  | { type: "range"; ids: string[] }
-  | { type: "single"; environmentId: string };
-
 // Kept here for existing importers; the order itself is shared with the
 // federated list and the CLI.
 export { sortEnvironmentsByActivity };
 
 export { animateActivityRowMovement, measureActivityRowLayoutTop } from "./ActivityEnvironmentList";
-
-export function resolveSidebarSelection(
-  environmentId: string,
-  modifiers: { shiftKey?: boolean; metaKey?: boolean },
-  orderedIds: string[],
-  selectedEnvironmentId: string | null,
-  selectedEnvironmentIds: string[],
-): SidebarSelectionResult {
-  if (modifiers.shiftKey) {
-    const clickedIndex = orderedIds.indexOf(environmentId);
-    if (clickedIndex === -1) {
-      return { type: "toggle", environmentId };
-    }
-
-    const anchorId = selectedEnvironmentId || selectedEnvironmentIds[0];
-    if (!anchorId) {
-      return { type: "range", ids: [environmentId] };
-    }
-
-    const anchorIndex = orderedIds.indexOf(anchorId);
-    if (anchorIndex === -1) {
-      return { type: "range", ids: [environmentId] };
-    }
-
-    const startIndex = Math.min(anchorIndex, clickedIndex);
-    const endIndex = Math.max(anchorIndex, clickedIndex);
-    return { type: "range", ids: orderedIds.slice(startIndex, endIndex + 1) };
-  }
-
-  if (modifiers.metaKey) {
-    return { type: "toggle", environmentId };
-  }
-
-  return { type: "single", environmentId };
-}
 
 /**
  * Resolves an environment drag within its project.
@@ -386,8 +343,6 @@ export function HierarchicalSidebar() {
   const toggleProjectCollapse = useUIStore((state) => state.toggleProjectCollapse);
   const toggleProjectFolderCollapse = useUIStore((state) => state.toggleProjectFolderCollapse);
   const setProjectFolderCollapsed = useUIStore((state) => state.setProjectFolderCollapsed);
-  const toggleEnvironmentSelection = useUIStore((state) => state.toggleEnvironmentSelection);
-  const setMultiSelection = useUIStore((state) => state.setMultiSelection);
   const clearMultiSelection = useUIStore((state) => state.clearMultiSelection);
   const projectsLoaded = useProjectStore((state) => state.hasLoaded);
   const setEnvironmentSortMode = useUIStore((state) => state.setEnvironmentSortMode);
@@ -442,8 +397,6 @@ export function HierarchicalSidebar() {
     () => new Set(visibleMachines.filter(isMachineShown).map((machine) => machine.connectionId)),
     [visibleMachines],
   );
-  const portalLayout = usePortalLayout();
-  const collapsedFolderKeys = useMachineViewStore((state) => state.collapsedFolderKeys);
   const openedRepositoryKey = useMachineViewStore((state) => state.openedRepository?.projectKey);
   useBoundCollapseSync(
     federation.enabled ? (boundMachineView?.backendId ?? null) : null,
@@ -750,89 +703,17 @@ export function HierarchicalSidebar() {
     [],
   );
 
-  // Build a flat ordered list of visible environment IDs in display order
-  // Only includes environments from expanded (non-collapsed) projects
-  const getOrderedEnvironmentIds = useCallback((): string[] => {
-    if (environmentSortMode === "activity") {
-      return activityEnvironments.map((environment) => environment.id);
-    }
-
-    const orderedIds: string[] = [];
-    const collectFrom = (project: Project): void => {
-      // Skip collapsed projects - their environments aren't visible
-      if (collapsedProjects.includes(project.id)) return;
-      for (const env of getProjectEnvironments(project.id)) orderedIds.push(env.id);
-    };
-    // A merged list draws this window's projects in the command node's order
-    // and folders (`MergedProjectList`), so a range follows that tree.
-    if (federatedMode === "project" || federatedMode === "repository") {
-      const { tree } = mergedProjectView(
-        machineViews,
-        mergedShownIds,
-        federatedMode,
-        portalLayout,
-        federation.portalState.selfId,
-      );
-      for (const projectId of visibleBoundProjectIds(tree, (name) =>
-        collapsedFolderKeys.includes(mergedFolderCollapseKey(federatedMode, name)),
-      )) {
-        const project = projectsById.get(projectId);
-        if (project) collectFrom(project);
-      }
-      return orderedIds;
-    }
-    for (const entry of projectTree) {
-      if (entry.kind === "project") {
-        collectFrom(entry.project);
-        continue;
-      }
-      // A collapsed folder hides every project inside it, so shift-range
-      // selection must not run through environments that are not on screen.
-      if (isProjectFolderCollapsed(collapsedProjectFolders, entry.name)) continue;
-      for (const project of entry.projects) collectFrom(project);
-    }
-    return orderedIds;
-  }, [
-    activityEnvironments,
-    environmentSortMode,
-    projectTree,
-    collapsedProjectFolders,
-    getProjectEnvironments,
-    collapsedProjects,
-    federatedMode,
-    machineViews,
-    mergedShownIds,
-    portalLayout,
-    federation.portalState.selfId,
-    collapsedFolderKeys,
-    projectsById,
-  ]);
-
   // useCallback so memo(EnvironmentItem) rows are not invalidated every render.
   const handleSelectEnvironment = useCallback(
     (environmentId: string, modifiers: { shiftKey?: boolean; metaKey?: boolean } = {}) => {
-      const selection = resolveSidebarSelection(
-        environmentId,
-        modifiers,
-        getOrderedEnvironmentIds(),
-        selectedEnvironmentId,
-        selectedEnvironmentIds,
-      );
-      if (selection.type === "toggle") {
-        toggleEnvironmentSelection(selection.environmentId);
-        return;
-      }
-      if (selection.type === "range") {
-        setMultiSelection(selection.ids);
-        return;
-      }
+      if (applySidebarModifierSelection(environmentId, modifiers)) return;
 
       // Normal click: clear multi-selection and select single environment
       if (isMobile && document.activeElement instanceof HTMLElement) {
         document.activeElement.blur();
       }
       clearMultiSelection();
-      const environment = allEnvironments.find((e) => e.id === selection.environmentId);
+      const environment = allEnvironments.find((e) => e.id === environmentId);
       if (environment) {
         selectProjectAndEnvironment(environment.projectId, environmentId);
         // Auto-start local environments on selection so a terminal can open
@@ -855,18 +736,7 @@ export function HierarchicalSidebar() {
         // phase from the persisted environment snapshot.
       }
     },
-    [
-      getOrderedEnvironmentIds,
-      selectedEnvironmentId,
-      selectedEnvironmentIds,
-      toggleEnvironmentSelection,
-      setMultiSelection,
-      isMobile,
-      clearMultiSelection,
-      allEnvironments,
-      selectProjectAndEnvironment,
-      startEnvironment,
-    ],
+    [isMobile, clearMultiSelection, allEnvironments, selectProjectAndEnvironment, startEnvironment],
   );
 
   const revealProject = useCallback(
@@ -899,76 +769,24 @@ export function HierarchicalSidebar() {
     [allEnvironments, handleSelectEnvironment, revealProject],
   );
 
-  // Bulk action handlers
-  const handleStopSelected = async () => {
-    const runningIds = selectedEnvironmentIds.filter((id) => {
-      const env = allEnvironments.find((e) => e.id === id);
-      return env?.status === "running" && (env.environmentType === "local" || dockerAvailable);
-    });
-
-    const results = await Promise.allSettled(runningIds.map((id) => stopEnvironment(id)));
-
-    results.forEach((result, index) => {
-      if (result.status === "rejected") {
-        log.error("environment.stop-failed", {
-          environmentId: runningIds[index],
-          error: formatLogError(result.reason),
-        });
-      }
-    });
-  };
-
-  const handleRestartSelected = async () => {
-    const runningIds = selectedEnvironmentIds.filter((id) => {
-      const env = allEnvironments.find((e) => e.id === id);
-      return env?.status === "running" && (env.environmentType === "local" || dockerAvailable);
-    });
-
-    const results = await Promise.allSettled(runningIds.map((id) => restartEnvironment(id)));
-
-    results.forEach((result, index) => {
-      if (result.status === "rejected") {
-        log.error("environment.restart-failed", {
-          environmentId: runningIds[index],
-          error: formatLogError(result.reason),
-        });
-      }
-    });
-  };
+  const selection = useSelectedEnvironmentActions({
+    selectionIds: selectedEnvironmentIds,
+    localEnvironments: allEnvironments,
+    machines: machineViews,
+    dockerAvailable,
+    stopEnvironment,
+    restartEnvironment,
+    deleteEnvironment,
+  });
 
   const handleDeleteSelected = async () => {
-    const idsToDelete = [...selectedEnvironmentIds];
-
-    const results = await Promise.allSettled(idsToDelete.map((id) => deleteEnvironment(id)));
-
-    results.forEach((result, index) => {
-      if (result.status === "rejected") {
-        log.error("environment.delete-failed", {
-          environmentId: idsToDelete[index],
-          error: formatLogError(result.reason),
-        });
-      }
-    });
-
+    await selection.deleteSelected();
     // Clear all selection after deletion
     clearMultiSelection();
     setShowBulkDeleteDialog(false);
   };
 
-  // Get environment info for bulk delete confirmation (id and name)
-  const selectedEnvironmentInfo = selectedEnvironmentIds
-    .map((id) => {
-      const env = allEnvironments.find((e) => e.id === id);
-      return env ? { id: env.id, name: env.name } : null;
-    })
-    .filter(Boolean) as { id: string; name: string }[];
-  const hasActionableRunningSelection = selectedEnvironmentIds.some((id) => {
-    const environment = allEnvironments.find((candidate) => candidate.id === id);
-    return (
-      environment?.status === "running" &&
-      (environment.environmentType === "local" || dockerAvailable)
-    );
-  });
+  const selectionSpansMachines = selection.selected.some((entry) => entry.remote);
 
   const handleForkEnvironment = useCallback(
     (environmentId: string, environmentType: EnvironmentType) =>
@@ -1362,16 +1180,16 @@ export function HierarchicalSidebar() {
         ) : isMultiSelectMode ? (
           <>
             <span className="text-sm font-medium text-foreground">
-              {selectedEnvironmentIds.length} selected
+              {selection.selected.length} selected
             </span>
             <div className="flex items-center gap-1">
               <Button
                 variant="ghost"
                 size="icon"
                 className="h-7 w-7 text-muted-foreground hover:text-orange-500"
-                onClick={handleStopSelected}
+                onClick={() => void selection.stopSelected()}
                 title="Stop selected"
-                disabled={!hasActionableRunningSelection}
+                disabled={!selection.canStopOrRestart}
               >
                 <Square className="h-4 w-4" />
               </Button>
@@ -1379,9 +1197,9 @@ export function HierarchicalSidebar() {
                 variant="ghost"
                 size="icon"
                 className="h-7 w-7 text-muted-foreground hover:text-foreground"
-                onClick={handleRestartSelected}
+                onClick={() => void selection.restartSelected()}
                 title="Restart selected"
-                disabled={!hasActionableRunningSelection}
+                disabled={!selection.canStopOrRestart}
               >
                 <RotateCw className="h-4 w-4" />
               </Button>
@@ -1391,6 +1209,7 @@ export function HierarchicalSidebar() {
                 className="h-7 w-7 text-muted-foreground hover:text-destructive"
                 onClick={() => setShowBulkDeleteDialog(true)}
                 title="Delete selected"
+                disabled={!selection.canDelete}
               >
                 <Trash2 className="h-4 w-4" />
               </Button>
@@ -1585,13 +1404,23 @@ export function HierarchicalSidebar() {
       <AlertDialog open={showBulkDeleteDialog} onOpenChange={setShowBulkDeleteDialog}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete {selectedEnvironmentIds.length} Environments</AlertDialogTitle>
+            <AlertDialogTitle>Delete {selection.selected.length} Environments</AlertDialogTitle>
             <AlertDialogDescription asChild>
               <div>
                 <p>Are you sure you want to delete the following environments?</p>
-                <ul className="mt-2 list-disc list-inside text-foreground">
-                  {selectedEnvironmentInfo.map(({ id, name }) => (
-                    <li key={id}>{name}</li>
+                <ul className="mt-2 max-h-64 list-disc list-inside overflow-y-auto text-foreground">
+                  {selection.selected.map((entry) => (
+                    <li key={entry.selectionId}>
+                      {entry.name}
+                      {selectionSpansMachines && (
+                        <span className="text-muted-foreground">
+                          {" "}
+                          on{" "}
+                          {entry.remote?.machine.name ?? boundMachineView?.name ?? "this machine"}
+                          {!isSelectedEnvironmentReachable(entry) && " (unavailable, skipped)"}
+                        </span>
+                      )}
+                    </li>
                   ))}
                 </ul>
                 <p className="mt-2 text-orange-500">

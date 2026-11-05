@@ -660,7 +660,8 @@ export function registerProjectCommands(
         : null;
       if (
         coordinator?.status === "unavailable" &&
-        (!workspace || coordinator.reason !== "unassigned")
+        (!workspace ||
+          (coordinator.reason !== "unassigned" && coordinator.reason !== "startup-failed"))
       ) {
         throw new Error(coordinatorRuntimeUnavailableMessage(coordinator));
       }

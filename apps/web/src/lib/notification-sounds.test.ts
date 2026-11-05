@@ -144,11 +144,19 @@ describe("notification sounds", () => {
   test("suppresses configured cues when their preference is disabled", async () => {
     const contexts = installAudioContext();
     useConfigStore.getState().updateGlobalConfig({
-      notificationSounds: { agentStopped: false, prMerged: true },
+      notificationSounds: { agentStopped: false, prMerged: true, coordinatorReport: true },
     });
 
     expect(isNotificationSoundEnabled("agent-stopped")).toBe(false);
     expect(isNotificationSoundEnabled("pr-merged")).toBe(true);
+    expect(isNotificationSoundEnabled("coordinator-report")).toBe(true);
+    useConfigStore.getState().updateGlobalConfig({
+      notificationSounds: { agentStopped: false, prMerged: true, coordinatorReport: false },
+    });
+    expect(isNotificationSoundEnabled("coordinator-report")).toBe(false);
+    useConfigStore.getState().updateGlobalConfig({
+      notificationSounds: { agentStopped: false, prMerged: true, coordinatorReport: true },
+    });
     expect(await playConfiguredNotificationSound("agent-stopped")).toBe(false);
     expect(contexts).toHaveLength(0);
 

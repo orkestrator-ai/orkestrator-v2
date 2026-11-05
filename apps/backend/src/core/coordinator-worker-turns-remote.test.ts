@@ -157,6 +157,7 @@ beforeEach(async () => {
     },
     runtime: new BackendRuntime({ emit: () => undefined }),
   } as unknown as CommandContext;
+  asRenderer = async (command, args) => commands.get(command)!(args, rootContext);
   mcp = new ControlMcpServer(
     world.root,
     async <T>(command: string, args = {}) => (await commands.get(command)!(args, rootContext)) as T,
@@ -179,6 +180,8 @@ afterEach(async () => {
 });
 
 /** A delegation this command node keeps for the remote worker's tab. */
+let asRenderer: (command: string, args: Record<string, unknown>) => Promise<unknown>;
+
 async function remoteDelegation(requestId: string) {
   const association = await world.storage.coordinators.saveCoordinatorWorkflowAssociation({
     id: `remote-${requestId}`,
@@ -223,6 +226,33 @@ test("a remote stop runs on the node, marks the open delegation, and survives a 
   expect(retried.structuredContent).toMatchObject({ nodeId: "bk_leaf", stopped: false });
   expect(stops).toBe(1);
   expect(routed.filter((command) => command === "stop_controller_worker_turn")).toHaveLength(2);
+});
+
+test("a stop from the Work panel reaches the node and tells the coordinator the user did it", async () => {
+  const id = await remoteDelegation("job-user");
+  const stopped = await asRenderer("stop_coordinator_worker_turn", {
+    scope,
+    input: {
+      requestId: "stop-user",
+      environmentId: workerId,
+      tabId: "agent",
+      nodeId: "bk_leaf",
+      stoppedBy: "user",
+    },
+  });
+  expect(stopped).toMatchObject({ nodeId: "bk_leaf", stopped: true, delegationOpen: true });
+  expect(routed).toContain("stop_controller_worker_turn");
+  expect(await delegation(id)).toMatchObject({ stopRequestedBy: "user" });
+});
+
+test("the coordinator's own tool cannot claim the user stopped the turn", async () => {
+  const refused = await tool("stop_worker_turn", {
+    requestId: "stop-spoof",
+    environmentId: workerId,
+    tabId: "agent",
+    stoppedBy: "user",
+  });
+  expect(refused.isError).toBe(true);
 });
 
 test("a confirmed remote stop reports the waiting delegation", async () => {

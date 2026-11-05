@@ -7,7 +7,6 @@ import type {
   ControlMcpCredentialPolicy,
   ControlMcpCredentialSummary,
 } from "@orkestrator/protocol/control-mcp";
-import { COORDINATOR_ASYNC_CONTRACT } from "@orkestrator/protocol/coordinator";
 import { ConfirmTokens } from "./control-mcp-confirm.js";
 import {
   ControlMcpCredentialStore,
@@ -23,9 +22,10 @@ import {
   COORDINATOR_CAPABILITIES,
   coordinatorToolGranted,
   createControlMcp,
+  RETIRED_COORDINATOR_TOOLS,
   type CoordinatorControlScope,
-  type CoordinatorPollGuard,
 } from "./control-mcp-tools.js";
+import { CoordinatorPollTracker } from "./control-mcp-poll-guard.js";
 import { isRecord, type JsonRecord } from "./control-mcp-tool-support.js";
 import { DEFAULT_CONTROL_MCP_PORT } from "../fixed-ports.js";
 import type { ControlMcpInvoker } from "./control-shared-actions.js";
@@ -43,13 +43,6 @@ const CONTROL_MCP_PATH = "/mcp";
 const CONTROL_MCP_DESCRIPTOR = "control-mcp.json";
 const MAX_REQUEST_BYTES = 1024 * 1024;
 const MAX_COORDINATOR_CREDENTIALS = 512;
-/**
- * How many identical answers a conversation may collect before it is told to
- * stop asking, and how long that judgement stands.
- */
-const COORDINATOR_POLL_BUDGET = 3;
-const COORDINATOR_POLL_WINDOW_MS = 120_000;
-const MAX_COORDINATOR_POLL_ENTRIES = 256;
 
 export type ControlMcpInfo = {
   url: string;
@@ -193,17 +186,8 @@ export class ControlMcpServer {
    * in a bridge that sat idle past it, which can never be given a new one.
    */
   private readonly coordinatorCredentials = new Map<string, { scope: CoordinatorControlScope }>();
-  /**
-   * Repeated-unchanged-read counters, per conversation and read.
-   *
-   * Lives here rather than on the MCP server because that one is rebuilt for
-   * every request — a counter kept there would reset on each call and never
-   * observe a loop at all.
-   */
-  private readonly coordinatorPolls = new Map<
-    string,
-    { fingerprint: string; unchanged: number; windowStartedAt: number }
-  >();
+  /** Repeated-unchanged-read counters, per conversation and question. */
+  private readonly coordinatorPolls = new CoordinatorPollTracker();
 
   constructor(
     private readonly dataDir: string,
@@ -280,43 +264,6 @@ export class ControlMcpServer {
     await run;
   }
 
-  /**
-   * The per-conversation poll guard handed to one request's MCP server.
-   *
-   * Bounded on both axes: one entry per conversation and exact read input, and
-   * the whole table is dropped when a credential is revoked. The budget is small
-   * on purpose — a turn legitimately reads its inbox once on entry and once
-   * before it finishes, so the fourth identical answer in two minutes is a wait
-   * loop, not work.
-   */
-  private coordinatorPollGuard(scope: CoordinatorControlScope): CoordinatorPollGuard {
-    return (read, fingerprint) => {
-      const key = `${scope.coordinatorId}:${scope.conversationId}:${read}`;
-      const now = Date.now();
-      const previous = this.coordinatorPolls.get(key);
-      if (
-        !previous ||
-        previous.fingerprint !== fingerprint ||
-        now - previous.windowStartedAt > COORDINATOR_POLL_WINDOW_MS
-      ) {
-        this.coordinatorPolls.set(key, { fingerprint, unchanged: 1, windowStartedAt: now });
-        if (this.coordinatorPolls.size > MAX_COORDINATOR_POLL_ENTRIES) {
-          const oldest = Array.from(this.coordinatorPolls.entries()).sort(
-            (a, b) => a[1].windowStartedAt - b[1].windowStartedAt,
-          )[0];
-          if (oldest) this.coordinatorPolls.delete(oldest[0]);
-        }
-        return null;
-      }
-      previous.unchanged += 1;
-      if (previous.unchanged <= COORDINATOR_POLL_BUDGET) return null;
-      return {
-        repeatedRead: true,
-        instruction: COORDINATOR_ASYNC_CONTRACT,
-      };
-    };
-  }
-
   issueCoordinatorCredential(scope: CoordinatorControlScope): CoordinatorControlConnection {
     if (!this.server || !this.info || process.env.ORKESTRATOR_CONTROL_MCP_DISABLED === "1") {
       throw new Error("Orkestrator control MCP is disabled or unavailable");
@@ -350,17 +297,7 @@ export class ControlMcpServer {
     }
     // A conversation that lost its credential is starting over. Carrying its
     // poll history forward would refuse the first read of the next one.
-    for (const key of this.coordinatorPolls.keys()) {
-      if (
-        key.startsWith(
-          conversationId === undefined
-            ? `${coordinatorId}:`
-            : `${coordinatorId}:${conversationId}:`,
-        )
-      ) {
-        this.coordinatorPolls.delete(key);
-      }
-    }
+    this.coordinatorPolls.forget(coordinatorId, conversationId);
   }
 
   /**
@@ -570,6 +507,11 @@ export class ControlMcpServer {
     if (workspace.lifecycleState !== "ready") {
       return { ok: false, status: 409, error: "Coordinator is paused or unavailable" };
     }
+    // This conversation's own bridge failed to start. Only its credential is
+    // refused; the main and every other conversation keep theirs.
+    if (typeof conversation.startupError === "string" && conversation.startupError) {
+      return { ok: false, status: 409, error: "This coordinator conversation could not start" };
+    }
     const invoke: ControlMcpInvoker = async <T>(
       command: string,
       args: Record<string, unknown> = {},
@@ -659,6 +601,13 @@ export class ControlMcpServer {
     tool: string,
     args: Record<string, unknown>,
   ): Promise<InProcessToolResult> {
+    const replacement = RETIRED_COORDINATOR_TOOLS.get(tool);
+    if (replacement) {
+      return {
+        isError: true,
+        text: `capability-denied: ${tool} was removed from the coordinator's tools; use ${replacement} instead`,
+      };
+    }
     if (!coordinatorToolGranted(coordinatorScope, tool)) {
       return { isError: true, text: "capability-denied: Coordinator capability denied" };
     }
@@ -747,7 +696,7 @@ export class ControlMcpServer {
       }
       scopedInvoke = checked.invoke;
     }
-    const pollGuard = coordinatorScope ? this.coordinatorPollGuard(coordinatorScope) : undefined;
+    const pollGuard = coordinatorScope ? this.coordinatorPolls.guard(coordinatorScope) : undefined;
     if (operatorCredential) this.credentials.markUsed(operatorCredential.id);
     const handler = createMcpHandler(
       () =>

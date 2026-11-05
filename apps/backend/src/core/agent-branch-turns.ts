@@ -168,7 +168,7 @@ export async function prepareAgentBranchRestartContinuation<B extends AgentBranc
 }
 
 /**
- * Queues a continuation for a branch the weekly limit stopped, once automatic
+ * Queues a continuation for a branch a five-hour or weekly limit stopped, once automatic
  * switching has moved the machine. The caller decided it may run; the count is
  * what `handleLimitStop` bounds.
  */

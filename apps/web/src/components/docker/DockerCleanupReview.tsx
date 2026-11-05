@@ -1,11 +1,17 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
-import { parseContainerLifecycleError } from "@orkestrator/protocol/container-lifecycle";
+import { toast } from "sonner";
+import {
+  parseContainerLifecycleError,
+  type RebuildPreview,
+} from "@orkestrator/protocol/container-lifecycle";
 import type {
   CleanupClassification,
   CleanupExecuteResult,
   CleanupPreview,
   CleanupPreviewRow,
+  LegacyRuntimeExposure,
+  LegacyRuntimeRow,
 } from "@orkestrator/protocol/container-recovery";
 import {
   AlertDialog,
@@ -17,9 +23,14 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import {
+  RebuildConfirmDialog,
+  reportRebuildOutcome,
+} from "@/components/environments/RebuildConfirmDialog";
 import { Z_FULLSCREEN_DIALOG } from "@/constants/z-index";
 import * as backend from "@/lib/backend";
 import { useAccountMachine } from "@/components/settings/account-machine";
+import { OutcomeUnknownError } from "@/lib/portal/portal-store";
 import { formatBytes } from "./docker-stats-format";
 
 export const CLEANUP_REASONS: Record<Exclude<CleanupClassification, "eligible">, string> = {
@@ -39,6 +50,11 @@ const KIND_LABELS: Record<CleanupPreviewRow["kind"], string> = {
   container: "Container",
   volume: "Volume",
   network: "Network",
+};
+
+const EXPOSURE_LABELS: Record<LegacyRuntimeExposure, string> = {
+  "host-mounts": "Your agent home directories are mounted into it",
+  "shared-bridge": "It shares a Docker network with other containers and the host",
 };
 
 function rowKey(row: Pick<CleanupPreviewRow, "kind" | "id">): string {
@@ -76,6 +92,16 @@ export function DockerCleanupReview({ open, onOpenChange, onFinished }: DockerCl
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<CleanupExecuteResult | null>(null);
+  const [rebuildTarget, setRebuildTarget] = useState<{
+    environmentId: string;
+    preview: RebuildPreview;
+  } | null>(null);
+  const [allowUnknownCapacity, setAllowUnknownCapacity] = useState(false);
+  const [checkingRebuild, setCheckingRebuild] = useState<string | null>(null);
+  const [rebuilding, setRebuilding] = useState<ReadonlySet<string>>(new Set());
+  const [refresh, setRefresh] = useState(0);
+
+  const selectionScope = useRef<{ machine: typeof machine } | null>(null);
 
   // Each opening reviews a fresh preview.
   const [wasOpen, setWasOpen] = useState(false);
@@ -90,7 +116,10 @@ export function DockerCleanupReview({ open, onOpenChange, onFinished }: DockerCl
   }
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      selectionScope.current = null;
+      return;
+    }
     let cancelled = false;
     const load = async () => {
       try {
@@ -100,7 +129,13 @@ export function DockerCleanupReview({ open, onOpenChange, onFinished }: DockerCl
         const eligibleKeys = next.rows
           .filter((row) => row.classification === "eligible")
           .map((row) => rowKey(row));
-        setSelected(new Set(eligibleKeys));
+        const fresh = !selectionScope.current || selectionScope.current.machine !== machine;
+        selectionScope.current = { machine };
+        // A refresh must never expand the removal the user already reviewed.
+        setSelected(
+          (current) =>
+            new Set(fresh ? eligibleKeys : eligibleKeys.filter((key) => current.has(key))),
+        );
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : String(err));
       } finally {
@@ -111,7 +146,7 @@ export function DockerCleanupReview({ open, onOpenChange, onFinished }: DockerCl
     return () => {
       cancelled = true;
     };
-  }, [open, machine]);
+  }, [open, machine, refresh]);
 
   const eligible = useMemo(
     () => preview?.rows.filter((row) => row.classification === "eligible") ?? [],
@@ -157,97 +192,222 @@ export function DockerCleanupReview({ open, onOpenChange, onFinished }: DockerCl
     }
   };
 
+  const openRebuild = async (row: LegacyRuntimeRow) => {
+    setCheckingRebuild(row.environmentId);
+    setAllowUnknownCapacity(false);
+    try {
+      setRebuildTarget({
+        environmentId: row.environmentId,
+        preview: await backend.getRebuildPreview(row.environmentId, machine),
+      });
+    } catch (err) {
+      toast.error("Could not check whether this container can be rebuilt", {
+        description: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setCheckingRebuild(null);
+    }
+  };
+
+  // The rebuild belongs to the backend: closing this review does not stop it,
+  // and the next opening lists the environment as busy until it finishes.
+  const rebuild = async () => {
+    if (!rebuildTarget?.preview.available || !rebuildTarget.preview.containerId) return;
+    const { environmentId, preview: reviewed } = rebuildTarget;
+    setRebuildTarget(null);
+    setRebuilding((current) => new Set(current).add(environmentId));
+    try {
+      await backend.recreateEnvironment(
+        environmentId,
+        {
+          intent: "preserve",
+          expectedContainerId: reviewed.containerId!,
+          ...(allowUnknownCapacity ? { allowUnknownCapacity: true } : {}),
+        },
+        machine,
+      );
+      reportRebuildOutcome(
+        await backend.getContainerLifecycleSnapshot(environmentId, machine).catch(() => null),
+      );
+    } catch (err) {
+      const lifecycle = parseContainerLifecycleError(err);
+      toast.error(
+        err instanceof OutcomeUnknownError
+          ? "Rebuild outcome unknown"
+          : "Could not confirm rebuild",
+        {
+          description: `${lifecycle?.message ?? (err instanceof Error ? err.message : String(err))} Check this environment’s Container settings for its current operation and recovery state before trying again.`,
+        },
+      );
+    } finally {
+      setRebuilding((current) => {
+        const next = new Set(current);
+        next.delete(environmentId);
+        return next;
+      });
+      onFinished();
+      setRefresh((current) => current + 1);
+    }
+  };
+
   const selectedCount = eligible.filter((row) => selected.has(rowKey(row))).length;
+  const legacyRuntimes = preview?.legacyRuntimes ?? [];
+  const legacyUnchecked = preview?.legacyRuntimesUnchecked ?? 0;
 
   return (
-    <AlertDialog open={open} onOpenChange={(next) => !working && onOpenChange(next)}>
-      <AlertDialogContent className={Z_FULLSCREEN_DIALOG} overlayClassName={Z_FULLSCREEN_DIALOG}>
-        <AlertDialogHeader>
-          <AlertDialogTitle>Review Docker cleanup</AlertDialogTitle>
-          <AlertDialogDescription>
-            Only stopped containers and volumes that no environment, recovery copy or operation
-            references can be removed. Nothing else is touched.
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        <div className="max-h-[50vh] space-y-4 overflow-y-auto text-sm">
-          {loading ? (
-            <div className="flex items-center gap-2 text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" /> Checking resources…
-            </div>
-          ) : null}
-          {error ? (
-            <p role="alert" className="text-destructive">
-              {error}
-            </p>
-          ) : null}
-          {result ? <p role="status">{describeResult(result)}</p> : null}
-          {preview && !result ? (
-            <>
-              <section>
-                <h4 className="font-medium">Can be removed ({eligible.length})</h4>
-                {eligible.length === 0 ? (
-                  <p className="text-muted-foreground">Nothing to clean up.</p>
-                ) : (
-                  <ul className="mt-1 space-y-1">
-                    {eligible.map((row) => (
-                      <li key={rowKey(row)}>
-                        <label className="flex items-center gap-2">
-                          <input
-                            type="checkbox"
-                            checked={selected.has(rowKey(row))}
-                            onChange={() => toggle(row)}
-                            disabled={working}
-                          />
-                          <span className="truncate">
-                            {KIND_LABELS[row.kind]} {row.name || row.id.slice(0, 12)}
-                            {row.sizeBytes !== null ? ` · ${formatBytes(row.sizeBytes)}` : ""}
-                          </span>
-                        </label>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </section>
-              {kept.length > 0 ? (
+    <>
+      <AlertDialog open={open} onOpenChange={(next) => !working && onOpenChange(next)}>
+        <AlertDialogContent className={Z_FULLSCREEN_DIALOG} overlayClassName={Z_FULLSCREEN_DIALOG}>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Review Docker cleanup</AlertDialogTitle>
+            <AlertDialogDescription>
+              Only stopped containers and volumes that no environment, recovery copy or operation
+              references can be removed. Nothing else is touched.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="max-h-[50vh] space-y-4 overflow-y-auto text-sm">
+            {loading ? (
+              <div className="flex items-center gap-2 text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" /> Checking resources…
+              </div>
+            ) : null}
+            {error ? (
+              <p role="alert" className="text-destructive">
+                {error}
+              </p>
+            ) : null}
+            {result ? <p role="status">{describeResult(result)}</p> : null}
+            {preview && !result ? (
+              <>
+                {legacyRuntimes.length > 0 ? (
+                  <section>
+                    <h4 className="font-medium">
+                      Older containers to rebuild ({legacyRuntimes.length})
+                    </h4>
+                    <p className="text-muted-foreground">
+                      Rebuilding keeps each environment&apos;s files and gives it only what its
+                      enabled agents need. Nothing here is removed.
+                    </p>
+                    <ul className="mt-1 space-y-1">
+                      {legacyRuntimes.map((row) => {
+                        const rebuildingHere = rebuilding.has(row.environmentId);
+                        const busy = row.busy || rebuildingHere;
+                        return (
+                          <li
+                            key={row.environmentId}
+                            className="flex items-center justify-between gap-2"
+                          >
+                            <div className="min-w-0">
+                              <p className="truncate">{row.environmentName}</p>
+                              <p className="text-xs text-muted-foreground">
+                                {row.exposures
+                                  .map((exposure) => EXPOSURE_LABELS[exposure])
+                                  .join(". ")}
+                              </p>
+                            </div>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="shrink-0"
+                              aria-label={`Rebuild ${row.environmentName}`}
+                              onClick={() => void openRebuild(row)}
+                              disabled={busy || checkingRebuild !== null}
+                            >
+                              {busy || checkingRebuild === row.environmentId ? (
+                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                              ) : null}
+                              {rebuildingHere ? "Rebuilding…" : row.busy ? "Busy" : "Rebuild…"}
+                            </Button>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </section>
+                ) : null}
+                {legacyUnchecked > 0 ? (
+                  <p className="text-muted-foreground">
+                    Docker did not answer for {legacyUnchecked}{" "}
+                    {legacyUnchecked === 1 ? "environment's container" : "environments' containers"}
+                    , so older containers may be missing from this review.
+                  </p>
+                ) : null}
                 <section>
-                  <h4 className="font-medium">Kept ({kept.length})</h4>
-                  <ul className="mt-1 space-y-1 text-muted-foreground">
-                    {kept.map((row) => (
-                      <li key={rowKey(row)} className="truncate">
-                        {KIND_LABELS[row.kind]} {row.name || row.id.slice(0, 12)} —{" "}
-                        {
-                          CLEANUP_REASONS[
-                            row.classification as Exclude<CleanupClassification, "eligible">
-                          ]
-                        }
-                      </li>
-                    ))}
-                  </ul>
+                  <h4 className="font-medium">Can be removed ({eligible.length})</h4>
+                  {eligible.length === 0 ? (
+                    <p className="text-muted-foreground">Nothing to clean up.</p>
+                  ) : (
+                    <ul className="mt-1 space-y-1">
+                      {eligible.map((row) => (
+                        <li key={rowKey(row)}>
+                          <label className="flex items-center gap-2">
+                            <input
+                              type="checkbox"
+                              checked={selected.has(rowKey(row))}
+                              onChange={() => toggle(row)}
+                              disabled={working}
+                            />
+                            <span className="truncate">
+                              {KIND_LABELS[row.kind]} {row.name || row.id.slice(0, 12)}
+                              {row.sizeBytes !== null ? ` · ${formatBytes(row.sizeBytes)}` : ""}
+                            </span>
+                          </label>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                 </section>
-              ) : null}
-              {preview.truncated ? (
-                <p className="text-muted-foreground">
-                  More resources exist than one review lists; run cleanup again afterwards.
-                </p>
-              ) : null}
-            </>
-          ) : null}
-        </div>
-        <AlertDialogFooter>
-          <AlertDialogCancel disabled={working}>{result ? "Close" : "Cancel"}</AlertDialogCancel>
-          {!result ? (
-            <Button
-              type="button"
-              variant="destructive"
-              onClick={() => void execute()}
-              disabled={working || loading || !preview || selectedCount === 0}
-            >
-              {working ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-              Remove {selectedCount} selected
-            </Button>
-          ) : null}
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
+                {kept.length > 0 ? (
+                  <section>
+                    <h4 className="font-medium">Kept ({kept.length})</h4>
+                    <ul className="mt-1 space-y-1 text-muted-foreground">
+                      {kept.map((row) => (
+                        <li key={rowKey(row)} className="truncate">
+                          {KIND_LABELS[row.kind]} {row.name || row.id.slice(0, 12)} —{" "}
+                          {
+                            CLEANUP_REASONS[
+                              row.classification as Exclude<CleanupClassification, "eligible">
+                            ]
+                          }
+                        </li>
+                      ))}
+                    </ul>
+                  </section>
+                ) : null}
+                {preview.truncated ? (
+                  <p className="text-muted-foreground">
+                    More resources exist than one review lists; run cleanup again afterwards.
+                  </p>
+                ) : null}
+              </>
+            ) : null}
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={working}>{result ? "Close" : "Cancel"}</AlertDialogCancel>
+            {!result ? (
+              <Button
+                type="button"
+                variant="destructive"
+                onClick={() => void execute()}
+                disabled={working || loading || !preview || selectedCount === 0}
+              >
+                {working ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                Remove {selectedCount} selected
+              </Button>
+            ) : null}
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      <RebuildConfirmDialog
+        open={rebuildTarget !== null}
+        onOpenChange={(next) => {
+          if (!next) setRebuildTarget(null);
+        }}
+        preview={rebuildTarget?.preview ?? null}
+        allowUnknownCapacity={allowUnknownCapacity}
+        onAllowUnknownCapacityChange={setAllowUnknownCapacity}
+        onConfirm={() => void rebuild()}
+      />
+    </>
   );
 }

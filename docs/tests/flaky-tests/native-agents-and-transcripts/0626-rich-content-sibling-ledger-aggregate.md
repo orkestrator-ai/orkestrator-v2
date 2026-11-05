@@ -137,6 +137,21 @@ remains unknown. No rich-content implementation or assertions changed.
 - Complete unchanged owner: `NODE_ENV=test mise run test:logged -- --name triage-rich-revocation -- bun test --cwd apps/web ./src/lib/chat/rich-conversation-revocation.test.tsx --parallel=1 --only-failures` passed, exit 0, in 2.4 s. Passing output was removed by the logged runner.
 - Owning code and assertions were unchanged. This repeats the open case; no new root cause established. Aggregate totals were not yet available when the owner reran.
 
+## Pipeline Notes landing repair — 2026-11-05
+
+- At `dbace6167`, the command `NODE_ENV=test mise run test:logged -- --name pipeline-flow-unit -- bun --cwd apps/web test src/components/build-pipeline/PipelineFlowView.test.tsx src/components/build-pipeline/PipelineFlowView.code-rewind.test.tsx --parallel=2 --only-failures` invoked the web package's test script, expanding to the whole web suite with two workers. The component browser suite was also running.
+- The same test at line 187 failed in 167.82 ms: sibling ledger expected length 1, received 0. Evidence: `/tmp/orkestrator-test-run.uxik2p/pipeline-flow-unit.log.gz` (compressed on completion).
+- Complete unchanged owner rerun: `NODE_ENV=test mise run test:logged -- --name rich-content-owner -- bun test --cwd apps/web ./src/lib/chat/rich-conversation-revocation.test.tsx --parallel=1 --only-failures` passed, exit 0, in 1.9 seconds.
+- No rich-content code, assertions or deadlines changed. The cause remains unknown. The correctly scoped pipeline owners passed separately. The accidentally expanded package run was stopped after more than six minutes (exit 143); final suite counts are unavailable and it is not green validation evidence.
+## Coordinator tool-surface review fixes — 2026-11-05
+
+- Original command: `mise run test` at `d844241a3`, workspace/root/bridges/protocol reservations 6/1/2/1; the workspace waited 981.9 seconds for shared capacity.
+- Failure: the same sibling-ledger assertion at line 187 expected length 1, received 0 (190.78 ms). Web totals: 12,489 passed, 10 skipped, one failed. Backend also had four deterministic schedule fixture failures, repaired separately; all three other aggregate groups passed.
+- Evidence: `/tmp/orkestrator-test-run.U5K9FH/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and its adjacent `summary.json`.
+- Complete unchanged owner: `NODE_ENV=test mise run test:logged -- --name fixes-rich-revocation-isolated -- bun test --cwd apps/web ./src/lib/chat/rich-conversation-revocation.test.tsx --parallel=1 --only-failures` passed all 11 tests, exit 0, in 3.3 seconds.
+- An initial owner invocation without explicit `NODE_ENV=test` loaded production React and failed because `React.act` was unavailable; diagnostics: `/tmp/orkestrator-test-run.8Yo4dx/fixes-rich-revocation-isolated.log.gz`. Correcting the invocation required no source changes.
+- No owning rich-content code or assertions changed. This repeats open case 0626; its root cause remains unknown.
+
 ## Leaf-mode branch merge validation — 2026-11-05
 
 - Merge parents: `0c9f7eb93c03d510284bf27200d7f058d0498556` and `e1f4c875fe7667a094ab350b8f7880aab8b6783d`. This owner was outside the four original conflicts and was unchanged by resolution.
@@ -145,3 +160,7 @@ remains unknown. No rich-content implementation or assertions changed.
 - Complete unchanged owner rerun: `mise run test:logged -- --name merge-revocation-rerun -- env NODE_ENV=test bun test --cwd apps/web ./src/lib/chat/rich-conversation-revocation.test.tsx --parallel=1 --only-failures` passed (exit 0, 2.6 seconds). Passing output was removed by the logged runner.
 - Evidence: `/tmp/orkestrator-test-run.WgzY1u/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; outer aggregate log `/tmp/orkestrator-test-run.6qQiEz/merge-default-suite.log.gz`.
 - This repeats the open case. No implementation, assertion, timeout or skip changed; root cause remains unconfirmed, and the aggregate remains non-green.
+
+## Static Find review recurrence, 2026-11-05
+
+Preparation at `c0808605ddf1d4ecb421db6493f91018f1199b56` repeated the sibling ledger length mismatch (expected 1, received 0). Evidence: `.orkestrator/review-artifacts/review-validation-72ace150-e330-4d03-bde1-fdc95c60e6e0/validation-04.stdout.txt`; web group reported six failures. Complete unchanged owner rerun: `mise run test:logged -- --name revocation-alone -- bun --cwd=apps/web test ./src/lib/chat/rich-conversation-revocation.test.tsx --parallel=1 --only-failures`, passed, exit 0, 1.7 s. No cause established; preserve assertions.

@@ -423,7 +423,8 @@ interface LaunchInput {
   projectId: string;
   environmentType: "local" | "containerized";
   name?: string;
-  agent: AgentPlatform;
+  /** Omitted: the public action resolves the saved default on first admission. */
+  agent?: AgentPlatform;
   modelId?: string;
   reasoningId?: string;
   fastMode?: boolean;
@@ -434,14 +435,15 @@ interface LaunchInput {
   baseCommit?: string;
 }
 
-export async function operatorLaunchEnvironment(caller: ControlMcpCaller, input: LaunchInput) {
+export async function operatorLaunchEnvironment(caller: ControlMcpCaller, launch: LaunchInput) {
+  const input = launch;
   const envelope = await runPublicAction(
     caller,
     "environment.launch",
     {
       projectId: input.projectId,
       type: input.environmentType === "containerized" ? "container" : "local",
-      agent: input.agent,
+      ...(input.agent ? { agent: input.agent } : {}),
       prompt: input.prompt,
       mode: input.conversationMode,
       ...(input.name ? { name: input.name } : {}),
@@ -460,6 +462,7 @@ export async function operatorLaunchEnvironment(caller: ControlMcpCaller, input:
     environment?: { id: string };
     environmentId?: string;
     sessionId: string;
+    selection?: unknown;
     runId: string;
   };
   return legacyResult({
@@ -469,7 +472,11 @@ export async function operatorLaunchEnvironment(caller: ControlMcpCaller, input:
     sessionId: result.sessionId,
     runId: result.runId,
     status: "accepted",
-    ...(await selectionFor(caller, input.projectId, undefined, input)),
+    ...(result.selection
+      ? { selection: result.selection }
+      : input.agent
+        ? await selectionFor(caller, input.projectId, undefined, { ...input, agent: input.agent })
+        : {}),
     receipt: envelope.receipt,
   });
 }
@@ -477,7 +484,8 @@ export async function operatorLaunchEnvironment(caller: ControlMcpCaller, input:
 interface JobInput {
   requestId: string;
   environmentId: string;
-  agent: AgentPlatform;
+  /** Omitted: the public action resolves this environment's default on first admission. */
+  agent?: AgentPlatform;
   modelId?: string;
   reasoningId?: string;
   fastMode?: boolean;
@@ -486,16 +494,17 @@ interface JobInput {
   prompt: string;
 }
 
-export async function operatorLaunchJob(caller: ControlMcpCaller, input: JobInput) {
+export async function operatorLaunchJob(caller: ControlMcpCaller, job: JobInput) {
   const environment = await dispatchAs<{ projectId: string }>(caller, "environment.get", {
-    environmentId: input.environmentId,
+    environmentId: job.environmentId,
   });
+  const input = job;
   const envelope = await runPublicAction(
     caller,
     "session.start",
     {
       environmentId: input.environmentId,
-      agent: input.agent,
+      ...(input.agent ? { agent: input.agent } : {}),
       prompt: input.prompt,
       mode: input.conversationMode,
       ...(input.title ? { title: input.title } : {}),
@@ -507,7 +516,12 @@ export async function operatorLaunchJob(caller: ControlMcpCaller, input: JobInpu
     undefined,
   );
   if (!envelope.ok) return failure(envelope);
-  const result = envelope.result as { sessionId: string; tabId: string; runId: string };
+  const result = envelope.result as {
+    sessionId: string;
+    tabId: string;
+    runId: string;
+    selection?: unknown;
+  };
   return legacyResult({
     jobId: result.tabId.replace(/^agent-job-/, ""),
     environmentId: input.environmentId,
@@ -515,9 +529,14 @@ export async function operatorLaunchJob(caller: ControlMcpCaller, input: JobInpu
     sessionId: result.sessionId,
     runId: result.runId,
     status: "accepted",
-    ...(environment.ok
-      ? await selectionFor(caller, environment.result.projectId, input.environmentId, input)
-      : {}),
+    ...(result.selection
+      ? { selection: result.selection }
+      : environment.ok && input.agent
+        ? await selectionFor(caller, environment.result.projectId, input.environmentId, {
+            ...input,
+            agent: input.agent,
+          })
+        : {}),
     receipt: envelope.receipt,
   });
 }

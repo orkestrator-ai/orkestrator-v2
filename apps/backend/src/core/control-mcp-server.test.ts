@@ -168,16 +168,6 @@ describe("Orkestrator control MCP server", () => {
             { environmentId: worker.environmentId, reviewers: [selection], fixModel: selection },
           ],
           [
-            "start_multi_review",
-            {
-              buildPipelineId: "build",
-              environmentId: worker.environmentId,
-              targetBranch: "main",
-              reviewers: [selection],
-              fixModel: selection,
-            },
-          ],
-          [
             "start_build_pipeline",
             {
               baseBranch: "main",
@@ -207,7 +197,7 @@ describe("Orkestrator control MCP server", () => {
             expect(content.nextStep).toContain("do not wait for a ready or fix-turn wake");
           } else expect(content.wake).toBe(COORDINATOR_WORKFLOW_STATUS_WAKE);
         }
-        for (const id of ["launched", "started"]) {
+        for (const id of ["launched"]) {
           await world.storage.saveMultiReviewWorkflow(id, worker.environmentId, 1, {
             id,
             environmentId: worker.environmentId,
@@ -218,7 +208,7 @@ describe("Orkestrator control MCP server", () => {
         await world.coordinator.reconcileWorkflowNotifications();
         const inbox = await world.storage.getAgentMailMailbox(main.environmentId, main.tabId);
         expect(inbox.messages.filter((message) => message.notice?.state === "ready")).toHaveLength(
-          mode === "off" ? 0 : 2,
+          mode === "off" ? 0 : 1,
         );
       } finally {
         await world.close();
@@ -326,9 +316,9 @@ describe("Orkestrator control MCP server", () => {
           { inputSchema?: { required?: string[] } } | undefined
       )?.inputSchema?.required ?? [];
     for (const field of ["reviewers", "reviewModel", "fixModel", "autoFix", "autoPr"])
-      expect(required("start_multi_review")).not.toContain(field);
-    // Both launch tools expose auto-fix and auto-PR as optional, saved-by-default booleans.
-    for (const name of ["launch_multi_review", "start_multi_review"]) {
+      expect(required("launch_multi_review")).not.toContain(field);
+    // The launch tool exposes auto-fix and auto-PR as optional, saved-by-default booleans.
+    for (const name of ["launch_multi_review"]) {
       const tool = definitions.find((item) => item.name === name) as
         | {
             description?: string;
@@ -414,9 +404,8 @@ describe("Orkestrator control MCP server", () => {
       wake: COORDINATOR_WORKFLOW_STATUS_WAKE,
       nextStep: "Finish your turn now. Do not poll.",
     });
-    expect(definitions.find((tool) => tool.name === "start_multi_review")?.description).toContain(
-      "does NOT create/select a root tab",
-    );
+    // The backend-only primitive is not offered to coordinators; launch_multi_review is.
+    expect(definitions.some((tool) => tool.name === "start_multi_review")).toBe(false);
     for (const name of [
       "launch_multi_review",
       "open_multi_review",
@@ -575,57 +564,6 @@ describe("Orkestrator control MCP server", () => {
     expect(autoAddressFindingsOff.body.result?.structuredContent?.selection).toMatchObject({
       source: { autoFix: "requested", autoPr: "requested" },
     });
-    overrides.set("start_coordinator_multi_review", () => ({
-      id: "started-review",
-      projectId: "project-1",
-      environmentId: "env-1",
-      phase: "preparing",
-      reviewers: [{ id: "reviewer-0", agent: "codex", model: "default", status: "pending" }],
-      fixModel: { agent: "claude", model: "default" },
-      autoFix: false,
-      autoPr: true,
-      controllerFence: "must-not-cross-mcp",
-    }));
-    const startedReview = await rpc(credential.url, credential.token, "tools/call", {
-      name: "start_multi_review",
-      arguments: {
-        requestId: "start-review-auto",
-        buildPipelineId: "pipeline-1",
-        environmentId: "env-1",
-        targetBranch: "main",
-        autoFix: false,
-        autoPr: true,
-      },
-    });
-    expect(startedReview.body.result?.isError).not.toBe(true);
-    expect(
-      invocations.findLast((entry) => entry.command === "start_coordinator_multi_review")?.args
-        .input,
-    ).toEqual({
-      environmentId: "env-1",
-      targetBranch: "main",
-      autoFix: false,
-      autoPr: true,
-      projectId: "project-1",
-    });
-    expect(startedReview.body.result?.structuredContent).toMatchObject({
-      workflow: {
-        id: "started-review",
-        automation: {
-          autoFix: false,
-          autoPr: true,
-          next: "Stops at ready if consolidation reports findings; address_multi_review starts Address Findings; a PR session starts once that Address Findings run completes. A clean report starts the PR session directly.",
-        },
-      },
-      selection: {
-        reviewers: [{ agent: "codex", model: "default" }],
-        autoFix: false,
-        autoPr: true,
-        source: { reviewers: "default", autoFix: "requested", autoPr: "requested" },
-      },
-      delivery: "async",
-    });
-    expect(JSON.stringify(startedReview.body)).not.toContain("must-not-cross-mcp");
     const notBoolean = await rpc(credential.url, credential.token, "tools/call", {
       name: "launch_multi_review",
       arguments: { requestId: "launch-review-bad-auto", environmentId: "env-1", autoPr: "yes" },
@@ -941,6 +879,38 @@ describe("Orkestrator control MCP server", () => {
     credential = issue();
     server.revokeCoordinatorCredentials("coordinator-1", "conversation-1");
     expect((await rpc(credential.url, credential.token, "tools/list")).response.status).toBe(401);
+  });
+
+  test("refuses the credential of a conversation that failed to start, and only that one", async () => {
+    overrides.set("get_project_coordinator", () => ({
+      workspace: {
+        id: "coordinator-1",
+        lifecycleState: "ready",
+        conversations: [
+          { id: "main", mailboxIncarnationId: "incarnation-main" },
+          {
+            id: "side",
+            mailboxIncarnationId: "incarnation-side",
+            startupError: "bridge did not become healthy",
+          },
+        ],
+      },
+    }));
+    const issue = (conversationId: string) =>
+      server.issueCoordinatorCredential({
+        role: "coordinator",
+        projectId: "project-1",
+        coordinatorId: "coordinator-1",
+        conversationId,
+        mailboxIncarnationId: `incarnation-${conversationId}`,
+        capabilities: ["discovery"],
+      });
+    const failed = issue("side");
+    const refused = await rpc(failed.url, failed.token, "tools/list");
+    expect(refused.response.status).toBe(409);
+    const working = issue("main");
+    const answered = await rpc(working.url, working.token, "tools/list");
+    expect(answered.response.status).toBe(200);
   });
 
   // A bridge reads its token once, at launch, so a credential that lapsed while

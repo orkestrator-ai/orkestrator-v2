@@ -127,6 +127,13 @@ export interface CoordinatorConversation {
   bridgePort?: number;
   bridgePid?: number;
   /**
+   * Why this conversation's bridge last failed to start, already sanitized for
+   * display. While set, this conversation has no runtime: no credential, no
+   * mail, no bridge start. Every other conversation carries on. Cleared by a
+   * successful start or an explicit retry. An older backend ignores the field.
+   */
+  startupError?: string;
+  /**
    * `main` is the project's one coordinator: every worker reports to it and it
    * owns all delegation. A `side` agent (Side 1, Side 2…) can read the project
    * and exchange mail with the main coordinator only. Absent on records written
@@ -311,6 +318,68 @@ export interface CoordinatorDelegation {
    * bounded hold for background work is skipped.
    */
   stopRequestedAt?: string;
+  /** The user stopped it from the Work panel, so the notice does not credit the coordinator. */
+  stopRequestedBy?: "user";
+  /** What was asked and on what, for the Work panel. Absent on older records. */
+  request?: CoordinatorDelegationRequest;
+}
+
+/**
+ * What the Work panel shows about one request: a one-line summary of the ask and
+ * the selection it ran with. The coordinator store is rewritten whole and holds
+ * up to `MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS` records, so every field is short
+ * and bounded by {@link normalizeCoordinatorDelegationRequest}. Never read back
+ * as the prompt: it is a display line, cut at the bound.
+ */
+export interface CoordinatorDelegationRequest {
+  summary?: string;
+  agent?: AgentPlatform;
+  /** Null when no tier pins a model and the agent picks its own. */
+  model?: string | null;
+  reasoning?: string | null;
+  /** `requested` when the coordinator overrode the saved default. */
+  source?: "requested" | "default";
+}
+
+export const COORDINATOR_DELEGATION_SUMMARY_MAX = 140;
+const COORDINATOR_DELEGATION_SELECTION_MAX = 120;
+
+function boundedSelection(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const text = value.trim();
+  return text && text.length <= COORDINATOR_DELEGATION_SELECTION_MAX ? text : undefined;
+}
+
+/** One line of at most {@link COORDINATOR_DELEGATION_SUMMARY_MAX} characters, or nothing. */
+export function coordinatorDelegationSummaryLine(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const text = value.trim().replace(/\s+/g, " ");
+  if (!text) return undefined;
+  if (text.length <= COORDINATOR_DELEGATION_SUMMARY_MAX) return text;
+  // Never leave half of a surrogate pair at the cut.
+  const cut = text.slice(0, COORDINATOR_DELEGATION_SUMMARY_MAX - 1).replace(/[\ud800-\udbff]$/, "");
+  return `${cut}…`;
+}
+
+/** A request with every field checked and bounded, or undefined when nothing is left. */
+export function normalizeCoordinatorDelegationRequest(
+  value: unknown,
+): CoordinatorDelegationRequest | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const source = value as Record<string, unknown>;
+  const summary = coordinatorDelegationSummaryLine(source.summary);
+  const model = boundedSelection(source.model);
+  const reasoning = boundedSelection(source.reasoning);
+  const request: CoordinatorDelegationRequest = {
+    ...(summary ? { summary } : {}),
+    ...(isAgentPlatform(source.agent) ? { agent: source.agent } : {}),
+    ...(model ? { model } : source.model === null ? { model: null } : {}),
+    ...(reasoning ? { reasoning } : source.reasoning === null ? { reasoning: null } : {}),
+    ...(source.source === "requested" || source.source === "default"
+      ? { source: source.source }
+      : {}),
+  };
+  return Object.keys(request).length > 0 ? request : undefined;
 }
 
 /** What coordinator-started work asks of the user, for the panel and for the agent. */
@@ -563,13 +632,11 @@ export const COORDINATOR_CONTROL_TOOL_NAMES = Object.freeze([
   "launch_graph",
   "launch_job",
   "launch_multi_review",
-  "launch_node_environment",
   "launch_terminal",
   "list_agents",
   "list_environments",
   "list_graph_templates",
   "list_mailboxes",
-  "list_node_environments",
   "list_nodes",
   "list_projects",
   "list_provider_accounts",
@@ -598,16 +665,11 @@ export const COORDINATOR_CONTROL_TOOL_NAMES = Object.freeze([
   "resume_schedule",
   "run_worker_command",
   "send_message",
-  "send_node_message",
-  "send_prompt_to_node_tab",
   "send_prompt_to_tab",
   "set_worker_goal",
   "start_build_pipeline",
   "start_environment",
-  "start_multi_review",
-  "start_node_environment",
   "stop_environment",
-  "stop_node_environment",
   "stop_worker_turn",
   "switch_provider_account",
   "set_account_auto_switch",
@@ -627,6 +689,31 @@ export const COORDINATOR_WORKER_PROMPT_FORMAT_RULE =
   "Worker prompts: the user reads them in the worker's transcript, so write Markdown with line breaks, not one long paragraph. Put the task first, then separate paragraphs or short bulleted sections for context, constraints and the expected report, with a blank line between them.";
 
 /**
+ * The request-id rule every coordinator is told, in the operator's wording.
+ *
+ * Request ids are namespaced by coordinator, across its conversations, so a
+ * fresh main that was only told to "reuse requestId on retry" picks `launch-1`
+ * again and collides with an earlier conversation's request.
+ */
+export const COORDINATOR_REQUEST_ID_RULE =
+  "Every mutation needs a new unique requestId; reuse one only to retry the same call after an ambiguous response.";
+
+/**
+ * What every coordinator request-id collision says: the id named another
+ * request (another payload, worker or tab), possibly an earlier
+ * conversation's, nothing was done, and a new id is the way out.
+ */
+export const COORDINATOR_REQUEST_ID_REUSED_ERROR =
+  "This requestId was already used for a different request (a different payload or target), possibly by an earlier conversation, so nothing was done. Use a new unique requestId for each new action; reuse one only to retry the same call.";
+
+/**
+ * Carried beside `replayed: true` when a request id named a request that had
+ * already run, so a replay never reads as fresh work.
+ */
+export const COORDINATOR_REPLAYED_NOTE =
+  "This requestId was already used, so this is the earlier request's result and nothing new was started. If you meant a new action, call again with a new unique requestId.";
+
+/**
  * The launch-selection rule every coordinator is told, verbatim.
  *
  * Coordinators otherwise fill every model and effort field `get_launch_options`
@@ -634,7 +721,7 @@ export const COORDINATOR_WORKER_PROMPT_FORMAT_RULE =
  * user's configured default. Kept short: it is injected on every turn.
  */
 export const COORDINATOR_LAUNCH_DEFAULTS_RULE =
-  "Defaults: omit modelId, reasoningId, Multi Review model rows, Multi Review autoFix and autoPr, and build agentType, steps and reviewers so environments, jobs, builds and Multi Reviews run the user's saved defaults. Override one only when the user asks for a specific model, agent, effort, reviewers or auto-fix/auto-PR, or agrees to one the task needs.";
+  "Defaults: omit agent, modelId, reasoningId, Multi Review model rows, Multi Review autoFix and autoPr, and build agentType, steps and reviewers so environments, jobs, builds and Multi Reviews run the user's saved defaults. Override one only when the user asks for a specific model, agent, effort, reviewers or auto-fix/auto-PR, or agrees to one the task needs.";
 
 /**
  * How long after a coordinator's last sent message to a project home the next
@@ -772,6 +859,11 @@ export interface CoordinatorWorkspace {
   repositoryContextEvents?: CoordinatorRepositoryContextEvent[];
   createdAt: string;
   updatedAt: string;
+  /**
+   * Written only by backends before `CoordinatorConversation.startupError`,
+   * which also set `lifecycleState: "error"`. Read for such a backend, and for
+   * a record it stored (version-compatibility.md).
+   */
   lastStartupError?: string;
   bridgePort?: number;
   bridgePid?: number;
@@ -864,6 +956,18 @@ export interface ProjectGitSwitchOptions {
   includeNestedRepositories?: boolean;
 }
 
+/**
+ * Whether this conversation may run: hold a credential, receive mail, start a
+ * bridge. Every "is this coordinator up?" question goes through this, because
+ * `lifecycleState` alone no longer answers it for one conversation.
+ */
+export function coordinatorConversationRunnable(
+  workspace: Pick<CoordinatorWorkspace, "lifecycleState">,
+  conversation: Pick<CoordinatorConversation, "startupError">,
+): boolean {
+  return workspace.lifecycleState === "ready" && !conversation.startupError;
+}
+
 export function coordinatorRuntimeId(coordinatorId: string, conversationId?: string): string {
   if (!coordinatorId || coordinatorId.includes("\0") || coordinatorId.includes(":")) {
     throw new Error("Invalid coordinator id");
@@ -942,6 +1046,7 @@ export function isCoordinatorWorkspace(value: unknown): value is CoordinatorWork
           item.lastTurnOrigin === "user" ||
           item.lastTurnOrigin === "mail") &&
         (item.lastTurnStartedAt === undefined || typeof item.lastTurnStartedAt === "string") &&
+        (item.startupError === undefined || typeof item.startupError === "string") &&
         (item.sideOrdinal === undefined ||
           (Number.isSafeInteger(item.sideOrdinal) && (item.sideOrdinal as number) > 0))
       );

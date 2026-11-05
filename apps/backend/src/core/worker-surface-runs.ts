@@ -287,15 +287,18 @@ async function nativeTurnPhase(
   if (tab.type !== "agent-native") return null;
   if (typeof platform !== "string" || !context.nativeAgents) return "unknown";
   try {
-    const projection = await context.nativeAgents.getProjection({
+    // The state read: phase and interactions without a transcript read.
+    const state = await context.nativeAgents.getSessionStateUpdate({
       environmentId,
       agent: platform as NativeAgentProvider,
       logicalSessionKey: `env-${environmentId}:${String(tab.id)}`,
-      messageLimit: 1,
+      viewVersion: 1,
+      forceSnapshot: true,
     });
-    if (!projection) return null;
-    if (projection.interactions.length > 0) return "waiting";
-    return projection.turn.phase;
+    if (state.status === "missing") return null;
+    if (state.status !== "snapshot") return "unknown";
+    if (state.value.interactions.length > 0) return "waiting";
+    return state.value.turn.phase;
   } catch {
     // An unreadable session is refused rather than closed under a turn.
     return "unknown";

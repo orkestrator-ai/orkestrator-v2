@@ -332,6 +332,16 @@ export class ProjectedMessageCache {
     }
   }
 
+  /**
+   * The detail registrations of every entry the session keeps, in all of its
+   * contexts, without refreshing recency. Bounded by the per-session limits.
+   */
+  *sessionDetails(sessionKey: string): Generator<readonly ProjectionDetailRegistration[]> {
+    const session = this.sessions.get(sessionKey);
+    if (!session) return;
+    for (const entry of Array.from(session.entries.values())) yield entry.details;
+  }
+
   /** Drop every entry of a logical session, in all of its contexts. */
   forgetSession(sessionKey: string): void {
     const session = this.sessions.get(sessionKey);

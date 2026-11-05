@@ -97,6 +97,7 @@ beforeEach(async () => {
         return {} as T;
       case "get_environment_snapshots":
         return [] as T;
+      case "get_coordinator_launch_environment":
       case "get_opencode_model_catalog_cache":
         return null as T;
       case "get_environment":
@@ -347,6 +348,33 @@ test("coordinator launch startup errors retain the environment and resolved base
     state: "failed",
     error: { code: "startup-failed" },
     outcome: { environmentId: "env-new", baseCommit: COMMIT },
+  });
+});
+
+test("a main that failed to start retries the schedule, and Retry lets it through", async () => {
+  await call("main", "create_schedule", {
+    requestId: "failed-main",
+    everyMinutes: 5,
+    action: {
+      type: "send_prompt_to_tab",
+      environmentId: "env-worker",
+      tabId: "worker-tab",
+      prompt: "audit",
+    },
+  });
+  const main = currentWorkspace.conversations.find((item) => item.id === "main-1")!;
+  main.startupError = "bridge failed";
+  clock.now += 5 * 60_000;
+  await fire();
+  const waiting = service.list({ kind: "operator" })[0]!;
+  expect(waiting.state).toBe("active");
+  expect(waiting.activeFire).toMatchObject({ state: "pending" });
+  main.startupError = undefined;
+  clock.now += SCHEDULED_JOB_LIMITS.busyRetryDelayMs;
+  await fire();
+  expect(service.list({ kind: "operator" })[0]!.lastFire).toMatchObject({
+    state: "succeeded",
+    fireId: waiting.activeFire!.fireId,
   });
 });
 

@@ -90,6 +90,18 @@ function load(): void {
 }
 
 /**
+ * The capability snapshot for code outside React: the cached one, or the
+ * result of loading it once (null when the backend has none or the read failed).
+ */
+export async function readTranscriptArtifactCapabilities(): Promise<TranscriptArtifactCapabilities | null> {
+  if (!snapshot) {
+    load();
+    await inflight;
+  }
+  return snapshot;
+}
+
+/**
  * Rollout switch for the rich Markdown pipeline. Defaults on until the
  * backend says otherwise; when off, text renders through the plain Markdown
  * path and find indexes it the same way. Stored content is unaffected.

@@ -91,6 +91,36 @@ describe("operator tools over public actions", () => {
     expect(!cli.ok && cli.error.code).toBe("not-found");
   });
 
+  test("launch_job without agent starts the default agent through session.start", async () => {
+    const harness = await open();
+    const launched = await harness.call(harness.defaultToken, "launch_job", {
+      requestId: "job-default-agent",
+      environmentId: "env-1",
+      prompt: "Fix the failing test.",
+    });
+    expect(launched.isError).not.toBe(true);
+    expect(launched.structuredContent).toMatchObject({
+      status: "accepted",
+      receipt: { action: "session.start", requestId: "job-default-agent" },
+      selection: { agent: "claude", source: "default" },
+    });
+    await harness.harness.context.storage.updateEnvironment("env-1", {
+      agentSettings: { defaultAgent: "codex" },
+    });
+    const replay = await harness.call(harness.defaultToken, "launch_job", {
+      requestId: "job-default-agent",
+      environmentId: "env-1",
+      prompt: "Fix the failing test.",
+    });
+    expect(replay.isError).not.toBe(true);
+    expect(replay.structuredContent).toMatchObject({
+      tabId: launched.structuredContent!.tabId,
+      receipt: { replayed: true },
+      selection: { agent: "claude" },
+    });
+    expect(harness.stub.sends).toHaveLength(1);
+  });
+
   test("launch_environment returns the created environment and replays its receipt", async () => {
     const harness = await open();
     const repository = await harness.harness.createRepository("operator-launch");
@@ -104,7 +134,6 @@ describe("operator tools over public actions", () => {
       requestId: "environment-1",
       projectId: added.result.project.id,
       environmentType: "local",
-      agent: "claude",
       conversationMode: "build",
       prompt: "work",
       name: "operator-launch",
@@ -125,6 +154,9 @@ describe("operator tools over public actions", () => {
       status: "accepted",
       receipt: { action: "environment.launch", requestId: input.requestId },
     });
+    const config = await harness.harness.context.storage.loadConfig();
+    config.global.agentSettings = { ...config.global.agentSettings, defaultAgent: "codex" };
+    await harness.harness.context.storage.saveConfig(config);
     const replay = await harness.call(harness.defaultToken, "launch_environment", input);
     expect(replay.structuredContent).toMatchObject({
       environmentId,

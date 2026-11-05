@@ -3,6 +3,7 @@ import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
+  defaultTailscaleRunner,
   extractTailscaleServeUrl,
   getTailscaleServeTarget,
   getTailscaleServeTargetPort,
@@ -1113,5 +1114,64 @@ describe("standalone Serve crash recovery", () => {
     descriptor.dataDir = path.join(dataDir, "other");
     await writeFile(file, JSON.stringify(descriptor));
     expect(await createStandaloneServeOwnershipStore(dataDir).load()).toBeNull();
+  });
+});
+
+describe("defaultTailscaleRunner", () => {
+  async function fakeTailscale(body: string): Promise<string> {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "ork-tailscale-runner-"));
+    temporaryDirectories.push(directory);
+    const command = path.join(directory, "tailscale");
+    await writeFile(command, `#!/bin/sh\n${body}\n`);
+    await chmod(command, 0o755);
+    return command;
+  }
+
+  test("returns both streams and selects CLI behaviour for the app bundle", async () => {
+    const command = await fakeTailscale(`printf '%s' "$TAILSCALE_BE_CLI"; printf err >&2`);
+    const previous = process.env.TAILSCALE_BE_CLI;
+    delete process.env.TAILSCALE_BE_CLI;
+    try {
+      expect(await defaultTailscaleRunner(command, [])).toEqual({ stdout: "true", stderr: "err" });
+    } finally {
+      if (previous !== undefined) process.env.TAILSCALE_BE_CLI = previous;
+    }
+  });
+
+  test("a failure reaches the manager's message as stderr", async () => {
+    const command = await fakeTailscale("echo on-stdout; echo denied >&2; exit 1");
+    await expect(new TailscaleServeManager(command).start(3000)).rejects.toThrow(
+      "Unable to inspect Tailscale Serve configuration: denied",
+    );
+  });
+
+  test("a failure with no stderr names the command, never its stdout", async () => {
+    const command = await fakeTailscale("echo on-stdout; exit 1");
+    const error = (await defaultTailscaleRunner(command, ["serve"]).catch(
+      (reason: unknown) => reason,
+    )) as Error;
+    expect(error.message).toBe(`Command failed: ${command} serve`);
+  });
+
+  test("a command past its timeout rejects, whatever it printed", async () => {
+    const command = await fakeTailscale("echo partial; exec sleep 30");
+    await expect(defaultTailscaleRunner(command, [], { timeoutMs: 100 })).rejects.toThrow(
+      "Command failed",
+    );
+  });
+
+  test("output past its limit rejects, so a cut status is never parsed", async () => {
+    const command = await fakeTailscale("printf 123456");
+    await expect(defaultTailscaleRunner(command, [], { maxOutputBytes: 5 })).rejects.toThrow(
+      "Command failed",
+    );
+  });
+
+  test("a missing executable keeps the runtime's own explanation", async () => {
+    const error = (await defaultTailscaleRunner("ork-no-such-command-6060", []).catch(
+      (reason: unknown) => reason,
+    )) as Error;
+    expect(error.message).toContain("ork-no-such-command-6060");
+    expect(error.message).not.toContain("Command failed");
   });
 });

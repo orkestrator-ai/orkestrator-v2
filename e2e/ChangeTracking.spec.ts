@@ -133,3 +133,64 @@ test("real change commands retain history and tool evidence, replay restore, and
     await host.close();
   }
 });
+
+test("an unreachable image stream retries base64 and releases its capability", async ({
+  page,
+}, testInfo) => {
+  const host = await startChangeTrackingHost();
+  let reads = 0;
+  const releases: string[] = [];
+  let opens = 0;
+  try {
+    await host.invoke("fixture_image", { base64: RED_PNG });
+    await page.route("https://unreachable.example.test/**", (route) => route.abort());
+    await page.exposeFunction("changesInvoke", (command: string, args: Record<string, unknown>) => {
+      if (command === "transcript_artifact_capabilities")
+        return {
+          backendId: "fixture",
+          contentOrigin: "https://unreachable.example.test",
+        };
+      if (command === "transcript_media_open_stream")
+        return {
+          url: "https://unreachable.example.test/m/image",
+          mimeType: "image/png",
+          streamId: `fixture-stream-${++opens}`,
+        };
+      if (command === "transcript_media_close_stream") {
+        releases.push(String(args.streamId));
+        return null;
+      }
+      if (command === "read_environment_file_base64") reads++;
+      return host.invoke(command, args);
+    });
+    await page.goto("/change-tracking?image=image.png");
+    const image = page.getByRole("img", { name: "image.png", exact: true });
+    await expect(image).toHaveAttribute("src", `data:image/png;base64,${RED_PNG}`);
+    await expect
+      .poll(() =>
+        image.evaluate((node: HTMLImageElement) => node.complete && node.naturalWidth === 1),
+      )
+      .toBe(true);
+    expect(reads).toBe(1);
+    // StrictMode and the initial projection can retire pending loads. Each
+    // capability must still be released exactly once; only the current load
+    // is allowed to perform the base64 retry.
+    expect(releases.length).toBe(opens);
+    expect(new Set(releases).size).toBe(opens);
+    await page.screenshot({
+      path: `output/visual-previews/image-stream-recovered-${testInfo.project.name}.png`,
+    });
+    await page.getByRole("button", { name: "Switch away" }).click();
+    await page.getByRole("button", { name: "Return", exact: true }).click();
+    await expect.poll(() => reads).toBe(2);
+    expect(releases.length).toBe(opens);
+    expect(new Set(releases).size).toBe(opens);
+    await page.reload();
+    await expect(image).toHaveAttribute("src", `data:image/png;base64,${RED_PNG}`);
+    await expect.poll(() => reads).toBe(3);
+    expect(releases.length).toBe(opens);
+    expect(new Set(releases).size).toBe(opens);
+  } finally {
+    await host.close();
+  }
+});

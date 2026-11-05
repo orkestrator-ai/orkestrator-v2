@@ -121,3 +121,23 @@ classified as a flake. The desktop and command owners also remain non-green
 on their isolated reruns; their failures are not being classified as flakes.
 No assertion, timeout, skip, or unrelated product code was changed to
 accommodate these results.
+
+## Key information list repair recurrence — 2026-11-05
+
+At `76e0fef73`, `mise run test:logged -- --name address-default -- mise run test`
+repeated `generator binary resolution > a nonexistent CODEX_PROTOCOL_BINARY fails instead of falling back`
+in `tests/unit/codex-app-server-protocol.test.ts` (5,002.89 ms, then an unhandled
+expected-exit assertion: expected 1, received 143). Root ran with one worker,
+workspace six slots and bridges two, after a 1,258 s scheduler wait.
+Root totals: 3,592 passed, five failed, one error across 182 files (422.94 s).
+The unchanged complete owner passed alone in 8.2 s:
+
+```sh
+mise run test:logged -- --name address-codex-app-server-protocol -- bun test ./tests/unit/codex-app-server-protocol.test.ts --parallel=1 --only-failures
+```
+
+The aggregate reached its 1,800 s outer deadline before workspace completion.
+Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.bQqjCL/address-default.log.gz`
+and sibling directory `orkestrator-test-run.cRDXEd/root-and-agent-support-tests.log`.
+Timing contention is a hypothesis, not an established cause. No test deadline,
+assertion or production code was changed to obtain the isolated pass.

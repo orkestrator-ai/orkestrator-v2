@@ -704,6 +704,22 @@ export class StorageDatabase {
     return revision;
   }
 
+  /** Mutate legacy array documents without reducing duplicate IDs to a keyed row.
+   * The mode check and mutation share a write transaction; normal row writers
+   * must continue using updateStoreRow.
+   */
+  updateDocumentArrayRows<T>(store: string, mutate: (items: T[]) => void): void {
+    this.transaction(() => {
+      if (this.readStoreHeader(store)?.mode !== "document") {
+        throw new Error("Expected an array document");
+      }
+      const current = this.readStoreValueInTransaction(store, { unreadable: "throw" })!
+        .value as T[];
+      mutate(current);
+      this.writeStoreInTransaction(store, current);
+    });
+  }
+
   /**
    * Synchronous read-modify-write in one IMMEDIATE transaction: SQLite's write
    * lock serializes it against every other connection, so no lease is needed.

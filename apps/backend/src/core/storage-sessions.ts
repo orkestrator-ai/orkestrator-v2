@@ -243,7 +243,7 @@ export class SessionsRepository {
     // this write commits next to, in this or another backend.
     const evicted = this.context.database.transaction(() => {
       const envSessions = this.context
-        .loadStoreRowsByOwner<Session>(file, environmentId)
+        .loadStoreRowsByOwner<Session>(file, environmentId, { unreadable: "throw" })
         .filter((candidate) => candidate.environmentId === environmentId);
       session.order = Math.max(-1, ...envSessions.map((candidate) => candidate.order)) + 1;
       let oldest: Session | undefined;
@@ -252,10 +252,20 @@ export class SessionsRepository {
           .filter((candidate) => candidate.status === "disconnected")
           .sort((a, b) => a.createdAt.localeCompare(b.createdAt))[0];
         if (oldest) {
-          this.context.updateStoreRow(file, oldest.id, () => ({
-            result: undefined,
-            delete: true,
-          }));
+          if (this.context.database.readStoreHeader("sessions")?.mode === "document") {
+            const evicted = oldest;
+            this.context.updateDocumentArrayRows<Session>(this.files.sessionsFile(), (sessions) => {
+              const index = sessions.findIndex(
+                (item) => item.id === evicted.id && item.environmentId === environmentId,
+              );
+              if (index >= 0) sessions.splice(index, 1);
+            });
+          } else {
+            this.context.updateStoreRow(file, oldest.id, () => ({
+              result: undefined,
+              delete: true,
+            }));
+          }
         }
       }
       this.context.updateStoreRow(file, session.id, () => ({ result: undefined, value: session }));

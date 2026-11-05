@@ -618,12 +618,23 @@ export class StorageContext {
     return this.readStoreOr(store, fallback);
   }
 
+  /** Transactional fallback for legacy arrays whose IDs are not unique. */
+  updateDocumentArrayRows<T>(filePath: string, mutate: (items: T[]) => void): void {
+    const store = this.storeForFile(filePath);
+    if (store === null) throw new Error("Expected a database store");
+    this.database.updateDocumentArrayRows(store, mutate);
+  }
+
   /**
    * The items of an array/record store whose indexed owner column equals
    * `owner` (e.g. one project's Kanban tickets), without assembling the whole
    * store. Inside an atomic scope it filters the buffered value instead.
    */
-  loadStoreRowsByOwner<T>(filePath: string, owner: string): T[] {
+  loadStoreRowsByOwner<T>(
+    filePath: string,
+    owner: string,
+    options: { unreadable?: "throw" } = {},
+  ): T[] {
     const store = this.storeForFile(filePath);
     if (store === null) throw new Error("loadStoreRowsByOwner requires a database store");
     const scope = this.openAtomicScope();
@@ -642,7 +653,7 @@ export class StorageContext {
     try {
       return (this.database.readStoreRowsByOwner(store, owner) ?? []) as T[];
     } catch (error) {
-      if (error instanceof StoreCorruptError) return [];
+      if (error instanceof StoreCorruptError && options.unreadable !== "throw") return [];
       throw error;
     }
   }

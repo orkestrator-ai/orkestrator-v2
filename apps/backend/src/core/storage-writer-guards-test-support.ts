@@ -79,6 +79,7 @@ const PRIMITIVES = new Map<string, Primitive>([
   ["StorageContext.saveSensitiveJson", { kind: "write", write: "whole" }],
   ["StorageContext.deleteStore", { kind: "write", write: "whole" }],
   ["StorageContext.updateStore", { kind: "write", write: "transactional" }],
+  ["StorageContext.updateDocumentArrayRows", { kind: "write", write: "transactional" }],
   ["StorageContext.updateStoreRow", { kind: "write", write: "transactional" }],
   ["StorageContext.updateSensitiveStoreRow", { kind: "write", write: "transactional" }],
   ["StorageContext.atomically", { kind: "atomically" }],
@@ -1404,6 +1405,7 @@ const RAW_WRITERS = new Set([
   "deleteStore",
   "deleteStoreInTransaction",
   "updateStore",
+  "updateDocumentArrayRows",
   "updateStoreRow",
   "rows",
 ]);

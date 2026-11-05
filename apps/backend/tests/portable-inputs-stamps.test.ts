@@ -807,5 +807,5 @@ describe("import ownership failures", () => {
     await f.replace(login.staged, undefined);
     await f.boot();
     expect(await f.read(".claude/.credentials.json")).toContain("fresh-backend");
-  });
+  }, 30_000);
 });

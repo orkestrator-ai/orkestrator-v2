@@ -768,11 +768,22 @@ export class DraftsRepository {
   /** One environment's rows, read inside the caller's transaction. */
   private environmentSessionRows(environmentId: string): Session[] {
     return this.context
-      .loadStoreRowsByOwner<Session>(this.files.sessionsFile(), environmentId)
+      .loadStoreRowsByOwner<Session>(this.files.sessionsFile(), environmentId, {
+        unreadable: "throw",
+      })
       .filter((session) => session.environmentId === environmentId);
   }
 
   private writeSessionRow(session: Session): void {
+    if (this.context.database.readStoreHeader("sessions")?.mode === "document") {
+      this.context.updateDocumentArrayRows<Session>(this.files.sessionsFile(), (sessions) => {
+        const index = sessions.findIndex(
+          (item) => item.id === session.id && item.environmentId === session.environmentId,
+        );
+        if (index >= 0) sessions[index] = session;
+      });
+      return;
+    }
     this.context.updateStoreRow(this.files.sessionsFile(), session.id, () => ({
       result: undefined,
       value: session,
@@ -782,6 +793,14 @@ export class DraftsRepository {
   async removeSessionsByEnvironment(environmentId: string): Promise<string[]> {
     const removed = this.context.database.transaction(() => {
       const ids = this.environmentSessionRows(environmentId).map((session) => session.id);
+      if (this.context.database.readStoreHeader("sessions")?.mode === "document") {
+        this.context.updateDocumentArrayRows<Session>(this.files.sessionsFile(), (sessions) => {
+          for (let index = sessions.length - 1; index >= 0; index--) {
+            if (sessions[index]?.environmentId === environmentId) sessions.splice(index, 1);
+          }
+        });
+        return ids;
+      }
       for (const id of ids) {
         this.context.updateStoreRow(this.files.sessionsFile(), id, () => ({
           result: undefined,
@@ -790,7 +809,11 @@ export class DraftsRepository {
       }
       return ids;
     });
-    await Promise.all(removed.map((sessionId) => this.deleteSessionBuffer(sessionId)));
+    await Promise.all(
+      removed.map(async (sessionId) => {
+        if (!(await this.getSession(sessionId))) await this.deleteSessionBuffer(sessionId);
+      }),
+    );
     if (removed.length > 0) this.context.changes.announce("session", environmentId);
     return removed;
   }

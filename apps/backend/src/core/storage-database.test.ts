@@ -60,7 +60,7 @@ afterEach(async () => {
 describe("StorageDatabase", () => {
   test("a library without octet_length falls back to the cast, with the same answer", async () => {
     const db = database(await dataDir());
-    expect(rowBytesExpression(db.db)).toBe("octet_length(value)");
+    const selected = rowBytesExpression(db.db);
     const fallback = rowBytesExpression({
       query() {
         throw new Error("no such function: octet_length");
@@ -69,10 +69,27 @@ describe("StorageDatabase", () => {
     expect(fallback).toBe("length(CAST(value AS BLOB))");
     const value = JSON.stringify("é€😀\u0000 and a long tail ".repeat(5_000));
     db.transaction(() => db.rows("records").put("unicode", value));
-    for (const expression of ["octet_length(value)", fallback]) {
+    for (const expression of [selected, fallback]) {
       expect(
         db.db.query(`SELECT ${expression} AS bytes FROM store_rows WHERE store = 'records'`).get(),
       ).toEqual({ bytes: Buffer.byteLength(value) });
+    }
+  });
+
+  test("production sizing falls back when the connection rejects octet_length", async () => {
+    const db = database(await dataDir());
+    const query = db.db.query.bind(db.db);
+    const probe = spyOn(db.db, "query").mockImplementation(((sql: string) => {
+      if (sql.includes("octet_length")) throw new Error("no such function: octet_length");
+      return query(sql);
+    }) as typeof db.db.query);
+    try {
+      const value = JSON.stringify({ owner: "one", text: "é😀" });
+      db.transaction(() => db.rows("owned").put("unicode", value));
+      expect(db.rows("owned").list({ values: false })[0]?.bytes).toBe(Buffer.byteLength(value));
+      expect(db.rows("owned").entry("unicode")?.bytes).toBe(Buffer.byteLength(value));
+    } finally {
+      probe.mockRestore();
     }
   });
 
@@ -86,7 +103,13 @@ describe("StorageDatabase", () => {
       rows.put("z", JSON.stringify({ owner: "one" }), { position: 7 });
       rows.put("y", JSON.stringify({ owner: "two" }), { position: 7 });
     });
+    const queries = spyOn(db.db, "query");
     const sizes = rows.list({ values: false });
+    const listingSql = queries.mock.calls
+      .map(([sql]) => sql)
+      .filter((sql) => sql.includes("NULL AS value") && sql.includes("FROM store_rows"));
+    queries.mockRestore();
+    expect(listingSql).toHaveLength(1);
     expect(sizes.map((entry) => entry.key)).toEqual(["c", "b", "a", "y", "z"]);
     expect(sizes.map(({ key, position }) => [key, position])).toEqual(
       rows.list().map(({ key, position }) => [key, position]),
@@ -101,12 +124,9 @@ describe("StorageDatabase", () => {
     ]);
 
     // The plan is the point: the listing must not seek each row by its position.
-    const plan = db.db
-      .query(
-        `EXPLAIN QUERY PLAN SELECT collection, key, position, owner, NULL AS value,
-           octet_length(value) AS bytes FROM store_rows WHERE store = ?`,
-      )
-      .all("owned") as Array<{ detail: string }>;
+    const plan = db.db.query(`EXPLAIN QUERY PLAN ${listingSql[0]}`).all("owned") as Array<{
+      detail: string;
+    }>;
     expect(plan.map((row) => row.detail).join("\n")).not.toContain("store_rows_position");
   });
 

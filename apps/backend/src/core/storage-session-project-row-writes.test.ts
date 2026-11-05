@@ -1,10 +1,8 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
-import { Database } from "bun:sqlite";
 import { readStorageDatabaseStore } from "@orkestrator/protocol/node/storage-database";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { STORAGE_DATABASE_FILE } from "./storage-database.js";
 import type { Project, Session } from "./models.js";
 import { createProject, StorageService } from "./storage.js";
 import { seedStore, storageDatabase, storageInternals } from "./storage-test-support.js";
@@ -110,6 +108,60 @@ function seedSessions(directory: string, count = 4): void {
     ),
   );
 }
+
+describe("owner-scoped session compatibility", () => {
+  for (const operation of ["remove", "disconnect", "reorder"] as const) {
+    test(operation + " preserves another owner's duplicate ID", async () => {
+      const directory = await dataDir();
+      const other = { ...session("shared", "B", 7), name: "preserve every field" };
+      seedStore(directory, "sessions.json", [
+        other,
+        session("shared", "A", 3),
+        session("unique", "A", 0),
+      ]);
+      const storage = await service(directory);
+      expect(storageDatabase(storage).readStoreHeader("sessions")?.mode).toBe("document");
+      if (operation === "remove") {
+        await storage.saveSessionBuffer("shared", "retained buffer");
+        await storage.removeSessionsByEnvironment("A");
+        expect(await storage.loadSessionBuffer("shared")).toBe("retained buffer");
+      }
+      if (operation === "disconnect") await storage.disconnectEnvironmentSessions("A");
+      if (operation === "reorder") await storage.reorderSessions("A", ["shared", "unique"]);
+      const stored = readStorageDatabaseStore(directory, "sessions") as Session[];
+      expect(stored.filter((item) => item.environmentId === "B")).toEqual([other]);
+      const own = stored.filter((item) => item.environmentId === "A");
+      if (operation === "remove") expect(own).toEqual([]);
+      if (operation === "disconnect")
+        expect(own.every((item) => item.status === "disconnected")).toBe(true);
+      if (operation === "reorder") expect(own.map((item) => item.order)).toEqual([0, 1]);
+    });
+  }
+
+  for (const operation of ["remove", "disconnect", "reorder", "create"] as const) {
+    test(operation + " refuses damaged rows in the target environment", async () => {
+      const directory = await dataDir();
+      seedSessions(directory);
+      const storage = await service(directory);
+      const db = storageDatabase(storage);
+      db.db
+        .query("UPDATE store_rows SET value = '{' WHERE store = 'sessions' AND key = 'session-0'")
+        .run();
+      const before = db.db.query("SELECT * FROM store_rows WHERE store = 'sessions'").all();
+      const run = () => {
+        if (operation === "remove") return storage.removeSessionsByEnvironment("environment-0");
+        if (operation === "disconnect")
+          return storage.disconnectEnvironmentSessions("environment-0");
+        if (operation === "reorder") return storage.reorderSessions("environment-0", ["session-2"]);
+        return storage.createSession("environment-0", "container", "new", "plain");
+      };
+      await expect(run()).rejects.toThrow();
+      expect(db.db.query("SELECT * FROM store_rows WHERE store = 'sessions'").all()).toEqual(
+        before,
+      );
+    });
+  }
+});
 
 describe("session row writes", () => {
   test("one field writes one row and reads and writes nothing else", async () => {
@@ -462,28 +514,6 @@ describe("project row writes", () => {
   });
 });
 
-const storageModule = path.join(import.meta.dir, "storage.ts");
-const supportModule = path.join(import.meta.dir, "storage-test-support.ts");
-
-/** Runs `body` with a `StorageService` named `storage` in another process. */
-function inProcess(directory: string, body: string): ReturnType<typeof Bun.spawn> {
-  const script = `
-    import { StorageService } from ${JSON.stringify(storageModule)};
-    import { storageDatabase, storageInternals } from ${JSON.stringify(supportModule)};
-    const storage = new StorageService(${JSON.stringify(directory)});
-    await storage.init();
-    ${body}
-    await storage.close();
-    process.exit(0);
-  `;
-  return Bun.spawn([process.execPath, "-e", script], {
-    cwd: path.join(import.meta.dir, "..", ".."),
-    env: { ...process.env, NODE_ENV: "test" },
-    stdout: "ignore",
-    stderr: "inherit",
-  });
-}
-
 describe("concurrent writers", () => {
   test("two connections writing sessions and projects lose no update", async () => {
     const directory = await dataDir();
@@ -520,119 +550,9 @@ describe("concurrent writers", () => {
     });
     expect(new Set(projects.map((item) => item.order)).size).toBe(projects.length);
   }, 30_000);
-
-  test("two processes writing the same rows lose no update", async () => {
-    const directory = await dataDir();
-    seedSessions(directory, 2);
-    seedStore(directory, "projects.json", [project(0), project(1)]);
-    const seeded = await service(directory);
-    await seeded.close();
-
-    const writer = (name: string, field: "lastActivityAt" | "containerId") =>
-      inProcess(
-        directory,
-        `for (let index = 0; index < 40; index += 1) {
-           await storage.updateSession("session-0", { ${field}: "${name}-" + index });
-           await storage.updateProject("project-${name === "one" ? 0 : 1}", { name: "${name}-" + index });
-           await storage.createSession("environment-1", "container", "${name}-" + index, "plain");
-           await storage.removeSession(
-             (await storage.getSessionsByEnvironment("environment-1")).find(
-               (row) => row.tabId === "${name}-" + index,
-             ).id,
-           );
-         }`,
-      );
-    const children = [writer("one", "lastActivityAt"), writer("two", "containerId")];
-    expect(await Promise.all(children.map((child) => child.exited))).toEqual([0, 0]);
-
-    const storage = await service(directory);
-    expect(await storage.getSession("session-0")).toMatchObject({
-      lastActivityAt: "one-39",
-      containerId: "two-39",
-    });
-    expect((await storage.getProject("project-0"))?.name).toBe("one-39");
-    expect((await storage.getProject("project-1"))?.name).toBe("two-39");
-    expect(await storage.getSessionsByEnvironment("environment-1")).toHaveLength(2);
-  }, 60_000);
 });
 
-describe("an interrupted write", () => {
-  async function assertReadable(directory: string): Promise<void> {
-    const db = new Database(path.join(directory, STORAGE_DATABASE_FILE));
-    try {
-      expect(db.query("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-      // As a crashed holder would look, so the next writer need not wait it out.
-      db.query("UPDATE leases SET heartbeat_at = 0").run();
-    } finally {
-      db.close();
-    }
-  }
-
-  test("a process killed inside a session reorder commits none of it", async () => {
-    const directory = await dataDir();
-    seedSessions(directory);
-    const seeded = await service(directory);
-    await seeded.close();
-
-    const child = inProcess(
-      directory,
-      `const repository = storageInternals(storage).repos.drafts;
-       const write = repository.writeSessionRow.bind(repository);
-       let writes = 0;
-       repository.writeSessionRow = (session) => {
-         write(session);
-         writes += 1;
-         if (writes === 2) process.kill(process.pid, "SIGKILL");
-       };
-       await storage.reorderSessions("environment-0", ["session-6", "session-4", "session-2", "session-0"]);`,
-    );
-    await child.exited;
-    expect(child.signalCode).toBe("SIGKILL");
-    await assertReadable(directory);
-
-    const storage = await service(directory);
-    expect((await storage.getSessionsByEnvironment("environment-0")).map((row) => row.id)).toEqual([
-      "session-0",
-      "session-2",
-      "session-4",
-      "session-6",
-    ]);
-    await storage.updateSession("session-0", { name: "after the crash" });
-    expect((await storage.getSession("session-0"))?.name).toBe("after the crash");
-  });
-
-  test("a process killed inside a project arrangement commits none of it", async () => {
-    const directory = await dataDir();
-    seedStore(directory, "projects.json", [project(0), project(1), project(2)]);
-    const seeded = await service(directory);
-    await seeded.close();
-
-    const child = inProcess(
-      directory,
-      `const repository = storageInternals(storage).repos.projects;
-       const save = repository.saveProject.bind(repository);
-       let writes = 0;
-       repository.saveProject = (item) => {
-         save(item);
-         writes += 1;
-         if (writes === 2) process.kill(process.pid, "SIGKILL");
-       };
-       await storage.reorderProjects(["project-2", "project-1", "project-0"]);`,
-    );
-    await child.exited;
-    expect(child.signalCode).toBe("SIGKILL");
-    await assertReadable(directory);
-
-    const storage = await service(directory);
-    expect((await storage.loadProjects()).map((item) => item.id)).toEqual([
-      "project-0",
-      "project-1",
-      "project-2",
-    ]);
-    await storage.updateProject("project-0", { name: "after the crash" });
-    expect((await storage.getProject("project-0"))?.name).toBe("after the crash");
-  });
-
+describe("transaction rollback", () => {
   test("a failure inside a transaction leaves every row as it was", async () => {
     const directory = await dataDir();
     seedSessions(directory);

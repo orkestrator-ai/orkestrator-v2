@@ -141,6 +141,17 @@ export interface TranscriptLine {
   [key: string]: unknown;
 }
 
+/** A bounded stretch of the transcript, oldest line first. */
+export interface TranscriptPage {
+  lines: TranscriptLine[];
+  /** Asks for the page before this one; null when this one reaches the start. */
+  earlierCursor: string | null;
+  /** The cursor no longer names a place in this session's transcript. */
+  expired?: boolean;
+  /** The session's mode. Absent from a backend that predates paging. */
+  permissionMode?: string;
+}
+
 /**
  * Whether a tmux prompt's countdown can be paused. The hook script owns the
  * deadline; `hook-outdated` is a prompt from a script, or a Claude Code
@@ -256,16 +267,28 @@ export async function getStatus(tabId: string, environmentId: string): Promise<T
   return invoke<TmuxStatus | null>("claude_tmux_status", { tabId, environmentId });
 }
 
-export async function getTranscript(
+/**
+ * One page of the tab's transcript: its tail, or the page before `before`.
+ * A backend that predates paging ignores `page` and answers the whole file as
+ * an array, which is a page with nothing before it.
+ */
+export async function getTranscriptPage(
   tabId: string,
   environmentId: string,
-): Promise<TranscriptLine[]> {
-  return invoke<TranscriptLine[]>("claude_tmux_transcript", { tabId, environmentId });
+  before?: string,
+  sessionId?: string,
+): Promise<TranscriptPage> {
+  const result = await invoke<TranscriptLine[] | TranscriptPage>("claude_tmux_transcript", {
+    tabId,
+    environmentId,
+    page: { ...(before === undefined ? {} : { before }), ...(sessionId ? { sessionId } : {}) },
+  });
+  return Array.isArray(result) ? { lines: result, earlierCursor: null } : result;
 }
 
 /**
- * The tab's task list as the backend holds it, without replaying the
- * transcript. The authoritative rehydration path for a tab that was not mounted
+ * The tab's task list as the backend holds it, whatever part of the transcript
+ * is loaded. The authoritative rehydration path for a tab that was not mounted
  * while tasks changed.
  */
 export async function getTaskList(tabId: string, environmentId: string): Promise<TaskListSnapshot> {

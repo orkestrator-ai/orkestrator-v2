@@ -1,6 +1,19 @@
 /** Version 1 of the multiplexed gateway terminal protocol. */
 export const TERMINAL_WEBSOCKET_PROTOCOL_VERSION = 1 as const;
 export const TERMINAL_WEBSOCKET_SUBPROTOCOL = "orkestrator-terminal.v1";
+/**
+ * Version 1 with one difference: the server answers input that succeeded with
+ * cumulative `input-results` frames rather than one `operation-result` each.
+ */
+export const TERMINAL_WEBSOCKET_INPUT_RESULTS_SUBPROTOCOL = "orkestrator-terminal.v1.input-results";
+/**
+ * What a client offers, preferred first. An older server selects the v1 entry,
+ * and a client offering only v1 keeps one `operation-result` per input.
+ */
+export const TERMINAL_WEBSOCKET_CLIENT_SUBPROTOCOLS = [
+  TERMINAL_WEBSOCKET_INPUT_RESULTS_SUBPROTOCOL,
+  TERMINAL_WEBSOCKET_SUBPROTOCOL,
+];
 export const TERMINAL_WEBSOCKET_PATH = "/__orkestrator/terminal";
 
 /** Control frames are deliberately small and never contain terminal bytes. */
@@ -133,6 +146,14 @@ export type TerminalWebSocketServerControlFrame =
   | TerminalSubscribedFrame
   | { type: "pong"; nonce: number }
   | { type: "unsubscribed"; channelId: number }
+  /**
+   * Every input on this channel up to and including `throughOperationId` that
+   * has not already had a failed `operation-result` succeeded. Input on one
+   * channel completes in id order and a failure is queued before any later
+   * result, so this can never cover an input still in flight or about to fail.
+   * Sent only on the input-results subprotocol.
+   */
+  | { type: "input-results"; channelId: number; throughOperationId: number }
   | {
       type: "operation-result";
       channelId: number;
@@ -413,6 +434,7 @@ export function parseTerminalWebSocketServerControlFrame(
     "ready",
     "subscribed",
     "unsubscribed",
+    "input-results",
     "operation-result",
     "lifecycle",
     "desync",
@@ -470,6 +492,17 @@ export function parseTerminalWebSocketServerControlFrame(
     }
     case "unsubscribed":
       return { type, channelId: readChannelId(object) };
+    case "input-results":
+      return {
+        type,
+        channelId: readChannelId(object),
+        throughOperationId: readInteger(
+          object,
+          "throughOperationId",
+          0,
+          Number.MAX_SAFE_INTEGER,
+        ) as number,
+      };
     case "operation-result": {
       const common = {
         type,

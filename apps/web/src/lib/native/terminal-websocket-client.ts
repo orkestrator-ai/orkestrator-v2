@@ -5,10 +5,10 @@ import {
   TERMINAL_BINARY_FRAME_TYPE,
   TERMINAL_WEBSOCKET_BINARY_HEADER_BYTES,
   TERMINAL_WEBSOCKET_CHANNEL_SOFT_BUFFER_BYTES,
+  TERMINAL_WEBSOCKET_CLIENT_SUBPROTOCOLS,
   TERMINAL_WEBSOCKET_MAX_BINARY_BYTES,
   TERMINAL_WEBSOCKET_PATH,
   TERMINAL_WEBSOCKET_PROTOCOL_VERSION,
-  TERMINAL_WEBSOCKET_SUBPROTOCOL,
   type TerminalWebSocketClientControlFrame,
 } from "@orkestrator/protocol/terminal-websocket";
 import {
@@ -96,7 +96,12 @@ const DEFAULT_MAX_AWAITING_SNAPSHOT_FRAMES = 1_024;
 const DEFAULT_MAX_PENDING_OPERATIONS = 1_024;
 const DEFAULT_MAX_PENDING_OPERATION_BYTES = 2 * 1024 * 1024;
 const DEFAULT_OPERATION_TIMEOUT_MS = 30_000;
-export const DEFAULT_TERMINAL_ACKNOWLEDGEMENT_DELAY_MS = 50;
+/**
+ * Acknowledgements are advisory: the server only uses one to reset an error
+ * counter, which any valid channel frame also resets. Its back-pressure reads
+ * the socket's buffer, not these.
+ */
+export const DEFAULT_TERMINAL_ACKNOWLEDGEMENT_DELAY_MS = 1_000;
 const DEFAULT_RECONNECT_DELAY_MS = 500;
 const DEFAULT_MAX_RECONNECT_DELAY_MS = 10_000;
 /** Matches the gateway's event streams: longer than its 25 s keepalive. */
@@ -460,7 +465,7 @@ export class TerminalWebSocketClient {
       this.options.createSocket ?? ((url, protocols) => new WebSocket(url, protocols));
     let socket: WebSocket;
     try {
-      socket = createSocket(this.options.url, TERMINAL_WEBSOCKET_SUBPROTOCOL);
+      socket = createSocket(this.options.url, TERMINAL_WEBSOCKET_CLIENT_SUBPROTOCOLS);
     } catch {
       this.fallbackAndReconnect();
       return;
@@ -571,6 +576,11 @@ export class TerminalWebSocketClient {
         case "unsubscribed":
           this.channels.delete(frame.channelId);
           break;
+        case "input-results": {
+          const channel = this.channels.get(frame.channelId);
+          if (channel) this.resolveInputThrough(channel, frame.throughOperationId);
+          break;
+        }
         case "operation-result": {
           const pending = this.pendingOperations.get(frame.operationId);
           if (!pending) return;
@@ -1038,6 +1048,18 @@ export class TerminalWebSocketClient {
   private resolveOperation(operationId: number): void {
     const pending = this.takeOperation(operationId);
     pending?.resolve();
+  }
+
+  private resolveInputThrough(channel: DesiredChannel, throughOperationId: number): void {
+    for (const [operationId, pending] of this.pendingOperations) {
+      if (
+        pending.channel === channel &&
+        pending.operation === "input" &&
+        operationId <= throughOperationId
+      ) {
+        this.resolveOperation(operationId);
+      }
+    }
   }
 
   private rejectOperation(operationId: number, error: Error): void {

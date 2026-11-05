@@ -20,7 +20,7 @@ import { FRONTEND_RENDER_POLICY } from "@orkestrator/protocol/rich-content-polic
  * Source text, binary media and arbitrary application state never live here.
  */
 
-export type RichViewChoice = "preview" | "source" | "data";
+export type RichViewChoice = "preview" | "source" | "data" | "document";
 
 export interface RichViewState {
   open?: boolean;
@@ -29,6 +29,8 @@ export interface RichViewState {
   expanded?: boolean;
   hiddenSeries?: readonly string[];
   viewport?: { x: number; y: number; scale: number };
+  /** Last measured inline height of a displayed static document, in CSS pixels. */
+  measuredHeight?: number;
   /** Temporary reveal applied by find; restored when find closes unless the user changed it. */
   findRevealed?: boolean;
 }

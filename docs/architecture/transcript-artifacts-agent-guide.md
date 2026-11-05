@@ -5,6 +5,97 @@ Codex, OpenCode, Cursor, Grok and Pi) exposes seven artifact tools. They are
 the only way to put durable, verified rich content into a conversation. This
 guide is the long form of the tool server's instructions.
 
+## Choosing a visual
+
+| The reader needs | Use | Shown as |
+| --- | --- | --- |
+| A flow, architecture, sequence or relationship diagram | A ` ```mermaid ` fence, or a `mermaid` artifact when durable | Rendered diagram |
+| A bar, line, area, scatter or donut chart | A ` ```chart ` fence, or a `chart` artifact when durable | Native chart with data table |
+| A bespoke report with mixed text, timelines and graphics | `html-static` with HTML, CSS and inline SVG | The verified document, inline and selectable |
+| A calculator, filterable dashboard or other authored JavaScript | `html-interactive` | Saved preview, then **Run interactive** |
+| A photograph, screenshot or requested image file | A Markdown image | Image |
+
+A chart fence holds exactly one `ChartSpecV1` object, for example:
+
+````markdown
+```chart
+{"schemaVersion":1,"kind":"bar","title":"Passing tests","description":"Passing tests per suite.","xAxis":{"kind":"category","label":"Suite"},"yAxis":{"label":"Tests"},"categories":[{"id":"unit","label":"Unit"},{"id":"browser","label":"Browser"}],"series":[{"id":"passed","label":"Passed","points":[{"categoryId":"unit","value":40},{"categoryId":"browser","value":8}]}]}
+```
+````
+
+Each kind has its own fields, listed in the [chart example](#chart-example-runnable)
+and in `AGENT_CHART_SPEC_SHAPES`. `valueLabel` belongs to a donut, and a bar series
+holds `points`, not `values`.
+
+Do not funnel every visual into HTML: the simpler paths are faster to write and
+need no verification. Choose a visual when it helps answer the question.
+
+The shared system instructions every provider receives carry this choice
+(`AGENT_VISUAL_OUTPUT_INSTRUCTION`). Read-only coordinators do not receive that
+block, because they delegate publishing to a worker.
+
+## Static reports (`html-static`)
+
+The verified effective document is displayed in the transcript. Write it for
+that:
+
+- **Self-contained.** HTML, CSS and inline SVG. Scripts, frames, event handlers
+  and executable URLs are removed, and nothing loads over the network. Use
+  `data:` URLs for images and fonts.
+- **Within the display budget.** At most 256 KiB of UTF-8 and 5,000 elements. A
+  document over it keeps its saved preview and source but is not displayed.
+- **Fluid.** No fixed outer width. A media query sees the transcript's width, so
+  a single-column layout for narrow frames works.
+- **Let content set the height.** Do not put `height: 100vh` on the root; a frame
+  sized to its content would chase it. Up to 1,600 px shows inline, and a taller
+  report scrolls inside its frame with an Expand action.
+- **Native disclosures are fine.** `<details>`/`<summary>` work, and the frame
+  follows their height.
+- **Links** need a real click and the reader's confirmation; they never navigate
+  the frame. Prefer showing the information to linking to it.
+- **Include the numbers as text.** Give a table or text alternative beside a
+  drawing, and `role="img"` with an `aria-label` on a meaningful `<svg>`.
+
+Theme variables. Always give each a fallback, as in
+`var(--ork-foreground, #18181b)`: the preview defines none of them, so a bare
+reference resolves to nothing there and the screenshot you inspect is wrong.
+
+| Variable | Meaning |
+| --- | --- |
+| `--ork-foreground`, `--ork-muted-foreground` | Text |
+| `--ork-background`, `--ork-card`, `--ork-muted` | Surfaces |
+| `--ork-border` | Rules and hairlines |
+| `--ork-primary`, `--ork-accent` | Emphasis and links |
+| `--ork-success`, `--ork-destructive` | Status |
+| `--ork-chart-1` to `--ork-chart-8` | The native chart palette of the current theme |
+| `--ork-font-sans` | The readable sans-serif stack |
+
+Naming any `--ork-*` variable opts the document into the application theme: its
+canvas becomes transparent over the card, and its default text follows the theme.
+A document that names none keeps the appearance of its verification profile on an
+opaque canvas, so hard-coded colours stay readable. Do not mix the two by setting
+a dark text colour with no background in a themed document.
+
+The preview is a separate rendering under its profile (light, 960 × 640 by
+default), so inspect it for layout and content; a theme or width change later is
+a new presentation of the same revision, never a new verification.
+
+```json
+{
+  "kind": "html-static",
+  "html": "<!doctype html><html><head><title>Costs</title><style>body{color:var(--ork-foreground,#18181b);font-family:var(--ork-font-sans,system-ui)}.bar{fill:var(--ork-chart-1,#2563eb)}</style></head><body><h1>Costs</h1><svg viewBox=\"0 0 300 20\" role=\"img\" aria-label=\"Model A 60 percent\" style=\"width:100%;height:auto\"><rect class=\"bar\" width=\"180\" height=\"20\"/></svg><table><tr><th>Model</th><th>Share</th></tr><tr><td>Model A</td><td>60%</td></tr></table></body></html>"
+}
+```
+
+A visual is in the conversation only once `publish_artifact` succeeds. A draft
+preview, a file path or a statement in your reply does not publish anything, and
+HTML, SVG and JavaScript code fences stay source.
+
+The tool server's instructions say at connection time whether this host can
+verify HTML and Mermaid. If it cannot, `preview_artifact` answers
+`renderer_unavailable`: say so and use a fence or a chart artifact instead.
+Publications already made still display from their stored bytes.
+
 ## Markdown or an artifact?
 
 Use **plain Markdown** for ordinary answers: prose, small code fences,
@@ -21,7 +112,7 @@ interactive:
 | `chart` | A bar, line, area, scatter or donut chart of supplied data | Strict schema + deterministic native render |
 | `mermaid` | A larger or durable diagram | Syntax parse + bounded isolated render |
 | `workflow-snapshot` | A snapshot of an existing Multi Review or Build pipeline run | Backend captures the run itself |
-| `html-static` | A designed static page, report or mock-up | Static sanitizer + supervised visual preview |
+| `html-static` | A designed static page, report or mock-up, displayed as a document | Static sanitizer + supervised visual preview |
 | `html-interactive` | An offline calculator, simulation, explorable diagram or mini tool | Executable-package validation + supervised preview + your declared probes |
 
 Facts that matter:

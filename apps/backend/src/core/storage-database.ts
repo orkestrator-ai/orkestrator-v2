@@ -264,6 +264,8 @@ export class StorageDatabase {
    * foreign commit reusing that revision number would be shadowed by it.
    */
   private pendingCache: Map<string, CachedStore | null> | null = null;
+  /** {@link rowBytesExpression} for this connection's SQLite library. */
+  private rowBytesSql: string | null = null;
   /** Revision each store was bumped to by row writes in the open transaction. */
   private readonly touchedRevisions = new Map<string, number>();
   private readonly layoutFor: (store: string) => StoreLayout;
@@ -702,6 +704,22 @@ export class StorageDatabase {
     return revision;
   }
 
+  /** Mutate legacy array documents without reducing duplicate IDs to a keyed row.
+   * The mode check and mutation share a write transaction; normal row writers
+   * must continue using updateStoreRow.
+   */
+  updateDocumentArrayRows<T>(store: string, mutate: (items: T[]) => void): void {
+    this.transaction(() => {
+      if (this.readStoreHeader(store)?.mode !== "document") {
+        throw new Error("Expected an array document");
+      }
+      const current = this.readStoreValueInTransaction(store, { unreadable: "throw" })!
+        .value as T[];
+      mutate(current);
+      this.writeStoreInTransaction(store, current);
+    });
+  }
+
   /**
    * Synchronous read-modify-write in one IMMEDIATE transaction: SQLite's write
    * lock serializes it against every other connection, so no lease is needed.
@@ -1126,6 +1144,8 @@ export class StorageDatabase {
       throw new Error(`Row access requires a record or envelope store: ${store}`);
     }
     const db = this.db;
+    this.rowBytesSql ??= rowBytesExpression(db);
+    const rowBytes = this.rowBytesSql;
     const ownerOf = layout.kind === "record" ? layout.owner : undefined;
     // Uncached, so every query that returns rows or keys is a database read;
     // the write paths below charge nothing here.
@@ -1193,7 +1213,7 @@ export class StorageDatabase {
       entry(key, collection = "") {
         const row = db
           .query(
-            `SELECT collection, key, position, owner, value, length(CAST(value AS BLOB)) AS bytes
+            `SELECT collection, key, position, owner, value, ${rowBytes} AS bytes
              FROM store_rows WHERE store = ? AND collection = ? AND key = ?`,
           )
           .get(store, collection, key) as StoreRowEntry | null;
@@ -1221,16 +1241,19 @@ export class StorageDatabase {
           clauses.push("owner = ?");
           parameters.push(options.owner);
         }
-        const columns =
-          options.values === false
-            ? "collection, key, position, owner, NULL AS value"
-            : "collection, key, position, owner, value";
+        // Sizes only: scan the primary key and sort here. Ordering in SQL walks
+        // `store_rows_position` and seeks each row, and a seek in this WITHOUT
+        // ROWID table reads whole cells, overflow pages included, to compare
+        // keys, which costs as much as reading the values.
+        const sizesOnly = options.values === false;
         const entries = db
           .query(
-            `SELECT ${columns}, length(CAST(value AS BLOB)) AS bytes FROM store_rows
-             WHERE ${clauses.join(" AND ")} ORDER BY collection, position, key`,
+            `SELECT collection, key, position, owner, ${sizesOnly ? "NULL AS value" : "value"},
+               ${rowBytes} AS bytes FROM store_rows
+             WHERE ${clauses.join(" AND ")}${sizesOnly ? "" : " ORDER BY collection, position, key"}`,
           )
           .all(...parameters) as StoreRowEntry[];
+        if (sizesOnly) entries.sort(compareRowEntries);
         read(entries.reduce((length, entry) => length + (entry.value?.length ?? 0), 0));
         return entries;
       },
@@ -1392,6 +1415,28 @@ function isUnchanged(
     if (!before || before.value !== row.value || before.position !== row.position) return false;
   }
   return true;
+}
+
+/** `ORDER BY collection, position, key`; a position is unique within its collection. */
+function compareRowEntries(left: StoreRowEntry, right: StoreRowEntry): number {
+  if (left.collection !== right.collection) return left.collection < right.collection ? -1 : 1;
+  if (left.position !== right.position) return left.position - right.position;
+  return left.key < right.key ? -1 : left.key > right.key ? 1 : 0;
+}
+
+/**
+ * The SQL for a row value's UTF-8 length. `octet_length` (SQLite 3.43) reads the
+ * length from the record header, so sizing a value never reads its overflow
+ * pages. Bun on macOS loads the system library, which varies with the macOS
+ * version, so the slower cast stays as the fallback.
+ */
+export function rowBytesExpression(db: Pick<Database, "query">): string {
+  try {
+    db.query("SELECT octet_length('')").get();
+    return "octet_length(value)";
+  } catch {
+    return "length(CAST(value AS BLOB))";
+  }
 }
 
 function rowId(collection: string, key: string): string {

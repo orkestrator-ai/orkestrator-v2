@@ -326,7 +326,12 @@ mock.module("@/lib/claude-tmux-client", () => ({
   ...realTmuxClientSnapshot,
   startSession: startSessionMock,
   getStatus: getStatusMock,
-  getTranscript: getTranscriptMock,
+  // These fixtures answer the way a backend that predates paging does; the
+  // client reads that array as a page with nothing before it.
+  getTranscriptPage: async (tabId: string, environmentId: string) => ({
+    lines: await getTranscriptMock(tabId, environmentId),
+    earlierCursor: null,
+  }),
   getPendingHooks: getPendingHooksMock,
   subscribe: subscribeMock,
   stopSession: stopSessionMock,

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   DESIGN_FRAME_DOCUMENT,
+  STATIC_HTML_FRAME_DOCUMENT,
   GATEWAY_DESIGN_FRAME_CONTENT_SECURITY_POLICY,
   GATEWAY_LOGIN_CONTENT_SECURITY_POLICY,
   GATEWAY_RENDERER_CONTENT_SECURITY_POLICY,
@@ -18,6 +19,7 @@ async function servedGateway() {
   const rendererRoot = await createRendererRoot(dataDir, "<!doctype html><title>index</title>");
   await writeRendererAsset(rendererRoot, "assets/app-12345678.js", "console.log('asset');");
   await writeRendererAsset(rendererRoot, DESIGN_FRAME_DOCUMENT, "<!doctype html>");
+  await writeRendererAsset(rendererRoot, STATIC_HTML_FRAME_DOCUMENT, "<!doctype html>");
   // Uppercase fixture names also exercise this on case-sensitive CI filesystems.
   await writeRendererAsset(rendererRoot, "INDEX.HTML", "<!doctype html>");
   await writeRendererAsset(rendererRoot, "DESIGN-FRAME.HTML", "<!doctype html>");
@@ -61,6 +63,15 @@ describe("gateway document Content Security Policy", () => {
   test("the design frame document is sandboxed instead of carrying the renderer's policy", async () => {
     const { get } = await servedGateway();
     const response = await get(DESIGN_FRAME_DOCUMENT.toUpperCase());
+    expect(response.status).toBe(200);
+    expect(response.headers["content-security-policy"]).toBe(
+      GATEWAY_DESIGN_FRAME_CONTENT_SECURITY_POLICY,
+    );
+  });
+
+  test("the static HTML presentation document is sandboxed the same way", async () => {
+    const { get } = await servedGateway();
+    const response = await get(STATIC_HTML_FRAME_DOCUMENT);
     expect(response.status).toBe(200);
     expect(response.headers["content-security-policy"]).toBe(
       GATEWAY_DESIGN_FRAME_CONTENT_SECURITY_POLICY,

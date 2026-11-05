@@ -4,8 +4,12 @@
  */
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  toNodeEnvironmentSummary,
+  toNodeProjectSummary,
+} from "@orkestrator/protocol/node-summaries";
 import type { BackendId } from "@orkestrator/protocol/federation";
-import { MergedProjectList } from "./FederatedSidebarSections";
+import { FederatedActivityList, MergedProjectList } from "./FederatedSidebarSections";
 import type { MachineView } from "@/lib/federation/aggregate";
 import { FederationProvider } from "@/components/federation/FederationProvider";
 import { HierarchicalSidebar } from "@/components/sidebar/HierarchicalSidebar";
@@ -171,4 +175,64 @@ for (const mode of ["project", "repository"] as const) {
       }
     });
   }
+}
+
+// Exercise the actual home list and its private activitySortKey adapter, including
+// build-active homes whose displayed activity differs from their agent snapshot.
+for (const order of ["priority", "newest", "oldest"] as const) {
+  test(`activity homes retain merged and working groups in ${order} order`, () => {
+    const nodeId = "bk_bound" as BackendId;
+    const states = [
+      { id: "merged-working", prState: "merged", agentActivityState: "working" },
+      { id: "working-unread", agentActivityState: "working", hasUnreadWork: true },
+      { id: "merged-unread", prState: "merged", hasUnreadWork: true },
+      { id: "idle", agentActivityState: "idle" },
+      { id: "building", agentActivityState: "idle", buildActive: true },
+      { id: "deleted", deletionRequestedAt: "2026-11-01" },
+      { id: "ordinary", projectHome: false },
+    ];
+    const projects = states.map(({ id }, index) =>
+      toNodeProjectSummary(nodeId, { id, name: id }, index)!,
+    );
+    const machine: MachineView = {
+      connectionId: "bound",
+      colorToken: "teal",
+      backendId: nodeId,
+      name: "This window",
+      bound: true,
+      freshness: "current",
+      transport: "connected",
+      loadedAt: 1,
+      truncated: false,
+      projects,
+      environmentsByProject: new Map(
+        states.map((state) => [
+          state.id,
+          [
+            toNodeEnvironmentSummary(nodeId, {
+              projectId: state.id,
+              projectHome: true,
+              lastActivityAt: "2026-11-01T10:00:00Z",
+              ...state,
+            })!,
+          ],
+        ]),
+      ),
+    };
+    render(
+      <FederatedActivityList
+        machines={[machine]}
+        order={order}
+        renderBoundRow={() => null}
+        renderBoundHome={(id) => <button data-testid="sorted-home">{id}</button>}
+      />,
+    );
+    expect(screen.getAllByTestId("sorted-home").map((home) => home.textContent)).toEqual([
+      "idle",
+      "working-unread",
+      "building",
+      "merged-unread",
+      "merged-working",
+    ]);
+  });
 }

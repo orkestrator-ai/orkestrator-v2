@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { toNodeEnvironmentSummary } from "@orkestrator/protocol/node-summaries";
 import {
   environmentKey,
   environmentRef,
@@ -298,4 +299,33 @@ test("merged and working rows sink the same way on every machine, in every order
   expect(ids("priority")).toEqual(["open", "idle", "unknown-pr", "working", "merged"]);
   expect(ids("newest")).toEqual(["open", "idle", "unknown-pr", "working", "merged"]);
   expect(ids("oldest")).toEqual(["unknown-pr", "idle", "open", "working", "merged"]);
+});
+
+test("raw remote PR readings survive normalization into every federated activity order", () => {
+  const raw = [
+    { id: "merged-unread", prState: "merged", hasUnreadWork: true },
+    { id: "working", prState: "open", agentActivityState: "working" },
+    { id: "closed", prState: "closed" },
+    { id: "legacy" },
+  ];
+  const environments = raw.map((row) =>
+    toNodeEnvironmentSummary("bk_remote" as BackendId, {
+      projectId: "p",
+      lastActivityAt: "2026-11-01T10:00:00Z",
+      ...row,
+    })!,
+  );
+  expect(environments.map((row) => row.prState)).toEqual(["merged", "open", "closed", undefined]);
+  const remote = machine("remote", "Remote", {
+    projects: [project("bk_remote", "p", "Project")],
+    environmentsByProject: new Map([["p", environments]]),
+  });
+  for (const order of ["priority", "newest", "oldest"] as const) {
+    expect(activityRows([remote], order).map((row) => row.environment.ref.environmentId)).toEqual([
+      "closed",
+      "legacy",
+      "working",
+      "merged-unread",
+    ]);
+  }
 });

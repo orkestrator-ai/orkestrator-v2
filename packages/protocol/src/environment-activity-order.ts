@@ -120,6 +120,8 @@ export function compareActivityTimestampsDesc(
 /**
  * The groups every order keeps, top to bottom: unmerged before merged, and
  * within each, environments that are not working before those that are.
+ * Both placements are explicit user requirements, including for unread rows
+ * and chronological modes; timestamps order rows only within these groups.
  */
 function activityGroup({ activity, prState }: ActivityOrderFields): number {
   return (prState === "merged" ? 2 : 0) + (activity === "working" ? 1 : 0);

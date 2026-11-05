@@ -98,7 +98,13 @@ describe("legacy commit fingerprint", () => {
         expect(unchanged).toBe(first);
 
         content = "second";
-        const changed = await service.getProjection(identity);
+        let changed: typeof first;
+        const hashed = await hashedCharacters(async () => {
+          changed = await service.getProjection(identity);
+        });
+        // The unchanged 4,000-character row enters the fingerprint by its
+        // memoized fingerprint, not by its JSON.
+        expect(hashed).toBeLessThan(4_000);
         expect(changed!.revision).toBeGreaterThan(first!.revision);
         expect((changed!.messages[0] as Row).content).toBe("second");
       },

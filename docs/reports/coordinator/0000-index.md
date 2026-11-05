@@ -24,10 +24,9 @@ A batch file combines several reports as numbered parts and takes the rating of 
 | 6 | [0090-x1-coordinator-trust-boundary.md](../security/0090-x1-coordinator-trust-boundary.md) | High | No | **X1, Coordinator trust boundary.**<br>`Security 0090`: M11: delegation scope and marking mail-originated delegations<br>`Security 0180`: L16: operator token reads, confirm token wording, self-reminder framing<br>`Security 0210`: I2: two stale statements about side agents<br>`Coordinator 0120`: Labelling the home in `list_environments` and a live read-only step for the message gate.<br>`Coordinator 0310`: Refusing `adopt_workflow` from a side agent. | From `Security 0090`: An injected worker can reach a user-created environment under its looser policy, limited only by framing and budgets. |
 | 7 | [0080-c2-workflow-records.md](0080-c2-workflow-records.md) | Medium | No | **C2, Workflow records.**<br>`0080`: The swallowed delegation-open error, showing store-full to the user, and settling the shared cap.<br>`0100`: Closing work when a node is forgotten, and a notice for a long-offline node.<br>`0380`: One shared alias lookup.: Duplicated request-alias lookup | From `0080`: Retention makes it rare, and what remains is a functional gap when every record is in use. |
 | 8 | [0110-c3-sweep-and-reads.md](0110-c3-sweep-and-reads.md) | Medium | No | **C3, Sweep and reads.**<br>`0110`: Syncing once per sweep, a read-only `snapshot()`, batched wake writes and pruning below the limit.<br>`0370`: One own-mailbox check, and `coordinatorRuntimeId` everywhere. | From `0110`: Real repeated work that has not been measured, so it removes a risk rather than a known slowdown. |
-| 9 | [0190-c9-panel-split.md](0190-c9-panel-split.md) | Medium | No | **C9, Panel split.**<br>`0340`: Splitting `CoordinatorPanel.tsx`.<br>`0220`: Keying pending first launches by conversation.<br>`0350`: A `runAction` helper and separate busy flags.<br>`0190`: Gating branch switch and Sync on any active turn. | From `0190`: A late refusal, seen only with a side agent focused while another turn runs. |
-| 10 | [0240-c10-explanations.md](0240-c10-explanations.md) | Medium | No | **C10, Explanations.**<br>`0320`: A tooltip, hint and placeholder for side agents.<br>`0330`: A dismissible first-run card.: Explain the coordinator once, in the product<br>`0400`: Discoverability of `!` commands, the footer wording, and a first message starting with `!`.<br>`0240`: Naming the tier in the picker and badge, and removing the repeated caveat. | From `0240`: The badge calls two different tiers advisory, so the user's main safety fact is blurred. |
-| 11 | [0390-panel-re-render-cost.md](0390-panel-re-render-cost.md) | Low | No | Narrowing the panel's subscriptions after measuring. | An optimisation that should wait for a measurement. |
-| 12 | [0410-leaf-mode-gate-edge-cases.md](0410-leaf-mode-gate-edge-cases.md) | Low | No | The gate's flash before status, an empty controller list, and what "open anyway" remembers. | Edge cases on a rare path. |
+| 9 | [0240-c10-explanations.md](0240-c10-explanations.md) | Medium | No | **C10, Explanations.**<br>`0320`: A tooltip, hint and placeholder for side agents.<br>`0330`: A dismissible first-run card.: Explain the coordinator once, in the product<br>`0400`: Discoverability of `!` commands, the footer wording, and a first message starting with `!`.<br>`0240`: Naming the tier in the picker and badge, and removing the repeated caveat. | From `0240`: The badge calls two different tiers advisory, so the user's main safety fact is blurred. |
+| 10 | [0390-panel-re-render-cost.md](0390-panel-re-render-cost.md) | Low | No | Narrowing the panel's subscriptions after measuring. | An optimisation that should wait for a measurement. |
+| 11 | [0410-leaf-mode-gate-edge-cases.md](0410-leaf-mode-gate-edge-cases.md) | Low | No | The gate's flash before status, an empty controller list, and what "open anyway" remembers. | Edge cases on a rare path. |
 
 ## Parallel running
 
@@ -41,16 +40,15 @@ This index only changes when a branch merges, so it can't show what is running n
 
 | Batch | Name | Parts | Lane and position | Finish first | Not at the same time as |
 | --- | --- | --- | --- | --- | --- |
-| C5 | [Prompt and context](0030-c5-prompt-and-context.md) | `0360`, `0170`, `0140`, `0030`, `0460` | Coordinator backend, 1 of 5 | None | C6 (Errors and dead ends), C7 (Work panel and navigation), C9 (Panel split) |
+| C5 | [Prompt and context](0030-c5-prompt-and-context.md) | `0360`, `0170`, `0140`, `0030`, `0460` | Coordinator backend, 1 of 5 | None | C6 (Errors and dead ends), C7 (Work panel and navigation) |
 | C4 | [Tool surface](0040-c4-tool-surface.md) | `0040`, `0130`, `0150`, `0160` | Coordinator backend, 2 of 5 | None | None |
 | X1 | [Coordinator trust boundary](../security/0090-x1-coordinator-trust-boundary.md) | `0120` task 1, `0310`; also security `0090`, `0180`, `0210` | Coordinator backend, 3 of 5 | None | None |
 | C2 | [Workflow records](0080-c2-workflow-records.md) | `0080`, `0100`, `0380` | Coordinator backend, 4 of 5 | None | None |
 | C3 | [Sweep and reads](0110-c3-sweep-and-reads.md) | `0110`, `0370` | Coordinator backend, 5 of 5 | None | C6 (Errors and dead ends) |
-| C9 | [Panel split](0190-c9-panel-split.md) | `0340`, `0220`, `0350`, `0190` | Coordinator panel, 1 of 6 | None | C5 (Prompt and context) |
-| C7 | [Work panel and navigation](0060-c7-work-panel-and-navigation.md) | `0060`, `0260`, `0280`, `0450` | Coordinator panel, 2 of 6 | None | C5 (Prompt and context), E23 (Renderer polling) |
-| C8 | [Tab strip](0070-c8-tab-strip.md) | `0070`, `0230`, `0420`, `0430` | Coordinator panel, 3 of 6 | None | None |
-| C6 | [Errors and dead ends](0020-c6-errors-and-dead-ends.md) | `0020`, `0180`, `0200`, `0210`, `0250`, `0440` | Coordinator panel, 4 of 6 | None | C3 (Sweep and reads), C5 (Prompt and context), E12 (Renderer store) |
-| C10 | [Explanations](0240-c10-explanations.md) | `0320`, `0330`, `0400`, `0240` | Coordinator panel, 5 of 6 | None | None |
+| C7 | [Work panel and navigation](0060-c7-work-panel-and-navigation.md) | `0060`, `0260`, `0280`, `0450` | Coordinator panel, 1 of 5 | None | C5 (Prompt and context), E23 (Renderer polling) |
+| C8 | [Tab strip](0070-c8-tab-strip.md) | `0070`, `0230`, `0420`, `0430` | Coordinator panel, 2 of 5 | None | None |
+| C6 | [Errors and dead ends](0020-c6-errors-and-dead-ends.md) | `0020`, `0180`, `0200`, `0210`, `0250`, `0440` | Coordinator panel, 3 of 5 | None | C3 (Sweep and reads), C5 (Prompt and context), E12 (Renderer store) |
+| C10 | [Explanations](0240-c10-explanations.md) | `0320`, `0330`, `0400`, `0240` | Coordinator panel, 4 of 5 | None | None |
 
 Why these are grouped:
 
@@ -59,7 +57,6 @@ Why these are grouped:
 - **X1:** What a coordinator or side agent may reach, and how its mail is framed. `0120` task 2 is a live check and can run separately.
 - **C2:** Same workflow store, and `0100` links to `0080`.
 - **C3:** `0110` makes reads cheap. `0370` routes the copies through the same mailbox check.
-- **C9:** `0340` recommends starting its split with `0220`. Going first gives the other panel batches smaller conflicts.
 - **C7:** Finding and opening workers. `0060` links to `0260`.
 - **C8:** Mostly the same `TabShell` and pane tree.
 - **C6:** The index splits report section 5.4 across `0020`, `0180`, `0210` and `0250`. Includes backend work: `0020` adds an error to each conversation.
@@ -71,12 +68,14 @@ These still follow the lane and conflict rules above.
 
 | Batch | Name | Files | Lane and position | Finish first | Not at the same time as |
 | --- | --- | --- | --- | --- | --- |
-| C-0390 | [Panel re-render cost, measure first](0390-panel-re-render-cost.md) | `0390` | Coordinator panel, 6 of 6 | None | None |
+| C-0390 | [Panel re-render cost, measure first](0390-panel-re-render-cost.md) | `0390` | Coordinator panel, 5 of 5 | None | None |
 | C-0410 | [Leaf-mode gate](0410-leaf-mode-gate-edge-cases.md) | `0410` | No lane | None | None |
 
 ## Status of every finding
 
-21 done, 10 partly done, 36 open, 7 no action.
+25 done, 9 partly done, 33 open, 7 no action.
+
+Batch C9 (Panel split) is closed. Its task-by-task outcomes are in the [closing report](../2026-11-05-c9-closing-report.md).
 
 | Finding | Disposition | Evidence |
 | --- | --- | --- |
@@ -113,18 +112,18 @@ These still follow the lane and conflict rules above.
 | A7 note: safety-level reason | Open | [C6 part 0210](0020-c6-errors-and-dead-ends.md#0210-state-cards-tell-the-user-what-to-do-but-offer-no-way-to-do-it) |
 | U1: waiting chip with Open buttons | Done | Replaced by the Work panel, `CoordinatorWorkPanel.tsx` (`eb6bf887a`, #1698). |
 | U1: Open from mail tiles and the banner | Open | [C7 part 0060](0060-c7-work-panel-and-navigation.md#0060-open-the-worker-from-mail-tiles-and-the-prompt-banner) |
-| U2: confirm closing the main | Done | `CoordinatorPanel.tsx:1083-1087`, `:1196-1223` (`e5245dfd6`, #1644). |
+| U2: confirm closing the main | Done | `CoordinatorPanel.tsx:473-478`, `:569-596` (`e5245dfd6`, #1644). |
 | U2: Change agent and main-tab marker | Open | [C8 part 0070](0070-c8-tab-strip.md#0070-add-a-visible-change-agent-action-and-mark-the-main-tab) |
-| U3: failure replaces the main's transcript | Done | Now a banner, `CoordinatorPanel.tsx:1007-1022` (`e5245dfd6`, #1644). |
+| U3: failure replaces the main's transcript | Done | Now a banner, `CoordinatorPanel.tsx:397-412` (`e5245dfd6`, #1644). |
 | U3: failure scoped to the conversation | Open | [C6 part 0020](0020-c6-errors-and-dead-ends.md#0020-one-conversations-startup-failure-takes-down-the-whole-coordinator) |
-| U4: Git error masks action errors | Done | Separate lines, `CoordinatorPanel.tsx:866-868`, `:992-997` (`e5245dfd6`, #1644). |
+| U4: Git error masks action errors | Done | Separate lines, `CoordinatorToolbar.tsx:109-111`, `:213-216` (`e5245dfd6`, #1644). |
 | U4: collapsed, with no `role="alert"` | Open | [C6 part 0180](0020-c6-errors-and-dead-ends.md#0180-coordinator-action-errors-are-still-collapsed-and-silent) |
-| U5: Git actions gated on the wrong turn | Open | [C9 part 0190](0190-c9-panel-split.md#0190-branch-switch-and-sync-are-gated-on-the-wrong-turn) |
+| U5: Git actions gated on the wrong turn | Done | Any active turn disables them and is named: `useCoordinatorActiveTurn.ts`, `coordinator-checkout-turn.ts`, `CoordinatorToolbar.tsx:94-98`. |
 | U6: pausing hides the transcript | Partly done | [C6 part 0200](0020-c6-errors-and-dead-ends.md#0200-paused-conversations-may-not-load-their-transcript) (a banner replaced the card, but connections stay off). |
 | U7: chip disappears with focus | Done | The Work panel covers every conversation, `docs/architecture/coordinator.md:997-1002` (`eb6bf887a`, #1698). |
 | U8: side agents never explained | Open | [C10 part 0320](0240-c10-explanations.md#0320-side-agents-are-never-explained) |
 | U9: dead-end states and scattered settings | Partly done | [C6 part 0210](0020-c6-errors-and-dead-ends.md#0210-state-cards-tell-the-user-what-to-do-but-offer-no-way-to-do-it) (the provider state is now a banner with Retry). |
-| U10: first sends in two groups | Open | [C9 part 0220](0190-c9-panel-split.md#0220-first-sends-in-two-groups-can-drop-the-first-prompt) |
+| U10: first sends in two groups | Done | One held prompt per conversation: `useCoordinatorLaunches.ts`. |
 | U11: accessibility | Open | [C8 part 0230](0070-c8-tab-strip.md#0230-coordinator-tab-strip-accessibility) |
 | U12: re-render cost | Open | [0390-panel-re-render-cost.md](0390-panel-re-render-cost.md) |
 | U13: `Context rN` jargon | Done | Moved into the badge's tooltip, `CoordinatorPanelNotices.tsx:75-78` (`e5245dfd6`, #1644). |
@@ -141,8 +140,8 @@ These still follow the lane and conflict rules above.
 | 5.3: legible read-only tier | Partly done | [C10 part 0240](0240-c10-explanations.md#0240-make-the-read-only-tier-legible) (the badge shows a non-enforced state, under the wrong name). |
 | 5.4: error rule and stale indicator | Partly done | [C6 part 0250](0020-c6-errors-and-dead-ends.md#0250-failed-background-reads-leave-the-panel-silently-stale), with the rule's other parts in 0020, 0180 and 0210. |
 | 5.5: idle feedback | Partly done | [C7 part 0450](0060-c7-work-panel-and-navigation.md#0450-feedback-while-the-coordinator-is-idle-but-work-runs) (the Work panel covers most of it). |
-| 6: `CoordinatorPanel` does too much | Partly done | [C9 part 0340](0190-c9-panel-split.md#0340-split-coordinatorpanel) (notices and the Work panel moved out). |
-| 6: repeated action handling and one busy flag | Open | [C9 part 0350](0190-c9-panel-split.md#0350-one-busy-flag-disables-unrelated-controls) |
+| 6: `CoordinatorPanel` does too much | Done | Split from 1,256 to about 600 lines: `CoordinatorToolbar.tsx`, `CoordinatorConversationPane.tsx`, `useCoordinatorSelection.ts`, `useCoordinatorLaunches.ts`, `useCoordinatorGitActions.ts`. |
+| 6: repeated action handling and one busy flag | Done | `runAction` with separate Git and conversation flags: `useCoordinatorActions.ts`. |
 | 6: delegation decision in three places | Done | `coordinator-delegation-decision.ts`, tested in `coordinator-delegation-decision.test.ts`. The remote goal hold it added needs live proof: [4860](../../todo/coordinator-and-multi-review/4860-c1-wake-reliability-follow-ups.md). |
 | 6: reads that write | Open | [C3 part 0110](0110-c3-sweep-and-reads.md#0110-the-sweep-and-every-snapshot-repeat-global-work) |
 | 6: partial serialization | Done | `mutateSerialized` in `coordinator-service.ts`, tested in `coordinator-delegation-wakes.test.ts`. |

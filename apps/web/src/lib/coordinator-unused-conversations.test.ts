@@ -66,7 +66,7 @@ describe("unusedCoordinatorConversationIds", () => {
         conversation("launching"),
       ]),
       drafts,
-      "launching",
+      new Set(["launching"]),
     );
     expect(ids).toEqual(["never-mounted", "whitespace"]);
   });

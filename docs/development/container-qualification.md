@@ -127,7 +127,7 @@ image.
 Image `orkestrator-review-egress:6833fa71`, built from worktree
 `egress-sni-dns` after validated commit `328e511c9`, passed the final-image
 smoke and the expanded `container-live-egress-filter.test.ts` on Docker Desktop.
-The last live run (`egress-live-auth`) completed with exit 0 in 47 seconds.
+The final live run (`egress-live-source-guard`) completed with exit 0 in 82 seconds.
 The older-image case remains optional and was skipped because no older image
 was supplied; its original evidence below is retained.
 
@@ -152,6 +152,9 @@ The added cases exercise:
   the 30/60-second classification deadlines without waiting in real time.
 - A workload sends a forged reply with the exact pending transaction ID and
   socket port from `127.0.0.11` on an unrelated source port; it is ignored.
+  Unmarked workload datagrams claiming source `127.0.0.11:53` are rejected
+  before loopback acceptance; Docker's genuine replies acquire that source
+  port later in POSTROUTING.
   A controlled addressed-upstream fixture also sends replies from the wrong
   port, queries masquerading as replies, wrong IDs and mismatched questions
   before its genuine response. Only the genuine response reaches the client.

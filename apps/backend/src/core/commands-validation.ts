@@ -186,8 +186,8 @@ export function resolveAnthropicApiKey(global: AppConfig["global"]): {
 }
 
 /**
- * Single source of truth for the Cursor key. `createDockerContainer` forwards
- * `apiKey`; the renderer is told only `source`, never the value.
+ * Single source of truth for the Cursor key. The credential sync hands `apiKey`
+ * to a running container; the renderer is told only `source`, never the value.
  */
 export function resolveCursorApiKey(global: AppConfig["global"]): {
   apiKey?: string;

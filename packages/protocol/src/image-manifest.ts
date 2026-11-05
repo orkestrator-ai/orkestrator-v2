@@ -113,6 +113,16 @@ export const IMAGE_CAPABILITIES = {
 export type ImageCapability = keyof typeof IMAGE_CAPABILITIES;
 
 /**
+ * Whether new containers may be created from this image: it takes staged
+ * inputs rather than expecting whole host agent homes bound into it.
+ */
+export function imageDeclaresStagedInputs(
+  capabilities: ImageManifest["capabilities"] | null | undefined,
+): boolean {
+  return (capabilities?.["staged-inputs"] ?? 0) >= 1;
+}
+
+/**
  * The `staged-inputs` version from which an image's entrypoint copies Cursor's
  * user MCP configuration (`~/.cursor/mcp.json`, and nothing else of Cursor's)
  * into the container. An older image gives Cursor no user MCP servers.

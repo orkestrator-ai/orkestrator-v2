@@ -272,9 +272,10 @@ whichever container owns the network namespace.
     chain still sees the pre-NAT output interface.
   - Start it detached from the caller's jobs (`ork_start_filter`):
     `ork_resolve_all` waits for every background job.
-  - `update-firewall.sh --set-domains` writes its names before resolving,
-    because the gateway's own lookups go through it, and puts them back if
-    the rebuild fails. A name that leaves loses its open connections.
+  - `update-firewall.sh --set-domains` stages proposed DNS lookup names while
+    retaining current connection permissions until the rebuild succeeds. A
+    failure restores the prior names without revoking streams; success publishes
+    the final permissions, and a name that leaves loses its open connections.
   - The gateway records `egress-filter` (`on`, or `off` when created with
     `ORKESTRATOR_EGRESS_FILTER=off`) at its first boot; a start never
     changes it, and an older image's gateway never runs it.

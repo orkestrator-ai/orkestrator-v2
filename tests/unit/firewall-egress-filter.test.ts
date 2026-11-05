@@ -304,12 +304,35 @@ esac`;
     writeFileSync(join(dir, "var", "github-ranges-active"), "# github-ranges x\n203.0.113.0/24\n");
     writeFileSync(join(dir, "ipsets", "allowed-domains"), "192.0.2.10,tcp:443 21600\n");
     writeFileSync(join(dir, "run-firewall", "egress-names"), "a.example tcp:443\n");
+    // Reload the real daemon while a connection authorized by the previous
+    // policy is active, at the point where a slow rebuild performs lookups.
+    writeFileSync(join(dir, "initial-names"), "a.example tcp:443\n");
+    writeFileSync(
+      join(dir, "check-connections.pl"),
+      `${read("docker/orkestrator-egress-filter.pl").replace("main() unless caller;", "")}
+      $opt{names} = ${JSON.stringify(join(dir, "initial-names"))}; load_names();
+      socketpair(my $client, my $peer, PF_UNIX, SOCK_STREAM, 0) or die $!;
+      socketpair(my $upstream, my $origin, PF_UNIX, SOCK_STREAM, 0) or die $!;
+      my $c = { kind => 'proxy', client => $client, upstream => $upstream,
+        port => 443, name => 'a.example', classified => 1, to_client => '', to_upstream => '' };
+      $connections{fileno($client)} = $connections{fileno($upstream)} = $c; $connection_count++;
+      $opt{names} = ${JSON.stringify(join(dir, "run-firewall", "egress-names"))};
+      refresh_names();
+      die 'previous connection revoked during rebuild' if $c->{closed};
+      die 'proposed connection authorized before commit' if name_allowed_on_port('b.example', 443);
+      $opt{resolv} = ${JSON.stringify(join(dir, "policy", "trusted-network", "resolv.conf"))};
+      load_resolvers();
+      die 'proposed DNS lookup refused' unless query_resolvers('b.example', 1);
+      syswrite($peer, 'still open') == 10 or die $!;
+      my $data; sysread($client, $data, 10) == 10 && $data eq 'still open' or die 'previous stream lost';
+      print 'retained';`,
+    );
     if (failSwap) writeFileSync(join(dir, "ipsets", "fail-swap"), "");
     writeStub(bin, "ipset", IPSET);
     writeStub(
       bin,
       "dig",
-      `printf '%s: %s\\n' "\${@: -1}" "$(tr '\\n' ';' < "${join(dir, "run-firewall", "egress-names")}")" >> "${join(dir, "lookups")}"; echo "\${@: -1}. 60 IN A 198.51.100.7"`,
+      `perl '${join(dir, "check-connections.pl")}' >> '${join(dir, "connections")}' 2> '${join(dir, "connection-errors")}' || exit 1; printf '%s: %s\\n' "\${@: -1}" "$(tr '\\n' ';' < "${join(dir, "run-firewall", "egress-names")}")" >> "${join(dir, "lookups")}"; echo "\${@: -1}. 60 IN A 198.51.100.7"`,
     );
     writeStub(bin, "conntrack", "exit 0");
     writeStub(bin, "chown", "exit 0");
@@ -323,15 +346,16 @@ esac`;
 
   test.skipIf(Boolean(NO_GNU_DATE))(
     titleWithSkip(
-      "writes the new names before resolving them, since the gateway's own lookups go through the daemon",
+      "stages DNS lookups while preserving current connection permissions until commit",
       NO_GNU_DATE,
     ),
     () => {
       withDir((dir) => {
         const result = editFixture(dir, false);
+        expect(readFileSync(join(dir, "connection-errors"), "utf8")).toBe("");
         expect(result.exitCode).toBe(0);
         expect(readFileSync(join(dir, "lookups"), "utf8")).toBe(
-          "b.example: b.example tcp:443;b.example tcp:8080;\n",
+          "b.example: a.example tcp:443;dns b.example;\n",
         );
         expect(readFileSync(join(dir, "run-firewall", "egress-names"), "utf8")).toBe(
           "b.example tcp:443\nb.example tcp:8080\n",
@@ -341,11 +365,16 @@ esac`;
   );
 
   test.skipIf(Boolean(NO_GNU_DATE))(
-    titleWithSkip("puts the previous names back when the rebuild fails", NO_GNU_DATE),
+    titleWithSkip(
+      "a failed rebuild restores names without interrupting the previous stream",
+      NO_GNU_DATE,
+    ),
     () => {
       withDir((dir) => {
         const result = editFixture(dir, true);
+        expect(readFileSync(join(dir, "connection-errors"), "utf8")).toBe("");
         expect(result.exitCode).not.toBe(0);
+        expect(readFileSync(join(dir, "connections"), "utf8")).toBe("retained");
         expect(readFileSync(join(dir, "run-firewall", "egress-names"), "utf8")).toBe(
           "a.example tcp:443\n",
         );

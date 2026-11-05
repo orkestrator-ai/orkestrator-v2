@@ -157,6 +157,8 @@ describe("classification", () => {
       "\r\n\r\nget / HTTP/1.1\r\nHost: tenant.invalid\r\n\r\n",
       "GET\t/\tHTTP/1.1\r\nHost: tenant.invalid\r\n\r\n",
       "custom / HTTP/1.1\r\nHost: tenant.invalid\r\n\r\n",
+      "GET /é/🦊 HTTP/1.1\r\nHost: tenant.invalid\r\n\r\n",
+      "custom /é HTTP/1.1\r\nHost: tenant.invalid\r\n\r\n",
       "\nGET / HTTP/1.1\nHost: tenant.invalid\n\n",
     ]) {
       expect(classify(request)).toBe("http|ok|tenant.invalid");
@@ -386,6 +388,73 @@ describe("DNS reply authentication and failover", () => {
       print 'ok';`,
         connectPrelude,
       ),
+    ).toBe("ok");
+  });
+});
+
+describe("proxy classification and DNS backpressure", () => {
+  test("fragmented UTF-8 requests check Host before forwarding on a named port", () => {
+    for (const host of ["db.example.test", "blocked.invalid"]) {
+      expect(
+        runtimePerl(`
+      $opt{names} = ${JSON.stringify(join(dir, "names"))}; load_names();
+      my $request = pack('H*', '${Buffer.from(`GET /é/🦊 HTTP/1.1\r\nHost: ${host}\r\n\r\n`).toString("hex")}');
+      for my $split (1 .. length($request) - 1) {
+        socketpair(my $client, my $peer, PF_UNIX, SOCK_STREAM, 0) or die $!;
+        socketpair(my $upstream, my $origin, PF_UNIX, SOCK_STREAM, 0) or die $!;
+        nonblocking($client); nonblocking($origin);
+        my $c = { kind => 'proxy', client => $client, upstream => $upstream,
+          port => 5432, classified => 0, peek => substr($request, 0, $split),
+          to_upstream => '', to_client => '' };
+        $connections{fileno($client)} = $connections{fileno($upstream)} = $c;
+        $connection_count++;
+        decide($c, 0);
+        die 'forwarded partial request' if $c->{classified} || length $c->{to_upstream};
+        $c->{peek} .= substr($request, $split); decide($c, 0);
+        if ('${host}' eq 'blocked.invalid') {
+          die 'forbidden Host relayed' unless $c->{closed};
+        } else {
+          die 'allowed request lost' unless $c->{classified} && $c->{to_upstream} eq $request;
+          drop_connection($c, 0);
+        }
+        close $peer; close $origin;
+      }
+      print 'ok';`),
+      ).toBe("ok");
+    }
+  });
+
+  test("a non-reading DNS client cannot accumulate responses and pipelined queries resume in order", () => {
+    expect(
+      runtimePerl(`
+      $opt{names} = ${JSON.stringify(join(dir, "names"))}; load_names();
+      socketpair(my $client, my $peer, PF_UNIX, SOCK_STREAM, 0) or die $!;
+      nonblocking($client); nonblocking($peer);
+      my $fill = 'x' x 65536; my $filled = 0;
+      while (my $n = syswrite($client, $fill)) { $filled += $n; }
+      my $message = pack('H*', '${query("blocked.invalid", { edns: true })}');
+      my $frame = pack('n', length $message) . $message;
+      my $c = { kind => 'dns', client => $client, inbound => $frame x 1000,
+        to_client => '', to_upstream => '', from_loopback => 0, deadline => time + 10 };
+      dns_tcp_next($c); dns_tcp_masks($c);
+      my $size = length $c->{to_client}; my $left = length $c->{inbound};
+      die 'no refusal' unless $size > 0 && $size <= 65537;
+      die 'still reading while blocked' if $poll->mask($client) & POLLIN;
+      for (1 .. 4000) { dns_tcp_next($c); }
+      die 'unbounded replies' unless length($c->{to_client}) == $size && length($c->{inbound}) == $left;
+      while ($filled > 0) { my $n = sysread($peer, my $data, $filled > 65536 ? 65536 : $filled); die $! unless $n; $filled -= $n; }
+      dns_tcp_event($c, $client, POLLOUT);
+      die 'pipeline did not advance exactly once' unless length($c->{inbound}) == $left - length($frame);
+      sysread($peer, my $answer, 65536) > 2 or die 'no answer';
+      die 'wrong reply ID' unless unpack('n', substr($answer, 2, 2)) == 0x1234;
+      # A separate client remains usable while the first is blocked.
+      socketpair(my $other, my $reader, PF_UNIX, SOCK_STREAM, 0) or die $!;
+      nonblocking($other);
+      my $d = { kind => 'dns', client => $other, inbound => $frame,
+        to_client => '', from_loopback => 0, deadline => time + 10 };
+      dns_tcp_next($d); dns_tcp_event($d, $other, POLLOUT);
+      sysread($reader, $answer, 65536) > 2 or die 'other client blocked';
+      print 'ok';`),
     ).toBe("ok");
   });
 });

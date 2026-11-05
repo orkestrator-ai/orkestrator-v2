@@ -89,6 +89,11 @@ sub load_names {
         my $count = 0;
         while (my $line = <$fh>) {
             chomp $line;
+            if ($line =~ /^dns ([a-z0-9][a-z0-9.-]{0,252})$/) {
+                last if ++$count > MAX_NAMES;
+                $names{$1} = 1;
+                next;
+            }
             next unless $line =~ /^([a-z0-9][a-z0-9.-]{0,252}) (tcp|udp):(\d{1,5})$/;
             last if ++$count > MAX_NAMES;
             $names{$1} = 1;
@@ -329,7 +334,10 @@ sub classify {
             || $line =~ /^(?:GET|HEAD|POST|PUT|DELETE|CONNECT|OPTIONS|TRACE|PATCH)[ \t\x0b\x0c\r]/i;
         return ('other');
     }
-    return ('need') if $head =~ /^[\x09\x0b\x0c\x0d\x20-\x7e]+$/;
+    # A textual method followed by whitespace can still be an HTTP request
+    # with raw UTF-8 target bytes. Never downgrade that partial line to raw.
+    return ('need') if $head =~ /^[!#\$%&'*+.^_`|~0-9A-Za-z-]+[ \t\x0b\x0c\r]/
+        || $head =~ /^[\x09\x0b\x0c\x0d\x20-\x7e]+$/;
     return ('other');
 }
 
@@ -784,7 +792,8 @@ sub dns_tcp_drop {
 sub dns_tcp_masks {
     my ($c) = @_;
     return if $c->{closed};
-    my $reading = !$c->{eof} && !$c->{upstream} && length($c->{inbound}) < 65537;
+    my $reading = !$c->{eof} && !$c->{upstream} && !length($c->{to_client})
+        && length($c->{inbound}) < 65537;
     $poll->mask($c->{client} => ($reading ? POLLIN : 0) | (length $c->{to_client} ? POLLOUT : 0));
     if ($c->{upstream}) {
         $poll->mask($c->{upstream} => $c->{connecting} || length $c->{to_upstream} ? POLLOUT : POLLIN);
@@ -793,7 +802,9 @@ sub dns_tcp_masks {
 
 sub dns_tcp_next {
     my ($c) = @_;
-    return if $c->{upstream} || length($c->{inbound}) < 2;
+    # One outstanding response per client bounds the output to one DNS frame
+    # (65535-byte payload plus its length), including a non-reading client.
+    return if $c->{upstream} || length($c->{to_client}) || length($c->{inbound}) < 2;
     my $size = unpack('n', $c->{inbound});
     return if length($c->{inbound}) < 2 + $size;
     my $message = substr($c->{inbound}, 2, $size);
@@ -854,7 +865,8 @@ sub dns_tcp_event {
             return dns_tcp_drop($c) unless defined $written || transient();
             substr($c->{to_client}, 0, $written, '') if $written;
         }
-        if (!$c->{eof} && ($events & (POLLIN | POLLHUP))) {
+        if (!$c->{eof} && !$c->{upstream} && !length($c->{to_client})
+            && length($c->{inbound}) < 65537 && ($events & (POLLIN | POLLHUP))) {
             my $read = sysread($fh, my $data, READ_CHUNK);
             if (defined $read && $read == 0) {
                 $c->{eof} = 1;

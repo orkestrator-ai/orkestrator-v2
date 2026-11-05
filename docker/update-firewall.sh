@@ -24,9 +24,9 @@
 # time it applies its own.
 #
 # In an egress gateway with name checks (firewall-domains.sh) a domain edit
-# also replaces the names the daemon allows. They are written before the new
-# list is resolved, because the gateway's own lookups go through the daemon,
-# and put back if the rebuild fails.
+# stages DNS-only names before resolving the proposed list, preserving current
+# connection permissions until the rebuild succeeds. Failed rebuilds restore
+# the previous names without revoking its streams.
 
 set -euo pipefail
 # Root runs this, and the image PATH puts node-writable directories first.
@@ -118,17 +118,21 @@ set_domains() {
         return 0
     fi
     ipset list "$ORK_SET" >/dev/null 2>&1 || fail "the firewall is not initialized"
-    local effective filter
+    local effective filter previous
+    previous=$(ork_effective_domains "$(stored_domains)")
     effective=$(ork_effective_domains "$csv")
     filter=$(ork_filter_state)
     if [ "$filter" = enforced ]; then
-        ork_write_filter_names "$effective" || fail "the allowed names could not be written; the previous list is still active"
+        ork_write_filter_names "$previous" "$effective" || fail "the lookup names could not be staged; the previous list is still active"
     fi
     if ! ork_rebuild_allowlist "$effective"; then
         if [ "$filter" = enforced ]; then
-            ork_write_filter_names "$(ork_effective_domains "$(stored_domains)")" || true
+            ork_write_filter_names "$previous" || true
         fi
         fail "the allowlist could not be rebuilt; the previous one is still active"
+    fi
+    if [ "$filter" = enforced ]; then
+        ork_write_filter_names "$effective" || fail "the allowed names could not be committed"
     fi
     store_domains "$csv"
     refresh_status "$csv" 0
@@ -174,8 +178,10 @@ refresh_once() {
     [[ "$failures" =~ ^[0-9]+$ ]] || failures=0
     # The daemon restarts its own worker; a supervisor that is gone too is
     # started again here. The namespace was closed in between.
-    if [ "$(ork_filter_state)" = enforced ] && ! ork_filter_running; then
-        ork_start_filter || true
+    if [ "$(ork_filter_state)" = enforced ]; then
+        # Clear DNS staging left by an interrupted edit before refreshing.
+        ork_write_filter_names "$effective" || return 1
+        if ! ork_filter_running; then ork_start_filter || true; fi
     fi
     if ork_rebuild_allowlist "$effective"; then
         # Unresolved domains count as a failed refresh for scheduling, so a

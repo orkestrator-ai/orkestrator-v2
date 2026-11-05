@@ -103,9 +103,10 @@ ork_filter_state() {
 
 # Writes the names the daemon allows, one `name protocol:port` per line, for
 # a comma-separated policy 3 domain list; the daemon rereads it within a
-# second. Runs in a subshell, so the caller's domain globals are untouched.
+# second. An optional second list stages DNS-only lookup names during an
+# update, preserving the active connection permissions. Runs in a subshell.
 ork_write_filter_names() {
-    local csv="$1" tmp="$ORK_FILTER_NAMES.tmp.$$"
+    local csv="$1" staged_dns="${2:-}" tmp="$ORK_FILTER_NAMES.tmp.$$"
     mkdir -p "$ORK_STATUS_DIR" || return 1
     (
         ork_split_domains "$csv"
@@ -116,6 +117,16 @@ ork_write_filter_names() {
                 if [ -n "$spec" ]; then printf '%s %s\n' "$domain" "$spec"; fi
             done <<< "${ORK_DOMAIN_PORTS[$domain]}"
         done
+        # During a rebuild, resolve proposed names without removing current
+        # names or changing the TCP ports that authorize live connections.
+        if [ -n "$staged_dns" ]; then
+            ork_split_domains "$staged_dns"
+            ork_group_entries
+            for domain in "${ORK_DOMAIN_LIST[@]}"; do
+                [ "${#domain}" -le 253 ] && [[ "$domain" =~ $ORK_DOMAIN ]] || continue
+                printf 'dns %s\n' "$domain"
+            done
+        fi
         true
     ) > "$tmp" || { rm -f "$tmp"; return 1; }
     chmod 0644 "$tmp" && mv -f "$tmp" "$ORK_FILTER_NAMES"

@@ -18,7 +18,7 @@ import {
   COORDINATOR_ENVIRONMENT_READS,
   COORDINATOR_ENVIRONMENT_USER_APPROVED,
 } from "./control-mcp-coordinator-environment-scope.js";
-import { ControlMcpServer } from "./control-mcp-server.js";
+import { ControlMcpServer, readControlMcpDescriptor } from "./control-mcp-server.js";
 import { rpc } from "./control-mcp-server-test-support.js";
 import { coordinatorRoleCapabilities, type CoordinatorControlScope } from "./control-mcp-tools.js";
 import { createEnvironment, createProject, StorageService } from "./storage.js";
@@ -679,6 +679,32 @@ test("the coordinator's listing marks the project home, and only the home", asyn
   expect(rows.find((row) => row.id === home.id)?.projectHome).toBe(true);
   expect(rows.find((row) => row.id === handMade)).toBeDefined();
   expect("projectHome" in rows.find((row) => row.id === handMade)!).toBe(false);
+});
+
+test("operator reads do not mark the project home", async () => {
+  const home = createEnvironment(world.projectId, { name: "home", environmentType: "local" });
+  Object.assign(home, { status: "running", setupPhase: "ready", projectHome: true });
+  await world.storage.addEnvironment(home);
+  // The default operator credential in this world's own data directory.
+  await mcp.start();
+  const operator = await readControlMcpDescriptor(mcp.getInfo()!.descriptorFile);
+  const call = async (name: string, args: Record<string, unknown>) => {
+    const { body } = await rpc(operator.url, operator.token, "tools/call", {
+      name,
+      arguments: args,
+    });
+    expect(body.result?.isError ?? false).toBe(false);
+    return body.result?.structuredContent as Record<string, unknown>;
+  };
+  const listed = await call("list_environments", { projectId: world.projectId });
+  const rows = listed.environments as Array<Record<string, unknown>>;
+  const homeRow = rows.find((row) => row.id === home.id);
+  expect(homeRow).toBeDefined();
+  expect("projectHome" in homeRow!).toBe(false);
+  const read = await call("get_environment", { environmentId: home.id });
+  const environment = read.environment as Record<string, unknown>;
+  expect(environment.id).toBe(home.id);
+  expect("projectHome" in environment).toBe(false);
 });
 
 test("a side agent cannot adopt a workflow; a backend takeover still moves it", async () => {

@@ -1178,12 +1178,15 @@ export function UnassignedNativeAgentComposer({
               <p
                 role="alert"
                 data-unassigned-command-refusal
-                className="mt-1.5 px-1 text-xs text-amber-300"
+                className="mt-1.5 px-1 text-center text-xs text-balance text-amber-300"
               >
                 {FIRST_MESSAGE_COMMAND_RULE}
               </p>
             ) : hint ? (
-              <div data-composer-hint className="mt-1.5 px-1 text-xs text-muted-foreground">
+              <div
+                data-composer-hint
+                className="mt-1.5 px-1 text-center text-xs text-balance text-muted-foreground"
+              >
                 {hint}
               </div>
             ) : null

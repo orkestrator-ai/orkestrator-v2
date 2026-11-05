@@ -736,6 +736,45 @@ tells the coordinator delegation is unavailable, and the toolbar says "Delegatio
 unavailable: agent messaging is off" from the snapshot's `agentMessaging`
 ([Delegation round trip](#delegation-round-trip)).
 
+## What the panel explains
+
+The coordinator works unlike any other tab, so the panel says how in the
+places the user acts:
+
+- **First-run card.** The empty main composer shows a dismissible card
+  (`CoordinatorIntroCard` in `CoordinatorIntro.tsx`): the coordinator reads
+  the checkout but never changes it, hands changes to build pipelines and
+  prompt environments and is woken when they finish, side agents are extra
+  read-only chats, and Change agent switches provider with the workers
+  carried over. Dismissal is a per-user view preference in the UI store
+  (`coordinatorIntroDismissed`), not per project, since the model does not
+  vary by project. The toolbar's **?** shows the same lines as a menu
+  whatever the conversation's state.
+- **Side agents.** **New side agent**'s tooltip and a side composer's hint
+  say that a side agent can read the project and talk to the main but cannot
+  launch workers. A side composer has its own placeholder ("Ask a question
+  about this project") rather than the main's "What would you like to get
+  done?", and no starter prompts.
+- **`!` commands.** Every coordinator composer has a hint line under it:
+  "Start a message with ! to run a command yourself in this checkout." The
+  panel footer speaks of the coordinator's own work ("The coordinator hands
+  code changes, builds and fixes to build pipelines and prompt
+  environments"), so it does not contradict a command the user runs. A first
+  message cannot be a command (see [User `!` commands](#user--commands)); the
+  rule is shown inline under the composer, with the text kept, until the text
+  no longer starts with `!`.
+- **The read-only tier.** The toolbar badge names the selected
+  conversation's tier as a pill ("Read-only · Enforced",
+  "Read-only · Provider-configured", "Read-only · Advisory"); only an
+  `advisory` platform is called advisory. The badge opens a menu, so it
+  works by touch and keyboard, with the tier's one-sentence meaning from the
+  table below, the checkout path and context revision, and a link to
+  **Settings → Coordinator**, where the safety level is set. In the picker,
+  each platform's rail row carries a tier-coloured marker and the tier in its
+  accessible name and tooltip, and the note for the platform in view starts
+  with the same pill followed by the qualification reason as the backend
+  wrote it. Nothing appends a second "cannot verify" sentence to the reason.
+
 ## Provider qualification
 
 Coordinator runs against the project's real checkout, so how strongly a
@@ -1600,7 +1639,8 @@ user's own environment, and shows its output, the prompt it waits on (link,
 code, ENTER), an input line and Cancel in the conversation. The coordinator's
 agent is told what ran, and what it printed, at the start of its next turn.
 The mechanism is the same as in any agent tab; see
-[user-commands.md](user-commands.md).
+[user-commands.md](user-commands.md). The composer's hint line mentions them
+([What the panel explains](#what-the-panel-explains)).
 
 **Why this does not break the read-only boundary.** The read-only policy is a
 limit on the *agent*: the bridge's tool hooks, the shell allowlist and the

@@ -317,11 +317,11 @@ describe("SystemUsageIndicator", () => {
     openPanel();
 
     expect(await screen.findByText("Couldn't read processes")).toBeTruthy();
-    expect(screen.queryByText("Loading processes…")).toBeNull();
+    expect(screen.queryByText("Loading processes…") === null).toBe(true);
 
     failing = false;
     await advance(READ_RETRY_MAX_MS);
-    expect(screen.queryByText("Couldn't read processes")).toBeNull();
+    expect(screen.queryByText("Couldn't read processes") === null).toBe(true);
     expect(screen.getByLabelText("title-bar-layout processes")).toBeTruthy();
   });
 
@@ -345,7 +345,7 @@ describe("SystemUsageIndicator", () => {
       openPanel();
       await advance(0);
       expect(screen.getByText("Couldn't read processes")).toBeTruthy();
-      expect(screen.queryByText("Loading processes…")).toBeNull();
+      expect(screen.queryByText("Loading processes…") === null).toBe(true);
       expect(calls).toBe(1);
     });
   }
@@ -362,7 +362,7 @@ describe("SystemUsageIndicator", () => {
     expect(await screen.findByText("Loading processes…")).toBeTruthy();
     await advance(USAGE_READ_TIMEOUT_MS);
     expect(screen.getByText("Couldn't read processes")).toBeTruthy();
-    expect(screen.queryByText("Loading processes…")).toBeNull();
+    expect(screen.queryByText("Loading processes…") === null).toBe(true);
   });
 
   test("the popover's meters say so when the host read failed with no sample", async () => {
@@ -381,7 +381,7 @@ describe("SystemUsageIndicator", () => {
 
     failing = false;
     await advance(READ_RETRY_MAX_MS);
-    expect(within(panel).queryByText("Data unavailable")).toBeNull();
+    expect(within(panel).queryByText("Data unavailable") === null).toBe(true);
   });
 
   test("opens a process panel from the meters and groups rows by environment", async () => {

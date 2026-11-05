@@ -50,3 +50,18 @@ an unconfirmed hypothesis; no test or implementation was changed.
 - The same readiness test exited 143 instead of 0 (593.69 ms). Evidence: `/tmp/orkestrator-test-run.sdNf2r/address-default-suite.log.gz` and `/tmp/orkestrator-test-run.1IcDtS/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 - Complete unchanged owner rerun: `mise run test:logged -- --name address-sse-probe-owner -- bun test --cwd apps/backend ./src/gateway-result-channels.test.ts --parallel=1 --only-failures` passed, exit 0, 5.2 s. Passing output was removed by the logged runner.
 - Neither the test nor SSE probe is changed by this branch relative to origin/main. The cause remains unconfirmed; the known shutdown-race hypothesis is not an established environmental excuse. The aggregate remains non-green and requires verifier disposition.
+
+## Merge 487cb02be recurrence, 2026-11-05
+
+`mise run test:logged -- --name merge-suite -- mise run test` failed after
+537.0 seconds, including 103.0 seconds in the host queue. Workspace/root/bridge/
+protocol reservations were 6/1/2/1 slots. Backend used four workers: 16,250 passed, 126 skipped, one failed across 1,080 files. The readiness probe exited 143 instead of 0 (1314.20 ms).
+
+Complete unchanged owner rerun:
+`NODE_ENV=test mise run test:logged -- --name merge-result-channels-rerun -- bun test --cwd apps/backend ./src/gateway-result-channels.test.ts --parallel=1 --only-failures`
+passed (exit 0, 6.2 seconds; passing counts not retained). Evidence:
+`/tmp/orkestrator-test-run.O57e2K/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+
+The sole original merge conflict was the federated environment action hook;
+this owner was not conflicted or manually edited. Root cause remains unconfirmed;
+no implementation or assertion was changed. The aggregate remains non-green.

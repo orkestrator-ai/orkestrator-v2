@@ -251,7 +251,7 @@ describe("DraggableTabBar", () => {
         expect(paneTabIds()).toContain("dirty");
         finish();
         await waitFor(() => expect(paneTabIds()).toEqual(["one"]));
-        await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+        await waitFor(() => expect(screen.queryByRole("alertdialog") === null).toBe(true));
         await waitFor(() =>
           expect(document.activeElement).toBe(screen.getByRole("tab", { name: "Terminal 1" })),
         );

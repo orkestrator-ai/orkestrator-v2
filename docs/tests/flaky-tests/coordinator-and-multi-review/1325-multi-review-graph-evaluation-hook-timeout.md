@@ -44,3 +44,18 @@ mise run test:logged -- --name address-graph-evaluation-rerun -- bun test --cwd 
 Evidence: `/tmp/orkestrator-test-run.NrGGXS/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`. Passing owner output was removed by the logged runner.
 This confirms another aggregate-only occurrence; scheduling pressure remains a
 hypothesis, not a proven cause. No assertion, timeout or skip was changed.
+
+## Desktop relay address-stage recurrence — 2026-11-05
+
+`mise run test:logged -- --name review-default-tests -- mise run test`
+repeated the unnamed hook timeout at 5000.30 ms. A concurrent pending input
+verification then reported `GraphAgentPromptError: Input package could not be
+verified (missing): Graph artifact is missing` from the same owning file.
+Backend totals: 16,123 passed and one failed. The workspace reserved six
+worker slots after waiting 914 s beside the root and bridge groups.
+Evidence: `/tmp/orkestrator-test-run.l79QN0/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+
+The complete unchanged owner passed alone, exit zero in 3.7 s:
+`NODE_ENV=test mise run test:logged -- --name fix-multi-review-owner -- bun test --cwd apps/backend ./src/core/multi-review-graph-evaluation.test.ts --parallel=1 --only-failures`.
+This establishes a recurrence, not its cause. No timeout or assertion was
+changed, and the aggregate remains failed.

@@ -117,6 +117,30 @@ function states(current: MailWorld, actor: MailActor): Array<string | undefined>
   return current.carriers(actor).flatMap((turn) => turn.map((carrier) => carrier.notice?.state));
 }
 
+test("released outcome owner does not suppress a returned worker's merge notice", async () => {
+  const current = await createWorld();
+  const coordinator = await current.main();
+  const worker = await current.addEnvironment("returned");
+  await delegated(current, worker, "old");
+  await current.storage.coordinators.updateCoordinatorWorkflowAssociation(
+    "delegation-old",
+    (item) => {
+      item.nodeRelease = { reason: "forgotten", at: new Date().toISOString() };
+      item.workerOutcome = {
+        ended: { key: "deleted", at: new Date().toISOString(), notified: true },
+      };
+      return true;
+    },
+  );
+  await delegated(current, worker, "new");
+  await current.storage.updateEnvironment(worker.environmentId, {
+    prUrl: PR_URL,
+    prState: "merged",
+  });
+  await settle(current);
+  expect(states(current, coordinator)).toEqual(["pr-merged"]);
+});
+
 describe("worker outcome wakes", () => {
   test("a PR the user raised on a launched worker wakes the coordinator once when it merges", async () => {
     const current = await createWorld();

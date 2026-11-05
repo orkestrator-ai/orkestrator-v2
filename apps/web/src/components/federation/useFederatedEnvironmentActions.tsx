@@ -79,12 +79,18 @@ export function useFederatedEnvironmentActions(
     });
   };
 
-  const run = async (label: string, action: () => Promise<void>) => {
-    if (!claimSidebarAction(environment.key)) return;
+  const attempt = async (label: string, action: () => Promise<void>) => {
     try {
       await action();
     } catch (error) {
       reportFederatedActionError(label, machine.name, error);
+    }
+  };
+
+  const run = async (label: string, action: () => Promise<void>) => {
+    if (!claimSidebarAction(environment.key)) return;
+    try {
+      await attempt(label, action);
     } finally {
       releaseSidebarAction(environment.key);
     }
@@ -153,14 +159,12 @@ export function useFederatedEnvironmentActions(
         // This action still holds the row's claim, so a nested `run` would be
         // refused and skip the start. The fork exists by now: a failed start
         // is its own error, not a failed fork.
-        try {
-          await startFederatedEnvironment(portal, {
+        await attempt(`Start fork ${fork.name}`, () =>
+          startFederatedEnvironment(portal, {
             backendId: ref.backendId,
             environmentId: fork.environmentId,
-          });
-        } catch (error) {
-          reportFederatedActionError(`Start fork ${fork.name}`, machine.name, error);
-        }
+          }),
+        );
       });
     },
     remove: () => {

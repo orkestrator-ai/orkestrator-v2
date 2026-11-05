@@ -248,14 +248,20 @@ channel has output next, because by then the socket really is behind.
 Terminal input and resizes wait on one ordering tail per session, owned by the
 gateway rather than the socket, so a plain disconnect still delivers what was
 already accepted and a reconnect cannot overtake it. Revocation is the
-deliberate exception: credential rotation and gateway stop refuse everything
-still queued, including what a disconnected socket left behind, and so do
-browser-session revocation and credential expiry on an open socket. The one
-operation already running in the backend cannot be recalled. Two gaps remain:
-a disconnected socket loses its credential expiry/revocation watchers, and explicit client-grant revocation does not notify even an open
-socket. A revoked grant can continue admitting input and running queued work
-until its original expiry (up to 15 minutes). Both are tracked
-in [4480](../todo/transcripts-and-observation/4480-terminal-operations-after-disconnected-credential-expiry.md).
+deliberate exception: credential rotation, gateway stop, and the expiry or
+revocation of a socket's own browser session or client grant all refuse
+everything still queued, including what a disconnected socket left behind. The
+one operation already running in the backend cannot be recalled.
+
+A socket keeps its expiry timer and revocation subscription until its last
+queued operation settles, so a queue is still refused if its credential lapses
+after the disconnect; each socket kept this way holds an operation, so the
+operation limits bound them. A credential still valid at its deadline (renewed
+or refreshed) is watched on, open socket or not. `ClientGrantService` tells a
+grant's listeners whenever its record goes (one grant, a controller's, all of
+them, or found expired), through the `onGrantRevoked` node hook, so a terminal
+socket or event stream it authorized closes at once rather than at the grant's
+original deadline.
 
 A local desktop window normally takes everything through Electron main: every
 backend event, terminal output included, is parsed in main and relayed to each
@@ -291,7 +297,9 @@ gateway itself instead:
   it was created, so mixed windows are normal: a relay window keeps main's stream
   unfiltered, and a change restarts that stream from its cursor. Opening it again
   announces `terminal-event-stream-connected`, so a relay window reads its exact
-  snapshot.
+  snapshot. Relayed node events are never on that stream: main takes them on a
+  filtered one, for what relay windows and realms listen to
+  ([command-nodes.md](command-nodes.md)).
 
 The default became `on` on 2026-11-01, after a live probe through Tailscale
 Serve showed no held frames and no re-encoding. `--compression body` is the

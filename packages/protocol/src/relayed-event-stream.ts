@@ -1,6 +1,6 @@
-import { GatewayEventStreamState } from "@orkestrator/protocol/gateway-event-stream";
-import { relayedNodeEventNodeId, type RelayedNodeEvent } from "@orkestrator/protocol/node-events";
-import type { ReconnectBackoff } from "@orkestrator/protocol/reconnect-backoff";
+import { GatewayEventStreamState } from "./gateway-event-stream.js";
+import { relayedNodeEventNodeId, type RelayedNodeEvent } from "./node-events.js";
+import type { ReconnectBackoff } from "./reconnect-backoff.js";
 
 /** How long a filter narrowing waits for its siblings. */
 export const RELAYED_FILTER_NARROW_DELAY_MS = 50;
@@ -32,7 +32,9 @@ interface RelayedEventEntry {
 }
 
 /**
- * The one stream carrying the relayed events of every node this client watches.
+ * The one stream carrying the relayed events of every node this client watches:
+ * a renderer on the gateway transport, or the desktop's main process for the
+ * windows it relays to.
  *
  * It has its own cursor over the gateway's relayed window, so changing the filter
  * costs nothing but the reopen: the replacement resumes from that cursor and
@@ -97,6 +99,11 @@ export class RelayedEventStream {
     if (!this.reconnectTimer) return;
     this.clearReconnect();
     this.refresh();
+  }
+
+  /** The backend may not be the same process: the next open starts fresh and resyncs. */
+  forgetCursor(): void {
+    this.state = new GatewayEventStreamState();
   }
 
   dispose(): void {

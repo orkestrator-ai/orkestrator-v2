@@ -17,6 +17,9 @@ import { formatRelativeTime } from "@/lib/format-relative-time";
 
 const log = createLogger("web.chat");
 
+/** The most of a failure's own message the dialog shows; the backend bounds a bridge's to this. */
+const MAX_FAILURE_DETAIL_CHARS = 500;
+
 /** Agent-neutral row rendered by the picker. */
 export interface ResumableSession {
   id: string;
@@ -89,7 +92,7 @@ export function NativeResumeSessionDialog({
   const [archiving, setArchiving] = useState<ReadonlySet<string>>(() => new Set());
   const [showArchived, setShowArchived] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<{ detail: string | null } | null>(null);
   const requestGenerationRef = useRef(0);
   const choiceGenerationRef = useRef(0);
 
@@ -130,7 +133,7 @@ export function NativeResumeSessionDialog({
           platform: agentLabelRef.current,
           error: formatLogError(err),
         });
-        setError("Failed to load sessions");
+        setError({ detail: failureDetail(err) });
       } finally {
         if (requestGeneration === requestGenerationRef.current) {
           setIsLoading(false);
@@ -245,7 +248,7 @@ export function NativeResumeSessionDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="mt-2">
+        <div className="mt-2 min-w-0">
           {!isLoading && !error && archivedCount > 0 && (
             <div className="mb-2 flex items-center justify-end gap-2">
               <Label htmlFor="resume-show-archived" className="text-xs text-muted-foreground">
@@ -263,7 +266,12 @@ export function NativeResumeSessionDialog({
               <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
             </div>
           ) : error ? (
-            <div className="py-8 text-center text-sm text-destructive">{error}</div>
+            <div className="py-8 text-center text-sm">
+              <p className="text-destructive">Failed to load sessions</p>
+              {error.detail && (
+                <p className="mt-1 break-words text-xs text-muted-foreground">{error.detail}</p>
+              )}
+            </div>
           ) : sessions.length === 0 ? (
             <div className="py-8 text-center text-sm text-muted-foreground">{emptyMessage}</div>
           ) : (
@@ -393,6 +401,15 @@ function decodeBase64Url(encoded: string): string | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * What a failed list says about itself, shown under the fixed heading. Any
+ * bridge's words end up here, so it is only ever rendered as text.
+ */
+function failureDetail(err: unknown): string | null {
+  const message = err instanceof Error ? err.message.trim() : "";
+  return message ? message.slice(0, MAX_FAILURE_DETAIL_CHARS) : null;
 }
 
 /** Sort key. Unknown timestamps sink to the bottom rather than to 1970. */

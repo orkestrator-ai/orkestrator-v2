@@ -7,6 +7,7 @@ import {
   drainPersistence,
   encodeStateWithinBudget,
   loadPersistedState,
+  persistBarrier,
   schedulePersist,
 } from "./persistence.js";
 import {
@@ -15,6 +16,7 @@ import {
   resolveCommandSelection,
 } from "./commands.js";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
+import { MAX_STATE_FILE_BYTES } from "./config.js";
 import { clientSessionKeys, sessions, type PersistedState } from "./state.js";
 import { testApprovalDeadline } from "./testing/approval-fixtures.js";
 
@@ -241,6 +243,34 @@ describe("encoding the state file", () => {
   test("answers nothing when the non-transcript state alone does not fit", () => {
     const state = randomState(() => 0.9);
     expect(encodeStateWithinBudget(state, new Map(), 10)).toBeUndefined();
+  });
+});
+
+describe("a durability barrier", () => {
+  test("rejects when the non-transcript state cannot fit, and publishes nothing", async () => {
+    // Dispatch waits on this barrier, so swallowing the failure would let a
+    // prompt reach Pi with no journal entry on disk, and a restart could then
+    // send the same request id again.
+    const small = newSessionState("small");
+    small.sessionFile = "/sessions/small.jsonl";
+    sessions.set(small.id, small);
+    await persistBarrier();
+    const published = await readFile(join(directory, "state.json"), "utf8");
+
+    // A session's error is kept whole, and shedding only ever touches transcripts.
+    const oversized = newSessionState("oversized");
+    oversized.error = "x".repeat(MAX_STATE_FILE_BYTES + 1);
+    sessions.set(oversized.id, oversized);
+
+    await expect(persistBarrier()).rejects.toThrow(
+      "Pi bridge state exceeds its persistence budget",
+    );
+    expect(await readFile(join(directory, "state.json"), "utf8")).toBe(published);
+
+    // The failure does not poison the queue: once it fits, barriers publish again.
+    sessions.delete(oversized.id);
+    await persistBarrier();
+    expect((await readState()).sessions.map((entry) => entry.clientSessionKey)).toEqual(["small"]);
   });
 });
 

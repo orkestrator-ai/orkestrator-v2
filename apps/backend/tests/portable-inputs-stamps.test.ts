@@ -4,7 +4,7 @@
  * fixture home, with each mount rewritten to the staged directory it binds.
  * Fixture homes only; never the real provider directories.
  */
-import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { IMAGE_CAPABILITIES } from "@orkestrator/protocol/image-manifest";
@@ -17,10 +17,6 @@ import {
 } from "../src/core/portable-inputs";
 import { buildMergeContainerClaudeCredentialCommand } from "../src/core/agent-accounts-containers";
 import { tempDir } from "./container-lifecycle-fixtures";
-
-// Each case runs several real shell boots and filesystem publications. Give
-// those bounded operations time to finish before Bun tears down their children.
-setDefaultTimeout(30_000);
 
 const REPO = path.join(import.meta.dir, "../../..");
 const entrypoint = await fs.readFile(path.join(REPO, "docker/entrypoint.sh"), "utf8");
@@ -811,5 +807,5 @@ describe("import ownership failures", () => {
     await f.replace(login.staged, undefined);
     await f.boot();
     expect(await f.read(".claude/.credentials.json")).toContain("fresh-backend");
-  }, 30_000);
+  });
 });

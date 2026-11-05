@@ -7,6 +7,7 @@ import { createDesignMcp, resolveDesignDestination, type DesignService } from ".
 import { createHash } from "node:crypto";
 import { mintAgentToolsToken } from "@orkestrator/protocol/node/bridge-credential";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { type AgentToolsPeerGate, dockerPeerFilter } from "./agent-tools-peer-filter.js";
 import { toNodeHandler } from "@modelcontextprotocol/node";
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
@@ -989,20 +990,30 @@ export class AgentToolsServer {
   private scheduledJobs: ScheduledJobService | null = null;
   private graphActivationToolHost: GraphActivationToolHost | null = null;
   private keyInformationHost: BuildPipelineKeyInformationHost | null = null;
+  private readonly peerFilter: AgentToolsPeerGate;
+  private unfollowNetworkChanges: (() => void) | null = null;
 
+  /**
+   * `peerFilter` decides which peer addresses may talk to the server at all
+   * (`agent-tools-peer-filter.ts`); the default admits loopback and this data
+   * directory's Docker networks.
+   */
   constructor(
     private readonly storage: StorageService,
     private readonly bindAddress = "0.0.0.0",
     private readonly workflowResults?: WorkflowResultService,
     private readonly design?: DesignService,
-  ) {}
+    peerFilter?: AgentToolsPeerGate,
+  ) {
+    this.peerFilter = peerFilter ?? dockerPeerFilter(() => storage.getDataDir());
+  }
 
   async start(): Promise<void> {
     const start = this.lifecycle.then(async () => {
       if (this.server) return;
       await this.workflowResults?.initializeCapabilityIdentity();
       const server = createServer((request, response) => {
-        void this.handle(request, response).catch((error: unknown) => {
+        void this.admitAndHandle(request, response).catch((error: unknown) => {
           if (!response.headersSent) {
             jsonResponse(response, 500, {
               error: error instanceof Error ? error.message : String(error),
@@ -1013,6 +1024,14 @@ export class AgentToolsServer {
         });
       });
 
+      // A peer the filter already refuses is closed on accept, before the
+      // request is read; one it cannot decide yet is decided per request.
+      server.on("connection", (socket) => {
+        if (this.peerFilter.verdict(socket.remoteAddress) === "refuse") {
+          this.peerFilter.recordRefusal(socket.remoteAddress);
+          socket.destroy();
+        }
+      });
       const listen = (port: number) =>
         new Promise<void>((resolve, reject) => {
           server.once("error", reject);
@@ -1041,6 +1060,7 @@ export class AgentToolsServer {
       }
       this.server = server;
       this.port = address.port;
+      this.unfollowNetworkChanges = this.peerFilter.followNetworkChanges();
       // The primary gateway and desktop supervisor own process lifetime. This
       // auxiliary listener must not keep a partially initialized/test backend
       // alive by itself.
@@ -1336,6 +1356,8 @@ export class AgentToolsServer {
       this.credentialsByEnvironment.clear();
       this.scopesByDigest.clear();
       this.stateSignalsByDigest.clear();
+      this.unfollowNetworkChanges?.();
+      this.unfollowNetworkChanges = null;
       if (!server) return;
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
@@ -1443,6 +1465,21 @@ export class AgentToolsServer {
     } finally {
       await handler.close().catch(() => undefined);
     }
+  }
+
+  /**
+   * Refuses a peer outside loopback and this backend's Docker networks before
+   * anything is routed: the connection is closed with no status, so an
+   * outside peer cannot tell a route, a 405 or a 401 apart.
+   */
+  private async admitAndHandle(request: IncomingMessage, response: ServerResponse) {
+    const peer = request.socket.remoteAddress;
+    if (!(await this.peerFilter.admits(peer))) {
+      this.peerFilter.recordRefusal(peer);
+      request.socket.destroy();
+      return;
+    }
+    await this.handle(request, response);
   }
 
   private async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {

@@ -7,7 +7,7 @@ Analysed 2026-11-04 against `main` at `a44641cb`.
 ### Tasks
 
 1. **Find what makes the output go missing**: open (runtime trigger; repository capture no longer depends on pipe events).
-2. **Stop a read waiting on a scan of a retired target**: done for replacement-worktree retargets; same-worktree admission and already parked readers retain their waits.
+2. **Stop a read waiting on a scan of a retired target**: done. Replacement-worktree retargets no longer wait, and already parked readers are released on abort ([todo 4260](../../todo/cross-cutting/4260-bun-loses-child-process-events.md) task 4, 2026-11-05). A read of the old scan's own worktree still queues in admission until that scan settles, by the pool's physical-release contract.
 
 ### 1. Find what makes the output go missing
 

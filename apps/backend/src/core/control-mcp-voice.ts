@@ -1,5 +1,12 @@
 import { allPublicPages } from "./control-mcp-pages.js";
 import type { McpServer } from "@modelcontextprotocol/server";
+import {
+  agentMailKind,
+  isPeerMailCarrierContent,
+  readAgentMailCarriers,
+  STRUCTURED_PROMPT_SUFFIX_PREFIX,
+  type MailActor,
+} from "@orkestrator/protocol/agent-mail";
 import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { AgentRegistrySnapshot } from "@orkestrator/protocol/agent-registry";
 import {
@@ -22,6 +29,7 @@ import {
   type PublicSessionSummary,
   type PublicTranscriptPage,
 } from "@orkestrator/protocol/public-api-resources";
+import { stripSystemInstructions } from "@orkestrator/protocol/review-evidence-frames";
 import {
   allowed,
   onNode,
@@ -230,6 +238,59 @@ function success(tool: string, result: unknown): ControlMcpEnvelope {
 function short(text: string, max: number): string {
   const flat = text.replace(/\s+/g, " ").trim();
   return flat.length <= max ? flat : `${flat.slice(0, max - 1)}…`;
+}
+
+/**
+ * A mail sender as a person hears it. A carrier does not hold the sender's
+ * environment name, and a transcript's label falls back to its short id, which
+ * is not worth saying aloud.
+ */
+function spokenMailSender(from: MailActor): string {
+  switch (from.kind) {
+    case "tab":
+      return from.title?.trim() || "another agent";
+    case "coordinator":
+      return from.title?.trim() || "the project coordinator";
+    case "node":
+      return from.role === "agent"
+        ? `${(from.environmentName ?? from.title)?.trim() || "an agent"} on ${from.nodeName}`
+        : `${from.title?.trim() || "the project coordinator"} on ${from.nodeName}`;
+    case "user":
+      return "you";
+    case "external":
+      return "an external client";
+    case "system":
+      return from.source === "self-reminder"
+        ? "a reminder this session set"
+        : "an Orkestrator workflow";
+  }
+}
+
+/**
+ * What a person hears for a stored row that is delivered mail, or null when it
+ * is not. Reads the stored text, because mail is usually longer than the excerpt
+ * `read_session` returns; a batch names its newest message.
+ */
+function spokenMailRow(text: string, textTruncated = false): string | null {
+  const content = stripSystemInstructions(text);
+  if (!isPeerMailCarrierContent(content, { requirePayloadFrame: true })) return null;
+  // A cut row can hide whole later carriers, so neither its newest sender nor
+  // its total batch size can be inferred from the visible prefix.
+  if (textTruncated)
+    return "Latest message contains delivered mail, but the transcript is cut off. The latest sender and batch size cannot be determined here.";
+  const { entries, rest } = readAgentMailCarriers(content);
+  const trailing =
+    rest && !rest.startsWith(STRUCTURED_PROMPT_SUFFIX_PREFIX)
+      ? ` User message: ${short(rest, 400)}`
+      : "";
+  const newest = entries.at(-1);
+  if (!newest) return `Latest message is delivered mail that could not be read here.${trailing}`;
+  const mail = agentMailKind(newest) === "external" ? "untrusted mail" : "mail";
+  const subject = short(newest.subject ?? "", 200);
+  const heading = `Latest message is ${mail} from ${short(spokenMailSender(newest.from), 120)}${subject ? `, subject: ${subject}` : ""}.`;
+  const others = entries.length - 1;
+  if (others === 0) return heading + trailing;
+  return `${heading} ${others} other ${others === 1 ? "message" : "messages"} came with it.${trailing}`;
 }
 
 export function attentionSentence(item: PublicAttentionItem): string {
@@ -719,10 +780,15 @@ export function registerVoiceTools(server: McpServer, caller: ControlMcpCaller):
           },
         } as ControlMcpEnvelope;
         const last = messages.at(-1);
+        const newest = page.messages.at(-1);
+        const spokenMail =
+          newest?.role === "user" ? spokenMailRow(newest.text, newest.textTruncated) : null;
         return envelopeToolResult(bounded, profile, {
-          say: last
-            ? `Latest ${last.role} message: ${short(last.text, brief ? 400 : 1_200)}`
-            : "The session has no messages yet.",
+          say:
+            spokenMail ??
+            (last
+              ? `Latest ${last.role} message: ${short(stripSystemInstructions(newest?.text ?? last.text), brief ? 400 : 1_200)}`
+              : "The session has no messages yet."),
           ids: { sessionId },
         });
       },

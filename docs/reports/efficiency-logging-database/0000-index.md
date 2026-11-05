@@ -45,11 +45,10 @@ A batch file combines several reports as numbered parts and takes the rating of 
 | 29 | [0600-e22-chat-rendering.md](0600-e22-chat-rendering.md) | Low | No | **E22, Chat rendering.**<br>`0600`: WEB-10: With find open, the whole transcript is re-indexed on every update<br>`0670`: WEB-19: Streaming markdown rebuilds the whole message's tree per update | From `0600`: The cost exists only while find is open on a long transcript. |
 | 30 | [0620-e23-renderer-polling.md](0620-e23-renderer-polling.md) | Low | No | **E23, Renderer polling.**<br>`0620`: WEB-12: One environment change refetches the project's whole environment list<br>`0630`: WEB-13: Expanded truncated folders are re-read every 5 s without a digest<br>`0660`: WEB-18: Some renderer polls keep running while the window is hidden | From `0620`: Bursts already collapse to one project read, so this should wait for a measurement. |
 | 31 | [0650-web-16-terminal-container-environment-subscription.md](0650-web-16-terminal-container-environment-subscription.md) | Low | No | WEB-16: `TerminalContainer` subscribes to the whole environment object | It is an unmeasured re-render, with launch-effect risk in the fix. |
-| 32 | [0680-bg-10-multi-review-snapshot-drift-checks.md](0680-bg-10-multi-review-snapshot-drift-checks.md) | Low | No | BG-10: Multi Review snapshot mode runs a drift check per reviewer | It costs a bounded number of extra git probes per review pass. |
-| 33 | [0691-dk-5-preview-capture-data-urls.md](0691-dk-5-preview-capture-data-urls.md) | Low | No | DK-5: Preview captures cross IPC as large data URLs | Captures are occasional and bounded. |
-| 34 | [0692-dk-6-preview-tunnel-multiplexing.md](0692-dk-6-preview-tunnel-multiplexing.md) | Low | No | DK-6: The preview tunnel opens a WebSocket per TCP connection | The existing connection pool already removes most repeats. |
-| 35 | [0693-dk-10-second-claude-binary.md](0693-dk-10-second-claude-binary.md) | Low | No | DK-10: The image ships two Claude Code native binaries | It is an optional image-size saving that waits on a maintainer decision. |
-| 36 | [0694-dk-16-attention-follow-polling.md](0694-dk-16-attention-follow-polling.md) | Low | No | DK-16 (rest): CLI `attention --follow` re-downloads pending items on every poll | It affects only long-running followers, and pending pages are probably small. |
+| 32 | [0691-dk-5-preview-capture-data-urls.md](0691-dk-5-preview-capture-data-urls.md) | Low | No | DK-5: Preview captures cross IPC as large data URLs | Captures are occasional and bounded. |
+| 33 | [0692-dk-6-preview-tunnel-multiplexing.md](0692-dk-6-preview-tunnel-multiplexing.md) | Low | No | DK-6: The preview tunnel opens a WebSocket per TCP connection | The existing connection pool already removes most repeats. |
+| 34 | [0693-dk-10-second-claude-binary.md](0693-dk-10-second-claude-binary.md) | Low | No | DK-10: The image ships two Claude Code native binaries | It is an optional image-size saving that waits on a maintainer decision. |
+| 35 | [0694-dk-16-attention-follow-polling.md](0694-dk-16-attention-follow-polling.md) | Low | No | DK-16 (rest): CLI `attention --follow` re-downloads pending items on every poll | It affects only long-running followers, and pending pages are probably small. |
 
 ## Parallel running
 
@@ -125,7 +124,6 @@ These still follow the lane and conflict rules above.
 | E-0360 | [SSE replay rings](0360-br-15-sse-replay-rings.md) | `0360` | No lane | None | None |
 | E-0520 | [Startup bundle](0520-web-9-startup-bundle.md) | `0520` | No lane | None | None |
 | E-0650 | [Terminal container subscription](0650-web-16-terminal-container-environment-subscription.md) | `0650` | No lane | None | None |
-| E-0680 | [Multi Review drift checks](0680-bg-10-multi-review-snapshot-drift-checks.md) | `0680` | No lane | None | None |
 | E-0692 | [Preview tunnel multiplexing](0692-dk-6-preview-tunnel-multiplexing.md) | `0692` | No lane | None | None |
 | E-0694 | [Attention follow polling](0694-dk-16-attention-follow-polling.md) | `0694` | No lane | None | None |
 
@@ -245,7 +243,7 @@ When one of these becomes ready, it joins the lane shown.
 | BG-7 | Done | `terminalClaudeDemand`, `tmux-poll.ts:457`, `:802` (051261eee). |
 | BG-8 | Done | Follower widened, `container-oom-events.ts:25` (12289fc56); `ContainerLifecycleReactor`, `container-lifecycle-events.ts:30` (051261eee). |
 | BG-9 | Done | Revision reuse, `agent-human-prompt-monitor.ts:59`, `:249`; OpenCode tail, `opencode-provider.ts:904` (d7054dace). |
-| BG-10 | Open | `beforeAdmission` still package-only, `multi-review-service.ts:3631-3633`; per-prompt probe, `:5011-5033`; see 0680. |
+| BG-10 | Done 2026-11-05 | Snapshot mode checks the worktree once per admission pass through `beforeAdmission`, and every reviewer prompt in the pass reuses that answer (`reviewFanoutHost`, `multi-review-service.ts`); one probe is 2 `git status` runs, so N reviewers went from 2N per pass to 2. |
 | BG-11 | Done | Shared prompt per pass, `build-pipeline-review-fanout.ts:482-496` (d7054dace). |
 | BG-12 | Done | Digest first with one pass snapshot, `agent-accounts-containers.ts:1144` (d7054dace). |
 | BG-13 | Done | Queued sync shared by later callers, `pr-monitor-runtime.ts:116`, `:169-170` (5254f8e27); the project-scoped alternative was not needed. |

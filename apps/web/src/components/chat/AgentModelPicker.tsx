@@ -232,25 +232,24 @@ function PlatformRailButton({
       onClick={onSelect}
       className={cn(
         "relative grid size-8 place-items-center rounded disabled:cursor-not-allowed disabled:opacity-30",
+        badge && "h-auto min-h-8 w-full gap-1 p-1 text-center",
         active ? "bg-muted text-foreground" : "text-muted-foreground hover:bg-muted/60",
         className,
       )}
     >
       <PlatformIcon platform={platform} />
-      {caveat || badge ? (
+      {badge ? <PlatformBadgePill badge={badge} /> : null}
+      {caveat && !badge ? (
         <span
           aria-hidden="true"
-          className={cn(
-            "absolute right-0.5 top-0.5 size-1.5 rounded-full",
-            badge?.tone === "positive" && !caveat ? "bg-emerald-400" : "bg-amber-400",
-          )}
+          className="absolute right-0.5 top-0.5 size-1.5 rounded-full bg-amber-400"
         />
       ) : null}
     </button>
   );
 }
 
-/** A platform badge as a pill, for the note under the picker's search. */
+/** A visible platform tier, shared by rail options and the selected note. */
 function PlatformBadgePill({ badge }: { badge: AgentPlatformBadge }) {
   return (
     <span
@@ -1132,7 +1131,10 @@ export function AgentModelPicker({
               Agent
             </DropdownMenuLabel>
             <div
-              className="flex max-w-full gap-1 overflow-x-auto px-2 pb-2"
+              className={cn(
+                "flex max-w-full gap-1 overflow-x-auto px-2 pb-2",
+                platformBadges && "flex-col",
+              )}
               role="group"
               aria-label="Agent platforms"
               data-native-mobile-platforms
@@ -1166,7 +1168,11 @@ export function AgentModelPicker({
                   {...(platformBadges?.[availablePlatform]
                     ? { badge: platformBadges[availablePlatform] }
                     : {})}
-                  className="shrink-0"
+                  className={
+                    platformBadges?.[availablePlatform]
+                      ? "w-full shrink-0 grid-cols-[1rem_minmax(0,1fr)] justify-items-start"
+                      : "shrink-0"
+                  }
                   onSelect={(event) => {
                     event.preventDefault();
                     setSearch("");
@@ -1289,15 +1295,21 @@ export function AgentModelPicker({
             className={cn(
               "grid min-h-0 flex-1 overflow-hidden divide-x divide-zinc-700/60",
               showReasoningControls && showSpeedControls
-                ? "grid-cols-[3rem_repeat(3,minmax(0,1fr))]"
+                ? platformBadges
+                  ? "grid-cols-[11rem_repeat(3,minmax(0,1fr))]"
+                  : "grid-cols-[3rem_repeat(3,minmax(0,1fr))]"
                 : showReasoningControls || showSpeedControls
-                  ? "grid-cols-[3rem_repeat(2,minmax(0,1fr))]"
-                  : "grid-cols-[3rem_minmax(0,1fr)]",
+                  ? platformBadges
+                    ? "grid-cols-[11rem_repeat(2,minmax(0,1fr))]"
+                    : "grid-cols-[3rem_repeat(2,minmax(0,1fr))]"
+                  : platformBadges
+                    ? "grid-cols-[11rem_minmax(0,1fr)]"
+                    : "grid-cols-[3rem_minmax(0,1fr)]",
             )}
             onKeyDown={handleCatalogKeyDown}
           >
             <div
-              className="flex min-h-0 flex-col items-center gap-1 pr-1"
+              className="flex min-h-0 flex-col items-center gap-1 overflow-y-auto pr-1"
               role="group"
               aria-label="Agent platforms"
               aria-keyshortcuts="ArrowLeft ArrowRight"

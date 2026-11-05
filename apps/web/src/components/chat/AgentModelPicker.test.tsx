@@ -939,6 +939,35 @@ describe("AgentModelPicker", () => {
     );
   });
 
+  for (const mobile of [false, true]) {
+    test(`shows every tier before selection (${mobile ? "touch" : "desktop"})`, () => {
+      setMobileViewport(mobile);
+      const tiers = { codex: "Enforced", cursor: "Provider-configured", pi: "Advisory" } as const;
+      renderPicker({
+        models: Object.keys(tiers).map((platform) => ({
+          platform: platform as "codex" | "cursor" | "pi",
+          id: platform,
+          label: platform,
+        })),
+        enabledPlatforms: ["codex", "cursor", "pi"],
+        selectedPlatform: "codex",
+        platformBadges: Object.fromEntries(
+          Object.entries(tiers).map(([platform, label]) => [
+            platform,
+            { label: `Read-only · ${label}`, description: label, tone: "caution" as const },
+          ]),
+        ),
+      });
+      openPicker();
+      for (const [platform, tier] of Object.entries(tiers)) {
+        const row = screen.getByRole("button", { name: `${platform} models, Read-only · ${tier}` });
+        expect(row.querySelector("[data-native-platform-badge]")?.textContent).toBe(
+          `Read-only · ${tier}`,
+        );
+      }
+    });
+  }
+
   test("renders no caveat when no platform notes are supplied", () => {
     setMobileViewport(false);
     renderPicker({

@@ -18,7 +18,7 @@ describe("HumanPromptBanner", () => {
   test("a caller that gives no onOpen sees no Open, as in an ordinary tab", () => {
     render(<HumanPromptBanner prompts={[waiting]} />);
     expect(screen.getByText(/answer it in the worker's tab/)).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /Open/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Open/ }) === null).toBe(true);
   });
 
   test("Open hands the entry to the caller", () => {
@@ -38,7 +38,7 @@ describe("HumanPromptBanner", () => {
         canOpen={(entry) => entry.environmentId === "env-2"}
       />,
     );
-    expect(screen.queryByRole("button", { name: "Open env-1" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Open env-1" }) === null).toBe(true);
     expect(screen.getByRole("button", { name: "Open env-2" })).toBeTruthy();
   });
 

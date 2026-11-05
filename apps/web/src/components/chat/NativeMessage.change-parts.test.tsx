@@ -292,7 +292,7 @@ test("a capped file list without a cursor shows the omitted-files note", () => {
   );
   expect(screen.getByText("src/app.ts")).toBeTruthy();
   expect(screen.getByText("More files changed; the totals above include them all.")).toBeTruthy();
-  expect(screen.queryByRole("button")).toBeNull();
+  expect(screen.queryByRole("button") === null).toBe(true);
   expect(calls("changes_get_files")).toHaveLength(0);
 });
 

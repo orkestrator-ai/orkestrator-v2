@@ -843,7 +843,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
       const alert = await screen.findByRole("alert");
       expect(alert.textContent).toContain("pause failed");
       // Nothing to expand: it is not behind a disclosure.
-      expect(alert.closest("details")).toBeNull();
+      expect(alert.closest("details") === null).toBe(true);
       fireEvent.click(within(alert).getByRole("button", { name: "Dismiss error" }));
       await waitFor(() => expect(screen.queryByRole("alert") === null).toBe(true));
     });
@@ -979,9 +979,9 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
     const alert = await screen.findByRole("alert");
     await waitFor(() => expect(ensuredGit.lastError?.message).toBe("sync failed"));
     expect(alert.textContent).toContain("sync failed");
-    expect(screen.queryByText("Repository error")).toBeNull();
+    expect(screen.queryByText("Repository error") === null).toBe(true);
     fireEvent.click(within(alert).getByRole("button", { name: "Dismiss error" }));
-    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("alert") === null).toBe(true));
     expect(await screen.findByText("Repository error")).toBeTruthy();
   });
 
@@ -1003,7 +1003,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
     await act(async () => {});
     expect(screen.getAllByText("pause failed")).toHaveLength(1);
     expect((await screen.findByRole("alert")).textContent).toContain("pause failed");
-    expect(screen.queryByText("Repository error")).toBeNull();
+    expect(screen.queryByText("Repository error") === null).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Dismiss error" }));
     expect(await screen.findByText("Repository error")).toBeTruthy();
   });

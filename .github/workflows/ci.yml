@@ -147,6 +147,16 @@ jobs:
         if: ${{ !cancelled() }}
         run: mise run lint
 
+      # Repository-wide guards that need no build, so a PR hears within minutes
+      # rather than after the test shards.
+      - name: Scan DOM absence assertions
+        if: ${{ !cancelled() }}
+        run: mise run test:logged -- --name dom-absence-scan -- bun test tests/unit/test-diagnostic-bounds.test.ts --test-name-pattern "never passes a DOM-producing query result" --parallel=1 --only-failures
+
+      - name: Check the flaky-test index
+        if: ${{ !cancelled() }}
+        run: mise run test:logged -- --name flaky-test-index -- bun test tests/unit/flaky-tests-index.test.ts --parallel=1 --only-failures
+
   typecheck:
     name: Typecheck
     runs-on: ubuntu-latest

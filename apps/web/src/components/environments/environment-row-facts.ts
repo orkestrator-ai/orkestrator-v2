@@ -18,6 +18,8 @@ import type { EnvironmentTooltipDetails } from "./EnvironmentTooltipBody";
 export interface LocalEnvironmentRowInputs {
   /** `useEnvironmentStore.isDeleting`: in flight here, or marked on the record. */
   deleting: boolean;
+  /** `isLocalDeletionRetryable`: a failed merge cleanup nothing here is retrying. */
+  deletionRetryable: boolean;
   /** `useEnvironmentDisplayActivity`: runtime activity, `working` during a build. */
   activity: AgentActivity;
   running: boolean;
@@ -42,6 +44,7 @@ export function localEnvironmentRowFacts(
     environmentType: environment.environmentType,
     status: environment.status,
     deleting: inputs.deleting,
+    deletionRetryable: inputs.deletionRetryable,
     buildPipeline: inputs.buildPipeline,
     prState: environment.prState ?? null,
     autoMerge: environment.autoMerge === true,
@@ -86,6 +89,7 @@ export function nodeEnvironmentRowFacts(
     environmentType: environment.environmentType,
     status: environment.status,
     deleting: environment.deleting,
+    deletionRetryable: environment.deletionRetryable === true,
     buildPipeline: environment.buildPipeline === true,
     prState: environment.prState ?? null,
     autoMerge: environment.autoMerge === true,

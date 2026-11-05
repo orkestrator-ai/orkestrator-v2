@@ -32,6 +32,8 @@ export interface EnvironmentRowFacts {
   environmentType: string | undefined;
   status: string;
   deleting: boolean;
+  /** `deleting` is left over from a failed merge cleanup: a bulk delete can retry it. */
+  deletionRetryable: boolean;
   /** A build pipeline names this environment: the row carries the pipe. */
   buildPipeline: boolean;
   prState: PrState | null;
@@ -76,6 +78,8 @@ export interface EnvironmentRowModel {
   dimmed: boolean;
   /** A spinner replaces the marker. */
   spinner: "deleting" | "transition" | null;
+  /** Multi-select can take it: not a delete in flight. */
+  selectable: boolean;
   /** What the row's button announces after its name, e.g. "Working". */
   activityText: string;
   /** The button's label where machines are shown: name, machine and activity. */
@@ -137,6 +141,7 @@ export function environmentRowModel(facts: EnvironmentRowFacts): EnvironmentRowM
     nameSignal,
     dimmed: facts.deleting || isStopping,
     spinner: facts.deleting ? "deleting" : isTransitioning || facts.busy ? "transition" : null,
+    selectable: !facts.deleting || facts.deletionRetryable,
     activityText,
     accessibleLabel: machine ? `${displayName}, on ${machine.name}, ${activityText}` : undefined,
     markerMachine: machine

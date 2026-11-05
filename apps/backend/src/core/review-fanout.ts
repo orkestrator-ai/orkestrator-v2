@@ -415,7 +415,9 @@ export interface ReviewFanoutHost {
    * connection (build pipeline workers). Absent: such turns keep the
    * bridge's environment connection.
    */
-  workerMailTurn?(reviewer: ReviewerRecord): PipelineWorkerMailTurn | undefined;
+  workerMailTurn?(
+    reviewer: ReviewerRecord,
+  ): PipelineWorkerMailTurn | undefined | Promise<PipelineWorkerMailTurn | undefined>;
   prepareResult?(
     selection: ReviewerModelSelection,
     requestId: string,

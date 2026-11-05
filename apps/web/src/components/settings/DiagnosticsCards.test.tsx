@@ -130,7 +130,7 @@ test("the database card says so when it has no figures", async () => {
   spyOn(backend, "getDatabaseStats").mockRejectedValue(new Error("not here"));
   mount(<DatabaseStorageCard />);
   await screen.findByText("Database figures unavailable");
-  expect(screen.queryByText("Main database")).toBeNull();
+  expect(screen.queryByText("Main database") === null).toBe(true);
 });
 
 test("the database card explains an empty database with no copies yet", async () => {
@@ -185,7 +185,7 @@ test("export shows the manifest first, and saves only when asked", async () => {
     ["plan-1", 3, "other"],
   ]);
   expect(await screen.findByRole("status")).toBeTruthy();
-  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  await waitFor(() => expect(screen.queryByRole("dialog") === null).toBe(true));
 });
 
 test("cancel saves nothing, and a bundle that does not add up is not saved", async () => {
@@ -203,7 +203,7 @@ test("cancel saves nothing, and a bundle that does not add up is not saved", asy
   fireEvent.click(screen.getByRole("button", { name: "Export diagnostics" }));
   let dialog = await screen.findByRole("dialog");
   fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
-  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  await waitFor(() => expect(screen.queryByRole("dialog") === null).toBe(true));
   expect(read).not.toHaveBeenCalled();
 
   fireEvent.click(screen.getByRole("button", { name: "Export diagnostics" }));

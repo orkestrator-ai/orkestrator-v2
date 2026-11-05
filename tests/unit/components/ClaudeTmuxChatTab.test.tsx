@@ -1987,7 +1987,7 @@ Running 1 Explore agent...
       await screen.findByText("Tail message");
       expect(getTranscriptPageMock).toHaveBeenCalledTimes(1);
       expect(getTranscriptPageMock.mock.calls[0]).toEqual(["tab-1", "env-1", undefined]);
-      expect(screen.queryByText("Older message")).toBeNull();
+      expect(screen.queryByText("Older message") === null).toBe(true);
 
       fireEvent.click(button()!);
 
@@ -2055,7 +2055,7 @@ Running 1 Explore agent...
       fireEvent.click(button()!);
 
       await screen.findByText("New tail message");
-      expect(screen.queryByText("Tail message")).toBeNull();
+      expect(screen.queryByText("Tail message") === null).toBe(true);
     });
 
     test("an empty tail after cursor expiry preserves visible history", async () => {

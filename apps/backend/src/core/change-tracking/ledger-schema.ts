@@ -455,7 +455,11 @@ export const moveChangeLedgerMigration: StorageMigration = {
     // Keep secure deletion enabled: legacy non-incremental databases may
     // retain freed pages indefinitely after these tables are dropped.
     for (const table of tables) db.exec(`DROP TABLE IF EXISTS ${table}`);
-    log.info("ledger.moved", { rows, durationMs: Math.round(performance.now() - started) });
+    // A new database has nothing to move, and its first open must stay quiet:
+    // a command that writes JSON to stdout shares the stream with this line.
+    if (rows > 0) {
+      log.info("ledger.moved", { rows, durationMs: Math.round(performance.now() - started) });
+    }
   },
 };
 

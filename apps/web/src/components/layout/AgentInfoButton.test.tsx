@@ -1368,6 +1368,27 @@ describe("AgentInfoButton usage panel", () => {
     );
   });
 
+  for (const unsupported of [false, true]) {
+    test(`reopening retains unavailable host usage (unsupported=${unsupported})`, async () => {
+      const reads = installFakeReadCoordinator();
+      let calls = 0;
+      nativeInvokeMock.mockImplementation(async (command: string) => {
+        if (command !== "get_system_usage") return undefined;
+        calls += 1;
+        throw new Error(unsupported ? "Unknown backend command: get_system_usage" : "offline");
+      });
+      render(<AgentInfoButton activeTab={claudeTab()} />);
+      open();
+      expect(await screen.findByText("Data unavailable")).toBeTruthy();
+      reopen();
+      await act(async () => {
+        await reads.clock.advance(0);
+      });
+      expect(screen.getByText("Data unavailable")).toBeTruthy();
+      expect(calls).toBe(1);
+    });
+  }
+
   test("polls while open, marks an aged sample unavailable, and recovers", async () => {
     const reads = installFakeReadCoordinator();
     const advance = async (ms: number) => {

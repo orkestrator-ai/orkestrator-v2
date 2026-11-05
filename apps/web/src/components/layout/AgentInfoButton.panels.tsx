@@ -90,16 +90,20 @@ export { SYSTEM_USAGE_STALE_AFTER_MS };
 export function SystemUsagePanel({
   usage,
   stale: staleSample,
+  failed = false,
   sampledAt = null,
   heading = true,
 }: {
   usage: SystemUsageSnapshot | null;
   stale: boolean;
+  /** The read failed: with no sample to show, say so rather than look like it is loading. */
+  failed?: boolean;
   sampledAt?: string | null;
   heading?: boolean;
 }) {
   const freshUsage = usage && !staleSample ? usage : null;
   const stale = usage !== null && freshUsage === null;
+  const unavailable = stale || (usage === null && failed);
   const sampleTime = formatSampleTime(sampledAt);
   return (
     <section
@@ -108,14 +112,16 @@ export function SystemUsagePanel({
       title={sampleTime ? `${stale ? "Last sampled" : "Sampled"} at ${sampleTime}` : undefined}
       data-sampled-at={sampledAt ?? undefined}
     >
-      {heading || stale ? (
+      {heading || unavailable ? (
         <div className="flex items-center justify-between gap-2 text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
           {heading ? <span>System</span> : null}
-          {stale ? <span role="status">Data unavailable</span> : null}
+          {unavailable ? <span role="status">Data unavailable</span> : null}
         </div>
       ) : null}
       <div
-        className={heading || stale ? "mt-2 grid grid-cols-4 gap-1.5" : "grid grid-cols-4 gap-1.5"}
+        className={
+          heading || unavailable ? "mt-2 grid grid-cols-4 gap-1.5" : "grid grid-cols-4 gap-1.5"
+        }
       >
         <SystemMetric
           icon={Cpu}

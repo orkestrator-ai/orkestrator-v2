@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { stat } from "node:fs/promises";
+import { brotliCompressSync } from "node:zlib";
+
+import * as gatewaySupport from "../src/gateway-support-core.js";
 
 import {
   etagForStaticVariant,
@@ -279,21 +282,28 @@ describe("a request that does not match still gets the right representation", ()
   });
 
   test("a failed compression serves identity, with the identity tag", async () => {
-    const { assetPath, get } = await servedAsset();
+    const { get } = await servedAsset();
     const identity = await get({ "accept-encoding": "identity" });
-    const file = await stat(assetPath);
-    // A codec failure settles the shared in-flight run as `declined`, which is
-    // what this request then finds.
-    const key = [assetPath, file.mtimeMs, file.size, "br,gzip", "optional"].join("\0");
-    staticFallbackCompressions.set(key, Promise.resolve({ status: "declined" }));
-    cleanups.push(() => staticFallbackCompressions.delete(key));
+    // Exercise the codec catch with a real zlib rejection, rather than seeding
+    // the outcome map. A one-byte output budget forces the codec to throw.
+    const codec = spyOn(gatewaySupport, "brotliCompressAsync").mockImplementation(async (source) =>
+      brotliCompressSync(source, { maxOutputLength: 1 }),
+    );
+    cleanups.push(() => codec.mockRestore());
 
     const response = await get({
-      "accept-encoding": ALL_ENCODINGS,
+      "accept-encoding": "br",
       "if-none-match": `W/"stale"`,
     });
+    expect(codec).toHaveBeenCalledTimes(1);
+    await expect(codec.mock.results[0]?.value).rejects.toMatchObject({
+      code: "ERR_BUFFER_TOO_LARGE",
+    });
+    expect(staticFallbackCompressions.size).toBe(0);
     expect(response.status).toBe(200);
     expect(response.headers["content-encoding"]).toBeUndefined();
+    expect(response.headers.vary).toBe("Accept-Encoding");
+    expect(response.headers["content-length"]).toBe(String(Buffer.byteLength(SOURCE)));
     expect(response.headers.etag).toBe(identity.headers.etag);
     expect(response.body).toBe(SOURCE);
   });

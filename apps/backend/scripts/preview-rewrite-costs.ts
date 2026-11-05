@@ -2,14 +2,14 @@
  * First-load cost of the legacy preview route's body rewrite (GW-10), against
  * bodies captured from a real Vite dev server:
  *
- *   mise exec -- bun apps/backend/scripts/preview-rewrite-costs.ts capture \\
- *     <name> <vite root> <out.json> [page.html]
- *   mise exec -- bun apps/backend/scripts/preview-rewrite-costs.ts measure \\
- *     corpus.json [more.json ...] [--runs 15] [--out result.json]
+ *   mise exec -- bun apps/backend/scripts/preview-rewrite-costs.ts capture \
+ *     <name> <vite root> output/efficiency/<name>.json [page.html]
+ *   mise exec -- bun apps/backend/scripts/preview-rewrite-costs.ts measure \
+ *     output/efficiency/<name>.json [more.json ...] [--runs 15] [--out result.json]
  *
  * `capture` walks the page's imports, dynamic ones included, through a Vite server
  * in middleware mode, which binds no port. A corpus holds source code, so keep it
- * out of the repository (`output/` is git-ignored).
+ * out of the repository (`output/efficiency/` is git-ignored).
  *
  * `measure` times the rewriter and two candidates (a no-match skip and one combined
  * regex), then replays each corpus through the real gateway on an ephemeral

@@ -49,6 +49,8 @@ function gitSummary(status: ProjectGitStatus | null): string {
 interface CoordinatorToolbarProps {
   snapshot: CoordinatorSnapshot;
   git: ProjectGitStatus | null;
+  /** Hide only a retained error already announced by the panel. */
+  announcedError?: string | null;
   gitBusy: boolean;
   fetching: boolean;
   conversationBusy: boolean;
@@ -75,6 +77,7 @@ interface CoordinatorToolbarProps {
 export function CoordinatorToolbar({
   snapshot,
   git,
+  announcedError,
   gitBusy,
   fetching,
   conversationBusy,
@@ -235,7 +238,9 @@ export function CoordinatorToolbar({
           </p>
         ) : null}
         {blocked && switchBlocked ? <p className="mt-1 text-xs text-amber-300">{blocked}</p> : null}
-        {gitError ? <CoordinatorErrorDetails label="Repository error" message={gitError} /> : null}
+        {gitError && gitError !== announcedError ? (
+          <CoordinatorErrorDetails label="Repository error" message={gitError} />
+        ) : null}
         {!snapshot.controlMcp.enabled || !snapshot.controlMcp.running ? (
           <p className="mt-1 text-xs text-amber-300">
             Orchestration controls are unavailable because Control MCP is{" "}

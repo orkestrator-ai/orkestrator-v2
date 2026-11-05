@@ -194,6 +194,19 @@ mock.module("@/lib/backend", () => ({
   getProjectCoordinatorView: getCoordinatorView,
   getProjectGitStatus: getGit,
   fetchProjectGit: fetchGit,
+  syncProjectGit: async () => {
+    ensuredGit = {
+      ...ensuredGit,
+      lastError: {
+        operation: "sync",
+        message: "sync failed",
+        stderr: "sync failed",
+        occurredAt: new Date(0).toISOString(),
+        retryable: true,
+      },
+    };
+    throw new Error("sync failed");
+  },
   checkCoordinatorUpstreamMerge: mock(async () => null),
   declineCoordinatorUpstreamMerge: mock(async () => undefined),
   getCoordinatorUpstreamAutoMerge: mock(async () => ({ enabled: false })),
@@ -789,6 +802,19 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
     });
   });
 
+  test("a failed Sync stays announced after identical repository status arrives and can be dismissed", async () => {
+    ensuredGit = { ...gitStatus, upstream: "origin/main", behind: 1, ahead: 0 };
+    render(<CoordinatorPanel projectId="project-1" />);
+    fireEvent.click(await screen.findByRole("button", { name: "Sync" }));
+    const alert = await screen.findByRole("alert");
+    await waitFor(() => expect(ensuredGit.lastError?.message).toBe("sync failed"));
+    expect(alert.textContent).toContain("sync failed");
+    expect(screen.queryByText("Repository error")).toBeNull();
+    fireEvent.click(within(alert).getByRole("button", { name: "Dismiss error" }));
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+    expect(await screen.findByText("Repository error")).toBeTruthy();
+  });
+
   test("identical repository and coordinator errors appear once", async () => {
     ensuredGit = {
       ...gitStatus,
@@ -806,7 +832,10 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
     await waitFor(() => expect(pause).toHaveBeenCalled());
     await act(async () => {});
     expect(screen.getAllByText("pause failed")).toHaveLength(1);
-    expect(screen.queryByText("Coordinator error") === null).toBe(true);
+    expect((await screen.findByRole("alert")).textContent).toContain("pause failed");
+    expect(screen.queryByText("Repository error")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss error" }));
+    expect(await screen.findByText("Repository error")).toBeTruthy();
   });
 
   test("an unavailable provider keeps the transcript under a banner", async () => {

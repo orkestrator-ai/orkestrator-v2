@@ -28,11 +28,7 @@ import { portalStore } from "@/lib/portal/portal-store";
 import { useCoordinatorPaneLayoutStore } from "@/stores/coordinatorPaneLayoutStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
-import {
-  CoordinatorActionAlert,
-  CoordinatorBanner,
-  coordinatorGitErrorText,
-} from "./CoordinatorPanelNotices";
+import { CoordinatorActionAlert, CoordinatorBanner } from "./CoordinatorPanelNotices";
 import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { CoordinatorPaneTree } from "./CoordinatorPaneTree";
 import { CoordinatorConversationTab } from "./CoordinatorConversationTab";
@@ -572,8 +568,8 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
     return `${name} on ${node?.view.displayName ?? entry.nodeId}`;
   };
 
-  // An action failure that only repeats the repository's own error is shown once.
-  const actionAlert = error && error !== coordinatorGitErrorText(git) ? error : null;
+  // Keep action failures announced even when the repository retains the same error.
+  const actionAlert = error;
 
   return (
     <CoordinatorPullRequestWatchProvider projectId={projectId}>
@@ -586,6 +582,7 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
         <CoordinatorToolbar
           snapshot={snapshot}
           git={git}
+          announcedError={actionAlert}
           gitBusy={gitBusy}
           fetching={fetching}
           conversationBusy={conversationBusy}

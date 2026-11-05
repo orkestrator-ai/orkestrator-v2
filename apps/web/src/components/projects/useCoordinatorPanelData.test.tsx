@@ -244,6 +244,30 @@ describe("useCoordinatorPanelData", () => {
       await waitFor(() => expect(latest.freshness).toBeNull());
     });
 
+    test.each(["get_project_coordinator_view", "get_project_git_status"])(
+      "both failed reads are named together when %s has more failures",
+      async (first) => {
+        render(<Harness projectId="p1" />);
+        await settle();
+        await waitFor(() => expect(latest.snapshot).not.toBeNull());
+        await failReads(first, 2);
+        nativeInvokeMock.mockImplementation((name: string, args: Record<string, unknown> = {}) => {
+          if (name === "get_project_coordinator_view" || name === "get_project_git_status") {
+            return Promise.reject(new Error("read failed"));
+          }
+          return fake.invoke(name, args);
+        });
+        await announce("p1");
+        await settle(GIT_STATUS_PROBE_INTERVAL_MS);
+        await settle(READ_RETRY_MAX_MS);
+        expect(latest.freshness?.detail).toContain("the coordinator and repository status");
+        recoverReads();
+        await settle(READ_RETRY_MAX_MS + GIT_STATUS_PROBE_INTERVAL_MS);
+        await announce("p1");
+        await waitFor(() => expect(latest.freshness).toBeNull());
+      },
+    );
+
     test("another project starts with no notice", async () => {
       const { rerender } = render(<Harness projectId="p1" />);
       await settle();

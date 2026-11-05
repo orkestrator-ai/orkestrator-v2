@@ -856,6 +856,19 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
     );
     cleanupContext = context;
     cleanupRuntimeId = runtimeId;
+    // A legacy workspace error is an admission fence, not a state that a
+    // successful bridge can silently overwrite. Headless callers must ensure.
+    await storage.coordinators.mutateCoordinatorWorkspace(project.id, (current) =>
+      current
+        ? { ...current, lifecycleState: "error", lastStartupError: "legacy failure" }
+        : current,
+    );
+    await expect(startLocalServerUnlocked(runtimeId, context, "codex")).rejects.toThrow();
+    expect(context.runtime.localServers.process(`codex:${runtimeId}`)).toBeUndefined();
+    expect((await storage.coordinators.getCoordinatorWorkspace(project.id))?.lifecycleState).toBe(
+      "error",
+    );
+    await coordinator.ensure(project.id);
     await startLocalServerUnlocked(runtimeId, context, "codex");
     const isolatedHome = path.join(
       storage.getDataDir(),

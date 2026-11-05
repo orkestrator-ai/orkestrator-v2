@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { Expand, ExternalLink, RefreshCw, X } from "lucide-react";
 import { clampArtifactFrameHeight } from "@orkestrator/protocol/artifact-frame-channel";
 import {
@@ -21,6 +29,7 @@ import {
 import { useRichViewField } from "@/stores/richContentViewStore";
 import { useStaticFrameSlot, type StaticFrameRank } from "@/stores/staticHtmlFrameSlots";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
+import { StaticDocumentFindContext } from "../chat-find-context";
 import {
   StaticHtmlFrame,
   type StaticFrameEvents,
@@ -202,6 +211,12 @@ export function StaticHtmlArtifactView({
   /** The text a frame reported for Find; null when this card can no longer show it. */
   onDocumentText: (text: string | null) => void;
 }) {
+  const documentFind = useContext(StaticDocumentFindContext);
+  const findQuery = documentFind?.query ?? null;
+  const findOccurrence =
+    documentFind?.activePublicationId === artifactRef.publicationId
+      ? documentFind.activeOccurrence
+      : null;
   const { observe, visibility } = useRichBlockVisibility();
   const { priority } = useRichRenderPriority(visibility);
   const visible = priority === "visible";
@@ -398,6 +413,8 @@ export function StaticHtmlArtifactView({
             mode="inline"
             height={estimatedHeight}
             rendered={inline.rendered}
+            findQuery={findQuery}
+            findOccurrence={findOccurrence}
             events={inlineEvents}
           />
         ) : null}
@@ -451,6 +468,8 @@ export function StaticHtmlArtifactView({
                   mode="expanded"
                   height={0}
                   rendered={dialog.rendered}
+                  findQuery={findQuery}
+                  findOccurrence={findOccurrence}
                   events={dialogEvents}
                 />
               ) : null}

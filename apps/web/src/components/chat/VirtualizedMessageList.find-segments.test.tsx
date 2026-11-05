@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { createRef, type ReactNode } from "react";
+import { createRef, useContext, type ReactNode } from "react";
 import * as realVirtuoso from "react-virtuoso";
 import { setHighlightBackend } from "@/lib/chat/highlighter/client";
 import {
@@ -42,6 +42,7 @@ const { NativeMessage } = await import("./NativeMessage");
 const { getNativeMessageSearchText } = await import("./native-message-search");
 const { clearArtifactRequestCache, rememberArtifactSearchBody, useCachedArtifactSearchBody } =
   await import("@/lib/chat/artifact-requests");
+const { StaticDocumentFindContext } = await import("./chat-find-context");
 
 class FakeHighlight {
   readonly ranges: Range[];
@@ -301,8 +302,10 @@ describe("find pairs rich matches by block identity", () => {
     // The roots a card renders: its mirror follows the same cache find now does.
     function Row() {
       const body = useCachedArtifactSearchBody(reference);
+      const documentFind = useContext(StaticDocumentFindContext);
       return (
         <div>
+          <output data-testid="document-find">{JSON.stringify(documentFind)}</output>
           <p data-agent-chat-search-content="true" data-testid="before">
             needle before
           </p>
@@ -361,6 +364,34 @@ describe("find pairs rich matches by block identity", () => {
       ]);
       expect(currentRange()?.startContainer.parentElement).toBe(screen.getByTestId("after"));
     });
+    const documentFind = () => JSON.parse(screen.getByTestId("document-find").textContent!);
+    expect(documentFind()).toEqual({
+      query: "needle",
+      activePublicationId: null,
+      activeOccurrence: null,
+    });
+
+    // Stepping back into the report names its occurrence, counted within its body.
+    fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
+    expect(await screen.findByText("3 of 4")).toBeTruthy();
+    await waitFor(() =>
+      expect(documentFind()).toEqual({
+        query: "needle",
+        activePublicationId: "pub_abcdefgh1",
+        activeOccurrence: 1,
+      }),
+    );
+    fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
+    expect(await screen.findByText("2 of 4")).toBeTruthy();
+    await waitFor(() =>
+      expect(documentFind()).toMatchObject({
+        activePublicationId: "pub_abcdefgh1",
+        activeOccurrence: 0,
+      }),
+    );
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() => expect(documentFind()).toBeNull());
     clearArtifactRequestCache();
   });
 });

@@ -52,6 +52,7 @@ ignores `apps/backend/tests/**`, so a repository-root path matches no file.
 | Live network | same command, `./tests/container-live-network.test.ts` | C22, C24, C26; on a gateway image C22 runs behind the egress gateway |
 | Live firewall | same command, `./tests/container-live-firewall.test.ts` | C23 and the policy 3 tuples; on a gateway image also root tampering from the runtime, published ports through the gateway and a gateway restart. Point `ORKESTRATOR_QUALIFICATION_IMAGE` at an image that does not declare `egress-gateway` for the in-container firewall |
 | Live egress conditions | same command, `./tests/container-live-egress-conditions.test.ts` | Gateway IPv6 (the daemon's IPv6 default, or with `ORKESTRATOR_LIVE_IPV6_NETWORK=1` an IPv6 network the test attaches), DNS rotation through a controlled resolver, and with `ORKESTRATOR_LIVE_DAEMON_RESTART_COMMAND` a Docker daemon restart. Point that command only at a disposable daemon. |
+| Live egress name checks (M12) | same command, `./tests/container-live-egress-filter.test.ts`; set `ORKESTRATOR_QUALIFICATION_OLDER_IMAGE` to add an image without `egress-filter` | The gateway's TLS SNI, HTTP Host and DNS checks: an allowed name, a foreign SNI on its address, a Host check on a named port against a local fixture, bodies both ways, a server-first protocol, GitHub SSH, DNS refusals over UDP, TCP and straight to an outside resolver, a live edit, the daemon killed and restarted, a restart, a full-mode runtime, the rollback switch and an older image. Outside traffic only to registry.npmjs.org, nodejs.org and GitHub |
 | Live readiness faults | same command, `./tests/container-live-readiness.test.ts` | C09 faults (missing firewall, DNS, permissions, torn status write, restart during launch; on derived images that do not declare `egress-gateway`, so the firewall stays in the runtime), a gateway that cannot apply its firewall, C10, C22 host-service reply, C23 re-run |
 | Live rebuild faults | same command, `./tests/container-live-rebuild-faults.test.ts` | C15: daemon disconnect mid-copy (a `DOCKER_HOST` proxy in the test process), kill just before and after the commit write |
 | Live build pipeline code rewind | same command, `./tests/build-pipeline-code-rewind-docker.test.ts` | "Rewind code to here" on fake providers through `createPipelineEnvironmentGit` and `docker exec`: preview, backup ref, reset, restart and lease push; a paused container refused with a readable reason; a reset journaled before the container stopped finishing once it answers (to-do 0405, task 7) |
@@ -120,6 +121,57 @@ Live tests start runtimes through `tests/container-live-start.ts`
 (`startRuntime`): Docker refuses a runtime whose egress gateway is not
 running, so a bare `docker start` of a restricted runtime fails on a gateway
 image.
+
+## Egress name checks on Docker Desktop (2026-11-05)
+
+S-0100 (security finding M12): the egress gateway's name checks
+(`egress-filter=1`, `docker/orkestrator-egress-filter.pl`), on Docker Desktop
+29.9.2, macOS, Apple Silicon (LinuxKit 7.0.14, cgroup v2, iptables 1.8.11 on
+nf_tables), from worktree `egress-sni-dns` at base `704809a20`. Image
+`orkestrator-s0100:filter`, built from the worktree with the capability label
+(`egress-filter=1`); older image `orkestrator-v2:dev-01c4621f8529`
+(`egress-gateway=1`, no `egress-filter`), read only.
+
+- `container-live-egress-filter.test.ts`: 4 pass, 0 fail, 66 assertions,
+  24 s. An allowed name over TLS answered 200; the same Cloudflare address
+  asked for `tenant.<run>.invalid` failed with `tlsv1 alert access denied`
+  (curl 35); a foreign Host on the fixture's port 8080 got the gateway's 403
+  and never reached the fixture; a 4 MiB upload's digest matched; the
+  fixture's banner arrived first on port 2525; GitHub answered `SSH-2.0` on
+  22; `c2VjcmV0.exfil.<run>.invalid` got REFUSED with EDE 18 over UDP, over
+  TCP and sent to `192.0.2.53`, and `getent` failed; `nodejs.org` added in
+  place resolved and answered 200, and a name removed while its address
+  stayed allowed got 403; with the daemon's supervisor and worker killed an
+  allowed address was refused (curl 7) and DNS reached no server, the
+  refresher started it again, and a killed worker was back within 2 s; a
+  restart kept the checks. A full-mode runtime had no daemon and no record,
+  and a reserved name was not refused. A gateway created with
+  `ORKESTRATOR_EGRESS_FILTER=off` recorded `off`, let a foreign Host through
+  and kept `off` across a restart without the variable. The older image's
+  gateway reported no `egressFilter`, let a foreign Host through, answered
+  the blocked name without EDE, and kept that across a restart.
+- Before the suite, by hand with a manual gateway and a capability-free
+  workload in its namespace: the same cases, plus `github.io` on GitHub's
+  Pages address refused at TLS, 21 downloads of a 4 MB tarball with one
+  digest, and 40 parallel 7 MB downloads in 34 s through the daemon against
+  40 s with no gateway on the same network (the link varied between runs;
+  single streams matched). The daemon's two processes held 8 MB of RSS
+  each, and the gateway's cgroup peaked at 39 MB of its 128 MiB.
+- Existing suites with the new image: `container-live-readiness` 9 pass;
+  `container-live-network` 3 pass, 1 fail; `container-live-egress-conditions`
+  1 pass, 1 skip (IPv6 not offered), 1 fail. Both failures fail identically
+  with the older image and are recorded in
+  [6103](../todo/containers-and-environments/6103-live-suite-failures-seen-during-s0100.md).
+  C23 (`container-live-firewall.test.ts`) was not run here because it
+  contacts `example.com`, which is not on the default allowlist; CI runs it.
+- Not run: rootful Linux Engine and rootless Docker
+  ([6101](../todo/containers-and-environments/6101-egress-name-checks-platform-coverage.md)).
+
+Created and removed: the image tags `orkestrator-s0100:filter` and
+`orkestrator-s0100:iter` (label `orkestrator-s0100=1`), the manual network
+`s0100-net-manual` and containers `s0100-gw`, `s0100-wl` (same label), and
+each suite run's owner-labelled runtimes, gateways, fixtures, volumes and
+networks, which `afterAll` removed and listed again as empty.
 
 ## Stop attribution: the drain waited on interactive shells (2026-11-02)
 

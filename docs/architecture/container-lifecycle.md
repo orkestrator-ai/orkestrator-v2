@@ -1170,6 +1170,68 @@ and the Network section says whether a root terminal can change the rules.
   exists (`sweepOrphanEgressGateways`). A recovery copy keeps its stopped
   gateway, so restoring it starts it the normal way.
 
+### Name checks (`egress-filter=1`)
+
+A gateway on network policy 3 from an image that declares `egress-filter=1`
+also checks the name a connection asks for (security finding M12):
+`init-firewall.sh` starts `orkestrator-egress-filter` (a Perl daemon run by
+the base system's `perl-base`) before any lookup, and installs, ahead of
+Docker's own DNS rules:
+
+- a DNAT of every new, unmarked TCP connection to an allowed tuple onto the
+  daemon's port on the namespace's own address. The daemon reads the
+  original destination, opens its own connection there and relays the
+  client's bytes only once its first bytes ask for a name allowed on that
+  port: the TLS ClientHello's server name, or the Host (and an absolute-form
+  target) of a plain HTTP/1.x request. GitHub's own names are allowed on 443
+  and 22 because its ranges are; `github.io` is not. A refused TLS client
+  gets an `access_denied` alert, an HTTP client a 403 naming the gateway.
+  Other protocols are refused on TCP 443 and relayed by address on any other
+  named port; a server that speaks first (SSH, a database banner) is relayed
+  to the client while its first bytes are awaited.
+- a redirect of every unmarked DNS query, to Docker's resolver or straight
+  to any server, to the daemon. It forwards an allowlisted name (exact),
+  GitHub's names and `*.docker.internal` (only when asked through Docker's
+  resolver) and answers anything else REFUSED, with Extended DNS Error 18
+  when the query carried EDNS. A query sent to Docker's resolver goes back
+  to it; one sent off-host goes to Docker's upstreams directly when Docker
+  names them by address, so Docker's own relay from the namespace, which is
+  redirected too, never loops.
+- ACCEPT rules for TCP to the allowed set and for DNS to the resolvers that
+  match only the daemon's `SO_MARK` (`0x6f726b`). The workload cannot set a
+  mark (no `NET_ADMIN`, `NET_RAW` dropped). UDP entries stay address-only.
+
+It fails closed: the boot fails (`state: failed`, no workload start) when the
+daemon does not start, and a daemon that dies leaves redirected connections
+refused and queries unanswered. Its supervisor restarts a dead worker within
+a second, and the refresher restarts a dead supervisor. The boot's own
+checks require a name off the list to be REFUSED and an allowed address to
+refuse a foreign SNI before the report says `applied`.
+`update-firewall.sh --set-domains` writes the daemon's names before it
+resolves the new list (the gateway's own lookups go through the daemon),
+puts them back if the rebuild fails, and the daemon closes open connections
+whose name left.
+
+The gateway records `egress-filter` (`on`, or `off` when the backend created
+it with `ORKESTRATOR_EGRESS_FILTER=off`) once, at its first boot, and the
+report carries `egressFilter` (`enforced`, `off`, `unavailable`), which the
+Network section shows. A start or a read never changes it. A gateway from an
+older image has no record and no field, reads as address-only enforcement,
+and keeps it until it is rebuilt; an in-container firewall and full mode
+never run it. The daemon listens on 31443 and 31453 in the shared namespace,
+so a workload cannot listen there, and a connection to them that was not
+redirected is refused.
+
+What it does not stop: a name hidden inside TLS (an encrypted ClientHello
+whose outer name is allowed, domain fronting), a second request with another
+Host on a kept-alive HTTP connection, an HTTP/2 connection a client reuses
+for another name, UDP entries (QUIC), protocols other than TLS and HTTP on a
+named port, and anything an allowed service accepts, such as a push to an
+attacker's GitHub repository or a call with an attacker's API key. A
+connection to an allowed address now completes its TCP handshake with the
+daemon before the upstream answers, so an unreachable upstream shows as a
+reset rather than a refusal.
+
 The workload's own `NET_ADMIN` and the `init-firewall.sh` sudo grant are
 gone: every image now runs the firewall step from the root entrypoint before
 privileges drop, and an in-container runtime gets `NET_ADMIN` only for that

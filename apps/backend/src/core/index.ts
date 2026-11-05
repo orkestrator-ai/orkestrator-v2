@@ -211,10 +211,8 @@ import {
   waitingBlocker,
   type CoordinatorWaitingBlocker,
 } from "./coordinator-status-wakes.js";
-import {
-  coordinatorProviderQualification,
-  defaultCoordinatorHostCapabilities,
-} from "./coordinator-providers.js";
+import { coordinatorDelegationAvailable } from "./coordinator-context-reads.js";
+import { defaultCoordinatorHostCapabilities } from "./coordinator-providers.js";
 import { ProjectGitService } from "./project-git-service.js";
 import {
   coordinatorConversationIdFromRuntimeId,
@@ -1217,8 +1215,10 @@ export class OrkestratorBackend {
           );
         },
         coordinatorDelegationAvailable: (platform) =>
-          this.controlMcp.getSettings().running &&
-          coordinatorProviderQualification(platform).delegation,
+          coordinatorDelegationAvailable(platform, {
+            controlMcpRunning: () => this.controlMcp.getSettings().running,
+            storage,
+          }),
       },
     );
     context.nativeAgents = this.nativeAgents;

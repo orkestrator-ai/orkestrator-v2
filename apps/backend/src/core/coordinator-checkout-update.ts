@@ -15,6 +15,7 @@
  * revision and its bounded event log (`repositoryContextEvents`). A
  * conversation's first turn gets no notice: it has read nothing yet.
  */
+import { inlineCoordinatorContextText } from "@orkestrator/protocol/coordinator-context";
 import type {
   CoordinatorConversation,
   CoordinatorRepositoryContextSource,
@@ -83,11 +84,8 @@ export function pendingCheckoutUpdate(
 const short = (commit: string | null) =>
   commit ? inline(commit.slice(0, 12)) : "an unknown commit";
 
-/**
- * Commit subjects and paths are repository content inside the coordinator
- * context block: keep each on one line, and never let one close the block.
- */
-const inline = (value: string) => value.replace(/\s+/g, " ").replaceAll("<", "‹").trim();
+/** Commit subjects and paths are repository content inside the context block. */
+const inline = inlineCoordinatorContextText;
 
 /** The notice lines, ending in a newline, for the coordinator context block. */
 export function renderCheckoutUpdate(

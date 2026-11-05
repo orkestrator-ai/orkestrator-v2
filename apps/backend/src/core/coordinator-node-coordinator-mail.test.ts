@@ -365,7 +365,9 @@ describe("command node coordinator ↔ leaf coordinator", () => {
         world.leafMain.tabId,
         returned!.id,
       );
-      expect(message.body).toContain("Office desktop has no coordinator for this repository");
+      expect(message.fallbackNotice).toContain(
+        "Office desktop has no coordinator for this repository",
+      );
       expect(message.body).toContain("Create build environments for these items.");
       const outbox = await world.leafCall("collect_node_outbox", {
         controllerId: "bk_cmd",

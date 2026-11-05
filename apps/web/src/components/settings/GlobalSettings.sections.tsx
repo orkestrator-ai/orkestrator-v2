@@ -1894,7 +1894,9 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
       description={<>Domains allowed in "Restricted" mode. {ALLOWLIST_ENTRY_HINT}</>}
     >
       <div className="space-y-4">
-        <p className="text-sm text-muted-foreground">{ALLOWLIST_RESIDUAL_RISK}</p>
+        <p className="max-w-2xl text-sm leading-relaxed text-muted-foreground">
+          {ALLOWLIST_RESIDUAL_RISK}
+        </p>
         <Textarea
           value={allowedDomains}
           onChange={handleDomainsChange}

@@ -1,6 +1,6 @@
 # Evidence body put has not started at aggregate assertion
 
-- **ID:** 6194
+- **ID:** 6550
 - **Status:** open
 - **Date observed:** 2026-11-05
 - **Test:** `evidence ingestion > commits a body's row and acknowledges only after put resolves`

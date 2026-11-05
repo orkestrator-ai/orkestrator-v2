@@ -261,7 +261,7 @@ describe("ChangesView on the environment change projection", () => {
     expect(screen.getByTestId("change-rows-reasons").textContent).toBe(
       "Too many changed files to list; the totals count them all",
     );
-    expect(screen.queryByTestId("change-rows-omitted")).toBeNull();
+    expect(screen.queryByTestId("change-rows-omitted") === null).toBe(true);
 
     fireEvent.click(screen.getByRole("button", { name: "Show more files (1 of 2)" }));
     await waitFor(() => expect(rowTexts()).toEqual(["m-1:a.ts", "m-1:b.ts"]));

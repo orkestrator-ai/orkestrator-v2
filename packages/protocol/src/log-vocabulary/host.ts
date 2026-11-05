@@ -11,8 +11,8 @@ export const HOST_LOG_AREAS = defineLogAreas({
       "maintenance.listener-failed": "A host maintenance listener threw; the others still run.",
       "suspend.reconcile-failed": "Reconciling due work after a host suspension failed.",
       "load.sample-failed": "Sampling machine load failed; the next sample retries.",
-      "usage.probe-stalled":
-        "A disk or GPU probe has not answered, so usage reports that figure as unavailable until it does.",
+      "usage.source-stalled":
+        "A usage source (scope: disk or gpu-sysfs) did not answer in time; its figure is missing from the sample until it does.",
       ...THROTTLE_LOG_EVENTS,
     },
   },

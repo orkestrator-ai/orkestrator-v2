@@ -7,6 +7,7 @@ import {
   commandTouchesWorktree,
   environmentRootPids,
   MAX_CONCURRENT_CONTAINER_PROBES,
+  PROCESS_ENUMERATION_BUDGET_MS,
   MAX_PROCESSES_PER_ENVIRONMENT,
   MAX_SNAPSHOT_PROCESSES,
   mapWithConcurrency,
@@ -519,6 +520,45 @@ describe("environment process usage", () => {
         expect(process.command.length).toBeLessThanOrEqual(241);
       }
     }
+  });
+
+  test("large slow enumerations return useful partial results before the client deadline", async () => {
+    let now = 0;
+    const pending: Array<() => void> = [];
+    const execute = mock(
+      () =>
+        new Promise<{ stdout: string }>((resolve) => {
+          pending.push(() => resolve({ stdout: "10 1 2.0 1.0 100 node" }));
+        }),
+    );
+    const environments = Array.from({ length: 60 }, (_, index) =>
+      environment({
+        id: `ctr-${index}`,
+        name: `box-${index}`,
+        environmentType: "containerized",
+        containerId: `ctr-${index}`,
+      }),
+    );
+    const result = readEnvironmentProcessUsage(environments, {
+      now: () => now,
+      runCommand: execute,
+    });
+    // Sixty probes would take thirty seconds in batches of four. Advance one
+    // full two-second batch at a time, without waiting on the wall clock.
+    for (let batch = 0; batch < PROCESS_ENUMERATION_BUDGET_MS / 2_000; batch += 1) {
+      expect(pending).toHaveLength(4);
+      now += 2_000;
+      for (const finish of pending.splice(0)) finish();
+      for (let tick = 0; tick < 12; tick += 1) await Promise.resolve();
+    }
+    const snapshot = await result;
+    expect(now).toBeLessThan(20_000);
+    expect(execute).toHaveBeenCalledTimes(20);
+    expect(pending).toHaveLength(0);
+    expect(snapshot.environments).toHaveLength(60);
+    expect(snapshot.environments.filter((group) => group.processes.length > 0)).toHaveLength(20);
+    expect(snapshot.environments.slice(20).every((group) => group.truncated)).toBe(true);
+    expect(snapshot.truncated).toBe(true);
   });
 
   test("survives a failed host or container probe instead of failing the snapshot", async () => {

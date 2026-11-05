@@ -4002,15 +4002,18 @@ export class MultiReviewService implements KeyedWorkflowOwner {
    * persisted, which lease fences it, and what the phase becomes once every
    * reviewer has settled.
    */
-  private reviewFanoutHost(
-    workflow: MultiReviewWorkflow,
-    token: string,
-    target: "host" | "container",
-  ): ReviewFanoutHost {
-    // The host lives for one admission pass. Snapshot mode checks the live
-    // worktree once per pass, as package mode verifies its evidence once, and
-    // every reviewer prompt built in the pass reuses that answer. A change after
-    // the check is seen by the next pass, whose prompts then say so.
+  private reviewFanoutHost(workflow: MultiReviewWorkflow, token: string): ReviewFanoutHost {
+    // The host lives for one admission pass. Only a dispatch needs the target,
+    // so a pass that just observes running reviewers reads no environment.
+    let passTarget: Promise<"host" | "container"> | undefined;
+    const targetForPass = () =>
+      (passTarget ??= this.storage
+        .getEnvironment(workflow.environmentId)
+        .then((environment) => (environment?.environmentType === "local" ? "host" : "container")));
+    // Snapshot mode checks the live worktree once per pass, as package mode
+    // verifies its evidence once, and every reviewer prompt built in the pass
+    // reuses that answer. A change after the check is seen by the next pass,
+    // whose prompts then say so.
     let passSnapshot: Promise<ReturnType<typeof promptWorktreeSnapshot>> | undefined;
     const reviewSnapshotForPass = () =>
       (passSnapshot ??= this.reviewSnapshotForDispatch(workflow, token).then(
@@ -4018,12 +4021,12 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       ));
     return {
       beforeResult: (reviewer) => this.prepareReviewerWorkerMail(workflow, token, reviewer),
-      workerMailTurn: (reviewer) =>
+      workerMailTurn: async (reviewer) =>
         reviewer.sessionKey
           ? workerMailTurnFor({
               environmentId: workflow.environmentId,
               projectId: workflow.projectId,
-              target,
+              target: await targetForPass(),
               sessionKey: reviewer.sessionKey,
               agent: reviewer.agent,
               signer: this.options.workflowResults,
@@ -4154,14 +4157,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     // Reviewer admission decides a transport, so the rollout snapshot has to be
     // current before the runner asks whether tool mode is allowed.
     await this.workflowRollout.refresh();
-    const environment = await this.storage.getEnvironment(workflow.environmentId);
-    const runner = new ReviewFanoutRunner(
-      this.reviewFanoutHost(
-        workflow,
-        token,
-        environment?.environmentType === "local" ? "host" : "container",
-      ),
-    );
+    const runner = new ReviewFanoutRunner(this.reviewFanoutHost(workflow, token));
     const outcome = await runner.advanceReviewers(workflow.reviewers);
     if (outcome.kind === "working") return;
     if (outcome.kind === "ready") {

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
@@ -310,7 +310,7 @@ describe("reference artifacts in a container", () => {
       }
     };
     const spawned: string[][] = [];
-    const spawnInContainer = ((command: string, args: string[]) => {
+    const runInContainer: typeof runCommand = (command, args = [], options) => {
       spawned.push([command, ...args]);
       // `docker exec -i <container> node -e <writer> /workspace <dir> …`
       const [, , container, node, flag, script, workspaceRoot, ...rest] = args;
@@ -322,15 +322,13 @@ describe("reference artifacts in a container", () => {
         "/workspace",
       ]);
       expect(script).toBe(CONTAINER_PINNED_ATTACHMENT_WRITE);
-      return spawn(process.execPath, ["-e", script!, workspace, ...rest], {
-        stdio: ["pipe", "pipe", "pipe"],
-      });
-    }) as never;
+      return runCommand(process.execPath, ["-e", script!, workspace, ...rest], options);
+    };
     const store = new GraphArtifactStore({
       storage,
       fence,
       createRunner: () => runner,
-      spawn: spawnInContainer,
+      run: runInContainer,
     });
     return { workspace, storage, store, commands, spawned, runner };
   }

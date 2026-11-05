@@ -632,7 +632,7 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["claude"] as Provid
           // The handoff tab may be the active tab in the canvas's pane.
           const askAgent = page.getByRole("button", { name: "Ask agent about the selection" });
           await page
-            .getByRole("button", { name: /^Design \d+ Close Design \d+$/ })
+            .getByRole("tab", { name: /^Design \d+$/ })
             .first()
             .click({ timeout: 30_000 });
           await askAgent.click({ timeout: 30_000 });

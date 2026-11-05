@@ -386,6 +386,7 @@ export function SystemUsageIndicator({
               <SystemUsagePanel
                 usage={usage}
                 stale={usageView.stale}
+                failed={usageView.failed}
                 sampledAt={usageView.sampledAt}
                 heading={false}
               />

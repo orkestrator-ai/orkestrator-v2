@@ -8,15 +8,25 @@
  * pipeline's validation guard compares path sets, not bytes — must not pay for
  * a full `git diff` plus every untracked file being read twice.
  *
+ * Git's output goes to unlinked files rather than pipes, the same idea as
+ * `runCommand` in `@orkestrator/protocol/node/command-capture`, which this script
+ * cannot import because it has to stay self-contained for the container. Under
+ * Bun a pipe reader can miss the end of a stream, and a local worktree runs this
+ * under the managed Bun (docs/tests/flaky-tests/environments-and-containers/1537-diff-base-override-scan-timeout.md).
+ *
  * Every failure leaves through one of REVIEW_WORKTREE_PROBE_REASON_CODES.
  * The script never writes a repository path, a filename, or Git's own message
  * to stderr, because that text ends up in an operator-facing prompt; the code
  * is the whole diagnostic.
  */
 export const REVIEW_WORKTREE_FINGERPRINT_SCRIPT = String.raw`
-const { spawn } = require("node:child_process");
-const { constants, promises: fs } = require("node:fs");
-const { createHash } = require("node:crypto");
+const { spawn, spawnSync } = require("node:child_process");
+const {
+  closeSync, constants, fstatSync, openSync, promises: fs, readSync, unlinkSync,
+} = require("node:fs");
+const { createHash, randomBytes } = require("node:crypto");
+const os = require("node:os");
+const path = require("node:path");
 
 const MAX_STATUS_BYTES = 16 * 1024 * 1024;
 const MAX_DIFF_BYTES = 256 * 1024 * 1024;
@@ -37,19 +47,96 @@ let gitPrefix = [];
 const STATUS_TIMEOUT = "status-timeout";
 const STATUS_TIMEOUT_MS = 10000;
 
+// Output is noticed by looking, because a file has no back-pressure.
+const OUTPUT_CHECK_MS = 100;
+const READ_CHUNK_BYTES = 64 * 1024;
+// How long a killed child may take to report its exit. Past this the group has
+// already had SIGKILL, so nothing more can be learned by waiting.
+const REAP_WAIT_MS = 2000;
+const EXIT_WATCH_MS = 1000;
+const EXIT_WATCH_MAX_MS = 16000;
+
+function openCaptureFile() {
+  const name = path.join(
+    os.tmpdir(),
+    "orkestrator-probe-" + process.pid + "-" + randomBytes(8).toString("hex"),
+  );
+  const fd = openSync(
+    name,
+    constants.O_CREAT | constants.O_EXCL | constants.O_RDWR | constants.O_APPEND,
+    0o600,
+  );
+  try {
+    unlinkSync(name);
+    return fd;
+  } catch (error) {
+    closeSync(fd);
+    throw error;
+  }
+}
+
+// Synchronous, so no event can be lost. The caller has checked the size.
+function readCapture(fd, consume) {
+  const chunk = Buffer.allocUnsafe(READ_CHUNK_BYTES);
+  for (let offset = 0; ;) {
+    const bytesRead = readSync(fd, chunk, 0, chunk.length, offset);
+    if (bytesRead === 0) return;
+    consume(chunk.subarray(0, bytesRead));
+    offset += bytesRead;
+  }
+}
+
+// On macOS Bun can lose the exit itself, and the child waits as a zombie nothing
+// reaps. Its wait status is still readable. Undefined means still running or unknown.
+function zombieExitCode(pid) {
+  const result = spawnSync("/bin/ps", ["-o", "stat=,xstat=", "-p", String(pid)], {
+    timeout: 100, killSignal: "SIGKILL", maxBuffer: 1024 * 1024,
+  });
+  if (result.status !== 0) return undefined;
+  const match = /^Z\S*\s+([0-9a-f]+)\s*$/i.exec(String(result.stdout).trim());
+  if (!match) return undefined;
+  const status = Number.parseInt(match[1], 16);
+  return status & 0x7f ? 128 + (status & 0x7f) : (status >> 8) & 0xff;
+}
+
 function git(args, options = {}) {
   return new Promise((resolve, reject) => {
-    // A hook can outlive Git and keep its output pipes open. Own a new process
-    // group so timeout cleanup includes hooks and their descendants.
+    const captureFds = [];
+    const releaseCapture = () => {
+      for (const fd of captureFds.splice(0)) {
+        try { closeSync(fd); } catch {}
+      }
+    };
+    try {
+      captureFds.push(openCaptureFile());
+      captureFds.push(openCaptureFile());
+    } catch (error) {
+      releaseCapture();
+      reject(error);
+      return;
+    }
+    const [stdoutFd, stderrFd] = captureFds;
+    // A hook can outlive Git. Own a new process group so timeout cleanup includes
+    // hooks and their descendants.
     const grouped = process.platform !== "win32";
     const child = spawn("git", [...gitPrefix, ...args], {
-      detached: grouped, stdio: ["ignore", "pipe", "pipe"],
+      detached: grouped, stdio: ["ignore", stdoutFd, stderrFd],
     });
-    const closed = new Promise(resolve => child.once("close", resolve));
-    const chunks = [];
-    let stdoutBytes = 0;
-    let stderrBytes = 0;
+    // A lost exit must not hold this process open once the probe has answered.
+    // The timers below keep it alive for as long as the probe is waiting.
+    child.unref();
+    const finished = new Promise(resolve => {
+      child.once("exit", resolve);
+      child.once("close", resolve);
+    });
+    const limit = options.captureLimit ?? options.hashLimit ?? 0;
     let settled = false;
+    let exitWatch;
+    const stopTimers = () => {
+      clearTimeout(timer);
+      clearInterval(outputCheck);
+      clearTimeout(exitWatch);
+    };
     const signalTree = (signal) => {
       try {
         if (grouped && child.pid) process.kill(-child.pid, signal);
@@ -59,11 +146,11 @@ function git(args, options = {}) {
     const fail = async (code, signal = "SIGKILL") => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
+      stopTimers();
       if (grouped) signalTree(signal);
       if (grouped && signal === "SIGTERM") {
         // Give Git time to remove index.lock, then kill even if Git already
-        // exited: a hook may ignore SIGTERM and still own the pipes.
+        // exited: a hook may ignore SIGTERM and still be running.
         await new Promise(resolve => setTimeout(resolve, 250));
         signalTree("SIGKILL");
       }
@@ -82,39 +169,69 @@ function git(args, options = {}) {
         });
         try { child.kill("SIGKILL"); } catch {}
       }
-      child.stdout.destroy();
-      child.stderr.destroy();
-      await closed;
+      await new Promise(resolve => {
+        const deadline = setTimeout(resolve, REAP_WAIT_MS);
+        finished.then(() => { clearTimeout(deadline); resolve(); });
+      });
+      releaseCapture();
       reject(coded(code));
+    };
+    const overLimit = () => {
+      if (limit > 0 && fstatSync(stdoutFd).size > limit) return "too-large";
+      if (fstatSync(stderrFd).size > MAX_STDERR_BYTES) return "git-failed";
+      return undefined;
+    };
+    const checkOutput = () => {
+      if (settled) return;
+      let code;
+      try {
+        code = overLimit();
+      } catch {
+        code = "git-failed";
+      }
+      if (code) fail(code);
+    };
+    const onExit = (code) => {
+      if (settled) return;
+      // The limits are polled, so a short burst can only be seen here.
+      checkOutput();
+      if (settled) return;
+      settled = true;
+      stopTimers();
+      if (code !== 0) {
+        releaseCapture();
+        reject(coded("git-failed"));
+        return;
+      }
+      try {
+        const chunks = [];
+        readCapture(stdoutFd, (chunk) => {
+          if (options.hash) options.hash.update(chunk);
+          if (options.captureLimit) chunks.push(Buffer.from(chunk));
+        });
+        resolve(options.captureLimit ? Buffer.concat(chunks) : Buffer.alloc(0));
+      } catch {
+        reject(coded("git-failed"));
+      } finally {
+        releaseCapture();
+      }
     };
     // SIGTERM lets git remove an index.lock it took before the daemon stalled.
     const timer = options.timeoutMs
       ? setTimeout(() => fail(STATUS_TIMEOUT, "SIGTERM"), options.timeoutMs)
       : undefined;
-    child.stdout.on("data", (chunk) => {
-      if (settled) return;
-      stdoutBytes += chunk.length;
-      const limit = options.captureLimit ?? options.hashLimit ?? 0;
-      if (limit > 0 && stdoutBytes > limit) {
-        fail("too-large");
-        return;
-      }
-      if (options.hash) options.hash.update(chunk);
-      if (options.captureLimit) chunks.push(chunk);
-    });
-    child.stderr.on("data", (chunk) => {
-      if (settled) return;
-      stderrBytes += chunk.length;
-      if (stderrBytes > MAX_STDERR_BYTES) fail("git-failed");
-    });
+    const outputCheck = setInterval(checkOutput, OUTPUT_CHECK_MS);
     child.on("error", () => fail("git-missing"));
-    child.on("close", (code) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      if (code !== 0) reject(coded("git-failed"));
-      else resolve(options.captureLimit ? Buffer.concat(chunks) : Buffer.alloc(0));
-    });
+    child.once("exit", onExit);
+    const watchForLostExit = (delayMs) => {
+      exitWatch = setTimeout(() => {
+        if (settled) return;
+        const code = zombieExitCode(child.pid);
+        if (code === undefined) watchForLostExit(Math.min(delayMs * 2, EXIT_WATCH_MAX_MS));
+        else onExit(code);
+      }, delayMs);
+    };
+    if (process.platform === "darwin" && child.pid) watchForLostExit(EXIT_WATCH_MS);
   });
 }
 

@@ -1,6 +1,7 @@
 import { useShallow } from "zustand/react/shallow";
 import { focusTabLaunch } from "@/lib/tab-launch";
 import { cn } from "@/lib/utils";
+import { createPaneTabElementId } from "@/types/paneLayout";
 import { useTabLaunchStore, type TabLaunch, type TabLaunchSurface } from "@/stores/tabLaunchStore";
 import { TAB_STRIP_CLASS, TabShell } from "./TabShell";
 
@@ -52,19 +53,31 @@ export function TabLaunchShimmer({ surface = "agent" }: { surface?: TabLaunchSur
 /** A launched tab in the strip, until the real one takes its place. */
 export function TabLaunchPlaceholder({
   environmentId,
+  paneId,
   launch,
   isPaneFocused,
 }: {
   environmentId: string;
+  paneId: string;
   launch: TabLaunch;
   isPaneFocused: boolean;
 }) {
   return (
     <TabShell
+      id={createPaneTabElementId(environmentId, paneId, launch.tabId)}
+      role="tab"
+      tabIndex={0}
+      aria-selected={launch.focused}
       isActive={launch.focused}
       isFocused={launch.focused && isPaneFocused}
       data-testid="tab-launch-placeholder"
       onClick={() => focusTabLaunch(environmentId, launch.tabId)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          event.currentTarget.click();
+        }
+      }}
     >
       <span className="text-shimmer">{launch.title}</span>
     </TabShell>

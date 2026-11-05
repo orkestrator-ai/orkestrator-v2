@@ -7,7 +7,6 @@ import {
   useRef,
   useState,
   type ComponentProps,
-  type KeyboardEvent,
   type ReactNode,
 } from "react";
 import {
@@ -50,7 +49,7 @@ import {
 } from "@/components/terminal/TerminalContainer.helpers";
 import { DropZoneOverlay } from "@/components/pane-layout/DropZoneOverlay";
 import { MobilePaneSwitcher } from "@/components/pane-layout/MobilePaneSwitcher";
-import { TAB_STRIP_CLASS, TabShell } from "@/components/pane-layout/TabShell";
+import { moveTabFocus, TAB_STRIP_CLASS, TabShell } from "@/components/pane-layout/TabShell";
 import {
   useStablePaneHosts,
   type StablePaneHosts,
@@ -405,22 +404,6 @@ function focusesPane(pane: HTMLElement, target: EventTarget | null): boolean {
     pane.contains(target) &&
     !(target instanceof Element && target.closest("[data-coordinator-tab-strip]"))
   );
-}
-
-/** Arrow keys, Home and End move focus between a strip's tabs; Enter or Space selects. */
-function moveTabFocus(event: KeyboardEvent<HTMLDivElement>) {
-  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
-  const tabs = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('[role="tab"]'));
-  const current = tabs.findIndex((tab) => tab === event.target);
-  if (current < 0) return;
-  event.preventDefault();
-  const next =
-    event.key === "Home"
-      ? 0
-      : event.key === "End"
-        ? tabs.length - 1
-        : (current + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
-  tabs[next]?.focus();
 }
 
 /**

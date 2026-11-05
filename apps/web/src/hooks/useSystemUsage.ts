@@ -49,12 +49,11 @@ export const ENVIRONMENT_PROCESS_USAGE_READ_KEY: ReadKey = {
 export const SYSTEM_USAGE_STALE_AFTER_MS = 10_000;
 
 /**
- * How long a usage read may run before it counts as failed. A read that takes
- * longer would deliver a sample already past {@link SYSTEM_USAGE_STALE_AFTER_MS},
- * since a sample's age is measured from the start of its read. It covers what no
- * backend timeout can: a backend that never answers at all.
+ * A usage read that has not answered by now counts as failed. It sits above the
+ * backend's own bounds: process enumeration admits probes for ten seconds,
+ * and its final batch has a two-second timeout. This leaves transport headroom.
  */
-export const USAGE_READ_TIMEOUT_MS = SYSTEM_USAGE_STALE_AFTER_MS;
+export const USAGE_READ_TIMEOUT_MS = 20_000;
 
 export interface UsageView<T> {
   /** Last successful sample, retained across failures. */
@@ -73,11 +72,53 @@ export interface UsageView<T> {
    */
   stale: boolean;
   /**
-   * No read has succeeded since the latest failure, including while a retry is
-   * in flight and for a command this backend does not have, which is never
-   * retried. Any retained sample is from an earlier read.
+   * The latest finished read failed or this backend lacks the command; any
+   * retained sample is from an earlier read. A retry in flight does not clear it.
    */
   failed: boolean;
+}
+
+/** One bounded result per physical request, retained until that request settles. */
+const outstandingRequests = new WeakMap<ReadCoordinator, Map<string, Promise<unknown>>>();
+
+/**
+ * Fails a read that outlives {@link USAGE_READ_TIMEOUT_MS}. `invoke` cannot be
+ * aborted, so the request stays open; retrying alongside it would add one more
+ * open request per retry, and in a browser those use up the connections the
+ * whole app shares. The key therefore fails at once until its request settles,
+ * and that late answer is dropped, since it describes the past.
+ */
+function readWithTimeout<T>(
+  coordinator: ReadCoordinator,
+  id: string,
+  read: () => Promise<T>,
+): Promise<T> {
+  const outstanding = outstandingRequests.get(coordinator) ?? new Map<string, Promise<unknown>>();
+  outstandingRequests.set(coordinator, outstanding);
+  const pending = outstanding.get(id);
+  if (pending) return pending as Promise<T>;
+  const request = Promise.resolve(read());
+  const result = new Promise<T>((resolve, reject) => {
+    const timer = coordinator.clock.setTimeout(() => {
+      reject(new Error("The usage read timed out"));
+    }, USAGE_READ_TIMEOUT_MS);
+    request.then(
+      (value) => {
+        coordinator.clock.clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        coordinator.clock.clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+  outstanding.set(id, result);
+  const settled = () => {
+    if (outstanding.get(id) === result) outstanding.delete(id);
+  };
+  void request.then(settled, settled);
+  return result;
 }
 
 function isTimestamp(value: unknown): value is string {
@@ -116,52 +157,6 @@ function useStalenessDeadline(clock: ReadCoordinatorClock, observedAt: number | 
   }, [clock, observedAt]);
 }
 
-/** Rejects when `read` runs past the bound; its late answer is ignored. */
-function withReadTimeout<T>(read: Promise<T>, clock: ReadCoordinatorClock): Promise<T> {
-  let timer: unknown;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = clock.setTimeout(
-      () => reject(new Error("The usage read timed out")),
-      USAGE_READ_TIMEOUT_MS,
-    );
-  });
-  return Promise.race([read, timeout]).finally(() => clock.clearTimeout(timer));
-}
-
-// Transport invokes cannot all be cancelled (desktop IPC included). Keep one
-// physical request per key until it settles, even after a coordinator timeout or
-// a component unmount. Connection generations must never share requests.
-const pendingUsageReads = new WeakMap<
-  ReadCoordinator,
-  {
-    generation: number;
-    reads: Map<string, Promise<unknown>>;
-  }
->();
-
-function sharedUsageRead<T>(
-  coordinator: ReadCoordinator,
-  generation: number,
-  key: ReadKey,
-  read: () => Promise<T>,
-): Promise<T> {
-  let scope = pendingUsageReads.get(coordinator);
-  if (!scope || scope.generation !== generation) {
-    scope = { generation, reads: new Map() };
-    pendingUsageReads.set(coordinator, scope);
-  }
-  const id = readKeyId(key);
-  const pending = scope.reads.get(id);
-  if (pending) return pending as Promise<T>;
-  const result = read();
-  scope.reads.set(id, result);
-  const clear = () => {
-    if (scope.reads.get(id) === result) scope.reads.delete(id);
-  };
-  void result.then(clear, clear);
-  return result;
-}
-
 function useUsageRead<T extends { sampledAt: string }>(options: {
   key: ReadKey;
   active: boolean;
@@ -176,11 +171,10 @@ function useUsageRead<T extends { sampledAt: string }>(options: {
     coordinator,
     enabled: active,
     demand: { active, intervalMs, priority: "auxiliary" },
-    read: async (context) => {
-      const sample = await withReadTimeout(
-        sharedUsageRead(coordinator, context.connectionGeneration, key, read),
-        coordinator.clock,
-      );
+    read: async ({ connectionGeneration }) => {
+      // A request to a previous server says nothing about the current one.
+      const id = `${readKeyId(key)}@${connectionGeneration}`;
+      const sample = await readWithTimeout(coordinator, id, read);
       // A malformed answer is a failed read, never a new measurement.
       if (!isSample(sample)) throw new Error("The backend returned an invalid usage sample");
       return sample;
@@ -198,8 +192,7 @@ function useUsageRead<T extends { sampledAt: string }>(options: {
     observedAt,
     stale:
       observedAt !== null && coordinator.clock.now() - observedAt > SYSTEM_USAGE_STALE_AFTER_MS,
-    failed:
-      state?.status === "error" || state?.status === "unsupported" || (state?.failures ?? 0) > 0,
+    failed: state !== null && (state.failures > 0 || state.status === "unsupported"),
   };
 }
 

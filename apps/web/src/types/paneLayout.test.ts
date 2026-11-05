@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  createPaneTabElementId,
   MAX_SPLIT_DEPTH,
   LEGACY_PANE_LAYOUT_VERSION,
   PANE_LAYOUT_VERSION,
@@ -100,5 +101,15 @@ describe("pane layout runtime helpers", () => {
         claudeTmuxData: { environmentId: "env" },
       }),
     ).toBeNull();
+  });
+
+  test("a pane tab's element id is a single IDREF, distinct across environments", () => {
+    const id = createPaneTabElementId("env one", "default", "file tab:a");
+    expect(/\s/.test(id)).toBe(false);
+    expect(id).not.toBe(createPaneTabElementId("env two", "default", "file tab:a"));
+    // A separator inside a part cannot make two different tabs collide.
+    expect(createPaneTabElementId("a:b", "c", "d")).not.toBe(
+      createPaneTabElementId("a", "b:c", "d"),
+    );
   });
 });

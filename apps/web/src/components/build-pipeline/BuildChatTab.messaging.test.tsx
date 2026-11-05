@@ -1023,7 +1023,7 @@ describe("BuildChatTab agent messaging", () => {
         .getState()
         .replacePipeline({ ...waiting, sessions: running.sessions, backendRevision: 51 }),
     );
-    expect(screen.queryByText(/Message queued:/)).toBeNull();
+    expect(screen.queryByText(/Message queued:/) === null).toBe(true);
   });
 
   test("reports a queue of more than one message as a queue", () => {
@@ -1455,7 +1455,9 @@ describe("BuildChatTab graph", () => {
     selectNode("Notes");
 
     expect(createTab).not.toHaveBeenCalled();
-    expect(within(inspector()).queryByRole("button", { name: "Open notes in a tab" })).toBeNull();
+    expect(
+      within(inspector()).queryByRole("button", { name: "Open notes in a tab" }) === null,
+    ).toBe(true);
   });
 
   test("opens a session from the node's context menu", async () => {

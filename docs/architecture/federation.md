@@ -644,6 +644,10 @@ row, header, badge, icon, menu, hover card, filter or sort shows:
   window's rows by environment ID, which is what its stores use, and another
   machine's by node-qualified key, because the same ID can exist on two
   machines.
+  A delete in flight cannot be selected. A failed merge cleanup can, on either
+  path, so a bulk delete can retry it: `deletionRetryable` on the node summary
+  (an optional boolean; a machine that predates it keeps such a row unselectable)
+  and `isLocalDeletionRetryable` on this window's rows.
 - Bulk Stop, Restart and Delete resolve each selected row to its owner
   (`lib/federation/selected-environments.ts`) and send it through the same path
   as that row's own action (`useSelectedEnvironmentActions`). An environment on

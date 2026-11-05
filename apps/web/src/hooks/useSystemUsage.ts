@@ -50,8 +50,8 @@ export const SYSTEM_USAGE_STALE_AFTER_MS = 10_000;
 
 /**
  * A usage read that has not answered by now counts as failed. It sits above the
- * backend's own bounds, including a process list that waits on several
- * unresponsive containers, so only a read that is truly stuck reaches it.
+ * backend's own bounds: process enumeration admits probes for ten seconds,
+ * and its final batch has a two-second timeout. This leaves transport headroom.
  */
 export const USAGE_READ_TIMEOUT_MS = 20_000;
 

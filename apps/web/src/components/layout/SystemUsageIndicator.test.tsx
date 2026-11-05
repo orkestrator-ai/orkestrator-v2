@@ -324,6 +324,31 @@ describe("SystemUsageIndicator", () => {
     expect(screen.getByLabelText("title-bar-layout processes")).toBeTruthy();
   });
 
+  for (const unsupported of [false, true]) {
+    test(`reopening retains a process failure without a sample (unsupported=${unsupported})`, async () => {
+      let calls = 0;
+      nativeInvokeMock.mockImplementation(async (command: string) => {
+        if (command === "get_system_usage") return usageSnapshot();
+        if (command !== "get_environment_process_usage") return undefined;
+        calls += 1;
+        throw new Error(
+          unsupported ? "Unknown backend command: get_environment_process_usage" : "offline",
+        );
+      });
+      render(<SystemUsageIndicator />);
+      openPanel();
+      expect(await screen.findByText("Couldn't read processes")).toBeTruthy();
+      fireEvent.click(
+        screen.getAllByRole("button", { name: "Close environment process usage" })[0]!,
+      );
+      openPanel();
+      await advance(0);
+      expect(screen.getByText("Couldn't read processes")).toBeTruthy();
+      expect(screen.queryByText("Loading processes…")).toBeNull();
+      expect(calls).toBe(1);
+    });
+  }
+
   test("a process read that never answers stops looking like it is loading", async () => {
     nativeInvokeMock.mockImplementation(async (command: string) => {
       if (command === "get_system_usage") return usageSnapshot();

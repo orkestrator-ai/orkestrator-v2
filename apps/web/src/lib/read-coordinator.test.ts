@@ -772,6 +772,37 @@ describe("read coordinator: identity and disposal", () => {
     expect(fresh.getState().value).toBe("joined");
   });
 
+  for (const unsupported of [false, true]) {
+    test(`a new subscriber receives a retained failure with no value (unsupported=${unsupported})`, async () => {
+      const { coordinator } = setup();
+      const transport = deferredTransport<string>();
+      const first = coordinator.subscribe({
+        key: key(),
+        read: transport.read,
+        demand: { intervalMs: 1_000 },
+      });
+      await transport.rejectLast(
+        new Error(unsupported ? "Unknown backend command: foo" : "offline"),
+      );
+      first.dispose();
+      const states = collect<string>();
+      const second = coordinator.subscribe({
+        key: key(),
+        read: transport.read,
+        demand: { intervalMs: 1_000 },
+        onState: states.onState,
+      });
+      await flush();
+      expect(states.states.at(-1)).toMatchObject({
+        status: unsupported ? "unsupported" : "error",
+        hasValue: false,
+        failures: unsupported ? 0 : 1,
+      });
+      expect(transport.calls).toHaveLength(1);
+      second.dispose();
+    });
+  }
+
   test("a new subscriber receives a kept value during error backoff", async () => {
     const { clock, coordinator } = setup();
     const transport = deferredTransport<string>();

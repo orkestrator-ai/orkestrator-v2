@@ -66,7 +66,7 @@ The controller selects `hasStartupAgentSession` and `startupAgentFailed` rather 
 
 ### Task 1: the opening-prompt effect no longer re-runs on environment writes
 
-The startup effect at `AgentNativeTab.controller.tsx:2899` depends on `submit`, and `submit` changes on every render because `useUserCommands` returns a new `refresh` each time. Before this change every environment write therefore re-ran the effect, which is also what could retry an opening prompt refused earlier. That accidental wake-up is gone. No launch relied on it: every refusal in `submit` is released by a state change that renders the tab anyway (`setIsSubmitting`, `setPreparingSend`, `setQueueEditPending`, or the turn state behind `canQueue`), and `never queues an opening prompt behind a running turn` in `AgentNativeTab.test.tsx` still passes with no environment write. [5960](5960-native-tab-render-churn.md) records the unstable callback.
+The startup effect at `AgentNativeTab.controller.tsx:2899` depends on `submit`, and `submit` changes on every render because `useUserCommands` returns a new `refresh` each time. Before this change every environment write therefore re-ran the effect, which is also what could retry an opening prompt refused earlier. That accidental wake-up is gone. No launch relied on it: every refusal in `submit` is released by a state change that renders the tab anyway (`setIsSubmitting`, `setPreparingSend`, `setQueueEditPending`, or the turn state behind `canQueue`), and `never queues an opening prompt behind a running turn` in `AgentNativeTab.test.tsx` still passes with no environment write. 5960 recorded the unstable callback, which has since been memoised (5960 task 1, done 2026-11-05; the file is in Git history at `ba209e5b1`).
 
 ### Task 1: proving behaviour unchanged
 
@@ -79,4 +79,4 @@ The harness was temporary, as the first measurement's was, and only the numbers 
 ## Related
 
 - [1202 efficiency follow-ups](1202-efficiency-review-follow-ups.md), task 3, which records the container's fix
-- [5960 native tab render churn](5960-native-tab-render-churn.md), two costs this measurement found on the renders that remain
+- [6280 native transcript list props churn](6280-native-transcript-list-props-churn.md), what is left of the two costs this measurement found on the renders that remain (5960, done and deleted; in Git history at `ba209e5b1`)

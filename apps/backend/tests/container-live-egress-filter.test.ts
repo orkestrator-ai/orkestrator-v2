@@ -276,6 +276,8 @@ describe("M12 name checks at the egress gateway", () => {
         "\r\n\r\nget / HTTP/1.1\r\n",
         "GET\t/\tHTTP/1.1\r\n",
         "custom / HTTP/1.1\r\n",
+        "GET /é/🦊 HTTP/1.1\r\n",
+        "custom /é HTTP/1.1\r\n",
       ]) {
         const response = await docker([
           "exec",

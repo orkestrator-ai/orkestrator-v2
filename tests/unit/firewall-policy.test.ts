@@ -34,7 +34,9 @@ describe("container firewall policy", () => {
       .split("\n")
       .map((line) => line.trim())
       .filter((line) => line && !line.startsWith("#"));
-    const dnsRules = activeLines.filter((line) => line.includes("--dport 53"));
+    const dnsRules = activeLines.filter(
+      (line) => line.includes("--dport 53") && !line.includes("! --dport 53"),
+    );
 
     // With name checks every query is first redirected to the gateway's
     // daemon (firewall-egress-filter.test.ts). Then: resolv.conf nameservers,

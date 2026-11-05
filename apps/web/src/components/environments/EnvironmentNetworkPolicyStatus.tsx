@@ -107,6 +107,14 @@ function NameChecks({ policy }: { policy: EnvironmentNetworkPolicy }) {
       </div>
     );
   }
+  if (effective.egressFilter === "unavailable" && policy.enforcement === "gateway") {
+    return (
+      <div>
+        Name checks require network policy 3. This gateway uses address-only enforcement; rebuilding
+        with a current image adds name checks only when the network policy 2 override is removed.
+      </div>
+    );
+  }
   // A backend that predates the field omits it; say nothing rather than
   // guess. `null` is a report without it: an image from before the checks.
   if (effective.egressFilter === undefined || policy.enforcement !== "gateway") return null;

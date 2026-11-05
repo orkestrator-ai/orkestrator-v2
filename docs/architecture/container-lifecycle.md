@@ -1207,10 +1207,13 @@ refused and queries unanswered. Its supervisor restarts a dead worker within
 a second, and the refresher restarts a dead supervisor. The boot's own
 checks require a name off the list to be REFUSED and an allowed address to
 refuse a foreign SNI before the report says `applied`.
-`update-firewall.sh --set-domains` writes the daemon's names before it
-resolves the new list (the gateway's own lookups go through the daemon),
-puts them back if the rebuild fails, and the daemon closes open connections
-whose name left.
+`update-firewall.sh --set-domains` stages the proposed names for DNS lookups
+while retaining the current connection permissions during resolution. A failed
+rebuild restores the previous names without closing its streams. After a
+successful rebuild, it publishes the final names and the daemon closes open
+connections whose name left. DNS staging temporarily permits lookup of the
+explicitly proposed names; it never grants their TCP connection permissions.
+The next periodic refresh clears staging left by an interrupted edit.
 
 The gateway records `egress-filter` (`on`, or `off` when the backend created
 it with `ORKESTRATOR_EGRESS_FILTER=off`) once, at its first boot, and the

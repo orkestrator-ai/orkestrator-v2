@@ -417,7 +417,13 @@ export type RawExecOutput = {
 export async function execWithOutput(
   command: string,
   args: string[],
-  options: { cwd?: string; env?: NodeJS.ProcessEnv; stdin?: string; timeoutMs?: number } = {},
+  options: {
+    cwd?: string;
+    env?: NodeJS.ProcessEnv;
+    stdin?: string;
+    timeoutMs?: number;
+    waitForDescendants?: boolean;
+  } = {},
 ): Promise<ExecOutput> {
   const raw = await execWithRawOutput(command, args, options);
   return { status: raw.status, stdout: raw.stdout.toString(), stderr: raw.stderr };
@@ -439,6 +445,7 @@ export async function execWithRawOutput(
     stdin?: string;
     timeoutMs?: number;
     maxOutputBytes?: number;
+    waitForDescendants?: boolean;
   } = {},
 ): Promise<RawExecOutput> {
   try {
@@ -449,7 +456,7 @@ export async function execWithRawOutput(
       // Arbitrary launchers can leave helpers writing after their leader exits.
       // Bound group waiting by default rather than returning incomplete success.
       timeoutMs: options.timeoutMs ?? 60_000,
-      waitForDescendants: true,
+      waitForDescendants: options.waitForDescendants ?? true,
       maxOutputBytes: options.maxOutputBytes ?? TMUX_EXEC_MAX_OUTPUT_BYTES,
     });
     return { status: 0, stdout, stderr: stderr.toString() };

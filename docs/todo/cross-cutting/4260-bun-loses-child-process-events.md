@@ -347,7 +347,7 @@ Put the table in task 5's subsection rather than a new file, because the ticket 
 
 ### Task 5 review repair: descendant completion and credential failures
 
-Tmux capture now waits for its private process group and defaults to a 60 s deadline. Leader-only capture would finish earlier for background helpers but could silently omit output, so complete capture is preferred; group waiting can also wait for helpers that redirected their output. Explicit caller deadlines still apply, and explicit zero still disables the deadline.
+Tmux capture now waits for its private process group and defaults to a 60 s deadline. Leader-only capture would finish earlier for background helpers but could silently omit output, so complete capture is preferred; group waiting can also wait for helpers that redirected their output. Explicit caller deadlines still apply, and explicit zero still disables the deadline. Login-shell exclude setup opts out of group waiting: a profile may start a redirected service that must survive setup. A caller-level test runs the real setup and verifies both the exclude file and helper survival.
 
 Failed Keychain reads now discard all captured output and use a fixed diagnostic while retaining failure classification. Returning partial output would aid diagnosis but could disclose credential material in error messages. Tests cover timeout, overflow and nonzero exit.
 
@@ -383,3 +383,19 @@ output and deadline-bound group waiting. Always waiting for the group preserved
 late output but blocked same-group fsmonitor daemons, so it was rejected. Tests
 cover helper survival, automatic daemon startup through project-home status,
 capture filesystem failures, and bounded unknown process inspection.
+
+
+### Task 5: login-shell completion and timeout-test determinism
+
+Exclude setup uses leader-exit completion through an explicit per-call option.
+Keeping group waiting everywhere retains output but also blocks on redirected
+profile services; opting out only for setup preserves transcript completeness
+and profile helper lifetime. A controlled fixture profile is sourced by a real
+login shell so this test does not read the developer's shell profile.
+
+Deadline-only assertions no longer require shell startup or output within 100 ms;
+nonzero-exit cases still verify byte and stream preservation. The real-process
+command-capture suite uses the integration naming convention, placing it in the
+slow tier without changing the shared tier runner. Docker overflow tests disable
+the command deadline and cover both successful exit and a still-running writer,
+so a timeout cannot masquerade as overflow handling.

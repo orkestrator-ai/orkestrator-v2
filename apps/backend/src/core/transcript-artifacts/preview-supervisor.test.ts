@@ -220,7 +220,7 @@ const dockerCases: Array<{
     stdout: "out",
   },
   {
-    name: "a timeout has no code and keeps what it wrote",
+    name: "a timeout has no code regardless of shell startup time",
     body: "printf out; exec sleep 30",
     timeoutMs: 100,
     code: null,
@@ -239,7 +239,10 @@ for (const { name, body, timeoutMs, code, stdout } of dockerCases) {
   test(`runDocker: ${name}`, async () => {
     const docker = fakeDocker(body);
     try {
-      expect(await runDocker(docker.command, ["ps", "-a"], timeoutMs)).toEqual({ code, stdout });
+      const result = await runDocker(docker.command, ["ps", "-a"], timeoutMs);
+      expect(result.code).toBe(code);
+      // Deadline tests must not require the shell to start before termination.
+      if (timeoutMs === undefined) expect(result.stdout).toBe(stdout);
     } finally {
       docker.remove();
     }
@@ -275,15 +278,30 @@ for (const stream of ["stdout", "stderr"] as const) {
       docker.remove();
     }
   });
-  test(`runDocker: rejects output beyond the 50 MiB ${stream} bound`, async () => {
+  test(`runDocker: rejects successful exit beyond the 50 MiB ${stream} bound`, async () => {
     const docker = fakeDocker(
-      `printf prefix; head -c ${50 * 1024 * 1024 + 1} /dev/zero ${stream === "stderr" ? ">&2" : ""}; exec sleep 30`,
+      `printf prefix; head -c ${50 * 1024 * 1024 + 1} /dev/zero ${stream === "stderr" ? ">&2" : ""}`,
     );
     try {
-      const result = await runDocker(docker.command, ["ps"], 5000);
+      const result = await runDocker(docker.command, ["ps"], 0);
       expect(result.code).toBeNull();
       expect(result.stdout.startsWith("prefix")).toBe(true);
       expect(result.stdout.length).toBe(stream === "stdout" ? 64 * 1024 : 6);
+    } finally {
+      docker.remove();
+    }
+  });
+}
+
+for (const stream of ["stdout", "stderr"] as const) {
+  test(`runDocker: kills an overflowing ${stream} writer with no command deadline`, async () => {
+    const docker = fakeDocker(
+      `head -c ${50 * 1024 * 1024 + 1} /dev/zero ${stream === "stderr" ? ">&2" : ""}; exec sleep 30`,
+    );
+    try {
+      // No command deadline: a null code must come from overflow termination,
+      // rather than a timeout. The test watchdog catches a failure to terminate.
+      expect((await runDocker(docker.command, ["ps"], 0)).code).toBeNull();
     } finally {
       docker.remove();
     }

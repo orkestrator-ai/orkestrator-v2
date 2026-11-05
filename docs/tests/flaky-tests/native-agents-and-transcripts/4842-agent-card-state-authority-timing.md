@@ -26,3 +26,12 @@ An initial invocation without `NODE_ENV=test` loaded production React and failed
 with `React.act is not a function` (artifact `/tmp/orkestrator-test-run.FAgmsw`);
 that invocation did not exercise the assertion. No test or renderer behavior
 was changed. The existing independent-read ordering hypothesis remains unproven.
+
+The failure does not depend on the E5 storage branch (`database-upkeep-ac99b5b934a3-r1`).
+Its first recorded occurrence, at `cd5b0142`, is on the E8 branch, which is
+neither an ancestor of nor a descendant of the E5 work. `git diff --stat
+origin/main...HEAD -- apps/web` on the E5 branch is empty, so the branch
+changes no renderer code, test or mock that this file loads. One possible
+cause, not yet proven: after the `unavailable` read, the test's state mock answers
+`unchanged` (`state-unscripted`) until `stateUpdates` is reassigned. A poll in
+that window could restore Stop before the held state is installed.

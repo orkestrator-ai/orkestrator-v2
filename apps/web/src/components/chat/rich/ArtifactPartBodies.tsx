@@ -28,6 +28,7 @@ import {
   readWholeRepresentation,
   rememberArtifactSearchBody,
   useArtifactRepresentation,
+  useCachedArtifactSearchBody,
   type ArtifactReadScope,
   type ArtifactRequestState,
 } from "@/lib/chat/artifact-requests";
@@ -260,16 +261,37 @@ function downloadPdfRepresentation(
     .finally(onSettled);
 }
 
+function useArtifactSearchBodyPublisher(
+  artifactRef: TranscriptArtifactRef,
+  scope: ArtifactReadScope,
+): (text: string | null) => void {
+  const { publicationId, artifactId, revision } = artifactRef;
+  const { backendId, environmentId, logicalSessionKey } = scope;
+  return useCallback(
+    (text) =>
+      rememberArtifactSearchBody({ publicationId, artifactId, revision }, text, {
+        backendId,
+        environmentId,
+        logicalSessionKey,
+      }),
+    [artifactId, backendId, environmentId, logicalSessionKey, publicationId, revision],
+  );
+}
+
 /**
  * Publish the body text this card shows to find's synchronous cache, and
  * withdraw it when the card stops showing it (e.g. Mermaid back to preview).
  * Unmounting (scrolling away) keeps it: the body is still the card's content.
  */
-function useArtifactSearchBody(artifactRef: TranscriptArtifactRef, text: string | null): void {
-  const { publicationId, artifactId, revision } = artifactRef;
+function useArtifactSearchBody(
+  artifactRef: TranscriptArtifactRef,
+  scope: ArtifactReadScope,
+  text: string | null,
+): void {
+  const publish = useArtifactSearchBodyPublisher(artifactRef, scope);
   useEffect(() => {
-    rememberArtifactSearchBody({ publicationId, artifactId, revision }, text);
-  }, [artifactId, publicationId, revision, text]);
+    publish(text);
+  }, [publish, text]);
 }
 
 /**
@@ -301,7 +323,7 @@ export function ChartArtifactBody({ artifactRef, scope, occurrenceKey }: BodyPro
         : null,
     [artifactRef, parsed, representation],
   );
-  useArtifactSearchBody(artifactRef, searchText);
+  useArtifactSearchBody(artifactRef, scope, searchText);
   if (representation.status !== "ready")
     return <BodyStatus state={representation} label="Loading chart data" />;
   if (!sameRevision(representation.value, artifactRef)) return <RevisionMismatch />;
@@ -351,7 +373,7 @@ export function MermaidArtifactBody({ artifactRef, scope, occurrenceKey }: BodyP
     showSource && source.status === "ready" && sameRevision(source.value, artifactRef)
       ? artifactBodySearchText("mermaid-source", source.value.data)
       : null;
-  useArtifactSearchBody(artifactRef, sourceSearchText);
+  useArtifactSearchBody(artifactRef, scope, sourceSearchText);
   const sanitized = useMemo(() => {
     if (svg.status !== "ready" || !sameRevision(svg.value, artifactRef)) return null;
     try {
@@ -453,7 +475,7 @@ export function WorkflowArtifactBody({ artifactRef, scope, occurrenceKey }: Body
         : null,
     [artifactRef, parsed, representation],
   );
-  useArtifactSearchBody(artifactRef, searchText);
+  useArtifactSearchBody(artifactRef, scope, searchText);
   if (representation.status !== "ready")
     return <BodyStatus state={representation} label="Loading workflow snapshot" />;
   if (!sameRevision(representation.value, artifactRef)) return <RevisionMismatch />;
@@ -506,6 +528,19 @@ export function HtmlArtifactBody({
   const showDocument = presentsDocument && choice === "document";
   const closeExpanded = useCallback(() => setExpanded(false), []);
   const openExpanded = useCallback(() => setExpanded(true), []);
+  // A static document's text exists only in its frame, so it arrives from there
+  // rather than from a representation. Leaving the document view withdraws it;
+  // scrolling away does not, and a remounted card finds it still in the cache.
+  const publishSearchBody = useArtifactSearchBodyPublisher(artifactRef, scope);
+  const publishDocumentText = useCallback(
+    (text: string | null) =>
+      publishSearchBody(text === null ? null : artifactBodySearchText("static-document", text)),
+    [publishSearchBody],
+  );
+  useEffect(() => {
+    if (!showDocument) publishSearchBody(null);
+  }, [publishSearchBody, showDocument]);
+  const documentSearchText = useCachedArtifactSearchBody(artifactRef);
   const firstCapture = view.receipt.captures[0] ?? null;
   const capture = useArtifactRepresentation(scope, artifactRef.publicationId, "capture", {
     enabled: firstCapture !== null,
@@ -715,6 +750,7 @@ export function HtmlArtifactBody({
             expanded={expanded}
             onExpand={openExpanded}
             onCloseExpanded={closeExpanded}
+            onDocumentText={publishDocumentText}
           />
         ) : (
           <>
@@ -741,6 +777,7 @@ export function HtmlArtifactBody({
         {showDiagnostics ? <ArtifactDiagnostics view={view} /> : null}
         {interactive ? <ArtifactWorkerPrepareAction /> : null}
       </div>
+      {showDocument ? <BodySearchRoot text={documentSearchText} /> : null}
       {enlarged && captureUrl ? (
         <Dialog open onOpenChange={setEnlarged}>
           <DialogContent size="6xl">

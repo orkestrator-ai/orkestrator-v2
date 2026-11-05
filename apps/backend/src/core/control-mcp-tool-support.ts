@@ -20,16 +20,18 @@ import {
 } from "@orkestrator/protocol/review-lens";
 import type { ControlMcpInvoker } from "./control-shared-actions.js";
 
-/** The field every environment and workflow tool takes to act on another node. */
+/**
+ * The field every environment and workflow tool takes to act on another node.
+ * Kept short: it is on dozens of tools in every turn, and a coordinator's
+ * context already says that a node means that node's copy of its project.
+ */
 export const nodeIdField = z
   .string()
   .trim()
   .min(1)
   .max(200)
   .optional()
-  .describe(
-    "A nodeId from list_nodes: act on that machine (for a coordinator, on that node's copy of this project). Omit for this machine.",
-  );
+  .describe("A nodeId from list_nodes to act on that machine; omit for this one.");
 
 export type JsonRecord = Record<string, unknown>;
 

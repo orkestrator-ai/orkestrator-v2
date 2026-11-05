@@ -262,7 +262,7 @@ and no site logs a stderr tail.
 
 | Area | Event | Level | Written when |
 | --- | --- | --- | --- |
-| `docker` | `writer-lease.lost` | `warn` | The one held-to-lost transition, with `reason` (`reclaimed`, `unreadable`). Schedules stop and container changes are refused. A lost lease is final for the process; the backend that takes it over writes `writer-lease.regained`. |
+| `docker` | `writer-lease.lost` | `warn` | The one held-to-lost transition, with `reason` (`reclaimed`, `unreadable`). Schedules stop and container changes are refused; Settings → Schedules says so ([scheduled jobs](scheduled-jobs.md#exactly-once)). A lost lease is final for the process; the backend that takes it over writes `writer-lease.regained`. |
 | `docker` | `writer-lease.regained` | `info` | A backend took the lease over from a holder that stopped refreshing it (crashed, killed or stalled), with `staleForMs` since that holder's last refresh. A lease a clean shutdown released is acquired silently. |
 | `storage` | `migration.failed` | `error` | The database could not reach this build's schema and did not open, with `fromVersion`, `toVersion` and `step` (`snapshot` for the safety copy, `migrate`). |
 | `process` | `rejection.unhandled` | `error`, throttled | A rejection reached the fatal rejection guard, beside the guard's own line. |
@@ -887,7 +887,9 @@ every bridge line is on the logger, in `bridge.claude`, `bridge.codex`,
 covers them all. [The bridge hop](#the-bridge-hop) never filters, so a local bridge's
 line keeps the level it was written at whatever the backend's own levels are. Output
 that is not a logger call (a native crash, a runtime panic, a vendor's own printing)
-is captured as text whatever the level is.
+is captured as text whatever the level is. That is why a local bridge does not
+inherit vendor debug switches from the shell that launched Orkestrator
+([the bridge hop](#the-bridge-hop)).
 
 `error` cannot be filtered, because no level is below it. A stall of 10 seconds or
 more uses that: `event-loop` `stalled`, and the desktop's `main-thread.stalled`, are
@@ -983,6 +985,14 @@ flowchart LR
   The bridge retains its level override privately so live policy updates still
   respect the value supplied at launch.
   OpenCode runs its own server and receives no relay flag, including an inherited one.
+- **Vendor debug switches are dropped.** `DEBUG`, `RUST_LOG` and
+  `DEBUG_CLAUDE_AGENT_SDK` turn on a vendor's own printing, which is not a logger
+  call: the hop captures it whatever the level is, and it can quote prompts and tool
+  content. A local launch removes them from the bridge's environment, and so from the
+  vendor CLI and the commands it runs (`bridge-vendor-debug-env.ts`). To keep them,
+  start the backend with `ORKESTRATOR_KEEP_VENDOR_DEBUG=1`. A project command that
+  sets its own `DEBUG` is unaffected, and container bridges never inherit the host
+  environment.
   A bridge whose output nobody reads as records (one started by hand, or a model
   catalogue probe) stays on the format its environment asks for.
 - **Redaction runs before and after decoding.** Raw output is scrubbed per bounded
@@ -1015,7 +1025,10 @@ older image's bridge ignores both variables and keeps its plain lines.
 
 A relaunch keeps the run before it in `/tmp/<provider>-bridge.prev.log`, read with
 `previous: true` on the `get_*_server_log` commands
-([container-lifecycle.md](container-lifecycle.md#the-previous-run)).
+([container-lifecycle.md](container-lifecycle.md#the-previous-run)). Lines the
+writer could not write (a full disk, a failed rotation) are counted and reported
+by an `[orkestrator-log-writer] dropped N lines` line at its next successful write
+([container-lifecycle.md](container-lifecycle.md#bounded-logs-bounded-logs1)).
 
 ### A level replaced at runtime
 

@@ -3,6 +3,9 @@ import {
   agentAccountSwitchEffect,
   classifyUsageLimitError,
   exhaustedUsageWindows,
+  turnFailureKind,
+  USAGE_LIMIT_ERROR_CODE,
+  usageLimitFailure,
   usageWindowView,
 } from "./agent-usage-limits.js";
 
@@ -69,4 +72,23 @@ test("the switch effect says it is machine-wide and needs no restart", () => {
   expect(effect).toContain("Machine-wide");
   expect(effect).toContain("next turn");
   expect(effect).toContain("No restart");
+});
+
+test("a failed turn is a usage limit by the provider's signal or, failing that, by its text", () => {
+  expect(usageLimitFailure({ failureKind: "usage-limit", error: "Your plan is paused." })).toEqual({
+    signal: "provider",
+  });
+  expect(
+    usageLimitFailure({ failureKind: "usage-limit", error: "You've hit your limit · resets 3pm" }),
+  ).toEqual({ signal: "provider", resetHint: "3pm" });
+  // An older bridge or record sends no kind: the text decides.
+  expect(usageLimitFailure({ error: "You've hit your limit · resets 3pm" })).toEqual({
+    signal: "text",
+    resetHint: "3pm",
+  });
+  expect(usageLimitFailure({ error: "Overloaded" })).toBeNull();
+  // An unknown kind is not a usage limit.
+  expect(usageLimitFailure({ failureKind: "rate-limit", error: "Overloaded" })).toBeNull();
+  expect(turnFailureKind("usage-limit")).toBe(USAGE_LIMIT_ERROR_CODE);
+  expect(turnFailureKind("usageLimitExceeded")).toBeUndefined();
 });

@@ -1,6 +1,6 @@
 /**
- * ChangeLedger: indexed durable records for change tracking, on the shared
- * `orkestrator.sqlite` (tables from ledger-schema.ts).
+ * ChangeLedger: indexed durable records for change tracking, in their own
+ * `change-tracking.sqlite` (tables and file from ledger-schema.ts).
  *
  * Every method is synchronous and short. Callers never hold a transaction
  * across an await: read the filesystem and write immutable objects first,
@@ -1205,6 +1205,11 @@ export class ChangeLedger {
   /** Returns up to `maxPages` free database pages to the filesystem; the free pages left. */
   releaseFreePages(maxPages?: number): number {
     return this.storage().releaseFreePages(maxPages);
+  }
+
+  /** Refreshes the ledger file's planner statistics (`StorageDatabase.optimize`). */
+  optimize(): void {
+    this.storage().optimize();
   }
 
   insertDiffIdentity(identity: DiffIdentity): void {

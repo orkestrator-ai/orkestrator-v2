@@ -563,13 +563,11 @@ export const COORDINATOR_CONTROL_TOOL_NAMES = Object.freeze([
   "launch_graph",
   "launch_job",
   "launch_multi_review",
-  "launch_node_environment",
   "launch_terminal",
   "list_agents",
   "list_environments",
   "list_graph_templates",
   "list_mailboxes",
-  "list_node_environments",
   "list_nodes",
   "list_projects",
   "list_provider_accounts",
@@ -598,16 +596,11 @@ export const COORDINATOR_CONTROL_TOOL_NAMES = Object.freeze([
   "resume_schedule",
   "run_worker_command",
   "send_message",
-  "send_node_message",
-  "send_prompt_to_node_tab",
   "send_prompt_to_tab",
   "set_worker_goal",
   "start_build_pipeline",
   "start_environment",
-  "start_multi_review",
-  "start_node_environment",
   "stop_environment",
-  "stop_node_environment",
   "stop_worker_turn",
   "switch_provider_account",
   "set_account_auto_switch",
@@ -627,6 +620,31 @@ export const COORDINATOR_WORKER_PROMPT_FORMAT_RULE =
   "Worker prompts: the user reads them in the worker's transcript, so write Markdown with line breaks, not one long paragraph. Put the task first, then separate paragraphs or short bulleted sections for context, constraints and the expected report, with a blank line between them.";
 
 /**
+ * The request-id rule every coordinator is told, in the operator's wording.
+ *
+ * Request ids are namespaced by coordinator, across its conversations, so a
+ * fresh main that was only told to "reuse requestId on retry" picks `launch-1`
+ * again and collides with an earlier conversation's request.
+ */
+export const COORDINATOR_REQUEST_ID_RULE =
+  "Every mutation needs a new unique requestId; reuse one only to retry the same call after an ambiguous response.";
+
+/**
+ * What every coordinator request-id collision says: the id named another
+ * request (another payload, worker or tab), possibly an earlier
+ * conversation's, nothing was done, and a new id is the way out.
+ */
+export const COORDINATOR_REQUEST_ID_REUSED_ERROR =
+  "This requestId was already used for a different request (a different payload or target), possibly by an earlier conversation, so nothing was done. Use a new unique requestId for each new action; reuse one only to retry the same call.";
+
+/**
+ * Carried beside `replayed: true` when a request id named a request that had
+ * already run, so a replay never reads as fresh work.
+ */
+export const COORDINATOR_REPLAYED_NOTE =
+  "This requestId was already used, so this is the earlier request's result and nothing new was started. If you meant a new action, call again with a new unique requestId.";
+
+/**
  * The launch-selection rule every coordinator is told, verbatim.
  *
  * Coordinators otherwise fill every model and effort field `get_launch_options`
@@ -634,7 +652,7 @@ export const COORDINATOR_WORKER_PROMPT_FORMAT_RULE =
  * user's configured default. Kept short: it is injected on every turn.
  */
 export const COORDINATOR_LAUNCH_DEFAULTS_RULE =
-  "Defaults: omit modelId, reasoningId, Multi Review model rows, Multi Review autoFix and autoPr, and build agentType, steps and reviewers so environments, jobs, builds and Multi Reviews run the user's saved defaults. Override one only when the user asks for a specific model, agent, effort, reviewers or auto-fix/auto-PR, or agrees to one the task needs.";
+  "Defaults: omit agent, modelId, reasoningId, Multi Review model rows, Multi Review autoFix and autoPr, and build agentType, steps and reviewers so environments, jobs, builds and Multi Reviews run the user's saved defaults. Override one only when the user asks for a specific model, agent, effort, reviewers or auto-fix/auto-PR, or agrees to one the task needs.";
 
 /**
  * How long after a coordinator's last sent message to a project home the next
@@ -695,7 +713,7 @@ export const COORDINATOR_VALIDATION_RULE =
  * when it fires (nobody may be there) or switch without asking.
  */
 export const COORDINATOR_TIMERS_AND_ACCOUNTS_RULE =
-  'Timers and accounts: for "in 2 hours" or "at 14:30" call create_schedule with action type remind_me (times are the user\'s local time) and put the whole instruction in its body; it wakes you with that text, queued until you are idle. If the user\'s own message asks you to switch accounts then, add authorizeAccountSwitch. When woken: get_usage_limits, list_provider_accounts, then switch_provider_account with the timer\'s scheduleId; without one the user approves the switch, unless Settings lets coordinators switch without asking: then it runs at once (state switched), so tell the user what you switched and never ask them to approve it. Never switch accounts on your own initiative. Automatic switching is separate: when the user asks, set_account_auto_switch turns it on, the backend then moves accounts by itself and you get a notice each time, and your own switch would pin the account and turn it off.';
+  'Timers and accounts: for "in 2 hours" or "at 14:30" call create_schedule with action type remind_me (times are the user\'s local time) and put the whole instruction in its body; it wakes you with that text, queued until you are idle. If the user\'s own message asks you to switch accounts then, add authorizeAccountSwitch. When woken: get_usage_limits, list_provider_accounts, then switch_provider_account with the timer\'s scheduleId; without one the user approves the switch, unless Settings lets coordinators switch without asking: then it runs at once (state switched), so tell the user what you switched and never ask them to approve it. After switching, resume each limitedTabs tab (after approval, read get_usage_limits) with a short send_prompt_to_tab, e.g. "continue"; they do not restart themselves. Never switch accounts on your own initiative. Automatic switching is separate: when the user asks, set_account_auto_switch turns it on, the backend then moves accounts by itself and you get a notice each time, and your own switch would pin the account and turn it off.';
 
 /** The mail-store hold reason that keeps worker progress from waking anyone. */
 export const COORDINATOR_DELEGATION_HOLD_REASON = "delegation-running";
@@ -776,6 +794,15 @@ export interface CoordinatorWorkspace {
   bridgePort?: number;
   bridgePid?: number;
   repositoryStatus?: ProjectGitStatus;
+  /**
+   * The IANA zone of the device that sent the newest prompt the user typed to
+   * any of this coordinator's conversations. A self-timer's absolute time
+   * (`at: "14:30"`) is read in it, so a coordinator on a machine in another
+   * zone still means the user's 14:30. Absent until a renderer that reports
+   * its zone sends a prompt; until then the backend host's zone is used. An
+   * older backend ignores it.
+   */
+  userTimeZone?: string;
 }
 
 export interface CoordinatorSnapshot {

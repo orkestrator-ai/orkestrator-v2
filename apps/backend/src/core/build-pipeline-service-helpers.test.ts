@@ -669,7 +669,7 @@ describe("BuildPipelineService", () => {
     });
   });
 
-  test("fails the review when the reviewer leaves a Git-visible path, keeping it as evidence", async () => {
+  test("a reviewer that leaves a Git-visible path marks the review stale and stops nothing", async () => {
     await withService(async (service, storage, _provider, _invocations, controls) => {
       const { started } = await startBuilding(service, storage);
       await service.advanceNow(started.id);
@@ -677,19 +677,14 @@ describe("BuildPipelineService", () => {
 
       await service.advanceNow(started.id);
 
-      const failed = await pipeline(storage, started.id);
-      expect(failed).toMatchObject({
-        phase: "failed",
-        error:
-          "Review cannot be certified because review left 1 uncommitted path that was not there when it started: coverage/tmp.json",
-      });
-      // Nothing was reset: the worktree change and the review session remain.
-      expect(controls.uncommittedPaths).toEqual(["coverage/tmp.json"]);
-      expect(failed.sessions.at(-1)?.phase).toBe("review");
+      const after = await pipeline(storage, started.id);
+      expect(after.phase).toBe("verifying");
+      expect(after.error).toBeUndefined();
+      expect(after.sessions.find((s) => s.phase === "review")?.reviewWorktreeChanged).toBe(true);
     });
   });
 
-  test("fails the review when the reviewer commits", async () => {
+  test("a reviewer that commits marks the review stale and stops nothing", async () => {
     await withService(async (service, storage, _provider, _invocations, controls) => {
       const { started } = await startBuilding(service, storage);
       await service.advanceNow(started.id);
@@ -697,10 +692,9 @@ describe("BuildPipelineService", () => {
 
       await service.advanceNow(started.id);
 
-      expect(await pipeline(storage, started.id)).toMatchObject({
-        phase: "failed",
-        error: "Review cannot be certified because review changed the environment HEAD",
-      });
+      const after = await pipeline(storage, started.id);
+      expect(after.error).toBeUndefined();
+      expect(after.sessions.find((s) => s.phase === "review")?.reviewWorktreeChanged).toBe(true);
     });
   });
 
@@ -863,12 +857,11 @@ describe("BuildPipelineService", () => {
     });
   });
 
-  test("refuses a reviewer that committed at submit time and accepts it once repaired within the turn", async () => {
+  test("accepts a reviewer's report at submit time though it committed", async () => {
     await withService(
       async (service, storage, provider, _invocations, controls) => {
         const results = controls.workflowResults!;
         const scope = { environmentId: "env-1", projectId: "project-1" };
-        const baseHead = controls.currentHead;
         // The review is driven by hand so the worktree can change mid-turn.
         const autoSubmit = provider.send;
         let reviewKey = "";
@@ -886,23 +879,11 @@ describe("BuildPipelineService", () => {
 
         // The reviewer commits.
         controls.currentHead = "2222222222222222222222222222222222222222";
-        const refused = await results.submit(scope, reviewKey, cleanReview);
-        expect(refused).toMatchObject({
-          ok: false,
-          error: { code: "worktree_changed", nextAction: "correct" },
-        });
-        expect(refused.ok ? "" : refused.error.message).toContain(
-          `HEAD moved from \`${baseHead}\` to \`${controls.currentHead}\` during review`,
-        );
-        // A refusal is not a report: the stage keeps waiting for one.
-        await service.advanceNow(started.id);
-        expect((await pipeline(storage, started.id)).phase).toBe("reviewing");
-
-        // It puts HEAD back within the same turn and submits again.
-        controls.currentHead = baseHead;
         expect(await results.submit(scope, reviewKey, cleanReview)).toMatchObject({ ok: true });
         await service.advanceNow(started.id);
-        expect((await pipeline(storage, started.id)).phase).toBe("verifying");
+        const after = await pipeline(storage, started.id);
+        expect(after.sessions.find((s) => s.phase === "review")?.reviewWorktreeChanged).toBe(true);
+        expect(after.error).toBeUndefined();
       },
       { toolMode: true },
     );
@@ -1087,7 +1068,7 @@ describe("BuildPipelineService", () => {
     });
   }
 
-  test("fails closed when Git state cannot be verified after review", async () => {
+  test("a Git state that cannot be read after review stops nothing", async () => {
     await withService(async (service, storage, _provider, _invocations, controls) => {
       const { started } = await startBuilding(service, storage);
       await service.advanceNow(started.id);
@@ -1095,11 +1076,12 @@ describe("BuildPipelineService", () => {
 
       await service.advanceNow(started.id);
 
-      expect(await pipeline(storage, started.id)).toMatchObject({
-        phase: "failed",
-        error:
-          "Review cannot be certified because the backend could not verify Git state after review: probe failed (Error)",
-      });
+      // Review no longer judges it. Verify, which still does, cannot start without it.
+      const after = await pipeline(storage, started.id);
+      expect(
+        after.sessions.find((s) => s.phase === "review")?.reviewWorktreeChanged,
+      ).toBeUndefined();
+      expect(after.error ?? "").not.toContain("Review cannot be certified");
     });
   });
 

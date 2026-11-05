@@ -9,6 +9,7 @@ import {
   initialPromptRequestId,
   launchEnvironmentCreateInput,
   validateSelection,
+  resolveLaunchAgent,
 } from "../control-shared-actions.js";
 import { nativeAgentSessionStorageKey } from "../native-agent-service-shared.js";
 import { requireEnvironment } from "./actions-discovery.js";
@@ -51,6 +52,7 @@ interface LaunchInput extends AgentSelection {
   baseCommit?: string;
   networkAccessMode?: "restricted" | "full";
   prompt: string;
+  agentDefaulted?: boolean;
 }
 
 const environmentLaunch: MutationActionHandler<LaunchInput> = {
@@ -58,17 +60,34 @@ const environmentLaunch: MutationActionHandler<LaunchInput> = {
   action: "environment.launch",
   parse(input) {
     const base = parseCreateEnvironment(input, "environment.launch");
-    const selection = parseAgentSelection(input);
+    const selection = parseAgentSelection({
+      ...input,
+      agent: input.agent === undefined ? "claude" : input.agent,
+    });
     const prompt = textInput(
       input,
       "prompt",
       PUBLIC_API_LIMITS.promptMaxChars,
       PUBLIC_API_LIMITS.promptMaxBytes,
     );
-    const value: LaunchInput = { ...base, ...selection, prompt };
-    return { value, scope: `project:${base.projectId}`, intent: value };
+    const value: LaunchInput = {
+      ...base,
+      ...selection,
+      prompt,
+      ...(input.agent === undefined ? { agentDefaulted: true } : {}),
+    };
+    return {
+      value,
+      scope: `project:${base.projectId}`,
+      intent: input.agent === undefined ? { ...value, agent: null } : value,
+    };
   },
   async prepare(input, context) {
+    if (input.agentDefaulted)
+      input = {
+        ...input,
+        agent: (await resolveLaunchAgent(context.invoke, input.projectId, undefined)).agent,
+      };
     await validateCreateEnvironment(input, context);
     try {
       await validateSelection(context.invoke, {
@@ -126,6 +145,13 @@ const environmentLaunch: MutationActionHandler<LaunchInput> = {
         });
         const environment = await requireEnvironment(context, environmentId);
         const result = {
+          selection: {
+            advisory: true,
+            agent: input.agent,
+            model: input.model ?? null,
+            reasoning: input.reasoning ?? null,
+            source: input.model || input.reasoning ? "requested" : "default",
+          },
           environment: publicEnvironmentSummary(environment),
           sessionId,
           runId: operation.operationId,

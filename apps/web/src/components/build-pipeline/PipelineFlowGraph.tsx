@@ -20,7 +20,7 @@ import {
   Wrench,
   type LucideIcon,
 } from "lucide-react";
-import type { BuildPipeline } from "@orkestrator/protocol/build-pipeline";
+import { pipelineReviewerConfigs, type BuildPipeline } from "@orkestrator/protocol/build-pipeline";
 import {
   FlowGraph,
   type FlowGraphEdge,
@@ -166,7 +166,17 @@ function nodeDetail(
     return run ? plural(run.plan.commands.length, "check") : "Validation";
   }
   if (!node.agent) return "";
-  return [node.agent, modelLabel(node.agent, node.model), node.reasoningEffort]
+  // The focus the reviewer ran with, as recorded at launch.
+  const lens =
+    node.kind === "reviewer"
+      ? (node.reviewer?.lens ?? pipelineReviewerConfigs(pipeline)[node.slot ?? -1]?.lens)
+      : undefined;
+  return [
+    node.agent,
+    modelLabel(node.agent, node.model),
+    node.reasoningEffort,
+    lens ? `Focus: ${lens.label}` : undefined,
+  ]
     .filter(Boolean)
     .join(" · ");
 }

@@ -2,13 +2,18 @@
  * Usage limits: a provider refusing a turn because the account's plan
  * allowance is used up, and what a switch of the active account changes.
  *
- * No provider reports a usage limit as structured state that reaches the
- * backend: Codex's `usageLimitExceeded` code, Claude's "You've hit your limit
- * · resets …" and Grok's `USAGE_EXHAUSTED` all arrive as the failed turn's
- * error text. The backend keeps that text, bounded, as the session's last turn
- * outcome; this module classifies it. Quota windows the provider reports
- * (`usedPercent`, `resetsAt`) are the other signal: a window at 100 % that has
- * not reset yet means the account cannot run a turn either.
+ * Two bridges report a usage limit as structured state: the Codex bridge
+ * from app-server's `usageLimitExceeded` code, the Claude bridge from a
+ * `rate_limit_event` whose status is `rejected`. Each puts
+ * {@link USAGE_LIMIT_ERROR_CODE} in its session snapshot's `errorCode` beside
+ * the failed turn's `error`, and the backend records it as the turn outcome's
+ * `failureKind`. Everything else arrives only as the failed turn's error text
+ * (Claude's "You've hit your limit · resets …", Grok's `USAGE_EXHAUSTED`, a
+ * bridge older than the code, a record written before it), which the backend
+ * keeps, bounded, and {@link classifyUsageLimitError} classifies. Quota
+ * windows the provider reports (`usedPercent`, `resetsAt`) are the other
+ * signal: a window at 100 % that has not reset yet means the account cannot
+ * run a turn either.
  */
 
 import type { AgentAccountPlatform } from "./agent-accounts.js";
@@ -45,6 +50,35 @@ export function classifyUsageLimitError(text: unknown): UsageLimitMatch | null {
   const reset = bounded.match(/\b(?:resets?|try again)(?:\s+(?:at|in|after))?\s+([^.\n·]{1,60})/i);
   const hint = reset?.[1]?.trim();
   return hint ? { resetHint: hint } : {};
+}
+
+/**
+ * The `errorCode` a bridge session snapshot carries beside a failed turn's
+ * `error` when the provider itself said the account's plan allowance is used
+ * up, and the persisted turn outcome's `failureKind` for it.
+ */
+export const USAGE_LIMIT_ERROR_CODE = "usage-limit";
+
+export type TurnFailureKind = typeof USAGE_LIMIT_ERROR_CODE;
+
+/** The structured failure kind a bridge reported, or undefined for any other value. */
+export function turnFailureKind(value: unknown): TurnFailureKind | undefined {
+  return value === USAGE_LIMIT_ERROR_CODE ? USAGE_LIMIT_ERROR_CODE : undefined;
+}
+
+/**
+ * Whether a failed turn stopped on a usage limit: by the provider's own
+ * structured signal when the bridge reported one, otherwise by its error text.
+ * The text path is permanent: providers without a structured signal, bridges
+ * that predate it and outcomes recorded before it all rely on it.
+ */
+export function usageLimitFailure(outcome: {
+  failureKind?: unknown;
+  error?: unknown;
+}): (UsageLimitMatch & { signal: "provider" | "text" }) | null {
+  const text = classifyUsageLimitError(outcome.error);
+  if (turnFailureKind(outcome.failureKind)) return { ...text, signal: "provider" };
+  return text ? { ...text, signal: "text" } : null;
 }
 
 /** One quota window, as the coordinator's tools report it. */

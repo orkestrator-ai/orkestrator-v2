@@ -35,3 +35,11 @@ mise run test:logged -- --name desktop-review-failures-isolated -- bun test --cw
 
 - **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.4NhQjk/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 - **Assessment:** recurrence confirmed by the unchanged owner pass. Shared-host scheduling pressure is a hypothesis, not an established cause. No implementation, assertion, deadline or skip in the owning file changed; the aggregate remains non-green.
+
+## Coordinator tool-surface repair rerun — 2026-11-05
+
+- Original command: `mise run test` at `8d08eaa27`, workspace/root/bridges/protocol reservations 6/1/2/1; workspace waited 1112.6 seconds for shared capacity.
+- Failure: the scheduled-reconcile test at line 540 observed one run instead of at least two after its timer wait (64.18 ms). Desktop reported 1769 passed, 16 skipped, one failed.
+- Evidence: `/tmp/orkestrator-test-run.b2h5jF/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and adjacent `summary.json`.
+- Complete unchanged owner: `mise run test:logged -- --name fixes-preview-retention-isolated -- bun test --cwd apps/desktop ./tests/preview-partition-retention.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures` passed, exit 0, in 0.4 seconds.
+- This repeats open case 0694. No desktop implementation, assertion, deadline or skip changed on this branch; root cause remains unconfirmed. The aggregate also had the terminal reconnect failure recorded in case 5105. Backend passed all 15,312 tests, and the root, bridge and protocol-lockfile groups passed.

@@ -215,7 +215,16 @@ backend.setTranscriptArtifactApplicationOrigins({
 // Private preview origins are optional: a missing domain or certificate only
 // disables browser publication and never blocks the backend from serving.
 const previewPublication = backend.previews
-  ? new PreviewPublicationManager({ runtime: backend.previews })
+  ? new PreviewPublicationManager({
+      runtime: backend.previews,
+      // Warn when the preview domain shares a site with any of these.
+      applicationOrigins: () => [
+        gatewayInfo.browserUrl,
+        info.browserUrl,
+        managedWebClient?.getStatus().url,
+        ...(options.allowedOrigins ?? []),
+      ],
+    })
   : null;
 await previewPublication?.start().catch((error: unknown) => {
   previewLog.warn("publication.start-failed", { error: formatLogError(error) });

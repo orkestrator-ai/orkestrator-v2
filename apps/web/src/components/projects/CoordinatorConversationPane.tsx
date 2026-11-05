@@ -116,8 +116,9 @@ export function CoordinatorConversationPane({
       <div className="relative min-h-0 flex-1">
         <LazyLoadBoundary
           loadingFallback={
-            <div className="grid h-full place-items-center">
-              <Loader2 className="size-6 animate-spin text-muted-foreground" />
+            <div role="status" className="grid h-full place-items-center">
+              <Loader2 className="size-6 animate-spin text-muted-foreground" aria-hidden="true" />
+              <span className="sr-only">Loading conversation</span>
             </div>
           }
           renderError={(details) => <LazyLoadInlineErrorFallback {...details} />}

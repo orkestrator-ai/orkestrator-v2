@@ -675,15 +675,30 @@ when the user said so in advance.
   carries the user's permission ([scheduled-jobs.md](scheduled-jobs.md#self-timers)):
   set with `authorizeAccountSwitch` in a turn the user started, naming the
   providers and any other machines, and used within two hours of firing.
+  Such a switch runs through `run_timer_agent_account_switch`, which records
+  it like the standing permission's (`authorizedBy: "self-timer"`, with the
+  timer's id and the user's words, outside that permission's hourly limit),
+  toasts it and lists it under the provider's accounts in Settings. Settings →
+  Schedules badges each timer that carries the permission, with the user's
+  words, and says when it lapses.
   The other is the [standing permission](#switching-without-asking) in Settings.
 - `get_usage_limits` (`agent-usage-limits.ts`, command
-  `get_project_usage_limits`) finds the tabs that need it. No provider reports
-  a usage limit as structured state, so it classifies each session's last
-  recorded turn error (`classifyUsageLimitError`: Claude's "hit your limit",
-  Codex's `usageLimitExceeded`, Grok's `USAGE_EXHAUSTED`, OpenCode's "limit
-  reached" retry) and adds the plan-usage cache's windows at 100 % that have
-  not reset. A tab stays listed until a later turn completes; after a
-  coordinator's switch it needs a new prompt to run again.
+  `get_project_usage_limits`) finds the tabs that need it, from each session's
+  last recorded turn outcome. The outcome's `failureKind: "usage-limit"` is
+  the provider's own word when the bridge reported it (see
+  [Usage-limit signal](#usage-limit-signal)); without it the error text is
+  classified (`classifyUsageLimitError`: Claude's "hit your limit", Codex's
+  `usageLimitExceeded`, Grok's `USAGE_EXHAUSTED`, OpenCode's "limit reached"
+  retry). Each listed tab says which (`signal: "provider" | "text"`). It adds
+  the plan-usage cache's windows at 100 % that have not reset. A tab stays
+  listed until a later turn completes.
+- **Resuming.** Nothing restarts a tab a limit stopped after a coordinator's
+  switch; the coordinator does, guided by the results. A switch that ran
+  returns `limitedTabs` (this project's tabs on that machine whose last turn
+  stopped on that provider's limit) and a `resumeStep` telling it to send each
+  one short prompt with `send_prompt_to_tab`; the mail for an approved switch
+  says to read them with `get_usage_limits`. A switch tool that also spent
+  turns would be harder to approve, so it does not.
 - `set_account_auto_switch` changes the ticks of
   [automatic switching](#automatic-switching), which resends what the weekly limit
   stopped by itself and tells the coordinator each time.
@@ -729,7 +744,8 @@ accounts without asking**, off by default
 - **What the user sees.** Each switch shows a toast naming the machine, both
   accounts, the coordinator and its reason (`coordinator-account-switched`), and
   stays listed under the tick (`get_coordinator_account_switch_grant`, the newest
-  ten) as long as the request store keeps it.
+  ten) as long as the request store keeps it. The switches self-timers made are
+  listed and toasted the same way, marked as allowed by a timer.
 - **Semantics.** Unchanged: machine-wide, a running turn finishes on the old
   account, and while automatic switching is on the switch pins the account and
   turns it off, as any manual switch does. That is deliberate. Automatic
@@ -738,6 +754,23 @@ accounts without asking**, off by default
   5-hour limit.
 - A self-timer's permission (`scheduleId`) still takes precedence over the
   standing permission, and keeps its own rules.
+
+### Usage-limit signal
+
+Two bridges report a usage limit as structured state, so a provider rewording
+its refusal does not hide it. The Codex bridge keeps app-server's
+`codexErrorInfo` code with a failed turn's error and, for `usageLimitExceeded`,
+answers `errorCode: "usage-limit"` beside `error` on `/session/:id/status`. The
+Claude bridge marks a turn whose `rate_limit_event` said `status: "rejected"`
+and, if that turn fails, answers the same on `GET /session/:id`. Both clear it
+with the error when the next turn starts. The backend reads it as
+`ProviderSessionFailedError.failureKind` and records it as the turn outcome's
+`failureKind`; without it the outcome is classified from its text and recorded
+the same way. The coordinator's reader, the automatic switcher and the
+workflows' resends all accept either (`usageLimitFailure`). A bridge that
+predates the code still works through its text, counted as
+`usage-limit.text-classified` for Claude and Codex
+([version-compatibility.md](version-compatibility.md#register)).
 
 ## Automatic switching
 

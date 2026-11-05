@@ -479,6 +479,9 @@ intent; the `public-cli.md` header already linked this file and 0014.
 
 - [0014-cli-qualification.md](0014-cli-qualification.md) for provider and platform
   evidence.
+- [5560-attention-follow-page-size.md](5560-attention-follow-page-size.md): what
+  `attention --follow` costs per poll, measured against fixtures, for task 1's
+  trigger measurement.
 - [agent-engines.md](../../architecture/agent-engines.md#opencode): OpenCode
   attachment MIME types, from todo 0166 (`--attach` with a text file was lost
   on OpenCode; found 2026-10-25, retired on 2026-10-29).

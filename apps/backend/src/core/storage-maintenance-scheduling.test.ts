@@ -6,7 +6,7 @@ import * as backups from "./storage-backups.js";
 import { StorageContext } from "./storage-context.js";
 import { createHarness } from "./change-tracking/service-test-support.js";
 
-test("snapshot scheduling delays the first check, prevents overlap and stops on close", async () => {
+test("snapshot scheduling delays the first check, chains the ledger copy and upkeep, prevents overlap and stops on close", async () => {
   const directory = mkdtempSync(path.join(tmpdir(), "ork-snapshot-timers-"));
   const context = new StorageContext(directory, { snapshots: true });
   const stale = path.join(
@@ -23,6 +23,12 @@ test("snapshot scheduling delays the first check, prevents overlap and stops on 
         finish = resolve;
       }),
   );
+  const ledgerCopy = spyOn(backups, "takeLedgerSnapshotIfDue").mockResolvedValue(null);
+  const upkeep = spyOn(backups, "runDatabaseUpkeep").mockResolvedValue(undefined);
+  // The check chains the hourly copy, the ledger copy and upkeep.
+  const settle = async () => {
+    for (let tick = 0; tick < 10; tick += 1) await Promise.resolve();
+  };
   jest.useFakeTimers();
   try {
     context.startSnapshots();
@@ -34,12 +40,17 @@ test("snapshot scheduling delays the first check, prevents overlap and stops on 
     expect(copy).toHaveBeenCalledTimes(1);
     jest.advanceTimersByTime(backups.BACKUP_CHECK_INTERVAL_MS);
     expect(copy).toHaveBeenCalledTimes(1);
+    expect(ledgerCopy).toHaveBeenCalledTimes(0);
     finish(null);
-    await Promise.resolve();
+    await settle();
+    // The ledger copy and upkeep follow the hourly copy, in the same check.
+    expect(ledgerCopy).toHaveBeenCalledTimes(1);
+    expect(upkeep).toHaveBeenCalledTimes(1);
     jest.advanceTimersByTime(backups.BACKUP_CHECK_INTERVAL_MS);
     expect(copy).toHaveBeenCalledTimes(2);
     finish(null);
-    await Promise.resolve();
+    await settle();
+    expect(upkeep).toHaveBeenCalledTimes(2);
     context.close();
     jest.advanceTimersByTime(backups.BACKUP_CHECK_INTERVAL_MS * 3);
     expect(copy).toHaveBeenCalledTimes(2);
@@ -51,6 +62,8 @@ test("snapshot scheduling delays the first check, prevents overlap and stops on 
   } finally {
     context.close();
     copy.mockRestore();
+    ledgerCopy.mockRestore();
+    upkeep.mockRestore();
     jest.useRealTimers();
     rmSync(directory, { recursive: true, force: true });
   }

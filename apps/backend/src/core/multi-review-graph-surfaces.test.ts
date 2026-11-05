@@ -1,6 +1,6 @@
 /**
  * The coordinator's Multi Review surfaces on the graph engine (item 301):
- * `launch_multi_review` and `start_multi_review` start a graph-engine review
+ * `launch_multi_review` starts a graph-engine review
  * with the button's automation defaults, `get_multi_review` answers from the
  * projected record exactly as from a bespoke one, and status wakes report each
  * end once, with the review's own graph run adding nothing. Real registry,
@@ -120,33 +120,6 @@ describe("coordinator launch on the graph engine", () => {
       await c.drive(workflow.id, (current) => current.phase !== "preparing"),
     );
     expect(run.bindings.params).toMatchObject({ autoFix: false, autoPr: true });
-  });
-
-  test("start_multi_review (the build-gated primitive) also starts a graph-engine review", async () => {
-    const c = await world();
-    await saveAutomationDefaults(c, { autoFix: false, autoPr: true });
-    const storage = c.w.fixture.storage;
-    storage.getBuildPipeline = (async () => ({
-      snapshot: { projectId: c.w.projectId, environmentId: c.w.environmentId, phase: "complete" },
-    })) as unknown as typeof storage.getBuildPipeline;
-    const result = await c.tool("start_multi_review", {
-      requestId: "start-1",
-      buildPipelineId: "build-1",
-      environmentId: c.w.environmentId,
-      targetBranch: "main",
-      ...rows,
-    });
-    expect(result.isError).not.toBe(true);
-    const content = result.structuredContent as {
-      workflow: { id: string };
-      selection: { autoFix: boolean; autoPr: boolean };
-    };
-    expect(content.selection).toMatchObject({ autoFix: false, autoPr: true });
-    expect(await c.w.workflow(content.workflow.id)).toMatchObject({
-      engine: "graph",
-      autoFix: false,
-      autoPr: true,
-    });
   });
 });
 

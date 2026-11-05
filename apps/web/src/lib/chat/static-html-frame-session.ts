@@ -8,6 +8,7 @@ import {
   STATIC_HTML_FRAME_PROTOCOL_VERSION,
   parseStaticHtmlFrameMessage,
   type StaticHtmlFrameErrorCode,
+  type StaticHtmlFrameMessage,
   type StaticHtmlFrameRejection,
   type StaticHtmlFrameTheme,
   type StaticHtmlHostMessage,
@@ -31,6 +32,8 @@ import {
 export type StaticHtmlFrameOutcome =
   | { kind: "ready" }
   | { kind: "rendered"; height: number; themed: boolean }
+  | { kind: "text"; text: string }
+  | { kind: "text-partial" }
   | { kind: "size"; height: number }
   | { kind: "error"; code: StaticHtmlFrameErrorCode }
   | { kind: "interaction"; focused: boolean; hasSelection: boolean; pointerSelecting: boolean }
@@ -56,6 +59,8 @@ export class StaticHtmlFrameSession {
   private refused = 0;
   private lastHeight: number | null = null;
   private sizeChanges: number[] = [];
+  /** Chunks of the mount's one text report; null once it arrived or was abandoned. */
+  private textChunks: string[] | null = [];
   private readonly limiter: ArtifactFrameRateLimiter;
   private readonly now: () => number;
 
@@ -110,6 +115,9 @@ export class StaticHtmlFrameSession {
         this.phase = "rendered";
         this.lastHeight = message.height;
         return { kind: "rendered", height: message.height, themed: message.themed };
+      case "text":
+        if (this.phase !== "rendered") return { kind: "rejected", reason: "not-rendering" };
+        return this.noteText(message);
       case "size":
         if (this.phase !== "rendered") return { kind: "rejected", reason: "not-rendering" };
         return this.noteSize(message.height);
@@ -134,6 +142,24 @@ export class StaticHtmlFrameSession {
       case "escape":
         return { kind: "escape" };
     }
+  }
+
+  /**
+   * Whole or not at all, like the document itself: a chunk out of sequence means
+   * the rate limiter dropped one, and part of a report is never indexed.
+   */
+  private noteText(
+    message: Extract<StaticHtmlFrameMessage, { type: "text" }>,
+  ): StaticHtmlFrameOutcome {
+    const chunks = this.textChunks;
+    if (chunks === null || message.index !== chunks.length) {
+      this.textChunks = null;
+      return { kind: "rejected", reason: "bad-shape" };
+    }
+    chunks.push(message.text);
+    if (chunks.length < message.count) return { kind: "text-partial" };
+    this.textChunks = null;
+    return { kind: "text", text: chunks.join("") };
   }
 
   private noteSize(height: number): StaticHtmlFrameOutcome {

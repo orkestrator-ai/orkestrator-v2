@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./browser-test";
 import { randomUUID } from "node:crypto";
 import { containerName, fixtureEnvironment, inContainer, invoke } from "./container-wiring-support";
 

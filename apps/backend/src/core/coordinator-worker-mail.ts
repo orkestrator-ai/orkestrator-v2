@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
+  COORDINATOR_REQUEST_ID_REUSED_ERROR,
   COORDINATOR_MAIL_ADDRESS,
   COORDINATOR_PROJECT_HOME_MESSAGE_WINDOW_MS,
   coordinatorConversationIdFromRuntimeId,
@@ -113,7 +114,7 @@ export async function openWorkerDelegation(
     association.conversationId !== scope.conversationId ||
     association.resourceId !== workerEnvironmentId
   ) {
-    throw new Error("Coordinator request id was reused with a different delegation target");
+    throw new Error(COORDINATOR_REQUEST_ID_REUSED_ERROR);
   }
   const opened = await context.storage.coordinators.openCoordinatorDelegation(
     context.runtime.coordinatorRequests.workerTabs,
@@ -138,6 +139,22 @@ async function sendCoordinatorWorkerMail(
     conversationId: sender.conversationId,
   };
   const { requestId, toTabId: requestedTabId, steer } = mail;
+  // A request id this coordinator already used to ask another worker, or in
+  // another conversation, cannot open this message's delegation, so it would
+  // arrive with no wake ever coming back. Refuse it before anything is sent.
+  const prior = (
+    await context.storage.coordinators.listCoordinatorWorkflowAssociations(scope.projectId)
+  ).find(
+    (association) =>
+      association.coordinatorId === scope.coordinatorId &&
+      association.requestId === `delegation:${requestId}`,
+  );
+  if (
+    prior &&
+    (prior.conversationId !== scope.conversationId || prior.resourceId !== destination.id)
+  ) {
+    throw new Error(COORDINATOR_REQUEST_ID_REUSED_ERROR);
+  }
   // Before admission: a copy takes as long as it takes and holds no mail lock.
   // If it fails the message does not exist and the caller is told why.
   const attachments = await placeCallerAttachments(context, invoke, scope, requestId, mail.own, {
@@ -178,6 +195,7 @@ async function sendCoordinatorWorkerMail(
     // along the way. A message the recipient bounced or that was never
     // scheduled for delivery has asked nothing and opens nothing.
     let coordinatorDelegationOpened = false;
+    let delegationNote: string | undefined;
     if (message.placement === "pending-inject" && joining) {
       coordinatorDelegationOpened = true;
     } else if (message.placement === "pending-inject") {
@@ -194,6 +212,8 @@ async function sendCoordinatorWorkerMail(
           source: "outbound-message",
           error: formatLogError(error),
         });
+        // The message is already stored; say plainly that no wake will follow.
+        delegationNote = `The message was sent, but no delegation was opened, so you will not be woken when the worker answers: ${error instanceof Error && error.message !== COORDINATOR_REQUEST_ID_REUSED_ERROR ? error.message : "The delegation request ID may already belong to another worker. Do not resend the delivered message under a new ID."}`;
       }
     }
     // Say plainly when the worker cannot read it yet: "pending" alone reads
@@ -215,6 +235,7 @@ async function sendCoordinatorWorkerMail(
       ...message,
       coordinatorDelegationOpened,
       ...(deliveryNote ? { deliveryNote } : {}),
+      ...(delegationNote ? { delegationNote } : {}),
     };
   });
   // Outside the admission lock: the delivery pass may need it.
@@ -223,6 +244,7 @@ async function sendCoordinatorWorkerMail(
     ...(await settleCoordinatorDeliverNow(context, admitted)),
     coordinatorDelegationOpened: admitted.coordinatorDelegationOpened,
     ...(admitted.deliveryNote ? { deliveryNote: admitted.deliveryNote } : {}),
+    ...(admitted.delegationNote ? { delegationNote: admitted.delegationNote } : {}),
   };
 }
 

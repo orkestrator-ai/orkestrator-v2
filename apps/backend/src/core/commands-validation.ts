@@ -1,3 +1,4 @@
+import { isValidTimeZone } from "@orkestrator/protocol/schedule-time";
 import { parseNativeAgentCommandIntent } from "@orkestrator/protocol/agent-command-catalogue";
 import { createHash } from "node:crypto";
 import {
@@ -413,6 +414,8 @@ export function asDispatchNativeAgentPromptInput(args: JsonRecord): DispatchNati
       typeof args.includeLocalSettings === "boolean" ? args.includeLocalSettings : undefined,
     promptSuggestions:
       typeof args.promptSuggestions === "boolean" ? args.promptSuggestions : undefined,
+    // Advisory: a zone this runtime cannot name is dropped, never a refusal.
+    ...(isValidTimeZone(args.clientTimeZone) ? { clientTimeZone: args.clientTimeZone } : {}),
   };
 }
 

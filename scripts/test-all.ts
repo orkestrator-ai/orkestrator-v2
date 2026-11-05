@@ -883,6 +883,7 @@ const ROOT_TEST_PATHS = [
   "./e2e/agent-testing/packaged-electron-app.test.ts",
   "./e2e/agent-testing/process-tree.test.ts",
   "./e2e/agent-testing/network-churn-report.test.ts",
+  "./e2e/agent-testing/browser-test.test.ts",
   "./e2e/agent-testing/artifact-sanitizing-reporter.test.ts",
   "./e2e/agent-testing/electron-display-setup.test.ts",
   "./scripts/opencode-live-compatibility-probe.test.ts",

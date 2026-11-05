@@ -16,6 +16,7 @@ import {
   isOptimisticNativeMessage,
   positionOptimisticNativeMessage,
   presentPeerMailCarrierRow,
+  presentPeerMailRows,
   splitPeerMailNativeMessageContent,
   SYSTEM_MESSAGE_PREFIX,
 } from "./client-only-messages";
@@ -427,6 +428,43 @@ describe("client-only optimistic messages", () => {
       ["peer-mail-mail-a", "system", expect.stringContaining("Report")],
       ["row", "user", "Look at this"],
     ]);
+  });
+
+  test("presents the mail rows of a transcript and leaves every other row alone", () => {
+    const createdAt = "2026-10-16T10:04:00.000Z";
+    const typed = createServerMessage("typed", "Please wait", createdAt);
+    const quoted = createServerMessage(
+      "reply",
+      renderAgentMailCarrier(mailMessage({ id: "mail-a" })),
+      createdAt,
+    );
+    quoted.role = "assistant";
+    const delivered = createServerMessage(
+      "delivered",
+      [mailMessage({ id: "mail-a" }), mailMessage({ id: "mail-b" })]
+        .map(renderAgentMailCarrier)
+        .join("\n\n"),
+      createdAt,
+    );
+    // The same delivery again, as a retried paste would store it.
+    const repeated = createServerMessage(
+      "repeated",
+      renderAgentMailCarrier(mailMessage({ id: "mail-b" })),
+      createdAt,
+    );
+
+    const rows = presentPeerMailRows([typed, quoted, delivered, repeated]);
+
+    expect(rows.map((row) => row.id)).toEqual([
+      "typed",
+      "reply",
+      "peer-mail-mail-a",
+      "peer-mail-mail-b",
+    ]);
+    expect(rows[0]).toBe(typed);
+    expect(rows[1]).toBe(quoted);
+    // A later transcript line does not rebuild the tile of an unchanged row.
+    expect(presentPeerMailRows([delivered])[0]).toBe(rows[2]!);
   });
 
   test("includes file parts for optimistic attachments", () => {

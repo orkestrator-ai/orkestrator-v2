@@ -1,7 +1,9 @@
 import {
   classifyUsageLimitError,
   exhaustedUsageWindows,
+  usageLimitFailure,
   usageWindowView,
+  type TurnFailureKind,
   type UsageWindowView,
 } from "@orkestrator/protocol/agent-usage-limits";
 import {
@@ -12,6 +14,7 @@ import {
 } from "@orkestrator/protocol/plan-usage";
 import type { Environment, PersistedNativeAgentSession } from "./models.js";
 import type { PlanUsageCache } from "./plan-usage-cache.js";
+import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 
 /**
  * Which agent tabs of a project stopped on a provider usage limit, and which
@@ -23,7 +26,10 @@ import type { PlanUsageCache } from "./plan-usage-cache.js";
  * storage listing.
  *
  * A tab counts as limited while its newest recorded turn failed with a usage
- * limit; any later turn that completes clears it. A turn the backend did not
+ * limit; any later turn that completes clears it. The outcome's `failureKind`
+ * says so when the bridge reported the provider's own signal; an outcome
+ * without it (an older bridge, a provider with no signal, a record from before
+ * the field) is classified by its error text. A turn the backend did not
  * dispatch (one typed into a terminal CLI) is not recorded, so a tab can be
  * limited without being listed: `get_tab_state` reads the live state.
  */
@@ -37,6 +43,11 @@ export interface UsageLimitedTab {
   /** The provider's error, bounded. */
   error: string;
   resetHint?: string;
+  /**
+   * `provider`: the provider's own structured signal said so. `text`: only
+   * the error's wording did.
+   */
+  signal: "provider" | "text";
 }
 
 export interface UsageLimitedAccount {
@@ -73,6 +84,25 @@ function tabIdFromLogicalKey(environmentId: string, logicalSessionKey: string): 
   return logicalSessionKey.slice(prefix.length) || null;
 }
 
+/**
+ * The `failureKind` to record for a failed turn: the bridge's structured kind
+ * when it reported one. Text-only failures keep their provenance at read time. A Claude or
+ * Codex limit known from text alone is counted, since those bridges send the
+ * code (`usage-limit.text-classified`, docs/architecture/version-compatibility.md).
+ */
+export function turnOutcomeFailureKind(
+  agent: string,
+  error: string | undefined,
+  reported: TurnFailureKind | undefined,
+): TurnFailureKind | undefined {
+  if (reported) return reported;
+  if (!classifyUsageLimitError(error)) return undefined;
+  if (agent === "claude" || agent === "codex") {
+    compatibilityPathUsage.record("usage-limit.text-classified");
+  }
+  return undefined;
+}
+
 /** `UsageLimitSources.planUsage` over a backend's cache. */
 export function cachedPlanUsage(
   cache: Pick<PlanUsageCache, "peek" | "lastOk">,
@@ -103,7 +133,7 @@ export async function readProjectUsageLimits(
     // Outcomes are appended as they are observed.
     const last = session.turnOutcomes?.at(-1);
     if (!last || last.outcome !== "failed") continue;
-    const match = classifyUsageLimitError(last.error);
+    const match = usageLimitFailure(last);
     if (!match) continue;
     limitedTabs.push({
       environmentId: environment.id,
@@ -113,6 +143,7 @@ export async function readProjectUsageLimits(
       observedAt: last.observedAt,
       error: (last.error ?? "").slice(0, MAX_ERROR_CHARS),
       ...(match.resetHint ? { resetHint: match.resetHint } : {}),
+      signal: match.signal,
     });
   }
   limitedTabs.sort((left, right) => right.observedAt.localeCompare(left.observedAt));

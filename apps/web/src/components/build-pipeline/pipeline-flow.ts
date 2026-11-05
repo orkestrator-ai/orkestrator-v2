@@ -309,6 +309,59 @@ export function pipelineSkipAction(
 }
 
 /**
+ * The reviewer a node can stop on its own: one of the running review's panel
+ * that is queued, starting or running. The rest of the panel carries on, unlike
+ * skipping, which ends the whole review. A pause has already stopped the panel.
+ */
+export function pipelineStoppableReviewerId(
+  pipeline: BuildPipeline,
+  node: PipelineFlowNode,
+): string | null {
+  if (node.placeholder || node.superseded || pipeline.phase !== "reviewing") return null;
+  const status = node.reviewer?.status;
+  return status === "pending" || status === "running" ? node.reviewer!.id : null;
+}
+
+/** Whether the worktree moved during the newest live review of the current round. */
+export function pipelineReviewWorktreeChanged(pipeline: BuildPipeline): boolean {
+  if (pipeline.reviewFanout?.snapshotStale) return true;
+  return (
+    pipeline.sessions.findLast(
+      (session) =>
+        session.phase === "review" &&
+        session.iteration === pipeline.iteration &&
+        !isSupersededPipelineSession(session) &&
+        session.superseded !== true &&
+        (session.reviewWorktreeChanged !== undefined || session.label === "Consolidation"),
+    )?.reviewWorktreeChanged === true
+  );
+}
+
+/**
+ * What restarting this reviewer alone names: its live record, or for a pass the
+ * pipeline has moved on from, its session. Only the current round's panel can
+ * restart this way, because a later round's code needs a whole new review. A
+ * failed reviewer of the live pass has Retry reviewer instead, and a queued one
+ * has nothing to restart yet.
+ */
+export function pipelineRestartableReviewerId(
+  pipeline: BuildPipeline,
+  node: PipelineFlowNode,
+): string | null {
+  if (node.kind !== "reviewer" || node.placeholder || node.superseded) return null;
+  if (isCancelledBuildPipeline(pipeline)) return null;
+  if (node.reviewer) {
+    const status = node.reviewer.status;
+    return status === "running" || status === "completed" || status === "cancelled"
+      ? node.reviewer.id
+      : null;
+  }
+  return node.session && node.session.iteration === pipeline.iteration && pipeline.reviewPackage
+    ? node.session.sessionKey
+    : null;
+}
+
+/**
  * The stage ID that prepares the review package again without rerunning the
  * build or fix that wrote its plan, when `node` offers that: the Build or Fix
  * that wrote the plan, and the Prepare node that holds its checks. Only the

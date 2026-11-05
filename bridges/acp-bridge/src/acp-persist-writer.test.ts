@@ -108,7 +108,11 @@ test("a barrier writes the current state now, without waiting for the streaming 
   const timer = spyOn(globalThis, "setTimeout");
   try {
     writer.scheduleStreamingPersist();
-    expect(timer.mock.calls.some((call) => call[1] === 1000)).toBe(true);
+    const streamingTimerIndex = timer.mock.calls.findIndex((call) => call[1] === 1000);
+    expect(streamingTimerIndex).toBeGreaterThanOrEqual(0);
+    // Hold the streaming callback indefinitely. The barrier must settle even
+    // though this timer can never release it (the test timeout guards a hang).
+    clearTimeout(timer.mock.results[streamingTimerIndex]!.value as ReturnType<typeof setTimeout>);
     state.promptJournal.set("request-1", {
       requestId: "request-1",
       state: "accepted",

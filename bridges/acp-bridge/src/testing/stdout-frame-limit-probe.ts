@@ -16,8 +16,12 @@ const agent = `
     input += data;
     const newline = input.indexOf("\\n");
     if (newline < 0) return;
-    const { id, params } = JSON.parse(input.slice(0, newline));
+    const { id, method, params } = JSON.parse(input.slice(0, newline));
     input = input.slice(newline + 1);
+    if (method === "probe/after") {
+      await wrote(JSON.stringify({ jsonrpc: "2.0", id, result: { alive: true } }) + "\\n");
+      return;
+    }
     const head = '{"jsonrpc":"2.0","id":' + id + ',"result":{"text":"';
     const tail = '"}}';
     const padding = params.bytes - head.length - tail.length;
@@ -61,17 +65,28 @@ async function run(bytes: number, newline: "joined" | "late" | "none"): Promise<
   const child = new AcpProcess();
   const result: CaseResult = { closedAfter: false };
   try {
-    const answer = (await child.request("probe/frame", { bytes, newline })) as { text: string };
-    result.answeredBytes = answer.text.length;
-  } catch (error) {
-    result.error = error instanceof Error ? error.message : String(error);
-    // A closed connection refuses the next request rather than sending it.
-    result.closedAfter = await child.request("probe/after", {}, 2_000).then(
-      () => false,
-      () => true,
-    );
+    try {
+      const answer = (await child.request("probe/frame", { bytes, newline })) as { text: string };
+      result.answeredBytes = answer.text.length;
+    } catch (error) {
+      result.error = error instanceof Error ? error.message : String(error);
+    }
+    // Check both accepted and rejected frames. A live child must answer; a
+    // timeout or any other transport failure must fail the probe, not pass it.
+    try {
+      const answer = await child.request("probe/after", {}, 2_000);
+      if (JSON.stringify(answer) !== JSON.stringify({ alive: true })) {
+        throw new Error("Live framing agent did not acknowledge the follow-up");
+      }
+    } catch (error) {
+      if (!(error instanceof Error) || error.message !== "framing ACP process is not running") {
+        throw error;
+      }
+      result.closedAfter = true;
+    }
+  } finally {
+    await child.close();
   }
-  await child.close();
   return result;
 }
 

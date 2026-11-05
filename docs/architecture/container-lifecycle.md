@@ -1444,7 +1444,10 @@ so the pinned CLI never replaces itself in the container. `ClaudeStatePollManage
 Version 2 hooks call `orkestrator-state-signal working|waiting`, which serializes
 writers with a bounded file lock and atomically replaces `/tmp/.claude-state-snapshot`
 with `state revision completions`. The counters survive lost POSTs, including a
-whole working-to-waiting turn between reads. The legacy state file is still
+whole working-to-waiting turn between reads. A writer that cannot take the
+lock within one second skips its write and still exits 0, so a hook never holds
+up Claude; `ORKESTRATOR_STATE_LOCK_WAIT` (whole seconds) overrides the wait,
+and only tests set it. The legacy state file is still
 written for older backends. Reads are bounded to 256 bytes. Version 1 images
 keep the one-second poll because their state cannot expose a missed whole turn.
 

@@ -3,6 +3,7 @@ import type { ControlMcpServer, ControlMcpInvoker } from "./control-mcp-server.j
 import { coordinatorRoleCapabilities, withoutWakePromise } from "./control-mcp-tools.js";
 import {
   COORDINATOR_ASYNC_CONTRACT,
+  COORDINATOR_TIMERS_AND_ACCOUNTS_RULE,
   COORDINATOR_MESSAGING_OFF_NOTE,
   COORDINATOR_PR_RULE,
   COORDINATOR_PR_STATUS_WAKE,
@@ -919,7 +920,11 @@ describe("Orkestrator control MCP server", () => {
   test("with agent messaging off no coordinator surface promises a wake", async () => {
     let enabled = false;
     overrides.set("get_config", () => ({
-      global: { enabledAgentPlatforms: ["codex"], agentMessaging: { enabled } },
+      global: {
+        enabledAgentPlatforms: ["codex"],
+        agentMessaging: { enabled },
+        experimentalScheduling: true,
+      },
     }));
     overrides.set("get_project_coordinator", () => ({
       workspace: {
@@ -953,6 +958,7 @@ describe("Orkestrator control MCP server", () => {
     expect(await instructions()).toContain(COORDINATOR_MESSAGING_OFF_NOTE);
     expect(await instructions()).not.toContain(COORDINATOR_ASYNC_CONTRACT);
     expect(await instructions()).not.toContain(COORDINATOR_PR_RULE);
+    expect(await instructions()).not.toContain(COORDINATOR_TIMERS_AND_ACCOUNTS_RULE);
     const launchPlan = async (requestId: string) => {
       const launched = await rpc(credential.url, credential.token, "tools/call", {
         name: "launch_feature_plan",
@@ -968,6 +974,7 @@ describe("Orkestrator control MCP server", () => {
     enabled = true;
     expect(await instructions()).toContain(COORDINATOR_ASYNC_CONTRACT);
     expect(await instructions()).toContain(COORDINATOR_PR_RULE);
+    expect(await instructions()).toContain(COORDINATOR_TIMERS_AND_ACCOUNTS_RULE);
     expect(await instructions()).not.toContain(COORDINATOR_MESSAGING_OFF_NOTE);
     expect((await launchPlan("plan-on")).wake).toContain("woken once");
   });

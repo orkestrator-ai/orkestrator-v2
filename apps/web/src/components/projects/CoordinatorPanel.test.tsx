@@ -732,6 +732,23 @@ describe("CoordinatorPanel", () => {
     expect(notes.grok).toBeUndefined();
   });
 
+  test("refreshes the messaging notice after config changes without remounting", async () => {
+    const notice = /Delegation unavailable: agent messaging is off/;
+    ensuredSnapshot = { ...snapshot, agentMessaging: { enabled: true } };
+    render(<CoordinatorPanel projectId="project-1" />);
+    await screen.findByRole("button", { name: /^Pause$/ });
+    expect(screen.queryByText(notice)).toBeNull();
+    for (const enabled of [false, true]) {
+      const reads = getCoordinatorView.mock.calls.length;
+      act(() => {
+        ensuredSnapshot = { ...snapshot, agentMessaging: { enabled } };
+        dispatchResourceChange({ resource: "config", id: "global", revision: enabled ? 2 : 1 });
+      });
+      await waitFor(() => expect(getCoordinatorView.mock.calls.length).toBeGreaterThan(reads));
+      await waitFor(() => expect(screen.queryByText(notice) !== null).toBe(!enabled));
+    }
+  });
+
   test("says delegation is unavailable while agent messaging is off", async () => {
     const notice = /Delegation unavailable: agent messaging is off/;
     // An older backend says nothing about the setting, which is not "off".

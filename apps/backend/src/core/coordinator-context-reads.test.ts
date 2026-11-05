@@ -1,10 +1,12 @@
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, mock, spyOn, test } from "bun:test";
 import type { CoordinatorWorkflowAssociation } from "@orkestrator/protocol/coordinator";
 import {
   agentMessagingEnabled,
   coordinatorDelegationAvailable,
   readCoordinatorWaitingOn,
 } from "./coordinator-context-reads.js";
+
+import * as providers from "./coordinator-providers.js";
 
 const config = (agentMessaging?: { enabled: boolean }) => ({
   loadConfig: async () => ({ global: { agentMessaging } }) as never,
@@ -61,6 +63,29 @@ describe("coordinatorDelegationAvailable", () => {
     expect(await available(false, true)).toBe(false);
     // With messaging off every delegation would wait for a wake that cannot arrive.
     expect(await available(true, false)).toBe(false);
+  });
+
+  test("an unqualified provider cannot delegate even with messaging and controls on", async () => {
+    const qualification = spyOn(providers, "coordinatorProviderQualification").mockReturnValue({
+      tier: "unavailable",
+      available: false,
+      delegation: false,
+    });
+    const loadConfig = mock(
+      async () => ({ global: { agentMessaging: { enabled: true } } }) as never,
+    );
+    try {
+      expect(
+        await coordinatorDelegationAvailable("codex", {
+          controlMcpRunning: () => true,
+          storage: { loadConfig },
+        }),
+      ).toBe(false);
+      expect(qualification).toHaveBeenCalledWith("codex");
+      expect(loadConfig).not.toHaveBeenCalled();
+    } finally {
+      qualification.mockRestore();
+    }
   });
 
   test("does not read the setting when Control MCP already answers", async () => {

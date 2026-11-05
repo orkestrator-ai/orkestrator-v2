@@ -658,7 +658,9 @@ export async function createControlMcp(
         (coordinatorScope?.capabilities.includes("environments") && messagingEnabled
           ? ` ${COORDINATOR_ENVIRONMENT_CHOICE_RULE} ${COORDINATOR_PR_RULE} ${COORDINATOR_VALIDATION_RULE}`
           : "") +
-        (coordinatorScope?.capabilities.includes("accounts") && schedulingEnabled
+        (coordinatorScope?.capabilities.includes("accounts") &&
+        schedulingEnabled &&
+        messagingEnabled
           ? ` ${COORDINATOR_TIMERS_AND_ACCOUNTS_RULE}`
           : "") +
         (coordinatorScope

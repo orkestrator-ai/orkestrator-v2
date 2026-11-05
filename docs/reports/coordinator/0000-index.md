@@ -19,8 +19,7 @@ A batch file combines several reports as numbered parts and takes the rating of 
 | 1 | [0090-x1-coordinator-trust-boundary.md](../security/0090-x1-coordinator-trust-boundary.md) | High | No | **X1, Coordinator trust boundary.**<br>`Security 0090`: M11: delegation scope and marking mail-originated delegations<br>`Security 0180`: L16: operator token reads, confirm token wording, self-reminder framing<br>`Security 0210`: I2: two stale statements about side agents<br>`Coordinator 0120`: Labelling the home in `list_environments` and a live read-only step for the message gate.<br>`Coordinator 0310`: Refusing `adopt_workflow` from a side agent. | From `Security 0090`: An injected worker can reach a user-created environment under its looser policy, limited only by framing and budgets. |
 | 2 | [0080-c2-workflow-records.md](0080-c2-workflow-records.md) | Medium | No | **C2, Workflow records.**<br>`0080`: The swallowed delegation-open error, showing store-full to the user, and settling the shared cap.<br>`0100`: Closing work when a node is forgotten, and a notice for a long-offline node.<br>`0380`: One shared alias lookup.: Duplicated request-alias lookup | From `0080`: Retention makes it rare, and what remains is a functional gap when every record is in use. |
 | 3 | [0110-c3-sweep-and-reads.md](0110-c3-sweep-and-reads.md) | Medium | No | **C3, Sweep and reads.**<br>`0110`: Syncing once per sweep, a read-only `snapshot()`, batched wake writes and pruning below the limit.<br>`0370`: One own-mailbox check, and `coordinatorRuntimeId` everywhere. | From `0110`: Real repeated work that has not been measured, so it removes a risk rather than a known slowdown. |
-| 4 | [0240-c10-explanations.md](0240-c10-explanations.md) | Medium | No | **C10, Explanations.**<br>`0320`: A tooltip, hint and placeholder for side agents.<br>`0330`: A dismissible first-run card.: Explain the coordinator once, in the product<br>`0400`: Discoverability of `!` commands, the footer wording, and a first message starting with `!`.<br>`0240`: Naming the tier in the picker and badge, and removing the repeated caveat. | From `0240`: The badge calls two different tiers advisory, so the user's main safety fact is blurred. |
-| 5 | [0390-panel-re-render-cost.md](0390-panel-re-render-cost.md) | Low | No | Narrowing the panel's subscriptions after measuring. | An optimisation that should wait for a measurement. |
+| 4 | [0390-panel-re-render-cost.md](0390-panel-re-render-cost.md) | Low | No | Narrowing the panel's subscriptions after measuring. | An optimisation that should wait for a measurement. |
 
 ## Parallel running
 
@@ -37,14 +36,12 @@ This index only changes when a branch merges, so it can't show what is running n
 | X1 | [Coordinator trust boundary](../security/0090-x1-coordinator-trust-boundary.md) | `0120` task 1, `0310`; also security `0090`, `0180`, `0210` | Coordinator backend, 1 of 3 | None | None |
 | C2 | [Workflow records](0080-c2-workflow-records.md) | `0080`, `0100`, `0380` | Coordinator backend, 2 of 3 | None | None |
 | C3 | [Sweep and reads](0110-c3-sweep-and-reads.md) | `0110`, `0370` | Coordinator backend, 3 of 3 | None | None |
-| C10 | [Explanations](0240-c10-explanations.md) | `0320`, `0330`, `0400`, `0240` | Coordinator panel, 1 of 2 | None | None |
 
 Why these are grouped:
 
 - **X1:** What a coordinator or side agent may reach, and how its mail is framed. `0120` task 2 is a live check and can run separately.
 - **C2:** Same workflow store, and `0100` links to `0080`.
 - **C3:** `0110` makes reads cheap. `0370` routes the copies through the same mailbox check.
-- **C10:** Copy in the notices file. `0320` and `0330` link to each other.
 
 ### Files built on their own
 
@@ -52,11 +49,11 @@ These still follow the lane and conflict rules above.
 
 | Batch | Name | Files | Lane and position | Finish first | Not at the same time as |
 | --- | --- | --- | --- | --- | --- |
-| C-0390 | [Panel re-render cost, measure first](0390-panel-re-render-cost.md) | `0390` | Coordinator panel, 2 of 2 | None | None |
+| C-0390 | [Panel re-render cost, measure first](0390-panel-re-render-cost.md) | `0390` | Coordinator panel, 1 of 1 | None | None |
 
 ## Status of every finding
 
-45 done, 7 partly done, 15 open, 7 no action.
+50 done, 5 partly done, 12 open, 7 no action.
 
 Batch C9 (Panel split) is closed. Its task-by-task outcomes are in the [closing report](../2026-11-05-c9-closing-report.md).
 
@@ -85,6 +82,12 @@ version of its deleted report, which the deletion commit's diff shows in full:
 What it left is in to-dos
 [4880](../../todo/coordinator-and-multi-review/4880-c6-live-checks.md) and
 [4881](../../todo/coordinator-and-multi-review/4881-unavailable-provider-transcript.md).
+
+Batch C10 (Explanations) is closed. It was built from `main` at `a0a6d6206`. Its
+task-by-task outcome table ends the last version of its deleted report, which
+the deletion commit's diff shows in full:
+`git show "$(git log -1 --format=%H --grep='close coordinator batch C10')"`.
+Every task was done, so it left no to-do.
 
 | Finding | Disposition | Evidence |
 | --- | --- | --- |
@@ -130,23 +133,23 @@ What it left is in to-dos
 | U5: Git actions gated on the wrong turn | Done | Any active turn disables them and is named: `useCoordinatorActiveTurn.ts`, `coordinator-checkout-turn.ts`, `CoordinatorToolbar.tsx:94-98`. |
 | U6: pausing hides the transcript | Done | Paused panes read saved history and establish nothing: `sendingHeldReason` (`AgentNativeTab.controller.tsx`, `useNativeAgentSession.ts`) and `heldCoordinatorConversation` (`coordinator-runtime.ts`), tested in `native-agent-service-held-coordinator.test.ts`. |
 | U7: chip disappears with focus | Done | The Work panel covers every conversation, `docs/architecture/coordinator.md:997-1002` (`eb6bf887a`, #1698). |
-| U8: side agents never explained | Open | [C10 part 0320](0240-c10-explanations.md#0320-side-agents-are-never-explained) |
+| U8: side agents never explained | Done | New side agent's tooltip, and a side composer's own placeholder and hint (`COORDINATOR_SIDE_AGENT_EXPLANATION`, `CoordinatorPanel.tsx`, `CoordinatorConversationPane.tsx`), tested in `CoordinatorPanel.tabs.test.tsx` and `CoordinatorPanel.outcome.test.tsx`. Batch C10. |
 | U9: dead-end states and scattered settings | Done | Buttons on the provider banner, empty-platform message and no-checkout card, and a Coordinator section in Settings: `CoordinatorConversationPane.tsx`, `CoordinatorPanel.tsx`, `GlobalSettings.sections.tsx`, tested in `CoordinatorPanel.outcome.test.tsx` and `GlobalSettings.coordinator-section.test.tsx`. |
 | U10: first sends in two groups | Done | One held prompt per conversation: `useCoordinatorLaunches.ts`. |
 | U11: accessibility | Done | Tab semantics, keyboard tab moves and a labelled spinner: `CoordinatorPaneTree.tsx`, `CoordinatorConversationTab.tsx`, tested in `CoordinatorPaneTree.test.tsx` and `CoordinatorPanel.tabs.test.tsx`. The environment strip, deliberately left: [5200](../../todo/coordinator-and-multi-review/5200-c8-tab-strip-follow-ups.md). |
 | U12: re-render cost | Open | [0390-panel-re-render-cost.md](0390-panel-re-render-cost.md) |
-| U13: `Context rN` jargon | Done | Moved into the badge's tooltip, `CoordinatorPanelNotices.tsx:75-78` (`e5245dfd6`, #1644). |
-| U13: `!` commands | Open | [C10 part 0400](0240-c10-explanations.md#0400--commands-in-the-coordinator-composer-are-undiscoverable) |
+| U13: `Context rN` jargon | Done | Moved into the badge's details (`e5245dfd6`, #1644), a menu since C10 (`CoordinatorIsolationBadge`, `CoordinatorPanelNotices.tsx`). |
+| U13: `!` commands | Done | A hint under every coordinator composer, a footer about the coordinator's own work, and the first-message rule shown inline under the composer (`COORDINATOR_COMMAND_HINT`, `FIRST_MESSAGE_COMMAND_RULE` in `AgentNativeTab.helpers.tsx`), tested in `CoordinatorPanel.outcome.test.tsx`. Batch C10. |
 | U13: leaf-mode gate | Done | `LeafModeCoordinatorGate.tsx` waits for portal status, names "the command node" when no controller is known, and remembers "open anyway" per project for the app session (`openedLeafCoordinators`, `uiStore.ts`); tested in `leaf-mode-coordinator-gate.test.tsx`. Batch C-0410; outcome table in the report's last version before deletion. |
 | U13: prompt subscriptions | Partly done | Retention bounds the set. Remote prompts reach the banner (`useRemoteHumanPrompts.ts`, tested with fakes); two real nodes: [4942](../../todo/coordinator-and-multi-review/4942-c7-live-checks.md). |
-| U13: picker caveats and tier name | Open | [C10 part 0240](0240-c10-explanations.md#0240-make-the-read-only-tier-legible) |
+| U13: picker caveats and tier name | Done | The appended "cannot verify" sentence is gone, and each platform's tier is named in the picker (`platformBadges`, `AgentModelPicker.tsx`), tested in `CoordinatorPanel.test.tsx` and `AgentModelPicker.test.tsx`. Batch C10. |
 | U13: tab click writes selection twice | Done | `focusesPane` and `coordinatorDragEndChange` in `CoordinatorPaneTree.tsx`, tested in `CoordinatorPanel.tabs.test.tsx` and `CoordinatorPaneTree.test.tsx`. |
-| U13: narrow screens | Done | Icon-only New side agent, Sync, Pause and badge below `sm` (`CoordinatorPanel.tsx`, `CoordinatorToolbar.tsx`, `CoordinatorPanelNotices.tsx`); the toolbar fits one row at 390 px. |
+| U13: narrow screens | Done | Icon-only New side agent, Sync and Pause, and a badge showing only its icon and tier name, below `sm` (`CoordinatorPanel.tsx`, `CoordinatorToolbar.tsx`, `CoordinatorPanelNotices.tsx`); the toolbar fits one row at 390 px. |
 | U13: research Add limit and Enter | Done | `CoordinatorWebResearchSettings.tsx`, tested in `CoordinatorWebResearchSettings.test.tsx`. |
 | U13: research duplicate check is case-sensitive | No action | Names can only be lowercase, `packages/protocol/src/coordinator-web-research.ts:56`. |
 | 5.1: Work rail | Partly done | Rail built in `eb6bf887a`, #1698. Request, agent, model, age and Stop added (`CoordinatorWorkPanel.tsx`, `coordinator-work-items.ts`). Answer and Address: [4940](../../todo/coordinator-and-multi-review/4940-work-row-answer-and-address.md); a real abort: [4942](../../todo/coordinator-and-multi-review/4942-c7-live-checks.md); the override marker elsewhere: [4943](../../todo/coordinator-and-multi-review/4943-launch-override-marker-in-environment-ui.md). |
-| 5.2: first-run card and starter prompts | Partly done | [C10 part 0330](0240-c10-explanations.md#0330-explain-the-coordinator-once-in-the-product) (starter prompts built in `e5245dfd6`, #1644). |
-| 5.3: legible read-only tier | Partly done | [C10 part 0240](0240-c10-explanations.md#0240-make-the-read-only-tier-legible) (the badge shows a non-enforced state, under the wrong name). |
+| 5.2: first-run card and starter prompts | Done | Starter prompts in `e5245dfd6` (#1644); the dismissible first-run card and the toolbar's "?" in `CoordinatorIntro.tsx`, dismissed per user in the UI store (`coordinatorIntroDismissed`), tested in `CoordinatorPanel.outcome.test.tsx` and `uiStore.persistence.test.ts`. Batch C10. |
+| 5.3: legible read-only tier | Done | A tier pill on the toolbar badge and in the picker; the badge's menu gives the tier's meaning and links Settings → Coordinator (`CoordinatorIsolationBadge`, `CoordinatorPanelNotices.tsx`), tested in `CoordinatorPanel.outcome.test.tsx`. Batch C10. |
 | 5.4: error rule and stale indicator | Done | `readFailuresFreshnessNotice` (`view-freshness.ts`) shown by `CoordinatorToolbar.tsx`, tested in `useCoordinatorPanelData.test.tsx`; the rule's other parts came with U3, U4 and U9. |
 | 5.5: idle feedback | Partly done | The Work panel, a next-wake line on narrow screens (`CoordinatorNextWakeLine`) and a report cue (`useNotificationSoundService.ts`). A desktop notification: [4941](../../todo/coordinator-and-multi-review/4941-coordinator-report-desktop-notification.md). |
 | 6: `CoordinatorPanel` does too much | Done | Split from 1,256 to about 600 lines: `CoordinatorToolbar.tsx`, `CoordinatorConversationPane.tsx`, `useCoordinatorSelection.ts`, `useCoordinatorLaunches.ts`, `useCoordinatorGitActions.ts`. |

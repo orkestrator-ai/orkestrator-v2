@@ -12,6 +12,11 @@ const DESKTOP = { width: 1024, height: 900 };
 const TERMINAL_ROWS = 200;
 const TERMINAL_TOP_LINE = 50;
 
+/** A pane in the phone's switcher; each pane's own strip holds tabs too. */
+function paneSwitcherTab(page: Page, name: RegExp) {
+  return page.getByRole("tablist", { name: "Split panes" }).getByRole("tab", { name });
+}
+
 function panes(page: Page) {
   const terminalPane = page.locator("[data-pane-leaf]").filter({ has: page.locator(".xterm") });
   const agentPane = page
@@ -173,7 +178,7 @@ for (const shell of SHELLS)
       await expect(view.composer).toBeFocused();
       await page.keyboard.type("!");
       await expectAgentPaneKept("keep this draft and more!");
-      if (start === PHONE) await page.getByRole("tab", { name: /Shell/ }).click();
+      if (start === PHONE) await paneSwitcherTab(page, /Shell/).click();
       await expectTerminalPaneKept();
     });
   }
@@ -186,7 +191,7 @@ test("switching panes on a phone keeps each pane's scroll position and the termi
   const transcript = page.locator('[data-pane-host="agent-pane"]').getByTestId("virtuoso-scroller");
   const terminalRows = page.locator('[data-pane-host="terminal-pane"] .xterm-rows');
   const terminalState = async () => (await page.evaluate(() => window.breakpointTerminalState!()))!;
-  const selectPane = (name: RegExp) => page.getByRole("tab", { name }).click();
+  const selectPane = (name: RegExp) => paneSwitcherTab(page, name).click();
 
   // The shell pane starts hidden behind the Codex pane, yet its terminal is
   // already fitted to the pane: hidden panes stay laid out at full size.
@@ -207,7 +212,7 @@ test("switching panes on a phone keeps each pane's scroll position and the termi
 
   for (let round = 0; round < 2; round += 1) {
     await selectPane(/Shell/);
-    await expect(page.getByRole("tab", { name: /Shell/ })).toHaveAttribute("aria-selected", "true");
+    await expect(paneSwitcherTab(page, /Shell/)).toHaveAttribute("aria-selected", "true");
     await expect(async () => {
       const shown = await terminalState();
       expect([shown.cols, shown.rows]).toEqual([hiddenSize.cols, hiddenSize.rows]);

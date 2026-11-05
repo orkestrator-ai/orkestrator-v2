@@ -1,3 +1,4 @@
+import { findCoordinatorCheckoutTurn } from "./coordinator-checkout-turn.js";
 import { usageLimitAccountRouting } from "./coordinator-usage-limit-account-routing.js";
 import { stopProjectGitMirrorRefreshes } from "./project-git-mirror.js";
 import { runCoordinatorMaintenance } from "./coordinator-maintenance.js";
@@ -1303,42 +1304,15 @@ export class OrkestratorBackend {
     this.transcriptArtifacts.onLedgerChange((change) =>
       storage.announceNativeAgentSessionProjection(change.environmentId, "transcript-artifact"),
     );
-    this.projectGit = new ProjectGitService(storage, async (projectId) => {
-      for (const home of await storage.getEnvironmentsByProject(projectId)) {
-        if (home.projectHome && (await this.nativeAgents.hasActiveCheckoutWork(home.id)))
-          return true;
-      }
-      const workspace = await storage.coordinators.getCoordinatorWorkspace(projectId);
-      if (!workspace) return false;
-      for (const conversation of workspace.conversations) {
-        if (conversation.closedAt || !conversation.agent) continue;
-        const runtimeId = coordinatorRuntimeId(workspace.id, conversation.id);
-        // The turn view, not the indicator view: a coordinator conversation
-        // whose composer is free is not holding this project's git, even when
-        // a background task it launched keeps the environment pulsing.
-        const observed = this.nativeAgents.sessionTurnActivitySnapshot(
-          runtimeId,
-          conversation.agent,
-          conversation.logicalSessionKey,
-        );
-        if (observed === "working" || observed === "waiting") return true;
-        const projection = await this.nativeAgents
-          .getProjection({
-            environmentId: runtimeId,
-            agent: conversation.agent,
-            logicalSessionKey: conversation.logicalSessionKey,
-            messageLimit: 1,
-          })
-          .catch(() => null);
-        if (
-          projection &&
-          ["running", "blocked", "cancelling", "recovering"].includes(projection.turn.phase)
-        ) {
-          return true;
-        }
-      }
-      return false;
-    });
+    this.projectGit = new ProjectGitService(
+      storage,
+      async (projectId) =>
+        (await findCoordinatorCheckoutTurn(projectId, {
+          storage,
+          nativeAgents: this.nativeAgents,
+          confirmWithProjections: true,
+        })) !== null,
+    );
     context.projectGit = this.projectGit;
     // D3 across engines: graph runs and Build Pipelines consult one projection
     // of who uses each checkout (bespoke Multi Reviews are tracked too).

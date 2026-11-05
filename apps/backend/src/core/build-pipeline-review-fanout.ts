@@ -1136,6 +1136,7 @@ export class BuildPipelineReviewFanout {
     const {
       status,
       error: statusDetail,
+      failureKind,
       turnSettled,
       backgroundWorkLive,
       interruption,
@@ -1204,6 +1205,7 @@ export class BuildPipelineReviewFanout {
         environmentId: pipeline.environmentId,
         requestId: consolidation.requestId,
         error: statusDetail,
+        ...(failureKind ? { failureKind } : {}),
         resends: consolidation.usageLimitResends ?? 0,
         turnStartedAt: consolidation.createdAt,
         session: { label: "Review consolidation" },

@@ -184,6 +184,11 @@ const PipelineWorkerMailFixture = lazy(async () => ({
 const MailTilesFixture = lazy(async () => ({
   default: (await import("./MailTilesFixture")).MailTilesFixture,
 }));
+const TmuxMailTilesFixture = lazy(async () => {
+  const fixture = await import("./TmuxMailTilesFixture");
+  fixture.installTmuxMailTilesFixture();
+  return { default: fixture.TmuxMailTilesFixture };
+});
 
 const CloseRetentionFixture = lazy(async () => ({
   default: (await import("./CloseRetentionFixture")).CloseRetentionFixture,
@@ -2118,6 +2123,13 @@ function fixtureForPath() {
   if (window.location.pathname === "/tmux-compose-focus") {
     installTmuxComposeFocusFixture();
     return <TmuxComposeFocusFixture />;
+  }
+  if (window.location.pathname === "/tmux-mail-tiles") {
+    return (
+      <Suspense fallback={null}>
+        <TmuxMailTilesFixture />
+      </Suspense>
+    );
   }
   if (window.location.pathname === "/data-saving-gateway")
     return (

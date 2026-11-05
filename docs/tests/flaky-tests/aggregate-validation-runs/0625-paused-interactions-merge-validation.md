@@ -285,3 +285,12 @@ Both required cold-enough and warm observations were completed. Evidence:
 `orkestrator-test-run.520NxN/refresh-main-warm-tests.log.gz` with group
 artifacts in `orkestrator-test-run.Xoy0uL`, below the host temporary directory.
 Final registry, formatting, conflict-marker and local-link checks passed.
+
+## Recurrence, 2026-11-05, Git mirror review
+
+Preparation's `mise run test` repeated `resource exclusion, queue bounds,
+cancellation and frozen budgets` at 5593.57 ms (5000 ms deadline). The unchanged
+owner passed alone with `mise run test:logged -- --name host-scheduler-owner --
+bun test ./tests/unit/host-test-scheduler.test.ts --parallel=1 --only-failures`
+(exit 0, 5.3 s). The original output is retained in the Git mirror review
+package's `validation-04.stdout.txt`. No scheduler code or test was changed.

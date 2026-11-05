@@ -1,3 +1,4 @@
+import { hostTimeZone, isValidTimeZone } from "@orkestrator/protocol/schedule-time";
 import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { coordinatorReplayFields } from "./control-mcp-results.js";
@@ -682,7 +683,11 @@ function coordinatorScheduleBackend(
   invoke: ControlMcpInvoker,
   scope: CoordinatorControlScope,
 ): Required<ScheduleToolBackend> {
-  const ownConversation = async (): Promise<{ owner: ScheduleOwner; record: JsonRecord }> => {
+  const ownConversation = async (): Promise<{
+    owner: ScheduleOwner;
+    record: JsonRecord;
+    workspace: JsonRecord;
+  }> => {
     const snapshot = await invoke<unknown>("get_project_coordinator", {
       projectId: scope.projectId,
     });
@@ -710,10 +715,17 @@ function coordinatorScheduleBackend(
         role,
       },
       record: conversation,
+      workspace,
     };
   };
   const owner = async (): Promise<ScheduleOwner> => (await ownConversation()).owner;
   return {
+    async defaultTimeZone() {
+      const { workspace } = await ownConversation();
+      return isValidTimeZone(workspace.userTimeZone)
+        ? { zone: workspace.userTimeZone, source: "user" as const }
+        : { zone: hostTimeZone(), source: "host" as const };
+    },
     async selfTimer({ body, subject, authorize }) {
       const { owner: self, record } = await ownConversation();
       if (self.kind !== "coordinator") throw new Error("Only coordinators set self-timers");

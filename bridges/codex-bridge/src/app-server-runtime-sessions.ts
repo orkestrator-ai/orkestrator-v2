@@ -1,4 +1,5 @@
 import { humanPromptObservation } from "@orkestrator/protocol/human-prompts";
+import { USAGE_LIMIT_ERROR_CODE } from "@orkestrator/protocol/agent-usage-limits";
 import {
   SteerOrdering,
   DEFAULT_SESSION_RETENTION_MS,
@@ -927,6 +928,7 @@ export class CodexRuntimeSessions {
     }
     const phaseBeforeReview = context.phase;
     const errorBeforeReview = context.error;
+    const errorCodeBeforeReview = context.errorCode;
     context.dispatchInFlight = true;
     this.ctx.registry.setPhase(context, "starting");
     await this.ctx.callbacks.primeCommandChanges(context);
@@ -1018,7 +1020,12 @@ export class CodexRuntimeSessions {
       // rejects. Only undo the phase while this dispatch still owns `starting`;
       // never overwrite the replacement-generation recovery guard with `idle`.
       if (context.phase === "starting") {
-        this.ctx.registry.setPhase(context, phaseBeforeReview, errorBeforeReview);
+        this.ctx.registry.setPhase(
+          context,
+          phaseBeforeReview,
+          errorBeforeReview,
+          errorCodeBeforeReview,
+        );
       }
       this.lifecycle.emitStatus(context);
       const message = error instanceof Error ? error.message : "Native review failed";
@@ -1451,6 +1458,8 @@ export class CodexRuntimeSessions {
     phase: SessionPhase;
     title?: string;
     error?: string;
+    /** `usage-limit` beside `error` when app-server said `usageLimitExceeded`. */
+    errorCode?: typeof USAGE_LIMIT_ERROR_CODE;
     /**
      * Why the last turn failed, when it was not the model's doing. `restart`:
      * an app-server restart stopped the turn partway; the thread is intact and
@@ -1506,6 +1515,11 @@ export class CodexRuntimeSessions {
       // title: leaving it out lets the backend name the session.
       title: session.titleSource === "prompt" ? undefined : session.title,
       error,
+      // The provider's own word that the account's plan is used up, so the
+      // backend need not match `error`'s wording. Only beside that failure.
+      ...(phase === "failed" && error !== undefined && context?.errorCode === "usageLimitExceeded"
+        ? { errorCode: USAGE_LIMIT_ERROR_CODE }
+        : {}),
       // Structured so a workflow can continue the turn without matching text.
       // The notice clears when the next turn is accepted, and the error check
       // keeps a later, unrelated failure from inheriting it.

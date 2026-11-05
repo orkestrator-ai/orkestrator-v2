@@ -485,6 +485,11 @@ const UNIFIED_RATE_LIMIT_WINDOW_KEYS = ["five_hour", "seven_day"] as const;
 
 /** The `rate_limit_info` fields the bridge reads from a `rate_limit_event`. */
 export interface RateLimitEventInfo {
+  isUsingOverage?: boolean;
+  overageInUse?: boolean;
+  overageStatus?: string;
+  /** `rejected`: the request was refused because the limit is reached. */
+  status?: string;
   rateLimitType?: string;
   utilization?: number;
   resetsAt?: number;

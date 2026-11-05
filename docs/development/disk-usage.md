@@ -55,6 +55,11 @@ the environment's worktree. The same breakdown is under the environment's own
 settings, in General. Sizes are allocated bytes from `du -x`, kept for five
 minutes unless refreshed.
 
+The same page has a **Project Git mirrors** section: one line per project with
+a [Git mirror](#project-git-mirrors) or a build of one, with its size, measured
+each time the page opens. A mirror whose project has gone shows as *Removed
+project* until the hourly sweep takes it.
+
 ## Where new worktrees go
 
 | Worktree | Default | Changed by |
@@ -144,6 +149,16 @@ What it costs, on the two repositories measured:
   blobless clone. A build needs 3 GiB free on the data directory's disk and a
   fetch 1 GiB; otherwise it is skipped and logged. Fetches compact themselves past
   30 packs.
+- **A first build reuses the host checkout.** A project with a host checkout
+  downloads only what the checkout lacks, on 7 GiB free or more; with less, or if
+  the checkout cannot help, the build downloads everything. The result is the same
+  mirror either way
+  ([how](../architecture/container-lifecycle.md#project-git-mirror)). What the
+  remote sent for this repository, from a local bare clone at 76 MiB: 72 MiB with
+  no checkout, 6 MiB from a checkout 50 commits behind, nothing from a current one.
+  On that same disk, with no network to wait for, a seeded build took longer: 16 s
+  without a checkout, 36 s and 55 s with one, one run each. It was not measured
+  against a real network remote. It runs in the background either way.
 - **It is only a cache.** To reclaim it by hand, delete only
   `<project id>/mount/mirror.git`, keeping the project directory and `mount/`.
   Existing clones are self-contained and the next creation rebuilds the mirror.

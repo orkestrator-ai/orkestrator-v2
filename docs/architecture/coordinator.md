@@ -301,8 +301,9 @@ coordinator conversation, on any provider. It names the session, machine, reposi
 account, the reset time when known (else the provider's words for it) and whether the
 session will resend, is waiting, or stays stopped.
 
-"Really stops" means the turn ended failed with a usage-limit error
-(`classifyUsageLimitError`). A transient limit the provider retries while the session
+"Really stops" means the turn ended failed with a usage limit: the bridge's
+structured `failureKind`, or else the error text (`usageLimitFailure`, see
+[agent-accounts.md](agent-accounts.md#usage-limit-signal)). A transient limit the provider retries while the session
 carries on does not fail the turn, so it sends nothing. Native tabs report from
 `NativeAgentUsageLimitResend`, workflows from `provider.usageLimitStop`, and both reach
 `AgentAccountAutoSwitcher`, whose `onLimitStop` fires once per stopped turn with the

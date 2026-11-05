@@ -28,6 +28,24 @@ describe("asDispatchNativeAgentPromptInput", () => {
       }),
     ).toThrow();
   });
+  test("keeps a client time zone this runtime can name and drops any other", () => {
+    const input = {
+      environmentId: "env-1",
+      agent: "claude",
+      logicalSessionKey: "env-env-1:tab-1",
+      prompt: "hello",
+      requestId: "request-1",
+    };
+    expect(
+      asDispatchNativeAgentPromptInput({ ...input, clientTimeZone: "America/New_York" }),
+    ).toMatchObject({ clientTimeZone: "America/New_York" });
+    // Advisory only: a bad zone never refuses the prompt.
+    for (const clientTimeZone of ["Mars/Olympus_Mons", 42, "x".repeat(65)]) {
+      expect(asDispatchNativeAgentPromptInput({ ...input, clientTimeZone })).not.toHaveProperty(
+        "clientTimeZone",
+      );
+    }
+  });
   test("retains bounded provider parameter defaults", () => {
     expect(
       asDispatchNativeAgentPromptInput({

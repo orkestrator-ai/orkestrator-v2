@@ -40,6 +40,13 @@ on every pull request, alongside the typecheck and test jobs. The lint step
 uses `if: ${{ !cancelled() }}` so a formatting failure does not hide lint
 output — one push reports both.
 
+The same job also runs two repository-wide test guards that need no build: the
+DOM absence scan (`never passes a DOM-producing query result directly to
+toBeNull` in `tests/unit/test-diagnostic-bounds.test.ts`) and the flaky-test
+index check (`tests/unit/flaky-tests-index.test.ts`), so a PR that breaks either
+fails within minutes. Both also stay in `mise run test`. A scan failure is fixed
+with `bun scripts/rewrite-bounded-dom-assertions.ts`.
+
 ## What is excluded, and why
 
 `bridges/codex-bridge/src/app-server/generated/**` is excluded from both the

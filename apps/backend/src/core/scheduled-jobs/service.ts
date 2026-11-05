@@ -25,6 +25,7 @@ import {
   type ScheduledJob,
   type ScheduledJobSummary,
 } from "@orkestrator/protocol/scheduled-jobs";
+import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
 import { requestDigest, ScheduleAuthorityError, type ScheduledJobExecutor } from "./executor.js";
 import {
   claimDueFire,
@@ -557,7 +558,8 @@ export class ScheduledJobService {
    * main next, the way its open delegations move over.
    */
   coordinatorConversationClosed(coordinatorId: string, conversationId: string): string[] {
-    return this.options.store.deleteByOwner(`coordinator:${coordinatorId}:${conversationId}`);
+    // A side conversation's schedules are keyed by its runtime id (`scheduleOwnerKey`).
+    return this.options.store.deleteByOwner(coordinatorRuntimeId(coordinatorId, conversationId));
   }
 
   /** A project was removed: its coordinator's schedules go; schedules aimed at it pause. */

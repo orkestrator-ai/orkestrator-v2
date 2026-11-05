@@ -151,7 +151,16 @@ describe("CO-02/CO-06 interrogating and creating on connected nodes", () => {
     const { call } = harness();
     expect(await call("list_nodes")).toMatchObject({
       self: { nodeId: "bk_self", mode: "command" },
-      nodes: [{ nodeId: "bk_leaf", name: "Build box", hasProject: true, available: true }],
+      nodes: [
+        {
+          nodeId: "bk_leaf",
+          name: "Build box",
+          hasProject: true,
+          available: true,
+          // A summary from a command node that predates the field still lists.
+          buildCommit: null,
+        },
+      ],
     });
   });
 

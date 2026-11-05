@@ -108,6 +108,10 @@ than GET gets `405`. The response (`parseBackendHello`) contains:
 - `endpointRole`: `control` on the loopback control listener, otherwise
   `client`.
 - `authorizationScopeId`: defined in the contract but never sent today.
+- `buildCommit`: optional. The commit this backend was built from, sent only
+  when the build has one ([releasing.md](../development/releasing.md#build-commit)).
+  A value that does not match `/^[0-9a-f]{7,40}$/` is dropped and the hello
+  still parses.
 
 The hello never includes data paths, the auth-file path, the token or the
 process ID. It is served with `cache-control: no-store`.

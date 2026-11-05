@@ -1,5 +1,8 @@
 import backendPackage from "../../package.json" with { type: "json" };
 
+/** Replaced by the backend's bundlers (`buildCommitDefine`); undeclared when run from source. */
+declare const __ORKESTRATOR_BUILD_COMMIT__: string | null | undefined;
+
 export const APP_SLUG = "orkestrator-v2";
 export const PRODUCT_NAME = "Orkestrator AI";
 
@@ -83,3 +86,12 @@ export const BACKEND_PACKAGE_VERSION = sanitizeAppVersion(backendPackage.version
 export const APP_VERSION = sanitizeAppVersion(
   process.env.ORKESTRATOR_VERSION?.trim() || BACKEND_PACKAGE_VERSION,
 );
+
+/**
+ * The commit this backend was built from, embedded at build time. `null` for a
+ * build with none to report: run from source, a test build, or a modified tree.
+ * Never read from the environment at runtime, where it would describe the
+ * process that started this one rather than the code it loaded.
+ */
+export const BUILD_COMMIT: string | null =
+  typeof __ORKESTRATOR_BUILD_COMMIT__ === "string" ? __ORKESTRATOR_BUILD_COMMIT__ : null;

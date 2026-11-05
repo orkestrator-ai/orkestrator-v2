@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { buildCommitDefine } from "@orkestrator/protocol/node/build-commit";
 import { RELEASE_RUNTIME_PATH } from "@orkestrator/protocol/node/standalone-service";
 import {
   BRIDGE_RUNTIMES_DIRECTORY,
@@ -44,6 +45,7 @@ const builds = await Promise.all([
     target: "bun",
     format: "esm",
     external: ["sharp", "playwright-core"],
+    define: buildCommitDefine(),
   }),
   ...[...BUNDLED_BRIDGES, ...ON_DEMAND_BRIDGES].map((bridge) =>
     Bun.build({

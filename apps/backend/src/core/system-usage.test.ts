@@ -1,4 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
+import { configureLogger, resetLogger, type LogOutput } from "@orkestrator/protocol/logger";
 import type { CpuInfo } from "node:os";
 import type { CommandContext, CommandHandler } from "./commands-context.js";
 import { MachineLoadSampler } from "./machine-load.js";
@@ -506,6 +507,46 @@ describe("system usage", () => {
       });
       return { read, state };
     }
+
+    test("stall logs are throttled by probe scope and recovery clears only that scope", async () => {
+      resetLogger();
+      const outputs: LogOutput[] = [];
+      configureLogger({
+        sink: (output) => {
+          outputs.push(output);
+        },
+      });
+      const disk = deferred<typeof statfsAnswer>();
+      const gpu = deferred<number>();
+      try {
+        const { read, state } = stallableReader(() => disk.promise, {
+          gpuPercent: () => gpu.promise,
+          gpuTimeoutMs: 1,
+        });
+        await read("/data");
+        state.clock += 5_000;
+        await read("/data");
+        const warnings = outputs.filter((output) => output.record?.event === "usage.probe-stalled");
+        expect(warnings.map((output) => output.record?.fields?.scope).sort()).toEqual([
+          "disk",
+          "gpu",
+        ]);
+        expect(warnings.every((output) => output.record?.level === "warn")).toBe(true);
+        disk.resolve(statfsAnswer);
+        await flushMicrotasks();
+        let recovered = outputs.filter((output) => output.record?.event === "throttle.recovered");
+        expect(recovered.map((output) => output.record?.fields?.scope)).toEqual(["disk"]);
+        gpu.resolve(44);
+        await flushMicrotasks();
+        recovered = outputs.filter((output) => output.record?.event === "throttle.recovered");
+        expect(recovered.map((output) => output.record?.fields?.scope).sort()).toEqual([
+          "disk",
+          "gpu",
+        ]);
+      } finally {
+        resetLogger();
+      }
+    });
 
     test("a statfs that never returns leaves CPU, RAM and GPU reporting", async () => {
       const { read } = stallableReader(() => new Promise(() => {}));

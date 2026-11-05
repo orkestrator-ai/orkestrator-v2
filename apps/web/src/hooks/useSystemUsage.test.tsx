@@ -173,8 +173,12 @@ describe("useSystemUsage", () => {
     expect(views.get("title")!.failed).toBe(true);
   });
 
-  test("a read that never returns reaches the error state and the next poll retries", async () => {
-    nextUsage = () => new Promise(() => {});
+  test("a timed-out request is reused across retries until it settles", async () => {
+    let release!: (value: unknown) => void;
+    nextUsage = () =>
+      new Promise((resolve) => {
+        release = resolve;
+      });
     render(<Meter id="title" intervalMs={5_000} />);
     await advance(USAGE_READ_TIMEOUT_MS - 1);
     expect(views.get("title")!.failed).toBe(false);
@@ -184,6 +188,12 @@ describe("useSystemUsage", () => {
     expect(views.get("title")!.failed).toBe(true);
     expect(views.get("title")!.sample).toBeNull();
 
+    await advance(READ_RETRY_MAX_MS * 4);
+    expect(usageCalls).toEqual([0]);
+    await act(async () => {
+      release(sample(7));
+      await flushMicrotasks();
+    });
     nextUsage = async () => sample(9);
     await advance(READ_RETRY_MAX_MS);
     expect(usageCalls.length).toBeGreaterThan(1);
@@ -324,3 +334,54 @@ for (const boundId of ["bk_self", "bk_workspace"]) {
     expect(routed).toHaveBeenCalledTimes(4);
   });
 }
+
+test("unresponsive machine reads stay bounded across retries and remounts, then recover", async () => {
+  let release!: (value: SystemUsageSnapshot) => void;
+  const routed = spyOn(portalStore, "invokeOnNode").mockImplementation(
+    () =>
+      new Promise<SystemUsageSnapshot>((resolve) => {
+        release = resolve;
+      }) as never,
+  );
+  const { rerender } = render(<MachineMeter id="bk_hung" bound={false} />);
+  await advance(USAGE_READ_TIMEOUT_MS + READ_RETRY_MAX_MS * 4);
+  expect(views.get("bk_hung")?.failed).toBe(true);
+  expect(routed).toHaveBeenCalledTimes(1);
+  rerender(<></>);
+  await advance(READ_RETRY_MAX_MS);
+  rerender(<MachineMeter id="bk_hung" bound={false} />);
+  await advance(READ_RETRY_MAX_MS * 2);
+  expect(routed).toHaveBeenCalledTimes(1);
+  await act(async () => {
+    release(sample(17));
+    await flushMicrotasks();
+  });
+  routed.mockImplementation(async () => sample(23) as never);
+  await advance(READ_RETRY_MAX_MS);
+  expect(views.get("bk_hung")?.failed).toBe(false);
+  expect(views.get("bk_hung")?.sample?.cpuPercent).toBe(23);
+});
+
+test("switching connections starts a fresh machine read and fences the old answer", async () => {
+  reads.coordinator.setConnection("first");
+  let release!: (value: SystemUsageSnapshot) => void;
+  const routed = spyOn(portalStore, "invokeOnNode").mockImplementation(
+    () =>
+      new Promise<SystemUsageSnapshot>((resolve) => {
+        release = resolve;
+      }) as never,
+  );
+  render(<MachineMeter id="bk_remote" bound={false} />);
+  await advance(USAGE_READ_TIMEOUT_MS);
+  const oldRelease = release;
+  routed.mockImplementation(async () => sample(25) as never);
+  act(() => reads.coordinator.setConnection("second"));
+  await advance(2_000);
+  expect(routed).toHaveBeenCalledTimes(2);
+  expect(views.get("bk_remote")?.sample?.cpuPercent).toBe(25);
+  await act(async () => {
+    oldRelease(sample(7));
+    await flushMicrotasks();
+  });
+  expect(views.get("bk_remote")?.sample?.cpuPercent).toBe(25);
+});

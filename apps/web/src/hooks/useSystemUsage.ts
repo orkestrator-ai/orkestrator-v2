@@ -9,6 +9,8 @@ import {
 import { portalStore } from "@/lib/portal/portal-store";
 import {
   getReadCoordinator,
+  readKeyId,
+  type ReadCoordinator,
   type ReadCoordinatorClock,
   type ReadKey,
 } from "@/lib/read-coordinator";
@@ -126,6 +128,40 @@ function withReadTimeout<T>(read: Promise<T>, clock: ReadCoordinatorClock): Prom
   return Promise.race([read, timeout]).finally(() => clock.clearTimeout(timer));
 }
 
+// Transport invokes cannot all be cancelled (desktop IPC included). Keep one
+// physical request per key until it settles, even after a coordinator timeout or
+// a component unmount. Connection generations must never share requests.
+const pendingUsageReads = new WeakMap<
+  ReadCoordinator,
+  {
+    generation: number;
+    reads: Map<string, Promise<unknown>>;
+  }
+>();
+
+function sharedUsageRead<T>(
+  coordinator: ReadCoordinator,
+  generation: number,
+  key: ReadKey,
+  read: () => Promise<T>,
+): Promise<T> {
+  let scope = pendingUsageReads.get(coordinator);
+  if (!scope || scope.generation !== generation) {
+    scope = { generation, reads: new Map() };
+    pendingUsageReads.set(coordinator, scope);
+  }
+  const id = readKeyId(key);
+  const pending = scope.reads.get(id);
+  if (pending) return pending as Promise<T>;
+  const result = read();
+  scope.reads.set(id, result);
+  const clear = () => {
+    if (scope.reads.get(id) === result) scope.reads.delete(id);
+  };
+  void result.then(clear, clear);
+  return result;
+}
+
 function useUsageRead<T extends { sampledAt: string }>(options: {
   key: ReadKey;
   active: boolean;
@@ -140,8 +176,11 @@ function useUsageRead<T extends { sampledAt: string }>(options: {
     coordinator,
     enabled: active,
     demand: { active, intervalMs, priority: "auxiliary" },
-    read: async () => {
-      const sample = await withReadTimeout(read(), coordinator.clock);
+    read: async (context) => {
+      const sample = await withReadTimeout(
+        sharedUsageRead(coordinator, context.connectionGeneration, key, read),
+        coordinator.clock,
+      );
       // A malformed answer is a failed read, never a new measurement.
       if (!isSample(sample)) throw new Error("The backend returned an invalid usage sample");
       return sample;

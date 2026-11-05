@@ -1006,6 +1006,63 @@ describe("remote detail reads", () => {
             targetBytes: liveWindow.targetBytes,
             representation: "summary",
           });
+          expect(stub.transcriptSnapshot!.mock.calls.at(-1)![1]!.knownSourceToken).toBeUndefined();
+          const sourceToken = stub.transcriptSnapshot!.mock.calls[0]![1]!.knownSourceToken;
+          expect(sourceToken).toBeUndefined();
+          await liveView(service);
+          const restoredToken = stub.transcriptSnapshot!.mock.calls.at(-1)![1]!.knownSourceToken;
+          expect(restoredToken).toEqual(expect.any(String));
+          await liveView(service);
+          expect(stub.transcriptSnapshot!.mock.calls.at(-1)![1]!.knownSourceToken).toBe(
+            restoredToken,
+          );
+          expect(legacyMessages).not.toHaveBeenCalled();
+          expect(interactiveSnapshot).not.toHaveBeenCalled();
+        },
+      );
+    });
+
+    test("recovery waits for an in-flight conditional poll, then reads fresh summaries", async () => {
+      const history = heavyHistory(3);
+      const { stub, legacyMessages, interactiveSnapshot } = summaryProvider(history);
+      await withService(
+        { prefix: "orkestrator-summary-evicted-pending-", provider: async () => stub.provider },
+        async ({ service }) => {
+          await service.ensureSession(identity);
+          const detailRef = (await liveView(service)).messages[2]!.parts[0]!.detailRef as string;
+          const snapshot = stub.transcriptSnapshot!;
+          const original = snapshot.getMockImplementation()!;
+          let release!: () => void;
+          let started!: () => void;
+          const gate = new Promise<void>((resolve) => {
+            release = resolve;
+          });
+          const entered = new Promise<void>((resolve) => {
+            started = resolve;
+          });
+          snapshot.mockImplementationOnce(async (...args) => {
+            expect(args[1]!.knownSourceToken).toEqual(expect.any(String));
+            const result = await original(...args);
+            expect(result).toMatchObject({ unchanged: true });
+            started();
+            await gate;
+            return result;
+          });
+          const poll = liveView(service);
+          await entered;
+          const internals = projectionInternals(service);
+          internals.evictToolDetails();
+          internals.projectedMessages.clear();
+          const expansion = service.getProjectionToolDetails({ ...identity, detailRef });
+          release();
+          await poll;
+          expect((await expansion).toolOutput).toBe(
+            history.messages[2]!.parts[0]!.toolOutput as string,
+          );
+          expect(snapshot.mock.calls).toHaveLength(3);
+          expect(snapshot.mock.calls[2]![1]!.knownSourceToken).toBeUndefined();
+          await liveView(service);
+          expect(snapshot.mock.calls.at(-1)![1]!.knownSourceToken).toEqual(expect.any(String));
           expect(legacyMessages).not.toHaveBeenCalled();
           expect(interactiveSnapshot).not.toHaveBeenCalled();
         },

@@ -265,6 +265,21 @@ describe("answer_project_worker_question", () => {
     ...overrides,
   });
 
+  for (const status of ["missing", "unavailable"] as const) {
+    test(`${status} session state refuses proposals without creating an approval`, async () => {
+      const create = mock(async () => ({ requestId: "approval-1" }));
+      commands.set("create_node_action_request", create as unknown as CommandHandler);
+      commands.set("get_native_agent_session_state_update", (async () => ({
+        status,
+      })) as CommandHandler);
+      await expect(
+        call("request_coordinator_worker_answer", { input: proposal() }),
+      ).rejects.toThrow("no pending interaction");
+      expect(create).not.toHaveBeenCalled();
+      expect(resolve).not.toHaveBeenCalled();
+    });
+  }
+
   test("answers the pending revision through the worker tab's own resolve command", async () => {
     expect(await call("answer_project_worker_question", approved())).toEqual({
       result: "answered",

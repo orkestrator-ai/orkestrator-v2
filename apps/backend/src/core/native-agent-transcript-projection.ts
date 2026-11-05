@@ -2739,6 +2739,7 @@ export class NativeAgentTranscriptProjection {
     input: NativeAgentTranscriptUpdateInput,
     key: string,
     phases?: ProgressiveReadPhaseTimer,
+    bypassSourceToken = false,
   ): Promise<ProjectedProgressiveTranscript | null> {
     const resolved = await this.host.resolveProjectionSession(input);
     if (!resolved) return null;
@@ -2753,7 +2754,7 @@ export class NativeAgentTranscriptProjection {
       ? await resolved.provider.transcriptSnapshot(resolved.session.providerSessionId, {
           limit: input.liveWindow.messages,
           targetBytes: input.liveWindow.targetBytes,
-          ...(previous?.sourceToken && !ledgerMoved
+          ...(previous?.sourceToken && !ledgerMoved && !bypassSourceToken
             ? { knownSourceToken: previous.sourceToken }
             : {}),
           // This projection resolves detail locators, so it can take the
@@ -2964,6 +2965,7 @@ export class NativeAgentTranscriptProjection {
 
   async getTranscriptUpdate(
     input: NativeAgentTranscriptUpdateInput,
+    bypassSourceToken = false,
   ): Promise<NativeAgentTranscriptUpdate> {
     this.host.assertProjectionInput(input);
     if (input.viewVersion !== NATIVE_AGENT_PROGRESSIVE_VIEW_VERSION) {
@@ -3008,7 +3010,14 @@ export class NativeAgentTranscriptProjection {
     const publish = async (
       timer?: ProgressiveReadPhaseTimer,
     ): Promise<NativeAgentTranscriptView | null> => {
-      const read = () => this.readProgressiveTranscript(input, key, timer);
+      // Recovery needs rows even if an already-started conditional poll says
+      // unchanged. Drain it before synchronously claiming fresh source work.
+      if (bypassSourceToken) {
+        while (this.progressiveReads.has(key)) {
+          await this.progressiveReads.get(key)!.catch(() => undefined);
+        }
+      }
+      const read = () => this.readProgressiveTranscript(input, key, timer, bypassSourceToken);
       const cover = () =>
         this.progressiveReadCovering(
           key,
@@ -4282,16 +4291,9 @@ export class NativeAgentTranscriptProjection {
       liveWindow,
       forceSnapshot: true,
     } as const;
-    // Without its source token the read cannot be answered "unchanged", which
-    // would keep the view without projecting (and so registering) its rows.
-    const key = this.progressiveKey(
-      update,
-      `transcript:${liveWindow.messages}:${liveWindow.targetBytes}`,
-    );
-    const cached = this.progressiveTranscriptCache.get(key);
-    if (cached?.sourceToken)
-      this.progressiveTranscriptCache.set(key, { ...cached, sourceToken: undefined });
-    await this.getTranscriptUpdate(update).catch(() => undefined);
+    // Bypass conditional reads locally; changing cached metadata would lose
+    // its token when the recovered view hashes identically to the kept view.
+    await this.getTranscriptUpdate(update, true).catch(() => undefined);
     return this.toolDetailCache.get(input.detailRef) ?? reregister();
   }
 

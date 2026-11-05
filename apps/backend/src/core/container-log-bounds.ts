@@ -101,6 +101,25 @@ export function boundedBackgroundLaunch(command: string, logFile: string): strin
   ].join("\n");
 }
 
+/**
+ * {@link boundedBackgroundLaunch} for a server that compares a plain secret. The
+ * `sh -c` wrapper and the writer run as long as the server does and nothing
+ * protects their environments, so neither may inherit `secretEnv`: the script
+ * un-exports it, starts the writer first, and hands it to `command` alone. For
+ * an image with the writer, which every `bridge-credential=1` image has.
+ */
+export function boundedLaunchWithPrivateEnv(
+  command: string,
+  logFile: string,
+  secretEnv: string,
+): string {
+  return [
+    `exec 3> >(setsid ${CONTAINER_LOG_WRITER} ${logFile} >/dev/null 2>&1)`,
+    `${secretEnv}="$${secretEnv}" setsid ${command} >&3 2>&3 3>&- &`,
+    "exec 3>&-",
+  ].join("\n");
+}
+
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }

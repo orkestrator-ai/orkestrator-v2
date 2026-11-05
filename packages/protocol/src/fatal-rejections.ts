@@ -77,6 +77,7 @@ export function installFatalRejectionGuard(options: FatalRejectionGuardOptions):
   // Keep these rules equivalent to secret-redaction.ts. Serialized workers cannot
   // import it; common fixtures in fatal-rejections.test.ts enforce parity.
   const CREDENTIALS: ReadonlyArray<{ pattern: RegExp; replacement: string }> = [
+    { pattern: /\bok[ab]_[A-Za-z0-9_-]{16,}/g, replacement: "[redacted]" },
     // scheme://user:password@host — the password is the point, but the username is
     // identity, so both go.
     {

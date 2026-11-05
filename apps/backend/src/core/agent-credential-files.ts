@@ -68,3 +68,61 @@ export const OPENCODE_GITHUB_ENV_PLUGIN_SOURCE = buildOpenCodeGitHubEnvironmentP
 export const OPENCODE_GITHUB_ENV_PLUGIN_FINGERPRINT = createHash("sha256")
   .update(OPENCODE_GITHUB_ENV_PLUGIN_SOURCE)
   .digest("hex");
+
+export const OPENCODE_CREDENTIAL_PLUGIN_FILE = "orkestrator-credential.js";
+export const OPENCODE_CREDENTIAL_PLUGIN_PATH = `/home/node/.config/opencode/plugins/${OPENCODE_CREDENTIAL_PLUGIN_FILE}`;
+
+/**
+ * What a bridge does for itself (`loadBridgeCredential`), for OpenCode, which
+ * compares a plain `OPENCODE_SERVER_PASSWORD` and runs its tools under the same
+ * uid. `exec` resets the non-dumpable flag, so this has to run inside the server.
+ * OpenCode keeps the value it read at startup, so removing the variable leaves
+ * authentication on and only stops tools inheriting it. OpenCode loads plugins
+ * before the first tool of an instance can run. A bare `Bun.spawn` would still
+ * pass the variable on; OpenCode 1.19 spawns through `node:child_process` and
+ * shell tools with an explicit environment, which do not (recheck on a bump).
+ *
+ * With `refuse-tools`, a Linux server that could not be hardened refuses tools
+ * rather than let them read the password out of `/proc`. A container pins the
+ * binary, so that should never fire. A host's OpenCode may be any build and the
+ * host promises no boundary here (to-do 4980 task 3), so it just logs.
+ */
+export function buildOpenCodeCredentialPluginSource(onUnhardened: "refuse-tools" | "log"): string {
+  return `const PR_SET_DUMPABLE = 4;
+
+async function markNonDumpable() {
+  if (process.platform !== "linux") return true;
+  try {
+    const { dlopen, FFIType } = await import("bun:ffi");
+    const libc = dlopen("libc.so.6", {
+      prctl: {
+        args: [FFIType.i32, FFIType.u64, FFIType.u64, FFIType.u64, FFIType.u64],
+        returns: FFIType.i32,
+      },
+    });
+    try {
+      return libc.symbols.prctl(PR_SET_DUMPABLE, 0n, 0n, 0n, 0n) === 0;
+    } finally {
+      libc.close();
+    }
+  } catch {
+    return false;
+  }
+}
+
+export const OrkestratorCredentialPlugin = async () => {
+  delete process.env.OPENCODE_SERVER_PASSWORD;
+  if (await markNonDumpable()) return {};
+  process.stderr.write("Orkestrator could not protect the OpenCode server password from this server's tools.\\n");
+  return ${
+    onUnhardened === "refuse-tools"
+      ? `{
+    "tool.execute.before": async () => {
+      throw new Error("Refusing to run tools: Orkestrator could not protect this OpenCode server's password from them.");
+    },
+  }`
+      : "{}"
+  };
+};
+`;
+}

@@ -2,14 +2,14 @@
 
 ## Task analysis
 
-Analysed 2026-11-03 against `main` at `7b48c23fb`.
+Analysed 2026-11-03 against `main` at `7b48c23fb`. Tasks 1, 3 and 4 acted on 2026-11-04 from `main` at `e198fd4a7` (security report S2); what they leave is in [4980](4980-agent-uid-process-control.md) and [4982](4982-bridge-credential-live-evidence.md). [4981](4981-opencode-password-readable-by-agent.md) gave OpenCode the same boundary.
 
 ### Tasks
 
-1. **Move the bridge credential out of the agent's uid**: the bridge token is still readable by the agent through the container's token file and `/proc/<bridge pid>/environ`. Status: open.
+1. **Move the bridge credential out of the agent's uid**: the bridge token was readable by the agent through the container's token file and `/proc/<bridge pid>/environ`. Status: done (2026-11-04) another way than recommended: the bridge holds only a hash of the token, and is non-dumpable; see Assumptions and decisions. The remaining ways for the agent's uid to catch a token are [4980](4980-agent-uid-process-control.md).
 2. **Narrow-only policy on the other bridge routes that take a policy**: Codex, Pi, Cursor and ACP (and Claude's `/session/create` recovery) replaced a live session's policy from the request body. Status: done.
-3. **Authorise widening through the backend**: a user who widens an environment's policy has no way to apply it to a live session on any bridge except a bridge restart. Status: open (depends on 1).
-4. **Interaction-answer routes**: any token holder can answer its own pending approvals. Status: open (depends on 1).
+3. **Authorise widening through the backend**: a user who widens an environment's policy has no way to apply it to a live session on any bridge except a bridge restart. Status: done (2026-11-04): the backend restarts an idle bridge and resumes.
+4. **Interaction-answer routes**: any token holder can answer its own pending approvals. Status: done (2026-11-04) through task 1, as recommended: the agent no longer holds the token.
 
 ### 1. Move the bridge credential out of the agent's uid
 
@@ -28,6 +28,9 @@ Analysed 2026-11-03 against `main` at `7b48c23fb`.
   - **Run the bridge as a separate uid and pass the token on an inherited file descriptor (recommended).** The backend starts the bridge with the token on an fd (or a root-owned file readable only by a dedicated `orkbridge` user), the bridge reads it once and closes it, and the agent child is spawned as `node`.
     - Pros: the agent cannot read `/proc/<bridge>/environ` or the file; closes the whole finding.
     - Cons: the bridge and the agent need different uids, so the bridge has to drop privileges for the agent child (or the agent runs under `runuser`); workspace file ownership and the SDKs' assumptions about one user need checking on every provider; host (non-container) environments need a different answer.
+  - **Keep one uid; the bridge holds only a verifier and is non-dumpable (implemented).** Added 2026-11-04. The token lives in a root-only file the backend reads; the bridge gets its SHA-256, and marks itself non-dumpable.
+    - Pros: covers all five bridges; a host bridge gets the same; no change to file ownership, SDKs or the agent's environment; a same-uid reader finds nothing usable.
+    - Cons: the agent can still kill the bridge and catch the token from the backend's next request, or plant code for the next start ([4980](4980-agent-uid-process-control.md)).
   - **Keep one uid, pass the token on an fd only.**
     - Pros: small change; no token file on disk and none in the environment.
     - Cons: a same-uid agent can still read the bridge's memory (`/proc/<pid>/mem` with ptrace permission) or reach the fd through `/proc/<pid>/fd`; it raises the bar but is not a boundary.
@@ -123,7 +126,41 @@ Pi and Cursor `create` only assigned the policy, which left an attached agent on
 
 Handled as Claude's `/config` refusal is: the resume fails with the bridge's message and the backend does not retry. Codex's resume now uses `assertOkWithErrorDetail` so its message says why. Task 3 owns the better answer.
 
+### Where the credential lives (task 1)
+
+Did not take the recommended separate uid, because the re-check on 2026-11-04 showed it does not fit:
+
+- Pi and Cursor have no agent child. Their SDKs run the agent in the bridge process, including its file tools and the shells it spawns, so there is nothing to drop to `node` (`bridges/pi-bridge/src/agent-session.ts`, `bridges/cursor-bridge/src/agent-session.ts`, `Agent.create({ local })`). A separate uid would only give the agent that uid.
+- Claude, Codex and Grok do have a child, but their bridges read what it writes under the agent's home, mode 700 on the image with files mode 600, and in-process SDK calls read them directly (`~/.claude` sessions and settings, Codex rollouts). A dedicated uid needs a privileged read path for each.
+- Dropping to `node` from a separate uid needs `sudo` or `CAP_SETUID` in the bridge, and it could not be proven here: real provider turns were out of scope for the ticket that did this.
+
+The option taken separates what the bridge *can check* from what it *holds*:
+
+- A bridge takes `<TOKEN_ENV>_SHA256` (`loadBridgeCredential`, `packages/protocol/src/node/bridge-credential.ts`), keeps no token, and calls `prctl(PR_SET_DUMPABLE, 0)` through `bun:ffi`. The kernel then gives `/proc/<pid>/{environ,mem,fd}` to root and refuses a same-uid ptrace; `exec` resets it, so children are unaffected. `pkill -f`, health checks and children all still work (probed on a real container).
+- On an image with `bridge-credential=1`, the token lives in root-only `/run/orkestrator-bridge/<kind>-token`, written and read with a root exec (`container-bridge-credential.ts`). The bridge runs from root-owned `/opt` with `bun --config=/dev/null`, so a checkout's `bunfig.toml` preload cannot run inside it.
+- A local bridge takes the same verifier; the backend keeps the token in memory.
+
+Options, with their cost against the ticket's acceptance:
+
+| Option | Pros | Cons |
+| --- | --- | --- |
+| Separate uid plus inherited fd (recommended by this file) | A real boundary: the agent cannot kill the bridge | Impossible for Pi and Cursor; a privileged read path per CLI provider; cannot be proven without billed turns; host needs another answer |
+| One uid, fd only | Small; no file and no env | `/proc/<pid>/mem` and `/proc/<pid>/fd` are still open to the agent |
+| One uid, verifier, non-dumpable (taken) | All five bridges, host too; no SDK or ownership change; nothing readable is usable | An imposter on the port, or code planted for the next start, can catch a token ([4980](4980-agent-uid-process-control.md)) |
+| Leave it | No work | Approvals stay self-answerable |
+
+The file and the `docker exec` secrets also moved off argv (security report L2), and tokens gained `okb_` and `oka_` prefixes (I7).
+
+### How a wider policy reaches a live session (task 3)
+
+Took the recommended option: on `policy-widening-refused`, `resumeProjectionSession` stops the bridge and retries once on the fresh one (`replaceBridgeForWiderPolicy`, `BridgePolicyWideningRefusedError`). One addition: a bridge with live work keeps it (`hasObservedLiveWork`, the check an account switch uses), and the resume fails saying to try again when the turn has finished, because the user's change to one conversation must not end another's turn.
+
+### Interaction-answer routes (task 4)
+
+Took the recommended option. Answer routes are unchanged and stay behind the one credential; they stop being self-answerable because the agent has no credential. Tests: `apps/backend/tests/bridge-credential-docker.test.ts` on all five real bridges, and `bridges/acp-bridge/src/acp-approval-verifier.test.ts` for a parked approval: what the agent can read gets 401 and leaves it parked, the token answers it.
+
 ## Related
 
-- `docs/reports/2-26-10-27-security.md`, H4 (status: partly fixed) and M13.
+- [`4980-agent-uid-process-control.md`](4980-agent-uid-process-control.md), [`4981-opencode-password-readable-by-agent.md`](4981-opencode-password-readable-by-agent.md), [`4982-bridge-credential-live-evidence.md`](4982-bridge-credential-live-evidence.md): what this file's tasks leave.
+- `docs/reports/2-26-10-27-security.md`, H4 (status: fixed, with that remainder) and M13.
 - [`4210-read-only-boundary-from-a-token-holder.md`](4210-read-only-boundary-from-a-token-holder.md): the read-only boundary, which is not part of the policy.

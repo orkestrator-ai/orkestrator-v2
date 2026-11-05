@@ -26,6 +26,9 @@ on:
       - "apps/backend/tests/container-worktree-signal-docker.test.ts"
       - "apps/backend/tests/container-start-docker.test.ts"
       - "apps/backend/tests/project-git-mirror-docker.test.ts"
+      - "apps/backend/tests/bridge-credential-docker.test.ts"
+      - "apps/backend/src/core/container-bridge-credential.ts"
+      - "packages/protocol/src/node/bridge-credential.ts"
       - "apps/backend/tests/staged-input-relay-docker.test.ts"
       - "apps/backend/tests/portable-inputs-stamps-docker.test.ts"
       - "apps/backend/tests/claude-config-filter-docker.test.ts"
@@ -132,6 +135,10 @@ jobs:
       - name: Live project Git mirror
         if: ${{ !cancelled() }}
         run: mise run test:logged -- --name git-mirror -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/project-git-mirror-docker.test.ts --parallel=1
+
+      - name: Live bridge credential (H4)
+        if: ${{ !cancelled() }}
+        run: mise run test:logged -- --name bridge-credential -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/bridge-credential-docker.test.ts --parallel=1
 
       - name: Live Claude config allowlist and Claude start (M8)
         if: ${{ !cancelled() }}

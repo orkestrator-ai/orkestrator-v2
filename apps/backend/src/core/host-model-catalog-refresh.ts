@@ -5,7 +5,8 @@ import {
   OPENCODE_PINNED_RUNTIME_ENV,
 } from "@orkestrator/protocol/terminal-agent-launch";
 import { existsSync, promises as fs } from "node:fs";
-import { randomBytes, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
+import { mintBridgeToken } from "@orkestrator/protocol/node/bridge-credential";
 import path from "node:path";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
@@ -171,7 +172,7 @@ async function refreshClaude(
 ): Promise<HostCatalog> {
   const { cwd, entrypoint } = await bridgeEntrypoint(context, "claude-bridge");
   const workingDirectory = await probeWorkingDirectory(context);
-  const token = randomBytes(32).toString("base64url");
+  const token = mintBridgeToken();
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     CWD: workingDirectory,
@@ -204,7 +205,7 @@ async function refreshClaude(
 async function refreshCodex(context: CommandContext): Promise<HostCatalog> {
   const { cwd, entrypoint } = await bridgeEntrypoint(context, "codex-bridge");
   const workingDirectory = await probeWorkingDirectory(context);
-  const token = randomBytes(32).toString("base64url");
+  const token = mintBridgeToken();
   const config = await context.storage.loadConfig();
   const models = await withShortLivedBridge(
     context.runtime.localServers,
@@ -257,7 +258,7 @@ async function refreshAcp(
   const bridgeName = useCursorSdk ? "cursor-bridge" : "acp-bridge";
   const { cwd, entrypoint } = await bridgeEntrypoint(context, bridgeName);
   const workingDirectory = await probeWorkingDirectory(context);
-  const token = randomBytes(32).toString("base64url");
+  const token = mintBridgeToken();
   const cursorCredentials =
     agent === "cursor" ? await resolveCursorHostCredentialMaterial(context) : undefined;
   const cursorApiKey = cursorCredentials?.apiKey;
@@ -337,7 +338,7 @@ export async function withHostOpenCodeServer<T>(
   purpose: BridgeProbe["purpose"] = "catalog-refresh",
 ): Promise<T> {
   const cwd = await probeWorkingDirectory(context);
-  const token = randomBytes(32).toString("base64url");
+  const token = mintBridgeToken();
   const headers = openCodeHealthHeaders(token);
   return withShortLivedBridge(
     context.runtime.localServers,

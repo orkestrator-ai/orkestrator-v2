@@ -1,4 +1,5 @@
-import { describe, expect, mock, test } from "bun:test";
+import * as credentialModes from "../src/core/container-credential-mode.js";
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { withheldGitHubCredentialEnvironment } from "@orkestrator/protocol/native-agent";
 
 import { createCommandFixtures } from "./command-fixtures";
@@ -420,6 +421,10 @@ case "$1" in
   exec)
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
     case "$*" in
+      *"/run/orkestrator-bridge/"*) exit 0 ;;
+      *"cat > /tmp/.orkestrator-start-"*) cat > "$FAKE_DOCKER_EXEC_LOG.secrets"; exit 0 ;;
+    esac
+    case "$*" in
       *"cat /tmp/claude-bridge-token"*|*"cat /tmp/opencode-server-password"*)
         exit 0 ;;
     esac
@@ -439,10 +444,12 @@ exit 0
 
           expect(failure).toBeInstanceOf(Error);
           const execLog = await fs.readFile(logs.exec, "utf8");
-          const token = execLog.match(new RegExp(`${credentialName}='([^']+)'`))?.[1];
-          expect(token).toMatch(/^[A-Za-z0-9_-]{43}$/);
+          const secrets = await fs.readFile(`${logs.exec}.secrets`, "utf8");
+          const token = secrets.match(new RegExp(`${credentialName}='([^']+)'`))?.[1];
+          // Only stdin carried it, so a failed exec has it nowhere to leak from.
+          expect(execLog).not.toContain(token!);
+          expect(token).toMatch(/^okb_[A-Za-z0-9_-]{43}$/);
           expect(failure!.message).not.toContain(token!);
-          expect(failure!.message).toContain("[REDACTED]");
         });
       } finally {
         if (previousHostPort === undefined) delete process.env.FAKE_BRIDGE_HOST_PORT;
@@ -451,3 +458,12 @@ exit 0
     },
   );
 });
+
+// These command fixtures intentionally represent legacy token-file images.
+let credentialModeSpy: ReturnType<typeof spyOn>;
+beforeEach(() => {
+  credentialModeSpy = spyOn(credentialModes, "containerCredentialMode").mockResolvedValue(
+    "token-file",
+  );
+});
+afterEach(() => credentialModeSpy.mockRestore());

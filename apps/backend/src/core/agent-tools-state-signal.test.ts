@@ -78,7 +78,7 @@ describe("Claude state signal route", () => {
     expect(url.hostname).toBe("host.docker.internal");
     expect(url.port).toBe(String(server.servicePort()));
     expect(url.pathname).toBe(CLAUDE_STATE_SIGNAL_PATH);
-    expect(credential.token).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(credential.token).toMatch(/^oka_[A-Za-z0-9_-]{43}$/);
   });
 
   test("rings exactly the credential's receiver and ignores any body", async () => {

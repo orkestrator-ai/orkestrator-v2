@@ -418,19 +418,21 @@ ENV MISE_SELF_UPDATE_AVAILABLE=false
 # first, each in its own layer, so a release that changes only bridge code
 # re-pulls the small bundles and not the SDKs. Within each group the bridge
 # that changes least comes first.
-COPY --from=bridge-build --chown=node:node /opt/bridge-deps/pi-bridge /opt/pi-bridge/dist/node_modules
-COPY --from=bridge-build --chown=node:node /opt/bridge-deps/cursor-bridge /opt/cursor-bridge/dist/node_modules
-COPY --from=bridge-build --chown=node:node /opt/bridge-deps/claude-bridge /opt/claude-bridge/dist/node_modules
-COPY --from=bridge-build --chown=node:node /opt/bridge-build/bridges/pi-bridge /opt/pi-bridge
-COPY --from=bridge-build --chown=node:node /opt/bridge-build/bridges/cursor-bridge /opt/cursor-bridge
-COPY --from=bridge-build --chown=node:node /opt/bridge-build/bridges/acp-bridge /opt/acp-bridge
-COPY --from=bridge-build --chown=node:node /opt/bridge-build/bridges/claude-bridge /opt/claude-bridge
-COPY --from=bridge-build --chown=node:node /opt/bridge-build/bridges/codex-bridge /opt/codex-bridge
+# Root-owned: code `node` could replace would see every token presented to the
+# bridge it next runs as.
+COPY --from=bridge-build --chown=root:root /opt/bridge-deps/pi-bridge /opt/pi-bridge/dist/node_modules
+COPY --from=bridge-build --chown=root:root /opt/bridge-deps/cursor-bridge /opt/cursor-bridge/dist/node_modules
+COPY --from=bridge-build --chown=root:root /opt/bridge-deps/claude-bridge /opt/claude-bridge/dist/node_modules
+COPY --from=bridge-build --chown=root:root /opt/bridge-build/bridges/pi-bridge /opt/pi-bridge
+COPY --from=bridge-build --chown=root:root /opt/bridge-build/bridges/cursor-bridge /opt/cursor-bridge
+COPY --from=bridge-build --chown=root:root /opt/bridge-build/bridges/acp-bridge /opt/acp-bridge
+COPY --from=bridge-build --chown=root:root /opt/bridge-build/bridges/claude-bridge /opt/claude-bridge
+COPY --from=bridge-build --chown=root:root /opt/bridge-build/bridges/codex-bridge /opt/codex-bridge
 # Every bridge entrypoint must exist in the final filesystem.
 RUN for bridge in claude codex acp pi cursor; do \
       test -s "/opt/${bridge}-bridge/dist/index.js" || { echo "missing ${bridge} bridge" >&2; exit 1; }; \
-      test "$(stat -c %U "/opt/${bridge}-bridge" "/opt/${bridge}-bridge/dist" | sort -u)" = node \
-        || { echo "${bridge} bridge directories are not owned by node" >&2; exit 1; }; \
+      test "$(stat -c %U "/opt/${bridge}-bridge" "/opt/${bridge}-bridge/dist" | sort -u)" = root \
+        || { echo "${bridge} bridge directories are not owned by root" >&2; exit 1; }; \
     done \
  && test -d /opt/claude-bridge/dist/node_modules/@anthropic-ai \
  && test -d /opt/pi-bridge/dist/node_modules \
@@ -501,7 +503,8 @@ COPY docker/orkestrator-git-credential.sh /usr/local/bin/orkestrator-git-credent
 # Per-boot status and process registration. Owned by node because the
 # entrypoint runs as node after the network policy is fixed; the records are
 # orchestration evidence, not a security boundary against the same user.
-RUN install -d -o node -g node -m 0755 /run/orkestrator /run/orkestrator/processes \
+RUN install -d -o root -g root -m 0700 /run/orkestrator-bridge \
+ && install -d -o node -g node -m 0755 /run/orkestrator /run/orkestrator/processes \
  && chmod 0755 /usr/local/bin/orkestrator-drain.sh /usr/local/bin/orkestrator-storage.sh /usr/local/bin/orkestrator-migrate.sh /usr/local/bin/orkestrator-log-writer /usr/local/bin/orkestrator-state-signal /usr/local/bin/orkestrator-worktree-signal /usr/local/bin/orkestrator-git-credential
 # Exercise the installed writer as its runtime user, including actual Perl
 # startup, rotation errors, signals, /dev/full and the no-Perl drain fallback.

@@ -101,6 +101,13 @@ export const IMAGE_CAPABILITIES = {
    * image gets neither the mount nor the variable.
    */
   "git-mirror": 1,
+  /**
+   * Every bridge in the image accepts `<TOKEN_ENV>_SHA256` in place of its
+   * token, marks itself non-dumpable, and runs from root-owned `/opt`, so the
+   * token can live in root-only `/run/orkestrator-bridge`. An older image keeps
+   * the token in a `node`-readable `/tmp` file and in the bridge's environment.
+   */
+  "bridge-credential": 1,
 } as const;
 
 export type ImageCapability = keyof typeof IMAGE_CAPABILITIES;

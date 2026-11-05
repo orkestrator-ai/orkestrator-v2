@@ -1119,7 +1119,9 @@ Agent CLIs, one per supported platform:
 
 Prebuilt bridge servers, so a container never builds them at runtime:
 - `/opt/claude-bridge`, `/opt/codex-bridge`, `/opt/cursor-bridge`,
-  `/opt/pi-bridge`, and `/opt/acp-bridge` (used only by Grok Build).
+  `/opt/pi-bridge`, and `/opt/acp-bridge` (used only by Grok Build), root-owned.
+  Each bridge's token lives in root-only `/run/orkestrator-bridge`
+  (`bridge-credential=1`); the bridge holds only its hash.
 
 Developer tooling:
 - Git, GitHub CLI (`gh`), git-delta, and SSH with GitHub/GitLab/Bitbucket host

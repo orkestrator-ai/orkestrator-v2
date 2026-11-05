@@ -19,6 +19,19 @@ describe("redactSecrets", () => {
     expect(redacted).toContain("Basic [redacted]");
   });
 
+  test("recognises bridge and agent-tools tokens with nothing around them to go on", () => {
+    const bridge = "okb_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789-_aBcDe";
+    const agentTools = "oka_ZyXwVuTsRqPoNmLkJiHgFeDcBa9876543210_-EdCbA";
+    const redacted = redactSecrets(`bridge said ${bridge} then ${agentTools} ok`);
+    expect(redacted).toBe("bridge said [redacted] then [redacted] ok");
+  });
+
+  test("leaves a word that only resembles the prefix", () => {
+    expect(redactSecrets("okb_short and bookb_abcdefghijklmnopqrstuvwxyz")).toBe(
+      "okb_short and bookb_abcdefghijklmnopqrstuvwxyz",
+    );
+  });
+
   test.each([
     ["OpenAI style", "key sk-live-0123456789abcdefgh here", "sk-live-0123456789abcdefgh"],
     ["GitHub PAT", "token ghp_0123456789abcdefghij", "ghp_0123456789abcdefghij"],

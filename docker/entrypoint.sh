@@ -6,6 +6,7 @@ set -e
 
 # Boot status contract (docker/image-manifest.ts):
 # ORKESTRATOR_CAPABILITY boot-status=1
+# ORKESTRATOR_CAPABILITY bridge-credential=1
 #
 # Readiness belongs to this boot only. Markers from an earlier start of the
 # same container are removed before anything else runs, and every status

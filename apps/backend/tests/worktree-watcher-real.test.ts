@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { promises as fs, readdirSync, readFileSync } from "node:fs";
+import { promises as fs, readdirSync, readFileSync, watch } from "node:fs";
 import path from "node:path";
 import { worktreeWatchPlanIo, listIgnoredDependencyTrees } from "../src/core/worktree-watch-plan";
 import {
@@ -190,7 +190,14 @@ describe("worktree watcher on this platform's real watch", () => {
     async () => {
       const worktree = await makeWorktree();
       let proof: readonly string[] | undefined;
+      let rootEvent!: (event: string, filename: string | null) => void;
       const { seen, hints } = await watchWorktree(worktree, {
+        startWatch: (target, listener, options) => {
+          if (target === worktree) rootEvent = listener;
+          return watch(target, { ...options, persistent: false }, (event, filename) =>
+            listener(event, filename?.toString() ?? null),
+          );
+        },
         plan: {
           ...worktreeWatchPlanIo,
           listExcluded: async (root) => {
@@ -204,6 +211,9 @@ describe("worktree watcher on this platform's real watch", () => {
       const hintsBefore = hints.length;
       await fs.rm(path.join(worktree, "node_modules"), { recursive: true });
       await fs.symlink("src", path.join(worktree, "node_modules"));
+      // Exercise real Git proof invalidation independently of macOS losing a
+      // single native notification (5061). Native delivery has separate tests.
+      rootEvent("rename", "node_modules");
       const deadline = Date.now() + DELIVERY_DEADLINE_MS;
       while (
         (hints.length === hintsBefore || proof?.includes("node_modules")) &&

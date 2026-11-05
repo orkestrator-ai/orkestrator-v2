@@ -32,3 +32,12 @@ The strengthened ignored-write test passed its new zero-scan and zero-hint
 assertions but timed out waiting for the subsequent source edit's revision.
 These results do not establish healthy macOS service-level delivery. The
 existing follow-up remains open; no deadline or assertion was weakened.
+
+A corrected combined rerun reported 14 pass, 1 skip, 6 fail in 257.33 s
+(`orkestrator-test-run.NQS7Sl/watcher-real-recovery.log.gz`): the symlink
+case received hints but its exclusion proof did not refresh, and five service
+detections timed out. The real-Git symlink regression now explicitly delivers
+the replacement event after the filesystem mutation, retaining both hint and
+updated-proof assertions, so it tests proof invalidation independently of native
+delivery. Its focused rerun passed in 6.6 s. Existing native-delivery tests remain
+unchanged. This does not close the healthy-host qualification gap.

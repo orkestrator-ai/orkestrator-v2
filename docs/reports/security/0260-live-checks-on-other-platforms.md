@@ -8,9 +8,9 @@ What is left of the report's [§8 dynamic testing](../2-26-10-27-security.md#8-n
 
 ### Tasks
 
-1. **Pass H1, M1 and M2 in shipping Safari**: the spec passes in Playwright's WebKit, which is not Safari. Status: open.
-2. **Run H3 on a rootless daemon**: the seed-file test passes on Docker Desktop only. Status: open.
-3. **Check whether a container reaches the gateway on Linux Engine**: accepting the leaked-session exposure rests on the answer. Status: open.
+1. **Pass H1, M1 and M2 in shipping Safari**: the spec passes in Playwright's WebKit, which is not Safari. Status: open, moved to [todo 5500](../../todo/previews-and-annotations/5500-shipping-safari-gateway-security-checks.md).
+2. **Run H3 on a rootless daemon**: the seed-file test passes on Docker Desktop only. Status: done 2026-11-05.
+3. **Check whether a container reaches the gateway on Linux Engine**: accepting the leaked-session exposure rests on the answer. Status: done 2026-11-05.
 
 ### 1. Pass H1, M1 and M2 in shipping Safari
 
@@ -63,3 +63,13 @@ What is left of the report's [§8 dynamic testing](../2-26-10-27-security.md#8-n
 - [Security report, §8](../2-26-10-27-security.md#8-not-covered--follow-up)
 - [Todo 0042](../../todo/previews-and-annotations/0042-service-preview-rollout.md), task 3
 - `docs/architecture/remote-gateway.md`, Security notes
+
+## Outcome
+
+Checked item by item on 2026-11-05 against `main` at `69a3b4ca5`, on omarchy-hp (Linux, Docker Engine 29.9.1, rootful and rootless). Evidence is in the [qualification record](../../development/container-qualification.md#gateway-reach-and-project-seed-files-on-linux-engine-2026-11-05).
+
+| Task | Item | Outcome | Where it went |
+| --- | --- | --- | --- |
+| 1 | H1, M1 and M2 in shipping Safari | Not run: it needs a Mac with Allow Remote Automation on, and this host is Linux | [Todo 5500](../../todo/previews-and-annotations/5500-shipping-safari-gateway-security-checks.md), with its problem, context and options |
+| 2 | H3 on a rootless daemon | Run: `container-project-seed-docker.test.ts` passed on the rootless daemon that was already running, and on rootful | `docs/development/container-qualification.md` |
+| 3 | Gateway reach on Linux Engine | Run: a restricted container was rejected on every route to the gateway and its stand-ins, on rootful and rootless, so there was no reach to fix and the report's firewall-defect option did not apply. A `full` container's reach depends on the host firewall on rootful (ufw dropped it here), and on rootless it reached the LAN and Tailscale addresses and Serve's port | `docs/development/container-qualification.md`; the wording in `docs/architecture/remote-gateway.md`, Security notes |

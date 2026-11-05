@@ -95,6 +95,12 @@ export const COMPATIBILITY_PATH_IDS = [
    * them: it predates compaction instructions and ignored the body.
    */
   "compact.instructions-ignored",
+  /**
+   * A Claude or Codex turn outcome was recorded as a usage limit from its error
+   * text alone: the bridge sent no `errorCode` (it predates the code, or the
+   * provider refused without its structured signal).
+   */
+  "usage-limit.text-classified",
 ] as const;
 
 export type CompatibilityPathId = (typeof COMPATIBILITY_PATH_IDS)[number];

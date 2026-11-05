@@ -319,6 +319,80 @@ describe("native turn outcomes", () => {
     });
   });
 
+  test("the drain records a bridge's usage-limit code, and an older bridge's limit by its text", async () => {
+    for (const [failure, expected] of [
+      // The bridge's structured code, whatever the wording.
+      [
+        new ProviderSessionFailedError("codex", "Your plan is paused.", {
+          failureKind: "usage-limit",
+        }),
+        { error: "Your plan is paused.", failureKind: "usage-limit" },
+      ],
+      // A bridge that predates the code: classified from the error text.
+      [
+        new ProviderSessionFailedError("codex", "You've hit your usage limit."),
+        { error: "You've hit your usage limit.", failureKind: "usage-limit" },
+      ],
+      // Neither: no kind.
+      [new ProviderSessionFailedError("codex", "model overloaded"), { error: "model overloaded" }],
+    ] as const) {
+      const stub = providerStub("codex");
+      await withService(stub.provider, async ({ service, storage }) => {
+        await service.dispatchPrompt({
+          environmentId: "env-1",
+          agent: "codex",
+          logicalSessionKey,
+          prompt: "first",
+          requestId: "r-1",
+        });
+        stub.setStatus(async () => {
+          throw failure;
+        });
+        const queueKey = `codex\0${logicalSessionKey}`;
+        await storage.enqueuePromptQueueMessage(queueKey, "env-1", { id: "u-2", text: "next" });
+        service.notifyPromptQueueChanged(queueKey);
+        const key = nativeAgentSessionStorageKey("env-1", "codex", logicalSessionKey);
+        await waitForCondition(
+          async () => (await storage.getNativeAgentSession(key))?.turnOutcomes?.length === 1,
+        );
+        const [recorded] = (await storage.getNativeAgentSession(key))!.turnOutcomes!;
+        expect(recorded).toMatchObject({ requestId: "r-1", outcome: "failed", ...expected });
+        if (!("failureKind" in expected)) expect(recorded).not.toHaveProperty("failureKind");
+      });
+    }
+  });
+
+  test("an observer returns and keeps the bridge's usage-limit code", async () => {
+    const stub = providerStub("claude");
+    await withService(stub.provider, async ({ service, storage }) => {
+      const session = await service.dispatchPrompt({
+        environmentId: "env-1",
+        agent: "claude",
+        logicalSessionKey,
+        prompt: "first",
+        requestId: "r-1",
+      });
+      const input = { environmentId: "env-1", agent: "claude" as const, logicalSessionKey };
+      markIdle(service, "claude", session.providerSessionId);
+      stub.setStatus(async () => {
+        throw new ProviderSessionFailedError("claude", "Request refused.", {
+          failureKind: "usage-limit",
+        });
+      });
+      const expected = {
+        outcome: "failed",
+        error: "Request refused.",
+        failureKind: "usage-limit",
+      } as const;
+      expect(await service.sessionTurnOutcome({ ...input, requestId: "r-1" })).toEqual(expected);
+      // Answered from storage the second time.
+      expect(await service.sessionTurnOutcome({ ...input, requestId: "r-1" })).toEqual(expected);
+      expect((await storage.getNativeAgentSession(session.key))?.turnOutcomes?.[0]).toMatchObject({
+        failureKind: "usage-limit",
+      });
+    });
+  });
+
   test("an observer settles a finished turn with one status read, then durably", async () => {
     const stub = providerStub("claude");
     await withService(stub.provider, async ({ service, storage }) => {

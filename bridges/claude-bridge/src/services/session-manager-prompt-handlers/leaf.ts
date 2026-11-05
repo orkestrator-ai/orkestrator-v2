@@ -47,6 +47,7 @@ function handlePromptSuggestion(turn: TurnState, message: SDKMessage): void {
 function handleRateLimitEvent(turn: TurnState, message: SDKMessage): void {
   const { session, sessionId } = turn;
   const info = (message as { rate_limit_info?: RateLimitEventInfo }).rate_limit_info;
+  if (info?.status === "rejected") turn.rateLimitRejected = true;
   if (info) {
     const nextWindows = rateLimitsFromEventInfo(info);
     const nextLabels = new Set(nextWindows.map((window) => window.label));

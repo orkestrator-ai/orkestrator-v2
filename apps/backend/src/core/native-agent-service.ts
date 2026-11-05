@@ -1,3 +1,5 @@
+import type { TurnFailureKind } from "@orkestrator/protocol/agent-usage-limits";
+import { turnOutcomeFailureKind } from "./agent-usage-limits.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("native-agent");
@@ -729,8 +731,8 @@ export class NativeAgentService {
       dispatchPrompt: (input) => this.dispatchPrompt(input),
       dispatchQueuedAsyncQuestionAnswer: (input, resolved, text, requestId) =>
         this.dispatchQueuedAsyncQuestionAnswer(input, resolved, text, requestId),
-      recordObservedTurnOutcome: (session, status, detail, provider) =>
-        this.recordObservedTurnOutcome(session, status, detail, provider),
+      recordObservedTurnOutcome: (session, status, detail, provider, failureKind) =>
+        this.recordObservedTurnOutcome(session, status, detail, provider, failureKind),
       usageLimitResendPending: (key) => this.usageLimitResend.isPending(key),
       settleAmbiguousDispatch: (input, key, requestId, provider) =>
         this.settleAmbiguousDispatch(input, key, requestId, provider),
@@ -2882,9 +2884,11 @@ export class NativeAgentService {
    * until the next turn, so `error` then is this turn's error. `pending` means
    * "ask again later"; `unknown` means the outcome cannot be established.
    */
-  async sessionTurnOutcome(
-    input: NativeAgentProjectionInput & { requestId: string },
-  ): Promise<{ outcome: "completed" | "failed" | "pending" | "unknown"; error?: string }> {
+  async sessionTurnOutcome(input: NativeAgentProjectionInput & { requestId: string }): Promise<{
+    outcome: "completed" | "failed" | "pending" | "unknown";
+    error?: string;
+    failureKind?: TurnFailureKind;
+  }> {
     const key = nativeAgentSessionStorageKey(
       input.environmentId,
       input.agent,
@@ -2894,7 +2898,11 @@ export class NativeAgentService {
     if (!session) return { outcome: "unknown" };
     const recorded = session.turnOutcomes?.find((entry) => entry.requestId === input.requestId);
     if (recorded) {
-      return { outcome: recorded.outcome, ...(recorded.error ? { error: recorded.error } : {}) };
+      return {
+        outcome: recorded.outcome,
+        ...(recorded.error ? { error: recorded.error } : {}),
+        ...(recorded.failureKind ? { failureKind: recorded.failureKind } : {}),
+      };
     }
     const ids = session.dispatchedRequestIds ?? [];
     if (ids[ids.length - 1] !== input.requestId) return { outcome: "unknown" };
@@ -2956,18 +2964,27 @@ export class NativeAgentService {
         : ("completed" as const);
     const error =
       outcome === "failed" ? (terminalError ?? observation.error)?.slice(0, 500) : undefined;
+    const failureKind =
+      outcome === "failed"
+        ? turnOutcomeFailureKind(
+            session.agent,
+            error,
+            terminalError === null ? observation.failureKind : undefined,
+          )
+        : undefined;
     this.settleArtifactTurn(session, input.requestId);
     try {
       await this.storage.recordNativeAgentTurnOutcome(key, session.providerSessionId, {
         requestId: input.requestId,
         outcome,
         ...(error ? { error } : {}),
+        ...(failureKind ? { failureKind } : {}),
         observedAt: new Date(this.now()).toISOString(),
       });
     } catch {
       // The answer is still correct for this call; a later call re-reads.
     }
-    return { outcome, ...(error ? { error } : {}) };
+    return { outcome, ...(error ? { error } : {}), ...(failureKind ? { failureKind } : {}) };
   }
 
   /**
@@ -3038,6 +3055,7 @@ export class NativeAgentService {
     status: string,
     detail: string | undefined,
     provider?: Pick<NativeAgentRuntimeProvider, "turnTerminalError">,
+    reportedFailureKind?: TurnFailureKind,
   ): Promise<number | void> {
     const requestId = session.dispatchedRequestIds?.at(-1);
     if (!requestId || session.turnOutcomes?.some((entry) => entry.requestId === requestId)) return;
@@ -3066,11 +3084,20 @@ export class NativeAgentService {
     }
     this.settleArtifactTurn(session, requestId);
     this.signInResends.noteTurnEnded(session);
+    const failed = status === "error" || failure !== undefined;
+    const failureKind = failed
+      ? turnOutcomeFailureKind(
+          session.agent,
+          failure,
+          status === "error" ? reportedFailureKind : undefined,
+        )
+      : undefined;
     try {
       await this.storage.recordNativeAgentTurnOutcome(session.key, session.providerSessionId, {
         requestId,
-        outcome: status === "error" || failure !== undefined ? "failed" : "completed",
+        outcome: failed ? "failed" : "completed",
         ...(failure ? { error: failure.slice(0, 500) } : {}),
+        ...(failureKind ? { failureKind } : {}),
         observedAt: new Date(this.now()).toISOString(),
       });
     } catch {

@@ -1,7 +1,12 @@
 import { expect, test, setSystemTime } from "bun:test";
 import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
 import { CACHE_TTL_MS, createPlanUsageCache } from "./plan-usage-cache.js";
-import { cachedPlanUsage, readProjectUsageLimits } from "./agent-usage-limits.js";
+import {
+  cachedPlanUsage,
+  readProjectUsageLimits,
+  turnOutcomeFailureKind,
+} from "./agent-usage-limits.js";
+import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import type { Environment, PersistedNativeAgentSession } from "./models.js";
 
 const NOW = Date.parse("2026-10-30T12:00:00Z");
@@ -74,9 +79,51 @@ test("lists only tabs of the project whose newest recorded turn hit a usage limi
       observedAt: "2026-10-30T11:00:00.000Z",
       error: "You've hit your usage limit. Try again at 3:05 PM.",
       resetHint: "3:05 PM",
+      signal: "text",
     },
   ]);
   expect(limits.activeAccounts).toEqual([]);
+});
+
+test("a bridge's structured usage-limit kind lists the tab whatever the error says", async () => {
+  const environments = [{ id: "env-a", projectId: "p", name: "A" }] as unknown as Environment[];
+  const sessions = [
+    // Reworded by the provider: only the structured kind says it is a limit.
+    session("env-a", "tab-1", [{ ...failed("Your plan is paused."), failureKind: "usage-limit" }]),
+    // An older bridge or record: no kind, the text still classifies.
+    session("env-a", "tab-2", [failed("You've hit your limit · resets 3pm")], { agent: "claude" }),
+    // No kind and no limit wording: not listed.
+    session("env-a", "tab-3", [failed("Your plan is paused.")]),
+  ];
+  const limits = await readProjectUsageLimits(
+    {
+      storage: {
+        getEnvironmentsByProject: async () => environments,
+        listNativeAgentSessions: async () => sessions,
+      },
+      planUsage: () => undefined,
+      now: () => NOW,
+    },
+    "p",
+  );
+  expect(limits.limitedTabs.map((tab) => [tab.tabId, tab.signal, tab.resetHint])).toEqual([
+    ["tab-1", "provider", undefined],
+    ["tab-2", "text", "3pm"],
+  ]);
+});
+
+test("the recorded kind is the bridge's when it sent one, else the text's", () => {
+  const before = compatibilityPathUsage.snapshot().paths["usage-limit.text-classified"]?.count;
+  expect(turnOutcomeFailureKind("codex", "Your plan is paused.", "usage-limit")).toBe(
+    "usage-limit",
+  );
+  expect(turnOutcomeFailureKind("codex", "Overloaded", undefined)).toBeUndefined();
+  // An older Claude or Codex bridge: classified by text, and counted.
+  expect(turnOutcomeFailureKind("claude", "You've hit your limit", undefined)).toBe("usage-limit");
+  // Grok has no structured signal; its text path is not a compatibility path.
+  expect(turnOutcomeFailureKind("grok", "USAGE_EXHAUSTED", undefined)).toBe("usage-limit");
+  const after = compatibilityPathUsage.snapshot().paths["usage-limit.text-classified"]?.count;
+  expect((after ?? 0) - (before ?? 0)).toBe(1);
 });
 
 test("reports each platform's cached reading with the windows that are used up", async () => {

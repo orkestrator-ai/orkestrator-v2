@@ -1,3 +1,4 @@
+import { turnFailureKind } from "@orkestrator/protocol/agent-usage-limits";
 import * as shared from "./storage-shared.js";
 import path from "node:path";
 import type { NativeSessionInvalidationCause } from "@orkestrator/protocol/native-agent-observation";
@@ -1267,6 +1268,9 @@ export class NativeAgentSessionsRepository {
             requestId: outcome.requestId,
             outcome: outcome.outcome,
             ...(outcome.error ? { error: outcome.error.slice(0, 500) } : {}),
+            ...(outcome.outcome === "failed" && turnFailureKind(outcome.failureKind)
+              ? { failureKind: turnFailureKind(outcome.failureKind) }
+              : {}),
             observedAt: outcome.observedAt,
           },
         ],

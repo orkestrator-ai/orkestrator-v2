@@ -340,7 +340,9 @@ async function writeReleaseManifest(directory: string, version: string): Promise
  *
  * The lockfile travels inside the package, so it cannot be read, or name the
  * package's own hash, before the package is fetched. The first install exists
- * only to fetch it. It resolves dependencies afresh, so it runs no scripts and
+ * only to fetch it. Each install uses its own fresh cache so fetched or host
+ * cache entries cannot bypass the frozen install's integrity checks. It resolves
+ * dependencies afresh, so it runs no scripts and
  * everything but the package is discarded; a frozen install of the published
  * lockfile then supplies the dependencies.
  *
@@ -367,8 +369,19 @@ export async function installRelease(
     await writeReleaseManifest(fetching, version);
     await run(
       options.bun,
-      installArguments(options.registry, "--production", "--linker=hoisted", "--ignore-scripts"),
-      { cwd: fetching, timeoutMs },
+      installArguments(
+        options.registry,
+        "--production",
+        "--linker=hoisted",
+        "--ignore-scripts",
+        "--cache-dir",
+        path.join(fetching, ".cache"),
+      ),
+      {
+        cwd: fetching,
+        timeoutMs,
+        env: { ...process.env, BUN_INSTALL_CACHE_DIR: path.join(fetching, ".cache") },
+      },
     );
     const fetched = path.join(fetching, "node_modules", STANDALONE_PACKAGE);
     const runtime = path.join(fetched, RELEASE_RUNTIME_PATH);
@@ -382,12 +395,18 @@ export async function installRelease(
         installArguments(
           options.registry,
           "--frozen-lockfile",
+          "--cache-dir",
+          path.join(staging, ".cache"),
           "--production",
           // Resolution from `node_modules/orkestrator` walks up to a flat tree.
           "--linker=hoisted",
           "--ignore-scripts",
         ),
-        { cwd: staging, timeoutMs },
+        {
+          cwd: staging,
+          timeoutMs,
+          env: { ...process.env, BUN_INSTALL_CACHE_DIR: path.join(staging, ".cache") },
+        },
       );
       await rm(path.join(fetched, "node_modules"), { recursive: true, force: true });
       await mkdir(path.join(staging, "node_modules"), { recursive: true });
@@ -400,6 +419,7 @@ export async function installRelease(
         timeoutMs,
       });
     }
+    await rm(path.join(staging, ".cache"), { recursive: true, force: true });
     const manifest = readReleaseManifest(staging);
     if (manifest?.version !== version) {
       throw new Error(`Installing ${STANDALONE_PACKAGE}@${version} produced no usable release`);

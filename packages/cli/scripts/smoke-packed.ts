@@ -15,9 +15,10 @@ if (typeof manifest.version !== "string") {
 const READY_TIMEOUT_MS = 10_000;
 const EXIT_TIMEOUT_MS = 10_000;
 
-async function run(command: string[], cwd: string): Promise<void> {
+async function run(command: string[], cwd: string, env?: NodeJS.ProcessEnv): Promise<void> {
   const child = Bun.spawn(command, {
     cwd,
+    env,
     stdout: "inherit",
     stderr: "inherit",
   });
@@ -204,6 +205,8 @@ try {
       process.execPath,
       "install",
       "--frozen-lockfile",
+      "--cache-dir",
+      path.join(lockedRelease, ".cache"),
       "--production",
       "--linker=hoisted",
       "--ignore-scripts",
@@ -211,7 +214,9 @@ try {
       "--no-summary",
     ],
     lockedRelease,
+    { ...process.env, BUN_INSTALL_CACHE_DIR: path.join(lockedRelease, ".cache") },
   );
+  await rm(path.join(lockedRelease, ".cache"), { recursive: true, force: true });
   const lockedPackage = path.join(lockedRelease, "node_modules", "orkestrator");
   await cp(await realpath(installedRoot), lockedPackage, {
     recursive: true,

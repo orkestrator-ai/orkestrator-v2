@@ -53,7 +53,12 @@ async function publish(
   const directory = await mkdtemp(path.join(scratch, "package-"));
   await writeFile(
     path.join(directory, "package.json"),
-    JSON.stringify({ name, version, dependencies }),
+    JSON.stringify({
+      name,
+      version,
+      dependencies,
+      scripts: { postinstall: `"${BUN}" -e 'throw new Error("lifecycle script ran")'` },
+    }),
   );
   for (const [file, contents] of Object.entries(files)) {
     await mkdir(path.dirname(path.join(directory, file)), { recursive: true });
@@ -138,6 +143,8 @@ beforeAll(async () => {
   lockedManifest = JSON.stringify({
     name: "orkestrator-release-runtime",
     private: true,
+    scripts: { postinstall: `"${BUN}" -e 'throw new Error("runtime lifecycle script ran")'` },
+    trustedDependencies: ["mid"],
     dependencies: { mid: "1.0.0" },
   });
   await writeFile(path.join(locking, "package.json"), lockedManifest);
@@ -188,12 +195,12 @@ describe("installRelease with real bun installs", () => {
 
   beforeEach(async () => {
     dataDir = await mkdtemp(path.join(scratch, "data-"));
-    // A cold cache per case, so each install really fetches and verifies.
+    // Deliberately share the caller cache: installRelease must override it.
     const cache = path.join(dataDir, "bun-cache");
     run = (file, args, options) =>
       runFile(file, args, {
         ...options,
-        env: { ...process.env, BUN_INSTALL_CACHE_DIR: cache },
+        env: { ...process.env, BUN_INSTALL_CACHE_DIR: cache, ...options?.env },
       });
   });
 
@@ -207,7 +214,7 @@ describe("installRelease with real bun installs", () => {
     return existsSync(releases) ? readdirSync(releases) : [];
   }
 
-  test("installs the versions the published lockfile names, not the newest", async () => {
+  test("installs locked versions without executing root or trusted dependency lifecycle scripts", async () => {
     const layout = standaloneLayout(dataDir);
     const releaseDir = await installRelease(layout, "2.0.0", { bun: BUN, run, registry });
 
@@ -218,6 +225,7 @@ describe("installRelease with real bun installs", () => {
     expect(await readFile(path.join(releaseDir, "bun.lock"), "utf8")).toBe(lockedLockfile);
     // The fetch install's resolution left nothing behind.
     expect(leftInReleases()).toEqual(["2.0.0"]);
+    expect(existsSync(path.join(releaseDir, ".cache"))).toBe(false);
   });
 
   test("a release without a published lockfile still installs, resolving afresh", async () => {
@@ -244,6 +252,22 @@ describe("installRelease with real bun installs", () => {
       installRelease(standaloneLayout(dataDir), "2.0.2", { bun: BUN, run, registry }),
     ).rejects.toThrow();
     expect(leftInReleases()).toEqual([]);
+  });
+
+  test("rejects a wrong hash even when fetch caches the locked version", async () => {
+    const releases = published.get("leaf")!;
+    published.set(
+      "leaf",
+      releases.filter((release) => release.version === "1.0.0"),
+    );
+    try {
+      await expect(
+        installRelease(standaloneLayout(dataDir), "2.0.2", { bun: BUN, run, registry }),
+      ).rejects.toThrow(/integrity/i);
+      expect(leftInReleases()).toEqual([]);
+    } finally {
+      published.set("leaf", releases);
+    }
   });
 
   test("refuses a runtime with no lockfile rather than resolving afresh", async () => {

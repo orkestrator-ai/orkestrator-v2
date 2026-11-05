@@ -66,9 +66,9 @@ describe("standalone releases", () => {
 
   test("the install that fetches the package runs no scripts and is not the one kept", async () => {
     const layout = standaloneLayout(dataDir);
-    const installs: { args: string[]; cwd: string }[] = [];
+    const installs: { args: string[]; cwd: string; env?: NodeJS.ProcessEnv }[] = [];
     const run: CommandRunner = async (file, args, options) => {
-      installs.push({ args, cwd: options.cwd! });
+      installs.push({ args, cwd: options.cwd!, env: options.env });
       // Only the first install lays out the package; the frozen one adds its
       // dependencies, which this fake has none of.
       if (installs.length > 1) return { stdout: "", stderr: "" };
@@ -86,6 +86,13 @@ describe("standalone releases", () => {
     expect(fetch!.args).not.toContain("--frozen-lockfile");
     expect(frozen!.args).toContain("--frozen-lockfile");
     expect(frozen!.args).toContain("--production");
+    expect(frozen!.args).toContain("--ignore-scripts");
+    const cache = (call: { args: string[] }) => call.args[call.args.indexOf("--cache-dir") + 1];
+    expect(cache(fetch!)).toBe(path.join(fetch!.cwd, ".cache"));
+    expect(cache(frozen!)).toBe(path.join(frozen!.cwd, ".cache"));
+    expect(cache(fetch!)).not.toBe(cache(frozen!));
+    expect(fetch!.env?.BUN_INSTALL_CACHE_DIR).toBe(cache(fetch!));
+    expect(frozen!.env?.BUN_INSTALL_CACHE_DIR).toBe(cache(frozen!));
     expect(frozen!.cwd).not.toBe(fetch!.cwd);
     expect(readdirSync(layout.releases)).toEqual(["2.22.0"]);
   });

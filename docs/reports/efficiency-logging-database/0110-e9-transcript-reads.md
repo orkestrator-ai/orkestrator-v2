@@ -94,7 +94,7 @@ Analysed 2026-11-03 against `main` at `a2bba9d8`.
 
 ### Current state
 
-Tasks 3 and 4 landed on 2026-11-04 without the baseline, at the ticket's request: no read other than `sync-v1` is unlimited now, and a refresh whose result is dropped reads a 32-row tail. `getNativeAgentSession` no longer decodes the store (see [0230](0230-e6-store-writes.md#0230-native-session-mutations-still-decode-the-whole-store-inside-the-lease)).
+Tasks 3 and 4 landed on 2026-11-04 without the baseline, at the ticket's request: no read other than `sync-v1` is unlimited now, and a refresh whose result is dropped reads a 32-row tail. `getNativeAgentSession` no longer decodes the store (see [1202](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md) task 2).
 
 ### Constraints and rationale
 

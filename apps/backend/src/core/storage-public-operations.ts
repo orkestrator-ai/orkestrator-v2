@@ -536,8 +536,7 @@ export class PublicOperationsRepository {
   ): Promise<Project> {
     // The revision check and the write happen under one projects.json lock.
     const project = await this.repos.projects.enqueueProjectMutation(async () => {
-      const projects = await this.repos.projects.loadProjects();
-      const current = projects.find((candidate) => candidate.id === projectId);
+      const current = await this.repos.projects.getProject(projectId);
       if (!current) throw new PublicActionError("not-found", `Project not found: ${projectId}`);
       if (expectedRevision !== undefined && projectRevision(current) !== expectedRevision) {
         throw new PublicActionError(
@@ -546,7 +545,7 @@ export class PublicOperationsRepository {
           { details: { currentRevision: projectRevision(current) } },
         );
       }
-      return this.applyProjectUpdates(projects, current, updates);
+      return this.applyProjectUpdates(current, updates);
     });
     this.context.changes.announce("project", projectId);
     return project;
@@ -554,24 +553,26 @@ export class PublicOperationsRepository {
 
   /** Shared body of project metadata edits; the caller holds the project lock. */
   private async applyProjectUpdates(
-    projects: Project[],
     project: Project,
     updates: Partial<Pick<Project, "name" | "gitUrl" | "localPath" | "folder">>,
   ): Promise<Project> {
+    // Only a new remote or checkout path has to be checked against the others.
+    const others =
+      typeof updates.gitUrl === "string" || typeof updates.localPath === "string"
+        ? (await this.repos.projects.loadProjects()).filter(
+            (candidate) => candidate.id !== project.id,
+          )
+        : [];
     if (typeof updates.gitUrl === "string") {
       const gitUrl = withoutUrlCredentials(updates.gitUrl.trim());
       if (!gitUrl) throw new PublicActionError("invalid-input", "Git URL cannot be empty");
-      if (
-        projects.some((candidate) => candidate.id !== project.id && candidate.gitUrl === gitUrl)
-      ) {
+      if (others.some((candidate) => candidate.gitUrl === gitUrl)) {
         throw new PublicActionError("conflict", "Another project already uses that remote URL");
       }
       project.gitUrl = gitUrl;
     }
     if (typeof updates.localPath === "string") {
-      const duplicate = projects.some(
-        (candidate) => candidate.id !== project.id && candidate.localPath === updates.localPath,
-      );
+      const duplicate = others.some((candidate) => candidate.localPath === updates.localPath);
       if (duplicate) {
         throw new PublicActionError("conflict", "Another project already uses that checkout path");
       }
@@ -579,7 +580,7 @@ export class PublicOperationsRepository {
     if (typeof updates.name === "string") project.name = updates.name;
     if ("localPath" in updates) project.localPath = updates.localPath ?? null;
     if ("folder" in updates) applyProjectFolder(project, updates.folder);
-    await this.context.saveJson(this.files.projectsFile(), projects);
+    this.repos.projects.saveProject(project);
     return project;
   }
 

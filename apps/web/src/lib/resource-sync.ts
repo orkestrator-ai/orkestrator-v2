@@ -18,6 +18,7 @@ import { listen, NATIVE_EVENT_STREAM_CONNECTED_EVENT, type UnlistenFn } from "@/
 import { primePrefetchedCommandResponses } from "@/lib/prefetched-command-responses";
 import { notifyReadCoordinatorReconnected } from "@/lib/read-coordinator";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { nativeSessionInvalidationNamesDiscovery } from "@orkestrator/protocol/native-agent-observation";
 
 const log = createLogger("web.resource-sync");
 
@@ -110,6 +111,19 @@ const activeTransportStops = new Set<() => void>();
 
 function coalesceKey(change: ResourceChange): string {
   return `${change.resource}\u0000${change.id}\u0000${change.agent ?? ""}\u0000${change.logicalSessionKey ?? ""}`;
+}
+
+/**
+ * Coalescing keeps the newer change, but a session change's cause can decide
+ * what a view reads: a later projection change in the same window must not hide
+ * that discovery moved.
+ */
+function coalesceChanges(older: ResourceChange, newer: ResourceChange): ResourceChange {
+  return newer.resource === "native-agent-session" &&
+    nativeSessionInvalidationNamesDiscovery(older.cause) &&
+    !nativeSessionInvalidationNamesDiscovery(newer.cause)
+    ? { ...newer, cause: older.cause }
+    : newer;
 }
 
 /**
@@ -233,7 +247,10 @@ export function dispatchResourceChange(change: ResourceChange): void {
   if (existing) {
     clearTimeout(existing.timer);
     // Keep the highest revision seen so handlers observe the latest ordering.
-    if (change.revision < existing.latest.revision) change = existing.latest;
+    change =
+      change.revision < existing.latest.revision
+        ? coalesceChanges(change, existing.latest)
+        : coalesceChanges(existing.latest, change);
   }
   const leading = !existing && LEADING_EDGE_RESOURCES.has(change.resource);
   if (leading) void deliver(change);
@@ -307,7 +324,10 @@ export function startResourceSync(options: ResourceSyncOptions = {}): () => void
     for (const change of changes) {
       const key = coalesceKey(change);
       const previous = latest.get(key);
-      if (!previous || previous.revision < change.revision) latest.set(key, change);
+      if (!previous) latest.set(key, change);
+      else if (previous.revision < change.revision)
+        latest.set(key, coalesceChanges(previous, change));
+      else latest.set(key, coalesceChanges(change, previous));
     }
     const ordered = Array.from(latest.values()).sort((a, b) => a.revision - b.revision);
     let clearPrefetched: () => void = () => {};

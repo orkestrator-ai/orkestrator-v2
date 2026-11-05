@@ -27,13 +27,13 @@ governs, marked "Decided".
 ### Tasks
 
 1. **Baseline and before-and-after numbers**: capture the report's measurements for the work already done and before each structural task. Status: open.
-2. **Storage keyed reads and writes**: the lease-held native session mutations, one shared decoded snapshot, the agent mail remainder, keyed-array row writes and the position index (TX-4 rest, BG-5, ST-9 rest, ST-10, ST-11). Status: open (ST-7, ST-8, BG-5, ST-11 and ST-10's compose drafts and environment writers done; TX-4 rest, ST-9 rest and ST-10's session and project writers open).
+2. **Storage keyed reads and writes**: the lease-held native session mutations, one shared decoded snapshot, the agent mail remainder, keyed-array row writes and the position index (TX-4 rest, BG-5, ST-9 rest, ST-10, ST-11). Status: open (ST-7, ST-8, BG-5, ST-11 and ST-10 done, TX-4's rest done 2026-11-04; ST-9 rest open; the prompt-queue reads a steer still makes are [5100](5100-prompt-queue-row-writes.md), live store sizes and write rates are [5101](5101-store-size-and-write-rate-live.md)).
 3. **Renderer re-renders and refetches**: WEB-6, WEB-7, WEB-9 to WEB-14 and WEB-16 to WEB-19, plus WEB-2's narrower subscriptions. Status: done (2026-11-04; WEB-2, WEB-3, WEB-4, WEB-5, WEB-8, WEB-15 and GW-13 earlier; WEB-7 and WEB-17 on 2026-11-03; WEB-2's third fix, WEB-6, WEB-9, WEB-10 and WEB-11, then WEB-12 to WEB-14, WEB-16, WEB-18 and WEB-19 on 2026-11-04; a React Profiler run stays with task 1).
-4. **Live agent view requests**: discovery out of the 500 ms round, a combined read, then bridge state ETags and transcript deltas (WEB-1, GW-1, GW-3, TX-5, TX-6). Status: open.
+4. **Live agent view requests**: discovery out of the 500 ms round, a combined read, then bridge state ETags and transcript deltas (WEB-1, GW-1, GW-3, TX-5, TX-6). Status: open (WEB-1 and GW-1 done 2026-11-04, a visible running tab from 3 requests per round to 1.04; GW-3, TX-5 and TX-6 open).
 5. **Transcript pipeline**: delta-base ring, unlimited post-dispatch reads, memoised fingerprints and the smaller items (TX-1 to TX-3, TX-7 to TX-9, TX-11 to TX-18). Status: open (TX-1 and TX-2 done 2026-11-04, focused tests only; live before-and-after numbers stay with task 1; TX-3, TX-7 to TX-9 and TX-11 to TX-18 open).
 6. **Bridge hot paths**: Codex config reads, cached transcript measurement, tool-card fast paths, Claude part identity, stream framing and shared helpers (BR-2, BR-4 to BR-16). Status: open (BR-1 and BR-3 done, without new tests; BR-4 to BR-6 and the transcript half of BR-15 done 2026-11-02; BR-2, BR-8, BR-9 and BR-11 done 2026-11-03; BR-7, BR-10, BR-12 to BR-14 and BR-16 done 2026-11-04; BR-15's SSE replay rings open).
 7. **Change tracking and git scans**: stamp short-circuit, count memo, manifest cache, off-loop zlib and the git scan costs (ST-1 to ST-6, ST-13 to ST-21). Status: open (ST-1, ST-2 and ST-4 done on 2026-11-02; ST-3, ST-14, ST-15, ST-16 and ST-18 done 2026-11-04, warm capture over 10,000 files with one changed from 681–797 ms to 211–319 ms p50, and a warm local diff scan from 7 git processes and every untracked file read to 4 and none; ST-2's directory-handle cache deliberately not done; ST-16's dropping of hints under ignored directories not done; ST-5 and ST-6 done 2026-11-04, longest event-loop stall during a capture storing a 16 MiB blob from 107–143 ms to 12–13 ms p50 and a cold durable capture of 1,000 files from 3.3–4.1 s to 0.6–1.1 s; ST-13, ST-17 and ST-19 to ST-21 open).
-8. **tmux and container polling**: the rest of BG-1, BG-2 and BG-8, plus BG-7, BG-14 and BG-15. Status: open (BG-1, BG-2, BG-7 and BG-8 done 2026-11-03, image proven locally; BG-14 and BG-15 open).
+8. **tmux and container polling**: the rest of BG-1, BG-2 and BG-8, plus BG-7, BG-14 and BG-15. Status: open (BG-1, BG-2, BG-7 and BG-8 done 2026-11-03, image proven locally; BG-14 done 2026-11-04, its remaining live evidence in [5120](../transcripts-and-observation/5120-tmux-transcript-reopen-live-evidence.md); BG-15 open).
 9. **PR monitor cost**: batched queries, then activity backoff (BG-6, BG-13). Status: done (2026-11-03; live before-and-after numbers stay with task 1).
 10. **Other background jobs**: the rest of BG-3, plus BG-9, BG-11 and BG-12. Status: done (2026-11-02; live before-and-after numbers stay with task 1).
 11. **Gateway and preview proxy**: GW-5, GW-6, GW-8 to GW-12 and GW-14 to GW-16. Status: open (GW-8 and GW-9 done; GW-4 done; GW-2 done in 0052; GW-5, GW-6, GW-12 and GW-14 done 2026-11-04, a flooding terminal channel no longer desyncs a quiet one; GW-10, GW-11, GW-15 and GW-16 open).
@@ -80,7 +80,65 @@ Done 2026-11-04 (branch `array-layout-writers-dd246b495d6d-r1`, re-checked again
 - Tests: `storage-database.test.ts` (array rows: insert, update, delete, order, owner, no-ops, key refusal, document fallback, rollback, mixing with whole-value writes); `storage-environment-row-writes.test.ts` (one field writes one row, counted by temporary SQLite triggers, with no whole-store read or write; each single-environment writer; concurrent connections; deletion fences; a SIGKILL between commit and scrub followed by a reopen; an older reader and writer on the same database).
 - Older build, checked by hand on 2026-11-04 with `HEAD` code from `96ee1eb3e` in a temporary worktree against a temporary data directory: it opened a database this branch had written (schema version 6, unchanged), listed the environments in order, updated and added one, and this branch reopened the result. No before-and-after timing was taken (task 1).
 
-**Investigation.** Re-checked 2026-11-02 and, for environments, 2026-11-04. Still whole-store: the lease-held native session mutations in `storage-native.ts` (22 call sites still load the whole store inside the key's lease, TX-4's rest) and the record-store writers the report names under ST-10 (`storage-projects.ts` for projects, `storage-sessions.ts`). Background callers not moved to the snapshot either mutate what they read or pass it on to code not checked yet: `reconcilePendingLaunches` (launches environments), environment cleanup, the local-server reaper, diff stats, the PR monitor and the coordinator, goal and sign-in services. Mail presence was checked: it already reads one row per mailbox (`mailInjectPresence`). ST-9's remainder (pending injects as their own collection, a body-free mailbox list) was not re-checked.
+Done 2026-11-04 (branch `store-writes-25e6fc826b9d-r1`, E6 of the efficiency batches), TX-4's rest, ST-10's session and project writers, and R20's blob length, read-only leases and usage prune. Each finding was re-checked against `main` at `e198fd4a7` first:
+
+- TX-4: `loadNativeAgentSessions` had 32 call sites (20 in `storage-native.ts`, 12 in `storage-native-deliveries.ts`). 28 held a key's lease, 27 of them mutations and `readNativeAgentPublicationState` a read; all 28 now read one row, through `readNativeAgentSessionUnderLease` or, for the two sweeps that must pass over a bad record, `peekNativeAgentSession`. The other 4 walk the store and stay. Damaged JSON in a key's own row now refuses that key, before any provider create; before, it read as "no session". Damaged JSON in another key's row no longer makes every key read as absent. `readNativeAgentPublicationState` reads one queue row.
+- ST-10, sessions: every writer commits only the rows it names in one transaction, reading the environment's rows by owner where it needs them. This also closes a loss: one damaged row used to make `updateStore` replace the whole store with the fallback, so the next session write lost every session.
+- ST-10, projects: every writer keeps the lease and commits rows (`saveProject`); `getProject` reads one row. An add, a new remote and a new checkout path still read the whole store, since they compare against the others, and write one row. The store joined `LEASED_ROW_STORES`.
+- Nothing about stored data changed: no schema version, no migration, no new stored value. An older build reads and writes these rows as before, and a store held as a document falls back to a whole-value write (`storage-session-project-row-writes.test.ts`).
+- R20, sizes: see "Blob length" under Decisions. `length(CAST(value AS BLOB))` remains only as the fallback.
+- R20, leases: `getAgentInteractionResolutionJournal` takes no lease. `pruneAgentInteractionResolutionJournal` is pure, and `build-pipeline-service-interactions.ts` copes with a stale read: a claim commits before the pending record that names it, and everything past the read goes through the processing lease. `resetAgentMailInjectBackoff` checks `store.snapshot()` first; a backoff committed just after the check is the same as one committed just after the reset.
+- R20, prune: `prune` is asynchronous and commits 250 rows per transaction with `setImmediate` between batches. Each row is read and decided inside its transaction, which also fixes a lost update: the old sweep wrote back the record it had read earlier, and another backend's turn in between was lost. A closed connection ends the sweep without reopening it, and the next due sweep finishes.
+- Tests: `storage-native-session-row-reads.test.ts`, `storage-session-project-row-writes.test.ts`, `storage-read-only-leases.test.ts`, the "retention sweep's batches" group of `usage-history-store.test.ts`, the size tests in `storage-database.test.ts`, and the journal test in `storage-native-agent-sessions.test.ts`, which replaces "orders a journal read against an in-flight update": that ordering is the behaviour the report's option removes. They cover concurrent writers across connections and across two real processes, a SIGKILL inside a multi-row transaction followed by an integrity check and a reopen, and a failure inside a transaction. Run against `e198fd4a7`, 16 of the 32 row-read, row-write and lease tests fail, among them every one-row assertion; the interrupted-write tests fail there only because they hook methods the base lacks.
+
+Measured with `bun scripts/benchmark-store-writes.ts`, workload `store-writes-v1` (2,000 native sessions of 200 request ids, 5,000 terminal sessions in 500 environments, 500 projects, 64 display tails of 1 MiB, 500 mailboxes of 50 messages, 20,000 usage rows). Three interleaved runs of `e198fd4a7` and this branch, 50 operations per run, on macOS 27 arm64 with Bun 1.4.4 and generated data in the temporary directory. Times are the lowest and highest p50 of the three runs.
+
+| Write path | Before (ms) | After (ms) | Rows written | Lease writes |
+| --- | --- | --- | --- | --- |
+| Native: activity checkpoint | 45.7–76.1 | 0.21–0.37 | 1 | 2 |
+| Native: activity checkpoint, no change | 45.1–61.9 | 0.10–0.16 | 0 | 2 |
+| Native: dispatch journal | 49.1–63.5 | 1.5–2.5 | 1 | 2 |
+| Session: one field | 3.3–5.3 | 0.07–0.12 | 1 | 0 |
+| Session: create, read the environment's rows, remove | 6.6–10.6 | 0.64–0.93 | 2 | 0 |
+| Session: disconnect an environment | 4.0–6.4 | 0.31–0.43 | 10 | 0 |
+| Session: reorder an environment | 4.0–6.0 | 0.55–0.71 | 10 | 0 |
+| Project: one field | 0.60–0.85 | 0.19–0.35 | 1 | 2 |
+| Project: new remote URL | 0.63–0.78 | 0.27–0.46 | 1 | 2 |
+| Project: read one | 0.07–0.09 | 0.00–0.01 | 0 | 0 |
+| Project: add and remove | 3.0–4.3 | 1.8–3.7 | 2 | 6 |
+| Project: move one to the end of 500 | 3.4–4.8 | **5.8–8.7 (slower)** | 500 | 2 |
+| Listing: 64 rows of 1 MiB, sizes only | 46–60 | 9.4–11.7 | 0 | 0 |
+| Journal: read | 0.17–0.30 | 0.01 | 0 | 2 before, 0 after |
+| Mail: backoff reset, nothing to reset | 9.8–13.5 | 0.00–0.01 | 0 | 2 before, 0 after |
+
+| Usage prune, 20,000 rows, 10,000 changed | Before | After |
+| --- | --- | --- |
+| Total | 2,353–3,142 ms | 1,687–2,422 ms |
+| Commits | 10,000 | 80 |
+| Longest event-loop stall | 2,353–3,142 ms | 42–64 ms |
+| Longest single commit | 10–87 ms | 38–64 ms |
+
+The rows-written column does not move because the whole-value writers already diffed against the stored rows: what they paid per write was decoding and re-serializing the store. The real write rate and store sizes behind these numbers were not measured ([5101](5101-store-size-and-write-rate-live.md)), and the cold-cache listing cost and the fallback on an older macOS were not either ([5102](5102-sqlite-size-fallback-live.md)).
+
+The E6 report was checked item by item and deleted; it stays in git history at base commit `48d2ed40c`, under `docs/reports/efficiency-logging-database/`. Every task and "Needs verification" item in that file, with its outcome (tests are under `apps/backend/src/core/`):
+
+| Part | Item | Outcome | Code and test, evidence, or to-do |
+| --- | --- | --- | --- |
+| 0230 | Task 1: load one row inside the key's lease | Done, with one site moved to a to-do | Code: `readNativeAgentSessionUnderLease` and `peekNativeAgentSession` (`storage-native.ts`). Test: `storage-native-session-row-reads.test.ts`, "a mutation reads and writes only its own key" and "two backends writing one key and other keys lose nothing". A steer's prompt queue step cannot move alone and is [5100](5100-prompt-queue-row-writes.md). |
+| 0230 | Needs verification: which of the 32 call sites are mutations | Done | Classified above under TX-4: 28 held a key's lease (27 mutations, 1 read), 4 walk the store. Test: "whole-store loads remain only where the whole store is the question" in the same file. |
+| 0470 | Task 1: row writes for array stores | Done, by #1736 | Code: keyed array layouts in `updateStoreRow` (`storage-database.ts`). Test: `storage-database.test.ts`, "StorageDatabase.updateStoreRow on a keyed array store". |
+| 0470 | Task 2: move a store's writers together | Done | Environments, by #1736: `saveEnvironment` (`storage-projects.ts`), `storage-environment-row-writes.test.ts`. Sessions: `storage-drafts.ts`, `storage-sessions.ts`. Projects: `saveProject` (`storage-projects.ts`). Tests: `storage-session-project-row-writes.test.ts`, "one field writes one row and reads and writes nothing else" and "two connections writing sessions and projects lose no update"; `storage-session-project-row-writes.integration.test.ts`, "two processes writing the same rows lose no update" and the two "an interrupted write" kills; `storage-writer-guards.test.ts`. |
+| 0470 | Needs verification: how large the environment store gets and how often it is written | Moved to a to-do | [5101](5101-store-size-and-write-rate-live.md): needs a real install, which this work could not touch. |
+| 0870 | Task 1: stop reading whole values to size them | Done | Code: `rowBytesExpression` and the primary-key scan in `rows()` (`storage-database.ts`). Test: `storage-database.test.ts`, "a library without octet_length falls back to the cast, with the same answer", "production sizing falls back when the connection rejects octet_length" and "a sizes-only listing keeps the listing's order without an ordered scan". |
+| 0870 | Task 2: remove leases taken only to read, journal read | Done | Code: `getAgentInteractionResolutionJournal` (`storage-native.ts`). Test: `storage-native-agent-sessions.test.ts`, "a journal read takes no lease and writes nothing". |
+| 0870 | Task 2: remove leases taken only to read, no-op backoff reset | Done | Code: `resetAgentMailInjectBackoff` (`storage-agent-mail-injects.ts`). Test: `storage-read-only-leases.test.ts`, "nothing to reset takes no lease and writes nothing". |
+| 0870 | Task 3: one transaction for the usage-history prune | Done, in batches as the report recommended | Code: `prune` and `USAGE_HISTORY_PRUNE_BATCH_ROWS` (`usage-history-store.ts`). Test: `usage-history-store.test.ts`, "commits a bounded batch at a time and frees the event loop between them" and "a turn recorded during the sweep is not lost". |
+| 0870 | Needs verification: the overflow read cost was not timed | Done, cold cache moved to a to-do | Timed warm in the table above (46–60 ms to 9.4–11.7 ms). A cold-cache listing is [5102](5102-sqlite-size-fallback-live.md), task 2. |
+| 0870 | Needs verification: SQLite version in Bun 1.4.4 on each platform | Partly checked, rest moved to a to-do | SQLite 3.54.0 on macOS 27 arm64 and 3.53.4 on Linux arm64 both have `octet_length`. The other platforms, and a real older macOS, are [5102](5102-sqlite-size-fallback-live.md), task 1. |
+
+No item needed the outcome "no longer holds": each was still present in the code when re-checked, or had already been done by #1736, as the table says.
+
+**Investigation.** Re-checked 2026-11-02 and, for environments, 2026-11-04. Background callers not moved to the snapshot either mutate what they read or pass it on to code not checked yet: `reconcilePendingLaunches` (launches environments), environment cleanup, the local-server reaper, diff stats, the PR monitor and the coordinator, goal and sign-in services. Mail presence was checked: it already reads one row per mailbox (`mailInjectPresence`). ST-9's remainder (pending injects as their own collection, a body-free mailbox list) was not re-checked.
 
 **Decisions.**
 
@@ -129,13 +187,26 @@ Done 2026-11-04 (branch `array-layout-writers-dd246b495d6d-r1`, re-checked again
   - **Move the record stores (sessions, projects) first.**
     - Pros: `updateStoreRow` already supports them.
     - Cons: smaller stores, so less gained.
-- **ST-10, sessions and projects: next step?** Open.
+- **ST-10, sessions and projects: next step?** Done 2026-11-04 with the first option.
   - **Move sessions next, then projects, each with its writer guard change (recommended).**
     - Pros: array row writes now exist for both; sessions change more often than projects.
-    - Cons: sessions need a check of what `updateStore` callers rely on; a project reorder still writes many rows.
+    - Cons: sessions need a check of what `updateStore` callers rely on; a project reorder still writes many rows, and on the generated workload moving one project across 500 went from 3.4–4.8 ms to 5.8–8.7 ms.
   - **Leave them whole.**
     - Pros: no risk to two stores that are small on most installs.
     - Cons: the report's remaining ST-10 writers stay O(store) per field.
+- **Blob length: how to size a value without reading it (R20, D7)?** Done 2026-11-04. The report's recommended `octet_length` no longer fitted alone, so this extends it.
+  - **`octet_length(value)` with a fallback to the cast, plus a primary-key scan sorted in JavaScript for sizes-only listings (recommended, done).**
+    - Pros: 46–60 ms to 9.4–11.7 ms at 64 rows of 1 MiB; no schema change; works on any SQLite, because the expression is chosen per connection.
+    - Cons: an older SQLite keeps the cast's cost on the size expression; a JavaScript sort per listing; the SQL no longer states the order, so a test pins it.
+  - **`octet_length(value)` alone, as the report recommended.**
+    - Pros: one expression; the SQL keeps its `ORDER BY`.
+    - Cons: measured to change little: 52.5 ms against 60.6 ms on macOS and 40.0 ms against 52.2 ms on Linux. A query with no size at all still took 52.9 ms and 35.9 ms, because `ORDER BY` walks `store_rows_position` and seeks each row, and a seek in this `WITHOUT ROWID` table reads whole cells, overflow pages included, to compare keys. It also fails at query time on a library older than 3.43.
+  - **A stored `bytes` column.**
+    - Pros: independent of the SQLite version.
+    - Cons: a migration that locks out older builds, every writer path must keep it right, and the ordered seek would still read the cells.
+  - **A separate listing without sizes for key-only callers.**
+    - Pros: no version risk.
+    - Cons: display tails and pipeline manifests read `bytes`, so they would still pay; the seek cost is the same either way.
 
 ### 3. Renderer re-renders and refetches
 
@@ -401,17 +472,44 @@ Left on their own timers, and why: `CAPTURE_RESUME_INTERVAL_MS` in `useAnnotatio
 
 **Context.** Decided 2026-11-01: take discovery out of the 500 ms round, then add a combined read; choose push or long-poll only if measurements still justify it, and keep a recovery poll either way. Quiet backoff already covers all six providers (0052 task 2).
 
-**Investigation.** The three reads are in `useNativeAgentSession.ts`; only `/invoke` exists (`gateway-auth.ts`). Bridge state reads have no conditional path and hash a state that includes the model catalogue (TX-5); transcript windows are always sent whole (TX-6). GW-3 is in `web-gateway.ts`.
+Done 2026-11-04 (WEB-1, GW-1): discovery left the timed round and a round is one request. Baseline taken first on an isolated `dev:test` profile at `e198fd4a7`, before any polling code changed, with `e2e/agent-testing/agent-tab-requests-live.spec.ts` (setup in [agent-testing.md](../../development/agent-testing.md#live-requests-of-a-running-agent-tab)). The named workload is `running-quiet`: one visible Claude tab whose turn is in a foreground wait, watched for 40 s. Two runs each, on the same machine:
+
+| Measure over 40 s | Before (`e198fd4a7`) | After |
+| --- | --- | --- |
+| Session requests | 246, 249 | 85, 85 |
+| Requests per round | 3.00, 3.00 | 1.04, 1.04 |
+| Requests per second | 6.15, 6.22 | 2.13, 2.12 |
+| Rounds (the cadence stayed 500 ms) | 82, 83 | 82, 82 |
+| Discovery reads | 82, 83 | 3, 3 |
+| Bytes on the wire, headers included | 463,918, 471,279 | 224,032, 225,611 |
+| Gateway request bodies | 78,392, 79,348 | 34,191, 34,191 |
+| Gateway response bodies | 223,533, 237,818 | 187,920, 201,261 |
+| Reconnect (offline 6 s, stream dropped): first read after online | 56 ms, 53 ms | 60 ms, 55 ms |
+
+Three of the discovery reads fall in a 40 s window because one section expiry sits inside it: the read that finds the sections expired, then follow-ups until they settle. Those are also about half of the remaining response bytes (93,620 of 187,920), since each is a whole discovery snapshot; the code says its availability flipped, which was not checked read by read.
+
+- Discovery (`NativeDiscoveryReadSchedule`, `native-session-read-policy.ts`): read on mount, a session or identity change, any read that is not a background round, a resync, a resume or reconnect, a phase change and an invalidation that names discovery (`nativeSessionInvalidationNamesDiscovery`, `native-agent-observation.ts`), and otherwise every 30 s with its token. `resource-sync.ts` now keeps a cause that names discovery when it coalesces a burst, which it previously overwrote with the newest. Tests: `useNativeAgentSession.read-round.test.tsx`, `native-session-read-policy.test.ts`, `resource-sync.test.ts`, `native-agent-observation.test.ts`.
+- Combined read (`get_native_agent_live_update`, `native-agent-live-update.ts`, `liveUpdateVersions` in `get_native_agent_sync_capabilities`): one request for transcript and state, used by a background round over tokens the view holds. Tests: `native-agent-live-update.test.ts`, `useNativeAgentSession.read-round.test.tsx`. Two rows added to the [version compatibility register](../../architecture/version-compatibility.md#register).
+- Real stack, profile `e8-agent-tab-polling` with real Claude turns: the requests spec above; its case that lets a turn end while the environment is off screen (no session request in 31 s inactive, the answer shown 251 ms after return, and again after a reload); its case that hides `liveUpdateVersions` from the page (2 reads a round, 60 in 15 s, no combined read sent, no failed session command); and `slash-command-picker.spec.ts` and `slash-command-inactive.spec.ts`. Claude only: the other platforms share this code path through unit tests, not a live run. `claude-revision-tokens-live.spec.ts` fails at its first case with and without this change, so it is no evidence either way; see [5040](../transcripts-and-observation/5040-revision-token-spec-background-output.md). Its page reader now counts a combined read as the two reads it answers.
+
+**Investigation.** The three reads are in `useNativeAgentSession.ts`; only `/invoke` exists (`gateway-auth.ts`). Bridge state reads have no conditional path and hash a state that includes the model catalogue (TX-5); transcript windows are always sent whole (TX-6). GW-3 is in `web-gateway.ts`. Push or long-poll: a running tab still sends two requests a second, each an `unchanged` answer of about 1.6 KB on the wire when nothing moved. Whether that justifies either is the maintainer's choice from these numbers; nothing here started it.
 
 **Decisions.**
 
-- **Where does the combined read live?**
+- **Where does the combined read live?** Done as recommended.
   - **One new progressive-update command that answers transcript and state with their `knownToken`s (recommended).**
     - Pros: one request; reuses the existing token contract; older backends are detected by the missing command.
     - Cons: a new protocol command that needs a version-compatibility entry.
   - **A generic bounded `/invoke-batch`.**
     - Pros: helps every caller.
     - Cons: new gateway surface with its own bounds, auth and error semantics.
+- **What triggers a discovery read?** Done 2026-11-04 with the first option, plus follow-ups for a section that has not settled (see Assumptions and decisions).
+  - **Mount, a session or identity change, a manual refresh, resync, a phase change and an invalidation that names discovery, with a 30 s backstop that reuses its `knownToken` (recommended).**
+    - Pros: covers both reports' lists; a new command or model still arrives; the backstop covers a missed hint and drives the refresh that produces announcements.
+    - Cons: a catalogue change not announced waits up to 30 s.
+  - **Only events, with no backstop.**
+    - Pros: fewest reads.
+    - Cons: the maintainer asked for a recovery poll to stay, and with no read the backend would not refresh discovery, so a change would never be announced.
 
 ### 5. Transcript pipeline
 
@@ -839,7 +937,9 @@ Live on beelink with the locally built image `orkestrator-v2:dev-task8-7d4bb9536
 
 Rechecked 2026-11-03 at `70c0228d1` (after the review fixes), image rebuilt from that commit as `orkestrator-v2:dev-f9ed233a0aa0` (`mise run docker:build:dev --profile task8r2-7d4bb95362a6`, exit 0); its manifest declares `tmux-hook-signal: 1` and `claude-state-signal: 3`. `tmux-hook-signal-docker.test.ts` against it: four runs at 4 execs in 10 s idle, plus one through `test:logged` (`task8-image-doorbell`), all passed. Its first run at that commit counted 7 and failed the old bound of 6, because the tab had no transcript and so also ran the fallback search, and pre-idle ticks could fall inside the window. The test now seeds the transcript, starts counting inside the idle wait, and asserts at most 4 execs and no search. Older image: `orkestrator-v2:latest`'s manifest has no `tmux-hook-signal` and its `orkestrator-state-signal hook` exits 0, so it stays on the one-exec poll. `tmux-exec-count.ts --seconds 600` reproduced the table above exactly, before and after.
 
-**Investigation.** Still open: BG-14 (reopening a tab replays the whole transcript through `docker exec`, `transcriptLines()` in `tmux-session-manager.ts` and `ClaudeTmuxChatTab.tsx`) and BG-15 (`dispatchMailInject` in `prompt-queue-drainer.ts` repeats the presence reads). The doorbell's network hop to a real backend is proven only where containers reach the host (the Linux Engine workflow); beelink's cannot, so its test rings a fake doorbell on the container's loopback.
+Done 2026-11-04, BG-14: a tab reopen reads one page from the transcript's tail (`readPage` in `tmux-transcript-reader.ts`, at most 512 KiB and 500 records, one `docker exec`) and the renderer pages earlier history in (`ClaudeTmuxChatTab.tsx`, `prependTranscriptPage` in `claudeTmuxStore.ts`). Task snapshots no longer need a replay: the poll tail's one pass records each call's snapshot (`TaskSnapshotHistory`). Through a fake `docker` on PATH (`apps/backend/scripts/tmux-reopen-read-size.ts`, workload "longest session"): 36,853,890 bytes in 2 execs before, 524,306 bytes in 1 exec after. Remaining live evidence: [5120](../transcripts-and-observation/5120-tmux-transcript-reopen-live-evidence.md).
+
+**Investigation.** Still open: BG-15 (`dispatchMailInject` in `prompt-queue-drainer.ts` repeats the presence reads). The doorbell's network hop to a real backend is proven only where containers reach the host (the Linux Engine workflow); beelink's cannot, so its test rings a fake doorbell on the container's loopback.
 
 **Decisions.**
 
@@ -850,7 +950,7 @@ Rechecked 2026-11-03 at `70c0228d1` (after the review fixes), image rebuilt from
   - **One long-lived `docker exec -i` co-process per container.**
     - Pros: no image change.
     - Cons: a new long-lived process to supervise, bound and restart; its death must be detected.
-- **BG-14: how to stop a reopen replaying the whole transcript?**
+- **BG-14: how to stop a reopen replaying the whole transcript?** Decided and done 2026-11-04: page from the tail.
   - **Page from the tail, as native transcripts page their history (recommended).**
     - Pros: one bounded read per reopen; the renderer already has a paged history view for native tabs.
     - Cons: the tmux chat tab has to move onto paged history; renderer and backend change together.
@@ -1817,6 +1917,22 @@ but at the 30 s safety read, after one read on adoption that can still correct
 a state stored before a restart. Dropping the poll entirely would lose that
 correction.
 
+### Task 8: BG-14 page size
+
+512 KiB and 500 records. On one host's 3,976 Claude transcripts (median 171 KB, 99th percentile 6.4 MB, longest 37 MB) that holds the median file whole and costs a long one about 1.4% of a whole read. A record longer than a page grows the window, up to 32 MiB; past that it becomes a notice row, so the read stays bounded and nothing vanishes silently.
+
+### Task 8: BG-14 historical task snapshots
+
+Kept per session as `tool_use_id` to snapshot, fed by the tail's one pass, bounded to 4,096 calls and 16 MiB, oldest first. A forgotten call's row renders from its own args, as a call the backend could not parse does. The alternative of replaying from the start for each page was rejected: it would put the whole-file read back behind every older page.
+
+### Task 8: BG-14 stays one command
+
+`claude_tmux_transcript` gains an optional `page`. An older backend ignores it and answers an array, which the client reads as a whole transcript, so a new renderer needs no capability probe or failed round trip. A call without `page` is an older renderer and still gets the array, counted as `tmux-transcript.whole-read`; both are in the [compatibility register](../../architecture/version-compatibility.md#register).
+
+### Task 8: BG-14 keeps paged-in rows across a reopen
+
+A reopened tail that overlaps the loaded rows keeps the older ones and their cursor, so a reader's place survives an environment switch. Without an overlap (more than a page was missed), or on a manual refresh, the tab starts again from the tail, which repairs any gap; earlier history stays a click away.
+
 ### Task 8: the image check counts a bound idle tab
 
 Made on 2026-11-03. The image test's idle window first counted an unbound tab
@@ -2197,3 +2313,19 @@ Verification named four desktop failures. None of them came from a gateway chang
 **Revoked-access recovery (three cases in `preview-transport-manager.test.ts`).** A real bug in tunnel v2: a pooled stream stayed reusable between the session `error` frame and the close frame, so a request after a revocation got a 502. Fixed in `PreviewTunnelSession`; the choice is recorded in [4500](4500-preview-tunnel-one-socket-per-connection.md).
 
 **Node pull-mode receive window (`preview-tunnel-session.test.ts`).** On Node 26.7.0 `read()` with no size returned one 64 KiB chunk of the four buffered, where the test expected all of them. The credit logic was correct, so the test now drains the stream until `read()` returns null. Only Node 26.7.0 is installed on the host, so the test was not run on an older Node.
+
+### Task 4: following a section that has not settled (2026-11-04)
+
+The analysis listed the triggers and a 30 s backstop. That alone would have stranded a view: the first read schedules at most two of the four sections per provider, so the rest stay `loading` until a later read asks again, and a refreshed section with an unchanged value is not announced, so a read that found it `stale` would have kept showing that until the next backstop, which would find it expired and `stale` again. A failed refresh announces nothing either. So a view with a section `loading` or `stale` looks again after 2 s, the backend's own section deadline, and one with a section `unavailable` after 5 s, the backend's retry. A provider that keeps failing costs one read every 2 s, down from two a second. No new backend announcement was added, since the read is what starts the refresh in any case.
+
+### Task 4: detecting the combined read by capability (2026-11-04)
+
+The analysis expected an older backend to be detected by the missing command. `get_native_agent_sync_capabilities` already carries this kind of answer (`transcriptPatchVersions`), so the backend advertises `liveUpdateVersions` and an older one is never sent a command it would refuse, which keeps its gateway's failure counts clean. The missing-command path stays only for a backend replaced by an older one before the next resync: both parts then answer `pending` in that round and are read on their own.
+
+### Task 4: a slow part answers `pending` (2026-11-04)
+
+The reads were separate, so a slow transcript could not delay session state, which carries pending approvals and the turn phase. Waiting for both would have traded that away, and the ticket asks for a running tab to stay as live as it is. A part still running after 250 ms answers `pending` and the client reads it alone, joining the provider read in flight. 250 ms is a judgment, half a round, not a measurement; the two reads took about 2 ms each in the runs above. First, manual and post-mutation reads stay two requests, so a cold transcript never travels with state.
+
+### Task 4: discovery causes instead of a new signal (2026-11-04)
+
+The analysis said an invalidation would have to start naming discovery. #1659 (2026-11-03) had already added a `cause` to each change, so the listener reads that and no event changed. A change with no cause (a backend before v2.36.0) or an unknown one counts as naming discovery, which keeps such a backend correct at the cost of some reads, and is listed in the compatibility register.

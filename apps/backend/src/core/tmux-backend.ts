@@ -1,6 +1,7 @@
 import * as shared from "./tmux-shared.js";
 import {
   MAX_PREVIOUS_SESSIONS,
+  TRANSCRIPT_WINDOW_MISSING_STATUS,
   TranscriptTaskTracker,
   containerExecArgs,
   countNewlines,
@@ -13,6 +14,7 @@ import {
   parseFreshJsonlFindOutput,
   parsePollSnapshotExecOutput,
   parseTranscriptHeadOutput,
+  parseTranscriptWindowOutput,
   path,
   pathDirname,
   pollSnapshotScript,
@@ -20,6 +22,7 @@ import {
   shellArg,
   tailFromOffsetCommand,
   transcriptHeadCommand,
+  transcriptWindowCommand,
 } from "./tmux-shared.js";
 type CommandContext = shared.CommandContext;
 type AgentToolConnection = shared.AgentToolConnection;
@@ -35,6 +38,7 @@ type RawExecOutput = shared.RawExecOutput;
 type TmuxPollSnapshot = shared.TmuxPollSnapshot;
 type SessionHookPaths = shared.SessionHookPaths;
 type PollSnapshotExtras = shared.PollSnapshotExtras;
+type TranscriptWindow = shared.TranscriptWindow;
 export type BackendTmuxLayerTypes = [
   CommandContext,
   AgentToolConnection,
@@ -358,6 +362,43 @@ export class TmuxBackend {
 
     const out = await this.execRaw(["sh", "-c", tailFromOffsetCommand(filePath, start)]);
     return out.stdout;
+  }
+
+  /**
+   * Up to `maxBytes` ending at `end` (the end of the file when undefined), with
+   * the file's size, in one round trip, or undefined when the file is missing.
+   * An `end` beyond the size returns no bytes; the size tells the caller why.
+   */
+  async readTranscriptWindow(
+    filePath: string,
+    end: number | undefined,
+    maxBytes: number,
+  ): Promise<TranscriptWindow | undefined> {
+    if (this.kind === "local") {
+      let handle: Awaited<ReturnType<typeof fs.open>>;
+      try {
+        handle = await fs.open(filePath, "r");
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+        throw error;
+      }
+      try {
+        const size = (await handle.stat()).size;
+        const stop = end ?? size;
+        if (stop > size) return { size, start: 0, bytes: Buffer.alloc(0) };
+        const start = Math.max(0, stop - maxBytes);
+        const buffer = Buffer.allocUnsafe(stop - start);
+        const { bytesRead } = await handle.read(buffer, 0, buffer.length, start);
+        return { size, start, bytes: buffer.subarray(0, bytesRead) };
+      } finally {
+        await handle.close().catch(() => undefined);
+      }
+    }
+
+    const out = await this.execRaw(["sh", "-c", transcriptWindowCommand(filePath, end, maxBytes)]);
+    if (out.status === TRANSCRIPT_WINDOW_MISSING_STATUS) return undefined;
+    if (out.status !== 0) throw new Error(out.stderr || `failed to read ${filePath}`);
+    return parseTranscriptWindowOutput(out.stdout);
   }
 
   /**

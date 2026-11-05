@@ -4,6 +4,8 @@ export const ENVIRONMENT_LOG_AREAS = defineLogAreas({
   environment: {
     description: "Environment naming, setup, status, moves, deletion and cleanup afterwards.",
     events: {
+      "cleanup.sessions-failed":
+        "Session metadata cleanup failed during environment deletion; deletion continues.",
       "cleanup.branch-kept":
         "A deleted environment's local branch was kept, as it may hold unmerged work.",
       "rename.failed": "Naming an environment from its pending prompt failed for the first time.",

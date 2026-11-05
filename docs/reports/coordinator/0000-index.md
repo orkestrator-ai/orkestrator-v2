@@ -49,7 +49,7 @@ This index only changes when a branch merges, so it can't show what is running n
 | C9 | [Panel split](0190-c9-panel-split.md) | `0340`, `0220`, `0350`, `0190` | Coordinator panel, 1 of 6 | None | C5 (Prompt and context) |
 | C7 | [Work panel and navigation](0060-c7-work-panel-and-navigation.md) | `0060`, `0260`, `0280`, `0450` | Coordinator panel, 2 of 6 | None | C1 (Wake reliability), C5 (Prompt and context), E23 (Renderer polling) |
 | C8 | [Tab strip](0070-c8-tab-strip.md) | `0070`, `0230`, `0420`, `0430` | Coordinator panel, 3 of 6 | None | None |
-| C6 | [Errors and dead ends](0020-c6-errors-and-dead-ends.md) | `0020`, `0180`, `0200`, `0210`, `0250`, `0440` | Coordinator panel, 4 of 6 | None | C1 (Wake reliability), C3 (Sweep and reads), C5 (Prompt and context), E8 (Agent tab polling), E12 (Renderer store) |
+| C6 | [Errors and dead ends](0020-c6-errors-and-dead-ends.md) | `0020`, `0180`, `0200`, `0210`, `0250`, `0440` | Coordinator panel, 4 of 6 | None | C1 (Wake reliability), C3 (Sweep and reads), C5 (Prompt and context), E12 (Renderer store) |
 | C10 | [Explanations](0240-c10-explanations.md) | `0320`, `0330`, `0400`, `0240` | Coordinator panel, 5 of 6 | None | None |
 
 Why these are grouped:

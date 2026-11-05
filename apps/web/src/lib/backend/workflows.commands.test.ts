@@ -5,6 +5,7 @@ import {
   dispatchNativeAgentPrompt,
   enqueuePromptQueueMessage,
   getNativeAgentDiscoveryUpdate,
+  getNativeAgentLiveUpdate,
   getNativeAgentProjectionUpdate,
   refreshNativeAgentCommands,
   setNativeAgentResumableSessionArchived,
@@ -246,4 +247,24 @@ describe("mixed-version: command fields in projection and discovery payloads", (
       "Invalid native agent projection update response",
     );
   });
+});
+
+test("combined wrapper validates parts and enforces the 20 MiB limit", async () => {
+  const input = {
+    environmentId: "env-1",
+    agent: "claude" as const,
+    logicalSessionKey: "k",
+    viewVersion: 1 as const,
+    liveWindow: { messages: 100, targetBytes: 512 * 1024 },
+  };
+  const pending = { viewVersion: 1, status: "pending" } as const;
+  const response = { viewVersion: 1, transcript: pending, state: pending } as const;
+  invokeMock.mockResolvedValue(response);
+  expect(await getNativeAgentLiveUpdate(input)).toEqual(response);
+  invokeMock.mockResolvedValue({ ...response, state: { ...pending, viewVersion: 2 } });
+  await expect(getNativeAgentLiveUpdate(input)).rejects.toThrow(
+    "Invalid native agent live update response",
+  );
+  invokeMock.mockResolvedValue({ ...response, padding: "x".repeat(20 * 1024 * 1024) });
+  await expect(getNativeAgentLiveUpdate(input)).rejects.toThrow("exceeded 20 MiB");
 });

@@ -193,6 +193,17 @@ describe("useAutoLoadEarlier", () => {
     expect(next.load).toHaveBeenCalledTimes(1);
   });
 
+  test("with no opening page, waits until the reader nears the top", async () => {
+    const { load, settle } = pages();
+    const input = baseInput({ load, openingPage: false });
+    render(<Harness {...input} withSentinel />);
+    expect(load).not.toHaveBeenCalled();
+
+    setHeadInView(true);
+    expect(load).toHaveBeenCalledTimes(1);
+    await settle();
+  });
+
   test("never pages without a cheap cursor or without earlier history", () => {
     const input = baseInput({ available: () => false });
     const view = render(<Harness {...input} withSentinel />);

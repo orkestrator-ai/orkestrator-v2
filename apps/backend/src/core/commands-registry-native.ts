@@ -1,5 +1,8 @@
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
-import { NATIVE_AGENT_DISCOVERY_SECTIONS } from "@orkestrator/protocol/native-agent";
+import {
+  NATIVE_AGENT_DISCOVERY_SECTIONS,
+  NATIVE_AGENT_LIVE_UPDATE_VERSION,
+} from "@orkestrator/protocol/native-agent";
 import { NATIVE_AGENT_OBSERVATION_EVENT_VERSION } from "@orkestrator/protocol/native-agent-observation";
 import { NATIVE_AGENT_TRANSCRIPT_PATCH_VERSION } from "@orkestrator/protocol/native-agent-transcript-patch";
 import { BUILD_PIPELINE_AGENTS } from "@orkestrator/protocol/build-pipeline";
@@ -20,6 +23,18 @@ import {
   asNativeAgentParameterValues,
   asNativeAgentSessionAction,
 } from "./commands-helpers.js";
+
+function assertNativeAgentLiveWindow(liveWindow: unknown): void {
+  if (
+    !liveWindow ||
+    typeof liveWindow !== "object" ||
+    Array.isArray(liveWindow) ||
+    (liveWindow as { messages?: unknown }).messages !== 100 ||
+    (liveWindow as { targetBytes?: unknown }).targetBytes !== 512 * 1024
+  ) {
+    throw new Error("Native agent live window is unsupported");
+  }
+}
 
 export function registerNativeAgentCommands(
   register: CommandRegistrar,
@@ -206,6 +221,8 @@ export function registerNativeAgentCommands(
     observationEventVersions: [NATIVE_AGENT_OBSERVATION_EVENT_VERSION],
     // Part-level message patches inside transcript deltas (efficiency step 14).
     transcriptPatchVersions: [NATIVE_AGENT_TRANSCRIPT_PATCH_VERSION],
+    // One request for transcript and state (`get_native_agent_live_update`).
+    liveUpdateVersions: [NATIVE_AGENT_LIVE_UPDATE_VERSION],
     ...(context.nativeAgents
       ? { observation: context.nativeAgents.observationStatus().stamp }
       : {}),
@@ -214,15 +231,7 @@ export function registerNativeAgentCommands(
   register("get_native_agent_transcript_update", async (args, context) => {
     if (!context.nativeAgents) throw new Error("Native agent service is unavailable");
     if (args.viewVersion !== 1) throw new Error("Native agent progressive view is unsupported");
-    if (
-      !args.liveWindow ||
-      typeof args.liveWindow !== "object" ||
-      Array.isArray(args.liveWindow) ||
-      (args.liveWindow as { messages?: unknown }).messages !== 100 ||
-      (args.liveWindow as { targetBytes?: unknown }).targetBytes !== 512 * 1024
-    ) {
-      throw new Error("Native agent live window is unsupported");
-    }
+    assertNativeAgentLiveWindow(args.liveWindow);
     return context.nativeAgents.getTranscriptUpdate({
       environmentId: asNonBlankString(args.environmentId, "environmentId"),
       agent: asString(args.agent, "agent") as import("./models.js").NativeAgentProvider,
@@ -261,6 +270,33 @@ export function registerNativeAgentCommands(
         args.forceSnapshot === undefined
           ? undefined
           : asRequiredBoolean(args.forceSnapshot, "forceSnapshot"),
+    });
+  });
+
+  register("get_native_agent_live_update", async (args, context) => {
+    if (!context.nativeAgents) throw new Error("Native agent service is unavailable");
+    if (args.viewVersion !== NATIVE_AGENT_LIVE_UPDATE_VERSION) {
+      throw new Error("Native agent live update is unsupported");
+    }
+    assertNativeAgentLiveWindow(args.liveWindow);
+    return context.nativeAgents.getLiveUpdate({
+      environmentId: asNonBlankString(args.environmentId, "environmentId"),
+      agent: asString(args.agent, "agent") as import("./models.js").NativeAgentProvider,
+      logicalSessionKey: asNonBlankString(args.logicalSessionKey, "logicalSessionKey"),
+      viewVersion: NATIVE_AGENT_LIVE_UPDATE_VERSION,
+      liveWindow: { messages: 100, targetBytes: 512 * 1024 },
+      transcriptToken:
+        args.transcriptToken === undefined
+          ? undefined
+          : asBoundedNonBlankString(args.transcriptToken, "transcriptToken", 1024),
+      stateToken:
+        args.stateToken === undefined
+          ? undefined
+          : asBoundedNonBlankString(args.stateToken, "stateToken", 1024),
+      // As on the transcript command: any other value keeps whole-message deltas.
+      ...(args.patchVersion === NATIVE_AGENT_TRANSCRIPT_PATCH_VERSION
+        ? { patchVersion: NATIVE_AGENT_TRANSCRIPT_PATCH_VERSION }
+        : {}),
     });
   });
 

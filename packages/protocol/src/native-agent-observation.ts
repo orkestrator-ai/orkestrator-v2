@@ -128,6 +128,27 @@ export function isNativeSessionInvalidationCause(
   return typeof value === "string" && INVALIDATION_CAUSE_SET.has(value);
 }
 
+/**
+ * Causes that say a session's discovery view (models, commands, MCP, runtime)
+ * may have moved.
+ */
+const DISCOVERY_INVALIDATION_CAUSES: ReadonlySet<NativeSessionInvalidationCause> = new Set([
+  "discovery-deadline",
+  "discovery-renewal",
+  "model-catalog-refresh",
+  "model-catalog-load",
+  "command-catalog",
+]);
+
+/**
+ * Whether a `native-agent-session` change should cost a discovery read. A
+ * change with no cause (a backend before causes) or with one this client does
+ * not know (a newer backend) could be about anything, so it counts.
+ */
+export function nativeSessionInvalidationNamesDiscovery(cause: unknown): boolean {
+  return !isNativeSessionInvalidationCause(cause) || DISCOVERY_INVALIDATION_CAUSES.has(cause);
+}
+
 /** Where a counted invalidation went: one platform's sessions, or a whole environment. */
 export type NativeSessionInvalidationScope = AgentPlatform | "environment";
 

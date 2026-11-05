@@ -143,6 +143,11 @@ export interface Environment {
    * Resolve when it conflicts. Absent from older backends; means off.
    */
   autoMerge?: boolean;
+  /**
+   * Auto-merge deletes this environment once it has merged the PR. Absent
+   * from older backends; means no cleanup.
+   */
+  autoMergeCleanup?: boolean;
   /** PR-specific authorization and freshness fence. */
   autoMergePrUrl?: string | null;
   autoMergeEnabledAt?: string | null;

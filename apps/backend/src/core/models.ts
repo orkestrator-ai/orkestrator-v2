@@ -360,6 +360,12 @@ export interface Environment {
    * conflicts (`pr-auto-merge.ts`). Absent means off.
    */
   autoMerge?: boolean;
+  /**
+   * Delete this environment once auto-merge has merged its pull request (the
+   * Integrate dialog's "Auto-merge & Cleanup"). Only meaningful while
+   * `autoMerge` is on, and cleared with it.
+   */
+  autoMergeCleanup?: boolean;
   /** PR-specific authorization and freshness fence. */
   autoMergePrUrl?: string | null;
   autoMergeEnabledAt?: string | null;

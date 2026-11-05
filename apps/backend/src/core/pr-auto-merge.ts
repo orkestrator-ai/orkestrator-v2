@@ -336,7 +336,8 @@ export class PrAutoMergeController {
    * The Merge PR button's command, pinned to the observed PR and head. The
    * pin makes the command refuse effects that differ from the ones it would
    * apply, so ask for exactly those: a project's home checkout keeps its
-   * branch, and a cleanup the user already requested still runs.
+   * branch, and a cleanup the user already requested, through Merge &
+   * Cleanup or by turning auto-merge on with cleanup, still runs.
    */
   private async merge(environment: Environment): Promise<boolean> {
     const headSha = this.options.monitorState(environment.id)?.headSha;
@@ -347,7 +348,8 @@ export class PrAutoMergeController {
       environmentId: environment.id,
       method: "squash",
       deleteBranch: !isProjectHomeEnvironment(current),
-      cleanupAfterMerge: Boolean(current.cleanupAfterMergeRequestedAt),
+      cleanupAfterMerge:
+        Boolean(current.cleanupAfterMergeRequestedAt) || current.autoMergeCleanup === true,
       expectedHeadSha: headSha,
       expectedPrUrl: environment.prUrl,
     });

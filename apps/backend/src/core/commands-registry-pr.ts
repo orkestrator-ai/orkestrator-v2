@@ -415,12 +415,30 @@ export function registerPullRequestCommands(
    * Turns auto-merge on or off for an environment (`pr-auto-merge.ts`). The
    * flag is durable; turning it on also asks the monitor for a fresh reading
    * before acting, so a cached pre-request reading cannot authorize a merge.
+   *
+   * `cleanupAfterMerge` (the Integrate dialog's "Auto-merge & Cleanup") also
+   * deletes the environment once auto-merge has merged the PR. Every call
+   * restates it, so turning auto-merge on again without it withdraws it.
    */
   register("set_environment_auto_merge", async (args, context) => {
-    assertOnlyKeys(args, ["environmentId", "enabled"], "arguments");
+    assertOnlyKeys(args, ["environmentId", "enabled", "cleanupAfterMerge"], "arguments");
     const id = asString(args.environmentId, "environmentId");
     const enabled = asRequiredBoolean(args.enabled, "enabled");
-    const updated = await context.storage.updateEnvironment(id, { autoMerge: enabled });
+    const cleanupAfterMerge =
+      args.cleanupAfterMerge === undefined
+        ? false
+        : asRequiredBoolean(args.cleanupAfterMerge, "cleanupAfterMerge");
+    if (enabled && cleanupAfterMerge) {
+      const environment = await context.storage.getEnvironment(id);
+      if (!environment) throw new Error(`Environment not found: ${id}`);
+      if (isProjectHomeEnvironment(environment)) {
+        throw new Error("A project's home checkout cannot be deleted after merging");
+      }
+    }
+    const updated = await context.storage.updateEnvironment(id, {
+      autoMerge: enabled,
+      autoMergeCleanup: enabled && cleanupAfterMerge,
+    });
     if (enabled) {
       // Advisory: the durable flag stands even if the monitor cannot check now.
       await context.runtime.prMonitor.requestRefresh(id, context).catch((error) => {

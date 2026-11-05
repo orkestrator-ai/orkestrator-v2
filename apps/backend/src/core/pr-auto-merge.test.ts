@@ -262,6 +262,12 @@ describe("PrAutoMergeController", () => {
     expect(h.invocations[0]?.args).toMatchObject({ deleteBranch: true, cleanupAfterMerge: true });
   });
 
+  test("asks for cleanup when auto-merge was turned on with cleanup", async () => {
+    const h = harness(environment({ autoMergeCleanup: true }));
+    await h.controller.evaluate("env-1");
+    expect(h.invocations[0]?.args).toMatchObject({ deleteBranch: true, cleanupAfterMerge: true });
+  });
+
   test("completed cleanup neither records an error nor schedules another attempt", async () => {
     const logs = captureLogs();
     const h = harness(

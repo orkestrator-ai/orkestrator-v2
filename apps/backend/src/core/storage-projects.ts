@@ -1209,6 +1209,9 @@ export class ProjectsRepository {
         environment.autoMergePrUrl = environment.autoMerge ? environment.prUrl : null;
         environment.autoMergeEnabledAt = environment.autoMerge ? new Date().toISOString() : null;
         environment.autoMergeError = null;
+        // Set only together with `autoMerge`, so a later toggle that does not
+        // ask for cleanup withdraws an earlier request.
+        environment.autoMergeCleanup = environment.autoMerge && updates.autoMergeCleanup === true;
       }
       if ("autoMergeError" in updates) {
         environment.autoMergeError =
@@ -1225,6 +1228,7 @@ export class ProjectsRepository {
         environment.autoMergePrUrl = null;
         environment.autoMergeEnabledAt = null;
         environment.autoMergeError = null;
+        environment.autoMergeCleanup = false;
       }
       if (
         !environment.autoMerge ||

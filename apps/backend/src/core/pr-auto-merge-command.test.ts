@@ -83,6 +83,73 @@ test("set_environment_auto_merge persists the flag and waits for the requested m
   });
 });
 
+test("set_environment_auto_merge records cleanup only with auto-merge, and each call restates it", async () => {
+  await withStorage(async (storage) => {
+    const environment = await storage.addEnvironment({
+      ...createEnvironment("project"),
+      prUrl: "https://github.com/o/r/pull/1",
+      prState: "open",
+    });
+    const context = {
+      storage,
+      emit: () => undefined,
+      runtime: { prMonitor: { requestRefresh: mock(async () => undefined) } },
+      prAutoMerge: { evaluate: mock(async () => undefined) },
+    } as unknown as CommandContext;
+    const command = createCommandRegistry().get("set_environment_auto_merge")!;
+
+    const withCleanup = (await command(
+      { environmentId: environment.id, enabled: true, cleanupAfterMerge: true },
+      context,
+    )) as { autoMerge?: boolean; autoMergeCleanup?: boolean };
+    expect(withCleanup).toMatchObject({ autoMerge: true, autoMergeCleanup: true });
+
+    await command({ environmentId: environment.id, enabled: true }, context);
+    expect((await storage.getEnvironment(environment.id))?.autoMergeCleanup).toBe(false);
+
+    await command(
+      { environmentId: environment.id, enabled: true, cleanupAfterMerge: true },
+      context,
+    );
+    await command(
+      { environmentId: environment.id, enabled: false, cleanupAfterMerge: true },
+      context,
+    );
+    expect(await storage.getEnvironment(environment.id)).toMatchObject({
+      autoMerge: false,
+      autoMergeCleanup: false,
+    });
+
+    await expect(
+      command({ environmentId: environment.id, enabled: true, cleanupAfterMerge: "yes" }, context),
+    ).rejects.toThrow();
+  });
+});
+
+test("set_environment_auto_merge refuses cleanup for a project's home checkout", async () => {
+  await withStorage(async (storage) => {
+    const environment = await storage.addEnvironment({
+      ...createEnvironment("project"),
+      projectHome: true,
+      prUrl: "https://github.com/o/r/pull/1",
+      prState: "open",
+    });
+    const context = {
+      storage,
+      emit: () => undefined,
+      runtime: { prMonitor: { requestRefresh: mock(async () => undefined) } },
+      prAutoMerge: { evaluate: mock(async () => undefined) },
+    } as unknown as CommandContext;
+    await expect(
+      createCommandRegistry().get("set_environment_auto_merge")!(
+        { environmentId: environment.id, enabled: true, cleanupAfterMerge: true },
+        context,
+      ),
+    ).rejects.toThrow("home checkout");
+    expect((await storage.getEnvironment(environment.id))?.autoMerge).not.toBe(true);
+  });
+});
+
 test("a monitor refresh failure does not undo turning auto-merge on", async () => {
   await withStorage(async (storage) => {
     const environment = await storage.addEnvironment({
@@ -130,11 +197,12 @@ for (const update of [
         prUrl: "https://github.com/o/r/pull/1",
         prState: "open",
       });
-      await storage.updateEnvironment(env.id, { autoMerge: true });
+      await storage.updateEnvironment(env.id, { autoMerge: true, autoMergeCleanup: true });
       expect((await storage.getEnvironment(env.id))?.autoMergePrUrl).toBe(env.prUrl);
       const updated = await storage.updateEnvironment(env.id, update);
       expect(updated.autoMerge).toBe(false);
       expect(updated.autoMergePrUrl).toBeNull();
+      expect(updated.autoMergeCleanup).toBe(false);
       await storage.updateEnvironment(env.id, {
         prUrl: "https://github.com/o/r/pull/3",
         prState: "open",

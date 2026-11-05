@@ -97,11 +97,14 @@ function OutcomeBadge({ fire }: { fire: ScheduleFire | null }) {
  */
 export function AccountSwitchPermissionBadge({
   job,
-  now = Date.now(),
+  now: nowOverride,
 }: {
   job: Pick<ScheduledJobSummary, "action" | "lastFire" | "timeZone">;
   now?: number;
 }) {
+  // Read once when the row mounts; the list reloads when schedules change.
+  const [mountedAt] = useState(() => Date.now());
+  const now = nowOverride ?? mountedAt;
   const grant = scheduleAccountSwitchGrant(job.action);
   if (!grant) return null;
   const providers = grant.platforms

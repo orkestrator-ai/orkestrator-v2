@@ -9,6 +9,8 @@ import {
   claudeKeychainService,
   codexAccountLoginState,
   hostClaudeJsonPath,
+  hostClaudeConfigDir,
+  hostCodexHome,
   linkSharedEntries,
   prepareAgentAccountHome,
   privateSharedEntries,
@@ -60,6 +62,17 @@ describe("claudeKeychainService", () => {
     expect(claudeKeychainService("/tmp/ork-p0/claude-a/")).not.toBe(
       claudeKeychainService("/tmp/ork-p0/claude-a"),
     );
+  });
+});
+
+describe("shared host destinations", () => {
+  test.each([
+    [hostClaudeConfigDir, "CLAUDE_CONFIG_DIR", ".claude"],
+    [hostCodexHome, "CODEX_HOME", ".codex"],
+  ] as const)("%s uses the configured host home or its default", (resolve, setting, directory) => {
+    expect(resolve({}, "/home/u")).toBe(`/home/u/${directory}`);
+    expect(resolve({ [setting]: "/custom/host" }, "/home/u")).toBe("/custom/host");
+    expect(resolve({ [setting]: " " }, "/home/u")).toBe(`/home/u/${directory}`);
   });
 });
 

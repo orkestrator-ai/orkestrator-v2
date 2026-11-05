@@ -211,6 +211,7 @@ function PrivateEntriesNotice({
 }) {
   const cli = account.platform === "claude" ? "Claude" : "Codex";
   const hostHome = account.platform === "claude" ? "~/.claude" : "~/.codex";
+  const homeSetting = account.platform === "claude" ? "CLAUDE_CONFIG_DIR" : "CODEX_HOME";
   const accountHome = `agent-accounts/${account.platform}/${account.id}`;
   const names = entries.join(", ");
   return (
@@ -226,7 +227,9 @@ function PrivateEntriesNotice({
         </p>
         <p>
           To share {entries.length === 1 ? "it" : "them"} again, copy anything you want to keep into{" "}
-          <code>{hostHome}</code>, then delete {names} from <code>{accountHome}</code> in
+          the configured {cli} host directory on the machine that owns this account (
+          <code>{homeSetting}</code> if set, otherwise <code>{hostHome}</code>). Verify the saved
+          content is there before deleting {names} from <code>{accountHome}</code> in
           Orkestrator&apos;s data folder. It is linked back the next time {cli} starts on this
           account.
         </p>

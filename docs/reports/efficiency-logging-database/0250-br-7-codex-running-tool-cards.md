@@ -48,7 +48,7 @@ Analysed 2026-11-03 against `main` at `a2bba9d8`.
 ## Constraints and rationale
 
 - [Report invariants](../2026-10-27-efficiency.md#invariants-every-fix-must-keep): Codex's stdout loop never awaits consumers. This runs on the publish tick, and must stay there.
-- 1202 recommends doing the replay ring work ([0360](0360-br-15-sse-replay-rings.md)) after this.
+- 1202 recommended doing the replay ring work (E-0360) after this; it was done 2026-11-05.
 
 ## Needs verification
 

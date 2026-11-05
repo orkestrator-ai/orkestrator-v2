@@ -20,7 +20,12 @@ import { dismissStartupDialogs } from "./electron-startup-dialogs";
 /**
  * The `localWindowGatewayTransport` setting in a real Electron window, off and
  * on (to-do 1202 task 12). Each run writes the counts recorded in that to-do: one
- * terminal printing LINE_COUNT lines with one window open.
+ * terminal printing LINE_COUNT lines with one window open. It also records
+ * Electron main's CPU time (`process.cpuUsage()`) and the window's renderer CPU
+ * time while idle, during that load and during a BURST_LINES burst with no
+ * pauses, which is the main-process baseline the E26 report asked for. Ends of
+ * the loads are detected from the page's own terminal listener, so the waiting
+ * adds no command through main.
  */
 
 type RendererWindow = Window & {
@@ -45,8 +50,18 @@ type PageTransport = {
   sources: EventSource[];
 };
 type Environment = { id: string; name: string };
+type CpuSample = { mainMicros: number; rendererSeconds: number; at: number };
+type CpuWindow = { wallMs: number; mainCpuMs: number; rendererCpuMs: number };
+type Frames = { count: number; desynced: number; tail: string };
 type Counts = {
   mode: "relay" | "gateway";
+  idle: CpuWindow;
+  /** Idle again, polling the page as the load windows do: the harness's own floor. */
+  idlePolled: CpuWindow;
+  load: CpuWindow;
+  burst: CpuWindow & { lines: number; relayedEvents: number; framesDelivered: number };
+  /** The same two loads with a second window showing the same terminal. */
+  twoWindows: { load: CpuWindow; burst: CpuWindow; relayedEvents: number };
   relayedEvents: number;
   relayedTerminalEvents: number;
   mainInvokes: number;
@@ -64,6 +79,8 @@ const electronExecutable = path.join(packageRoot, "node_modules", ".bin", "elect
 const previewDir = path.join(repositoryRoot, "output", "visual-previews");
 const countsDir = path.join(repositoryRoot, "output", "agent-testing", "local-transport-counts");
 const LINE_COUNT = 300;
+const BURST_LINES = 200_000;
+const IDLE_MS = 5_000;
 
 const visibleText = (output: string): string =>
   output
@@ -116,22 +133,64 @@ async function instrumentMain(app: ElectronApplication): Promise<void> {
   });
 }
 
+/** Main's own CPU time, and the renderers' cumulative CPU time, at one instant. */
+async function sampleCpu(app: ElectronApplication): Promise<CpuSample> {
+  return app.evaluate(({ app: electronApp }) => {
+    const usage = process.cpuUsage();
+    const rendererSeconds = electronApp
+      .getAppMetrics()
+      .filter((metric) => metric.type === "Tab")
+      .reduce((total, metric) => total + (metric.cpu.cumulativeCPUUsage ?? 0), 0);
+    return { mainMicros: usage.user + usage.system, rendererSeconds, at: Date.now() };
+  });
+}
+
+function cpuWindow(start: CpuSample, end: CpuSample): CpuWindow {
+  return {
+    wallMs: end.at - start.at,
+    mainCpuMs: Math.round((end.mainMicros - start.mainMicros) / 100) / 10,
+    rendererCpuMs: Math.round((end.rendererSeconds - start.rendererSeconds) * 10_000) / 10,
+  };
+}
+
 async function countRelay(app: ElectronApplication): Promise<void> {
   await app.evaluate(({ BrowserWindow }) => {
     const state = globalThis as typeof globalThis & {
       __relay?: { events: number; terminal: number };
     };
+    // Restarts the count; every open window adds to it, each hooked once.
     const relay = { events: 0, terminal: 0 };
     state.__relay = relay;
-    const contents = BrowserWindow.getAllWindows()[0]!.webContents;
-    const send = contents.send.bind(contents);
-    contents.send = (channel: string, ...args: unknown[]) => {
-      if (channel === "orkestrator:event") {
-        relay.events += 1;
-        if (String(args[0]).startsWith("terminal-output-")) relay.terminal += 1;
+    for (const browserWindow of BrowserWindow.getAllWindows()) {
+      const contents = browserWindow.webContents as typeof browserWindow.webContents & {
+        __relayCounted?: boolean;
+      };
+      if (contents.__relayCounted) continue;
+      contents.__relayCounted = true;
+      const send = contents.send.bind(contents);
+      contents.send = (channel: string, ...args: unknown[]) => {
+        const current = (globalThis as typeof globalThis & { __relay?: typeof relay }).__relay;
+        if (channel === "orkestrator:event" && current) {
+          current.events += 1;
+          if (String(args[0]).startsWith("terminal-output-")) current.terminal += 1;
+        }
+        send(channel, ...args);
+      };
+    }
+  });
+}
+
+async function clickNewWindow(app: ElectronApplication): Promise<void> {
+  await app.evaluate(({ Menu }) => {
+    const find = (items: Electron.MenuItem[]): Electron.MenuItem | undefined => {
+      for (const item of items) {
+        if (item.label === "New Window") return item;
+        const nested = item.submenu ? find(item.submenu.items) : undefined;
+        if (nested) return nested;
       }
-      send(channel, ...args);
+      return undefined;
     };
+    find(Menu.getApplicationMenu()!.items)!.click();
   });
 }
 
@@ -299,15 +358,15 @@ async function runScenario(mode: Counts["mode"], temporaryRoot: string): Promise
     await instrumentPage(window);
     await window.reload();
     await expect(window).toHaveTitle(profile.electronTitle, { timeout: 60_000 });
-    const openEnvironment = async (name: string) => {
-      const expand = window.getByRole("button", { name: `Expand project ${project.name}` });
-      const entry = window.getByText(name, { exact: true }).first();
+    const openEnvironment = async (name: string, page: Page = window) => {
+      const expand = page.getByRole("button", { name: `Expand project ${project.name}` });
+      const entry = page.getByText(name, { exact: true }).first();
       // A startup dialog can cover the sidebar for a moment, so ask again until the row shows.
       await expect(async () => {
         if (await expand.isVisible()) await expand.click();
         await expect(entry).toBeVisible({ timeout: 2_000 });
       }).toPass({ timeout: 30_000 });
-      await window.mouse.move(0, 0);
+      await page.mouse.move(0, 0);
       await entry.click();
     };
     const focusTerminal = async () => {
@@ -319,6 +378,19 @@ async function runScenario(mode: Counts["mode"], temporaryRoot: string): Promise
       await focusTerminal();
       await window.keyboard.type(line, { delay: 15 });
       await window.keyboard.press("Enter");
+    };
+    /**
+     * Types `line`, then samples CPU and presses Enter, so the window measures
+     * the command's output and not the typing: main is Chromium's browser
+     * process, which handles every synthetic key.
+     */
+    const measureInTerminal = async (line: string, marker: string): Promise<CpuWindow> => {
+      await focusTerminal();
+      await window.keyboard.type(line, { delay: 15 });
+      const start = await sampleCpu(electronApp);
+      await window.keyboard.press("Enter");
+      await expect.poll(() => reached(marker), { timeout: 120_000, intervals: [50] }).toBe(true);
+      return cpuWindow(start, await sampleCpu(electronApp));
     };
 
     const renderedOutput = () =>
@@ -365,26 +437,50 @@ async function runScenario(mode: Counts["mode"], temporaryRoot: string): Promise
       const state = globalThis as typeof globalThis & {
         __frames?: { count: number; desynced: number };
       };
-      const frames = { count: 0, desynced: 0 };
+      const frames = { count: 0, desynced: 0, tail: "" };
       state.__frames = frames;
-      (globalThis.window as RendererWindow).orkestrator!.listen<{ desynced?: boolean }>(
-        `terminal-output-${session}`,
-        (payload) => {
-          frames.count += 1;
-          if (payload && typeof payload === "object" && payload.desynced) frames.desynced += 1;
-        },
-      );
+      (globalThis.window as RendererWindow).orkestrator!.listen<{
+        desynced?: boolean;
+        text?: string;
+      }>(`terminal-output-${session}`, (payload) => {
+        frames.count += 1;
+        if (payload && typeof payload === "object" && payload.desynced) frames.desynced += 1;
+        if (payload && typeof payload === "object" && typeof payload.text === "string") {
+          frames.tail = (frames.tail + payload.text).slice(-4096);
+        }
+      });
     }, sessionId);
     const frames = () =>
-      window.evaluate(
-        () => (globalThis as unknown as { __frames: { count: number; desynced: number } }).__frames,
+      window.evaluate(() => (globalThis as unknown as { __frames: Frames }).__frames);
+    const relayState = () =>
+      electronApp.evaluate(
+        () => (globalThis as unknown as { __relay: { events: number; terminal: number } }).__relay,
       );
+    // Seen by the page's own listener, or, after a desync dropped frames, in the
+    // authoritative snapshot.
+    const reached = async (marker: string) => {
+      const seen = await frames();
+      if (visibleText(seen.tail).includes(marker)) return true;
+      return seen.desynced > 0 && (await output()).includes(marker);
+    };
+
+    // Idle: nothing running, same window open.
+    const idleStart = await sampleCpu(electronApp);
+    await new Promise((resolve) => setTimeout(resolve, IDLE_MS));
+    const idle = cpuWindow(idleStart, await sampleCpu(electronApp));
+    const polledStart = await sampleCpu(electronApp);
+    while (Date.now() - polledStart.at < IDLE_MS) {
+      await reached("NEVER-PRINTED");
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    const idlePolled = cpuWindow(polledStart, await sampleCpu(electronApp));
 
     // The measured load: one window, one terminal printing a known number of lines.
     const before = { main: await mainState(), page: await pageState() };
     await countRelay(electronApp);
-    await runInTerminal(
+    const load = await measureInTerminal(
       `for i in $(seq 1 ${LINE_COUNT}); do echo LINE-$i; sleep 0.01; done; echo LOAD-$((40+2))`,
+      "LOAD-42",
     );
     await expect.poll(output, { timeout: 60_000 }).toContain("LOAD-42");
     await expect.poll(renderedOutput, { timeout: 30_000 }).toContain("LOAD-42");
@@ -392,13 +488,56 @@ async function runScenario(mode: Counts["mode"], temporaryRoot: string): Promise
     await mkdir(previewDir, { recursive: true });
     await window.screenshot({ path: path.join(previewDir, `local-transport-${mode}.png`) });
 
-    const relay = await electronApp.evaluate(
-      () => (globalThis as unknown as { __relay: { events: number; terminal: number } }).__relay,
-    );
+    const relay = { ...(await relayState()) };
     const main = await mainState();
     const page = await pageState();
+
+    // A burst with no pauses: the case where relaying terminal output costs main most.
+    const framesBeforeBurst = (await frames()).count;
+    const burst = {
+      ...(await measureInTerminal(`seq 1 ${BURST_LINES}; echo BURST-$((40+2))`, "BURST-42")),
+      lines: BURST_LINES,
+      relayedEvents: (await relayState()).events - relay.events,
+      framesDelivered: (await frames()).count - framesBeforeBurst,
+    };
+    await expect.poll(output, { timeout: 60_000 }).toContain("BURST-42");
+
+    // Two windows on the same terminal: the relay sends every event to both.
+    const secondOpened = electronApp.waitForEvent("window", {
+      predicate: (page) => page.url().startsWith(rendererUrl),
+      timeout: 60_000,
+    });
+    await clickNewWindow(electronApp);
+    const extra = await secondOpened;
+    extra.setDefaultTimeout(20_000);
+    await expect(extra).toHaveTitle(profile.electronTitle, { timeout: 60_000 });
+    expect(await extra.evaluate(() => "orkestratorDesktopHost" in window)).toBe(mode === "gateway");
+    await openEnvironment(target.name, extra);
+    await expect(extra.locator(".xterm:visible").first()).toBeVisible({ timeout: 60_000 });
+    await countRelay(electronApp);
+    await window.bringToFront();
+    const twoLoad = await measureInTerminal(
+      `for i in $(seq 1 ${LINE_COUNT}); do echo TWO-$i; sleep 0.01; done; echo TWO-LOAD-$((40+2))`,
+      "TWO-LOAD-42",
+    );
+    const twoBurst = await measureInTerminal(
+      `seq 1 ${BURST_LINES}; echo TWO-BURST-$((40+2))`,
+      "TWO-BURST-42",
+    );
+    const twoWindows = {
+      load: twoLoad,
+      burst: twoBurst,
+      relayedEvents: (await relayState()).events,
+    };
+    await extra.close();
+
     const counts: Counts = {
       mode,
+      idle,
+      idlePolled,
+      load,
+      burst,
+      twoWindows,
       relayedEvents: relay.events,
       relayedTerminalEvents: relay.terminal,
       mainInvokes: main.invokes - before.main.invokes,
@@ -602,17 +741,7 @@ async function runScenario(mode: Counts["mode"], temporaryRoot: string): Promise
         predicate: (page) => page.url().startsWith(rendererUrl),
         timeout: 60_000,
       });
-      await electronApp.evaluate(({ Menu }) => {
-        const find = (items: Electron.MenuItem[]): Electron.MenuItem | undefined => {
-          for (const item of items) {
-            if (item.label === "New Window") return item;
-            const nested = item.submenu ? find(item.submenu.items) : undefined;
-            if (nested) return nested;
-          }
-          return undefined;
-        };
-        find(Menu.getApplicationMenu()!.items)!.click();
-      });
+      await clickNewWindow(electronApp);
       const second = await opened;
       await expect(second).toHaveTitle(/electron-transport-relay/, { timeout: 60_000 });
       expect(await second.evaluate(() => "orkestratorDesktopHost" in window)).toBe(true);

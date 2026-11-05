@@ -12,9 +12,14 @@
  * the rule that bridges never log them.
  *
  * Output arrives in arbitrary chunks, so a token can straddle two of them.
- * Lines are reassembled before redaction, bounded so a bridge that never
- * prints a newline cannot grow the buffer.
+ * Lines are reassembled before redaction by the splitter the desktop's relay
+ * uses too, bounded so a bridge that never prints a newline cannot grow the
+ * buffer.
  */
+import {
+  PROCESS_OUTPUT_LINE_LIMIT,
+  createBoundedLineSplitter,
+} from "@orkestrator/protocol/node/bounded-line-splitter";
 import {
   emitLogRecord,
   parseLogRecordLine,
@@ -31,7 +36,7 @@ const EXTRA_RULES: Array<{ pattern: RegExp; replacement: string }> = [
 ];
 
 /** Longest partial line held back waiting for its newline. */
-export const BRIDGE_OUTPUT_LINE_LIMIT = 64 * 1024;
+export const BRIDGE_OUTPUT_LINE_LIMIT = PROCESS_OUTPUT_LINE_LIMIT;
 
 export function redactBridgeOutput(text: string): string {
   let result = redactSecrets(text);
@@ -57,38 +62,35 @@ export function redactBridgeLogLine(line: string): string {
 }
 
 /**
- * Turn a byte stream into redacted whole lines for `write`. Call `flush` when
- * the stream ends so a final line without a newline is not lost.
+ * Turn a byte stream into redacted whole lines for `write`, one line per call.
+ * Call `flush` when the stream ends so a final line without a newline is not
+ * lost.
  */
 export function createBridgeOutputForwarder(
   write: (text: string) => void,
   limit = BRIDGE_OUTPUT_LINE_LIMIT,
 ): { push: (chunk: Buffer | string) => void; flush: () => void } {
-  let pending = "";
-  return {
-    push(chunk) {
-      pending += chunk.toString();
-      const end = pending.lastIndexOf("\n");
-      if (end >= 0) {
-        const complete = pending.slice(0, end);
-        pending = pending.slice(end + 1);
-        write(redactBridgeOutput(complete));
-      }
-      if (pending.length > limit) {
-        // Cut at the limit rather than lose output; a token split here is the
-        // accepted cost of keeping the buffer bounded.
-        const head = pending;
-        pending = "";
-        write(redactBridgeOutput(head));
-      }
-    },
-    flush() {
-      if (!pending) return;
-      const rest = pending;
-      pending = "";
-      write(redactBridgeOutput(rest));
-    },
-  };
+  // A line cut at the limit can split a token; that is the accepted cost of
+  // keeping the buffer bounded.
+  // Ask the shared rules whether this line ends in an introducer whose value
+  // could arrive on a later line. The probe is never emitted. Keep only a bit
+  // of context, so even arbitrarily many blank lines cannot grow the buffer.
+  const probe = "RedactionContinuationProbe12345678";
+  let awaitingValue = false;
+  return createBoundedLineSplitter((line) => {
+    let redacted = redactBridgeOutput(line);
+    if (awaitingValue) {
+      // A synthetic assignment applies the shared value rules to the next
+      // line without retaining the original diagnostic. This conservatively
+      // uses the assignment rule's six-character minimum for all schemes.
+      const prefix = "password: ";
+      redacted = redactBridgeOutput(prefix + line).slice(prefix.length);
+    }
+    awaitingValue =
+      (awaitingValue && /^\s*$/.test(line)) ||
+      !redactBridgeOutput(`${line}\n${probe}`).endsWith(probe);
+    write(redacted);
+  }, limit);
 }
 
 /**

@@ -139,7 +139,7 @@ Analysed 2026-11-05 against `main` at `af2e566e5`, from what the X1 batch (Coord
 
 ## Needs verification
 
-- Whether the Claude CLI ever needs another path under the data directory in a real coordinator turn. The scripted run covers saved tool results, memory and attachments, and a real model can only add calls, not new sandbox paths, but a CLI bump could. Re-run the qualification file on each bump.
+- Whether the Claude CLI ever needs another path under the data directory in a real coordinator turn. The scripted run covers saved tool results, memory, attachments and a command run under the sandbox; it does not cover skills or a large tool result written by a real MCP call. Re-run the qualification file on each CLI bump.
 
 ## Related
 

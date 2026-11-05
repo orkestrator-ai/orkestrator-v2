@@ -495,6 +495,34 @@ describe("send_coordinator_node_mail", () => {
     });
   });
 
+  test("a turn the user did not start is framed on a leaf that can say so", async () => {
+    const answers = {
+      deliver_node_mail: { messageId: "m1", toTabId: "startup-agent", placement: "pending-inject" },
+    };
+    const send = (context: Awaited<ReturnType<typeof setup>>, requestId: string) =>
+      context.run("send_coordinator_node_mail", {
+        scope: context.scope,
+        nodeId: "bk_leaf",
+        requestId,
+        toEnvironmentId: "leaf-env",
+        body: "Do this.",
+      });
+    const delivered = (context: Awaited<ReturnType<typeof setup>>) =>
+      context.routed.find((entry) => entry.command === "deliver_node_mail")!.args;
+
+    const capable = await setup({
+      answers,
+      capabilities: { "node-attachment": 1, "node-mail-turn-origin": 1 },
+    });
+    await send(capable, "from-mail");
+    expect(delivered(capable).turnOrigin).toBe("mail");
+
+    // An older leaf refuses an unknown key, so it is never sent one.
+    const older = await setup({ answers });
+    await send(older, "older");
+    expect(delivered(older)).not.toHaveProperty("turnOrigin");
+  });
+
   test("without deliverNow a capable leaf is not asked to steer, and drops any outcome", async () => {
     const { run, scope, routed } = await setup({
       capabilities: { "node-attachment": 1, "node-mail-steer": 1 },

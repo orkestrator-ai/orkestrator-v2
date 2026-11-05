@@ -88,10 +88,13 @@ export async function readGitBlob(
     stdout: "pipe",
     stderr: "pipe",
   });
-  const timer = setTimeout(
-    () => child.kill("SIGKILL"),
-    options.timeoutMs ?? GIT_BLOB_READ_TIMEOUT_MS,
-  );
+  let timer: ReturnType<typeof setTimeout>;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(
+      () => reject(new Error("git cat-file timed out")),
+      options.timeoutMs ?? GIT_BLOB_READ_TIMEOUT_MS,
+    );
+  });
   const reader = child.stdout.getReader();
   // Header bytes until the first newline, then body chunks until `size` arrived.
   let head = Buffer.alloc(0);
@@ -100,7 +103,7 @@ export async function readGitBlob(
   let bodyBytes = 0;
   try {
     for (;;) {
-      const { value, done } = await reader.read();
+      const { value, done } = await Promise.race([reader.read(), deadline]);
       if (value && value.byteLength > 0) {
         let chunk = Buffer.from(value);
         if (!header) {
@@ -128,11 +131,18 @@ export async function readGitBlob(
       }
       if (done) break;
     }
-    const stderr = (await new Response(child.stderr).text()).trim().slice(0, 2_000);
+    const stderr = (await Promise.race([new Response(child.stderr).text(), deadline]))
+      .trim()
+      .slice(0, 2_000);
     throw new Error(stderr || "git cat-file ended before answering");
   } finally {
-    clearTimeout(timer);
-    reader.releaseLock();
+    clearTimeout(timer!);
+    // Cancellation itself may wait on a broken pipe; never await it here.
+    void reader.cancel().then(
+      () => reader.releaseLock(),
+      () => undefined,
+    );
+    void child.stderr.cancel().catch(() => undefined);
     // The answer is complete (or the read failed): the process has nothing
     // more this read needs, and an oversized body is never drained.
     if (child.exitCode === null) child.kill("SIGKILL");

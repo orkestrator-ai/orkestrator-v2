@@ -10,6 +10,9 @@ const PNG_BASE64 = "iVBORw0KGgo=";
 
 type Handler = (args: Record<string, unknown>) => Promise<unknown>;
 let handlers: Record<string, Handler>;
+const OriginalImage = globalThis.Image;
+let imageFails = false;
+let imagePending = false;
 
 function calls(command: string): Array<Record<string, unknown>> {
   return invokeMock.mock.calls
@@ -50,6 +53,18 @@ const LOCAL = {
 };
 
 beforeEach(() => {
+  imageFails = false;
+  imagePending = false;
+  globalThis.Image = function () {
+    const img = document.createElement("img");
+    Object.defineProperty(img, "src", {
+      set: () => {
+        if (!imagePending)
+          queueMicrotask(() => img.dispatchEvent(new Event(imageFails ? "error" : "load")));
+      },
+    });
+    return img;
+  } as unknown as typeof Image;
   resetTranscriptArtifactCapabilities();
   setBackend({}, CONTENT_ORIGIN);
   invokeMock.mockReset();
@@ -59,6 +74,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  globalThis.Image = OriginalImage;
   resetTranscriptArtifactCapabilities();
   invokeMock.mockReset();
   invokeMock.mockImplementation(() => Promise.resolve());
@@ -75,6 +91,26 @@ describe("loadEnvironmentImage", () => {
     loaded.release();
     loaded.release();
     expect(calls("transcript_media_close_stream")).toEqual([{ streamId: "stream-1" }]);
+  });
+
+  test("an unreachable stream retries bounded base64 once and revokes the capability", async () => {
+    imageFails = true;
+    const loaded = await loadEnvironmentImage(LOCAL);
+    expect(loaded.source).toBe("inline");
+    loaded.release();
+    expect(calls("read_environment_file_base64")).toHaveLength(1);
+    expect(calls("transcript_media_close_stream")).toEqual([{ streamId: "stream-1" }]);
+  });
+
+  test("aborting a pending image load releases the stream without a stale base64 read", async () => {
+    imagePending = true;
+    const controller = new AbortController();
+    const pending = loadEnvironmentImage(LOCAL, controller.signal);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    controller.abort();
+    await expect(pending).rejects.toThrow();
+    expect(calls("read_environment_file_base64")).toHaveLength(0);
+    expect(calls("transcript_media_close_stream")).toHaveLength(1);
   });
 
   test("a container image streams with its container id", async () => {

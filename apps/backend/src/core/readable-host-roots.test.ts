@@ -1,3 +1,5 @@
+import { registerTranscriptArtifactCommands } from "./transcript-artifacts/commands.js";
+import type { CommandHandler } from "./commands-context.js";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
@@ -183,4 +185,30 @@ describe("readable host file roots", () => {
       "invalid_input",
     );
   });
+});
+
+test("registered environment-less stream command uses the current readable host roots", async () => {
+  const commands = new Map<string, CommandHandler>();
+  registerTranscriptArtifactCommands((name, handler) => commands.set(name, handler));
+  const ctx = {
+    ...context(),
+    transcriptArtifacts: { runtime: () => ({ contentServer: server }) },
+  } as unknown as CommandContext;
+  const invoke = (name: string, args: Record<string, unknown>) =>
+    Promise.resolve(commands.get(name)!(args as never, ctx));
+  const opened = (await invoke("transcript_media_open_stream", {
+    path: path.join(customWorktree, "clip.wav"),
+  })) as { streamId: string };
+  try {
+    expect(minted).toHaveLength(1);
+    await expect(
+      invoke("transcript_media_open_stream", { path: path.join(outside, "secret.wav") }),
+    ).rejects.toThrow("policy_denied");
+    environments = [];
+    await expect(
+      invoke("transcript_media_open_stream", { path: path.join(customWorktree, "clip.wav") }),
+    ).rejects.toThrow("policy_denied");
+  } finally {
+    await invoke("transcript_media_close_stream", { streamId: opened.streamId });
+  }
 });

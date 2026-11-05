@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, mock, spyOn, test } from "bun:test";
 import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -155,3 +155,27 @@ describe("reading a blob from a repository", () => {
     ).rejects.toThrow("Not a valid object name");
   });
 });
+
+for (const stdoutEnds of [false, true]) {
+  test(`a stuck ${stdoutEnds ? "stderr" : "stdout"} pipe cannot outlive the deadline`, async () => {
+    const kill = mock(() => {});
+    const spawn = spyOn(Bun, "spawn").mockReturnValue({
+      stdout: new ReadableStream({
+        start(controller) {
+          if (stdoutEnds) controller.close();
+        },
+      }),
+      stderr: new ReadableStream(),
+      exitCode: null,
+      kill,
+    } as unknown as ReturnType<typeof Bun.spawn>);
+    try {
+      await expect(readGitBlob("/absent", "HEAD:file", 100, { timeoutMs: 20 })).rejects.toThrow(
+        "timed out",
+      );
+      expect(kill).toHaveBeenCalledWith("SIGKILL");
+    } finally {
+      spawn.mockRestore();
+    }
+  });
+}

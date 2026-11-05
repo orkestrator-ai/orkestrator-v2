@@ -193,14 +193,17 @@ function LiveImageDiffPreview({
       try {
         const mimeType = getImageMimeType(filePath);
         if (!mimeType) throw new Error("Unsupported image format");
-        const loaded = await loadEnvironmentImage({
-          environmentId,
-          containerId,
-          isLocalEnvironment,
-          worktreePath,
-          filePath,
-          mimeType,
-        });
+        const loaded = await loadEnvironmentImage(
+          {
+            environmentId,
+            containerId,
+            isLocalEnvironment,
+            worktreePath,
+            filePath,
+            mimeType,
+          },
+          controller.signal,
+        );
         if (controller.signal.aborted) {
           loaded.release();
           return;
@@ -463,6 +466,7 @@ export function FileViewerTab({
     }
 
     let cancelled = false;
+    const imageController = new AbortController();
     let releaseImage: (() => void) | null = null;
 
     async function loadFile() {
@@ -482,14 +486,17 @@ export function FileViewerTab({
           if (!(isLocalEnvironment && worktreePath) && !containerId) {
             throw new Error("No container ID or worktree path available for image viewing");
           }
-          const loaded = await loadEnvironmentImage({
-            environmentId,
-            containerId,
-            isLocalEnvironment,
-            worktreePath,
-            filePath,
-            mimeType,
-          });
+          const loaded = await loadEnvironmentImage(
+            {
+              environmentId,
+              containerId,
+              isLocalEnvironment,
+              worktreePath,
+              filePath,
+              mimeType,
+            },
+            imageController.signal,
+          );
           if (cancelled) {
             loaded.release();
           } else {
@@ -565,6 +572,7 @@ export function FileViewerTab({
     loadFile();
     return () => {
       cancelled = true;
+      imageController.abort();
       releaseImage?.();
     };
   }, [

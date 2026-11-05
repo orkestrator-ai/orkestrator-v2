@@ -71,15 +71,42 @@ async function openStream(
   return { url: stream.url, source: "stream", release };
 }
 
+/** Validate fetch and decode before handing a stream to either viewer. */
+async function imageLoads(url: string, signal?: AbortSignal): Promise<boolean> {
+  if (signal?.aborted) return false;
+  return new Promise((resolve) => {
+    const image = new Image();
+    const finish = (loaded: boolean) => {
+      clearTimeout(timer);
+      image.onload = null;
+      image.onerror = null;
+      signal?.removeEventListener("abort", abort);
+      if (!loaded) image.removeAttribute("src");
+      resolve(loaded);
+    };
+    const abort = () => finish(false);
+    const timer = setTimeout(() => finish(false), 10_000);
+    image.onload = () => finish(true);
+    image.onerror = () => finish(false);
+    signal?.addEventListener("abort", abort, { once: true });
+    image.src = url;
+  });
+}
+
 /** Resolves the image, preferring a stream capability; rejects as the base64 reader does. */
 export async function loadEnvironmentImage(
   target: EnvironmentImageTarget,
+  signal?: AbortSignal,
 ): Promise<EnvironmentImageSource> {
   const local = Boolean(target.isLocalEnvironment && target.worktreePath);
   if (local && !target.environmentId) throw new Error("The image has no owning environment");
   if (!local && !target.containerId) throw new Error("The image has no owning environment");
   const streamed = await openStream(target, local);
-  if (streamed) return streamed;
+  if (streamed) {
+    if (await imageLoads(streamed.url, signal)) return streamed;
+    streamed.release();
+  }
+  signal?.throwIfAborted();
   const base64 = local
     ? await backend.readEnvironmentFileBase64(target.environmentId!, target.filePath)
     : await backend.readContainerFileBase64(target.containerId!, target.filePath);

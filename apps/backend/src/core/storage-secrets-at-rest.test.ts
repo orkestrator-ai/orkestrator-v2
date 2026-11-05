@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, test } from "bun:test";
-import { promises as fs } from "node:fs";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import syncFs, { promises as fs } from "node:fs";
+import { Database } from "bun:sqlite";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { openChangeLedgerDatabase } from "./change-tracking/ledger-schema.js";
@@ -108,6 +109,34 @@ describe("database files", () => {
     for (const file of files) expect(await mode(file)).toBe(0o600);
   });
 
+  test("a companion chmod failure propagates and closes the new connection", async () => {
+    const directory = await dataDir();
+    const first = opened(openBackendDatabase(directory));
+    const wal = path.join(directory, `${STORAGE_DATABASE_FILE}-wal`);
+    const failure = Object.assign(new Error("fake permission failure"), { code: "EACCES" });
+    const chmod = syncFs.chmodSync;
+    const chmodSpy = spyOn(syncFs, "chmodSync").mockImplementation((file, mode) => {
+      if (file === wal) throw failure;
+      return chmod(file, mode);
+    });
+    const closeSpy = spyOn(Database.prototype, "close");
+    let rejected: Database | undefined;
+    try {
+      expect(() => openBackendDatabase(directory)).toThrow(failure);
+      expect(closeSpy).toHaveBeenCalledTimes(1);
+      rejected = closeSpy.mock.contexts[0] as Database;
+    } finally {
+      chmodSpy.mockRestore();
+      closeSpy.mockRestore();
+    }
+    expect(rejected).toBeDefined();
+    expect(rejected).not.toBe(first.db);
+    expect(() => rejected!.query("SELECT 1").get()).toThrow();
+    // An existing connection is not closed by the failed second open.
+    expect(first.db.query("SELECT 1 AS alive").get()).toEqual({ alive: 1 });
+    opened(openBackendDatabase(directory));
+  });
+
   test("an open leaves the target of a symlinked companion alone", async () => {
     const directory = await dataDir();
     const outside = path.join(directory, "outside");
@@ -154,6 +183,34 @@ describe("config.json, which holds the provider secrets", () => {
 
     for (const file of files) expect(await mode(file)).toBe(0o600);
     expect(await fs.readFile(config, "utf8")).toBe(untouched);
+  });
+
+  test("a start tightens retained secret-bearing atomic remnants only", async () => {
+    const directory = await dataDir();
+    const id = "12345678-1234-4234-8234-123456789abc";
+    const names = [
+      `.config.json.${id}.tmp`,
+      `.config.json.recovery.${id}.tmp`,
+      `.config.json.bak.1.${id}.tmp`,
+    ];
+    for (const name of names) {
+      await fs.writeFile(path.join(directory, name), FAKE_SECRETS[0]!, { mode: 0o644 });
+    }
+    const outside = path.join(directory, "unrelated.tmp");
+    await fs.writeFile(outside, "unrelated", { mode: 0o644 });
+    await fs.symlink(
+      outside,
+      path.join(directory, `.config.json.${id.replace("12345678", "abcdef12")}.tmp`),
+    );
+    await fs.mkdir(path.join(directory, `.config.json.${id.replace("12345678", "abcdef13")}.tmp`));
+
+    await startedService(directory);
+
+    for (const name of names) {
+      expect(await mode(path.join(directory, name))).toBe(0o600);
+      expect(await fs.readFile(path.join(directory, name), "utf8")).toBe(FAKE_SECRETS[0]!);
+    }
+    expect(await mode(outside)).toBe(0o644);
   });
 
   test("a start does not fail when the file or its backups do not exist", async () => {

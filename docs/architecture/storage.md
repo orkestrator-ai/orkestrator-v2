@@ -545,7 +545,7 @@ else in the data directory:
 | --- | --- | --- |
 | `config.json` | All four | 0600, set by every save and every backend start (`restrictConfigFileModes`) |
 | `config.json.bak.1` to `.bak.5` | Earlier values of all four | The same |
-| `.config.json.<uuid>.tmp` | All four, if a save was interrupted | Created 0600 |
+| `.config.json.<uuid>.tmp` (also recovery and backup atomic-save remnants) | All four, if a save was interrupted | Created 0600; existing regular remnants tightened to 0600 at backend start |
 | `portable-inputs/<environment>/<revision>/claude-config/.orkestrator-anthropic-key` | `anthropicApiKey`, for a container whose image takes staged inputs | 0600 in a 0700 directory |
 
 `orkestrator.sqlite`, `change-tracking.sqlite`, their `-wal` and `-shm` and the
@@ -571,7 +571,10 @@ content they hold.
   of the data directory, or an image of an unencrypted disk. A copy made outside
   the app can also lose the 0600 mode.
 - Clearing or replacing a key does not remove the old value from the backup
-  ladder until five further config saves have rotated it out. A staged Anthropic
+  ladder until five further config saves have rotated it out. Interrupted-save
+  remnants are retained and tightened at startup, rather than deleted because
+  another backend may still be writing one. They can retain old keys indefinitely
+  until manually removed while all backends are stopped. A staged Anthropic
   key also remains in its `portable-inputs` revision while any container of that
   environment references it, including stopped containers and recovery copies.
   Changing the setting does not rewrite that revision or the key already copied

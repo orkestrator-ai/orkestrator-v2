@@ -1,5 +1,5 @@
 import { EnvironmentUnavailableError, type EnvironmentGit } from "./workspace-code-rewind.js";
-import { gitHubCli } from "./github-cli-binary.js";
+import { gitHubCli, type GitHubCliSelection } from "./github-cli-binary.js";
 import { gitHubCliEnv, type GitHubCliConfigSource } from "./github-credentials.js";
 import type { EnvironmentMutationFence } from "./environment-replacement-fence.js";
 import {
@@ -166,9 +166,10 @@ export function isRemoteBranchAlreadyDeletedError(message: string): boolean {
 export function createLocalGhRunner(
   cwd: string,
   gitHubConfig: GitHubCliConfigSource | undefined,
+  gitHubCliSelection: GitHubCliSelection | undefined,
 ): GhCliRunner {
   return async (args, timeoutMs = 60_000) => {
-    const { stdout } = await runCommand(gitHubCli(), args, {
+    const { stdout } = await runCommand(gitHubCli(gitHubCliSelection), args, {
       cwd,
       timeoutMs,
       env: await gitHubCliEnv(gitHubConfig),
@@ -285,6 +286,7 @@ export function createEnvironmentCommandRunner(
   environment: Environment,
   fence: Pick<EnvironmentMutationFence, "beginMutation">,
   gitHubConfig: GitHubCliConfigSource | undefined,
+  gitHubCliSelection: GitHubCliSelection | undefined,
   execute = runCommand,
 ): EnvironmentCommandRunner {
   if (environment.environmentType === "local") {
@@ -298,7 +300,7 @@ export function createEnvironmentCommandRunner(
           // `gh` on the host is the backend's resolved copy; inside a
           // container it is the image's own.
           (
-            await execute(command === "gh" ? gitHubCli() : command, args, {
+            await execute(command === "gh" ? gitHubCli(gitHubCliSelection) : command, args, {
               cwd: environment.worktreePath,
               timeoutMs,
               env: command === "gh" ? await gitHubCliEnv(gitHubConfig, env) : env,
@@ -334,7 +336,7 @@ export function createGitEnvironmentCommandRunner(
   environment: Environment,
   fence: Pick<EnvironmentMutationFence, "beginMutation">,
 ): EnvironmentCommandRunner {
-  return createEnvironmentCommandRunner(environment, fence, undefined);
+  return createEnvironmentCommandRunner(environment, fence, undefined, undefined);
 }
 
 export function parseReviewPackageId(value: unknown): string {
@@ -883,6 +885,7 @@ export async function verifyEnvironmentReviewPackage(
     environment,
     context.runtime.environments.fence,
     context.storage,
+    context.runtime.gitHubCli,
   );
   try {
     await ensureReviewPackageIsGitExcluded(environment, runner, reference.filePath);
@@ -942,6 +945,7 @@ export async function verifyEnvironmentPullRequest(
     environment,
     context.runtime.environments.fence,
     context.storage,
+    context.runtime.gitHubCli,
   );
   const raw = await runner(
     "gh",
@@ -1027,6 +1031,7 @@ export async function generateReviewPackage(
     environment,
     context.runtime.environments.fence,
     context.storage,
+    context.runtime.gitHubCli,
   );
   const baseName = `origin/${branch}`;
   const [headOutput, baseOutput] = await Promise.all([
@@ -1271,6 +1276,7 @@ export async function deletePullRequestHeadBranchViaGitHubApi(
 
 export async function mergePullRequestViaGitHubApi(
   gitHubConfig: GitHubCliConfigSource,
+  gitHubCliSelection: GitHubCliSelection | undefined,
   prUrl: string,
   method: "squash" | "merge" | "rebase",
   deleteBranch: boolean,
@@ -1280,7 +1286,7 @@ export async function mergePullRequestViaGitHubApi(
   const pr = parseGitHubPullRequestUrl(prUrl);
   const pullEndpoint = `repos/${encodeGitHubPathSegment(pr.owner)}/${encodeGitHubPathSegment(pr.repo)}/pulls/${pr.number}`;
   const mergeEndpoint = `${pullEndpoint}/merge`;
-  const runGh = createLocalGhRunner(cwd, gitHubConfig);
+  const runGh = createLocalGhRunner(cwd, gitHubConfig, gitHubCliSelection);
 
   await markPullRequestReadyIfDraft(prUrl, runGh);
 
@@ -1408,7 +1414,11 @@ async function runStoredEnvironmentMergeOnce<T>(
         "The project checkout branch changed; refresh its pull request before merging",
       );
     }
-    const runner = createLocalGhRunner(environment.worktreePath!, context.storage);
+    const runner = createLocalGhRunner(
+      environment.worktreePath!,
+      context.storage,
+      context.runtime.gitHubCli,
+    );
     const identity = JSON.parse(
       await runner(
         ["pr", "view", previousPr, "--json", "headRefName,baseRefName,isCrossRepository"],
@@ -1453,6 +1463,7 @@ async function runStoredEnvironmentMergeOnce<T>(
         environment.environmentType === "local"
           ? await mergePullRequestViaGitHubApi(
               context.storage,
+              context.runtime.gitHubCli,
               environment.prUrl!,
               method,
               deleteBranch,

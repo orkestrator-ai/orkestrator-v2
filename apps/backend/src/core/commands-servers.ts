@@ -1594,7 +1594,11 @@ export async function deleteEnvironment(
         environmentId,
       });
       if (environment)
-        await deleteMergedEnvironmentRemoteBranch(environment, storage).catch(() => undefined);
+        await deleteMergedEnvironmentRemoteBranch(
+          environment,
+          storage,
+          context.runtime.gitHubCli,
+        ).catch(() => undefined);
       if (environment?.worktreePath)
         context.runtime.diffStats.gitFetchScheduler.forget(environment.worktreePath);
       // Graph runs' reference artifacts live in the workspace: remove them

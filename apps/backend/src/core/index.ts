@@ -56,7 +56,6 @@ import {
 import { pickInheritedGlobalSettings } from "@orkestrator/protocol/controller-settings";
 import type { NodeMode } from "@orkestrator/protocol/command-nodes";
 import { stoppedWorkerMailHook } from "./agent-mail-stopped-worker.js";
-import { setManagedGitHubCli } from "./github-cli-binary.js";
 import { resolveManagedBinary } from "./commands-agent-support.js";
 import { closeEnvironmentCleanupStorage } from "./environment-cleanup-ledger.js";
 import {
@@ -682,8 +681,7 @@ export class OrkestratorBackend {
     context.deleteWorkflowResultsByEnvironment = (environmentId: string) =>
       this.workflowResults.deleteByEnvironment(environmentId);
     this.context = context;
-    context.pinnedGitHubCli = resolveManagedBinary(context, "gh");
-    setManagedGitHubCli(context.pinnedGitHubCli);
+    context.runtime.gitHubCli.pin(resolveManagedBinary(context, "gh"));
     this.hostMaintenance.setReaders({
       impact: () => readRestartImpact(context),
       tools: () => readToolStatus(context, this.hostMaintenance.ghChannel()),
@@ -785,6 +783,7 @@ export class OrkestratorBackend {
           };
         },
         workerGoal: (environmentId, tabId) => workerSessionGoal(storage, environmentId, tabId),
+        gitHubCli: this.runtime.gitHubCli,
       },
     );
     context.coordinators = this.coordinators;
@@ -1351,7 +1350,11 @@ export class OrkestratorBackend {
         branchPushState: (environmentId) =>
           readEnvironmentBranchPushState(
             storage,
-            createGraphEnvironmentShell(context.runtime.environments.fence, storage),
+            createGraphEnvironmentShell(
+              context.runtime.environments.fence,
+              storage,
+              context.runtime.gitHubCli,
+            ),
             environmentId,
           ),
         workspaceWriters,
@@ -1444,10 +1447,11 @@ export class OrkestratorBackend {
         workspaceHead: async (environment) => ({
           branch: environment.branch,
           headRef: (
-            await createGraphEnvironmentShell(context.runtime.environments.fence, storage).git(
-              environment,
-              ["rev-parse", "--verify", "HEAD^{commit}"],
-            )
+            await createGraphEnvironmentShell(
+              context.runtime.environments.fence,
+              storage,
+              context.runtime.gitHubCli,
+            ).git(environment, ["rev-parse", "--verify", "HEAD^{commit}"])
           ).trim(),
         }),
       }),
@@ -1489,7 +1493,11 @@ export class OrkestratorBackend {
     this.buildPipelineActivity = new BuildPipelineActivity(storage);
     context.graphRuns = this.graphRuns;
     // System nodes (item 207): backend side effects, journaled per run.
-    const graphShell = createGraphEnvironmentShell(context.runtime.environments.fence, storage);
+    const graphShell = createGraphEnvironmentShell(
+      context.runtime.environments.fence,
+      storage,
+      context.runtime.gitHubCli,
+    );
     this.graphSystemExecutor = new GraphNodeSystemExecutor({
       storage,
       invoke: invokeCommand,
@@ -1887,11 +1895,7 @@ export class OrkestratorBackend {
     // what restarted this backend.
     try {
       this.hostMaintenance.init();
-      await applyGhChannel(
-        this.context,
-        this.hostMaintenance.ghChannel(),
-        this.context.pinnedGitHubCli,
-      );
+      await applyGhChannel(this.context, this.hostMaintenance.ghChannel());
     } catch (error) {
       log.warn("startup.step-failed", { step: "host-update-record", error: formatLogError(error) });
     }

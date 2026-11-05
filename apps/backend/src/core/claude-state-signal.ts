@@ -126,6 +126,8 @@ export async function containerImageCapabilitySupport(
   const recordedImageId = environment
     ? currentRuntimeIdentity(environment, context)?.imageId
     : undefined;
+  // Terminal signals retain their no-exec retry path for unknown identities.
+  if (!recordedImageId && capability !== "bridge-credential") return "unknown";
   // Older runtimes predate recorded image identities. Inspect the running
   // container rather than treating missing metadata as a legacy capability.
   const imageId = recordedImageId ?? (await inspectImage(containerId).catch(() => undefined));

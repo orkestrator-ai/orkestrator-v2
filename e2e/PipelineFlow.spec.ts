@@ -872,6 +872,8 @@ test("Notes shows follow-ups and the full brief after reload", async ({ page }) 
     await expect(followUps).toContainText("Needs a device.");
     await expect(followUps).toContainText("Rich text formatting");
     await expect(followUps).toContainText("mise run test:browser");
+    await expect(notes.getByRole("region").nth(0)).toHaveAttribute("aria-label", "Summary");
+    await expect(notes.getByRole("region").nth(1)).toHaveAttribute("aria-label", "Needs a look");
     for (const title of [
       "Objective",
       "Context",

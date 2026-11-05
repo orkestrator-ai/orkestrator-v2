@@ -14,7 +14,7 @@ const taskSnapshot = {
 };
 
 describe("PipelineNotesView", () => {
-  test("leads with what needs a look, then shows the whole brief", () => {
+  test("shows what needs a look under the summary, then the rest of the brief", () => {
     render(
       <PipelineNotesView
         pipeline={build({
@@ -38,7 +38,19 @@ describe("PipelineNotesView", () => {
     expect(flagged.getByText("Rich text formatting")).toBeTruthy();
     expect(flagged.getByText("mise run test:browser")).toBeTruthy();
 
-    // Every section of the key information tab follows it.
+    expect(
+      screen
+        .getAllByRole("region")
+        .slice(0, 3)
+        .map((region) => region.getAttribute("aria-label")),
+    ).toEqual(["Summary", "Needs a look", "Objective"]);
+
+    // Outlined in orange, with no shading behind it.
+    const outline = screen.getByRole("region", { name: "Needs a look" }).classList;
+    expect(outline.contains("border-amber-500/30")).toBe(true);
+    expect(Array.from(outline).some((name) => name.startsWith("bg-"))).toBe(false);
+
+    // Every section of the key information tab is still there.
     for (const title of [
       "Objective",
       "Context",
@@ -56,6 +68,36 @@ describe("PipelineNotesView", () => {
         .filter((heading) => !heading.closest('[aria-label="Needs a look"]'));
       expect(headings).toHaveLength(1);
     }
+  });
+
+  test("shows what needs a look ahead of a brief with no summary", () => {
+    const withoutSummary = { ...keyInformation };
+    delete withoutSummary.summary;
+    render(
+      <PipelineNotesView pipeline={build({ phase: "complete", keyInformation: withoutSummary })} />,
+    );
+
+    expect(screen.getAllByRole("region")[0]!.getAttribute("aria-label")).toBe("Needs a look");
+  });
+
+  test("shows what needs a look when no brief was recorded", () => {
+    render(
+      <PipelineNotesView
+        pipeline={build({
+          phase: "complete",
+          taskSnapshot,
+          sessions: [
+            session("verify", "verify-1", 0, {
+              acceptanceCriteriaResults: [{ id: "ac-1", status: "not-checked", evidence: "" }],
+            }),
+          ],
+        })}
+      />,
+    );
+
+    const flagged = within(screen.getByRole("region", { name: "Needs a look" }));
+    expect(flagged.getByText("Works on a real phone")).toBeTruthy();
+    expect(screen.getByText("Nothing has been recorded yet")).toBeTruthy();
   });
 
   test("says when nothing was flagged, and when nothing was recorded", () => {

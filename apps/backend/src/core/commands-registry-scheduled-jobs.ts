@@ -1,4 +1,8 @@
-import type { ScheduleOwner, ScheduleState } from "@orkestrator/protocol/scheduled-jobs";
+import type {
+  ScheduleOwner,
+  SchedulerStatus,
+  ScheduleState,
+} from "@orkestrator/protocol/scheduled-jobs";
 import type { CommandContext } from "./commands-context.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
 import type {
@@ -130,9 +134,33 @@ export function scheduleListFilter(args: Record<string, unknown>): ScheduleListF
   };
 }
 
+/**
+ * Whether this backend fires schedules. The scheduler fires only while the
+ * registry writer lease is held (`isWriter` in `core/index.ts`), so the
+ * lease's state is the answer. No writer at all means nothing guards the
+ * directory, and the scheduler fires.
+ */
+export function schedulerStatus(
+  writer: Pick<NonNullable<CommandContext["registryWriterLease"]>, "state"> | undefined,
+): SchedulerStatus {
+  switch (writer?.state() ?? "held") {
+    case "held":
+      return { firing: true };
+    case "lost":
+    case "released":
+      return { firing: false, reason: "writer-lease-lost" };
+    case "busy":
+      return { firing: false, reason: "another-backend" };
+    case "schema-incompatible":
+      return { firing: false, reason: "newer-data-directory" };
+  }
+}
+
 export function registerScheduledJobCommands(register: CommandRegistrar): void {
   register("list_scheduled_jobs", async (args, context) => ({
     schedules: (await service(context)).list(actorOf(args), scheduleListFilter(args)),
+    // Additive: a renderer that predates it ignores it and shows no notice.
+    scheduler: schedulerStatus(context.registryWriterLease),
     revision: Date.now(),
   }));
   register("get_scheduled_job", async (args, context) =>

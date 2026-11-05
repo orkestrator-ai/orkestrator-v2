@@ -1965,6 +1965,8 @@ export class OrkestratorBackend {
     // while every container mutation is refused.
     this.context.registryWriterLease ??= await openRegistryWriter(
       this.context.storage.getDataDir(),
+      // Schedules stop with the lease; Settings → Schedules reads why.
+      { onLost: () => this.context.storage.announceSchedulerStatus() },
     );
     const lifecycleRecovery = await reconcileInterruptedEnvironmentLifecycleTasks(
       this.context.storage,

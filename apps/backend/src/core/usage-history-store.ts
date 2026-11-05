@@ -313,20 +313,20 @@ export class UsageHistoryStore {
       .map((entry) => entry.key);
     let prunedRows = 0;
     let prunedDays = 0;
-    const survivors: Array<{ key: string; lastSeenAt: string }> = [];
+    const survivors: Array<{ key: string; lastSeenAt: string; snapshot: string }> = [];
     const sweep = await this.inBatches(database, keys, (key) => {
       const outcome = pruneExpiredDays(database, key, oldestDay);
       if (outcome.kind === "removed") prunedRows += 1;
       if (outcome.kind === "survivor") {
         if (outcome.changed) prunedDays += 1;
-        survivors.push({ key, lastSeenAt: outcome.lastSeenAt });
+        survivors.push({ key, lastSeenAt: outcome.lastSeenAt, snapshot: outcome.snapshot });
       }
     });
     if (sweep && survivors.length > this.maxRows) {
       survivors.sort((left, right) => left.lastSeenAt.localeCompare(right.lastSeenAt));
       const oldest = survivors.slice(0, survivors.length - this.maxRows);
-      await this.inBatches(database, oldest, ({ key, lastSeenAt }) => {
-        if (dropUnlessRefreshed(database, key, lastSeenAt)) prunedRows += 1;
+      await this.inBatches(database, oldest, ({ key, snapshot }) => {
+        if (dropUnlessRefreshed(database, key, snapshot)) prunedRows += 1;
       });
     }
     return { prunedRows, prunedDays };
@@ -377,7 +377,8 @@ export class UsageHistoryStore {
 }
 
 type PruneOutcome =
-  { kind: "removed" | "skipped" } | { kind: "survivor"; changed: boolean; lastSeenAt: string };
+  | { kind: "removed" | "skipped" }
+  | { kind: "survivor"; changed: boolean; lastSeenAt: string; snapshot: string };
 
 /**
  * Drops one row's expired days, or the row when none is left. A row that cannot
@@ -392,7 +393,12 @@ function pruneExpiredDays(database: StorageDatabase, key: string, oldestDay: str
       if (Object.keys(record.days).length === 0) {
         return { result: { kind: "removed" }, delete: true };
       }
-      const result: PruneOutcome = { kind: "survivor", changed, lastSeenAt: record.lastSeenAt };
+      const result: PruneOutcome = {
+        kind: "survivor",
+        changed,
+        lastSeenAt: record.lastSeenAt,
+        snapshot: JSON.stringify(record),
+      };
       return changed ? { result, value: record } : { result };
     });
   } catch (error) {
@@ -402,9 +408,9 @@ function pruneExpiredDays(database: StorageDatabase, key: string, oldestDay: str
 }
 
 /** Removes a row chosen as least recently used, unless a turn has touched it since. */
-function dropUnlessRefreshed(database: StorageDatabase, key: string, lastSeenAt: string): boolean {
+function dropUnlessRefreshed(database: StorageDatabase, key: string, snapshot: string): boolean {
   return database.updateStoreRow<boolean>(USAGE_HISTORY_STORE, key, (current) =>
-    parseUsageSessionRecord(current)?.lastSeenAt === lastSeenAt
+    JSON.stringify(parseUsageSessionRecord(current)) === snapshot
       ? { result: true, delete: true }
       : { result: false },
   );

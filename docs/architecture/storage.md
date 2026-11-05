@@ -312,8 +312,9 @@ from that.
   nothing; the commit's own check is what stops a controller that lost its
   lease. The same rule applies to the interaction journal's read
   (`getAgentInteractionResolutionJournal`, whose prune only filters the copy it
-  returns) and to an agent mail backoff reset with nothing to reset, which checks
-  the shared read model first and takes the lease only when an entry matches.
+  returns). Agent mail backoff resets always take the writer lease, even when
+  nothing needs clearing, so a reset observes earlier queued backoff writes.
+  A reset with no matching backoff leaves the store revision unchanged.
 - **`atomically(operation)`**: buffers every database-store write and delete
   made inside it and commits them in one transaction. Resource announcements
   made inside are published only after that commit. Reads inside see the

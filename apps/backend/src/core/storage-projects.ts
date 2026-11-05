@@ -524,7 +524,13 @@ export class ProjectsRepository {
   /** {@link saveProject} for several projects: one commit, and only changed rows are written. */
   private saveProjects(projects: readonly Project[]): void {
     this.context.database.transaction(() => {
-      for (const project of projects) this.saveProject(project);
+      if (this.context.database.readStoreHeader("projects")?.mode === "document") {
+        this.context.updateDocumentArrayRows<Project>(this.files.projectsFile(), (stored) => {
+          stored.splice(0, stored.length, ...projects);
+        });
+      } else {
+        for (const project of projects) this.saveProject(project);
+      }
     });
   }
 

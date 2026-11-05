@@ -547,17 +547,8 @@ export class AgentMailInjects {
     return pending;
   }
 
-  /**
-   * Activity edges make a held delivery immediately eligible without announcing
-   * UI churn. Nothing to reset costs one revision check and no lease. A backoff
-   * committed just after that check is the same as one committed just after the
-   * reset, and the lease path re-reads under the lease.
-   */
+  /** Activity edges clear held delivery backoff in writer order. */
   async resetAgentMailInjectBackoff(mailboxId: string): Promise<void> {
-    const { pendingInject } = await this.store.snapshot();
-    if (!pendingInject.some((entry) => entry.mailboxId === mailboxId && entry.nextAttemptAt)) {
-      return;
-    }
     await this.store.enqueue(async () => {
       const store = await this.store.load();
       let changed = false;

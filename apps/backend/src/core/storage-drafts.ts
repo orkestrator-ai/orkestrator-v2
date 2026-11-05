@@ -757,11 +757,22 @@ export class DraftsRepository {
   }
 
   async removeSession(sessionId: string): Promise<void> {
-    const removed = this.context.updateStoreRow(this.files.sessionsFile(), sessionId, (current) => {
-      if (!isRecord(current)) throw new Error(`Session not found: ${sessionId}`);
-      return { result: current as unknown as Session, delete: true };
+    const removed = this.context.database.transaction(() => {
+      if (this.context.database.readStoreHeader("sessions")?.mode === "document") {
+        let removed: Session | undefined;
+        this.context.updateDocumentArrayRows<Session>(this.files.sessionsFile(), (sessions) => {
+          const index = sessions.findIndex((item) => item.id === sessionId);
+          if (index < 0) throw new Error(`Session not found: ${sessionId}`);
+          removed = sessions.splice(index, 1)[0];
+        });
+        return removed!;
+      }
+      return this.context.updateStoreRow(this.files.sessionsFile(), sessionId, (current) => {
+        if (!isRecord(current)) throw new Error(`Session not found: ${sessionId}`);
+        return { result: current as unknown as Session, delete: true };
+      });
     });
-    await this.deleteSessionBuffer(sessionId);
+    if (!(await this.getSession(sessionId))) await this.deleteSessionBuffer(sessionId);
     this.context.changes.announce("session", removed.environmentId);
   }
 
@@ -774,16 +785,27 @@ export class DraftsRepository {
       .filter((session) => session.environmentId === environmentId);
   }
 
+  private mutateEnvironmentSessions<T>(
+    environmentId: string,
+    mutate: (sessions: Session[]) => T,
+  ): T {
+    return this.context.database.transaction(() => {
+      if (this.context.database.readStoreHeader("sessions")?.mode === "document") {
+        let result!: T;
+        this.context.updateDocumentArrayRows<Session>(this.files.sessionsFile(), (sessions) => {
+          result = mutate(sessions.filter((item) => item.environmentId === environmentId));
+        });
+        return result;
+      }
+      const sessions = this.environmentSessionRows(environmentId);
+      const result = mutate(sessions);
+      for (const session of sessions) this.writeSessionRow(session);
+      return result;
+    });
+  }
+
+  /** Keyed-store writes only; document bulk mutations preserve array entries directly. */
   private writeSessionRow(session: Session): void {
-    if (this.context.database.readStoreHeader("sessions")?.mode === "document") {
-      this.context.updateDocumentArrayRows<Session>(this.files.sessionsFile(), (sessions) => {
-        const index = sessions.findIndex(
-          (item) => item.id === session.id && item.environmentId === session.environmentId,
-        );
-        if (index >= 0) sessions[index] = session;
-      });
-      return;
-    }
     this.context.updateStoreRow(this.files.sessionsFile(), session.id, () => ({
       result: undefined,
       value: session,
@@ -819,12 +841,11 @@ export class DraftsRepository {
   }
 
   async disconnectEnvironmentSessions(environmentId: string): Promise<Session[]> {
-    const updated = this.context.database.transaction(() => {
+    const updated = this.mutateEnvironmentSessions(environmentId, (sessions) => {
       const changed: Session[] = [];
-      for (const session of this.environmentSessionRows(environmentId)) {
+      for (const session of sessions) {
         if (session.status !== "connected") continue;
         session.status = "disconnected";
-        this.writeSessionRow(session);
         changed.push(session);
       }
       return changed;
@@ -834,8 +855,7 @@ export class DraftsRepository {
   }
 
   async reorderSessions(environmentId: string, sessionIds: string[]): Promise<Session[]> {
-    this.context.database.transaction(() => {
-      const sessions = this.environmentSessionRows(environmentId);
+    this.mutateEnvironmentSessions(environmentId, (sessions) => {
       const provided = new Set(sessionIds);
       for (const [index, id] of sessionIds.entries()) {
         const session = sessions.find((candidate) => candidate.id === id);
@@ -845,7 +865,6 @@ export class DraftsRepository {
       for (const session of sessions) {
         if (!provided.has(session.id)) session.order = order++;
       }
-      for (const session of sessions) this.writeSessionRow(session);
     });
     this.context.changes.announce("session", environmentId);
     return this.getSessionsByEnvironment(environmentId);

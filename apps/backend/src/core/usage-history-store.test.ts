@@ -572,6 +572,10 @@ describe("the retention sweep's batches", () => {
     // The oldest by `lastSeenAt`, and already visited by the first batch.
     const oldest = "row-00000";
 
+    const original = stored(database, oldest)!;
+    const clock = spyOn(store as unknown as { now: () => Date }, "now").mockReturnValue(
+      new Date(original.lastSeenAt),
+    );
     const sweep = store.prune();
     store.recordTurns({
       sessionKey: oldest,
@@ -579,6 +583,7 @@ describe("the retention sweep's batches", () => {
       platform: "claude",
       turns: [turn("refreshing")],
     });
+    clock.mockRestore();
     const { prunedRows } = await sweep;
 
     expect(stored(database, oldest)?.turnIds).toEqual(["refreshing"]);

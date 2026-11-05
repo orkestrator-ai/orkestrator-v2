@@ -3,6 +3,7 @@ import {
   readStoredValue,
   seedStore,
   storageDatabase,
+  storageInternals,
   withTemporaryStorage,
 } from "./storage-test-support.js";
 import type { StorageService } from "./storage.js";
@@ -52,7 +53,7 @@ interface StoredMail {
 }
 
 describe("agent mail backoff reset", () => {
-  test("nothing to reset takes no lease and writes nothing", async () => {
+  test("nothing to reset acquires the lease but does not rewrite the store", async () => {
     await withTemporaryStorage(async (storage) => {
       seedStore(
         storage.getDataDir(),
@@ -74,8 +75,59 @@ describe("agent mail backoff reset", () => {
       await storage.resetAgentMailInjectBackoff("mailbox-1");
       await storage.resetAgentMailInjectBackoff("mailbox-3");
 
-      expect(leaseWrites()).toBe(0);
+      expect(leaseWrites()).toBeGreaterThan(0);
       expect(storageDatabase(storage).storeRevision("agent-mail")).toBe(revision);
+    });
+  });
+
+  test("reset waits behind a queued backoff writer", async () => {
+    await withTemporaryStorage(async (storage) => {
+      seedStore(storage.getDataDir(), "agent-mail.json", mailStore());
+      const { repos } = storageInternals(storage);
+      // Use the shared store queue used by all mail writers.
+      const store = (
+        repos.agentMailInjects as unknown as {
+          store: {
+            enqueue<T>(run: () => Promise<T>): Promise<T>;
+          };
+        }
+      ).store;
+      let release!: () => void;
+      let entered!: () => void;
+      const started = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const writer = store.enqueue(async () => {
+        entered();
+        await gate;
+        seedStore(
+          storage.getDataDir(),
+          "agent-mail.json",
+          mailStore([
+            {
+              mailboxId: "mailbox-1",
+              messageId: "message-1",
+              nextAttemptAt: "2026-11-04T00:00:00.000Z",
+              attempts: 3,
+            },
+          ]),
+        );
+      });
+      await started;
+      const reset = storage.resetAgentMailInjectBackoff("mailbox-1");
+      release();
+      await writer;
+      await reset;
+      expect(
+        readStoredValue<StoredMail>(storage.getDataDir(), "agent-mail.json")!.pendingInject[0],
+      ).toMatchObject({ attempts: 0 });
+      expect(
+        readStoredValue<StoredMail>(storage.getDataDir(), "agent-mail.json")!.pendingInject[0]
+          ?.nextAttemptAt,
+      ).toBeUndefined();
     });
   });
 

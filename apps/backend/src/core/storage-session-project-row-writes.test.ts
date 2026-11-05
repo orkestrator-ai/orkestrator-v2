@@ -5,7 +5,12 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { Project, Session } from "./models.js";
 import { createProject, StorageService } from "./storage.js";
-import { seedStore, storageDatabase, storageInternals } from "./storage-test-support.js";
+import {
+  seedStore,
+  seedUnreadableStore,
+  storageDatabase,
+  storageInternals,
+} from "./storage-test-support.js";
 
 const directories: string[] = [];
 const services: StorageService[] = [];
@@ -110,6 +115,56 @@ function seedSessions(directory: string, count = 4): void {
 }
 
 describe("owner-scoped session compatibility", () => {
+  test("single removal retains the second owner's duplicate and shared buffer", async () => {
+    const directory = await dataDir();
+    const other = session("shared", "B", 1);
+    seedStore(directory, "sessions.json", [session("shared", "A", 0), other]);
+    const storage = await service(directory);
+    await storage.saveSessionBuffer("shared", "buffer");
+    await storage.removeSession("shared");
+    expect(readStorageDatabaseStore(directory, "sessions")).toEqual([other]);
+    expect(await storage.loadSessionBuffer("shared")).toBe("buffer");
+  });
+
+  for (const operation of ["disconnect", "reorder"] as const) {
+    test(operation + " retains distinct same-owner duplicates", async () => {
+      const directory = await dataDir();
+      const entries = [
+        { ...session("shared", "A", 3), name: "first", tabId: "one" },
+        { ...session("shared", "A", 7), name: "second", tabId: "two" },
+      ];
+      seedStore(directory, "sessions.json", entries);
+      const storage = await service(directory);
+      if (operation === "disconnect") await storage.disconnectEnvironmentSessions("A");
+      else await storage.reorderSessions("A", ["shared"]);
+      const stored = readStorageDatabaseStore(directory, "sessions") as Session[];
+      expect(stored.map(({ name, tabId }) => ({ name, tabId }))).toEqual(
+        entries.map(({ name, tabId }) => ({ name, tabId })),
+      );
+      expect(
+        stored.map((entry) => (operation === "disconnect" ? entry.status : entry.order)),
+      ).toEqual(operation === "disconnect" ? ["disconnected", "disconnected"] : [0, 7]);
+    });
+  }
+
+  for (const operation of ["create", "disconnect", "reorder", "remove", "single-remove"] as const) {
+    test(operation + " refuses an unreadable sessions document without replacing it", async () => {
+      const directory = await dataDir();
+      const storage = await service(directory);
+      seedUnreadableStore(directory, "sessions.json");
+      const db = storageDatabase(storage);
+      const before = db.readStoreHeader("sessions");
+      const run = () => {
+        if (operation === "create") return storage.createSession("A", "c", "t", "plain");
+        if (operation === "disconnect") return storage.disconnectEnvironmentSessions("A");
+        if (operation === "reorder") return storage.reorderSessions("A", []);
+        if (operation === "single-remove") return storage.removeSession("shared");
+        return storage.removeSessionsByEnvironment("A");
+      };
+      await expect(run()).rejects.toThrow();
+      expect(db.readStoreHeader("sessions")).toEqual(before);
+    });
+  }
   for (const operation of ["remove", "disconnect", "reorder"] as const) {
     test(operation + " preserves another owner's duplicate ID", async () => {
       const directory = await dataDir();
@@ -311,6 +366,34 @@ describe("session row writes", () => {
     expect(stored.find((row) => row.id === "session-0")?.name).toBe("row write");
     expect(stored.find((row) => row.id === "session-1")?.name).toBe("older write");
     expect(stored.find((row) => row.id === "session-2")?.name).toBe("second row write");
+  });
+
+  test("arrangements preserve distinct metadata of duplicate projects", async () => {
+    const directory = await dataDir();
+    const entries = [
+      project(0),
+      { ...project(0), name: "second", localPath: "/second" },
+      project(1),
+    ];
+    seedStore(directory, "projects.json", entries);
+    const storage = await service(directory);
+    await storage.reorderProjects(["project-1", "project-0"]);
+    await storage.arrangeProjects(["project-0", "project-1"], { "project-0": "folder" });
+    await storage.arrangeProjectsByIntent({
+      kind: "add-to-folder",
+      projectId: "project-0",
+      folder: "new-folder",
+    });
+    const stored = readStorageDatabaseStore(directory, "projects") as Project[];
+    expect(
+      stored
+        .toSorted((a, b) => a.name.localeCompare(b.name))
+        .map(({ name, gitUrl, localPath }) => ({ name, gitUrl, localPath })),
+    ).toEqual(
+      entries
+        .toSorted((a, b) => a.name.localeCompare(b.name))
+        .map(({ name, gitUrl, localPath }) => ({ name, gitUrl, localPath })),
+    );
   });
 
   test("a store held whole falls back without losing an item", async () => {

@@ -1,3 +1,4 @@
+import { useCallback, useMemo } from "react";
 import { Loader2, Plus, RotateCcw, Settings2 } from "lucide-react";
 import {
   AGENT_PLATFORM_LABELS,
@@ -74,6 +75,27 @@ function sendingHeldReason(
   return undefined;
 }
 
+/*
+ * The agent tab is memoized, so everything it is given here keeps its identity
+ * across renders that change none of its inputs: built once per module, or
+ * memoized per conversation below.
+ */
+const SIDE_COMPOSER_HINT = (
+  <>
+    {COORDINATOR_SIDE_AGENT_EXPLANATION} {COORDINATOR_COMMAND_HINT}
+  </>
+);
+const MAIN_UNASSIGNED = {
+  unassignedStarterPrompts: COORDINATOR_STARTER_PROMPTS,
+  unassignedIntro: <CoordinatorIntroCard />,
+};
+const EMPTY_PLATFORMS_ACTION = (
+  <Button size="sm" variant="outline" onClick={() => requestGlobalSettings("coordinator")}>
+    <Settings2 className="size-3.5" />
+    Coordinator settings
+  </Button>
+);
+
 /**
  * One group's front conversation. Only the front tab of each group is mounted;
  * the backend owns the session, so a tab brought forward rehydrates.
@@ -97,7 +119,35 @@ export function CoordinatorConversationPane({
   onCloseConversation,
 }: CoordinatorConversationPaneProps) {
   const enabledPlatforms = useConfigStore((state) => state.config.global.enabledAgentPlatforms);
-  if (!conversation) {
+  const workspaceId = snapshot.workspace.id;
+  const conversationId = conversation?.id;
+  const platform = conversation?.agent;
+  const providerSessionId = conversation?.providerSessionId;
+  const environmentId = conversationId
+    ? coordinatorRuntimeId(workspaceId, conversationId)
+    : undefined;
+  const data = useMemo(
+    () =>
+      environmentId
+        ? { platform, environmentId, isLocal: true, sessionId: providerSessionId }
+        : undefined,
+    [environmentId, platform, providerSessionId],
+  );
+  const role = conversation?.role;
+  const assignTo = useMemo(
+    () => (conversationId ? { id: conversationId, ...(role ? { role } : {}) } : undefined),
+    [conversationId, role],
+  );
+  const onAssignPlatform = useCallback(
+    (assigned: AgentPlatform, prompt: string, options: CoordinatorLaunchOptions) =>
+      assignTo ? startConversation(assignTo, assigned, options, prompt) : Promise.resolve(),
+    [assignTo, startConversation],
+  );
+  const beforeSend = useCallback(
+    () => (assignTo ? confirmUpstreamMerge(assignTo) : Promise.resolve(undefined)),
+    [assignTo, confirmUpstreamMerge],
+  );
+  if (!conversation || !data) {
     return (
       <div className="grid h-full place-items-center text-center">
         <div>
@@ -123,7 +173,6 @@ export function CoordinatorConversationPane({
   // A banner over the transcript rather than a replacement for it: the
   // conversation stays readable while its platform is unavailable.
   const providerUnavailable = Boolean(conversation.agent && !providerState?.available);
-  const environmentId = coordinatorRuntimeId(snapshot.workspace.id, conversation.id);
   const side = conversation.role === "side";
   const heldReason = sendingHeldReason(snapshot, conversation);
   // A platform turned off is Platforms' to fix; anything else here is the safety level.
@@ -168,7 +217,7 @@ export function CoordinatorConversationPane({
         </CoordinatorBanner>
       ) : null}
       <AgentMailBanner
-        environmentId={environmentId}
+        environmentId={data.environmentId}
         tabId={conversation.tabId}
         agentAvailable={availablePlatforms.length > 0}
       />
@@ -184,12 +233,7 @@ export function CoordinatorConversationPane({
         >
           <LazyAgentNativeTab
             tabId={conversation.tabId}
-            data={{
-              platform: conversation.agent,
-              environmentId,
-              isLocal: true,
-              sessionId: conversation.providerSessionId,
-            }}
+            data={data}
             isActive
             ownsGlobalShortcuts={paneFocused}
             executionPolicy="coordinator-read-only"
@@ -203,43 +247,16 @@ export function CoordinatorConversationPane({
             composerPlaceholder={
               side ? COORDINATOR_SIDE_COMPOSER_PLACEHOLDER : COORDINATOR_COMPOSER_PLACEHOLDER
             }
-            composerHint={
-              side ? (
-                <>
-                  {COORDINATOR_SIDE_AGENT_EXPLANATION} {COORDINATOR_COMMAND_HINT}
-                </>
-              ) : (
-                COORDINATOR_COMMAND_HINT
-              )
-            }
+            composerHint={side ? SIDE_COMPOSER_HINT : COORDINATOR_COMMAND_HINT}
             connectionEnabled={providerState?.available !== false}
             {...(heldReason ? { sendingHeldReason: heldReason } : {})}
             // Only the main coordinator delegates, so only it is offered work
             // that has to run in a pipeline or environment.
-            {...(conversation.role === "main"
-              ? {
-                  unassignedStarterPrompts: COORDINATOR_STARTER_PROMPTS,
-                  unassignedIntro: <CoordinatorIntroCard />,
-                }
-              : {})}
+            {...(conversation.role === "main" ? MAIN_UNASSIGNED : {})}
             emptyPlatformsMessage="No agent platform meets this coordinator's read-only requirement on this machine. Enable a qualified platform, or lower the coordinator safety level in Settings."
-            emptyPlatformsAction={
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => requestGlobalSettings("coordinator")}
-              >
-                <Settings2 className="size-3.5" />
-                Coordinator settings
-              </Button>
-            }
-            onAssignPlatform={
-              conversation.agent
-                ? undefined
-                : (platform, prompt, options) =>
-                    startConversation(conversation, platform, options, prompt)
-            }
-            beforeSend={side ? undefined : () => confirmUpstreamMerge(conversation)}
+            emptyPlatformsAction={EMPTY_PLATFORMS_ACTION}
+            onAssignPlatform={conversation.agent ? undefined : onAssignPlatform}
+            beforeSend={side ? undefined : beforeSend}
             {...(launch
               ? {
                   initialPrompt: launch.prompt,

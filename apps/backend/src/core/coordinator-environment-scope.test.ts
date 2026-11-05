@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, mock, test } from "bun:test";
 import path from "node:path";
 import {
   COORDINATOR_ENVIRONMENT_ORIGIN_REFUSAL,
@@ -6,6 +6,8 @@ import {
 } from "@orkestrator/protocol/coordinator";
 import { renderAgentMailCarrier } from "@orkestrator/protocol/agent-mail";
 import { unknownBackendCommandMessage } from "@orkestrator/protocol/unknown-command";
+import { MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS } from "./coordinator-workflow-retention.js";
+import { seedStore, readStoredValue } from "./storage-test-support.js";
 import { MailWorld } from "./agent-mail-world-test-support.js";
 import { BackendRuntime } from "./backend-runtime.js";
 import { createCommandRegistry } from "./commands-registry.js";
@@ -61,6 +63,7 @@ beforeEach(async () => {
   Object.assign(leafWorker, { status: "running", setupPhase: "ready", worktreePath: world.root });
   await leaf.addEnvironment(leafWorker);
   leafWorkerId = leafWorker.id;
+
   leafContext = {
     storage: leaf,
     emit: () => undefined,
@@ -128,6 +131,12 @@ beforeEach(async () => {
   };
   handMadeActor = await world.addEnvironment("hand-made");
   handMade = handMadeActor.environmentId;
+  await world.storage.saveBuildPipeline("pipeline-target", world.projectId, handMade, 1, {
+    id: "pipeline-target",
+    projectId: world.projectId,
+    environmentId: handMade,
+    phase: "paused",
+  } as never);
 });
 
 afterEach(async () => {
@@ -167,16 +176,20 @@ const launched = (environmentId: string, extra: Record<string, unknown> = {}) =>
 /** Every tool the check applies to, with input its schema accepts. */
 function actions(environmentId: string): Record<string, Record<string, unknown>> {
   const request = { requestId: crypto.randomUUID(), environmentId };
-  const tab = { environmentId, tabId: "agent" };
+  const tab = { environmentId, tabId: "startup-agent" };
   return {
+    pause_build_pipeline: { pipelineId: "pipeline-target" },
+    cancel_build_pipeline: { pipelineId: "pipeline-target" },
+    resume_build_pipeline: { pipelineId: "pipeline-target" },
+    restart_build_pipeline_step: { pipelineId: "pipeline-target", requestId: crypto.randomUUID() },
     launch_job: { ...request, prompt: "Run this" },
-    send_prompt_to_tab: { ...request, tabId: "agent", prompt: "Run this" },
+    send_prompt_to_tab: { ...request, tabId: "startup-agent", prompt: "Run this" },
     launch_terminal: { ...request, command: "bun test" },
     open_worker_browser: { ...request, url: "http://127.0.0.1:3000/" },
     edit_worker_tab: { ...tab, operation: "close" },
-    stop_worker_turn: { ...request, tabId: "agent" },
-    run_worker_command: { ...request, tabId: "agent", command: "/review" },
-    set_worker_goal: { ...request, tabId: "agent", objective: "Finish", maxIterations: 2 },
+    stop_worker_turn: { ...request, tabId: "startup-agent" },
+    run_worker_command: { ...request, tabId: "startup-agent", command: "/review" },
+    set_worker_goal: { ...request, tabId: "startup-agent", objective: "Finish", maxIterations: 2 },
     pause_worker_goal: tab,
     clear_worker_goal: tab,
     fork_worker: request,
@@ -220,7 +233,10 @@ test("every coordinator tool that names an environment has chosen how it stands"
   const names = (schema: unknown): boolean => {
     if (!schema || typeof schema !== "object") return false;
     return Object.entries(schema as Record<string, unknown>).some(
-      ([key, value]) => /environmentId$/i.test(key) || key === "environment" || names(value),
+      ([key, value]) =>
+        /(?:environmentId|pipelineId|workflowId|runId)$/i.test(key) ||
+        key === "environment" ||
+        names(value),
     );
   };
   const unclassified = (body.result?.tools ?? [])
@@ -268,7 +284,7 @@ test("mail and tools to an environment on another node are refused the same way"
     await tool("send_prompt_to_tab", {
       requestId: "prompt",
       environmentId: leafWorkerId,
-      tabId: "agent",
+      tabId: "startup-agent",
       prompt: "Run this",
       nodeId: LEAF,
     }),
@@ -277,19 +293,93 @@ test("mail and tools to an environment on another node are refused the same way"
   expect(routed).not.toContain("dispatch_native_agent_intent");
 });
 
-test("with the setting on, the same calls pass the check", async () => {
+test("with the setting on, each action succeeds and reaches its effect", async () => {
   await allowOthers();
   const sent = await tool("send_message", message(handMade));
   expect(sent.isError).toBe(false);
+  expect(await world.undelivered(handMadeActor)).toHaveLength(1);
+  // Each action has an independent downstream effect. Delegation ownership is
+  // covered by its owning suites; avoid a prior action holding this test's tab.
+  commands.set("assert_coordinator_delegation_available", async () => ({ available: true }));
+  commands.set("open_coordinator_delegation", async () => ({ opened: true }));
+  const effects: Record<string, string> = {
+    pause_build_pipeline: "pause_build_pipeline",
+    cancel_build_pipeline: "cancel_build_pipeline",
+    resume_build_pipeline: "resume_build_pipeline",
+    restart_build_pipeline_step: "restart_coordinator_build_pipeline_step",
+    launch_job: "launch_control_job",
+    send_prompt_to_tab: "dispatch_native_agent_intent",
+    launch_terminal: "launch_coordinator_terminal",
+    open_worker_browser: "open_coordinator_browser",
+    edit_worker_tab: "edit_coordinator_worker_tab",
+    stop_worker_turn: "stop_coordinator_worker_turn",
+    run_worker_command: "run_coordinator_worker_command",
+    set_worker_goal: "set_coordinator_worker_goal",
+    pause_worker_goal: "pause_coordinator_worker_goal",
+    clear_worker_goal: "clear_coordinator_worker_goal",
+    fork_worker: "fork_coordinator_worker",
+    start_environment: "start_environment_background",
+    stop_environment: "stop_environment",
+    create_pr: "create_coordinator_pr",
+    resolve_conflicts: "resolve_coordinator_conflicts",
+    launch_multi_review: "launch_coordinator_multi_review_action",
+    start_build_pipeline: "start_coordinator_build_pipeline",
+    launch_graph: "start_coordinator_graph_run",
+    transfer_files: "transfer_node_files",
+  };
+  commands.set("get_native_agent_model_catalog", async () => []);
+  commands.set("verify_project_launch_base", async () => ({ contained: true }));
+  commands.set("get_project_base_branch_tip", async () => ({
+    branch: "main",
+    commit: BASE,
+    ref: "origin/main",
+    fetched: true,
+  }));
   for (const [name, input] of Object.entries(actions(handMade))) {
-    const result = await tool(name, input);
-    expect({ name, refused: result.text === COORDINATOR_ENVIRONMENT_ORIGIN_REFUSAL }).toEqual({
-      name,
-      refused: false,
+    const effect = effects[name]!;
+    const handler = mock(async () => ({
+      id: "pipeline-target",
+      projectId: scope.projectId,
+      environmentId: handMade,
+      tabId: "startup-agent",
+      phase: "paused",
+      status: "accepted",
+      outcome: "dispatched",
+      restarted: true,
+      launch: { runId: "graph-run" },
+      workflow: {
+        id: "review",
+        projectId: scope.projectId,
+        environmentId: handMade,
+        phase: "preparing",
+      },
+    }));
+    const previous = commands.get(effect);
+    commands.set(effect, handler);
+    const result = await tool(name, {
+      ...input,
+      ...(name === "launch_job" ? { agent: "codex" } : {}),
     });
+    expect({ name, isError: result.isError, text: result.isError ? result.text : "ok" }).toEqual({
+      name,
+      isError: false,
+      text: "ok",
+    });
+    expect(handler).toHaveBeenCalledTimes(1);
+    if (previous) commands.set(effect, previous);
+    else commands.delete(effect);
   }
+  const delivered = mock(async () => ({
+    messageId: "remote-mail",
+    toEnvironmentId: leafWorkerId,
+    toTabId: "agent",
+    placement: "pending-inject",
+  }));
+  commands.set("deliver_node_mail", delivered);
   const remote = await tool("send_message", message(leafWorkerId, { nodeId: LEAF }));
-  expect(remote.text).not.toBe(COORDINATOR_ENVIRONMENT_ORIGIN_REFUSAL);
+  expect(remote.isError).toBe(false);
+  expect(delivered).toHaveBeenCalledTimes(1);
+  expect(remote.structuredContent).toMatchObject({ message: { messageId: "remote-mail" } });
 });
 
 test("turning the setting off again refuses again: nothing sticks", async () => {
@@ -304,14 +394,25 @@ test("turning the setting off again refuses again: nothing sticks", async () => 
 test("an environment this coordinator launched passes", async () => {
   await launched(handMade);
   expect((await tool("send_message", message(handMade))).isError).toBe(false);
+  const stop = mock(async () => ({ stopped: true }));
+  commands.set("stop_environment", stop);
   const result = await tool("stop_environment", { environmentId: handMade });
-  expect(result.text).not.toBe(COORDINATOR_ENVIRONMENT_ORIGIN_REFUSAL);
+  expect(result.isError).toBe(false);
+  expect(stop).toHaveBeenCalledTimes(1);
 });
 
 test("its own worker on another node passes", async () => {
   await launched(leafWorkerId, { nodeId: LEAF });
+  const deliver = mock(async () => ({
+    messageId: "own-remote",
+    toEnvironmentId: leafWorkerId,
+    toTabId: "agent",
+    placement: "pending-inject",
+  }));
+  commands.set("deliver_node_mail", deliver);
   const result = await tool("send_message", message(leafWorkerId, { nodeId: LEAF }));
-  expect(result.text).not.toBe(COORDINATOR_ENVIRONMENT_ORIGIN_REFUSAL);
+  expect(result.isError).toBe(false);
+  expect(deliver).toHaveBeenCalledTimes(1);
   expect(routed).toContain("deliver_node_mail");
 });
 
@@ -359,11 +460,11 @@ test("a build pipeline this coordinator started makes its environment its own", 
     coordinatorId: scope.coordinatorId,
     conversationId: scope.conversationId,
     kind: "build-pipeline",
+    createdEnvironmentId: handMade,
     resourceId: "pipeline-1",
     requestId: "pipeline-1",
     createdAt: new Date().toISOString(),
   });
-  refused(await tool("send_message", message(handMade)));
   await world.storage.saveBuildPipeline("pipeline-1", world.projectId, handMade, 1, {
     id: "pipeline-1",
     projectId: world.projectId,
@@ -372,7 +473,7 @@ test("a build pipeline this coordinator started makes its environment its own", 
   expect((await tool("send_message", message(handMade))).isError).toBe(false);
 });
 
-test("a review this coordinator holds makes its environment its own", async () => {
+test("a review association never grants creation authority", async () => {
   await world.storage.coordinators.saveCoordinatorWorkflowAssociation({
     id: crypto.randomUUID(),
     projectId: scope.projectId,
@@ -389,7 +490,7 @@ test("a review this coordinator holds makes its environment its own", async () =
     environmentId: handMade,
     projectId: world.projectId,
   } as never);
-  expect((await tool("send_message", message(handMade))).isError).toBe(false);
+  refused(await tool("send_message", message(handMade)));
 });
 
 test("an older environment with no stored origin is treated as not this coordinator's", async () => {
@@ -509,3 +610,113 @@ test("a user-started turn's mail is unchanged", async () => {
   expect("turnOrigin" in message.from).toBe(false);
   expect(renderAgentMailCarrier(message)).not.toContain("arose from agent mail");
 });
+
+for (const kind of ["build-pipeline", "graph-run"] as const) {
+  test(`${kind} creation remains authorized after capacity cleanup`, async () => {
+    const createdAt = "2026-09-01T00:00:00Z";
+    const origin = {
+      id: "creation",
+      projectId: scope.projectId,
+      coordinatorId: scope.coordinatorId,
+      conversationId: scope.conversationId,
+      kind,
+      resourceId: "gone-workflow",
+      requestId: "created",
+      createdAt,
+      terminalNotifiedAt: createdAt,
+      createdEnvironmentId: handMade,
+    };
+    const current = readStoredValue<Record<string, unknown>>(
+      world.storage.getDataDir(),
+      "coordinators.json",
+    )!;
+    seedStore(world.storage.getDataDir(), "coordinators.json", {
+      ...current,
+      workflows: [
+        origin,
+        ...Array.from({ length: MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS - 1 }, (_, i) => ({
+          ...origin,
+          id: `old-${i}`,
+          requestId: `old-${i}`,
+          createdEnvironmentId: undefined,
+        })),
+      ],
+    });
+    await launched("another-environment");
+    expect(
+      (await world.storage.coordinators.listCoordinatorWorkflowAssociations(scope.projectId)).some(
+        (row) => row.id === "creation",
+      ),
+    ).toBe(true);
+    expect((await tool("send_message", message(handMade))).isError).toBe(false);
+    const stop = mock(async () => ({ stopped: true }));
+    commands.set("stop_environment", stop);
+    expect((await tool("stop_environment", { environmentId: handMade })).isError).toBe(false);
+    expect(stop).toHaveBeenCalledTimes(1);
+  });
+}
+
+for (const kind of ["build-pipeline", "multi-review", "graph-run"] as const) {
+  for (const remote of kind === "graph-run" ? [false] : [false, true]) {
+    test(`${kind} membership does not persist opt-in authority (${remote ? "remote" : "local"})`, async () => {
+      const environmentId = remote ? leafWorkerId : handMade;
+      await allowOthers();
+      await world.storage.coordinators.saveCoordinatorWorkflowAssociation({
+        id: "opt-in-workflow",
+        projectId: scope.projectId,
+        coordinatorId: scope.coordinatorId,
+        conversationId: scope.conversationId,
+        kind,
+        resourceId: "existing-workflow",
+        requestId: "existing-workflow",
+        createdAt: new Date().toISOString(),
+        ...(remote ? { nodeId: LEAF } : {}),
+      });
+      await world.storage.patchRepositorySettings(scope.projectId, {}, [
+        "coordinatorOtherEnvironments",
+      ]);
+      refused(await tool("send_message", message(environmentId, remote ? { nodeId: LEAF } : {})));
+      refused(
+        await tool("send_prompt_to_tab", {
+          environmentId,
+          tabId: "startup-agent",
+          requestId: "revoked",
+          prompt: "Work",
+          ...(remote ? { nodeId: LEAF } : {}),
+        }),
+      );
+    });
+    if (kind === "multi-review") continue;
+    test(`${kind} creation receipt is scoped to its environment and node (${remote ? "remote" : "local"})`, async () => {
+      const environmentId = remote ? leafWorkerId : handMade;
+      await world.storage.coordinators.saveCoordinatorWorkflowAssociation({
+        id: "workflow-creator",
+        projectId: scope.projectId,
+        coordinatorId: scope.coordinatorId,
+        conversationId: scope.conversationId,
+        kind,
+        resourceId: "workflow",
+        requestId: "workflow",
+        createdEnvironmentId: environmentId,
+        createdAt: new Date().toISOString(),
+        ...(remote ? { nodeId: LEAF } : {}),
+      });
+      const stop = mock(async () => ({ stopped: true }));
+      commands.set("stop_environment", stop);
+      const allowed = await tool("stop_environment", {
+        environmentId,
+        ...(remote ? { nodeId: LEAF } : {}),
+      });
+      expect(allowed.isError).toBe(false);
+      expect(stop).toHaveBeenCalledTimes(1);
+      refused(
+        await tool("stop_environment", {
+          environmentId: "not-created",
+          ...(remote ? { nodeId: LEAF } : {}),
+        }),
+      );
+      if (remote) refused(await tool("stop_environment", { environmentId }));
+      expect(stop).toHaveBeenCalledTimes(1);
+    });
+  }
+}

@@ -31,81 +31,27 @@ export interface CoordinatorEnvironmentNode {
   call<T>(command: string, args?: Record<string, unknown>): Promise<T>;
 }
 
-function snapshotId(value: unknown): string | undefined {
-  const snapshot = (value as { snapshot?: { id?: unknown } } | null)?.snapshot;
-  return typeof snapshot?.id === "string" ? snapshot.id : undefined;
-}
-
-/** Whether this coordinator launched the environment, or runs a workflow of its own there. */
+/** Creation receipts, unlike workflow membership, are durable authority. */
 export async function coordinatorCreatedEnvironment(
   context: CommandContext,
   scope: CoordinatorScope,
   environmentId: string,
   node?: CoordinatorEnvironmentNode,
 ): Promise<boolean> {
-  const records = (
-    await context.storage.coordinators.listCoordinatorWorkflowAssociations(scope.projectId)
-  ).filter(
+  const records = await context.storage.coordinators.listCoordinatorWorkflowAssociations(
+    scope.projectId,
+  );
+  return records.some(
     (association) =>
       association.coordinatorId === scope.coordinatorId &&
       !association.pending &&
-      association.nodeId === node?.nodeId,
+      association.nodeId === node?.nodeId &&
+      (((association.kind === "build-pipeline" || association.kind === "graph-run") &&
+        association.createdEnvironmentId === environmentId) ||
+        (association.kind === "environment" &&
+          association.resourceId === environmentId &&
+          Boolean(association.baseCommit))),
   );
-  if (
-    records.some(
-      (association) =>
-        association.kind === "environment" &&
-        association.resourceId === environmentId &&
-        association.baseCommit,
-    )
-  )
-    return true;
-  const ids = (kind: string) =>
-    new Set(
-      records
-        .filter((association) => association.kind === kind)
-        .map((association) => association.resourceId),
-    );
-  const pipelines = ids("build-pipeline");
-  const reviews = ids("multi-review");
-  if (node) {
-    if (pipelines.size > 0) {
-      // The environment names its pipeline; the pipeline confirms it, since a
-      // fork made in the node's own UI can keep the source's link.
-      const environment = await node.call<{ buildPipelineId?: unknown }>("get_environment", {
-        environmentId,
-      });
-      if (
-        typeof environment?.buildPipelineId === "string" &&
-        pipelines.has(environment.buildPipelineId)
-      ) {
-        const pipeline = await node.call<{ snapshot?: { environmentId?: unknown } }>(
-          "get_build_pipeline",
-          { pipelineId: environment.buildPipelineId },
-        );
-        if (pipeline?.snapshot?.environmentId === environmentId) return true;
-      }
-    }
-    if (reviews.size === 0) return false;
-    const listed = await node.call<unknown>("list_multi_review_workflows", { environmentId });
-    return Array.isArray(listed) && listed.some((entry) => reviews.has(snapshotId(entry) ?? ""));
-  }
-  if (pipelines.size > 0) {
-    const listed = await context.storage.listBuildPipelinesForEnvironment(
-      scope.projectId,
-      environmentId,
-    );
-    if (listed.some((pipeline) => pipelines.has(pipeline.id))) return true;
-  }
-  if (reviews.size > 0) {
-    const listed = await context.storage.listMultiReviewWorkflows(environmentId);
-    if (listed.some((entry) => reviews.has(snapshotId(entry) ?? ""))) return true;
-  }
-  for (const runId of ids("graph-run")) {
-    const run = await context.storage.graphRuns.getGraphRun(runId);
-    if (run?.environmentId === environmentId) return true;
-  }
-  return false;
 }
 
 /**

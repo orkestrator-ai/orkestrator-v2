@@ -270,6 +270,7 @@ export function registerCoordinatorGraphActions(register: CommandRegistrar): voi
       await context.storage.coordinators.completeCoordinatorWorkflowAssociation(
         receipt.association.id,
         launched.runId,
+        parsed.environment.kind === "existing" ? undefined : launched.environmentId,
       );
       return { launch: launched, associationId: receipt.association.id };
     })().finally(() => {

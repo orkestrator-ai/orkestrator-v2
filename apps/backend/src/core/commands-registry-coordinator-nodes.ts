@@ -555,15 +555,29 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
   register("assert_coordinator_environment_scope", async (args, context) => {
     const caller = await identity(args.scope, context);
     const named = record(args.target) ? args.target : {};
-    const environmentId = asNonBlankString(named.environmentId, "environmentId");
+    let environmentId = typeof named.environmentId === "string" ? named.environmentId : undefined;
     // The tool's own checks answer for a coordinator's own runtime id.
-    if (coordinatorIdFromRuntimeId(environmentId)) return { allowed: true };
+    if (environmentId && coordinatorIdFromRuntimeId(environmentId)) return { allowed: true };
     const nodeId = typeof named.nodeId === "string" ? named.nodeId : undefined;
     // transfer_files names this node by its own id.
     const target =
       nodeId && nodeId !== (await context.nodes?.status())?.nodeId
         ? await coordinatorNodeTarget(context, caller.projectId, nodeId)
         : null;
+    if (typeof named.pipelineId === "string") {
+      const pipeline = target
+        ? await target.call<{ snapshot?: { projectId?: string; environmentId?: string } }>(
+            "get_build_pipeline",
+            { pipelineId: named.pipelineId },
+          )
+        : await context.storage.getBuildPipeline(named.pipelineId);
+      const snapshot = record(pipeline?.snapshot) ? pipeline.snapshot : null;
+      if (snapshot?.projectId !== (target?.projectId ?? caller.projectId))
+        throw new Error("Build pipeline not found in this project");
+      environmentId =
+        typeof snapshot.environmentId === "string" ? snapshot.environmentId : undefined;
+    }
+    if (!environmentId) throw new Error("Workflow has no environment");
     // The project home has its own rule, and the tools refuse it by name.
     const environment = target
       ? await target.call<unknown>("get_environment", { environmentId })
@@ -988,6 +1002,9 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
         await context.storage.coordinators.completeCoordinatorWorkflowAssociation(
           receipt.association.id,
           workflow.id,
+          input.existingEnvironmentId || typeof workflow.environmentId !== "string"
+            ? undefined
+            : workflow.environmentId,
         );
         if (boardTicket) {
           // Shown at once; the node then reports the build's own progress.
@@ -1220,12 +1237,8 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
         "Adopt this workflow into the current coordinator conversation before opening it",
       );
     }
-    // As on this node: a review with no record here takes the origin check.
-    if (
-      !owned &&
-      (surface === "address" || surface === "custom-fix") &&
-      saved.snapshot.environmentId
-    ) {
+    // Addressing starts a turn, even for a workflow already followed here.
+    if ((surface === "address" || surface === "custom-fix") && saved.snapshot.environmentId) {
       await assertCoordinatorMayActOnEnvironment(
         context,
         caller,

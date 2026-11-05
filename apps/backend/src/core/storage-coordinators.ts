@@ -1,4 +1,5 @@
 import type { WorkerTabCloseAdmission } from "./worker-tab-close-admission.js";
+import type { GraphRun } from "@orkestrator/protocol/graphs/run";
 import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -439,6 +440,32 @@ export class CoordinatorsRepository {
     });
   }
 
+  /** Graph provisioning may finish after its launch receipt settled. Preserve
+   * creation before the graph's disposable run history can leave the store. */
+  async recordGraphEnvironmentCreation(run: GraphRun): Promise<void> {
+    if (!run.environmentId || !run.launch?.create || run.launch.requestedBy !== "coordinator")
+      return;
+    await this.enqueueCoordinatorMutation(async () => {
+      const store = await this.loadCoordinatorStore();
+      let changed = false;
+      for (const association of store.workflows) {
+        if (
+          association.kind !== "graph-run" ||
+          association.nodeId ||
+          association.projectId !== run.projectId ||
+          association.resourceId !== run.id ||
+          association.createdEnvironmentId === run.environmentId
+        )
+          continue;
+        association.createdEnvironmentId = run.environmentId;
+        changed = true;
+      }
+      if (!changed) return;
+      store.revision += 1;
+      await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
+    });
+  }
+
   async saveCoordinatorWorkflowAssociation(
     association: CoordinatorWorkflowAssociation,
   ): Promise<CoordinatorWorkflowAssociation> {
@@ -518,6 +545,7 @@ export class CoordinatorsRepository {
   async completeCoordinatorWorkflowAssociation(
     associationId: string,
     resourceId: string,
+    createdEnvironmentId?: string,
   ): Promise<CoordinatorWorkflowAssociation> {
     if (!resourceId.trim()) throw new Error("Coordinator workflow resource id is required");
     return this.enqueueCoordinatorMutation(async () => {
@@ -573,6 +601,7 @@ export class CoordinatorsRepository {
         return owner;
       }
       association.resourceId = resourceId;
+      if (createdEnvironmentId) association.createdEnvironmentId = createdEnvironmentId;
       association.pending = false;
       delete association.claimPid;
       store.revision += 1;

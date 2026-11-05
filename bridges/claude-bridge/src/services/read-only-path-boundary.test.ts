@@ -51,6 +51,9 @@ beforeAll(() => {
   seed(join(attachments, "pasted.png"));
   symlinkSync(join(dataDir, "control-mcp.json"), join(checkout, "innocent.json"));
   symlinkSync(join(dataDir, "control-mcp.json"), join(home, "projects", "p", "planted.json"));
+  mkdirSync(join(dataDir, "nested"));
+  symlinkSync(join(dataDir, "nested"), join(checkout, "alias"));
+  symlinkSync(dataDir, join(checkout, "directory-link"));
   boundary = coordinatorReadBoundary([checkout], {
     [COORDINATOR_PROTECTED_DATA_DIR_ENV]: dataDir,
     CLAUDE_CONFIG_DIR: home,
@@ -197,6 +200,39 @@ describe("shellCommandRefused", () => {
     expect(refused("cat innocent.json")).toBe(true);
   });
 
+  test("symlink parent components resolve before lexical normalization", () => {
+    const path = `${checkout}/alias/../control-mcp.json`;
+    expect(realpathSync.native(path)).toBe(join(dataDir, "control-mcp.json"));
+    expect(refuses(path)).toBe(true);
+    expect(refused(`cat ${path}`, true)).toBe(true);
+    expect(refuses(`${checkout}/alias/../missing/credential`)).toBe(true);
+    expect(refuses(`${checkout}/../checkout/README.md`)).toBe(false);
+  });
+
+  test("hook-only searches cannot follow descendant credential symlinks", () => {
+    for (const command of [
+      "grep -R fixture .",
+      "grep -nR fixture .",
+      "grep -rS fixture .",
+      "diff -r . safe",
+      "grep --dereference-recursive fixture .",
+      "rg --follow fixture .",
+      "rg -L fixture directory-link",
+    ]) {
+      expect({ command, refused: refused(command, true) }).toEqual({ command, refused: true });
+    }
+    expect(refused("grep -r fixture .", true)).toBe(false);
+    expect(refused("rg --hidden fixture .", true)).toBe(false);
+    expect(refused("grep -R fixture .", false)).toBe(false);
+  });
+
+  test("hook-only searches check the implicit cwd", () => {
+    for (const command of ["grep -r fixture", "rg --hidden fixture"]) {
+      expect(shellCommandRefused(boundary, command, root, { traversal: true })).toBe(true);
+      expect(shellCommandRefused(boundary, command, checkout, { traversal: true })).toBe(false);
+    }
+  });
+
   test("ordinary commands and the conversation's own files pass", () => {
     expect(refused("ls -la")).toBe(false);
     expect(refused("git log --oneline -5")).toBe(false);
@@ -246,6 +282,17 @@ describe("createCoordinatorReadOnlyHook", () => {
       expect(answer?.permissionDecision).toBe("deny");
       expect(answer?.permissionDecisionReason).toContain("data directory");
     }
+  });
+
+  test("hook-only commands refuse symlink traversal and keep safe searches", async () => {
+    for (const command of [
+      "grep -R fixture .",
+      "rg --follow fixture .",
+      "cat alias/../control-mcp.json",
+    ]) {
+      expect((await run("Bash", { command }, "unavailable"))?.permissionDecision).toBe("deny");
+    }
+    expect(await run("Bash", { command: "rg fixture ." }, "unavailable")).toBeUndefined();
   });
 
   test("leaves the conversation's saved tool results and memory readable", async () => {

@@ -1,12 +1,12 @@
 import type { JsonRecord } from "./control-mcp-tool-support.js";
 
 /**
- * How each coordinator tool that names an environment stands with the origin
+ * How each coordinator tool that names an environment or workflow stands with the origin
  * check (`coordinator-environment-scope.ts`). A test fails on a tool taking an
  * environment that is in none of these lists, so a new one has to choose.
  */
 
-type EnvironmentTarget = { environmentId?: unknown; nodeId?: unknown };
+type EnvironmentTarget = { environmentId?: unknown; pipelineId?: unknown; nodeId?: unknown };
 
 const named = (input: JsonRecord): EnvironmentTarget => input;
 
@@ -15,6 +15,13 @@ export const COORDINATOR_ENVIRONMENT_ACTIONS: ReadonlyMap<
   string,
   (input: JsonRecord) => EnvironmentTarget
 > = new Map([
+  ["pause_build_pipeline", (input) => ({ pipelineId: input.pipelineId, nodeId: input.nodeId })],
+  ["cancel_build_pipeline", (input) => ({ pipelineId: input.pipelineId, nodeId: input.nodeId })],
+  ["resume_build_pipeline", (input) => ({ pipelineId: input.pipelineId, nodeId: input.nodeId })],
+  [
+    "restart_build_pipeline_step",
+    (input) => ({ pipelineId: input.pipelineId, nodeId: input.nodeId }),
+  ],
   ["launch_job", named],
   ["send_prompt_to_tab", named],
   ["launch_terminal", named],
@@ -57,6 +64,10 @@ export const COORDINATOR_ENVIRONMENT_ACTIONS: ReadonlyMap<
  */
 export const COORDINATOR_ENVIRONMENT_CHECKED_BY_COMMAND: ReadonlySet<string> = new Set([
   "send_message",
+  "address_multi_review",
+  "custom_fix_multi_review",
+  "cancel_multi_review",
+  "cancel_graph_run",
 ]);
 
 /** Reads: they send nothing to the environment and start nothing in it. */
@@ -78,6 +89,11 @@ export const COORDINATOR_ENVIRONMENT_READS: ReadonlySet<string> = new Set([
   "read_node_environment",
   "list_environments",
   "list_graph_templates",
+  "get_build_pipeline",
+  "get_multi_review",
+  "open_multi_review",
+  "open_multi_review_fix",
+  "get_graph_run",
 ]);
 
 /**

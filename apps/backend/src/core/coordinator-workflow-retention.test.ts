@@ -72,6 +72,20 @@ describe("selectCoordinatorWorkflowsToClear", () => {
     ).toEqual(expected);
   });
 
+  test("keeps creation provenance for existing pipeline and graph environments", () => {
+    const records = [
+      finished("pipeline", { kind: "build-pipeline", createdEnvironmentId: "live" }),
+      finished("graph", { kind: "graph-run", createdEnvironmentId: "live" }),
+      finished("remote", {
+        kind: "build-pipeline",
+        nodeId: "leaf",
+        createdEnvironmentId: "remote-live",
+      }),
+      finished("deleted", { kind: "graph-run", createdEnvironmentId: "gone" }),
+    ];
+    expect(select(records, { environments: ["live"] })).toEqual(new Set(["deleted"]));
+  });
+
   test("clears the oldest finished records first, up to the batch", () => {
     const workflows = [
       finished("c", { createdAt: "2026-09-03T00:00:00.000Z" }),

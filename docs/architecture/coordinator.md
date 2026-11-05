@@ -1793,10 +1793,18 @@ workers. An environment counts when this coordinator has, on the same node
 
 - an `environment` launch (it carries `baseCommit`; a `delegation:` record does
   not, because asking an environment something does not make it yours);
-- a `build-pipeline` whose pipeline runs in that environment. Pipeline
-  environments have no mailbox `coordinatorOrigin`, which reads launch records
-  only, so that field cannot answer this;
-- a `multi-review` or local `graph-run` in that environment.
+- a `build-pipeline` or local `graph-run` with `createdEnvironmentId` naming
+  the environment it actually created. The completion write records this only
+  for a new environment; deferred graph provisioning records it when its
+  environment is published. Retention keeps the creation receipt while that local
+  environment exists, and keeps remote creation receipts conservatively.
+
+Workflow membership alone grants no authority. A review, a pipeline targeting
+an existing environment, or an existing-environment graph launched under the
+opt-in does not adopt that environment. Turning the setting off revokes access.
+Legacy workflow records without creation evidence fail closed; use the setting
+for those environments. Creation receipts remain sufficient even after the
+pipeline or graph history itself is removed.
 
 An environment with no such record, an older one included, is treated as not
 this coordinator's. Nothing distinguishes it from one the user made by hand, so
@@ -1806,7 +1814,7 @@ an old version never wrote: the refusal, with the setting as the way out.
 
 What the check covers is listed tool by tool in
 `control-mcp-coordinator-environment-scope.ts`, and a test fails on an
-environment-taking tool that is in no list:
+environment- or workflow-taking tool that is in no list:
 
 - **Checked:** `send_message` (`toEnvironmentId`, in its commands, because a
   reply's destination is resolved inside the tool; replies get no exception),
@@ -1815,9 +1823,11 @@ environment-taking tool that is in no list:
   `clear_worker_goal`, `fork_worker`, `start_environment`, `stop_environment`,
   `open_worker_browser`, `edit_worker_tab`, `create_pr`, `resolve_conflicts`,
   `launch_multi_review`, `start_build_pipeline` (`existingEnvironmentId`),
+  pipeline resume, restart, pause and cancel (resolved through `pipelineId`),
   `launch_graph` (`environment.environmentId`), and `transfer_files` (its
-  destination). Addressing a review that has no record here takes the check too,
-  since it starts an agent in that environment and adopts the review.
+  destination). Standard and custom review addressing always take the check,
+  including reviews already followed by this coordinator, since addressing
+  starts an agent in that environment.
 - **Not checked, reads:** they send nothing and start nothing, including
   `get_tab_transcript`, `get_worker_changes` and `list_worker_commands`.
 - **Not checked, user-approved requests:** `answer_worker_question`,

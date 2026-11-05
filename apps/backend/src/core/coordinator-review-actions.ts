@@ -572,9 +572,9 @@ export function registerCoordinatorReviewActions(
       throw new Error(
         "Adopt this workflow into the current coordinator conversation before opening it",
       );
-    // A review with no record here was started in the UI. Addressing it starts
-    // an agent in its environment and adopts it, so it takes the origin check.
-    if (!ownedAssociation && surface === "address" && saved.snapshot.environmentId) {
+    // Addressing starts an agent even when we already follow this workflow.
+    // Workflow membership must not keep opt-in authority after revocation.
+    if (surface === "address" && saved.snapshot.environmentId) {
       await assertCoordinatorMayActOnEnvironment(context, caller, saved.snapshot.environmentId);
     }
     const review = { snapshot: saved.snapshot, revision: saved.revision };

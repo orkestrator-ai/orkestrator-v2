@@ -84,6 +84,13 @@ export function selectCoordinatorWorkflowsToClear(
 
   const candidates: Array<{ id: string; createdAt: number; index: number }> = [];
   workflows.forEach((association, index) => {
+    // Creation provenance remains authoritative after the workflow itself is
+    // pruned. Remote existence is unknown, so retain it conservatively.
+    if (
+      association.createdEnvironmentId &&
+      (association.nodeId || input.environmentExists(association.createdEnvironmentId))
+    )
+      return;
     const createdAt = Date.parse(association.createdAt);
     // An unreadable timestamp cannot prove the record is recent.
     if (Number.isFinite(createdAt) && now - createdAt < replayWindowMs) return;

@@ -565,6 +565,9 @@ export interface CoordinatorWorkflowAssociation {
   claimPid?: number;
   baseBranch?: string;
   baseCommit?: string;
+  /** Environment actually created by this workflow, never an existing target.
+   * Kept while that environment exists, independently of workflow history. */
+  createdEnvironmentId?: string;
   dependsOnResourceId?: string;
   createdAt: string;
   lastNotifiedRevision?: number;

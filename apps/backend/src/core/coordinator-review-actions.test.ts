@@ -1,6 +1,7 @@
 import { readStoredValue, seedStore } from "./storage-test-support.js";
 import type { CoordinatorWorkflowAssociation } from "@orkestrator/protocol/coordinator";
 import { MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS } from "./coordinator-workflow-retention.js";
+import { BackendRuntime } from "./backend-runtime.js";
 import { ControlMcpServer } from "./control-mcp-server.js";
 import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
 import { afterEach, beforeEach, expect, mock, test } from "bun:test";
@@ -974,3 +975,110 @@ test("cleanup removes snapshot history and adoption ownership while an old revie
   expect(opened.ui.status).toBe("opened");
   expect(start).toHaveBeenCalledTimes(1);
 });
+
+for (const custom of [false, true]) {
+  test(`unassociated ${custom ? "custom fix" : "address"} refuses foreign environment without adoption or dispatch`, async () => {
+    context.runtime = new BackendRuntime({ emit: () => undefined });
+    const started = await launch();
+    const stored = readStoredValue<Record<string, unknown>>(root + "/data", "coordinators.json")!;
+    seedStore(root + "/data", "coordinators.json", { ...stored, workflows: [] });
+    await storage.patchRepositorySettings(scope.projectId, {}, ["coordinatorOtherEnvironments"]);
+    const address = mock(async () => {
+      throw new Error("must not dispatch");
+    });
+    context.multiReviews!.address = address;
+    context.multiReviews!.customAddressFindings = address;
+    const command = custom
+      ? "custom_fix_coordinator_multi_review_action"
+      : "address_coordinator_multi_review_action";
+    const args = custom
+      ? {
+          scope,
+          input: { workflowId: started.workflow.id, requestId: "denied", instruction: "Fix" },
+        }
+      : { scope, workflowId: started.workflow.id };
+    await expect(commands.get(command)!(args, context)).rejects.toThrow(
+      "did not create that environment",
+    );
+    expect(address).not.toHaveBeenCalled();
+    expect(
+      await storage.coordinators.listCoordinatorWorkflowAssociations(scope.projectId),
+    ).toHaveLength(0);
+  });
+}
+
+test("a review launched with opt-in cannot grant mail or prompt access after revocation", async () => {
+  await launch();
+  await storage.patchRepositorySettings(scope.projectId, {}, ["coordinatorOtherEnvironments"]);
+  const server = new ControlMcpServer(
+    storage.getDataDir(),
+    async <T>(command: string, args = {}) => (await commands.get(command)!(args, context)) as T,
+    { port: 0 },
+  );
+  const workspace = (await storage.coordinators.getCoordinatorWorkspace(scope.projectId))!;
+  const conversation = workspace.conversations.find((row) => row.id === scope.conversationId)!;
+  const caller = {
+    role: "coordinator" as const,
+    ...scope,
+    mailboxIncarnationId: conversation.mailboxIncarnationId!,
+    capabilities: ["mail", "jobs"],
+  };
+  try {
+    for (const [name, input] of [
+      ["send_message", { requestId: "revoked-mail", toEnvironmentId: environmentId, body: "Work" }],
+      [
+        "send_prompt_to_tab",
+        { requestId: "revoked-prompt", environmentId, tabId: "agent", prompt: "Work" },
+      ],
+    ] as const) {
+      const result = await server.callCoordinatorTool(caller, name, input);
+      expect(result.isError).toBe(true);
+      expect(result.text).toContain("did not create that environment");
+    }
+  } finally {
+    await server.stop();
+  }
+});
+
+for (const custom of [false, true]) {
+  test(`local ${custom ? "custom fix" : "address"} dispatches for a created environment with opt-in off`, async () => {
+    context.runtime = new BackendRuntime({ emit: () => undefined });
+    const launched = await launch();
+    await storage.patchRepositorySettings(scope.projectId, {}, ["coordinatorOtherEnvironments"]);
+    await storage.coordinators.saveCoordinatorWorkflowAssociation({
+      id: "creator",
+      ...scope,
+      kind: "environment",
+      resourceId: environmentId,
+      baseCommit: "a".repeat(40),
+      requestId: "created",
+      createdAt: new Date().toISOString(),
+    });
+    const dispatch = mock(async () => ({
+      ...launched.workflow,
+      phase: "interactive" as const,
+      addressPromptPending: true,
+    }));
+    context.multiReviews!.address = dispatch;
+    context.multiReviews!.customAddressFindings = dispatch;
+    const result = await commands.get(
+      custom
+        ? "custom_fix_coordinator_multi_review_action"
+        : "address_coordinator_multi_review_action",
+    )!(
+      custom
+        ? {
+            scope,
+            input: { workflowId: launched.workflow.id, requestId: "owned-fix", instruction: "Fix" },
+          }
+        : { scope, workflowId: launched.workflow.id },
+      context,
+    );
+    expect(result).toMatchObject(
+      custom
+        ? { outcome: "pending", ui: { status: "opened" } }
+        : { workflow: { phase: "interactive" } },
+    );
+    expect(dispatch).toHaveBeenCalledTimes(1);
+  });
+}

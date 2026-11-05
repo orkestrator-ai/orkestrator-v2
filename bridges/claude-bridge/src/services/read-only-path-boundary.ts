@@ -51,7 +51,7 @@ function canonical(path: string): string {
 
 function namedAndCanonical(paths: readonly (string | undefined)[]): string[] {
   const named = paths.flatMap((path) => (path?.trim() && isAbsolute(path) ? [path] : []));
-  return [...new Set(named.flatMap((path) => [resolve(path), canonical(resolve(path))]))];
+  return [...new Set(named.flatMap((path) => [resolve(path), canonical(path)]))];
 }
 
 /** The checkout as named and as resolved, since a symlink and its target are one directory. */
@@ -96,7 +96,7 @@ function deniedForm(boundary: ReadBoundary, path: string): boolean {
 
 function expandedHome(path: string): string {
   if (path === "~") return homedir();
-  return path.startsWith("~/") ? join(homedir(), path.slice(2)) : path;
+  return path.startsWith("~/") ? `${homedir()}${sep}${path.slice(2)}` : path;
 }
 
 /**
@@ -111,8 +111,11 @@ export function readBoundaryRefuses(
   cwd: string,
   options: { traversal?: boolean } = {},
 ): boolean {
-  const lexical = resolve(cwd, expandedHome(path));
-  const real = canonical(lexical);
+  const expanded = expandedHome(path);
+  // Preserve symlink/.. traversal for the filesystem; resolve() is lexical only.
+  const raw = isAbsolute(expanded) ? expanded : `${cwd}${sep}${expanded}`;
+  const lexical = resolve(raw);
+  const real = canonical(raw);
   if (deniedForm(boundary, lexical) || deniedForm(boundary, real)) return true;
   return (
     options.traversal === true &&
@@ -164,7 +167,41 @@ export function shellCommandRefused(
   cwd: string,
   options: { traversal: boolean },
 ): boolean {
-  const [, ...tokens] = command.trim().split(/\s+/);
+  const [program, ...tokens] = command.trim().split(/\s+/);
+  if (options.traversal) {
+    // A hook cannot constrain paths reached through descendant symlinks.
+    // Refuse follow modes, including short-option clusters, before execution.
+    if (
+      (program === "grep" &&
+        tokens.some(
+          (token) =>
+            /^-[^-]*[RS]/.test(token) ||
+            (token.startsWith("--") && "--dereference-recursive".startsWith(token)),
+        )) ||
+      (program === "diff" &&
+        tokens.some((token) => /^-[^-]*r/.test(token) || token === "--recursive")) ||
+      ((program === "rg" ||
+        program === "ag" ||
+        program === "find" ||
+        program === "fd" ||
+        program === "du" ||
+        program === "ls") &&
+        tokens.some(
+          (token) => token === "--follow" || token === "--dereference" || /^-[^-]*L/.test(token),
+        ))
+    )
+      return true;
+    const searches =
+      program === "rg" ||
+      program === "ag" ||
+      program === "find" ||
+      program === "fd" ||
+      program === "du" ||
+      program === "ls" ||
+      program === "tree" ||
+      program === "grep";
+    if (searches && readBoundaryRefuses(boundary, cwd, cwd, options)) return true;
+  }
   return tokens.some((token) => {
     const attached = token.startsWith("-")
       ? [token.slice(token.indexOf("=") + 1), token.slice(2)]

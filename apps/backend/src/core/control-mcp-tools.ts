@@ -678,12 +678,14 @@ export async function createControlMcp(
     coordinatorScope
       ? async (tool, input) => {
           const target = COORDINATOR_ENVIRONMENT_ACTIONS.get(tool)?.(isRecord(input) ? input : {});
-          if (typeof target?.environmentId !== "string") return;
+          if (typeof target?.environmentId !== "string" && typeof target?.pipelineId !== "string")
+            return;
           await invoke("assert_coordinator_environment_scope", {
             scope: coordinatorScope,
             // Nested: the invoker's own environment check would look it up again.
             target: {
               environmentId: target.environmentId,
+              pipelineId: target.pipelineId,
               ...(typeof target.nodeId === "string" ? { nodeId: target.nodeId } : {}),
             },
           });

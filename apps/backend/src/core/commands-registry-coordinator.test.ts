@@ -622,7 +622,7 @@ describe("coordinator command registry", () => {
     });
     const startBuild = mock(async () => {
       await buildBarrier;
-      return { id: "pipeline-1", projectId: project.id };
+      return { id: "pipeline-1", projectId: project.id, environmentId: "pipeline-environment" };
     });
     context.buildPipelines = { start: startBuild } as unknown as CommandContext["buildPipelines"];
     const build = commands.get("start_coordinator_build_pipeline")!;
@@ -640,7 +640,12 @@ describe("coordinator command registry", () => {
     expect(
       await storage.coordinators.listCoordinatorWorkflowAssociations(project.id),
     ).toContainEqual(
-      expect.objectContaining({ kind: "build-pipeline", resourceId: "pipeline-1", pending: false }),
+      expect.objectContaining({
+        kind: "build-pipeline",
+        resourceId: "pipeline-1",
+        pending: false,
+        createdEnvironmentId: "pipeline-environment",
+      }),
     );
   });
 

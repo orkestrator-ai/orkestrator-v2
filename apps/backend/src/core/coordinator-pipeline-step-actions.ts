@@ -18,6 +18,7 @@ import {
   withCoordinatorReceipt,
   type CoordinatorCaller,
 } from "./coordinator-action-scope.js";
+import { assertCoordinatorMayActOnEnvironment } from "./coordinator-environment-scope.js";
 import { optionalText, surfaceRecord as record } from "./worker-surface-runs.js";
 
 /**
@@ -175,6 +176,16 @@ export function registerCoordinatorPipelineStepActions(register: CommandRegistra
     const requestId = asNonBlankString(input.requestId, "requestId");
     const restart = restartInput(input);
     const remote = await remoteNode(context, caller, optionalText(input.nodeId, "nodeId", 200));
+    const saved = remote
+      ? await remote.call<{ snapshot?: { projectId?: string; environmentId?: string } }>(
+          "get_build_pipeline",
+          { pipelineId: restart.pipelineId },
+        )
+      : await context.storage.getBuildPipeline(restart.pipelineId);
+    const snapshot = saved?.snapshot as { projectId?: string; environmentId?: string } | undefined;
+    if (snapshot?.projectId !== (remote?.projectId ?? caller.projectId) || !snapshot.environmentId)
+      throw new Error("Build pipeline not found in this project");
+    await assertCoordinatorMayActOnEnvironment(context, caller, snapshot.environmentId, remote);
     return withCoordinatorReceipt(
       context,
       caller,

@@ -753,6 +753,7 @@ export function registerCoordinatorCommands(
         await context.storage.coordinators.completeCoordinatorWorkflowAssociation(
           receipt.association.id,
           workflow.id,
+          input.existingEnvironmentId ? undefined : workflow.environmentId,
         );
         return workflow;
       },

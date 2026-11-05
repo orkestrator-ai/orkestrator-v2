@@ -159,6 +159,35 @@ describe("CO-05/UP-02 coordinator mail to and from a leaf agent", () => {
     });
   }
 
+  test("mail-origin framing reaches the leaf's own coordinator", async () => {
+    const world = await MailWorld.create();
+    worlds.push(world);
+    const main = await world.main();
+    const { instance } = coordination(world, [{ id: "bk_cmd", name: "Office desktop" }]);
+    for (const origin of ["mail", undefined] as const) {
+      const { messageId } = await instance.deliverIncoming({
+        controllerId: "bk_cmd",
+        coordinatorEnvironmentId: "coordinator:c1:conv-1",
+        coordinatorTabId: "coord-tab",
+        projectId: world.projectId,
+        toEnvironmentId: "coordinator",
+        toTabId: "",
+        requestId: `origin-${origin}`,
+        body: "Status?",
+        ...(origin ? { turnOrigin: origin } : {}),
+      });
+      const message = await world.storage.getAgentMailMessage(
+        main.environmentId,
+        main.tabId,
+        messageId,
+      );
+      expect(renderAgentMailCarrier(message).includes("arose from agent mail")).toBe(
+        origin === "mail",
+      );
+      expect(message.from).toMatchObject({ kind: "node", role: "coordinator" });
+    }
+  });
+
   test("a command node's mail from a turn the user did not start says so on the leaf", async () => {
     const world = await MailWorld.create();
     worlds.push(world);

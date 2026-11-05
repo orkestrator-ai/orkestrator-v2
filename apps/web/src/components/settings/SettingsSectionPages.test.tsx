@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, expect, mock, spyOn, test } from "bun:test";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import * as backend from "@/lib/backend";
 import { EnvironmentSettingsDialog } from "@/components/environments/EnvironmentSettingsDialog";
 import { RepositorySettings } from "./RepositorySettings";
+import { useConfigStore } from "@/stores/configStore";
+import { COORDINATOR_OTHER_ENVIRONMENTS_SETTING_LABEL } from "@orkestrator/protocol/coordinator";
 import type { Environment, Project } from "@/types";
 
 const project: Project = {
@@ -78,3 +80,41 @@ test("repository section navigation uses menu titles and widens Defaults only", 
   fireEvent.click(screen.getByRole("button", { name: "Branches" }));
   expectPage("Branches", "default");
 });
+
+for (const stored of [undefined, true]) {
+  test(`repository coordinator form loads ${stored ?? "default off"} and saves the edited switch`, async () => {
+    const original = useConfigStore.getState().config;
+    const config = {
+      ...original,
+      repositories: {
+        ...original.repositories,
+        [project.id]: {
+          defaultBranch: "main",
+          prBaseBranch: "main",
+          ...(stored ? { coordinatorOtherEnvironments: true } : {}),
+        },
+      },
+    };
+    useConfigStore.setState({ config });
+    const save = spyOn(backend, "patchRepositorySettings").mockResolvedValue(config);
+    const close = mock(() => {});
+    try {
+      render(<RepositorySettings project={project} open onOpenChange={close} />);
+      fireEvent.click(screen.getByRole("button", { name: "Coordinator" }));
+      const control = screen.getByRole("switch", {
+        name: COORDINATOR_OTHER_ENVIRONMENTS_SETTING_LABEL,
+      });
+      expect(control.getAttribute("aria-checked")).toBe(String(stored === true));
+      fireEvent.click(control);
+      expect(control.getAttribute("aria-checked")).toBe(String(stored !== true));
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+      expect(save.mock.calls[0]![0]).toBe(project.id);
+      expect(save.mock.calls[0]![1]).toEqual(stored ? {} : { coordinatorOtherEnvironments: true });
+      expect(save.mock.calls[0]![2]).toEqual(stored ? ["coordinatorOtherEnvironments"] : []);
+      await waitFor(() => expect(close).toHaveBeenCalledWith(false));
+    } finally {
+      useConfigStore.setState({ config: original });
+    }
+  });
+}

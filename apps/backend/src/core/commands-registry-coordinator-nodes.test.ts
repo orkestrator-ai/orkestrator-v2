@@ -61,7 +61,11 @@ async function setup(
     get_environment: { id: "leaf-env", projectId: "p-leaf", name: "leaf-env", status: "running" },
     create_controller_environment: { id: "leaf-env", status: "stopped" },
     deliver_node_mail: { messageId: "m1", toTabId: "startup-agent" },
-    start_controller_build_pipeline: { id: "pipeline-leaf", projectId: "p-leaf" },
+    start_controller_build_pipeline: {
+      id: "pipeline-leaf",
+      projectId: "p-leaf",
+      environmentId: "leaf-env",
+    },
     get_build_pipeline: { snapshot: { id: "pipeline-leaf", projectId: "p-leaf" }, revision: 1 },
     ...options.answers,
   };
@@ -655,6 +659,24 @@ describe("workflows on a node", () => {
     ).toHaveLength(1);
   });
 
+  test("a remote pipeline in an existing environment grants no creation authority", async () => {
+    const { run, scope, associations } = await setup();
+    await run("start_coordinator_node_build_pipeline", {
+      scope,
+      requestId: "existing-build",
+      nodeId: "bk_leaf",
+      input: {
+        projectId: scope.projectId,
+        taskId: "t1",
+        taskTitle: "Fix",
+        delegationBaseBranch: "main",
+        delegationBaseCommit: BASE,
+        existingEnvironmentId: "leaf-env",
+      },
+    });
+    expect((await associations())[0]!.createdEnvironmentId).toBeUndefined();
+  });
+
   test("a build pipeline is reserved here and started on the node's copy", async () => {
     const { run, scope, routed, associations } = await setup();
     const workflow = await run("start_coordinator_node_build_pipeline", {
@@ -697,6 +719,7 @@ describe("workflows on a node", () => {
     expect(await associations()).toEqual([
       expect.objectContaining({ kind: "build-pipeline", resourceId: "pipeline-leaf" }),
     ]);
+    expect((await associations())[0]).toMatchObject({ createdEnvironmentId: "leaf-env" });
   });
 
   test("a Multi Review launch reattaches its receipt to the review the node ran", async () => {

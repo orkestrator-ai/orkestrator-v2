@@ -27,7 +27,7 @@ import {
 } from "./pr-viewer-permission.js";
 import { PrRequiredChecksCache } from "./pr-required-checks.js";
 import { PR_BATCH_TIMEOUT_MS, PrMonitorBatchReader } from "./commands-pr-monitor-batch.js";
-import { gitHubCli } from "./github-cli-binary.js";
+import { gitHubCli, type GitHubCliSelection } from "./github-cli-binary.js";
 import { gitHubCliEnv } from "./github-credentials.js";
 import { runCommand } from "./shell.js";
 import { ProjectCheckoutMergeFollower } from "./project-checkout-merge-follow.js";
@@ -63,6 +63,8 @@ export type PrMonitorRuntimeOptions = {
   timing?: Pick<PrMonitorServiceOptions, "schedule" | "cancel" | "monotonicNow" | "random">;
   /** Follows merges into project checkouts; tests pass one with their own timers. */
   checkoutFollower?: ProjectCheckoutMergeFollower;
+  /** The backend's `gh`, set by `BackendRuntime`; absent, `gh` comes from PATH. */
+  gitHubCli?: GitHubCliSelection;
 };
 
 /**
@@ -129,7 +131,7 @@ export class PrMonitorRuntime {
   readonly prBatches = new PrMonitorBatchReader({
     run: async (_group, args) =>
       (
-        await runCommand(gitHubCli(), args, {
+        await runCommand(gitHubCli(this.options.gitHubCli), args, {
           timeoutMs: PR_BATCH_TIMEOUT_MS,
           env: await gitHubCliEnv(this.storage),
         })
@@ -489,6 +491,7 @@ export class PrMonitorRuntime {
           detectEnvironmentPullRequest(target, {
             ...options,
             storage: this.storage,
+            gitHubCli: this.options.gitHubCli,
             viewerPermissions: this.viewerPermissions,
             requiredChecks: this.requiredChecks,
             batch: this.prBatches,

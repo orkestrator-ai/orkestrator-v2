@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { formatContainerLifecycleError } from "@orkestrator/protocol/container-lifecycle";
-import { createLogger } from "@orkestrator/protocol/logger";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("docker");
 
@@ -25,6 +25,11 @@ export const REGISTRY_WRITER_LEASE_FILE = "container-lifecycle.writer.lease";
 export interface RegistryWriterLeaseOptions {
   staleMs?: number;
   heartbeatMs?: number;
+  /**
+   * Called once, on the held-to-lost transition, so a reader that is not
+   * polling (the schedules settings) can read the new state.
+   */
+  onLost?: () => void;
   /** Test seam. */
   now?: () => number;
 }
@@ -47,6 +52,14 @@ export class RegistryWriterLeaseBusyError extends Error {
   }
 }
 
+/**
+ * Whether this process may write the registry, and why not. `held` is the one
+ * writer; `lost` was the writer until another process reclaimed the lease or
+ * its file went; `busy` and `schema-incompatible` never had it; `released` is
+ * a clean shutdown.
+ */
+export type RegistryWriterState = "held" | "lost" | "busy" | "schema-incompatible" | "released";
+
 export class RegistryWriterLease {
   private released = false;
   private lost = false;
@@ -56,6 +69,7 @@ export class RegistryWriterLease {
     private readonly token: string,
     private readonly handle: fs.FileHandle,
     private readonly heartbeat: ReturnType<typeof setInterval>,
+    private readonly onLost?: () => void,
   ) {}
 
   static async acquire(
@@ -95,7 +109,7 @@ export class RegistryWriterLease {
           void lease?.refresh();
         }, heartbeatMs);
         heartbeat.unref?.();
-        lease = new RegistryWriterLease(leasePath, token, handle, heartbeat);
+        lease = new RegistryWriterLease(leasePath, token, handle, heartbeat, options.onLost);
         if (reclaimedStaleForMs !== undefined) {
           log.info("writer-lease.regained", { staleForMs: reclaimedStaleForMs });
         }
@@ -161,6 +175,12 @@ export class RegistryWriterLease {
     return false;
   }
 
+  /** Checks the lease file like {@link isHeld}, so a loss is noticed on read. */
+  state(): RegistryWriterState {
+    if (this.released) return "released";
+    return this.isHeld() ? "held" : "lost";
+  }
+
   /**
    * The one held-to-lost transition. Losing the lease is final for this
    * process: `writer-lease.regained` is written by the process that takes a
@@ -172,6 +192,11 @@ export class RegistryWriterLease {
     this.lost = true;
     clearInterval(this.heartbeat);
     log.warn("writer-lease.lost", { reason });
+    try {
+      this.onLost?.();
+    } catch (error) {
+      log.warn("writer-lease.listener-failed", { error: formatLogError(error) });
+    }
   }
 
   /** Throws unless this process still holds the lease. */
@@ -301,9 +326,15 @@ export class RegistrySchemaBlockedError extends Error {
 
 /** Writer handle that is never held: containers are read-only in this process. */
 export class BlockedRegistryWriter {
-  constructor(private readonly error: Error) {}
+  constructor(
+    private readonly error: Error,
+    private readonly reason: "busy" | "schema-incompatible",
+  ) {}
   isHeld(): boolean {
     return false;
+  }
+  state(): RegistryWriterState {
+    return this.reason;
   }
   assertHeld(): void {
     throw this.error;
@@ -311,7 +342,10 @@ export class BlockedRegistryWriter {
   async release(): Promise<void> {}
 }
 
-export type RegistryWriter = Pick<RegistryWriterLease, "assertHeld" | "isHeld" | "release">;
+export type RegistryWriter = Pick<
+  RegistryWriterLease,
+  "assertHeld" | "isHeld" | "release" | "state"
+>;
 
 /**
  * Checks the schema marker, then acquires the writer lease. Never throws for
@@ -325,14 +359,14 @@ export async function openRegistryWriter(
   const schema = await checkRegistrySchemaMarker(dataDir);
   if (!schema.compatible) {
     log.info("writer-lease.not-acquired", { reason: "schema-incompatible" });
-    return new BlockedRegistryWriter(new RegistrySchemaBlockedError());
+    return new BlockedRegistryWriter(new RegistrySchemaBlockedError(), "schema-incompatible");
   }
   try {
     return await RegistryWriterLease.acquire(dataDir, options);
   } catch (error) {
     if (error instanceof RegistryWriterLeaseBusyError) {
       log.info("writer-lease.not-acquired", { reason: "busy" });
-      return new BlockedRegistryWriter(error);
+      return new BlockedRegistryWriter(error, "busy");
     }
     throw error;
   }

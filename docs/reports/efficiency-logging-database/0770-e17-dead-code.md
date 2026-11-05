@@ -94,7 +94,7 @@ The rest of L10 is done or no longer applies:
 - **Tag variants** went with the migration to fixed areas (`docs/architecture/logging.md:794-884`).
 - **Buffered debug logger** aggregates and flushes (R4; `bridge-diagnostics.ts:684`, `:696`).
 - **Bridge stderr at `error`** stays by design for raw text, which has no level (`logging.md:604`, `:824`).
-- **Unfiltered environment** is [0830](0720-e13-silent-failures.md#0830-stop-inherited-vendor-debug-variables-reaching-local-bridges).
+- **Unfiltered environment** was `0830`, done in [E13](0000-index.md#closing-check-of-e13-silent-failures) ([the bridge hop](../../architecture/logging.md#the-bridge-hop)).
 
 ## Related
 

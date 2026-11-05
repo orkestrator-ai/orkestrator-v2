@@ -26,6 +26,7 @@ interface Harness {
   watcherClosed: (environmentId: string) => boolean;
   watcherClosedAtPath: (worktreePath: string) => boolean;
   failWatch: (environmentId: string) => void;
+  qualifyWatch: (environmentId: string) => void;
   failWatchAtPath: (worktreePath: string) => void;
   setScan: (scan: (target: DiffStatsTarget) => Promise<DiffScanResult>) => void;
   clock: { value: number };
@@ -40,6 +41,7 @@ function createHarness(
     admission?: WorkAdmissionPool;
     watchable?: boolean;
     watcherStartError?: Error;
+    pendingCoverage?: boolean;
     emit?: (event: string, payload: unknown) => void;
   } = {},
 ): Harness {
@@ -57,6 +59,8 @@ function createHarness(
     {
       onChange: () => void;
       onError?: (error: unknown) => void;
+      onCoverageChange?: () => void;
+      qualified: boolean;
       closed: boolean;
       watching: boolean;
     }
@@ -111,6 +115,8 @@ function createHarness(
       const record = {
         onChange: watcherOptions.onChange,
         onError: watcherOptions.onError,
+        onCoverageChange: watcherOptions.onCoverageChange,
+        qualified: !options.pendingCoverage,
         closed: false,
         watching: watchable,
       };
@@ -120,6 +126,9 @@ function createHarness(
         watcherOptions.onError?.(options.watcherStartError);
       }
       return {
+        get qualified() {
+          return record.qualified;
+        },
         get watching() {
           return record.watching && !record.closed;
         },
@@ -185,6 +194,13 @@ function createHarness(
     },
     watcherClosedAtPath(worktreePath) {
       return watchers.get(worktreePath)?.closed === true;
+    },
+    qualifyWatch(environmentId) {
+      const key = watcherKeyFor(environmentId);
+      const record = key ? watchers.get(key) : undefined;
+      if (!record) throw new Error("No watcher");
+      record.qualified = true;
+      record.onCoverageChange?.();
     },
     failWatch(environmentId) {
       const key = watcherKeyFor(environmentId);
@@ -337,6 +353,42 @@ describe("DiffStatsService", () => {
     expect(harness.warnings).toEqual([
       expect.objectContaining({ event: "scan.watcher-failed", environmentId: "env-local" }),
     ]);
+  });
+
+  test("asynchronous unqualified watch failures retain capped retry backoff", async () => {
+    const harness = createHarness({ pendingCoverage: true });
+    try {
+      harness.service.track(localTarget());
+      await settle();
+      for (const [index, delayMs] of [30_000, 60_000, 120_000, 240_000, 480_000].entries()) {
+        harness.failWatch("env-local");
+        expect(harness.delayed).toHaveLength(index + 1);
+        const timer = harness.delayed[index]!;
+        expect(timer.delayMs).toBe(delayMs);
+        timer.callback();
+        await settle();
+      }
+      harness.failWatch("env-local");
+      expect(harness.delayed).toHaveLength(5);
+    } finally {
+      harness.service.shutdown();
+    }
+  });
+
+  test("qualified recovery resets the watcher retry budget", async () => {
+    const harness = createHarness({ pendingCoverage: true });
+    try {
+      harness.service.track(localTarget());
+      await settle();
+      harness.failWatch("env-local");
+      harness.delayed[0]!.callback();
+      await settle();
+      harness.qualifyWatch("env-local");
+      harness.failWatch("env-local");
+      expect(harness.delayed.map((timer) => timer.delayMs)).toEqual([30_000, 30_000]);
+    } finally {
+      harness.service.shutdown();
+    }
   });
 
   test("falls back cleanly when watcher setup reports an error synchronously", async () => {

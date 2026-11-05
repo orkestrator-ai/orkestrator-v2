@@ -157,6 +157,7 @@ const { useCursorModelsForTests } = await import("./models.js");
 const { useCursorCredentialRuntimeForTests } = await import("./credentials.js");
 const { clientSessionKeys, sessions } = await import("./state.js");
 const { setCursorMcpTimeoutsForTests, setCursorMcpTransportForTests } = await import("./mcp.js");
+const { RESUME_FELL_BACK_NOTICE } = await import("./translate.js");
 const { useChangeEvidenceForTests } = await import("./change-evidence.js");
 const { ChangeEvidenceSpool } =
   await import("@orkestrator/protocol/node/change-tracking/evidence-spool");
@@ -1218,9 +1219,38 @@ describe("ensureAgent", () => {
         },
       ]);
       expect(JSON.stringify(records)).not.toContain("no such agent");
+      // The user is told too, in fixed words that carry none of the SDK's error.
+      expect(state.messages).toMatchObject([
+        {
+          role: "assistant",
+          content: RESUME_FELL_BACK_NOTICE,
+          parts: [{ type: "status", severity: "warning", content: RESUME_FELL_BACK_NOTICE }],
+        },
+      ]);
+      expect(JSON.stringify(state.messages)).not.toContain("no such agent");
+      expect(state.currentAssistantMessageId).toBeUndefined();
     } finally {
       logs.restore();
     }
+  });
+
+  test("the note that a resume fell back survives a bridge restart", async () => {
+    const { loadPersistedState, persistBarrier } = await import("./persistence.js");
+    const state = newSessionState();
+    sessions.set(state.id, state);
+    state.agentId = "lost-agent";
+    resumeFails = true;
+    await ensureAgent(state);
+    const revision = state.revision;
+    expect(revision).toBeGreaterThan(0);
+    await persistBarrier();
+
+    sessions.clear();
+    await loadPersistedState();
+    const restored = sessions.get(state.id)!;
+    expect(restored).not.toBe(state);
+    expect(restored.agentId).toBe("created-agent");
+    expect(restored.messages.map((message) => message.content)).toEqual([RESUME_FELL_BACK_NOTICE]);
   });
 
   test("a configuration resume that fails keeps the conversation and is not a fallback", async () => {
@@ -1235,6 +1265,7 @@ describe("ensureAgent", () => {
       expect(logs.records().map((record) => record.event)).not.toContain(
         "session.resume-fell-back",
       );
+      expect(state.messages).toEqual([]);
     } finally {
       logs.restore();
     }
@@ -1510,7 +1541,8 @@ describe("ensureAgent", () => {
     expect(state.usage?.sessionTokens).toBeUndefined();
     expect(state.usage?.sessionTokenFloor).toBeUndefined();
     expect(state.usage?.costUsd).toBeUndefined();
-    expect(state.revision).toBe(revision + 1);
+    // One revision for the fallback note, one for the reset usage.
+    expect(state.revision).toBe(revision + 2);
 
     expect(await refreshAgentUsage(state, replacement, state.promptSequence, 100, 100)).toBe(
       "retry",

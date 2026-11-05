@@ -162,7 +162,10 @@ export function registerToolingCommands(
     );
   });
   register("get_container_github_credential_status", async (_args, context) =>
-    getContainerGitHubCredentialStatus((await context.storage.loadConfig()).global),
+    getContainerGitHubCredentialStatus(
+      (await context.storage.loadConfig()).global,
+      context.runtime.gitHubCli,
+    ),
   );
   register(
     "check_any_ai_cli",

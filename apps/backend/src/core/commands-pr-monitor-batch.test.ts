@@ -417,7 +417,7 @@ function localTarget(number: number): PrMonitorTarget {
 function hostReader(): PrMonitorBatchReader {
   return new PrMonitorBatchReader({
     run: async (_group, args) =>
-      (await runCommand(gitHubCli(), args, { timeoutMs: 10_000 })).stdout,
+      (await runCommand(gitHubCli(undefined), args, { timeoutMs: 10_000 })).stdout,
   });
 }
 

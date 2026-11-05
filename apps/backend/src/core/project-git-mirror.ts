@@ -16,6 +16,9 @@
  *
  * Every remote URL and credential is passed per transfer. No `remote` section
  * is ever written, so the mirror's config holds nothing to leak.
+ *
+ * A build can start from what the project's host checkout already holds, but a
+ * checkout decides nothing: see `seedMirror`.
  */
 import { createHash, randomUUID } from "node:crypto";
 import {
@@ -28,6 +31,7 @@ import {
   rename,
   rm,
   rmdir,
+  stat,
   statfs,
   writeFile,
 } from "node:fs/promises";
@@ -46,10 +50,16 @@ const log = createLogger("docker");
 export const GIT_MIRRORS_DIR = "git-mirrors";
 export const CONTAINER_GIT_MIRROR_MOUNT = "/orkestrator-git-mirror";
 export const CONTAINER_GIT_MIRROR_PATH = `${CONTAINER_GIT_MIRROR_MOUNT}/mirror.git`;
-const MIRROR_NAME = "mirror.git";
+export const GIT_MIRROR_NAME = "mirror.git";
 
 /** Branches only: clones use `--no-tags`, and `refs/pull/*` can dwarf the repository. */
 const MIRROR_REFSPEC = "+refs/heads/*:refs/heads/*";
+/**
+ * What a seed reads from a checkout. Remote-tracking refs are the ones likely to
+ * be on the remote, so local work never leaves the checkout, and a wrong or forged
+ * one costs nothing: the remote does not recognise it and the mirror never sees it.
+ */
+const SEED_REFSPEC = "+refs/remotes/*:refs/seed/*";
 /** A clone only pays the remote for what the mirror lacks, so this need not be tight. */
 export const GIT_MIRROR_REFRESH_INTERVAL_MS = 15 * 60_000;
 /**
@@ -59,6 +69,11 @@ export const GIT_MIRROR_REFRESH_INTERVAL_MS = 15 * 60_000;
  */
 export const GIT_MIRROR_MAX_BYTES = 2 * 1024 ** 3;
 const GIT_MIRROR_MIN_FREE_BYTES = 1024 ** 3;
+/**
+ * A seed's worst case in limits: what the checkout hands over, what the remote
+ * adds to it, and the mirror copied out of them. A plain build needs one.
+ */
+const GIT_MIRROR_SEED_LIMITS_FREE = 3;
 /** A repository rarely shrinks, so an oversized one is only looked at again weekly. */
 const GIT_MIRROR_OVERSIZED_RETRY_MS = 7 * 24 * 60 * 60_000;
 /** Fetch failures in a row before the mirror is rebuilt rather than updated. */
@@ -109,6 +124,8 @@ export type GitMirrorRefreshOptions = {
 
 type GitMirrorContext = Pick<CommandContext, "storage"> &
   Partial<Pick<CommandContext, "environmentLifecycleTasks">>;
+
+type MirrorProject = Pick<Project, "id" | "gitUrl"> & Partial<Pick<Project, "localPath">>;
 
 type MirrorWriter = { controller: AbortController; done: Promise<GitMirrorRefreshOutcome> };
 
@@ -233,7 +250,7 @@ export async function gitMirrorContainerArguments(
 /** Starts a refresh in the background. Never rejects and never delays a launch. */
 export function scheduleProjectGitMirrorRefresh(
   context: GitMirrorContext,
-  project: Pick<Project, "id" | "gitUrl">,
+  project: MirrorProject,
 ): void {
   void refreshProjectGitMirror(context, project);
 }
@@ -252,7 +269,7 @@ export async function stopProjectGitMirrorRefreshes(dataDir: string): Promise<vo
 /** Creates or updates a project's mirror. Failures are logged, never thrown. */
 export function refreshProjectGitMirror(
   context: GitMirrorContext,
-  project: Pick<Project, "id" | "gitUrl">,
+  project: MirrorProject,
   options: GitMirrorRefreshOptions = {},
 ): Promise<GitMirrorRefreshOutcome> {
   if (context.environmentLifecycleTasks?.isAccepting() === false)
@@ -277,7 +294,7 @@ export function refreshProjectGitMirror(
 
 async function runRefresh(
   context: GitMirrorContext,
-  project: Pick<Project, "id" | "gitUrl">,
+  project: MirrorProject,
   options: GitMirrorRefreshOptions,
   controller: AbortController,
 ): Promise<GitMirrorRefreshOutcome> {
@@ -288,11 +305,16 @@ async function runRefresh(
   const execute = options.run ?? runCommand;
   const run: typeof runCommand = (command, args, settings) => {
     controller.signal.throwIfAborted();
-    return execute(command, args, { ...settings, signal: controller.signal });
+    return execute(command, args, {
+      ...settings,
+      signal: settings?.signal
+        ? AbortSignal.any([controller.signal, settings.signal])
+        : controller.signal,
+    });
   };
   const directory = projectDirectory(dataDir, project.id);
   await ensureProjectDirectories(dataDir, project.id);
-  const mirror = path.join(mountDirectory(dataDir, project.id), MIRROR_NAME);
+  const mirror = path.join(mountDirectory(dataDir, project.id), GIT_MIRROR_NAME);
   const state = await readState(directory);
   if (!options.force) {
     if ((state.oversizedUntil ?? 0) > now()) return "skipped-oversized";
@@ -319,7 +341,15 @@ async function runRefresh(
     return "skipped-low-disk";
   }
 
-  const transfer: Transfer = { context, project, run, controller, maxBytes, oversized: false };
+  const transfer: Transfer = {
+    context,
+    project,
+    run,
+    controller,
+    maxBytes,
+    oversized: false,
+    canSeed: free >= GIT_MIRROR_MIN_FREE_BYTES + GIT_MIRROR_SEED_LIMITS_FREE * maxBytes,
+  };
   try {
     if (rebuild) {
       const built = await buildMirror(transfer, directory, mirror);
@@ -372,12 +402,26 @@ async function runRefresh(
 
 type Transfer = {
   context: GitMirrorContext;
-  project: Pick<Project, "id" | "gitUrl">;
+  project: MirrorProject;
   run: typeof runCommand;
   controller: AbortController;
   maxBytes: number;
   oversized: boolean;
+  /** The disk has room for a seed's quarantine as well as the build. */
+  canSeed: boolean;
 };
+
+/**
+ * No template: a mirror has no hooks. 0644 keeps it readable by the workload
+ * user under rootless Docker, whatever the backend's umask.
+ */
+async function initBareRepository(transfer: Transfer, gitDir: string): Promise<void> {
+  await transfer.run(
+    "git",
+    ["init", "--quiet", "--bare", "--template=", "--shared=0644", "--initial-branch=main", gitDir],
+    { timeoutMs: GIT_MIRROR_LOCAL_TIMEOUT_MS, env: gitLocalEnv() },
+  );
+}
 
 /** Builds a new mirror beside the mount and renames it in, so no reader sees a partial one. */
 async function buildMirror(
@@ -386,15 +430,11 @@ async function buildMirror(
   mirror: string,
 ): Promise<"published" | "empty"> {
   const building = await mkdtemp(path.join(directory, ".building-"));
-  const staged = path.join(building, MIRROR_NAME);
-  // No template: a mirror has no hooks. 0644 keeps it readable by the workload
-  // user under rootless Docker, whatever the backend's umask.
-  await transfer.run(
-    "git",
-    ["init", "--quiet", "--bare", "--template=", "--shared=0644", "--initial-branch=main", staged],
-    { timeoutMs: GIT_MIRROR_LOCAL_TIMEOUT_MS, env: gitLocalEnv() },
-  );
-  await fetchInto(transfer, staged);
+  const staged = path.join(building, GIT_MIRROR_NAME);
+  if (!(await seedMirror(transfer, building, staged))) {
+    await initBareRepository(transfer, staged);
+    await fetchInto(transfer, staged);
+  }
   const refs = await transfer.run(
     "git",
     [`--git-dir=${staged}`, "for-each-ref", "--count=1", "--format=%(objectname)", "refs/heads/"],
@@ -410,13 +450,136 @@ async function buildMirror(
   return "published";
 }
 
-/** Fetches every branch, stopping the transfer if it passes the size limit. */
-async function fetchInto(transfer: Transfer, gitDir: string): Promise<void> {
+/**
+ * Builds `staged` from the project's host checkout and the remote, or leaves
+ * nothing and returns false, which means an ordinary download. A checkout can
+ * hold unpushed work and refs and config shaped by whatever ran in it, so it only
+ * ever saves bytes:
+ *
+ * - The checkout is read only through the `upload-pack` of a fetch, the one way
+ *   into a repository that restricts what its config and hooks can run. Every
+ *   object is hashed on the way in, and a fetch checks a ref's whole history.
+ * - That goes into a quarantine beside the mirror, where the remote then decides
+ *   which branches exist and where they point, and sends what is missing.
+ * - The mirror fetches those branches from the quarantine, so it receives exactly
+ *   what they reach, hashes fixing the content, and no other ref or object.
+ */
+async function seedMirror(transfer: Transfer, building: string, staged: string): Promise<boolean> {
+  const { project, controller } = transfer;
+  const checkout = transfer.canSeed ? await seedableCheckout(project) : null;
+  if (!checkout) return false;
+  const quarantine = path.join(building, "seed.git");
+  try {
+    await initBareRepository(transfer, quarantine);
+    await fetchBoundedLocal(transfer, checkout, quarantine, SEED_REFSPEC);
+    await fetchInto(transfer, quarantine, await packBytes(quarantine));
+    await initBareRepository(transfer, staged);
+    // The quarantine may contain a full seed plus a full remote increment.
+    // Discard it before duplicating that data if it no longer fits one limit.
+    if ((await directoryBytes(quarantine)) > transfer.maxBytes) {
+      throw new Error("The seed and remote together exceed the mirror limit");
+    }
+    await fetchBoundedLocal(transfer, quarantine, staged, MIRROR_REFSPEC);
+    log.info("git-mirror.seeded", { projectId: project.id });
+    return true;
+  } catch (error) {
+    if (controller.signal.aborted) throw error;
+    log.info("git-mirror.seed-skipped", {
+      projectId: project.id,
+      error: formatLogError(error, { message: false }),
+    });
+    await rm(staged, { recursive: true, force: true });
+    return false;
+  } finally {
+    await rm(quarantine, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
+async function seedableCheckout(project: MirrorProject): Promise<string | null> {
+  const checkout = project.localPath;
+  if (!checkout || !path.isAbsolute(checkout)) return null;
+  const stats = await stat(checkout).catch(() => null);
+  return stats?.isDirectory() ? checkout : null;
+}
+
+/**
+ * Bounds either local copy in a seed. Exceeding this limit ends only the seed:
+ * a plain remote download may still fit after discarding unreachable seed data.
+ */
+async function fetchBoundedLocal(
+  transfer: Transfer,
+  checkout: string,
+  quarantine: string,
+  refspec: string,
+): Promise<void> {
+  const limit = new AbortController();
+  const guard = setInterval(() => {
+    void packBytes(quarantine).then((bytes) => {
+      if (bytes > transfer.maxBytes) limit.abort();
+    });
+  }, GIT_MIRROR_SIZE_CHECK_MS);
+  guard.unref?.();
+  try {
+    await fetchLocal(transfer, checkout, quarantine, refspec, limit.signal);
+  } finally {
+    clearInterval(guard);
+  }
+  // A small fetch unpacks to loose objects, which the running guard does not see.
+  if ((await directoryBytes(quarantine)) > transfer.maxBytes) {
+    throw new Error("The checkout holds more than a mirror's limit");
+  }
+}
+
+/**
+ * A fetch between repositories on this disk. Local protocol only: an older Git's
+ * `upload-pack` can fetch missing objects for a partial clone, from wherever that
+ * repository's config says.
+ */
+async function fetchLocal(
+  transfer: Transfer,
+  source: string,
+  gitDir: string,
+  refspec: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  await transfer.run(
+    "git",
+    [
+      `--git-dir=${gitDir}`,
+      "-c",
+      "gc.auto=0",
+      "-c",
+      "maintenance.auto=false",
+      "fetch",
+      "--quiet",
+      "--no-tags",
+      "--no-recurse-submodules",
+      "--no-write-fetch-head",
+      "--",
+      source,
+      refspec,
+    ],
+    {
+      cwd: path.dirname(gitDir),
+      timeoutMs: GIT_MIRROR_LOCAL_TIMEOUT_MS,
+      signal: signal
+        ? AbortSignal.any([signal, transfer.controller.signal])
+        : transfer.controller.signal,
+      env: { ...gitLocalEnv(), GIT_ALLOW_PROTOCOL: "file", GIT_NO_LAZY_FETCH: "1" },
+    },
+  );
+}
+
+/**
+ * Fetches every branch, stopping the transfer if it passes the size limit.
+ * `seedBytes` is what the repository held before, which the remote did not send.
+ */
+async function fetchInto(transfer: Transfer, gitDir: string, seedBytes = 0): Promise<void> {
   const { context, project, run, controller, maxBytes } = transfer;
   const credentials = await gitHubGitCredentials(context.storage, project.gitUrl);
   const guard = setInterval(() => {
     void packBytes(gitDir).then((bytes) => {
-      if (bytes > maxBytes) {
+      if (bytes - seedBytes > maxBytes) {
         transfer.oversized = true;
         controller.abort();
       }
@@ -503,7 +666,7 @@ function gitLocalEnv(): NodeJS.ProcessEnv {
 async function retireMirror(directory: string, mirror: string): Promise<void> {
   if (!(await isDirectory(mirror))) return;
   const retired = await mkdtemp(path.join(directory, ".retired-"));
-  await rename(mirror, path.join(retired, MIRROR_NAME));
+  await rename(mirror, path.join(retired, GIT_MIRROR_NAME));
 }
 
 /** What an earlier, interrupted refresh left, and what this one finished with. */

@@ -47,7 +47,7 @@
  * reason; every other problem is collected and fails the test at the end, so
  * one run fills the whole matrix.
  */
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page } from "./browser-test";
 import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import {

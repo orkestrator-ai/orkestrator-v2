@@ -2,7 +2,9 @@ import {
   COORDINATOR_EXECUTION_POLICY,
   COORDINATOR_WORKSPACE_VERSION,
 } from "@orkestrator/protocol/coordinator";
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
+import { GitHubCliSelection } from "./github-cli-binary.js";
+import * as shell from "./shell.js";
 import { AgentMailError, type AgentMailNotice } from "@orkestrator/protocol/agent-mail";
 import type { GitHubPullRequestRef } from "@orkestrator/protocol/github-pull-requests";
 import {
@@ -51,6 +53,7 @@ interface Harness {
   watches: CoordinatorPullRequestWatches;
   sent: SentMail[];
   reads: GitHubPullRequestRef[];
+  readTokens: string[];
   setStatus(number: number, next: GitHubPullRequestStatus | Error): void;
   advance(ms: number): void;
   setMode(mode: "off" | "settled" | "stages"): Promise<void>;
@@ -67,6 +70,7 @@ async function withHarness(
   run: (harness: Harness) => Promise<void>,
   realMail = false,
   hiddenIssueAccess = false,
+  gitHubCli?: GitHubCliSelection,
 ): Promise<void> {
   await withTemporaryStorage(async (storage) => {
     await storage.addProject({
@@ -87,6 +91,7 @@ async function withHarness(
     const statuses = new Map<number, GitHubPullRequestStatus | Error>();
     const sent: SentMail[] = [];
     const reads: GitHubPullRequestRef[] = [];
+    const readTokens: string[] = [];
     const workspace = {
       id: "coord-1",
       conversations: [
@@ -159,9 +164,11 @@ async function withHarness(
     const watches = new CoordinatorPullRequestWatches({
       storage: facade,
       now: () => now,
-      token: async () => token,
+      gitHubCli,
+      token: gitHubCli ? undefined : async () => token,
       readStatus: async (_token, ref) => {
         reads.push(ref);
+        readTokens.push(_token);
         const next = statuses.get(ref.number) ?? status();
         if (next instanceof Error) throw next;
         return next;
@@ -190,6 +197,7 @@ async function withHarness(
       watches,
       sent,
       reads,
+      readTokens,
       setStatus: (number, next) => statuses.set(number, next),
       advance: (ms) => {
         now += ms;
@@ -224,6 +232,42 @@ async function withHarness(
 const ref = (number: number): GitHubPullRequestRef => ({ owner: "acme", repo: "app", number });
 
 describe("watching a pull request", () => {
+  test("the default token reader uses the backend selection and follows channel changes", async () => {
+    const selection = new GitHubCliSelection();
+    selection.pin("/managed/backend-a/gh");
+    const run = spyOn(shell, "runCommand").mockResolvedValue({
+      stdout: "selected-host-login\n",
+      stderr: "",
+    });
+    try {
+      await withHarness(
+        async ({ watches, advance, readTokens }) => {
+          await watches.watch(PROJECT_ID, ref(7), "rendered");
+          await watches.sweep();
+          expect(run).toHaveBeenLastCalledWith(
+            "/managed/backend-a/gh",
+            ["auth", "token", "--hostname", "github.com"],
+            expect.objectContaining({ timeoutMs: 10_000 }),
+          );
+          selection.select("/managed/backend-a/latest/gh");
+          advance(WATCHED_PR_POLL_INTERVAL_MS);
+          await watches.sweep();
+          expect(run).toHaveBeenLastCalledWith(
+            "/managed/backend-a/latest/gh",
+            ["auth", "token", "--hostname", "github.com"],
+            expect.objectContaining({ timeoutMs: 10_000 }),
+          );
+          expect(readTokens).toEqual(["selected-host-login", "selected-host-login"]);
+        },
+        false,
+        false,
+        selection,
+      );
+    } finally {
+      run.mockRestore();
+    }
+  });
+
   test("watches only the project's own repository, once it has a coordinator", async () => {
     await withHarness(async ({ watches, storage, setCoordinator }) => {
       expect(await watches.watch(PROJECT_ID, { ...ref(1), repo: "other" }, "rendered")).toEqual({

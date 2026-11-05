@@ -34,7 +34,7 @@
  * in a hook spawns `mise` or reads profile state, so the file stays inert
  * without the opt-in. Prompts and transcripts never reach test output.
  */
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page } from "./browser-test";
 import { spawn, spawnSync } from "node:child_process";
 import { openSync, promises as fs } from "node:fs";
 import path from "node:path";

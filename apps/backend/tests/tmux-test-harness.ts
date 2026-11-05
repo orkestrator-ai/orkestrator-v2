@@ -44,6 +44,13 @@ export const TMUX_TEST_TIMEOUT_MS = 30_000;
 
 jest.setTimeout(TMUX_TEST_TIMEOUT_MS);
 
+// Resolved before any fake runtime prepends its shims to PATH.
+const realPs = Bun.which("ps") ?? "/bin/ps";
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'\\''`)}'`;
+}
+
 /** mkdtemp prefix for the fake tmux runtime; also the guard for its cleanup path. */
 export const RUNTIME_TEMP_PREFIX = "ork-tmux-runtime-";
 
@@ -325,8 +332,23 @@ printf '%s\\n' 'Claude Code test'
 exit 0
 `,
   );
+  // The fake tmux runs no server process, so the process census that confirms
+  // "no server running" must not see the host's own tmux servers (a developer's
+  // or a dev profile's): one of those made every teardown report incomplete.
+  // Every other ps call, such as the private-tmux fixture's scoped `-p`, is real.
+  await fs.writeFile(
+    path.join(binDir, "ps"),
+    `#!/bin/sh
+if [ "$*" = "-A -o pid=,comm=" ]; then
+  printf '%s\\n' "$$ ps"
+  exit 0
+fi
+exec ${shellQuote(realPs)} "$@"
+`,
+  );
   await fs.chmod(path.join(binDir, "tmux"), 0o755);
   await fs.chmod(path.join(binDir, "claude"), 0o755);
+  await fs.chmod(path.join(binDir, "ps"), 0o755);
 
   const originalPath = process.env.PATH;
   const originalHome = process.env.HOME;

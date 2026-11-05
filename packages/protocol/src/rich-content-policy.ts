@@ -103,6 +103,14 @@ export const STATIC_PRESENTATION_POLICY = {
   sizeChangeWindowMs: 5_000,
   /** Messages refused by the rate limiter before the view is stopped. */
   maxRefusedMessages: 100,
+  /**
+   * Document text the frame reports for Find, and the characters per message
+   * that carry it. A chunk of three-byte characters still fits
+   * `FRAME_CHANNEL_POLICY.maxMessageBytes`, and a full report's chunks fit its
+   * burst alongside `ready` and `rendered`.
+   */
+  maxSearchTextCharacters: 64 * KIB,
+  searchTextChunkCharacters: 2 * KIB,
 } as const;
 
 export const INTERACTIVE_HTML_POLICY = {

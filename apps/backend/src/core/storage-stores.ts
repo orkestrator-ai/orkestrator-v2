@@ -2,7 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { BUILD_PIPELINE_TRANSCRIPT_STORE_LAYOUTS } from "./build-pipeline-transcript-layout.js";
 import { NATIVE_AGENT_DISPLAY_TAIL_STORE_LAYOUTS } from "./native-agent-display-tail-layout.js";
-import { changeLedgerMigration } from "./change-tracking/ledger-schema.js";
+import {
+  changeLedgerMigration,
+  moveChangeLedgerMigration,
+} from "./change-tracking/ledger-schema.js";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import { snapshotBeforeMigration } from "./storage-backups.js";
 import {
@@ -257,6 +260,7 @@ export const STORAGE_MIGRATIONS: readonly StorageMigration[] = [
   changeLedgerMigration,
   retireLoopedReviewsMigration,
   buildPipelineReviewReportUpgradeMigration,
+  moveChangeLedgerMigration,
 ];
 
 function legacyArtifacts(entries: readonly string[], baseName: string): string[] {

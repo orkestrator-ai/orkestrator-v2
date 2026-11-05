@@ -43,3 +43,16 @@ Analysed 2026-11-03 against `main` at `a2bba9d8`.
 
 - [Efficiency report, C](../2026-10-27-efficiency.md#c-bridges) (BR-13)
 - [1202 task 6](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md)
+
+## Outcome
+
+Checked back against the code on 2026-11-05 at `main` `69a3b4ca5`, before this file was deleted. The tests named were run on that commit and pass.
+
+| Task | Outcome | Code, evidence or to-do |
+| --- | --- | --- |
+| 1. Bound the queue and drain without promise chains | Done | `SerialQueue` in `bridges/codex-bridge/src/app-server/jsonl-rpc-client.ts` holds an array per key and drains it in one microtask loop, bounded by `DEFAULT_NOTIFICATION_QUEUE_MAX_DEPTH` (100,000) and `DEFAULT_NOTIFICATION_QUEUE_MAX_BYTES` (256 MiB). Past either it drops the backlog and calls `onOverflow`. Tests in `jsonl-rpc-client.test.ts`: `runs a synchronous backlog without chaining promises`; `the count bound drops the backlog and reports it once`; `the byte bound counts what is queued and releases what finished`; `drain waits only for what was queued when it was called`; `clear does not leave the depth negative when a running task ends`. |
+| Decision: fail the connection and recover through the supervisor restart | Done | `AppServerSupervisor` wires `onOverflow` to `handleNotificationQueueOverflow`, which calls `restartNow` without awaiting it on the read loop (`app-server/process-supervisor.ts`). Test: `notification queue overflow > replaces the child and reports the new generation` (`process-supervisor.test.ts`). |
+| Constraint: strict order within a key; a failed task does not stop those after it | Done | Tests in `jsonl-rpc-client.test.ts`: `preserves order within a key`; `a failing task does not block its successors`; `keeps order across synchronous and asynchronous tasks, and past a rejection`. |
+| Constraint: the stdout loop never awaits consumers | Done | The overflow restart is started with `void this.restartNow(...)`; the read loop only enqueues. |
+| Open question: the bound's value | Decided; real figure moved to a to-do | 100,000 entries and 256 MiB were chosen as far above one stdout chunk's lines (1202, "Task 6: BR-7, BR-10, BR-12 to BR-14 and BR-16"). No high-water mark from a real workload was read. [5481](../../todo/agent-engines/5481-codex-notification-queue-headroom.md). |
+| Needs verification: the restart path recovers cleanly when entered from here | Done | Proven with the runtime and a fake app-server child: `a notification backlog past its bound restarts the child and fails the turn as a restart` (`app-server-runtime-lifecycle.test.ts`) shows a new child, health `ready` with `restartCount: 1` and depth 0, the turn failed as a restart, and no dropped delta in the transcript. |

@@ -58,3 +58,14 @@ Analysed 2026-11-03 against `main` at `a2bba9d8`.
 
 - [Efficiency report, C](../2026-10-27-efficiency.md#c-bridges) (BR-7)
 - [1202 task 6](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md)
+
+## Outcome
+
+Checked back against the code on 2026-11-05 at `main` `69a3b4ca5`, before this file was deleted. The tests named were run on that commit and pass.
+
+| Task | Outcome | Code, evidence or to-do |
+| --- | --- | --- |
+| 1. Cache in-progress item parts by accumulator version | Done | `TurnRenderState.runningItemParts` in `bridges/codex-bridge/src/messages/render-turn.ts` keeps a running item's parts while its accumulator `version` stands still. Keyed on the version alone, because every mutator moves it (1202, "Task 6: BR-7, BR-10, BR-12 to BR-14 and BR-16"). Tests in `messages/render-turn.test.ts`, "running items across publish ticks": `an item that did not change keeps its part objects, progress line included`; `only the item that moved gets new parts`; `a delta landing while a render is awaited is not cached away`; `a kept state renders exactly what a fresh one does`. |
+| 2. Send `content` only when it changed | Done | `MessagePatchEventData.content` is optional (`messages/types.ts`), and `app-server-runtime-rows.ts` sends it only when `publishedContent` changed. Tests in `app-server-runtime-rows.test.ts`, "publishing running tool cards": `a patch lists only the card that moved and omits an unchanged body`; `a client applying the frames holds exactly the transcript's row`; `a publish with nothing new sends nothing and moves no revision`; `a new row's first patch carries the body`. |
+| Constraint: the stdout loop never awaits consumers | Done | The cache runs on the publish tick in the coalescer, not in the read loop. |
+| Needs verification: who still consumes full `message.patched` frames | Done | A search on 2026-11-05 finds Codex's `message.patched` only in `bridges/codex-bridge` (published by `index.ts` and its own tests); nothing in `apps`, `packages` or `e2e` reads it, and the backend subscribes to the content-free `?observe=1` stream. The bridge's own reader is covered by `a client applying the frames holds exactly the transcript's row`. |

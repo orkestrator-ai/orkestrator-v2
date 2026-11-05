@@ -86,3 +86,16 @@ Analysed 2026-11-03 against `main` at `a2bba9d8`.
 
 - [Efficiency report, D](../2026-10-27-efficiency.md#d-renderer-appswebsrc)
 - [1202 efficiency follow-ups](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md), task 3
+
+## Outcome
+
+Checked back against the code on 2026-11-05 at `main` `69a3b4ca5`, before this file was deleted. The tests named were run on that commit and pass. No production build was repeated for this check; the sizes are the ones recorded in 1202 task 3.
+
+| Task | Outcome | Code, evidence or to-do |
+| --- | --- | --- |
+| 1. Baseline the startup closure | Done | Measured on 2026-11-04 at `96ee1eb3e`: 94 chunks, 4.23 MB, 1.28 MB gzip, reproducible with `bunx vite build --manifest && bun scripts/startup-closure.ts` in `apps/web` ([1202 task 3](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md#3-renderer-re-renders-and-refetches)). |
+| 2. Lazy-load mail markdown | Done | `AgentMailConversationView.tsx` loads its Markdown through `lazy(loadAgentMailMarkdown)`. `MailTile.tsx` still imports `MessageMarkdown` directly, but is no longer reachable at startup. Test: `keeps on-demand modules out of the startup graph` (`apps/web/src/startup-closure.test.ts`, which lists `MessageMarkdown.tsx`). |
+| 3. Lazy-load the find and search module | Done | `BugReportSheet` and the coordinator's `CoordinatorConversationPane` (where `CoordinatorPanel`'s use moved) reach the agent tab through `LazyAgentNativeTab`. Test: `keeps on-demand modules out of the startup graph`, which lists `native-message-search.ts` and `AgentNativeTab.tsx`. |
+| 4. Stop re-exporting `terminalPortalStore` | Done | `apps/web/src/stores/index.ts` no longer re-exports it; xterm's runtime is in `lib/terminal-xterm.ts`. Tests: `keeps on-demand modules out of the startup graph` (lists `lib/terminal-xterm.ts` and `PersistentTerminal.tsx`) and `keeps on-demand packages out of the startup graph` (lists `@xterm/`). |
+| 5. Consider `manualChunks` | Done (not needed) | `apps/web/vite.config.ts` has no `build` options; the closure fell to 2.55 MB and 0.80 MB gzip without them (1202 task 3). |
+| Needs verification | Nothing left | The file's own section said so; the measurements are in 1202 task 3. |

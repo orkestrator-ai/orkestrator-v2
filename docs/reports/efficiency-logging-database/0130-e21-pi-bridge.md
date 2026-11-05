@@ -102,3 +102,18 @@ Analysed 2026-11-03 against `main` at `a2bba9d8`.
 - [Efficiency report, C](../2026-10-27-efficiency.md#c-bridges) (BR-10, BR-14)
 - [1202 task 6](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md)
 - [0240](0240-e20-acp-bridge.md#0240-acp-still-serialises-every-session-on-each-state-write): the same pattern in ACP
+
+## Outcome
+
+Checked back against the code on 2026-11-05 at `main` `69a3b4ca5`, before this file was deleted. The tests named were run on that commit and pass.
+
+| Part | Task | Outcome | Code, evidence or to-do |
+| --- | --- | --- | --- |
+| 0130 | 1. Avoid re-parsing unchanged session files | Done | `session-list-cache.ts` keeps the whole list against a sha256 of each `.jsonl` file's name, size, mtime, ctime and inode, for up to 30 s; `readResumableSessions` in `bridges/pi-bridge/src/agent-session.ts` reads through it. Tests in `session-list-cache.test.ts`: `answers from memory while no file changed`; `a changed file shows in the answer, and the next read is cached again`. |
+| 0130 | 2. Report a timed-out list | Done | `listResumableSessions` aborts the SDK read through `signal` and rethrows `TimeoutError`; `/session/list` answers 504 with `SESSION_LIST_TIMEOUT_MESSAGE` (`bridges/pi-bridge/src/http.ts`). Tests: `a timeout is reported, not an empty history, and stops the read` and `any other failure still reads as no sessions` (`session-list-cache.test.ts`); `a session list that timed out answers 504 with its reason` (`http.test.ts`); `a bridge's timed-out list reaches the caller as an error, not an empty list` (`apps/backend/src/core/http-bridge-provider-archive.test.ts`). |
+| 0130 | Decision: the reason reaches the user through the existing path | Moved to a to-do | The backend passes the 504 body on, but `NativeResumeSessionDialog` replaces any failure with "Failed to load sessions" (test `surfaces a fetch failure instead of an empty list`), so the reason never reaches the user. [5480](../../todo/agent-engines/5480-pi-resume-list-timeout-leftovers.md) task 1. |
+| 0130 | Constraint: every cache has byte and count bounds | Done | One entry per bridge, a fixed-size digest as its key, and a list over `MAX_CACHED_SESSION_LIST_BYTES` (2 MiB) is not kept. Test: `a list too large to keep is read each time, bounded as before` (`session-list-cache.test.ts`). |
+| 0130 | Needs verification: how the resume UI renders the error | Moved to a to-do | Read from code and the dialog's unit test only, as above; no browser run. [5480](../../todo/agent-engines/5480-pi-resume-list-timeout-leftovers.md) tasks 1 and 2. |
+| 0130 | Needs verification: how large a history reaches the timeout | Moved to a to-do | Not measured. [5480](../../todo/agent-engines/5480-pi-resume-list-timeout-leftovers.md) task 3. |
+| 0355 | 1. Encode each record once | Done | `encodeStateWithinBudget` in `bridges/pi-bridge/src/persistence.ts` encodes each session record once and splices the records into the envelope; shedding re-encodes only the records it trims, keeping Pi's oldest-first policy. Tests in `persistence.test.ts`: `shedding encodes each record once, not the whole payload per session`; `writes the old bytes for any state and budget`; `sheds transcripts oldest-first rather than skipping the write`. |
+| 0355 | Constraint: a durability barrier still throws when the state cannot fit | Done in code, test missing | `persistNow` throws "Pi bridge state exceeds its persistence budget" when `encodeStateWithinBudget` answers `undefined`. The encoder half is tested (`answers nothing when the non-transcript state alone does not fit`); no test drives `persistBarrier()` to that rejection. [5480](../../todo/agent-engines/5480-pi-resume-list-timeout-leftovers.md) task 4. |

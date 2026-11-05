@@ -2,7 +2,7 @@
 
 Which files under `docs/reports` can be built together, and which pieces of work must not run at the same time. Each folder's `0000-index.md` has the same information for its own files, in a **Parallel running** section.
 
-Worked out on 2026-11-03 against `main` at `a44641cbc`, from the 167 work files in the four folders. On 2026-11-04, 137 of them were combined into the 41 batch files listed under [Batch files](#batch-files), which keep each report as a numbered part, with repeated text removed. That leaves 71 files. The other 30 are built on their own, need a decision or measurement first, or are blocked. E1 is a set of baseline tasks inside other batch files, so it has no file of its own. E8 (Agent tab polling) was built on 2026-11-04 and its file deleted, so this plan no longer lists it; its result is in [1202 task 4](../todo/cross-cutting/1202-efficiency-review-follow-ups.md). E4 (Object store) was built on 2026-11-05 and its file deleted the same way; its outcome is the closing check in [the efficiency index](efficiency-logging-database/0000-index.md#closing-check-of-e4-object-store). E-0120 (Bearer terminal streams) was built on 2026-11-05 and its file deleted too; GW-3 is recorded as done in the efficiency index. S-0200 (Workspace grant allowlist) was built on 2026-11-05 and its file deleted too; I1 is recorded as done in the security index, and its live checks are in [todo 5740](../todo/cross-cutting/5740-workspace-grant-scope-live-evidence.md).
+Worked out on 2026-11-03 against `main` at `a44641cbc`, from the 167 work files in the four folders. On 2026-11-04, 137 of them were combined into the 41 batch files listed under [Batch files](#batch-files), which keep each report as a numbered part, with repeated text removed. That leaves 71 files. The other 30 are built on their own, need a decision or measurement first, or are blocked. E1 is a set of baseline tasks inside other batch files, so it has no file of its own. E8 (Agent tab polling) was built on 2026-11-04 and its file deleted, so this plan no longer lists it; its result is in [1202 task 4](../todo/cross-cutting/1202-efficiency-review-follow-ups.md). E4 (Object store) was built on 2026-11-05 and its file deleted the same way; its outcome is the closing check in [the efficiency index](efficiency-logging-database/0000-index.md#closing-check-of-e4-object-store). E-0120 (Bearer terminal streams) was built on 2026-11-05 and its file deleted too; GW-3 is recorded as done in the efficiency index. E21, E-0140, E-0250, E-0520 and E-0692 were finished, checked back and deleted on 2026-11-05; their outcome is in the efficiency index's [closing check](efficiency-logging-database/0000-index.md#closing-check-of-e21-e-0140-e-0250-e-0520-and-e-0692). S-0200 (Workspace grant allowlist) was built on 2026-11-05 and its file deleted too; I1 is recorded as done in the security index, and its live checks are in [todo 5740](../todo/cross-cutting/5740-workspace-grant-scope-live-evidence.md).
 
 ## Rules
 
@@ -40,7 +40,6 @@ Worked out on 2026-11-03 against `main` at `a44641cbc`, from the 167 work files 
 | E15 | [efficiency-logging-database/0750-e15-health-and-diagnostics.md](efficiency-logging-database/0750-e15-health-and-diagnostics.md) | `0750`, `0820`, `0810`, `0880`, `0780` |
 | E16 | [efficiency-logging-database/0790-e16-log-controls.md](efficiency-logging-database/0790-e16-log-controls.md) | `0790`, `0890`, `0900` |
 | E20 | [efficiency-logging-database/0240-e20-acp-bridge.md](efficiency-logging-database/0240-e20-acp-bridge.md) | `0270`, `0260`, `0240` |
-| E21 | [efficiency-logging-database/0130-e21-pi-bridge.md](efficiency-logging-database/0130-e21-pi-bridge.md) | `0130`, `0355` |
 
 ## Lanes
 
@@ -67,12 +66,7 @@ These batches don't share a protected area. They only have to respect the confli
 - **S-0270 (iOS app review):** security `0270`
 - **S-0260 (Live checks on other platforms):** security `0260`
 - **E20 (ACP bridge):** efficiency-logging-database `0270`, `0260`, `0240`
-- **E21 (Pi bridge):** efficiency-logging-database `0130`, `0355`
-- **E-0140 (Codex queue bound):** efficiency-logging-database `0140`
-- **E-0250 (Codex running tool cards):** efficiency-logging-database `0250`
-- **E-0520 (Startup bundle):** efficiency-logging-database `0520`
 - **E-0650 (Terminal container subscription):** efficiency-logging-database `0650`
-- **E-0692 (Preview tunnel multiplexing):** efficiency-logging-database `0692`
 - **E-0694 (Attention follow polling):** efficiency-logging-database `0694`
 - **CI-0010 (Backend shard timeout):** ci-shard-validation `0010`
 
@@ -86,7 +80,6 @@ Don't run these pairs at the same time.
 | C6 (Errors and dead ends) | E12 (Renderer store) | `useNativeAgentSession.ts`, `AgentNativeTab.controller.tsx` |
 | E5 (Database upkeep) | E15 (Health and diagnostics) | `storage-backups.ts` |
 | E13 (Silent failures) | E20 (ACP bridge) | `commands-servers.ts`, `acp-context.ts` |
-| E13 (Silent failures) | E21 (Pi bridge) | `agent-session.ts`, `bridges/pi-bridge/src/http.ts` |
 
 ## Must finish first
 

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-const script = new URL("./agent-mail-store-size-bench.ts", import.meta.url).pathname;
+const script = new URL("../scripts/agent-mail-store-size-bench.ts", import.meta.url).pathname;
 
 async function run(args: string[]) {
   const child = Bun.spawn([process.execPath, script, ...args], {

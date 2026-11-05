@@ -9,6 +9,7 @@ import { SYSTEM_USAGE_STALE_AFTER_MS } from "./AgentInfoButton.panels";
 import { USAGE_READ_TIMEOUT_MS } from "@/hooks/useSystemUsage";
 import { READ_RETRY_MAX_MS, resetReadCoordinatorForTests } from "@/lib/read-coordinator";
 import {
+  flushMicrotasks,
   installFakeReadCoordinator,
   type FakeReadEnvironment,
 } from "@/lib/testing/read-coordinator";
@@ -675,9 +676,12 @@ describe("SystemUsageIndicator", () => {
 
     test("a read that never returns says loading, then fails, and a retry in flight keeps the message", async () => {
       let calls = 0;
+      let release!: (value: ReturnType<typeof processSnapshot>) => void;
       readProcesses = () => {
         calls += 1;
-        return new Promise(() => {});
+        return new Promise((resolve) => {
+          release = resolve;
+        });
       };
       render(<SystemUsageIndicator />);
       openPanel();
@@ -687,12 +691,16 @@ describe("SystemUsageIndicator", () => {
       await advance(1);
       expect(screen.getByText(FAILURE)).toBeTruthy();
 
-      // Polling continues; the hung retry does not flip back to loading.
-      const before = calls;
-      while (calls === before) await advance(1_000);
+      // Retries reuse the hung request and do not flip back to loading.
+      await advance(READ_RETRY_MAX_MS * 2);
+      expect(calls).toBe(1);
       expect(screen.getByText(FAILURE)).toBeTruthy();
       expect(screen.queryByText("Loading processes…")).toBeNull();
 
+      await act(async () => {
+        release(processSnapshot());
+        await flushMicrotasks();
+      });
       readProcesses = async () => processSnapshot();
       await advance(READ_RETRY_MAX_MS + USAGE_READ_TIMEOUT_MS);
       await waitFor(() => expect(screen.getByText("node")).toBeTruthy());

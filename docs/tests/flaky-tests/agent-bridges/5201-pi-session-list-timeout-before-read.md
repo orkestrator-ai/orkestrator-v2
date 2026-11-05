@@ -1,7 +1,7 @@
 # Pi session-list timeout before the mocked read
 
 - **ID:** 5201
-- **Status:** open
+- **Status:** resolved
 - **Observed:** 2026-11-05
 - **Test:** `the resumable session list > a timeout is reported, not an empty history, and stops the read`
 - **File:** `bridges/pi-bridge/src/session-list-cache.test.ts:165`
@@ -38,3 +38,15 @@ without changing Pi code. Its aggregate evidence is
 `/tmp/orkestrator-test-run.XQvHvE/c8-default-repaired.log.gz`.
 The full run still failed on the separate backend coordinator-mail assertion
 and native-agent registry index mismatch; it did not fail in Pi.
+
+## Resolution (2026-11-05)
+
+This is the same timeout-before-read defect recorded in
+[5183](5183-pi-session-list-timeout-before-read.md). The fix in `1d2eaf111`
+is present in the merged branch: `readResumableSessions` checks
+`signal.throwIfAborted()` before starting the SDK list, and fake timers drive
+both timeout orderings. The new case, `a timeout before the list starts never
+starts it`, covers a timeout during the file stamp. Case 5183 retains the
+negative test, five passing owner runs and four-worker Pi suite verification
+performed for that fix. The C8 observations above are retained as independent
+historical evidence; no new test run was needed for this documentation merge.

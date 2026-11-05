@@ -39,12 +39,16 @@ async function setup(): Promise<PublicApiHarness> {
   return harness;
 }
 
+function resultOf<T>(response: unknown): T {
+  return (response as { result: T }).result;
+}
+
 describe("diagnostics actions", () => {
   test("a plan is read back to exactly the bytes its manifest describes, without the token", async () => {
     const harness = await setup();
     const planned = await harness.call("diagnostics.plan", {});
     expect(planned.ok).toBe(true);
-    const plan = planned.result as DiagnosticsBundlePlan;
+    const plan = resultOf<DiagnosticsBundlePlan>(planned);
     expect(plan.manifest.notice).toContain("not a proof");
     expect(plan.manifest.entries.map((entry) => entry.path)).toContain(
       "logs/essential/essential.jsonl",
@@ -57,7 +61,7 @@ describe("diagnostics actions", () => {
     while (offset !== null) {
       const read = await harness.call("diagnostics.read", { planId: plan.planId, offset });
       expect(read.ok).toBe(true);
-      const chunk = read.result as DiagnosticsBundleChunk;
+      const chunk = resultOf<DiagnosticsBundleChunk>(read);
       pieces.push(Buffer.from(chunk.data, "base64"));
       offset = chunk.nextOffset;
     }
@@ -65,7 +69,7 @@ describe("diagnostics actions", () => {
     expect(createHash("sha256").update(archive).digest("hex")).toBe(plan.archive.sha256);
     expect(Buffer.from(Bun.gunzipSync(archive)).toString("latin1")).not.toContain(FIXTURE_TOKEN);
     // Reads leave no operation record and no file.
-    expect(planned.receipt).toBeUndefined();
+    expect((planned as { receipt?: unknown }).receipt).toBeUndefined();
     await expect(
       fs.readdir(path.join(harness.storage.getDataDir(), "diagnostics")),
     ).rejects.toThrow();
@@ -75,7 +79,7 @@ describe("diagnostics actions", () => {
     const harness = await setup();
     const missing = await harness.call("diagnostics.read", { planId: "nope" });
     expect(missing).toMatchObject({ ok: false, error: { code: "not-found" } });
-    const plan = (await harness.call("diagnostics.plan", {})).result as DiagnosticsBundlePlan;
+    const plan = resultOf<DiagnosticsBundlePlan>(await harness.call("diagnostics.plan", {}));
     const beyond = await harness.call("diagnostics.read", {
       planId: plan.planId,
       offset: plan.archive.bytes + 1,

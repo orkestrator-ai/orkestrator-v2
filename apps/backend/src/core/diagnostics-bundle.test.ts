@@ -151,8 +151,8 @@ async function untar(archive: Buffer): Promise<Map<string, Buffer>> {
   const done = new Promise<void>((resolve, reject) => {
     reader.on("entry", (header, stream, next) => {
       const chunks: Buffer[] = [];
-      stream.on("data", (chunk: Buffer) => {
-        chunks.push(chunk);
+      stream.on("data", (chunk: unknown) => {
+        chunks.push(chunk as Buffer);
       });
       stream.on("end", () => {
         files.set(header.name, Buffer.concat(chunks));

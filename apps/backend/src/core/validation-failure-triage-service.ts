@@ -175,7 +175,9 @@ export async function triageValidationFailures(
       commands,
       changedFiles: options.changedFiles,
       mergeBase,
-      ci: repository ? { repository, gh: local ? gitHubCli() : "gh" } : null,
+      ci: repository
+        ? { repository, gh: local ? gitHubCli(context.runtime.gitHubCli) : "gh" }
+        : null,
       budgetMs: CLASSIFIER_BUDGET_MS,
     });
     const env = local ? await gitHubCliEnv(context.storage).catch(() => process.env) : process.env;

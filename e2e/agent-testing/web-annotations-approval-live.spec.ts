@@ -24,7 +24,7 @@
  * Content-free facts per step land as `[annotation-disruption]` lines and
  * Playwright annotations.
  */
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page } from "./browser-test";
 import { spawn, spawnSync } from "node:child_process";
 import { openSync, promises as fs } from "node:fs";
 import path from "node:path";

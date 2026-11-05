@@ -1,5 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { CalendarClock, Loader2, Pause, Pencil, Play, Plus, RotateCw, Trash2 } from "lucide-react";
+import {
+  AlertTriangle,
+  CalendarClock,
+  Loader2,
+  Pause,
+  Pencil,
+  Play,
+  Plus,
+  RotateCw,
+  Trash2,
+} from "lucide-react";
 import { toast } from "sonner";
 import type { MailboxDescriptor } from "@orkestrator/protocol/agent-mail";
 import { AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
@@ -11,10 +21,12 @@ import {
   normalizeTimeZone,
   SCHEDULED_JOB_LIMITS,
   scheduleAccountSwitchGrant,
+  schedulerPausedMessage,
   type ScheduleAction,
   type ScheduleFire,
   type ScheduledJob,
   type ScheduledJobSummary,
+  type SchedulerStatus,
 } from "@orkestrator/protocol/scheduled-jobs";
 import {
   AlertDialog,
@@ -169,6 +181,8 @@ function actionLabel(action: ScheduleAction): string {
 
 export function SchedulesSettings() {
   const [schedules, setSchedules] = useState<ScheduledJobSummary[] | null>(null);
+  // Absent from a backend that predates it, which then shows no notice.
+  const [scheduler, setScheduler] = useState<SchedulerStatus | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<{ job?: ScheduledJob } | null>(null);
   const [deleting, setDeleting] = useState<ScheduledJobSummary | null>(null);
@@ -180,8 +194,9 @@ export function SchedulesSettings() {
   const reload = useCallback(
     () =>
       backend.listScheduledJobs().then(
-        ({ schedules: list }) => {
+        ({ schedules: list, scheduler: status }) => {
           setSchedules(list);
+          setScheduler(status);
           setError(null);
         },
         (cause: unknown) => setError(errorText(cause)),
@@ -253,6 +268,17 @@ export function SchedulesSettings() {
         <div className="flex justify-center py-10" role="status" aria-label="Loading schedules">
           <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
         </div>
+      ) : null}
+
+      {scheduler?.firing === false && schedules && schedules.length > 0 ? (
+        <p
+          className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-sm text-amber-200"
+          role="status"
+          data-testid="scheduler-paused"
+        >
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+          <span>{schedulerPausedMessage(scheduler.reason)}</span>
+        </p>
       ) : null}
 
       {schedules?.length === 0 ? (

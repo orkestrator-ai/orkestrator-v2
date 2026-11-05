@@ -267,7 +267,7 @@ export function registerDockerCommands(
       await syncRuntimeGitHubCredential(
         assigned ?? null,
         id,
-        await resolveContainerGitHubToken(config.global),
+        await resolveContainerGitHubToken(config.global, context.runtime.gitHubCli),
         context,
       );
     }
@@ -660,7 +660,7 @@ export function registerDockerCommands(
   register("propagate_github_token_to_containers", async (_args, context) => {
     const { storage, runtime } = context;
     const config = await storage.loadConfig();
-    const githubToken = await resolveContainerGitHubToken(config.global);
+    const githubToken = await resolveContainerGitHubToken(config.global, runtime.gitHubCli);
     const environments = await storage.loadEnvironments();
     const updated: string[] = [];
     const failed: [string, string][] = [];

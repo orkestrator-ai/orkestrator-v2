@@ -299,6 +299,7 @@ async function controlReviewValidationOnce(
     environment,
     context.runtime.environments.fence,
     context.storage,
+    context.runtime.gitHubCli,
   );
   if (action === "start")
     await ensureReviewPackageIsGitExcluded(

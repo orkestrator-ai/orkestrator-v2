@@ -45,7 +45,7 @@ Analysed 2026-11-03 against `main` at `a2bba9d8`.
 
 **Problem.** The coordinator's model differs from any other tab: read-only, delegating, a main and side agents, one platform per conversation, woken by mail. Nothing states this in one place.
 
-**Context.** The report's starter prompts exist (see [Current state](#current-state)), with different text from its examples. Its fourth line refers to Change agent, so wording depends on [0070](0070-c8-tab-strip.md#0070-add-a-visible-change-agent-action-and-mark-the-main-tab).
+**Context.** The report's starter prompts exist (see [Current state](#current-state)), with different text from its examples. Its fourth line refers to Change agent, which C8 built: a button on the assigned main tab and an item in its tab menu ([One main coordinator](../../architecture/coordinator.md#one-main-coordinator-and-side-agents)).
 
 **Investigation.** The nearest thing is the isolation badge's tooltip (`CoordinatorPanelNotices.tsx:60-80`), which covers only the read-only part. `unassignedStarterPrompts` is passed for the main only (`CoordinatorPanel.tsx:804-806`), so the empty state already has a slot for this.
 

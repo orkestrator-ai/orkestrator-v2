@@ -882,8 +882,10 @@ describe("StorageDatabase failure logging", () => {
   test("a scrub checkpoint that throws is logged without its message and never throws", async () => {
     const db = database(await dataDir());
     const logs = captureLogs();
-    const exec = spyOn(db.db, "exec").mockImplementation(() => {
-      throw failure();
+    const original = db.db.query.bind(db.db);
+    const exec = spyOn(db.db, "query").mockImplementation((sql) => {
+      if (sql.includes("wal_checkpoint")) throw failure();
+      return original(sql);
     });
     try {
       expect(() => db.scrubDeletedContent()).not.toThrow();
@@ -905,6 +907,56 @@ describe("StorageDatabase failure logging", () => {
       logs.restore();
     }
   });
+
+  test("vacuum faults are throttled separately from successful checkpoints", async () => {
+    const db = database(await dataDir());
+    const original = db.db.exec.bind(db.db);
+    const exec = spyOn(db.db, "exec").mockImplementation((sql) => {
+      if (sql.includes("incremental_vacuum")) throw failure();
+      return original(sql);
+    });
+    const logs = captureLogs();
+    try {
+      db.scrubDeletedContent();
+      db.scrubDeletedContent();
+      expect(logs.records()).toMatchObject([
+        { event: "scrub.vacuum-failed", fields: { error: { code: "SQLITE_IOERR" } } },
+      ]);
+      expect(logs.records()).toHaveLength(1);
+      expect(JSON.stringify(logs.records())).not.toContain(SENTINEL);
+      exec.mockRestore();
+      db.scrubDeletedContent();
+      expect(logs.records().at(-1)).toMatchObject({
+        event: "throttle.recovered",
+        fields: { site: "scrub.vacuum-failed", failures: 2 },
+      });
+    } finally {
+      exec.mockRestore();
+      logs.restore();
+    }
+  });
+
+  test.each(["SQLITE_BUSY", "SQLITE_LOCKED"])(
+    "vacuum %s stops promptly without a warning",
+    async (code) => {
+      const db = database(await dataDir());
+      const original = db.db.exec.bind(db.db);
+      const exec = spyOn(db.db, "exec").mockImplementation((sql) => {
+        if (sql.includes("incremental_vacuum")) throw Object.assign(new Error(SENTINEL), { code });
+        return original(sql);
+      });
+      const logs = captureLogs();
+      try {
+        expect(db.releaseFreePages()).toBe(-1);
+        db.scrubDeletedContent();
+        expect(db.db.query("PRAGMA busy_timeout").get()).toEqual({ timeout: 10000 });
+        expect(logs.records()).toEqual([]);
+      } finally {
+        exec.mockRestore();
+        logs.restore();
+      }
+    },
+  );
 
   test("a successful scrub with no fault writes nothing", async () => {
     const db = database(await dataDir());

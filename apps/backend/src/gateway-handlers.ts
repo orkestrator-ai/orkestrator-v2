@@ -1,4 +1,5 @@
 import { withRelayController } from "./core/public-api/index.js";
+import { isGlobalConfigEcho, isGlobalConfigWriteCommand } from "./core/nodes/index.js";
 import type { GatewayAuth } from "./gateway-auth.js";
 import type { GatewayContext } from "./gateway-context.js";
 import type { GatewayEvents } from "./gateway-events.js";
@@ -104,6 +105,19 @@ export class GatewayHandlers {
       return;
     }
     if (options.refuseCommand?.(command)) {
+      // A refused settings write that would change nothing is answered with
+      // the current settings: an older realm sends one when it saves a model
+      // favourite (`isGlobalConfigEcho`). Anything else stays refused.
+      if (isGlobalConfigWriteCommand(command)) {
+        const current: unknown = await Promise.resolve()
+          .then(() => this.ctx.backend.invoke("get_config", {}))
+          .catch(() => null);
+        if (current && isGlobalConfigEcho(command, args, current)) {
+          compatibilityPathUsage.record("workspace-grant.config-echo");
+          serializedJsonResponse(response, 200, JSON.stringify({ result: current }));
+          return;
+        }
+      }
       jsonResponse(response, 403, { error: "This credential cannot run that command." });
       return;
     }

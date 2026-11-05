@@ -1,7 +1,7 @@
 import { acknowledgeDockerReachabilityWarning } from "../docker-reachability-warning";
 import { ensureProjectExpanded, sidebarEnvironmentRow } from "./sidebar-project";
 import { dismissSidebarTooltip } from "./sidebar-tooltip";
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page } from "./browser-test";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";

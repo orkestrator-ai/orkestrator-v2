@@ -457,7 +457,9 @@ export interface ReviewFanoutHost {
   /** Throws if this process no longer owns the workflow. */
   assertFence(): Promise<void>;
   /**
-   * Verifies the evidence every reviewer admitted this pass will be sent.
+   * Verifies the evidence every reviewer admitted this pass will be sent: the
+   * immutable package in package mode, the live worktree against the pinned
+   * snapshot in snapshot mode.
    *
    * Called once per pass, before any reviewer that needs its original prompt
    * leaves `pending` or `prepared`. It replaces a verification per reviewer:
@@ -476,8 +478,10 @@ export interface ReviewFanoutHost {
     reviewer: ReviewerRecord,
   ): Promise<string>;
   /**
-   * Re-verifies the pinned worktree and returns the prompt projection of it.
-   * Owners choose whether drift is fatal or is recorded for prompt qualification.
+   * Returns the prompt projection of the pinned worktree, verified by this
+   * pass's admission check when the owner has one (Multi Review reuses that
+   * answer for every prompt the pass builds). Owners choose whether drift is
+   * fatal or is recorded for prompt qualification.
    */
   reviewSnapshot?(): Promise<ReviewWorktreeSnapshot>;
   /** True when the owner tolerated live-worktree drift after pinning the snapshot. */

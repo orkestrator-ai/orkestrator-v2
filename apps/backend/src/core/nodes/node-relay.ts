@@ -5,7 +5,9 @@ import { Readable } from "node:stream";
 
 import { isBackendId, type BackendId } from "@orkestrator/protocol/federation";
 
+import { compatibilityPathUsage } from "../compatibility-path-usage.js";
 import { isWorkspaceExcludedCommand } from "./node-routing.js";
+import { isGlobalConfigEcho, isGlobalConfigWriteCommand } from "./workspace-grant-scope.js";
 
 /**
  * The relay fallback: a client that cannot reach a leaf directly sends its
@@ -16,7 +18,8 @@ import { isWorkspaceExcludedCommand } from "./node-routing.js";
  *
  * Relayed paths are the client API only: hello, invoke, events, terminal
  * and the loopback preview proxies. Administrative commands are refused,
- * the same as for client grants.
+ * the same as for client grants (`isWorkspaceExcludedCommand`), terminals
+ * excepted.
  */
 
 export const NODE_RELAY_PREFIX = "/__orkestrator/nodes/";
@@ -110,6 +113,67 @@ async function readBody(request: IncomingMessage, limit: number): Promise<Buffer
   return Buffer.concat(chunks);
 }
 
+/** Bound on the leaf's settings read while checking a relayed settings write. */
+const MAX_CONFIG_ECHO_READ_BYTES = 4 * 1024 * 1024;
+
+async function readBoundedText(
+  body: ReadableStream<Uint8Array>,
+  limit: number,
+): Promise<string | null> {
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > limit) {
+        await reader.cancel().catch(() => undefined);
+        return null;
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+/**
+ * A relayed settings write that would change nothing on the leaf is answered
+ * with the leaf's current settings rather than refused, as the leaf's own
+ * gateway does for a client grant (`isGlobalConfigEcho`). Only `get_config`
+ * reaches the leaf; the write never does. Returns false to refuse.
+ */
+async function answerConfigEcho(
+  response: ServerResponse,
+  command: string,
+  args: unknown,
+  target: RelayTarget,
+  fetchImpl: typeof fetch,
+): Promise<boolean> {
+  let current: unknown;
+  try {
+    const answer = await fetchImpl(new URL("/__orkestrator/invoke", target.baseUrl), {
+      method: "POST",
+      headers: { ...target.headers, "content-type": "application/json" },
+      body: JSON.stringify({ command: "get_config", args: {} }),
+      redirect: "manual",
+    });
+    if (!answer.ok || !answer.body) return false;
+    const text = await readBoundedText(answer.body, MAX_CONFIG_ECHO_READ_BYTES);
+    if (text === null) return false;
+    current = (JSON.parse(text) as { result?: unknown }).result;
+  } catch {
+    return false;
+  }
+  if (!isGlobalConfigEcho(command, args, current)) return false;
+  compatibilityPathUsage.record("workspace-grant.config-echo");
+  json(response, 200, { result: current });
+  return true;
+}
+
 /** Relay one HTTP request. Returns false when the path is not a relay path. */
 export async function relayHttp(
   request: IncomingMessage,
@@ -135,13 +199,24 @@ export async function relayHttp(
     }
     if (parsed.path === "/__orkestrator/invoke") {
       let command: unknown;
+      let args: unknown;
       try {
-        command = (JSON.parse(body.toString("utf8")) as { command?: unknown }).command;
+        ({ command, args } = JSON.parse(body.toString("utf8")) as {
+          command?: unknown;
+          args?: unknown;
+        });
       } catch {
         json(response, 400, { error: "Expected a JSON command." });
         return true;
       }
       if (typeof command !== "string" || isWorkspaceExcludedCommand(command)) {
+        if (
+          typeof command === "string" &&
+          isGlobalConfigWriteCommand(command) &&
+          (await answerConfigEcho(response, command, args, target, fetchImpl))
+        ) {
+          return true;
+        }
         json(response, 403, { error: "That command cannot be relayed to another node." });
         return true;
       }

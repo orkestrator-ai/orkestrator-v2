@@ -1,3 +1,4 @@
+import { SchedulerStatusFixture } from "./SchedulerStatusFixture";
 import { FocusVisibilityFixture } from "./FocusVisibilityFixture";
 import { SidebarMotionFixture } from "../../apps/web/src/test/SidebarMotionFixture";
 import { HtmlPreviewFixture } from "./HtmlPreviewFixture";
@@ -1944,6 +1945,7 @@ function fixtureForPath() {
       </>
     );
   if (window.location.pathname === "/settings-machines") return <SettingsMachineFixture />;
+  if (window.location.pathname === "/scheduler-status") return <SchedulerStatusFixture />;
   if (window.location.pathname === "/global-settings") return <GlobalSettingsFixture />;
   if (window.location.pathname === "/github-cli-setup") return <GitHubCliSetupFixture />;
   if (window.location.pathname === "/expanded-viewers") {

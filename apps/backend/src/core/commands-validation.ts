@@ -108,8 +108,11 @@ export async function requireLinearApiKey(context: CommandContext): Promise<stri
   return auth.apiKey;
 }
 
-async function gitHubTokenFromConfig(globalConfig: AppConfig["global"]): Promise<string> {
-  const token = await resolveGitHubToken(globalConfig);
+async function gitHubTokenFromConfig(
+  context: CommandContext,
+  globalConfig: AppConfig["global"],
+): Promise<string> {
+  const token = await resolveGitHubToken(globalConfig, context.runtime.gitHubCli);
   if (!token) {
     throw new Error(
       gitHubCredentialSource(globalConfig) === "host-cli"
@@ -123,7 +126,7 @@ async function gitHubTokenFromConfig(globalConfig: AppConfig["global"]): Promise
 /** The GitHub credential selected in Settings, for commands not tied to a project. */
 export async function requireGitHubToken(context: CommandContext): Promise<string> {
   const config = await context.storage.loadConfig();
-  return gitHubTokenFromConfig(config.global);
+  return gitHubTokenFromConfig(context, config.global);
 }
 
 export async function requireGitHubProject(
@@ -135,7 +138,7 @@ export async function requireGitHubProject(
     context.storage.loadConfig(),
   ]);
   if (!project) throw new Error(`Project not found: ${projectId}`);
-  const token = await gitHubTokenFromConfig(config.global);
+  const token = await gitHubTokenFromConfig(context, config.global);
   return { token, repository: resolveGitHubRepository(project.gitUrl) };
 }
 

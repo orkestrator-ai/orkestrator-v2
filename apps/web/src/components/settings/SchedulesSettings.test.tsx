@@ -1,8 +1,23 @@
+import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  RegistryWriterLease,
+  REGISTRY_WRITER_LEASE_FILE,
+} from "../../../../backend/src/core/registry-writer-lease";
+import { StorageService } from "../../../../backend/src/core/storage";
+import { schedulerStatus } from "../../../../backend/src/core/commands-registry-scheduled-jobs";
 import { afterAll, afterEach, describe, expect, mock, test, spyOn, setSystemTime } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
-import type { ScheduledJob, ScheduledJobSummary } from "@orkestrator/protocol/scheduled-jobs";
+import {
+  schedulerPausedMessage,
+  type ScheduledJob,
+  type ScheduledJobSummary,
+  type SchedulerStatus,
+} from "@orkestrator/protocol/scheduled-jobs";
 import * as realBackend from "@/lib/backend";
+import { dispatchResourceChange, requestViewSafetyChecks } from "@/lib/resource-sync";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
 import { useProjectStore } from "@/stores";
 import type { Project } from "@/types";
@@ -73,7 +88,11 @@ const failed = job({
 });
 
 let schedules = [job(), failed];
-const listScheduledJobs = mock(async () => ({ schedules: schedules.map(summary) }));
+let scheduler: SchedulerStatus | undefined;
+const listScheduledJobs = mock(async () => ({
+  schedules: schedules.map(summary),
+  ...(scheduler ? { scheduler } : {}),
+}));
 const getScheduledJob = mock(async (id: string) => schedules.find((item) => item.id === id)!);
 const runScheduledJob = mock(async (id: string) => ({ job: getScheduledJob(id), fire: {} }));
 const pauseScheduledJob = mock(async (id: string) => schedules.find((item) => item.id === id)!);
@@ -114,6 +133,7 @@ const { SchedulesSettings } = await import("./SchedulesSettings");
 afterEach(() => {
   cleanup();
   schedules = [job(), failed];
+  scheduler = undefined;
   for (const fn of [
     listScheduledJobs,
     runScheduledJob,
@@ -290,6 +310,82 @@ describe("SchedulesSettings", () => {
     );
     expect(screen.getByTestId("schedule-account-switch-permission").textContent).toBe(
       "Claude and Codex switch permission lapsed",
+    );
+  });
+
+  test("says when this backend does not fire the schedules it lists", async () => {
+    scheduler = { firing: false, reason: "writer-lease-lost" };
+    render(<SchedulesSettings />);
+    const notice = await screen.findByTestId("scheduler-paused");
+    expect(notice.textContent).toBe(schedulerPausedMessage("writer-lease-lost"));
+    expect(notice.getAttribute("role")).toBe("status");
+  });
+
+  test("a lease lost while the view is open shows on its next read, and only with schedules", async () => {
+    scheduler = { firing: true };
+    render(<SchedulesSettings />);
+    await screen.findAllByTestId("schedule-row");
+    expectDomAbsent(screen.queryByTestId("scheduler-paused"), "scheduler notice while firing");
+
+    // The backend announces the loss; any reread picks the state up.
+    scheduler = { firing: false, reason: "another-backend" };
+    requestViewSafetyChecks("resource-gap");
+    const notice = await screen.findByTestId("scheduler-paused");
+    expect(notice.textContent).toBe(schedulerPausedMessage("another-backend"));
+
+    // Nobody with no schedules needs to hear that none fire.
+    schedules = [];
+    requestViewSafetyChecks("resource-gap");
+    await screen.findByText(/No schedules yet/);
+    expectDomAbsent(screen.queryByTestId("scheduler-paused"), "scheduler notice with no schedules");
+  });
+
+  test("lease loss reaches the mounted view through the storage resource feed and survives remount", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "schedule-view-lease-"));
+    const storage = new StorageService(directory);
+    await storage.init();
+    const lease = await RegistryWriterLease.acquire(directory, {
+      onLost: () => storage.announceSchedulerStatus(),
+    });
+    storage.setResourceChangeListener((change) => {
+      scheduler = schedulerStatus(lease);
+      dispatchResourceChange(change);
+    });
+    try {
+      scheduler = schedulerStatus(lease);
+      const view = render(<SchedulesSettings />);
+      await screen.findAllByTestId("schedule-row");
+      expectDomAbsent(screen.queryByTestId("scheduler-paused"), "held writer");
+      await writeFile(
+        join(directory, REGISTRY_WRITER_LEASE_FILE),
+        JSON.stringify({
+          token: "replacement",
+          pid: 1,
+          acquiredAt: new Date().toISOString(),
+        }),
+      );
+      expect(lease.isHeld()).toBe(false);
+      expect((await screen.findByTestId("scheduler-paused")).textContent).toBe(
+        schedulerPausedMessage("writer-lease-lost"),
+      );
+      view.unmount();
+      render(<SchedulesSettings />);
+      expect((await screen.findByTestId("scheduler-paused")).textContent).toBe(
+        schedulerPausedMessage("writer-lease-lost"),
+      );
+    } finally {
+      await lease.release();
+      storage.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("a backend that predates the field shows no notice", async () => {
+    render(<SchedulesSettings />);
+    await screen.findAllByTestId("schedule-row");
+    expectDomAbsent(
+      screen.queryByTestId("scheduler-paused"),
+      "scheduler notice from an old backend",
     );
   });
 

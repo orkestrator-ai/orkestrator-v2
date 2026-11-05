@@ -1,3 +1,4 @@
+import { promptQueueKeyMatchesEnvironment } from "./storage-shared-records.js";
 import { restoreLegacyPromptQueueClaims } from "./storage-record-upgrades.js";
 import type { PersistedPromptQueue } from "./models.js";
 import type { StorageContext } from "./storage-context.js";
@@ -183,7 +184,7 @@ export class PromptQueueStore {
   }
 
   /**
-   * Every readable queue, for what walks the store. No mutation needs this: it
+   * Every readable queue, for listings. Single-queue mutations do not use this: it
    * decodes every queue, attachments included.
    */
   async loadPromptQueues(): Promise<Record<string, PersistedPromptQueue>> {
@@ -205,21 +206,28 @@ export class PromptQueueStore {
    * is never rewritten and each removal journals its own archive cleanup. A
    * crash part-way leaves the rest for a retry, which the caller's environment
    * record still allows. A row that names no environment goes too, since it
-   * cannot be shown to belong to a live one; a row naming another environment
-   * stays even when this build cannot read it. Returns the removed queues' keys.
+   * cannot be shown to belong to a live one by its value or key. A row naming
+   * another environment stays even when this build cannot read it. Returns the removed queues' keys.
    */
   async deletePromptQueuesOwnedBy(environmentId: string): Promise<string[]> {
     const removedKeys: string[] = [];
-    for (const [queueKey, stored] of Object.entries(await this.readStoredPromptQueues())) {
-      const owner = isRecord(stored) ? stored.environmentId : undefined;
-      if (isNonBlankString(owner) && owner !== environmentId) continue;
-      this.context.updateSensitiveStoreRow(
-        this.files.promptQueuesFile(),
-        queueKey,
-        () => ({ result: undefined, delete: true }),
-        { unreadableRow: "replace" },
-      );
-      if (decodePromptQueueRow(queueKey, stored)) removedKeys.push(queueKey);
+    try {
+      for (const [queueKey, stored] of Object.entries(await this.readStoredPromptQueues())) {
+        const owner = isRecord(stored) ? stored.environmentId : undefined;
+        if (isNonBlankString(owner) && owner !== environmentId) continue;
+        if (!isNonBlankString(owner) && !promptQueueKeyMatchesEnvironment(queueKey, environmentId))
+          continue;
+        this.context.updateSensitiveStoreRow(
+          this.files.promptQueuesFile(),
+          queueKey,
+          () => ({ result: undefined, delete: true }),
+          { unreadableRow: "replace" },
+        );
+        if (decodePromptQueueRow(queueKey, stored)) removedKeys.push(queueKey);
+      }
+    } finally {
+      // Earlier row commits remain visible even if a later deletion fails.
+      if (removedKeys.length > 0) this.context.changes.announce("prompt-queue", environmentId);
     }
     return removedKeys;
   }

@@ -193,9 +193,9 @@ describe("StorageService store writers", () => {
       }
     });
 
-    test("no mutation decodes the whole store: only the listings load every queue", () => {
+    test("whole-store scans are limited to listings and environment deletion", () => {
       const callers = readStorageSources().flatMap(({ file, source }) =>
-        [...source.matchAll(/\bloadPromptQueues\(\)/g)].map((match) => {
+        [...source.matchAll(/\b(?:loadPromptQueues|readStoredPromptQueues)\(\)/g)].map((match) => {
           const line = source.slice(0, match.index).split("\n").length;
           return `${path.basename(file)}: ${source.split("\n")[line - 1]!.trim()}`;
         }),
@@ -203,6 +203,9 @@ describe("StorageService store writers", () => {
       expect(callers.sort()).toEqual(
         [
           "storage-prompt-queue-store.ts: async loadPromptQueues(): Promise<Record<string, PersistedPromptQueue>> {",
+          "storage-prompt-queue-store.ts: const stored = await this.readStoredPromptQueues();",
+          "storage-prompt-queue-store.ts: for (const [queueKey, stored] of Object.entries(await this.readStoredPromptQueues())) {",
+          "storage-prompt-queue-store.ts: private async readStoredPromptQueues(): Promise<Record<string, unknown>> {",
           "storage-prompts.ts: return Object.values(await this.repos.promptQueues.loadPromptQueues());",
           "storage-prompts.ts: return Object.values(await this.repos.promptQueues.loadPromptQueues()).filter(",
         ].sort(),

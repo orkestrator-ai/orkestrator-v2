@@ -445,6 +445,26 @@ describe("deleting an environment's prompt queues", () => {
     expect(readStoredValue(dataDir, QUEUES)).toEqual({ [SIBLING]: future });
   });
 
+  test("keeps damaged tmux rows whose keys name another environment", async () => {
+    const ours = "claude-tmux\0env:e1:tab:tab-1";
+    const theirs = "claude-tmux\0env:e2:tab:tab-1";
+    const invalid = "claude-tmux\0env:e2:tab:tab-2";
+    const { storage } = await seeded({
+      [ours]: record(ours, "e1", []),
+      [theirs]: record(theirs, "e2", []),
+      [invalid]: { shape: "unknown" },
+    });
+    setRow(storage, ours, "{ not json");
+    setRow(storage, theirs, "{ not json");
+    await storage.deletePromptQueuesByEnvironment("e1");
+    const rows = storageDatabase(storage).readStoreSerialized("prompt-queues");
+    expect(rows?.mode).toBe("rows");
+    if (rows?.mode !== "rows") throw new Error("expected rows");
+    const retained = Array.from(rows.rows);
+    expect(retained.map((row) => row.key).sort()).toEqual([theirs, invalid].sort());
+    expect(retained.find((row) => row.key === theirs)?.value).toBe("{ not json");
+  });
+
   test("an unparsable row elsewhere does not hide the environment's queues", async () => {
     const { storage } = await seeded({
       [KEY]: record(KEY, "e1", [{ id: "m1" }]),
@@ -463,6 +483,8 @@ describe("deleting an environment's prompt queues", () => {
     });
     const { context } = storageInternals(storage);
     const real = context.updateSensitiveStoreRow.bind(context);
+    const events: Array<{ resource: string }> = [];
+    storage.setResourceChangeListener((change) => events.push(change));
     let calls = 0;
     const update = spyOn(context, "updateSensitiveStoreRow").mockImplementation(((
       ...args: Parameters<typeof real>
@@ -472,8 +494,10 @@ describe("deleting an environment's prompt queues", () => {
     }) as never);
     await expect(storage.deletePromptQueuesByEnvironment("e1")).rejects.toThrow("disk full");
     update.mockRestore();
+    expect(events.filter((event) => event.resource === "prompt-queue")).toHaveLength(1);
     expect(await storage.listPromptQueues("e1")).toHaveLength(1);
     expect(await storage.deletePromptQueuesByEnvironment("e1")).toHaveLength(1);
+    expect(events.filter((event) => event.resource === "prompt-queue")).toHaveLength(2);
     expect(await storage.listPromptQueues("e1")).toEqual([]);
     expect(await storage.getPromptQueue(SIBLING)).toEqual(sibling());
   });
@@ -522,6 +546,36 @@ describe("the retired JSON archive of prompt queues", () => {
       expect(copy).toContain(SIBLING_TEXT);
     }
   });
+
+  for (const operation of ["replace", "delete"] as const) {
+    test(`an unreadable row journals archive cleanup on ${operation}`, async () => {
+      const { storage, copies } = await migrated({
+        [KEY]: record(KEY, "e1", [{ id: "m1", text: "torn-archived-text" }]),
+        [SIBLING]: sibling(),
+      });
+      setRow(storage, KEY, "{ not json");
+      const journal = spyOn(storageDatabase(storage), "writeStoreInTransaction");
+      try {
+        if (operation === "replace") {
+          await storage.enqueuePromptQueueMessage(KEY, "e1", { id: "m2" });
+        } else {
+          await storage.deletePromptQueuesByEnvironment("e1");
+        }
+        const cleanups = journal.mock.calls.filter(([store]) => store !== "prompt-queues");
+        expect(JSON.stringify(cleanups)).toContain(
+          operation === "replace" ? "prune-row" : "delete-row",
+        );
+        expect(JSON.stringify(cleanups)).not.toContain(SIBLING_TEXT);
+        for (const copy of await copies()) {
+          expect(copy).not.toContain("torn-archived-text");
+          expect(copy).toContain(SIBLING_TEXT);
+        }
+        expect(await storage.getPromptQueue(SIBLING)).toEqual(sibling());
+      } finally {
+        journal.mockRestore();
+      }
+    });
+  }
 
   test("deleting an environment scrubs its archived queues and keeps others'", async () => {
     const { storage, copies } = await migrated({

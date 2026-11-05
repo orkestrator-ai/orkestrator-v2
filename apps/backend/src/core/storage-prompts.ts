@@ -889,7 +889,6 @@ export class PromptsRepository {
     }
     return this.repos.promptQueues.enqueuePromptQueueMutation(async () => {
       const removedKeys = await this.repos.promptQueues.deletePromptQueuesOwnedBy(environmentId);
-      if (removedKeys.length > 0) this.context.changes.announce("prompt-queue", environmentId);
 
       // Queued prompts carry user-authored text and pasted attachments, and
       // rotating the primary file leaves them readable in its backups. Always

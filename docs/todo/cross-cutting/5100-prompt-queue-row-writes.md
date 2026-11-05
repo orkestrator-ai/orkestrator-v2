@@ -28,7 +28,7 @@ Analysed 2026-11-04 against `main` at `e198fd4a7`; re-checked 2026-11-05 against
 
 ## Current state
 
-Every writer of `prompt-queues` is an `updateSensitiveStoreRow` under the queue lease, through `PromptQueueStore.updatePromptQueue` or, for deletion, `deletePromptQueuesOwnedBy`. A mutation decodes one queue. Only `listPromptQueues` and `listAllPromptQueues` still decode every queue; those scans are [6020](6020-prompt-queue-scans-decode-every-queue.md). The store's format is unchanged, so older and newer backends keep sharing it under the same lease.
+Every writer of `prompt-queues` is an `updateSensitiveStoreRow` under the queue lease, through `PromptQueueStore.updatePromptQueue` or, for deletion, `deletePromptQueuesOwnedBy`. A single-queue mutation decodes one queue. `listPromptQueues`, `listAllPromptQueues` and environment deletion through `deletePromptQueuesOwnedBy` still decode every queue; those scans are [6020](6020-prompt-queue-scans-decode-every-queue.md). The store's format is unchanged, so older and newer backends keep sharing it under the same lease.
 
 ## Constraints and rationale
 
@@ -37,7 +37,7 @@ A queue row's claim recovery and validation must stay what `loadPromptQueues` ap
 ## Related
 
 - [1202](1202-efficiency-review-follow-ups.md) task 2
-- [6020](6020-prompt-queue-scans-decode-every-queue.md): the listing scans
+- [6020](6020-prompt-queue-scans-decode-every-queue.md): the listing and environment-deletion scans
 - [Storage: Concurrency](../../architecture/storage.md#concurrency)
 
 ## Assumptions and decisions
@@ -60,7 +60,7 @@ A whole-value save used to replace a store with an unparsable row, losing every 
 
 - `loadPromptQueues` parses row by row, and a bad row costs only itself. An unreadable document still reads as empty.
 - `updateStoreRow` gained `unreadableRow: "replace"`, used only by this store, so a queue's next write replaces its own bad row. The default still refuses.
-- An invalid row naming another environment survives, which keeps a newer build's record intact. Environment deletion removes rows naming that environment or none. Rows that name none used to go on any write; now they go on the next environment deletion.
+- An invalid row naming another environment survives, which keeps a newer build's record intact. Environment deletion removes rows naming that environment or none, except unattributed tmux rows whose keys do not match that environment. Rows with no owner in either their value or key used to go on any write; now they go on the next environment deletion.
 
 Compose drafts and native sessions refuse an unparsable row of their own key instead. Queues do not, because replacing is what a whole-value save did here, and a refusal would block that tab's queue until someone repaired the row.
 
@@ -104,3 +104,7 @@ The costs that remain:
 - **With an archive, a removal still parses the archived copies** while pruning them, so the archive's size still counts until the archive expires. An append removes nothing and skips this.
 - **Environment deletion still decodes the whole store**, since it has to find the owner's rows. It is rare, and it decodes the same bytes as before. Its wall time moved both ways between runs under this load: with 2000 queues and an archive, 120 to 247 ms in one run and 740 to 381 ms in the table's.
 
+
+### Review repairs (task 1)
+
+Environment deletion remains a full-store scan; the writer guard now enumerates both listing and raw-row scan callers. Damaged tmux rows are retained when their keys do not match the environment being deleted, rather than deleting another environment's recoverable data. Deletion announces committed readable removals in a finally block, so a later failure still notifies listeners once. Regression coverage includes partial-failure notifications and unreadable rows with retired archives for both replacement and deletion.

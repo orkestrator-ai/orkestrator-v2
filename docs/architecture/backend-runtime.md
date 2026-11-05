@@ -165,6 +165,30 @@ Three limits apply:
   comes from reading XNU and has not been measured on a Mac. Do not use
   background QoS (`taskpolicy -b`), which throttles even on an idle machine.
 
+## One-shot commands
+
+A command that runs to completion goes through `runCommand` or
+`runCommandBuffer`. They live in `packages/protocol/src/node/command-capture.ts`,
+so the bridges share them, and the backend re-exports them from `shell.ts`. Its
+copy of `command-capture.ts` installs the hook that charges each one to
+recurring-work metrics.
+
+Output goes to unlinked files rather than pipes, because Bun can lose the end of
+a stream or a child's exit
+([case 1537](../tests/flaky-tests/environments-and-containers/1537-diff-base-override-scan-timeout.md)).
+Nothing depends on a pipe's `close` event, and a deadline settles the call as a
+failure whatever the runtime reports, so a lost event can never read as success
+with output missing. Under Bun the child comes from `Bun.spawn`; where `Bun` does
+not exist (Electron's main process runs the SSH adapter) it comes from
+`node:child_process`.
+
+Use `spawnCommand` or `spawnParentBoundCommand` only for a child read while it
+runs: a log follower, a server, a stream. A caller that hands over one payload
+and waits for one answer is not a follower, and `runCommand`'s `stdin` covers it.
+Two sites keep their own capture and a deadline of their own: the review worktree
+fingerprint script has to stay self-contained for the container, and the database
+copy holds stdin open as its supervisor's liveness pipe.
+
 ## Process-wide on purpose
 
 Some module state describes the host or the Docker daemon, not one backend,
@@ -195,7 +219,7 @@ declaration:
 | `environment-cleanup-reconciler.ts` | `reportedStrayWithContent`, `scheduled` | Keyed by the resolved data directory. |
 | `bug-report-service.ts` | `filingFlights` | Keyed by data directory and report id. |
 | `git-fsmonitor.ts` | `fsmonitorMigrations` | Keyed by worktree path: the migration edits that worktree's config file on the host. |
-| `command-capture.ts` | `commandInvocations`, `commandObservers` | Count this process's own subprocesses for benchmarks; `runCommand` has no backend in reach. |
+| `packages/protocol/src/node/command-capture.ts` | `commandInvocations`, `commandObservers`, `commandCaptureMetrics` | Count this process's own subprocesses for benchmarks and recurring-work metrics; `runCommand` has no backend in reach. |
 | `transcript-artifacts/preview-supervisor.ts` | `backendStartIdentity` | The start identity of this process, which names the preview scratch it owns. |
 | `transcript-artifacts/dependency-manifest.ts` | `cache` | Verified bytes of a pinned bundle file, keyed by bundle and directory. |
 | `control-mcp-direct-tools.ts` | `compiled` | Schemas compiled from constants. |

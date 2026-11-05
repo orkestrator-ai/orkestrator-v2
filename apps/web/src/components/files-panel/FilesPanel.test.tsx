@@ -222,7 +222,7 @@ for (const fails of [false, true]) {
       remainingTree = [];
       fireEvent.click(screen.getByRole("button", { name: /^Delete folder$/ }));
     }
-    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("alertdialog") === null).toBe(true));
     expect(useFilesPanelStore.getState().expandedFolders).not.toContain("docs");
     expect(useFilesPanelStore.getState().fileTree).toEqual([]);
     expect(deleteLocalFile).toHaveBeenCalledTimes(fails ? 2 : 1);

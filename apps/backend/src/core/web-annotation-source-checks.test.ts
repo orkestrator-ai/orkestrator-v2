@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
+import { loseBunExitEvents } from "@orkestrator/protocol/testing/lost-exit";
+import { runCommand } from "./command-capture.js";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -160,24 +162,47 @@ describe("CONTAINER_PATH_CHECKER", () => {
     // Stand in for `docker exec -i <id> node -e SCRIPT -- /workspace <budget>`
     // by running the same script locally against this test's workspace.
     const calls: string[][] = [];
-    const fakeSpawn = ((command: string, args: string[]) => {
+    const fakeRun: typeof runCommand = (command, args = [], options) => {
       calls.push([command, ...args]);
       const script = args[args.indexOf("-e") + 1]!;
       const budget = args.at(-1)!;
-      return spawn("node", ["-e", script, "--", workspace, budget], { stdio: "pipe" });
-    }) as Parameters<typeof runContainerPathCheck>[0];
+      return runCommand("node", ["-e", script, "--", workspace, budget], options);
+    };
     await expect(
-      runContainerPathCheck(fakeSpawn, "c1", ["src/Save.tsx", "src/Missing.tsx"]),
+      runContainerPathCheck(fakeRun, "c1", ["src/Save.tsx", "src/Missing.tsx"]),
     ).resolves.toEqual(["exists", "missing"]);
     expect(calls[0]!.slice(0, 5)).toEqual(["docker", "exec", "-i", "c1", "node"]);
     expect(calls[0]!.slice(-2)).toEqual(["/workspace", "2000"]);
 
-    const hanging = (() =>
-      spawn("node", ["-e", "setTimeout(() => {}, 10_000)"], { stdio: "pipe" })) as Parameters<
-      typeof runContainerPathCheck
-    >[0];
+    const hanging: typeof runCommand = (_command, _args, options) =>
+      runCommand("node", ["-e", "setTimeout(() => {}, 10_000)"], options);
     await expect(
       runContainerPathCheck(hanging, "c1", ["src/Save.tsx"], { timeoutMs: 200 }),
     ).rejects.toThrow("timed out");
+  });
+
+  test("runContainerPathCheck treats a failed or unreadable check as a failure", async () => {
+    const running = (script: string): typeof runCommand => {
+      return (_command, _args, options) => runCommand("sh", ["-c", script], options);
+    };
+    await expect(
+      runContainerPathCheck(running("printf '[]'; exit 4"), "c1", ["a"]),
+    ).rejects.toThrow("exited with 4");
+    await expect(
+      runContainerPathCheck(running("printf 'not json'"), "c1", ["a"]),
+    ).rejects.toThrow();
+  });
+
+  test("a lost completion event fails the check at its deadline", async () => {
+    const restore = loseBunExitEvents();
+    try {
+      const answered: typeof runCommand = (_command, _args, options) =>
+        runCommand("sh", ["-c", `printf '["exists"]'`], options);
+      await expect(
+        runContainerPathCheck(answered, "c1", ["a"], { timeoutMs: 200 }),
+      ).rejects.toThrow("timed out");
+    } finally {
+      restore();
+    }
   });
 });

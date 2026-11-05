@@ -1010,6 +1010,7 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
           <SystemUsagePanel
             usage={systemUsage.sample}
             stale={systemUsage.stale}
+            failed={systemUsage.failed}
             sampledAt={systemUsage.sampledAt}
           />
           {activeSession ? (

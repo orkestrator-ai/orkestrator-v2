@@ -90,7 +90,7 @@ describe("PipelineIntegrateButton", () => {
       autoMerge: true,
       autoMergeCleanup: false,
     });
-    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(screen.queryByRole("alertdialog") === null).toBe(true);
     expect(integrateButton().textContent).toBe("AIntegrating");
   });
 
@@ -120,7 +120,7 @@ describe("PipelineIntegrateButton", () => {
     await act(async () => {
       fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
     });
-    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(screen.queryByRole("alertdialog") === null).toBe(true);
     expect(invokeMock).not.toHaveBeenCalled();
   });
 
@@ -162,7 +162,9 @@ describe("PipelineIntegrateButton", () => {
     render(<PipelineIntegrateButton environmentId="env-1" />);
     const dialog = await openConfirmation();
     expect(within(dialog).getByRole("button", { name: "Auto-merge" })).toBeTruthy();
-    expect(within(dialog).queryByRole("button", { name: "Auto-merge & Cleanup" })).toBeNull();
+    expect(within(dialog).queryByRole("button", { name: "Auto-merge & Cleanup" }) === null).toBe(
+      true,
+    );
   });
 });
 
@@ -188,7 +190,7 @@ describe("Key information panel", () => {
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Key information" }));
     });
-    expect(screen.queryByRole("button", { name: "Integrate" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Integrate" }) === null).toBe(true);
   });
 });
 

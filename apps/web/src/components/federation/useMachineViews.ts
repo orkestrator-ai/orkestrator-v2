@@ -107,6 +107,7 @@ function boundEnvironments(
       ...(environment.environmentType ? { environmentType: environment.environmentType } : {}),
       deleting:
         environment.lifecycleOperation === "deleting" || Boolean(environment.deletionRequestedAt),
+      ...(environment.cleanupAfterMergeError ? { deletionRetryable: true as const } : {}),
       isProjectHome: environment.projectHome === true,
     });
     byProject.set(environment.projectId, list);

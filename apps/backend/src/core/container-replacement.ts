@@ -121,6 +121,8 @@ export const REPLACEMENT_PHASES = [
 
 /** Largest amount of work one copy step may take. */
 const COPY_TIMEOUT_MS = 60 * 60_000;
+/** How long killed `docker` clients get to report closing before the step fails. */
+const PIPE_SETTLE_GRACE_MS = 5_000;
 /** Capacity headroom on top of the estimated copy size. */
 const CAPACITY_HEADROOM_BYTES = 512 * 1024 * 1024;
 
@@ -255,8 +257,11 @@ function helperArguments(
 }
 
 /**
- * Streams `docker cp <container>:<path> -` into a helper's stdin. Bounded by a
- * deadline. Only the daemon's own "could not find the file" is an absent path
+ * Streams `docker cp <container>:<path> -` into a helper's stdin. This stays on
+ * live pipes, unlike one-shot captures, because the stream is a whole workspace
+ * and has to flow between the two children while they run. It is bounded by a
+ * deadline that settles the step as failed whether or not either child reports
+ * closing, so a lost completion event cannot hold a rebuild. Only the daemon's own "could not find the file" is an absent path
  * (nothing to preserve): a CLI that reached no daemon (its socket gone) also
  * says "no such file or directory", and that step copied nothing and must
  * fail, or a rebuild during a daemon outage would commit an empty candidate.
@@ -267,6 +272,7 @@ export async function pipeContainerPath(
   containerId: string,
   sourcePath: string,
   consumerArgs: string[],
+  options: { timeoutMs?: number; settleGraceMs?: number } = {},
 ): Promise<
   | { absent: true }
   | { absent: false; output: string; producerFailed: boolean; daemonUnavailable: boolean }
@@ -279,10 +285,16 @@ export async function pipeContainerPath(
     let output = "";
     let producerCode: number | null = null;
     let consumerCode: number | null = null;
+    let settleTimer: ReturnType<typeof setTimeout> | undefined;
     const timer = setTimeout(() => {
       producer.kill("SIGKILL");
       consumer.kill("SIGKILL");
-    }, COPY_TIMEOUT_MS);
+      settleTimer = setTimeout(
+        () =>
+          resolve({ absent: false, output: "", producerFailed: true, daemonUnavailable: false }),
+        options.settleGraceMs ?? PIPE_SETTLE_GRACE_MS,
+      );
+    }, options.timeoutMs ?? COPY_TIMEOUT_MS);
     producer.stdout.pipe(consumer.stdin);
     // Once nothing reads the stream (the helper died, or its stdin broke),
     // `pipe` leaves the producer's stdout paused with data unread. Discard the
@@ -305,6 +317,7 @@ export async function pipeContainerPath(
     const finish = () => {
       if (producerCode === null || consumerCode === null) return;
       clearTimeout(timer);
+      clearTimeout(settleTimer);
       if (producerCode !== 0 && isDockerPathNotFound(producerErr)) {
         resolve({ absent: true });
         return;

@@ -80,7 +80,7 @@ version of its deleted report, which the deletion commit's diff shows in full:
 `git show "$(git log -1 --format=%H --grep='close coordinator batch C6')"`.
 What it left is in to-dos
 [4880](../../todo/coordinator-and-multi-review/4880-c6-live-checks.md) and
-[4881](../../todo/coordinator-and-multi-review/4881-unavailable-provider-transcript.md).
+[6560](../../todo/coordinator-and-multi-review/6560-unavailable-platform-live-checks.md).
 
 Batch C10 (Explanations) is closed. It was built from `main` at `a0a6d6206`. Its
 task-by-task outcome table ends the last version of its deleted report, which

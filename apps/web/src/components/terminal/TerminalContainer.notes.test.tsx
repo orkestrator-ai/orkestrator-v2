@@ -93,7 +93,9 @@ test("Notes activation creates and renders a real pane tab, and reopening reuses
   });
   expect(store.getActivePane("env-1")?.activeTabId).toBe(opened.id);
   act(() => store.setActiveTab("default", "build", "env-1"));
-  fireEvent.doubleClick(await screen.findByRole("tab", { name: /^Notes/ }));
+  // The opened tab is itself a "Notes" tab now, so ask the pipeline for its node.
+  const pipelineGraph = await screen.findByRole("tablist", { name: "Build pipeline" });
+  fireEvent.doubleClick(within(pipelineGraph).getByRole("tab", { name: /^Notes/ }));
   await waitFor(() =>
     expect(usePaneLayoutStore.getState().getActivePane("env-1")?.activeTabId).toBe(opened.id),
   );

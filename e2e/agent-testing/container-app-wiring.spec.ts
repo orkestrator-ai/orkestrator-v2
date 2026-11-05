@@ -375,7 +375,7 @@ test("Docker fixture container validation output reads real command output in th
         expectedRevision: 0,
       });
       await selectEnvironment(page, containerName);
-      await expect(page.getByRole("button", { name: /^Terminal \d+/ }).first()).toBeVisible({
+      await expect(page.getByRole("tab", { name: /^Terminal \d+/ }).first()).toBeVisible({
         timeout: 30_000,
       });
       // The renderer persists the seeded layout without moving the selection.

@@ -4,7 +4,7 @@ From efficiency batch E3 (Retention and deletion), parts `0730` and `0540`: thei
 
 ## Task analysis
 
-Analysed 2026-11-05 against `main` at `54911a112`.
+Analysed 2026-11-05 against `main` at `0e8958f57`.
 
 ### Tasks
 
@@ -106,7 +106,7 @@ Analysed 2026-11-05 against `main` at `54911a112`.
 
 ## Related
 
-- Batch file E3: `docs/reports/efficiency-logging-database/0540-e3-retention-and-deletion.md` at commit REPORTCOMMIT (`git show REPORTCOMMIT:docs/reports/efficiency-logging-database/0540-e3-retention-and-deletion.md`); its outcome table is at the end.
+- Batch file E3: `docs/reports/efficiency-logging-database/0540-e3-retention-and-deletion.md` at commit a95c0effb (`git show a95c0effb:docs/reports/efficiency-logging-database/0540-e3-retention-and-deletion.md`); its outcome table is at the end.
 - [Change tracking](../../architecture/change-tracking.md#age-based-retention)
 - [5361](5361-retention-pass-on-a-large-real-store.md), the object store side of the pass
 - [5820](5820-removed-project-kanban-notes-plans.md), the rest of the same batch

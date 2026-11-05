@@ -6,7 +6,7 @@ The batch file was deleted when E3 was built. It is in Git history at the commit
 
 ## Task analysis
 
-Analysed 2026-11-05 against `main` at `54911a112`.
+Analysed 2026-11-05 against `main` at `0e8958f57`.
 
 ### Tasks
 
@@ -67,6 +67,6 @@ Analysed 2026-11-05 against `main` at `54911a112`.
 
 ## Related
 
-- Batch file E3: `docs/reports/efficiency-logging-database/0540-e3-retention-and-deletion.md` at commit REPORTCOMMIT (`git show REPORTCOMMIT:docs/reports/efficiency-logging-database/0540-e3-retention-and-deletion.md`); its outcome table is at the end.
+- Batch file E3: `docs/reports/efficiency-logging-database/0540-e3-retention-and-deletion.md` at commit a95c0effb (`git show a95c0effb:docs/reports/efficiency-logging-database/0540-e3-retention-and-deletion.md`); its outcome table is at the end.
 - [Logging and database report, D4](../../reports/2026-10-29-logging-and-database-efficiency.md#d4-the-rest-of-the-ledger-never-shrinks-medium-growing)
 - [Change tracking](../../architecture/change-tracking.md#deleting-an-environment), which covers the ledger half of D4

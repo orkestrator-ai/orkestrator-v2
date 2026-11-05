@@ -2,6 +2,7 @@ import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { groupHasLiveMember } from "./shell-process-state.js";
 import { execWithOutput, execWithRawOutput } from "./tmux-shared.js";
 
 const directories: string[] = [];
@@ -125,6 +126,38 @@ describe("execWithRawOutput", () => {
       { timeoutMs: 100 },
     );
     expect(raw).toEqual({ status: -1, stdout: Buffer.from("early"), stderr: "Command timed out" });
+  });
+
+  test("a redirected helper delays completion until the deadline and is terminated", async () => {
+    const directory = await fs.mkdtemp(path.join(tmpdir(), "ork-tmux-redirected-"));
+    directories.push(directory);
+    const timeoutMs = 1000;
+    const started = Date.now();
+    const raw = await execWithRawOutput(
+      "sh",
+      [
+        "-c",
+        // The leader exits only after the helper has ignored TERM and redirected
+        // both streams. It therefore leaves no inherited output pipe to wait on.
+        // sleep is finite so even a broken cleanup cannot leave a permanent helper.
+        `printf '%s' "$$" > "$1/group"
+sh -c 'trap "" TERM; printf ready > "$1/ready"; exec sleep 30' sh "$1" >/dev/null 2>&1 &
+while [ ! -f "$1/ready" ]; do sleep 0.01; done
+printf early`,
+        "sh",
+        directory,
+      ],
+      { timeoutMs },
+    );
+
+    expect(await fs.readFile(path.join(directory, "ready"), "utf8")).toBe("ready");
+    expect(raw).toEqual({ status: -1, stdout: Buffer.from("early"), stderr: "Command timed out" });
+    expect(Date.now() - started).toBeGreaterThanOrEqual(timeoutMs);
+    const groupId = Number(await fs.readFile(path.join(directory, "group"), "utf8"));
+    // Zombies can remain under a non-reaping init; only live members matter.
+    const exitDeadline = Date.now() + 1000;
+    while (groupHasLiveMember(groupId) && Date.now() < exitDeadline) await Bun.sleep(10);
+    expect(groupHasLiveMember(groupId)).toBe(false);
   });
 });
 

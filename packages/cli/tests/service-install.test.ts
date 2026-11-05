@@ -1,3 +1,4 @@
+import { readLinuxProcessIdentity } from "../src/client/process-start.js";
 import { afterEach, expect, spyOn, test } from "bun:test";
 import * as childProcess from "node:child_process";
 import { createServer } from "node:net";
@@ -53,6 +54,8 @@ async function fixture(
   if (options.credentialFailure) await chmod(authFile, 0o644);
   const home = spyOn(os, "homedir").mockReturnValue(box.root);
   restores.push(() => home.mockRestore());
+  const processIdentity =
+    process.platform === "linux" ? await readLinuxProcessIdentity(process.pid) : undefined;
   const manager = spyOn(childProcess, "spawnSync").mockImplementation((() => {
     if (options.publish !== false)
       writeFileSync(
@@ -64,6 +67,7 @@ async function fixture(
           generation: "fresh",
           pid: process.pid,
           startedAt: new Date().toISOString(),
+          processIdentity,
           url: ADDRESS,
           endpoints: options.endpoints ?? [],
           authFile,
@@ -383,6 +387,10 @@ test("same-version old launcher failures during manager reload do not fail a cor
               generation: "replacement",
               pid: process.pid,
               startedAt: new Date().toISOString(),
+              processIdentity:
+                process.platform === "linux"
+                  ? await readLinuxProcessIdentity(process.pid)
+                  : undefined,
               url: ADDRESS,
               endpoints: [],
               authFile: f.authFile,

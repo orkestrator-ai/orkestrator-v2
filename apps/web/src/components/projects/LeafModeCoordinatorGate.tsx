@@ -11,24 +11,6 @@ import { workspaceTarget } from "@/lib/portal/portal-transport";
 import { useProjectStore, useUIStore } from "@/stores";
 import { useRealmShellStore } from "@/stores/realmShellStore";
 
-/**
- * Coordinators belong to the command node. A node attached to another
- * command node (leaf mode) keeps its own coordinator conversations, since
- * they may hold important information, but they stay behind this notice
- * until the user chooses to open them. That choice lasts for the app session,
- * per project (`openedLeafCoordinators` in the UI store). Nothing is shown,
- * and so nothing starts the coordinator, until the portal status has loaded;
- * a failed status read counts as loaded, so a broken portal never hides it.
- *
- * A node the user reaches through a command node (this workspace is a realm
- * on a leaf) follows the window's sidebar grouping. Grouped by repository,
- * the notice leads to the command node's coordinator for the same
- * repository when the command node has one, and the leaf's opens directly
- * when it has not. An unavailable or incomplete summary cannot establish
- * absence, so the user can retry or explicitly open this node's coordinator.
- * Grouped by machine, project or activity, the machines are not
- * linked, so the leaf's coordinator opens directly.
- */
 /** The window's workspace node and the project: a project id is per node. */
 export function leafCoordinatorGateKey(projectId: string | undefined): string {
   return `${workspaceTarget()?.nodeId ?? "local"}:${projectId ?? ""}`;
@@ -48,6 +30,24 @@ function PendingCoordination() {
   );
 }
 
+/**
+ * Coordinators belong to the command node. A node attached to another
+ * command node (leaf mode) keeps its own coordinator conversations, since
+ * they may hold important information, but they stay behind this notice
+ * until the user chooses to open them. That choice lasts for the app session,
+ * per project (`openedLeafCoordinators` in the UI store). Nothing is shown,
+ * and so nothing starts the coordinator, until the portal status has loaded;
+ * a failed status read counts as loaded, so a broken portal never hides it.
+ *
+ * A node the user reaches through a command node (this workspace is a realm
+ * on a leaf) follows the window's sidebar grouping. Grouped by repository,
+ * the notice leads to the command node's coordinator for the same
+ * repository when the command node has one, and the leaf's opens directly
+ * when it has not. An unavailable or incomplete summary cannot establish
+ * absence, so the user can retry or explicitly open this node's coordinator.
+ * Grouped by machine, project or activity, the machines are not
+ * linked, so the leaf's coordinator opens directly.
+ */
 export function LeafModeCoordinatorGate({
   projectId,
   children,

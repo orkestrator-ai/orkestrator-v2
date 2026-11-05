@@ -14,9 +14,7 @@ Batch C1's task-by-task outcome is in
 
 A batch file combines several reports as numbered parts and takes the rating of its most serious part. A number such as `0720` in this index names a part or a file, and the table below shows where it lives.
 
-| Rank | File | Criticality | Finished | Covers | Why this rating |
-| --- | --- | --- | --- | --- | --- |
-| 1 | [0110-c3-sweep-and-reads.md](0110-c3-sweep-and-reads.md) | Medium | No | **C3, Sweep and reads.**<br>`0110`: Syncing once per sweep, a read-only `snapshot()`, batched wake writes and pruning below the limit.<br>`0370`: One own-mailbox check, and `coordinatorRuntimeId` everywhere. | From `0110`: Real repeated work that has not been measured, so it removes a risk rather than a known slowdown. |
+No work files are left. C3, the last, is closed (below).
 
 ## Parallel running
 
@@ -28,13 +26,7 @@ This index only changes when a branch merges, so it can't show what is running n
 
 ### Batches
 
-| Batch | Name | Parts | Lane and position | Finish first | Not at the same time as |
-| --- | --- | --- | --- | --- | --- |
-| C3 | [Sweep and reads](0110-c3-sweep-and-reads.md) | `0110`, `0370` | Coordinator backend, 1 of 1 | None | None |
-
-Why these are grouped:
-
-- **C3:** `0110` makes reads cheap. `0370` routes the copies through the same mailbox check.
+None at the moment. C3 (Sweep and reads) was the last, and is closed (below).
 
 ### Files built on their own
 
@@ -42,7 +34,13 @@ None at the moment. C-0390 (Panel re-render cost) was the last, and is closed (b
 
 ## Status of every finding
 
-55 done, 8 partly done, 4 open, 7 no action.
+58 done, 9 partly done, 0 open, 7 no action.
+
+Batch C3 (Sweep and reads) is closed. Its report was analysed against `a2bba9d8` and built from `main` at `cd7e963ec`; its measurement, task-by-task outcome table and the list of paths that open a main end the last
+version of its deleted report, which the deletion commit's diff shows in full:
+`git show "$(git log -1 --format=%H --grep='close coordinator batch C3')"`.
+On an isolated store of 40 coordinators and 1,800 workflow records, one sweep went from about 800 ms to about 55 ms and one coordinator read from about 16 ms to about 5.5 ms. What it left, pruning below the limit and the per-wake repair in a sweep's wake pass, is in to-do
+[6660](../../todo/coordinator-and-multi-review/6660-c3-sweep-and-reads-follow-ups.md).
 
 Batch C2 (Workflow records) is closed. Its report was analysed against `a2bba9d8` and built from `main` at `41f9eb638`; its task-by-task outcome table ends the last
 version of its deleted report, which the deletion commit's diff shows in full:
@@ -102,14 +100,14 @@ Every task was done, so it left no to-do.
 | B1: request aliases kept without limit | Done | Arrival timestamps and expiry, `docs/architecture/coordinator.md:87-90` (`b0dcf1660`). |
 | B1: store-full visibility and swallowed delegation open | Partly done | `send_message`'s `warning` when the delegation did not open, and `workflowStore` on the snapshot with `CoordinatorWorkflowStoreBanner` (`coordinator-workflow-retention.ts`, `storage-coordinators.ts`, `CoordinatorPanelNotices.tsx`), tested in `coordinator-worker-mail.test.ts`, `control-mcp-server-messaging.test.ts`, `coordinator-workflow-retention.test.ts` and `CoordinatorWorkflowStoreBanner.test.tsx`. The banner on a live stack: [6360](../../todo/coordinator-and-multi-review/6360-c2-workflow-records-live-checks.md) task 4. |
 | B1: per-project cap | Done | Kept shared, with the reason in the `MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS` comment and `docs/architecture/coordinator.md` (Workflow record limit and cleanup). |
-| B1: list walked long before the cap | Open | [C3 part 0110](0110-c3-sweep-and-reads.md#0110-the-sweep-and-every-snapshot-repeat-global-work) |
+| B1: list walked long before the cap | Partly done | Measured on an isolated store (C3): 1,400 finished records add 5 to 8 ms to a 60 s sweep and about 2 ms to a read, so nothing prunes below the limit yet. A measurement on a real large store: [6660](../../todo/coordinator-and-multi-review/6660-c3-sweep-and-reads-follow-ups.md) task 1. |
 | B2: no per-item catch in wake and reconcile loops | Done | `deliverDelegationWakesOnce` and `reconcileWorkerDelegations` in `coordinator-service.ts`, tested in `coordinator-delegation-wakes.test.ts`. A wake that keeps failing is retired with one notice (`wakeFailedAt`). |
 | B3: delegation closing mid-pass delayed | Done | `runDelegationWakePasses` in `coordinator-service.ts`, tested in `coordinator-delegation-wakes.test.ts`. |
 | B4: forgotten-node delegations never close | Partly done | `CoordinatorService.nodesReleased` from `NodeService`'s `onNodesReleased` on forget and handover, the sweep's release of unregistered nodes, and a once-per-episode notice for a node unreachable for a day (`coordinator-node-release.ts`), tested in `coordinator-node-release.test.ts`, `nodes/node-service.test.ts` and `nodes/node-handover.test.ts`. Two-node runs: [6360](../../todo/coordinator-and-multi-review/6360-c2-workflow-records-live-checks.md) tasks 1–3. |
 | B5: held notices dropped after 24 h | Done | `coordinator-status-backfill.ts`, tested in `coordinator-status-wakes.test.ts`. Whether the remaining rule can go: [4860](../../todo/coordinator-and-multi-review/4860-c1-wake-reliability-follow-ups.md). |
 | B6: close during wake delivery | Done | The re-check before `markCoordinatorDelegationWoken` in `coordinator-service.ts`, tested in `coordinator-delegation-wakes.test.ts`. |
 | B6: waiting cleared only on working | Done | `endWaitingEpisode` in `coordinator-status-wakes.ts`, tested in `coordinator-status-wakes.test.ts` and `coordinator-remote.test.ts`. |
-| B7: repair sweep and snapshot cost | Open | [C3 part 0110](0110-c3-sweep-and-reads.md#0110-the-sweep-and-every-snapshot-repeat-global-work) |
+| B7: repair sweep and snapshot cost | Done | One mailbox sync and owed-set read per sweep (`reconcileClosedConversations`, `coordinator-closed-conversations.ts`), open delegations re-read only after a store change (`coordinator-open-delegations.ts`), and a wake of two writes and one announcement (`closeOnDecision`, `coordinator-service.ts`); tested in `coordinator-sweep.test.ts`. Batch C3. |
 | A1: delegation prompt with messaging off | Done | `coordinatorDelegationAvailable` in `coordinator-context-reads.ts`, `withoutWakePromise` in `control-mcp-tools.ts`, the notice in `CoordinatorToolbar.tsx`; tested in `native-agent-service-base.test.ts`, `control-mcp-server-coordinator-workflows.test.ts`, `CoordinatorPanel.test.tsx`. |
 | A2: `agent` cannot be omitted | Done | `agent` is optional on `launch_environment` and `launch_job` and resolves to the saved default (`resolveLaunchAgent`, `control-shared-actions.ts`); tested in `control-mcp-server-launch.test.ts`, `control-mcp-operator-tools.test.ts`, `commands-registry-coordinator.test.ts`. A live check that models omit it: [4920](../../todo/coordinator-and-multi-review/4920-coordinator-tool-surface-live-follow-ups.md) task 3. |
 | A3: request-id namespace | Done | `COORDINATOR_REQUEST_ID_RULE` in the context and instructions, `COORDINATOR_REQUEST_ID_REUSED_ERROR` on every collision, `replayed: true` on replays, and a pre-send check in `send_message` (`coordinator-worker-mail.ts`); the namespace stays per coordinator, as the report recommended. Tested in `coordinator-worker-mail.test.ts`, `commands-registry-coordinator.test.ts`, `coordinator-review-actions.test.ts`, `coordinator-context.test.ts`. |
@@ -154,9 +152,9 @@ Every task was done, so it left no to-do.
 | 6: `CoordinatorPanel` does too much | Done | Split from 1,256 to about 600 lines: `CoordinatorToolbar.tsx`, `CoordinatorConversationPane.tsx`, `useCoordinatorSelection.ts`, `useCoordinatorLaunches.ts`, `useCoordinatorGitActions.ts`. |
 | 6: repeated action handling and one busy flag | Done | `runAction` with separate Git and conversation flags: `useCoordinatorActions.ts`. |
 | 6: delegation decision in three places | Done | `coordinator-delegation-decision.ts`, tested in `coordinator-delegation-decision.test.ts`. The remote goal hold it added needs live proof: [4860](../../todo/coordinator-and-multi-review/4860-c1-wake-reliability-follow-ups.md). |
-| 6: reads that write | Open | [C3 part 0110](0110-c3-sweep-and-reads.md#0110-the-sweep-and-every-snapshot-repeat-global-work) |
+| 6: reads that write | Done | `snapshot()` repairs nothing; a main that opens (`ensureMainConversation`, `ensure`, `createConversation`) and a conversation close run the repair, and the sweep covers the rest; tested in `coordinator-sweep.test.ts`. Batch C3. |
 | 6: partial serialization | Done | `mutateSerialized` in `coordinator-service.ts`, tested in `coordinator-delegation-wakes.test.ts`. |
-| 6: copied mailbox check and hand-built runtime ids | Open | [C3 part 0370](0110-c3-sweep-and-reads.md#0370-duplicated-mailbox-authorization-and-runtime-ids-in-the-control-mcp-tools) |
+| 6: copied mailbox check and hand-built runtime ids | Done | `assertOwnMailbox` in `control-mcp-tools.ts` for `read_messages`, `get_message` and `ack_message`, and `coordinatorRuntimeId` in `control-mcp-tools.ts`, `control-mcp-server.ts` and `scheduled-jobs/service.ts`; tested in `control-mcp-server-messaging.test.ts`. Batch C3. |
 | 6: duplicated request-alias lookup | Done | `coordinatorRequestAlias` and `coordinatorRequestMatch` in `coordinator-workflow-retention.ts`, used by every alias lookup; tested in `coordinator-workflow-retention.test.ts`. |
 | 6: context prompt built inline | Done | `buildCoordinatorContext` in `packages/protocol/src/coordinator-context.ts`, tested in `coordinator-context.test.ts`. |
 | 1: Top 10 actions | No action | Each restates a finding above. |

@@ -139,7 +139,7 @@ Backend services (one composition root, `service.ts`):
 | `DiffBodyService` | `diff-bodies.ts` | Immutable bodies, live detail resolution |
 | `ChangeHandoffSerializer` | `handoff.ts` | Agent handoff text |
 | `ChangeRestoreService` | `restore.ts` | Conditional restore |
-| `ChangeRetentionService` | `retention.ts` | Reachability GC, quotas |
+| `ChangeRetentionService` | `retention.ts`, `reachability-cache.ts` | Reachability GC, quotas, per-manifest object ids between passes |
 | `ChangeTrackingPolicyRegistry` | `policy-registry.ts` | Every budget and cadence |
 | shared physical work | `shared-physical-work.ts` | Alias scan joins, refcounted watchers |
 | `GitScopeService` | `git-scopes.ts` | `uncommitted-net`, `committed-net`, `staged`, `unstaged`, `commit`, `pull-request` |
@@ -236,7 +236,8 @@ parsed on every read. A capture leaves its own manifest there.
   copy was verified when it was read.
 - **Retention does not fill it.** `readManifest(store, id, { scan: true })` uses a
   hit but keeps nothing, so one pass over every snapshot cannot evict what live
-  views are using.
+  views are using. Retention keeps its own, smaller cache instead (see
+  [Retention and backup](#retention-and-backup)).
 
 Entries are sorted by path bytes, as every stored manifest has been since the
 first capture. `findManifestEntry` binary-searches on that order for diff pages
@@ -426,6 +427,35 @@ check skips objects it wrote or proved present in the same pass, unless
 `capture-orphan-fence.test.ts` races retention against a capture on both sides
 of the half-grace boundary.
 
+A sweep walks the store without the lock, collecting old unreachable objects one
+fan-out directory at a time, then takes the lock per 64 candidates to `lstat`
+each again and remove it. The mtime read under the lock decides, so a renewal
+that lands after the walk saw an old fence keeps its object, and captures write
+while a sweep walks. Abandoned temporaries are removed the same way, re-checking
+that no live batch owns the name.
+
+The store keeps its compressed byte count current: a placed object adds its
+size and a sweep subtracts what it removed, so a retention pass reads the figure
+(`ObjectStore.currentBytes`) rather than walking every object twice. Missing
+manifests invalidate accounting immediately; a daily recount under the store
+lock also reconciles external changes to reachable or young objects. Puts use
+the same daily reconciliation before checking the hard budget. The store
+walks once when it has no figure yet (after a restart), and again after a sweep
+finds a candidate already gone, which only something outside the store can
+cause.
+
+Reachability comes from the ledger's snapshots, each manifest read once per pass
+even when several snapshots share a tree. `ReachabilityCache`
+(`reachability-cache.ts`) keeps the object ids each manifest names, 20 bytes
+each, between passes: at most 4,096 manifests and 32 MiB. A pass reads every
+manifest in the same order, which would make least-recently-used eviction miss
+every time once the history outgrows the bound, so an entry is admitted only
+while there is room, and one that a completed pass did not walk (no snapshot
+names that tree any more) is dropped at the end of that pass. A hit still
+requires the manifest object, so a manifest that is gone contributes nothing,
+as a read would. `retention-store-walks.test.ts` covers the byte count, the lock
+and the cache.
+
 File rows are bounded per measurement. `measurementFileRowCap` (2,000) applies
 when a snapshot pair, an environment scan or a Git scope is measured, never
 afterwards, because a sealed measurement is immutable. Past it the rows with
@@ -565,6 +595,27 @@ to point at a real disk:
 A capture of a large file takes longer in total because compression runs through
 the thread pool; it no longer holds up every other client while it does. The
 first read of a large manifest pays for freezing it, once.
+
+The hourly retention pass (`--only=retention`): 400 referenced snapshots, each a
+distinct tree of `--retention-files` real blobs, 8 manifests open as diff views
+would leave them, nothing removable. Measured on 2026-11-05 on the macOS
+development machine (temporary directory on the internal disk, load average
+about 20 to 34 from other worktrees' suites), one run of the code before ST-20
+and one after at 2,000 files, two (the ranges) at 10,000. Each row is the second
+of two passes in a row unless stated:
+
+| Workload | Before | After |
+| --- | --- | --- |
+| 2,000 files: pass duration | 565 ms | 87 ms |
+| Same: manifests parsed | 392 | 0 (400 reachability hits) |
+| 10,000 files: pass duration | 2,760 ms | 1,682–1,718 ms |
+| Same: manifests parsed | 392 | 225 (167 reachability hits; the 32 MiB bound holds 167 such manifests) |
+| Both: hits in the parsed-manifest cache | 8 of 400 | 8 of 400 |
+| 10,000 files: a 64-byte put issued while a sweep runs | 400–435 ms | 0.7–2.1 ms |
+
+The first pass after a start parses every manifest, as before. Before ST-20 the
+parsed-manifest cache served only the manifests live views had open, so every
+other one was parsed on every pass.
 
 ## Known limitations
 

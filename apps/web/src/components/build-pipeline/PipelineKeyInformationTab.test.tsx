@@ -185,7 +185,7 @@ describe("PipelineKeyInformationTab", () => {
           pipelines: new Map([[PIPELINE_ID, { ...pipeline, backendRevision: 3 }]]),
         }),
       );
-      expect(within(tab).queryByRole("region", { name: "Needs a look" })).toBeNull();
+      expect(within(tab).queryByRole("region", { name: "Needs a look" }) === null).toBe(true);
       expect(within(tab).getByText("Nothing was flagged for a person to look at.")).toBeTruthy();
     });
 
@@ -210,7 +210,7 @@ describe("PipelineKeyInformationTab", () => {
     test("the key information view stays the brief alone", () => {
       const tab = renderTab({ ...pipeline, keyInformation, backendRevision: 2 });
       expect(tab.textContent).toContain("Key information ·");
-      expect(within(tab).queryByRole("region", { name: "Needs a look" })).toBeNull();
+      expect(within(tab).queryByRole("region", { name: "Needs a look" }) === null).toBe(true);
     });
   });
 

@@ -22,7 +22,7 @@ import {
   releaseSidebarAction,
   useSidebarActionStore,
 } from "@/stores/sidebarActionStore";
-import { useUIStore } from "@/stores";
+import { useEnvironmentStore, useUIStore } from "@/stores";
 import type { Environment } from "@/types";
 
 const log = createLogger("web.sidebar");
@@ -61,7 +61,13 @@ export function useSelectedEnvironmentActions({
 }) {
   const { portal } = useFederation();
   const pending = useSidebarActionStore((state) => state.pending);
-  const selected = resolveSelectedEnvironments(selectionIds, localEnvironments, machines);
+  const deletingEnvironments = useEnvironmentStore((state) => state.deletingEnvironments);
+  const selected = resolveSelectedEnvironments(
+    selectionIds,
+    localEnvironments,
+    machines,
+    deletingEnvironments,
+  );
 
   // An environment deleted elsewhere leaves the selection, whichever machine it was on.
   const resolvedCount = selected.length;
@@ -69,12 +75,15 @@ export function useSelectedEnvironmentActions({
     if (resolvedCount === selectionIds.length) return;
     const { selectedEnvironmentIds, setMultiSelection } = useUIStore.getState();
     const known = new Set(
-      resolveSelectedEnvironments(selectedEnvironmentIds, localEnvironments, machines).map(
-        (entry) => entry.selectionId,
-      ),
+      resolveSelectedEnvironments(
+        selectedEnvironmentIds,
+        localEnvironments,
+        machines,
+        deletingEnvironments,
+      ).map((entry) => entry.selectionId),
     );
     setMultiSelection(selectedEnvironmentIds.filter((id) => known.has(id)));
-  }, [localEnvironments, machines, resolvedCount, selectionIds.length]);
+  }, [deletingEnvironments, localEnvironments, machines, resolvedCount, selectionIds.length]);
 
   const run = async (action: BulkAction, targets: readonly SelectedEnvironment[]) => {
     const available = targets.filter(isSelectedEnvironmentReachable);

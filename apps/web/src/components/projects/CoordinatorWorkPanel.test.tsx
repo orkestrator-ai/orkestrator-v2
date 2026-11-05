@@ -332,8 +332,8 @@ describe("CoordinatorWorkPanel", () => {
     expect(asked!.querySelector("[data-work-meta]")?.textContent).toBe(
       "Claude Code · opus · requested · 12m",
     );
-    expect(plain!.querySelector("[data-work-summary]")).toBeNull();
-    expect(plain!.querySelector("[data-work-meta]")).toBeNull();
+    expect(plain!.querySelector("[data-work-summary]") === null).toBe(true);
+    expect(plain!.querySelector("[data-work-meta]") === null).toBe(true);
     expect(within(plain!).getByRole("button", { name: "Open Work panel" })).toBeTruthy();
   });
 
@@ -352,7 +352,7 @@ describe("CoordinatorWorkPanel", () => {
       />,
     );
     // Only a row with something to stop offers it.
-    expect(screen.queryByRole("button", { name: "Stop Work panel" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Stop Work panel" }) === null).toBe(true);
     const button = screen.getByRole("button", { name: "Stop fix-login" }) as HTMLButtonElement;
     fireEvent.click(button);
     expect(onStop).toHaveBeenCalledWith(stop);
@@ -371,7 +371,7 @@ describe("CoordinatorWorkPanel", () => {
         onClearFinished={clearFinished}
       />,
     );
-    expect(screen.queryByRole("button", { name: "Stop fix-login" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Stop fix-login" }) === null).toBe(true);
   });
 
   test("the next wake line shows on a narrow screen only, while the coordinator is idle", () => {
@@ -382,15 +382,15 @@ describe("CoordinatorWorkPanel", () => {
     narrow.unmount();
 
     const busy = render(<CoordinatorNextWakeLine items={waiting} quiet={true} />);
-    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByRole("status") === null).toBe(true);
     busy.unmount();
 
     const none = render(<CoordinatorNextWakeLine items={[items[1]!]} quiet={false} />);
-    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByRole("status") === null).toBe(true);
     none.unmount();
 
     wideScreen = true;
     render(<CoordinatorNextWakeLine items={waiting} quiet={false} />);
-    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByRole("status") === null).toBe(true);
   });
 });

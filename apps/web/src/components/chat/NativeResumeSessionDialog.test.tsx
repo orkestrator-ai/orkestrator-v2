@@ -426,7 +426,7 @@ describe("NativeResumeSessionDialog", () => {
     const message = '<img src="x" onerror="alert(1)"> <b>bold</b> **stars** [link](http://x.test)';
     const failure = await renderFailure(new Error(message));
     expect(screen.getByText(message)).toBeTruthy();
-    expect(failure.querySelector("img, b, strong, a")).toBeNull();
+    expect(failure.querySelector("img, b, strong, a") === null).toBe(true);
   });
 
   test("bounds a message no bridge limited", async () => {
@@ -449,7 +449,7 @@ describe("NativeResumeSessionDialog", () => {
     rerender(<NativeResumeSessionDialog open={false} {...props} />);
     rerender(<NativeResumeSessionDialog open {...props} />);
     expect(await screen.findByText("Listed now")).toBeTruthy();
-    expect(screen.queryByText("first failure")).toBeNull();
+    expect(screen.queryByText("first failure") === null).toBe(true);
   });
 
   test("renders running and error status badges", async () => {

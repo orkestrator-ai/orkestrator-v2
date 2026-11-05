@@ -100,6 +100,8 @@ interface FileTreeNodeProps {
   onContextSelect?: (path: string) => void;
   onRevert?: (path: string) => void;
   onDelete?: (paths: string[]) => void;
+  /** Deletes a folder and everything in it. Folders are deleted one at a time. */
+  onDeleteFolder?: (path: string) => void;
   onMove?: (sourcePaths: string[], destinationDirectory: string) => void;
   onCopyFiles?: (files: File[], destinationDirectory: string) => void;
   onRequestMove?: (sourcePaths: string[]) => void;
@@ -118,6 +120,7 @@ export const FileTreeNode = memo(function FileTreeNode({
   onContextSelect,
   onRevert,
   onDelete,
+  onDeleteFolder,
   onMove,
   onCopyFiles,
   onRequestMove,
@@ -218,7 +221,7 @@ export const FileTreeNode = memo(function FileTreeNode({
 
     return (
       <Collapsible open={isExpanded} onOpenChange={(open) => setFolderExpanded(item.path, open)}>
-        {onCreateFolder ? (
+        {onCreateFolder || onDeleteFolder ? (
           <ContextMenu>
             <ContextMenuTrigger
               asChild
@@ -228,14 +231,26 @@ export const FileTreeNode = memo(function FileTreeNode({
               <div>{folderRow}</div>
             </ContextMenuTrigger>
             <ContextMenuContent>
-              <ContextMenuItem disabled={movePending} onSelect={() => onCreateFolder(item.path)}>
-                <FolderPlus />
-                New folder
-              </ContextMenuItem>
+              {onCreateFolder && (
+                <ContextMenuItem disabled={movePending} onSelect={() => onCreateFolder(item.path)}>
+                  <FolderPlus />
+                  New folder
+                </ContextMenuItem>
+              )}
               <ContextMenuItem onSelect={() => void copyFilePath(item.path)}>
                 <Copy />
                 Copy path
               </ContextMenuItem>
+              {onDeleteFolder && (
+                <ContextMenuItem
+                  variant="destructive"
+                  disabled={movePending}
+                  onSelect={() => onDeleteFolder(item.path)}
+                >
+                  <Trash2 />
+                  Delete folder
+                </ContextMenuItem>
+              )}
             </ContextMenuContent>
           </ContextMenu>
         ) : (
@@ -278,6 +293,7 @@ export const FileTreeNode = memo(function FileTreeNode({
               onContextSelect={onContextSelect}
               onRevert={onRevert}
               onDelete={onDelete}
+              onDeleteFolder={onDeleteFolder}
               onMove={onMove}
               onCopyFiles={onCopyFiles}
               onRequestMove={onRequestMove}

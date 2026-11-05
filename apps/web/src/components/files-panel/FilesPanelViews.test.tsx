@@ -608,6 +608,39 @@ describe("files panel views", () => {
     expect(screen.getAllByText("New folder")).toHaveLength(1);
   });
 
+  test("deletes a folder from its context menu", async () => {
+    const onDelete = mock((_paths: string[]) => undefined);
+    const onDeleteFolder = mock((_path: string) => undefined);
+    useFilesPanelStore.setState({ fileTree, expandedFolders: ["src"] });
+    renderWithTerminal(<AllFilesView onDelete={onDelete} onDeleteFolder={onDeleteFolder} />);
+
+    // A folder menu exists even without folder creation, and offers only folder deletion.
+    fireEvent.contextMenu(screen.getByRole("button", { name: "src" }));
+    expect(await screen.findByText("Copy path")).toBeTruthy();
+    expect(screen.queryByText("New folder") === null).toBe(true);
+    expect(screen.queryByText("Delete file") === null).toBe(true);
+    fireEvent.click(screen.getByText("Delete folder"));
+    expect(onDeleteFolder).toHaveBeenCalledWith("src");
+    expect(onDelete).not.toHaveBeenCalled();
+
+    // Files keep their own delete action and never offer folder deletion.
+    fireEvent.contextMenu(await screen.findByRole("button", { name: "App.tsx" }));
+    expect(await screen.findByText("Delete file")).toBeTruthy();
+    expect(screen.queryByText("Delete folder") === null).toBe(true);
+  });
+
+  test("keeps Delete folder disabled while a mutation is pending", async () => {
+    const onDeleteFolder = mock((_path: string) => undefined);
+    useFilesPanelStore.setState({ fileTree, expandedFolders: [] });
+    renderWithTerminal(<AllFilesView onDeleteFolder={onDeleteFolder} movePending />);
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "archive" }));
+    const item = await screen.findByText("Delete folder");
+    expect(item.closest("[data-disabled]") !== null || item.hasAttribute("data-disabled")).toBe(
+      true,
+    );
+  });
+
   test("keeps New folder disabled while a mutation is pending", async () => {
     const onCreateFolder = mock(async () => "src/hooks");
     useFilesPanelStore.setState({ fileTree, expandedFolders: ["src"] });

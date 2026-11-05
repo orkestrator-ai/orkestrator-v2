@@ -257,7 +257,7 @@ describe("AlertDialog primitives", () => {
       "apps/web/src/components/settings/McpSettings.tsx",
       "apps/web/src/components/docker/DockerSettings.tsx",
       "apps/web/src/components/environments/EnvironmentSettingsDialog.tsx",
-      "apps/web/src/components/environments/EnvironmentRebuildSection.tsx",
+      "apps/web/src/components/environments/RebuildConfirmDialog.tsx",
       "apps/web/src/components/environments/EnvironmentRecoveryCopies.tsx",
       "apps/web/src/components/docker/DockerCleanupReview.tsx",
     ];

@@ -1440,7 +1440,7 @@ describe("HierarchicalSidebar", () => {
     expect(tiedEnvironments.map((env) => env.id)).toEqual(["env-b", "env-a"]);
   });
 
-  test("priority order puts unread, then waiting and working, before newer idle activity", () => {
+  test("priority order puts unread and waiting before newer idle activity, and working last", () => {
     const environments = [
       { ...createdEnvironment, id: "env-idle-new", lastActivityAt: "2026-07-23T10:00:00.000Z" },
       {
@@ -1467,13 +1467,13 @@ describe("HierarchicalSidebar", () => {
     expect(sortEnvironmentsByActivity(environments, [project]).map((env) => env.id)).toEqual([
       "env-unread",
       "env-waiting",
-      "env-working",
       "env-idle-new",
       "env-idle-old",
+      "env-working",
     ]);
     expect(
       sortEnvironmentsByActivity(environments, [project], "newest").map((env) => env.id),
-    ).toEqual(["env-idle-new", "env-working", "env-waiting", "env-unread", "env-idle-old"]);
+    ).toEqual(["env-idle-new", "env-waiting", "env-unread", "env-idle-old", "env-working"]);
   });
 
   test("sorts oldest activity first while keeping the sidebar order for ties", () => {

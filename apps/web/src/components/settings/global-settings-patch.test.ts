@@ -23,6 +23,21 @@ describe("globalConfigPatchFromCoreFields", () => {
     expect(changes.unset).toContain("claudeBackgroundCommandLimitHours");
   });
 
+  test("a retired key left in the stored config is neither sent nor unset", () => {
+    const stored = {
+      ...useConfigStore.getState().config.global,
+      experimentalCodexRawEventLogging: true,
+    };
+    expect(storedCoreFields(stored)).not.toHaveProperty("experimentalCodexRawEventLogging");
+    const changes = globalConfigPatchFromCoreFields(
+      { ...baseline, terminalScrollback: 1234 },
+      baseline,
+      stored,
+    );
+    expect(changes.patch).toEqual({ terminalScrollback: 1234 });
+    expect(changes.unset).not.toContain("experimentalCodexRawEventLogging" as never);
+  });
+
   test("stores a preview-tab link default and unsets the external one", () => {
     expect(
       globalConfigPatchFromCoreFields(

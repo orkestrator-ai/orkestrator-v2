@@ -1233,7 +1233,8 @@ record what was observed at the time and are left as they are.
   summary of identifier-shaped tokens and a byte count, never the line. `recorder.notice` is dynamic and ours: it warns that notification recording is
   on or refused, naming the directory the developer set in
   `CODEX_BRIDGE_RECORD_NOTIFICATIONS`. It is loud on purpose, and a recording's content
-  never reaches it.
+  never reaches it. That recorder is the only capture of raw Codex events, and it is a
+  developer's tool with no Settings control.
 
 ## Adding to later processes
 

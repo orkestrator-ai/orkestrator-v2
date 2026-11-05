@@ -801,7 +801,9 @@ export class StorageDatabase {
    * in the layout's key field, since a row and its item cannot name different
    * keys. A store held whole as a document falls back to a full
    * read-modify-write; if that document is unreadable, `unreadable: "throw"`
-   * raises {@link StoreCorruptError} instead of replacing it.
+   * raises {@link StoreCorruptError} instead of replacing it. An unparsable row
+   * raises it too, unless `unreadableRow: "replace"`, where `mutate` sees that
+   * row as absent and may overwrite or delete it.
    */
   updateStoreRow<T>(
     store: string,
@@ -810,6 +812,7 @@ export class StorageDatabase {
     options: {
       collection?: string;
       unreadable?: "replace" | "throw";
+      unreadableRow?: "replace";
       /** Value to start from when the store is absent (or replaced); default `{}`. */
       initial?: () => Record<string, unknown>;
     } = {},
@@ -865,7 +868,7 @@ export class StorageDatabase {
       try {
         current = existing ? (JSON.parse(existing.value) as unknown) : undefined;
       } catch {
-        throw new StoreCorruptError(store);
+        if (options.unreadableRow !== "replace") throw new StoreCorruptError(store);
       }
       const update = mutate(current);
       if (layout.kind === "array" && !update.delete && "value" in update) {

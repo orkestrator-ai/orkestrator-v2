@@ -5,6 +5,7 @@ import type { BackendId, RouteId } from "@orkestrator/protocol/federation";
 import {
   NODE_EVENT_WATCH_TTL_MS,
   RELAYED_NODE_EVENT,
+  relayedNodeEventName,
   type RelayedNodeEvent,
 } from "@orkestrator/protocol/node-events";
 
@@ -27,7 +28,7 @@ async function commandWithLeaf() {
 
 function relayed(node: TestNode): RelayedNodeEvent[] {
   return node.events
-    .filter((entry) => entry.event === RELAYED_NODE_EVENT)
+    .filter((entry) => entry.event === relayedNodeEventName("bk_leaf" as BackendId))
     .map((entry) => entry.payload as RelayedNodeEvent);
 }
 
@@ -39,7 +40,9 @@ describe("relaying another node's events on request", () => {
       prefixes: ["change-projection-changed"],
     });
     expect(watch.renewed).toBe(false);
+    expect(watch.perNodeEvents).toBe(true);
     await settle(40);
+    expect(command.events.some((entry) => entry.event === RELAYED_NODE_EVENT)).toBe(false);
     expect(relayed(command)).toContainEqual({ nodeId: "bk_leaf" as never, kind: "resync" });
 
     leaf.emit("change-projection-changed", { kind: "deleted", resourceKey: "k" });
@@ -67,9 +70,11 @@ describe("relaying another node's events on request", () => {
       { nodeId: "bk_leaf" as never, prefixes: ["a-", "b-"] },
     ]);
 
+    expect(command.portal.events.isWatched("bk_leaf" as never)).toBe(true);
     command.portal.events.unwatch(second.watchId);
     expect(command.portal.events.diagnostics().relays[0]?.prefixes).toEqual(["a-"]);
     command.portal.events.unwatch(first.watchId);
+    expect(command.portal.events.isWatched("bk_leaf" as never)).toBe(false);
     expect(command.portal.events.diagnostics().relays).toEqual([]);
 
     await settle(40);

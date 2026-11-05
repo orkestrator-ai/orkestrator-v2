@@ -10,6 +10,7 @@ import {
   Terminal as TerminalIcon,
   Hammer,
   Network,
+  StickyNote,
   Workflow,
 } from "lucide-react";
 import { AgentPlatformIcon } from "@/components/icons/AgentIcons";
@@ -229,6 +230,9 @@ export function DraggableTab({
     if (isBuildTab(tab.type) && buildPipelineTitle) {
       return `Build: ${buildPipelineTitle}`;
     }
+    if (tab.type === "key-information" && tab.keyInformationTabData?.view === "notes") {
+      return buildPipelineTitle ? `Notes: ${buildPipelineTitle}` : `Notes ${tabNumber}`;
+    }
     if (tab.type === "key-information") {
       return buildPipelineTitle
         ? `Key info: ${buildPipelineTitle}`
@@ -284,6 +288,8 @@ export function DraggableTab({
     if (tab.type === "graph-designer")
       return <Network className="h-3 w-3 shrink-0 text-indigo-400" />;
     if (tab.type === "graph-run") return <Workflow className="h-3 w-3 shrink-0 text-indigo-400" />;
+    if (tab.type === "key-information" && tab.keyInformationTabData?.view === "notes")
+      return <StickyNote className="h-3 w-3 shrink-0 text-amber-400" />;
     if (tab.type === "key-information")
       return <FileText className="h-3 w-3 shrink-0 text-amber-400" />;
     if (tab.type === "browser") {

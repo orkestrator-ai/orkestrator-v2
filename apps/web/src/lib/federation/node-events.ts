@@ -15,6 +15,11 @@
  * still subscribes and dropped with the last one. The command node's own
  * resources (shown from its self summary) need no relay and are subscribed
  * on the portal channel directly.
+ *
+ * Frames arrive under the watched node's own name when the command node says it
+ * relays that way and the transport can scope a stream to it. They arrive under
+ * the one old name from an older command node, and from the desktop's main
+ * process relay, so both names are listened to; a transport only uses one.
  */
 
 import type { BackendId } from "@orkestrator/protocol/federation";
@@ -22,10 +27,15 @@ import {
   isRelayedNodeEvent,
   NODE_EVENT_WATCH_RENEW_MS,
   RELAYED_NODE_EVENT,
+  relayedNodeEventName,
   type NodeEventWatchResult,
 } from "@orkestrator/protocol/node-events";
 import { portalStore } from "@/lib/portal/portal-store";
-import { portalInvoke, portalListenAuthoritative } from "@/lib/portal/portal-transport";
+import {
+  portalInvoke,
+  portalListen,
+  portalListenAuthoritative,
+} from "@/lib/portal/portal-transport";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("web.federation");
@@ -51,6 +61,8 @@ interface NodeWatch {
   revision: number;
   dirty: boolean;
   renewTimer: ReturnType<typeof setInterval> | null;
+  /** Stops the listener on this node's own event name, once one is in place. */
+  stopPerNodeListener: (() => void) | null;
 }
 
 const watches = new Map<BackendId, NodeWatch>();
@@ -66,29 +78,31 @@ function resync(subscribers: Iterable<NodeEventSubscriber>): void {
   }
 }
 
+function applyRelayedFrame(payload: unknown): void {
+  if (!isRelayedNodeEvent(payload)) return;
+  const watch = watches.get(payload.nodeId);
+  if (!watch) return;
+  if (payload.kind === "resync") {
+    resync(watch.subscribers);
+    return;
+  }
+  for (const subscriber of watch.subscribers) {
+    if (!subscriber.events.includes(payload.event)) continue;
+    try {
+      subscriber.onEvent(payload.event, payload.payload);
+    } catch (error) {
+      log.error("event-handler.failed", {
+        eventName: payload.event,
+        error: formatLogError(error),
+      });
+    }
+  }
+}
+
 function ensureListening(): Promise<void> {
   listening ??= portalListenAuthoritative<unknown>(
     RELAYED_NODE_EVENT,
-    ({ payload }) => {
-      if (!isRelayedNodeEvent(payload)) return;
-      const watch = watches.get(payload.nodeId);
-      if (!watch) return;
-      if (payload.kind === "resync") {
-        resync(watch.subscribers);
-        return;
-      }
-      for (const subscriber of watch.subscribers) {
-        if (!subscriber.events.includes(payload.event)) continue;
-        try {
-          subscriber.onEvent(payload.event, payload.payload);
-        } catch (error) {
-          log.error("event-handler.failed", {
-            eventName: payload.event,
-            error: formatLogError(error),
-          });
-        }
-      }
-    },
+    ({ payload }) => applyRelayedFrame(payload),
     {
       // The command node's own stream reconnected: it may have restarted and
       // lost every lease, and relayed events may have been missed.
@@ -109,6 +123,23 @@ function ensureListening(): Promise<void> {
     },
   );
   return listening;
+}
+
+/**
+ * Resolves once the stream carrying this node is open, so the first read that
+ * follows cannot precede the subscription it is an increment base for.
+ */
+async function listenPerNode(watch: NodeWatch): Promise<void> {
+  if (watch.stopPerNodeListener) return;
+  watch.stopPerNodeListener = await portalListen<unknown>(
+    relayedNodeEventName(watch.nodeId),
+    ({ payload }) => applyRelayedFrame(payload),
+  );
+}
+
+function stopListeningPerNode(watch: NodeWatch): void {
+  watch.stopPerNodeListener?.();
+  watch.stopPerNodeListener = null;
 }
 
 function eventsKey(watch: NodeWatch): string {
@@ -145,6 +176,13 @@ async function syncWatch(watch: NodeWatch): Promise<void> {
             await portalInvoke("unwatch_node_events", { watchId: watch.watchId }).catch(
               () => undefined,
             );
+            return;
+          }
+          // A command node downgraded under this lease stops saying it.
+          if (result.perNodeEvents) await listenPerNode(watch);
+          else stopListeningPerNode(watch);
+          if (watches.get(watch.nodeId) !== watch) {
+            stopListeningPerNode(watch);
             return;
           }
           if (watch.revision !== revision) continue;
@@ -236,6 +274,7 @@ export function subscribeNodeEvents(
       revision: 0,
       dirty: false,
       renewTimer: null,
+      stopPerNodeListener: null,
     };
     watches.set(nodeId, watch);
     startRenewing(watch);
@@ -255,6 +294,7 @@ export function subscribeNodeEvents(
       return;
     }
     if (current.renewTimer) clearInterval(current.renewTimer);
+    stopListeningPerNode(current);
     watches.delete(nodeId);
     // The lease expires on its own if this is lost.
     void Promise.resolve()
@@ -265,7 +305,10 @@ export function subscribeNodeEvents(
 
 /** Test seam. */
 export function resetNodeEventsForTests(): void {
-  for (const watch of watches.values()) if (watch.renewTimer) clearInterval(watch.renewTimer);
+  for (const watch of watches.values()) {
+    if (watch.renewTimer) clearInterval(watch.renewTimer);
+    stopListeningPerNode(watch);
+  }
   watches.clear();
   listening = null;
 }

@@ -13,7 +13,7 @@ const PANEL = [
 ];
 
 describe("build pipeline review pause/resume", () => {
-  test("pause stops the panel and resume starts a fresh fan-out", async () => {
+  test("pause stops the panel and resume reruns only what it interrupted", async () => {
     await withPipeline(async ({ service, read, provider, packageGeneration }) => {
       provider.runningModels.add("opus");
       provider.runningModels.add("sonnet");
@@ -47,14 +47,72 @@ describe("build pipeline review pause/resume", () => {
       const resumed = await read(started.id);
       expect(resumed.phase).toBe("reviewing");
       expect(resumed.pendingPromptAttempt).toBeUndefined();
-      // The panel reopens on the package it was reviewing: verified again, not
-      // rebuilt through another preparation round. Initialization and reviewer
-      // admission each verify it before the new panel has been dispatched.
+      // The panel carries on over the package it was reviewing: verified again,
+      // not rebuilt through another preparation round.
       expect(packageGeneration.count).toBe(generated);
-      expect(packageGeneration.verificationCount).toBe(verified + 2);
+      expect(packageGeneration.verificationCount).toBe(verified + 1);
       expect(
         resumed.reviewFanout?.reviewers.map((reviewer) => reviewer.providerSessionId),
       ).not.toEqual(firstPanel);
+    });
+  });
+
+  test("resume keeps the reports the panel already has", async () => {
+    await withPipeline(async ({ service, read, provider }) => {
+      provider.runningModels.add("sonnet");
+      const started = await service.start(startInput(PANEL));
+      await advanceUntil(service, read, started.id, "reviewing");
+      for (let pass = 0; pass < 5; pass += 1) await service.advanceNow(started.id);
+      const before = (await read(started.id)).reviewFanout!.reviewers;
+      expect(before.map((reviewer) => reviewer.status)).toEqual(["completed", "running"]);
+
+      await service.pause(started.id);
+      await service.resume(started.id);
+      for (let pass = 0; pass < 3; pass += 1) await service.advanceNow(started.id);
+
+      const after = (await read(started.id)).reviewFanout!.reviewers;
+      expect(after[0]).toMatchObject({
+        id: before[0]!.id,
+        status: "completed",
+        providerSessionId: before[0]!.providerSessionId,
+      });
+      expect(after[0]!.report).toEqual(before[0]!.report);
+      expect(after[1]!.status).toBe("running");
+      expect(after[1]!.providerSessionId).not.toBe(before[1]!.providerSessionId);
+      // One reviewer ran again; its completed peer did not.
+      expect(reviewerSessionCreates(provider)).toHaveLength(3);
+    });
+  });
+
+  test("resume continues an interrupted consolidation in its own session", async () => {
+    await withPipeline(async ({ service, read, provider }) => {
+      provider.runningConsolidation = true;
+      const started = await service.start(startInput(PANEL));
+      await advanceUntil(service, read, started.id, "reviewing");
+      for (let pass = 0; pass < 10; pass += 1) {
+        if ((await read(started.id)).reviewFanout?.consolidation?.state === "sent") break;
+        await service.advanceNow(started.id);
+      }
+      const before = (await read(started.id)).reviewFanout!.consolidation!;
+      expect(before.state).toBe("sent");
+
+      await service.pause(started.id);
+      await service.resume(started.id);
+      for (let pass = 0; pass < 3; pass += 1) await service.advanceNow(started.id);
+
+      const state = (await read(started.id)).reviewFanout!;
+      expect(state.reviewers.every((reviewer) => reviewer.status === "completed")).toBe(true);
+      expect(reviewerSessionCreates(provider)).toHaveLength(2);
+      expect(state.consolidation?.providerSessionId).toBe(before.providerSessionId);
+      expect(state.consolidation?.requestId).not.toBe(before.requestId);
+      const turns = provider.sent.filter((s) => s.sessionId === before.providerSessionId);
+      expect(turns).toHaveLength(2);
+      expect(turns[1]!.prompt).toContain("This work was paused and has now resumed");
+
+      provider.runningConsolidation = false;
+      expect((await advanceUntil(service, read, started.id, "addressing", 5)).phase).toBe(
+        "addressing",
+      );
     });
   });
 
@@ -132,7 +190,7 @@ describe("build pipeline review pause/resume", () => {
     },
   );
 
-  test("resume retries a reviewer abort that failed during pause before dispatching a fresh panel", async () => {
+  test("resume retries a reviewer abort that failed during pause before rerunning it", async () => {
     await withPipeline(async ({ service, read, provider, packageGeneration }) => {
       provider.runningModels.add("opus");
       provider.runningModels.add("sonnet");
@@ -198,7 +256,7 @@ describe("build pipeline review pause/resume", () => {
         expect(abortDispatchCounts).toEqual([sentBefore, sentBefore]);
         expect(reviewerSessionCreates(provider)).toHaveLength(4);
         expect(packageGeneration.count).toBe(generatedBefore);
-        expect(packageGeneration.verificationCount).toBe(verifiedBefore + 2);
+        expect(packageGeneration.verificationCount).toBe(verifiedBefore + 1);
       } finally {
         abort.mockRestore();
       }

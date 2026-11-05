@@ -2068,6 +2068,15 @@ every round. There is no pane tab for any of them; the mailbox is the worker.
 - **Delegations.** A coordinator message to a worker opens a delegation like
   any other; it settles when that worker's turn ends or the worker ends
   (`workerActivity` reads the pipeline for a `pipeline-worker:` tab).
+- **Multi Review reviewers.** Each reviewer of a Multi Review has the same kind
+  of mailbox while its review is in its reviewers' stage, under the same address
+  scheme, so `list_mailboxes`, `send_message` and `get_tab_transcript` treat it
+  alike (`multiReviewWorkers`, `multi-review-worker-mail.ts`). Queued mail becomes
+  its next turn before its result is accepted, and `deliverNow` steers under the
+  workflow lock. A restart rotates the session key, so it is a new address and
+  mail never follows. Preparation, consolidation and Address Findings keep their
+  own sessions and have no worker mailbox. A send naming only the environment is
+  still routed as usual: a Multi Review does not make it a pipeline environment.
 
 Decisions:
 

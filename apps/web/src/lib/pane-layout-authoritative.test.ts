@@ -306,6 +306,54 @@ describe("hydratePaneLayoutDependencies", () => {
     expect(hydrateBuildPipeline.mock.calls.map(([id]) => id)).toEqual(["pipeline-1", "pipeline-1"]);
   });
 
+  test("notes and brief survive serialization and authoritative cold reload", async () => {
+    const { createPersistedPaneLayoutInput } = await import("./pane-layout-persistence");
+    const root = leaf("default", [
+      {
+        id: "brief",
+        type: "key-information",
+        keyInformationTabData: {
+          environmentId: "env-1",
+          pipelineId: "pipeline-1",
+        },
+      },
+      {
+        id: "notes",
+        type: "key-information",
+        keyInformationTabData: {
+          environmentId: "env-1",
+          pipelineId: "pipeline-1",
+          view: "notes",
+        },
+      },
+    ]);
+    if (root.kind !== "leaf") throw new Error("expected leaf");
+    root.activeTabId = "notes";
+    let state = paneState(root);
+    for (let reload = 0; reload < 2; reload++) {
+      const saved = JSON.parse(
+        JSON.stringify({
+          ...persisted(root),
+          ...createPersistedPaneLayoutInput(state),
+        }),
+      );
+      useBuildPipelineStore.setState({ pipelines: new Map() });
+      hydrateBuildPipeline.mockImplementationOnce(async (id) => {
+        useBuildPipelineStore.setState({
+          pipelines: new Map([[id, { id, environmentId: "env-1" } as never]]),
+        });
+      });
+      await hydratePaneLayoutDependencies(saved.root);
+      state = reconcileAuthoritativePaneLayout(
+        "env-1",
+        saved,
+        paneState(leaf("default", [{ id: "plain", type: "plain" }])),
+      )!;
+      expect(state.root).toEqual(root);
+    }
+    expect(hydrateBuildPipeline.mock.calls.map(([id]) => id)).toEqual(["pipeline-1", "pipeline-1"]);
+  });
+
   test("loads only the records this client is missing", async () => {
     useBuildPipelineStore.setState({
       pipelines: new Map([["known-pipeline", {} as never]]),

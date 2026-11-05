@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { TranscriptScrollController } from "@/lib/transcript-scroll/transcript-scroll-controller";
 import { createRef } from "react";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type { VirtuosoHandle } from "react-virtuoso";
@@ -99,6 +100,37 @@ describe("NativeChatShell", () => {
   afterAll(() => {
     globalThis.ResizeObserver = originalResizeObserver;
     mock.module("./VirtualizedMessageList", () => realVirtualizedMessageListSnapshot);
+  });
+
+  test("mounts the prompt rail only with a controller and an uncentered composer, using dock measurements", () => {
+    const props = shellProps();
+    const controller = new TranscriptScrollController({ current: null });
+    const messages: NativeMessage[] = [
+      { id: "prompt", role: "user", content: "Hello", parts: [], createdAt: "2026-11-05" },
+    ];
+    const { rerender } = render(<NativeChatShell {...props} messages={messages} />);
+    expect(screen.queryByTestId("transcript-prompt-navigator")).toBeNull();
+    rerender(
+      <NativeChatShell
+        {...props}
+        messages={messages}
+        scrollProps={{ ...props.scrollProps, controller }}
+      />,
+    );
+    expect(screen.getByTestId("transcript-prompt-navigator")).toBeTruthy();
+    screen.getByTestId("compose-dock").getBoundingClientRect = () => ({ height: 173 }) as DOMRect;
+    act(() => resizeCallback?.([], resizeObserver!));
+    expect(screen.getByTestId("transcript-prompt-navigator").style.bottom).toBe("173px");
+    rerender(
+      <NativeChatShell
+        {...props}
+        centerCompose
+        messages={messages}
+        scrollProps={{ ...props.scrollProps, controller }}
+      />,
+    );
+    expect(screen.queryByTestId("transcript-prompt-navigator")).toBeNull();
+    controller.dispose();
   });
 
   test("reserves the measured dock height for pinned content and tracks growth", () => {

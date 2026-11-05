@@ -1,8 +1,16 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Client as McpClient, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
-import { ARTIFACT_TOOL_POLICY } from "@orkestrator/protocol/rich-content-policy";
+import {
+  ARTIFACT_TOOL_POLICY,
+  STATIC_PRESENTATION_POLICY,
+} from "@orkestrator/protocol/rich-content-policy";
 import { ARTIFACT_TOOL_NAMES } from "@orkestrator/protocol/transcript-artifacts";
 import { AgentToolsServer } from "../agent-tools.js";
+import {
+  ARTIFACT_ONLY_SERVER_INSTRUCTIONS,
+  ARTIFACT_TOOL_INSTRUCTIONS,
+  artifactAuthoringNotice,
+} from "./tools.js";
 import { WorkflowResultService } from "../workflow-result-service.js";
 import {
   CONVERSATION,
@@ -275,5 +283,41 @@ describe("artifact tools over the real MCP server", () => {
     } finally {
       await client.close();
     }
+  });
+});
+
+describe("visual guidance and authoring availability", () => {
+  test("the concise guidance names chart fences and the static document display", () => {
+    for (const text of [ARTIFACT_TOOL_INSTRUCTIONS, ARTIFACT_ONLY_SERVER_INSTRUCTIONS]) {
+      expect(text).toContain("```chart fences");
+      expect(text).toContain("displayed in the transcript");
+      expect(text).toContain(`${STATIC_PRESENTATION_POLICY.maxDocumentBytes / 1024} KiB`);
+    }
+  });
+
+  test("an available host adds nothing, and a host that does not report adds nothing", () => {
+    expect(artifactAuthoringNotice({ preview: true, interactive: true })).toBe("");
+    expect(artifactAuthoringNotice(undefined)).toBe("");
+  });
+
+  test("a missing renderer is stated with its reason, and replay is kept separate", () => {
+    const notice = artifactAuthoringNotice({
+      preview: false,
+      previewReason: "Headless Chromium is not installed",
+      interactive: false,
+    });
+    expect(notice).toContain("cannot currently be verified or published");
+    expect(notice).toContain("Headless Chromium is not installed");
+    expect(notice).toContain("already published still display");
+  });
+
+  test("a host without interactive preparation says only that", () => {
+    const notice = artifactAuthoringNotice({ preview: true, interactive: false });
+    expect(notice).toContain("html-interactive");
+    expect(notice).toContain("html-static, mermaid and chart artifacts still work");
+  });
+
+  test("the service reports its real runner status", () => {
+    expect(h.service.authoringAvailability().preview).toBe(true);
   });
 });

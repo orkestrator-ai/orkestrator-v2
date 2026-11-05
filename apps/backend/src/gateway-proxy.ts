@@ -1,6 +1,7 @@
 import type { GatewayContext } from "./gateway-context.js";
 import {
   DESIGN_FRAME_DOCUMENT,
+  STATIC_HTML_FRAME_DOCUMENT,
   GATEWAY_DESIGN_FRAME_CONTENT_SECURITY_POLICY,
   GATEWAY_RENDERER_CONTENT_SECURITY_POLICY,
 } from "@orkestrator/protocol/renderer-content-security-policy";
@@ -79,7 +80,8 @@ const log = createLogger("gateway");
 function staticDocumentContentSecurityPolicy(root: string, filePath: string): string | null {
   const relativePath = path.relative(root, filePath).toLowerCase();
   if (relativePath === "index.html") return GATEWAY_RENDERER_CONTENT_SECURITY_POLICY;
-  if (relativePath === DESIGN_FRAME_DOCUMENT) return GATEWAY_DESIGN_FRAME_CONTENT_SECURITY_POLICY;
+  if (relativePath === DESIGN_FRAME_DOCUMENT || relativePath === STATIC_HTML_FRAME_DOCUMENT)
+    return GATEWAY_DESIGN_FRAME_CONTENT_SECURITY_POLICY;
   return null;
 }
 

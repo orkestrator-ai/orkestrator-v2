@@ -66,6 +66,7 @@ import {
   type ArtifactRolloutFlags,
   type ArtifactRuntimeParts,
   type ArtifactServiceContext,
+  type ArtifactAuthoringAvailability,
 } from "./service-context.js";
 import type { ArtifactIdentityOverrides } from "./service-identity.js";
 import { ArtifactPreviews } from "./service-preview.js";
@@ -99,6 +100,7 @@ export function readArtifactRolloutFlags(
     richMarkdown: on("ORKESTRATOR_RICH_MARKDOWN"),
     artifactPublication: on("ORKESTRATOR_ARTIFACT_PUBLICATION"),
     liveInteractive: on("ORKESTRATOR_ARTIFACT_LIVE_INTERACTIVE"),
+    staticPresentation: on("ORKESTRATOR_ARTIFACT_STATIC_PRESENTATION"),
   };
 }
 
@@ -317,6 +319,22 @@ export class TranscriptArtifactService {
   /** Artifact authoring tools are advertised while publication is enabled. */
   toolsEnabled(): boolean {
     return this.ctx.rollout().artifactPublication;
+  }
+
+  /**
+   * Whether agents can verify HTML and Mermaid artifacts right now. Tool
+   * registration alone does not prove it: the preview worker can be missing.
+   * Already published documents replay from stored bytes either way.
+   */
+  authoringAvailability(): ArtifactAuthoringAvailability {
+    const status = this.ctx.runtime.runner?.status();
+    return {
+      preview: status?.available === true,
+      ...(status?.available === true
+        ? {}
+        : { previewReason: status?.reason ?? "Preview runtime is not installed" }),
+      interactive: status?.available === true && Boolean(this.ctx.runtime.preparer),
+    };
   }
 
   /**

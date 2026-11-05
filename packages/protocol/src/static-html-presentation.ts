@@ -1,0 +1,542 @@
+/**
+ * Presentation of a published `html-static` artifact as a real document in
+ * the transcript: a trusted runtime that runs inside an opaque sandboxed frame
+ * (`sandbox="allow-scripts"`, never `allow-same-origin`), and the narrow,
+ * versioned channel between it and the host card.
+ *
+ * The frame only ever displays the verified effective HTML the host hands it.
+ * It sanitizes it again with the design runtime's static rules (scripts,
+ * frames, event handlers and executable URLs removed; inline SVG and CSS
+ * kept), applies the application theme, reports its content height and a few
+ * interaction booleans, and asks the host to open a link only after a real
+ * click. Nothing here can reach a tool, the composer, a backend command, the
+ * clipboard, application shortcuts or model context.
+ *
+ * Messages, frame to host: `ready` (carries the per-mount nonce), `rendered`,
+ * `size`, `error`, `interaction`, `link-request`, `escape`. Host to frame:
+ * `render` (once per mount) and `theme`. Every message after `ready` carries
+ * the mount's generation; the host also checks the sender window.
+ */
+import { normalizeArtifactLink } from "./artifact-frame-channel.js";
+import { FRAME_CHANNEL_POLICY, STATIC_PRESENTATION_POLICY } from "./rich-content-policy.js";
+
+export const STATIC_HTML_FRAME_CHANNEL = "orkestrator-static-html";
+export const STATIC_HTML_FRAME_PROTOCOL_VERSION = 1;
+/**
+ * Version of the transcript presentation runtime. It is part of the cache
+ * identity of a displayed document; it is not part of any verification
+ * receipt, so changing it never re-verifies or rewrites a publication.
+ */
+export const STATIC_HTML_PRESENTATION_RUNTIME_VERSION = "static-html-presentation:v1";
+
+/** Per-mount readiness nonce and render generation. */
+export const STATIC_HTML_MOUNT_ID = /^[A-Za-z0-9_-]{16,64}$/;
+
+export const STATIC_HTML_FRAME_ERROR_CODES = [
+  "too-large",
+  "too-many-elements",
+  "invalid-render",
+  "render-failed",
+] as const;
+export type StaticHtmlFrameErrorCode = (typeof STATIC_HTML_FRAME_ERROR_CODES)[number];
+
+export interface StaticHtmlFrameTheme {
+  appearance: "light" | "dark";
+  reducedMotion: boolean;
+  /** `--ork-*` custom properties, already sanitized by the host. */
+  tokens: Record<string, string>;
+}
+
+interface Envelope {
+  channel: typeof STATIC_HTML_FRAME_CHANNEL;
+  v: 1;
+}
+
+export type StaticHtmlFrameMessage =
+  | (Envelope & { type: "ready"; nonce: string })
+  | (Envelope & {
+      type: "rendered";
+      generation: string;
+      height: number;
+      elementCount: number;
+      /** The document uses `--ork-*` tokens, so it follows the application theme. */
+      themed: boolean;
+    })
+  | (Envelope & { type: "size"; generation: string; height: number })
+  | (Envelope & { type: "error"; generation: string; code: StaticHtmlFrameErrorCode })
+  | (Envelope & {
+      type: "interaction";
+      generation: string;
+      focused: boolean;
+      hasSelection: boolean;
+      pointerSelecting: boolean;
+    })
+  | (Envelope & { type: "link-request"; generation: string; url: string; label: string })
+  | (Envelope & { type: "escape"; generation: string });
+
+export type StaticHtmlHostMessage =
+  | (Envelope & {
+      type: "render";
+      generation: string;
+      html: string;
+      theme: StaticHtmlFrameTheme;
+      /** The receipt's profile: the appearance a document without tokens was verified under. */
+      verifiedAppearance: "light" | "dark";
+    })
+  | (Envelope & { type: "theme"; generation: string; theme: StaticHtmlFrameTheme });
+
+export type StaticHtmlFrameRejection =
+  | "not-object"
+  | "too-large"
+  | "wrong-channel"
+  | "wrong-version"
+  | "unknown-type"
+  | "bad-shape"
+  | "generation-mismatch";
+
+const MESSAGE_KEYS: Record<StaticHtmlFrameMessage["type"], readonly string[]> = {
+  ready: ["nonce"],
+  rendered: ["generation", "height", "elementCount", "themed"],
+  size: ["generation", "height"],
+  error: ["generation", "code"],
+  interaction: ["generation", "focused", "hasSelection", "pointerSelecting"],
+  "link-request": ["generation", "url", "label"],
+  escape: ["generation"],
+};
+
+const MAX_REPORTED_HEIGHT = 100_000;
+
+function validHeight(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isFinite(value) &&
+    value >= 0 &&
+    value <= MAX_REPORTED_HEIGHT
+  );
+}
+
+/**
+ * Validate one frame-to-host message: exact keys, bounded size, known type,
+ * and (after `ready`) the mount's generation. The caller checks the sender
+ * window and the nonce.
+ */
+export function parseStaticHtmlFrameMessage(
+  data: unknown,
+  generation: string | null,
+): { ok: true; message: StaticHtmlFrameMessage } | { ok: false; reason: StaticHtmlFrameRejection } {
+  if (typeof data !== "object" || data === null || Array.isArray(data))
+    return { ok: false, reason: "not-object" };
+  const record = data as Record<string, unknown>;
+  const keys = Object.keys(record);
+  if (keys.length > 8) return { ok: false, reason: "too-large" };
+  let bytes = 0;
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string") bytes += value.length + key.length;
+    else if (typeof value === "object" && value !== null) return { ok: false, reason: "bad-shape" };
+    else bytes += key.length + 8;
+  }
+  if (bytes > FRAME_CHANNEL_POLICY.maxMessageBytes) return { ok: false, reason: "too-large" };
+  if (record.channel !== STATIC_HTML_FRAME_CHANNEL) return { ok: false, reason: "wrong-channel" };
+  if (record.v !== STATIC_HTML_FRAME_PROTOCOL_VERSION)
+    return { ok: false, reason: "wrong-version" };
+  const type = record.type;
+  if (typeof type !== "string" || !Object.hasOwn(MESSAGE_KEYS, type))
+    return { ok: false, reason: "unknown-type" };
+  const allowed = ["channel", "v", "type", ...MESSAGE_KEYS[type as StaticHtmlFrameMessage["type"]]];
+  if (keys.some((key) => !allowed.includes(key)) || keys.length !== allowed.length)
+    return { ok: false, reason: "bad-shape" };
+  if (type === "ready") {
+    return typeof record.nonce === "string" && STATIC_HTML_MOUNT_ID.test(record.nonce)
+      ? { ok: true, message: record as unknown as StaticHtmlFrameMessage }
+      : { ok: false, reason: "bad-shape" };
+  }
+  if (generation === null || record.generation !== generation)
+    return { ok: false, reason: "generation-mismatch" };
+  switch (type) {
+    case "rendered":
+      if (
+        !validHeight(record.height) ||
+        typeof record.themed !== "boolean" ||
+        typeof record.elementCount !== "number" ||
+        !Number.isInteger(record.elementCount) ||
+        record.elementCount < 0 ||
+        record.elementCount > STATIC_PRESENTATION_POLICY.maxElements
+      )
+        return { ok: false, reason: "bad-shape" };
+      break;
+    case "size":
+      if (!validHeight(record.height)) return { ok: false, reason: "bad-shape" };
+      break;
+    case "error":
+      if (
+        typeof record.code !== "string" ||
+        !(STATIC_HTML_FRAME_ERROR_CODES as readonly string[]).includes(record.code)
+      )
+        return { ok: false, reason: "bad-shape" };
+      break;
+    case "interaction":
+      if (
+        typeof record.focused !== "boolean" ||
+        typeof record.hasSelection !== "boolean" ||
+        typeof record.pointerSelecting !== "boolean"
+      )
+        return { ok: false, reason: "bad-shape" };
+      break;
+    case "link-request":
+      if (
+        typeof record.url !== "string" ||
+        typeof record.label !== "string" ||
+        record.label.length > FRAME_CHANNEL_POLICY.maxLinkLabelCharacters ||
+        normalizeArtifactLink(record.url) === null
+      )
+        return { ok: false, reason: "bad-shape" };
+      break;
+  }
+  return { ok: true, message: record as unknown as StaticHtmlFrameMessage };
+}
+
+/**
+ * The trusted runtime of the presentation frame. Self-contained: it is
+ * serialized with `toString()` into the frame document, so it may not refer
+ * to anything outside its own body (limits arrive as `config`).
+ *
+ * The sanitizer (`clean`, `elementCount`) is the design runtime's static rule
+ * set, kept line-for-line equivalent to `installDesignRuntime` and pinned by
+ * a parity test; see `docs/architecture/rich-transcripts.md` for why it is
+ * not shared by reference.
+ */
+export function installStaticHtmlPresentationRuntime(config: {
+  nonce: string | null;
+  maxHtmlBytes: number;
+  maxElements: number;
+  maxLinkCharacters: number;
+}) {
+  const CHANNEL = "orkestrator-static-html";
+  const MOUNT_ID = /^[A-Za-z0-9_-]{16,64}$/;
+  const fromHash = /^#([A-Za-z0-9_-]{16,64})$/.exec(window.location.hash)?.[1] ?? null;
+  const nonce = config.nonce ?? fromHash;
+  let generation: string | null = null;
+
+  const forbidden = "script,iframe,frame,object,embed,base,meta,link,portal,applet";
+  const externalUrl = /^\s*(?:https?:)?\/\//i;
+  const cssExternal = /url\(\s*['"]?\s*(?:https?:)?\/\//gi;
+  const cssImport = /@import\s/gi;
+  interface Counts {
+    scripts: number;
+    handlers: number;
+    externalReferences: number;
+    forbiddenElements: number;
+    executableUrls: number;
+  }
+  function countCss(text: string | null, counts: Counts) {
+    if (!text) return;
+    counts.externalReferences += (text.match(cssExternal) ?? []).length;
+    counts.externalReferences += (text.match(cssImport) ?? []).length;
+  }
+  function clean(doc: Document | DocumentFragment, counts: Counts) {
+    doc.querySelectorAll(forbidden).forEach((node) => {
+      if (node.tagName.toLowerCase() === "script") counts.scripts++;
+      else counts.forbiddenElements++;
+      node.remove();
+    });
+    for (const node of Array.from(doc.querySelectorAll("*"))) {
+      if (node.tagName.toLowerCase() === "style") countCss(node.textContent, counts);
+      for (const attr of Array.from(node.attributes)) {
+        const lower = attr.name.toLowerCase();
+        if (/^on/i.test(attr.name)) {
+          counts.handlers++;
+          node.removeAttribute(attr.name);
+        } else if (["srcdoc", "nonce", "http-equiv", "action", "formaction"].includes(lower)) {
+          counts.forbiddenElements++;
+          node.removeAttribute(attr.name);
+        } else if (["href", "src", "xlink:href", "srcset", "poster"].includes(lower)) {
+          if (/^(?:javascript|vbscript):/i.test(attr.value.trim())) {
+            counts.executableUrls++;
+            node.removeAttribute(attr.name);
+          } else if (externalUrl.test(attr.value) && lower !== "href") {
+            counts.externalReferences++;
+          }
+        } else if (lower === "style") {
+          countCss(attr.value, counts);
+        }
+      }
+      if (node instanceof HTMLTemplateElement) clean(node.content, counts);
+    }
+  }
+  function elementCount(root: Document | DocumentFragment): number {
+    let total = 0;
+    for (const node of Array.from(root.querySelectorAll("*"))) {
+      total++;
+      if (node instanceof HTMLTemplateElement) total += elementCount(node.content);
+    }
+    return total;
+  }
+
+  const post = (message: Record<string, unknown>) => {
+    try {
+      window.parent.postMessage({ channel: CHANNEL, v: 1, ...message }, "*");
+    } catch {
+      // A detached frame has no parent to report to.
+    }
+  };
+
+  interface Theme {
+    appearance: "light" | "dark";
+    reducedMotion: boolean;
+    tokens: Record<string, string>;
+  }
+  // A document that names no token was authored against its verified profile,
+  // often with hard-coded colours. It keeps that profile on an opaque canvas,
+  // because inheriting a dark theme's pale text could make it unreadable.
+  let themed = false;
+  const appliedTokens = new Set<string>();
+  function applyTheme(theme: unknown) {
+    const value = (theme ?? {}) as Partial<Theme>;
+    const appearance = value.appearance === "dark" ? "dark" : "light";
+    const root = document.documentElement;
+    for (const key of Array.from(appliedTokens)) root.style.removeProperty(key);
+    appliedTokens.clear();
+    if (value.tokens && typeof value.tokens === "object") {
+      for (const [key, token] of Object.entries(value.tokens).slice(0, 64)) {
+        if (
+          /^--ork-[a-z0-9-]{1,40}$/.test(key) &&
+          typeof token === "string" &&
+          token.length < 200
+        ) {
+          root.style.setProperty(key, token);
+          appliedTokens.add(key);
+        }
+      }
+    }
+    root.dataset.orkTheme = appearance;
+    root.dataset.orkReducedMotion = value.reducedMotion === true ? "true" : "false";
+    root.style.colorScheme = appearance;
+  }
+
+  // Zero-specificity defaults: authored CSS always wins over them.
+  const HOST_STYLE =
+    ":where(html){-webkit-text-size-adjust:100%;overflow-wrap:break-word}" +
+    ":where(img,video){max-width:100%;height:auto}" +
+    ":where(svg){max-width:100%}" +
+    ":where(summary){cursor:pointer}" +
+    "[data-ork-reduced-motion=true] *{animation-duration:0s!important;transition-duration:0s!important}";
+  const THEMED_STYLE =
+    ":where(html){color:var(--ork-foreground,CanvasText);font-family:var(--ork-font-sans,system-ui,sans-serif)}" +
+    ":where(body){margin:12px}" +
+    ":where(a){color:var(--ork-primary,LinkText)}";
+  const VERIFIED_STYLE =
+    ":where(html){background:Canvas;color:CanvasText;font-family:system-ui,-apple-system,sans-serif}";
+
+  function measure(): number {
+    const root = document.documentElement.getBoundingClientRect().height;
+    const body = document.body ? document.body.scrollHeight : 0;
+    return Math.ceil(Math.max(root, body));
+  }
+  let lastHeight = -1;
+  let sizeTimer: ReturnType<typeof setTimeout> | null = null;
+  function scheduleSize() {
+    if (!generation || sizeTimer) return;
+    // At most one report per 300 ms; the latest height always arrives.
+    sizeTimer = setTimeout(() => {
+      sizeTimer = null;
+      const height = measure();
+      // A frame in a hidden tab has no layout; its last real height stands.
+      if (height === 0 || height === lastHeight || !generation) return;
+      lastHeight = height;
+      post({ type: "size", generation, height });
+    }, 300);
+  }
+
+  let interaction = { focused: false, hasSelection: false, pointerSelecting: false };
+  let interactionTimer: ReturnType<typeof setTimeout> | null = null;
+  function noteInteraction(patch: Partial<typeof interaction>) {
+    const next = { ...interaction, ...patch };
+    if (
+      next.focused === interaction.focused &&
+      next.hasSelection === interaction.hasSelection &&
+      next.pointerSelecting === interaction.pointerSelecting
+    )
+      return;
+    interaction = next;
+    if (!generation || interactionTimer) return;
+    interactionTimer = setTimeout(() => {
+      interactionTimer = null;
+      if (generation) post({ type: "interaction", generation, ...interaction });
+    }, 100);
+  }
+
+  function render(html: unknown, theme: unknown, verifiedAppearance: unknown): void {
+    const fail = (code: string) => post({ type: "error", generation, code });
+    if (typeof html !== "string") return fail("invalid-render");
+    if (new TextEncoder().encode(html).length > config.maxHtmlBytes) return fail("too-large");
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    clean(doc, {
+      scripts: 0,
+      handlers: 0,
+      externalReferences: 0,
+      forbiddenElements: 0,
+      executableUrls: 0,
+    });
+    const total = elementCount(doc);
+    if (total > config.maxElements) return fail("too-many-elements");
+    document.documentElement.replaceChildren(
+      ...Array.from(doc.documentElement.childNodes).map((node) => document.importNode(node, true)),
+    );
+    for (const attr of Array.from(document.documentElement.attributes))
+      document.documentElement.removeAttribute(attr.name);
+    for (const attr of Array.from(doc.documentElement.attributes))
+      document.documentElement.setAttribute(attr.name, attr.value);
+    const style = document.createElement("style");
+    style.setAttribute("data-ork-presentation", "");
+    themed = /--ork-/.test(html);
+    style.textContent = HOST_STYLE + (themed ? THEMED_STYLE : VERIFIED_STYLE);
+    document.head.prepend(style);
+    applyTheme(
+      themed
+        ? theme
+        : {
+            appearance: verifiedAppearance,
+            reducedMotion: (theme as Partial<Theme> | null)?.reducedMotion,
+            tokens: {},
+          },
+    );
+    const observer = new ResizeObserver(scheduleSize);
+    observer.observe(document.documentElement);
+    if (document.body) observer.observe(document.body);
+    lastHeight = measure();
+    post({ type: "rendered", generation, height: lastHeight, elementCount: total, themed });
+  }
+
+  window.addEventListener("message", (event: MessageEvent) => {
+    if (event.source !== window.parent) return;
+    const data = event.data as Record<string, unknown> | null;
+    if (!data || typeof data !== "object" || data.channel !== CHANNEL || data.v !== 1) return;
+    if (data.type === "render") {
+      // One document per mount: a second render is ignored, never merged.
+      if (generation !== null || typeof data.generation !== "string") return;
+      if (!MOUNT_ID.test(data.generation)) return;
+      generation = data.generation;
+      try {
+        render(data.html, data.theme, data.verifiedAppearance);
+      } catch {
+        post({ type: "error", generation, code: "render-failed" });
+      }
+    } else if (
+      data.type === "theme" &&
+      themed &&
+      generation !== null &&
+      data.generation === generation
+    ) {
+      applyTheme(data.theme);
+      scheduleSize();
+    }
+  });
+
+  // Navigation never happens inside the frame. A real primary click on an
+  // http(s) link becomes a request the host shows as its own control;
+  // in-document fragments scroll the frame itself.
+  const linkOf = (target: EventTarget | null): Element | null =>
+    target instanceof Element ? target.closest("a, area") : null;
+  document.addEventListener(
+    "click",
+    (event) => {
+      const anchor = linkOf(event.target);
+      if (!anchor) return;
+      event.preventDefault();
+      if (!event.isTrusted || event.button !== 0 || !generation) return;
+      const href = (
+        anchor.getAttribute("href") ??
+        anchor.getAttributeNS("http://www.w3.org/1999/xlink", "href") ??
+        ""
+      ).trim();
+      if (href.startsWith("#")) {
+        let id = href.slice(1);
+        try {
+          id = decodeURIComponent(id);
+        } catch {
+          // A malformed escape names no element.
+        }
+        const destination = id ? document.getElementById(id) : null;
+        const scroller = document.scrollingElement;
+        if (destination && scroller) scroller.scrollTop += destination.getBoundingClientRect().top;
+        return;
+      }
+      if (!/^https?:\/\//i.test(href) || href.length > config.maxLinkCharacters) return;
+      const label = (anchor.textContent ?? "").replace(/\s+/g, " ").trim().slice(0, 200);
+      post({ type: "link-request", generation, url: href, label });
+    },
+    true,
+  );
+  document.addEventListener(
+    "auxclick",
+    (event) => {
+      if (linkOf(event.target)) event.preventDefault();
+    },
+    true,
+  );
+  document.addEventListener("submit", (event) => event.preventDefault(), true);
+  document.addEventListener(
+    "keydown",
+    (event) => {
+      // Escape returns focus to the transcript; no other key leaves the frame.
+      if (event.key === "Escape" && generation) post({ type: "escape", generation });
+    },
+    true,
+  );
+  document.addEventListener("toggle", scheduleSize, true);
+  document.addEventListener("selectionchange", () => {
+    const selection = document.getSelection();
+    noteInteraction({ hasSelection: Boolean(selection && !selection.isCollapsed) });
+  });
+  window.addEventListener("focus", () => noteInteraction({ focused: true }));
+  window.addEventListener("blur", () => noteInteraction({ focused: false }));
+  document.addEventListener("pointerdown", () => noteInteraction({ pointerSelecting: true }), true);
+  for (const name of ["pointerup", "pointercancel"])
+    document.addEventListener(name, () => noteInteraction({ pointerSelecting: false }), true);
+
+  const start = () => {
+    if (nonce && MOUNT_ID.test(nonce)) post({ type: "ready", nonce });
+  };
+  if (document.readyState === "loading")
+    document.addEventListener("DOMContentLoaded", start, { once: true });
+  else start();
+}
+
+function runtimeScript(nonce: string | null): string {
+  const config = {
+    nonce,
+    maxHtmlBytes: STATIC_PRESENTATION_POLICY.maxDocumentBytes,
+    maxElements: STATIC_PRESENTATION_POLICY.maxElements,
+    maxLinkCharacters: FRAME_CHANNEL_POLICY.maxLinkCharacters,
+  };
+  return `(${installStaticHtmlPresentationRuntime.toString()})(${JSON.stringify(config)});`;
+}
+
+function frameDocument(scriptSource: string, scriptAttributes: string, script: string): string {
+  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src ${scriptSource}; style-src 'unsafe-inline'; img-src data:; font-src data:; media-src 'none'; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"></head><body><script${scriptAttributes}>${script}</script></body></html>`;
+}
+
+/**
+ * Development form, for a `srcdoc` frame: only the nonce-bearing bootstrap
+ * runs. `mountNonce` is also the readiness nonce the frame reports.
+ */
+export function staticHtmlFrameBootstrap(mountNonce: string): string {
+  if (!STATIC_HTML_MOUNT_ID.test(mountNonce)) throw new Error("Invalid mount nonce");
+  return frameDocument(
+    `'nonce-${mountNonce}'`,
+    ` nonce="${mountNonce}"`,
+    runtimeScript(mountNonce),
+  );
+}
+
+/**
+ * Production form, emitted as a file beside `index.html`. Its policy pins the
+ * script's hash, and the frame reads its readiness nonce from the URL
+ * fragment the host appends per mount. The hash function is a parameter
+ * because this module also runs in the browser.
+ */
+export function staticHtmlFrameDocument(sha256Base64: (script: string) => string): string {
+  const script = runtimeScript(null);
+  return frameDocument(`'sha256-${sha256Base64(script)}'`, "", script);
+}

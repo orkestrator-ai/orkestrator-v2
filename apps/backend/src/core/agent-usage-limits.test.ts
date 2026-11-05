@@ -7,6 +7,7 @@ import {
   turnOutcomeFailureKind,
 } from "./agent-usage-limits.js";
 import { compatibilityPathUsage } from "./compatibility-path-usage.js";
+import { resumeAfterSwitch } from "./control-mcp-account-tools.js";
 import type { Environment, PersistedNativeAgentSession } from "./models.js";
 
 const NOW = Date.parse("2026-10-30T12:00:00Z");
@@ -216,4 +217,20 @@ test("cache expiry serves lastOk as stale without changing fetchedAt", async () 
   } finally {
     setSystemTime();
   }
+});
+
+test("after a switch the coordinator is told to resume exactly the limited tabs", () => {
+  const tab = { environmentId: "env-a", environmentName: "A", tabId: "tab-1" };
+  expect(resumeAfterSwitch([tab])).toEqual({
+    limitedTabs: [tab],
+    resumeStep: expect.stringContaining("Only these tabs"),
+  });
+  expect(resumeAfterSwitch([])).toEqual({
+    limitedTabs: [],
+    resumeStep: expect.stringContaining("nothing to resume"),
+  });
+  // Unreadable: the coordinator reads them itself rather than guessing.
+  expect(resumeAfterSwitch(undefined)).toEqual({
+    resumeStep: expect.stringContaining("Call get_usage_limits"),
+  });
 });

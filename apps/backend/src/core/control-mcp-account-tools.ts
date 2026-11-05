@@ -49,7 +49,11 @@ import type { ControlMcpInvoker } from "./control-shared-actions.js";
  * permission is this machine's, checked here and again by
  * `run_granted_agent_account_switch` as it records the switch; it still
  * refuses a signed-out or known-exhausted account, and past the hourly limit
- * the switch asks the user after all.
+ * the switch asks the user after all. A switch either permission allowed is
+ * recorded as a request that ran without asking, which is how the user sees
+ * it. Resuming the tabs the limit stopped stays the coordinator's job: a
+ * switch that ran returns them (`limitedTabs`, `resumeStep`) and an approved
+ * one's mail says to read them.
  */
 
 export const ACCOUNT_TOOL_CAPABILITIES: ReadonlyArray<readonly [string, string]> = [
@@ -267,7 +271,36 @@ async function refuseExhausted(
  * permission or a self-timer's. Either way it is recorded where the user sees
  * it, and there is nothing for the user to approve.
  */
-function unattendedResult(
+/**
+ * The tabs a switch should resume: this project's tabs on that machine whose
+ * newest recorded turn stopped on that provider's usage limit, from the same
+ * reader as `get_usage_limits`. `undefined` when it cannot be read.
+ */
+export type ResumeTabs = JsonRecord[] | undefined;
+
+/** What the coordinator does about the limited tabs once a switch ran. */
+export function resumeAfterSwitch(tabs: ResumeTabs): JsonRecord {
+  if (tabs === undefined) {
+    return {
+      resumeStep:
+        "Call get_usage_limits to find the tabs that stopped on this provider's usage limit, then send each a short prompt with send_prompt_to_tab (for example 'continue') so it runs on the new account.",
+    };
+  }
+  if (tabs.length === 0) {
+    return {
+      limitedTabs: [],
+      resumeStep:
+        "No tab of this project is recorded as stopped on this provider's usage limit, so there is nothing to resume.",
+    };
+  }
+  return {
+    limitedTabs: tabs,
+    resumeStep:
+      "Resume each tab in limitedTabs: send it one short prompt with send_prompt_to_tab (for example 'continue'), so it runs again on the new account. Only these tabs: any other tab was not stopped by the limit, and a tab that is busy now was already resumed. Each one wakes you when its turn ends.",
+  };
+}
+
+async function unattendedResult(
   request: GrantedRequest,
   view: {
     machineView: JsonRecord;
@@ -277,6 +310,7 @@ function unattendedResult(
     accountLabel: string;
   },
   authorizedBy: JsonRecord,
+  resume: () => Promise<ResumeTabs>,
 ) {
   const permission =
     request.authorizedBy === "self-timer" ? "the timer's permission" : "the standing permission";
@@ -314,8 +348,9 @@ function unattendedResult(
     effect: agentAccountSwitchEffect(view.platform),
     nextStep:
       request.authorizedBy === "self-timer"
-        ? "It already ran under the permission the user gave this timer; it is listed for them with the account. Tell the user which account you switched from and to, on which machine, and why. Tabs stopped on a usage limit need a new prompt to run again."
-        : "It already ran: the user allowed coordinators to switch without asking, so there is nothing for them to approve. Tell the user which account you switched from and to, on which machine, and why. Tabs stopped on a usage limit need a new prompt to run again.",
+        ? "It already ran under the permission the user gave this timer; it is listed for them with the account. Tell the user which account you switched from and to, on which machine, and why. Then follow resumeStep."
+        : "It already ran: the user allowed coordinators to switch without asking, so there is nothing for them to approve. Tell the user which account you switched from and to, on which machine, and why. Then follow resumeStep.",
+    ...resumeAfterSwitch(await resume()),
   });
 }
 
@@ -591,7 +626,7 @@ export function registerAccountTools(server: McpServer, context: AccountToolCont
       title: "Switch the active provider account",
       description:
         "Make another signed-in Claude or Codex login the active account for that provider on this machine (or another with nodeId), through the same switch as Settings. Machine-wide: every session of that provider on that machine moves to it on its next turn; a turn already running finishes on the current account; no restart. " +
-        `It changes which subscription is billed, so it needs the user's permission, in one of three forms. (1) With scheduleId of the self-timer that woke you, whose reminder says it carries the user's permission, it switches at once. (2) When the user turned on "Let coordinators switch accounts without asking" for that provider in Settings on this machine, it switches at once with no approval, on this machine and on machines this one controls (state switched, authorizedBy standing-grant); the user is shown each such switch, but you still tell them what you did. Even then it refuses a signed-out account or one whose usage reading says it is used up, and after ${COORDINATOR_ACCOUNT_SWITCH_LIMIT.switches} switches of one provider on one machine within an hour it asks the user instead and says why. (3) Otherwise it creates a request the user approves in Orkestrator and you are told the outcome by mail. Read state in the result: only pending means the user must approve; never ask the user to approve a switch that already ran. Only switch when the user asked for switches, never on your own initiative; the standing permission is that request made in advance. Take accountId from list_provider_accounts and prefer one with hasAllocationLeft true. Like any manual switch, it pins the account while automatic switching is on.`,
+        `It changes which subscription is billed, so it needs the user's permission, in one of three forms. (1) With scheduleId of the self-timer that woke you, whose reminder says it carries the user's permission, it switches at once. (2) When the user turned on "Let coordinators switch accounts without asking" for that provider in Settings on this machine, it switches at once with no approval, on this machine and on machines this one controls (state switched, authorizedBy standing-grant); the user is shown each such switch, but you still tell them what you did. Even then it refuses a signed-out account or one whose usage reading says it is used up, and after ${COORDINATOR_ACCOUNT_SWITCH_LIMIT.switches} switches of one provider on one machine within an hour it asks the user instead and says why. (3) Otherwise it creates a request the user approves in Orkestrator and you are told the outcome by mail. Read state in the result: only pending means the user must approve; never ask the user to approve a switch that already ran. Only switch when the user asked for switches, never on your own initiative; the standing permission is that request made in advance. Take accountId from list_provider_accounts and prefer one with hasAllocationLeft true. Like any manual switch, it pins the account while automatic switching is on. A switch that ran lists limitedTabs, this project's tabs on that machine whose last turn stopped on that provider's usage limit: nothing restarts them, so send each one short prompt with send_prompt_to_tab (resumeStep says so).`,
       inputSchema: z.object({
         requestId: z
           .string()
@@ -666,6 +701,34 @@ export function registerAccountTools(server: McpServer, context: AccountToolCont
       const previous = snapshot.accounts.find(
         (entry) => entry.platform === platform && entry.id === previousAccountId,
       );
+      // Read once the switch ran: the tabs of this project on that machine
+      // whose last turn stopped on this provider's limit.
+      const resumeTabs = async (): Promise<ResumeTabs> => {
+        try {
+          const target = machine.self ? null : await context.onNode(machine.nodeId);
+          if (!machine.self && !target) return undefined;
+          const limits = target
+            ? await target.call<JsonRecord>("get_project_usage_limits", {
+                projectId: target.projectId,
+              })
+            : await invoke<JsonRecord>("get_project_usage_limits", {
+                projectId: scope.projectId,
+              });
+          if (!Array.isArray(limits.limitedTabs)) return undefined;
+          return (limits.limitedTabs as JsonRecord[])
+            .filter((tab) => tab.agent === platform)
+            .map((tab) => ({
+              environmentId: tab.environmentId,
+              environmentName: tab.environmentName,
+              tabId: tab.tabId,
+              observedAt: tab.observedAt,
+              ...(tab.signal ? { signal: tab.signal } : {}),
+              ...(target ? { nodeId: machine.nodeId } : {}),
+            }));
+        } catch {
+          return undefined;
+        }
+      };
       const previousTarget = {
         ...(previousAccountId ? { previousAccountId } : {}),
         ...(previous ? { previousAccountLabel: accountName(previous) } : {}),
@@ -690,7 +753,7 @@ export function registerAccountTools(server: McpServer, context: AccountToolCont
           // The same requestId already asked the user; report that request.
           return existingRequestResult(run.request, requestId, machineView, platform, accountId);
         }
-        return unattendedResult(
+        return await unattendedResult(
           run.request,
           {
             machineView,
@@ -705,6 +768,7 @@ export function registerAccountTools(server: McpServer, context: AccountToolCont
             grantedAt: grant.grantedAt,
             recordId: run.request.requestId,
           },
+          resumeTabs,
         );
       }
       let askedBecause: string | undefined;
@@ -728,7 +792,7 @@ export function registerAccountTools(server: McpServer, context: AccountToolCont
         if (run.outcome === "ran" || run.outcome === "existing") {
           const { request } = run;
           if (request.authorizedBy) {
-            return unattendedResult(
+            return await unattendedResult(
               request,
               {
                 machineView,
@@ -738,6 +802,7 @@ export function registerAccountTools(server: McpServer, context: AccountToolCont
                 accountLabel: account.label,
               },
               { setting: "standing-grant", recordId: request.requestId },
+              resumeTabs,
             );
           }
           // The same requestId already asked the user; report that request.

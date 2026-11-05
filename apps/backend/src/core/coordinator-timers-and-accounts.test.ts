@@ -990,6 +990,19 @@ test("scenario: check in 2 hours, find usage limits, switch to an account with a
   ).filter((row) => row.hasAllocationLeft === true && row.active === false);
   expect(candidates.map((row) => row.accountId)).toEqual(["acct-work"]);
 
+  // A Codex tab stopped on Codex's limit: a Claude switch does not resume it.
+  sessions.push({
+    ...session("env-b", "tab-codex", [
+      {
+        requestId: "r4",
+        outcome: "failed",
+        error: "Request refused.",
+        failureKind: "usage-limit",
+        observedAt: "2026-10-30T10:30:00.000Z",
+      },
+    ]),
+    agent: "codex",
+  } as PersistedNativeAgentSession);
   const switched = await call("main", "switch_provider_account", {
     requestId: "scenario-switch",
     platform: "claude",
@@ -1005,6 +1018,18 @@ test("scenario: check in 2 hours, find usage limits, switch to an account with a
     scope: "machine",
     authorizedBy: { scheduleId, userInstruction: instruction },
     effect: expect.stringContaining("next turn"),
+    nextStep: expect.stringContaining("resumeStep"),
+    // The tabs to resume: this provider's limited tabs only.
+    limitedTabs: [
+      {
+        environmentId: "env-a",
+        environmentName: "Feature A",
+        tabId: "tab-a",
+        observedAt: "2026-10-30T10:00:00.000Z",
+        signal: "text",
+      },
+    ],
+    resumeStep: expect.stringContaining("send_prompt_to_tab"),
   });
   expect(switches).toEqual([{ machine: SELF, platform: "claude", accountId: "acct-work" }]);
   // No approval was needed, and none is left waiting.

@@ -1515,22 +1515,28 @@ export class NodeCoordination {
         toEnvironmentId: request.requestedBy.coordinatorEnvironmentId,
         toTabId: request.requestedBy.coordinatorTabId,
         subject: `Request ${request.state}: ${describeNodeAction(request)}`.slice(0, 200),
-        body: `${describeNodeAction(request)}: ${request.state}. ${request.result?.message ?? ""}${
-          request.kind === "update-agents-md" && request.state === "rejected"
-            ? " Do not propose these AGENTS.md entries again in this conversation unless the user asks."
-            : request.kind === "answer-worker-question" && request.state === "rejected"
-              ? " The question is still waiting in the worker's tab for the user; do not propose the same answer again unless the user asks."
-              : request.kind === "answer-worker-question" && request.state === "executed"
-                ? " Its delegation still wakes you when the worker's turn ends."
-                : request.kind === "message-project-home" && request.state === "executed"
-                  ? " For the next 3 hours your messages to the project home are sent without approval, but working there is still discouraged: prefer an isolated environment."
-                  : request.kind === "message-project-home"
-                    ? " The message was not sent. Do the work in an isolated environment instead (start_build_pipeline or launch_environment), or ask the user."
-                    : ""
-        }`.trim(),
+        body: `${describeNodeAction(request)}: ${request.state}. ${request.result?.message ?? ""}${requesterFollowUp(request)}`.trim(),
       },
     );
   }
+}
+
+/** What the requesting coordinator does next, by kind and outcome. */
+function requesterFollowUp(request: NodeActionRequest): string {
+  if (request.kind === "update-agents-md" && request.state === "rejected")
+    return " Do not propose these AGENTS.md entries again in this conversation unless the user asks.";
+  if (request.kind === "answer-worker-question" && request.state === "rejected")
+    return " The question is still waiting in the worker's tab for the user; do not propose the same answer again unless the user asks.";
+  if (request.kind === "answer-worker-question" && request.state === "executed")
+    return " Its delegation still wakes you when the worker's turn ends.";
+  // Nothing resumes a tab a limit stopped but a new prompt.
+  if (request.kind === "switch-agent-account" && request.state === "executed")
+    return " Now resume the tabs that stopped on that provider's usage limit: call get_usage_limits (with that machine's nodeId if the switch was on another machine) and send each listed tab of that provider one short prompt with send_prompt_to_tab, for example 'continue'. Only those tabs; a busy tab was already resumed.";
+  if (request.kind === "message-project-home" && request.state === "executed")
+    return " For the next 3 hours your messages to the project home are sent without approval, but working there is still discouraged: prefer an isolated environment.";
+  if (request.kind === "message-project-home")
+    return " The message was not sent. Do the work in an isolated environment instead (start_build_pipeline or launch_environment), or ask the user.";
+  return "";
 }
 
 function agentsMdPayload(value: unknown): unknown {

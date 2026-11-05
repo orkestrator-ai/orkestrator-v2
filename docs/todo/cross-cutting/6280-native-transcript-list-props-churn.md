@@ -2,7 +2,7 @@
 
 ## Task analysis
 
-Analysed 2026-11-05 against `main` at `533acf703`, with 5960 task 1 applied. Carried over from [5960](5960-native-tab-render-churn.md) task 2, which found the source of the nested update and recorded why it was not removed there.
+Analysed 2026-11-05 against `main` at `533acf703`, with 5960 task 1 applied. Carried over from 5960 (native tab render churn) task 2, which found the source of the nested update and recorded why it was not removed there. 5960 is deleted; its last version, with the outcome table, is in Git history at `ba209e5b1` (`git show ba209e5b1:docs/todo/cross-cutting/5960-native-tab-render-churn.md`).
 
 ### Tasks
 
@@ -73,4 +73,4 @@ Measure in Chromium with a fixture transcript and a fake backend: no provider tu
 
 ## Replaces
 
-- [5960 native tab render churn](5960-native-tab-render-churn.md) task 2: its problem, measurements and options are carried here.
+- 5960 native tab render churn, task 2: its problem, measurements and options are carried here. Task 1 was done in the same change. The deleted file is at `ba209e5b1`.

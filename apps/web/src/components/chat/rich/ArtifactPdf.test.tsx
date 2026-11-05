@@ -186,13 +186,20 @@ describe("artifact PDF representation", () => {
       );
       fireEvent.click(await screen.findByRole("button", { name: "Download PDF" }));
       await waitFor(() => expect(clicks).toHaveLength(1));
-      expect(calls(TRANSCRIPT_ARTIFACT_COMMANDS.readRepresentation).at(-1)).toEqual({
-        environmentId: "env-1",
-        logicalSessionKey: "session-1",
-        publicationId: "pub_pdfcard01",
-        representation: "pdf",
-        paper: defaultPrintPaper(),
-      });
+      // The card also reads its capture and displayed document, in no fixed order.
+      expect(
+        calls(TRANSCRIPT_ARTIFACT_COMMANDS.readRepresentation).filter(
+          (request) => request.representation === "pdf",
+        ),
+      ).toEqual([
+        {
+          environmentId: "env-1",
+          logicalSessionKey: "session-1",
+          publicationId: "pub_pdfcard01",
+          representation: "pdf",
+          paper: defaultPrintPaper(),
+        },
+      ]);
       // Filename derived from the title on the client, never a path.
       expect(clicks[0]!.download).toBe("Quarterly report v2.pdf");
       // The saved preview stays the print fallback.

@@ -40,7 +40,6 @@ Worked out on 2026-11-03 against `main` at `a44641cbc`, from the 167 work files 
 | E5 | [efficiency-logging-database/0760-e5-database-upkeep.md](efficiency-logging-database/0760-e5-database-upkeep.md) | `0760`, `0800`, `0910`, `0920` |
 | E7 | [efficiency-logging-database/0420-e7-diff-scans.md](efficiency-logging-database/0420-e7-diff-scans.md) | `0420`, `0440`, `0450`, `0460`, `0570` |
 | E26 | [efficiency-logging-database/0400-e26-local-desktop-transport.md](efficiency-logging-database/0400-e26-local-desktop-transport.md) | `0400`, `0860` |
-| E19 | [efficiency-logging-database/0100-e19-terminal-websocket.md](efficiency-logging-database/0100-e19-terminal-websocket.md) | `0100`, `0375`, `0610` |
 | E18 | [efficiency-logging-database/0280-e18-gateway-events.md](efficiency-logging-database/0280-e18-gateway-events.md) | `0280`, `0290`, `0300`, `0370` |
 | E24 | [efficiency-logging-database/0310-e24-gateway-static-and-preview.md](efficiency-logging-database/0310-e24-gateway-static-and-preview.md) | `0310`, `0365` |
 | E13 | [efficiency-logging-database/0720-e13-silent-failures.md](efficiency-logging-database/0720-e13-silent-failures.md) | `0720`, `0830` |
@@ -64,7 +63,7 @@ Worked out on 2026-11-03 against `main` at `a44641cbc`, from the 167 work files 
 | Storage | 1. E5 (Database upkeep)<br>2. S-0190 (Provider secrets at rest) | `storage-database.ts`, `storage-backups.ts`, `storage-stores.ts` |
 | Git scans and file reads | 1. E7 (Diff scans)<br>2. E-0580 (File RPC and usage report) | `commands-files.ts`, `git-scopes.ts`, `diff-stats-service.ts` |
 | Desktop | 1. E26 (Local desktop transport)<br>2. E-0691 (Preview capture data URLs) | `apps/desktop/electron/` windows, IPC and preloads, `backend-process.ts` |
-| Gateway | 1. E19 (Terminal WebSocket)<br>2. E-0120 (Bearer terminal streams)<br>3. S-0200 (Workspace grant allowlist)<br>4. E18 (Gateway events)<br>5. E24 (Gateway static and preview)<br>6. S-0160 (Descriptor process binding) | `gateway-auth.ts`, `gateway-events.ts`, `gateway-proxy.ts`, `gateway-support-*.ts`, `terminal-websocket-server.ts` |
+| Gateway | 1. E-0120 (Bearer terminal streams)<br>2. S-0200 (Workspace grant allowlist)<br>3. E18 (Gateway events)<br>4. E24 (Gateway static and preview)<br>5. S-0160 (Descriptor process binding) | `gateway-auth.ts`, `gateway-events.ts`, `gateway-proxy.ts`, `gateway-support-*.ts`, `terminal-websocket-server.ts` |
 | Logging and diagnostics | 1. E13 (Silent failures)<br>2. E17 (Dead code)<br>3. E15 (Health and diagnostics)<br>4. E16 (Log controls) | `application-logging.ts`, the metrics route and the logging settings |
 
 ## Work with no lane

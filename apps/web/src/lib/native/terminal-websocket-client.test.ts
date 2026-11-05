@@ -4,10 +4,12 @@ import {
   encodeTerminalBinaryFrame,
   TERMINAL_BINARY_FRAME_TYPE,
   TERMINAL_WEBSOCKET_BINARY_HEADER_BYTES,
+  TERMINAL_WEBSOCKET_INPUT_RESULTS_SUBPROTOCOL,
   TERMINAL_WEBSOCKET_MAX_BINARY_BYTES,
   TERMINAL_WEBSOCKET_SUBPROTOCOL,
 } from "@orkestrator/protocol/terminal-websocket";
 import {
+  DEFAULT_TERMINAL_ACKNOWLEDGEMENT_DELAY_MS,
   TerminalWebSocketClient,
   terminalWebSocketUrl,
   type TerminalSocketPayload,
@@ -190,6 +192,174 @@ async function denySubscriptionRepeatedly(
   }
 }
 
+describe("TerminalWebSocketClient cumulative input results", () => {
+  function connected() {
+    const harness = createHarness();
+    harness.client.subscribe("session-a", () => undefined);
+    harness.client.subscribe("session-b", () => undefined);
+    const socket = harness.sockets[0]!;
+    openAndReady(socket);
+    acceptSubscription(socket, "session-a", 11);
+    acceptSubscription(socket, "session-b", 22);
+    return { ...harness, socket };
+  }
+
+  function trackInput(client: TerminalWebSocketClient, sessionId: string, data: string) {
+    const outcome = { settled: "pending" as "pending" | "resolved" | "rejected", message: "" };
+    void client.enqueueInput(sessionId, data)!.then(
+      () => {
+        outcome.settled = "resolved";
+      },
+      (error: Error) => {
+        outcome.settled = "rejected";
+        outcome.message = error.message;
+      },
+    );
+    return outcome;
+  }
+
+  test("settles input up to the id on that channel and nothing else", async () => {
+    const { client, socket } = connected();
+    const first = trackInput(client, "session-a", "a");
+    const second = trackInput(client, "session-a", "b");
+    const other = trackInput(client, "session-b", "c");
+    const third = trackInput(client, "session-a", "d");
+    const resize = client.resize("session-a", 80, 24);
+    const ids = sentBinaries(socket).map((frame) => frame.revision);
+    const resizeId = sentControls(socket).findLast((frame) => frame.type === "resize")!
+      .operationId as number;
+
+    socket.receive(
+      JSON.stringify({ type: "input-results", channelId: 11, throughOperationId: ids[1] }),
+    );
+    await tick();
+    expect(first.settled).toBe("resolved");
+    expect(second.settled).toBe("resolved");
+    expect(other.settled).toBe("pending");
+    expect(third.settled).toBe("pending");
+
+    // A resize has its own id in the same sequence, and its own answer.
+    socket.receive(
+      JSON.stringify({ type: "input-results", channelId: 11, throughOperationId: resizeId + 10 }),
+    );
+    await tick();
+    expect(third.settled).toBe("resolved");
+    expect(other.settled).toBe("pending");
+    socket.receive(
+      JSON.stringify({
+        type: "operation-result",
+        channelId: 11,
+        operationId: resizeId,
+        operation: "resize",
+        ok: true,
+      }),
+    );
+    expect(await resize).toBe(true);
+    socket.receive(
+      JSON.stringify({ type: "input-results", channelId: 22, throughOperationId: ids[2] }),
+    );
+    await tick();
+    expect(other.settled).toBe("resolved");
+    expect(socket.closes).toEqual([]);
+  });
+
+  test("a failure stays a failure when a later result covers its id", async () => {
+    const { client, socket } = connected();
+    const first = trackInput(client, "session-a", "a");
+    const failed = trackInput(client, "session-a", "b");
+    const last = trackInput(client, "session-a", "c");
+    const ids = sentBinaries(socket).map((frame) => frame.revision);
+
+    socket.receive(
+      JSON.stringify({ type: "input-results", channelId: 11, throughOperationId: ids[0] }),
+    );
+    socket.receive(
+      JSON.stringify({
+        type: "operation-result",
+        channelId: 11,
+        operationId: ids[1],
+        operation: "input",
+        ok: false,
+        message: "Terminal session is not running",
+      }),
+    );
+    socket.receive(
+      JSON.stringify({ type: "input-results", channelId: 11, throughOperationId: ids[2] }),
+    );
+    await tick();
+    expect(first.settled).toBe("resolved");
+    expect(failed).toEqual({ settled: "rejected", message: "Terminal session is not running" });
+    expect(last.settled).toBe("resolved");
+  });
+
+  test("a retired recovery channel cannot settle input on its replacement", async () => {
+    const { client, socket } = connected();
+    const retired = trackInput(client, "session-a", "before recovery");
+    client.observeSnapshot("session-a", { generation: 2, revision: 0 });
+    await tick();
+    expect(retired.settled).toBe("rejected");
+    expect(sentControls(socket)).toContainEqual({ type: "unsubscribe", channelId: 11 });
+    acceptSubscription(socket, "session-a", 33, 2, 0);
+    const replacement = trackInput(client, "session-a", "after recovery");
+    const frame = sentBinaries(socket).at(-1)!;
+    expect(frame.channelId).toBe(33);
+
+    // Cover even the newer operation's id: identity, not just the id range,
+    // must prevent the old channel from resolving this promise.
+    socket.receive(
+      JSON.stringify({
+        type: "input-results",
+        channelId: 11,
+        throughOperationId: frame.revision,
+      }),
+    );
+    await tick();
+    expect(replacement.settled).toBe("pending");
+    expect(retired.settled).toBe("rejected");
+    socket.receive(
+      JSON.stringify({
+        type: "input-results",
+        channelId: 33,
+        throughOperationId: frame.revision,
+      }),
+    );
+    await tick();
+    expect(replacement.settled).toBe("resolved");
+    expect(socket.closes).toEqual([]);
+  });
+
+  test("a result for a channel it has left settles nothing", async () => {
+    const { client, socket } = connected();
+    const pending = trackInput(client, "session-a", "a");
+    const id = sentBinaries(socket)[0]!.revision;
+    socket.receive(
+      JSON.stringify({ type: "input-results", channelId: 99, throughOperationId: id }),
+    );
+    await tick();
+    expect(pending.settled).toBe("pending");
+    expect(socket.closes).toEqual([]);
+  });
+
+  test("an older server's one result per input still settles each", async () => {
+    const { client, socket } = connected();
+    const first = trackInput(client, "session-a", "a");
+    const second = trackInput(client, "session-a", "b");
+    const ids = sentBinaries(socket).map((frame) => frame.revision);
+    socket.receive(
+      JSON.stringify({
+        type: "operation-result",
+        channelId: 11,
+        operationId: ids[0],
+        operation: "input",
+        ok: true,
+      }),
+    );
+    await tick();
+    expect(first.settled).toBe("resolved");
+    expect(second.settled).toBe("pending");
+  });
+});
+
 describe("TerminalWebSocketClient", () => {
   test("owns one socket, multiplexes channels, acknowledges operations, and reconnects cursors", async () => {
     const { client, sockets, fallback, socketReady, channelReady } = createHarness();
@@ -198,7 +368,10 @@ describe("TerminalWebSocketClient", () => {
     const unsubscribeA = client.subscribe("session-a", outputA);
     const unsubscribeB = client.subscribe("session-b", outputB);
     expect(sockets).toHaveLength(1);
-    expect(sockets[0]!.protocols).toBe(TERMINAL_WEBSOCKET_SUBPROTOCOL);
+    expect(sockets[0]!.protocols).toEqual([
+      TERMINAL_WEBSOCKET_INPUT_RESULTS_SUBPROTOCOL,
+      TERMINAL_WEBSOCKET_SUBPROTOCOL,
+    ]);
     expect(sockets[0]!.binaryType).toBe("arraybuffer");
 
     const first = sockets[0]!;
@@ -353,6 +526,35 @@ describe("TerminalWebSocketClient", () => {
 
     expect(sentControls(socket).filter((frame) => frame.type === "ack")).toEqual([
       { type: "ack", channelId: 11, generation: 1, revision: 3 },
+    ]);
+  });
+
+  test("the default delay sends one acknowledgement for a burst of output", async () => {
+    expect(DEFAULT_TERMINAL_ACKNOWLEDGEMENT_DELAY_MS).toBe(1_000);
+    const { client, sockets } = createHarness({ acknowledgementDelayMs: undefined });
+    const unsubscribe = client.subscribe("session-a", () => undefined);
+    const socket = sockets[0]!;
+    openAndReady(socket);
+    acceptSubscription(socket, "session-a", 11, 1, 0);
+
+    for (const revision of [1, 2, 3, 4, 5]) {
+      socket.receive(
+        encodeTerminalBinaryFrame({
+          type: TERMINAL_BINARY_FRAME_TYPE.output,
+          channelId: 11,
+          generation: 1,
+          revision,
+          bytes: new TextEncoder().encode(`frame-${revision}`),
+        }),
+      );
+      await tick();
+    }
+    expect(sentControls(socket).some((frame) => frame.type === "ack")).toBe(false);
+
+    // Leaving the channel does not lose the cursor the delay was holding.
+    unsubscribe();
+    expect(sentControls(socket).filter((frame) => frame.type === "ack")).toEqual([
+      { type: "ack", channelId: 11, generation: 1, revision: 5 },
     ]);
   });
 

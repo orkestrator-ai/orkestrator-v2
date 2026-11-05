@@ -36,7 +36,7 @@ governs, marked "Decided".
 8. **tmux and container polling**: the rest of BG-1, BG-2 and BG-8, plus BG-7, BG-14 and BG-15. Status: open (BG-1, BG-2, BG-7 and BG-8 done 2026-11-03, image proven locally; BG-14 done 2026-11-04, its remaining live evidence in [5120](../transcripts-and-observation/5120-tmux-transcript-reopen-live-evidence.md); BG-15 open).
 9. **PR monitor cost**: batched queries, then activity backoff (BG-6, BG-13). Status: done (2026-11-03; live before-and-after numbers stay with task 1).
 10. **Other background jobs**: the rest of BG-3, plus BG-9, BG-11 and BG-12. Status: done (2026-11-02; live before-and-after numbers stay with task 1).
-11. **Gateway and preview proxy**: GW-5, GW-6, GW-8 to GW-12 and GW-14 to GW-16. Status: open (GW-8 and GW-9 done; GW-4 done; GW-2 done in 0052; GW-5, GW-6, GW-12 and GW-14 done 2026-11-04, a flooding terminal channel no longer desyncs a quiet one; GW-10, GW-11, GW-15 and GW-16 open).
+11. **Gateway and preview proxy**: GW-5, GW-6, GW-8 to GW-12 and GW-14 to GW-16. Status: open (GW-8 and GW-9 done; GW-4 done; GW-2 done in 0052; GW-5, GW-6, GW-12 and GW-14 done 2026-11-04, a flooding terminal channel no longer desyncs a quiet one; GW-16 done 2026-11-04, live checks beyond loopback Chromium are in [5080](5080-terminal-websocket-live-evidence.md); GW-10, GW-11 and GW-15 open).
 12. **Local desktop transport**: local windows on the filtered gateway transport, and the IPC payload costs (DK-1, DK-2, DK-5, DK-6). Status: done (DK-1, DK-2 and DK-5 on 2026-11-04 behind a setting that is off by default; DK-6 fixed on 2026-11-04 by tunnel v2, [4500](4500-preview-tunnel-one-socket-per-connection.md); the default flip is [4501](4501-local-window-transport-default.md)).
 13. **Toolchain startup and downloads**: stamp-based verification and resumable downloads (DK-3, DK-4). Status: done (2026-11-03; Electron launch-to-ready 10.2–13.8 s before, 1.6–1.9 s after; a cold-cache run still needs live evidence).
 14. **Docker image size**: layer order, the second Bun, npm caches, the leftover apt layer and the second Claude binary (DK-7 to DK-11). Status: open (DK-7, DK-8, DK-9 and DK-11 done 2026-11-02; amd64 image smoke and Docker qualification passed; DK-10 left for a maintainer decision).
@@ -1028,7 +1028,7 @@ Tests: `commands-pr-monitor-batch.test.ts` (reader rules, and the `gh` boundary 
 
 ### 11. Gateway and preview proxy
 
-**Problem.** Per-frame and per-request costs remain in the gateway (GW-10, GW-11, GW-15, GW-16). The preview proxy's missing upstream connection reuse (GW-8) and stripped ETags (GW-9), the terminal socket back-pressure (GW-6) and the event frame costs (GW-5, GW-12, GW-14) are fixed.
+**Problem.** Per-frame and per-request costs remain in the gateway (GW-10, GW-11, GW-15). The preview proxy's missing upstream connection reuse (GW-8) and stripped ETags (GW-9), the terminal socket back-pressure (GW-6), the event frame costs (GW-5, GW-12, GW-14) and the small per-chunk and per-frame costs (GW-16) are fixed.
 
 **Context.** Done: the shared SSE decoder is linear (GW-4). GW-2 is done in 0052 (D14). Done on 2026-11-02:
 
@@ -1038,6 +1038,7 @@ Tests: `commands-pr-monitor-batch.test.ts` (reader rules, and the `gh` boundary 
 - GW-5, done 2026-11-04: a frame is UTF-8 encoded once (`encodeGatewayFrame` in `gateway-event-replay.ts`), the replay ring holds that `Buffer` instead of the string, every client is written the same `Buffer`, and writers take the byte count as an argument (`EventClientWriter.write(chunk, byteLength?)`). Only short fixed strings such as keepalives are still measured by the writer.
 - GW-12, done 2026-11-04: `GatewayEvents.writeReplayFrames` writes one cursor frame per run of skipped events, just before the next matching frame or at the end of the window. The cursor it carries is the newest skipped revision. `gateway.connected`'s `replayed` count and the replay metrics still count the whole window.
 - GW-14, done 2026-11-04: `since()` finds the range with `slice(revision + 1 - oldest)`, and `replay.ring.oversizedAppends` in `/__orkestrator/metrics` counts frames larger than the ring's byte bound. Such a frame still empties the window, which keeps the gap detectable.
+- GW-16, done 2026-11-04. Idle deadlines: `gateway-proxy.ts` (`rewriteIdle`, `armIdleTimer`) and `preview-forward.ts` (`resetIdle`) refresh one timer per body. Decoders: two module-level decoders in `terminal-websocket-server.ts`. Operation results: on the `orkestrator-terminal.v1.input-results` subprotocol, input that succeeded is answered by one cumulative `input-results` frame per channel per flush; failures and resizes stay alone, and results collected so far go out ahead of any other control frame, so control frames keep their order. A client offering only v1 keeps one `operation-result` per input, and such a socket counts `terminal-websocket.per-input-results`. Acks: `DEFAULT_TERMINAL_ACKNOWLEDGEMENT_DELAY_MS` is 1 s. Tests: `apps/backend/tests/terminal-websocket-input-results.test.ts`, `terminal-websocket-client-gateway.test.ts` (the renderer's client against the real gateway), `gateway-proxy-idle-timers.test.ts`, the idle-deadline case in `preview-forward.test.ts`, and the cumulative-results and default-delay cases in `terminal-websocket-client.test.ts`.
 - Tests for these four: `apps/backend/tests/terminal-websocket-backpressure.test.ts`, `apps/backend/tests/gateway-frame-costs.test.ts`, and the window and oversized cases in `apps/backend/src/gateway-event-replay.test.ts`.
 - Tests for GW-8 and GW-9: `preview-upstream-pool.test.ts`, the reuse cases in `preview-forward.test.ts` and `preview-publication.test.ts`, `gateway-proxy-etag.test.ts`, and in `test:preview:browser` `e2e/preview/upstream-pool.spec.ts` (reuse, revocation and generation change close idle connections, legacy-route 304) plus the opt-in measurement `e2e/preview/vite-page-load.spec.ts`. The whole `test:preview:browser` suite with the Vite fixture passed twice in Chromium, Firefox and WebKit (58 passed, 2 skipped: the Chromium-only measurement). On beelink WebKit ran only with Ubuntu 24.04's `libicu74`, `libxml2` and `libflite1` libraries added to a private copy of the WebKit bundle (see 2680).
 
@@ -1085,7 +1086,49 @@ Review correction (2026-11-04): the original burst timings included a fixed 100 
 
 The noisy channel now desyncs sooner: about 110 frames (1.8 MB) earlier in this workload, because it no longer has the socket's 2 MiB to fill. The timings move with the host: an earlier `fan-out` pair on the same builds gave 447–481 µs before and 192–403 µs after, and the whole-window `since()` range after the change is wide. The desync, frame-measure and cursor counts did not vary between runs.
 
-Not re-checked: GW-10, GW-11, GW-15, GW-16.
+Not re-checked: GW-10, GW-11, GW-15.
+
+Re-checked GW-16 on 2026-11-04 against `main` at `e198fd4a7`: all four items held, at moved lines (`gateway-proxy.ts:313-329` and `:563-571`, `preview-forward.ts:316-326`, `terminal-websocket-server.ts:426` and `:586`, `operationResult` at `:1101`, `terminal-websocket-client.ts:99`). An ack was found to be redundant on the server: `channel()` already resets `invalidChannelFrames` for any valid channel, before the ack's own reset runs.
+
+`timer.refresh()` under Bun 1.4.4, which 0375 had not exercised: it moves the deadline from now, keeps an unreferenced timer unreferenced, and does nothing after `clearTimeout`, but re-arms a timer that has already fired. So `armIdleTimer` still creates a new timer after one fires, and the other two sites can only re-arm through data on a stream the firing already destroyed, which is a no-op. A refresh took about 36 ns against 91 ns for a clear and a new timer, so the saving is allocation churn rather than noticeable time.
+
+**GW-16 before and after.** `apps/backend/scripts/terminal-input-costs.ts`: the real gateway and the renderer's real client over a real socket, against a fake backend. The same script ran with the five changed sources at `e198fd4a7` and with this change, 5 runs before and 10 after (two sets, one either side of the before set), on one host with load average 3.5 to 5.9, Bun 1.4.4. Ranges are those runs. Raw JSON is in `output/efficiency/e19/` of the build worktree (git-ignored).
+
+| Workload | Measure | Before | After |
+| --- | --- | --- | --- |
+| `proxy-chunks`: one 64-chunk body through each idle deadline (buffered proxy, preview rewrite, preview forwarder) | Idle timers created per body, each site | 65 | 1 |
+| `typing`: 200 keystrokes 15 ms apart, each echoed | Decoders constructed | 253–256 | 0 |
+| | Result frames | 200 | 200 |
+| | Result bytes | 17,692 | 12,492 |
+| | Ack frames | 53–56 | 4 |
+| | Keystroke to result, median | 0.22–0.34 ms | 0.21–0.30 ms |
+| | Keystroke to result, 95th percentile | 0.35–0.54 ms | 0.34–0.51 ms |
+| | Writes and results in order, none lost | yes | yes |
+| `burst`: 200 keystrokes in one turn, writes complete at once | Decoders constructed | 200 | 0 |
+| | Result frames | 200 | 1 |
+| | Result bytes | 17,692 | 63 |
+| | All settled | 2.65–3.41 ms | 1.17–2.13 ms |
+| | Writes and results in order, none lost | yes | yes |
+| `burst-slow-write`: the same burst, each write takes 1 ms | Result frames | 200 | 200 |
+| | Result bytes | 17,692 | 12,492 |
+| | All settled | 250.8–253.4 ms | 250.2–262.0 ms |
+| `output`: one channel, 100 frames a second for 5 s | Ack frames | 100 | 5 |
+| | Acks per second | 17.6–17.7 | 0.87–0.88 |
+| | Ack payload bytes | 5,780 | 289 |
+
+The counts did not vary between runs, except the before `typing` acks and decoders shown as ranges. The latency ranges overlap, and these synthetic figures show no measurable added delay rather than none at all.
+
+**Real Chromium, real shell.** An isolated `dev:test` profile at this change, with the transport turned on and frames counted in the page (loopback, counts only). Chromium offered both subprotocols and the server selected input results.
+
+| 25 ms typing, then keys with no delay, then a reload | Negotiated | Offering only v1, as an older client |
+| --- | --- | --- |
+| Typing: input frames / result frames | 52 / 52 | 52 / 52 |
+| No-delay keys: input frames / result frames | 316 / 314 | 316 / 316 |
+| Failed results, socket closes | 0, 0 | 0, 0 |
+| Typed text intact in the terminal's output | yes | yes |
+| Input works after a reload | yes | yes |
+
+So on a real shell the frame count barely falls: each write finishes in its own event-loop turn, and Playwright's no-delay keys still arrive one at a time. A person typing, or keys over any path where results finish apart, gets one frame per key, about 29% smaller (88 to 62 bytes on average). The frame count only falls when results finish together, as in `burst`. No batching that adds no delay can do better than this, and a wait long enough to merge keystrokes would be the delay the ticket forbids. `e2e/agent-testing/terminal-input-resume.spec.ts -g websocket` also passed on that profile.
 
 **Decisions.**
 
@@ -1124,6 +1167,27 @@ Not re-checked: GW-10, GW-11, GW-15, GW-16.
   - **The report's `W/"<upstream>|<encoding>|rw<prefix-hash>"`.**
     - Pros: shorter.
     - Cons: loses whether the upstream tag was weak, so Vite would never answer 304; a rewriter change would revalidate stale rewrites.
+- **How to batch operation results (GW-16)?** Done.
+  - **A cumulative result per channel per flush, with failures alone (recommended).**
+    - Pros: no added wait, since the frame goes out in the flush a lone result would have used; 200 results become one when they finish together; each frame is smaller even when they do not; a failure keeps its message.
+    - Cons: a new frame and a negotiation, for one frame per key at typing speed, where only the bytes fall.
+  - **Leave it.**
+    - Pros: no protocol change, and the frames are small.
+    - Cons: one larger frame per key always.
+- **How to negotiate input results (GW-16)?** Done.
+  - **A second subprotocol, offered ahead of v1 (recommended).**
+    - Pros: settled in the upgrade, so it costs no frame or round trip; an older server selects v1 and an older client offers only v1, with no version check on either side; the backend can count older clients.
+    - Cons: a name to keep alongside v1 until the window passes.
+  - **A client frame after `ready.features`, as `ping` does.**
+    - Pros: follows the nearest precedent.
+    - Cons: results sent before it arrives need a second code path, and it adds a frame to every connection.
+- **Send fewer acks, or use them (GW-16)?** Done.
+  - **Send them once a second (recommended).**
+    - Pros: a client-only constant with no protocol change; 100 acks become 5 in the `output` workload.
+    - Cons: revisit if flow control ever wants them.
+  - **Use them as flow-control credit.**
+    - Pros: gives the server a true view of client progress.
+    - Cons: a much larger change, and GW-6's `bufferedAmount` watermark covers the same socket problem.
 - **How does a paused flush resume (GW-6)?** Done.
   - **From the `ws.send` callback, pausing only while a send is in flight (recommended).**
     - Pros: no work while a socket is stalled; a pause can never be left with nothing to wake it, whatever else `bufferedAmount` holds; corrected `terminal-burst` runs delivered all frames without desync (14–35 ms before, 19–33 ms after; insufficient to claim zero latency cost).
@@ -2256,7 +2320,8 @@ browser and real-stack suites were not run.
 
 - WEB-12, WEB-13 and WEB-18 with `localWindowGatewayTransport` on and off in a real Electron window: `local-gateway-transport-electron.spec.ts` was not run, because this host has no disposable display (`xvfb-run`). From code, the polls and the new reads all go through the same `invoke`, and neither the gateway nor the relay filters commands by name; the Chromium run exercised the gateway path only.
 - WEB-19 timings in Chromium: the numbers are production React under Happy DOM; no React Profiler run was made.
-- WEB-11 on a real mobile WebView and over a slow remote link: that a socket left dead in the background gets no pong and is replaced, and that 2.5 s is long enough for a healthy pong. Only fake-socket client tests and the real gateway's ping handling in a backend test have run.
+- WEB-11 on a real mobile WebView and over a slow remote link: that a socket left dead in the background gets no pong and is replaced, and that 2.5 s is long enough for a healthy pong. Only fake-socket client tests and the real gateway's ping handling in a backend test have run. Tracked in [5080](5080-terminal-websocket-live-evidence.md).
+- GW-16 past loopback Chromium: the input-results subprotocol through the Tailscale Serve route, a command-node relay in a browser, WebKit and a mobile WebView. Tracked in [5080](5080-terminal-websocket-live-evidence.md).
 
 ## Related
 
@@ -2313,6 +2378,46 @@ Verification named four desktop failures. None of them came from a gateway chang
 **Revoked-access recovery (three cases in `preview-transport-manager.test.ts`).** A real bug in tunnel v2: a pooled stream stayed reusable between the session `error` frame and the close frame, so a request after a revocation got a 502. Fixed in `PreviewTunnelSession`; the choice is recorded in [4500](4500-preview-tunnel-one-socket-per-connection.md).
 
 **Node pull-mode receive window (`preview-tunnel-session.test.ts`).** On Node 26.7.0 `read()` with no size returned one 64 KiB chunk of the four buffered, where the test expected all of them. The credit logic was correct, so the test now drains the stream until `read()` returns null. Only Node 26.7.0 is installed on the host, so the test was not run on an older Node.
+
+### Task 11: GW-16 cumulative input results (2026-11-04)
+
+Kept the report's recommended per-flush batching after measuring it, although a real shell at typing speed still gets one frame per key: it adds no wait, costs fewer bytes per key either way, and collapses results that finish together. A timed window would merge more, and the ticket rules out delaying a keystroke's result. Input-only, because resizes are rare and carry their own failures. The frame uses a new subprotocol rather than a `ready` feature, as the report suggested, so a socket's result format is fixed from its first frame. Results are collected per socket rather than per channel object, because a result can complete after its channel retired, and it is then sent and ignored exactly as the older frame was.
+
+### Task 11: leftovers from efficiency report 0100 (2026-11-04)
+
+Report `docs/reports/efficiency-logging-database/0100-e19-terminal-websocket.md` was checked item by item and deleted; `git show e198fd4a7:<that path>` still reads it. Its GW-6 and WEB-11 work was confirmed in code and tests. What needs evidence no host here could give went to [5080](5080-terminal-websocket-live-evidence.md).
+
+
+#### E19 retained task outcome table
+
+The complete pre-retirement report is readable with:
+`git show 48d2ed40c87dfda6cd1d681fa54bc930e26e03f8:docs/reports/efficiency-logging-database/0100-e19-terminal-websocket.md`.
+The six rows below preserve its original part/task numbering; the report stays deleted.
+
+| Original part / task | Outcome | Code and validation evidence |
+| --- | --- | --- |
+| 0100 task 1 — stop channel flushing above the socket watermark (GW-6) | Done; existing implementation confirmed | `apps/backend/src/terminal-websocket-server.ts`: `flush`, `socketBackedUp` and send-callback resume; `apps/backend/tests/terminal-websocket-backpressure.test.ts`, `terminal-websocket-stalled.integration.test.ts`; task 11 measurements above and `apps/backend/scripts/gateway-frame-costs.ts` terminal-flood workload. |
+| 0375 task 1 — refresh idle timers (GW-16) | Done | `apps/backend/src/gateway-proxy.ts` and `packages/protocol/src/node/preview-forward.ts`; `apps/backend/tests/gateway-proxy-idle-timers.test.ts` and `packages/protocol/src/node/preview-forward.test.ts` cover steady traffic, last-chunk silence deadlines and one timer per body. |
+| 0375 task 2 — reuse decoders (GW-16) | Done | Module-level fatal control and non-fatal input decoders in `apps/backend/src/terminal-websocket-server.ts`; `apps/backend/tests/terminal-websocket-input-results.test.ts` covers allocation counts, split UTF-8 and recovery after malformed input. |
+| 0375 task 3 — batch input operation results (GW-16) | Done; remote qualification moved | `packages/protocol/src/terminal-websocket.ts`, server `operationResult` / `queueInputResults`, client `resolveInputThrough`; protocol, server input-results, client-gateway and renderer client tests cover ordering, failures and v1 compatibility. Remote/browser matrix remains [5080 task 3](5080-terminal-websocket-live-evidence.md). |
+| 0375 task 4 — reduce advisory terminal acknowledgements (GW-16) | Done | `apps/web/src/lib/native/terminal-websocket-client.ts` default acknowledgement delay is 1 s; its owning tests cover coalescing; task 11 benchmark above records 100 to 5 acknowledgements in 5 seconds. |
+| 0610 task 1 — rebuild only unhealthy sockets on visibility return (WEB-11) | Done; device qualification moved | Client visibility probe and server ping handler; `apps/web/src/lib/native/terminal-websocket-client.visibility.test.ts` and `apps/backend/tests/gateway-terminal-liveness.test.ts`; [5080 task 2](5080-terminal-websocket-live-evidence.md) retains mobile/slow-link evidence. |
+
+| Original verification item or remaining qualification | Outcome / retained evidence |
+| --- | --- |
+| 0100: Bun `bufferedAmount`, send callbacks and quiet-channel desync reproduction | Done; task 11 measurements and backpressure / real stalled-peer tests above; terminal-flood workload reproduced the old desync. |
+| 0375: exercise `timer.refresh()` under Bun on these paths | Done; gateway and preview-forward owning tests exercise refresh, single allocation and cleanup. These real socket/wall-clock files are assigned to the slow tier; they remain runnable directly. |
+| 0610: how many users enabled the opt-in transport | Moved to [5080 task 1](5080-terminal-websocket-live-evidence.md); no real-install usage evidence collected. |
+| WEB-11 probe on a mobile WebView and slow link | Moved to [5080 task 2](5080-terminal-websocket-live-evidence.md). |
+| Negotiated results over Tailscale Serve, browser command-node relay, WebKit/mobile and a real-latency link | Moved to [5080 task 3](5080-terminal-websocket-live-evidence.md); earlier loopback Chromium evidence is recorded above. |
+
+### Task 11 review decisions (2026-11-04)
+
+**Task 11 — real-time validation.** Keep the actual socket and runtime timer tests and assign both owning files to the slow tier. This preserves integration evidence without making the deterministic default depend on host scheduling. A fake-clock rewrite could run in the default tier but would not exercise Bun's real `refresh()` and network paths. Silence assertions now measure from the final chunk.
+
+**Task 11 — compatibility usage.** Count the v1 path when an authenticated socket becomes ready, for both header and in-band authentication. Counting upgrades included peers that never authenticated; counting only input results would omit authenticated older peers before their first write. Tests cover unauthenticated, in-band and header-authenticated sockets.
+
+**Task 11 — coverage.** Added queue-saturation rejection between successful input results and a delayed successful result after channel unsubscribe. Corrected the flush comment to identify `queueControl` as the hard-limit owner.
 
 ### Task 4: following a section that has not settled (2026-11-04)
 

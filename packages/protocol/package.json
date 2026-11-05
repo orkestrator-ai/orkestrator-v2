@@ -133,6 +133,7 @@
     "./graphs/builtins": "./src/graphs/builtins/index.ts",
     "./graphs/capability-profiles": "./src/graphs/capability-profiles.ts",
     "./graphs/compile": "./src/graphs/compile.ts",
+    "./graphs/sha256": "./src/graphs/sha256.ts",
     "./graphs/describe": "./src/graphs/describe.ts",
     "./graphs/describe-prompt": "./src/graphs/describe-prompt.ts",
     "./graphs/examples": "./src/graphs/examples.ts",
@@ -303,12 +304,14 @@
     "./transcript-artifacts": "./src/transcript-artifacts.ts",
     "./transcript-artifacts-validation": "./src/transcript-artifacts-validation.ts",
     "./artifact-frame-channel": "./src/artifact-frame-channel.ts",
+    "./static-html-presentation": "./src/static-html-presentation.ts",
     "./css-resource-scan": "./src/css-resource-scan.ts",
     "./transcript-artifact-commands": "./src/transcript-artifact-commands.ts",
     "./transcript-media-pins": "./src/transcript-media-pins.ts",
     "./artifact-host-ipc": "./src/artifact-host-ipc.ts",
     "./testing/rich-content-fixtures": "./src/testing/rich-content-fixtures.ts",
-    "./testing/artifact-tool-fixtures": "./src/testing/artifact-tool-fixtures.ts"
+    "./testing/artifact-tool-fixtures": "./src/testing/artifact-tool-fixtures.ts",
+    "./testing/static-html-fixtures": "./src/testing/static-html-fixtures.ts"
   },
   "scripts": {
     "build": "bun check -p tsconfig.json",

@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import {
   Code2,
   Download,
   Expand,
+  FileText,
   Image as ImageIcon,
   Info,
   Play,
@@ -47,6 +48,8 @@ import {
 } from "@/stores/artifactLiveHostStore";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
+import { StaticHtmlArtifactView } from "./StaticHtmlArtifactView";
+import { staticHtmlPresentationSupported } from "./static-html-frame-source";
 import { NativeChart } from "./NativeChart";
 import { NativeChartSource } from "./NativeChartData";
 import { WorkflowSnapshotCard } from "./WorkflowSnapshotCard";
@@ -483,11 +486,26 @@ export function HtmlArtifactBody({
   scope,
   occurrenceKey,
 }: BodyProps & { view: ArtifactPublicationView }) {
-  const [choice, setChoice] = useRichViewField(occurrenceKey, "view", "preview" as RichViewChoice);
+  const capabilities = useTranscriptArtifactCapabilities();
+  const interactive = artifactRef.kind === "html-interactive";
+  // Replay needs only stored bytes: not the preview worker or `liveInteractive`.
+  const presentsDocument =
+    artifactRef.kind === "html-static" &&
+    capabilities?.rolloutFlags?.staticPresentation !== false &&
+    staticHtmlPresentationSupported();
+  const [choice, setChoice] = useRichViewField(
+    occurrenceKey,
+    "view",
+    (presentsDocument ? "document" : "preview") as RichViewChoice,
+  );
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [enlarged, setEnlarged] = useState(false);
+  const [expanded, setExpanded] = useState(false);
   const [pdfBusy, setPdfBusy] = useState(false);
   const showSource = choice === "source";
+  const showDocument = presentsDocument && choice === "document";
+  const closeExpanded = useCallback(() => setExpanded(false), []);
+  const openExpanded = useCallback(() => setExpanded(true), []);
   const firstCapture = view.receipt.captures[0] ?? null;
   const capture = useArtifactRepresentation(scope, artifactRef.publicationId, "capture", {
     enabled: firstCapture !== null,
@@ -504,8 +522,6 @@ export function HtmlArtifactBody({
       ? capture.value.data
       : null;
   const captureUrl = captureBase64 ? `data:image/png;base64,${captureBase64}` : null;
-  const interactive = artifactRef.kind === "html-interactive";
-  const capabilities = useTranscriptArtifactCapabilities();
   const liveEnabled = Boolean(
     capabilities?.liveInteractive && capabilities.rolloutFlags.liveInteractive,
   );
@@ -587,9 +603,17 @@ export function HtmlArtifactBody({
             />
           )
         ) : null}
+        {presentsDocument ? (
+          <ToolbarAction
+            label="Document"
+            pressed={showDocument}
+            onClick={() => setChoice("document")}
+            icon={<FileText aria-hidden="true" />}
+          />
+        ) : null}
         <ToolbarAction
-          label="Preview"
-          pressed={!showSource}
+          label={presentsDocument ? "Saved preview" : "Preview"}
+          pressed={!showSource && !showDocument}
           onClick={() => setChoice("preview")}
           icon={<ImageIcon aria-hidden="true" />}
         />
@@ -599,12 +623,20 @@ export function HtmlArtifactBody({
           onClick={() => setChoice("source")}
           icon={<Code2 aria-hidden="true" />}
         />
-        <ToolbarAction
-          label="Enlarge preview"
-          disabled={!captureUrl}
-          onClick={() => setEnlarged(true)}
-          icon={<Expand aria-hidden="true" />}
-        />
+        {showDocument ? (
+          <ToolbarAction
+            label="Expand document"
+            onClick={openExpanded}
+            icon={<Expand aria-hidden="true" />}
+          />
+        ) : (
+          <ToolbarAction
+            label="Enlarge preview"
+            disabled={!captureUrl}
+            onClick={() => setEnlarged(true)}
+            icon={<Expand aria-hidden="true" />}
+          />
+        )}
         <ToolbarAction
           label="Download PNG"
           disabled={!captureBase64}
@@ -673,6 +705,17 @@ export function HtmlArtifactBody({
           ) : (
             <BodyStatus state={source} label="Loading source" />
           )
+        ) : showDocument ? (
+          <StaticHtmlArtifactView
+            artifactRef={artifactRef}
+            view={view}
+            scope={scope}
+            occurrenceKey={occurrenceKey}
+            preview={preview}
+            expanded={expanded}
+            onExpand={openExpanded}
+            onCloseExpanded={closeExpanded}
+          />
         ) : (
           <>
             {!live && ended ? (

@@ -66,12 +66,12 @@ Two runtimes receiving identical events at identical latencies puts the loss bel
 both of them. Neither Bun, the watch plan nor the service is needed to reproduce it. What
 keeps `fseventsd` busy is still not established.
 
-After `6c454e5c5`, all at the same `fseventsd` load:
+With the change in `6c454e5c5`, `fseventsd` still at about 100% of a core. The Linux runs and the first macOS runs were on the working copy just before its darwin-only progress line was finalised:
 
 | Command | Result |
 | --- | --- |
-| `worktree-snapshots-git.test.ts` alone, macOS, three runs | 7 of 7 each, in 259.7 s, 77.8 s and 51.0 s |
-| With `worktree-watcher-real.test.ts`, macOS, two runs | Exit 0 in 124.7 s; 20 pass, 1 skip (Linux only), 0 fail in 100.8 s |
+| `worktree-snapshots-git.test.ts` alone, macOS, three runs | Exit 0 in 259.7 s (counts removed with the passing output); 7 of 7 in 77.8 s; 7 of 7 in 51.0 s |
+| With `worktree-watcher-real.test.ts`, macOS, three runs | Exit 0 in 124.7 s; 20 pass, 1 skip (Linux only), 0 fail in 100.8 s; at the committed code, exit 0 in 267.4 s |
 | Mutation: `plan: null` in the service test, macOS | Fails at `expect(scansStarted).toBe(scansBefore)`, 6 expected, 7 received, so it detects the plan being off |
 | `worktree-snapshots-git.test.ts`, `oven/bun:1.4.4` linux/arm64, three runs, one change per detection | 7 of 7 each, about 29 s |
 | `worktree-watcher-real.test.ts`, split and plan tests, same container | 50 of 50 |

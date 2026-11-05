@@ -75,9 +75,9 @@ These still follow the lane and conflict rules above.
 Batch C9 (Panel split) is closed. Its task-by-task outcomes are in the [closing report](../2026-11-05-c9-closing-report.md).
 
 Batch C8 (Tab strip) is closed. Its task-by-task outcome table ends the last
-version of its deleted report, which
-`git show "$(git log -1 --format=%H --diff-filter=D -- docs/reports/coordinator/0070-c8-tab-strip.md)^:docs/reports/coordinator/0070-c8-tab-strip.md"`
-prints. What it left is in to-do
+version of its deleted report, which the deletion commit's diff shows in full:
+`git show "$(git log -1 --format=%H --grep='close coordinator batch C8')"`.
+What it left is in to-do
 [5200](../../todo/coordinator-and-multi-review/5200-c8-tab-strip-follow-ups.md).
 
 | Finding | Disposition | Evidence |

@@ -166,3 +166,27 @@ historical open status remains; no assertion, timeout or skip was changed.
 
 Evidence: `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.P117Rf/review-fixes-component-browser.log.gz`
 and `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.wI7nDh/design-accessibility-owner.log.gz`.
+
+
+## Launch override review recurrence — 2026-11-05
+
+The required browser rerun on repair commit `c63d42e7a` repeated the missing
+plans (h2) treeitem attachment at line 613 in mobile Chromium. The command was
+`ORKESTRATOR_E2E_PORT=54487 mise run test:logged -- --name browser -- mise run test:browser`,
+with five Playwright workers on the shared host. Its output is retained at
+`/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.EQqosx/browser.log.gz`.
+The broad run was still active when this owner rerun finished; its eventual
+result is recorded separately in the Address Findings validation result.
+
+The complete unchanged mobile owner passed with one worker (exit 0,
+123.2 seconds):
+
+```sh
+ORKESTRATOR_E2E_PORT=54487 mise run test:logged -- --name browser-design-a11y-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/DesignCanvasAccessibility.spec.ts --project=mobile-chromium --workers=1 --output=output/playwright/design-a11y-address
+```
+
+Passing output was deleted by the bounded runner, so no per-test totals were
+retained. This owner reused the broad run's fixture server; it was a
+single-file rerun, not an idle-host qualification. No owner assertion, timeout,
+skip or fixture logic changed. The cause of the intermittent observation
+remains unestablished.

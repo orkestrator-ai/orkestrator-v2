@@ -131,8 +131,17 @@ describe("Codex sub-agent cards through the bridge and backend projection", () =
       // Running: three identified children and the rejected spawn, once each.
       const running = await stack.waitForProjection(
         (projection) =>
-          childCards(projection).length >= 3 &&
-          cards(projection).some((card) => card.name === "extra_check"),
+          ["Ada", "Grace", "Linus"].every((name) =>
+            childCards(projection).some(
+              (card) => card.name === name && card.actions.includes("tool:exec_command"),
+            ),
+          ) &&
+          cards(projection).some(
+            (card) =>
+              card.name === "extra_check" &&
+              card.state === "failure" &&
+              card.actions.includes("Agent could not start: agent limit reached."),
+          ),
         "three child cards and the rejected spawn",
       );
       const ids = childCards(running).map((card) => card.id!);

@@ -37,6 +37,11 @@ describe("StorageService store writers", () => {
       leases: ["environmentsFile"],
     });
     expect(stores.get("environmentsFile")!.paths).toBeGreaterThan(10);
+    // The same for projects, including the public operations' revision-checked edit.
+    expect(stores.get("projectsFile")).toMatchObject({
+      kind: "transactional",
+      leases: ["projectsFile"],
+    });
     expect(stores.get("environmentFinalPrFile")).toMatchObject({
       kind: "whole",
       leases: ["environmentsFile"],

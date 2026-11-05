@@ -40,7 +40,6 @@ Worked out on 2026-11-03 against `main` at `a44641cbc`, from the 167 work files 
 | E15 | [efficiency-logging-database/0750-e15-health-and-diagnostics.md](efficiency-logging-database/0750-e15-health-and-diagnostics.md) | `0750`, `0820`, `0810`, `0880`, `0780` |
 | E16 | [efficiency-logging-database/0790-e16-log-controls.md](efficiency-logging-database/0790-e16-log-controls.md) | `0790`, `0890`, `0900` |
 | E20 | [efficiency-logging-database/0240-e20-acp-bridge.md](efficiency-logging-database/0240-e20-acp-bridge.md) | `0270`, `0260`, `0240` |
-| E23 | [efficiency-logging-database/0620-e23-renderer-polling.md](efficiency-logging-database/0620-e23-renderer-polling.md) | `0620`, `0630`, `0660` |
 
 ## Lanes
 
@@ -67,7 +66,6 @@ These batches don't share a protected area. They only have to respect the confli
 - **S-0270 (iOS app review):** security `0270`
 - **S-0260 (Live checks on other platforms):** security `0260`
 - **E20 (ACP bridge):** efficiency-logging-database `0270`, `0260`, `0240`
-- **E23 (Renderer polling):** efficiency-logging-database `0620`, `0630`, `0660`
 - **E-0650 (Terminal container subscription):** efficiency-logging-database `0650`
 - **E-0694 (Attention follow polling):** efficiency-logging-database `0694`
 - **CI-0010 (Backend shard timeout):** ci-shard-validation `0010`
@@ -80,7 +78,6 @@ Don't run these pairs at the same time.
 | --- | --- | --- |
 | C3 (Sweep and reads) | C6 (Errors and dead ends) | `coordinator-service.ts`, `control-mcp-server.ts` |
 | C6 (Errors and dead ends) | E12 (Renderer store) | `useNativeAgentSession.ts`, `AgentNativeTab.controller.tsx` |
-| C7 (Work panel and navigation) | E23 (Renderer polling) | `useUserCommands.ts` |
 | E5 (Database upkeep) | E15 (Health and diagnostics) | `storage-backups.ts` |
 | E13 (Silent failures) | E20 (ACP bridge) | `commands-servers.ts`, `acp-context.ts` |
 
@@ -106,7 +103,7 @@ These files are named by several batches that can still run together. The report
 | `GlobalSettings.sections.tsx` | C6, E15, E17 |
 | `native-agent-display-tail-store.ts` | E5, E11 |
 | `usage-history-store.ts` | E15, E-0580 |
-| `App.tsx`, `MailTile.tsx` | E-0520 with E23 (`App.tsx`) and C7 (`MailTile.tsx`) |
+| `MailTile.tsx` | E-0520, C7 |
 
 ## How this was worked out
 

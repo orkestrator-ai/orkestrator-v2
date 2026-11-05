@@ -34,11 +34,10 @@ A batch file combines several reports as numbered parts and takes the rating of 
 | 18 | [0390-gw-7-websocket-compression.md](0390-gw-7-websocket-compression.md) | Low | No | GW-7: No WebSocket message compression | Deferred by 0052 decision D6 until the transport direction is chosen. |
 | 19 | [0560-st-9-agent-mail-store-remainder.md](0560-st-9-agent-mail-store-remainder.md) | Low | No | ST-9 (rest): Agent mail: pending injects and mailbox lists still sit on the whole store | The read cost the finding described has gone, and the rest needs a stored-format change only a measurement could justify. |
 | 20 | [0580-st-21-file-rpc-and-usage-report.md](0580-st-21-file-rpc-and-usage-report.md) | Low | No | ST-21: Whole files cross RPC as base64, branch reads spawn twice, and usage reports parse every row | These are occasional, bounded reads. |
-| 21 | [0620-e23-renderer-polling.md](0620-e23-renderer-polling.md) | Low | No | **E23, Renderer polling.**<br>`0620`: WEB-12: One environment change refetches the project's whole environment list<br>`0630`: WEB-13: Expanded truncated folders are re-read every 5 s without a digest<br>`0660`: WEB-18: Some renderer polls keep running while the window is hidden | From `0620`: Bursts already collapse to one project read, so this should wait for a measurement. |
-| 22 | [0650-web-16-terminal-container-environment-subscription.md](0650-web-16-terminal-container-environment-subscription.md) | Low | No | WEB-16: `TerminalContainer` subscribes to the whole environment object | It is an unmeasured re-render, with launch-effect risk in the fix. |
-| 23 | [0691-dk-5-preview-capture-data-urls.md](0691-dk-5-preview-capture-data-urls.md) | Low | No | DK-5: Preview captures cross IPC as large data URLs | Captures are occasional and bounded. |
-| 24 | [0693-dk-10-second-claude-binary.md](0693-dk-10-second-claude-binary.md) | Low | No | DK-10: The image ships two Claude Code native binaries | It is an optional image-size saving that waits on a maintainer decision. |
-| 25 | [0694-dk-16-attention-follow-polling.md](0694-dk-16-attention-follow-polling.md) | Low | No | DK-16 (rest): CLI `attention --follow` re-downloads pending items on every poll | It affects only long-running followers, and pending pages are probably small. |
+| 21 | [0650-web-16-terminal-container-environment-subscription.md](0650-web-16-terminal-container-environment-subscription.md) | Low | No | WEB-16: `TerminalContainer` subscribes to the whole environment object | It is an unmeasured re-render, with launch-effect risk in the fix. |
+| 22 | [0691-dk-5-preview-capture-data-urls.md](0691-dk-5-preview-capture-data-urls.md) | Low | No | DK-5: Preview captures cross IPC as large data URLs | Captures are occasional and bounded. |
+| 23 | [0693-dk-10-second-claude-binary.md](0693-dk-10-second-claude-binary.md) | Low | No | DK-10: The image ships two Claude Code native binaries | It is an optional image-size saving that waits on a maintainer decision. |
+| 24 | [0694-dk-16-attention-follow-polling.md](0694-dk-16-attention-follow-polling.md) | Low | No | DK-16 (rest): CLI `attention --follow` re-downloads pending items on every poll | It affects only long-running followers, and pending pages are probably small. |
 
 ## Parallel running
 
@@ -69,7 +68,6 @@ This index only changes when a branch merges, so it can't show what is running n
 | E15 | [Health and diagnostics](0750-e15-health-and-diagnostics.md) | `0750`, `0820`, `0810`, `0880`, `0780` | Logging and diagnostics, 3 of 4 | None | E5 (Database upkeep) |
 | E16 | [Log controls](0790-e16-log-controls.md) | `0790`, `0890`, `0900` | Logging and diagnostics, 4 of 4 | None | None |
 | E20 | [ACP bridge](0240-e20-acp-bridge.md) | `0270`, `0260`, `0240` | No lane | None | E13 (Silent failures) |
-| E23 | [Renderer polling](0620-e23-renderer-polling.md) | `0620`, `0630`, `0660` | No lane | None | C7 (Work panel and navigation) |
 
 Why these are grouped:
 
@@ -90,7 +88,6 @@ Why these are grouped:
 - **E15:** Build the sources first. `0780` then packages them.
 - **E16:** Linked settings for log detail.
 - **E20:** Remove the dead code first.
-- **E23:** Background refetches.
 
 ### Files built on their own
 
@@ -116,7 +113,7 @@ When one of these becomes ready, it joins the lane shown.
 
 ## Status of every efficiency finding
 
-86 done, 8 partly done, 27 open, 2 no action.
+89 done, 8 partly done, 24 open, 2 no action.
 
 | Finding | Disposition | Evidence |
 | --- | --- | --- |
@@ -181,13 +178,13 @@ When one of these becomes ready, it joins the lane shown.
 | WEB-9 | Done | Startup closure 4.23 MB to 2.55 MB, 1.28 MB to 0.80 MB gzip; guarded by `startup-closure.test.ts` (2026-11-04); see [1202 task 3](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md#3-renderer-re-renders-and-refetches). |
 | WEB-10 | Done | `AgentChatSearchIndex`, gated on `isOpen`, `AgentChatFind.tsx` (2026-11-04); see 1202 task 3 and the closing check of E22 below. |
 | WEB-11 | Done | On return the terminal socket is pinged and kept when the pong arrives within 2.5 s, replaced otherwise or when the server lacks the `ping` feature, `terminal-websocket-client.ts`, `terminal-websocket-server.ts` (2026-11-04); see 1202 task 3. The check on a real mobile WebView is in [5080](../../todo/cross-cutting/5080-terminal-websocket-live-evidence.md). |
-| WEB-12 | Open | Project read per change, `useEnvironmentListSync.ts:84-92`; see 0620. |
-| WEB-13 | Open | `reloadFolders` has no digest, `useFilesPanel.ts:644-663`; see 0630. |
+| WEB-12 | Done | A lone announcement reads one record, `refreshEnvironmentSnapshot` (`useEnvironments.ts`) through `get_environment_snapshot`; bursts still read the list once, `useEnvironmentListSync.ts` (#1754, `bfac1f577`); see [Closing check of E23](#closing-check-of-e23-renderer-polling) and 1202 task 3. Busy-period rate: [5460](../../todo/cross-cutting/5460-renderer-polling-live-evidence.md). |
+| WEB-13 | Done | `get_file_subtree` and `get_local_file_subtree` take `knownDigest` and answer `unchanged` with no contents, `commands-registry-terminal.ts`, `file-subtree-loads.ts` (#1754, `bfac1f577`); see [Closing check of E23](#closing-check-of-e23-renderer-polling). Expanded-folder counts in real use: [5460](../../todo/cross-cutting/5460-renderer-polling-live-evidence.md). |
 | WEB-14 | Open | Four Maps copied up front, `nativeAgentProjectionStore.ts:173-178`; see 0640. |
 | WEB-15 | Done | Memoised `readTranscriptTail`, `AgentNativeTab.controller.tsx:1152` (9c06cb7aa). |
 | WEB-16 | Open | Whole environment subscribed, `TerminalContainer.view.tsx:168-170`; see 0650. |
 | WEB-17 | Done | `LiveElapsed`, `ClaudeTmuxChatTab.tsx:1406`; `createRuntimeClock`, `MultiReviewTab.tsx:564` (387d1412f); `BuildChatTab.tsx` has no interval. |
-| WEB-18 | Open | Plain intervals at `App.tsx:683`, `useUserCommands.ts:68` and others; see 0660. |
+| WEB-18 | Done | Every named poll runs through `startCoordinatedPoll` (`lib/coordinated-poll.ts`), which reads nothing while the window is hidden (#1754, `bfac1f577`); see [Closing check of E23](#closing-check-of-e23-renderer-polling). A real Electron window: [5460](../../todo/cross-cutting/5460-renderer-polling-live-evidence.md). |
 | WEB-19 | Done | While a part streams, `MessageMarkdown` renders each completed segment once through `IncrementalMarkdownCache.render` (`incremental-parse.ts`) and reuses its elements, #1754 `bfac1f577`; Chromium Profiler numbers in the closing check of E22 below and in 1202 task 3. |
 | ST-1 | Done | Settled stamp skips the read, `capture.ts:321-322` (c3c899b16). |
 | ST-2 | Done | `dlopen` once per process, `confined-read.ts:28` (c3c899b16); the handle cache was deliberately not done, 1202 task 7. |
@@ -246,7 +243,7 @@ When one of these becomes ready, it joins the lane shown.
 
 ## Status of every logging and database item
 
-12 done, 6 partly done, 19 open, 1 no action.
+89 done, 8 partly done, 24 open, 2 no action.
 
 | Finding | Disposition | Evidence |
 | --- | --- | --- |
@@ -349,6 +346,27 @@ These five files were marked Finished or Done, checked back against the code ite
 | `0250-br-7-codex-running-tool-cards.md` | E-0250 | Both tasks done; no reader outside the bridge consumes full `message.patched` frames. | None |
 | `0520-web-9-startup-bundle.md` | E-0520 | All five tasks done; guarded by `startup-closure.test.ts`. | None |
 | `0692-dk-6-preview-tunnel-multiplexing.md` | E-0692 | Task done as tunnel v2. Not confirmed: first-load cost over a real remote link. | [4500](../../todo/cross-cutting/4500-preview-tunnel-one-socket-per-connection.md) task 1 |
+
+## Closing check of E23 (Renderer polling)
+
+The outcome of every task in the E23 batch file, checked back against the code on 2026-11-05 before the file was deleted. Base commit `69a3b4ca5`, where the build began; the file's last version, ending in this table, is at the parent of its deletion commit. All three parts had been built by #1754 (`bfac1f577`) after the file was analysed, so every finding no longer holds; WEB-12, WEB-13 and WEB-18 in the table above summarise this. Live evidence left over is [5460](../../todo/cross-cutting/5460-renderer-polling-live-evidence.md).
+
+| Part | Task | Outcome | Code, evidence or to-do |
+| --- | --- | --- | --- |
+| 0620 | 1. Read only the changed environment | No longer holds: built in #1754 | A lone pending announcement reads its one record: `useEnvironmentListSync.ts` calls `refreshEnvironmentSnapshot` (`useEnvironments.ts`), which reads `get_environment_snapshot` (`commands-registry-environments.ts`) and removes the environment on `null`. Tests in `tests/unit/hooks/useEnvironmentListSync.test.ts` under `a lone announced environment`: `reads that record and not the project's list`; `falls back to the list, and stays there, on a backend without the read`; `a change landing during its read is read afterwards, not lost`; `several changes waiting at once read the list once`; `an announcement without a project still reads every list`. In `useEnvironments.test.ts` under `refreshEnvironmentSnapshot`: `updates that environment and keeps the others' objects`; `removes an environment the backend no longer has`; `adds one another client created`; `reports a backend that predates the read, changing nothing`; `a failed read is not mistaken for a missing command`. Backend: `a single environment snapshot reads as the list does, private fields removed` (`commands-registry-environments.test.ts`). |
+| 0620 | Decision: patch one record? | No longer holds: the report's recommendation was to wait for a measurement; #1754 measured and built the one-record read | 1202 task 3, in Chromium on a `dev:test` profile: a rename went from 1 list read to 1 record read and 0 lists, a deletion to 2 record reads and 0 lists. The report's cons are covered: a reorder announces several environments, which still read the list once; a removal is a `null` record; the store replaces a record by id, so its project comes from the backend. |
+| 0620 | Compatibility with older backends | Done in #1754 | A backend without `get_environment_snapshot` falls back to the list until the next explicit resync; row in the [version compatibility register](../../architecture/version-compatibility.md#register). Test: `falls back to the list, and stays there, on a backend without the read`. |
+| 0620 | Needs verification: RPC rate and size during busy periods | Moved to a to-do | Sizes measured here with the backend command fixtures: one record 356 bytes; the list 1,786 bytes for 5 environments, 7,171 for 20, 17,971 for 50. The rate in a busy period needs running agents: [5460](../../todo/cross-cutting/5460-renderer-polling-live-evidence.md) task 1. |
+| 0630 | 1. Conditional subtree reads | No longer holds: built in #1754 | `get_local_file_subtree` and `get_file_subtree` take `knownDigest` (`commands-registry-terminal.ts`) and answer `{ unchanged, digest, value? }` through `conditionalSnapshot` (`commands-terminal.ts`). That is the same contract as the report's `snapshotResponse`, without the `view` stamp, which a folder read has no owner for. The renderer keeps each folder's digest (`fileSubtreeDigests`, `file-subtree-loads.ts`, `filesPanelStore.ts`) and leaves `fileSubtrees` alone when a folder is unchanged. Tests: `get_local_file_subtree answers an unchanged directory with no contents` (#1754) and `get_file_subtree answers an unchanged container directory with no contents` (this batch), both in `apps/backend/tests/commands-registry-file-subtrees.test.ts`. The new one fails when the command ignores the digest. In `file-subtree-loads.test.ts`: `a directory re-read with its digest and found unchanged keeps what is held`; `a changed directory replaces the contents and the digest`; `a backend that sends no digest is asked afresh every time`; `a failed re-read keeps the digest, and an unchanged answer then clears the failure`; `a retried or collapsed directory is read without a digest`. |
+| 0630 | Decision: how to skip the work? | Done: the recommended option | `knownDigest` on both commands, as above. The second option, skipping reads while a watched snapshot revision is unchanged, was not taken; whether it is worth it depends on 5460 task 2. |
+| 0630 | Constraint: an explicit refresh must still re-read | Holds | The explicit read in `useFilesPanel.ts` runs `loadVisible({ refresh: true })` and then `reloadFolders()`. Folder reads are never cached on the backend ("each expansion or refresh reads the directory as it is now"), so every refresh walks the folder; a digest only drops a payload that would be identical. Shown by the changed-listing steps of both backend tests above. |
+| 0630 | Constraint: additive command change | Done in #1754 | Without `knownDigest` both commands answer the raw subtree as before (asserted in the new container test). A backend that ignores the digest reads as changed with no digest: `a backend that sends no digest is asked afresh every time`; row in the [version compatibility register](../../architecture/version-compatibility.md#register). |
+| 0630 | Needs verification: how many folders stay expanded in real use | Moved to a to-do | Needs real use: [5460](../../todo/cross-cutting/5460-renderer-polling-live-evidence.md) task 2. |
+| 0660 | 1. Route polls through the read coordinator | No longer holds: built in #1754 | `startCoordinatedPoll` (`apps/web/src/lib/coordinated-poll.ts`) replaced the bare timer at every site the report names: `App.tsx` (Docker probe, 60 s), `useUserCommands.ts` (3 s), `BugReportSheet.tsx`, `DockerImageStatusPanel.tsx`, both `DockerSettings.tsx` polls, `EnvironmentRecoveryCopies.tsx`, `ProjectCopyDialog.tsx`, `useMachineMaintenance.ts`, and annotation selection in `useAnnotationCapture.ts`. Each keeps its interval. Tests in `coordinated-poll.test.ts`: `stops while the window is hidden and reads once on its return`; `a return before the interval has passed reads nothing extra`; `hidden from the start, it reads only after the window shows`; `stops while the transport is disconnected, and reads on reconnect`; and `<file> polls through the coordinator` for each named file. Also `the running-command poll stops while hidden and reads again on return` (`useUserCommands.test.tsx`). 1202 task 3: a 3 s poll went from 200 reads in 10 min hidden to 0. |
+| 0660 | Decision: which polls move? | Done, with one difference from the recommendation | Every named poll moved. The report recommended keeping annotation selection on its own timer with a visibility check; #1754 moved it to the coordinator at `critical` priority instead. Pros: one scheduling owner and no separate catch-up code; the coordinator reads `critical` polls first, within about 50 ms of the window's return. Cons: none found against the recommended option. Its timer would also have needed its own return handling. Tests: `the selection poll stops while the window is hidden and reads at once on return` (`useAnnotationCapture.test.tsx`); `critical polls are read first on return` (`coordinated-poll.test.ts`). |
+| 0660 | Constraint: the coordinator never owns commands | Holds | `startCoordinatedPoll` is documented as reads only. The upload retry in `useAnnotationCapture.ts` (`CAPTURE_RESUME_INTERVAL_MS`) is a mutation and stays on its own timer. Test: `the annotation file's only interval left is its upload retry` (`coordinated-poll.test.ts`). |
+| 0660 | Constraint: unmount is not cancel | Holds | Only the polls' reads pause; the commands, containers, copies and maintenance jobs they watch run in the backend and are not touched. The stop function only disposes the read subscription: `the stop function ends it, and leaves nothing in the coordinator` (`coordinated-poll.test.ts`). |
+| 0660 | Needs verification: how much hidden-window throttling already hides this | No longer holds for the browser; the Electron part moved to a to-do | The polls now issue no reads while the document is hidden, whatever the timer throttling, so throttling no longer changes the cost (0 reads hidden in Chromium, 1202 task 3). Whether a real Electron window reports hidden when minimised, hidden or covered was not checked: [5460](../../todo/cross-cutting/5460-renderer-polling-live-evidence.md) task 3. |
 
 ## Closing check of E4 (Object store)
 

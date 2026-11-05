@@ -96,6 +96,8 @@ Added `usage.source-stalled` to the `host` log area through `log.throttled`, bec
 
 ### Task 2: one outstanding request per key
 
+Merge reconciliation (2026-11-05): keep the bounded result shared from the start of the physical request, including across panel unmounts before the timeout. Retain that result until the underlying request settles, so retries after a timeout fail immediately and drop late answers; this preserves the branch’s remount protection alongside the 20 s deadline and budgeted process enumeration.
+
 After a timeout, the key fails at once until its request settles, and the late answer is dropped because it describes the past. A retry that ignored the open request would add one per retry, as described above. The cost: a request that never settles keeps that key failing until a reload or a server switch (each connection generation starts clean). A dead connection does eventually settle; the failure message is also what the user should see meanwhile.
 
 ## Related

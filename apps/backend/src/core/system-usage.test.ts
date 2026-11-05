@@ -608,6 +608,114 @@ describe("system usage", () => {
     expect((await second).gpuPercent).toBe(55);
   });
 
+  describe("a probe that does not answer", () => {
+    const statfsAnswer = { blocks: 1_000, bavail: 375 };
+
+    function stallableReader(
+      statfs: (path: string) => Promise<{ blocks: number; bavail: number }>,
+      overrides: Parameters<typeof createSystemUsageReader>[0] = {},
+    ) {
+      const state = { clock: 0 };
+      const read = createSystemUsageReader({
+        platform: "linux",
+        cpus: () => [cpu(state.clock, state.clock * 3)],
+        totalMemory: () => 1_000,
+        freeMemory: () => 250,
+        diskPercent: (path) => readDiskPercent(path, statfs),
+        gpuPercent: async () => 44,
+        sourceTimeoutMs: 1,
+        now: () => state.clock,
+        delay: async (milliseconds) => {
+          state.clock += milliseconds;
+        },
+        ...overrides,
+      });
+      return { read, state };
+    }
+
+    test("a statfs that never returns leaves CPU, RAM and GPU reporting", async () => {
+      const { read } = stallableReader(() => new Promise(() => {}));
+      expect(await read("/data")).toMatchObject({
+        cpuPercent: expect.any(Number),
+        ramPercent: 75,
+        gpuPercent: 44,
+        diskPercent: null,
+      });
+    });
+
+    test("the timeout resolves the shared read, so later polls are not joined to it", async () => {
+      const { read, state } = stallableReader(() => new Promise(() => {}));
+      const first = read("/data");
+      expect(read("/data")).toBe(first);
+      expect((await first).diskPercent).toBeNull();
+      state.clock += 5_000;
+      const next = read("/data");
+      expect(next).not.toBe(first);
+      expect((await next).diskPercent).toBeNull();
+    });
+
+    test("repeated polls during a stall keep one statfs per path and recover when it answers", async () => {
+      const answers = new Map<string, ReturnType<typeof deferred<typeof statfsAnswer>>>();
+      const statfs = mock((path: string) => {
+        const answer = deferred<typeof statfsAnswer>();
+        answers.set(path, answer);
+        return answer.promise;
+      });
+      const { read, state } = stallableReader(statfs);
+
+      for (let poll = 0; poll < 12; poll += 1) {
+        expect((await read("/data")).diskPercent).toBeNull();
+        state.clock += 5_000;
+      }
+      expect(statfs).toHaveBeenCalledTimes(1);
+
+      // Another target is another filesystem: it is not held up by this stall.
+      expect((await read("/other")).diskPercent).toBeNull();
+      expect(statfs).toHaveBeenCalledTimes(2);
+
+      answers.get("/data")!.resolve(statfsAnswer);
+      await flushMicrotasks();
+      statfs.mockImplementation(async () => statfsAnswer);
+      expect((await read("/data")).diskPercent).toBe(62.5);
+      expect(statfs).toHaveBeenCalledTimes(3);
+      expect((await read("/data")).diskPercent).toBe(62.5);
+    });
+
+    test("a statfs that answers inside the deadline is reported", async () => {
+      const { read } = stallableReader(async () => statfsAnswer, { sourceTimeoutMs: 1_000 });
+      expect((await read("/data")).diskPercent).toBe(62.5);
+    });
+
+    test("a GPU probe that never returns reports null and recovers when it answers", async () => {
+      const probe = deferred<number | null>();
+      const gpuPercent = mock(() => probe.promise);
+      const { read, state } = stallableReader(async () => statfsAnswer, {
+        gpuPercent: createBoundedRead<void, number | null>("gpu-sysfs", gpuPercent, null, 1),
+      });
+
+      expect(await read("/data")).toMatchObject({ gpuPercent: null, diskPercent: 62.5 });
+      state.clock += 5_000;
+      expect(await read("/data")).toMatchObject({ gpuPercent: null, diskPercent: 62.5 });
+      expect(gpuPercent).toHaveBeenCalledTimes(1);
+
+      probe.resolve(55);
+      await flushMicrotasks();
+      state.clock += 30_000;
+      expect((await read("/data")).gpuPercent).toBe(55);
+      expect(gpuPercent).toHaveBeenCalledTimes(2);
+    });
+
+    test("a disk read that fails is still reported as a failure", async () => {
+      const { read } = stallableReader(async () => statfsAnswer, {
+        diskPercent: async () => {
+          throw new Error("unreadable");
+        },
+        sourceTimeoutMs: 1_000,
+      });
+      await expect(read("/data")).rejects.toThrow("unreadable");
+    });
+  });
+
   test("parses Darwin vm_stat and reports Activity Monitor Memory Used", () => {
     const output = [
       "Mach Virtual Memory Statistics: (page size of 16384 bytes)",

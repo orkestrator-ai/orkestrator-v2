@@ -78,8 +78,8 @@ export interface UsageView<T> {
   failed: boolean;
 }
 
-/** Requests that outlived their timeout and have not settled, per coordinator. */
-const outstandingRequests = new WeakMap<ReadCoordinator, Set<string>>();
+/** One bounded result per physical request, retained until that request settles. */
+const outstandingRequests = new WeakMap<ReadCoordinator, Map<string, Promise<unknown>>>();
 
 /**
  * Fails a read that outlives {@link USAGE_READ_TIMEOUT_MS}. `invoke` cannot be
@@ -93,15 +93,13 @@ function readWithTimeout<T>(
   id: string,
   read: () => Promise<T>,
 ): Promise<T> {
-  const outstanding = outstandingRequests.get(coordinator) ?? new Set<string>();
+  const outstanding = outstandingRequests.get(coordinator) ?? new Map<string, Promise<unknown>>();
   outstandingRequests.set(coordinator, outstanding);
-  if (outstanding.has(id)) return Promise.reject(new Error("A usage read is still outstanding"));
+  const pending = outstanding.get(id);
+  if (pending) return pending as Promise<T>;
   const request = Promise.resolve(read());
-  return new Promise<T>((resolve, reject) => {
+  const result = new Promise<T>((resolve, reject) => {
     const timer = coordinator.clock.setTimeout(() => {
-      outstanding.add(id);
-      const settled = () => outstanding.delete(id);
-      void request.then(settled, settled);
       reject(new Error("The usage read timed out"));
     }, USAGE_READ_TIMEOUT_MS);
     request.then(
@@ -115,6 +113,12 @@ function readWithTimeout<T>(
       },
     );
   });
+  outstanding.set(id, result);
+  const settled = () => {
+    if (outstanding.get(id) === result) outstanding.delete(id);
+  };
+  void request.then(settled, settled);
+  return result;
 }
 
 function isTimestamp(value: unknown): value is string {

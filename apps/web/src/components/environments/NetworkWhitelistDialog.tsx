@@ -15,7 +15,11 @@ import { Loader2, Shield, Globe, CheckCircle2, XCircle, AlertCircle } from "luci
 import * as backend from "@/lib/backend";
 import { useConfigStore } from "@/stores";
 import type { Environment, DomainTestResult } from "@/types";
-import { ALLOWLIST_ENTRY_HINT, parseAllowlistEntry } from "@orkestrator/protocol/network-allowlist";
+import {
+  ALLOWLIST_ENTRY_HINT,
+  ALLOWLIST_RESIDUAL_RISK,
+  parseAllowlistEntry,
+} from "@orkestrator/protocol/network-allowlist";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("web.environment");
@@ -242,6 +246,7 @@ export function NetworkWhitelistDialog({
               <div className="space-y-2">
                 <Label htmlFor="network-allowed-domains">Allowed Domains</Label>
                 <p className="text-xs text-muted-foreground">{ALLOWLIST_ENTRY_HINT}</p>
+                <p className="text-xs text-muted-foreground">{ALLOWLIST_RESIDUAL_RISK}</p>
                 <Textarea
                   id="network-allowed-domains"
                   value={customDomains}

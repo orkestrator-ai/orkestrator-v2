@@ -15,13 +15,12 @@ A batch file combines several reports as numbered parts and takes the rating of 
 | Rank | File | Criticality | Finished | Covers | Why this rating |
 | --- | --- | --- | --- | --- | --- |
 | 1 | [0490-e25-container-start.md](0490-e25-container-start.md) | Medium | No | **E25, Container start.**<br>`0490`: DK-14: Agent-home inputs are copied in full per environment and again on every start<br>`0500`: DK-13: Each environment clones from the remote again | From `0490`: Every container start copies inputs again, at a size nobody has measured. |
-| 2 | [0510-e12-renderer-store.md](0510-e12-renderer-store.md) | Medium | No | **E12, Renderer store.**<br>`0510`: WEB-6: The live-head merge serialises parts with no identity shortcut<br>`0590`: WEB-2 (rest): The native session hook subscribes to whole cache entries it reads only at mount<br>`0640`: WEB-14: Projection store writes copy four Maps even when one changes | From `0510`: Head-row serialisation runs on transcript updates while streaming, at a cost no Profiler run has confirmed. |
-| 3 | [0790-e16-log-controls.md](0790-e16-log-controls.md) | Medium | No | **E16, Log controls.**<br>`0790`: R8's remainder (L7) and its control: a switch, DevTools and a persisted error ring.<br>`0890`: User controls: presets, auto-revert and privacy text.<br>`0900`: User controls: `--log-level` and `--log-category`. | From `0790`: Renderer bugs in the packaged app leave no trace, which is a supportability gap rather than broken behaviour. |
-| 4 | [0160-e10-conditional-reads-and-deltas.md](0160-e10-conditional-reads-and-deltas.md) | Low | No | **E10, Conditional reads and deltas.**<br>`0160`: TX-1: A transcript delta can only be built from the newest cached view<br>`0180`: TX-5: Session-state reads have no conditional path from the bridge<br>`0190`: TX-6: Bridge transcript windows are always sent whole | From `0160`: The report rates it High, but the maintainer gated it on a baseline, so it stays Low until that measurement arrives. |
-| 5 | [0385-tx-10-joined-history-pages.md](0385-tx-10-joined-history-pages.md) | Low | No | TX-10: Joined history pages read the whole transcript per page | A compatibility path that only older renderers use and that 0232 will remove, blocked on the support window. |
-| 6 | [0390-gw-7-websocket-compression.md](0390-gw-7-websocket-compression.md) | Low | No | GW-7: No WebSocket message compression | Deferred by 0052 decision D6 until the transport direction is chosen. |
-| 7 | [0560-st-9-agent-mail-store-remainder.md](0560-st-9-agent-mail-store-remainder.md) | Low | No | ST-9 (rest): Agent mail: pending injects and mailbox lists still sit on the whole store | The read cost the finding described has gone, and the rest needs a stored-format change only a measurement could justify. |
-| 8 | [0693-dk-10-second-claude-binary.md](0693-dk-10-second-claude-binary.md) | Low | No | DK-10: The image ships two Claude Code native binaries | It is an optional image-size saving that waits on a maintainer decision. |
+| 2 | [0790-e16-log-controls.md](0790-e16-log-controls.md) | Medium | No | **E16, Log controls.**<br>`0790`: R8's remainder (L7) and its control: a switch, DevTools and a persisted error ring.<br>`0890`: User controls: presets, auto-revert and privacy text.<br>`0900`: User controls: `--log-level` and `--log-category`. | From `0790`: Renderer bugs in the packaged app leave no trace, which is a supportability gap rather than broken behaviour. |
+| 3 | [0160-e10-conditional-reads-and-deltas.md](0160-e10-conditional-reads-and-deltas.md) | Low | No | **E10, Conditional reads and deltas.**<br>`0160`: TX-1: A transcript delta can only be built from the newest cached view<br>`0180`: TX-5: Session-state reads have no conditional path from the bridge<br>`0190`: TX-6: Bridge transcript windows are always sent whole | From `0160`: The report rates it High, but the maintainer gated it on a baseline, so it stays Low until that measurement arrives. |
+| 4 | [0385-tx-10-joined-history-pages.md](0385-tx-10-joined-history-pages.md) | Low | No | TX-10: Joined history pages read the whole transcript per page | A compatibility path that only older renderers use and that 0232 will remove, blocked on the support window. |
+| 5 | [0390-gw-7-websocket-compression.md](0390-gw-7-websocket-compression.md) | Low | No | GW-7: No WebSocket message compression | Deferred by 0052 decision D6 until the transport direction is chosen. |
+| 6 | [0560-st-9-agent-mail-store-remainder.md](0560-st-9-agent-mail-store-remainder.md) | Low | No | ST-9 (rest): Agent mail: pending injects and mailbox lists still sit on the whole store | The read cost the finding described has gone, and the rest needs a stored-format change only a measurement could justify. |
+| 7 | [0693-dk-10-second-claude-binary.md](0693-dk-10-second-claude-binary.md) | Low | No | DK-10: The image ships two Claude Code native binaries | It is an optional image-size saving that waits on a maintainer decision. |
 
 ## Parallel running
 
@@ -37,8 +36,7 @@ This index only changes when a branch merges, so it can't show what is running n
 | --- | --- | --- | --- | --- | --- |
 | E1 | Baseline run | The baseline task in `0150`, `0160`, `0180` and `0190` | No lane | None | None |
 | E25 | [Container start](0490-e25-container-start.md) | `0490`, `0500` | Containers, 3 of 3 | None | None |
-| E10 | [Conditional reads and deltas](0160-e10-conditional-reads-and-deltas.md) | `0160`, `0180`, `0190` | Transcript, 1 of 2 | E1 (Baseline run) | None |
-| E12 | [Renderer store](0510-e12-renderer-store.md) | `0510`, `0590`, `0640` | Transcript, 2 of 2 | None | None |
+| E10 | [Conditional reads and deltas](0160-e10-conditional-reads-and-deltas.md) | `0160`, `0180`, `0190` | Transcript, 1 of 1 | E1 (Baseline run) | None |
 | E16 | [Log controls](0790-e16-log-controls.md) | `0790`, `0890`, `0900` | Logging and diagnostics, 1 of 1 | None | None |
 
 Why these are grouped:
@@ -46,7 +44,6 @@ Why these are grouped:
 - **E1:** The baseline task in `0150`, `0160`, `0180` and `0190`. A measurement on an isolated `dev:test` profile with no code change, and it must happen before E10. `0400`'s baseline was taken with E26; see the closing check of E26 below.
 - **E25:** `0500` depends on `0490`.
 - **E10:** Waiting on the baseline. `0190` links to `0160`.
-- **E12:** Same hook and projection store.
 - **E16:** Linked settings for log detail.
 
 ### Files built on their own
@@ -69,7 +66,7 @@ When one of these becomes ready, it joins the lane shown.
 
 ## Status of every efficiency finding
 
-106 done, 6 partly done, 8 open, 3 no action.
+107 done, 6 partly done, 7 open, 3 no action.
 
 | Finding | Disposition | Evidence |
 | --- | --- | --- |
@@ -124,11 +121,11 @@ When one of these becomes ready, it joins the lane shown.
 | BR-15 | Done | The transcript helpers moved to `packages/protocol/src/node` (#1593 `e668f0a6d`), and both bridges now use one replay ring, `EventRing` (`packages/protocol/src/node/event-ring.ts`); Claude collapses superseded frames and reuses each frame's byte count (`bridges/claude-bridge/src/routes/events.ts`). See the closing check of E-0360 below. |
 | BR-16 | Done | The replay, its gates and what only it used are removed, and the harness and fake agent use `acp-fixture`; the method-gated `cursor/*` handlers are [4540](../../todo/agent-engines/4540-acp-bridge-cursor-extension-leftovers.md). See 1202 task 6. |
 | WEB-1 | Done | A background round is one request plus discovery when due, 3 requests per round to 1.04 (`useNativeAgentSession.ts`); the finding's note that Claude and Codex idle views never back off no longer held (`turn.quietObservation`, `native-session-read-policy.ts`); see [1202 task 4](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md). |
-| WEB-2 | Done | Identity kept and recency condition gone (12289fc56); the hook reads its sync and progressive caches with `getState()` (`useNativeAgentSession.ts`, 2026-11-04); see 0590 and [1202](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md). |
+| WEB-2 | Done | Identity kept and recency condition gone (12289fc56); the hook reads its sync and progressive caches with `getState()` (`useNativeAgentSession.ts`, 2026-11-04); see [1202](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md) and [Closing check of E12](#closing-check-of-e12-renderer-store). |
 | WEB-3 | Done | `useHydrateOncePerEnvironment`, `App.tsx:368`; no-op guards in `environmentStore.ts` setters (12289fc56). |
 | WEB-4 | Done | Identity and hydration check before serialising, `pane-layout-persistence.ts:799` (9c06cb7aa). |
 | WEB-5 | Done | `quiet` background reads leave the flags alone, `useNativeAgentSession.ts:2233-2237` (9c06cb7aa). |
-| WEB-6 | Done | Early return and `sameTranscriptJson` in `hooks/native-agent-live-head.ts` (2026-11-04); see 0510 and 1202. |
+| WEB-6 | Done | Early return and `sameTranscriptJson` in `hooks/native-agent-live-head.ts` (2026-11-04); see 1202 and [Closing check of E12](#closing-check-of-e12-renderer-store). |
 | WEB-7 | Done | `selectActivePaneTab`, `AppShell.tsx:69`, `:176`; per-field selectors, `usePullRequest.ts:62-70` (387d1412f). |
 | WEB-8 | Done | Normalised only when a handler runs, `AgentInfoButton.tsx:475-479` (9c06cb7aa). |
 | WEB-9 | Done | Startup closure 4.23 MB to 2.55 MB, 1.28 MB to 0.80 MB gzip; guarded by `startup-closure.test.ts` (2026-11-04); see [1202 task 3](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md#3-renderer-re-renders-and-refetches). |
@@ -136,7 +133,7 @@ When one of these becomes ready, it joins the lane shown.
 | WEB-11 | Done | On return the terminal socket is pinged and kept when the pong arrives within 2.5 s, replaced otherwise or when the server lacks the `ping` feature, `terminal-websocket-client.ts`, `terminal-websocket-server.ts` (2026-11-04); see 1202 task 3. The check on a real mobile WebView is in [5080](../../todo/cross-cutting/5080-terminal-websocket-live-evidence.md). |
 | WEB-12 | Done | A lone announcement reads one record, `refreshEnvironmentSnapshot` (`useEnvironments.ts`) through `get_environment_snapshot`; bursts still read the list once, `useEnvironmentListSync.ts` (#1754, `bfac1f577`); see [Closing check of E23](#closing-check-of-e23-renderer-polling) and 1202 task 3. Busy-period rate: [5460](../../todo/cross-cutting/5460-renderer-polling-live-evidence.md). |
 | WEB-13 | Done | `get_file_subtree` and `get_local_file_subtree` take `knownDigest` and answer `unchanged` with no contents, `commands-registry-terminal.ts`, `file-subtree-loads.ts` (#1754, `bfac1f577`); see [Closing check of E23](#closing-check-of-e23-renderer-polling). Expanded-folder counts in real use: [5460](../../todo/cross-cutting/5460-renderer-polling-live-evidence.md). |
-| WEB-14 | Open | Four Maps copied up front, `nativeAgentProjectionStore.ts:173-178`; see 0640. |
+| WEB-14 | Done | `setProjection` and `setProgressiveCache` copy each Map on its first write (`copyOnWrite`, `nativeAgentProjectionStore.ts`; #1754, `bfac1f577`); ceilings and untouched Maps pinned in `nativeAgentProjectionStore.test.ts`; see [Closing check of E12](#closing-check-of-e12-renderer-store). |
 | WEB-15 | Done | Memoised `readTranscriptTail`, `AgentNativeTab.controller.tsx:1152` (9c06cb7aa). |
 | WEB-16 | Done | `useShallow` selector of the fields read, `TerminalContainer.view.tsx:160-199`; `reuseUnchangedFields`, `environmentStore.ts` (bfac1f577); guarded by `TerminalContainer.render-count.test.tsx`; see [1202 task 3](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md). The native tab's own whole-record selector is [5580](../../todo/cross-cutting/5580-agent-native-tab-environment-subscription.md). |
 | WEB-17 | Done | `LiveElapsed`, `ClaudeTmuxChatTab.tsx:1406`; `createRuntimeClock`, `MultiReviewTab.tsx:564` (387d1412f); `BuildChatTab.tsx` has no interval. |
@@ -647,3 +644,23 @@ The detailed outcome is retained here so it survives squash merges (historical l
 | 0365 | Constraint: the rewriter's source is hashed into the tag | Not triggered | `rewriteBrowserPreviewBody` and `gateway-proxy-etag.ts` are unchanged, so nothing reloads after this update, and the existing tag behaviour stands. |
 | 0365 | Context: the route is a fallback | Confirmed | To-do [0042](../../todo/previews-and-annotations/0042-service-preview-rollout.md) plans to retire it. That is why GW-10 is recorded as declined rather than left open: reopen it only if the route stays and a real page shows the rewrite in a profile. |
 | Both | Report invariants | Held | No new cache, queue or buffer. The script's output is aggregates only, and its corpus stays in the git-ignored `output/efficiency/`. |
+
+## Closing check of E12 (Renderer store)
+
+Checked back on 2026-11-05 on branch `renderer-store-report-cf7c05d19868-r1`, based on `main` at `fbb6c7560`, item by item against the batch file before it was deleted. The full outcome table, naming the code and test for every item, ends the file's last version, in the commit before its deletion (`f4a52ca03` on that branch; after a rebase, the parent of the commit that deletes it). All three parts were already built by #1754 (`bfac1f577`): 0640 too, though the file still listed it as open. This batch added store tests for 0640's constraints and took the two-tab Profiler run. No to-do was needed.
+
+| Part | Finding | Outcome |
+| --- | --- | --- |
+| `0510` | WEB-6: the live-head merge serialises parts with no identity shortcut | Done: early return and `sameTranscriptJson` (`hooks/native-agent-live-head.ts`), tested in `native-agent-live-head.test.ts`. The note that the early return should match the restored-prefix path did not hold. |
+| `0590` | WEB-2 (rest): the hook subscribes to whole cache entries it reads only at mount | Done, recommended option: `getState()` seeds (`useSessionCacheSeeds`), tested in `useNativeAgentSession.store-subscriptions.test.tsx`. |
+| `0640` | WEB-14: projection store writes copy four Maps | Done: `copyOnWrite` in `nativeAgentProjectionStore.ts`. New tests in `nativeAgentProjectionStore.test.ts`: a projection write keeps the sync and progressive Maps while both hold entries, which fails on the pre-#1754 store; the count and byte ceilings still evict from projections, projection bytes and sync caches; LRU order is unchanged. |
+
+**Profiler run (all three parts' "Needs verification").** Two real `AgentNativeTab`s in headless Chromium, React development build, component-browser fixture server with a fake backend in the page (no backend process or provider). Each tab had a 60-row fixture transcript, and while streaming a live row gained a sentence every 200 ms. Windows were 20 s. Seven runs; the two taken while the host was loaded are left out of the timings.
+
+| Variant | Idle commits per tab | Streaming commits per tab | Mean per commit | p95 per commit |
+| --- | --- | --- | --- | --- |
+| Current (3 runs) | 0 | 170 to 172 | 5.16 to 5.78 ms | 11.0 to 12.8 ms |
+| 0590 reverted (1 quiet run) | 0 | 170 | 5.56 and 6.00 ms | 12.6 and 13.4 ms |
+| 0640 reverted (2 runs) | 0 | 170 | 5.41 to 5.77 ms | 11.2 to 13.5 ms |
+
+Store writes were 0 idle and 160 per window streaming (both tabs) in every variant. Neither revert changes the commit count, and the per-commit differences are within noise. A Bun micro-benchmark of `setProjection` with 128 sessions held: 8.86 to 9.34 µs per write before 0640, 3.97 to 4.17 µs after. For 0510, 1202 task 3 already measured the merge at at most 0.3 ms per update before the fix and 0.03 to 0.06 ms after. Production React and a real bridge's cadence were not measured. The question was whether the work shows in a profile, and at this scale it does not.

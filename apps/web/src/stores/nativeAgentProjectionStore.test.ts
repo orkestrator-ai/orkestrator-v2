@@ -444,6 +444,95 @@ describe("native agent projection writes copy only what they change", () => {
     );
   });
 
+  test("a projection write keeps the sync and progressive Maps while both hold entries", () => {
+    const { setProjection, setProgressiveCache } = useNativeAgentProjectionStore.getState();
+    for (const key of ["a", "b"]) {
+      const live = projection(key, [{ id: `${key}-1` }]);
+      setProjection(key, live, syncCache(live, [{ id: `${key}-history` }], 20));
+      setProgressiveCache(key, progressive);
+    }
+    const before = identities();
+    const entries = {
+      sync: before.syncCaches.get("a"),
+      progressive: before.progressiveCaches.get("a"),
+    };
+
+    setProjection("a", projection("a", [{ id: "a-1" }, { id: "a-2" }]));
+
+    expect(changedMaps(before)).toEqual(["projections", "projectionBytes"]);
+    const state = useNativeAgentProjectionStore.getState();
+    expect(state.syncCaches.get("a")).toBe(entries.sync);
+    expect(state.progressiveCaches.get("a")).toBe(entries.progressive);
+    expect([...state.projections.keys()]).toEqual(["b", "a"]);
+  });
+
+  test("the count ceiling still evicts the oldest session from all three Maps", () => {
+    const { setProjection, setProgressiveCache } = useNativeAgentProjectionStore.getState();
+    const oldLive = projection("old", [{ id: "old-1" }]);
+    setProjection("old", oldLive, syncCache(oldLive, [{ id: "old-history" }], 40));
+    setProgressiveCache("old", progressive);
+    for (let index = 0; index < 127; index += 1) {
+      setProjection(`s${index}`, projection(`s${index}`, [{ id: "m" }]));
+    }
+    const before = identities();
+    expect(before.projections.size).toBe(128);
+
+    setProjection("s127", projection("s127", [{ id: "m" }]));
+
+    const state = useNativeAgentProjectionStore.getState();
+    expect(state.projections.size).toBe(128);
+    expect(state.projections.has("old")).toBe(false);
+    expect(state.projectionBytes.has("old")).toBe(false);
+    expect(state.syncCaches.has("old")).toBe(false);
+    expect(state.historyBytesTotal).toBe(0);
+    expect(state.progressiveCaches.get("old")?.transcriptToken).toBeUndefined();
+    expect(changedMaps(before)).toEqual([
+      "projections",
+      "projectionBytes",
+      "syncCaches",
+      "progressiveCaches",
+    ]);
+    expect(recomputeNativeAgentProjectionTotals()).toEqual({
+      projectionBytesTotal: state.projectionBytesTotal,
+      historyBytesTotal: state.historyBytesTotal,
+      progressiveCacheBytesTotal: state.progressiveCacheBytesTotal,
+    });
+  });
+
+  test("the byte ceiling still evicts the oldest session from all three Maps", () => {
+    // Each "big" message counts as 20 MiB, so two of them pass the 32 MiB ceiling.
+    setEncodedValueMeasureForTests((value) =>
+      (value as { big?: boolean } | null)?.big ? 20 * 1024 * 1024 : measureEncodedValue(value),
+    );
+    try {
+      const { setProjection, setProgressiveCache } = useNativeAgentProjectionStore.getState();
+      const oldLive = projection("old", [{ id: "old-1", big: true }]);
+      setProjection("old", oldLive, syncCache(oldLive, [{ id: "old-history" }], 40));
+      setProgressiveCache("old", progressive);
+      const keptLive = projection("kept", [{ id: "kept-1" }]);
+      setProjection("kept", keptLive, syncCache(keptLive, [{ id: "kept-history" }], 30));
+      const before = identities();
+
+      setProjection("new", projection("new", [{ id: "new-1", big: true }]));
+
+      const state = useNativeAgentProjectionStore.getState();
+      expect([...state.projections.keys()]).toEqual(["kept", "new"]);
+      expect([...state.projectionBytes.keys()].sort()).toEqual(["kept", "new"]);
+      expect([...state.syncCaches.keys()]).toEqual(["kept"]);
+      expect(state.historyBytesTotal).toBe(30);
+      expect(state.projectionBytesTotal).toBeLessThanOrEqual(32 * 1024 * 1024);
+      expect(state.progressiveCaches.get("old")?.transcriptToken).toBeUndefined();
+      expect(changedMaps(before)).toEqual([
+        "projections",
+        "projectionBytes",
+        "syncCaches",
+        "progressiveCaches",
+      ]);
+    } finally {
+      setEncodedValueMeasureForTests();
+    }
+  });
+
   test("rewriting the newest projection publishes nothing", () => {
     const { setProjection } = useNativeAgentProjectionStore.getState();
     const live = projection("a");

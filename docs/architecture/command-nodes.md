@@ -382,7 +382,14 @@ A command node attached to another command node operates in leaf mode:
   information, but they are mostly hidden: the portal and the node's own UI
   do not show them by default. They can be opened behind a warning that the
   node is in leaf mode and that coordination happens on the named command
-  node.
+  node ("the command node" when no controller name is known). Until the
+  node's portal status has loaded, the coordinator tab shows only "Checking
+  repository coordination…", so the coordinator neither flashes nor starts
+  before the node's mode is known; a failed status read counts as loaded and
+  opens the coordinator as on any other node. Opening it anyway is
+  remembered per node and project for the rest of the app session
+  (`openedLeafCoordinators` in the UI store, not persisted), so the warning
+  returns after a restart.
 - A window whose workspace is on a leaf follows its sidebar grouping.
   Grouped by repository, the window links each repository's projects
   across machines, so the leaf's coordinator is replaced by the same

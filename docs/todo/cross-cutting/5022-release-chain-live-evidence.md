@@ -4,14 +4,14 @@ Carried from security report batch S5, part `0140` tasks 2 and 4 (finding L6). T
 
 ## Task analysis
 
-Analysed 2026-11-04 against `main` at `e198fd4a7`.
+Analysed 2026-11-04 against `main` at `e198fd4a7`; re-checked 2026-11-05 against `main` at `69a3b4ca5`, when tasks 3 and 4 were done.
 
 ### Tasks
 
-1. **Prove the pinned installer on the live site**: the site serves a pin and the pin moves after a Stable release. Status: open.
-2. **Prove a published release installs from its lockfile**: a real update on a standalone host, on Linux and macOS. Status: open.
-3. **Pin the Bun that `install.sh` downloads**: it still fetches Bun's own installer with `curl | bash`. Status: open.
-4. **Lock the first run through `bunx`**: `bunx` resolves transitive dependencies afresh before the service install takes over. Status: open.
+1. **Prove the pinned installer on the live site**: the site serves a pin and the pin moves after a Stable release. Status: open (needs the deploy and the next Stable release; nothing here can show either).
+2. **Prove a published release installs from its lockfile**: a real update on a standalone host, on Linux and macOS. Status: open (needs two published releases that carry `resources/release-runtime/`).
+3. **Pin the Bun that `install.sh` downloads**: it still fetches Bun's own installer with `curl | bash`. Status: done (2026-11-05): the script downloads Bun's release archive and checks it against stated SHA-256s.
+4. **Lock the first run through `bunx`**: `bunx` resolves transitive dependencies afresh before the service install takes over. Status: done (2026-11-05) for releases that publish `resources/release-runtime/`; the current pin, 2.36.1, predates it and still runs through `bun x` until the pin moves (task 1).
 
 ### 1. Prove the pinned installer on the live site
 
@@ -20,6 +20,8 @@ Analysed 2026-11-04 against `main` at `e198fd4a7`.
 **Context.** `apps/web-public/public/install.sh` states `PINNED_RELEASE`, and `mise run release:pin-installer` moves it after a Stable release (`docs/development/releasing.md`, step 5). `docs/architecture/version-compatibility.md` says the hosted client follows `main`. The repository has a `vercel.json` and no deploy workflow, so the deploy itself is outside what a change here can observe.
 
 **Investigation.** Running the script from the worktree with a temporary `HOME` and Bun cache printed `orkestrator 2.36.1`, the pinned version, from the real registry. Nothing was deployed.
+
+Re-checked 2026-11-05: `PINNED_RELEASE` is still `apps/web-public/public/install.sh:6`, `apps/web-public/vercel.json` is the deploy configuration and there is still no deploy workflow. Since task 4 the live check has one more thing to see: once the pin reaches a Stable release with `resources/release-runtime/`, a first run prints `Installing the dependencies orkestrator@<pin> was published with…` instead of going through `bun x`.
 
 **Decisions.**
 
@@ -42,6 +44,8 @@ Analysed 2026-11-04 against `main` at `e198fd4a7`.
 - `installRelease` on the packed `orkestrator` tarball, with other packages proxied from npm: installed in about 4 s, and `bin/orkestrator.js --version` reported the version.
 - `bun install --frozen-lockfile --os … --cpu …` accepted the lockfile for linux x64, linux arm64, darwin arm64 and darwin x64, and chose each platform's `@img/sharp-*` and Agent SDK packages. Only linux x64 ran the result.
 
+Re-checked 2026-11-05: `installRelease` is now `packages/protocol/src/node/standalone-service.ts:352`; the rest holds. Task 4 gives the first run the same install, so the run in 0033 can watch both: the first run from `install.sh` and the update after it.
+
 **Decisions.**
 
 - **How to qualify it?**
@@ -58,7 +62,9 @@ Analysed 2026-11-04 against `main` at `e198fd4a7`.
 
 **Context.** The report named this as context for task 2, with no decision. Everything later runs under that Bun, including the update path above. `mise.toml` pins the Bun the project builds with, and `packages/cli/package.json` asks for `>=1.4.4`.
 
-**Investigation.** `apps/web-public/public/install.sh` still has the line. Its behaviour with an argument was not run here.
+**Investigation.** `apps/web-public/public/install.sh` still had the line on 2026-11-05. Bun's installer (`https://bun.com/install`, read, not run) takes a tag such as `bun-v1.4.4` as `$1`, but then still downloads the archive with no hash check. The repository already keeps Bun 1.4.4's version and four archive SHA-256s in `scripts/download-bun.sh`, enforced by `tests/unit/version-drift.test.ts`, which removes most of the second option's cost. Bun's `SHASUMS256.txt` for v1.4.4 matched those four, and supplied the hashes for the `-baseline` (no AVX2) and `-musl` (Alpine) archives that Bun's installer picks on such hosts.
+
+**Outcome.** The second option was taken (see Assumptions and decisions). `install.sh` now chooses the archive the way Bun's installer does (Rosetta 2, AVX2, Alpine), downloads it from the `bun-v<PINNED_BUN>` GitHub release, refuses it unless its SHA-256 is the one stated in the script, checks the binary reports `PINNED_BUN`, and only then moves it into `${BUN_INSTALL:-~/.bun}/bin` with a `bunx` link. Code: `install_bun`, `bun_target` and `bun_sha256` in `apps/web-public/public/install.sh`. Tests: `tests/unit/install-script.test.ts` (each target, a wrong hash, a wrong version, a failed download, the `shasum` fallback) and `tests/unit/version-drift.test.ts` (`PINNED_BUN` equals the `mise.toml` pin; the four shared hashes equal `scripts/download-bun.sh`'s).
 
 **Decisions.**
 
@@ -79,7 +85,9 @@ Analysed 2026-11-04 against `main` at `e198fd4a7`.
 
 **Context.** The pin (task 2 of the report) and the lockfile (task 4) were each decided for their own path. `service install` hands over to `installRelease`, which is locked, but the process doing that was started by `bunx`.
 
-**Investigation.** `apps/web-public/public/install.sh` launches through `bunx` or `bun x`. Neither takes a lockfile from the package. No fix was tried.
+**Investigation.** On 2026-11-05 `apps/web-public/public/install.sh` still launched through `bunx` or `bun x`. `service install` (`packages/cli/src/client/commands/service.ts`) records only `process.execPath` and installs its own release into the data directory, so a first run from a temporary directory leaves nothing behind that the service needs.
+
+**Outcome.** The recommended option was taken. After it has a Bun, `install.sh` fetches `orkestrator@<spec>` with `--ignore-scripts` into a fresh directory with its own cache, copies the package's `resources/release-runtime/{package.json,bun.lock}` into a second directory, runs `bun install --frozen-lockfile --production --linker=hoisted --ignore-scripts` there with its own cache, moves the package in, and replaces its own process with `bun <release>/node_modules/orkestrator/bin/orkestrator.js "$@"`. A helper removes the directory once that process exits. A runtime without `bun.lock` is refused; a package with no runtime (any release before 2026-11-04, including the current pin) runs through `bun x` as before, recorded in the register in `docs/architecture/version-compatibility.md`. Tests: `tests/unit/install-script-locked-run.test.ts` runs the real script with real `bun install`s against a loopback registry: the locked version wins over a newer one, no lifecycle script runs, arguments and the exit status pass through, SIGTERM to the script's process reaches the CLI, the temporary directory is removed, and an out-of-step or missing lockfile is refused with nothing run.
 
 **Decisions.**
 
@@ -91,11 +99,55 @@ Analysed 2026-11-04 against `main` at `e198fd4a7`.
     - Pros: no change.
     - Cons: the first run is the process that writes the service unit and holds the user's terminal.
 
+## Current state
+
+- `install.sh` pins the release (task 2 of the report), the Bun it downloads (task 3) and, for releases that publish one, the dependency lockfile of its first run (task 4). Users who saved an older copy of the script keep running it unchanged: it still runs `bunx orkestrator@<its pin>`, and a host it set up updates through `installRelease` like any other.
+- Tasks 1 and 2 need the site deployed from `main`, and published releases; they stay open.
+
 ## Constraints and rationale
 
 A committed lockfile is regenerated by hand, so it holds its versions until someone changes them, and it is resolved separately from the root `bun.lock`: at the time of writing, 15 of its 145 entries are newer than the root's. `mise run smoke:cli` installs and runs exactly this lockfile before each publish, which is what makes those versions tested.
 
 Releases older than the lockfile still install with a plain `bun install`. The path is in the register in `docs/architecture/version-compatibility.md`.
+
+## Assumptions and decisions
+
+### Task 3: verify Bun's archive against stated hashes, not pass a version to Bun's installer
+
+- **Chosen:** download Bun's release archive and check it against SHA-256s stated in the script (the second option), instead of the recommended `bash -s bun-v<version>` to Bun's installer.
+- **Why:** the ticket asks for a pinned Bun that is verified. Passing a version still runs bun.com's script unverified and downloads the archive with no hash check. The cost the file gave against the second option, a hash per platform, was mostly paid already: `scripts/download-bun.sh` keeps four of them and the drift test enforces them, so the new test checks the script's copies against those.
+- **Pros:** nothing from outside runs before it is checked; a new Bun release does not reach new hosts on its own; one Bun pin across `mise.toml`, the desktop app and the site.
+- **Cons:** nine hashes in a shell script; the five for `-baseline` and `-musl` hosts are checked only for their form, so a Bun bump has to copy them from `SHASUMS256.txt` (`docs/development/upgrade-agents.md` says so); the target choice copies Bun's installer and can drift from it.
+
+### Task 3: where `PINNED_BUN` comes from
+
+- **Chosen:** the `mise.toml` pin, enforced by `tests/unit/version-drift.test.ts`, and moved by the Bun bump procedure, not stamped by `release:pin-installer`.
+- **Why:** Bun is a repository pin that already moves in its own change with a drift test; stamping it at release time would add a second place it can come from.
+- **Cons:** a Bun bump reaches the site when it merges, ahead of the next pinned release; the release still runs because `packages/cli` asks for `bun >=1.4.4`.
+
+### Task 3: the shell profile
+
+- **Chosen:** leave the user's shell profile alone and print the directory to add to `PATH`. Bun's installer edited `.bashrc`, `.zshrc` or fish's configuration.
+- **Why:** the script should not rewrite dotfiles; the CLI and the service it installs find Bun by its absolute path, and the script puts that directory first on the CLI's `PATH`.
+- **Cons:** after a first install, `bun` and `bunx` are not on the user's `PATH` until they add it.
+
+### Task 4: where the locked release lives, and how it is cleaned up
+
+- **Chosen:** a fresh `mktemp -d` directory under `TMPDIR`, the CLI started with `exec` so it keeps the script's process, signals and terminal, and a small background helper that removes the directory once that process has exited.
+- **Why:** `exec` keeps the behaviour the script had with `bunx` (Ctrl-C, SIGTERM to the process, the exit status). Running the CLI as a child to clean up afterwards would need signal forwarding, and a background child of a non-interactive bash ignores SIGINT. `bunx` also leaves its install under `TMPDIR`.
+- **Cons:** every run downloads the package and its dependencies twice (the discarded fetch, then the frozen install), as `installRelease` does; a host killed with SIGKILL leaves the directory to the system's temporary-file cleanup.
+
+### Task 4: releases without a lockfile
+
+- **Chosen:** run them through `bun x`, as the script always did, after the fetch shows no `resources/release-runtime/`.
+- **Why:** keeps those releases running exactly as before (the ticket requires older installs to keep working) and matches `installRelease`, which installs them afresh. The current pin, 2.36.1, is one of them, so the locked first run starts when the pin moves (task 1).
+- **Cons:** until then the fetch is extra work on every first run.
+
+### Task 4: what `ORKESTRATOR_INSTALL_VERSION` may hold
+
+- **Chosen:** an npm tag or a version (letters, digits, `.`, `_`, `+`, `-`, starting with a letter or digit), refused otherwise.
+- **Why:** it is written into a JSON manifest; the README documents only tags and versions.
+- **Cons:** a range such as `^2.36`, which `bunx` accepted, is now refused.
 
 ## Related
 

@@ -123,7 +123,7 @@ export interface CompatibilityPathUsageEntry {
   lastSeenAt: string;
 }
 
-/** The persisted document, also what the command and `/api/metrics` return. */
+/** The persisted document, also what the command and `/__orkestrator/metrics` return. */
 export interface CompatibilityPathUsageSnapshot {
   version: 1;
   paths: Partial<Record<CompatibilityPathId, CompatibilityPathUsageEntry>>;

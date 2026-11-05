@@ -12,6 +12,7 @@ import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { getAllLeaves, usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { KeyInformationTabData } from "@/types/paneLayout";
 import { keyInformationUpdatedLine } from "./key-information-format";
+import { PipelineIntegrateButton } from "./PipelineIntegrateButton";
 import {
   useKeepActiveEntryInView,
   useKeyInformationSectionNav,
@@ -156,6 +157,7 @@ export function PipelineKeyInformationTab({ data }: { data: KeyInformationTabDat
             {keyInformationUpdatedLine(pipeline.keyInformation)}
           </div>
         </div>
+        <PipelineIntegrateButton environmentId={pipeline.environmentId} />
         {buildTab ? (
           <Button
             type="button"

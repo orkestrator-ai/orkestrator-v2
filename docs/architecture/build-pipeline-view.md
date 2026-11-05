@@ -368,9 +368,9 @@ it as a panel floating over the tab (`PipelineKeyInformation.tsx`; Escape, the
 close button or a click outside closes it). Its sections, each shown only once
 written:
 
-- **Summary**: one paragraph on the change as a whole, in plain language for a
-  reader who does not know the code. A brief written before this section
-  existed has none and opens on its Problem or Objective.
+- **Summary**: the change as a whole, in plain language for a reader who does
+  not know the code, in a few short paragraphs. A brief written before this
+  section existed has none and opens on its Problem or Objective.
 - **Problem** or **Objective**: `framing` is `problem` by default, `objective`
   when the ticket adds or changes something that was not broken.
 - **Context**, **Solution**, **What was done**.
@@ -391,6 +391,15 @@ uses the same behaviour (`key-information-section-nav.ts`). When Context and
 Solution share a row in the wide tab, scrolling within that row keeps its
 selected heading current. Entering the row from another section defaults to
 its first heading, Context.
+
+Summary, Problem or Objective, Context and Solution are laid out as paragraphs
+and lists (`key-information-blocks.ts`) in both the panel and the tab: a blank
+line starts a paragraph, and lines starting `- `, `* `, `• `, `1. ` or `1) `
+become a bulleted or numbered list. The Build prompt and the tool's field
+descriptions ask agents to write that way. Text recorded as one unbroken run,
+as older briefs were, is regrouped into paragraphs of a few whole sentences
+once it is 480 characters or longer, so it still does not read as one block;
+text with any line break is shown as written.
 
 Stage agents keep it through two agent tools, `get_key_information` and
 `update_key_information` (`build-pipeline-key-information-tools.ts`). They are

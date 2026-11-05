@@ -7,7 +7,7 @@ Analysed 2026-11-04 against `main` at `96ee1eb3e`.
 ### Tasks
 
 1. **Qualify a packaged window**: run the new transport on a packaged `file://` renderer. Status: open.
-2. **Flip the default**: after one release behind the setting. Status: open (depends on 1).
+2. **Flip the default**: after one release behind the setting. Status: open (depends on 1 and on [5760](5760-local-transport-main-cpu.md) task 2).
 3. **Retire the relay for local windows**: remove the second path once the default has held. Status: open (depends on 2).
 
 ### 1. Qualify a packaged window
@@ -34,7 +34,7 @@ Analysed 2026-11-04 against `main` at `96ee1eb3e`.
 
 **Context.** Decided 2026-11-01: the default moves after one release behind the setting. Moving the terminal to the WebSocket is a separate decision.
 
-**Investigation.** Not started; this waits for the release and task 1. The setting is a boolean read as `=== true`, so a flip must not turn a user's explicit `false` into on.
+**Investigation.** Not started; this waits for the release and task 1. The setting is a boolean read as `=== true`, so a flip must not turn a user's explicit `false` into on. Measured 2026-11-05, the direct transport does not lower Electron main's CPU and raises it with two windows; [5760](5760-local-transport-main-cpu.md) holds the figures and decides whether the flip waits for an explanation.
 
 **Decisions.**
 
@@ -67,5 +67,6 @@ Analysed 2026-11-04 against `main` at `96ee1eb3e`.
 ## Related
 
 - [1202 efficiency follow-ups](1202-efficiency-review-follow-ups.md), task 12.
-- [0400 local desktop transport](../../reports/efficiency-logging-database/0400-e26-local-desktop-transport.md).
+- [5760 local transport main CPU](5760-local-transport-main-cpu.md).
+- [Closing check of E26](../../reports/efficiency-logging-database/0000-index.md#closing-check-of-e26-local-desktop-transport), the outcome of efficiency report parts `0400` and `0860`.
 - [Remote gateway](../../architecture/remote-gateway.md).

@@ -225,7 +225,7 @@ import {
   coordinatorIdFromRuntimeId,
   coordinatorRuntimeId,
 } from "@orkestrator/protocol/coordinator";
-import type { Environment } from "./models.js";
+import type { Environment, PersistedNativeAgentSession } from "./models.js";
 import {
   ENVIRONMENT_LIFECYCLE_DRAIN_TIMEOUT_MS,
   EnvironmentLifecycleTaskTracker,
@@ -1846,26 +1846,44 @@ export class OrkestratorBackend {
     environmentId: string,
     tabId: string,
   ): Promise<string | undefined> {
-    return lastAssistantText((await this.workerProjection(environmentId, tabId, 6))?.messages);
+    const projection = await this.workerRead(environmentId, tabId, (agent, logicalSessionKey) =>
+      this.nativeAgents.getProjection({
+        environmentId,
+        agent,
+        logicalSessionKey,
+        messageLimit: 6,
+      }),
+    );
+    return lastAssistantText(projection?.messages);
   }
 
   /**
    * Whether a waiting worker tab is blocked on an approval or a question, from
    * its pending interactions rather than its activity state, which cannot say.
+   * Reads session state only: the interactions need no transcript.
    */
   private async waitingBlocker(
     environmentId: string,
     tabId: string,
   ): Promise<CoordinatorWaitingBlocker | undefined> {
-    return waitingBlocker((await this.workerProjection(environmentId, tabId, 1))?.interactions);
+    const state = await this.workerRead(environmentId, tabId, (agent, logicalSessionKey) =>
+      this.nativeAgents.getSessionStateUpdate({
+        environmentId,
+        agent,
+        logicalSessionKey,
+        viewVersion: 1,
+        forceSnapshot: true,
+      }),
+    );
+    return waitingBlocker(state?.status === "snapshot" ? state.value.interactions : undefined);
   }
 
-  /** A short projection read of one worker tab with a deadline; null when unavailable. */
-  private async workerProjection(
+  /** A short read of one worker tab's session with a deadline; null when unavailable. */
+  private async workerRead<T>(
     environmentId: string,
     tabId: string,
-    messageLimit: number,
-  ): Promise<{ messages?: unknown; interactions?: unknown } | null | undefined> {
+    read: (agent: PersistedNativeAgentSession["agent"], logicalSessionKey: string) => Promise<T>,
+  ): Promise<T | null | undefined> {
     const logicalSessionKey = `env-${environmentId}:${tabId}`;
     const session = (await this.context.storage.readNativeAgentSessionsSnapshot()).find(
       (candidate) =>
@@ -1880,14 +1898,7 @@ export class OrkestratorBackend {
     });
     try {
       return await Promise.race([
-        this.nativeAgents
-          .getProjection({
-            environmentId,
-            agent: session.agent,
-            logicalSessionKey,
-            messageLimit,
-          })
-          .catch(() => null),
+        read(session.agent, logicalSessionKey).catch(() => null),
         deadline,
       ]);
     } finally {

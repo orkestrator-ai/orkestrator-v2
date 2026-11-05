@@ -54,6 +54,7 @@ const REASONS: Record<string, string> = {
   "changes.reason.legacy-payload": "Recorded before change tracking; measured from the tool input",
   "changes.reason.history-replay": "Rebuilt from saved history",
   "changes.reason.resource-deleted": "No longer available",
+  "changes.reason.history-expired": "Past the retention window, so its details were removed",
   "changes.reason.scan-failed": "Could not read the workspace",
   "changes.reason.runtime-stopped": "The environment is stopped",
   "changes.reason.capture-timeout": "Capturing the workspace took too long",

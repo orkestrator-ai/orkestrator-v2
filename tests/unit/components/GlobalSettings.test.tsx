@@ -1644,7 +1644,7 @@ describe("GlobalSettings", () => {
         },
       },
     }));
-    render(<GlobalSettings activeSection="platforms" />);
+    render(<GlobalSettings activeSection="coordinator" />);
     const choices = screen.getByRole("radiogroup", { name: "Coordinator web research" });
     expect(
       (within(choices).getByRole("radio", { name: /Web search only/ }) as HTMLInputElement).checked,
@@ -1691,7 +1691,7 @@ describe("GlobalSettings", () => {
   });
 
   test("persists a coordinator safety level change on its own", async () => {
-    render(<GlobalSettings activeSection="platforms" />);
+    render(<GlobalSettings activeSection="coordinator" />);
 
     const tiers = screen.getByRole("radiogroup", { name: "Coordinator safety level" });
     const providerConfigured = within(tiers).getByRole("radio", {
@@ -1720,7 +1720,7 @@ describe("GlobalSettings", () => {
         global: { ...state.config.global, coordinatorProviderTiers: "enforced" },
       },
     }));
-    render(<GlobalSettings activeSection="platforms" />);
+    render(<GlobalSettings activeSection="coordinator" />);
 
     const tiers = screen.getByRole("radiogroup", { name: "Coordinator safety level" });
     const providerConfigured = within(tiers).getByRole("radio", {

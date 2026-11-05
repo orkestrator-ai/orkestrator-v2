@@ -132,6 +132,39 @@ describe("AgentRegistry", () => {
     }
   });
 
+  test("a coordinator conversation that failed to start reads stopped, and only that one", async () => {
+    const { storage, dataDir } = await fixture();
+    try {
+      await storage.coordinators.mutateCoordinatorWorkspace("p1", (current) => ({
+        ...current!,
+        conversations: [
+          ...current!.conversations,
+          {
+            ...current!.conversations[0]!,
+            id: "side",
+            tabId: "coordinator-side",
+            logicalSessionKey: "coordinator-coordinator-1:side",
+            role: "side",
+            sideOrdinal: 1,
+            startupError: "bridge failed",
+          },
+        ],
+      }));
+      const registry = new AgentRegistry(storage, {
+        native: () => "idle",
+        tmux: () => undefined,
+      });
+      const states = Object.fromEntries(
+        (await registry.snapshot({ projectId: "p1" })).entries
+          .filter((entry) => entry.ownerKind === "coordinator")
+          .map((entry) => [entry.tabId, entry.state]),
+      );
+      expect(states).toEqual({ "coordinator-main": "idle", "coordinator-side": "stopped" });
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
   test("lists every agent tab and coordinator with live state and counts", async () => {
     const { storage, dataDir } = await fixture();
     try {

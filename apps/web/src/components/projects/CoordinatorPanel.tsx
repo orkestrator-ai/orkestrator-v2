@@ -28,7 +28,7 @@ import { portalStore } from "@/lib/portal/portal-store";
 import { useCoordinatorPaneLayoutStore } from "@/stores/coordinatorPaneLayoutStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
-import { CoordinatorBanner } from "./CoordinatorPanelNotices";
+import { CoordinatorActionAlert, CoordinatorBanner } from "./CoordinatorPanelNotices";
 import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { CoordinatorPaneTree } from "./CoordinatorPaneTree";
 import { CoordinatorConversationTab } from "./CoordinatorConversationTab";
@@ -50,6 +50,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import * as backend from "@/lib/backend";
+import { useAppDialogStore } from "@/stores/appDialogStore";
 import { createSessionKey } from "@/lib/utils";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { useNativeComposeStore } from "@/stores/nativeComposeStore";
@@ -70,6 +71,8 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
     git,
     loading,
     error: loadError,
+    clearError: clearLoadError,
+    freshness,
     load,
     applySnapshot: setSnapshot,
     applyGit: setGit,
@@ -320,6 +323,15 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
             Coordinator reads the project’s real local checkout. Set a valid local path in
             Repository settings to continue.
           </p>
+          <Button
+            className="mt-4"
+            variant="outline"
+            onClick={() =>
+              useAppDialogStore.getState().open({ kind: "repository-settings", projectId })
+            }
+          >
+            Repository settings
+          </Button>
         </div>
       </div>
     );
@@ -485,6 +497,14 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
       { failureMessage: "Could not close conversation" },
     );
   };
+  const retryConversation = (conversationId: string) => {
+    void runAction(
+      "conversation",
+      async () =>
+        setSnapshot(await backend.retryCoordinatorConversation(projectId, conversationId)),
+      { failureMessage: "Could not retry conversation" },
+    );
+  };
   const clearFinishedWork = (associationIds: string[]) => {
     setError(null);
     return backend
@@ -548,6 +568,9 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
     return `${name} on ${node?.view.displayName ?? entry.nodeId}`;
   };
 
+  // Keep action failures announced even when the repository retains the same error.
+  const actionAlert = error;
+
   return (
     <CoordinatorPullRequestWatchProvider projectId={projectId}>
       <div
@@ -559,10 +582,11 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
         <CoordinatorToolbar
           snapshot={snapshot}
           git={git}
+          announcedError={actionAlert}
           gitBusy={gitBusy}
           fetching={fetching}
           conversationBusy={conversationBusy}
-          error={error}
+          freshness={freshness}
           runGit={runGit}
           prepareSwitch={prepareSwitch}
           activeTurn={activeTurn}
@@ -571,11 +595,31 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
           onPause={() => setPaused(true)}
         />
 
+        {actionAlert ? (
+          <CoordinatorActionAlert
+            message={actionAlert}
+            onDismiss={() => {
+              setError(null);
+              clearLoadError();
+            }}
+          />
+        ) : null}
+        {/* Only from a backend that predates per-conversation startup errors,
+        or a record one stored (version-compatibility.md). */}
         {snapshot.workspace.lifecycleState === "error" ? (
           <CoordinatorBanner
             tone="error"
             action={
-              <Button size="sm" variant="outline" onClick={() => void load()}>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={conversationBusy}
+                onClick={() =>
+                  void runAction("conversation", load, {
+                    failureMessage: "Could not open Coordinator",
+                  })
+                }
+              >
                 <RotateCcw className="size-3.5" />
                 Retry
               </Button>
@@ -603,7 +647,8 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
               </Button>
             }
           >
-            Coordination is paused. Messages will wait until you resume.
+            Coordination is paused. Mail and new turns wait until you resume; conversations stay
+            readable.
           </CoordinatorBanner>
         ) : null}
 
@@ -697,6 +742,18 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
                       newConversationLabel={newConversationLabel}
                       onCreateConversation={() => createConversation()}
                       onRetry={() => void load()}
+                      onRetryConversation={retryConversation}
+                      onCloseConversation={(id) => {
+                        const item = conversationById.get(id);
+                        if (item?.role === "main") {
+                          setPendingMainClose({
+                            id,
+                            title: item.title,
+                            paneId: pane.id,
+                            changeAgent: false,
+                          });
+                        } else closeConversation(id);
+                      }}
                     />
                   );
                 }}

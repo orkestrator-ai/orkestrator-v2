@@ -337,7 +337,7 @@ log hashes remain readable during upgrades.
 
 `autoFix` and `autoPr` are fixed on the workflow at launch. The launch dialog
 opens its two checkboxes on the saved app-level settings. Coordinator launches
-(`launch_multi_review`, `start_multi_review`) take the same saved values unless
+(`launch_multi_review`) take the same saved values unless
 the call sets them, and a requested `autoPr: true` turns an omitted `autoFix` on
 (`multiReviewAutomation` in `coordinator-launch-defaults.ts`). Both paths then
 run the same `MultiReviewService` code:
@@ -386,7 +386,7 @@ overrides it for testing. The default stays `bespoke` until the graph runtime
 has soaked and the user decides to flip it; the bespoke service is not
 retired. A running review keeps the engine it started on.
 
-Every launch surface (the dialog, `launch_multi_review` and
+Every launch surface (the dialog, `launch_multi_review`, an operator's
 `start_multi_review`, the CLI's `review launch`) still calls
 `MultiReviewService.start`, so all of them follow the setting. On `graph` the
 service records `engine: "graph"` and `graphRun.runId`
@@ -707,8 +707,8 @@ guard, presets and prompt section live in
   included, edited on each row of the Multi Review defaults. The Multi Review
   button, the Build launcher's reviewer rows and coordinator launches that omit
   their rows start from them.
-- **Callers.** The coordinator's `launch_multi_review`, `start_multi_review`
-  and `start_build_pipeline` accept `lens` on reviewer rows and report it as
+- **Callers.** The coordinator's `launch_multi_review` and
+  `start_build_pipeline` accept `lens` on reviewer rows and report it as
   `{ label, instructionBytes }`. The public `review.launch` action accepts it on
   `reviewers`, and `orkestrator review launch` sets it with `--focus N=TEXT` or
   `--focus-file N=PATH` ([public CLI](public-cli.md)).

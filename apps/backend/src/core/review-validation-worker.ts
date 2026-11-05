@@ -85,8 +85,10 @@ function stopRequestedCommands() {
 process.on("SIGTERM", () => { stop("Validation was cancelled"); });
 process.on("SIGINT", () => { stop("Validation was cancelled"); });
 
+// Optional locks off: a drift check must not take index.lock while the
+// validation command it brackets (an install, a test run) works in the checkout.
 function gitOptions() {
-  return { cwd: root, encoding: "utf8", timeout: 10000, maxBuffer: 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] };
+  return { cwd: root, encoding: "utf8", timeout: 10000, maxBuffer: 1024 * 1024, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" } };
 }
 function headMatches() {
   const head = spawnSync("git", ["rev-parse", "--verify", "HEAD^{commit}"], gitOptions());

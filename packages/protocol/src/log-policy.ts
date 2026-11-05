@@ -96,6 +96,111 @@ export function effectiveLogLevel(detail: LogDetail, area: string): LogLevel {
   }
 }
 
+/** Whether any level in this setting is above `info`, the only detail that expires. */
+export function logDetailIsRaised(detail: LogDetail): boolean {
+  if (LEVEL_DETAIL[detail.level] > LEVEL_DETAIL.info) return true;
+  return Object.values(detail.areaLevels).some((level) => LEVEL_DETAIL[level] > LEVEL_DETAIL.info);
+}
+
+/**
+ * The setting with every raised level back at `info`: the default comes down to
+ * `info` and a raised area loses its entry. A lowered one (`updater=warn`) stays,
+ * because quieting an area is not what expiry exists to undo.
+ */
+export function revertRaisedLogDetail(detail: LogDetail): LogDetail {
+  const areaLevels: Record<string, LogLevel> = {};
+  for (const area of Object.keys(detail.areaLevels).sort()) {
+    const level = detail.areaLevels[area]!;
+    if (LEVEL_DETAIL[level] <= LEVEL_DETAIL.info) areaLevels[area] = level;
+  }
+  const level = LEVEL_DETAIL[detail.level] > LEVEL_DETAIL.info ? DEFAULT_LOG_LEVEL : detail.level;
+  return { level, areaLevels };
+}
+
+/** Whether two settings write the same levels. */
+export function sameLogDetail(left: LogDetail, right: LogDetail): boolean {
+  return left.level === right.level && formatLogAreaLevels(left) === formatLogAreaLevels(right);
+}
+
+/**
+ * How long raised detail stays before the backend reverts it. Saving to disk is
+ * a separate setting, so a revert never touches it.
+ */
+export const LOG_DETAIL_EXPIRY_MS = 24 * 60 * 60 * 1000;
+
+/** What a global config holds for expiry, before it is normalized. */
+export interface LogDetailExpirySource extends LogDetailSource {
+  /** Backend-owned: when raised detail reverts. ISO 8601; absent when nothing expires. */
+  logDetailExpiresAt?: unknown;
+  /** The user's choice to keep raised detail for a long investigation. */
+  logDetailKeepRaised?: unknown;
+}
+
+const EXPIRY_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/;
+
+/** Milliseconds since the epoch, or null for anything but a stored expiry. */
+export function parseLogDetailExpiresAt(value: unknown): number | null {
+  if (typeof value !== "string" || !EXPIRY_PATTERN.test(value)) return null;
+  const at = Date.parse(value);
+  return Number.isFinite(at) ? at : null;
+}
+
+function expires(source: LogDetailExpirySource, detail: LogDetail): boolean {
+  return logDetailIsRaised(detail) && source.logDetailKeepRaised !== true;
+}
+
+/**
+ * The expiry a config write stores, or undefined for none. Raised detail keeps
+ * the expiry it already had while the levels stay the same; a change of levels
+ * (or turning "keep" off) starts a fresh 24 hours. Every writer gets this,
+ * including a client that predates the setting, so none can raise detail for good
+ * by accident.
+ */
+export function nextLogDetailExpiresAt(
+  next: LogDetailExpirySource,
+  stored: LogDetailExpirySource | null,
+  nowMs: number,
+): string | undefined {
+  const detail = resolveLogDetail(next);
+  if (!expires(next, detail)) return undefined;
+  const storedExpiry = stored ? parseLogDetailExpiresAt(stored.logDetailExpiresAt) : null;
+  if (
+    stored &&
+    storedExpiry !== null &&
+    stored.logDetailKeepRaised !== true &&
+    sameLogDetail(resolveLogDetail(stored), detail)
+  ) {
+    return stored.logDetailExpiresAt as string;
+  }
+  return new Date(nowMs + LOG_DETAIL_EXPIRY_MS).toISOString();
+}
+
+/** What the backend's expiry check does to a stored config at `nowMs`. */
+export type LogDetailExpiryAction =
+  | { kind: "none" }
+  /** Raised detail with no expiry (written by hand or by an older backend): give it one. */
+  | { kind: "stamp"; expiresAt: string }
+  /** An expiry is stored but nothing is raised, or the user keeps it raised. */
+  | { kind: "clear" }
+  /** Due: raised levels go back to `info`, and the expiry goes. */
+  | { kind: "revert"; detail: LogDetail };
+
+export function logDetailExpiryAction(
+  source: LogDetailExpirySource,
+  nowMs: number,
+): LogDetailExpiryAction {
+  const detail = resolveLogDetail(source);
+  if (!expires(source, detail)) {
+    return source.logDetailExpiresAt === undefined ? { kind: "none" } : { kind: "clear" };
+  }
+  const expiry = parseLogDetailExpiresAt(source.logDetailExpiresAt);
+  if (expiry === null) {
+    return { kind: "stamp", expiresAt: new Date(nowMs + LOG_DETAIL_EXPIRY_MS).toISOString() };
+  }
+  if (expiry <= nowMs) return { kind: "revert", detail: revertRaisedLogDetail(detail) };
+  return { kind: "none" };
+}
+
 /** Whether bridges keep writing their diagnostic snapshots under this setting. */
 export function logDetailEnablesBridgeDiagnostics(detail: LogDetail): boolean {
   return LEVEL_DETAIL[effectiveLogLevel(detail, BRIDGE_DIAGNOSTICS_LOG_AREA)] >= LEVEL_DETAIL.debug;

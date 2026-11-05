@@ -366,6 +366,35 @@ describe("delete_environment durable child-state cleanup", () => {
     );
   });
 
+  test("records its change-tracking purge, and a failure does not strand deletion", async () => {
+    await withDeleteCommand(
+      async (storage) => {
+        await storage.addEnvironment(environment());
+      },
+      async (invokeDelete, storage, context) => {
+        const environmentDeleted = mock((_environmentId: string): void => {
+          throw new Error("private failure detail");
+        });
+        context.runtime.changeTracking = {
+          environmentDeleted,
+          onDiffScanEvent: () => undefined,
+        } as unknown as NonNullable<typeof context.runtime.changeTracking>;
+        const warning = spyOn(console, "warn").mockImplementation(() => undefined);
+        try {
+          await expect(invokeDelete()).resolves.toBeUndefined();
+          expect(environmentDeleted).toHaveBeenCalledWith("e1");
+          expect(warning).toHaveBeenCalledWith(
+            expect.stringContaining("delete.step-failed environmentId=e1 step=change-tracking"),
+          );
+          expect(await storage.getEnvironment("e1")).toBeNull();
+        } finally {
+          context.runtime.changeTracking = null;
+          warning.mockRestore();
+        }
+      },
+    );
+  });
+
   test("purges agent mail before removing the environment", async () => {
     await withDeleteCommand(
       async (storage) => storage.addEnvironment(environment()).then(() => undefined),

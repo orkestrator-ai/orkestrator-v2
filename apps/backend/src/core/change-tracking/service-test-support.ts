@@ -36,6 +36,8 @@ export function createHarness(
     policy?: Partial<ChangeTrackingPolicy>;
     repo?: boolean;
     manualScheduling?: boolean;
+    /** More environments whose worktree is the same checkout as `env-1`. */
+    aliases?: readonly string[];
   } = {},
 ): Harness {
   const dataDir = mkdtempSync(join(tmpdir(), "ork-ct-data-"));
@@ -53,7 +55,9 @@ export function createHarness(
     database: () => (database ??= openChangeLedgerDatabase(dataDir)),
     emit: (event, payload) => events.push({ event, payload }),
     environmentTarget: async (environmentId) =>
-      environmentId === "env-1" ? { kind: "local", worktreePath: repo } : null,
+      environmentId === "env-1" || options.aliases?.includes(environmentId)
+        ? { kind: "local", worktreePath: repo }
+        : null,
     durable: false,
     manualScheduling: options.manualScheduling ?? true,
     policy: options.policy,

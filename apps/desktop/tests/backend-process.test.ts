@@ -1232,7 +1232,7 @@ sleep 5
 
   test("HTTP client covers commands, settings, errors, and event delivery", async () => {
     const server = createServer(async (request, response) => {
-      if (request.url === "/__orkestrator/events") {
+      if (new URL(request.url ?? "/", "http://fixture").pathname === "/__orkestrator/events") {
         response.writeHead(200, { "content-type": "text/event-stream" });
         response.write(
           `: connected\n\n${FRESH_CONNECTED_FRAME}data: {"event":"changed","payload":{"ok":true}}\n\n`,
@@ -1514,8 +1514,8 @@ sleep 5
         "kept",
       ]);
       expect(urls).toEqual([
-        "http://127.0.0.1:34121/__orkestrator/events",
-        "http://127.0.0.1:34121/__orkestrator/events?since=desktop1%3A1",
+        "http://127.0.0.1:34121/__orkestrator/events?relayedEvents=per-node",
+        "http://127.0.0.1:34121/__orkestrator/events?since=desktop1%3A1&relayedEvents=per-node",
       ]);
       expect(firstCancelled).toBe(true);
       // One malformed frame, then one disconnect it recovers from.

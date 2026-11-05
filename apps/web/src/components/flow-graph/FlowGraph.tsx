@@ -743,6 +743,8 @@ export interface FlowGraphProps {
    * over a remembered view and wherever the panel around the graph has scrolled.
    */
   landOnSelection?: boolean;
+  /** A measured landing in the panel has completed. */
+  onSelectionLanded?: () => void;
 }
 
 /**
@@ -795,6 +797,7 @@ export function FlowGraph({
   fitControl = false,
   errorFace = "first-line",
   landOnSelection = false,
+  onSelectionLanded,
 }: FlowGraphProps) {
   const stackedWrapperRef = useRef<HTMLDivElement | null>(null);
   const [fullscreen, toggleFullscreen] = useFlowFullscreen(stackedWrapperRef, isActive);
@@ -931,22 +934,30 @@ export function FlowGraph({
         landedRef.current = null;
         return;
       }
-      if (landedRef.current === viewKey || !wrapperMeasurable) return;
+      const landingKey = `${viewKey}\u0000${fullscreen ? "overlay" : "panel"}`;
+      if (landedRef.current === landingKey || !wrapperMeasurable) return;
       if (stacked && columnHeight === null) return;
       const wrapper = stackedWrapperRef.current;
       const node = nodeRefs.current.get(selectedId);
       const scroller = fullscreen ? wrapper : scrollingAncestor(wrapper);
-      if (!wrapper || !node || !scroller) return;
-      landedRef.current = viewKey;
+      // ResizeObserver can still describe the visible pane after it was hidden.
+      // Never spend the arrival using zero geometry from the current DOM.
+      if (!wrapper?.clientWidth || !node || !scroller) return;
+      const nodeBounds = node.getBoundingClientRect();
+      if (!nodeBounds.width || !nodeBounds.height) return;
+      landedRef.current = landingKey;
       const top = scroller.getBoundingClientRect().top;
       scroller.scrollTop += stacked
         ? node.getBoundingClientRect().top - top - STACKED_LANDING_MARGIN
         : Math.min(0, wrapper.getBoundingClientRect().top - top);
+      // The overlay has its own scroller; the panel still needs its arrival
+      // when fullscreen closes.
+      if (!fullscreen) onSelectionLanded?.();
     };
   });
   useEffect(() => {
     landRef.current();
-  }, [landOnSelection, selectedId, wrapperMeasurable, stacked, columnHeight, viewKey]);
+  }, [landOnSelection, selectedId, wrapperMeasurable, stacked, columnHeight, viewKey, fullscreen]);
 
   const handleKeyDown = (event: KeyboardEvent<HTMLButtonElement>, node: FlowNodeModel) => {
     if (event.key === "Enter") {

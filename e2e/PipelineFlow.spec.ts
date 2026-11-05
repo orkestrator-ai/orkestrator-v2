@@ -955,6 +955,127 @@ test("a run finishing behind another pane lands on Notes when shown, once", asyn
   await expect.poll(() => overview.evaluate((element) => element.scrollTop)).toBe(40);
 });
 
+test("completion before the hide observer waits for a visible pane", async ({ page }) => {
+  await page.setViewportSize({ width: page.viewportSize()!.width, height: 560 });
+  // Hold observer notifications so selection sees the previous measurable state.
+  await page.addInitScript(() => {
+    const Original = window.ResizeObserver;
+    const controls = { hold: false, pending: [] as (() => void)[] };
+    Object.assign(window, { __landingResize: controls });
+    window.ResizeObserver = class extends Original {
+      constructor(callback: ResizeObserverCallback) {
+        super((entries, observer) => {
+          const notify = () => callback(entries, observer);
+          if (controls.hold) controls.pending.push(notify);
+          else notify();
+        });
+      }
+    };
+  });
+  await page.goto("/pipeline-flow?scenario=notes&unfinished&paneControls");
+  await expect(graph(page)).toBeVisible();
+  await page.evaluate(() => {
+    (window as unknown as { __landingResize: { hold: boolean } }).__landingResize.hold = true;
+  });
+  await page.getByRole("button", { name: "Activate other pane" }).click();
+  await page.getByRole("button", { name: "Finish the run" }).click();
+  await page.evaluate(() => {
+    const controls = (
+      window as unknown as {
+        __landingResize: { hold: boolean; pending: (() => void)[] };
+      }
+    ).__landingResize;
+    controls.hold = false;
+    controls.pending.splice(0).forEach((notify) => notify());
+  });
+  await page.getByRole("button", { name: "Activate build pane" }).click();
+  await expectOnScreen(page, "Notes");
+  await expect(page.getByRole("region", { name: "Needs a look" })).toBeInViewport();
+  const overview = page.getByTestId("pipeline-flow-scroll");
+  await overview.evaluate((element) => {
+    element.scrollTop = 40;
+  });
+  await page.getByRole("button", { name: "Activate other pane" }).click();
+  await page.getByRole("button", { name: "Activate build pane" }).click();
+  await expect.poll(() => overview.evaluate((element) => element.scrollTop)).toBe(40);
+});
+
+test("collapsing finished Notes preserves the reader's pan and panel position", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: page.viewportSize()!.width, height: 560 });
+  await page.goto("/pipeline-flow?scenario=notes");
+  await expectOnScreen(page, "Notes");
+  const overview = page.getByTestId("pipeline-flow-scroll");
+  const viewport = page.locator("[data-flow-viewport]");
+  await viewport.evaluate((element) => {
+    element.scrollLeft = 0;
+  });
+  await overview.evaluate((element) => {
+    element.scrollTop = 40;
+  });
+  const toggle = page.getByRole("button", { name: "Pipeline", exact: true });
+  // Programmatic activation keeps Playwright from scrolling the header into view.
+  await toggle.evaluate((element) => element.click());
+  await expect(graph(page)).toHaveCount(0);
+  await toggle.evaluate((element) => element.click());
+  await expect(graph(page)).toBeVisible();
+  await expect.poll(() => overview.evaluate((element) => element.scrollTop)).toBe(40);
+  await expect.poll(() => viewport.evaluate((element) => element.scrollLeft)).toBe(0);
+});
+
+test("completion returns a wide graph scrolled above the panel", async ({ page }) => {
+  test.skip(!isWide(page), "The stacked layout has its own landing coverage");
+  await page.setViewportSize({ width: page.viewportSize()!.width, height: 560 });
+  await page.goto("/pipeline-flow?scenario=notes&unfinished&paneControls");
+  const overview = page.getByTestId("pipeline-flow-scroll");
+  await expect(graph(page)).toBeVisible();
+  // Give the unfinished inspector enough content height to scroll fully past
+  // the graph; its default PR summary is only a few lines long.
+  await page.getByTestId("pipeline-inspector").evaluate((element) => {
+    element.style.minHeight = "1000px";
+  });
+  await overview.evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+  });
+  await expect(graph(page)).not.toBeInViewport();
+  await page.getByRole("button", { name: "Finish the run" }).click();
+  await expectOnScreen(page, "Notes");
+  await expect(page.getByRole("region", { name: "Needs a look" })).toBeInViewport();
+});
+
+test("completion in fullscreen lands in the overlay and then the panel", async ({ page }) => {
+  await page.goto("/pipeline-flow?scenario=notes&unfinished&paneControls");
+  await page.getByRole("button", { name: "Fullscreen", exact: true }).click();
+  const overlay = page.locator("[data-flow-fullscreen]");
+  await expect(overlay).toBeVisible();
+  await page.getByRole("button", { name: "Finish the run" }).evaluate((element) => element.click());
+  await expect(node(page, "Notes")).toHaveAttribute("aria-selected", "true");
+  await expect
+    .poll(() =>
+      node(page, "Notes").evaluate((element) => {
+        const box = element.getBoundingClientRect();
+        const bounds = element.closest("[data-flow-fullscreen]")!.getBoundingClientRect();
+        return (
+          box.top >= bounds.top &&
+          box.bottom <= bounds.bottom &&
+          box.left >= bounds.left &&
+          box.right <= bounds.right
+        );
+      }),
+    )
+    .toBe(true);
+  if (!isWide(page))
+    expect(await overlay.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+  await page.getByRole("button", { name: "Exit fullscreen", exact: true }).click();
+  await expectOnScreen(page, "Notes");
+  await expect(page.getByRole("region", { name: "Needs a look" })).toBeInViewport();
+  await page.reload();
+  // The fixture resets to unfinished on reload; finishing again is a fresh arrival.
+  await page.getByRole("button", { name: "Finish the run" }).click();
+  await expectOnScreen(page, "Notes");
+});
+
 test("a node the user picked is not scrolled away from when the run finishes", async ({ page }) => {
   await page.goto("/pipeline-flow?scenario=notes&unfinished&paneControls");
   const overview = page.getByTestId("pipeline-flow-scroll");

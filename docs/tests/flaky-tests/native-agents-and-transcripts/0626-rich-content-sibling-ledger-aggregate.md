@@ -136,3 +136,10 @@ remains unknown. No rich-content implementation or assertions changed.
 - Failure: 139.88 ms: sibling ledger expected length 1, received 0. Evidence: `/tmp/orkestrator-test-run.8nVKRg/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log` (compressed on aggregate completion).
 - Complete unchanged owner: `NODE_ENV=test mise run test:logged -- --name triage-rich-revocation -- bun test --cwd apps/web ./src/lib/chat/rich-conversation-revocation.test.tsx --parallel=1 --only-failures` passed, exit 0, in 2.4 s. Passing output was removed by the logged runner.
 - Owning code and assertions were unchanged. This repeats the open case; no new root cause established. Aggregate totals were not yet available when the owner reran.
+
+## Pipeline Notes landing repair — 2026-11-05
+
+- At `dbace6167`, the command `NODE_ENV=test mise run test:logged -- --name pipeline-flow-unit -- bun --cwd apps/web test src/components/build-pipeline/PipelineFlowView.test.tsx src/components/build-pipeline/PipelineFlowView.code-rewind.test.tsx --parallel=2 --only-failures` invoked the web package's test script, expanding to the whole web suite with two workers. The component browser suite was also running.
+- The same test at line 187 failed in 167.82 ms: sibling ledger expected length 1, received 0. Evidence: `/tmp/orkestrator-test-run.uxik2p/pipeline-flow-unit.log.gz` (compressed on completion).
+- Complete unchanged owner rerun: `NODE_ENV=test mise run test:logged -- --name rich-content-owner -- bun test --cwd apps/web ./src/lib/chat/rich-conversation-revocation.test.tsx --parallel=1 --only-failures` passed, exit 0, in 1.9 seconds.
+- No rich-content code, assertions or deadlines changed. The cause remains unknown. The correctly scoped pipeline owners passed separately. The accidentally expanded package run was stopped after more than six minutes (exit 143); final suite counts are unavailable and it is not green validation evidence.

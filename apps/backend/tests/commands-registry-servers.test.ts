@@ -1,3 +1,4 @@
+import * as serverHealth from "../src/core/commands-server-health.js";
 import * as credentialModes from "../src/core/container-credential-mode.js";
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import os from "node:os";
@@ -1769,6 +1770,24 @@ exit 0
               containerPort: 4096,
             })),
           );
+          // Failed warming is deliberately best-effort, including verifier
+          // mode. It is not evidence that the credential plugin loaded.
+          await fs.rm(tokenFile);
+          modeSpy.mockResolvedValue("verifier");
+          const warm = spyOn(serverHealth, "warmOpenCodeInstance").mockResolvedValue(false);
+          try {
+            const result = await commands.get("start_opencode_server")!(
+              { containerId: "container-opencode-auth" },
+              context,
+            );
+            expect(result).toMatchObject({ hostPort, wasRunning: false });
+            expect(warm).toHaveBeenCalled();
+            expect(
+              captured.records().some((record) => record.event === "opencode.warm-incomplete"),
+            ).toBe(true);
+          } finally {
+            warm.mockRestore();
+          }
         } finally {
           captured.restore();
         }

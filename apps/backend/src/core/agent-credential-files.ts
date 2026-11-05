@@ -113,7 +113,7 @@ async function markNonDumpable() {
 export const OrkestratorCredentialPlugin = async () => {
   delete process.env.OPENCODE_SERVER_PASSWORD;
   if (await markNonDumpable()) return {};
-  console.error("Orkestrator could not protect the OpenCode server password from this server's tools.");
+  process.stderr.write("Orkestrator could not protect the OpenCode server password from this server's tools.\\n");
   return ${
     onUnhardened === "refuse-tools"
       ? `{

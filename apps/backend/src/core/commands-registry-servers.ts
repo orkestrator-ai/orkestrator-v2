@@ -162,9 +162,8 @@ export function registerServerCommands(
     const operationId = await containerBridgeOperationId(context, id);
     return enqueueContainerBridgeOperation(context, "opencode", operationId, async () => {
       await syncContainerLoginUnlocked(context, "opencode", id);
-      const started = await startContainerOpenCodeServer(
-        id,
-        await containerCredentialMode(context, id),
+      const started = await startContainerOpenCodeServer(id, () =>
+        containerCredentialMode(context, id),
       );
       const connection = await resolveContainerAgentToolConnection(context, id);
       if (connection) {
@@ -282,7 +281,7 @@ export function registerServerCommands(
         connection,
         bridgeDebugEnvValue(global) === "1",
         global.claudeBackgroundCommandLimitHours,
-        await containerCredentialMode(context, id),
+        () => containerCredentialMode(context, id),
       );
     });
   });
@@ -393,7 +392,6 @@ export function registerServerCommands(
         ? agentToolConnectionFingerprint(agentToolConnection)
         : null;
       const readPersistedToken = () => readContainerBridgeToken(id, "codex");
-      const credentialMode = await containerCredentialMode(context, id);
       const hasCurrentAgentTools = async (): Promise<boolean> => {
         if (!expectedAgentToolsFingerprint) return true;
         const persisted = (
@@ -410,7 +408,10 @@ export function registerServerCommands(
         wasRunning: boolean;
         authToken: string;
       }> => {
-        const credential = containerBridgeLaunch("codex", credentialMode);
+        const credential = containerBridgeLaunch(
+          "codex",
+          await containerCredentialMode(context, id),
+        );
         const authToken = credential.token;
         const started = await startContainerServer(
           id,

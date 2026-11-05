@@ -116,12 +116,19 @@ export async function containerImageCapabilitySupport(
   capability: ImageCapability,
   minimum: number,
   readManifest = readImageManifest,
+  inspectImage = async (id: string) =>
+    (await runCommand("docker", ["inspect", "--format", "{{.Image}}", id])).stdout.trim(),
 ): Promise<ClaudeStateSignalSupport> {
   const environment = findEnvironmentByContainerId(
     await context.storage.loadEnvironments(),
     containerId,
   );
-  const imageId = environment ? currentRuntimeIdentity(environment, context)?.imageId : undefined;
+  const recordedImageId = environment
+    ? currentRuntimeIdentity(environment, context)?.imageId
+    : undefined;
+  // Older runtimes predate recorded image identities. Inspect the running
+  // container rather than treating missing metadata as a legacy capability.
+  const imageId = recordedImageId ?? (await inspectImage(containerId).catch(() => undefined));
   if (!imageId) return "unknown";
   const read = await readManifest(imageId, context);
   if (read.kind === "unavailable") return "unknown";

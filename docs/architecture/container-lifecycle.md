@@ -1627,17 +1627,23 @@ read it (`container-bridge-credential.ts`). The rules for bridges are in
   on an older image) goes on stdin to a mode 600 file that the script sources and
   deletes first (`launchContainerScript`). `docker exec -d` has no stdin of its
   own, hence the separate exec.
-- **Nothing the agent can plant runs through the checkout or `/opt`.** The bridge
+- **The bridge entrypoint bypasses checkout Bun configuration.** The bridge
   runs from root-owned `/opt` with `bun --config=/dev/null`. Its working directory
-  stays `/workspace`.
+  stays `/workspace`. This does not prevent SDK resource loading: when project
+  resources are enabled, Pi discovers project extensions and executes them in
+  the bridge process. Such code can observe later presented credentials; see
+  to-do 4980 task 2.
 - **Root never reads a `node`-writable path.** `readContainerBridgeToken` reads the
   root file as root, and only then the old `/tmp` file as `node`, because `node` can
   make that a symlink to anything.
 - **An older image keeps what it had.** A container whose image lacks the capability
-  (or whose manifest cannot be read) keeps a `node`-readable token in `/tmp` and in
+  keeps a `node`-readable token in `/tmp` and in
   the bridge's environment until it is rebuilt. Tokens still reach it on stdin, and
   a bridge an older backend started keeps working unprefixed
-  ([version-compatibility.md](version-compatibility.md#register)).
+  ([version-compatibility.md](version-compatibility.md#register)). Missing recorded
+  image ids are resolved by inspecting the running container. An unreadable image
+  manifest refuses fresh startup rather than silently selecting weaker storage;
+  retry after Docker can read the image. Healthy existing bridges reuse their token.
 
 What the agent's uid can still do is in
 [to-do 4980](../todo/containers-and-environments/4980-agent-uid-process-control.md):

@@ -102,3 +102,14 @@ test("the host plugin is written whole, private, and again on each start", async
   expect(await readFile(plugin, "utf8")).toBe(buildOpenCodeCredentialPluginSource("log"));
   expect((await stat(plugin)).mode & 0o777).toBe(0o600);
 });
+
+test("concurrent host starts install a complete private plugin", async () => {
+  const dataDir = await temporaryDirectory();
+  const results = await Promise.all(
+    Array.from({ length: 32 }, () => writeHostOpenCodeCredentialPlugin(dataDir)),
+  );
+  expect(new Set(results).size).toBe(1);
+  const plugin = path.join(results[0]!, "plugins", "orkestrator-credential.js");
+  expect(await readFile(plugin, "utf8")).toBe(buildOpenCodeCredentialPluginSource("log"));
+  expect((await stat(plugin)).mode & 0o777).toBe(0o600);
+});

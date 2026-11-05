@@ -17,7 +17,7 @@ Analysed 2026-11-04 against `main` at `e198fd4a7`.
 
 **Problem.** A bridge holds only a hash of its token, in a process the agent's uid cannot read, so an agent cannot read the token out of it. But the backend still sends the token on every request. An agent that can run a background process can kill the bridge (same uid), bind the same port, and read the token from the backend's next request (the activity sweep sends one within seconds). It can then start a real bridge from the verifier and answer approvals on sessions that bridge restores or creates.
 
-**Context.** The start paths accept a running listener after an unauthenticated health check (`startContainerClaudeServer`, the `start_*_server` handlers in `commands-registry-servers.ts`), and `peekContainerAgentBridge` sends the token to whatever answers the port. A kill also ends the agent's own session and every approval parked on that bridge, so this needs a detached process, not one tool call. The attack needs an agent that can already run a persistent process, which on an `ask` environment means a command the user approved. The same holds for OpenCode (`startContainerOpenCodeServer`, whose password goes to whatever answers port 4096), with one difference: it takes the plain password, so a process already running as `node` when a server starts can also read it from `/tmp/.orkestrator-start-*` or from the server's environment in the seconds before its plugin loads.
+**Context.** The start paths accept a running listener after an unauthenticated health check (`startContainerClaudeServer`, the `start_*_server` handlers in `commands-registry-servers.ts`), and `peekContainerAgentBridge` sends the token to whatever answers the port. A kill also ends the agent's own session and every approval parked on that bridge, so this needs a detached process, not one tool call. The attack needs an agent that can already run a persistent process, which on an `ask` environment means a command the user approved. The same holds for OpenCode (`startContainerOpenCodeServer`, whose password goes to whatever answers port 4096), with one difference: it takes the plain password, so a process already running as `node` when a server starts can also read it from `/tmp/.orkestrator-start-*` or from the server's environment before its plugin loads. The warm request is best-effort: if it fails, startup still succeeds and this exposure can last indefinitely until an instance successfully loads the plugin. A health response alone does not prove hardening.
 
 **Investigation.** Not exercised as an attack. Reasoned from the routes: `bridges/*` compare one presented token; nothing proves the listener is the bridge the backend started. `apps/backend/tests/bridge-credential-docker.test.ts` proves the token cannot be read while the real bridge runs; it does not cover this.
 
@@ -42,14 +42,16 @@ Analysed 2026-11-04 against `main` at `e198fd4a7`.
 
 OpenCode has more of these, all read when an instance starts: plugins in `~/.config/opencode/plugins` (the credential plugin's own file among them), `/workspace/.opencode/plugins`, and the `plugin` key of `opencode.json`. A plugin runs inside the server and is handed a client that needs no password. `opencode` itself is at `/home/node/.opencode/bin`, which `node` owns.
 
-**Investigation.** Each file above is `node`-writable by design (`docker/verify-root-boundary.sh`). Bun does not read `~/.bunfig.toml` when running a script (checked the same day). OpenCode's plugin loading was read from behaviour on 2026-11-05: `apps/backend/tests/bridge-credential-docker.test.ts` does not plant one.
+Pi also discovers project extensions from agent-writable workspace paths when `projectResources` is enabled (`agent-session.ts`, `noExtensions: !discoverProjectResources`). These execute inside the verifier bridge itself, including during session creation, and can observe later Authorization headers without restarting or impersonating the listener. Non-dumpable memory does not isolate code inside that same process. Built-in extension factories are a separate trusted integration.
+
+**Investigation.** No planted Pi extension/token-observation attack has been run; this remains live evidence to collect with a synthetic credential, not a provider turn. Each file above is `node`-writable by design (`docker/verify-root-boundary.sh`). Bun does not read `~/.bunfig.toml` when running a script (checked the same day). OpenCode's plugin loading was read from behaviour on 2026-11-05: `apps/backend/tests/bridge-credential-docker.test.ts` does not plant one.
 
 **Decisions.**
 
 - **How should a bridge start without reading what the agent can write?**
   - **Launch through a root-owned script with a fixed environment (recommended).** `docker exec --user node` runs `/usr/local/bin/orkestrator-bridge-launch` with no login shell and a fixed `PATH`, which applies only the backend's values, and the bridge passes the runtime environment to the agents it spawns rather than holding it itself.
     - Pros: closes the whole class for bridges; the agent's tools keep their environment.
-    - Cons: every bridge needs to source the runtime environment for its children; needs a new image capability; OpenCode would also need `OPENCODE_DISABLE_PROJECT_CONFIG` and a config directory `node` cannot write, because it loads plugins itself.
+    - Cons: every bridge needs to source the runtime environment for its children; needs a new image capability; Pi would also need discovered extensions disabled or isolated in a child without the bridge HTTP server (while retaining trusted built-in factories); OpenCode would also need `OPENCODE_DISABLE_PROJECT_CONFIG` and a config directory `node` cannot write, because it loads plugins itself.
   - **Scrub known variables on the launch line.**
     - Pros: one line.
     - Cons: a list of dangerous variables is never complete, and a planted `bun` function in `~/.bash_profile` still runs.
@@ -96,3 +98,13 @@ OpenCode has more of these, all read when an instance starts: plugins in `~/.con
 - [`4981-opencode-password-readable-by-agent.md`](4981-opencode-password-readable-by-agent.md) (what OpenCode's server does now)
 - [`4210-read-only-boundary-from-a-token-holder.md`](4210-read-only-boundary-from-a-token-holder.md)
 - `docs/reports/2-26-10-27-security.md`, H4.
+
+## Assumptions and decisions
+
+### Task 2: Pi project extensions
+
+Documented discovered extensions as an in-process attack surface rather than changing the user-enabled project-resources contract in this repair. A fixed launch environment alone cannot close it. Dedicated isolation or disabling discovery needs follow-up; no live exploit evidence is claimed.
+
+### Task 1: OpenCode warm failures
+
+Retained best-effort warming for compatibility and documented that a failed warm may leave the password exposed indefinitely, until plugin load succeeds. Startup success and health checks must not be described as proof of plugin hardening.

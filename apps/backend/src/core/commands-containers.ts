@@ -824,7 +824,7 @@ export function containerServerLogFile(processName: LocalServerKind): string {
  */
 export async function startContainerOpenCodeServer(
   containerId: string,
-  credentialMode: ContainerCredentialMode = "token-file",
+  credentialMode: ContainerCredentialMode | (() => Promise<ContainerCredentialMode>) = "token-file",
 ): Promise<{ hostPort: number; wasRunning: boolean; authToken: string }> {
   assertContainerNotDraining(containerId);
   if (!(await isContainerRunning(containerId))) {
@@ -870,7 +870,8 @@ export async function startContainerOpenCodeServer(
 
   await ensureCurrentBootReady(containerId);
   const authToken = mintBridgeToken();
-  const keepPasswordFromAgent = credentialMode === "verifier";
+  const mode = typeof credentialMode === "function" ? await credentialMode() : credentialMode;
+  const keepPasswordFromAgent = mode === "verifier";
   const serve = `opencode serve --port ${OPENCODE_SERVER_PORT} --hostname 0.0.0.0`;
   await launchContainerScript(
     containerId,
@@ -948,7 +949,7 @@ export async function startContainerClaudeServer(
   agentToolConnection?: AgentToolConnection,
   debugLogging = false,
   backgroundCommandLimitHours?: number,
-  credentialMode: ContainerCredentialMode = "token-file",
+  credentialMode: ContainerCredentialMode | (() => Promise<ContainerCredentialMode>) = "token-file",
 ): Promise<{ hostPort: number; wasRunning: boolean; authToken: string }> {
   const bashMaxTimeout = claudeBashMaxTimeoutEnvValue(backgroundCommandLimitHours);
   const expectedAgentToolsFingerprint = agentToolConnection
@@ -980,7 +981,10 @@ export async function startContainerClaudeServer(
     wasRunning: boolean;
     authToken: string;
   }> => {
-    const credential = containerBridgeLaunch("claude", credentialMode);
+    const credential = containerBridgeLaunch(
+      "claude",
+      typeof credentialMode === "function" ? await credentialMode() : credentialMode,
+    );
     const authToken = credential.token;
     const started = await startContainerServer(
       containerId,

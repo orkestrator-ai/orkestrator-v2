@@ -945,6 +945,7 @@ describe("process and platform command behavior", () => {
     process.env.FAKE_CLAUDE_BRIDGE_TOKEN = "b".repeat(43);
     process.env.FAKE_OPENCODE_SERVER_PASSWORD = "o".repeat(43);
     try {
+      credentialModeSpy.mockRejectedValue(new Error("manifest unavailable"));
       expect(await invoke("start_opencode_server", { containerId: "container-a" })).toEqual({
         hostPort: healthy.port,
         wasRunning: true,

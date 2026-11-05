@@ -1,4 +1,5 @@
-import { mkdir, rename, writeFile } from "node:fs/promises";
+import { mkdir, rename, rm, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import {
   buildOpenCodeCredentialPluginSource,
@@ -17,8 +18,15 @@ export async function writeHostOpenCodeCredentialPlugin(dataDir: string): Promis
   await mkdir(pluginDirectory, { recursive: true, mode: 0o700 });
   const plugin = path.join(pluginDirectory, OPENCODE_CREDENTIAL_PLUGIN_FILE);
   // A server starting alongside this one must never load half a file.
-  const staged = `${plugin}.${process.pid}.tmp`;
-  await writeFile(staged, buildOpenCodeCredentialPluginSource("log"), { mode: 0o600 });
-  await rename(staged, plugin);
+  const staged = `${plugin}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(staged, buildOpenCodeCredentialPluginSource("log"), {
+      mode: 0o600,
+      flag: "wx",
+    });
+    await rename(staged, plugin);
+  } finally {
+    await rm(staged, { force: true });
+  }
   return directory;
 }

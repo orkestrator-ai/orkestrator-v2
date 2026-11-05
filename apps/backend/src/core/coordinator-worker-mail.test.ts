@@ -609,4 +609,22 @@ describe("coordinator request ids on worker mail", () => {
     ).rejects.toThrow(COORDINATOR_REQUEST_ID_REUSED_ERROR);
     expect(await mailTo(other.id)).toHaveLength(0);
   });
+  test("stored mail reports delegation failure without inviting a duplicate delivery", async () => {
+    const opening = spyOn(storage.coordinators, "openCoordinatorDelegation").mockRejectedValue(
+      new Error(COORDINATOR_REQUEST_ID_REUSED_ERROR),
+    );
+    try {
+      const result = await send({
+        requestId: "delegation-fails",
+        toEnvironmentId: workerId,
+        body: "Go.",
+      });
+      expect(result.delegationNote).toContain("The message was sent");
+      expect(result.delegationNote).toContain("Do not resend");
+      expect(result.delegationNote).not.toContain("Nothing was");
+      expect(await mailTo(workerId)).toHaveLength(1);
+    } finally {
+      opening.mockRestore();
+    }
+  });
 });

@@ -1316,6 +1316,7 @@ async function readResumableSessions(signal: AbortSignal): Promise<NativeAgentRe
   // Asked of Pi rather than derived: its default directory's name is its own.
   const directory = SessionManager.create(workingDirectory, sessionDirectory()).getSessionDir();
   const stamp = await sessionFilesStamp(directory);
+  signal.throwIfAborted();
   const cached = cachedSessionList(directory, stamp);
   if (cached) return cached;
 

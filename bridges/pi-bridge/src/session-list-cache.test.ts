@@ -157,9 +157,23 @@ describe("the resumable session list", () => {
         given!.addEventListener("abort", () => reject(given!.reason));
       });
     });
-    setSessionListTimeoutForTests(5);
+    setSessionListTimeoutForTests(1000);
+    // Allow filesystem preparation to finish before advancing the timeout clock.
+    const timeout = spyOn(globalThis, "setTimeout");
+    let expire: (() => void) | undefined;
+    timeout.mockImplementation(((callback: () => void) => {
+      expire = callback;
+      return { unref() {} };
+    }) as never);
 
-    const failure = await listResumableSessions().catch((error: unknown) => error);
+    const pending = listResumableSessions().catch((error: unknown) => error);
+    try {
+      while (!signal) await Bun.sleep(1);
+      expire!();
+    } finally {
+      timeout.mockRestore();
+    }
+    const failure = await pending;
 
     expect(failure).toBeInstanceOf(TimeoutError);
     expect(signal?.aborted).toBe(true);

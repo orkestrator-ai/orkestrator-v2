@@ -23,7 +23,6 @@ import {
   launchOptions,
   launchSelectionReport,
   launchSettingsTiers,
-  resolveLaunchAgent,
   type ControlMcpInvoker,
 } from "./control-shared-actions.js";
 
@@ -424,7 +423,7 @@ interface LaunchInput {
   projectId: string;
   environmentType: "local" | "containerized";
   name?: string;
-  /** Omitted: the saved default agent, resolved here; the public action needs one. */
+  /** Omitted: the public action resolves the saved default on first admission. */
   agent?: AgentPlatform;
   modelId?: string;
   reasoningId?: string;
@@ -436,40 +435,15 @@ interface LaunchInput {
   baseCommit?: string;
 }
 
-/**
- * The agent an operator launch runs. `environment.launch` and `session.start`
- * take an explicit agent, so an omitted one is resolved here, from the same
- * settings the coordinator path reads, on the node this caller targets.
- */
-async function operatorLaunchAgent(
-  caller: ControlMcpCaller,
-  projectId: string,
-  requested: AgentPlatform | undefined,
-  environment?: JsonRecord,
-): Promise<AgentPlatform> {
-  if (requested) return requested;
-  try {
-    const read = caller.readInvoke ?? caller.invoke;
-    return (await resolveLaunchAgent(read, projectId, undefined, environment)).agent;
-  } catch (error) {
-    throw new Error(
-      `The default agent could not be read (${error instanceof Error ? error.message : "unknown error"}); pass agent explicitly`,
-    );
-  }
-}
-
 export async function operatorLaunchEnvironment(caller: ControlMcpCaller, launch: LaunchInput) {
-  const input = {
-    ...launch,
-    agent: await operatorLaunchAgent(caller, launch.projectId, launch.agent),
-  };
+  const input = launch;
   const envelope = await runPublicAction(
     caller,
     "environment.launch",
     {
       projectId: input.projectId,
       type: input.environmentType === "containerized" ? "container" : "local",
-      agent: input.agent,
+      ...(input.agent ? { agent: input.agent } : {}),
       prompt: input.prompt,
       mode: input.conversationMode,
       ...(input.name ? { name: input.name } : {}),
@@ -488,6 +462,7 @@ export async function operatorLaunchEnvironment(caller: ControlMcpCaller, launch
     environment?: { id: string };
     environmentId?: string;
     sessionId: string;
+    selection?: unknown;
     runId: string;
   };
   return legacyResult({
@@ -497,7 +472,11 @@ export async function operatorLaunchEnvironment(caller: ControlMcpCaller, launch
     sessionId: result.sessionId,
     runId: result.runId,
     status: "accepted",
-    ...(await selectionFor(caller, input.projectId, undefined, input)),
+    ...(result.selection
+      ? { selection: result.selection }
+      : input.agent
+        ? await selectionFor(caller, input.projectId, undefined, { ...input, agent: input.agent })
+        : {}),
     receipt: envelope.receipt,
   });
 }
@@ -505,7 +484,7 @@ export async function operatorLaunchEnvironment(caller: ControlMcpCaller, launch
 interface JobInput {
   requestId: string;
   environmentId: string;
-  /** Omitted: the environment's default agent, resolved here. */
+  /** Omitted: the public action resolves this environment's default on first admission. */
   agent?: AgentPlatform;
   modelId?: string;
   reasoningId?: string;
@@ -519,22 +498,13 @@ export async function operatorLaunchJob(caller: ControlMcpCaller, job: JobInput)
   const environment = await dispatchAs<{ projectId: string }>(caller, "environment.get", {
     environmentId: job.environmentId,
   });
-  let agent = job.agent;
-  if (!agent) {
-    if (!environment.ok) return failure(environment);
-    const read = caller.readInvoke ?? caller.invoke;
-    const record = await read<unknown>("get_environment", { environmentId: job.environmentId })
-      .then((value) => (value && typeof value === "object" ? (value as JsonRecord) : undefined))
-      .catch(() => undefined);
-    agent = await operatorLaunchAgent(caller, environment.result.projectId, undefined, record);
-  }
-  const input = { ...job, agent };
+  const input = job;
   const envelope = await runPublicAction(
     caller,
     "session.start",
     {
       environmentId: input.environmentId,
-      agent: input.agent,
+      ...(input.agent ? { agent: input.agent } : {}),
       prompt: input.prompt,
       mode: input.conversationMode,
       ...(input.title ? { title: input.title } : {}),
@@ -546,7 +516,12 @@ export async function operatorLaunchJob(caller: ControlMcpCaller, job: JobInput)
     undefined,
   );
   if (!envelope.ok) return failure(envelope);
-  const result = envelope.result as { sessionId: string; tabId: string; runId: string };
+  const result = envelope.result as {
+    sessionId: string;
+    tabId: string;
+    runId: string;
+    selection?: unknown;
+  };
   return legacyResult({
     jobId: result.tabId.replace(/^agent-job-/, ""),
     environmentId: input.environmentId,
@@ -554,9 +529,14 @@ export async function operatorLaunchJob(caller: ControlMcpCaller, job: JobInput)
     sessionId: result.sessionId,
     runId: result.runId,
     status: "accepted",
-    ...(environment.ok
-      ? await selectionFor(caller, environment.result.projectId, input.environmentId, input)
-      : {}),
+    ...(result.selection
+      ? { selection: result.selection }
+      : environment.ok && input.agent
+        ? await selectionFor(caller, environment.result.projectId, input.environmentId, {
+            ...input,
+            agent: input.agent,
+          })
+        : {}),
     receipt: envelope.receipt,
   });
 }

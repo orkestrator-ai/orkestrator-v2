@@ -104,6 +104,20 @@ describe("operator tools over public actions", () => {
       receipt: { action: "session.start", requestId: "job-default-agent" },
       selection: { agent: "claude", source: "default" },
     });
+    await harness.harness.context.storage.updateEnvironment("env-1", {
+      agentSettings: { defaultAgent: "codex" },
+    });
+    const replay = await harness.call(harness.defaultToken, "launch_job", {
+      requestId: "job-default-agent",
+      environmentId: "env-1",
+      prompt: "Fix the failing test.",
+    });
+    expect(replay.isError).not.toBe(true);
+    expect(replay.structuredContent).toMatchObject({
+      tabId: launched.structuredContent!.tabId,
+      receipt: { replayed: true },
+      selection: { agent: "claude" },
+    });
     expect(harness.stub.sends).toHaveLength(1);
   });
 
@@ -120,7 +134,6 @@ describe("operator tools over public actions", () => {
       requestId: "environment-1",
       projectId: added.result.project.id,
       environmentType: "local",
-      agent: "claude",
       conversationMode: "build",
       prompt: "work",
       name: "operator-launch",
@@ -141,6 +154,9 @@ describe("operator tools over public actions", () => {
       status: "accepted",
       receipt: { action: "environment.launch", requestId: input.requestId },
     });
+    const config = await harness.harness.context.storage.loadConfig();
+    config.global.agentSettings = { ...config.global.agentSettings, defaultAgent: "codex" };
+    await harness.harness.context.storage.saveConfig(config);
     const replay = await harness.call(harness.defaultToken, "launch_environment", input);
     expect(replay.structuredContent).toMatchObject({
       environmentId,

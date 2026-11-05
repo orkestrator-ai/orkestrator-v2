@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { controlJobId as jobIdFor, savedControlJobAgent } from "./control-job-identity.js";
 import { isEnvironmentReadyForAgents } from "@orkestrator/protocol/environment-readiness";
 import { normalizeAgentPlatforms, isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { resolveAgentPlatformSettings } from "@orkestrator/protocol/agent-settings";
@@ -25,15 +25,6 @@ import {
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("native-agent");
-
-function jobIdFor(environmentId: string, requestId: string): string {
-  return createHash("sha256")
-    .update(environmentId)
-    .update("\0")
-    .update(requestId)
-    .digest("hex")
-    .slice(0, 24);
-}
 
 async function launchNativeAgentJob(
   args: Record<string, unknown>,
@@ -81,7 +72,15 @@ async function launchNativeAgentJobInternal(
   }
   const title = asOptionalString(args.title)?.trim();
   if (title && title.length > 200) throw new Error("title must be at most 200 characters");
-  const agent = args.agent;
+  let agent = args.agent;
+  if (args.agentDefaulted === true) {
+    agent =
+      savedControlJobAgent(
+        await context.storage.getPaneLayout(environmentId),
+        environmentId,
+        requestId,
+      ) ?? agent;
+  }
   if (!isAgentPlatform(agent) || !BUILD_PIPELINE_AGENTS.includes(agent)) {
     throw new Error("Agent platform is invalid");
   }

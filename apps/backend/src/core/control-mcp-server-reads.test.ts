@@ -141,6 +141,7 @@ describe("Orkestrator control MCP server", () => {
         },
       ],
     }));
+    let remoteDefault = "codex";
     overrides.set("invoke_on_node", (args) => {
       const inner = {
         command: String(args.command),
@@ -159,7 +160,11 @@ describe("Orkestrator control MCP server", () => {
         // The node's own launch options.
         get_project: { id: "p-leaf", name: "Orkestrator" },
         get_config: {
-          global: { enabledAgentPlatforms: ["codex"], agentMessaging: { enabled: true } },
+          global: {
+            enabledAgentPlatforms: ["codex", "claude"],
+            agentSettings: { defaultAgent: remoteDefault },
+            agentMessaging: { enabled: true },
+          },
         },
         get_native_agent_model_catalog: [
           {
@@ -262,6 +267,31 @@ describe("Orkestrator control MCP server", () => {
     expect(
       invocations.find(({ command }) => command === "launch_coordinator_node_environment")?.args,
     ).toMatchObject({ nodeId: "bk_leaf", requestId: "launch-remote" });
+
+    remoteDefault = "claude";
+    const saved = {
+      id: "leaf-new",
+      projectId: "p-leaf",
+      agentSettings: { defaultAgent: "codex" },
+      startupAgentSession: { agent: "codex", model: "original-model", reasoningEffort: "high" },
+    };
+    overrides.set("get_coordinator_node_launch_environment", () => saved);
+    overrides.set("launch_coordinator_node_environment", () => ({
+      environment: saved,
+      replayed: true,
+    }));
+    const replay = await call("launch_environment", {
+      requestId: "launch-remote",
+      projectId: "project-1",
+      prompt: "Fix it.",
+      baseBranch: "main",
+      baseCommit: "a".repeat(40),
+      nodeId: "bk_leaf",
+    });
+    expect(replay).toMatchObject({
+      replayed: true,
+      selection: { agent: "codex", model: "original-model", reasoning: "high" },
+    });
 
     // A reply to an agent on another node goes back across the node link.
     await call("send_message", {

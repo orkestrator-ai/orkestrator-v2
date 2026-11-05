@@ -5,6 +5,7 @@
  * and authentication; it rebuilds this server for every request.
  */
 import { STARTUP_AGENT_TAB_ID } from "@orkestrator/protocol/tab-initial-prompt";
+import { savedControlJobAgent } from "./control-job-identity.js";
 import { coordinatorDeliverNowResult } from "./coordinator-deliver-now.js";
 import { nodeMailReplyTarget } from "./node-mail-reply-target.js";
 import { McpServer } from "@modelcontextprotocol/server";
@@ -1670,37 +1671,63 @@ export async function createControlMcp(
         // The base, the agent and the model are checked against that node's copy,
         // and an omitted agent is that node's default.
         await assertCoordinatorLaunchBaseOnBranch(target.invoke, target.projectId, input);
-        const { agent, defaulted } = await resolveLaunchAgent(
+        const saved = await invoke<unknown>("get_coordinator_node_launch_environment", {
+          scope: coordinatorScope,
+          requestId: input.requestId,
+          nodeId: target.nodeId,
+        });
+        const savedSettings =
+          isRecord(saved) && isRecord(saved.agentSettings) ? saved.agentSettings : undefined;
+        const { agent } = await resolveLaunchAgent(
           target.invoke,
           target.projectId,
-          input.agent,
+          input.agent ??
+            (isRecord(saved) && isRecord(saved.startupAgentSession)
+              ? (saved.startupAgentSession.agent as AgentPlatform)
+              : isRecord(saved) && typeof saved.initialAgentPlatform === "string"
+                ? (saved.initialAgentPlatform as AgentPlatform)
+                : (savedSettings?.defaultAgent as AgentPlatform | undefined)),
         );
-        const options = await validateSelection(target.invoke, {
-          ...input,
-          agent,
-          projectId: target.projectId,
-        });
+        const options = saved
+          ? { models: [] }
+          : await validateSelection(target.invoke, {
+              ...input,
+              agent,
+              projectId: target.projectId,
+            });
         const { nodeId: _nodeId, ...launchInput } = input;
         const launch = await invoke<unknown>("launch_coordinator_node_environment", {
           scope: coordinatorScope,
           requestId: input.requestId,
           nodeId: target.nodeId,
           input: launchEnvironmentCreateInput({ ...launchInput, agent }),
-          ...(defaulted ? { agentDefaulted: true } : {}),
+          ...(input.agent === undefined ? { agentDefaulted: true } : {}),
         });
         const environment = isRecord(launch) ? launch.environment : null;
         if (!isRecord(environment) || typeof environment.id !== "string") {
           throw new Error("Environment creation returned no environment");
         }
-        const selection = await selectionReport(
-          target.projectId,
-          environment,
-          options.models,
-          { ...input, agent },
-          false,
-          target.invoke,
-        );
-        if (isRecord(selection.selection)) selection.selection.advisory = true;
+        const startup = isRecord(environment.startupAgentSession)
+          ? environment.startupAgentSession
+          : undefined;
+        const selection = startup
+          ? {
+              selection: {
+                agent: startup.agent,
+                model: startup.model ?? null,
+                reasoning: startup.reasoningEffort ?? null,
+                source: input.modelId || input.reasoningId ? "requested" : "default",
+              },
+            }
+          : await selectionReport(
+              target.projectId,
+              environment,
+              options.models,
+              { ...input, agent },
+              false,
+              target.invoke,
+            );
+        if (!startup && isRecord(selection.selection)) selection.selection.advisory = true;
         const startError =
           isRecord(launch) && typeof launch.startError === "string" ? launch.startError : undefined;
         const delegationOpened =
@@ -1736,14 +1763,29 @@ export async function createControlMcp(
       }
       // A new environment's own tier pins no model or agent, so repository and
       // app settings decide, exactly as the startup launch reads them.
-      const { agent, defaulted } = await resolveLaunchAgent(invoke, input.projectId, input.agent);
-      const options = await validateSelection(invoke, { ...input, agent });
+      const saved = await invoke<unknown>("get_coordinator_launch_environment", {
+        scope: coordinatorScope,
+        requestId: input.requestId,
+      });
+      const savedSettings =
+        isRecord(saved) && isRecord(saved.agentSettings) ? saved.agentSettings : undefined;
+      const { agent } = await resolveLaunchAgent(
+        invoke,
+        input.projectId,
+        input.agent ??
+          (isRecord(saved) && isRecord(saved.startupAgentSession)
+            ? (saved.startupAgentSession.agent as AgentPlatform)
+            : isRecord(saved) && typeof saved.initialAgentPlatform === "string"
+              ? (saved.initialAgentPlatform as AgentPlatform)
+              : (savedSettings?.defaultAgent as AgentPlatform | undefined)),
+      );
+      const options = saved ? { models: [] } : await validateSelection(invoke, { ...input, agent });
       const createInput = launchEnvironmentCreateInput({ ...input, agent });
       const launch = await invoke<unknown>("launch_coordinator_environment", {
         scope: coordinatorScope,
         requestId: input.requestId,
         input: createInput,
-        ...(defaulted ? { agentDefaulted: true } : {}),
+        ...(input.agent === undefined ? { agentDefaulted: true } : {}),
       });
       const environment = isRecord(launch) ? launch.environment : null;
       if (!isRecord(environment) || typeof environment.id !== "string") {
@@ -1880,10 +1922,18 @@ export async function createControlMcp(
         throw new Error(`Environment not found: ${input.environmentId}`);
       }
       // An omitted agent is this environment's default, as its new-tab button picks.
+      const savedAgent =
+        input.agent === undefined
+          ? savedControlJobAgent(
+              await inv("get_pane_layout", { environmentId: input.environmentId }),
+              input.environmentId,
+              input.requestId,
+            )
+          : undefined;
       const { agent } = await resolveLaunchAgent(
         inv,
         environment.projectId,
-        input.agent,
+        input.agent ?? savedAgent,
         environment,
       );
       const options = await validateSelection(inv, {
@@ -1915,13 +1965,19 @@ export async function createControlMcp(
         : null;
       const launchArgs = delegation
         ? withCoordinatorDelegationPresentation(
-            { ...input, agent, prompt: delegation.source, activateTab: false },
+            {
+              ...input,
+              agent,
+              agentDefaulted: input.agent === undefined,
+              prompt: delegation.source,
+              activateTab: false,
+            },
             {
               kind: COORDINATOR_DELEGATION_PRESENTATION,
               frame: delegation.frame,
             },
           )
-        : { ...input, agent, activateTab: false };
+        : { ...input, agent, agentDefaulted: input.agent === undefined, activateTab: false };
       const job = target
         ? await target.call<unknown>("launch_control_job", launchArgs, `job:${input.requestId}`)
         : await invoke<unknown>("launch_control_job", launchArgs);
@@ -1948,7 +2004,14 @@ export async function createControlMcp(
         ...job,
         ...onNodeResult(target),
         ...selection,
-        ...(delegationOpened ? asyncDelegationResult() : {}),
+        ...(delegationOpened
+          ? asyncDelegationResult()
+          : coordinatorScope
+            ? {
+                delegationNote:
+                  "The request was dispatched, but no delegation was opened (the request ID may already belong to another worker). Do not dispatch again under a new ID; inspect the existing job. You will not be woken automatically.",
+              }
+            : {}),
       });
     },
   );

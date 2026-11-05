@@ -584,6 +584,26 @@ export function registerCoordinatorCommands(
       });
     },
   );
+  register("get_coordinator_launch_environment", async ({ scope, requestId }, context) => {
+    if (!record(scope)) throw new Error("Coordinator scope is required");
+    const projectId = asNonBlankString(scope.projectId, "projectId");
+    const coordinatorId = asNonBlankString(scope.coordinatorId, "coordinatorId");
+    const conversationId = asNonBlankString(scope.conversationId, "conversationId");
+    await requireCoordinatorConversation(context, projectId, coordinatorId, conversationId);
+    const association = (
+      await context.storage.coordinators.listCoordinatorWorkflowAssociations(projectId)
+    ).find(
+      (item) =>
+        item.coordinatorId === coordinatorId &&
+        item.conversationId === conversationId &&
+        item.requestId === requestId &&
+        item.nodeId === undefined &&
+        item.kind === "environment" &&
+        !item.pending,
+    );
+    if (!association) return null;
+    return context.storage.getEnvironment(association.resourceId);
+  });
   register(
     "assert_coordinator_delegation_available",
     async ({ scope, environmentId, tabId, requestId }, context) => {

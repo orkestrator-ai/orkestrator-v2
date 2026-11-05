@@ -213,7 +213,7 @@ async function sendCoordinatorWorkerMail(
           error: formatLogError(error),
         });
         // The message is already stored; say plainly that no wake will follow.
-        delegationNote = `The message was sent, but no delegation was opened, so you will not be woken when the worker answers: ${error instanceof Error ? error.message : "unknown error"}`;
+        delegationNote = `The message was sent, but no delegation was opened, so you will not be woken when the worker answers: ${error instanceof Error && error.message !== COORDINATOR_REQUEST_ID_REUSED_ERROR ? error.message : "The delegation request ID may already belong to another worker. Do not resend the delivered message under a new ID."}`;
       }
     }
     // Say plainly when the worker cannot read it yet: "pending" alone reads

@@ -1,3 +1,4 @@
+import { controlJobId } from "./control-job-identity.js";
 import { beforeEach, describe, expect, test } from "bun:test";
 import { type ControlMcpServer, readControlMcpDescriptor } from "./control-mcp-server.js";
 import {
@@ -62,6 +63,94 @@ describe("Orkestrator control MCP server", () => {
     expect(String(launch?.prompt)).toContain("Diagnose and fix the failing test suite.");
     expect(String(launch?.prompt)).toContain(COORDINATOR_WORKER_NO_PR_INSTRUCTION);
     expect(String(launch?.prompt)).toContain(COORDINATOR_WORKER_VALIDATION_INSTRUCTION);
+  });
+
+  test("a dispatched job explains delegation failure without suggesting another dispatch", async () => {
+    overrides.set("open_coordinator_delegation", () => {
+      throw new Error("requestId reused");
+    });
+    const descriptor = coordinatorCredential(["discovery", "environments", "jobs"]);
+    const launched = await rpc(descriptor.url, descriptor.token, "tools/call", {
+      name: "launch_job",
+      arguments: {
+        requestId: "delegation-conflict",
+        environmentId: "env-1",
+        agent: "codex",
+        prompt: "Work",
+      },
+    });
+    expect(launched.body.result?.isError).not.toBe(true);
+    expect(launched.body.result?.structuredContent?.delegationNote).toContain(
+      "no delegation was opened",
+    );
+    expect(launched.body.result?.structuredContent?.delegationNote).toContain(
+      "Do not dispatch again",
+    );
+  });
+
+  test("pending startup replay uses the saved agent even when current defaults change", async () => {
+    const environment = {
+      id: "saved",
+      projectId: "project-1",
+      agentSettings: { defaultAgent: "codex" },
+    };
+    overrides.set("get_coordinator_launch_environment", () => environment);
+    overrides.set("get_repository_config", () => ({ agentSettings: { defaultAgent: "claude" } }));
+    overrides.set("launch_coordinator_environment", () => ({ environment, replayed: true }));
+    const descriptor = coordinatorCredential(["discovery", "environments"]);
+    const launched = await rpc(descriptor.url, descriptor.token, "tools/call", {
+      name: "launch_environment",
+      arguments: {
+        requestId: "saved",
+        projectId: "project-1",
+        baseBranch: "main",
+        baseCommit: "a".repeat(40),
+        prompt: "Work",
+      },
+    });
+    expect(launched.body.result?.isError).not.toBe(true);
+    expect(launched.body.result?.structuredContent).toMatchObject({
+      replayed: true,
+      selection: { agent: "codex" },
+    });
+  });
+
+  test("defaulted job retry validates its saved platform after the environment default changes", async () => {
+    overrides.set("get_config", () => ({ global: { enabledAgentPlatforms: ["codex", "claude"] } }));
+    overrides.set("get_environment", () => ({
+      id: "env-1",
+      projectId: "project-1",
+      agentSettings: { defaultAgent: "claude" },
+    }));
+    overrides.set("get_pane_layout", () => ({
+      root: {
+        kind: "leaf",
+        id: "leaf",
+        activeTabId: null,
+        tabs: [
+          {
+            id: `agent-job-${controlJobId("env-1", "saved-job")}`,
+            type: "agent-native",
+            nativeAgentData: { platform: "codex" },
+          },
+        ],
+      },
+    }));
+    const descriptor = coordinatorCredential(["discovery", "environments", "jobs"]);
+    const launched = await rpc(descriptor.url, descriptor.token, "tools/call", {
+      name: "launch_job",
+      arguments: {
+        requestId: "saved-job",
+        environmentId: "env-1",
+        modelId: "gpt-5.6-codex",
+        prompt: "Work",
+      },
+    });
+    expect(launched.body.result?.isError, JSON.stringify(launched.body.result)).not.toBe(true);
+    expect(
+      invocations.findLast((item) => item.command === "launch_control_job")?.args,
+    ).toMatchObject({ agent: "codex", agentDefaulted: true });
+    expect(launched.body.result?.structuredContent?.selection).toMatchObject({ agent: "codex" });
   });
 
   test("rejects disabled agents and invalid model or reasoning selections", async () => {

@@ -323,6 +323,31 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
   };
 
   register(
+    "get_coordinator_node_launch_environment",
+    async ({ scope, requestId, nodeId }, context) => {
+      const caller = await identity(scope, context);
+      const target = await coordinatorNodeTarget(
+        context,
+        caller.projectId,
+        asNonBlankString(nodeId, "nodeId"),
+      );
+      const association = (
+        await context.storage.coordinators.listCoordinatorWorkflowAssociations(caller.projectId)
+      ).find(
+        (item) =>
+          item.coordinatorId === caller.coordinatorId &&
+          item.conversationId === caller.conversationId &&
+          item.requestId === requestId &&
+          item.nodeId === target.nodeId &&
+          item.kind === "environment" &&
+          !item.pending,
+      );
+      return association
+        ? target.call("get_environment", { environmentId: association.resourceId })
+        : null;
+    },
+  );
+  register(
     "launch_coordinator_node_environment",
     async ({ scope, requestId, nodeId, input, agentDefaulted }, context) => {
       const caller = await identity(scope, context);
@@ -618,6 +643,23 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
           asNonBlankString(args.nodeId, "nodeId"),
         );
         const requestId = asNonBlankString(args.requestId, "requestId");
+        const prior = (
+          await context.storage.coordinators.listCoordinatorWorkflowAssociations(caller.projectId)
+        ).find(
+          (item) =>
+            item.coordinatorId === caller.coordinatorId &&
+            item.requestId === `delegation:${requestId}`,
+        );
+        if (
+          prior &&
+          (prior.conversationId !== caller.conversationId ||
+            prior.nodeId !== target.nodeId ||
+            prior.resourceId !== toEnvironmentId ||
+            (typeof args.toTabId === "string" &&
+              prior.delegation?.workerTabId &&
+              prior.delegation.workerTabId !== args.toTabId.trim()))
+        )
+          throw new Error(COORDINATOR_REQUEST_ID_REUSED_ERROR);
         // deliverNow reaches the worker only through a leaf that knows `steer`;
         // an older one would refuse the whole message over the unknown field.
         const steer =
@@ -681,18 +723,24 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
             delivered.placement === "pending-inject" ||
             (steer && delivered.placement === "injected");
           let coordinatorDelegationOpened = false;
+          let delegationNote: string | undefined;
           if (joining && scheduled) {
             context.coordinators?.noteRemoteRequest(joining.id);
             coordinatorDelegationOpened = true;
           } else if (workerTab && scheduled) {
-            coordinatorDelegationOpened = await openNodeDelegation(
-              context,
-              caller,
-              target.nodeId,
-              toEnvironmentId,
-              workerTab,
-              requestId,
-            );
+            try {
+              coordinatorDelegationOpened = await openNodeDelegation(
+                context,
+                caller,
+                target.nodeId,
+                toEnvironmentId,
+                workerTab,
+                requestId,
+              );
+            } catch {
+              delegationNote =
+                "The message was delivered, but no delegation was opened. Do not resend it under a new requestId; you will not be woken automatically when the worker answers.";
+            }
           }
           return {
             nodeId: target.nodeId,
@@ -715,6 +763,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
               ? { deliverNow: delivered.deliverNow, deliverNowNote: delivered.deliverNowNote }
               : {}),
             coordinatorDelegationOpened,
+            ...(delegationNote ? { delegationNote } : {}),
             // Said plainly, as for a worker here: "pending" alone reads as delivered.
             ...(recipient.status === "stopped"
               ? {

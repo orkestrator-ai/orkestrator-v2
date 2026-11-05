@@ -68,7 +68,7 @@ What leaving out means depends on what a watch costs on the platform:
 | | Linux | macOS and other platforms |
 | --- | --- | --- |
 | A recursive watch | One inotify watch per directory, and Bun walks all of `node_modules` to place them | One FSEvents path, no per-directory cost |
-| An extra recursive watch | No measurable cost | Blocks the JS thread to start and close (below) |
+| An extra recursive watch | No measurable cost | Makes the shared FSEvents stream rebuild, which blocks whichever thread starts or closes a watch (below), so they run in a helper process (`watch-host.ts`) |
 | What runs | A non-recursive watch on the root and on each ancestor of a left-out subtree, and a recursive watch on every other child of those | One recursive root |
 | A left-out subtree | Not watched | Watched by the OS; its events are dropped on arrival, before they count towards a burst |
 | A new directory | The non-recursive watch sees it, and a watch is added | Covered by the root |
@@ -126,6 +126,13 @@ one watch:
 | 1 | 2 ms | 0 ms |
 | 5 | 2,882 ms (1,453 ms) | 1,075 ms |
 | 20 | 19,836 ms (4,424 ms) | 994 ms; 15,415 ms in another run |
+
+Those numbers are for watches held in the calling process. The backend's now run in
+a helper, so the wait no longer reaches its event loop
+([environment-deletion.md](environment-deletion.md#watches-and-the-event-loop)); the
+rebuild still costs the helper, which is why macOS keeps one watch. Because a start
+returns before the watch exists, a macOS watcher reports `qualified` only once the
+helper says it is established.
 
 Linux start and close for 20 watches took 6 ms and 0 ms. What is left is in
 [5060](../todo/cross-cutting/5060-worktree-watch-leftovers.md).

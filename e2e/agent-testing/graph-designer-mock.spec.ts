@@ -1,6 +1,6 @@
 import { acknowledgeDockerReachabilityWarning } from "../docker-reachability-warning";
 import { ensureProjectExpanded } from "./sidebar-project";
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page } from "./browser-test";
 import { spawnSync } from "node:child_process";
 import { graphTemplateExample } from "@orkestrator/protocol/graphs/examples";
 import type { GraphTemplateV1 } from "@orkestrator/protocol/graphs/template";

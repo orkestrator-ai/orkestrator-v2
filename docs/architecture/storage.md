@@ -3,7 +3,8 @@
 The backend's authoritative state lives in one SQLite database,
 `orkestrator.sqlite`, in the data directory (`~/Library/Application
 Support/orkestrator-v2/` on macOS, `${XDG_CONFIG_HOME:-~/.config}/orkestrator-v2/`
-on Linux). It replaced 29 JSON store files (plus one file per public-operation
+on Linux). The change-tracking ledger has its own file beside it,
+`change-tracking.sqlite` (see [Version 7](#migrations)). It replaced 29 JSON store files (plus one file per public-operation
 namespace), their per-file lock files and five-deep backup ladders.
 
 | File | Purpose |
@@ -427,9 +428,30 @@ primitives above serialize their writes.
   their backups) returns up to 16 MiB of freed pages to the filesystem
   (`auto_vacuum = INCREMENTAL`, set when the database is created) and runs a
   truncating WAL checkpoint so old frames do not keep the content either.
-  `storageFilesContain(dataDir, marker)` checks this in tests. It never throws:
-  a checkpoint that fails or that a reader blocks is logged as `[storage]
-  scrub.checkpoint-failed`, throttled, and the next one retries.
+  `storageFilesContain(dataDir, marker)` checks this in tests. It never throws.
+- The scrub's checkpoint never waits. A truncating checkpoint calls the busy
+  handler until every reader has moved past it, so a reader holding an older
+  snapshot (an hourly copy in progress, another backend's long read) used to
+  block the event loop for the whole ten-second busy timeout
+  (`storage-database-upkeep.test.ts` shows the wait). It now runs with
+  `busy_timeout = 0`: it checkpoints what it can and reports the rest busy. A
+  busy or failed scrub is retried from a timer, also without waiting, five
+  seconds later and doubling up to a minute, until the WAL truncates or the
+  connection closes (one last try). So deleted content leaves the WAL within
+  a minute of the last older reader finishing. Each deferral and failure is
+  logged as `[storage] scrub.checkpoint-failed`, throttled, with a
+  `throttle.recovered` line once it succeeds.
+- `foreign_keys` is off: no table declares a foreign key, so the PRAGMA would
+  promise checks nothing enforces. A migration that declares keys turns it on
+  in `StorageDatabase`'s constructor.
+- `PRAGMA optimize` keeps the planner's statistics current, bounded by
+  `analysis_limit = 400` and never waiting for another writer: on the main
+  database after every snapshot check, on the ledger after every retention
+  pass, and on every connection as it closes. On a generated 666 MB ledger the
+  first run took under a millisecond.
+- Cache sizes (`cache_size`, `mmap_size`, `temp_store`) are SQLite's defaults.
+  They are revisited only with a measured read problem
+  ([5181](../todo/cross-cutting/5181-sqlite-cache-sizes.md)).
 - The database file is 0600; SQLite gives `-wal` and `-shm` the same mode.
 
 ### Snapshots
@@ -437,7 +459,9 @@ primitives above serialize their writes.
 WAL covers crashes and torn writes, not a bad migration, a bug that deletes
 data or damage to the file. `storage-backups.ts` keeps snapshots in
 `<dataDir>/backups/` (0700, files 0600), each a consistent `VACUUM INTO` copy
-verified with `quick_check` before it is renamed into place:
+verified with `quick_check` before it is renamed into place. The hourly copies
+hold `orkestrator.sqlite` only; the change-tracking ledger has its own file
+and its own, daily, best-effort copies (below):
 
 - `pre-migration-v<from>-<stamp>.sqlite` before an existing database is
   migrated to a newer schema (a failed snapshot aborts the open instead of
@@ -477,9 +501,31 @@ verified with `quick_check` before it is renamed into place:
 - Anything older than seven days is deleted. That is also the privacy cost:
   content deleted from the live database can survive in a snapshot until it
   ages out.
+- `change-tracking-daily-<stamp>.sqlite` copies `change-tracking.sqlite`, by
+  the same check, after the hourly one and under the same lease: when the
+  newest is a day old. Each due interval creates a recovery point, including
+  ownership and binding-only edits; no ingestion fingerprint gates it. Same child-process copy and
+  `quick_check`; its own backoff file, `backups/.ledger-backoff.json`. The
+  newest two are kept. They are best effort: they give way first to the 16 GiB
+  budget, and a copy that would not fit beside every other snapshot is skipped
+  (`[storage] snapshot.ledger-skipped`) rather than displacing one.
+  `change-tracking-pre-migration-v<from>-<stamp>.sqlite` is taken before the
+  ledger file's own schema migrates; the newest two are kept.
+- Neither ledger copy holds `<dataDir>/change-tracking/` (objects and
+  evidence bodies), so a restored ledger can name bodies that are gone;
+  readers report those as expired, as they do for a pruned body.
 
-Restore: stop the app, replace `orkestrator.sqlite` with a snapshot and delete
-`orkestrator.sqlite-wal` and `-shm`. Snapshots are off by default under the
+Restore: stop the app, replace `orkestrator.sqlite` with an `hourly-` or
+`pre-migration-` snapshot and delete `orkestrator.sqlite-wal` and `-shm`. The
+ledger restores the same way and independently: `change-tracking.sqlite` from
+a `change-tracking-` snapshot, deleting its `-wal` and `-shm`. Nothing joins or
+writes across the two files, so either can be restored alone. A ledger older
+than the app database lacks the measurements newer transcript rows and
+handoffs name, which then read as not retained; a newer ledger holds rows
+nothing names yet, which retention prunes as usual. Restoring a
+`pre-migration-v6-` snapshot (from before the ledger moved) brings the old
+ledger back inside `orkestrator.sqlite`, and the next start moves it out again,
+replacing `change-tracking.sqlite`. Snapshots are off by default under the
 test runner (`new StorageService(dir, { snapshots: true })` turns them on).
 
 ## Migrations
@@ -512,10 +558,11 @@ Malformed message ids receive a stable recovery id.
 Version 4 (`change-tracking/ledger-schema.ts`) adds the change-tracking
 ledger: the first engine with its own indexed tables (worktrees, evidence,
 snapshots, turn boundaries, measurements, selections, outbox, restore
-records) because its queries need joins and range scans. Its file contents
-live under `<dataDir>/change-tracking/` (a content-addressed object store and
-evidence bodies), so a backup of change history must include that directory
-as well as `orkestrator.sqlite`. See [change-tracking.md](change-tracking.md).
+records) because its queries need joins and range scans. Version 7 moves them
+to their own file. Its file contents live under `<dataDir>/change-tracking/`
+(a content-addressed object store and evidence bodies), so a backup of change
+history must include that directory as well as `change-tracking.sqlite`. See
+[change-tracking.md](change-tracking.md).
 
 Version 5 (`retire-looped-reviews`) retires the removed Looped Review
 feature's data: it deletes the `looped-reviews` store, prunes looped-review
@@ -534,6 +581,27 @@ Version 6 (`backfill-build-pipeline-review-reports`,
 review reports a stored pipeline carries, written before the field existed. The
 current contract requires it, and the renderer no longer repairs a report it
 reads. The legacy localStorage import applies the same backfill.
+
+Version 7 (`move-change-ledger`, `change-tracking/ledger-schema.ts`) moves the
+change-tracking ledger out of `orkestrator.sqlite` into
+`change-tracking.sqlite`, so the hourly snapshot no longer copies it with every
+small change to an app store (on one machine, 6.2 GB of snapshots for stores
+of about 0.6 MB). A second connection attaches the main file and copies the
+committed ledger rows in one transaction on the ledger file, replacing what it
+held; the migration then drops the tables with `secure_delete` enabled so
+legacy databases cannot retain recoverable ledger bytes on free pages. A crash before the commit
+repeats the copy. A new database creates no ledger file here: the ledger
+opens it on first use. The ledger file is versioned on its own (`user_version`
+2, `CHANGE_LEDGER_FILE_SCHEMA_VERSION`), refuses to open when newer than the
+build, and takes its own pre-migration snapshot. Change tracking opens the
+main database before the ledger, so the move has always run before the ledger
+is first written. On a generated ledger of 2 million file rows (666 MB) the
+move took about 8 s with secure deletion disabled (a historical measurement;
+the corrected migration keeps it enabled and has not been remeasured); the hourly
+copy afterwards was 48 KB in 19 ms. The pages the ledger freed are returned to
+the filesystem after start-up, 4 MiB at a time with the event loop free
+between steps (about 30 ms each), by the snapshot check's upkeep
+(`runDatabaseUpkeep`).
 
 Every startup also extracts identities from stray `looped-reviews.json` files
 and their retained `legacy-json/` copies, including backups and interrupted

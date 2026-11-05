@@ -85,7 +85,9 @@ struct GatewayConnectionValidator: GatewayConnectionValidating, Sendable {
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await session.data(for: request)
+            // Only this origin can vouch for the token. URLSession does not carry
+            // the header across a redirect, so the target's answer proves nothing.
+            (data, response) = try await session.data(for: request, delegate: GatewayRedirectBlocker())
         } catch let error as URLError {
             switch error.code {
             case .cancelled where Task.isCancelled:
@@ -117,6 +119,18 @@ struct GatewayConnectionValidator: GatewayConnectionValidating, Sendable {
 
     private struct StatusPayload: Decodable {
         let ok: Bool?
+    }
+}
+
+final class GatewayRedirectBlocker: NSObject, URLSessionTaskDelegate {
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        completionHandler(nil)
     }
 }
 

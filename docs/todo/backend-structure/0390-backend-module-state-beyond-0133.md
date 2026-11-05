@@ -330,8 +330,9 @@ backend" (`:562`), and "two OrkestratorBackends in one process (todo 0733)"
 
 Every row this file listed has moved or is documented; see Assumptions and
 decisions. The line references in the task subsections are from `79f3bc97` and
-have moved. Module state this file did not list is in
-[1070-backend-module-state-beyond-0390.md](1070-backend-module-state-beyond-0390.md).
+have moved. Module state this file did not list was sorted and moved by
+to-do 1070, which is finished and deleted (`backend-runtime.md` lists the
+result).
 
 The container log service (`container-log-service.ts` `instance`) moved to
 `runtime.containerLogs` in
@@ -386,10 +387,9 @@ Departed from the recommendation. It kept the full-backend case for the backend'
 
 ### Follow-up: 1070
 
-The scan for this file's rows found about twenty more modules with unlisted module state. They were out of scope, so they are recorded unread in [1070-backend-module-state-beyond-0390.md](1070-backend-module-state-beyond-0390.md).
+The scan for this file's rows found about twenty more modules with unlisted module state. They were out of scope, so they were recorded unread in to-do 1070, which has since sorted and moved them and been deleted.
 
 ## Related
 
 - [0733-two-backends-share-process-watchers.md](0733-two-backends-share-process-watchers.md): moved the container log service row.
-- [1070-backend-module-state-beyond-0390.md](1070-backend-module-state-beyond-0390.md): module state this file did not list.
 - [`backend-runtime.md`](../../architecture/backend-runtime.md)

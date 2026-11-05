@@ -363,6 +363,22 @@ describe("superseded measurements", () => {
     release.mockRestore();
   });
 
+  test("contention ends this page-release pass; the next pass can make progress", async () => {
+    const { h } = setup();
+    const release = spyOn(h.service.ledger, "releaseFreePages")
+      .mockReturnValueOnce(-1)
+      .mockReturnValueOnce(10)
+      .mockReturnValueOnce(0);
+    try {
+      await h.service.retention.run();
+      expect(release).toHaveBeenCalledTimes(1);
+      await h.service.retention.run();
+      expect(release).toHaveBeenCalledTimes(3);
+    } finally {
+      release.mockRestore();
+    }
+  });
+
   test.each(["incremental", "no-progress"])(
     "retention releases free pages and stops on %s",
     async (mode) => {

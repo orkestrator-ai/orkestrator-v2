@@ -8,14 +8,36 @@ import { openMachineWorkspace } from "@/lib/federation/open-workspace";
 import { realmCoordinatorDefers } from "@/lib/federation/workspace-realm";
 import { portalStore } from "@/lib/portal/portal-store";
 import { workspaceTarget } from "@/lib/portal/portal-transport";
-import { useProjectStore } from "@/stores";
+import { useProjectStore, useUIStore } from "@/stores";
 import { useRealmShellStore } from "@/stores/realmShellStore";
+
+/** The window's workspace node and the project: a project id is per node. */
+export function leafCoordinatorGateKey(projectId: string | undefined): string {
+  return `${workspaceTarget()?.nodeId ?? "local"}:${projectId ?? ""}`;
+}
+
+/** Shown while the facts the gate decides on are still loading. */
+function PendingCoordination() {
+  return (
+    <div
+      id="project-panel-coordinator"
+      role="tabpanel"
+      className="flex h-full items-center justify-center text-sm text-muted-foreground"
+      data-testid="leaf-mode-coordinator-pending"
+    >
+      <p role="status">Checking repository coordination…</p>
+    </div>
+  );
+}
 
 /**
  * Coordinators belong to the command node. A node attached to another
  * command node (leaf mode) keeps its own coordinator conversations, since
  * they may hold important information, but they stay behind this notice
- * until the user chooses to open them for this session.
+ * until the user chooses to open them. That choice lasts for the app session,
+ * per project (`openedLeafCoordinators` in the UI store). Nothing is shown,
+ * and so nothing starts the coordinator, until the portal status has loaded;
+ * a failed status read counts as loaded, so a broken portal never hides it.
  *
  * A node the user reaches through a command node (this workspace is a realm
  * on a leaf) follows the window's sidebar grouping. Grouped by repository,
@@ -44,21 +66,31 @@ export function LeafModeCoordinatorGate({
     (state) => state.projects.find((project) => project.id === projectId)?.gitUrl,
   );
   const grouping = useRealmShellStore((state) => state.grouping);
-  const [opened, setOpened] = useState(false);
+  const gateKey = leafCoordinatorGateKey(projectId);
+  const opened = useUIStore((state) => state.openedLeafCoordinators.includes(gateKey));
+  const openLeafCoordinator = useUIStore((state) => state.openLeafCoordinator);
+  const openAnyway = () => openLeafCoordinator(gateKey);
   const [retrying, setRetrying] = useState(false);
   const onLeaf = workspaceTarget() !== null;
   useEffect(() => {
     if (!portalStore.getState().loaded) void portalStore.refresh();
   }, []);
 
-  // The portal status is the command node's: on a leaf window it is not this node's mode.
+  if (opened) return <>{children}</>;
+  // The portal status is the command node's: on a leaf window it is not this
+  // node's mode. Until it loads, this node's mode is unknown. A failed read
+  // still marks it loaded, so the coordinator then opens as on any other node.
+  if (!onLeaf && !portalLoaded) return <PendingCoordination />;
   const leafMode = !onLeaf && status?.mode === "leaf";
-  if (opened || (!onLeaf && !leafMode)) return <>{children}</>;
+  if (!onLeaf && !leafMode) return <>{children}</>;
   if (onLeaf && !realmCoordinatorDefers(grouping)) return <>{children}</>;
 
-  const controllers = onLeaf
-    ? (self?.displayName ?? "the command node")
-    : (status?.controllers.map((entry) => entry.displayName).join(", ") ?? "");
+  // No known controller name (an empty list, or blank names) reads as the command node.
+  const controllerNames = onLeaf
+    ? [self?.displayName]
+    : (status?.controllers ?? []).map((entry) => entry.displayName);
+  const named = controllerNames.map((name) => (name ?? "").trim()).filter(Boolean);
+  const controllers = named.length > 0 ? named.join(", ") : "the command node";
   const hint = repositoryHint(gitUrl);
   const commandProject =
     onLeaf && hint ? self?.projects.find((project) => project.repositoryHint === hint) : undefined;
@@ -103,7 +135,7 @@ export function LeafModeCoordinatorGate({
               >
                 {retrying ? "Retrying…" : "Try again"}
               </Button>
-              <Button type="button" variant="outline" size="sm" onClick={() => setOpened(true)}>
+              <Button type="button" variant="outline" size="sm" onClick={openAnyway}>
                 Open this node&apos;s coordinator anyway
               </Button>
             </div>
@@ -113,18 +145,7 @@ export function LeafModeCoordinatorGate({
     }
     // Until the window's grouping and the command node's projects are known,
     // show neither the notice nor the conversations.
-    if (grouping === null || !portalLoaded || !projectsLoaded) {
-      return (
-        <div
-          id="project-panel-coordinator"
-          role="tabpanel"
-          className="flex h-full items-center justify-center text-sm text-muted-foreground"
-          data-testid="leaf-mode-coordinator-pending"
-        >
-          <p role="status">Checking repository coordination…</p>
-        </div>
-      );
-    }
+    if (grouping === null || !portalLoaded || !projectsLoaded) return <PendingCoordination />;
     // The command node has no copy of this repository to coordinate it.
     if (!commandProject) return <>{children}</>;
   }
@@ -166,7 +187,7 @@ export function LeafModeCoordinatorGate({
               Open the coordinator on {controllers}
             </Button>
           ) : null}
-          <Button type="button" variant="outline" size="sm" onClick={() => setOpened(true)}>
+          <Button type="button" variant="outline" size="sm" onClick={openAnyway}>
             Open this node&apos;s coordinator anyway
           </Button>
         </div>

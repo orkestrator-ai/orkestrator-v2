@@ -289,6 +289,39 @@ export function summarizeScheduledJob(job: ScheduledJob): ScheduledJobSummary {
   return { ...rest, lastFire: settled ?? null, activeFire: active ?? null };
 }
 
+/**
+ * Why this backend fires no schedules although scheduling is on. Only the
+ * backend holding the data directory's registry writer lease fires; every
+ * other one still lists and edits them.
+ *
+ * - `writer-lease-lost`: this backend held the lease and lost it, which lasts
+ *   until it restarts.
+ * - `another-backend`: another backend held the lease when this one started.
+ * - `newer-data-directory`: a newer Orkestrator wrote the data directory, so
+ *   this one never took the lease.
+ */
+export type SchedulerPausedReason =
+  "writer-lease-lost" | "another-backend" | "newer-data-directory";
+
+/**
+ * Whether this backend fires schedules, as `list_scheduled_jobs` answers it
+ * in `scheduler`. Added after the field it sits beside: a backend that
+ * predates it sends nothing, which a reader treats as no known pause.
+ */
+export type SchedulerStatus = { firing: true } | { firing: false; reason: SchedulerPausedReason };
+
+/** What to tell someone with schedules on a backend that does not fire them. */
+export function schedulerPausedMessage(reason: SchedulerPausedReason): string {
+  switch (reason) {
+    case "writer-lease-lost":
+      return "Schedules have stopped firing on this backend. It lost control of its data directory, usually to another Orkestrator using the same directory. Close the other one and restart Orkestrator to resume them.";
+    case "another-backend":
+      return "Schedules fire in another Orkestrator that is using this data directory, not in this one. They run while that one is running.";
+    case "newer-data-directory":
+      return "Schedules do not fire on this backend because a newer Orkestrator wrote its data directory. Update Orkestrator to run them here.";
+  }
+}
+
 /** Owner key: the indexed row owner, used to list and delete one owner's schedules. */
 export function scheduleOwnerKey(owner: ScheduleOwner): string {
   switch (owner.kind) {

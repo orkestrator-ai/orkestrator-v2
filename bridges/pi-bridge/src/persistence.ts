@@ -219,6 +219,7 @@ function toPersisted(state: SessionState): PersistedSession {
     ...(state.readOnly ? { readOnly: true } : {}),
     ...(state.clientSessionKey ? { clientSessionKey: state.clientSessionKey } : {}),
     ...(state.sessionFile ? { sessionFile: state.sessionFile } : {}),
+    ...(state.resumeFallbackFile ? { resumeFallbackFile: state.resumeFallbackFile } : {}),
     ...(state.piSessionId ? { piSessionId: state.piSessionId } : {}),
     // A session that was mid-turn when the process died is not running now.
     // Recording it as `running` would have the next start report a turn that
@@ -304,6 +305,7 @@ function restoreSession(entry: unknown): SessionState | undefined {
   if (isNativeAgentExecutionPolicy(entry.policy)) state.policy = entry.policy;
   state.policyPending = true;
   if (nonBlank(entry.sessionFile)) state.sessionFile = entry.sessionFile;
+  if (nonBlank(entry.resumeFallbackFile)) state.resumeFallbackFile = entry.resumeFallbackFile;
   if (nonBlank(entry.piSessionId)) state.piSessionId = entry.piSessionId;
   state.status = entry.status === "error" ? "error" : "idle";
   if (nonBlank(entry.error)) state.error = entry.error;

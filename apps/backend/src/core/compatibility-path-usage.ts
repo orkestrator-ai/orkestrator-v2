@@ -95,6 +95,12 @@ export const COMPATIBILITY_PATH_IDS = [
    * them: it predates compaction instructions and ignored the body.
    */
   "compact.instructions-ignored",
+  /**
+   * A workspace client (a client grant or the relay) sent a global-settings
+   * write that changed nothing and was answered with the current settings: a
+   * realm from before `patch_global_config` saving a model favourite.
+   */
+  "workspace-grant.config-echo",
 ] as const;
 
 export type CompatibilityPathId = (typeof COMPATIBILITY_PATH_IDS)[number];

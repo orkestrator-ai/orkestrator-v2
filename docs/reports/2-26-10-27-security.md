@@ -810,7 +810,7 @@ write and terminal calls when the policy denies them.
 - The review validation worker was only spot-checked: commands are passed as argv to `bash -lc`.
 - `tmux-hooks` `find` invocations were not reviewed.
 - Pi's `grep`/`find` tools live in the Pi SDK, outside this repo.
-- The iOS app (`apps/ios`) was not reviewed.
+- The iOS app (`apps/ios`) was not reviewed at the time. It was reviewed on 2026-11-05 against `69a3b4ca5`, by reading the code and running it on simulators: three defects were fixed (a crash from a CSP-sandboxed page calling the native bridge, a status check that accepted an answer from a redirect target, and a sign-in that refused tokens containing `+`), and the rest is in to-dos [5600](../todo/cross-cutting/5600-ios-bridge-user-consent.md), [5601](../todo/cross-cutting/5601-ios-runtime-security-checks.md) (device and signed-build checks) and [5602](../todo/cross-cutting/5602-ios-session-and-privacy-hardening.md).
 - The initial review did no dynamic testing. H2 has since been checked against locally built before/after images with the root-boundary smoke test (see its Status above). H1, M1 and M2 pass in Chromium, Firefox and WebKit (`e2e/preview/gateway-browser-security.spec.ts`) and H3 on Docker Desktop and rootless Linux Engine (`docs/development/container-qualification.md`). Shipping Safari remains ([todo 5500](../todo/previews-and-annotations/5500-shipping-safari-gateway-security-checks.md)).
 
 ## 9. Recommended remediation order

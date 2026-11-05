@@ -62,19 +62,19 @@ run = "bunx turbo run start:web-public --cwd . --filter=@orkestrator/backend"
 
 [tasks.build]
 description = "Build the desktop application"
-run = "bunx turbo --cwd . run build --filter=@orkestrator/desktop"
+run = "ORKESTRATOR_BUILD_COMMIT=\"$(bun scripts/build-commit.ts)\" bunx turbo --cwd . run build --filter=@orkestrator/desktop"
 
 [tasks."build:desktop"]
 description = "Build the desktop application"
-run = "bunx turbo --cwd . run build --filter=@orkestrator/desktop"
+run = "ORKESTRATOR_BUILD_COMMIT=\"$(bun scripts/build-commit.ts)\" bunx turbo --cwd . run build --filter=@orkestrator/desktop"
 
 [tasks."build:backend"]
 description = "Build the standalone backend"
-run = "bunx turbo --cwd . run build --filter=@orkestrator/backend"
+run = "ORKESTRATOR_BUILD_COMMIT=\"$(bun scripts/build-commit.ts)\" bunx turbo --cwd . run build --filter=@orkestrator/backend"
 
 [tasks."build:cli"]
 description = "Build the published CLI"
-run = "bunx turbo --cwd . run build --filter=orkestrator"
+run = "ORKESTRATOR_BUILD_COMMIT=\"$(bun scripts/build-commit.ts)\" bunx turbo --cwd . run build --filter=orkestrator"
 
 [tasks."build:renderer"]
 description = "Build the Electron renderer"
@@ -86,7 +86,7 @@ run = "bunx turbo --cwd . run build --filter=@orkestrator/web-public"
 
 [tasks."build:electron"]
 description = "Build the Electron application"
-run = "bunx turbo --cwd . run build --filter=@orkestrator/desktop"
+run = "ORKESTRATOR_BUILD_COMMIT=\"$(bun scripts/build-commit.ts)\" bunx turbo --cwd . run build --filter=@orkestrator/desktop"
 
 [tasks."build:claude-bridge"]
 description = "Build the Claude bridge"
@@ -110,6 +110,16 @@ run = "bunx turbo --cwd . run build --filter=cursor-bridge"
 
 [tasks."build:all"]
 description = "Build every workspace package"
+run = "ORKESTRATOR_BUILD_COMMIT=\"$(bun scripts/build-commit.ts)\" bunx turbo --cwd . run build"
+
+# Test builds set no commit: they keep one Turbo cache entry across commits and
+# their backend reports `null`, as `dev:test` does.
+[tasks."build:cli:test"]
+description = "Build the published CLI for tests, without a build commit"
+run = "bunx turbo --cwd . run build --filter=orkestrator"
+
+[tasks."build:all:test"]
+description = "Build every workspace package for tests, without a build commit"
 run = "bunx turbo --cwd . run build"
 
 [tasks."download:bun"]
@@ -176,7 +186,7 @@ run = [
 
 [tasks."pack:cli"]
 description = "Pack the CLI workspace"
-run = "bun pm pack --cwd packages/cli"
+run = "ORKESTRATOR_BUILD_COMMIT=\"$(bun scripts/build-commit.ts)\" bun pm pack --cwd packages/cli"
 
 [tasks."smoke:cli"]
 description = "Smoke-test the packed CLI"
@@ -236,13 +246,13 @@ run = "bun check -p e2e/tsconfig.json && bunx playwright test --config e2e/playw
 
 [tasks."test:agent:browser"]
 description = "Run browser agent tests against an already-running profile (use test:agent:browser:isolated for one-shot validation)"
-depends = ["build:cli", "playwright:install"]
+depends = ["build:cli:test", "playwright:install"]
 run = "bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts"
 
 [tasks."test:agent:browser:isolated"]
 description = "Start a disposable profile, run all browser agent tests, then stop/reset it"
 raw_args = true
-depends = ["build:cli", "playwright:install"]
+depends = ["build:cli:test", "playwright:install"]
 run = "bun apps/desktop/scripts/test-agent-browser-isolated.ts"
 
 [tasks."test:agent:design:isolated"]
@@ -254,7 +264,7 @@ run = "bun apps/desktop/scripts/test-agent-browser-isolated.ts --design"
 [tasks."test:cli:scenarios"]
 description = "Run targeted CLI scenarios against isolated packaged backends (credential-free unless --provider)"
 raw_args = true
-depends = ["build:cli"]
+depends = ["build:cli:test"]
 run = "bun packages/cli/scripts/run-scenarios.ts"
 
 [tasks."test:agent:docker:isolated"]
@@ -465,7 +475,7 @@ description = "Build the unpacked Linux application for the packaged Electron sp
 run = [
   "bun install --frozen-lockfile",
   "mise run download:bun",
-  "mise run build:all",
+  "mise run build:all:test",
   "bunx electron-builder --linux --dir --config electron-builder.packaged-test.config.ts --publish never",
 ]
 
@@ -475,7 +485,7 @@ env = { CSC_IDENTITY_AUTO_DISCOVERY = "false" }
 run = [
   "bun install --frozen-lockfile",
   "mise run download:bun",
-  "mise run build:all",
+  "mise run build:all:test",
   "bunx electron-builder --$(if [ \"$(uname -s)\" = Darwin ]; then echo mac; else echo linux; fi) --dir --publish never",
   "bun scripts/verify-packaged-security.ts",
   "bunx playwright test --config e2e/agent-testing/playwright.packaged-electron.config.ts packaged-security-electron.spec.ts",

@@ -175,6 +175,12 @@ Not governed by the window (listed so nobody waits on it):
   2026-10-25. An older image or Engine keeps them as its guarded behaviour,
   decided by the image's persisted capabilities rather than a window
   ([container lifecycle](container-lifecycle.md#rollout-switches-and-legacy-runtimes)).
+- A hello with no `buildCommit` (added 2026-11-05): `list_nodes` reports `null`
+  and lists the node normally. This is detected by shape and is permanent, with
+  no code to retire and no counter: development, test and modified builds send
+  no commit either, so a missing field never shows that a peer is old. An older
+  client's `parseBackendHello` ignores the field, and nothing stores it, so a
+  downgrade leaves nothing behind.
 
 | Renderers that build, deliver and prune "Continue in…" handoffs themselves: `save_agent_handoff`, `delete_agent_handoff` and `prune_agent_handoffs` stay registered, and a prompt that already holds its carrier is recognised rather than prefixed again | `commands-registry-prompts.ts`; `promptWithPendingAgentHandoff` (`native-agent-handoffs.ts`) | `agent-handoff.renderer-saved`, `agent-handoff.renderer-carried` | Renderers before `create_agent_handoff` (2026-11-01) | The floor is at or above the first Stable release with it and both counters are quiet. Stored handoffs need no migration: the record is unchanged, and the destination's transcript proves whether one was already delivered | Native agents |
 | Backends that do not deliver or prune handoffs: the renderer prepends the history, marks the tab consumed and prunes on hydration when `get_agent_handoff_capabilities` says so. Continue in… itself reports that the backend must be updated | `useAgentHandoff.ts`, `AgentNativeTab.controller.tsx`, `pruneUnreferencedAgentHandoffs` (`paneLayoutStore.ts`), `createAgentHandoff` (`lib/agent-handoff.ts`) | None (renderer side) | Backends before `create_agent_handoff` (2026-11-01) | The floor is a release with `get_agent_handoff_capabilities` | Native agents |

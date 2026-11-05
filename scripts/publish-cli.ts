@@ -9,9 +9,13 @@
  * `2.23.0-alpha` as `alpha`. `bun publish` would otherwise tag every version
  * `latest`, handing a prerelease to every `bunx orkestrator` user and every
  * Stable standalone backend.
+ *
+ * `bun publish` rebuilds the package in its `prepack` step, without Turbo, so
+ * this is where the published backend gets its build commit.
  */
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { buildCommitEnv } from "../packages/protocol/src/node/build-commit.js";
 import {
   HOST_UPDATE_CHANNEL_TAGS,
   hostUpdateChannelOfVersion,
@@ -45,7 +49,11 @@ if (import.meta.main) {
     ) as { version: string };
     const command = cliPublishCommand(version);
     console.log(`\n$ ${command.join(" ")}`);
-    const result = Bun.spawnSync(command, { cwd: root, stdio: ["inherit", "inherit", "inherit"] });
+    const result = Bun.spawnSync(command, {
+      cwd: root,
+      env: buildCommitEnv(root),
+      stdio: ["inherit", "inherit", "inherit"],
+    });
     process.exitCode = result.exitCode ?? 1;
   } catch (error) {
     console.error(`publish-cli: ${error instanceof Error ? error.message : String(error)}`);

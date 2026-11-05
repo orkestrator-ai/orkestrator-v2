@@ -166,7 +166,7 @@ import {
   ensureContainerAgentToolsHost,
   ensureContainerHostServicePorts,
 } from "./commands-environment.js";
-import { APP_VERSION, DOCKER_IMAGE } from "./constants.js";
+import { APP_VERSION, BUILD_COMMIT, DOCKER_IMAGE } from "./constants.js";
 import { BACKEND_CAPABILITIES, type BackendProfile } from "@orkestrator/protocol/backend-profile";
 import { WorkflowResultService } from "./workflow-result-service.js";
 import { HostMaintenanceService } from "./host-maintenance.js";
@@ -2851,6 +2851,7 @@ export class OrkestratorBackend {
     installationId: string;
     generation: string;
     appVersion: string;
+    buildCommit: string | null;
     profile: BackendProfile;
     nodeMode: NodeMode;
   }> {
@@ -2863,6 +2864,7 @@ export class OrkestratorBackend {
       installationId: identity.instanceId,
       generation: storage.getResourceGeneration(),
       appVersion: APP_VERSION,
+      buildCommit: BUILD_COMMIT,
       profile,
       nodeMode: this.nodes.mode(),
     };

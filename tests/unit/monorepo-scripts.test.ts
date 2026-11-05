@@ -536,6 +536,67 @@ describe("monorepo orchestration scripts", () => {
     expect(workspaceTask.env ?? []).not.toContain("ORKESTRATOR_TEST_WORKERS");
   });
 
+  test("a backend's build commit is part of the cache key of every task that embeds it", () => {
+    // Turbo restores dist/** on a hit without running the build, so a commit
+    // missing from the key would report whichever commit first filled the entry.
+    const root = JSON.parse(read("turbo.json")) as {
+      envMode?: string;
+      globalPassThroughEnv?: string[];
+      tasks: Record<string, { env?: string[] }>;
+    };
+    const cli = JSON.parse(read("packages/cli/turbo.json")) as {
+      tasks: Record<string, { env?: string[] }>;
+    };
+    expect(root.tasks["@orkestrator/backend#build"]?.env).toEqual(["ORKESTRATOR_BUILD_COMMIT"]);
+    expect(cli.tasks.build?.env).toEqual(["ORKESTRATOR_BUILD_COMMIT"]);
+    // Strict mode passes it to the build through `env`; passthrough would not hash it.
+    expect(root.envMode).toBeUndefined();
+    expect(root.globalPassThroughEnv).not.toContain("ORKESTRATOR_BUILD_COMMIT");
+    // Only those two. Elsewhere it would miss the renderer's and bridges' caches per commit.
+    expect(root.tasks.build?.env).toBeUndefined();
+
+    for (const script of ["apps/backend/scripts/build.ts", "packages/cli/scripts/build.ts"]) {
+      expect(read(script), script).toContain("define: buildCommitDefine()");
+      expect(read(script), script).not.toContain("rev-parse");
+    }
+    const stamp = '"$(bun scripts/build-commit.ts)"';
+    const taskRun = (name: string) => String(miseTasks()[name]?.run);
+    for (const task of ["build", "build:desktop", "build:electron", "build:backend", "build:cli"]) {
+      expect(taskRun(task), task).toStartWith(`ORKESTRATOR_BUILD_COMMIT=${stamp} bunx turbo `);
+    }
+    expect(taskRun("build:all")).toStartWith(`ORKESTRATOR_BUILD_COMMIT=${stamp} bunx turbo `);
+    expect(taskRun("pack:cli")).toStartWith(`ORKESTRATOR_BUILD_COMMIT=${stamp} bun pm pack `);
+  });
+
+  test("test builds set no build commit, so they keep their cache and report null", () => {
+    const tasks = miseTasks() as Record<string, MiseTask & { depends?: string[] }>;
+    const commands = (name: string) => [tasks[name]?.run ?? []].flat().join("\n");
+    expect(commands("build:cli:test")).toBe("bunx turbo --cwd . run build --filter=orkestrator");
+    expect(commands("build:all:test")).toBe("bunx turbo --cwd . run build");
+    for (const task of [
+      "test:agent:browser",
+      "test:agent:browser:isolated",
+      "test:cli:scenarios",
+    ]) {
+      expect(tasks[task]?.depends, task).toContain("build:cli:test");
+      expect(tasks[task]?.depends, task).not.toContain("build:cli");
+    }
+    for (const task of ["package:linux:unpacked:test", "test:package:security"]) {
+      expect(commands(task), task).toContain("mise run build:all:test");
+    }
+    for (const entry of [
+      "scripts/test-all.ts",
+      "apps/desktop/scripts/dev/bridge-builds.ts",
+      "apps/desktop/scripts/dev-test.ts",
+    ]) {
+      expect(read(entry), entry).not.toContain("ORKESTRATOR_BUILD_COMMIT");
+    }
+    // `dev:test` runs the backend from source, which has no embedded commit.
+    expect(read("apps/desktop/electron/backend-process.ts")).toContain(
+      'path.join(options.appRoot, "apps", "backend", "src", "main.ts")',
+    );
+  });
+
   test("every Turbo task keeps the operator's temporary directory", () => {
     // Strict environment mode drops anything undeclared, so without this the
     // workspace and bridge suites fall back to /tmp and a private TMPDIR

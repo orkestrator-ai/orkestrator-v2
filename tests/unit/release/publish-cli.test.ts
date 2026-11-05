@@ -1,4 +1,6 @@
 import { expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { cliPublishCommand } from "../../../scripts/publish-cli";
 
 test.each([
@@ -18,6 +20,19 @@ test.each([
     "--tag",
     distTag,
   ]);
+});
+
+test("the publish, whose prepack rebuilds without Turbo, is given the build commit", () => {
+  const source = readFileSync(
+    path.join(import.meta.dir, "../../../scripts/publish-cli.ts"),
+    "utf8",
+  );
+  expect(source).toContain("env: buildCommitEnv(root)");
+  const manifest = JSON.parse(
+    readFileSync(path.join(import.meta.dir, "../../../packages/cli/package.json"), "utf8"),
+  ) as { scripts: Record<string, string> };
+  expect(manifest.scripts.prepack).toBe("bun run build");
+  expect(manifest.scripts.build).toBe("bun scripts/build.ts");
 });
 
 test.each(["2.23.0-rc.1", "2.23.0-canary.1", "garbage"])(

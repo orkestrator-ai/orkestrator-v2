@@ -198,6 +198,46 @@ To rehearse a build without uploading or needing the tag, run
 The local signed `package:release` task also sets `--publish never`, including
 when a GitHub token is available.
 
+## Build commit
+
+`list_nodes` reports the commit each backend was built from
+([coordinator.md](../architecture/coordinator.md#multiple-machines)), which is
+what answers "does this machine have that fix?" when many merges share one
+version. The commit is embedded when the backend is bundled:
+
+1. `scripts/build-commit.ts` prints `HEAD`, or nothing when no commit describes
+   the tree exactly (any modified or untracked file, or no repository).
+2. The build task exports that as `ORKESTRATOR_BUILD_COMMIT`. A build task sets
+   it rather than a build script reading Git, because Turbo restores `dist/**` on
+   a cache hit without running the script. The variable is in the `env` of
+   `@orkestrator/backend#build` (`turbo.json`) and of the CLI's `build`
+   (`packages/cli/turbo.json`), so it is part of both cache keys, and of the
+   desktop's through its dependency on the backend. These builds miss the cache
+   once per commit.
+3. Both `Bun.build` calls for `main.ts` embed it with `define`
+   (`buildCommitDefine`), and the backend reads it as `BUILD_COMMIT`. It is never
+   read from the environment at runtime.
+
+What each build path reports:
+
+| Path | Reports |
+| --- | --- |
+| `build`, `build:desktop`, `build:electron`, `build:backend`, `build:cli`, `build:all` | The commit |
+| `package:mac`, `package:linux`, `package:linux:unpacked`, `package:release` (through `build:all`) | The commit |
+| `release:desktop` (`scripts/release-desktop.ts`, through `build:all`) | The commit |
+| `publish:cli` and `release:publish` (`bun publish` rebuilds in `prepack`; `scripts/publish-cli.ts` sets the variable) | The commit |
+| `pack:cli` | The commit |
+| `.github/workflows/validate-bun-runtime.yml` (`build:all`) | The checked-out commit; on a pull request, its merge commit |
+| Any path above from a modified tree, or with no Git repository | `null` |
+| `dev`, `dev:web`, `dev:test`, and the qualification scripts that start `apps/backend/src/main.ts` | `null`: they run from source |
+| `mise run test` and its variants, and `build:cli:test`, `build:all:test` and the tasks that use them (`test:agent:browser`, `test:agent:browser:isolated`, `test:cli:scenarios`, `package:linux:unpacked:test`, `test:package:security`) | `null`, and they keep one cache entry across commits |
+| `smoke:cli`, a bare `bun run build`, a bare `bunx turbo run build`, `scripts/qualify-preview-worker-upgrade.ts` | `null`: nothing sets the variable |
+| `start:web`, `start:web-public` | `null`: they pass `ORKESTRATOR_*` on to the running backend, and so to what it starts, where a stale commit would stamp later builds |
+
+`build:renderer`, `build:web-public`, the bridge builds and `setup` do not build
+the backend. The container image holds no backend; its own `sourceRevision`
+(`docker/image-manifest.ts`) is separate.
+
 ## Machine prerequisites
 
 | Machine | Needs |

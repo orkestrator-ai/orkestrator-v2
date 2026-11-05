@@ -19,7 +19,6 @@ A batch file combines several reports as numbered parts and takes the rating of 
 | 1 | [0090-x1-coordinator-trust-boundary.md](../security/0090-x1-coordinator-trust-boundary.md) | High | No | **X1, Coordinator trust boundary.**<br>`Security 0090`: M11: delegation scope and marking mail-originated delegations<br>`Security 0180`: L16: operator token reads, confirm token wording, self-reminder framing<br>`Security 0210`: I2: two stale statements about side agents<br>`Coordinator 0120`: Labelling the home in `list_environments` and a live read-only step for the message gate.<br>`Coordinator 0310`: Refusing `adopt_workflow` from a side agent. | From `Security 0090`: An injected worker can reach a user-created environment under its looser policy, limited only by framing and budgets. |
 | 2 | [0080-c2-workflow-records.md](0080-c2-workflow-records.md) | Medium | No | **C2, Workflow records.**<br>`0080`: The swallowed delegation-open error, showing store-full to the user, and settling the shared cap.<br>`0100`: Closing work when a node is forgotten, and a notice for a long-offline node.<br>`0380`: One shared alias lookup.: Duplicated request-alias lookup | From `0080`: Retention makes it rare, and what remains is a functional gap when every record is in use. |
 | 3 | [0110-c3-sweep-and-reads.md](0110-c3-sweep-and-reads.md) | Medium | No | **C3, Sweep and reads.**<br>`0110`: Syncing once per sweep, a read-only `snapshot()`, batched wake writes and pruning below the limit.<br>`0370`: One own-mailbox check, and `coordinatorRuntimeId` everywhere. | From `0110`: Real repeated work that has not been measured, so it removes a risk rather than a known slowdown. |
-| 4 | [0390-panel-re-render-cost.md](0390-panel-re-render-cost.md) | Low | No | Narrowing the panel's subscriptions after measuring. | An optimisation that should wait for a measurement. |
 
 ## Parallel running
 
@@ -45,17 +44,15 @@ Why these are grouped:
 
 ### Files built on their own
 
-These still follow the lane and conflict rules above.
-
-| Batch | Name | Files | Lane and position | Finish first | Not at the same time as |
-| --- | --- | --- | --- | --- | --- |
-| C-0390 | [Panel re-render cost, measure first](0390-panel-re-render-cost.md) | `0390` | Coordinator panel, 1 of 1 | None | None |
+None at the moment. C-0390 (Panel re-render cost) was the last, and is closed (below).
 
 ## Status of every finding
 
-50 done, 5 partly done, 12 open, 7 no action.
+51 done, 5 partly done, 11 open, 7 no action.
 
 Batch C9 (Panel split) is closed. Its task-by-task outcomes are in the [closing report](../2026-11-05-c9-closing-report.md).
+
+Batch C-0390 (Panel re-render cost) is closed. Its report was analysed against `a2bba9d8` and built from `main` at `1c2f12837`; its measurement, decision and task-by-task outcome table end the report in the parent of the commit that deleted it. In a component-browser fixture with three conversation groups, 50 unrelated environment, build pipeline or Multi Review writes committed every group's transcript controller 102 times and took 450–590 ms of panel commit time; after the change they commit no controller and take 76–96 ms. No to-do was needed.
 
 Batch C4 (Tool surface) is closed. Its report was analysed against `a2bba9d8` and built from `main` at `7347e5093`; its task-by-task outcome table ends the report in the parent of the commit that deleted it. What it could not prove without real provider turns is in to-do [4920](../../todo/coordinator-and-multi-review/4920-coordinator-tool-surface-live-follow-ups.md).
 
@@ -137,7 +134,7 @@ Every task was done, so it left no to-do.
 | U9: dead-end states and scattered settings | Done | Buttons on the provider banner, empty-platform message and no-checkout card, and a Coordinator section in Settings: `CoordinatorConversationPane.tsx`, `CoordinatorPanel.tsx`, `GlobalSettings.sections.tsx`, tested in `CoordinatorPanel.outcome.test.tsx` and `GlobalSettings.coordinator-section.test.tsx`. |
 | U10: first sends in two groups | Done | One held prompt per conversation: `useCoordinatorLaunches.ts`. |
 | U11: accessibility | Done | Tab semantics, keyboard tab moves and a labelled spinner: `CoordinatorPaneTree.tsx`, `CoordinatorConversationTab.tsx`, tested in `CoordinatorPaneTree.test.tsx` and `CoordinatorPanel.tabs.test.tsx`. The environment strip, deliberately left: [5200](../../todo/coordinator-and-multi-review/5200-c8-tab-strip-follow-ups.md). |
-| U12: re-render cost | Open | [0390-panel-re-render-cost.md](0390-panel-re-render-cost.md) |
+| U12: re-render cost | Done | Measured, then narrowed: `CoordinatorWorkArea.tsx` owns the Work panel's and prompts banner's store subscriptions with the conversations as its children, `useCoordinatorActiveTurn.ts` selects only home environment ids, and `CoordinatorConversationPane.tsx` gives the memoized agent tab stable props; tested in `CoordinatorPanel.render-cost.test.tsx` and `useCoordinatorActiveTurn.test.tsx`. Batch C-0390, below. |
 | U13: `Context rN` jargon | Done | Moved into the badge's details (`e5245dfd6`, #1644), a menu since C10 (`CoordinatorIsolationBadge`, `CoordinatorPanelNotices.tsx`). |
 | U13: `!` commands | Done | A hint under every coordinator composer, a footer about the coordinator's own work, and the first-message rule shown inline under the composer (`COORDINATOR_COMMAND_HINT`, `FIRST_MESSAGE_COMMAND_RULE` in `AgentNativeTab.helpers.tsx`), tested in `CoordinatorPanel.outcome.test.tsx`. Batch C10. |
 | U13: leaf-mode gate | Done | `LeafModeCoordinatorGate.tsx` waits for portal status, names "the command node" when no controller is known, and remembers "open anyway" per project for the app session (`openedLeafCoordinators`, `uiStore.ts`); tested in `leaf-mode-coordinator-gate.test.tsx`. Batch C-0410; outcome table in the report's last version before deletion. |

@@ -83,10 +83,13 @@ export function useCoordinatorActiveTurn(
     },
   });
 
-  const environments = useEnvironmentStore((state) => state.environments);
-  const homeIds = useMemo(
-    () => projectHomeEnvironmentIds(environments, projectId),
-    [environments, projectId],
+  // Selected as a key, so a write to any other environment renders nothing here.
+  const homeKey = useEnvironmentStore((state) =>
+    Array.from(projectHomeEnvironmentIds(state.environments, projectId)).sort().join("\u0000"),
+  );
+  const homeIds = useMemo<ReadonlySet<string>>(
+    () => (homeKey ? new Set(homeKey.split("\u0000")) : NO_ENVIRONMENTS),
+    [homeKey],
   );
   const workspaceId = workspace?.id;
   const invalidate = read.invalidate;

@@ -15,11 +15,13 @@ Items already owned elsewhere stay there and are not repeated: compression and
 WebSocket deflate (GW-2, GW-7) in
 [0052](../transcripts-and-observation/0052-remote-client-bandwidth.md), joined
 history pages (TX-10) in 0232, recurring-work live evidence in
-[0048](../transcripts-and-observation/0048-recurring-work-qualification.md),
-container resource budgets in
-[0022](../containers-and-environments/0022-container-resource-budgets-and-performance.md)
-and Multi Review drift checks (BG-10) in
-[0027](../coordinator-and-multi-review/0027-multi-review-scale-and-cost.md).
+[0048](../transcripts-and-observation/0048-recurring-work-qualification.md)
+and container resource budgets in
+[0022](../containers-and-environments/0022-container-resource-budgets-and-performance.md).
+Multi Review drift checks (BG-10), once listed here as owned by
+[0027](../coordinator-and-multi-review/0027-multi-review-scale-and-cost.md),
+which had no task for them, were done on 2026-11-05: snapshot mode checks
+the worktree once per admission pass, as package mode already did.
 
 The maintainer's decisions of 2026-11-01 are recorded in the task each one
 governs, marked "Decided".

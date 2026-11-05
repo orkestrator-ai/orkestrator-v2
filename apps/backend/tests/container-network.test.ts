@@ -177,6 +177,9 @@ exit 0
       refreshFailures: null,
       revokedEntries: null,
       revocation: null,
+      // A report from an image before the gateway's name checks has no field:
+      // addresses only, which the status shows rather than implying checks.
+      egressFilter: null,
     });
     expect(
       parseFirewallStatus(
@@ -195,6 +198,14 @@ exit 0
     expect(parseFirewallStatus('{"mode":"open"}')).toBeNull();
     expect(
       parseFirewallStatus('{"mode":"restricted","hostServicePorts":"1;rm"}')?.hostServicePorts,
+    ).toBeNull();
+    for (const value of ["enforced", "off", "unavailable"] as const) {
+      expect(
+        parseFirewallStatus(`{"mode":"restricted","egressFilter":"${value}"}`)?.egressFilter,
+      ).toBe(value);
+    }
+    expect(
+      parseFirewallStatus('{"mode":"restricted","egressFilter":"maybe"}')?.egressFilter,
     ).toBeNull();
   });
 });

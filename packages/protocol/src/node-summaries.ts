@@ -95,6 +95,13 @@ export interface NodeEnvironmentSummary {
   /** Owner clock; the search falls back to it when there is no activity time. */
   createdAt?: string;
   deleting: boolean;
+  /**
+   * `deleting` is left over from a merge cleanup that failed, and a new delete
+   * retries it, so the row stays selectable for a bulk delete. Absent
+   * otherwise, and from nodes that predate it, whose row then stays out of a
+   * selection as before. The error's text stays on its machine.
+   */
+  deletionRetryable?: true;
   isProjectHome: boolean;
   /**
    * An existing build pipeline record names this environment, so
@@ -327,6 +334,9 @@ export function toNodeEnvironmentSummary(
     deleting:
       raw.lifecycleOperation === "deleting" ||
       (typeof raw.deletionRequestedAt === "string" && raw.deletionRequestedAt.length > 0),
+    ...(typeof raw.cleanupAfterMergeError === "string" && raw.cleanupAfterMergeError.length > 0
+      ? { deletionRetryable: true as const }
+      : {}),
     isProjectHome: raw.projectHome === true,
     ...(raw.buildPipeline === true ? { buildPipeline: true as const } : {}),
     ...(raw.buildActive === true ? { buildActive: true as const } : {}),

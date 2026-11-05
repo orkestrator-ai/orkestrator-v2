@@ -366,3 +366,30 @@ The exact `mise run test:logged -- --name browser -- mise run test:browser` reru
 A one-worker rerun of the complete three owners passed all 32 cases (66.3 s, exit 0): `mise run test:logged -- --name review-fixes-native-owners -- bunx playwright test NativeHeldSend.spec.ts NativeAttachments.spec.ts BackgroundTaskOutcome.spec.ts --config=e2e/playwright.config.ts --workers=1`. No code, timeout, assertion or skip changed between runs. This confirms intermittence in these owners; host load is only a hypothesis.
 
 Broad failure evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.XG8r46/browser.log.gz`. The passing logged runner deleted its raw output as designed. The original review package remains untouched.
+
+## Unavailable-platform coordinator review — 2026-11-05
+
+At repair commit `823590c73`, the five-worker component rerun
+`mise run test:logged -- --name address-browser -- env ORKESTRATOR_E2E_PORT=24371 mise run test:browser`
+reached case 610 of 1,590 before the logged runner's 1,800,000 ms absolute
+deadline. It named 18 failures and produced no closing test summary; the public
+site suite was not reached. Evidence is preserved separately from preparation
+at `.orkestrator/review-artifacts/address-findings-403b728a/address-browser.log.gz`.
+
+Three mobile failures were in these complete owners:
+
+- `e2e/NativeComposeBar.spec.ts`: `non-steerable head actions can be reached and activated by keyboard`.
+- `e2e/NativeHeldSend.spec.ts`: `a device code survives browser-open failure, environment switching and renderer reload without another login`.
+- `e2e/NativeHeldSend.spec.ts`: `a held send survives switching environments, dispatches once on return and stays settled after reload`.
+
+Both complete owners passed with one worker, exit 0, in 194.6 s:
+
+```sh
+mise run test:logged -- --name address-native-browser -- env ORKESTRATOR_E2E_PORT=24372 bunx playwright test --config e2e/playwright.config.ts e2e/NativeHeldSend.spec.ts e2e/NativeComposeBar.spec.ts --workers=1
+```
+
+The run selected 20 viewport cases; the existing desktop skip for the
+mobile-only compose layout remained. Neither owner, assertion, timeout nor skip
+was changed. Navigation or reload exceeded the 30-second deadline in each of the three
+cases; the passing owner rerun establishes intermittence for them, without establishing a cause. The broad command's other 15 failures and
+its absolute deadline remain unresolved, not classified by this observation.

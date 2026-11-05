@@ -2,7 +2,7 @@
 
 ## Task analysis
 
-Analysed 2026-11-05 against main at d5294b202, with coordinator batch C7 (Work panel and navigation) applied.
+Analysed 2026-11-05 against main at af2e566e5, with coordinator batch C7 (Work panel and navigation) applied.
 
 ### Tasks
 

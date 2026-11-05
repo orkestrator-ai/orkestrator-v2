@@ -195,3 +195,30 @@ Whether a remote worker's prompt reaches the user by any other route in practice
 - [Coordinator report, 4.4 (U13)](../2026-10-27-coordinator.md#44-ui-and-ux)
 - [0395-coordinator-worker-surfaces-follow-ups.md](../../todo/coordinator-and-multi-review/0395-coordinator-worker-surfaces-follow-ups.md)
 - [Coordinator report, 5.5](../2026-10-27-coordinator.md#55-feedback-while-the-coordinator-is-idle-but-work-is-running)
+
+## Outcome
+
+Checked item by item against this file on 2026-11-05. Base commit `af2e566e5`. The line numbers above had moved, but every finding still held, so none closes as "no longer holds".
+
+| Part | Task | Outcome | Where |
+| --- | --- | --- | --- |
+| 0060 | 1. Add Open to notice tiles | Done | `useNoticeWorkerTarget` and the Open button in `MailTile.tsx`, through `openCoordinatorWorkTarget` and `workerTabTarget`; `notice.resource.nodeId` added (`agent-mail.ts`, `coordinator-service.ts`, `coordinator-status-wakes.ts`, `storage-agent-mail-budgets.ts`). Tested in `MailTile.test.tsx` (opens, and no action when unreachable), `coordinator-work-items.test.ts`, `agent-mail.test.ts`, `coordinator-remote.test.ts`. |
+| 0060 | 2. Add Open to the prompt banner | Done | Optional `onOpen` and `canOpen` on `HumanPromptBanner.tsx`, supplied by `CoordinatorPanel.tsx`; `AgentNativeTab.controller.tsx` passes neither and is unchanged. Tested in `HumanPromptBanner.test.tsx` and `CoordinatorPanel.test.tsx`; seen on an isolated profile opening the worker's tab. |
+| 0260 | 1. Show what was asked, on what, and since when | Done | `CoordinatorDelegation.request`, bounded by `normalizeCoordinatorDelegationRequest` in `coordinator.ts` and at `openCoordinatorDelegation`; recorded by launches, jobs, prompts, mail, forks, goals and commands (`coordinator-delegation-request.ts`, `control-mcp-tools.ts`, `coordinator-worker-mail.ts`, `commands-registry-coordinator-nodes.ts`); drawn by `WorkRow` from `workerItem` and `workAge`. Tested in `coordinator.test.ts`, `coordinator-worker-turns.test.ts`, `coordinator-work-items.test.ts`, `CoordinatorWorkPanel.test.tsx`, including records without the fields. |
+| 0260 | 1. The missing override marker ("tracked follow-up") | Done on Work rows; moved to to-do [4943](../../todo/coordinator-and-multi-review/4943-launch-override-marker-in-environment-ui.md) for the environment and tab UI | "requested" on `WorkRow`, from `request.source`. |
+| 0260 | 2. Add row actions: Stop | Done; a real abort moved to to-do [4942](../../todo/coordinator-and-multi-review/4942-c7-live-checks.md) task 2 | `stopCoordinatorWorkerTurn` calling `stop_coordinator_worker_turn` with `stoppedBy: "user"`, `stopRequestedBy` in `coordinator-worker-turn-actions.ts`, the wake's wording in `coordinator-service.ts`. Tested in `CoordinatorWorkPanel.test.tsx`, `CoordinatorPanel.test.tsx`, `coordinator-worker-turns.test.ts`, `coordinator-worker-turns-remote.test.ts`. |
+| 0260 | 2. Add row actions: Answer and Address | Moved to to-do [4940](../../todo/coordinator-and-multi-review/4940-work-row-answer-and-address.md) | As decided in the ticket, with the report's reasoning. |
+| 0280 | 1. Show remote workers' prompts | Done with fakes; two real nodes moved to to-do [4942](../../todo/coordinator-and-multi-review/4942-c7-live-checks.md) task 1 | `useRemoteHumanPrompts.ts`, `normalizeRemoteHumanPromptEntry` in `human-prompts.ts`, the node-qualified key in `workerItem`. Tested in `useRemoteHumanPrompts.test.tsx`, `human-prompts.test.ts`, `coordinator-work-items.test.ts`. |
+| 0280 | Security check | Passed: the link and code are shown | See below. |
+| 0280 | Needs verification: any other route in practice | Moved to to-do [4942](../../todo/coordinator-and-multi-review/4942-c7-live-checks.md) task 1 | Needs two nodes; other real nodes were out of bounds. The code still shows no other route: `noteWorkerHumanPrompt` skips `nodeId`. |
+| 0450 | 1. Say what the next wake waits for | Done, on narrow screens | `nextWakeLine` in `coordinator-work-items.ts`, `CoordinatorNextWakeLine` in `CoordinatorWorkPanel.tsx`. It sits under the conversation group, not directly under the last message. Tested in `coordinator-work-items.test.ts`, `CoordinatorWorkPanel.test.tsx`; seen on an isolated profile. |
+| 0450 | 2. Notify: extend the sound service | Done; hearing it after a real wake moved to to-do [4942](../../todo/coordinator-and-multi-review/4942-c7-live-checks.md) task 3 | `coordinator-wake-attention` (`environment-attention.ts`, `storage-changes.ts`, `backend-event-fanout.ts`, `coordinator-service.ts`), `useNotificationSoundService.ts`, `coordinatorReport` in `notification-sounds.ts`, a row in `SoundsSettings.tsx`. Tested in `useNotificationSoundService.test.tsx`, `notification-sounds.test.ts`, `client-state.test.ts`, `environment-attention.test.ts`, `coordinator-worker-turns.test.ts`. |
+| 0450 | 2. Notify: desktop notification | Moved to to-do [4941](../../todo/coordinator-and-multi-review/4941-coordinator-report-desktop-notification.md) | Out of scope, as decided in the ticket. |
+
+### Part 0280 security check
+
+Result: showing a sign-in link or code across nodes does not widen what a remote read exposes, so the banner shows them.
+
+- **What summaries omit, and why it does not apply.** `node-summaries.ts` carries "names, status and activity only, never transcripts, prompts, paths or credentials". Those summaries go to every client and the command node keeps them as last-known state. This read does neither: the answer stays in the panel's React state, and `NodePortal.invokeOnNode` and `routeToNode` log no arguments or results.
+- **What `invokeOnNode` already permits.** `list_human_prompts` is in neither `NODE_EXCLUDED_COMMANDS` nor `isWorkspaceExcludedCommand`. A window opened on that node already draws the same banner, and `get_native_agent_projection` crosses the same link carrying the tool output the prompt was detected in.
+- **What was added because a remote answer is untrusted.** A link must pass `isSignInLink`, every field is bounded, `userCommandId` is dropped, and entries for environments not asked for are refused.

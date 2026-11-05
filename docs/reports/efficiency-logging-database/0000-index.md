@@ -264,7 +264,7 @@ When one of these becomes ready, it joins the lane shown.
 | DK-13 | Open | Direct clone only, `docker/workspace-setup.sh:385-397`; see 0500. |
 | DK-14 | Partly done | Start copy stamped, `import_agent_input` in `docker/entrypoint.sh` (`staged-inputs=5`, 1202 task 15); the per-environment staging copy remains, see 0490. |
 | DK-15 | Done | Rename, repair and `EXDEV` fallback, `environment-move.ts:428`, `:470`, `:559` (2525fc05c). |
-| DK-16 | Partly done | Transcript `knownToken`, `session.ts:1085`, `actions-transcript.ts:154` (b68b6e710); `attention --follow` stays unconditional because a page is at most 80 KiB, `public-api-attention.test.ts`; a real follower's page size is left in [5560](../../todo/cli-and-slash-commands/5560-attention-follow-page-size.md). |
+| DK-16 | Partly done | Transcript `knownToken`, `session.ts:1085`, `actions-transcript.ts:154` (b68b6e710); `attention --follow` stays unconditional on fixture measurements, with 32/80 KiB default/maximum-page fixture budgets in `public-api-attention.test.ts` (not universal bounds); a real follower's page size is left in [5560](../../todo/cli-and-slash-commands/5560-attention-follow-page-size.md). |
 | DK-17 | Done | One bounded read, `packages/cli/src/client/transport.ts:134` (b68b6e710). |
 | DK-18 | Done | One `appendFile` per event-loop turn and `mkdir` only after a failure, in `packages/protocol/src/node/application-logging.ts`; see [1202](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md) task 16 and [E26 part 0860](0400-e26-local-desktop-transport.md#0860-finish-the-electron-relay-and-file-writer), task 1, shared with R7. |
 

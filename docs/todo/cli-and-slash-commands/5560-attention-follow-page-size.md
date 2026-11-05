@@ -28,18 +28,18 @@ What was left of `docs/reports/efficiency-logging-database/0694-dk-16-attention-
 | Default limit, 200 3-byte characters in title and environment name | 20 | 30,741 | 1.3 GB |
 | Largest limit, 200 3-byte characters in title and environment name | 50 | 76,401 | 3.3 GB |
 
-The largest page is about 7% of a transcript page's 1 MiB cap (`PUBLIC_API_LIMITS.transcriptMaxBytes`). The last row needs fifty approvals pending for the whole day, all with names at the cut-off. Interaction bodies are omitted, and titles and environment names are cut at 200 UTF-16 code units (`apps/backend/src/core/public-api/actions-attention.ts:91`, `:97`). Not measured: a title made entirely of characters JSON escapes costs six bytes per unit, which by calculation gives about 136 KB for the largest page. Provider-chosen ids are not cut.
+The largest measured fixture page is about 7% of a transcript page's 1 MiB cap (`PUBLIC_API_LIMITS.transcriptMaxBytes`). The last row needs fifty approvals pending for the whole day, all with names at the cut-off. Interaction bodies are omitted, and titles and environment names are cut at 200 UTF-16 code units (`apps/backend/src/core/public-api/actions-attention.ts:91`, `:97`). Not measured: titles and environment names made entirely of characters JSON escapes cost six bytes per unit, which by calculation gives about 136 KB for a full page with the same 36-character ids. That estimate was not measured and is not a universal bound. Provider-chosen ids are not cut, so longer ids can increase the serialized size further.
 
-`public-api-attention.test.ts` ("a full page of over-long names stays small enough to re-read on every poll") holds a default page to 32 KiB and a full page to 80 KiB. So the ceiling is known. Not run, because it needs real pending interactions and so a billed provider turn: how many items a real follower sees, and how long their titles are.
+`public-api-attention.test.ts` ("pages with three-byte names and 36-character IDs stay within fixture budgets") holds a default page of this fixture to 32 KiB and a maximum page to 80 KiB. These regression budgets cover three-byte names and 36-character interaction ids; they do not establish a universal serialized-page ceiling or cover escaped names and longer provider ids. Not run, because it needs real pending interactions and so a billed provider turn: how many items a real follower sees, and how long their titles are.
 
-A conditional read would save less than these figures. An empty page is already 264 bytes and an unchanged answer would still have to return the moving `cursor`. The backend would also still load environments, layouts and pending interactions to compute the token.
+For the measured fixture pages, a conditional read would save less than these figures. An empty page is already 264 bytes and an unchanged answer would still have to return the moving `cursor`. The backend would also still load environments, layouts and pending interactions to compute the token.
 
 **Decisions.**
 
 - **Add a conditional read?**
   - **Leave it until a real follower shows a meaningful page size (recommended).** Taken on 2026-11-05 on the numbers above.
-    - Pros: pending items are few and small compared with a transcript page; public API surface stays as it is; the ceiling is pinned by a test.
-    - Cons: a long-running follower re-downloads them every 2 s.
+    - Pros: the measured fixture pages are small compared with a transcript page; public API surface stays as it is; fixture budgets are pinned by a test.
+    - Cons: a long-running follower re-downloads them every 2 s; the fixture does not bound escaped names or longer provider ids.
   - **An optional `knownToken` on `attention.list`, advertised as a feature, as `session transcript` now does.**
     - Pros: the contract the transcript action already uses.
     - Cons: public API surface, and the backend still has to build the page to compute the token.
@@ -60,7 +60,13 @@ A conditional read would save less than these figures. An empty page is already 
 
 ## Current state
 
-`attention --follow` and `attention.list` are unchanged: no `knownToken`, no new feature flag, nothing for older clients or nodes to rely on. The decision and its bound are recorded in [`control-mcp-voice.md`](../../architecture/control-mcp-voice.md#hearing-about-work-without-asking).
+`attention --follow` and `attention.list` are unchanged: no `knownToken`, no new feature flag, nothing for older clients or nodes to rely on. The decision and fixture evidence are recorded in [`control-mcp-voice.md`](../../architecture/control-mcp-voice.md#hearing-about-work-without-asking).
+
+## Assumptions and decisions
+
+### Task 1: scope the payload evidence to the fixture
+
+On 2026-11-05, qualified the 32/80 KiB regression budgets as applying to the tested three-byte names and 36-character interaction ids. Kept the recommended unconditional polling decision provisional on these measurements and left task 1 open for live measurement. Enforcing a universal byte or id limit would change the public contract; this documentation correction introduces no such limit. Escaped strings and longer provider ids remain outside the fixture guarantee.
 
 ## Constraints and rationale
 

@@ -277,10 +277,11 @@ describe("attention.list", () => {
     expect(decodeAttentionCursor(encodeAttentionCursor(1_234_567))).toBe(1_234_567);
   });
 
-  // `attention --follow` re-reads every pending item on each poll, with no
-  // conditional read, because a page stays this small. Raising these budgets
-  // reopens that decision (docs/todo/cli-and-slash-commands/5560).
-  test("a full page of over-long names stays small enough to re-read on every poll", async () => {
+  // Fixture budgets for three-byte names and 36-character interaction IDs,
+  // not universal page bounds: JSON-escaped names and longer provider IDs can
+  // exceed them. Revisit unconditional polling if this fixture grows or live
+  // measurements warrant it (docs/todo/cli-and-slash-commands/5560).
+  test("pages with three-byte names and 36-character IDs stay within fixture budgets", async () => {
     const { harness, service, stub } = await setup();
     const started = await harness.call<{ tabId: string }>(
       "session.start",

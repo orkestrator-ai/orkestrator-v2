@@ -1,4 +1,5 @@
 import type { AgentActivityState } from "@orkestrator/protocol/agent-activity";
+import type { TurnFailureKind } from "@orkestrator/protocol/agent-usage-limits";
 import type {
   AgentInteractionApplyOutcome,
   AgentInteractionOrigin,
@@ -257,16 +258,26 @@ export class ProviderSessionFailedError extends Error {
   readonly interruption?: ProviderTurnInterruption;
   /** See {@link ProviderSessionObservation.interruptedRequestId}. */
   readonly interruptedRequestId?: string;
+  /**
+   * The bridge's structured `errorCode` for the failure: `usage-limit` when the
+   * provider said the plan allowance is used up. Older bridges never send it.
+   */
+  readonly failureKind?: TurnFailureKind;
 
   constructor(
     agent: ProviderAgent,
     detail: string,
-    options: { interruption?: ProviderTurnInterruption; interruptedRequestId?: string } = {},
+    options: {
+      interruption?: ProviderTurnInterruption;
+      interruptedRequestId?: string;
+      failureKind?: TurnFailureKind;
+    } = {},
   ) {
     super(`The ${agent} session failed: ${detail}`);
     this.name = "ProviderSessionFailedError";
     this.agent = agent;
     this.detail = detail;
+    if (options.failureKind) this.failureKind = options.failureKind;
     if (options.interruption) this.interruption = options.interruption;
     if (options.interruption && options.interruptedRequestId) {
       this.interruptedRequestId = options.interruptedRequestId;
@@ -333,7 +344,7 @@ export async function readProviderStatus(
   >,
   sessionId: string,
   requestId?: string,
-): Promise<ProviderSessionObservation & { error?: string }> {
+): Promise<ProviderSessionObservation & { error?: string; failureKind?: TurnFailureKind }> {
   try {
     const observation = provider.observeSession
       ? await provider.observeSession(sessionId)
@@ -372,6 +383,7 @@ export async function readProviderStatus(
         ...failed,
         ...(settled !== undefined ? { turnSettled: settled } : {}),
         error: error.detail,
+        ...(error.failureKind ? { failureKind: error.failureKind } : {}),
       };
     }
     throw error;
@@ -755,6 +767,8 @@ export interface AgentSessionProvider {
     environmentId: string;
     requestId: string;
     error: string | undefined;
+    /** The bridge's structured kind beside `error`, when it sent one. */
+    failureKind?: TurnFailureKind;
     resends: number;
     /** When the turn is known to have been running by; see `UsageLimitStopInput`. */
     turnStartedAt?: string;

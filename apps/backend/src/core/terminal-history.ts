@@ -18,9 +18,23 @@ export const TERMINAL_HISTORY_PAGE_MAX_BYTES = 256 * 1024;
 export const TERMINAL_HISTORY_PAGE_MAX_ROWS = 1_000;
 export const TERMINAL_HISTORY_SEGMENT_BYTES = 4 * 1024 * 1024;
 export const TERMINAL_HISTORY_PENDING_BYTES = 1024 * 1024;
-export const TERMINAL_HISTORY_PENDING_RECORDS = 256;
 export const TERMINAL_HISTORY_GLOBAL_PENDING_BYTES = 16 * 1024 * 1024;
-export const TERMINAL_HISTORY_GLOBAL_PENDING_RECORDS = 4_096;
+// One PTY chunk becomes one record per line, all queued in a single event-loop
+// turn, before any write can return a slot. So these must hold a large chunk of
+// short lines; the memory limit is the byte bounds above, which charge
+// TERMINAL_HISTORY_RECORD_OVERHEAD_BYTES per record. Each stays just under what
+// its byte bound allows for empty lines.
+export const TERMINAL_HISTORY_PENDING_RECORDS = 12_288;
+export const TERMINAL_HISTORY_GLOBAL_PENDING_RECORDS = 196_608;
+// Rounded up from the 73 bytes a queued record measured beyond its text, so
+// empty lines cannot queue uncounted memory.
+const TERMINAL_HISTORY_RECORD_OVERHEAD_BYTES = 80;
+// Output received before the session's archive is ready, counted in chunks.
+const TERMINAL_HISTORY_PREINIT_CHUNKS = 256;
+const TERMINAL_HISTORY_GLOBAL_PREINIT_CHUNKS = 4_096;
+// A flush starts at this much queued output rather than waiting for the timer.
+const TERMINAL_HISTORY_FLUSH_RECORDS = 256;
+const TERMINAL_HISTORY_FLUSH_BYTES = 256 * 1024;
 const TERMINAL_HISTORY_SCROLLBACK = 2_000;
 const TERMINAL_STATE_MAX_BYTES = 2 * 1024 * 1024;
 const TERMINAL_HISTORY_RECORD_MAX_BYTES = 128 * 1024;
@@ -80,6 +94,7 @@ type Session = {
   queuedBytes: number;
   queuedRecords: number;
   flushTimer: ReturnType<typeof setTimeout> | null;
+  flushQueued: boolean;
   lastCheckpointAt: number;
   bytesSinceCheckpoint: number;
   manifest: Manifest;
@@ -914,6 +929,7 @@ export class TerminalHistory {
       queuedBytes: 0,
       queuedRecords: 0,
       flushTimer: null,
+      flushQueued: false,
       lastCheckpointAt: 0,
       bytesSinceCheckpoint: 0,
       manifest: blankManifest(historyId, incarnation, input.environmentId, input.tabId),
@@ -1009,7 +1025,11 @@ export class TerminalHistory {
   }
 
   private releaseQueuedRecords(session: Session, records: HistoryRecord[]): void {
-    const bytes = records.reduce((sum, record) => sum + Buffer.byteLength(record.text, "utf8"), 0);
+    const bytes = records.reduce(
+      (sum, record) =>
+        sum + Buffer.byteLength(record.text, "utf8") + TERMINAL_HISTORY_RECORD_OVERHEAD_BYTES,
+      0,
+    );
     session.queuedBytes = Math.max(0, session.queuedBytes - bytes);
     session.queuedRecords = Math.max(0, session.queuedRecords - records.length);
     this.queuedBytes = Math.max(0, this.queuedBytes - bytes);
@@ -1050,17 +1070,45 @@ export class TerminalHistory {
   }
 
   private flushPending(session: Session): void {
-    const records = session.pending.splice(0);
-    session.pendingBytes = 0;
-    if (records.length === 0) return;
+    if (session.pending.length === 0 || session.flushQueued) return;
+    session.flushQueued = true;
     this.scheduleIo(session, async () => {
+      // Takes what is pending when it runs, so a backlog becomes one larger
+      // write instead of a queue of small ones that each rewrite the manifest.
+      session.flushQueued = false;
+      const records = session.pending.splice(0);
+      session.pendingBytes = 0;
       try {
         let segment = session.manifest.segments.at(-1);
         let createdSegment = false;
+        // One write per segment per flush: a write for each record is what
+        // made a queue slow to drain, and its slots only return after the write.
+        let batch = "";
+        let batchBytes = 0;
+        let batchLast = 0;
+        const writeBatch = async (target: Manifest["segments"][number]) => {
+          const file = segmentPath(session, target.number);
+          try {
+            await fs.appendFile(file, batch, { encoding: "utf8", mode: 0o600 });
+            await fs.chmod(file, 0o600);
+          } catch (error) {
+            // appendFile can leave a partial batch, and chmod can fail after a
+            // complete append. Keep the file at its last committed boundary so
+            // later appends cannot turn the unaccounted tail into durable rows.
+            await fs.truncate(file, target.bytes).catch(() => {});
+            throw error;
+          }
+          target.bytes += batchBytes;
+          target.last = batchLast;
+          session.manifest.durableThroughSequence = batchLast;
+          batch = "";
+          batchBytes = 0;
+        };
         for (const record of records) {
           const line = `${JSON.stringify(record)}\n`;
           const bytes = Buffer.byteLength(line, "utf8");
-          if (!segment || segment.bytes + bytes > TERMINAL_HISTORY_SEGMENT_BYTES) {
+          if (!segment || segment.bytes + batchBytes + bytes > TERMINAL_HISTORY_SEGMENT_BYTES) {
+            if (segment && batchBytes > 0) await writeBatch(segment);
             segment = {
               number: (segment?.number ?? 0) + 1,
               bytes: 0,
@@ -1070,15 +1118,11 @@ export class TerminalHistory {
             session.manifest.segments.push(segment);
             createdSegment = true;
           }
-          await fs.appendFile(segmentPath(session, segment.number), line, {
-            encoding: "utf8",
-            mode: 0o600,
-          });
-          await fs.chmod(segmentPath(session, segment.number), 0o600);
-          segment.bytes += bytes;
-          segment.last = record.sequence;
-          session.manifest.durableThroughSequence = record.sequence;
+          batch += line;
+          batchBytes += bytes;
+          batchLast = record.sequence;
         }
+        if (segment && batchBytes > 0) await writeBatch(segment);
         await this.pruneSessionSegments(session);
         session.manifest.updatedAt = Date.now();
         await atomicWrite(manifestPath(session), `${JSON.stringify(session.manifest)}\n`);
@@ -1161,9 +1205,9 @@ export class TerminalHistory {
     }
     const bytes = Buffer.byteLength(text, "utf8");
     if (
-      session.preinitArchiveChunks.length >= TERMINAL_HISTORY_PENDING_RECORDS ||
+      session.preinitArchiveChunks.length >= TERMINAL_HISTORY_PREINIT_CHUNKS ||
       session.preinitArchiveBytes + bytes > TERMINAL_HISTORY_PENDING_BYTES ||
-      this.preinitRecords >= TERMINAL_HISTORY_GLOBAL_PENDING_RECORDS ||
+      this.preinitRecords >= TERMINAL_HISTORY_GLOBAL_PREINIT_CHUNKS ||
       this.preinitBytes + bytes > TERMINAL_HISTORY_GLOBAL_PENDING_BYTES
     ) {
       this.markHistoryGap(session);
@@ -1176,7 +1220,7 @@ export class TerminalHistory {
   }
 
   private enqueueHistoryRecord(session: Session, text: string, at: number): void {
-    const bytes = Buffer.byteLength(text, "utf8");
+    const bytes = Buffer.byteLength(text, "utf8") + TERMINAL_HISTORY_RECORD_OVERHEAD_BYTES;
     const hasCapacity =
       session.queuedRecords < TERMINAL_HISTORY_PENDING_RECORDS &&
       session.queuedBytes + bytes <= TERMINAL_HISTORY_PENDING_BYTES &&
@@ -1196,6 +1240,12 @@ export class TerminalHistory {
     this.queuedBytes += bytes;
     this.queuedRecords += 1;
     this.scheduleFlush(session);
+    if (
+      session.pending.length >= TERMINAL_HISTORY_FLUSH_RECORDS ||
+      session.pendingBytes >= TERMINAL_HISTORY_FLUSH_BYTES
+    ) {
+      this.flushPending(session);
+    }
   }
 
   private scheduleCheckpoint(session: Session): void {
@@ -1539,7 +1589,23 @@ export class TerminalHistory {
     session.flushTimer = null;
     await session.parseTail;
     this.flushPending(session);
-    await session.ioTail;
+    // Queue the entire read with writes and retention. Waiting for the current
+    // tail alone lets a later flush expose a partial batch or an empty segment.
+    let page: TerminalHistoryPage | null = null;
+    let failure: { error: unknown } | undefined;
+    await this.scheduleIo(session, async () => {
+      try {
+        page = await this.readPage(session, cursor);
+      } catch (error) {
+        failure = { error };
+      }
+    });
+    if (failure) throw failure.error;
+    if (session.manifest.completed) await this.evictCompletedSessions();
+    return page;
+  }
+
+  private async readPage(session: Session, cursor?: string): Promise<TerminalHistoryPage> {
     await this.acquirePageRead();
     try {
       await this.pageReadHook?.();
@@ -1620,7 +1686,6 @@ export class TerminalHistory {
       };
     } finally {
       this.releasePageRead();
-      if (session.manifest.completed) await this.evictCompletedSessions();
     }
   }
 

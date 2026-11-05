@@ -90,6 +90,12 @@ interface UIState {
    * changes another client's freshness or the backend's own cadence.
    */
   dataSaving: boolean;
+  /**
+   * Leaf-mode coordinator gates the user chose to open anyway, keyed by
+   * `leafCoordinatorGateKey`. Kept for the app session only: not persisted, so
+   * the notice returns after a restart.
+   */
+  openedLeafCoordinators: string[];
 
   // Actions
   selectProject: (projectId: string | null) => void;
@@ -135,6 +141,8 @@ interface UIState {
   /** Reset zoom to 100% */
   resetZoom: () => void;
   setDataSaving: (enabled: boolean) => void;
+  /** Remember, for this app session, that the user opened a gated coordinator. */
+  openLeafCoordinator: (key: string) => void;
 }
 
 export const createUIStore = () =>
@@ -161,6 +169,7 @@ export const createUIStore = () =>
         multiReviewGraphHeight: null,
         pipelineGraphHeight: null,
         dataSaving: false,
+        openedLeafCoordinators: [],
 
         // Actions
         toggleWorkBucketCollapsed: (bucket) =>
@@ -295,6 +304,13 @@ export const createUIStore = () =>
         resetZoom: () => set({ zoomLevel: ZOOM_DEFAULT }),
 
         setDataSaving: (enabled) => set({ dataSaving: enabled }),
+
+        openLeafCoordinator: (key) =>
+          set((state) =>
+            state.openedLeafCoordinators.includes(key)
+              ? state
+              : { openedLeafCoordinators: [...state.openedLeafCoordinators, key] },
+          ),
       }),
       {
         name: windowStorageKey("ui-storage"),

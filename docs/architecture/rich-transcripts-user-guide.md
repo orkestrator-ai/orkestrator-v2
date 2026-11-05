@@ -92,8 +92,11 @@ without blur and resize the window; it fits the width of the transcript.
 - **Replay.** A published report reopens from its stored bytes, including when
   the preview renderer is unavailable. Reopening shows the published revision,
   never a later draft.
-- **Find.** Find matches a report's summary. Text inside the document is not
-  yet included; use the browser-style selection inside the report, or **Source**.
+- **Find.** Find matches a report's summary immediately. Once the document has
+  been displayed in this session, Find also includes its text up to 64 Ki
+  characters. A match leads to the report's card without highlighting the text
+  inside its frame. An open Find bar picks up newly loaded text on the next
+  query or conversation update.
 
 Selecting text keeps a report open while it stays in the transcript's rendered
 range. As with any message, scrolling far enough away ends the selection.

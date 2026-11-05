@@ -29,7 +29,7 @@ import {
 import { randomUUID } from "node:crypto";
 import { browserPreviewAnchorKit } from "./browser-preview-anchor-script.js";
 import {
-  boundedScreenshotDataUrl,
+  boundedScreenshotPng,
   captureImageRepresentation,
   documentMask,
   maskCaptureImage,
@@ -47,7 +47,7 @@ import { parseViewport, pickRect } from "./browser-preview-capture-parse.js";
 import {
   BrowserPreviewCaptureSpoolError,
   createBrowserPreviewCaptureId,
-  decodePngDataUrl,
+  decodePngBytes,
 } from "./browser-preview-capture-store.js";
 import { responsiveSetInput } from "./browser-preview-capture-validation.js";
 import type { CaptureStoreLike } from "./browser-preview-capture.js";
@@ -271,7 +271,7 @@ export async function captureResponsiveSet(
           continue;
         }
         const nativeSize = captureImageRepresentation(image);
-        const decoded = decodePngDataUrl(boundedScreenshotDataUrl(masked.image));
+        const decoded = decodePngBytes(boundedScreenshotPng(masked.image));
         if (evidenceBytes + decoded.bytes.length > WEB_ANNOTATION_LIMITS.briefAttachmentBytes) {
           fail(width, "too-large");
           continue;

@@ -1286,6 +1286,20 @@ test("text, region, and page modes capture end to end; open roots select inner c
     expect(Math.abs(region.capture.target.rect.height - canvas.height)).toBeLessThanOrEqual(3);
   }
   expect(region.imageDataUrl ?? region.capture.redaction.imageExcluded).toBeTruthy();
+  if (!region.capture.redaction.imageExcluded) {
+    expect(region.regionCrop?.imageDataUrl).toMatch(/^data:image\/png;base64,/);
+    const crop = region.regionCrop!;
+    const target = region.capture.target;
+    if (target.kind !== "region" || !target.imageRect) throw new Error("Missing region geometry");
+    expect(crop.sourceRect).toEqual(target.imageRect);
+    expect(crop.width).toBe(Math.round(target.imageRect.width));
+    expect(crop.height).toBe(Math.round(target.imageRect.height));
+    const decodedSize = await s().app.evaluate(
+      ({ nativeImage }, dataUrl) => nativeImage.createFromDataURL(dataUrl).getSize(),
+      crop.imageDataUrl,
+    );
+    expect(decodedSize).toEqual({ width: crop.width, height: crop.height });
+  }
   await saveCapture(region.descriptor.captureId, "Label the chart axes.");
 
   // Page mode completes without any selection gesture.

@@ -1,3 +1,4 @@
+import { turnFailureKind } from "@orkestrator/protocol/agent-usage-limits";
 import { AGENT_INTERACTION_LIMITS } from "@orkestrator/protocol/agent-interactions";
 import { POLICY_WIDENING_REFUSED_CODE } from "@orkestrator/protocol/execution-policy-narrowing";
 import { isContentRevision } from "@orkestrator/protocol/session-activity-batch";
@@ -304,7 +305,13 @@ export function throwExplainedTurnFailure(
       : undefined;
   const detail = typeof body.error === "string" ? body.error.trim().slice(0, 4_000) : "";
   if (detail) {
-    throw new ProviderSessionFailedError(agent, detail, { interruption, interruptedRequestId });
+    // Bridges that predate `errorCode` send none; the text still classifies.
+    const failureKind = turnFailureKind(body.errorCode);
+    throw new ProviderSessionFailedError(agent, detail, {
+      interruption,
+      interruptedRequestId,
+      ...(failureKind ? { failureKind } : {}),
+    });
   }
   return interruption
     ? { interruption, ...(interruptedRequestId ? { interruptedRequestId } : {}) }

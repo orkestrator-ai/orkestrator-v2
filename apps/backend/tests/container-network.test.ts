@@ -470,7 +470,10 @@ describe("allowlist edits in place", () => {
 
   test("a backend without the registry writer saves the list but does not push it", async () => {
     const { context, dir } = await allowlistContext(["one.example", "two.example"]);
-    context.registryWriterLease = new BlockedRegistryWriter(new RegistrySchemaBlockedError());
+    context.registryWriterLease = new BlockedRegistryWriter(
+      new RegistrySchemaBlockedError(),
+      "schema-incompatible",
+    );
     const tarPath = await manifestTar({ "network-policy": 2, "network-refresh": 1 });
     await withDockerScript(
       allowlistDocker({

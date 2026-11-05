@@ -4,6 +4,7 @@ import { isNodeReadCommand } from "@orkestrator/protocol/command-nodes";
 import type { BackendId } from "@orkestrator/protocol/federation";
 
 import { NodeOutcomeUnknownError, NodeUnavailableError } from "./node-link.js";
+import { WORKSPACE_ADMINISTRATION_COMMANDS } from "./workspace-grant-scope.js";
 
 /**
  * Node-qualified command routing for the portal: a client names the node and
@@ -12,7 +13,9 @@ import { NodeOutcomeUnknownError, NodeUnavailableError } from "./node-link.js";
  * Administrative commands never cross: they belong to the node's own user
  * (token rotation, attachment, grants) or would let one node reach past
  * another (registry commands of a node in leaf mode). The same list applies
- * to client grants and to the relay.
+ * to client grants and to the relay, which also refuse the commands below
+ * (`isWorkspaceExcludedCommand`) and the machine's own administration
+ * (`WORKSPACE_ADMINISTRATION_COMMANDS`).
  *
  * A write whose answer was lost is recorded as outcome-unknown against the
  * node and never resubmitted automatically.
@@ -63,6 +66,7 @@ export const NODE_EXCLUDED_COMMANDS: ReadonlySet<string> = new Set([
   "list_node_action_requests",
   // Each machine's standing permission is for its own coordinators only.
   "run_granted_agent_account_switch",
+  "run_timer_agent_account_switch",
   "resolve_node_action_request",
   // Transfers and comparisons are run by the command node, not through it.
   "transfer_node_files",
@@ -138,9 +142,16 @@ export const NODE_EXCLUDED_COMMANDS: ReadonlySet<string> = new Set([
   "get_control_mcp_settings",
 ]);
 
+/**
+ * Commands a workspace client (a client grant, or the relay) never runs: the
+ * node-excluded commands, the node-link plumbing below and the machine's own
+ * administration. Everything else a workspace uses stays open, terminals
+ * included.
+ */
 export function isWorkspaceExcludedCommand(command: string): boolean {
   return (
     isNodeExcludedCommand(command) ||
+    WORKSPACE_ADMINISTRATION_COMMANDS.has(command) ||
     [
       "deliver_node_mail",
       "get_node_project_coordinator",

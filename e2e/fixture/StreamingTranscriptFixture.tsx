@@ -1,3 +1,4 @@
+import { TranscriptPromptNavigator } from "../../apps/web/src/components/chat/TranscriptPromptNavigator";
 import { PrPaneTranscriptFrame } from "./PrPaneTranscriptFrame";
 import { useLayoutEffect, useMemo, useState } from "react";
 import type { StateSnapshot } from "react-virtuoso";
@@ -354,7 +355,14 @@ export function StreamingTranscriptFixture() {
       </button>
       <output data-testid="transcript-row-count">{rows.length}</output>
       <output data-testid="list-generation">{listGeneration}</output>
-      <div className="flex flex-col" style={{ height: 800 }}>
+      <div className="@container relative flex flex-col" style={{ height: 800 }}>
+        {query.has("promptRail") ? (
+          <TranscriptPromptNavigator
+            messages={rows}
+            controller={scrollProps.controller}
+            bottomInsetPx={0}
+          />
+        ) : null}
         <VirtualizedMessageList
           key={listGeneration}
           messages={rows}

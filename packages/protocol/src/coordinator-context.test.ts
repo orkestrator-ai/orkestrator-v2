@@ -7,6 +7,7 @@ import {
   COORDINATOR_ENVIRONMENT_CHOICE_RULE,
   COORDINATOR_MESSAGING_OFF_NOTE,
   COORDINATOR_PR_RULE,
+  COORDINATOR_REQUEST_ID_RULE,
   COORDINATOR_ROUTING_RULE,
   COORDINATOR_TIMERS_AND_ACCOUNTS_RULE,
   coordinatorDelegationBucket,
@@ -87,11 +88,20 @@ describe("buildCoordinatorContext", () => {
       COORDINATOR_AGENTS_MD_RULE,
       COORDINATOR_TIMERS_AND_ACCOUNTS_RULE,
       COORDINATOR_ASYNC_CONTRACT,
+      COORDINATOR_REQUEST_ID_RULE,
     ]) {
       expect(block).toContain(rule);
     }
     expect(block).toContain("latest commit of the base branch main");
     expect(block).not.toContain(COORDINATOR_MESSAGING_OFF_NOTE);
+  });
+
+  test("request ids are new per action, and retired tools are not named", () => {
+    const block = buildCoordinatorContext(input());
+    // "Reuse requestId on retry" alone let a fresh main pick an earlier conversation's id.
+    expect(block).toContain("new unique requestId");
+    expect(block).not.toContain("Reuse requestId on retry");
+    expect(block).not.toContain("start_multi_review");
   });
 
   test("the timers rule follows the scheduling setting", () => {

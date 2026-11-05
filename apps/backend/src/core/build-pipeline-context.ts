@@ -18,6 +18,8 @@ export interface BranchPushState {
  * operations every part needs: the control-record save, the locked mutation
  * and the workflow-result helpers.
  */
+import { workerMailTurnFor } from "./pipeline-worker-identity.js";
+import { ProvisionalFindingInbox } from "./review-provisional-findings.js";
 import { randomUUID } from "node:crypto";
 import type { ReviewFanoutConcurrency } from "./review-fanout-scheduler.js";
 import type { MultiReviewEfficiencyObserver } from "./multi-review-efficiency.js";
@@ -40,11 +42,7 @@ import type { WorkflowResultService } from "./workflow-result-service.js";
 import { WorkflowResultRollout } from "./workflow-result-rollout.js";
 import { BuildPipelineTranscriptCheckpoints } from "./build-pipeline-transcript-checkpoints.js";
 import type { WorkflowResultKind } from "@orkestrator/protocol/workflow-results";
-import { pipelineWorkerTabId } from "@orkestrator/protocol/pipeline-worker-mail";
-import {
-  pipelineWorkerMailCapability,
-  type PipelineWorkerMailTurn,
-} from "./pipeline-worker-identity.js";
+import { type PipelineWorkerMailTurn } from "./pipeline-worker-identity.js";
 import {
   buildPipelineSessionStage,
   buildPipelineStage,
@@ -183,6 +181,8 @@ export class BuildPipelineContext {
 
   /** Bound by the backend once agent mail exists; null in narrow tests. */
   workerMailbox: PipelineWorkerMailbox | null = null;
+  /** Findings live reviewers report; a pass moves them onto the reviewer record. */
+  readonly provisionalFindings: ProvisionalFindingInbox;
 
   /** The keyed driver (step 08); `null` on the rollback tick or before init. */
   supervisor: KeyedWorkflowSupervisor<BuildPipelineObligation> | null = null;
@@ -232,6 +232,12 @@ export class BuildPipelineContext {
     readonly invoke: CommandInvoker,
     readonly options: BuildPipelineServiceOptions = {},
   ) {
+    this.provisionalFindings = new ProvisionalFindingInbox({
+      slotOpen: async (scope, resultKey) =>
+        (await options.workflowResults?.status(scope, resultKey))?.lifecycle === "open",
+      // The supervisor's next tick collects them, as it does an accepted result.
+      wake: () => {},
+    });
     this.keyed = options.keyedScheduling ?? keyedSchedulingEnabled("build-pipeline");
   }
 
@@ -324,39 +330,15 @@ export class BuildPipelineContext {
     sessionKey: string,
     agent: string | undefined,
   ): PipelineWorkerMailTurn | undefined {
-    if (!agent) return undefined;
-    const tabId = pipelineWorkerTabId(sessionKey);
-    try {
-      if (agent === "opencode") {
-        // Worker identity is wired (`resolveWorkerToolConnection`) and the
-        // signing identity exists (`workflowResults`).
-        const workflowResults = this.options.workflowResults;
-        if (!workflowResults || !this.options.resolveWorkerToolConnection) return undefined;
-        return {
-          workerMail: {
-            environmentId: pipeline.environmentId,
-            tabId,
-            capability: pipelineWorkerMailCapability(workflowResults, {
-              environmentId: pipeline.environmentId,
-              projectId: pipeline.projectId,
-              tabId,
-            }),
-          },
-        };
-      }
-      if (!this.options.resolveWorkerToolConnection) return undefined;
-      return {
-        agentMcp: this.options.resolveWorkerToolConnection(
-          pipeline.environmentId,
-          pipeline.projectId,
-          pipeline.environmentType === "local" ? "host" : "container",
-          tabId,
-        ),
-      };
-    } catch {
-      // The agent tools server is down: the turn keeps the bridge's own.
-      return undefined;
-    }
+    return workerMailTurnFor({
+      environmentId: pipeline.environmentId,
+      projectId: pipeline.projectId,
+      target: pipeline.environmentType === "local" ? "host" : "container",
+      sessionKey,
+      agent,
+      signer: this.options.workflowResults,
+      resolveConnection: this.options.resolveWorkerToolConnection,
+    });
   }
 
   /**
@@ -534,6 +516,13 @@ export class BuildPipelineContext {
       pipeline,
       expectedRevision,
     );
+    this.provisionalFindings.track({
+      id: pipeline.id,
+      environmentId: pipeline.environmentId,
+      projectId: pipeline.projectId,
+      phase: pipeline.phase,
+      reviewers: pipeline.reviewFanout?.reviewers ?? [],
+    });
     await this.storage.buildPipelineTranscriptFault("after-control-save", pipeline.id);
     if (saved.id === pipeline.id) {
       checkpoint.settle();

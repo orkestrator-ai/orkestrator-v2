@@ -9,6 +9,7 @@ import {
   type CaptureContents,
   type Json,
 } from "./browser-preview-capture-harness";
+import { pngBytes } from "./png-fixture";
 
 const MASK = [0x28, 0x23, 0x1f, 0xff];
 
@@ -40,7 +41,7 @@ async function captured(harness: ReturnType<typeof createHarness>) {
   const status = await harness.manager.getCaptureStatus("browser-1");
   if (status.status !== "captured")
     throw new Error(`expected capture, got ${JSON.stringify(status)}`);
-  return { status, pending: (await harness.manager.readPendingCapture(status.captureId))! };
+  return { status, pending: (await harness.manager.readPendingCaptureWire(status.captureId))! };
 }
 
 describe("geometry at multiple zoom levels, device scales, and scroll offsets", () => {
@@ -163,6 +164,35 @@ describe("geometry at multiple zoom levels, device scales, and scroll offsets", 
   }
 });
 
+describe("a region crop across IPC", () => {
+  test("the wire read carries full and cropped PNG bytes without data URLs", async () => {
+    const harness = createHarness({ cropping: true });
+    const contents = await harness.attach();
+    const viewport = { width: 1_000, height: 600 };
+    contents.image = { width: viewport.width, height: viewport.height };
+    contents.probe = {
+      connected: true,
+      rect: { x: 100, y: 50, width: 320, height: 120 },
+      viewport,
+      scroll: { x: 0, y: 0 },
+      devicePixelRatio: 1,
+      sensitive: [],
+      sensitiveComplete: true,
+    };
+    await start(harness.manager, "region");
+    contents.selection = regionSelection(viewport, { x: 0, y: 0 }, 1);
+    const { pending } = await captured(harness);
+    const sourceRect = { x: 100, y: 50, width: 320, height: 120 };
+    const crop = pending.regionCrop!;
+    expect(Buffer.from(crop.imageBytes).equals(pngBytes(320, 120))).toBe(true);
+    expect(crop).toMatchObject({ width: 320, height: 120, sourceRect });
+    expect("imageDataUrl" in crop).toBe(false);
+
+    expect(Buffer.from(pending.imageBytes!).equals(pngBytes(1_000, 600))).toBe(true);
+    expect("imageDataUrl" in pending).toBe(false);
+  });
+});
+
 describe("capture lifecycle hazards", () => {
   test("hot reload replacing the target during capture spools a stale capture", async () => {
     const harness = createHarness();
@@ -184,7 +214,7 @@ describe("capture lifecycle hazards", () => {
     contents.selection = elementSelection();
     contents.onCapture = () => contents.reloadDocument();
     const { pending } = await captured(harness);
-    expect(pending.imageDataUrl).toBeNull();
+    expect(pending.imageBytes).toBeNull();
     expect(pending.capture.stale?.reason).toContain("navigated");
   });
 
@@ -361,7 +391,7 @@ describe("result capture", () => {
     const status = await startResult(harness, { masks: [manualMask] });
     expect(status.status).toBe("captured");
     expect(contents.settleCalls).toBe(1);
-    const pending = (await harness.manager.readPendingCapture((status as Json).captureId))!;
+    const pending = (await harness.manager.readPendingCaptureWire((status as Json).captureId))!;
     expect(pending.capture.producer).toBe("result-capture");
     expect(pending.descriptor.purpose).toBe("result");
     expect(pending.result).toEqual({
@@ -387,10 +417,10 @@ describe("result capture", () => {
     const moving = { ...contents.probe, rect: { x: 0, y: 0, width: 10, height: 10 } };
     contents.probes = [contents.probe, moving, contents.probe, moving];
     const status = await startResult(harness, {});
-    const pending = (await harness.manager.readPendingCapture((status as Json).captureId))!;
+    const pending = (await harness.manager.readPendingCaptureWire((status as Json).captureId))!;
     expect(pending.result?.stability).toBe("unstable");
     expect(pending.capture.stale).toBeUndefined();
-    expect(pending.imageDataUrl).not.toBeNull();
+    expect(pending.imageBytes).not.toBeNull();
   });
 
   test("masks remembered from the acknowledged original capture are reapplied", async () => {
@@ -400,7 +430,8 @@ describe("result capture", () => {
     contents.selection = elementSelection();
     const original = await captured(harness);
     await harness.manager.replacePendingCaptureImage(original.status.captureId, {
-      imageDataUrl: original.pending.imageDataUrl,
+      imageDataUrl: null,
+      imageBytes: original.pending.imageBytes!,
       manualRegions: 0,
       regions: [{ x: 400, y: 200, width: 100, height: 60 }],
     });
@@ -410,7 +441,7 @@ describe("result capture", () => {
       backendCaptureId: "capture-original",
     });
     const status = await startResult(harness, { originalCaptureId: "capture-original" });
-    const pending = (await harness.manager.readPendingCapture((status as Json).captureId))!;
+    const pending = (await harness.manager.readPendingCaptureWire((status as Json).captureId))!;
     expect(pending.result?.masks).toContainEqual({
       source: "manual",
       rect: { x: 200, y: 220, width: 50, height: 30 },

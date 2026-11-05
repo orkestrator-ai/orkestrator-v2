@@ -243,12 +243,14 @@ describe("BuildLaunchDialog", () => {
             "Reviewers run read-only where the provider enforces it",
           );
           expect(note?.textContent).not.toContain("write access");
+          expect(note?.textContent).toContain("the review is marked stale and carries on");
+          expect(note?.textContent).not.toContain("rejects a result");
         } else {
           expect(note?.textContent).toContain("Full workspace write access");
+          expect(note?.textContent).toContain(
+            "rejects a result if HEAD moved or a Git-visible path appeared or disappeared",
+          );
         }
-        expect(note?.textContent).toContain(
-          "rejects a result if HEAD moved or a Git-visible path appeared or disappeared",
-        );
         expect(note?.textContent).toContain(
           "Ignored files, .git contents, paths outside the worktree and edits to files that were already uncommitted are not checked",
         );

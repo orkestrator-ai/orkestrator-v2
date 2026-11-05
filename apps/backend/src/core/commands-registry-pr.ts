@@ -144,7 +144,7 @@ export function registerPullRequestCommands(
     );
   });
 
-  register("detect_pr_local", async ({ environmentId, branch }, { storage }) => {
+  register("detect_pr_local", async ({ environmentId, branch }, { storage, runtime }) => {
     let env = await storage.getEnvironment(asString(environmentId, "environmentId"));
     if (!env) throw new Error(`Environment not found: ${environmentId}`);
     if (!env.worktreePath)
@@ -159,7 +159,7 @@ export function registerPullRequestCommands(
         prUrl: null,
         prState: null,
       },
-      { storage },
+      { storage, gitHubCli: runtime.gitHubCli },
     );
     if (!detection) return null;
     return {
@@ -345,6 +345,7 @@ export function registerPullRequestCommands(
                   prState: "merged",
                 },
                 context.storage,
+                context.runtime.gitHubCli,
               ).catch(() => undefined);
             }
 

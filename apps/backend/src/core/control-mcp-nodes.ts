@@ -1,10 +1,6 @@
-import { STARTUP_AGENT_TAB_ID } from "@orkestrator/protocol/tab-initial-prompt";
 import { offlineLaunchMessage } from "@orkestrator/protocol/ticket-sync";
 import type { McpServer } from "@modelcontextprotocol/server";
-import {
-  COORDINATOR_WORKER_PROMPT_FORMAT_RULE,
-  coordinatorRuntimeId,
-} from "@orkestrator/protocol/coordinator";
+import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
 import type { NodeStatus } from "@orkestrator/protocol/command-nodes";
 import { repositoryHint, type NodeSummariesResult } from "@orkestrator/protocol/node-summaries";
 import { z } from "zod";
@@ -14,7 +10,6 @@ import { readNodeMachineLoad, readOwnMachineLoad } from "./control-mcp-machine-l
 import {
   compactMessages,
   environmentSummary,
-  launchEnvironmentCreateInput,
   nativeTab,
   paneTabs,
   type ControlMcpInvoker,
@@ -23,13 +18,14 @@ import {
 /**
  * Cross-node coordinator tools (docs/architecture/command-nodes.md,
  * "Coordinators"). A coordinator on a command node can:
- * - list the connected nodes, each machine's version, OS and load, and their
- *   environments for its project;
- * - create environments on another node (its own node stays the default:
- *   that is launch_environment);
- * - read an environment directly (state, tabs, transcript) and start, stop,
- *   prompt or message it;
- * - ask the user to delete an environment. It never deletes one itself: the
+ * - list the connected nodes, each machine's version, OS and load;
+ * - read a file, diff and test results of an environment on another node;
+ * - ask the user to delete an environment.
+ *
+ * Everything else a coordinator does on another node goes through the
+ * ordinary tools with nodeId (launch_environment, start_environment,
+ * send_prompt_to_tab, send_message and the reads), which `createNodeTargets`
+ * below routes. It never deletes one itself: the
  *   request waits for the user's explicit confirmation naming the node and
  *   the environment.
  *
@@ -70,8 +66,6 @@ const WRITE = {
   openWorldHint: true,
 };
 const MAX_TRANSCRIPT_MESSAGES = 100;
-const MAX_PROMPT_LENGTH = 100_000;
-const MAX_BODY_BYTES = 32 * 1024;
 
 const nodeIdSchema = z.string().trim().min(1).max(200).describe("A nodeId from list_nodes.");
 
@@ -261,56 +255,11 @@ export function registerNodeTools(
   );
 
   server.registerTool(
-    "list_node_environments",
-    {
-      title: "List environments on connected nodes",
-      description:
-        "Environments of this project on one connected node, or on every connected node when nodeId is omitted. Names, status and agent activity only. list_environments reports the same.",
-      inputSchema: z.object({ nodeId: nodeIdSchema.optional() }),
-      annotations: READ,
-    },
-    async ({ nodeId }) => {
-      await status();
-      const [summaries, hint] = await Promise.all([
-        invoke<NodeSummariesResult>("get_node_summaries", nodeId ? { nodeIds: [nodeId] } : {}),
-        ownRepository(),
-      ]);
-      const nodes = summaries.nodes.map((node) => {
-        const project = hint
-          ? node.projects.find((entry) => entry.repositoryHint === hint)
-          : undefined;
-        return {
-          nodeId: node.nodeId,
-          name: node.view.displayName,
-          available: node.available,
-          freshness: node.freshness,
-          environments: project
-            ? node.environments
-                .filter(
-                  (environment) =>
-                    environment.projectId === project.ref.projectId && !environment.isProjectHome,
-                )
-                .map((environment) => ({
-                  environmentId: environment.ref.environmentId,
-                  name: environment.name,
-                  status: environment.status,
-                  activity: environment.activity,
-                  ...(environment.branch ? { branch: environment.branch } : {}),
-                }))
-            : [],
-          hasProject: Boolean(project),
-        };
-      });
-      return result({ nodes });
-    },
-  );
-
-  server.registerTool(
     "read_node_environment",
     {
       title: "Read an environment on a connected node",
       description:
-        "Read one environment on another node directly: its state and tabs; with tabId a bounded transcript of that tab; with include its Git status and diff, a text file (path) and its build pipeline (test) results. Read-only. For state and transcripts, get_environment, list_tabs, get_tab_state and get_tab_transcript take nodeId as well.",
+        "Read a text file (include file, with path) of an environment on another node, with its state and tabs; include diff and tests add its Git status and diff and its build pipeline results. Read-only. For state, tabs and transcripts use get_environment, list_tabs, get_tab_state and get_tab_transcript with nodeId; for a worker's changes, get_worker_changes with nodeId.",
       inputSchema: z.object({
         nodeId: nodeIdSchema,
         environmentId: z.string().trim().min(1).max(200),
@@ -366,184 +315,6 @@ export function registerNodeTools(
   );
 
   server.registerTool(
-    "launch_node_environment",
-    {
-      title: "Launch an environment on a connected node",
-      description:
-        "Older form of launch_environment with nodeId, which is preferred: it also validates the agent and model on that node and reports the selection. Check list_nodes before placement. Stay on this node unless load or OS gives a clear reason to move, or the user requests another node. The worker reports back to you by mail.",
-      inputSchema: z.object({
-        requestId: z.string().trim().min(1).max(256),
-        nodeId: nodeIdSchema,
-        environmentType: z.enum(["local", "containerized"]).default("local"),
-        name: z.string().trim().min(1).max(200).optional(),
-        agent: z.enum(["claude", "codex", "cursor", "grok", "opencode", "pi"]),
-        modelId: z.string().trim().min(1).max(500).optional(),
-        reasoningId: z.string().trim().min(1).max(100).optional(),
-        conversationMode: z.enum(["plan", "build"]).default("build"),
-        prompt: z
-          .string()
-          .trim()
-          .min(1)
-          .max(MAX_PROMPT_LENGTH)
-          .describe(COORDINATOR_WORKER_PROMPT_FORMAT_RULE),
-        baseBranch: z.string().trim().min(1).max(500),
-        baseCommit: z.string().regex(/^[0-9a-f]{40}$/i),
-      }),
-      annotations: { ...WRITE, destructiveHint: true },
-    },
-    async (input) => {
-      const target = await nodeTarget(input.nodeId);
-      const { nodeId: _nodeId, ...launch } = input;
-      // The same launch as launch_environment with nodeId: a delegation this
-      // conversation is woken for once, when the worker's turn ends.
-      const launched = await invoke<unknown>("launch_coordinator_node_environment", {
-        scope,
-        requestId: input.requestId,
-        nodeId: target.nodeId,
-        input: launchEnvironmentCreateInput({ ...launch, projectId: scope.projectId } as never),
-      });
-      const environment = isRecord(launched) ? launched.environment : null;
-      if (!isRecord(environment) || typeof environment.id !== "string") {
-        throw new Error("Environment creation on that node returned no environment.");
-      }
-      const startError =
-        isRecord(launched) && typeof launched.startError === "string"
-          ? launched.startError
-          : undefined;
-      return result({
-        nodeId: input.nodeId,
-        node: target.nodeName,
-        environmentId: environment.id,
-        tabId: STARTUP_AGENT_TAB_ID,
-        status: startError ? "created" : "accepted",
-        ...(startError ? { error: startError } : {}),
-      });
-    },
-  );
-
-  for (const [tool, command, title] of [
-    [
-      "start_node_environment",
-      "start_environment_background",
-      "Start an environment on a connected node",
-    ],
-    ["stop_node_environment", "stop_environment", "Stop an environment on a connected node"],
-  ] as const) {
-    server.registerTool(
-      tool,
-      {
-        title,
-        description: `${title}. It never deletes anything.`,
-        inputSchema: z.object({
-          nodeId: nodeIdSchema,
-          environmentId: z.string().trim().min(1).max(200),
-        }),
-        annotations: WRITE,
-      },
-      async ({ nodeId, environmentId }) => {
-        const target = await nodeTarget(nodeId);
-        await target.environment(environmentId);
-        await target.call(command, { environmentId });
-        return result({ nodeId, environmentId, status: "accepted" });
-      },
-    );
-  }
-
-  server.registerTool(
-    "send_prompt_to_node_tab",
-    {
-      title: "Prompt an agent tab on a connected node",
-      description:
-        "Older form of send_prompt_to_tab with nodeId, which is preferred: it also makes you wait for that worker's answer like a local delegation.",
-      inputSchema: z.object({
-        requestId: z.string().trim().min(1).max(256),
-        nodeId: nodeIdSchema,
-        environmentId: z.string().trim().min(1).max(200),
-        tabId: z.string().trim().min(1).max(200),
-        prompt: z
-          .string()
-          .trim()
-          .min(1)
-          .max(MAX_PROMPT_LENGTH)
-          .describe(COORDINATOR_WORKER_PROMPT_FORMAT_RULE),
-      }),
-      annotations: { ...WRITE, destructiveHint: true },
-    },
-    async ({ requestId, nodeId, environmentId, tabId, prompt }) => {
-      const target = await nodeTarget(nodeId);
-      await target.environment(environmentId);
-      const layout = await target.call<unknown>("get_pane_layout", { environmentId });
-      const native = nativeTab(layout, tabId);
-      if (!native) throw new Error(`Native agent tab not found: ${tabId}`);
-      const outcome = await target.call<unknown>(
-        "dispatch_native_agent_intent",
-        {
-          environmentId,
-          agent: native.agent,
-          logicalSessionKey: `env-${environmentId}:${tabId}`,
-          requestId,
-          prompt,
-        },
-        `prompt:${requestId}`,
-      );
-      // Asking a worker something is a delegation, as with send_prompt_to_tab.
-      const opened = await invoke<unknown>("open_coordinator_node_delegation", {
-        scope,
-        nodeId,
-        environmentId,
-        tabId,
-        requestId,
-      }).catch(() => null);
-      return result({
-        nodeId,
-        environmentId,
-        tabId,
-        ...(isRecord(outcome) ? outcome : {}),
-        ...(isRecord(opened) && opened.opened === true ? { delivery: "async" } : {}),
-      });
-    },
-  );
-
-  server.registerTool(
-    "send_node_message",
-    {
-      title: "Message an agent on a connected node",
-      description:
-        "Older form of send_message with nodeId, which is preferred. Mail to an agent tab of an environment on another node; it wakes that agent, which may reply to you.",
-      inputSchema: z.object({
-        requestId: z.string().trim().min(1).max(256),
-        nodeId: nodeIdSchema,
-        environmentId: z.string().trim().min(1).max(200),
-        tabId: z.string().trim().min(1).max(200).optional(),
-        subject: z.string().trim().max(200).optional(),
-        body: z
-          .string()
-          .min(1)
-          .refine(
-            (value) => Buffer.byteLength(value, "utf8") <= MAX_BODY_BYTES,
-            "body must be at most 32 KiB",
-          ),
-      }),
-      annotations: { ...WRITE, destructiveHint: true },
-    },
-    async ({ requestId, nodeId, environmentId, tabId, subject, body }) => {
-      const target = await nodeTarget(nodeId);
-      await target.environment(environmentId);
-      // The same delivery as send_message with nodeId.
-      const delivered = await invoke<unknown>("send_coordinator_node_mail", {
-        scope,
-        nodeId: target.nodeId,
-        requestId,
-        toEnvironmentId: environmentId,
-        ...(tabId ? { toTabId: tabId } : {}),
-        ...(subject ? { subject } : {}),
-        body,
-      });
-      return result({ nodeId, environmentId, delivered: isRecord(delivered) ? delivered : true });
-    },
-  );
-
-  server.registerTool(
     "request_environment_deletion",
     {
       title: "Ask the user to confirm deleting an environment",
@@ -592,15 +363,18 @@ export function registerNodeTools(
   );
 }
 
-/** Node tools and the capability each needs (mirrors the coordinator capability map). */
+/**
+ * Node tools and the capability each needs (mirrors the coordinator capability map).
+ *
+ * The older `*_node_*` forms of list_environments, launch_environment,
+ * start_environment, stop_environment, send_prompt_to_tab and send_message
+ * were removed: those tools take nodeId and do more (they validate the
+ * selection, check outstanding delegations and carry the async contract).
+ * `read_node_environment` stays for the one thing no nodeId tool reads, a
+ * file in another node's environment. See `RETIRED_COORDINATOR_TOOLS`.
+ */
 export const NODE_TOOL_CAPABILITIES: ReadonlyArray<readonly [string, string]> = [
   ["list_nodes", "discovery"],
-  ["list_node_environments", "environments"],
   ["read_node_environment", "environments"],
-  ["launch_node_environment", "environments"],
-  ["start_node_environment", "environments"],
-  ["stop_node_environment", "environments"],
-  ["send_prompt_to_node_tab", "jobs"],
-  ["send_node_message", "mail"],
   ["request_environment_deletion", "environments"],
 ];

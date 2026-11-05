@@ -20,6 +20,7 @@ import {
 } from "@orkestrator/protocol/preview-header-policy";
 import { previewErrorFromUnknown } from "@orkestrator/protocol/preview-services";
 
+import { hostsShareSite } from "./core/host-site.js";
 import type { PreviewPublicationPort } from "./core/preview-access.js";
 import type { PreviewRuntime } from "./core/preview-runtime.js";
 import type { PreviewSettings } from "./core/storage-preview-services.js";
@@ -30,6 +31,13 @@ export interface PreviewPublicationStatus {
   enabled: boolean;
   available: boolean;
   reason?: string;
+  /**
+   * Set when the preview domain is the same site as one of the application's
+   * own origins. Publication still runs (a tailnet deployment may choose
+   * this), but a preview service could then send same-site requests to the
+   * application and set cookies on the shared parent domain.
+   */
+  warning?: string;
   domain: string | null;
   listening: { address: string; port: number } | null;
   certificate: { validTo: string; coversHosts: boolean } | null;
@@ -37,6 +45,12 @@ export interface PreviewPublicationStatus {
 
 export interface PreviewPublicationOptions {
   runtime: PreviewRuntime;
+  /**
+   * The application's own page origins (gateway, Tailscale Serve, web client,
+   * allowed origins). Read on every status, because some are known only once
+   * their listener has bound.
+   */
+  applicationOrigins?: () => readonly (string | null | undefined)[];
   /** Certificate files are re-read on this interval and hot-swapped when changed. */
   certificateCheckMs?: number;
   /** Test seam for the certificate expiry clock. */
@@ -50,6 +64,14 @@ const log = createLogger("preview");
 const MAX_BOOTSTRAP_BODY_BYTES = 4 * 1024;
 const DOMAIN =
   /^(?=.{1,200}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
+
+/**
+ * Suffixes under which each next label is a separate registrable domain (they
+ * are on the Public Suffix List). Every tailnet name under `ts.net` is its own
+ * site, so a preview domain in one tailnet is not same-site with an app in
+ * another, while one under the app's own tailnet name is.
+ */
+const PREVIEW_PUBLIC_SUFFIXES = ["ts.net"] as const;
 
 const SECURITY_HEADERS = {
   "cache-control": "no-store",
@@ -157,16 +179,41 @@ export class PreviewPublicationManager implements PreviewPublicationPort {
   }
 
   status(): PreviewPublicationStatus {
+    const warning = this.sameSiteWarning();
     return {
       enabled: this.settings?.enabled ?? false,
       available: this.reason === undefined && this.listening !== null,
       ...(this.reason ? { reason: this.reason } : {}),
+      ...(warning ? { warning } : {}),
       domain: this.settings?.domain ?? null,
       listening: this.listening,
       certificate: this.certificate
         ? { validTo: this.certificate.validTo, coversHosts: this.certificate.coversHosts }
         : null,
     };
+  }
+
+  /**
+   * The preview domain must be a different site from the application: a
+   * same-site preview host can send same-site requests to the gateway and set
+   * cookies on the shared parent. This warns rather than refuses, because the
+   * comparison is an approximation and a deployment may have no other domain.
+   */
+  private sameSiteWarning(): string | undefined {
+    const domain = this.settings?.enabled ? this.settings.domain : null;
+    if (!domain || !DOMAIN.test(domain)) return undefined;
+    for (const origin of this.options.applicationOrigins?.() ?? []) {
+      if (!origin) continue;
+      let host: string;
+      try {
+        host = new URL(origin).hostname;
+      } catch {
+        continue;
+      }
+      if (hostsShareSite(host, domain, { publicSuffixes: PREVIEW_PUBLIC_SUFFIXES }))
+        return `The preview domain ${domain} is the same site as Orkestrator (${host}). A preview service could send same-site requests to Orkestrator and set cookies for the shared domain. Use a preview domain under a different registrable domain or tailnet.`;
+    }
+    return undefined;
   }
 
   private capability(): { available: boolean; reason?: string } {
@@ -258,6 +305,8 @@ export class PreviewPublicationManager implements PreviewPublicationPort {
         "Set a preview domain (for example preview.example.ts.net) with wildcard DNS on your private network.";
       return;
     }
+    if (this.sameSiteWarning())
+      log.warn("publication.same-site", { reason: "preview-domain-shares-site" });
     if (!settings.certFile || !settings.keyFile) {
       this.reason = `Provide a certificate and key covering *.${settings.domain}.`;
       return;

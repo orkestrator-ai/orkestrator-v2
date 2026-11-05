@@ -123,7 +123,8 @@ describe("reviewer records", () => {
 
   test("accepts a bounded continuation prompt", () => {
     expect(isReviewerRecord(reviewer({ continuationPrompt: "Please continue" }))).toBe(true);
-    expect(isReviewerRecord(reviewer({ continuationPrompt: "x".repeat(4_097) }))).toBe(false);
+    expect(isReviewerRecord(reviewer({ continuationPrompt: "x".repeat(131_072) }))).toBe(true);
+    expect(isReviewerRecord(reviewer({ continuationPrompt: "x".repeat(131_073) }))).toBe(false);
   });
 
   test("carries whether the model is a real selection or a placeholder", () => {

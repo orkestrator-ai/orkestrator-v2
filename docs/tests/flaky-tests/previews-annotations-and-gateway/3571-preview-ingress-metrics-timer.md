@@ -17,3 +17,12 @@
 - **Assessment:** the first-byte event may have missed the observed timer flush
   under aggregate load; this is a hypothesis, not an established root cause.
   No implementation, assertions, deadlines or skips in this owner changed.
+
+## Recurrence, 2026-11-05
+
+Git mirror review preparation (`mise run test`, workspace group) missed the
+first-byte histogram at 165.65 ms. The unchanged complete owner passed alone:
+`mise run test:logged -- --name recorded-desktop-failure -- bun test --cwd
+apps/desktop ./tests/preview-transport-manager.test.ts --parallel=1 --only-failures`
+(exit 0, 11.2 s). Original evidence remains in the review package's
+`validation-04.stdout.txt`; no assertion or timeout was changed.

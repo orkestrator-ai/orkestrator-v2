@@ -3681,6 +3681,7 @@ describe("NativeAgentService", () => {
         requestId: "request-1",
         prompt: "Inspect this",
         owner: { kind: "environment", projectId: "forged", environmentId: runtimeId },
+        clientTimeZone: "Asia/Tokyo",
       });
       expect(session).toMatchObject({
         origin: "coordinator",
@@ -3749,6 +3750,10 @@ describe("NativeAgentService", () => {
       expect(
         (await storage.coordinators.getCoordinatorWorkspace(project.id))!.conversations[0],
       ).toMatchObject({ lastTurnOrigin: "user", lastTurnStartedAt: expect.any(String) });
+      // The user's device named its zone; a self-timer's "14:30" is read in it.
+      expect((await storage.coordinators.getCoordinatorWorkspace(project.id))!.userTimeZone).toBe(
+        "Asia/Tokyo",
+      );
       await storage.coordinators.mutateCoordinatorWorkspace(project.id, (workspace) => ({
         ...workspace!,
         repositoryContextRevision: 4,
@@ -3845,6 +3850,7 @@ describe("NativeAgentService", () => {
           logicalSessionKey: "coordinator-coordinator-1:conversation-1",
           requestId: "request-mail",
           prompt: "<orkestrator-peer-message>timer</orkestrator-peer-message>",
+          clientTimeZone: "Europe/Paris",
         },
         undefined,
         false,
@@ -3854,6 +3860,10 @@ describe("NativeAgentService", () => {
         (await storage.coordinators.getCoordinatorWorkspace(project.id))!.conversations[0]
           ?.lastTurnOrigin,
       ).toBe("mail");
+      // Only a turn the user started says where the user is.
+      expect((await storage.coordinators.getCoordinatorWorkspace(project.id))!.userTimeZone).toBe(
+        "Asia/Tokyo",
+      );
 
       delegationAvailable = false;
       await service.dispatchPrompt({

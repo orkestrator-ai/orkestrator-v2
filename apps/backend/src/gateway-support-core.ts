@@ -18,6 +18,7 @@ import {
   createUnzip,
   gzip,
 } from "node:zlib";
+import { RELAYED_NODE_EVENT, RELAYED_NODE_EVENT_PREFIX } from "@orkestrator/protocol/node-events";
 import type { GatewayTokenSettings, WebClientStatus } from "@orkestrator/protocol/web-client";
 import type {
   HostMaintenanceSnapshot,
@@ -164,6 +165,11 @@ export interface OrkestratorGatewayOptions {
     idleRetentionMs?: number;
     handshakeFrameCapacity?: number;
     handshakeMaxBytes?: number;
+  };
+  relayedEventReplay?: {
+    frameCapacity?: number;
+    maxBytes?: number;
+    idleRetentionMs?: number;
   };
   /** Optional admission overrides, primarily for constrained deployments and boundary tests. */
   terminalWebSocket?: {
@@ -855,6 +861,7 @@ export const PER_ENTITY_EVENT_PREFIXES: readonly [prefix: string, label: string]
   [`${DROPPABLE_EVENT_PREFIX}tmux:`, "terminal-output-tmux"],
   [DROPPABLE_EVENT_PREFIX, "terminal-output"],
   ["claude-state-", "claude-state"],
+  [RELAYED_NODE_EVENT_PREFIX, RELAYED_NODE_EVENT],
 ];
 
 export function normalizeGatewayEventMetricKey(event: string): string {

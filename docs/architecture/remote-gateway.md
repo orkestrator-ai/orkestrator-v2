@@ -469,7 +469,14 @@ reconnects on its own capped, jittered ladder (`ReconnectBackoff` from
   `gateway.cursor` frame per run of them, before the next matching frame or at
   the end of the window. An event larger than the replay ring's byte bound empties
   the window, so reconnecting clients reconcile, and it is counted in
-  `replay.ring.oversizedAppends` on `/__orkestrator/metrics`.
+  `replay.ring.oversizedAppends` on `/__orkestrator/metrics`. A scoped client's
+  replay is charged against its buffer for what it will be written: matching
+  frames and one cursor per run of skips, so a burst of unrelated events no
+  longer tells it `replay-too-large`.
+- Relayed node events are outside that window. They have a second ring
+  (`replay.relayedRing` in the metrics) and, in a renderer, a stream of their own
+  with its own cursor, so a busy leaf cannot make a client reconcile
+  ([command nodes](command-nodes.md)).
 - A link can drop with no answer at all (a tailnet peer that vanished), and then
   an open stream never errors: its socket waits on TCP for many minutes. So
   every client watches for silence. A main stream that shows no sign of life for

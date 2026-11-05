@@ -12,7 +12,7 @@ import { BoundedPathList } from "./BoundedPathList";
 
 export interface PendingFileAction {
   environmentId: string;
-  kind: "revert" | "delete";
+  kind: "revert" | "delete" | "delete-folder";
   paths: string[];
 }
 
@@ -32,8 +32,9 @@ export function FileActionDialog({
   onConfirm,
 }: FileActionDialogProps) {
   const isRevert = action?.kind === "revert";
+  const isFolderDelete = action?.kind === "delete-folder";
   const paths = action?.paths ?? [];
-  const isBulkDelete = !isRevert && paths.length > 1;
+  const isBulkDelete = action?.kind === "delete" && paths.length > 1;
   const primaryPath = paths[0];
 
   return (
@@ -46,7 +47,13 @@ export function FileActionDialog({
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>
-            {isRevert ? "Revert file?" : isBulkDelete ? "Delete files?" : "Delete file?"}
+            {isRevert
+              ? "Revert file?"
+              : isFolderDelete
+                ? "Delete folder?"
+                : isBulkDelete
+                  ? "Delete files?"
+                  : "Delete file?"}
           </AlertDialogTitle>
           <AlertDialogDescription>
             {isRevert ? (
@@ -54,6 +61,12 @@ export function FileActionDialog({
                 Restore <strong className="break-all text-foreground">{primaryPath}</strong> to its
                 state in <strong className="break-all text-foreground">{targetRef}</strong>. Any
                 changes to this file will be discarded.
+              </>
+            ) : isFolderDelete ? (
+              <>
+                Delete <strong className="break-all text-foreground">{primaryPath}</strong> and
+                everything inside it from this workspace. Git will stage the deletion of tracked
+                files. Untracked and ignored files in the folder cannot be recovered from Git.
               </>
             ) : isBulkDelete ? (
               <>
@@ -89,9 +102,11 @@ export function FileActionDialog({
               ? "Working..."
               : isRevert
                 ? "Revert"
-                : isBulkDelete
-                  ? "Delete files"
-                  : "Delete file"}
+                : isFolderDelete
+                  ? "Delete folder"
+                  : isBulkDelete
+                    ? "Delete files"
+                    : "Delete file"}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

@@ -1574,6 +1574,43 @@ describe("useFilesPanel", () => {
     expect(mockToastSuccess).toHaveBeenCalledWith("Files moved", { description: "2 files" });
   });
 
+  test("deletes a folder with folder wording and forgets its expanded branch", async () => {
+    const environment = createMockEnvironment({
+      id: "env-container",
+      projectId: "project-1",
+      environmentType: "containerized",
+      containerId: "container-1",
+      status: "running",
+    });
+    resetStores(environment);
+    useFilesPanelStore.setState({ expandedFolders: ["src", "docs"] });
+    const { result } = renderHook(() => useFilesPanel());
+
+    await act(async () => {
+      await result.current.deleteFile(["src"], { target: "folder" });
+    });
+    expect(mockDeleteContainerFile).toHaveBeenCalledWith("env-container", "src");
+    expect(mockGetFileTree).toHaveBeenCalled();
+    expect(mockToastSuccess).toHaveBeenCalledWith("Folder deleted", { description: "src" });
+    expect(useFilesPanelStore.getState().expandedFolders).toEqual(["docs"]);
+
+    mockDeleteContainerFile.mockRejectedValueOnce(
+      new Error("docs was not fully deleted: it contains a nested Git repository"),
+    );
+    let failure: unknown;
+    await act(async () => {
+      await result.current.deleteFile(["docs"], { target: "folder" }).catch((error: unknown) => {
+        failure = error;
+      });
+    });
+    expect(failure).toBeInstanceOf(Error);
+    expect(mockToastError).toHaveBeenCalledWith("Failed to delete folder", {
+      description: "docs was not fully deleted: it contains a nested Git repository",
+    });
+    // Nothing was removed, so the branch keeps its expansion.
+    expect(useFilesPanelStore.getState().expandedFolders).toEqual(["docs"]);
+  });
+
   test("rejects a batch move whose sources share a basename before any backend call", async () => {
     const environment = createMockEnvironment({
       id: "env-container",

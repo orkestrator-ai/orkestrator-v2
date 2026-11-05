@@ -1881,8 +1881,8 @@ exit 0
         expect(dockerExec).toContain(
           'git restore --source="$base" --staged --worktree -- "$candidate"',
         );
-        expect(dockerExec).toContain('git rm -f --ignore-unmatch -- "$candidate"');
-        expect(dockerExec).toContain('git clean -f -x -- "$candidate"');
+        expect(dockerExec).toContain('git rm -r -f --ignore-unmatch -- "$candidate"');
+        expect(dockerExec).toContain('git clean -f -d -x -- "$candidate"');
         expect(dockerExec).toContain("Symlink ancestor is not allowed");
         expect(dockerExec).toContain("renameat2");
         expect(dockerExec).toContain("bun -e");

@@ -1431,14 +1431,28 @@ export async function removeLocalWorkspacePath(
   target: string,
 ): Promise<void> {
   await assertNoLocalSymlinkAncestors(worktreePath, target);
-  await runCommand("git", ["-C", worktreePath, "rm", "-f", "--ignore-unmatch", "--", target], {
-    timeoutMs: 30_000,
-  });
+  // `-r` and `-d` let the same removal take a whole folder; for a file they
+  // change nothing.
+  await runCommand(
+    "git",
+    ["-C", worktreePath, "rm", "-r", "-f", "--ignore-unmatch", "--", target],
+    { timeoutMs: 30_000 },
+  );
   // Git clean understands worktree boundaries and does not traverse a symlinked
   // parent. It handles the untracked/ignored case left behind by git rm.
-  await runCommand("git", ["-C", worktreePath, "clean", "-f", "-x", "--", target], {
+  await runCommand("git", ["-C", worktreePath, "clean", "-f", "-d", "-x", "--", target], {
     timeoutMs: 30_000,
   });
+  // Git clean skips a nested repository (it would need `-ff`), so a folder
+  // holding one survives. Report that rather than claim the folder is gone.
+  const remaining = await fs.lstat(path.join(worktreePath, target)).catch((error: unknown) => {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  });
+  if (remaining) {
+    // Same wording as `remove_path` in the container script.
+    throw new Error(`${target} was not fully deleted: it contains a nested Git repository`);
+  }
 }
 
 export async function gitPathExistsAtRef(
@@ -1934,8 +1948,12 @@ export const CONTAINER_SAFE_MUTATION_FUNCTIONS = [
   "remove_path() {",
   '  local candidate="$1"',
   '  assert_safe_path "$candidate" || return 1',
-  '  git rm -f --ignore-unmatch -- "$candidate"',
-  '  git clean -f -x -- "$candidate"',
+  '  git rm -r -f --ignore-unmatch -- "$candidate"',
+  '  git clean -f -d -x -- "$candidate"',
+  '  if [ -e "$candidate" ] || [ -L "$candidate" ]; then',
+  '    echo "$candidate was not fully deleted: it contains a nested Git repository" >&2',
+  "    return 1",
+  "  fi",
   "}",
 ].join("\n");
 

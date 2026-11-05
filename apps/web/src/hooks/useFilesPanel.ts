@@ -843,13 +843,18 @@ export function useFilesPanel() {
   );
 
   const deleteFile = useCallback(
-    async (filePath: string | string[]) => {
+    async (filePath: string | string[], options: { target?: "file" | "folder" } = {}) => {
       if (!isAvailable || !targetId) {
         throw new Error("The selected environment is not available");
       }
 
       const paths = Array.isArray(filePath) ? [...new Set(filePath)] : [filePath];
       if (paths.length === 0) return;
+      // The backend removes a folder recursively through the same command;
+      // only the wording and the tree state it leaves behind differ.
+      const noun = options.target === "folder" ? "folder" : "file";
+      const failureTitle =
+        paths.length === 1 ? `Failed to delete ${noun}` : `Failed to delete ${noun}s`;
 
       setFileActionPending(paths[0]!);
       const completedPaths: string[] = [];
@@ -857,9 +862,7 @@ export function useFilesPanel() {
       try {
         const environmentId = await resolveMutationEnvironmentId().catch((error: unknown) => {
           const message = error instanceof Error ? error.message : String(error);
-          toast.error(paths.length === 1 ? "Failed to delete file" : "Failed to delete files", {
-            description: message,
-          });
+          toast.error(failureTitle, { description: message });
           throw error;
         });
         // Attempt every path even if one fails, so a single collision cannot
@@ -882,14 +885,24 @@ export function useFilesPanel() {
         }
 
         if (completedPaths.length > 0) {
+          if (options.target === "folder") {
+            // Forget the deleted branch's expanded subtrees so a stale read of
+            // it cannot be merged back into the refreshed tree.
+            const { setFolderExpanded } = useFilesPanelStore.getState();
+            for (const path of completedPaths) setFolderExpanded(path, false);
+          }
           await refreshAllFilesData();
         }
 
         if (failures.length === 0) {
           if (paths.length === 1) {
-            toast.success("File deleted", { description: paths[0] });
+            toast.success(noun === "folder" ? "Folder deleted" : "File deleted", {
+              description: paths[0],
+            });
           } else {
-            toast.success("Files deleted", { description: `${paths.length} files` });
+            toast.success(`${noun === "folder" ? "Folders" : "Files"} deleted`, {
+              description: `${paths.length} ${noun}s`,
+            });
           }
           return;
         }
@@ -899,9 +912,7 @@ export function useFilesPanel() {
           paths.length,
           failures[0]!.message,
         );
-        toast.error(paths.length === 1 ? "Failed to delete file" : "Failed to delete files", {
-          description: message,
-        });
+        toast.error(failureTitle, { description: message });
         throw new FileBatchActionError(message, {
           remainingPaths: failures.map((failure) => failure.path),
           completedPaths,

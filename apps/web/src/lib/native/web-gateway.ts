@@ -15,6 +15,7 @@ import {
   GATEWAY_EVENT_CURSOR_PARAM,
   GATEWAY_KEEPALIVE_EVENT,
   GATEWAY_KEEPALIVE_EVENTS_PARAM,
+  GATEWAY_RELAYED_EVENTS_PARAM,
   GATEWAY_STREAM_CONNECT_TIMEOUT_MS,
   GATEWAY_STREAM_SILENCE_LIMIT_MS,
   GatewayEventStreamState,
@@ -22,13 +23,20 @@ import {
   NATIVE_EVENT_STREAM_CONNECTED_EVENT,
   parseGatewayEventData,
   readSseStream,
+  type GatewayRelayedEventsMode,
 } from "@orkestrator/protocol/gateway-event-stream";
+import { isPerNodeRelayedEvent } from "@orkestrator/protocol/node-events";
 import { TerminalInputSequencer } from "@orkestrator/protocol/terminal-input-sequencer";
 import {
   TerminalWebSocketClient,
   terminalWebSocketUrl,
   type TerminalSocketPayload,
 } from "@/lib/native/terminal-websocket-client";
+import {
+  RelayedEventStream,
+  type RelayedEventConnection,
+  type RelayedEventConnectionHandlers,
+} from "@/lib/native/relayed-event-stream";
 import { ReconnectBackoff } from "@orkestrator/protocol/reconnect-backoff";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
@@ -308,11 +316,11 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
   let bearerToken = options.token?.trim() || undefined;
   const baseUrl = normalizedBaseUrl(options.baseUrl);
   /**
-   * A same-origin page (or one whose credential is added below it) reads the
-   * shared terminal stream with an `EventSource`; a bearer or cross-origin
-   * client reads the same stream with `fetch`.
+   * A same-origin page (or one whose credential is added below it) reads a
+   * filtered stream with an `EventSource`; a bearer or cross-origin client reads
+   * the same stream with `fetch`.
    */
-  const sharedTerminalStreamUsesEventSource = () =>
+  const filteredStreamsUseEventSource = () =>
     !bearerToken && (!baseUrl || options.terminalEventSource === true);
   const apiUrl = (pathname: string): string => {
     if (options.unavailableReason) throw new Error(options.unavailableReason);
@@ -519,6 +527,12 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
       if (included) params.set("includeEvents", included);
     }
     if (!terminalEvents && since) params.set(GATEWAY_EVENT_CURSOR_PARAM, since);
+    // Relayed node events have their own stream. A gateway that predates this
+    // ignores the parameter and sends them here under the one old name, which is
+    // why `lib/federation/node-events.ts` keeps listening for that name.
+    if (!terminalEvents) {
+      params.set(GATEWAY_RELAYED_EVENTS_PARAM, "per-node" satisfies GatewayRelayedEventsMode);
+    }
     // Only an `EventSource` needs it, and only the main stream is watched.
     if (!terminalEvents && !bearerToken && !baseUrl) {
       params.set(GATEWAY_KEEPALIVE_EVENTS_PARAM, "1");
@@ -530,7 +544,9 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     event.startsWith(TERMINAL_OUTPUT_EVENT_PREFIX);
 
   const hasMainEventListeners = (): boolean =>
-    [...listeners.keys()].some((event) => !isTerminalOutputEvent(event));
+    [...listeners.keys()].some(
+      (event) => !isTerminalOutputEvent(event) && !isPerNodeRelayedEvent(event),
+    );
 
   const deliver = (event: string, payload: unknown) => {
     const callbacks = listeners.get(event);
@@ -857,6 +873,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
       closeSharedTerminalConnection();
       scheduleSharedTerminalReconnect();
     }
+    relayedEvents.dropConnection();
     terminalSocket?.dropConnection();
   };
 
@@ -872,6 +889,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
       closeSharedTerminalConnection();
       refreshSharedTerminalConnection();
     }
+    relayedEvents.retryUnanswered();
     terminalSocket?.reconnectIfNotReady();
   };
 
@@ -1097,15 +1115,24 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
    */
   const openSharedTerminalConnection = (
     events: readonly string[],
-    handlers: { onOpen: () => void; onMessage: (data: string) => void; onError: () => void },
-  ): SharedTerminalConnection => {
-    const url = apiUrl(eventStreamPath(events));
-    if (sharedTerminalStreamUsesEventSource()) {
+    handlers: RelayedEventConnectionHandlers,
+  ): SharedTerminalConnection =>
+    openFilteredConnection(apiUrl(eventStreamPath(events)), "terminal", handlers);
+
+  /** One filtered stream, on whichever transport this client can authenticate. */
+  const openFilteredConnection = (
+    url: string,
+    kind: "terminal" | "relayed",
+    handlers: RelayedEventConnectionHandlers,
+  ): RelayedEventConnection => {
+    const logEvent =
+      kind === "terminal" ? "terminal-stream.disconnected" : "relayed-stream.disconnected";
+    if (filteredStreamsUseEventSource()) {
       const source = new EventSource(url, { withCredentials: credentials !== "omit" });
       source.onopen = handlers.onOpen;
-      source.onmessage = (message) => handlers.onMessage(message.data);
+      source.onmessage = (message) => handlers.onMessage(message.data, message.lastEventId);
       source.onerror = () => {
-        log.warn("terminal-stream.disconnected", { transport: "event-source" });
+        log.warn(logEvent, { transport: "event-source" });
         handlers.onError();
       };
       return source;
@@ -1119,16 +1146,16 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
           signal: controller.signal,
         });
         if (!response.ok || !response.body) {
-          throw new Error(`Gateway terminal event stream failed with HTTP ${response.status}`);
+          throw new Error(`Gateway ${kind} event stream failed with HTTP ${response.status}`);
         }
         if (controller.signal.aborted) return;
         handlers.onOpen();
         await readSseStream(response.body, controller.signal, (frame) => {
-          if (frame.data) handlers.onMessage(frame.data);
+          if (frame.data) handlers.onMessage(frame.data, frame.id);
         });
       } catch (error) {
         if (!controller.signal.aborted) {
-          log.warn("terminal-stream.disconnected", {
+          log.warn(logEvent, {
             transport: "fetch",
             error: formatLogError(error),
           });
@@ -1143,6 +1170,20 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     })();
     return { close: () => controller.abort() };
   };
+
+  const relayedEvents = new RelayedEventStream({
+    open: (events, since, handlers) => {
+      const params = new URLSearchParams({ includeEvents: events.join(",") });
+      if (since) params.set(GATEWAY_EVENT_CURSOR_PARAM, since);
+      return openFilteredConnection(
+        apiUrl(`${GATEWAY_PREFIX}/events?${params.toString()}`),
+        "relayed",
+        handlers,
+      );
+    },
+    deliver,
+    backoff: createStreamBackoff(),
+  });
 
   const startTerminalEventFallback = (stream: TerminalEventStream) => {
     if (stream.closed) return;
@@ -1209,6 +1250,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
       ensureEventStream();
     }
     retryWaitingTerminalFallbacks();
+    relayedEvents.retryWaiting();
   };
   const retryWaitingStreamsWhenVisible = () => {
     if (document.visibilityState === "visible") retryWaitingStreams();
@@ -1433,6 +1475,8 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
       callbackSet.add(callback as EventCallback<unknown>);
       if (isTerminalOutputEvent(event)) {
         ensureTerminalEventStream(event);
+      } else if (isPerNodeRelayedEvent(event)) {
+        relayedEvents.add(event);
       } else {
         ensureEventStream();
       }
@@ -1441,12 +1485,14 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
         if (callbackSet.size === 0) {
           listeners.delete(event);
           if (isTerminalOutputEvent(event)) closeTerminalEventStream(event);
+          else if (isPerNodeRelayedEvent(event)) relayedEvents.remove(event);
         }
         closeEventStreamIfIdle();
       };
     },
 
     eventStreamReady(event: string): Promise<void> {
+      if (isPerNodeRelayedEvent(event)) return relayedEvents.ready(event);
       if (!isTerminalOutputEvent(event)) return Promise.resolve();
       return ensureTerminalEventStream(event).ready;
     },
@@ -1567,6 +1613,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     terminalSocket?.dispose();
     terminalSocket = null;
     stopTerminalEventFallbacks();
+    relayedEvents.dispose();
   });
   return api;
 }

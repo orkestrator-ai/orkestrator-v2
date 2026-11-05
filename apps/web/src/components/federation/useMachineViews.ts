@@ -102,6 +102,7 @@ function boundEnvironments(
         ? { activityUpdatedAt: environment.agentActivityUpdatedAt }
         : {}),
       ...(environment.lastActivityAt ? { lastActivityAt: environment.lastActivityAt } : {}),
+      ...(environment.prState ? { prState: environment.prState } : {}),
       hasUnreadWork: environment.hasUnreadWork === true,
       ...(environment.environmentType ? { environmentType: environment.environmentType } : {}),
       deleting:

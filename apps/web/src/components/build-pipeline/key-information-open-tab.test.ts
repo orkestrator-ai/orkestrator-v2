@@ -27,7 +27,11 @@ function leaf(): PaneLeaf {
 function open(
   tabs: TabInfo[],
   pipelineId: string,
-  { maxTabs = 9, environmentId = ENVIRONMENT_ID } = {},
+  {
+    maxTabs = 9,
+    environmentId = ENVIRONMENT_ID,
+    view,
+  }: { maxTabs?: number; environmentId?: string; view?: "notes" } = {},
 ) {
   const addTab = mock((paneId: string, tab: TabInfo, environmentId: string) =>
     usePaneLayoutStore.getState().addTab(paneId, tab, environmentId),
@@ -38,7 +42,7 @@ function open(
     activePaneId: "pane-1",
     allTabs: tabs,
     maxTabs,
-    target: { environmentId, pipelineId },
+    target: { environmentId, pipelineId, ...(view ? { view } : {}) },
     addTab,
     onTabLimit,
   });
@@ -80,6 +84,36 @@ describe("openKeyInformationTab", () => {
     const { opened, addTab } = open(tabs, "pipeline-1", { maxTabs: 2 });
     expect(opened).toBe(true);
     expect(addTab).not.toHaveBeenCalled();
+    expect(leaf().activeTabId).toBe("brief");
+  });
+
+  test("the notes are a tab of their own, focused rather than repeated", () => {
+    const brief: TabInfo = {
+      id: "brief",
+      type: "key-information",
+      keyInformationTabData: { environmentId: ENVIRONMENT_ID, pipelineId: "pipeline-1" },
+    };
+    seed([buildTab, brief]);
+    const first = open([buildTab, brief], "pipeline-1", { view: "notes" });
+    expect(first.opened).toBe(true);
+    expect(first.addTab).toHaveBeenCalledTimes(1);
+    const notes = leaf().tabs.find((tab) => tab.keyInformationTabData?.view === "notes")!;
+    expect(notes.keyInformationTabData).toEqual({
+      environmentId: ENVIRONMENT_ID,
+      pipelineId: "pipeline-1",
+      view: "notes",
+    });
+    expect(leaf().activeTabId).toBe(notes.id);
+
+    const tabs = leaf().tabs;
+    usePaneLayoutStore.getState().setActiveTab("pane-1", "build", ENVIRONMENT_ID);
+    const again = open(tabs, "pipeline-1", { view: "notes", maxTabs: tabs.length });
+    expect(again.opened).toBe(true);
+    expect(again.addTab).not.toHaveBeenCalled();
+    expect(leaf().activeTabId).toBe(notes.id);
+
+    // The key information tab is still the one the plain view finds.
+    open(tabs, "pipeline-1");
     expect(leaf().activeTabId).toBe("brief");
   });
 

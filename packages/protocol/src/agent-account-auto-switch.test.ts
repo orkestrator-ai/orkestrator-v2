@@ -2,21 +2,26 @@ import { describe, expect, test } from "bun:test";
 import {
   AUTO_SWITCH_RESET_TOLERANCE_MS,
   MAX_USAGE_LIMIT_RESENDS,
+  autoSwitchNoticeText,
+  legacyAutoSwitchEvent,
+  confirmedLimitResetsAt,
   decideAutoSwitch,
+  fiveHourWindow,
   generalWeeklyWindow,
   isAgentAccountAutoSwitchedEvent,
   isAutoSwitchAccountIncluded,
+  nextFiveHourRefresh,
   normalizeAgentAccountAutoSwitchSettings,
   parseAgentAccountAutoSwitchStates,
   rankAutoSwitchAccounts,
   usageLimitResendCount,
   usageLimitResendPrompt,
   usageLimitResendRequestId,
-  weeklyLimitConfirmedUsedUp,
-  weeklyLimitReading,
+  limitConfirmedUsedUp,
+  usageLimitReading,
   withAutoSwitchTicks,
   type AutoSwitchAccount,
-  type WeeklyLimitReading,
+  type UsageLimitReading,
 } from "./agent-account-auto-switch.js";
 import {
   parseInheritedGlobalSettings,
@@ -40,7 +45,7 @@ function snapshot(overrides: Partial<PlanUsageSnapshot> = {}): PlanUsageSnapshot
 
 function account(
   id: string,
-  reading: Partial<WeeklyLimitReading>,
+  reading: Partial<UsageLimitReading>,
   overrides: Partial<AutoSwitchAccount> = {},
 ): AutoSwitchAccount {
   return {
@@ -56,7 +61,7 @@ const at = (hours: number) => NOW + hours * 3_600_000;
 function login(
   id: string,
   email: string | undefined,
-  reading: Partial<WeeklyLimitReading>,
+  reading: Partial<UsageLimitReading>,
   overrides: { included?: boolean; signedIn?: boolean } = {},
 ): AutoSwitchAccount {
   return account(id, reading, {
@@ -104,7 +109,7 @@ describe("the general weekly limit", () => {
 
 describe("reading a snapshot", () => {
   test("a reset in the past is not a known reset, and the window has started over", () => {
-    const reading = weeklyLimitReading(
+    const reading = usageLimitReading(
       "claude",
       snapshot({
         stale: true,
@@ -113,11 +118,11 @@ describe("reading a snapshot", () => {
       NOW,
     );
     expect(reading).toEqual({ freshness: "stale", wouldPay: false, usedPercent: 0 });
-    expect(weeklyLimitConfirmedUsedUp(reading)).toBe(false);
+    expect(limitConfirmedUsedUp(reading)).toBe(false);
   });
 
   test("a stale reading can never confirm a used-up limit", () => {
-    const stale = weeklyLimitReading(
+    const stale = usageLimitReading(
       "claude",
       snapshot({
         stale: true,
@@ -126,10 +131,10 @@ describe("reading a snapshot", () => {
       NOW,
     );
     expect(stale.usedPercent).toBe(100);
-    expect(weeklyLimitConfirmedUsedUp(stale)).toBe(false);
+    expect(limitConfirmedUsedUp(stale)).toBe(false);
     expect(
-      weeklyLimitConfirmedUsedUp(
-        weeklyLimitReading(
+      limitConfirmedUsedUp(
+        usageLimitReading(
           "claude",
           snapshot({ windows: [{ window: "seven_day", usedPercent: 100 }] }),
           NOW,
@@ -140,7 +145,7 @@ describe("reading a snapshot", () => {
 
   test("an unavailable account is unknown, not out", () => {
     expect(
-      weeklyLimitReading(
+      usageLimitReading(
         "claude",
         snapshot({ status: "unavailable", windows: [], message: "refreshed while in use" }),
         NOW,
@@ -151,7 +156,7 @@ describe("reading a snapshot", () => {
   test("only the provider saying so, or another limit out with paid usage on, would pay", () => {
     const weekly = { window: "seven_day", usedPercent: 10, resetsAt: inHours(10) };
     const read = (overrides: Partial<PlanUsageSnapshot>) =>
-      weeklyLimitReading("claude", snapshot({ windows: [weekly], ...overrides }), NOW).wouldPay;
+      usageLimitReading("claude", snapshot({ windows: [weekly], ...overrides }), NOW).wouldPay;
     expect(read({})).toBe(false);
     expect(read({ paidOverage: { enabled: true } })).toBe(false);
     expect(read({ paidOverage: { enabled: false, inUse: true } })).toBe(true);
@@ -669,7 +674,7 @@ describe("the rkmbp readings of 2026-11-04", () => {
 
   const entries = (host: string, added: string, now: number): AutoSwitchAccount[] => {
     const read = (usedPercent: number, resetsAt: string) =>
-      weeklyLimitReading(
+      usageLimitReading(
         "claude",
         snapshot({ windows: [{ window: "seven_day", usedPercent, resetsAt }] }),
         now,
@@ -708,6 +713,501 @@ describe("the rkmbp readings of 2026-11-04", () => {
       }
       expect(active).toBe(start);
     }
+  });
+});
+
+describe("the 5-hour limit", () => {
+  const out = (hours: number) => ({
+    freshness: "fresh" as const,
+    usedPercent: 100,
+    resetsAt: at(hours),
+  });
+  const ids = (ranked: AutoSwitchAccount[]) => ranked.map(({ account: entry }) => entry.id);
+
+  test.each(["claude", "codex"] as const)(
+    "%s inferred expiry also clears inferred paid usage, preserving explicit and other limits",
+    (platform) => {
+      const base = snapshot({
+        platform,
+        stale: true,
+        fetchedAt: inHours(-6),
+        paidOverage: { enabled: true },
+        windows: [
+          {
+            window: platform === "claude" ? "seven_day" : "secondary",
+            usedPercent: 20,
+            resetsAt: inHours(24),
+            windowMinutes: 10_080,
+          },
+          {
+            window: platform === "claude" ? "five_hour" : "primary",
+            usedPercent: 100,
+            windowMinutes: 300,
+          },
+        ],
+      });
+      const read = (value: PlanUsageSnapshot) => usageLimitReading(platform, value, NOW);
+      const recovered = read(base);
+      expect(recovered.fiveHour?.usedPercent).toBe(0);
+      expect(recovered.wouldPay).toBe(false);
+      const ranked = (value: UsageLimitReading) =>
+        ids(
+          rankAutoSwitchAccounts(
+            [account("active", { usedPercent: 20, resetsAt: at(48) }), account("return", value)],
+            "active",
+          ),
+        );
+      expect(ranked(recovered)[0]).toBe("return");
+      for (const stale of [false, true]) {
+        // Explicit provider credit/overage use stays authoritative even after reset.
+        const explicit = read({
+          ...base,
+          stale,
+          paidOverage: { enabled: true, inUse: true },
+          windows: base.windows.map((window) => ({
+            ...window,
+            ...(window.windowMinutes === 300 ? { resetsAt: inHours(-1) } : {}),
+          })),
+        });
+        expect(explicit.fiveHour?.usedPercent).toBe(0);
+        expect(explicit.wouldPay).toBe(true);
+        expect(ranked(explicit)).toEqual(["active"]);
+      }
+      const modelOut = read({
+        ...base,
+        windows: [
+          ...base.windows,
+          { window: "model_limit", usedPercent: 100, resetsAt: inHours(1) },
+        ],
+      });
+      expect(modelOut.wouldPay).toBe(true);
+      expect(ranked(modelOut)).toEqual(["active"]);
+    },
+  );
+
+  test("is Claude's five_hour window and whichever Codex general slot is under a week", () => {
+    const fiveHour = { window: "five_hour", usedPercent: 10, windowMinutes: 300 };
+    const week = { window: "seven_day", usedPercent: 10, windowMinutes: 10_080 };
+    expect(fiveHourWindow("claude", [week, fiveHour])).toBe(fiveHour);
+    expect(fiveHourWindow("claude", [week])).toBeUndefined();
+
+    const short = { window: "primary", usedPercent: 10, windowMinutes: 300 };
+    const long = { window: "secondary", usedPercent: 10, windowMinutes: 10_080 };
+    expect(fiveHourWindow("codex", [short, long])).toBe(short);
+    const swappedShort = { ...short, window: "secondary" };
+    expect(fiveHourWindow("codex", [{ ...long, window: "primary" }, swappedShort])).toBe(
+      swappedShort,
+    );
+    expect(fiveHourWindow("codex", [long])).toBeUndefined();
+    // No length, or a window that is not one of the general limit's slots, says nothing.
+    expect(fiveHourWindow("codex", [{ window: "primary", usedPercent: 10 }])).toBeUndefined();
+    expect(
+      fiveHourWindow("codex", [{ window: "codex_spark", usedPercent: 100, windowMinutes: 300 }]),
+    ).toBeUndefined();
+  });
+
+  describe("reading a snapshot", () => {
+    const weekly = { window: "seven_day", usedPercent: 10, resetsAt: inHours(40) };
+    const read = (window: PlanUsageSnapshot["windows"][number], stale = false) =>
+      usageLimitReading(
+        "claude",
+        snapshot({ windows: [weekly, window], ...(stale ? { stale: true } : {}) }),
+        NOW,
+      ).fiveHour;
+
+    test("carries its level and reset beside the weekly limit", () => {
+      expect(read({ window: "five_hour", usedPercent: 98, resetsAt: inHours(2) })).toEqual({
+        freshness: "fresh",
+        usedPercent: 98,
+        resetsAt: at(2),
+      });
+      expect(read({ window: "five_hour", usedPercent: 98, resetsAt: inHours(2) }, true)).toEqual({
+        freshness: "stale",
+        usedPercent: 98,
+        resetsAt: at(2),
+      });
+    });
+
+    test("a reset in the past has started the window over", () => {
+      expect(read({ window: "five_hour", usedPercent: 100, resetsAt: inHours(-1) })).toEqual({
+        freshness: "fresh",
+        usedPercent: 0,
+      });
+    });
+
+    test("with no reset it cannot outlast its own length from when it was read", () => {
+      const window = { window: "five_hour", usedPercent: 100, windowMinutes: 300 };
+      expect(read(window)?.resetsAt).toBe(at(5));
+      expect(
+        usageLimitReading("claude", snapshot({ windows: [window], fetchedAt: inHours(-6) }), NOW)
+          .fiveHour,
+      ).toEqual({ freshness: "fresh", usedPercent: 0 });
+    });
+
+    test("is left out when the snapshot has none, or no level for it", () => {
+      expect(usageLimitReading("claude", snapshot({ windows: [weekly] }), NOW)).not.toHaveProperty(
+        "fiveHour",
+      );
+      expect(read({ window: "five_hour", resetsAt: inHours(2) })).toBeUndefined();
+    });
+
+    test("is read on Codex too, in whichever slot holds it", () => {
+      const reading = usageLimitReading(
+        "codex",
+        snapshot({
+          platform: "codex",
+          windows: [
+            { window: "primary", usedPercent: 12, windowMinutes: 10_080, resetsAt: inHours(40) },
+            { window: "secondary", usedPercent: 99, windowMinutes: 300, resetsAt: inHours(1) },
+          ],
+        }),
+        NOW,
+      );
+      expect(reading).toMatchObject({
+        usedPercent: 12,
+        resetsAt: at(40),
+        fiveHour: { usedPercent: 99, resetsAt: at(1) },
+      });
+    });
+  });
+
+  test("moves the machine at 98% and not before", () => {
+    const next = account("next", { usedPercent: 10, resetsAt: at(100) });
+    const active = (usedPercent: number) =>
+      account("active", {
+        usedPercent: 20,
+        resetsAt: at(3),
+        fiveHour: { freshness: "fresh", usedPercent, resetsAt: at(1) },
+      });
+    expect(decideAutoSwitch([active(97.9), next], "active")).toEqual(STAY);
+    expect(decideAutoSwitch([active(98), next], "active")).toEqual({
+      action: "switch",
+      accountId: "next",
+      reason: "five-hour",
+    });
+  });
+
+  test("with both limits past the threshold the weekly one is the reason", () => {
+    expect(
+      decideAutoSwitch(
+        [
+          account("active", { usedPercent: 98, resetsAt: at(3), fiveHour: out(1) }),
+          account("next", { usedPercent: 10, resetsAt: at(100) }),
+        ],
+        "active",
+      ),
+    ).toEqual({ action: "switch", accountId: "next", reason: "threshold" });
+  });
+
+  test("never changes the order: a nearly full window still ranks by its weekly reset", () => {
+    const ranked = rankAutoSwitchAccounts(
+      [
+        account("later", {
+          usedPercent: 1,
+          resetsAt: at(90),
+          fiveHour: { freshness: "fresh", usedPercent: 0 },
+        }),
+        account("soon", {
+          usedPercent: 90,
+          resetsAt: at(9),
+          fiveHour: { freshness: "fresh", usedPercent: 97, resetsAt: at(1) },
+        }),
+        account("out", { usedPercent: 1, resetsAt: at(2), fiveHour: out(4) }),
+      ],
+      "later",
+    );
+    expect(ids(ranked)).toEqual(["soon", "later"]);
+  });
+
+  test("a stale reading never moves the active account, but keeps an idle one out", () => {
+    const stale = { freshness: "stale" as const, usedPercent: 100, resetsAt: at(2) };
+    expect(
+      decideAutoSwitch(
+        [
+          account("active", { usedPercent: 20, resetsAt: at(3), fiveHour: stale }),
+          account("next", { usedPercent: 10, resetsAt: at(100) }),
+        ],
+        "active",
+      ),
+    ).toEqual(STAY);
+    expect(
+      ids(
+        rankAutoSwitchAccounts(
+          [
+            account("active", { usedPercent: 20, resetsAt: at(90) }),
+            account("idle", { usedPercent: 10, resetsAt: at(3), fiveHour: stale }),
+          ],
+          "active",
+        ),
+      ),
+    ).toEqual(["active"]);
+  });
+
+  test("a fresh 5-hour reading speaks even when the week is not known", () => {
+    expect(
+      decideAutoSwitch(
+        [
+          account("active", { freshness: "none", fiveHour: out(1) }),
+          account("next", { usedPercent: 10, resetsAt: at(100) }),
+        ],
+        "active",
+      ),
+    ).toEqual({ action: "switch", accountId: "next", reason: "five-hour" });
+    expect(
+      decideAutoSwitch(
+        [
+          account("active", {
+            freshness: "none",
+            fiveHour: { freshness: "fresh", usedPercent: 40 },
+          }),
+          account("next", { usedPercent: 10, resetsAt: at(100) }),
+        ],
+        "active",
+      ),
+    ).toEqual(STAY);
+  });
+
+  test("with every account out on one limit or the other, it stays", () => {
+    expect(
+      decideAutoSwitch(
+        [
+          account("active", { usedPercent: 20, resetsAt: at(3), fiveHour: out(1) }),
+          account("week-out", { usedPercent: 100, resetsAt: at(9) }),
+          account("window-out", { usedPercent: 10, resetsAt: at(20), fiveHour: out(2) }),
+        ],
+        "active",
+      ),
+    ).toEqual(STAY);
+  });
+
+  test("one login shares it: a twin is no way off, and a twin's reading speaks for the login", () => {
+    const fiveHour = out(1);
+    expect(
+      decideAutoSwitch(
+        [
+          login("host", "same@example.com", { usedPercent: 20, resetsAt: at(3), fiveHour }),
+          login("added", "same@example.com", { usedPercent: 20, resetsAt: at(3) }),
+        ],
+        "host",
+      ),
+    ).toEqual(STAY);
+    expect(
+      decideAutoSwitch(
+        [
+          login("host", "same@example.com", { usedPercent: 20, resetsAt: at(3) }),
+          login("added", "same@example.com", { usedPercent: 20, resetsAt: at(3), fiveHour }),
+          login("other", "b@example.com", { usedPercent: 5, resetsAt: at(90) }),
+        ],
+        "host",
+      ),
+    ).toEqual({ action: "switch", accountId: "other", reason: "five-hour" });
+  });
+
+  test("a move back is held by the reset tolerance like any other soonest-reset move", () => {
+    const refreshed = (soonerBy: number) =>
+      decideAutoSwitch(
+        [
+          login("first", "a@example.com", {
+            usedPercent: 20,
+            resetsAt: at(10) - soonerBy,
+            fiveHour: { freshness: "fresh", usedPercent: 0 },
+          }),
+          login("second", "b@example.com", { usedPercent: 20, resetsAt: at(10) }),
+        ],
+        "second",
+      );
+    expect(refreshed(30 * 60_000)).toEqual(STAY);
+    expect(refreshed(AUTO_SWITCH_RESET_TOLERANCE_MS + 1)).toEqual({
+      action: "switch",
+      accountId: "first",
+      reason: "soonest-reset",
+    });
+  });
+
+  describe("across a week on each provider", () => {
+    // Weekly resets: first in 24 hours, second in 48, third in 96.
+    const fiveHourResetIn = { first: 3, second: 4, third: 5 };
+    const week = { first: at(24), second: at(48), third: at(96) };
+
+    const entries = (platform: "claude" | "codex", used: Record<string, number>, now: number) =>
+      Object.entries(week).map(([id, weeklyReset]) => {
+        const fiveHourReset = new Date(
+          NOW + fiveHourResetIn[id as keyof typeof fiveHourResetIn] * 3_600_000,
+        ).toISOString();
+        const resetsAt = new Date(weeklyReset).toISOString();
+        const windows =
+          platform === "claude"
+            ? [
+                { window: "seven_day", usedPercent: 40, resetsAt },
+                { window: "five_hour", usedPercent: used[id] ?? 0, resetsAt: fiveHourReset },
+              ]
+            : [
+                { window: "secondary", usedPercent: 40, resetsAt, windowMinutes: 10_080 },
+                {
+                  window: "primary",
+                  usedPercent: used[id] ?? 0,
+                  resetsAt: fiveHourReset,
+                  windowMinutes: 300,
+                },
+              ];
+        return login(
+          id,
+          `${id}@example.com`,
+          usageLimitReading(platform, snapshot({ platform, windows }), now),
+        );
+      });
+
+    test.each(["claude", "codex"] as const)(
+      "%s burns the soonest weekly first, moves down the list, and comes back",
+      (platform) => {
+        // Nothing used yet: on the soonest weekly reset.
+        expect(decideAutoSwitch(entries(platform, {}, NOW), "third")).toEqual({
+          action: "switch",
+          accountId: "first",
+          reason: "soonest-reset",
+        });
+        expect(decideAutoSwitch(entries(platform, {}, NOW), "first")).toEqual(STAY);
+
+        // The first 5-hour window fills: the next soonest weekly takes over.
+        expect(decideAutoSwitch(entries(platform, { first: 98 }, NOW), "first")).toEqual({
+          action: "switch",
+          accountId: "second",
+          reason: "five-hour",
+        });
+        expect(decideAutoSwitch(entries(platform, { first: 98 }, NOW), "second")).toEqual(STAY);
+
+        // That fills too, with the first still out: down the list.
+        const bothOut = { first: 100, second: 98 };
+        expect(decideAutoSwitch(entries(platform, bothOut, NOW), "second")).toEqual({
+          action: "switch",
+          accountId: "third",
+          reason: "five-hour",
+        });
+
+        // The first window resets: straight back, past the second, still out.
+        const firstReset = NOW + 3 * 3_600_000 + 1;
+        expect(decideAutoSwitch(entries(platform, bothOut, firstReset), "third")).toEqual({
+          action: "switch",
+          accountId: "first",
+          reason: "soonest-reset",
+        });
+        expect(decideAutoSwitch(entries(platform, bothOut, firstReset), "first")).toEqual(STAY);
+      },
+    );
+
+    test("every window out stays where it is until one resets", () => {
+      const allOut = { first: 100, second: 100, third: 100 };
+      expect(decideAutoSwitch(entries("claude", allOut, NOW), "third")).toEqual(STAY);
+      // Its own window is still out, so that is why it leaves.
+      expect(decideAutoSwitch(entries("claude", allOut, NOW + 4.5 * 3_600_000), "third")).toEqual({
+        action: "switch",
+        accountId: "first",
+        reason: "five-hour",
+      });
+    });
+  });
+
+  describe("confirming a limit error", () => {
+    const reading = (fiveHour: number, weekly = 40) =>
+      usageLimitReading(
+        "claude",
+        snapshot({
+          windows: [
+            { window: "seven_day", usedPercent: weekly, resetsAt: inHours(40) },
+            { window: "five_hour", usedPercent: fiveHour, resetsAt: inHours(2) },
+          ],
+        }),
+        NOW,
+      );
+
+    test("the 5-hour limit counts from the threshold, the weekly limit only at 100%", () => {
+      expect(limitConfirmedUsedUp(reading(97.9))).toBe(false);
+      expect(limitConfirmedUsedUp(reading(98))).toBe(true);
+      expect(limitConfirmedUsedUp(reading(10, 99))).toBe(false);
+      expect(limitConfirmedUsedUp(reading(10, 100))).toBe(true);
+    });
+
+    test("a stale reading confirms neither", () => {
+      expect(
+        limitConfirmedUsedUp(
+          usageLimitReading(
+            "claude",
+            snapshot({
+              stale: true,
+              windows: [
+                { window: "seven_day", usedPercent: 100, resetsAt: inHours(40) },
+                { window: "five_hour", usedPercent: 100, resetsAt: inHours(2) },
+              ],
+            }),
+            NOW,
+          ),
+        ),
+      ).toBe(false);
+    });
+
+    test("the reset is the used-up limit's, and the week outlasts the 5 hours", () => {
+      expect(confirmedLimitResetsAt(reading(100))).toBe(at(2));
+      expect(confirmedLimitResetsAt(reading(100, 100))).toBe(at(40));
+    });
+  });
+
+  describe("the next refresh worth looking at", () => {
+    test("is the soonest other included account the 5-hour limit alone keeps out", () => {
+      expect(
+        nextFiveHourRefresh(
+          [
+            account("active", { usedPercent: 20, resetsAt: at(90), fiveHour: out(1) }),
+            account("later", { usedPercent: 20, resetsAt: at(50), fiveHour: out(4) }),
+            account("sooner", { usedPercent: 20, resetsAt: at(9), fiveHour: out(2) }),
+            account("unticked", { usedPercent: 20, fiveHour: out(0.5) }, { included: false }),
+            account("week-out", { usedPercent: 100, resetsAt: at(9), fiveHour: out(0.5) }),
+            account("room", {
+              usedPercent: 20,
+              fiveHour: { freshness: "fresh", usedPercent: 50, resetsAt: at(0.5) },
+            }),
+          ],
+          "active",
+        ),
+      ).toBe(at(2));
+    });
+
+    test("is nothing when no other account is waiting on one", () => {
+      expect(
+        nextFiveHourRefresh(
+          [
+            account("active", { usedPercent: 20, resetsAt: at(90), fiveHour: out(1) }),
+            account("next", { usedPercent: 20, resetsAt: at(9) }),
+          ],
+          "active",
+        ),
+      ).toBeUndefined();
+    });
+  });
+
+  test("a coordinator's notice says which limit moved the machine", () => {
+    const notice = (reason: "five-hour" | "limit") =>
+      autoSwitchNoticeText({
+        platformLabel: "Codex",
+        machineName: "mini",
+        from: "a",
+        to: "b",
+        reason,
+      }).body;
+    expect(notice("five-hour")).toContain("its 5-hour limit reached 98%");
+    expect(notice("limit")).toContain("5-hour or general weekly limit is used up");
+    expect(notice("limit")).toContain("work a 5-hour or weekly limit stopped resends itself");
+  });
+
+  test("the reason travels between machines", () => {
+    expect(
+      isAgentAccountAutoSwitchedEvent({
+        platform: "codex",
+        from: "a",
+        to: "b",
+        reason: "five-hour",
+        at: "2026-11-01T12:00:00.000Z",
+      }),
+    ).toBe(true);
   });
 });
 
@@ -829,4 +1329,20 @@ test("signed-out active accounts yield to signed-in accounts, and signed-out des
     reason: "signed-out",
   });
   expect(decideAutoSwitch([a, b], "b")).toEqual({ action: "stay" });
+});
+
+test("legacy events use an older reason while the outbox notice keeps five-hour", () => {
+  const notice = {
+    platform: "claude" as const,
+    from: "first",
+    to: "second",
+    reason: "five-hour" as const,
+    at: "2026-11-01T12:00:00Z",
+  };
+  const legacy = legacyAutoSwitchEvent(notice);
+  const oldReasons = ["threshold", "limit", "soonest-reset", "not-included", "signed-out"];
+  expect(oldReasons.includes(legacy.reason)).toBe(true);
+  expect(legacy).toEqual({ ...notice, reason: "limit" });
+  expect(notice.reason).toBe("five-hour");
+  expect(legacyAutoSwitchEvent({ ...notice, reason: "limit" })).toEqual(legacy);
 });

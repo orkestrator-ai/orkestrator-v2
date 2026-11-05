@@ -147,6 +147,17 @@ describe("a client grant at the leaf's gateway", () => {
     expect(invoke.mock.calls.map(([command]) => command)).toEqual(["get_config"]);
   });
 
+  test("answers an older client's save carrying the retired raw logging key without writing", async () => {
+    const { invoke, call } = await gatewayWithBackend();
+    const answered = await call("update_global_config", {
+      global: { ...olderRealmFavouriteEcho.global, experimentalCodexRawEventLogging: true },
+      preserveInheritedSettings: true,
+    });
+    expect(answered.status).toBe(200);
+    expect(answered.json()).toEqual({ result: leafConfig });
+    expect(invoke.mock.calls.map(([command]) => command)).toEqual(["get_config"]);
+  });
+
   test("answers a no-op patch with realistic redacted settings without writing", async () => {
     const { invoke, call } = await gatewayWithBackend();
     const answered = await call("patch_global_config", patchEcho);

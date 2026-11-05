@@ -20,6 +20,7 @@ import type { Environment } from "../src/core/models";
 import { EnvironmentLifecycleTaskTracker } from "../src/core/environment-lifecycle-tasks";
 import { dockerContainerRuntimeName, dockerOwnerNamespace } from "../src/core/docker-ownership";
 import { resetDockerTopologyCache } from "../src/core/docker-image";
+import { imageManifestArchive } from "./container-lifecycle-fixtures";
 import { ContainerHostReachabilityService } from "../src/core/container-host-reachability";
 import { BackendRuntime } from "../src/core/backend-runtime";
 import { isolateXdgEnvironment, XDG_KEYS } from "./xdg-fixture.js";
@@ -86,9 +87,13 @@ if [ "$1" = "version" ]; then
 fi
 if [ "$1" = "image" ] && [ "$2" = "inspect" ]; then
   [ "\${FAKE_DOCKER_FAIL_IMAGE:-}" = "1" ] && { echo "image missing" >&2; exit 20; }
-  printf '[]\n'
+  printf 'sha256:${"c".repeat(64)}\t[]\tamd64\n'
   exit 0
 fi
+case "$*" in
+  "cp manifest-probe:"*) cat "$FAKE_DOCKER_MANIFEST"; exit 0 ;;
+  *manifest-probe*) [ "$1" = create ] && printf 'manifest-probe\n'; exit 0 ;;
+esac
 if [ "$1" = "create" ]; then
   printf 'container-created-123\n'
   exit 0
@@ -474,6 +479,7 @@ beforeAll(async () => {
   process.env.HOME = fakeHome;
   restoreXdg = isolateXdgEnvironment();
   process.env.FAKE_DOCKER_LOG = commandLog;
+  process.env.FAKE_DOCKER_MANIFEST = await imageManifestArchive(root);
   process.env.FAKE_LAUNCHER_LOG = launcherLog;
   // Lets the fake `docker ps` label one row with the owner the registry under
   // test will compute from `root`.
@@ -529,6 +535,7 @@ afterAll(async () => {
   Object.defineProperty(os, "homedir", { configurable: true, value: originalHomedir });
   if (originalDockerLog === undefined) delete process.env.FAKE_DOCKER_LOG;
   else process.env.FAKE_DOCKER_LOG = originalDockerLog;
+  delete process.env.FAKE_DOCKER_MANIFEST;
   if (originalLauncherLog === undefined) delete process.env.FAKE_LAUNCHER_LOG;
   else process.env.FAKE_LAUNCHER_LOG = originalLauncherLog;
   if (originalLauncherFailExecutable === undefined)
@@ -756,7 +763,11 @@ describe("process and platform command behavior", () => {
       ["container-a", "alpha"],
       ["container-b", "beta"],
     ]);
-    expect(await readCommandLog()).not.toContain(
+    // An earlier test's create prunes its input revisions in the background, by owner.
+    const listings = (await readCommandLog())
+      .split("\n")
+      .filter((line) => !line.includes("orkestrator-inputs-revision"));
+    expect(listings.join("\n")).not.toContain(
       `--filter label=orkestrator-owner=${dockerOwnerNamespace(root)} --format`,
     );
     expect(

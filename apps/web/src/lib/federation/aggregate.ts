@@ -89,6 +89,7 @@ export function activityRows(
               (environment.buildActive ? "working" : environment.activity),
             activityUpdatedAt: environment.activityUpdatedAt,
             lastActivityAt: environment.lastActivityAt,
+            prState: environment.prState,
             machineId: machine.backendId,
             projectOrder: project?.order,
             order: environment.order,

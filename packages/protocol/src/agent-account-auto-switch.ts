@@ -1,5 +1,5 @@
 /**
- * Automatic account switching: the settings, which limit counts, and the rule
+ * Automatic account switching: the settings, which limits count, and the rule
  * that picks an account. Pure, so the machine applying the rule and the views
  * explaining it cannot disagree. See docs/architecture/agent-accounts.md
  * ("Automatic switching").
@@ -19,9 +19,9 @@ import type { PlanUsageSnapshot } from "./plan-usage.js";
 // `agent-accounts.ts` imports this module to parse peer answers.
 const PLATFORMS: readonly AgentAccountPlatform[] = ["claude", "codex"];
 
-/** Between turns, the general weekly limit at or past this moves the machine. */
+/** Between turns, the general weekly limit or the 5-hour limit at or past this moves the machine. */
 export const AUTO_SWITCH_THRESHOLD_PERCENT = 98;
-/** A limit error only moves the machine when a fresh reading says this. */
+/** A limit error moves the machine when a fresh reading says this of the weekly limit. */
 export const WEEKLY_LIMIT_USED_UP_PERCENT = 100;
 /** Resends of one stopped turn. Each needs another confirmed used-up account. */
 export const MAX_USAGE_LIMIT_RESENDS = 3;
@@ -33,6 +33,7 @@ export const MAX_USAGE_LIMIT_RESENDS = 3;
 export const AUTO_SWITCH_RESET_TOLERANCE_MS = 60 * 60_000;
 
 const WEEK_MINUTES = 7 * 24 * 60;
+const FIVE_HOUR_MINUTES = 5 * 60;
 const MAX_TICKED_EMAILS = 64;
 const MAX_EMAIL_LENGTH = 320;
 
@@ -121,6 +122,7 @@ export type AgentAccountAutoSwitchMode = "off" | "automatic" | "pinned";
 
 export const AUTO_SWITCH_REASONS = [
   "threshold",
+  "five-hour",
   "limit",
   "soonest-reset",
   "not-included",
@@ -225,13 +227,46 @@ export function generalWeeklyWindow<W extends UsageWindowLike>(
   );
 }
 
-/** How much one reading can be trusted to say about the general weekly limit. */
-export interface WeeklyLimitReading {
-  /** `fresh`: read just now. `stale`: an earlier reading. `none`: nothing is known. */
+/**
+ * The limit that runs out within a day, on the general allowance.
+ *
+ * Claude: window `five_hour`. Codex: whichever of `primary` and `secondary` is
+ * shorter than the week, because the slot says nothing and the length is the
+ * provider's to change. Those slots only come from the general limit, as above.
+ */
+export function fiveHourWindow<W extends UsageWindowLike>(
+  platform: AgentAccountPlatform,
+  windows: readonly W[],
+): W | undefined {
+  if (platform === "claude") return windows.find((window) => window.window === "five_hour");
+  return windows.find(
+    (window) =>
+      (window.window === "primary" || window.window === "secondary") &&
+      window.windowMinutes !== undefined &&
+      window.windowMinutes < WEEK_MINUTES,
+  );
+}
+
+/** The 5-hour limit, as one snapshot says it. It decides who has room, never the order. */
+export interface FiveHourLimitReading {
+  freshness: "fresh" | "stale";
+  usedPercent: number;
+  /** Epoch ms. Only a reset still ahead counts as known. */
+  resetsAt?: number;
+}
+
+/** How much one reading can be trusted to say about the limits that count. */
+export interface UsageLimitReading {
+  /**
+   * How far the general weekly limit is known. `fresh`: read just now. `stale`:
+   * an earlier reading. `none`: nothing is known about it.
+   */
   freshness: "fresh" | "stale" | "none";
   usedPercent?: number;
   /** Epoch ms. Only a reset still ahead counts as known. */
   resetsAt?: number;
+  /** Absent when the snapshot does not report one. */
+  fiveHour?: FiveHourLimitReading;
   /** A turn here would be paid for rather than come out of the plan. */
   wouldPay: boolean;
 }
@@ -245,25 +280,49 @@ function windowUsed(window: UsageWindowLike, now: number): number | undefined {
     : undefined;
 }
 
+function fiveHourLimitReading(
+  platform: AgentAccountPlatform,
+  snapshot: PlanUsageSnapshot,
+  now: number,
+): FiveHourLimitReading | undefined {
+  const window = fiveHourWindow(platform, snapshot.windows);
+  const usedPercent = window && windowUsed(window, now);
+  if (!window || usedPercent === undefined) return undefined;
+  const freshness = snapshot.stale === true ? "stale" : "fresh";
+  const reset = window.resetsAt ? Date.parse(window.resetsAt) : Number.NaN;
+  // With no reset to go on, a window still cannot outlast its own length from
+  // when it was read, so a used-up one is never held out for longer than that.
+  const ends = Number.isFinite(reset)
+    ? reset
+    : Date.parse(snapshot.fetchedAt) + (window.windowMinutes ?? FIVE_HOUR_MINUTES) * 60_000;
+  if (ends <= now) return { freshness, usedPercent: 0 };
+  return { freshness, usedPercent, ...(Number.isFinite(ends) ? { resetsAt: ends } : {}) };
+}
+
 /**
  * Read one snapshot for the rule. A reset in the past is not a known reset: the
  * window has started over and the next reset cannot be told until it is read.
  */
-export function weeklyLimitReading(
+export function usageLimitReading(
   platform: AgentAccountPlatform,
   snapshot: PlanUsageSnapshot | undefined,
   now: number,
-): WeeklyLimitReading {
+): UsageLimitReading {
   if (!snapshot || snapshot.status !== "ok") return { freshness: "none", wouldPay: false };
   const freshness = snapshot.stale === true ? "stale" : "fresh";
   // Past its plan allowance on any other limit, an account with paid usage on
   // would bill the next turn, so its weekly room is no reason to move onto it.
+  const fiveHour = fiveHourLimitReading(platform, snapshot, now);
+  const shortWindow = fiveHourWindow(platform, snapshot.windows);
   const otherLimitOut =
     snapshot.paidOverage?.enabled === true &&
-    snapshot.windows.some((window) => (windowUsed(window, now) ?? 0) >= 100);
+    snapshot.windows.some(
+      (window) =>
+        ((window === shortWindow ? fiveHour?.usedPercent : windowUsed(window, now)) ?? 0) >= 100,
+    );
   const wouldPay = snapshot.paidOverage?.inUse === true || otherLimitOut;
   const window = generalWeeklyWindow(platform, snapshot.windows);
-  if (!window) return { freshness: "none", wouldPay };
+  if (!window) return { freshness: "none", wouldPay, ...(fiveHour ? { fiveHour } : {}) };
   const reset = window.resetsAt ? Date.parse(window.resetsAt) : Number.NaN;
   const usedPercent = windowUsed(window, now);
   return {
@@ -271,11 +330,11 @@ export function weeklyLimitReading(
     wouldPay,
     ...(usedPercent !== undefined ? { usedPercent } : {}),
     ...(Number.isFinite(reset) && reset > now ? { resetsAt: reset } : {}),
+    ...(fiveHour ? { fiveHour } : {}),
   };
 }
 
-/** Whether a fresh reading proves the general weekly limit is used up. */
-export function weeklyLimitConfirmedUsedUp(reading: WeeklyLimitReading): boolean {
+function weeklyConfirmedUsedUp(reading: UsageLimitReading): boolean {
   return (
     reading.freshness === "fresh" &&
     reading.usedPercent !== undefined &&
@@ -283,34 +342,60 @@ export function weeklyLimitConfirmedUsedUp(reading: WeeklyLimitReading): boolean
   );
 }
 
+/** One limit's reading, as far as who has room is concerned. */
+type LimitLevel = Pick<UsageLimitReading, "freshness" | "usedPercent" | "resetsAt">;
+
+function freshlyPast(level: LimitLevel | undefined): boolean {
+  return level?.freshness === "fresh" && (level.usedPercent ?? 0) >= AUTO_SWITCH_THRESHOLD_PERCENT;
+}
+
 /**
- * Whether an account has room to be switched onto.
+ * Whether a fresh reading proves a limit that moves the machine stopped the turn:
+ * the general weekly limit used up, or the 5-hour limit at the threshold. A 5-hour
+ * window fills fast enough to read just under 100% at the refusal, and the machine
+ * leaves it at the threshold anyway.
+ */
+export function limitConfirmedUsedUp(reading: UsageLimitReading): boolean {
+  return weeklyConfirmedUsedUp(reading) || freshlyPast(reading.fiveHour);
+}
+
+/** When the limit a confirmed stop proved used up lifts; the week outlasts the 5 hours. */
+export function confirmedLimitResetsAt(reading: UsageLimitReading): number | undefined {
+  return weeklyConfirmedUsedUp(reading) ? reading.resetsAt : reading.fiveHour?.resetsAt;
+}
+
+/**
+ * Whether one limit leaves room for a switch onto the account.
  *
  * Only a fresh reading can say the active account has run out, so an old
  * reading never moves the machine. An idle account's reading is often old, and
- * a weekly limit does not fall before its reset, so a stale reading past the
- * threshold with its reset still ahead keeps that account out until the reset.
- * With no reset to go on, the reading says too little to rule the account out.
+ * neither limit falls before its reset, so a stale reading past the threshold
+ * with its reset still ahead keeps that account out until the reset. With no
+ * reset to go on, the reading says too little to rule the account out.
  */
-function hasRoom(reading: WeeklyLimitReading, active: boolean): boolean {
-  if (reading.usedPercent === undefined || reading.usedPercent < AUTO_SWITCH_THRESHOLD_PERCENT) {
+function levelHasRoom(level: LimitLevel, active: boolean): boolean {
+  if (level.usedPercent === undefined || level.usedPercent < AUTO_SWITCH_THRESHOLD_PERCENT) {
     return true;
   }
-  if (reading.freshness === "fresh") return false;
-  return active || reading.resetsAt === undefined;
+  if (level.freshness === "fresh") return false;
+  return active || level.resetsAt === undefined;
 }
 
-function freshlyPastThreshold(reading: WeeklyLimitReading): boolean {
+function hasRoom(reading: UsageLimitReading, active: boolean): boolean {
   return (
-    reading.freshness === "fresh" && (reading.usedPercent ?? 0) >= AUTO_SWITCH_THRESHOLD_PERCENT
+    levelHasRoom(reading, active) && (!reading.fiveHour || levelHasRoom(reading.fiveHour, active))
   );
+}
+
+function freshlyPastThreshold(reading: UsageLimitReading): boolean {
+  return freshlyPast(reading) || freshlyPast(reading.fiveHour);
 }
 
 export interface AutoSwitchAccount {
   account: Pick<AgentAccountSummary, "id" | "signedIn"> &
     Partial<Pick<AgentAccountSummary, "identity">>;
   included: boolean;
-  reading: WeeklyLimitReading;
+  reading: UsageLimitReading;
 }
 
 export type AutoSwitchDecision =
@@ -326,8 +411,9 @@ function sameLogin(left: AutoSwitchAccount, right: AutoSwitchAccount): boolean {
 }
 
 /**
- * Included, signed-in accounts with room, soonest reset first; no known reset
- * ranks last. A used-up entry's twins have no room either, though only a fresh
+ * Included, signed-in accounts with room on both limits, soonest weekly reset
+ * first; no known reset ranks last. The 5-hour limit only says who has room, so an
+ * account that gets it back takes its place in the order again. A used-up entry's twins have no room either, though only a fresh
  * reading says so about the active entry. While the active entry is usable its
  * twins are left out, because moving to one gains no allowance. Once it is signed
  * out or unticked, a twin is a real way off it.
@@ -374,12 +460,10 @@ export function decideAutoSwitch(
   activeAccountId: string,
 ): AutoSwitchDecision {
   const current = accounts.find(({ account }) => account.id === activeAccountId);
-  const loginPastThreshold =
-    current !== undefined &&
-    accounts.some(
-      (entry) =>
-        (entry === current || sameLogin(entry, current)) && freshlyPastThreshold(entry.reading),
-    );
+  const login = accounts.filter(
+    (entry) => current !== undefined && (entry === current || sameLogin(entry, current)),
+  );
+  const loginPastThreshold = login.some((entry) => freshlyPastThreshold(entry.reading));
   if (
     current?.included &&
     current.account.signedIn &&
@@ -394,9 +478,11 @@ export function decideAutoSwitch(
       ? "signed-out"
       : !current?.included
         ? "not-included"
-        : loginPastThreshold
+        : login.some((entry) => freshlyPast(entry.reading))
           ? "threshold"
-          : "soonest-reset";
+          : loginPastThreshold
+            ? "five-hour"
+            : "soonest-reset";
   if (reason === "soonest-reset") {
     // Ranked ahead of the active account, so `best` has a known reset.
     const soonerBy =
@@ -405,6 +491,28 @@ export function decideAutoSwitch(
     if (!(soonerBy > AUTO_SWITCH_RESET_TOLERANCE_MS)) return { action: "stay" };
   }
   return { action: "switch", accountId: best.account.id, reason };
+}
+
+/**
+ * When the next other account the 5-hour limit alone keeps out gets it back, which
+ * is when the machine may want to move again.
+ */
+export function nextFiveHourRefresh(
+  accounts: readonly AutoSwitchAccount[],
+  activeAccountId: string,
+): number | undefined {
+  const refreshes = accounts.flatMap(({ account, included, reading }) => {
+    const resetsAt = reading.fiveHour?.resetsAt;
+    return account.id !== activeAccountId &&
+      included &&
+      account.signedIn &&
+      resetsAt !== undefined &&
+      levelHasRoom(reading, false) &&
+      !levelHasRoom(reading.fiveHour!, false)
+      ? [resetsAt]
+      : [];
+  });
+  return refreshes.length > 0 ? Math.min(...refreshes) : undefined;
 }
 
 const RESEND_REQUEST_ID = /^usage-limit-resend:(\d+):(.+)$/;
@@ -440,7 +548,7 @@ export const USAGE_LIMIT_RESEND_MARKER = "[Orkestrator automatic resend]";
  */
 export function usageLimitResendPrompt(): string {
   return [
-    `${USAGE_LIMIT_RESEND_MARKER} The previous turn stopped because the account's weekly usage limit ran out, and this session has moved to another account. This message was sent automatically, not by the user.`,
+    `${USAGE_LIMIT_RESEND_MARKER} The previous turn stopped because the account's 5-hour or weekly usage limit ran out, and this session has moved to another account. This message was sent automatically, not by the user.`,
     "Continue the original request from where it stopped. Do not repeat work or tool calls that already completed; check the conversation so far and finish the request.",
   ].join("\n\n");
 }
@@ -460,6 +568,13 @@ export interface AgentAccountAutoSwitchedEvent {
   to: string;
   reason: AutoSwitchReason;
   at: string;
+}
+
+/** Older event-stream consumers predate five-hour reasons; outbox/state keep the detail. */
+export function legacyAutoSwitchEvent(
+  notice: AgentAccountAutoSwitchedEvent,
+): AgentAccountAutoSwitchedEvent {
+  return notice.reason === "five-hour" ? { ...notice, reason: "limit" } : notice;
 }
 
 export function isAgentAccountAutoSwitchedEvent(
@@ -486,13 +601,16 @@ export function autoSwitchNoticeText(input: {
 }): { subject: string; body: string } {
   const why = {
     threshold: "its general weekly limit reached 98%",
-    limit: "a turn stopped and a fresh reading confirmed its general weekly limit is used up",
-    "soonest-reset": "another included account's weekly limit resets sooner",
+    "five-hour":
+      "its 5-hour limit reached 98%, and the machine returns to it after that limit resets if its weekly limit still resets soonest",
+    limit:
+      "a turn stopped and a fresh reading confirmed its 5-hour or general weekly limit is used up",
+    "soonest-reset": "another included account with room has a weekly limit that resets sooner",
     "signed-out": "the current account is signed out",
     "not-included": "its tick is off, so it is no longer included",
   }[input.reason];
   return {
     subject: `${input.platformLabel} moved to ${input.to} on ${input.machineName}`.slice(0, 200),
-    body: `Automatic account switching moved ${input.platformLabel} on ${input.machineName} from ${input.from} to ${input.to}, because ${why}. Nothing needs doing: work the weekly limit stopped resends itself, and any other stopped work stays stopped. To see or change this, use list_provider_accounts and set_account_auto_switch.`,
+    body: `Automatic account switching moved ${input.platformLabel} on ${input.machineName} from ${input.from} to ${input.to}, because ${why}. Nothing needs doing: work a 5-hour or weekly limit stopped resends itself, and any other stopped work stays stopped. To see or change this, use list_provider_accounts and set_account_auto_switch.`,
   };
 }

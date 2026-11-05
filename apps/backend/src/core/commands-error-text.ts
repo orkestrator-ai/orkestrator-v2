@@ -52,6 +52,23 @@ export const ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES = {
     "Timed out fetching from the git remote. Check your network connection and that your SSH agent has your key loaded (a passphrase-protected key must be added with ssh-add), then retry.",
 } as const;
 
+/**
+ * The one lifecycle message that is not a fixed constant: a refused create has
+ * to name the image, which the configured reference does without carrying a
+ * path, credential or child output.
+ */
+export function imageWithoutStagedInputsMessage(image: string): string {
+  return `The environment image ${image} is too old for new containers: it would need your whole agent home directories mounted into it. Nothing was created. Download a current image from Docker settings, or rebuild your custom image from the current Dockerfile, then retry.`;
+}
+
+const IMAGE_WITHOUT_STAGED_INPUTS =
+  /ContainerLifecycleError:capability-unavailable: (The environment image \S+(?: \(\w+\))? is too old for new containers: .*)$/;
+
+/** The manifest could not be read, which says nothing about the image's age. */
+export function imageUnreadableMessage(image: string): string {
+  return `Docker could not report what the environment image ${image} supports. Nothing was created. Check that Docker is running and retry.`;
+}
+
 /** OpenSSH's refusal once no key it could use was accepted, as Git relays it. */
 export function isGitSshAuthenticationFailure(message: string): boolean {
   return /permission denied \((?:[^(),\s]+,\s*)*publickey(?:\s*,[^(),]+)*\)/i.test(message);
@@ -61,7 +78,8 @@ export function isGitSshAuthenticationFailure(message: string): boolean {
  * Classifies a subprocess/storage failure into a message that is safe to
  * persist and render. Raw command errors can contain clone URLs, host paths,
  * environment variables, and child output, so the raw text never crosses this
- * boundary — the return value is always one of the constants above.
+ * boundary — the return value is one of the constants above, or the image
+ * refusal built by `imageWithoutStagedInputsMessage`.
  *
  * Classification prefers `CommandFailedError`'s structured outcome over the
  * message. A timeout in particular is invisible in the text: `execFile` kills
@@ -82,6 +100,8 @@ export function environmentLifecycleErrorMessage(error: unknown, causeDepth = 0)
   }
 
   const message = error instanceof Error ? error.message : "";
+  const imageRefusal = IMAGE_WITHOUT_STAGED_INPUTS.exec(message)?.[1];
+  if (imageRefusal) return imageRefusal;
   if (message.includes("ContainerLifecycleError:not-ready:")) {
     return /did not complete in time/.test(message)
       ? ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.initializationTimedOut
@@ -98,7 +118,7 @@ export function environmentLifecycleErrorMessage(error: unknown, causeDepth = 0)
   }
   // Matched against what the Docker CLI actually emits, not a paraphrase.
   if (
-    /cannot connect to the docker daemon|is the docker daemon running|docker daemon is not running|error during connect/i.test(
+    /cannot connect to the docker daemon|is the docker daemon running|docker daemon is not running|error during connect|docker could not report what the environment image/i.test(
       message,
     )
   ) {

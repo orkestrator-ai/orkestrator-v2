@@ -215,7 +215,6 @@ function resetStores(
             claude: { mode: "terminal", claudeNativeBackend: "sdk" },
           },
         },
-        experimentalCodexRawEventLogging: true,
       },
       repositories:
         environment && repositoryConfig

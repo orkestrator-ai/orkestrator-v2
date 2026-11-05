@@ -203,13 +203,18 @@ test("an active build sorts with working environments even when persisted activi
       "priority",
       displayedActivityResolver({}, {}, new Set(["build"])),
     ).map((row) => row.id),
-  ).toEqual(["build", "working", "idle"]);
+  ).toEqual(["idle", "build", "working"]);
 });
 
 test("bound machine activity order rehydrates from the active build store", async () => {
   installDesktopFake({ list: connectionList([]), datasets: {} });
-  const idle = { ...environment, id: "idle", agentActivityState: "idle", order: 0 } as Environment;
-  const build = { ...idle, id: "build", order: 1 };
+  const build = {
+    ...environment,
+    id: "build",
+    agentActivityState: "idle",
+    order: 0,
+  } as Environment;
+  const idle = { ...build, id: "idle", order: 1 };
   useEnvironmentStore.setState({ environments: [idle, build] });
   useProjectStore.setState({ projects: [project] });
   const { result, unmount } = renderHook(() => useBoundMachineView(), {
@@ -217,13 +222,30 @@ test("bound machine activity order rehydrates from the active build store", asyn
   });
   await waitFor(() => expect(result.current).not.toBeNull());
   const ids = () => activityRows([result.current!]).map((row) => row.environment.ref.environmentId);
-  expect(ids()).toEqual(["idle", "build"]);
-  act(() => useBuildPipelineStore.setState({ activeBuildEnvironmentIds: new Set(["build"]) }));
   expect(ids()).toEqual(["build", "idle"]);
+  act(() => useBuildPipelineStore.setState({ activeBuildEnvironmentIds: new Set(["build"]) }));
+  expect(ids()).toEqual(["idle", "build"]);
   unmount();
   const restored = renderHook(() => useBoundMachineView(), { wrapper: FederationProvider });
   await waitFor(() => expect(restored.result.current).not.toBeNull());
   expect(
     activityRows([restored.result.current!]).map((row) => row.environment.ref.environmentId),
-  ).toEqual(["build", "idle"]);
+  ).toEqual(["idle", "build"]);
+});
+
+test("this machine's merged environments sort below unmerged ones in the merged list", async () => {
+  installDesktopFake({ list: connectionList([]), datasets: {} });
+  const merged = { ...environment, id: "merged", prState: "merged", order: 0 } as Environment;
+  const open = { ...environment, id: "open", prState: "open", order: 1 } as Environment;
+  useEnvironmentStore.setState({ environments: [merged, open] });
+  useProjectStore.setState({ projects: [project] });
+  const { result, unmount } = renderHook(() => useBoundMachineView(), {
+    wrapper: FederationProvider,
+  });
+  await waitFor(() => expect(result.current).not.toBeNull());
+  expect(activityRows([result.current!]).map((row) => row.environment.ref.environmentId)).toEqual([
+    "open",
+    "merged",
+  ]);
+  unmount();
 });

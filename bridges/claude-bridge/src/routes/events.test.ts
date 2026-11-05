@@ -23,6 +23,7 @@ import events, {
   createReplayRetention,
   getReplayFrames,
   parseReplayCursor,
+  serializeEvent,
   serializeEventData,
 } from "./events.js";
 import { eventEmitter } from "../services/event-emitter.js";
@@ -161,6 +162,24 @@ describe("createBoundedSseWriter", () => {
     await first;
   });
 
+  test("uses a frame's known byte count rather than measuring its data again", async () => {
+    const { write, overflowReasons, releaseFirst } = stallingWriter({
+      maxPendingBytes: 8,
+    });
+    const byteLength = spyOn(Buffer, "byteLength");
+    try {
+      // The data is one byte, but the count the sender supplied is what counts.
+      const first = write({ event: "a", data: "1", dataBytes: 1 });
+      await write({ event: "a", data: "2", dataBytes: 50 });
+      expect(overflowReasons).toHaveLength(1);
+      expect(byteLength).not.toHaveBeenCalled();
+      releaseFirst();
+      await first;
+    } finally {
+      byteLength.mockRestore();
+    }
+  });
+
   test("accepts a single oversized frame when idle", async () => {
     const written: string[] = [];
     let overflowed = 0;
@@ -273,6 +292,25 @@ describe("serializeEventData", () => {
     // later subscribers send: the frame was snapshotted at emit time.
     event.data.message.id = "mutated";
     expect(serializeEventData(event)).toBe(first);
+  });
+
+  test("measures an event's encoded bytes once with its serialization", () => {
+    const event = {
+      type: "message.updated" as const,
+      sessionId: "s-é",
+      data: { message: { id: "m-1", text: "ééé" } },
+    };
+    const first = serializeEvent(event);
+    expect(first.dataBytes).toBe(Buffer.byteLength(first.data));
+    expect(first.dataBytes).toBeGreaterThan(first.data.length);
+
+    const byteLength = spyOn(Buffer, "byteLength");
+    try {
+      expect(serializeEvent(event)).toBe(first);
+      expect(byteLength).not.toHaveBeenCalled();
+    } finally {
+      byteLength.mockRestore();
+    }
   });
 
   test("serializes each event object independently", () => {
@@ -408,6 +446,96 @@ describe("SSE replay ring", () => {
   });
 });
 
+describe("SSE replay collapse", () => {
+  const generation = "collapse";
+  const updated = (sessionId: string, id: string, text: string) => ({
+    type: "message.updated" as const,
+    sessionId,
+    data: { message: { id, text } },
+  });
+  const patched = (sessionId: string, messageId: string, revision: number) => ({
+    type: "message.patched" as const,
+    sessionId,
+    data: { messageId, partCount: 1, changedParts: [], revision },
+  });
+
+  test("a full snapshot collapses the message's earlier snapshots and patches", () => {
+    const replay = createReplayBuffer();
+    replay.append(updated("s", "m-1", "base"), 1, generation);
+    replay.append(patched("s", "m-1", 2), 2, generation);
+    replay.append(patched("s", "m-1", 3), 3, generation);
+    replay.append(updated("s", "m-2", "other message"), 4, generation);
+    replay.append(patched("s", "m-2", 2), 5, generation);
+    replay.append(updated("s", "m-1", "whole"), 6, generation);
+
+    const { frames, resetRequired } = replay.getFrames({ generation, revision: 0 }, 6, generation);
+    expect(resetRequired).toBe(false);
+    expect(frames.map((frame) => [frame.revision, frame.event, frame.superseded === true])).toEqual(
+      [
+        [1, "message.updated", true],
+        [2, "message.patched", true],
+        [3, "message.patched", true],
+        [4, "message.updated", false],
+        [5, "message.patched", false],
+        [6, "message.updated", false],
+      ],
+    );
+    expect(frames[0]?.data).toBe("{}");
+    expect(frames[5]?.data).toContain('"text":"whole"');
+    // Each collapsed frame keeps its own cursor.
+    expect(frames.map((frame) => frame.id)).toEqual(
+      [1, 2, 3, 4, 5, 6].map((revision) => `${generation}:${revision}`),
+    );
+  });
+
+  test("patches after the newest snapshot are kept", () => {
+    const replay = createReplayBuffer();
+    replay.append(updated("s", "m-1", "one"), 1, generation);
+    replay.append(updated("s", "m-1", "two"), 2, generation);
+    replay.append(patched("s", "m-1", 3), 3, generation);
+    const { frames } = replay.getFrames({ generation, revision: 1 }, 3, generation);
+    expect(frames.map((frame) => frame.superseded === true)).toEqual([false, false]);
+  });
+
+  test("does not collapse the same message id across sessions", () => {
+    const replay = createReplayBuffer();
+    replay.append(updated("a", "m-1", "a's"), 1, generation);
+    replay.append(updated("b", "m-1", "b's"), 2, generation);
+    const { frames } = replay.getFrames({ generation, revision: 0 }, 2, generation);
+    expect(frames.map((frame) => frame.superseded === true)).toEqual([false, false]);
+  });
+
+  test("a collapsed frame frees its ring weight", () => {
+    const replay = createReplayBuffer();
+    const big = "x".repeat(10_000);
+    replay.append(updated("s", "m-1", big), 1, generation);
+    const afterFirst = replay.stats().bytes;
+    replay.append(updated("s", "m-1", big), 2, generation);
+    expect(replay.stats().frames).toBe(2);
+    expect(replay.stats().bytes).toBeLessThan(afterFirst + 1_000);
+  });
+
+  test("a skipped revision makes an older cursor require a reset", () => {
+    const replay = createReplayBuffer();
+    replay.append(updated("s", "m-1", "kept"), 1, generation);
+    replay.skip(2);
+    expect(replay.getFrames({ generation, revision: 1 }, 2, generation)).toEqual({
+      frames: [],
+      resetRequired: true,
+    });
+    expect(replay.getFrames({ generation, revision: 2 }, 2, generation)).toEqual({
+      frames: [],
+      resetRequired: false,
+    });
+    replay.append(updated("s", "m-1", "next"), 3, generation);
+    expect(
+      replay
+        .getFrames({ generation, revision: 2 }, 3, generation)
+        .frames.map((frame) => frame.revision),
+    ).toEqual([3]);
+  });
+});
+
 describe("GET /subscribe (SSE)", () => {
   test("the test reader times out when an SSE stream stalls", async () => {
     const reader = new ReadableStream<Uint8Array>().getReader();
@@ -533,6 +661,91 @@ describe("GET /subscribe (SSE)", () => {
       expect(live).toContain(`id: ${eventEmitter.generation}:`);
       expect(live).toContain('data: {"sessionId":"observed-live"}');
       expect(live).not.toContain("private output");
+    } finally {
+      controller.abort();
+      await reader?.cancel().catch(() => {});
+      await waitFor(() => eventEmitter.subscriberCount === subscribersBefore);
+    }
+  });
+
+  test("replays collapsed frames as cursor frames before the newest snapshot", async () => {
+    const subscribersBefore = eventEmitter.subscriberCount;
+    const before = eventEmitter.currentRevision;
+    eventEmitter.emit({
+      type: "message.updated",
+      sessionId: "collapse-route",
+      data: { message: { id: "m-route", text: "first snapshot" } },
+    });
+    eventEmitter.emit({
+      type: "message.patched",
+      sessionId: "collapse-route",
+      data: { messageId: "m-route", partCount: 1, changedParts: [], revision: 2 },
+    });
+    eventEmitter.emit({
+      type: "message.updated",
+      sessionId: "collapse-route",
+      data: { message: { id: "m-route", text: "latest snapshot" } },
+    });
+    const through = eventEmitter.currentRevision;
+    const controller = new AbortController();
+    const cursor = encodeURIComponent(`${eventEmitter.generation}:${before}`);
+    const response = await app.request(`/subscribe?since=${cursor}`, {
+      signal: controller.signal,
+    });
+    const reader = response.body?.getReader();
+    try {
+      const frames = await readUntil(reader!, (buffer) => buffer.includes("latest snapshot"));
+      expect(frames).toContain('"replayed":3');
+      expect(frames).not.toContain("first snapshot");
+      expect(frames).not.toContain("event: message.patched");
+      const cursorFrame = (revision: number) =>
+        `event: bridge.cursor\ndata: {}\nid: ${eventEmitter.generation}:${revision}`;
+      expect(frames).toContain(cursorFrame(before + 1));
+      expect(frames).toContain(cursorFrame(before + 2));
+      expect(frames.indexOf(cursorFrame(before + 2))).toBeLessThan(
+        frames.indexOf("latest snapshot"),
+      );
+      expect(frames).toContain(`id: ${eventEmitter.generation}:${through}`);
+    } finally {
+      controller.abort();
+      await reader?.cancel().catch(() => {});
+      await waitFor(() => eventEmitter.subscriberCount === subscribersBefore);
+    }
+  });
+
+  test("an observation subscriber's replay is unchanged by the collapse", async () => {
+    const subscribersBefore = eventEmitter.subscriberCount;
+    const before = eventEmitter.currentRevision;
+    eventEmitter.emit({
+      type: "message.updated",
+      sessionId: "collapse-observed",
+      data: { message: { id: "m-observed", text: "one" } },
+    });
+    eventEmitter.emit({
+      type: "message.patched",
+      sessionId: "collapse-observed",
+      data: { messageId: "m-observed", partCount: 1, changedParts: [], revision: 2 },
+    });
+    eventEmitter.emit({
+      type: "message.updated",
+      sessionId: "collapse-observed",
+      data: { message: { id: "m-observed", text: "two" } },
+    });
+    const controller = new AbortController();
+    const cursor = encodeURIComponent(`${eventEmitter.generation}:${before}`);
+    const response = await app.request(`/subscribe?observe=1&since=${cursor}`, {
+      signal: controller.signal,
+    });
+    const reader = response.body?.getReader();
+    try {
+      const last = `id: ${eventEmitter.generation}:${before + 3}`;
+      const frames = await readUntil(reader!, (buffer) => buffer.includes(last));
+      expect(frames).not.toContain("bridge.cursor");
+      const observed = (type: string, revision: number) =>
+        `event: ${type}\ndata: {"sessionId":"collapse-observed"}\nid: ${eventEmitter.generation}:${revision}`;
+      expect(frames).toContain(observed("message.updated", before + 1));
+      expect(frames).toContain(observed("message.patched", before + 2));
+      expect(frames).toContain(observed("message.updated", before + 3));
     } finally {
       controller.abort();
       await reader?.cancel().catch(() => {});

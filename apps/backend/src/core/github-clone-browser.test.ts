@@ -63,7 +63,7 @@ describe("listGitHubCloneAccounts", () => {
       return "zeta-corp\nAcme\noctocat\nnot a login\nbeta\n";
     }, calls);
 
-    expect(await listGitHubCloneAccounts(undefined, run)).toEqual([
+    expect(await listGitHubCloneAccounts(undefined, undefined, run)).toEqual([
       { login: "Acme", kind: "organization" },
       { login: "beta", kind: "organization" },
       { login: "octocat", kind: "user" },
@@ -79,7 +79,7 @@ describe("listGitHubCloneAccounts", () => {
     const run = runner(
       () => new CommandFailedError("spawn gh ENOENT", { executableMissing: true }),
     );
-    await expect(listGitHubCloneAccounts(undefined, run)).rejects.toThrow(
+    await expect(listGitHubCloneAccounts(undefined, undefined, run)).rejects.toThrow(
       "GitHub CLI is not available. Set it up under GitHub authentication in Settings, then retry",
     );
   });
@@ -88,7 +88,7 @@ describe("listGitHubCloneAccounts", () => {
     const run = runner(
       () => new CommandFailedError("To get started with GitHub CLI, run gh auth login"),
     );
-    await expect(listGitHubCloneAccounts(undefined, run)).rejects.toThrow(
+    await expect(listGitHubCloneAccounts(undefined, undefined, run)).rejects.toThrow(
       "Could not list your GitHub organizations: To get started with GitHub CLI, run gh auth login",
     );
   });
@@ -106,7 +106,7 @@ describe("listGitHubCloneRepositories", () => {
       ]);
     }, calls);
 
-    const result = await listGitHubCloneRepositories(undefined, "acme", run);
+    const result = await listGitHubCloneRepositories(undefined, undefined, "acme", run);
 
     expect(result).toEqual({
       truncated: false,
@@ -142,7 +142,7 @@ describe("listGitHubCloneRepositories", () => {
     const run = runner(({ args }) =>
       args[0] === "config" ? "ssh\n" : pageJson([ghRepository("api")]),
     );
-    const result = await listGitHubCloneRepositories(undefined, "acme", run);
+    const result = await listGitHubCloneRepositories(undefined, undefined, "acme", run);
     expect(result.repositories[0]?.cloneUrl).toBe("git@github.com:acme/api.git");
   });
 
@@ -158,7 +158,7 @@ describe("listGitHubCloneRepositories", () => {
     const names: string[] = [];
     let cursor: string | undefined;
     do {
-      const page = await listGitHubCloneRepositories(undefined, "acme", run, cursor);
+      const page = await listGitHubCloneRepositories(undefined, undefined, "acme", run, cursor);
       expect(page.repositories.length).toBeLessThanOrEqual(GITHUB_CLONE_REPOSITORY_PAGE_SIZE);
       names.push(...page.repositories.map((repository) => repository.name));
       cursor = page.nextCursor;
@@ -177,6 +177,7 @@ describe("listGitHubCloneRepositories", () => {
       await expect(
         listGitHubCloneRepositories(
           undefined,
+          undefined,
           "acme",
           runner(({ args }) => (args[0] === "config" ? "https" : output)),
           "same",
@@ -185,9 +186,9 @@ describe("listGitHubCloneRepositories", () => {
     }
     const run = runner(() => "");
     for (const cursor of ["", "x".repeat(513)]) {
-      await expect(listGitHubCloneRepositories(undefined, "acme", run, cursor)).rejects.toThrow(
-        "Invalid GitHub repository cursor",
-      );
+      await expect(
+        listGitHubCloneRepositories(undefined, undefined, "acme", run, cursor),
+      ).rejects.toThrow("Invalid GitHub repository cursor");
     }
     expect(run).not.toHaveBeenCalled();
   });
@@ -195,7 +196,7 @@ describe("listGitHubCloneRepositories", () => {
   test("rejects owners that are not GitHub logins without running gh", async () => {
     const calls: Call[] = [];
     const run = runner(() => "[]", calls);
-    await expect(listGitHubCloneRepositories(undefined, "--help", run)).rejects.toThrow(
+    await expect(listGitHubCloneRepositories(undefined, undefined, "--help", run)).rejects.toThrow(
       "Invalid GitHub account name",
     );
     expect(calls).toHaveLength(0);
@@ -205,7 +206,7 @@ describe("listGitHubCloneRepositories", () => {
     const run = runner(({ args }) =>
       args[0] === "config" ? "https" : new CommandFailedError("HTTP 404: Not Found"),
     );
-    await expect(listGitHubCloneRepositories(undefined, "acme", run)).rejects.toThrow(
+    await expect(listGitHubCloneRepositories(undefined, undefined, "acme", run)).rejects.toThrow(
       "Could not list repositories for acme: HTTP 404: Not Found",
     );
   });
@@ -218,14 +219,14 @@ describe("GitHub listing edge cases", () => {
       if (args.includes("graphql")) return pageJson([]);
       return "";
     });
-    expect(await listGitHubCloneAccounts(undefined, run)).toEqual([
+    expect(await listGitHubCloneAccounts(undefined, undefined, run)).toEqual([
       { login: "octocat_acme", kind: "user" },
     ]);
-    expect(await listGitHubCloneRepositories(undefined, "octocat_acme", run)).toEqual({
+    expect(await listGitHubCloneRepositories(undefined, undefined, "octocat_acme", run)).toEqual({
       repositories: [],
       truncated: false,
     });
-    await expect(listGitHubCloneRepositories(undefined, "-x", run)).rejects.toThrow(
+    await expect(listGitHubCloneRepositories(undefined, undefined, "-x", run)).rejects.toThrow(
       "Invalid GitHub account name",
     );
   });
@@ -240,8 +241,8 @@ describe("GitHub listing edge cases", () => {
           args.includes("user") ? "octocat" : args.includes("graphql") ? pageJson([]) : "",
         calls,
       );
-      await listGitHubCloneAccounts(undefined, run);
-      await listGitHubCloneRepositories(undefined, "octocat", run);
+      await listGitHubCloneAccounts(undefined, undefined, run);
+      await listGitHubCloneRepositories(undefined, undefined, "octocat", run);
       for (const call of calls) {
         if (call.args[0] === "api")
           expect(call.args.slice(1, 3)).toEqual(["--hostname", "github.com"]);
@@ -263,8 +264,8 @@ describe("GitHub listing edge cases", () => {
         args.includes("user") ? "octocat" : args.includes("graphql") ? pageJson([]) : "",
       calls,
     );
-    await listGitHubCloneAccounts(source, run);
-    await listGitHubCloneRepositories(source, "octocat", run);
+    await listGitHubCloneAccounts(source, undefined, run);
+    await listGitHubCloneRepositories(source, undefined, "octocat", run);
     const apiCalls = calls.filter((call) => call.args[0] === "api");
     expect(apiCalls).toHaveLength(3);
     for (const call of apiCalls) expect(call.options?.env?.GH_TOKEN).toBe("stored_pat");
@@ -275,10 +276,10 @@ describe("GitHub listing edge cases", () => {
     async (githubToken) => {
       const source = selectedPat(githubToken);
       const run = runner(() => "host-account");
-      await expect(listGitHubCloneAccounts(source, run)).rejects.toThrow(
+      await expect(listGitHubCloneAccounts(source, undefined, run)).rejects.toThrow(
         "personal access token is missing",
       );
-      await expect(listGitHubCloneRepositories(source, "acme", run)).rejects.toThrow(
+      await expect(listGitHubCloneRepositories(source, undefined, "acme", run)).rejects.toThrow(
         "personal access token is missing",
       );
       expect(run).not.toHaveBeenCalled();
@@ -294,6 +295,7 @@ describe("GitHub listing edge cases", () => {
       await expect(
         listGitHubCloneRepositories(
           undefined,
+          undefined,
           "acme",
           runner(({ args }) => (args[0] === "config" ? "https" : output!)),
         ),
@@ -305,6 +307,7 @@ describe("GitHub listing edge cases", () => {
     for (const viewer of ["", "not a login", "--help"]) {
       await expect(
         listGitHubCloneAccounts(
+          undefined,
           undefined,
           runner(({ args }) => (args.includes("user") ? viewer : "acme")),
         ),
@@ -318,7 +321,7 @@ describe("GitHub listing edge cases", () => {
         ? "viewer"
         : Array.from({ length: 1200 }, (_, i) => `org-${i}`).join("\n"),
     );
-    const accounts = await listGitHubCloneAccounts(undefined, run);
+    const accounts = await listGitHubCloneAccounts(undefined, undefined, run);
     expect(accounts).toHaveLength(1201);
     expect(accounts).toContainEqual({ login: "viewer", kind: "user" });
     expect(accounts).toContainEqual({ login: "org-1199", kind: "organization" });
@@ -326,6 +329,7 @@ describe("GitHub listing edge cases", () => {
 
   test("falls back to HTTPS when an SSH-preferred repository has no SSH URL", async () => {
     const result = await listGitHubCloneRepositories(
+      undefined,
       undefined,
       "acme",
       runner(({ args }) =>

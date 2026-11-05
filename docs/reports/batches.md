@@ -82,7 +82,6 @@ These batches don't share a protected area. They only have to respect the confli
 - **E-0650 (Terminal container subscription):** efficiency-logging-database `0650`
 - **E-0680 (Multi Review drift checks):** efficiency-logging-database `0680`
 - **E-0692 (Preview tunnel multiplexing):** efficiency-logging-database `0692`
-- **E-0694 (Attention follow polling):** efficiency-logging-database `0694`
 - **CI-0010 (Backend shard timeout):** ci-shard-validation `0010`
 
 ## Conflicts between lanes

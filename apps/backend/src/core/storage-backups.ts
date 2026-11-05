@@ -399,7 +399,7 @@ export function copyDatabaseInChildProcess(
  * Waits for the worker's exit, so no open copy allocation survives, but not
  * forever once it has had SIGKILL: a lost exit event must still end this process.
  */
-const DATABASE_COPY_SUPERVISOR = String.raw`
+export const DATABASE_COPY_SUPERVISOR = String.raw`
 const { spawn } = require("node:child_process");
 const [source, target, timeoutMs, helper] = process.argv.slice(1);
 const worker = spawn(process.execPath, ["-e", helper, "--", source, target], {

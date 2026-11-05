@@ -154,7 +154,7 @@ Production code and files outside the test suites:
 | `docker/image-manifest.ts` | Not fitting | Re-checked 2026-11-05 after S-0080 merged; the only importer under `docker/`. Synchronous `spawnSync` of `--version` in an image-build script outside the backend; `runCommand` is async. |
 | `apps/backend/src/core/agent-credential-files.ts` | Not fitting | No import: a comment names the module. |
 | `packages/protocol/src/node/command-capture.ts` | Not fitting | This is `runCommand`, with file capture, and the backend re-exports it. Under Bun it uses `Bun.spawn`; the import is for where `Bun` is absent. |
-| `apps/backend/src/core/design/export-writer.ts` | Not fitting | Also imported by Node-based browser tests, where `Bun` is undefined, and its spawn seam lets tests withhold a payload. Left on pipes until a stall is seen; its deadline settles the call. |
+| `apps/backend/src/core/design/export-writer.ts` | Not fitting | Its spawn seam lets tests withhold a payload from a real child. Shared capture supports Node, so runtime compatibility no longer requires pipes. Left on pipes until a stall is seen; its deadline settles the call. |
 | `apps/backend/src/core/fix-path.ts` | Not fitting | Synchronous `execFileSync` of the login shell in a synchronous startup path; `runCommand` is async. |
 | `apps/backend/src/core/process-tree.ts` | Not fitting | Type only. Signals a child it is given and captures nothing. |
 | `apps/backend/src/core/public-api/exec-worker.ts` | Not fitting | Self-contained script text run inside the environment, so it cannot import `runCommand`. It supervises a detached command and follows its output. |

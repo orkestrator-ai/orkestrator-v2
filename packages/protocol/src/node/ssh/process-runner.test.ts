@@ -88,3 +88,23 @@ describe.skipIf(process.platform === "win32")("runBoundedCommand", () => {
     expect(result.timedOut).toBe(true);
   });
 });
+
+test("capture setup errors keep their cause instead of claiming OpenSSH is missing", async () => {
+  const failure = new Error("temporary capture directory unavailable");
+  const broken = {
+    ...context,
+    capture: async () => {
+      throw failure;
+    },
+  };
+  await expect(runBoundedCommand(broken, "ssh", [], BOUNDS)).rejects.toBe(failure);
+});
+
+test.skipIf(process.platform === "win32")(
+  "stderr above the independent stop bound terminates the helper",
+  async () => {
+    const result = await run("head -c 1048577 /dev/zero >&2; exec sleep 30");
+    expect(result).toMatchObject({ overflowed: true, spawnFailed: false, timedOut: false });
+    expect(result.stderr.length).toBe(BOUNDS.maxStderrBytes);
+  },
+);

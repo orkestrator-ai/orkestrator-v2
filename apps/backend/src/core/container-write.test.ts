@@ -76,3 +76,15 @@ describe.skipIf(process.platform === "win32")("runContainerWrite", () => {
     }
   });
 });
+
+test("missing Docker is reported without a null exit status", async () => {
+  process.env.PATH = root;
+  await expect(runContainerWrite("c1", ["true"], "")).rejects.toThrow(
+    "Docker executable not found",
+  );
+});
+
+test("an excessive output fails with its cause", async () => {
+  await fakeDocker("head -c 53000000 /dev/zero");
+  await expect(runContainerWrite("c1", ["true"], "")).rejects.toThrow("output limit exceeded");
+});

@@ -6,7 +6,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loseBunExitEvents } from "@orkestrator/protocol/testing/lost-exit";
-import { runCommand } from "./command-capture.js";
+import { CommandFailedError, runCommand } from "./command-capture.js";
 import {
   CONTAINER_EVIDENCE_REMOVER,
   CONTAINER_EVIDENCE_TIMEOUT_MS,
@@ -265,4 +265,20 @@ describe("runContainerEvidenceScript", () => {
       runContainerEvidenceScript(running("head -c 70000 /dev/zero"), "c1", "", [], ""),
     ).rejects.toThrow("wrote too much");
   });
+});
+
+test("signal termination never exposes the evidence argv", async () => {
+  await expect(
+    runContainerEvidenceScript(
+      async () => {
+        throw new CommandFailedError("docker exec private-id secret-script /private/path", {
+          signal: "SIGKILL",
+        });
+      },
+      "private-id",
+      "secret-script",
+      ["/private/path"],
+      "",
+    ),
+  ).rejects.toThrow(/^Container evidence script terminated without an exit status$/);
 });

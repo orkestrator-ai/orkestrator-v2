@@ -841,6 +841,11 @@ export async function writeContainerReviewPackage(
     if (error.timedOut) {
       throw new Error(`Container review package write timed out after ${timeoutMs}ms`);
     }
+    if (error.executableMissing) throw new Error("Docker executable not found");
+    if (error.outputLimitExceeded)
+      throw new Error("Container review package write output limit exceeded");
+    if (error.exitCode === null)
+      throw new Error("Container review package write terminated without an exit status");
     const diagnostic = Buffer.from(error.stderr)
       .subarray(0, MAX_CONTAINER_REVIEW_PACKAGE_STDERR_BYTES)
       .toString("utf8")

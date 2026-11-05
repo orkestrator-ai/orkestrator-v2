@@ -334,3 +334,58 @@ describe.skipIf(process.platform === "win32")("runFile", () => {
     }
   });
 });
+
+test.skipIf(process.platform === "win32")(
+  "aborting a real detached installer kills it and removes staging",
+  async () => {
+    const layout = standaloneLayout(dataDir);
+    const controller = new AbortController();
+    let childPid = 0;
+    const run: CommandRunner = (_file, _args, options) =>
+      runFile("sh", ["-c", "echo $$; exec sleep 30"], options).catch((error) => {
+        childPid = Number(error.stdout.trim());
+        throw error;
+      });
+    const pending = installRelease(layout, "2.22.0", {
+      bun: "bun",
+      run,
+      signal: controller.signal,
+    });
+    const timer = setTimeout(() => controller.abort(), 150);
+    try {
+      await expect(pending).rejects.toMatchObject({ aborted: true });
+      // SIGKILL delivery precedes asynchronous process reaping.
+      for (let attempt = 0; attempt < 100; attempt++) {
+        try {
+          process.kill(childPid, 0);
+        } catch {
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      expect(childPid).toBeGreaterThan(0);
+      expect(() => process.kill(childPid, 0)).toThrow();
+      expect(readdirSync(layout.releases)).toEqual([]);
+      expect(existsSync(layout.current)).toBe(false);
+    } finally {
+      clearTimeout(timer);
+    }
+  },
+);
+
+test("an installer that returns after abort cannot publish a release", async () => {
+  const layout = standaloneLayout(dataDir);
+  const controller = new AbortController();
+  await expect(
+    installRelease(layout, "2.22.0", {
+      bun: "bun",
+      signal: controller.signal,
+      run: async (...args) => {
+        const result = await fakeInstall("2.22.0")(...args);
+        controller.abort(new Error("interrupted"));
+        return result;
+      },
+    }),
+  ).rejects.toThrow("interrupted");
+  expect(readdirSync(layout.releases)).toEqual([]);
+});

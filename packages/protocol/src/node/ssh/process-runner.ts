@@ -58,14 +58,9 @@ export async function runBoundedCommand(
       spawnFailed: false,
     };
   } catch (error) {
-    // Anything but a command failure, or one that names no outcome, never ran.
-    const ran =
-      error instanceof CommandFailedError &&
-      (error.exitCode !== null ||
-        error.signal !== null ||
-        error.timedOut ||
-        error.outputLimitExceeded);
-    if (!ran) {
+    // Capture setup failures are infrastructure errors, not missing OpenSSH.
+    if (!(error instanceof CommandFailedError)) throw error;
+    if (error.executableMissing) {
       return {
         exitCode: null,
         signal: null,

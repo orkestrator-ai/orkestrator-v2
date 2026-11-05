@@ -207,7 +207,10 @@ export async function runContainerEvidenceScript(
     if (error.outputLimitExceeded) throw new Error("Container evidence script wrote too much");
     const message = error.stderr.split("\n", 1)[0]?.trim().slice(0, 300);
     if (message) throw new Error(message);
-    throw error.exitCode === null ? error : new Error(`docker exec exited with ${error.exitCode}`);
+    if (error.executableMissing) throw new Error("Docker executable not found");
+    if (error.exitCode === null)
+      throw new Error("Container evidence script terminated without an exit status");
+    throw new Error(`docker exec exited with ${error.exitCode}`);
   }
 }
 

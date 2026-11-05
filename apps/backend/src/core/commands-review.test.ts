@@ -935,3 +935,24 @@ test("classifier execution failure seals a package with a limitation", async () 
     runtime.shutdown();
   }
 });
+
+test.each([
+  [{ executableMissing: true }, "Docker executable not found"],
+  [{ outputLimitExceeded: true }, "Container review package write output limit exceeded"],
+  [
+    { signal: "SIGKILL" as const },
+    "Container review package write terminated without an exit status",
+  ],
+])("review writes retain the non-exit failure cause %j", async (details, message) => {
+  await expect(
+    writeContainerReviewPackage(
+      async () => {
+        throw new shell.CommandFailedError("private argv", details);
+      },
+      "c1",
+      "dir",
+      "file",
+      Buffer.from("x"),
+    ),
+  ).rejects.toThrow(message);
+});

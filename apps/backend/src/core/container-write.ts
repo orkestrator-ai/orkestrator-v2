@@ -30,6 +30,9 @@ export async function runContainerWrite(
   } catch (error) {
     if (!(error instanceof CommandFailedError)) throw error;
     if (error.timedOut) throw new Error(`docker exec timed out after ${timeoutMs} ms`);
+    if (error.executableMissing) throw new Error("Docker executable not found");
+    if (error.outputLimitExceeded) throw new Error("docker exec output limit exceeded");
+    if (error.exitCode === null) throw new Error("docker exec terminated without an exit status");
     throw (
       options.errorForExit?.(error.exitCode) ??
       new Error(`docker exec exited with ${error.exitCode}`)

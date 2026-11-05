@@ -1,10 +1,13 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { EventEmitter } from "node:events";
+import { runInNewContext } from "node:vm";
 import { Database } from "bun:sqlite";
 import { spawn, execFileSync, type SpawnOptions } from "node:child_process";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
+  DATABASE_COPY_SUPERVISOR,
   BACKUP_CHECK_INTERVAL_MS,
   BACKUP_DIRECTORY,
   BACKUP_FAILURE_BACKOFF_MS,
@@ -653,4 +656,35 @@ describe("top tables from the backup child", () => {
     database.writeStore("kanban", [{ id: "t2", projectId: "p1" }]);
     expect(await takeHourlySnapshotIfDue(database, directory, clock)).not.toBeNull();
   });
+});
+
+test("the real supervisor forces failure after killing a worker whose exit is lost", () => {
+  const worker = new EventEmitter();
+  const kills: string[] = [];
+  Object.assign(worker, { kill: (signal: string) => kills.push(signal) });
+  const stdin = new EventEmitter();
+  Object.assign(stdin, { resume() {} });
+  const exits: number[] = [];
+  const timers: Array<{ callback: () => void; delay: number }> = [];
+  runInNewContext(DATABASE_COPY_SUPERVISOR, {
+    require: () => ({ spawn: () => worker }),
+    process: {
+      execPath: "bun",
+      argv: ["supervisor", "source", "target", "100", "helper"],
+      stdin,
+      exit: (code: number) => exits.push(code),
+    },
+    setTimeout: (callback: () => void, delay: number) => {
+      timers.push({ callback, delay });
+      return timers.length;
+    },
+    clearTimeout() {},
+  });
+  expect(timers[0]!.delay).toBe(100);
+  timers[0]!.callback();
+  expect(kills).toEqual(["SIGKILL"]);
+  expect(exits).toEqual([]);
+  expect(timers[1]!.delay).toBe(5000);
+  timers[1]!.callback();
+  expect(exits).toEqual([1]);
 });

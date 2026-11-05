@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -84,6 +85,10 @@ export function memoryLifecycleContext(
     },
   };
   const context = {
+    // No provider's credentials are authorized, so a create that stages inputs
+    // reads nothing from the developer's real home. A test wanting them says so.
+    runtimeFlavor: "agent-test",
+    credentialSources: new Set<string>(),
     storage,
     emit: (event: string, payload: unknown) => events.push({ event, payload }),
     appRoot: dataDir,
@@ -92,6 +97,45 @@ export function memoryLifecycleContext(
     runtime: new BackendRuntime({ emit: (event, payload) => context.emit(event, payload) }),
   } as unknown as CommandContext;
   return { context, events, writes, environments: store };
+}
+
+/** An immutable image id for fake Docker scripts to answer with. */
+export const FIXTURE_IMAGE_ID = `sha256:${"c".repeat(64)}`;
+
+/**
+ * Writes the archive `docker cp` streams for an image's manifest, for a fake
+ * Docker script's `cp` to `cat`. New containers need `staged-inputs`, so that
+ * is what a current image declares unless the test says otherwise.
+ */
+export async function imageManifestArchive(
+  dir: string,
+  capabilities: Record<string, number> = { "staged-inputs": 5 },
+  schemaVersion = 1,
+): Promise<string> {
+  const source = await fs.mkdtemp(path.join(dir, "manifest-"));
+  await fs.writeFile(
+    path.join(source, "image-manifest.json"),
+    JSON.stringify({
+      schemaVersion,
+      appVersion: "1.0.0",
+      sourceRevision: "b27421dcfa8de61b9c20a08e79efd7dfbd0c7fc2",
+      architecture: "amd64",
+      runtimes: { bun: "1.4.4", node: "24.21.0" },
+      agents: {},
+      bridges: [],
+      capabilities,
+      stateFormats: {},
+    }),
+  );
+  const archive = path.join(source, "manifest.tar");
+  // Docker emits a plain archive; macOS tar must not add AppleDouble metadata.
+  const tar = spawnSync(
+    "tar",
+    ["--format=ustar", "-cf", archive, "-C", source, "image-manifest.json"],
+    { env: { ...process.env, COPYFILE_DISABLE: "1" } },
+  );
+  if (tar.status !== 0) throw new Error("could not write the manifest archive");
+  return archive;
 }
 
 /**

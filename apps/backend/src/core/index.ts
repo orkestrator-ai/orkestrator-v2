@@ -1,4 +1,5 @@
 import { findCoordinatorCheckoutTurn } from "./coordinator-checkout-turn.js";
+import { combineWorkerMailPorts } from "./build-pipeline-worker-mail.js";
 import { usageLimitAccountRouting } from "./coordinator-usage-limit-account-routing.js";
 import { stopProjectGitMirrorRefreshes } from "./project-git-mirror.js";
 import { runCoordinatorMaintenance } from "./coordinator-maintenance.js";
@@ -128,7 +129,10 @@ import {
   composeWebAnnotationDispatchText,
 } from "./web-annotation-brief.js";
 import type { WebAnnotationToolHost } from "./web-annotation-contracts.js";
-import type { ProvisionalFindingSink } from "./review-provisional-findings.js";
+import {
+  combineProvisionalFindingSinks,
+  type ProvisionalFindingSink,
+} from "./review-provisional-findings.js";
 import {
   createMcpRuntimeProbe,
   mcpRolloutLoader,
@@ -761,7 +765,9 @@ export class OrkestratorBackend {
         // A build pipeline worker's turn, read from its pipeline: an ended
         // worker reads idle, so a delegation to it settles.
         if (isPipelineWorkerTabId(tabId)) {
-          const status = await this.buildPipelines.workerMail.state(environmentId, tabId);
+          const status =
+            (await this.buildPipelines.workerMail.state(environmentId, tabId)) ??
+            (await this.multiReviews.workerMail.state(environmentId, tabId));
           return status === "running" ? "working" : status === null ? "unknown" : "idle";
         }
         return (await workerSessionActivity(storage, this.nativeAgents, environmentId, tabId)).turn;
@@ -1390,9 +1396,20 @@ export class OrkestratorBackend {
           usageLimitStops: this.accountAutoSwitch,
         },
         resolveAgentToolConnection,
+        resolveWorkerToolConnection: (environmentId, projectId, target, tabId) =>
+          this.agentTools.connection(environmentId, projectId, target, tabId),
         assertAgentToolsReachable,
         artifactDispatch,
         artifactLedger,
+        environmentFence: context.runtime.environments.fence,
+        assertEnvironmentQuiescent: async (environmentId) => {
+          if (await this.nativeAgents.hasActiveCheckoutWork(environmentId)) {
+            throw new Error(
+              "An agent may still write to this environment. Stop it before rewinding code.",
+            );
+          }
+        },
+        environmentGit: createPipelineEnvironmentGit(storage, context.runtime.environments.fence),
         dispatchAddressFindingsPrompt: (workflow, presentation) =>
           dispatchMultiReviewAddressFindingsPrompt(
             this.nativeAgents,
@@ -1686,7 +1703,12 @@ export class OrkestratorBackend {
       this.agentTools as {
         setProvisionalFindingSink?: (sink: ProvisionalFindingSink | null) => void;
       }
-    ).setProvisionalFindingSink?.(this.multiReviews.provisionalFindingSink());
+    ).setProvisionalFindingSink?.(
+      combineProvisionalFindingSinks([
+        this.multiReviews.provisionalFindingSink(),
+        this.buildPipelines.provisionalFindingSink(),
+      ]),
+    );
     this.featurePlanning = new FeaturePlanningService(
       storage,
       async <T>(command: string, args: Record<string, unknown> = {}) => {
@@ -1724,15 +1746,24 @@ export class OrkestratorBackend {
           if (handler) await handler({ environmentId }, context);
         },
       ),
-      pipelineWorkers: this.buildPipelines.workerMail,
+      pipelineWorkers: combineWorkerMailPorts([
+        this.buildPipelines.workerMail,
+        this.multiReviews.workerMail,
+      ]),
     });
-    // A pipeline worker's queued mail becomes its next turn at its turn end.
-    this.buildPipelines.setWorkerMailbox({
-      claim: (environmentId, tabId, requestId) =>
+    // A worker's queued mail becomes its next turn at its turn end.
+    const workerMailbox = {
+      claim: (environmentId: string, tabId: string, requestId: string) =>
         this.agentMail.claimPipelineWorkerMail(environmentId, tabId, requestId),
-      settle: (environmentId, tabId, messageIds, outcome) =>
-        this.agentMail.settlePipelineWorkerMail(environmentId, tabId, messageIds, outcome),
-    });
+      settle: (
+        environmentId: string,
+        tabId: string,
+        messageIds: readonly string[],
+        outcome: "accepted" | "returned",
+      ) => this.agentMail.settlePipelineWorkerMail(environmentId, tabId, messageIds, outcome),
+    };
+    this.buildPipelines.setWorkerMailbox(workerMailbox);
+    this.multiReviews.setWorkerMailbox(workerMailbox);
     context.drainAgentMail = () => this.agentMail.drainInjects();
     // Scoped workflow wakeups (step 08), subscribed before any owner's first
     // discovery so nothing that commits during startup is missed. Each wake
@@ -2878,6 +2909,7 @@ export class OrkestratorBackend {
       noteControllerContact: (id) => this.nodes.noteControllerContact(id),
       authenticateGrant: (token) => this.nodePortal.grants.authenticate(token)?.expiresAt ?? null,
       relayTarget: (nodeId) => this.nodePortal.relayTarget(nodeId),
+      isRelayedNodeWatched: (nodeId) => this.nodePortal.events.isWatched(nodeId),
     };
   }
 

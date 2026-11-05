@@ -22,6 +22,7 @@ import {
   type PipelineSession,
   type PipelineSessionPhase,
 } from "./build-pipeline.js";
+import type { MultiReviewWorkflow } from "./multi-review.js";
 import type { ReviewerRecord } from "./review-fanout.js";
 
 /** The pane-layout tab type a worker mailbox reports; no pane ever holds one. */
@@ -110,7 +111,10 @@ function stepOf(session: Pick<PipelineSession, "phase" | "label" | "sessionKey">
   return { step: session.phase };
 }
 
-function reviewerStatus(record: Pick<ReviewerRecord, "status">, running: boolean) {
+function reviewerStatus(
+  record: Pick<ReviewerRecord, "status">,
+  running: boolean,
+): PipelineWorkerStatus {
   switch (record.status) {
     case "pending":
       return running ? "running" : "idle";
@@ -222,6 +226,39 @@ export function pipelineWorkers(
     });
   }
   return workers;
+}
+
+/**
+ * A Multi Review's reviewers as workers, once each has a session. Reviewers are
+ * the panel's only workers: preparation, consolidation and Address Findings keep
+ * their own session handling. Addressed like a pipeline's, so one store, directory
+ * and set of tools serve both.
+ */
+export function multiReviewWorkers(
+  workflow: Pick<MultiReviewWorkflow, "id" | "environmentId" | "phase" | "reviewers">,
+): PipelineWorker[] {
+  if (!workflow.environmentId || !Array.isArray(workflow.reviewers)) return [];
+  const live = workflow.phase === "reviewing";
+  return workflow.reviewers.flatMap((reviewer, index) => {
+    if (!reviewer.sessionKey || !reviewer.providerSessionId) return [];
+    const status = reviewerStatus(reviewer, reviewer.status === "running");
+    return [
+      {
+        address: pipelineWorkerTabId(reviewer.sessionKey),
+        environmentId: workflow.environmentId,
+        pipelineId: workflow.id,
+        sessionKey: reviewer.sessionKey,
+        step: "review" as const,
+        round: 1,
+        slot: index + 1,
+        label: `Reviewer ${index + 1}`,
+        agent: reviewer.agent as BuildPipelineAgent,
+        ...(reviewer.model && !reviewer.modelUnpinned ? { model: reviewer.model } : {}),
+        // A review that left its reviewers' stage has no turn left to take mail.
+        status: !live && status === "running" ? ("cancelled" as const) : status,
+      },
+    ];
+  });
 }
 
 /** The worker one address names in this pipeline, or undefined. */

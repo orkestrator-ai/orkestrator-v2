@@ -148,6 +148,26 @@ export function usePipelineControls(pipeline: BuildPipeline | undefined, onFollo
       }
     });
 
+  const restartReviewer = (reviewerId: string) =>
+    run(async () => {
+      try {
+        replacePipeline(await backend.restartBuildPipelineReviewer(pipeline!.id, reviewerId));
+        toast.success("Reviewer restarted");
+      } catch (error) {
+        toast.error("Failed to restart the reviewer", { description: describe(error) });
+      }
+    });
+
+  const stopReviewer = (reviewerId: string) =>
+    run(async () => {
+      try {
+        replacePipeline(await backend.stopBuildPipelineReviewer(pipeline!.id, reviewerId));
+        toast.success("Reviewer stopped");
+      } catch (error) {
+        toast.error("Failed to stop the reviewer", { description: describe(error) });
+      }
+    });
+
   return {
     pending,
     pause: () => void runControl("pause"),
@@ -160,6 +180,8 @@ export function usePipelineControls(pipeline: BuildPipeline | undefined, onFollo
     rewindCode,
     skipStage: (stageId: string) => void skipStage(stageId),
     retryReviewer: (reviewerId: string) => void retryReviewer(reviewerId),
+    restartReviewer: (reviewerId: string) => void restartReviewer(reviewerId),
+    stopReviewer: (reviewerId: string) => void stopReviewer(reviewerId),
   };
 }
 

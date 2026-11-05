@@ -2,7 +2,7 @@
 
 Which files under `docs/reports` can be built together, and which pieces of work must not run at the same time. Each folder's `0000-index.md` has the same information for its own files, in a **Parallel running** section.
 
-Worked out on 2026-11-03 against `main` at `a44641cbc`, from the 167 work files in the four folders. On 2026-11-04, 137 of them were combined into the 41 batch files listed under [Batch files](#batch-files), which keep each report as a numbered part, with repeated text removed. That leaves 71 files. The other 30 are built on their own, need a decision or measurement first, or are blocked. E1 is a set of baseline tasks inside other batch files, so it has no file of its own. E8 (Agent tab polling) was built on 2026-11-04 and its file deleted, so this plan no longer lists it; its result is in [1202 task 4](../todo/cross-cutting/1202-efficiency-review-follow-ups.md). E-0120 (Bearer terminal streams) was built on 2026-11-05 and its file deleted too; GW-3 is recorded as done in the efficiency index.
+Worked out on 2026-11-03 against `main` at `a44641cbc`, from the 167 work files in the four folders. On 2026-11-04, 137 of them were combined into the 41 batch files listed under [Batch files](#batch-files), which keep each report as a numbered part, with repeated text removed. That leaves 71 files. The other 30 are built on their own, need a decision or measurement first, or are blocked. E1 is a set of baseline tasks inside other batch files, so it has no file of its own. E8 (Agent tab polling) was built on 2026-11-04 and its file deleted, so this plan no longer lists it; its result is in [1202 task 4](../todo/cross-cutting/1202-efficiency-review-follow-ups.md). E-0120 (Bearer terminal streams) was built on 2026-11-05 and its file deleted too; GW-3 is recorded as done in the efficiency index. C4 (Tool surface) was built on 2026-11-05 and its file deleted; what it could not prove without real provider turns is in [4920](../todo/coordinator-and-multi-review/4920-coordinator-tool-surface-live-follow-ups.md).
 
 ## Rules
 
@@ -17,7 +17,6 @@ Worked out on 2026-11-03 against `main` at `a44641cbc`, from the 167 work files 
 | Batch | File | Parts |
 | --- | --- | --- |
 | X1 | [security/0090-x1-coordinator-trust-boundary.md](security/0090-x1-coordinator-trust-boundary.md) | `Security 0090`, `Security 0180`, `Security 0210`, `Coordinator 0120`, `Coordinator 0310` |
-| C4 | [coordinator/0040-c4-tool-surface.md](coordinator/0040-c4-tool-surface.md) | `0040`, `0130`, `0150`, `0160` |
 | C2 | [coordinator/0080-c2-workflow-records.md](coordinator/0080-c2-workflow-records.md) | `0080`, `0100`, `0380` |
 | C3 | [coordinator/0110-c3-sweep-and-reads.md](coordinator/0110-c3-sweep-and-reads.md) | `0110`, `0370` |
 | C7 | [coordinator/0060-c7-work-panel-and-navigation.md](coordinator/0060-c7-work-panel-and-navigation.md) | `0060`, `0260`, `0280`, `0450` |
@@ -49,7 +48,7 @@ Worked out on 2026-11-03 against `main` at `a44641cbc`, from the 167 work files 
 
 | Lane | Run order | Code it protects |
 | --- | --- | --- |
-| Coordinator backend | 1. C4 (Tool surface)<br>2. X1 (Coordinator trust boundary)<br>3. C2 (Workflow records)<br>4. C3 (Sweep and reads) | `coordinator-service.ts`, `control-mcp-tools.ts`, the protocol's `coordinator.ts` and the context prompt in `native-agent-service.ts` |
+| Coordinator backend | 1. X1 (Coordinator trust boundary)<br>2. C2 (Workflow records)<br>3. C3 (Sweep and reads) | `coordinator-service.ts`, `control-mcp-tools.ts`, the protocol's `coordinator.ts` and the context prompt in `native-agent-service.ts` |
 | Coordinator panel | 1. C7 (Work panel and navigation)<br>2. C8 (Tab strip)<br>3. C6 (Errors and dead ends)<br>4. C10 (Explanations)<br>5. C-0390 (Panel re-render cost, measure first) | `CoordinatorPanel.tsx`, `CoordinatorPanelNotices.tsx`, `TabShell.tsx` |
 | Containers | 1. S-0080 (Legacy host mounts)<br>2. S-0100 (Egress SNI and DNS)<br>3. S-0170 (Agent-tools bind address)<br>4. E14 (Docker logs)<br>5. E25 (Container start) | `commands-containers.ts`, `commands-registry-servers.ts` and the `docker/` entrypoint, setup and firewall scripts |
 | Transcript | 1. E9 (Transcript reads)<br>2. E10 (Conditional reads and deltas)<br>3. E11 (Projection hashing)<br>4. E12 (Renderer store) | `native-agent-transcript-projection.ts` (5,570 lines), `useNativeAgentSession.ts` (3,870 lines), `nativeAgentProjectionStore.ts` |
@@ -113,7 +112,7 @@ These files are named by several batches that can still run together. The report
 | `apps/backend/src/core/index.ts` | E9, E13, E15, S-0170 |
 | `gateway-support-core.ts` | E15, E17, E18, E24 |
 | `native-agent-transcript-projection.ts` | E15 (`0880` task 1) with the Transcript lane |
-| `native-agent-service.ts`, `control-mcp-tools.ts` | E9 with C2, C3, C4 and X1 |
+| `native-agent-service.ts`, `control-mcp-tools.ts` | E9 with C2, C3 and X1 |
 | `commands-files.ts` | E7, E-0580 |
 | `commands-servers.ts` | C6, E3, E13, E20 |
 | `GlobalSettings.sections.tsx` | C6, E15, E17 |

@@ -108,7 +108,8 @@ function git(args, options = {}) {
       }
     };
     try {
-      captureFds.push(openCaptureFile(), openCaptureFile());
+      captureFds.push(openCaptureFile());
+      captureFds.push(openCaptureFile());
     } catch (error) {
       releaseCapture();
       reject(error);

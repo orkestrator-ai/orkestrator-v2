@@ -304,7 +304,8 @@ export function copyDatabaseInChildProcess(
     };
     let child: ChildProcess;
     try {
-      captureFds.push(openCaptureFile(), openCaptureFile());
+      captureFds.push(openCaptureFile());
+      captureFds.push(openCaptureFile());
       child = (options.spawn ?? spawn)(
         process.execPath,
         [

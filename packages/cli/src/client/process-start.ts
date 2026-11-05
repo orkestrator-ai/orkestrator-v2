@@ -1,3 +1,4 @@
+import { linuxProcessIdentity } from "@orkestrator/protocol/backend-instance";
 import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
 
@@ -121,4 +122,18 @@ export function parsePsLstart(output: string): number | null {
   ];
   const time = Date.UTC(year, month, day, hours, minutes, seconds);
   return Number.isFinite(time) ? time : null;
+}
+
+/** No epoch conversion: changing btime cannot change this identity. */
+export async function readLinuxProcessIdentity(
+  pid: number,
+  readText: (file: string) => Promise<string> = defaultSources.readText,
+): Promise<string | null> {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return null;
+  try {
+    const boot = await readText("/proc/sys/kernel/random/boot_id");
+    return linuxProcessIdentity(boot, await readText(`/proc/${pid}/stat`));
+  } catch {
+    return null;
+  }
 }

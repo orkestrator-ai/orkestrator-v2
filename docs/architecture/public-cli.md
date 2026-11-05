@@ -89,22 +89,19 @@ errors and invalid contents are refusals. Service startup and generation reads
 also surface refusals immediately. A failed PID probe, including `EPERM`, counts
 as gone, closing the cross-user PID-reuse case.
 
-A live PID is then bound to the backend that wrote the descriptor by its start
-time (`descriptorProcessRefusal`, `packages/cli/src/client/process-start.ts`),
-before the credential file is read or anything is sent. Linux reads
-`/proc/<pid>/stat` field 22 against `btime` in `/proc/stat`; macOS runs
-`/bin/ps -o lstart=` in the C locale and UTC. The process must have started no
-more than 30 seconds after the descriptor's `startedAt` and no more than one
-hour before it. `startedAt` is written once the backend is serving, so the
-process always predates it by its boot time (the hour); a PID reused after the
-backend exits can only have started later, so the 30 seconds only absorbs the
-one-second resolution of both sources and small wall-clock corrections. A start
-time that cannot be read, or a `startedAt` that is not a time, is refused
-(`connection-failed`, "cannot be confirmed"). The CLI ships for Linux and macOS
-only; on any other platform the start time is unreadable, so descriptors are
-refused. Service startup applies the same check before it reads the token of a
-newly published descriptor. The check binds the descriptor to the process, not
-to the port's listener: a live backend's port is its own.
+A live PID is bound to the backend before every credential read, including
+polls and credential-rotation retries. On Linux, the descriptor publishes
+`processIdentity`: the boot ID plus field 22 (start ticks) of the process's
+procfs stat. The client compares these exactly, without converting through
+wall-clock boot time. Clock corrections therefore cannot invalidate the binding.
+Older Linux backends must be upgraded and restarted to publish this identity;
+missing or unreadable identities fail closed.
+
+On macOS, the client reads `/bin/ps -o lstart=` with a fixed locale and UTC
+timezone. The start must be within one hour before to 30 seconds after the
+descriptor's `startedAt`, allowing backend initialization time and timestamp
+resolution. Unreadable or mismatching values fail closed. Service startup
+applies the same guard before reading a fresh descriptor's token.
 
 The installation ID is stable per data directory (a copied directory gets a
 new one). Every public response carries `backend.installationId`/`generation`;

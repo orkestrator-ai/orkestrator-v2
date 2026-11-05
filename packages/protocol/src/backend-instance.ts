@@ -43,6 +43,8 @@ export interface BackendInstanceDescriptor {
   generation: string;
   pid: number;
   startedAt: string;
+  /** Linux boot ID and start ticks; stable across wall-clock changes. */
+  processIdentity?: string;
   /** Primary gateway URL (the loopback control listener when one exists). */
   url: string;
   /** Browser/remote listener URL, when one is serving. */
@@ -152,6 +154,9 @@ export function parseBackendInstanceDescriptor(value: unknown): BackendInstanceD
     generation: text("generation", 200),
     pid: value.pid as number,
     startedAt: text("startedAt", 64),
+    ...(value.processIdentity !== undefined
+      ? { processIdentity: text("processIdentity", 128) }
+      : {}),
     url: value.url,
     ...(value.browserUrl !== undefined ? { browserUrl: value.browserUrl as string } : {}),
     ...(endpoints !== undefined ? { endpoints } : {}),
@@ -161,4 +166,18 @@ export function parseBackendInstanceDescriptor(value: unknown): BackendInstanceD
     appVersion: text("appVersion", 64),
     publicApiSchemaVersion: value.publicApiSchemaVersion as number,
   };
+}
+
+/** A boot-relative Linux identity, or null for malformed procfs data. */
+export function linuxProcessIdentity(bootId: string, stat: string): string | null {
+  const boot = bootId.trim();
+  const close = stat.lastIndexOf(")");
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(boot) || close < 0)
+    return null;
+  const ticks = stat
+    .slice(close + 2)
+    .split(" ")
+    .at(19);
+  if (!ticks || !/^\d+$/.test(ticks) || !Number.isSafeInteger(Number(ticks))) return null;
+  return `${boot}:${ticks}`;
 }

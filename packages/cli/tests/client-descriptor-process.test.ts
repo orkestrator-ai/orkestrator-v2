@@ -1,3 +1,4 @@
+import { GatewayTransport } from "../src/client/transport.js";
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
@@ -8,6 +9,7 @@ import {
   parseProcStatStartTicks,
   parsePsLstart,
   readProcessStartTime,
+  readLinuxProcessIdentity,
   type ProcessStartSources,
 } from "../src/client/process-start.js";
 import { awaitServiceConnection } from "../src/client/service-connection.js";
@@ -293,7 +295,7 @@ describe.skipIf(!supported)("commands refuse a reused descriptor pid", () => {
     expect(result.code).toBe(4);
     const error = JSON.parse(result.out).error;
     expect(error.code).toBe("connection-failed");
-    expect(error.message).toContain(`pid ${child.pid} belongs to a process started at`);
+    expect(error.message).toContain("descriptor is stale");
     expect(backend.requests).toHaveLength(0);
   });
 
@@ -377,3 +379,95 @@ describe("the start time is checked before the token is read", () => {
     expect(connection?.token).not.toBeNull();
   });
 });
+
+describe("cached target process binding", () => {
+  for (const changed of [null, Date.now() + 120_000]) {
+    for (const retry of [false, true]) {
+      test(`blocks ${retry ? "401 retry" : "next request"} after process becomes ${changed === null ? "unreadable" : "reused"}`, async () => {
+        const box = await sandbox();
+        const backend = await gateway();
+        const dataDir = await box.publishDescriptor(backend);
+        let start: number | null = Date.now();
+        const target = await resolveSavedConnection(
+          "local",
+          {
+            kind: "descriptor",
+            descriptorPath: path.join(dataDir, "backend-instance.json"),
+            addedAt: new Date().toISOString(),
+          },
+          async () => start,
+        );
+        let requests = 0;
+        const transport = new GatewayTransport(target, async () => {
+          requests++;
+          start = changed;
+          // If the guard is bypassed, token reading fails with auth-failed.
+          await rm(path.join(dataDir, "gateway-auth.json"));
+          return new Response("{}", { status: retry ? 401 : 200 });
+        });
+        if (!retry) await transport.invoke("test", {}, { mutation: false });
+        await expect(transport.invoke("test", {}, { mutation: false })).rejects.toMatchObject({
+          code: "connection-failed",
+        });
+        expect(requests).toBe(1);
+      });
+    }
+  }
+});
+
+test.skipIf(process.platform !== "linux")(
+  "Linux binding ignores shifted btime and detects changed ticks and boot ID",
+  async () => {
+    const boot = "11111111-1111-1111-1111-111111111111";
+    let bootId = boot;
+    let ticks = "12345";
+    let btime = 1762300000;
+    const readText = async (file: string) => {
+      if (file.endsWith("boot_id")) return bootId;
+      if (file === "/proc/stat") return `btime ${btime}`;
+      const fields = Array.from({ length: 50 }, () => "0");
+      fields[18] = ticks;
+      return `4242 (backend) S ${fields.join(" ")}`;
+    };
+    const first = await readLinuxProcessIdentity(4242, readText);
+    expect(first).toBe(`${boot}:12345`);
+    btime += 3600;
+    expect(await readLinuxProcessIdentity(4242, readText)).toBe(first);
+    btime -= 7200;
+    expect(await readLinuxProcessIdentity(4242, readText)).toBe(first);
+    ticks = "12346";
+    expect(await readLinuxProcessIdentity(4242, readText)).not.toBe(first);
+    ticks = "12345";
+    bootId = "22222222-2222-2222-2222-222222222222";
+    expect(await readLinuxProcessIdentity(4242, readText)).not.toBe(first);
+    expect(await readLinuxProcessIdentity(4242, async () => "garbage")).toBeNull();
+    expect(
+      await readLinuxProcessIdentity(4242, async () => {
+        throw new Error("gone");
+      }),
+    ).toBeNull();
+  },
+);
+
+test.skipIf(process.platform !== "linux")(
+  "Linux descriptors require stable identity and survive wall-clock shifts",
+  async () => {
+    const identity = await readLinuxProcessIdentity(process.pid);
+    expect(identity).not.toBeNull();
+    for (const startedAt of ["2000-01-01T00:00:00Z", "2099-01-01T00:00:00Z"]) {
+      expect(
+        await descriptorProcessRefusal({ pid: process.pid, startedAt, processIdentity: identity! }),
+      ).toBeNull();
+    }
+    expect(
+      await descriptorProcessRefusal({ pid: process.pid, startedAt: new Date().toISOString() }),
+    ).toContain("upgraded backend");
+    expect(
+      await descriptorProcessRefusal({
+        pid: process.pid,
+        startedAt: "",
+        processIdentity: identity + "1",
+      }),
+    ).toContain("descriptor is stale");
+  },
+);

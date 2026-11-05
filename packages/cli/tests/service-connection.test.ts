@@ -1,3 +1,4 @@
+import { readLinuxProcessIdentity } from "../src/client/process-start.js";
 import { afterEach, describe, expect, test } from "bun:test";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -38,6 +39,8 @@ async function publish(
       generation: overrides.generation ?? "gen-2",
       pid: overrides.pid ?? process.pid,
       startedAt: new Date().toISOString(),
+      processIdentity:
+        process.platform === "linux" ? await readLinuxProcessIdentity(process.pid) : undefined,
       url: "http://127.0.0.1:40000",
       browserUrl: overrides.browserUrl ?? "https://host.tailnet.ts.net",
       authFile,

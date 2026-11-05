@@ -1,3 +1,4 @@
+import { readLinuxProcessIdentity } from "../../src/client/process-start.js";
 import { mkdtemp, rm, writeFile, chmod, mkdir } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -205,6 +206,8 @@ export async function createSandbox(): Promise<ClientSandbox> {
           generation: "gen-1",
           pid: options.pid ?? process.pid,
           startedAt: new Date().toISOString(),
+          processIdentity:
+            process.platform === "linux" ? await readLinuxProcessIdentity(process.pid) : undefined,
           url: gateway.url,
           authFile,
           dataDir,

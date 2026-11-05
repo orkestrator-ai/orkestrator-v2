@@ -49,7 +49,7 @@ runner there only checks preview-worker staging).
 **Decisions.**
 
 - **How to get the evidence?**
-  - **Run the CLI package tests and one packaged-client connection on a Mac once (recommended).** `bun test --preload ../../tests/setup-node.ts tests/client-descriptor-process.test.ts tests/cli.test.ts --parallel=2` in `packages/cli` after `bun run build`, then `orkestrator connection add` against a throwaway `dev:test` profile's data directory.
+  - **Run the CLI package tests and one packaged-client connection on a Mac once (recommended).** `bun --cwd packages/cli test --preload ../../tests/setup-node.ts tests/client-descriptor-process.test.ts tests/cli.test.ts --parallel=2` from the repository root after `bun run --cwd packages/cli build`, then `orkestrator connection add` against a throwaway `dev:test` profile's data directory.
     - Pros: cheap; proves the real `ps` output and a real backend's `startedAt` both fit; no code change.
     - Cons: one-off; a later macOS `ps` change would go unnoticed.
   - **Add a macOS job to CI that runs the CLI package tests.**
@@ -60,3 +60,9 @@ runner there only checks preview-worker staging).
 
 - `docs/architecture/public-cli.md` (the instance descriptor section)
 - [Security review, §5 Low severity](../../reports/2-26-10-27-security.md#5-low-severity) (L12)
+
+## Assumptions and decisions
+
+### Task 1: real macOS qualification
+
+The review repair ran on Linux, so the real macOS run remains open. Fake BSD ps coverage and the portable real-child test do not substitute for that evidence.

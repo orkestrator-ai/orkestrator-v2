@@ -16,7 +16,11 @@ import {
 } from "@orkestrator/protocol/node/runtime-profile-status";
 import { assertPrivateFile, CliConfigStore, type SavedConnection } from "./config.js";
 import { CliError } from "./errors.js";
-import { readProcessStartTime, type ProcessStartReader } from "./process-start.js";
+import {
+  readLinuxProcessIdentity,
+  readProcessStartTime,
+  type ProcessStartReader,
+} from "./process-start.js";
 
 /**
  * A concrete backend the client will talk to. Resolution is explicit:
@@ -254,11 +258,22 @@ export const DESCRIPTOR_START_AFTER_TOLERANCE_MS = 30 * 1000;
  * rather than trusted, since nothing then ties the pid to the backend.
  */
 export async function descriptorProcessRefusal(
-  descriptor: Pick<BackendInstanceDescriptor, "pid" | "startedAt">,
+  descriptor: Pick<BackendInstanceDescriptor, "pid" | "startedAt" | "processIdentity">,
   readStart: ProcessStartReader = readProcessStartTime,
   alive: (pid: number) => boolean = processIsAlive,
 ): Promise<string | null> {
   if (!alive(descriptor.pid)) return "is not running as your user (its descriptor is stale)";
+  if (process.platform === "linux" && readStart === readProcessStartTime) {
+    if (!descriptor.processIdentity) {
+      return "cannot be confirmed: restart an upgraded backend to publish its Linux process identity";
+    }
+    const identity = await readLinuxProcessIdentity(descriptor.pid);
+    if (identity === null)
+      return "cannot be confirmed: its Linux process identity could not be read";
+    return identity === descriptor.processIdentity
+      ? null
+      : "is not running: its process identity changed (its descriptor is stale)";
+  }
   const startedAt = Date.parse(descriptor.startedAt);
   if (!Number.isFinite(startedAt)) {
     return "cannot be confirmed: its descriptor has no valid start time";
@@ -306,7 +321,12 @@ async function descriptorTarget(
     },
     baseUrl,
     // The service's own auth file is created mode 0600 by the backend.
-    readToken: () => readTokenFile(descriptor.authFile, true),
+    readToken: async () => {
+      const refusal = await descriptorProcessRefusal(descriptor, readStart);
+      if (refusal)
+        throw new CliError("connection-failed", `The backend for ${kind} '${name}' ${refusal}`);
+      return readTokenFile(descriptor.authFile, true);
+    },
     expectedInstallationId: descriptor.installationId,
     descriptorGeneration: descriptor.generation,
     refresh,

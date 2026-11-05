@@ -38,7 +38,7 @@ governs, marked "Decided".
 8. **tmux and container polling**: the rest of BG-1, BG-2 and BG-8, plus BG-7, BG-14 and BG-15. Status: open (BG-1, BG-2, BG-7 and BG-8 done 2026-11-03, image proven locally; BG-14 done 2026-11-04, its remaining live evidence in [5120](../transcripts-and-observation/5120-tmux-transcript-reopen-live-evidence.md); BG-15 open).
 9. **PR monitor cost**: batched queries, then activity backoff (BG-6, BG-13). Status: done (2026-11-03; live before-and-after numbers stay with task 1).
 10. **Other background jobs**: the rest of BG-3, plus BG-9, BG-11 and BG-12. Status: done (2026-11-02; live before-and-after numbers stay with task 1).
-11. **Gateway and preview proxy**: GW-5, GW-6, GW-8 to GW-12 and GW-14 to GW-16. Status: open (GW-8 and GW-9 done; GW-4 done; GW-2 done in 0052; GW-5, GW-6, GW-12 and GW-14 done 2026-11-04, a flooding terminal channel no longer desyncs a quiet one; GW-16 done 2026-11-04, live checks beyond loopback Chromium are in [5080](5080-terminal-websocket-live-evidence.md); GW-11 done 2026-11-05, its live checks are in [5840](5840-relayed-events-live-evidence.md) and the desktop's own stream in [5841](5841-desktop-main-relayed-stream.md); GW-10 and GW-15 open).
+11. **Gateway and preview proxy**: GW-5, GW-6, GW-8 to GW-12 and GW-14 to GW-16. Status: done (GW-8 and GW-9 done; GW-4 done; GW-2 done in 0052; GW-5, GW-6, GW-12 and GW-14 done 2026-11-04, a flooding terminal channel no longer desyncs a quiet one; GW-16 done 2026-11-04, live checks beyond loopback Chromium are in [5080](5080-terminal-websocket-live-evidence.md); GW-11 done 2026-11-05, its live checks are in [5840](5840-relayed-events-live-evidence.md) and the desktop's own stream in [5841](5841-desktop-main-relayed-stream.md); GW-15 done 2026-11-05, a revalidation by date alone is [6160](6160-static-if-modified-since-compression.md); GW-10 declined 2026-11-05 on first-load numbers, with the rewriter unchanged).
 12. **Local desktop transport**: local windows on the filtered gateway transport, and the IPC payload costs (DK-1, DK-2, DK-5, DK-6). Status: done (DK-1, DK-2 and DK-5 on 2026-11-04 behind a setting that is off by default; DK-6 fixed on 2026-11-04 by tunnel v2, [4500](4500-preview-tunnel-one-socket-per-connection.md); the default flip is [4501](4501-local-window-transport-default.md)).
 13. **Toolchain startup and downloads**: stamp-based verification and resumable downloads (DK-3, DK-4). Status: done (2026-11-03; Electron launch-to-ready 10.2–13.8 s before, 1.6–1.9 s after; a cold-cache run still needs live evidence).
 14. **Docker image size**: layer order, the second Bun, npm caches, the leftover apt layer and the second Claude binary (DK-7 to DK-11). Status: open (DK-7, DK-8, DK-9 and DK-11 done 2026-11-02; amd64 image smoke and Docker qualification passed; DK-10 left for a maintainer decision).
@@ -1066,7 +1066,7 @@ Tests: `commands-pr-monitor-batch.test.ts` (reader rules, and the `gh` boundary 
 
 ### 11. Gateway and preview proxy
 
-**Problem.** Per-frame and per-request costs remain in the gateway (GW-10, GW-15). The preview proxy's missing upstream connection reuse (GW-8) and stripped ETags (GW-9), the terminal socket back-pressure (GW-6), the event frame costs (GW-5, GW-12, GW-14), the small per-chunk and per-frame costs (GW-16) and the shared name and window of relayed events (GW-11) are fixed.
+**Problem.** Per-frame and per-request costs in the gateway. The preview proxy's missing upstream connection reuse (GW-8) and stripped ETags (GW-9), the terminal socket back-pressure (GW-6), the event frame costs (GW-5, GW-12, GW-14), the small per-chunk and per-frame costs (GW-16), the shared name and window of relayed events (GW-11) and the compression before a static 304 (GW-15) are fixed. The preview rewrite's regex passes (GW-10) were measured and declined.
 
 **Context.** Done: the shared SSE decoder is linear (GW-4). GW-2 is done in 0052 (D14). Done on 2026-11-02:
 
@@ -1079,6 +1079,8 @@ Tests: `commands-pr-monitor-batch.test.ts` (reader rules, and the `gh` boundary 
 - GW-11, done 2026-11-05 (batch E18): relayed events are named `relayed-node-event:<nodeId>` and kept in their own ring (`relayedEventReplay`, 512 frames, 512 KiB). A renderer reads them on one stream filtered to its watched nodes, with its own cursor (`RelayedEventStream`, `apps/web/src/lib/native/relayed-event-stream.ts`), and its main stream asks for none. A stream that does not ask keeps getting the old name, with a `resync` per node on reconnect; both directions are in the [register](../../architecture/version-compatibility.md#register). Tests: `apps/backend/tests/gateway-relayed-events.test.ts`, `apps/web/src/lib/native/web-gateway-relayed-stream.test.ts`, the per-node cases in `node-events.test.ts`. Live checks: [5840](5840-relayed-events-live-evidence.md). The desktop's main process stays on the old name: [5841](5841-desktop-main-relayed-stream.md).
 - Scoped replay budget, done 2026-11-05 (batch E18): `replayFitsClientBudget` charges a scoped client for matching frames plus one cursor per run of skips. Tests: "the replay budget of a scoped client" in `apps/backend/tests/gateway-frame-costs.test.ts`.
 - GW-16, done 2026-11-04. Idle deadlines: `gateway-proxy.ts` (`rewriteIdle`, `armIdleTimer`) and `preview-forward.ts` (`resetIdle`) refresh one timer per body. Decoders: two module-level decoders in `terminal-websocket-server.ts`. Operation results: on the `orkestrator-terminal.v1.input-results` subprotocol, input that succeeded is answered by one cumulative `input-results` frame per channel per flush; failures and resizes stay alone, and results collected so far go out ahead of any other control frame, so control frames keep their order. A client offering only v1 keeps one `operation-result` per input, and such a socket counts `terminal-websocket.per-input-results`. Acks: `DEFAULT_TERMINAL_ACKNOWLEDGEMENT_DELAY_MS` is 1 s. Tests: `apps/backend/tests/terminal-websocket-input-results.test.ts`, `terminal-websocket-client-gateway.test.ts` (the renderer's client against the real gateway), `gateway-proxy-idle-timers.test.ts`, the idle-deadline case in `preview-forward.test.ts`, and the cumulative-results and default-delay cases in `terminal-websocket-client.test.ts`.
+- GW-15, done 2026-11-05 (batch E24): `heldStaticFallbackEncoding` in `gateway-proxy.ts` compares a static revalidation with the tag of every variant the request could have been given before anything is compressed, and answers with the variant the client holds. That 304 omits a coded `Content-Length`, which only compressing would tell us. `*` takes the normal path, since it names no variant. No result cache. Tests: `apps/backend/tests/gateway-static-revalidation.test.ts`. A revalidation by date alone still compresses: [6160](6160-static-if-modified-since-compression.md).
+- GW-10, declined 2026-11-05 (batch E24): see the numbers under **Investigation** and the decision below. `rewriteBrowserPreviewBody` is unchanged.
 - Tests for these four: `apps/backend/tests/terminal-websocket-backpressure.test.ts`, `apps/backend/tests/gateway-frame-costs.test.ts`, and the window and oversized cases in `apps/backend/src/gateway-event-replay.test.ts`.
 - Tests for GW-8 and GW-9: `preview-upstream-pool.test.ts`, the reuse cases in `preview-forward.test.ts` and `preview-publication.test.ts`, `gateway-proxy-etag.test.ts`, and in `test:preview:browser` `e2e/preview/upstream-pool.spec.ts` (reuse, revocation and generation change close idle connections, legacy-route 304) plus the opt-in measurement `e2e/preview/vite-page-load.spec.ts`. The whole `test:preview:browser` suite with the Vite fixture passed twice in Chromium, Firefox and WebKit (58 passed, 2 skipped: the Chromium-only measurement). On beelink WebKit ran only with Ubuntu 24.04's `libicu74`, `libxml2` and `libflite1` libraries added to a private copy of the WebKit bundle (see 2680).
 
@@ -1170,6 +1172,16 @@ The counts did not vary between runs, except the before `typing` acks and decode
 
 So on a real shell the frame count barely falls: each write finishes in its own event-loop turn, and Playwright's no-delay keys still arrive one at a time. A person typing, or keys over any path where results finish apart, gets one frame per key, about 29% smaller (88 to 62 bytes on average). The frame count only falls when results finish together, as in `burst`. No batching that adds no delay can do better than this, and a wait long enough to merge keystrokes would be the delay the ticket forbids. `e2e/agent-testing/terminal-input-resume.spec.ts -g websocket` also passed on that profile.
 
+**GW-10 first-load numbers.** Measured on 2026-11-05 against `main` at `0194a0675` with `apps/backend/scripts/preview-rewrite-costs.ts`: bodies captured from a real Vite dev server, medians of 15 interleaved rounds for the rewriter and 7 for the replay through the real gateway, three sets at load average 41 to 49, ranges across the sets. The client shares the gateway's process, and raw JSON is in `output/efficiency/e24/` of the build worktree (git-ignored). `web` is this repository's `apps/web` with every lazy route, so an upper bound.
+
+| Corpus | Bodies (bytes) | Nothing to rewrite | Rewrite today | Combined regex saves | No-match skip saves | Gateway first load | Repeat load (all 304) |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `fixture` | 5 (43,637) | 2 bodies, 1.5% of bytes | 0.25–0.27 ms | 0.01–0.05 ms | Within noise | 8.7–12.4 ms | 5.5–8.1 ms |
+| `wide`, the fixture plus 150 one-line modules | 154 (60,123) | 151 bodies, 6.9% of bytes | 0.36–0.47 ms | 0.09–0.12 ms | About 0.1 ms | 43–48 ms | 34–44 ms |
+| `web` | 1,754 (27,957,113) | 319 bodies, 10.9% of bytes | 152–190 ms | 46–93 ms | −6 to 13 ms, within noise | 1,531–3,094 ms | 749–1,081 ms |
+
+Walking `web` through Vite itself took 8,166 ms (one capture). A rewriter edit makes every module a full response once after an update: on `web` 782–2,013 ms more gateway time and 7.09 MB on the wire, so 17 to 29 complete first loads per update to break even on time, while the bytes never pay back. The nine passes run only on HTML, one body per page; JavaScript runs five. The outcome of each report item is the [closing check of E24](../../reports/efficiency-logging-database/0000-index.md#closing-check-of-e24-gateway-static-and-preview).
+
 **Decisions.**
 
 - **First step?** Decided 2026-11-01 and done 2026-11-02.
@@ -1249,13 +1261,29 @@ So on a real shell the frame count barely falls: each write finishes in its own 
   - **Leave it.**
     - Pros: no behaviour change; the figure stays a safe overestimate.
     - Cons: the needless reconcile stays.
-- **Next step?** Open.
-  - **GW-10, one combined rewrite regex with a no-match fast path (recommended).**
-    - Pros: cheaper first loads on the legacy route.
-    - Cons: GW-9 already removed the rewrite from repeat loads, and the legacy route is a fallback.
+- **How to answer a static revalidation before compressing (GW-15)?** Done 2026-11-05 (batch E24).
+  - **Compare the tag of every variant the request could have been given, then answer with the one the client holds (recommended).**
+    - Pros: no compression for any matching tag, including a file where compressing does not help; needs no cache; the 304 describes the bytes the client has.
+    - Cons: a client holding a variant keeps it until the file changes, even where compressing would now choose another. It pays no transfer for that.
+  - **Compare only the coding the fallback would choose, as the report put it.**
+    - Pros: the narrowest change.
+    - Cons: a file where compressing does not help, or a client holding its second choice, still compresses on every revalidation.
+  - **Add a small bounded result cache as well.**
+    - Pros: also saves work on full 200s.
+    - Cons: a new cache with byte and count bounds for a low-impact path, with no measurement asking for it.
+- **Is GW-10 worth doing?** Decided 2026-11-05 (batch E24), on the numbers above.
+  - **Neither, and record it as declined (recommended).**
+    - Pros: no reload after an update; no second copy of the patterns; the route is due to retire with [0042](../previews-and-annotations/0042-service-preview-rollout.md).
+    - Cons: the largest case keeps 46–93 ms it could save. Reopen only if the route stays and a real page shows the rewrite in a profile.
+  - **One combined regex per kind plus a no-match skip.**
+    - Pros: 46–93 ms on a 1,754-module first load.
+    - Cons: costs one full reload per module after the update; 17 to 29 complete first loads to break even; and the HTML form cannot be byte-identical, since one pass matches non-overlapping text and today `<a href="/a url(/b) c">` has both of its paths rewritten.
+  - **Only a no-match skip.**
+    - Pros: small; can sit in the caller, where it changes no tag.
+    - Cons: within noise on `web`, about 0.1 ms on `wide`; in the caller it keeps a second copy of the patterns, where a missed shape silently leaves a body unrewritten.
+- **Next step?** Closed 2026-11-05: nothing is left in this task beyond the to-dos named above.
+  - **GW-10, one combined rewrite regex with a no-match fast path.** Declined 2026-11-05, as above.
   - **GW-11, per-node federation event names.** Done 2026-11-05 (batch E18).
-    - Pros: less replay-window pressure for federation users.
-    - Cons: federation only; touches replay invariants.
 
 ### 12. Local desktop transport
 

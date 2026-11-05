@@ -23,11 +23,10 @@ A batch file combines several reports as numbered parts and takes the rating of 
 | 7 | [0790-e16-log-controls.md](0790-e16-log-controls.md) | Medium | No | **E16, Log controls.**<br>`0790`: R8's remainder (L7) and its control: a switch, DevTools and a persisted error ring.<br>`0890`: User controls: presets, auto-revert and privacy text.<br>`0900`: User controls: `--log-level` and `--log-category`. | From `0790`: Renderer bugs in the packaged app leave no trace, which is a supportability gap rather than broken behaviour. |
 | 8 | [0160-e10-conditional-reads-and-deltas.md](0160-e10-conditional-reads-and-deltas.md) | Low | No | **E10, Conditional reads and deltas.**<br>`0160`: TX-1: A transcript delta can only be built from the newest cached view<br>`0180`: TX-5: Session-state reads have no conditional path from the bridge<br>`0190`: TX-6: Bridge transcript windows are always sent whole | From `0160`: The report rates it High, but the maintainer gated it on a baseline, so it stays Low until that measurement arrives. |
 | 9 | [0210-e11-projection-hashing.md](0210-e11-projection-hashing.md) | Low | No | **E11, Projection hashing.**<br>`0210`: TX-3: The legacy commit re-serialises the whole projection to fingerprint it<br>`0220`: TX-9, TX-13: Memoise row fingerprints and hash them for the view token<br>`0320`: TX-7: Head-row recovery re-reads the raw transcript on each streaming revision<br>`0330`: TX-11: Patch building re-serialises and hashes whole rows in a JavaScript loop<br>`0340`: TX-12: Already-encoded rows are stringified again on the way out<br>`0345`: TX-14: Restart-preview checkpoints are serialised three times and cloned<br>`0350`: TX-16: Inline tool bodies are re-hashed whenever their row misses the cache<br>`0380`: TX-17: Small linear scans in the transcript projection | From `0210`: A contained optimisation with no behaviour change and no measured cost. |
-| 10 | [0310-e24-gateway-static-and-preview.md](0310-e24-gateway-static-and-preview.md) | Low | No | **E24, Gateway static and preview.**<br>`0310`: GW-15: Static fallback compression runs before the 304 check<br>`0365`: GW-10: The preview body rewrite makes many full regex passes | From `0310`: Wasted compression only for revalidated static files that have no precompressed sibling. |
-| 11 | [0385-tx-10-joined-history-pages.md](0385-tx-10-joined-history-pages.md) | Low | No | TX-10: Joined history pages read the whole transcript per page | A compatibility path that only older renderers use and that 0232 will remove, blocked on the support window. |
-| 12 | [0390-gw-7-websocket-compression.md](0390-gw-7-websocket-compression.md) | Low | No | GW-7: No WebSocket message compression | Deferred by 0052 decision D6 until the transport direction is chosen. |
-| 13 | [0560-st-9-agent-mail-store-remainder.md](0560-st-9-agent-mail-store-remainder.md) | Low | No | ST-9 (rest): Agent mail: pending injects and mailbox lists still sit on the whole store | The read cost the finding described has gone, and the rest needs a stored-format change only a measurement could justify. |
-| 14 | [0693-dk-10-second-claude-binary.md](0693-dk-10-second-claude-binary.md) | Low | No | DK-10: The image ships two Claude Code native binaries | It is an optional image-size saving that waits on a maintainer decision. |
+| 10 | [0385-tx-10-joined-history-pages.md](0385-tx-10-joined-history-pages.md) | Low | No | TX-10: Joined history pages read the whole transcript per page | A compatibility path that only older renderers use and that 0232 will remove, blocked on the support window. |
+| 11 | [0390-gw-7-websocket-compression.md](0390-gw-7-websocket-compression.md) | Low | No | GW-7: No WebSocket message compression | Deferred by 0052 decision D6 until the transport direction is chosen. |
+| 12 | [0560-st-9-agent-mail-store-remainder.md](0560-st-9-agent-mail-store-remainder.md) | Low | No | ST-9 (rest): Agent mail: pending injects and mailbox lists still sit on the whole store | The read cost the finding described has gone, and the rest needs a stored-format change only a measurement could justify. |
+| 13 | [0693-dk-10-second-claude-binary.md](0693-dk-10-second-claude-binary.md) | Low | No | DK-10: The image ships two Claude Code native binaries | It is an optional image-size saving that waits on a maintainer decision. |
 
 ## Parallel running
 
@@ -49,7 +48,6 @@ This index only changes when a branch merges, so it can't show what is running n
 | E12 | [Renderer store](0510-e12-renderer-store.md) | `0510`, `0590`, `0640` | Transcript, 4 of 4 | None | None |
 | E3 | [Retention and deletion](0540-e3-retention-and-deletion.md) | `0730`, `0540`, `0840` | Change tracking, 1 of 1 | None | None |
 | E26 | [Local desktop transport](0400-e26-local-desktop-transport.md) | `0400`, `0860` | Desktop, 1 of 1 | E1 (Baseline run) | None |
-| E24 | [Gateway static and preview](0310-e24-gateway-static-and-preview.md) | `0310`, `0365` | Gateway, 1 of 2 | None | None |
 | E15 | [Health and diagnostics](0750-e15-health-and-diagnostics.md) | `0750`, `0820`, `0810`, `0880`, `0780` | Logging and diagnostics, 1 of 2 | None | None |
 | E16 | [Log controls](0790-e16-log-controls.md) | `0790`, `0890`, `0900` | Logging and diagnostics, 2 of 2 | None | None |
 
@@ -63,7 +61,6 @@ Why these are grouped:
 - **E12:** Same hook and projection store.
 - **E3:** All decide what gets deleted and when.
 - **E26:** Both in `backend-process.ts`.
-- **E24:** Both in `gateway-proxy.ts`.
 - **E15:** Build the sources first. `0780` then packages them.
 - **E16:** Linked settings for log detail.
 
@@ -87,7 +84,7 @@ When one of these becomes ready, it joins the lane shown.
 
 ## Status of every efficiency finding
 
-91 done, 7 partly done, 23 open, 2 no action.
+94 done, 7 partly done, 19 open, 3 no action.
 
 | Finding | Disposition | Evidence |
 | --- | --- | --- |
@@ -100,12 +97,12 @@ When one of these becomes ready, it joins the lane shown.
 | GW-7 | Open | No compression option is set (`apps/backend/src/terminal-websocket-server.ts:193-198`), and 0052 D6 defers the work; see 0390. |
 | GW-8 | Done | The private-origin proxy reuses pooled connections (`apps/backend/src/preview-http-proxy.ts:160`, `apps/backend/src/preview-upstream-pool.ts`, #1604 `b64242842`). |
 | GW-9 | Done | Compressed and rewritten bodies get a derived ETag that maps back upstream (`apps/backend/src/gateway-proxy.ts:188`, `:397`, `apps/backend/src/gateway-proxy-etag.ts`, #1604 `b64242842`). |
-| GW-10 | Open | The rewrite still runs nine `replace` passes on HTML (`apps/backend/src/gateway-support-extra.ts:555`); see 0365. |
+| GW-10 | No action | Declined on first-load numbers: the rewrite is about 150–190 ms of a 1,754-module, 28 MB first load, a combined regex would save 46–93 ms of that, and a rewriter edit makes every module a full response once. The rewriter is unchanged (`apps/backend/src/gateway-support-extra.ts:569`). See the [E24 closing check](#closing-check-of-e24-gateway-static-and-preview). |
 | GW-11 | Done | Relayed events are named per node (`relayedNodeEventName`, `apps/backend/src/core/nodes/node-event-relay.ts:240`, `:255`) and kept in their own ring (`relayedEventReplay`), and a renderer reads them on one filtered stream with its own cursor (`apps/web/src/lib/native/relayed-event-stream.ts`). Older clients keep the old name. Live checks are in [5840](../../todo/cross-cutting/5840-relayed-events-live-evidence.md) and the desktop's main process in [5841](../../todo/cross-cutting/5841-desktop-main-relayed-stream.md); see the [E18 closing check](#closing-check-of-e18-gateway-events). |
 | GW-12 | Done | One cursor frame per run of skipped replay frames (`apps/backend/src/gateway-events.ts:308`), and a scoped client's replay budget counts only what it is written (`:363`); see 1202 task 11 and the [E18 closing check](#closing-check-of-e18-gateway-events). |
 | GW-13 | Done | The rebuild section follows `container-lifecycle-updated` with a 15 s backstop (`apps/web/src/components/environments/EnvironmentRebuildSection.tsx:146`, `:175-177`, #1606 `9c06cb7aa`), and 1202 records the choice to leave the other two 3 s backstops. |
 | GW-14 | Done | The lookup is a `slice` (`apps/backend/src/gateway-event-replay.ts:191`), and `oversizedAppends` counts frames over the byte bound (`:155`); see 1202 task 11 and the [E18 closing check](#closing-check-of-e18-gateway-events). |
-| GW-15 | Open | Compression still runs before the 304 check (`apps/backend/src/gateway-proxy.ts:794`, `:860`); see 0310. |
+| GW-15 | Done | A matching `If-None-Match` is answered before compressing (`heldStaticFallbackEncoding`, `apps/backend/src/gateway-proxy.ts:95`, `:835`); see the [E24 closing check](#closing-check-of-e24-gateway-static-and-preview). A revalidation by date alone still compresses: [6160](../../todo/cross-cutting/6160-static-if-modified-since-compression.md). |
 | GW-16 | Done | The idle deadlines refresh one timer (`apps/backend/src/gateway-proxy.ts:313`, `:556`, `packages/protocol/src/node/preview-forward.ts:319`), the decoders are shared (`apps/backend/src/terminal-websocket-server.ts:170-171`), input results are cumulative per flush on a negotiated subprotocol (`:904`, `:1143`), and acks go once a second (`apps/web/src/lib/native/terminal-websocket-client.ts:104`); see 1202 task 11. Live checks past loopback Chromium are in [5080](../../todo/cross-cutting/5080-terminal-websocket-live-evidence.md). |
 | TX-1 | Done | Superseded views stay in a bounded ring per key, and the cached answer and the read path both build deltas from it (`apps/backend/src/core/native-agent-transcript-delta-bases.ts`); see 0160. |
 | TX-2 | Done | Reads other than `sync-v1` pass a limit to `legacy` through `interactiveSnapshot`, and dropped refreshes read a 32-row tail (`refreshProjectionState` in `apps/backend/src/core/native-agent-transcript-projection.ts`); see 0150. |
@@ -482,3 +479,46 @@ The detailed outcome evidence is retained here so it survives squash merges (his
 | 0370 | Task 2: give relayed traffic its own replay share | Done | `relayedEventReplay` (`apps/backend/src/gateway-context.ts`), 512 frames and 512 KiB (`gateway-event-replay.ts`). Test: "a busy leaf expires relayed cursors only; a main cursor still replays" in `gateway-relayed-events.test.ts`. |
 | 0370 | Decision: how to separate them | Done, as recommended | A second bounded ring with its own cursor, on its own stream rather than a merged cursor, so `Last-Event-ID` and the handshake are unchanged. Tests: the same file, plus the renderer's stream class against a real gateway. |
 | 0370 | Live evidence: two real nodes in a real browser, and real older releases | Moved to a to-do | To-do 5840, tasks 1 and 2. |
+
+## Closing check of E24 (Gateway static and preview)
+
+Built on 2026-11-05 on branch `gateway-static-preview-b18ff877de68-r1`, based on `main` at `0194a0675`, and checked item by item against the batch file before it was deleted. The full outcome table ends the file's last version, in the commit before its deletion (`66af728ac` on that branch).
+
+| Part | Finding | Outcome |
+| --- | --- | --- |
+| `0310` | GW-15: static fallback compression runs before the 304 check | Done for `If-None-Match`, with no result cache. A revalidation by date alone is [6160](../../todo/cross-cutting/6160-static-if-modified-since-compression.md). |
+| `0365` | GW-10: the preview body rewrite makes many full regex passes | Declined on the numbers below. The rewriter is unchanged, so no module reloads after this update. |
+
+**First-load numbers for `0365`.**
+
+Bodies captured from a real Vite dev server, then measured with `apps/backend/scripts/preview-rewrite-costs.ts`: Bun 1.4.4, medians of 15 interleaved rounds for the rewriter and 7 for the replay, three sets, ranges across the sets. The host's load average was 41 to 49, so the milliseconds are noisy and the counts are not. The replay is the real gateway, compressing with gzip, on an ephemeral port with a temporary data directory, against an application served from memory, with the client in the same process. That inflates its wall clock, so the rewrite's share is if anything understated there and overstated against a real page, which also waits on Vite and the browser.
+
+| Corpus | Bodies (bytes) | Nothing to rewrite | Rewrite today | Combined regex saves | No-match skip saves | Gateway first load | Repeat load (all 304) | First-load bytes on the wire |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `fixture`: `test-fixtures/preview-vite` | 5 (43,637) | 2 bodies, 643 bytes (1.5%) | 0.25–0.27 ms | 0.01–0.05 ms | Within noise | 8.7–12.4 ms | 5.5–8.1 ms | 14,219 |
+| `wide`: the fixture plus 150 generated one-line modules | 154 (60,123) | 151 bodies, 4,133 bytes (6.9%) | 0.36–0.47 ms | 0.09–0.12 ms | About 0.1 ms | 43–48 ms | 34–44 ms | 18,332 |
+| `web`: this repository's `apps/web`, with every lazy route, so an upper bound | 1,754 (27,957,113) | 319 bodies, 3,044,053 bytes (10.9%) | 152–190 ms | 46–93 ms | −6 to 13 ms, within noise | 1,531–3,094 ms | 749–1,081 ms | About 7.09 MB |
+
+The rewrite is 2–3% of the gateway's first load on `fixture`, about 1% on `wide` and 6–10% on `web`. Walking the `web` closure through Vite itself took 8,166 ms (one capture), about 50 times the rewrite. On `web` a combined regex would save 2–3% of the gateway's first load, or under 1% once Vite's own time is counted.
+
+A rewriter edit changes the rewrite key, so after an update every module of a previewed app is a full response once. On `web` that costs 782–2,013 ms more gateway time and 7.09 MB on the wire, against 46–93 ms saved per first load: 17 to 29 complete first loads of the whole closure per update to break even on time, and the bytes never pay back. On `wide` it takes about 100.
+
+The detailed outcome is retained here so it survives squash merges (historical line numbers):
+
+| Part | Item | Outcome | Code, evidence or to-do |
+| --- | --- | --- | --- |
+| 0310 | Task 1: skip the fallback compression for a revalidation that will match | Done | `heldStaticFallbackEncoding` (`apps/backend/src/gateway-proxy.ts:95`), called at `:835` before the compression at `:850`. Tests in `apps/backend/tests/gateway-static-revalidation.test.ts`: "a matching tag gets a 304 with no compression run", which also asserts that a full response does compress. With the check disabled, 6 of the file's 17 tests fail. In headless Chromium against a real gateway, reloads ran 0 compressions, and the script, the stylesheet and the 9,252-character body stayed intact. |
+| 0310 | Decision: compute the tag before compressing | Done, recommended option, widened | It compares every variant this request could have been given, not only the first choice, and identity when acceptable. Comparing the first choice alone would still compress on every revalidation of a file where compressing does not help, or of a client holding its second choice. Tests: "a tag held from an uncompressed answer matches without compressing", "a client holding the second choice keeps it, with that coding's headers". |
+| 0310 | Decision's stated cost: a client holding the encoded tag gets a 304 where compressing would fail | Accepted, as the report says | Test: "a client holding an encoded tag gets a 304 even when compressing would decline". The same holds for a client holding identity after a decline: it keeps valid bytes until the file changes, and pays no transfer. |
+| 0310 | Decision: a small bounded result cache | Left out, as recommended | No measurement asks for it. No cache or buffer was added. |
+| 0310 | Constraint: the 304's `Vary` and `Content-Encoding` match a 200 | Done | Test: "a 304 carries the Vary, Content-Encoding and validators of the 200", for `br`, `gzip` and both. |
+| 0310 | Found while building: the 304 cannot state a coded length | Done | Only compressing would tell us, and a cache copies a 304's fields onto its stored response, so the identity size would be wrong. The field is omitted for a coded variant. Test: "a 304 never states a length it did not measure". |
+| 0310 | Found while building: `If-None-Match: *` names no variant | Done | It takes the normal path, so its coding is the one a 200 would have. Test: "a wildcard takes the normal path, so its coding is the one a 200 would have". |
+| 0310 | Non-matching requests keep the right body and encoding | Done | Tests: "a stale tag gets the coded body", "a tag from before the file changed does not match", "a coded tag the request no longer accepts gets a coding it does accept", "an identity tag is not a match where identity is forbidden", "a declined compression serves identity, with the identity tag", "a failed compression serves identity, with the identity tag", "a client holding a coded copy of a file over the cap is not answered by it", "a precompressed sibling still takes precedence over the on-the-fly tags", "a HEAD revalidation still reports the identity metadata it always did". The failure test settles the in-flight run as `declined`, the outcome a codec failure produces; a real codec failure was not forced. |
+| 0310 | `If-Modified-Since` with no `If-None-Match` | Not done, moved to a to-do | It still compresses first, because it names no variant, so nothing tells the gateway which coding the 304 should describe. Every static response carries an ETag, so a browser sends `If-None-Match` as well. To-do [6160](../../todo/cross-cutting/6160-static-if-modified-since-compression.md). |
+| 0365 | Open question: is this still worth doing? | Answered: no | The numbers above. Real bodies rewrite in well under 1 ms for a small page and about 150–190 ms for a 1,754-module, 28 MB closure. |
+| 0365 | Task 1 and decision: one combined regex per kind | Declined | It would save 46–93 ms on the largest case at the cost of a one-time reload, and needs 17 to 29 complete first loads per update to break even. The nine HTML passes run on one body per page, so the HTML alternation would save almost nothing, and it could not be byte-identical in any case: a single pass matches non-overlapping text, while today `<a href="/a url(/b) c">` becomes `<a href="<P>/a url(<P>/b) c">` (observed). The JavaScript variant differed on none of 1,753 real bodies, which is not proof and was not taken further, so no differential test was written. |
+| 0365 | Decision: only a no-match skip | Declined | A good share of bodies have nothing to rewrite only by count: 18% of `web`, but 10.9% of its bytes, and `wide`'s 98% is 6.9% of its bytes because the generated modules are one-liners. The saving is within noise on `web` and about 0.1 ms on `wide`. Inside the rewriter it pays the same reload. In the caller it pays none but keeps a second copy of the patterns, where a missed shape silently leaves a body unrewritten, and the decode and re-encode stay because they change invalid UTF-8. |
+| 0365 | Constraint: the rewriter's source is hashed into the tag | Not triggered | `rewriteBrowserPreviewBody` and `gateway-proxy-etag.ts` are unchanged, so nothing reloads after this update, and the existing tag behaviour stands. |
+| 0365 | Context: the route is a fallback | Confirmed | To-do [0042](../../todo/previews-and-annotations/0042-service-preview-rollout.md) plans to retire it. That is why GW-10 is recorded as declined rather than left open: reopen it only if the route stays and a real page shows the rewrite in a profile. |
+| Both | Report invariants | Held | No new cache, queue or buffer. The script's output is aggregates only, and its corpus stays in the git-ignored `output/efficiency/`. |

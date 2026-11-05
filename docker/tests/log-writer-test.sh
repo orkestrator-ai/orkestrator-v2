@@ -128,6 +128,48 @@ file="$work/fsize.log"
 [ "$(cat "$file")" = "$(printf '[orkestrator-log-writer] dropped 2 lines\n%0599d' 4)" ] ||
     fail 'a failed write left no dropped-lines marker'
 
+# Fail the initial write, then persist its marker and one complete data line
+# plus a partial line before failing again. The next marker must count only
+# the newly unwritten line, and both successful markers must affect rotation.
+cat >"$work/modules/FailAfterMarker.pm" <<'PERL'
+package FailAfterMarker;
+my $calls = 0;
+BEGIN {
+    *CORE::GLOBAL::syswrite = sub {
+        $calls++;
+        if ($calls == 1) {
+            open(my $ready, ">", $ENV{WRITER_FAILURE_READY}) or die $!;
+            print $ready "ready\n";
+            close $ready;
+        }
+        if ($calls == 1 || $calls == 3) { $! = 28; return undef; }
+        my $length = $_[2];
+        $length = index($_[1], "\n") + 1 + length("kept\npar") if $calls == 2;
+        return CORE::syswrite($_[0], $_[1], $length, $_[3]);
+    };
+}
+1;
+PERL
+file="$work/marker-data-failure.log"
+rm -f "$work/input"
+mkfifo "$work/input"
+WRITER_FAILURE_READY="$work/failed" PERL5OPT=-MFailAfterMarker PERL5LIB="$work/modules" \
+    bash "$writer" "$file" 100 2 <"$work/input" &
+pid=$!
+exec 3>"$work/input"
+printf 'before\n' >&3
+wait_content "$work/failed" ready
+printf 'kept\npartial\n' >&3
+first=$'[orkestrator-log-writer] dropped 1 lines\nkept\npar'
+wait_content "$file" "$first"
+printf 'after\n' >&3
+reported="$first"$'[orkestrator-log-writer] dropped 1 lines\nafter'
+wait_content "$file" "$reported"
+printf 'tail\n' >&3
+wait_content "$file" tail
+finish_writer
+[ "$(cat "$file.1")" = "$reported" ] || fail 'successful markers were not accounted for in rotation'
+
 # Signal the exact process spawned here only, after its first persisted line
 # proves the shell has execed Perl and installed the ignored dispositions.
 start_writer "$work/signals.log"
@@ -162,6 +204,33 @@ fallbac"
     tail -n 1 "$work/fallback.log" |
     grep -Eqx '\[orkestrator-log-writer\] dropped at least [0-9]+ bytes past 100' ||
     fail 'the no-Perl fallback did not end with a dropped-bytes marker'
+# Repeated producers must still reach EOF without growing the capped file.
+size=$(wc -c <"$work/fallback.log")
+[ "$size" -le 228 ] || fail 'fallback marker exceeded its fixed allowance'
+for ((run = 0; run < 4; run++)); do
+    for ((i = 0; i < 20000; i++)); do printf 'repeated overflow\n'; done |
+        PATH="$work/bin" /bin/bash "$writer" "$work/fallback.log" 100
+    [ "$(wc -c <"$work/fallback.log")" -eq "$size" ] ||
+        fail 'repeated fallback invocation grew the capped file'
+done
+# A file already at the data cap gets one notice; an oversized file is
+# preserved without further appends. Neither path may stop draining input.
+for initial in 100 300; do
+    head -c "$initial" /dev/zero >"$work/existing.log"
+    for ((run = 0; run < 3; run++)); do
+        for ((i = 0; i < 20000; i++)); do printf 'existing overflow\n'; done |
+            PATH="$work/bin" /bin/bash "$writer" "$work/existing.log" 100
+        actual=$(wc -c <"$work/existing.log")
+        if [ "$initial" -eq 300 ]; then
+            [ "$actual" -eq 300 ] || fail 'oversized file grew on fallback'
+        elif [ "$run" -eq 0 ]; then
+            size="$actual"
+            [ "$size" -gt 100 ] && [ "$size" -le 228 ] || fail 'missing bounded notice at cap'
+        else
+            [ "$actual" -eq "$size" ] || fail 'existing capped file grew on repeat'
+        fi
+    done
+done
 for ((i = 0; i < 20000; i++)); do printf 'fallback drop\n'; done |
     PATH="$work/bin" /bin/bash "$writer" "$work/absent/log" 2>/dev/null
 if [ -c /dev/full ]; then

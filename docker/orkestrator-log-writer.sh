@@ -37,16 +37,18 @@ if ! command -v perl >/dev/null 2>&1; then
     # to max-bytes less what the file already holds, then count the rest
     # while draining it, so the producer never sees a closed pipe. A failed
     # open or write leaves the rest to the count as well. At end of input a
-    # marker says how much was dropped.
+    # marker says how much was dropped. Allow at most 128 bytes beyond max
+    # across all invocations, including the marker itself.
     size=0
     # Only a regular file has a size to read; /dev/full, say, reads forever.
     [ -f "$file" ] && size=$(( $(wc -c <"$file" 2>/dev/null || echo 0) ))
     room=$(( max > size ? max - size : 0 ))
     head -c "$room" >>"$file" 2>/dev/null || true
     dropped=$(( $(wc -c) ))
-    if [ "$dropped" -gt 0 ]; then
-        printf '\n[orkestrator-log-writer] dropped at least %s bytes past %s\n' "$dropped" "$max" \
-            >>"$file" 2>/dev/null || true
+    [ -f "$file" ] && size=$(( $(wc -c <"$file" 2>/dev/null || echo 0) ))
+    if [ "$dropped" -gt 0 ] && [ "$size" -le "$max" ]; then
+        printf '\n[orkestrator-log-writer] dropped at least %s bytes past %s\n' "$dropped" "$max" |
+            head -c 128 >>"$file" 2>/dev/null || true
     fi
     exit 0
 fi

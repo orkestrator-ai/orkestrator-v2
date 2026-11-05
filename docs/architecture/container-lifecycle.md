@@ -1347,7 +1347,9 @@ accounting is not wound back for lost lines, so the next rotation, which frees
 the oldest file, comes sooner rather than later. A custom image without Perl
 appends up to 5 MiB less what the file already holds, drains the rest, and at
 end of input appends `[orkestrator-log-writer] dropped at least N bytes past
-<max>`. These reach a container only when it is rebuilt.
+<max>`. The notice has a fixed 128-byte allowance beyond the data cap; once
+the file exceeds the cap, later runs drain without appending another notice.
+These reach a container only when it is rebuilt.
 
 Container stdout/stderr uses Docker's `local` driver where the daemon lists it,
 else `json-file` with the same 10 MiB × 3 bounds, which overrides a daemon's

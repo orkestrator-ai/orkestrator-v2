@@ -23,6 +23,7 @@ import type {
   MacOsPermissionsStatus,
   MacOsPrivacySettingsPane,
 } from "@orkestrator/protocol/macos-permissions";
+import { isPerNodeRelayedEvent } from "@orkestrator/protocol/node-events";
 import {
   ARTIFACT_HOST_CHANNELS,
   type ArtifactHostApi,
@@ -344,12 +345,47 @@ export function createArtifactHostApi(ipcRenderer: IpcRendererLike): ArtifactHos
 }
 
 /**
+ * Tells main which per-node relayed events this document listens to on one
+ * channel, because main takes only those from its backend. The listeners stay
+ * here; main only learns the names. A new document starts by saying it has none,
+ * since a reload leaves main with the previous document's.
+ */
+function createRelayedListenReporter(
+  ipcRenderer: IpcRendererLike,
+  channel: "workspace" | "portal",
+) {
+  const ready = new Map<string, Promise<void>>();
+  ipcRenderer.send?.("orkestrator:relayed-events:reset", channel);
+  return {
+    started(event: string): void {
+      if (!isPerNodeRelayedEvent(event)) return;
+      ready.set(
+        event,
+        ipcRenderer
+          .invoke<void>("orkestrator:relayed-events:listen", channel, event)
+          .catch(() => undefined),
+      );
+    },
+    stopped(event: string): void {
+      if (!isPerNodeRelayedEvent(event)) return;
+      ready.delete(event);
+      ipcRenderer.send?.("orkestrator:relayed-events:unlisten", channel, event);
+    },
+    /** Settles once main's stream carrying this event is open. */
+    eventStreamReady(event: string): Promise<void> {
+      return ready.get(event) ?? Promise.resolve();
+    },
+  };
+}
+
+/**
  * `window.orkestratorPortal`: the window's own command node while its
  * workspace (`window.orkestrator`) is on another node.
  */
 export function createPortalApi(rawIpcRenderer: IpcRendererLike) {
   const ipcRenderer = withReadableInvokeErrors(rawIpcRenderer);
   const listeners = new Map<string, Set<EventCallback<unknown>>>();
+  const relayedListens = createRelayedListenReporter(ipcRenderer, "portal");
   ipcRenderer.on("orkestrator:portal-event", (_event, name: string, payload: unknown) => {
     const callbacks = listeners.get(name);
     if (!callbacks) return;
@@ -361,13 +397,18 @@ export function createPortalApi(rawIpcRenderer: IpcRendererLike) {
     },
     listen<T = unknown>(event: string, callback: EventCallback<T>): () => void {
       const callbackSet = listeners.get(event) ?? new Set<EventCallback<unknown>>();
+      if (callbackSet.size === 0) relayedListens.started(event);
       listeners.set(event, callbackSet);
       callbackSet.add(callback as EventCallback<unknown>);
       return () => {
-        callbackSet.delete(callback as EventCallback<unknown>);
-        if (callbackSet.size === 0) listeners.delete(event);
+        if (!callbackSet.delete(callback as EventCallback<unknown>)) return;
+        if (callbackSet.size === 0) {
+          listeners.delete(event);
+          relayedListens.stopped(event);
+        }
       };
     },
+    eventStreamReady: relayedListens.eventStreamReady,
   };
 }
 
@@ -438,6 +479,7 @@ export function createWorkspaceRealmApi(ipcRenderer: IpcRendererLike) {
 export function createOrkestratorElectronApi(rawIpcRenderer: IpcRendererLike) {
   const ipcRenderer = withReadableInvokeErrors(rawIpcRenderer);
   const listeners = new Map<string, Set<EventCallback<unknown>>>();
+  const relayedListens = createRelayedListenReporter(ipcRenderer, "workspace");
 
   ipcRenderer.on("orkestrator:event", (_event, name: string, payload: unknown) => {
     const callbacks = listeners.get(name);
@@ -456,13 +498,19 @@ export function createOrkestratorElectronApi(rawIpcRenderer: IpcRendererLike) {
 
     listen<T = unknown>(event: string, callback: EventCallback<T>): () => void {
       const callbackSet = listeners.get(event) ?? new Set<EventCallback<unknown>>();
+      if (callbackSet.size === 0) relayedListens.started(event);
       listeners.set(event, callbackSet);
       callbackSet.add(callback as EventCallback<unknown>);
       return () => {
-        callbackSet.delete(callback as EventCallback<unknown>);
-        if (callbackSet.size === 0) listeners.delete(event);
+        if (!callbackSet.delete(callback as EventCallback<unknown>)) return;
+        if (callbackSet.size === 0) {
+          listeners.delete(event);
+          relayedListens.stopped(event);
+        }
       };
     },
+
+    eventStreamReady: relayedListens.eventStreamReady,
 
     clipboard: {
       readText(): Promise<string> {

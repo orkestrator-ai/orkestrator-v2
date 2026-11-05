@@ -280,6 +280,8 @@ export function pipelineNodeView({
         <PipelinePullRequestChecks checks={pullRequest.checks} />
       ) : undefined,
     canOpen,
+    openHint:
+      node.kind === "notes" ? "Double-click or press Enter to open the notes in a tab" : undefined,
     onOpen,
     contextMenu,
   };

@@ -180,8 +180,8 @@ export interface PipelineFlowViewProps {
  *
  * The graph is a projection of the pipeline record; selection, zoom, pan and
  * whether the graph is collapsed are view state and never reach the record.
- * A node opens in the inspector on a click, and its session opens in a tab of
- * its own on a double click.
+ * A node opens in the inspector on a click, and its session, or the Notes
+ * step's notes, opens in a tab of its own on a double click.
  */
 export function PipelineFlowView({
   pipeline,
@@ -313,6 +313,12 @@ export function PipelineFlowView({
     if (!options || !createTab || !node.session) return;
     createTab(node.session.agent ?? pipeline.agentType, options);
   };
+  const openNotes = () => {
+    if (!createTab) return;
+    createTab("key-information", {
+      keyInformation: { environmentId, pipelineId: pipeline.id, view: "notes" },
+    });
+  };
   const openReview = (key: string) => {
     if (!createTab) return;
     createTab("multi-review", {
@@ -365,6 +371,14 @@ export function PipelineFlowView({
         label: node.kind === "fix" ? "Open Rework session" : "Open session",
         icon: ExternalLink,
         onSelect: () => openSession(node),
+      });
+    }
+    if (node.kind === "notes" && createTab) {
+      actions.push({
+        key: "open-notes",
+        label: "Open notes in a tab",
+        icon: ExternalLink,
+        onSelect: openNotes,
       });
     }
     if (node.passKey && !passKey && createTab && !node.placeholder) {
@@ -531,7 +545,9 @@ export function PipelineFlowView({
     const actions = actionsFor(node);
     nodeActions.set(node.id, actions);
     const canOpen =
-      Boolean(node.session && createTab) || (node.kind === "pr" && Boolean(pullRequest && shipped));
+      Boolean(node.session && createTab) ||
+      (node.kind === "pr" && Boolean(pullRequest && shipped)) ||
+      (node.kind === "notes" && Boolean(createTab));
     const view = pipelineNodeView({
       node,
       pipeline,
@@ -539,7 +555,11 @@ export function PipelineFlowView({
       now,
       modelLabel,
       canOpen,
-      onOpen: () => (node.kind === "pr" ? void viewPR() : openSession(node)),
+      onOpen: () => {
+        if (node.kind === "pr") void viewPR();
+        else if (node.kind === "notes") openNotes();
+        else openSession(node);
+      },
       contextMenu: contextMenuFor(actions),
     });
     if (

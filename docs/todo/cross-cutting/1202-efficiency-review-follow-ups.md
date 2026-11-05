@@ -27,7 +27,7 @@ governs, marked "Decided".
 ### Tasks
 
 1. **Baseline and before-and-after numbers**: capture the report's measurements for the work already done and before each structural task. Status: open.
-2. **Storage keyed reads and writes**: the lease-held native session mutations, one shared decoded snapshot, the agent mail remainder, keyed-array row writes and the position index (TX-4 rest, BG-5, ST-9 rest, ST-10, ST-11). Status: open (ST-7, ST-8, BG-5, ST-11 and ST-10's compose drafts and environment writers done; TX-4 rest, ST-9 rest and ST-10's session and project writers open).
+2. **Storage keyed reads and writes**: the lease-held native session mutations, one shared decoded snapshot, the agent mail remainder, keyed-array row writes and the position index (TX-4 rest, BG-5, ST-9 rest, ST-10, ST-11). Status: open (ST-7, ST-8, BG-5, ST-11 and ST-10 done, TX-4's rest done 2026-11-04; ST-9 rest open; the prompt-queue reads a steer still makes are [5100](5100-prompt-queue-row-writes.md), live store sizes and write rates are [5101](5101-store-size-and-write-rate-live.md)).
 3. **Renderer re-renders and refetches**: WEB-6, WEB-7, WEB-9 to WEB-14 and WEB-16 to WEB-19, plus WEB-2's narrower subscriptions. Status: done (2026-11-04; WEB-2, WEB-3, WEB-4, WEB-5, WEB-8, WEB-15 and GW-13 earlier; WEB-7 and WEB-17 on 2026-11-03; WEB-2's third fix, WEB-6, WEB-9, WEB-10 and WEB-11, then WEB-12 to WEB-14, WEB-16, WEB-18 and WEB-19 on 2026-11-04; a React Profiler run stays with task 1).
 4. **Live agent view requests**: discovery out of the 500 ms round, a combined read, then bridge state ETags and transcript deltas (WEB-1, GW-1, GW-3, TX-5, TX-6). Status: open (WEB-1 and GW-1 done 2026-11-04, a visible running tab from 3 requests per round to 1.04; GW-3, TX-5 and TX-6 open).
 5. **Transcript pipeline**: delta-base ring, unlimited post-dispatch reads, memoised fingerprints and the smaller items (TX-1 to TX-3, TX-7 to TX-9, TX-11 to TX-18). Status: open (TX-1 and TX-2 done 2026-11-04, focused tests only; live before-and-after numbers stay with task 1; TX-3, TX-7 to TX-9 and TX-11 to TX-18 open).
@@ -80,7 +80,65 @@ Done 2026-11-04 (branch `array-layout-writers-dd246b495d6d-r1`, re-checked again
 - Tests: `storage-database.test.ts` (array rows: insert, update, delete, order, owner, no-ops, key refusal, document fallback, rollback, mixing with whole-value writes); `storage-environment-row-writes.test.ts` (one field writes one row, counted by temporary SQLite triggers, with no whole-store read or write; each single-environment writer; concurrent connections; deletion fences; a SIGKILL between commit and scrub followed by a reopen; an older reader and writer on the same database).
 - Older build, checked by hand on 2026-11-04 with `HEAD` code from `96ee1eb3e` in a temporary worktree against a temporary data directory: it opened a database this branch had written (schema version 6, unchanged), listed the environments in order, updated and added one, and this branch reopened the result. No before-and-after timing was taken (task 1).
 
-**Investigation.** Re-checked 2026-11-02 and, for environments, 2026-11-04. Still whole-store: the lease-held native session mutations in `storage-native.ts` (22 call sites still load the whole store inside the key's lease, TX-4's rest) and the record-store writers the report names under ST-10 (`storage-projects.ts` for projects, `storage-sessions.ts`). Background callers not moved to the snapshot either mutate what they read or pass it on to code not checked yet: `reconcilePendingLaunches` (launches environments), environment cleanup, the local-server reaper, diff stats, the PR monitor and the coordinator, goal and sign-in services. Mail presence was checked: it already reads one row per mailbox (`mailInjectPresence`). ST-9's remainder (pending injects as their own collection, a body-free mailbox list) was not re-checked.
+Done 2026-11-04 (branch `store-writes-25e6fc826b9d-r1`, E6 of the efficiency batches), TX-4's rest, ST-10's session and project writers, and R20's blob length, read-only leases and usage prune. Each finding was re-checked against `main` at `e198fd4a7` first:
+
+- TX-4: `loadNativeAgentSessions` had 32 call sites (20 in `storage-native.ts`, 12 in `storage-native-deliveries.ts`). 28 held a key's lease, 27 of them mutations and `readNativeAgentPublicationState` a read; all 28 now read one row, through `readNativeAgentSessionUnderLease` or, for the two sweeps that must pass over a bad record, `peekNativeAgentSession`. The other 4 walk the store and stay. Damaged JSON in a key's own row now refuses that key, before any provider create; before, it read as "no session". Damaged JSON in another key's row no longer makes every key read as absent. `readNativeAgentPublicationState` reads one queue row.
+- ST-10, sessions: every writer commits only the rows it names in one transaction, reading the environment's rows by owner where it needs them. This also closes a loss: one damaged row used to make `updateStore` replace the whole store with the fallback, so the next session write lost every session.
+- ST-10, projects: every writer keeps the lease and commits rows (`saveProject`); `getProject` reads one row. An add, a new remote and a new checkout path still read the whole store, since they compare against the others, and write one row. The store joined `LEASED_ROW_STORES`.
+- Nothing about stored data changed: no schema version, no migration, no new stored value. An older build reads and writes these rows as before, and a store held as a document falls back to a whole-value write (`storage-session-project-row-writes.test.ts`).
+- R20, sizes: see "Blob length" under Decisions. `length(CAST(value AS BLOB))` remains only as the fallback.
+- R20, leases: `getAgentInteractionResolutionJournal` takes no lease. `pruneAgentInteractionResolutionJournal` is pure, and `build-pipeline-service-interactions.ts` copes with a stale read: a claim commits before the pending record that names it, and everything past the read goes through the processing lease. `resetAgentMailInjectBackoff` checks `store.snapshot()` first; a backoff committed just after the check is the same as one committed just after the reset.
+- R20, prune: `prune` is asynchronous and commits 250 rows per transaction with `setImmediate` between batches. Each row is read and decided inside its transaction, which also fixes a lost update: the old sweep wrote back the record it had read earlier, and another backend's turn in between was lost. A closed connection ends the sweep without reopening it, and the next due sweep finishes.
+- Tests: `storage-native-session-row-reads.test.ts`, `storage-session-project-row-writes.test.ts`, `storage-read-only-leases.test.ts`, the "retention sweep's batches" group of `usage-history-store.test.ts`, the size tests in `storage-database.test.ts`, and the journal test in `storage-native-agent-sessions.test.ts`, which replaces "orders a journal read against an in-flight update": that ordering is the behaviour the report's option removes. They cover concurrent writers across connections and across two real processes, a SIGKILL inside a multi-row transaction followed by an integrity check and a reopen, and a failure inside a transaction. Run against `e198fd4a7`, 16 of the 32 row-read, row-write and lease tests fail, among them every one-row assertion; the interrupted-write tests fail there only because they hook methods the base lacks.
+
+Measured with `bun scripts/benchmark-store-writes.ts`, workload `store-writes-v1` (2,000 native sessions of 200 request ids, 5,000 terminal sessions in 500 environments, 500 projects, 64 display tails of 1 MiB, 500 mailboxes of 50 messages, 20,000 usage rows). Three interleaved runs of `e198fd4a7` and this branch, 50 operations per run, on macOS 27 arm64 with Bun 1.4.4 and generated data in the temporary directory. Times are the lowest and highest p50 of the three runs.
+
+| Write path | Before (ms) | After (ms) | Rows written | Lease writes |
+| --- | --- | --- | --- | --- |
+| Native: activity checkpoint | 45.7–76.1 | 0.21–0.37 | 1 | 2 |
+| Native: activity checkpoint, no change | 45.1–61.9 | 0.10–0.16 | 0 | 2 |
+| Native: dispatch journal | 49.1–63.5 | 1.5–2.5 | 1 | 2 |
+| Session: one field | 3.3–5.3 | 0.07–0.12 | 1 | 0 |
+| Session: create, read the environment's rows, remove | 6.6–10.6 | 0.64–0.93 | 2 | 0 |
+| Session: disconnect an environment | 4.0–6.4 | 0.31–0.43 | 10 | 0 |
+| Session: reorder an environment | 4.0–6.0 | 0.55–0.71 | 10 | 0 |
+| Project: one field | 0.60–0.85 | 0.19–0.35 | 1 | 2 |
+| Project: new remote URL | 0.63–0.78 | 0.27–0.46 | 1 | 2 |
+| Project: read one | 0.07–0.09 | 0.00–0.01 | 0 | 0 |
+| Project: add and remove | 3.0–4.3 | 1.8–3.7 | 2 | 6 |
+| Project: move one to the end of 500 | 3.4–4.8 | **5.8–8.7 (slower)** | 500 | 2 |
+| Listing: 64 rows of 1 MiB, sizes only | 46–60 | 9.4–11.7 | 0 | 0 |
+| Journal: read | 0.17–0.30 | 0.01 | 0 | 2 before, 0 after |
+| Mail: backoff reset, nothing to reset | 9.8–13.5 | 0.00–0.01 | 0 | 2 before, 0 after |
+
+| Usage prune, 20,000 rows, 10,000 changed | Before | After |
+| --- | --- | --- |
+| Total | 2,353–3,142 ms | 1,687–2,422 ms |
+| Commits | 10,000 | 80 |
+| Longest event-loop stall | 2,353–3,142 ms | 42–64 ms |
+| Longest single commit | 10–87 ms | 38–64 ms |
+
+The rows-written column does not move because the whole-value writers already diffed against the stored rows: what they paid per write was decoding and re-serializing the store. The real write rate and store sizes behind these numbers were not measured ([5101](5101-store-size-and-write-rate-live.md)), and the cold-cache listing cost and the fallback on an older macOS were not either ([5102](5102-sqlite-size-fallback-live.md)).
+
+The E6 report was checked item by item and deleted; it stays in git history at base commit `48d2ed40c`, under `docs/reports/efficiency-logging-database/`. Every task and "Needs verification" item in that file, with its outcome (tests are under `apps/backend/src/core/`):
+
+| Part | Item | Outcome | Code and test, evidence, or to-do |
+| --- | --- | --- | --- |
+| 0230 | Task 1: load one row inside the key's lease | Done, with one site moved to a to-do | Code: `readNativeAgentSessionUnderLease` and `peekNativeAgentSession` (`storage-native.ts`). Test: `storage-native-session-row-reads.test.ts`, "a mutation reads and writes only its own key" and "two backends writing one key and other keys lose nothing". A steer's prompt queue step cannot move alone and is [5100](5100-prompt-queue-row-writes.md). |
+| 0230 | Needs verification: which of the 32 call sites are mutations | Done | Classified above under TX-4: 28 held a key's lease (27 mutations, 1 read), 4 walk the store. Test: "whole-store loads remain only where the whole store is the question" in the same file. |
+| 0470 | Task 1: row writes for array stores | Done, by #1736 | Code: keyed array layouts in `updateStoreRow` (`storage-database.ts`). Test: `storage-database.test.ts`, "StorageDatabase.updateStoreRow on a keyed array store". |
+| 0470 | Task 2: move a store's writers together | Done | Environments, by #1736: `saveEnvironment` (`storage-projects.ts`), `storage-environment-row-writes.test.ts`. Sessions: `storage-drafts.ts`, `storage-sessions.ts`. Projects: `saveProject` (`storage-projects.ts`). Tests: `storage-session-project-row-writes.test.ts`, "one field writes one row and reads and writes nothing else" and "two connections writing sessions and projects lose no update"; `storage-session-project-row-writes.integration.test.ts`, "two processes writing the same rows lose no update" and the two "an interrupted write" kills; `storage-writer-guards.test.ts`. |
+| 0470 | Needs verification: how large the environment store gets and how often it is written | Moved to a to-do | [5101](5101-store-size-and-write-rate-live.md): needs a real install, which this work could not touch. |
+| 0870 | Task 1: stop reading whole values to size them | Done | Code: `rowBytesExpression` and the primary-key scan in `rows()` (`storage-database.ts`). Test: `storage-database.test.ts`, "a library without octet_length falls back to the cast, with the same answer", "production sizing falls back when the connection rejects octet_length" and "a sizes-only listing keeps the listing's order without an ordered scan". |
+| 0870 | Task 2: remove leases taken only to read, journal read | Done | Code: `getAgentInteractionResolutionJournal` (`storage-native.ts`). Test: `storage-native-agent-sessions.test.ts`, "a journal read takes no lease and writes nothing". |
+| 0870 | Task 2: remove leases taken only to read, no-op backoff reset | Done | Code: `resetAgentMailInjectBackoff` (`storage-agent-mail-injects.ts`). Test: `storage-read-only-leases.test.ts`, "nothing to reset takes no lease and writes nothing". |
+| 0870 | Task 3: one transaction for the usage-history prune | Done, in batches as the report recommended | Code: `prune` and `USAGE_HISTORY_PRUNE_BATCH_ROWS` (`usage-history-store.ts`). Test: `usage-history-store.test.ts`, "commits a bounded batch at a time and frees the event loop between them" and "a turn recorded during the sweep is not lost". |
+| 0870 | Needs verification: the overflow read cost was not timed | Done, cold cache moved to a to-do | Timed warm in the table above (46–60 ms to 9.4–11.7 ms). A cold-cache listing is [5102](5102-sqlite-size-fallback-live.md), task 2. |
+| 0870 | Needs verification: SQLite version in Bun 1.4.4 on each platform | Partly checked, rest moved to a to-do | SQLite 3.54.0 on macOS 27 arm64 and 3.53.4 on Linux arm64 both have `octet_length`. The other platforms, and a real older macOS, are [5102](5102-sqlite-size-fallback-live.md), task 1. |
+
+No item needed the outcome "no longer holds": each was still present in the code when re-checked, or had already been done by #1736, as the table says.
+
+**Investigation.** Re-checked 2026-11-02 and, for environments, 2026-11-04. Background callers not moved to the snapshot either mutate what they read or pass it on to code not checked yet: `reconcilePendingLaunches` (launches environments), environment cleanup, the local-server reaper, diff stats, the PR monitor and the coordinator, goal and sign-in services. Mail presence was checked: it already reads one row per mailbox (`mailInjectPresence`). ST-9's remainder (pending injects as their own collection, a body-free mailbox list) was not re-checked.
 
 **Decisions.**
 
@@ -129,13 +187,26 @@ Done 2026-11-04 (branch `array-layout-writers-dd246b495d6d-r1`, re-checked again
   - **Move the record stores (sessions, projects) first.**
     - Pros: `updateStoreRow` already supports them.
     - Cons: smaller stores, so less gained.
-- **ST-10, sessions and projects: next step?** Open.
+- **ST-10, sessions and projects: next step?** Done 2026-11-04 with the first option.
   - **Move sessions next, then projects, each with its writer guard change (recommended).**
     - Pros: array row writes now exist for both; sessions change more often than projects.
-    - Cons: sessions need a check of what `updateStore` callers rely on; a project reorder still writes many rows.
+    - Cons: sessions need a check of what `updateStore` callers rely on; a project reorder still writes many rows, and on the generated workload moving one project across 500 went from 3.4–4.8 ms to 5.8–8.7 ms.
   - **Leave them whole.**
     - Pros: no risk to two stores that are small on most installs.
     - Cons: the report's remaining ST-10 writers stay O(store) per field.
+- **Blob length: how to size a value without reading it (R20, D7)?** Done 2026-11-04. The report's recommended `octet_length` no longer fitted alone, so this extends it.
+  - **`octet_length(value)` with a fallback to the cast, plus a primary-key scan sorted in JavaScript for sizes-only listings (recommended, done).**
+    - Pros: 46–60 ms to 9.4–11.7 ms at 64 rows of 1 MiB; no schema change; works on any SQLite, because the expression is chosen per connection.
+    - Cons: an older SQLite keeps the cast's cost on the size expression; a JavaScript sort per listing; the SQL no longer states the order, so a test pins it.
+  - **`octet_length(value)` alone, as the report recommended.**
+    - Pros: one expression; the SQL keeps its `ORDER BY`.
+    - Cons: measured to change little: 52.5 ms against 60.6 ms on macOS and 40.0 ms against 52.2 ms on Linux. A query with no size at all still took 52.9 ms and 35.9 ms, because `ORDER BY` walks `store_rows_position` and seeks each row, and a seek in this `WITHOUT ROWID` table reads whole cells, overflow pages included, to compare keys. It also fails at query time on a library older than 3.43.
+  - **A stored `bytes` column.**
+    - Pros: independent of the SQLite version.
+    - Cons: a migration that locks out older builds, every writer path must keep it right, and the ordered seek would still read the cells.
+  - **A separate listing without sizes for key-only callers.**
+    - Pros: no version risk.
+    - Cons: display tails and pipeline manifests read `bytes`, so they would still pay; the seek cost is the same either way.
 
 ### 3. Renderer re-renders and refetches
 

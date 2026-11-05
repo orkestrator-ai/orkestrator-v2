@@ -2,6 +2,8 @@ import { mkdtemp, mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { coordinatorMainConversation } from "@orkestrator/protocol/coordinator";
+import type { CommandContext } from "../src/core/commands-context.js";
+import { createCommandRegistry } from "../src/core/commands-registry.js";
 import { CoordinatorService } from "../src/core/coordinator-service.js";
 import { runCommand } from "../src/core/shell.js";
 import type { StorageContext } from "../src/core/storage-context.js";
@@ -18,13 +20,15 @@ import { benchOption as option } from "./agent-mail-bench-fixture.js";
  * Each project has a coordinator with one main conversation, `open` running
  * worker delegations (one running local environment each) and `finished`
  * delegations that were closed and woken, so the defaults hold 1,800 of the
- * store's 2,000 workflow records. `sweepMs` is one
- * `reconcileWorkerDelegations` call (the 60 s `coordinator-repair` job);
- * `readMs` is one `CoordinatorService.get`, which `get_project_coordinator`,
- * the panel's view and every coordinator `read_messages` call. Writes are the
- * committed revisions of the coordinator and agent mail stores per call. Each
- * figure is the mean per call; machine- and load-specific, so compare runs on
- * one host only.
+ * store's 2,000 workflow records.
+ *
+ * `sweep` is one `reconcileWorkerDelegations`, which the 60 s
+ * `coordinator-repair` job runs. `read` is one `CoordinatorService.get`, which
+ * `get_project_coordinator`, the panel's view and every coordinator
+ * `read_messages` call; `view` is the panel's `get_project_coordinator_view`,
+ * which also digests the answer. Writes are the committed revisions of the
+ * coordinator and agent mail stores per call. Each figure is the mean per
+ * call; machine- and load-specific, so compare runs on one host only.
  */
 
 const projects = Math.max(1, option("projects", 40));
@@ -126,8 +130,15 @@ try {
 
   const sweep = await measure(() => coordinator.reconcileWorkerDelegations());
   const read = await measure((index) => coordinator.get(projectIds[index % projectIds.length]!));
+  const views = createCommandRegistry().get("get_project_coordinator_view")!;
+  const context = { storage, coordinators: coordinator } as unknown as CommandContext;
+  const view = await measure(async (index) =>
+    views({ projectId: projectIds[index % projectIds.length]! }, context),
+  );
   const records = (await storage.coordinators.getCoordinatorReconciliationState()).workflows.length;
-  log(JSON.stringify({ projects, open, finished, records, iterations, sweep, read }, null, 2));
+  log(
+    JSON.stringify({ projects, open, finished, records, iterations, sweep, read, view }, null, 2),
+  );
   storage.close();
 } finally {
   await rm(root, { recursive: true, force: true });

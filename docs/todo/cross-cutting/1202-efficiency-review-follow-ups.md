@@ -30,7 +30,7 @@ governs, marked "Decided".
 
 1. **Baseline and before-and-after numbers**: capture the report's measurements for the work already done and before each structural task. Status: open.
 2. **Storage keyed reads and writes**: the lease-held native session mutations, one shared decoded snapshot, the agent mail remainder, keyed-array row writes and the position index (TX-4 rest, BG-5, ST-9 rest, ST-10, ST-11). Status: open (ST-7, ST-8, BG-5, ST-11 and ST-10 done, TX-4's rest done 2026-11-04; ST-9 rest open; the prompt-queue reads a steer made were [5100](5100-prompt-queue-row-writes.md), done 2026-11-05; live store sizes and write rates are [5101](5101-store-size-and-write-rate-live.md)).
-3. **Renderer re-renders and refetches**: WEB-6, WEB-7, WEB-9 to WEB-14 and WEB-16 to WEB-19, plus WEB-2's narrower subscriptions. Status: done (2026-11-04; WEB-2, WEB-3, WEB-4, WEB-5, WEB-8, WEB-15 and GW-13 earlier; WEB-7 and WEB-17 on 2026-11-03; WEB-2's third fix, WEB-6, WEB-9, WEB-10 and WEB-11, then WEB-12 to WEB-14, WEB-16, WEB-18 and WEB-19 on 2026-11-04; a React Profiler run stays with task 1).
+3. **Renderer re-renders and refetches**: WEB-6, WEB-7, WEB-9 to WEB-14 and WEB-16 to WEB-19, plus WEB-2's narrower subscriptions. Status: done (2026-11-04; WEB-2, WEB-3, WEB-4, WEB-5, WEB-8, WEB-15 and GW-13 earlier; WEB-7 and WEB-17 on 2026-11-03; WEB-2's third fix, WEB-6, WEB-9, WEB-10 and WEB-11, then WEB-12 to WEB-14, WEB-16, WEB-18 and WEB-19 on 2026-11-04; a React Profiler run stays with task 1). E12 (WEB-2's third fix, WEB-6 and WEB-14) was checked back on 2026-11-05 and its batch file deleted: all three were built, and its two-tab Profiler run found no difference in commits; see the [closing check of E12](../../reports/efficiency-logging-database/0000-index.md#closing-check-of-e12-renderer-store).
 4. **Live agent view requests**: discovery out of the 500 ms round, a combined read, then bridge state ETags and transcript deltas (WEB-1, GW-1, GW-3, TX-5, TX-6). Status: open (WEB-1 and GW-1 done 2026-11-04, a visible running tab from 3 requests per round to 1.04; GW-3 done 2026-11-05; TX-5 and TX-6 open).
 5. **Transcript pipeline**: delta-base ring, unlimited post-dispatch reads, memoised fingerprints and the smaller items (TX-1 to TX-3, TX-7 to TX-9, TX-11 to TX-18). Status: open (TX-1 and TX-2 done 2026-11-04, focused tests only; live before-and-after numbers stay with task 1; TX-8, TX-15 and TX-18 done 2026-11-05 in E9, with fixture figures and live evidence in [5340](../transcripts-and-observation/5340-transcript-reads-live-evidence.md); TX-3, TX-7, TX-9, TX-11 to TX-14 and TX-16 done 2026-11-05 in E11, focused tests only, see the [closing check of E11](../../reports/efficiency-logging-database/0000-index.md#closing-check-of-e11-projection-hashing); TX-17 left until a profile shows it and E11's savings unmeasured, both in [6260](../transcripts-and-observation/6260-projection-hashing-measurements.md)).
 6. **Bridge hot paths**: Codex config reads, cached transcript measurement, tool-card fast paths, Claude part identity, stream framing and shared helpers (BR-2, BR-4 to BR-16). Status: done (BR-1 and BR-3 done, tests for BR-1 added 2026-11-05 by E20; BR-4 to BR-6 and the transcript half of BR-15 done 2026-11-02; BR-2, BR-8, BR-9 and BR-11 done 2026-11-03; BR-7, BR-10, BR-12 to BR-14 and BR-16 done 2026-11-04; BR-15's SSE replay rings done 2026-11-05).
@@ -2399,7 +2399,12 @@ browser and real-stack suites were not run.
 - Task 12 on a packaged `file://` window: the Electron spec uses the dev renderer, so the packaged Content Security Policy and origin are unexercised on the new transport (read from code: `connect-src` allows `http:`, and main rewrites `Origin`). Tracked in [4501](4501-local-window-transport-default.md).
 - Before-and-after numbers for every landed item (task 1).
 - A React Profiler run with two visible agent tabs, idle and streaming, for
-  WEB-2.
+  WEB-2: answered 2026-11-05 by E12's closing check
+  (`docs/reports/efficiency-logging-database/0000-index.md`). In Chromium with
+  React's development build and a fake backend, idle tabs committed nothing,
+  and streaming tabs committed 170 times in 20 s whether or not the hook
+  subscribed to its cache entries (5.2 to 5.8 ms mean per commit). Production
+  React was not measured.
 - The compression default under real remote load: tracked in 0052 task 2.
 - Task 7: `lstatSync` and warm-capture numbers come from this Linux host only;
   macOS was not measured. ST-16's scan rate comes from a fake watcher and clock;

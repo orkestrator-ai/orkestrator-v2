@@ -1,11 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { request as httpRequest } from "node:http";
 
-import {
-  LoopbackArtifactContentServer,
-  approximateSite,
-  hostsShareSite,
-} from "./content-server.js";
+import { LoopbackArtifactContentServer } from "./content-server.js";
 import { sha256Hex } from "./dependency-manifest.js";
 import {
   DESKTOP_ARTIFACT_SHELL_ORIGIN,
@@ -416,16 +412,5 @@ describe("artifact content server", () => {
     const later = String((await get(mint(server).shellUrl)).headers["content-security-policy"]);
     expect(later).toContain(`frame-ancestors ${DESKTOP_ARTIFACT_SHELL_ORIGIN}`);
     expect(later).not.toContain("127.0.0.1:4100");
-  });
-
-  test("site approximation errs towards 'same site'", () => {
-    expect(approximateSite("app.example.com")).toBe("example.com");
-    expect(approximateSite("a.b.example.co.uk")).toBe("example.co.uk");
-    expect(approximateSite("127.0.0.1")).toBe("127.0.0.1");
-    expect(hostsShareSite("artifacts.example.com", "app.example.com")).toBe(true);
-    expect(hostsShareSite("example.com", "x.example.com")).toBe(true);
-    expect(hostsShareSite("usercontent.example.net", "app.example.com")).toBe(false);
-    expect(hostsShareSite("localhost", "127.0.0.1")).toBe(false);
-    expect(hostsShareSite("a.example.co.uk", "b.example.co.uk")).toBe(true);
   });
 });

@@ -72,6 +72,48 @@ for (const invalidate of ["update", "reconnect"])
     link.stop();
   });
 
+test("a write that returns nothing is a success, not an unknown outcome", async () => {
+  const { leaf, link } = await setup();
+  let dispatches = 0;
+  leaf.commands.set("mutate", async () => {
+    dispatches++;
+  });
+  await link.start();
+  const outcomes = new NodeOutcomeLedger();
+  const result = await routeToNode({
+    nodeId: "bk_leaf" as never,
+    link,
+    command: "mutate",
+    args: {},
+    outcomes,
+  });
+  expect(result).toEqual({ outcome: "ok", result: undefined });
+  expect(dispatches).toBe(1);
+  expect(outcomes.list()).toHaveLength(0);
+  link.stop();
+});
+
+for (const body of ["null", "[]", '{"status":"ok"}', '{"error":"failed"}'])
+  test(`a successful status with an unexpected body stays unknown (${body})`, async () => {
+    const { link } = await setup(async (_input, init) =>
+      init?.body && JSON.parse(String(init.body)).command === "mutate"
+        ? new Response(body, { status: 200 })
+        : null,
+    );
+    await link.start();
+    const outcomes = new NodeOutcomeLedger();
+    const result = await routeToNode({
+      nodeId: "bk_leaf" as never,
+      link,
+      command: "mutate",
+      args: {},
+      outcomes,
+    });
+    expect(result.outcome).toBe("unknown");
+    expect(outcomes.list()).toHaveLength(1);
+    link.stop();
+  });
+
 for (const malformed of [false, true])
   test(`lost successful response records durable unknown (malformed=${malformed})`, async () => {
     let dispatches = 0;

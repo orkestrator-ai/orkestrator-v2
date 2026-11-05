@@ -39,7 +39,7 @@
  * asked for. Nothing at module scope spawns `mise`, so the file stays inert in
  * profile-free runs.
  */
-import { expect, test, type Locator, type Page, type TestInfo } from "@playwright/test";
+import { expect, test, type Locator, type Page, type TestInfo } from "./browser-test";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { withDesignLiveHeartbeat } from "./design-live-heartbeat";

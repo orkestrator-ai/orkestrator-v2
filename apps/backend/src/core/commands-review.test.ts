@@ -720,7 +720,7 @@ describe("pipeline environment Git wiring", () => {
       });
       const lookup = mock(async () => environment);
       const git = createPipelineEnvironmentGit({ getEnvironment: lookup }, fence, (env, guard) =>
-        createEnvironmentCommandRunner(env, guard, undefined, execute),
+        createEnvironmentCommandRunner(env, guard, undefined, undefined, execute),
       );
       expect(await git("git-env", ["rev-parse", "HEAD"])).toBe("head-sha\n");
       expect(lookup).toHaveBeenCalledWith("git-env");
@@ -770,7 +770,7 @@ describe("pipeline environment Git wiring", () => {
         { getEnvironment: async () => environment },
         { beginMutation: () => () => {} },
         (env, guard) =>
-          createEnvironmentCommandRunner(env, guard, undefined, async () => {
+          createEnvironmentCommandRunner(env, guard, undefined, undefined, async () => {
             throw failure;
           }),
         readStatus,

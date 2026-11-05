@@ -24,7 +24,13 @@ const PANEL: Array<
   { agent: "claude", model: "opus", reasoningEffort: "high" },
   { agent: "codex", model: "gpt-6.1-sol", reasoningEffort: "high" },
   { agent: "cursor", model: "grok-4.6", reasoningEffort: "high" },
-  { agent: "opencode", model: "deepseek-v4.1-flash-preview-with-a-very-long-model-name" },
+  // Longer than any node is wide in any font: with Arial's metrics the old
+  // 55-character name fitted a phone-width node with 4px to spare.
+  {
+    agent: "opencode",
+    model:
+      "deepseek-v4.1-flash-preview-with-a-very-long-model-name-that-no-flow-node-can-show-whole",
+  },
   { agent: "grok", model: "grok-code-fast-2", reasoningEffort: "medium" },
   { agent: "pi", model: "kimi-k3" },
   { agent: "claude", model: "sonnet", reasoningEffort: "medium" },
@@ -512,7 +518,10 @@ export function MultiReviewFlowFixture() {
             onClick={() => {
               const current = useMultiReviewStore.getState().workflows.get(workflow.id)!;
               const validationRun = multiReviewFlowWorkflow("preparing", count).validationRun!;
-              validationRun.results[0]!.command = `mise run ${"long-validation-command-".repeat(30)}`;
+              // Far wider than any column, yet short enough when wrapped for the
+              // details column to fit a 1400px viewport beside the transcript in
+              // any monospace font. Thirty repeats overflowed it with Liberation Mono.
+              validationRun.results[0]!.command = `mise run ${"long-validation-command-".repeat(12)}`;
               useMultiReviewStore.getState().replaceWorkflow({
                 ...current,
                 validationRun,

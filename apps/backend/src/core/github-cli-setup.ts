@@ -8,7 +8,7 @@ import {
   type SpawnLike,
 } from "./agent-accounts-login.js";
 import type { GitHubCliLoginProgress } from "./github-cli-login.js";
-import { gitHubCli } from "./github-cli-binary.js";
+import { gitHubCli, type GitHubCliSelection } from "./github-cli-binary.js";
 import { checkHostTool } from "./host-tools.js";
 
 /**
@@ -50,7 +50,7 @@ function assertSignInAllowed(context: CommandContext): void {
 export async function getGitHubCliStatus(context: CommandContext): Promise<GitHubCliStatus> {
   const installed = await checkHostTool(context, "gh");
   const [authenticated, config] = await Promise.all([
-    installed ? getHostGitHubToken().then(Boolean) : false,
+    installed ? getHostGitHubToken(context.runtime.gitHubCli).then(Boolean) : false,
     context.storage.loadConfig(),
   ]);
   return {
@@ -74,7 +74,11 @@ export function gitHubCliLoginProgress(context: CommandContext): GitHubCliLoginP
  * `GITHUB_TOKEN` would make gh refuse to store a login, and a token the backend
  * inherited is not the login the user is creating.
  */
-export function gitHubCliLoginCommand(browserShimDirectory: string, env = process.env) {
+export function gitHubCliLoginCommand(
+  selection: GitHubCliSelection | undefined,
+  browserShimDirectory: string,
+  env = process.env,
+) {
   const loginEnv: NodeJS.ProcessEnv = { ...env, NO_COLOR: "1", GH_PROMPT_DISABLED: "1" };
   delete loginEnv.GH_TOKEN;
   delete loginEnv.GITHUB_TOKEN;
@@ -83,7 +87,7 @@ export function gitHubCliLoginCommand(browserShimDirectory: string, env = proces
   loginEnv.BROWSER = browser;
   loginEnv.GH_BROWSER = browser;
   return {
-    command: gitHubCli(),
+    command: gitHubCli(selection),
     args: ["auth", "login", "--web", "--hostname", GITHUB_HOSTNAME],
     env: loginEnv,
   };
@@ -99,10 +103,14 @@ export async function startGitHubCliLogin(
       options.shimDirectory ??
         path.join(context.storage.agentAccounts.agentAccountsDirectory(), ".login-shim"),
     );
-    return beginAgentAccountLogin("github", gitHubCliLoginCommand(shim), {
-      spawnImpl: options.spawnImpl,
-      totalTimeoutMs: LOGIN_TOTAL_TIMEOUT_MS,
-    });
+    return beginAgentAccountLogin(
+      "github",
+      gitHubCliLoginCommand(context.runtime.gitHubCli, shim),
+      {
+        spawnImpl: options.spawnImpl,
+        totalTimeoutMs: LOGIN_TOTAL_TIMEOUT_MS,
+      },
+    );
   });
 }
 

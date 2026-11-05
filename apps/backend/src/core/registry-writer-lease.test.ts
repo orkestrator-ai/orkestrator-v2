@@ -159,3 +159,91 @@ describe("registry writer lease logging", () => {
     ]);
   });
 });
+
+describe("registry writer state", () => {
+  test("a held lease reads as held, and as lost once another backend takes it", async () => {
+    const lease = await open();
+    expect(lease.state()).toBe("held");
+    await replaceLease("another-backend");
+    // Reading the state checks the file, so the loss is found without a tick.
+    expect(lease.state()).toBe("lost");
+    expect(leaseRecords()).toMatchObject([{ event: "writer-lease.lost" }]);
+  });
+
+  test("a released lease reads as released, not lost", async () => {
+    const lease = await open();
+    await lease.release();
+    expect(lease.state()).toBe("released");
+    expect(leaseRecords()).toEqual([]);
+  });
+
+  test("a backend that never held it says why", async () => {
+    writers.push(await openRegistryWriter(directory));
+    const second = await openRegistryWriter(directory);
+    writers.push(second);
+    expect(second.state()).toBe("busy");
+
+    const newer = await fs.mkdtemp(path.join(os.tmpdir(), "ork-writer-lease-newer-"));
+    try {
+      await fs.writeFile(
+        path.join(newer, REGISTRY_SCHEMA_MARKER_FILE),
+        JSON.stringify({ schemaVersion: 99, minimumWriterVersion: 99, updatedAt: "" }),
+      );
+      const blocked = await openRegistryWriter(newer);
+      expect(blocked.state()).toBe("schema-incompatible");
+    } finally {
+      await fs.rm(newer, { recursive: true, force: true });
+    }
+  });
+
+  test("the loss callback runs once, from a check or a heartbeat", async () => {
+    let lost = 0;
+    const checked = await open({ onLost: () => (lost += 1) });
+    await replaceLease("another-backend");
+    for (let tick = 0; tick < 3; tick += 1) checked.isHeld();
+    expect(lost).toBe(1);
+    await checked.release();
+    expect(lost).toBe(1);
+
+    let heartbeatLost = 0;
+    await fs.rm(path.join(directory, REGISTRY_WRITER_LEASE_FILE), { force: true });
+    await open({ heartbeatMs: 5, onLost: () => (heartbeatLost += 1) });
+    await replaceLease("another-backend");
+    for (let attempt = 0; attempt < 200 && heartbeatLost === 0; attempt += 1) {
+      await Bun.sleep(5);
+    }
+    await Bun.sleep(25);
+    expect(heartbeatLost).toBe(1);
+  });
+
+  test("a throwing loss callback is logged and never escapes the heartbeat", async () => {
+    await open({
+      heartbeatMs: 5,
+      onLost: () => {
+        throw new Error("listener broke");
+      },
+    });
+    await replaceLease("another-backend");
+    for (
+      let attempt = 0;
+      attempt < 200 &&
+      !leaseRecords().some((record) => record.event === "writer-lease.listener-failed");
+      attempt += 1
+    ) {
+      await Bun.sleep(5);
+    }
+    expect(leaseRecords().map((record) => record.event)).toEqual([
+      "writer-lease.lost",
+      "writer-lease.listener-failed",
+    ]);
+  });
+
+  test("a release never calls the loss callback", async () => {
+    let lost = 0;
+    const lease = await open({ heartbeatMs: 1, onLost: () => (lost += 1) });
+    await Bun.sleep(5);
+    await lease.release();
+    await Bun.sleep(10);
+    expect(lost).toBe(0);
+  });
+});

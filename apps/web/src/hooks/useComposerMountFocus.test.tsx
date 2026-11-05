@@ -35,6 +35,15 @@ describe("useComposerMountFocus", () => {
     expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Composer" }));
   });
 
+  test("respects an explicit moved-tab focus intent when the composer mounts late", () => {
+    const { rerender } = render(<Harness composer={false} panel="closed" />);
+    const tab = screen.getByRole("button", { name: "Open tab" });
+    tab.setAttribute("data-preserve-focus", "");
+    tab.focus();
+    rerender(<Harness composer panel="closed" />);
+    expect(document.activeElement).toBe(tab);
+  });
+
   test("leaves focus in an open panel when the composer mounts late", () => {
     const { rerender } = render(<Harness composer={false} panel="open" />);
     const close = screen.getByRole("button", { name: "Close agent information" });

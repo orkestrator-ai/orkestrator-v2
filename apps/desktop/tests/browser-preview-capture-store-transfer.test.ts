@@ -88,7 +88,7 @@ describe("manual redaction accounting", () => {
       imageDataUrl: pngDataUrl(64, 40),
       manualRegions: 3,
     });
-    let pending = (await store.read(created.captureId))!;
+    let pending = (await store.readWire(created.captureId))!;
     expect(pending.capture.redaction.manualRegions).toBe(5);
 
     for (let pass = 0; pass < 2; pass += 1) {
@@ -97,12 +97,12 @@ describe("manual redaction accounting", () => {
         manualRegions: 30,
       });
     }
-    pending = (await store.read(created.captureId))!;
+    pending = (await store.readWire(created.captureId))!;
     expect(pending.capture.redaction.manualRegions).toBe(32);
 
     // Excluding the image adds no regions and keeps the running total.
     await store.replaceImage(created.captureId, { imageDataUrl: null, manualRegions: 0 });
-    pending = (await store.read(created.captureId))!;
+    pending = (await store.readWire(created.captureId))!;
     expect(pending.capture.redaction).toMatchObject({ manualRegions: 32, imageExcluded: true });
   });
 
@@ -119,7 +119,7 @@ describe("manual redaction accounting", () => {
       manualRegions: 0,
       regions: [{ x: 200, y: 100, width: 40, height: 60 }],
     });
-    const pending = (await store.read(created.captureId))!;
+    const pending = (await store.readWire(created.captureId))!;
     expect(pending.capture.redaction.manualRegions).toBe(1);
     expect(pending.masks).toEqual([
       { source: "sensitive-field", rect: { x: 10, y: 130, width: 100, height: 20 } },

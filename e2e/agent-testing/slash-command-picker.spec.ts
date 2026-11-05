@@ -21,7 +21,7 @@
  * containerized environment's own `/workspace` through `docker exec` (no
  * override: a container loads project resources by default).
  */
-import { expect, test, type Locator } from "@playwright/test";
+import { expect, test, type Locator } from "./browser-test";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import {
   authenticatedInvoke,

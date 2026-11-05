@@ -13,7 +13,7 @@ import {
   type Config,
   type Json,
 } from "./browser-preview-capture-harness";
-import { pngDataUrl } from "./png-fixture";
+import { pngBytes } from "./png-fixture";
 
 describe("BrowserPreviewManager trusted capture", () => {
   test("binds a new selection to host-assigned ids and runs in an isolated world", async () => {
@@ -65,7 +65,7 @@ describe("BrowserPreviewManager trusted capture", () => {
       image: { width: 1_600, height: 1_000, reduced: false },
     });
     expect(contents.capturePage).toHaveBeenCalledTimes(1);
-    const pending = (await harness.manager.readPendingCapture(started.captureId))!;
+    const pending = (await harness.manager.readPendingCaptureWire(started.captureId))!;
     const capture = pending.capture;
     expect(validateWebAnnotationCaptureInput(capture).ok).toBe(true);
     expect(capture.producer).toBe("desktop-native");
@@ -96,7 +96,7 @@ describe("BrowserPreviewManager trusted capture", () => {
     });
     expect(capture.documentGeneration).toBeGreaterThan(0);
     expect(capture.stale).toBeUndefined();
-    expect(pending.imageDataUrl).toBe(pngDataUrl(1_600, 1_000));
+    expect(pending.imageBytes).toEqual(pngBytes(1_600, 1_000));
     expect(harness.events.map((event) => event.status)).toEqual([
       "selecting",
       "capturing",
@@ -155,7 +155,7 @@ describe("BrowserPreviewManager trusted capture", () => {
     const status = await harness.manager.getCaptureStatus("browser-1");
     if (status.status !== "captured")
       throw new Error(`expected capture, got ${JSON.stringify(status)}`);
-    const capture = (await harness.manager.readPendingCapture(status.captureId))!.capture;
+    const capture = (await harness.manager.readPendingCaptureWire(status.captureId))!.capture;
 
     expect(capture.geometry?.image).toEqual({
       width: 2_000,
@@ -297,8 +297,8 @@ describe("BrowserPreviewManager trusted capture", () => {
     expect(contents.capturePage).toHaveBeenCalledTimes(1);
     expect(status.pending).toMatchObject({ stale: true, image: null });
     expect(status.pending.staleReason).toContain("navigated");
-    const capture = (await harness.manager.readPendingCapture(status.captureId))!;
-    expect(capture.imageDataUrl).toBeNull();
+    const capture = (await harness.manager.readPendingCaptureWire(status.captureId))!;
+    expect(capture.imageBytes).toBeNull();
     expect(capture.capture.stale?.reason).toContain("navigated");
     expect(capture.capture.geometry?.image).toBeNull();
     // Identity names the page the target was selected on, not the new route.
@@ -336,8 +336,8 @@ describe("BrowserPreviewManager trusted capture", () => {
     if (status.status !== "captured")
       throw new Error(`expected capture, got ${JSON.stringify(status)}`);
     expect(status.pending.image).toBeNull();
-    const pending = (await harness.manager.readPendingCapture(status.captureId))!;
-    expect(pending.imageDataUrl).toBeNull();
+    const pending = (await harness.manager.readPendingCaptureWire(status.captureId))!;
+    expect(pending.imageBytes).toBeNull();
     expect(pending.capture.redaction.sensitiveRegionsMasked).toBe(0);
     expect(pending.capture.redaction.imageExcluded).toBe(true);
     expect(pending.capture.geometry?.image).toBeNull();
@@ -373,8 +373,8 @@ describe("BrowserPreviewManager trusted capture", () => {
 
       expect(status.status).toBe("captured");
       if (status.status !== "captured") throw new Error("expected capture");
-      const pending = (await harness.manager.readPendingCapture(status.captureId))!;
-      expect(pending.imageDataUrl).toBeNull();
+      const pending = (await harness.manager.readPendingCaptureWire(status.captureId))!;
+      expect(pending.imageBytes).toBeNull();
       expect(pending.capture.geometry?.image).toBeNull();
       expect(pending.capture.redaction.imageExcluded).toBe(true);
       expect(pending.capture.evidence).not.toBeNull();
@@ -401,8 +401,8 @@ describe("BrowserPreviewManager trusted capture", () => {
       if (status.status !== "captured")
         throw new Error(`expected capture, got ${JSON.stringify(status)}`);
       expect(status.pending.image).toBeNull();
-      const pending = (await harness.manager.readPendingCapture(status.captureId))!;
-      expect(pending.imageDataUrl).toBeNull();
+      const pending = (await harness.manager.readPendingCaptureWire(status.captureId))!;
+      expect(pending.imageBytes).toBeNull();
       expect(pending.capture.redaction).toMatchObject({
         sensitiveRegionsMasked: 0,
         imageExcluded: true,
@@ -422,8 +422,8 @@ describe("BrowserPreviewManager trusted capture", () => {
     const status = await harness.manager.getCaptureStatus("browser-1");
 
     if (status.status !== "captured") throw new Error("expected capture");
-    const pending = (await harness.manager.readPendingCapture(status.captureId))!;
-    expect(pending.imageDataUrl).toBe(pngDataUrl(1_600, 1_000));
+    const pending = (await harness.manager.readPendingCaptureWire(status.captureId))!;
+    expect(pending.imageBytes).toEqual(pngBytes(1_600, 1_000));
     expect(pending.capture.redaction).toMatchObject({
       sensitiveRegionsMasked: 0,
       imageExcluded: false,
@@ -443,7 +443,7 @@ describe("BrowserPreviewManager trusted capture", () => {
     if (status.status !== "captured") throw new Error("expected capture");
     expect(contents.capturePage).toHaveBeenCalledTimes(2);
     expect(status.pending.stale).toBe(false);
-    const capture = (await harness.manager.readPendingCapture(status.captureId))!.capture;
+    const capture = (await harness.manager.readPendingCaptureWire(status.captureId))!.capture;
     expect(capture.target.kind === "element" && capture.target.rect).toEqual(moved.rect);
   });
 
@@ -567,7 +567,7 @@ describe("BrowserPreviewManager trusted capture", () => {
     });
     await harness.manager.discardPendingCapture(second.captureId);
     expect(await harness.manager.listPendingCaptures()).toEqual([]);
-    await expect(harness.manager.readPendingCapture("../../etc/passwd")).rejects.toThrow(
+    await expect(harness.manager.readPendingCaptureWire("../../etc/passwd")).rejects.toThrow(
       "pending capture ID",
     );
   });

@@ -65,6 +65,20 @@ export const COORDINATOR_LOG_AREAS = defineLogAreas({
       "store.workflows-in-use":
         "The workflow store was full and every record was still in use, so new work was refused.",
       "remote-worker.settle-failed": "A remote worker could not be settled.",
+      "node-release.failed":
+        "Work on a node that was forgotten or handed over could not be closed; the sweep's registry check retries.",
+      "node-release.reconcile-failed":
+        "The sweep could not check records against the node registry; the next sweep retries.",
+      "node-release.unregistered":
+        "Records named a node the registry no longer holds, so their work was closed here.",
+      "node-release.notice-failed":
+        "The notice for work closed on a released node could not be sent; it stays owed and the sweep retries.",
+      "node-release.no-coordinator":
+        "Work closed on a released node belonged to a coordinator that no longer exists, so nobody was told.",
+      "node-offline.notice-failed":
+        "The notice that a node has been unreachable for a day could not be sent; the next failed read retries.",
+      "node-offline.check-failed":
+        "Whether a long-unreachable node's coordinators were told could not be checked; the next read retries.",
       "checkout.merge-followed":
         "After an environment's PR merged, the project checkout was fast-forwarded, or `outcome` says why not.",
       "checkout.merge-follow-failed":

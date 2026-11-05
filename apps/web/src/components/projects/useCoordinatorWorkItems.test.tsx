@@ -360,3 +360,24 @@ test.each(["build-pipeline", "multi-review"])(
     }
   },
 );
+
+test.each(["build-pipeline", "multi-review", "graph-run"])(
+  "released remote %s does not refresh after resync or remount",
+  async (kind) => {
+    const read = spyOn(portalStore, "invokeOnNode").mockRejectedValue(new Error("released node"));
+    const snap = snapshot(kind, "remote");
+    snap.workflows[0]!.nodeRelease = { reason: "forgotten", at: new Date(now).toISOString() };
+    try {
+      const hook = renderHook(() => useCoordinatorWorkItems(snap, empty));
+      expect(hook.result.current.counts.finished).toBe(1);
+      await act(async () => requestResourceResync());
+      expect(read).not.toHaveBeenCalled();
+      hook.unmount();
+      const remounted = renderHook(() => useCoordinatorWorkItems(snap, empty));
+      expect(remounted.result.current.items[0]?.target).toBeNull();
+      expect(read).not.toHaveBeenCalled();
+    } finally {
+      read.mockRestore();
+    }
+  },
+);

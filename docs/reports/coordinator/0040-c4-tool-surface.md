@@ -190,3 +190,34 @@ The per-turn token and cost figure on the current surface, per provider.
 - [Coordinator report, 4.3 (A4)](../2026-10-27-coordinator.md#43-agent-experience-prompt-and-tools)
 - [Coordinator report, 4.3 (A5)](../2026-10-27-coordinator.md#43-agent-experience-prompt-and-tools)
 - [0395-coordinator-worker-surfaces-follow-ups.md](../../todo/coordinator-and-multi-review/0395-coordinator-worker-surfaces-follow-ups.md): adds `nodeId` to more tools
+
+## Outcome
+
+Built on branch `tool-surface-report-fadb85be2efd-r1` from `main` at
+`7347e5093a20f3c4d6758432b8a7da091ed84ae5` (2026-11-05). Every finding was
+re-checked against that commit first; all still held, with the line numbers
+moved (for example the coordinator's request-id sentence is now in
+`packages/protocol/src/coordinator-context.ts`, not `native-agent-service.ts`).
+No real provider turn was run.
+
+Schema size for a main coordinator (messaging and scheduling on), measured by
+`control-mcp-coordinator-schema-size.test.ts` as the JSON of each listed tool's
+name, description and input schema: **89 tools, 125,040 bytes (about 31,300
+tokens at four bytes a token) before; 82 tools, 115,114 bytes (about 28,800
+tokens) after.** The test bounds it at 85 tools and 125,000 bytes.
+
+| Part | Task | Outcome | Code and tests, evidence, or to-do |
+| --- | --- | --- | --- |
+| 0040 | 1. Let `agent` default | Done | `agent` is optional on both tools and resolves through `resolveLaunchAgent`/`defaultLaunchAgent` (`control-shared-actions.ts`), the rule behind `get_launch_options`' `defaults.agent`: the saved default when enabled, else the first enabled platform. A job reads its environment's tier; a `nodeId` launch resolves on that node; operators resolve before `environment.launch`/`session.start` (`control-mcp-operator-tools.ts`). A defaulted launch is fingerprinted as "the default" (`coordinatorLaunchIdentity`, `coordinator-action-scope.ts`) so a retry after a settings change replays. `COORDINATOR_LAUNCH_DEFAULTS_RULE` now names `agent`. Tests: `control-mcp-server-launch.test.ts` ("an omitted agent runs the user's default agent": `launch_environment`, `launch_job`, schema), `control-mcp-operator-tools.test.ts`, `coordinator-action-scope.test.ts`, `commands-registry-coordinator.test.ts` ("a defaulted agent replays after the default agent changes"). |
+| 0130 | 1. Fix the wording | Done | `COORDINATOR_REQUEST_ID_RULE` (`packages/protocol/src/coordinator.ts`) in the context block and the server instructions; `launch_environment` and `create_schedule` reworded. Tests: `coordinator-context.test.ts`, `control-mcp-server-launch.test.ts` ("request ids"). |
+| 0130 | 2. Make a collision obvious | Done | Every collision throws `COORDINATOR_REQUEST_ID_REUSED_ERROR` (storage, node, review and mail paths); launch, build-pipeline and Multi Review replays carry `replayed: true` and `replayNote` (`coordinatorReplayFields`, `control-mcp-results.ts`); `send_message` refuses a delegation id already used for another worker before sending, and reports any other delegation-open failure in `delegationNote` (`coordinator-worker-mail.ts`). Tests: `commands-registry-coordinator.test.ts`, `coordinator-review-actions.test.ts`, `coordinator-worker-mail.test.ts` ("coordinator request ids on worker mail"), `control-mcp-server-launch.test.ts`. |
+| 0150 | 1. Stop inviting polling | Done | `list_agents` now says to read it for a one-off question, not to wait. Test: `control-mcp-server-reads.test.ts`. |
+| 0150 | 2. Harden the guard | Done | `control-mcp-poll-guard.ts`: semantic keys (`pollKey`: tool, target, question filters, never `limit`/`offset`), a sliding window, and per-read fingerprints on `list_agents`, `get_environment`, `get_tab_state`, `get_tab_transcript`, `get_build_pipeline`, `get_multi_review` and `list_workflows` (the C5 gap). Tests: `control-mcp-poll-guard.test.ts`, `control-mcp-server-reads.test.ts`, `control-mcp-server-messaging.test.ts`. |
+| 0160 | 1. Remove the legacy node tools | Done, one kept | Six removed (`control-mcp-nodes.ts`, `COORDINATOR_CONTROL_TOOL_NAMES`). `read_node_environment` was kept: re-checking showed it is the only way to read a file in another node's environment (`get_worker_changes` covers diffs, `get_build_pipeline` tests). `RETIRED_COORDINATOR_TOOLS` pauses a saved schedule naming a removed tool with its replacement; backend commands stay, so older nodes are unaffected. Tests: `control-mcp-nodes.test.ts`, `control-mcp-coordinator-schema-size.test.ts`. |
+| 0160 | 2. Hide `start_multi_review` | Done | Removed from the coordinator map, its registration and both steering sentences; operators keep theirs. No live scenario called the tool (`multi-review-live.spec.ts` calls the backend command). Tests: `control-mcp-server.test.ts`, `control-mcp-server-coordinator-workflows.test.ts`. |
+| 0160 | 3. Measure, then trim schema prose | Done in part; rest moved to to-do 4920 | Measured and bounded (above). The shared `nodeId` description (27 tools) was cut to what the context does not say. The only prose that repeats the context block verbatim, the worker-prompt format rule on four prompt fields (about 1.5 KB), is pinned there on purpose by an earlier change; whether it and the PR and validation notes can go needs real transcripts: [4920](../../todo/coordinator-and-multi-review/4920-coordinator-tool-surface-live-follow-ups.md), task 2. |
+| 0160 | Needs verification: per-turn token and cost per provider | Moved to to-do 4920 | Needs billed provider turns: [4920](../../todo/coordinator-and-multi-review/4920-coordinator-tool-surface-live-follow-ups.md), task 1. |
+
+Parts 0040 and 0130 change what a model is told; they are proven with fakes
+only. Whether a real coordinator now leaves `agent` out and picks a new
+`requestId` per action is to-do 4920, task 3.

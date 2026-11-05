@@ -11,6 +11,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertCircle, Check, Loader2, Plus, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { InfoHint } from "@/components/ui/info-hint";
 import { Input } from "@/components/ui/input";
 import { AccountQuotaList } from "@/components/layout/AgentInfoButton.panels";
 import { AgentAccountLoginPanel } from "@/components/settings/AgentAccountLoginPanel";
@@ -159,23 +160,77 @@ function AutoSwitchControls({
           onCheckedChange={(checked) => onChange(checked === true)}
         />
         <div className="min-w-0 space-y-1">
-          <label
-            htmlFor={`auto-switch-${platformLabel}`}
-            className="flex flex-wrap items-center gap-2 text-sm font-medium text-foreground"
-          >
-            Automatically use the account whose weekly limit resets soonest
+          <div className="flex flex-wrap items-center gap-2">
+            <label
+              htmlFor={`auto-switch-${platformLabel}`}
+              className="text-sm font-medium text-foreground"
+            >
+              Automatically use the account whose weekly limit resets soonest
+            </label>
+            <InfoHint label="About automatic switching">
+              {state.mode === "pinned" ? (
+                <p>
+                  A manual switch pinned {pinned?.label ?? "this account"}
+                  {machineName ? ` on ${machineName}` : ""}, so automatic switching is off here.
+                  Tick this to turn it back on.
+                </p>
+              ) : null}
+              <p>
+                Moves on at 98% of the general weekly or 5-hour limit, or when a fresh reading
+                confirms one is used up, and resends the work it stopped. It comes back when that
+                5-hour limit resets, so accounts are used up in the order their weeks end.
+              </p>
+              <p>
+                Applies to {platformLabel} on every machine this one controls. Fable and other model
+                limits never move it. Switching by hand pins that account and turns this off until
+                you tick it again.
+              </p>
+            </InfoHint>
             <AutoSwitchBadge state={state} pinnedLabel={pinned?.label} />
-          </label>
-          <p className="text-xs text-muted-foreground">
-            {state.mode === "pinned"
-              ? `A manual switch pinned ${pinned?.label ?? "this account"}${machineName ? ` on ${machineName}` : ""}, so automatic switching is off here. Tick this to turn it back on.`
-              : `Moves on at 98% of the general weekly or 5-hour limit, or when a fresh reading confirms one is used up, and resends the work it stopped. It comes back when that 5-hour limit resets, so accounts are used up in the order their weeks end. Applies to ${platformLabel} on every machine this one controls. Fable and other model limits never move it. Switching by hand pins that account and turns this off until you tick it again.`}
-          </p>
+          </div>
           {state.mode === "automatic" && moved ? (
             <p className="text-xs text-muted-foreground">Last moved to {moved.label}.</p>
           ) : null}
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Shared entries the CLI replaced with its own copy in this account's
+ * directory (`privateSharedEntries` on the backend). One line; the
+ * explanation and the way back are behind the info icon.
+ */
+function PrivateEntriesNotice({
+  account,
+  entries,
+}: {
+  account: AgentAccountSummary;
+  entries: readonly string[];
+}) {
+  const cli = account.platform === "claude" ? "Claude" : "Codex";
+  const hostHome = account.platform === "claude" ? "~/.claude" : "~/.codex";
+  const accountHome = `agent-accounts/${account.platform}/${account.id}`;
+  const names = entries.join(", ");
+  return (
+    <div className="mt-1 flex flex-wrap items-center gap-x-1.5 text-xs text-amber-500">
+      <AlertCircle className="h-3 w-3 shrink-0" />
+      <span>Not shared with your other accounts: {names}</span>
+      <InfoHint label={`About ${names} not being shared`}>
+        <p>
+          {cli} saved its own copy of {entries.length === 1 ? "this" : "these"} for this account
+          instead of using the host login&apos;s. Changes this account makes stay here, and changes
+          from the host login and your other accounts don&apos;t show up here. Everything else is
+          still shared.
+        </p>
+        <p>
+          To share {entries.length === 1 ? "it" : "them"} again, copy anything you want to keep into{" "}
+          <code>{hostHome}</code>, then delete {names} from <code>{accountHome}</code> in
+          Orkestrator&apos;s data folder. It is linked back the next time {cli} starts on this
+          account.
+        </p>
+      </InfoHint>
     </div>
   );
 }
@@ -265,11 +320,7 @@ function AccountRow({
             </label>
           ) : null}
           {account.privateEntries?.length ? (
-            <p className="mt-1 text-xs text-amber-500">
-              No longer shared with the host login: {account.privateEntries.join(", ")}.{" "}
-              {account.platform === "claude" ? "Claude" : "Codex"} saved its own copy, so changes
-              here and on other accounts no longer reach each other.
-            </p>
+            <PrivateEntriesNotice account={account} entries={account.privateEntries} />
           ) : null}
         </div>
         {!editing ? (

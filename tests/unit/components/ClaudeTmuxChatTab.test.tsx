@@ -38,6 +38,8 @@ import * as realReactVirtuoso from "react-virtuoso";
 
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@orkestrator/protocol/git-workflow-prompts";
 
+import { renderAgentMailCarrier, type AgentMailMessage } from "@orkestrator/protocol/agent-mail";
+
 import { mockReadImage } from "../../mocks/clipboard";
 
 import { restoreMatchMedia, setMobileViewport } from "../../mocks/match-media";
@@ -1325,6 +1327,117 @@ Running 1 Explore agent...
     expect(await screen.findByText("20.4k tokens")).toBeTruthy();
     expect(screen.queryByText("8 tool uses") === null).toBe(true);
     expect(screen.queryByText("0 updates") === null).toBe(true);
+  });
+
+  describe("delivered mail", () => {
+    function mailCarrier(id: string, subject: string): string {
+      return renderAgentMailCarrier({
+        version: 1,
+        id,
+        threadId: id,
+        requestId: `request-${id}`,
+        createdAt: "2026-11-05T10:00:00.000Z",
+        from: {
+          kind: "tab",
+          projectId: "project-1",
+          environmentId: "env-2",
+          tabId: "startup-agent",
+          incarnationId: "incarnation-1",
+          agent: "codex",
+          title: "Codex 1",
+        },
+        toEnvironmentId: "env-1",
+        toTabId: "tab-1",
+        toIncarnationId: "incarnation-2",
+        subject,
+        body: `The body of ${subject}`,
+        bodyBytes: 20,
+        trust: "same-project",
+        injectDepth: 0,
+        threadDepth: 0,
+        placement: "injected",
+        revision: 1,
+      } satisfies AgentMailMessage);
+    }
+
+    const userLine = (uuid: string, content: unknown) => ({
+      type: "user",
+      uuid,
+      timestamp: "2026-11-05T10:00:00.000Z",
+      message: { role: "user", content },
+    });
+
+    const renderedRows = () =>
+      lastVirtuosoProps?.data.map((message: any) => [message.id, message.role]);
+
+    const renderTab = () =>
+      render(
+        <ClaudeTmuxChatTab
+          tabId="tab-1"
+          data={{ environmentId: "env-1", containerId: "container-1" }}
+          isActive
+        />,
+      );
+
+    test("draws a stored delivery as tiles, whichever way the row holds its text", async () => {
+      const unreadable =
+        '<orkestrator-peer-message version="1">\n<orkestrator-peer-payload-json>\n{not json}\n' +
+        "</orkestrator-peer-payload-json>\n</orkestrator-peer-message>";
+      getTranscriptMock.mockImplementation(async () => [
+        userLine("typed", "An ordinary prompt"),
+        userLine("batch", `${mailCarrier("a", "First")}\n\n${mailCarrier("b", "Second")}`),
+        // tmux pastes each line feed as a carriage return.
+        userLine("blocks", [
+          { type: "text", text: mailCarrier("c", "Third").replaceAll("\n", "\r") },
+        ]),
+        userLine("broken", unreadable),
+      ]);
+      mockRunningTmuxStatus();
+
+      const view = renderTab();
+
+      expect(await screen.findByText("First")).toBeTruthy();
+      expect(screen.getByText("Second")).toBeTruthy();
+      expect(screen.getByText("Third")).toBeTruthy();
+      expect(renderedRows()).toEqual([
+        ["typed", "user"],
+        ["peer-mail-a", "system"],
+        ["peer-mail-b", "system"],
+        ["peer-mail-c", "system"],
+        ["system-peer-mail-unreadable:broken:0", "system"],
+      ]);
+      expect(view.container.querySelectorAll("[data-mail-tile]")).toHaveLength(3);
+      expect(screen.getByText(/could not be read for display here/)).toBeTruthy();
+      expect(view.container.textContent).not.toContain("orkestrator-peer");
+    });
+
+    test("draws mail that arrives live, then again from the transcript after a remount", async () => {
+      getTranscriptMock.mockImplementation(async () => []);
+      mockRunningTmuxStatus();
+      const view = renderTab();
+      await waitFor(() => expect(subscribedHandler).not.toBeNull());
+
+      const delivery = userLine("delivered", mailCarrier("live", "Arrived live"));
+      act(() => {
+        subscribedHandler?.({
+          kind: "transcript-line",
+          tab_id: "tab-1",
+          environment_id: "env-1",
+          session_id: "session-existing",
+          line: delivery,
+        });
+      });
+      expect(await screen.findByText("Arrived live")).toBeTruthy();
+
+      // Switching away unmounts the tab; the row is all that comes back.
+      view.unmount();
+      getTranscriptMock.mockImplementation(async () => [delivery]);
+      useClaudeTmuxStore.setState({ tabs: new Map() });
+      renderTab();
+
+      expect(await screen.findByText("Arrived live")).toBeTruthy();
+      expect(renderedRows()).toEqual([["peer-mail-live", "system"]]);
+    });
   });
 
   test("keeps successful background launches active while they remain in the tmux roster", async () => {

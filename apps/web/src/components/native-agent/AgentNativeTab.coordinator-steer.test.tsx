@@ -297,7 +297,7 @@ describe("Coordinator chat steering", () => {
     const steer = await screen.findByRole("button", {
       name: "Steer queued prompt 1 of 1: also check the open pull requests",
     });
-    expect(screen.queryByTestId("compose-queue-item-note")).toBeNull();
+    expect(screen.queryByTestId("compose-queue-item-note") === null).toBe(true);
     await act(async () => {
       fireEvent.click(steer);
     });
@@ -368,7 +368,7 @@ describe("Coordinator chat steering", () => {
         "Claude cannot be steered here, so this is sent when the turn ends.",
       ),
     );
-    expect(screen.queryByRole("button", { name: /^Steer queued prompt/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Steer queued prompt/ }) === null).toBe(true);
     expect(steerNativeAgentQueuedPromptMock).not.toHaveBeenCalled();
     expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
 
@@ -405,7 +405,9 @@ for (const reason of [
     expect(screen.getByRole("button", { name: /^Steer queued prompt/ })).toBeTruthy();
     running = false;
     await publishProjection();
-    await waitFor(() => expect(screen.queryByTestId("compose-queue-item-note")).toBeNull());
+    await waitFor(() =>
+      expect(screen.queryByTestId("compose-queue-item-note") === null).toBe(true),
+    );
     running = true;
     await publishProjection();
     await waitFor(() =>
@@ -502,7 +504,7 @@ test("a retained refusal yields to the new turn's provider gate after an earlier
       "cannot be steered",
     ),
   );
-  expect(screen.queryByRole("button", { name: /^Steer queued prompt/ })).toBeNull();
+  expect(screen.queryByRole("button", { name: /^Steer queued prompt/ }) === null).toBe(true);
   expect(steerNativeAgentQueuedPromptMock).toHaveBeenCalledTimes(1);
   expect(queuedItems).toEqual([retained]);
 });
@@ -526,7 +528,7 @@ test("a successful retry clears the prior refusal for the same queue id", async 
   queuedItems = [retained];
   await publishProjection();
   await waitFor(() => expect(queuedRows()).toHaveLength(1));
-  expect(screen.queryByTestId("compose-queue-item-note")).toBeNull();
+  expect(screen.queryByTestId("compose-queue-item-note") === null).toBe(true);
 });
 
 test("a later applied auto-steer clears history for the same id", async () => {
@@ -559,7 +561,7 @@ test("a later applied auto-steer clears history for the same id", async () => {
     queuedItems = [retained];
     await publishProjection();
     await waitFor(() => expect(queuedRows()).toHaveLength(1));
-    expect(screen.queryByTestId("compose-queue-item-note")).toBeNull();
+    expect(screen.queryByTestId("compose-queue-item-note") === null).toBe(true);
   } finally {
     uuid.mockRestore();
   }

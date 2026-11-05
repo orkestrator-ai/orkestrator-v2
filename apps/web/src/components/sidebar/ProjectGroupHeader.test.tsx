@@ -78,7 +78,7 @@ test.each([false, true])(
     const label = screen.getByText("This computer");
     const initialClasses = button.className;
     expect(button.classList.contains("pl-[39px]")).toBe(member);
-    expect(screen.queryByTestId("coordinator-activity-icon")).toBeNull();
+    expect(screen.queryByTestId("coordinator-activity-icon") === null).toBe(true);
 
     for (const state of ["working", "waiting", null] as const) {
       view.rerender(<Header member={member} coordinatorActivity={state} />);
@@ -93,7 +93,7 @@ test.each([false, true])(
           expect(activity.parentElement!.classList.contains("w-8")).toBe(true);
         }
       } else {
-        expect(screen.queryByTestId("coordinator-activity-icon")).toBeNull();
+        expect(screen.queryByTestId("coordinator-activity-icon") === null).toBe(true);
       }
     }
   },

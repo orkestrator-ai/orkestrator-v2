@@ -52,20 +52,20 @@ describe("LazyTerminalPortalHost", () => {
     setTabs("env-1", [{ id: "agent", type: "agent-native" }]);
     render(<LazyTerminalPortalHost containerId={null} environmentId="env-1" />);
     await settle();
-    expect(screen.queryByTestId("loaded-host")).toBeNull();
+    expect(screen.queryByTestId("loaded-host") === null).toBe(true);
   });
 
   test("ignores a terminal tab in another environment", async () => {
     setTabs("env-other", [{ id: "shell", type: "plain" }]);
     render(<LazyTerminalPortalHost containerId={null} environmentId="env-1" />);
     await settle();
-    expect(screen.queryByTestId("loaded-host")).toBeNull();
+    expect(screen.queryByTestId("loaded-host") === null).toBe(true);
   });
 
   test("loads the host when the environment gains a terminal tab", async () => {
     render(<LazyTerminalPortalHost containerId={null} environmentId="env-1" />);
     await settle();
-    expect(screen.queryByTestId("loaded-host")).toBeNull();
+    expect(screen.queryByTestId("loaded-host") === null).toBe(true);
 
     setTabs("env-1", [{ id: "shell", type: "plain" }]);
     expect((await screen.findByTestId("loaded-host")).textContent).toBe("env-1");

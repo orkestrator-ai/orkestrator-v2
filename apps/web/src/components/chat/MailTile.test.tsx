@@ -201,7 +201,7 @@ describe("MailTile", () => {
     expect(list.textContent).toContain("second.png");
     expect(container.querySelectorAll("[data-mail-attachment]")).toHaveLength(2);
     // Outside the clamped body, so a long message cannot clip it away.
-    expect(container.querySelector("[data-mail-body] [data-mail-attachments]")).toBeNull();
+    expect(container.querySelector("[data-mail-body] [data-mail-attachments]") === null).toBe(true);
     expect(container.textContent).not.toContain("mail-attachments/");
 
     fireEvent.click(screen.getByRole("button", { name: /Claude 2 · worker/ }));
@@ -210,7 +210,7 @@ describe("MailTile", () => {
 
   test("a message with no images draws no attachment row", () => {
     const { container } = render(<MailTile mail={mail()} expansionKey="k" />);
-    expect(container.querySelector("[data-mail-attachments]")).toBeNull();
+    expect(container.querySelector("[data-mail-attachments]") === null).toBe(true);
   });
 
   test("starts collapsed with the body clamped to a few lines", () => {

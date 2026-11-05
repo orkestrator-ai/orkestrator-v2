@@ -190,7 +190,7 @@ describe("worktree watcher on this platform's real watch", () => {
     async () => {
       const worktree = await makeWorktree();
       let proof: readonly string[] | undefined;
-      const { seen } = await watchWorktree(worktree, {
+      const { seen, hints } = await watchWorktree(worktree, {
         plan: {
           ...worktreeWatchPlanIo,
           listExcluded: async (root) => {
@@ -201,16 +201,17 @@ describe("worktree watcher on this platform's real watch", () => {
       });
       await expectNoticed(worktree, seen, "src");
       expect(proof).toContain("node_modules");
+      const hintsBefore = hints.length;
       await fs.rm(path.join(worktree, "node_modules"), { recursive: true });
       await fs.symlink("src", path.join(worktree, "node_modules"));
       const deadline = Date.now() + DELIVERY_DEADLINE_MS;
       while (
-        (!seen.has("node_modules") || proof?.includes("node_modules")) &&
+        (hints.length === hintsBefore || proof?.includes("node_modules")) &&
         Date.now() < deadline
       ) {
         await new Promise((resolve) => setTimeout(resolve, 100));
       }
-      expect(seen.has("node_modules")).toBe(true);
+      expect(hints.length).toBeGreaterThan(hintsBefore);
       expect(proof).not.toContain("node_modules");
     },
     DELIVERY_DEADLINE_MS * 2,

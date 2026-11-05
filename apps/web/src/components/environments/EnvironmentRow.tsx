@@ -410,8 +410,8 @@ export interface EnvironmentRowProps {
   selected: boolean;
   /** Secondary line, e.g. the project name in the activity list. */
   subtitle?: string;
-  /** This window's multi-select; another machine's rows take no part in it. */
-  multiSelect?: { active: boolean; checked: boolean; onToggle: () => void };
+  /** The sidebar's multi-select; `id` is this row's id in it (`lib/sidebar-selection.ts`). */
+  multiSelect?: { id: string; active: boolean; checked: boolean; onToggle: () => void };
   /** Click or Enter/Space on the row. */
   onActivate: (modifiers: { shiftKey: boolean; metaKey: boolean }) => void;
   actions: EnvironmentRowActions;
@@ -507,6 +507,8 @@ export function EnvironmentRow({
             <div
               role="button"
               tabIndex={0}
+              // A range runs over the rows as drawn; a deleting row has nothing to select.
+              data-environment-selection-id={facts.deleting ? undefined : multiSelect?.id}
               onClick={activate}
               onKeyDown={(event) => {
                 if (event.key === "Enter" || event.key === " ") {

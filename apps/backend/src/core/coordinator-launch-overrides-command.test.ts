@@ -7,6 +7,10 @@ import { COORDINATOR_LAUNCH_OVERRIDES_COMMAND } from "@orkestrator/protocol/coor
 import type { CommandContext, CommandHandler } from "./commands-context.js";
 import { createCommandRegistry } from "./commands-registry.js";
 import { launchDelegationRequest } from "./coordinator-delegation-request.js";
+import { ControlMcpServer } from "./control-mcp-server.js";
+import { coordinatorRoleCapabilities } from "./control-mcp-tools.js";
+import { CoordinatorService } from "./coordinator-service.js";
+import { cleanupSessionHarnesses, setup } from "./public-api/test-provider.js";
 import { StorageService } from "./storage.js";
 
 let root: string;
@@ -68,6 +72,81 @@ describe(COORDINATOR_LAUNCH_OVERRIDES_COMMAND, () => {
         },
       ],
     });
+  });
+
+  test("a real model-only launch_job records the resolved selection on its actual tab", async () => {
+    const { harness, stub, projectId } = await setup("claude");
+    let server: ControlMcpServer | undefined;
+    try {
+      const { projectPath } = await harness.createRepository("job-override");
+      await harness.storage.updateProject(projectId, { localPath: projectPath });
+      await harness.storage.patchRepositorySettings(projectId, {
+        coordinatorOtherEnvironments: true,
+      });
+      await harness.storage.updateEnvironment("env-1", {
+        agentSettings: {
+          defaultAgent: "claude",
+          platforms: { claude: { model: "sonnet", reasoningEffort: "high" } },
+        },
+      });
+      // Only the external provider and its catalogue are scripted. Job dispatch,
+      // delegation admission and projection all use the real registry and store.
+      harness.commands.set("get_native_agent_model_catalog", () => [
+        { id: "opus", name: "Opus", platform: "claude", reasoning: [{ id: "high", name: "High" }] },
+      ]);
+      const coordinators = new CoordinatorService(harness.storage, () => ({
+        enabled: true,
+        running: true,
+        error: null,
+      }));
+      harness.context.coordinators = coordinators;
+      const { workspace } = await coordinators.ensure(projectId);
+      const conversation = workspace.conversations[0]!;
+      server = new ControlMcpServer(
+        harness.dataDir,
+        async <T>(name: string, args: Record<string, unknown> = {}) =>
+          (await harness.commands.get(name)!(args, harness.context)) as T,
+      );
+      const launched = await server.callCoordinatorTool(
+        {
+          role: "coordinator",
+          projectId,
+          coordinatorId: workspace.id,
+          conversationId: conversation.id,
+          mailboxIncarnationId: conversation.mailboxIncarnationId!,
+          capabilities: coordinatorRoleCapabilities("main"),
+        },
+        "launch_job",
+        {
+          requestId: "job-model-only",
+          environmentId: "env-1",
+          agent: "claude",
+          modelId: "opus",
+          prompt: "Fix the fixture parser.",
+        },
+      );
+      expect(launched.isError).toBe(false);
+      const job = launched.structuredContent as { tabId: string; delegationNote?: string };
+      expect(job.delegationNote).toBeUndefined();
+      expect(job.tabId).toBeString();
+      expect(stub.sends).toHaveLength(1);
+      const rows = await harness.storage.coordinators.listAllCoordinatorWorkflowAssociations();
+      expect(
+        rows.find((row) => row.delegation?.workerTabId === job.tabId)?.delegation?.request,
+      ).toMatchObject({
+        model: "opus",
+        reasoning: "high",
+        source: "requested",
+      });
+      expect(
+        await harness.commands.get(COORDINATOR_LAUNCH_OVERRIDES_COMMAND)!({}, harness.context),
+      ).toEqual({
+        overrides: [{ environmentId: "env-1", tabId: job.tabId, model: "opus", reasoning: "high" }],
+      });
+    } finally {
+      await server?.stop();
+      await cleanupSessionHarnesses();
+    }
   });
 
   test("answers across projects from one read, and leaves out a worker on another node", async () => {

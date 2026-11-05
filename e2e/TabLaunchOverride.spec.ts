@@ -12,7 +12,7 @@ test("only the tab whose launch overrode the default is marked", async ({ page }
   await expect(marker).toHaveText("requested");
   await expect(marker).toHaveAttribute(
     "title",
-    "The coordinator requested claude-opus-5-5 · max instead of the saved default.",
+    "This launch uses claude-opus-5-5 · max. The coordinator overrode the saved default.",
   );
   // In the tab it belongs to: the word sits between that tab's title and close button.
   await expect(

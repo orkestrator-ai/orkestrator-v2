@@ -31,7 +31,8 @@ function sameOverrides(
   if (a.size !== b.size) return false;
   for (const [key, override] of a) {
     const other = b.get(key);
-    if (other?.model !== override.model || other?.reasoning !== override.reasoning) return false;
+    if (!other || other.model !== override.model || other.reasoning !== override.reasoning)
+      return false;
   }
   return true;
 }

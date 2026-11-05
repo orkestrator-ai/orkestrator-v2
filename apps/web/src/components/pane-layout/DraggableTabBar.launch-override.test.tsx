@@ -71,7 +71,19 @@ describe("launch override marker on the tab strip", () => {
     const marker = await screen.findByTestId("tab-launch-override");
     expect(marker.textContent).toBe("requested");
     expect(marker.getAttribute("title")).toBe(
-      "The coordinator requested opus · max instead of the saved default.",
+      "This launch uses opus · max. The coordinator overrode the saved default.",
+    );
+  });
+
+  test("a model-only job override describes the resolved model and inherited effort", async () => {
+    // launch_job resolved a requested model with the saved effort before recording it.
+    answer = {
+      overrides: [{ environmentId: "worker", tabId: "job-tab", model: "opus", reasoning: "high" }],
+    };
+    renderTabs([agentTab("job-tab")]);
+    const marker = await screen.findByTestId("tab-launch-override");
+    expect(marker.getAttribute("title")).toBe(
+      "This launch uses opus · high. The coordinator overrode the saved default.",
     );
   });
 

@@ -97,6 +97,59 @@ describe("coordinator launch override store", () => {
     release();
   });
 
+  test("a same-size snapshot replaces a selection-free override on another tab", async () => {
+    answer = [{ environmentId: "worker-a", tabId: "old-tab" }];
+    await store.getState().refresh();
+    answer = [{ environmentId: "worker-b", tabId: "new-tab", model: "opus" }];
+    await store.getState().refresh();
+    expect(Array.from(store.getState().overrides.keys())).toEqual([key("worker-b", "new-tab")]);
+    expect(store.getState().overrides.get(key("worker-b", "new-tab"))?.model).toBe("opus");
+  });
+
+  test("a hint during an unresolved read queues a second read with the newest snapshot", async () => {
+    const first = Promise.withResolvers<{ overrides: Array<Record<string, string>> }>();
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command !== COORDINATOR_LAUNCH_OVERRIDES_COMMAND) return undefined;
+      reads += 1;
+      if (reads === 1) return first.promise;
+      return { overrides: [{ environmentId: "new-worker", tabId: "new-tab", model: "opus" }] };
+    });
+    const release = store.getState().retain();
+    dispatchResourceChange({ resource: "coordinator", id: "project", revision: 1 });
+    await settled();
+    expect(reads).toBe(1);
+    first.resolve({ overrides: [{ environmentId: "old-worker", tabId: "old-tab" }] });
+    await settled();
+    expect(reads).toBe(2);
+    expect(Array.from(store.getState().overrides.keys())).toEqual([key("new-worker", "new-tab")]);
+    release();
+  });
+
+  test("releasing the last consumer during a read cancels its queued rerun", async () => {
+    const first = Promise.withResolvers<{ overrides: [] }>();
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command !== COORDINATOR_LAUNCH_OVERRIDES_COMMAND) return undefined;
+      reads += 1;
+      return first.promise;
+    });
+    const release = store.getState().retain();
+    dispatchResourceChange({ resource: "coordinator", id: "project", revision: 1 });
+    await settled();
+    release();
+    first.resolve({ overrides: [] });
+    await settled();
+    expect(reads).toBe(1);
+  });
+
+  test("releasing the last consumer cancels a hint still waiting to read", async () => {
+    const release = store.getState().retain();
+    await settled();
+    dispatchResourceChange({ resource: "coordinator", id: "project", revision: 1 });
+    release();
+    await settled();
+    expect(reads).toBe(1);
+  });
+
   test("a failed read keeps the last answer", async () => {
     answer = [{ environmentId: "worker", tabId: "tab" }];
     const release = store.getState().retain();

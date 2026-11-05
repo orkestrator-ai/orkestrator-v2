@@ -136,3 +136,12 @@ remains unknown. No rich-content implementation or assertions changed.
 - Failure: 139.88 ms: sibling ledger expected length 1, received 0. Evidence: `/tmp/orkestrator-test-run.8nVKRg/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log` (compressed on aggregate completion).
 - Complete unchanged owner: `NODE_ENV=test mise run test:logged -- --name triage-rich-revocation -- bun test --cwd apps/web ./src/lib/chat/rich-conversation-revocation.test.tsx --parallel=1 --only-failures` passed, exit 0, in 2.4 s. Passing output was removed by the logged runner.
 - Owning code and assertions were unchanged. This repeats the open case; no new root cause established. Aggregate totals were not yet available when the owner reran.
+
+## Coordinator tool-surface review fixes — 2026-11-05
+
+- Original command: `mise run test` at `d844241a3`, workspace/root/bridges/protocol reservations 6/1/2/1; the workspace waited 981.9 seconds for shared capacity.
+- Failure: the same sibling-ledger assertion at line 187 expected length 1, received 0 (190.78 ms). Web totals: 12,489 passed, 10 skipped, one failed. Backend also had four deterministic schedule fixture failures, repaired separately; all three other aggregate groups passed.
+- Evidence: `/tmp/orkestrator-test-run.U5K9FH/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and its adjacent `summary.json`.
+- Complete unchanged owner: `NODE_ENV=test mise run test:logged -- --name fixes-rich-revocation-isolated -- bun test --cwd apps/web ./src/lib/chat/rich-conversation-revocation.test.tsx --parallel=1 --only-failures` passed all 11 tests, exit 0, in 3.3 seconds.
+- An initial owner invocation without explicit `NODE_ENV=test` loaded production React and failed because `React.act` was unavailable; diagnostics: `/tmp/orkestrator-test-run.8Yo4dx/fixes-rich-revocation-isolated.log.gz`. Correcting the invocation required no source changes.
+- No owning rich-content code or assertions changed. This repeats open case 0626; its root cause remains unknown.

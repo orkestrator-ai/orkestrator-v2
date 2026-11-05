@@ -3338,6 +3338,11 @@ export class NativeAgentTranscriptProjection {
         ? advertisedCapabilities
         : { ...advertisedCapabilities, interactions: { kinds: liveInteractionKinds } };
     if (capabilities.actions?.steer && !steerSupported) {
+      log.debug("steer.capability-cleared", {
+        agent: input.agent,
+        environmentId: input.environmentId,
+        status: snapshot.status,
+      });
       capabilities = { ...capabilities, actions: { ...capabilities.actions, steer: false } };
     }
     const stateSnapshot = snapshot as ProviderSessionStateSnapshot;
@@ -5191,6 +5196,13 @@ export class NativeAgentTranscriptProjection {
           steerSupportedPromise,
           mcpPromise,
         ]);
+      if (advertisedCapabilities.actions?.steer && !steerSupported) {
+        log.debug("steer.capability-cleared", {
+          agent: input.agent,
+          environmentId: input.environmentId,
+          status: snapshot.status,
+        });
+      }
       const steerQualified =
         !advertisedCapabilities.actions?.steer || steerSupported
           ? advertisedCapabilities

@@ -46,3 +46,27 @@ The owner, component and direct grouping/workspace/UI stores have no diff in
 another intermittent observation, not a demonstrated cause or an environmental
 excuse. No assertion, timer or renderer implementation was changed; the failed
 aggregate remains a limitation for the verifier.
+
+## C5 address-findings recurrence — 2026-11-05
+
+At `7e51eb465`, `mise run test:logged -- --name address-committed-suite -- mise run test`
+failed after 434.3 s. The workspace used two web workers and four backend
+workers. The grouping-delivery case (line 1163, 18.72 ms) expected zero
+`postMessage` calls and received seven. Web totals: 12,485 passed, ten skipped,
+one failed. Backend totals: 15,225 passed, 119 skipped, zero failed. Root,
+bridges and the Codex protocol lockfile groups passed. The three failures in
+C5's original preparation package were absent after repair.
+
+Evidence: `/tmp/orkestrator-test-run.jwBKD9/address-committed-suite.log.gz`
+(lines 2622–2628); inner logs: `/tmp/orkestrator-test-run.Cel21e/`.
+
+The unchanged complete owner passed alone (2.1 s, exit 0):
+
+```sh
+mise run test:logged -- --name address-federation-owner -- env NODE_ENV=test bun test --cwd apps/web ./src/components/federation/RemoteWorkspaceRegion.test.tsx --parallel=1 --only-failures
+```
+
+The component, owner and machine grouping store have no diff in
+`origin/main...HEAD`. No new root cause was established and no federation
+assertion or implementation was changed. This recurrence remains an aggregate
+validation limitation; the isolated pass does not make the aggregate green.

@@ -192,7 +192,6 @@ Whether a remote worker's prompt reaches the user by any other route in practice
 
 - [Coordinator report, 4.4 (U1)](../2026-10-27-coordinator.md#44-ui-and-ux)
 - [Coordinator report, 5.1](../2026-10-27-coordinator.md#51-make-delegated-work-a-first-class-visible-object)
-- [C5 part 0140](0030-c5-prompt-and-context.md#0140-the-coordinator-cannot-read-what-it-is-waiting-on)
 - [Coordinator report, 4.4 (U13)](../2026-10-27-coordinator.md#44-ui-and-ux)
 - [0395-coordinator-worker-surfaces-follow-ups.md](../../todo/coordinator-and-multi-review/0395-coordinator-worker-surfaces-follow-ups.md)
 - [Coordinator report, 5.5](../2026-10-27-coordinator.md#55-feedback-while-the-coordinator-is-idle-but-work-is-running)

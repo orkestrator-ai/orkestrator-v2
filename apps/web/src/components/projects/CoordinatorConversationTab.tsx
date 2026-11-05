@@ -96,22 +96,21 @@ export function CoordinatorConversationTab({
   };
 
   const moveTab = (change: (current: CoordinatorPaneLayout) => CoordinatorPaneLayout) => {
-    let elementId: string | null = null;
     onLayoutChange((current) => {
       const next = change(current);
       const destination = collectCoordinatorLeaves(next.root).find((group) =>
         group.conversationIds.includes(item.id),
       );
-      elementId = destination ? coordinatorTabElementId(destination.id, item.id) : null;
+      const elementId = destination ? coordinatorTabElementId(destination.id, item.id) : null;
       movedTabId.current = elementId;
+      // A React state updater can run after this event returns. Schedule
+      // from the applied change so its destination ID exists before focus.
+      if (elementId) {
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => focusMovedTab(elementId));
+        });
+      }
       return next;
-    });
-    // The split creates its ID once, in the applied layout change. Focus
-    // the mounted destination after the source menu has finished closing.
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        if (elementId) focusMovedTab(elementId);
-      });
     });
   };
 

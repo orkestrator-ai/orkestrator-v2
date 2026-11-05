@@ -12,7 +12,10 @@ import {
   type NativeAgentCapability,
   type NativeAgentExecutionPolicy,
 } from "@orkestrator/protocol/native-agent";
-import type { CoordinatorCommandSandbox } from "@orkestrator/protocol/coordinator";
+import {
+  COORDINATOR_PROTECTED_DATA_DIR_ENV,
+  type CoordinatorCommandSandbox,
+} from "@orkestrator/protocol/coordinator";
 import { claudeMcpToolPrefix } from "./mcp-tool-prefix.js";
 import {
   claudeReadOnlyWorkspacePaths,
@@ -856,7 +859,9 @@ export function createCoordinatorReadOnlyHook(
   const readBoundary = (cwd: string) =>
     options.readBoundary !== undefined
       ? options.readBoundary
-      : coordinatorReadBoundary(claudeReadOnlyWorkspacePaths(cwd));
+      : process.env[COORDINATOR_PROTECTED_DATA_DIR_ENV]
+        ? coordinatorReadBoundary(claudeReadOnlyWorkspacePaths(cwd))
+        : null;
   return async (input): Promise<HookJSONOutput> => {
     if (input.hook_event_name !== "PreToolUse") return {};
     const toolName = input.tool_name;

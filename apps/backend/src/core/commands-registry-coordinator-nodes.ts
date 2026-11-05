@@ -554,10 +554,11 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
   // The origin check for a coordinator tool; see `coordinator-environment-scope.ts`.
   register("assert_coordinator_environment_scope", async (args, context) => {
     const caller = await identity(args.scope, context);
-    const environmentId = asNonBlankString(args.environmentId, "environmentId");
+    const named = record(args.target) ? args.target : {};
+    const environmentId = asNonBlankString(named.environmentId, "environmentId");
     // The tool's own checks answer for a coordinator's own runtime id.
     if (coordinatorIdFromRuntimeId(environmentId)) return { allowed: true };
-    const nodeId = typeof args.nodeId === "string" ? args.nodeId : undefined;
+    const nodeId = typeof named.nodeId === "string" ? named.nodeId : undefined;
     // transfer_files names this node by its own id.
     const target =
       nodeId && nodeId !== (await context.nodes?.status())?.nodeId

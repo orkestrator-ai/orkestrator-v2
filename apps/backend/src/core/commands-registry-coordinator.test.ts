@@ -973,6 +973,7 @@ describe("coordinator command registry", () => {
 
   test("opens delegations only for scheduled mail; a follow-up joins the open one", async () => {
     const project = await storage.addProject(createProject("remote", checkout));
+    await storage.patchRepositorySettings(project.id, { coordinatorOtherEnvironments: true });
     const snapshot = await coordinator.ensure(project.id);
     const conversation = snapshot.workspace.conversations[0]!;
     await coordinator.assignConversationAgent(project.id, conversation.id, "codex");

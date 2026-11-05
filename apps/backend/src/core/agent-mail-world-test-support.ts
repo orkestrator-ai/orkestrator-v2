@@ -189,6 +189,10 @@ export class MailWorld {
     const project = await storage.addProject(
       createProject("https://example.invalid/mail-world.git", checkout),
     );
+    // These worlds exercise mail, not who may be mailed; the origin check has its own tests.
+    if (options.coordinatorOtherEnvironments !== false) {
+      await storage.patchRepositorySettings(project.id, { coordinatorOtherEnvironments: true });
+    }
     let world: MailWorld | undefined;
     const { coordinator, mail } = MailWorld.services(() => world!, storage, options);
     const ensured = await coordinator.ensure(project.id);

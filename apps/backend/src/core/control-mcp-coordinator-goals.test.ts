@@ -34,6 +34,7 @@ async function fixture() {
   const project = await harness.storage.addProject(
     createProject("https://example.invalid/goals.git", projectPath),
   );
+  await harness.storage.patchRepositorySettings(project.id, { coordinatorOtherEnvironments: true });
   const coordinator = new CoordinatorService(harness.storage, () => ({
     enabled: true,
     running: true,

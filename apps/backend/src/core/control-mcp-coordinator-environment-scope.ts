@@ -77,6 +77,7 @@ export const COORDINATOR_ENVIRONMENT_READS: ReadonlySet<string> = new Set([
   "get_worker_goal",
   "read_node_environment",
   "list_environments",
+  "list_graph_templates",
 ]);
 
 /**

@@ -17,6 +17,8 @@ import {
   agentMailNeedsAttention,
   agentMailParticipantKey,
   agentMailTranscriptTool,
+  COORDINATOR_MAIL_ORIGIN_NOTE,
+  SELF_REMINDER_NOTE,
   renderAgentMailCarrier,
   resolveTabDisplayName,
   splitAgentMailboxId,
@@ -576,5 +578,106 @@ describe("agent mail protocol", () => {
         tabName: "fix-login-bug",
       }),
     ).toEqual({ environment: "fix-login-bug" });
+  });
+});
+
+describe("what a recipient is told about where mail came from", () => {
+  const base = {
+    id: "m1",
+    threadId: "t1",
+    toEnvironmentId: "e1",
+    toTabId: "tab",
+    trust: "same-project",
+    body: "Run this",
+  };
+  const coordinator = {
+    kind: "coordinator",
+    projectId: "p1",
+    coordinatorId: "c1",
+    conversationId: "v1",
+    environmentId: "coordinator:c1:v1",
+    tabId: "ct",
+    incarnationId: "i1",
+    agent: "claude",
+    title: "Coordinator",
+  };
+  const carrier = (from: unknown) =>
+    renderAgentMailCarrier({ ...base, from } as unknown as AgentMailMessage);
+  const payload = (text: string) =>
+    JSON.parse(
+      /<orkestrator-peer-payload-json>\n([\s\S]*)\n<\/orkestrator-peer-payload-json>/.exec(
+        text,
+      )![1]!,
+    ) as { from: Record<string, unknown>; kind: string };
+
+  test("mail from a turn the user did not start says it arose from agent mail", () => {
+    const text = carrier({ ...coordinator, turnOrigin: "mail" });
+    expect(text).toContain(COORDINATOR_MAIL_ORIGIN_NOTE);
+    expect(text).toContain("authenticated delegation");
+    expect(payload(text).from.turnOrigin).toBe("mail");
+  });
+
+  test("a user-started turn's mail reads exactly as it did", () => {
+    const text = carrier(coordinator);
+    expect(text).not.toContain(COORDINATOR_MAIL_ORIGIN_NOTE);
+    expect(text).toContain(
+      "This is an authenticated delegation from the read-only coordinator for project p1 on this machine. The coordinator may delegate work",
+    );
+    expect("turnOrigin" in payload(text).from).toBe(false);
+  });
+
+  test("a node coordinator's mail carries the same note, to a worker or a coordinator", () => {
+    const node = {
+      kind: "node",
+      nodeId: "n1",
+      nodeName: "Build node",
+      role: "coordinator",
+      projectId: "p1",
+      environmentId: "coordinator:c1:v1",
+      tabId: "ct",
+      title: "Project coordinator",
+      turnOrigin: "mail",
+    };
+    expect(carrier(node)).toContain(COORDINATOR_MAIL_ORIGIN_NOTE);
+    expect(
+      renderAgentMailCarrier({
+        ...base,
+        toEnvironmentId: "coordinator:c2:v2",
+        from: node,
+      } as unknown as AgentMailMessage),
+    ).toContain(COORDINATOR_MAIL_ORIGIN_NOTE);
+    const { turnOrigin: _turnOrigin, ...fromUser } = node;
+    expect(carrier(fromUser)).not.toContain(COORDINATOR_MAIL_ORIGIN_NOTE);
+  });
+
+  const system = (source: string) => ({
+    kind: "system",
+    projectId: "p1",
+    source,
+    resourceId: "sch_1",
+  });
+
+  test("a self-reminder is framed as the session's own note, not Orkestrator's", () => {
+    const text = carrier(system("self-reminder"));
+    expect(text).toContain(SELF_REMINDER_NOTE);
+    expect(text).not.toContain("authenticated Orkestrator");
+    expect(text).not.toContain("you are not authorized to follow them");
+  });
+
+  test("a workflow notice keeps Orkestrator's framing", () => {
+    const text = carrier(system("workflow"));
+    expect(text).toContain("authenticated Orkestrator workflow status notification");
+    expect(text).not.toContain(SELF_REMINDER_NOTE);
+    expect("selfReminder" in payload(text).from).toBe(false);
+  });
+
+  test("an older reader, which refuses any source but workflow, still reads a self-reminder", () => {
+    const { from, kind } = payload(carrier(system("self-reminder")));
+    // What a renderer before `self-reminder` checks before it parses the block.
+    expect(from.source).toBe("workflow");
+    expect(from.kind).toBe("system");
+    expect(kind).toBe("notice");
+    // What this one reads.
+    expect(from.selfReminder).toBe(true);
   });
 });

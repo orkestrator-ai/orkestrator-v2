@@ -341,6 +341,51 @@ describe("client-only optimistic messages", () => {
     expect(row!.peerMail?.notice).toBeUndefined();
   });
 
+  test("reads a self-reminder as the session's own note, by either spelling", () => {
+    const reminder = (from: Record<string, unknown>) => {
+      const [row] = createPeerMailNativeMessagesFromCarrier({
+        content: renderAgentMailCarrier(
+          mailMessage({
+            id: "mail-reminder",
+            from: from as AgentMailMessage["from"],
+          }),
+        ),
+        createdAt: "x",
+      });
+      return row!;
+    };
+    const system = { kind: "system", projectId: "p", resourceId: "sch-1" };
+    // What this backend writes: `workflow` for an older renderer, and the marker.
+    const row = reminder({ ...system, source: "self-reminder" });
+    expect(row.peerMail?.kind).toBe("notice");
+    expect(row.content).toContain("Reminder you set");
+    expect(reminder({ ...system, source: "workflow" }).content).toContain("Orkestrator workflow");
+  });
+
+  test("a coordinator's mail still parses with its turn origin", () => {
+    const [row] = createPeerMailNativeMessagesFromCarrier({
+      content: renderAgentMailCarrier(
+        mailMessage({
+          id: "mail-origin",
+          from: {
+            kind: "coordinator",
+            projectId: "p",
+            coordinatorId: "c",
+            conversationId: "v",
+            environmentId: "coordinator:c:v",
+            tabId: "ct",
+            incarnationId: "i",
+            agent: "claude",
+            title: "Coordinator",
+            turnOrigin: "mail",
+          },
+        }),
+      ),
+      createdAt: "x",
+    });
+    expect(row!.peerMail?.kind).toBe("coordinator");
+  });
+
   test("drops a malformed notice but keeps the notice row", () => {
     const content = renderAgentMailCarrier(
       mailMessage({

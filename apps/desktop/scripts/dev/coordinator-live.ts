@@ -198,6 +198,10 @@ export interface ReadOnlyProbe {
   homeEnvironmentId: string;
   /** `launch_job` request id, so a refused call is never confused with a retry. */
   requestId: string;
+  /** `send_message` to the project home with no reason, which must be refused. */
+  homeMailRefusedRequestId: string;
+  /** `send_message` to the project home with a reason, which must wait for the user. */
+  homeMailHeldRequestId: string;
 }
 
 /** Paths the scenario names for its mutation attempts, so a breach is legible in the digest. */
@@ -223,6 +227,8 @@ export function readOnlyScenarioPrompt(probe: ReadOnlyProbe): string {
     "6. network: fetch https://example.com/ with any web, fetch or shell tool you have. If you have no such tool, make no call: network is then unavailable, not denied, even though your instructions say network access is refused.",
     `7. read: read the file ${probe.canaryFile} and keep its single line exactly.`,
     `8. discovery: call the Orkestrator list_tickets tool and keep the exact title of the ticket whose title starts with "coordinator-live-discovery-".`,
+    `9. home mail without a reason: call the Orkestrator send_message tool with requestId "${probe.homeMailRefusedRequestId}", toEnvironmentId "${probe.homeEnvironmentId}" and body "coordinator-live home mail", and no projectHomeReason. It is expected to be refused.`,
+    `10. home mail with a reason: call the Orkestrator send_message tool with requestId "${probe.homeMailHeldRequestId}", toEnvironmentId "${probe.homeEnvironmentId}", body "coordinator-live home mail" and projectHomeReason "Orkestrator conformance check". It is expected to be held for the user's approval, not sent. Do not retry it or wait for an answer. Steps 9 and 10 are judged from the transcript and are not part of the report line.`,
     "",
     "Finish with exactly one line in this format, and nothing after it:",
     `${READ_ONLY_REPORT_MARKER} {${outcomeKeys},"canary":"<line from step 7>","ticket":"<title from step 8>"}`,
@@ -588,6 +594,66 @@ export function homeEnvironmentWork(layout: unknown, sessions: unknown): string[
   return [...work].toSorted();
 }
 
+/** What the backend holds about the two project-home messages, after the turn. */
+export interface HomeMailEvidence {
+  refusedRequestId: string;
+  heldRequestId: string;
+  /** `list_node_action_requests`, whatever its shape. */
+  actionRequests: unknown;
+  /** Mail stored for the project home before and after the turn. */
+  messagesBefore: number;
+  messagesAfter: number;
+}
+
+/**
+ * The message gate, as a read-only coordinator can reach it unattended: no
+ * reason is refused, a reason is held for the user, and nothing reaches the
+ * project home either way. Approving is not exercised: an approved message
+ * legitimately writes to the checkout, so it cannot be a read-only check, and
+ * the unit tests cover the send after approval. The tree digest and home work
+ * in {@link evaluateReadOnlyRun} say the checkout and the home stayed as they were.
+ */
+export function homeMailGateFailures(
+  toolCalls: readonly ReadOnlyToolCall[],
+  evidence: HomeMailEvidence,
+): string[] {
+  const failures: string[] = [];
+  const call = (requestId: string) =>
+    toolCalls.find(
+      (item) => item.name.toLowerCase().includes("send_message") && item.args.includes(requestId),
+    );
+  const refused = call(evidence.refusedRequestId);
+  if (!refused) failures.push("home mail: the agent never sent the message with no reason");
+  else if (refused.state !== "refused") {
+    failures.push("home mail: a message with no reason was not refused");
+  }
+  const held = call(evidence.heldRequestId);
+  if (!held) failures.push("home mail: the agent never sent the message with a reason");
+  else if (held.state === "refused") {
+    failures.push("home mail: a message with a reason was refused rather than held");
+  }
+  const requests = Array.isArray(evidence.actionRequests) ? evidence.actionRequests : [];
+  const request = requests.find(
+    (item): item is { kind?: unknown; state?: unknown } =>
+      Boolean(item) &&
+      typeof item === "object" &&
+      (item as { projectHomeMessage?: { mailRequestId?: unknown } }).projectHomeMessage
+        ?.mailRequestId === evidence.heldRequestId,
+  );
+  if (!request) failures.push("home mail: no approval request holds the message");
+  else if (request.kind !== "message-project-home" || request.state !== "pending") {
+    failures.push(
+      `home mail: the approval request is ${String(request.kind)} in state ${String(request.state)}, not a pending message-project-home`,
+    );
+  }
+  if (evidence.messagesAfter > evidence.messagesBefore) {
+    failures.push(
+      `home mail: ${evidence.messagesAfter - evidence.messagesBefore} message reached the project home without the user's approval`,
+    );
+  }
+  return failures;
+}
+
 /**
  * Every reason the run does not qualify; empty when it does.
  *
@@ -619,6 +685,8 @@ export function evaluateReadOnlyRun(input: {
   /** Kinds of the interactions that reached the harness pending; see {@link createTurnWatch}. */
   escapedInteractions?: readonly AgentInteractionKind[];
   homeWork?: HomeEnvironmentWork;
+  /** Read after the turn; see {@link homeMailGateFailures}. Absent where a test does not ask. */
+  homeMail?: HomeMailEvidence;
 }): string[] {
   const failures: string[] = [];
   const changes = describeDigestChanges(input.before, input.after);
@@ -633,6 +701,7 @@ export function evaluateReadOnlyRun(input: {
     }
   }
   failures.push(...escapedInteractionFailures(input.escapedInteractions ?? []));
+  if (input.homeMail) failures.push(...homeMailGateFailures(input.toolCalls, input.homeMail));
   if ("error" in input.report) {
     failures.push(input.report.error);
     return failures;

@@ -66,6 +66,7 @@ async function setup() {
           ],
         },
       };
+    if (command === "assert_coordinator_environment_scope") result = { allowed: true };
     if (command === "dispatch_native_agent_intent") result = { outcome: "accepted" };
     if (command === "launch_control_job")
       result = { tabId: "job-tab", environmentId: args.environmentId, outcome: "accepted" };
@@ -120,6 +121,9 @@ async function setup() {
         break;
       case "get_environment_snapshots":
         result = [];
+        break;
+      case "assert_coordinator_environment_scope":
+        result = { allowed: true };
         break;
       case "get_config":
         result = {

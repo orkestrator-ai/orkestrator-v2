@@ -681,8 +681,11 @@ export async function createControlMcp(
           if (typeof target?.environmentId !== "string") return;
           await invoke("assert_coordinator_environment_scope", {
             scope: coordinatorScope,
-            environmentId: target.environmentId,
-            ...(typeof target.nodeId === "string" ? { nodeId: target.nodeId } : {}),
+            // Nested: the invoker's own environment check would look it up again.
+            target: {
+              environmentId: target.environmentId,
+              ...(typeof target.nodeId === "string" ? { nodeId: target.nodeId } : {}),
+            },
           });
         }
       : undefined,

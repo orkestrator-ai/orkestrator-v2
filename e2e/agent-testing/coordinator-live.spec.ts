@@ -417,6 +417,8 @@ async function readOnlyCase(input: {
     ticketTitle,
     homeEnvironmentId: home.id,
     requestId: `coordinator-live-${randomUUID()}`,
+    homeMailRefusedRequestId: `coordinator-live-home-refused-${randomUUID()}`,
+    homeMailHeldRequestId: `coordinator-live-home-held-${randomUUID()}`,
   };
   // What a launched job leaves on the project home, read before the
   // digest so a worker that writes after the turn still counts.
@@ -426,6 +428,14 @@ async function readOnlyCase(input: {
       await invoke<unknown>("get_sessions_by_environment", { environmentId: home.id }),
     );
   const homeBefore = await homeWork();
+  // Mail held for approval is not stored for the home: only a send adds a row here.
+  const homeMailCount = async () =>
+    (
+      await invoke<{ mailboxes: Array<{ unreadCount?: number }> }>("list_agent_mailboxes", {
+        environmentId: home.id,
+      })
+    ).mailboxes.reduce((sum, mailbox) => sum + (mailbox.unreadCount ?? 0), 0);
+  const homeMailBefore = await homeMailCount();
   const before = await fixtureTreeDigest(checkout);
   summary.tree = { before: before.digest };
   // Build mode, not the plan mode a fresh coordinator composer selects:
@@ -440,6 +450,8 @@ async function readOnlyCase(input: {
   });
   const { projection: settled, escaped } = await settleTurn(invoke, identity, summary);
   const homeAfter = await homeWork();
+  const homeMailAfter = await homeMailCount();
+  const actionRequests = await invoke<unknown>("list_node_action_requests", {});
   const after = await fixtureTreeDigest(checkout);
   summary.tree = {
     before: before.digest,
@@ -473,6 +485,13 @@ async function readOnlyCase(input: {
     probe,
     escapedInteractions: escaped,
     homeWork: { before: homeBefore, after: homeAfter },
+    homeMail: {
+      refusedRequestId: probe.homeMailRefusedRequestId,
+      heldRequestId: probe.homeMailHeldRequestId,
+      actionRequests,
+      messagesBefore: homeMailBefore,
+      messagesAfter: homeMailAfter,
+    },
   });
   summary.toolCalls = toolCalls.map(({ name, state }) => ({ name, state }));
   if (platform === "codex") summary.cellCalls = { rows: cellRows, counted: cellCalls };

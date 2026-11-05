@@ -71,7 +71,10 @@ beforeEach(async () => {
   rootContext = {
     storage: world.storage,
     coordinators: world.coordinator,
-    nodes: { status: async () => ({ nodeId: "bk_command", mode: "command" }) },
+    nodes: {
+      status: async () => ({ nodeId: "bk_command", mode: "command" }),
+      link: () => undefined,
+    },
     nodePortal: {
       summaries: async () => ({
         selfId: "bk_command",

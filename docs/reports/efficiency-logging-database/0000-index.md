@@ -24,17 +24,16 @@ A batch file combines several reports as numbered parts and takes the rating of 
 | 8 | [0790-e16-log-controls.md](0790-e16-log-controls.md) | Medium | No | **E16, Log controls.**<br>`0790`: R8's remainder (L7) and its control: a switch, DevTools and a persisted error ring.<br>`0890`: User controls: presets, auto-revert and privacy text.<br>`0900`: User controls: `--log-level` and `--log-category`. | From `0790`: Renderer bugs in the packaged app leave no trace, which is a supportability gap rather than broken behaviour. |
 | 9 | [0160-e10-conditional-reads-and-deltas.md](0160-e10-conditional-reads-and-deltas.md) | Low | No | **E10, Conditional reads and deltas.**<br>`0160`: TX-1: A transcript delta can only be built from the newest cached view<br>`0180`: TX-5: Session-state reads have no conditional path from the bridge<br>`0190`: TX-6: Bridge transcript windows are always sent whole | From `0160`: The report rates it High, but the maintainer gated it on a baseline, so it stays Low until that measurement arrives. |
 | 10 | [0210-e11-projection-hashing.md](0210-e11-projection-hashing.md) | Low | No | **E11, Projection hashing.**<br>`0210`: TX-3: The legacy commit re-serialises the whole projection to fingerprint it<br>`0220`: TX-9, TX-13: Memoise row fingerprints and hash them for the view token<br>`0320`: TX-7: Head-row recovery re-reads the raw transcript on each streaming revision<br>`0330`: TX-11: Patch building re-serialises and hashes whole rows in a JavaScript loop<br>`0340`: TX-12: Already-encoded rows are stringified again on the way out<br>`0345`: TX-14: Restart-preview checkpoints are serialised three times and cloned<br>`0350`: TX-16: Inline tool bodies are re-hashed whenever their row misses the cache<br>`0380`: TX-17: Small linear scans in the transcript projection | From `0210`: A contained optimisation with no behaviour change and no measured cost. |
-| 11 | [0240-e20-acp-bridge.md](0240-e20-acp-bridge.md) | Low | No | **E20, ACP bridge.**<br>`0270`: BR-16: ACP's Cursor replay looks like dead code<br>`0260`: BR-12: ACP stdout framing is quadratic for large frames<br>`0240`: BR-1 (remainder): ACP still serialises every session on each state write | From `0240`: The write rate is already down to once a second, so the remaining cache should wait for a measurement. |
-| 12 | [0280-e18-gateway-events.md](0280-e18-gateway-events.md) | Low | No | **E18, Gateway events.**<br>`0280`: GW-5: Events are measured and encoded again for each subscriber<br>`0290`: GW-12: Scoped stream replay writes one cursor frame per skipped event<br>`0300`: GW-14: Replay lookup is a linear filter and an oversized event is invisible<br>`0370`: GW-11: Relayed federation events share one name and the main replay window | From `0280`: A small per-subscriber cost that should wait for a profile. |
-| 13 | [0310-e24-gateway-static-and-preview.md](0310-e24-gateway-static-and-preview.md) | Low | No | **E24, Gateway static and preview.**<br>`0310`: GW-15: Static fallback compression runs before the 304 check<br>`0365`: GW-10: The preview body rewrite makes many full regex passes | From `0310`: Wasted compression only for revalidated static files that have no precompressed sibling. |
-| 14 | [0385-tx-10-joined-history-pages.md](0385-tx-10-joined-history-pages.md) | Low | No | TX-10: Joined history pages read the whole transcript per page | A compatibility path that only older renderers use and that 0232 will remove, blocked on the support window. |
-| 15 | [0390-gw-7-websocket-compression.md](0390-gw-7-websocket-compression.md) | Low | No | GW-7: No WebSocket message compression | Deferred by 0052 decision D6 until the transport direction is chosen. |
-| 16 | [0560-st-9-agent-mail-store-remainder.md](0560-st-9-agent-mail-store-remainder.md) | Low | No | ST-9 (rest): Agent mail: pending injects and mailbox lists still sit on the whole store | The read cost the finding described has gone, and the rest needs a stored-format change only a measurement could justify. |
-| 17 | [0580-st-21-file-rpc-and-usage-report.md](0580-st-21-file-rpc-and-usage-report.md) | Low | No | ST-21: Whole files cross RPC as base64, branch reads spawn twice, and usage reports parse every row | These are occasional, bounded reads. |
-| 18 | [0650-web-16-terminal-container-environment-subscription.md](0650-web-16-terminal-container-environment-subscription.md) | Low | No | WEB-16: `TerminalContainer` subscribes to the whole environment object | It is an unmeasured re-render, with launch-effect risk in the fix. |
-| 19 | [0691-dk-5-preview-capture-data-urls.md](0691-dk-5-preview-capture-data-urls.md) | Low | No | DK-5: Preview captures cross IPC as large data URLs | Captures are occasional and bounded. |
-| 20 | [0693-dk-10-second-claude-binary.md](0693-dk-10-second-claude-binary.md) | Low | No | DK-10: The image ships two Claude Code native binaries | It is an optional image-size saving that waits on a maintainer decision. |
-| 21 | [0694-dk-16-attention-follow-polling.md](0694-dk-16-attention-follow-polling.md) | Low | No | DK-16 (rest): CLI `attention --follow` re-downloads pending items on every poll | It affects only long-running followers, and pending pages are probably small. |
+| 11 | [0280-e18-gateway-events.md](0280-e18-gateway-events.md) | Low | No | **E18, Gateway events.**<br>`0280`: GW-5: Events are measured and encoded again for each subscriber<br>`0290`: GW-12: Scoped stream replay writes one cursor frame per skipped event<br>`0300`: GW-14: Replay lookup is a linear filter and an oversized event is invisible<br>`0370`: GW-11: Relayed federation events share one name and the main replay window | From `0280`: A small per-subscriber cost that should wait for a profile. |
+| 12 | [0310-e24-gateway-static-and-preview.md](0310-e24-gateway-static-and-preview.md) | Low | No | **E24, Gateway static and preview.**<br>`0310`: GW-15: Static fallback compression runs before the 304 check<br>`0365`: GW-10: The preview body rewrite makes many full regex passes | From `0310`: Wasted compression only for revalidated static files that have no precompressed sibling. |
+| 13 | [0385-tx-10-joined-history-pages.md](0385-tx-10-joined-history-pages.md) | Low | No | TX-10: Joined history pages read the whole transcript per page | A compatibility path that only older renderers use and that 0232 will remove, blocked on the support window. |
+| 14 | [0390-gw-7-websocket-compression.md](0390-gw-7-websocket-compression.md) | Low | No | GW-7: No WebSocket message compression | Deferred by 0052 decision D6 until the transport direction is chosen. |
+| 15 | [0560-st-9-agent-mail-store-remainder.md](0560-st-9-agent-mail-store-remainder.md) | Low | No | ST-9 (rest): Agent mail: pending injects and mailbox lists still sit on the whole store | The read cost the finding described has gone, and the rest needs a stored-format change only a measurement could justify. |
+| 16 | [0580-st-21-file-rpc-and-usage-report.md](0580-st-21-file-rpc-and-usage-report.md) | Low | No | ST-21: Whole files cross RPC as base64, branch reads spawn twice, and usage reports parse every row | These are occasional, bounded reads. |
+| 17 | [0650-web-16-terminal-container-environment-subscription.md](0650-web-16-terminal-container-environment-subscription.md) | Low | No | WEB-16: `TerminalContainer` subscribes to the whole environment object | It is an unmeasured re-render, with launch-effect risk in the fix. |
+| 18 | [0691-dk-5-preview-capture-data-urls.md](0691-dk-5-preview-capture-data-urls.md) | Low | No | DK-5: Preview captures cross IPC as large data URLs | Captures are occasional and bounded. |
+| 19 | [0693-dk-10-second-claude-binary.md](0693-dk-10-second-claude-binary.md) | Low | No | DK-10: The image ships two Claude Code native binaries | It is an optional image-size saving that waits on a maintainer decision. |
+| 20 | [0694-dk-16-attention-follow-polling.md](0694-dk-16-attention-follow-polling.md) | Low | No | DK-16 (rest): CLI `attention --follow` re-downloads pending items on every poll | It affects only long-running followers, and pending pages are probably small. |
 
 ## Parallel running
 
@@ -61,7 +60,6 @@ This index only changes when a branch merges, so it can't show what is running n
 | E17 | [Dead code](0770-e17-dead-code.md) | `0770`, `0930` | Logging and diagnostics, 1 of 3 | None | None |
 | E15 | [Health and diagnostics](0750-e15-health-and-diagnostics.md) | `0750`, `0820`, `0810`, `0880`, `0780` | Logging and diagnostics, 2 of 3 | None | None |
 | E16 | [Log controls](0790-e16-log-controls.md) | `0790`, `0890`, `0900` | Logging and diagnostics, 3 of 3 | None | None |
-| E20 | [ACP bridge](0240-e20-acp-bridge.md) | `0270`, `0260`, `0240` | No lane | None | None |
 
 Why these are grouped:
 
@@ -78,7 +76,6 @@ Why these are grouped:
 - **E17:** Low-risk removals. Goes before E15, which names six of the same files.
 - **E15:** Build the sources first. `0780` then packages them.
 - **E16:** Linked settings for log detail.
-- **E20:** Remove the dead code first.
 
 ### Files built on their own
 
@@ -142,7 +139,7 @@ When one of these becomes ready, it joins the lane shown.
 | TX-16 | Open | Inline bodies are still serialised and hashed on a row miss (`apps/backend/src/core/native-agent-transcript-projection.ts:807-808`); see 0350. |
 | TX-17 | Open | The scans remain (`apps/backend/src/core/native-agent-transcript-projection.ts:1203`, `:2035`, `:2078`), and the report names no fix; see 0380. |
 | TX-18 | Open | The fallback still calls `this.legacy(sessionId)` without the limit (`apps/backend/src/core/http-bridge-transcript-reader.ts:66`); see 0200. |
-| BR-1 | Partly done | Streaming writes are limited to one a second (`bridges/acp-bridge/src/acp-persist-writer.ts:239-249`, #1548 `12289fc56`), but the report's fragment cache was not built and each write still serialises every session (`:293`); see 0240. |
+| BR-1 | Done | Streaming writes are limited to one a second (`bridges/acp-bridge/src/acp-persist-writer.ts:231-241`, #1548 `12289fc56`). The report's fragment cache was not built, because a measurement at the bound was not conclusive; figures and the open questions are in [5900](../../todo/agent-engines/5900-acp-state-write-cost-at-the-cap.md). |
 | BR-2 | Done | `isSessionConfigPersisted` reads one record through `loadRecord` (`bridges/codex-bridge/src/app-server-runtime-sessions.ts:1803`, `bridges/codex-bridge/src/sessions/persistence.ts:386`, #1683 `38ac30844`). |
 | BR-3 | Done | The check interval is 1 MiB (`bridges/acp-bridge/src/acp-context.ts:961`, #1548 `12289fc56`). |
 | BR-4 | Done | `TranscriptRowSizes` remembers row sizes (`packages/protocol/src/node/transcript-budget.ts:296`), used by Pi and Cursor through `packages/protocol/src/node/bridge-transcript-bounds.ts:80` and by ACP through `bridges/acp-bridge/src/acp-rows.ts:197` (#1593 `e668f0a6d`). |
@@ -153,11 +150,11 @@ When one of these becomes ready, it joins the lane shown.
 | BR-9 | Done | `emitRow` returns whether it published, and the caller returns early otherwise (`bridges/claude-bridge/src/services/session-manager-prompt-stream.ts:431`, `:553`, #1693 `9a878575d`). |
 | BR-10 | Done | `session-list-cache.ts` keeps the list while no file changes, and a timeout answers 504 (`bridges/pi-bridge/src/agent-session.ts`); see 1202 task 6. The resume dialog shows a generic failure rather than the 504's reason, and the timeout's size is unmeasured: [5480](../../todo/agent-engines/5480-pi-resume-list-timeout-leftovers.md). |
 | BR-11 | Done | `readSessionIndex` caches the parsed index and reads only appended bytes (`bridges/codex-bridge/src/history/session-index-cache.ts`, `bridges/codex-bridge/src/history/rollout.ts:92`, #1683 `38ac30844`). |
-| BR-12 | Done | `JsonlLineFramer` searches only the new chunk (`bridges/acp-bridge/src/acp-jsonl-framer.ts`); see 1202 task 6. |
+| BR-12 | Done | `JsonlLineFramer` searches only the new chunk (`bridges/acp-bridge/src/acp-jsonl-framer.ts`), and `acp-jsonl-framer.test.ts` covers the close at the real 4 MiB limit for terminated and unterminated lines; see 1202 task 6. Real frame sizes are still unread: [5900](../../todo/agent-engines/5900-acp-state-write-cost-at-the-cap.md) task 4. |
 | BR-13 | Done | `SerialQueue` drains an array per key with count and byte bounds, and overflow replaces the child (`bridges/codex-bridge/src/app-server/jsonl-rpc-client.ts`); see 1202 task 6. A real high-water mark is still to be read: [5481](../../todo/agent-engines/5481-codex-notification-queue-headroom.md). |
 | BR-14 | Done | `encodeStateWithinBudget` encodes each record once (`bridges/pi-bridge/src/persistence.ts`); see 1202 task 6. A test that the durability barrier rejects state that cannot fit is [5480](../../todo/agent-engines/5480-pi-resume-list-timeout-leftovers.md) task 4. |
 | BR-15 | Done | The transcript helpers moved to `packages/protocol/src/node` (#1593 `e668f0a6d`), and both bridges now use one replay ring, `EventRing` (`packages/protocol/src/node/event-ring.ts`); Claude collapses superseded frames and reuses each frame's byte count (`bridges/claude-bridge/src/routes/events.ts`). See the closing check of E-0360 below. |
-| BR-16 | Done | The replay and its gates are removed and the harness uses `acp-fixture`; the method-gated `cursor/*` handlers are [4540](../../todo/agent-engines/4540-acp-bridge-cursor-extension-leftovers.md). See 1202 task 6. |
+| BR-16 | Done | The replay, its gates and what only it used are removed, and the harness and fake agent use `acp-fixture`; the method-gated `cursor/*` handlers are [4540](../../todo/agent-engines/4540-acp-bridge-cursor-extension-leftovers.md). See 1202 task 6. |
 | WEB-1 | Done | A background round is one request plus discovery when due, 3 requests per round to 1.04 (`useNativeAgentSession.ts`); the finding's note that Claude and Codex idle views never back off no longer held (`turn.quietObservation`, `native-session-read-policy.ts`); see [1202 task 4](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md). |
 | WEB-2 | Done | Identity kept and recency condition gone (12289fc56); the hook reads its sync and progressive caches with `getState()` (`useNativeAgentSession.ts`, 2026-11-04); see 0590 and [1202](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md). |
 | WEB-3 | Done | `useHydrateOncePerEnvironment`, `App.tsx:368`; no-op guards in `environmentStore.ts` setters (12289fc56). |
@@ -397,6 +394,16 @@ These five files were marked Finished or Done, checked back against the code ite
 | `0250-br-7-codex-running-tool-cards.md` | E-0250 | Both tasks done; no reader outside the bridge consumes full `message.patched` frames. | None |
 | `0520-web-9-startup-bundle.md` | E-0520 | All five tasks done; guarded by `startup-closure.test.ts`. | None |
 | `0692-dk-6-preview-tunnel-multiplexing.md` | E-0692 | Task done as tunnel v2. Not confirmed: first-load cost over a real remote link. | [4500](../../todo/cross-cutting/4500-preview-tunnel-one-socket-per-connection.md) task 1 |
+
+## Closing check of E20 (ACP bridge)
+
+`0240-e20-acp-bridge.md` was checked back against the code item by item on 2026-11-05 and deleted. Base commit `0e8958f57`; the check and first measurements were at `3baeaacf6`, and nothing between the two touches `bridges/acp-bridge`. Its last version, ending with its outcome table, is the commit before the one that deleted it.
+
+| Part | Outcome | Left over |
+| --- | --- | --- |
+| `0270` (BR-16) | Replay and gates were gone. The check found the fake agent still falling back to `cursor`, and constants, a counter, a set and fields only the replay used; all removed. | The method-gated handlers, already in [4540](../../todo/agent-engines/4540-acp-bridge-cursor-extension-leftovers.md) |
+| `0260` (BR-12) | Done as recorded. A test at the real 4 MiB limit, through a real `AcpProcess`, was missing and is added. | Real frame sizes: [5900](../../todo/agent-engines/5900-acp-state-write-cost-at-the-cap.md) task 4 |
+| `0240` (BR-1) | Measured at 256 sessions and 16 MB: a stall of 84 to 112 ms with nothing trimmed and 178 to 195 ms with every session windowed, at load 28 to 53. Cache not built: not conclusive. | [5900](../../todo/agent-engines/5900-acp-state-write-cost-at-the-cap.md) tasks 1 to 3 |
 
 ## Closing check of E23 (Renderer polling)
 

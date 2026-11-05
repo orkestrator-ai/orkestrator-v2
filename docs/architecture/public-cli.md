@@ -87,12 +87,24 @@ descriptor is never skipped: a profile falls back to the manifest's endpoint
 only when opening the descriptor returns `ENOENT`. Access-denied, other I/O
 errors and invalid contents are refusals. Service startup and generation reads
 also surface refusals immediately. A failed PID probe, including `EPERM`, counts
-as gone, closing the cross-user PID-reuse case. A successful probe establishes
-only that the current user can signal a process with that PID: reuse by another
-process of the same user is not detected. The descriptor is not bound to the
-original process start time or the port's listener, so same-user PID reuse can
-still cause the credential to be sent to a stale port before response identity
-validation. L12 is therefore only partially fixed.
+as gone, closing the cross-user PID-reuse case.
+
+A live PID is then bound to the backend that wrote the descriptor by its start
+time (`descriptorProcessRefusal`, `packages/cli/src/client/process-start.ts`),
+before the credential file is read or anything is sent. Linux reads
+`/proc/<pid>/stat` field 22 against `btime` in `/proc/stat`; macOS runs
+`/bin/ps -o lstart=` in the C locale and UTC. The process must have started no
+more than 30 seconds after the descriptor's `startedAt` and no more than one
+hour before it. `startedAt` is written once the backend is serving, so the
+process always predates it by its boot time (the hour); a PID reused after the
+backend exits can only have started later, so the 30 seconds only absorbs the
+one-second resolution of both sources and small wall-clock corrections. A start
+time that cannot be read, or a `startedAt` that is not a time, is refused
+(`connection-failed`, "cannot be confirmed"). The CLI ships for Linux and macOS
+only; on any other platform the start time is unreadable, so descriptors are
+refused. Service startup applies the same check before it reads the token of a
+newly published descriptor. The check binds the descriptor to the process, not
+to the port's listener: a live backend's port is its own.
 
 The installation ID is stable per data directory (a copied directory gets a
 new one). Every public response carries `backend.installationId`/`generation`;

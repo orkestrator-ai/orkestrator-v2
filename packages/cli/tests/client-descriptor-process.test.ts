@@ -1,0 +1,379 @@
+import { afterEach, describe, expect, test } from "bun:test";
+import { spawn, type ChildProcess } from "node:child_process";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import path from "node:path";
+import {
+  createProcessStartReader,
+  parseProcStatBootTime,
+  parseProcStatStartTicks,
+  parsePsLstart,
+  readProcessStartTime,
+  type ProcessStartSources,
+} from "../src/client/process-start.js";
+import { awaitServiceConnection } from "../src/client/service-connection.js";
+import {
+  DESCRIPTOR_START_AFTER_TOLERANCE_MS,
+  DESCRIPTOR_START_BEFORE_TOLERANCE_MS,
+  descriptorProcessRefusal,
+  resolveSavedConnection,
+} from "../src/client/targets.js";
+import {
+  createSandbox,
+  startFakeGateway,
+  type ClientSandbox,
+  type FakeGateway,
+} from "./support/client-harness.js";
+
+// Every descriptor here lives in a fresh temporary sandbox and names either
+// this test process or a child it spawned; nothing reads the real data
+// directory, its descriptor or its auth file.
+
+const cleanups: Array<() => Promise<void> | void> = [];
+afterEach(async () => {
+  for (const cleanup of cleanups.splice(0)) await cleanup();
+});
+
+async function sandbox(): Promise<ClientSandbox> {
+  const box = await createSandbox();
+  cleanups.push(() => box.cleanup());
+  return box;
+}
+
+async function gateway(): Promise<FakeGateway> {
+  const created = await startFakeGateway();
+  cleanups.push(() => created.stop());
+  return created;
+}
+
+/** A process of this user started now: what a reused pid looks like. */
+function startChild(): ChildProcess & { pid: number } {
+  const child = spawn("sleep", ["60"], { stdio: "ignore" });
+  cleanups.push(() => {
+    child.kill("SIGKILL");
+  });
+  if (child.pid === undefined) throw new Error("child did not start");
+  return child as ChildProcess & { pid: number };
+}
+
+async function rewriteDescriptor(dataDir: string, changes: Record<string, unknown>) {
+  const file = path.join(dataDir, "backend-instance.json");
+  const descriptor = JSON.parse(await readFile(file, "utf8")) as Record<string, unknown>;
+  await writeFile(file, JSON.stringify({ ...descriptor, ...changes }), { mode: 0o600 });
+}
+
+async function publishProfile(
+  box: ClientSandbox,
+  backend: FakeGateway,
+  dataDir: string,
+  pid: number,
+) {
+  const runtime = path.join(box.env.ORKESTRATOR_DEV_ROOT!, "profiles", "qa", "runtime");
+  await mkdir(runtime, { recursive: true });
+  const statusPath = path.join(runtime, "status.json");
+  await writeFile(
+    statusPath,
+    JSON.stringify({
+      version: 1,
+      profile: "qa",
+      flavor: "agent-test",
+      electronTitle: "x",
+      rendererUrl: "http://127.0.0.1:1",
+      logDir: runtime,
+      statusPath,
+      startedAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+      processStartTimes: {},
+      status: "ready",
+      dataDir,
+      pids: { backend: pid },
+      browserUrl: backend.url,
+      authFile: path.join(dataDir, "gateway-auth.json"),
+    }),
+  );
+}
+
+const supported = process.platform === "linux" || process.platform === "darwin";
+const fiveMinutesAgo = () => new Date(Date.now() - 5 * 60_000).toISOString();
+
+describe("start time parsing", () => {
+  test("reads field 22 of /proc/<pid>/stat past a command name with spaces and parentheses", () => {
+    const fields = Array.from({ length: 50 }, (_, index) => String(index + 3));
+    fields[18] = "123456"; // field 22: the state (field 3) is index 0 after ")"
+    expect(parseProcStatStartTicks(`4242 (my (odd) name) S ${fields.join(" ")}`)).toBe(123456);
+  });
+
+  test("rejects a malformed /proc/<pid>/stat", () => {
+    expect(parseProcStatStartTicks("")).toBeNull();
+    expect(parseProcStatStartTicks("4242 (short) S 1 2 3")).toBeNull();
+    expect(parseProcStatStartTicks(`4242 (x) S ${"x ".repeat(30)}`)).toBeNull();
+  });
+
+  test("reads btime from /proc/stat", () => {
+    expect(parseProcStatBootTime("cpu  1 2 3\nbtime 1762300000\nprocesses 9\n")).toBe(1762300000);
+    expect(parseProcStatBootTime("cpu  1 2 3\n")).toBeNull();
+  });
+
+  test("parses ps lstart as UTC", () => {
+    expect(parsePsLstart("Thu Nov  5 16:35:38 2026\n")).toBe(Date.UTC(2026, 10, 5, 16, 35, 38));
+    expect(parsePsLstart("Mon Jan 12 03:04:05 2026")).toBe(Date.UTC(2026, 0, 12, 3, 4, 5));
+    expect(parsePsLstart("")).toBeNull();
+    expect(parsePsLstart("Thu Foo  5 16:35:38 2026")).toBeNull();
+    expect(parsePsLstart("5 Nov 2026 16:35:38")).toBeNull();
+  });
+});
+
+function fakeSources(overrides: Partial<ProcessStartSources>): ProcessStartSources {
+  return {
+    platform: "linux",
+    readText: () => Promise.reject(new Error("unexpected read")),
+    runPs: () => Promise.reject(new Error("unexpected ps")),
+    ...overrides,
+  };
+}
+
+describe("process start reader", () => {
+  test("Linux combines boot time with the process's start ticks", async () => {
+    const fields = Array.from({ length: 50 }, () => "0");
+    fields[18] = "12345"; // field 22: 123.45 s after boot at USER_HZ 100
+    const reads: string[] = [];
+    const read = createProcessStartReader(
+      fakeSources({
+        platform: "linux",
+        readText: async (file) => {
+          reads.push(file);
+          if (file === "/proc/4242/stat") return `4242 (backend) S ${fields.join(" ")}\n`;
+          if (file === "/proc/stat") return "cpu 0\nbtime 1762300000\n";
+          throw new Error("unexpected file");
+        },
+      }),
+    );
+    expect(await read(4242)).toBe(1762300000 * 1000 + 123450);
+    expect(reads).toEqual(["/proc/4242/stat", "/proc/stat"]);
+  });
+
+  test("macOS asks ps for the process's lstart", async () => {
+    const calls: string[][] = [];
+    const read = createProcessStartReader(
+      fakeSources({
+        platform: "darwin",
+        runPs: async (args) => {
+          calls.push(args);
+          return "Thu Nov  5 16:35:38 2026\n";
+        },
+      }),
+    );
+    expect(await read(4242)).toBe(Date.UTC(2026, 10, 5, 16, 35, 38));
+    expect(calls).toEqual([["-o", "lstart=", "-p", "4242"]]);
+  });
+
+  test("an unreadable start time is null on both platforms", async () => {
+    const missing = Object.assign(new Error("gone"), { code: "ENOENT" });
+    for (const sources of [
+      fakeSources({ platform: "linux", readText: () => Promise.reject(missing) }),
+      fakeSources({ platform: "linux", readText: async () => "garbage" }),
+      fakeSources({ platform: "darwin", runPs: () => Promise.reject(new Error("exit 1")) }),
+      fakeSources({ platform: "darwin", runPs: async () => "" }),
+      // The CLI ships for Linux and macOS only; anything else cannot confirm.
+      fakeSources({ platform: "win32", runPs: async () => "Thu Nov  5 16:35:38 2026" }),
+    ]) {
+      expect(await createProcessStartReader(sources)(4242)).toBeNull();
+    }
+    expect(await createProcessStartReader(fakeSources({}))(0)).toBeNull();
+    expect(await createProcessStartReader(fakeSources({}))(-1)).toBeNull();
+  });
+
+  test.skipIf(!supported)("reads a real child's start time on this host", async () => {
+    const before = Date.now();
+    const child = startChild();
+    const started = await readProcessStartTime(child.pid);
+    expect(started).not.toBeNull();
+    // One-second resolution on both platforms, so allow for truncation.
+    expect(started!).toBeGreaterThanOrEqual(before - 2_000);
+    expect(started!).toBeLessThanOrEqual(Date.now() + 1_000);
+  });
+});
+
+describe("descriptorProcessRefusal", () => {
+  const startedAt = "2026-11-05T12:00:00.000Z";
+  const at = Date.parse(startedAt);
+  const live = () => true;
+  const reader = (value: number | null) => async () => value;
+
+  test("accepts a process that started before the backend wrote startedAt", async () => {
+    expect(await descriptorProcessRefusal({ pid: 7, startedAt }, reader(at - 4_000), live)).toBe(
+      null,
+    );
+    expect(
+      await descriptorProcessRefusal(
+        { pid: 7, startedAt },
+        reader(at - DESCRIPTOR_START_BEFORE_TOLERANCE_MS),
+        live,
+      ),
+    ).toBeNull();
+  });
+
+  test("accepts a start up to the tolerance after startedAt", async () => {
+    expect(
+      await descriptorProcessRefusal(
+        { pid: 7, startedAt },
+        reader(at + DESCRIPTOR_START_AFTER_TOLERANCE_MS),
+        live,
+      ),
+    ).toBeNull();
+  });
+
+  test("refuses a pid whose process started after the backend: a reused pid", async () => {
+    const reason = await descriptorProcessRefusal(
+      { pid: 7, startedAt },
+      reader(at + DESCRIPTOR_START_AFTER_TOLERANCE_MS + 1_000),
+      live,
+    );
+    expect(reason).toContain("pid 7 belongs to a process started at");
+    expect(reason).toContain("descriptor is stale");
+  });
+
+  test("refuses a pid whose process is far older than the backend", async () => {
+    expect(
+      await descriptorProcessRefusal(
+        { pid: 7, startedAt },
+        reader(at - DESCRIPTOR_START_BEFORE_TOLERANCE_MS - 1_000),
+        live,
+      ),
+    ).toContain("descriptor is stale");
+  });
+
+  test("refuses when the start time cannot be read", async () => {
+    expect(await descriptorProcessRefusal({ pid: 7, startedAt }, reader(null), live)).toBe(
+      "cannot be confirmed: the start time of process 7 could not be read",
+    );
+  });
+
+  test("refuses a descriptor whose startedAt is not a time, without reading the process", async () => {
+    let reads = 0;
+    const reason = await descriptorProcessRefusal(
+      { pid: 7, startedAt: "not a time" },
+      async () => {
+        reads += 1;
+        return at;
+      },
+      live,
+    );
+    expect(reason).toContain("no valid start time");
+    expect(reads).toBe(0);
+  });
+
+  test("a dead pid stays stale", async () => {
+    expect(await descriptorProcessRefusal({ pid: 7, startedAt }, reader(at), () => false)).toBe(
+      "is not running as your user (its descriptor is stale)",
+    );
+  });
+});
+
+describe.skipIf(!supported)("commands refuse a reused descriptor pid", () => {
+  test("a descriptor naming this live backend process is still used", async () => {
+    const box = await sandbox();
+    const backend = await gateway();
+    const dataDir = await box.publishDescriptor(backend);
+    const added = await box.run(["--json", "connection", "add", "local", "--data-dir", dataDir]);
+    expect(added.code).toBe(0);
+    expect(JSON.parse(added.out).result.verified).toBe(true);
+    backend.requests.length = 0;
+    const listed = await box.run(["--json", "--connection", "local", "project", "list"]);
+    expect(listed.code).toBe(0);
+    expect(backend.requests.length).toBeGreaterThan(0);
+  });
+
+  test("connection add refuses a pid now held by a later process and contacts nothing", async () => {
+    const box = await sandbox();
+    const backend = await gateway();
+    const child = startChild();
+    const dataDir = await box.publishDescriptor(backend, { pid: child.pid });
+    await rewriteDescriptor(dataDir, { startedAt: fiveMinutesAgo() });
+    const result = await box.run(["--json", "connection", "add", "local", "--data-dir", dataDir]);
+    expect(result.code).toBe(4);
+    const error = JSON.parse(result.out).error;
+    expect(error.code).toBe("connection-failed");
+    expect(error.message).toContain(`pid ${child.pid} belongs to a process started at`);
+    expect(backend.requests).toHaveLength(0);
+  });
+
+  test("a saved connection stops once its pid is reused", async () => {
+    const box = await sandbox();
+    const backend = await gateway();
+    const dataDir = await box.publishDescriptor(backend);
+    expect(
+      (await box.run(["connection", "add", "local", "--data-dir", dataDir, "--default"])).code,
+    ).toBe(0);
+    // The backend died; a later process of this user took its pid.
+    const child = startChild();
+    await rewriteDescriptor(dataDir, { pid: child.pid, startedAt: fiveMinutesAgo() });
+    backend.requests.length = 0;
+    const result = await box.run(["--json", "project", "list"]);
+    expect(result.code).toBe(4);
+    expect(JSON.parse(result.out).error.message).toContain("descriptor is stale");
+    expect(backend.requests).toHaveLength(0);
+  });
+
+  test("a profile whose backend pid was reused is refused without falling back", async () => {
+    const box = await sandbox();
+    const backend = await gateway();
+    const child = startChild();
+    const dataDir = await box.publishDescriptor(backend, { pid: child.pid });
+    await rewriteDescriptor(dataDir, { startedAt: fiveMinutesAgo() });
+    await publishProfile(box, backend, dataDir, child.pid);
+    const result = await box.run(["--json", "--profile", "qa", "project", "list"]);
+    expect(result.code).toBe(4);
+    expect(JSON.parse(result.out).error.message).toContain("descriptor is stale");
+    expect(backend.requests).toHaveLength(0);
+  });
+});
+
+describe("the start time is checked before the token is read", () => {
+  test("an unreadable start time refuses before the credential file is opened", async () => {
+    const box = await sandbox();
+    const backend = await gateway();
+    const dataDir = await box.publishDescriptor(backend);
+    // Without a credential file, reaching readToken would fail differently.
+    await rm(path.join(dataDir, "gateway-auth.json"));
+    const saved = {
+      kind: "descriptor" as const,
+      descriptorPath: path.join(dataDir, "backend-instance.json"),
+      addedAt: new Date().toISOString(),
+    };
+    await expect(resolveSavedConnection("local", saved, async () => null)).rejects.toMatchObject({
+      code: "connection-failed",
+      message: `The backend for connection 'local' cannot be confirmed: the start time of process ${process.pid} could not be read`,
+    });
+    const matching = await resolveSavedConnection("local", saved, async () => Date.now() - 1_000);
+    expect(matching.baseUrl).toBe(backend.url);
+    expect(backend.requests).toHaveLength(0);
+  });
+
+  test("service start never takes a token from a descriptor whose process it cannot confirm", async () => {
+    const box = await sandbox();
+    const backend = await gateway();
+    const dataDir = await box.publishDescriptor(backend);
+    let clock = 0;
+    const options = {
+      timeoutMs: 1_000,
+      now: () => clock,
+      sleep: async (ms: number) => {
+        clock += ms;
+      },
+    };
+    expect(
+      await awaitServiceConnection(dataDir, null, { ...options, readStart: async () => null }),
+    ).toBeNull();
+    clock = 0;
+    const later = Date.now() + DESCRIPTOR_START_AFTER_TOLERANCE_MS + 60_000;
+    expect(
+      await awaitServiceConnection(dataDir, null, { ...options, readStart: async () => later }),
+    ).toBeNull();
+    clock = 0;
+    const connection = await awaitServiceConnection(dataDir, null, {
+      ...options,
+      readStart: async () => Date.now() - 1_000,
+    });
+    expect(connection?.token).not.toBeNull();
+  });
+});

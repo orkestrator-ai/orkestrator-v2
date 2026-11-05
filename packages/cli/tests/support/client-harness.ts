@@ -204,7 +204,7 @@ export async function createSandbox(): Promise<ClientSandbox> {
           installationId: options.installationId ?? "install-a",
           generation: "gen-1",
           pid: options.pid ?? process.pid,
-          startedAt: new Date(0).toISOString(),
+          startedAt: new Date().toISOString(),
           url: gateway.url,
           authFile,
           dataDir,

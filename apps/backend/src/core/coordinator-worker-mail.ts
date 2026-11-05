@@ -6,6 +6,7 @@ import {
   coordinatorConversationIdFromRuntimeId,
   coordinatorIdFromRuntimeId,
   coordinatorRuntimeId,
+  type CoordinatorDelegationRequest,
 } from "@orkestrator/protocol/coordinator";
 import {
   PROJECT_HOME_MESSAGE_LIMITS,
@@ -99,6 +100,7 @@ export async function openWorkerDelegation(
   workerEnvironmentId: string,
   workerTabId: string,
   requestId: string,
+  request?: CoordinatorDelegationRequest,
 ): Promise<boolean> {
   const association = await context.storage.coordinators.saveCoordinatorWorkflowAssociation({
     id: randomUUID(),
@@ -120,6 +122,8 @@ export async function openWorkerDelegation(
     context.runtime.coordinatorRequests.workerTabs,
     association.id,
     workerTabId,
+    undefined,
+    request,
   );
   if (!opened) throw new Error("Coordinator delegation association was not found");
   return opened.delegation?.state === "running";
@@ -206,6 +210,7 @@ async function sendCoordinatorWorkerMail(
           destination.id,
           destinationTabId,
           requestId,
+          { summary: mail.subject || mail.body },
         );
       } catch (error) {
         log.warn("delegation.open-failed", {

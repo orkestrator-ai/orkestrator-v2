@@ -65,3 +65,7 @@ tests. Adding `--timeout=60000` on the command line, for diagnosis only, the tes
 filtered with `-t over-limit` passed in 14.8 s at a load average of 39, so it was
 slow rather than stalled. No idle-host rerun was possible. No assertion, timeout
 or skip was changed.
+
+## Static Find repair aggregate, 2026-11-05
+
+`mise run test` after commit `c4448a5ad` timed out `root-change approval handles over-limit and still permits rejection` at 7424.08 ms (5000 ms limit). Web totals: 12590 pass, 10 skip, 1 fail. Evidence: `/tmp/orkestrator-test-run.PpclE3/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`. Complete unchanged owner rerun: `mise run test:logged -- --name approval-alone -- bun --cwd=apps/web test ./src/components/federation/node-action-requests.test.tsx --parallel=1 --only-failures`, passed, exit 0, 2.0 s. No cause established; no assertion changed.

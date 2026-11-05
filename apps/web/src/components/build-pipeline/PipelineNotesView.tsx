@@ -5,8 +5,9 @@ import { PipelineNeedsALook } from "./PipelineNeedsALook";
 import { KeyInformationDocument } from "./PipelineKeyInformationTab";
 
 /**
- * The Notes step: what a person still has to do or look at, then everything
- * the key information tab shows. Both are read from the pipeline record.
+ * The Notes step: everything the key information tab shows, with what a person
+ * still has to do or look at under the summary. Both are read from the pipeline
+ * record.
  */
 export function PipelineNotesView({ pipeline }: { pipeline: BuildPipeline }) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -16,8 +17,11 @@ export function PipelineNotesView({ pipeline }: { pipeline: BuildPipeline }) {
       data-testid="pipeline-notes"
       className="@container max-h-[70vh] overflow-y-auto"
     >
-      <PipelineNeedsALook followUps={pipelineFollowUps(pipeline)} />
-      <KeyInformationDocument keyInformation={pipeline.keyInformation} scrollRef={scrollRef} />
+      <KeyInformationDocument
+        keyInformation={pipeline.keyInformation}
+        scrollRef={scrollRef}
+        afterSummary={<PipelineNeedsALook followUps={pipelineFollowUps(pipeline)} />}
+      />
     </div>
   );
 }

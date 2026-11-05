@@ -167,7 +167,7 @@ describe("PipelineKeyInformationTab", () => {
         />,
       );
 
-    test("leads with what needs a look, then the whole brief, updating in place", () => {
+    test("places what needs a look under the summary, updating in place", () => {
       seed({ ...pipeline, keyInformation, backendRevision: 2 });
       renderNotes();
       const tab = screen.getByTestId("pipeline-key-information-tab");
@@ -176,7 +176,7 @@ describe("PipelineKeyInformationTab", () => {
       const flagged = within(tab).getByRole("region", { name: "Needs a look" });
       expect(within(flagged).getByText("Rich text formatting")).toBeTruthy();
       expect(within(section(tab, "Solution")).getByText(keyInformation.solution!)).toBeTruthy();
-      expect(flagged.compareDocumentPosition(section(tab, "Summary"))).toBe(
+      expect(section(tab, "Summary").compareDocumentPosition(flagged)).toBe(
         Node.DOCUMENT_POSITION_FOLLOWING,
       );
 
@@ -262,7 +262,7 @@ describe("PipelineKeyInformationTab", () => {
       const prose = within(statement).getByText(legacy.statement!);
       expect(prose.classList.contains("text-[15px]")).toBe(true);
       expect(prose.classList.contains("leading-7")).toBe(true);
-      expect(prose.parentElement!.classList.contains("border-amber-400/60")).toBe(true);
+      expect(prose.parentElement!.classList.contains("border-blue-400/60")).toBe(true);
       const nav = within(tab).getByRole("navigation", { name: "Key information sections" });
       expect(within(nav).getAllByRole("button")[0]!.textContent).toBe(title);
       expect(within(nav).queryByRole("button", { name: "Summary" })).toBeNull();
@@ -282,7 +282,7 @@ describe("PipelineKeyInformationTab", () => {
     const prose = within(regions[0]!).getByText(summary);
     expect(prose.classList.contains("text-[15px]")).toBe(true);
     expect(prose.classList.contains("leading-7")).toBe(true);
-    expect(prose.parentElement!.classList.contains("border-amber-400/60")).toBe(true);
+    expect(prose.parentElement!.classList.contains("border-blue-400/60")).toBe(true);
     expect(within(tab).queryByText("Nothing has been recorded yet")).toBeNull();
     const nav = within(tab).getByRole("navigation", { name: "Key information sections" });
     expect(

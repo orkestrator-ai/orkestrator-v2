@@ -739,9 +739,10 @@ and is not followed automatically, so a finished run still opens on the step it
 last reached. On a failed run it stays readable and its status says "So far".
 Only a cancelled run that never shipped omits it.
 
-Its inspector (`PipelineNotesView`) leads with **Needs a look**, then shows the
-whole key information document (`KeyInformationDocument`, the same one the
-key information tab renders). The list comes from `pipelineFollowUps`
+Its inspector (`PipelineNotesView`) shows the whole key information document
+(`KeyInformationDocument`, the same one the key information tab renders), with
+**Needs a look** directly under the summary, or ahead of the sections when the
+brief has no summary. The list comes from `pipelineFollowUps`
 (`@orkestrator/protocol/build-pipeline-notes`), a pure reading of the record:
 
 - criteria the newest live Verify marked `not-checked`, with what was missing;

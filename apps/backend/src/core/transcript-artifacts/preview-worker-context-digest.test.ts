@@ -37,6 +37,28 @@ const BASE = {
   "licenses/d3@7.9.0/LICENSE": "ISC\n",
 };
 
+describe("what the worker bundle holds", () => {
+  // `rich-transcripts.md` promises that changing the transcript's presentation
+  // runtime asks no install to rebuild its worker image. This is that promise.
+  test("the transcript's presentation runtime is not in it, and the verifying runtime is", async () => {
+    const build = await Bun.build({
+      entrypoints: [path.join(import.meta.dir, "preview-worker-entry.ts")],
+      target: "node",
+      format: "esm",
+      external: ["playwright-core"],
+    });
+    expect(build.success).toBe(true);
+    const bundle = await build.outputs[0]!.text();
+    expect(bundle).toContain("installDesignRuntime");
+    for (const name of [
+      "installStaticHtmlPresentationRuntime",
+      "orkestrator-static-html",
+      "static-html-presentation",
+    ])
+      expect(bundle).not.toContain(name);
+  });
+});
+
 describe("worker context digest", () => {
   test("the same bytes give the same digest whatever the creation order", async () => {
     const first = await workerContextDigest(context(BASE));

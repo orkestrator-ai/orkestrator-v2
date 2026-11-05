@@ -1,7 +1,11 @@
 import { flushSync } from "react-dom";
 import { HumanPromptBanner } from "@/components/chat/HumanPromptBanner";
 import { useHumanPrompts } from "@/hooks/useUserCommands";
+import { useRemoteHumanPrompts, type RemoteHumanPromptEntry } from "@/hooks/useRemoteHumanPrompts";
+import type { HumanPromptEntry } from "@orkestrator/protocol/human-prompts";
 import { useEffect, useMemo, useState } from "react";
+import { toast } from "sonner";
+import { useStore } from "zustand";
 import { AlertCircle, GitBranch, Loader2, Pause, Play, Plus, RotateCcw } from "lucide-react";
 import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
 import { useCoordinatorActions } from "./useCoordinatorActions";
@@ -13,8 +17,14 @@ import { useCoordinatorPanelData } from "./useCoordinatorPanelData";
 import { useCoordinatorWorkItems } from "./useCoordinatorWorkItems";
 import { CoordinatorConversationPane } from "./CoordinatorConversationPane";
 import { CoordinatorToolbar } from "./CoordinatorToolbar";
-import { CoordinatorWorkPanel } from "./CoordinatorWorkPanel";
+import { CoordinatorNextWakeLine, CoordinatorWorkPanel } from "./CoordinatorWorkPanel";
 import { openCoordinatorWorkTarget } from "@/lib/coordinator-work-navigation";
+import {
+  remoteWorkKey,
+  workerTabTarget,
+  type CoordinatorWorkStop,
+} from "@/lib/coordinator-work-items";
+import { portalStore } from "@/lib/portal/portal-store";
 import { useCoordinatorPaneLayoutStore } from "@/stores/coordinatorPaneLayoutStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
@@ -195,6 +205,8 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
    * its builds and reviews run in. Read once: the Work panel marks those rows
    * as needing the user, and the banner shows the workers' own prompts so the
    * person talking to the coordinator sees them without opening the worker.
+   * Workers on other nodes are read through each node's link, while a request
+   * to them is open (`useRemoteHumanPrompts`).
    */
   const workerEnvironmentIds = useMemo(
     () =>
@@ -229,14 +241,38 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
     return Array.from(ids);
   }, [snapshot, workerEnvironmentIds, pipelines, multiReviews]);
   const workPrompts = useHumanPrompts(workEnvironmentIds);
-  const workerPrompts = useMemo(
-    () => workPrompts.filter((entry) => workerEnvironmentIds.has(entry.environmentId)),
-    [workPrompts, workerEnvironmentIds],
+  const remoteWorkers = useMemo(
+    () =>
+      snapshot
+        ? snapshot.workflows.flatMap((association) =>
+            association.kind === "environment" &&
+            association.coordinatorId === snapshot.workspace.id &&
+            association.nodeId &&
+            !association.pending &&
+            association.delegation?.state === "running"
+              ? [{ nodeId: association.nodeId, environmentId: association.resourceId }]
+              : [],
+          )
+        : [],
+    [snapshot],
+  );
+  const remotePrompts = useRemoteHumanPrompts(remoteWorkers);
+  const workerPrompts = useMemo<Array<HumanPromptEntry | RemoteHumanPromptEntry>>(
+    () => [
+      ...workPrompts.filter((entry) => workerEnvironmentIds.has(entry.environmentId)),
+      ...remotePrompts,
+    ],
+    [workPrompts, workerEnvironmentIds, remotePrompts],
   );
   const promptEnvironmentIds = useMemo(
-    () => new Set(workPrompts.map((entry) => entry.environmentId)),
-    [workPrompts],
+    () =>
+      new Set([
+        ...workPrompts.map((entry) => entry.environmentId),
+        ...remotePrompts.map((entry) => remoteWorkKey(entry.nodeId, entry.environmentId)),
+      ]),
+    [workPrompts, remotePrompts],
   );
+  const nodes = useStore(portalStore.store, (state) => state.nodes);
   // Everything this coordinator started, from every conversation and node.
   const work = useCoordinatorWorkItems(snapshot, promptEnvironmentIds);
   const selectedSessionKey =
@@ -458,6 +494,59 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
         setError(cause instanceof Error ? cause.message : "Could not clear finished work"),
       );
   };
+  // Any open conversation can carry the stop; the backend checks it belongs here.
+  const stopConversation = conversations[0];
+  const stopWorker = async (stop: CoordinatorWorkStop) => {
+    if (!stopConversation) return;
+    setError(null);
+    const scope = {
+      projectId,
+      coordinatorId: snapshot.workspace.id,
+      conversationId: stopConversation.id,
+    };
+    try {
+      const results = await Promise.all(
+        stop.tabIds.map((tabId) =>
+          backend.stopCoordinatorWorkerTurn(scope, {
+            // A new click is a new request: it stops whatever turn is running then.
+            requestId: `work-panel-stop:${crypto.randomUUID()}`,
+            environmentId: stop.environmentId,
+            tabId,
+            ...(stop.nodeId ? { nodeId: stop.nodeId } : {}),
+          }),
+        ),
+      );
+      if (!results.some((result) => result.stopped === true)) {
+        toast.info("That worker has no running turn to stop");
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not stop the worker");
+    } finally {
+      invalidateView();
+    }
+  };
+  const promptTarget = (entry: HumanPromptEntry | RemoteHumanPromptEntry) =>
+    workerTabTarget(
+      {
+        environmentId: entry.environmentId,
+        tabId: entry.tabId,
+        ...("nodeId" in entry ? { nodeId: entry.nodeId } : {}),
+        title: promptLabel(entry),
+      },
+      { environments, nodes },
+    );
+  const promptLabel = (entry: HumanPromptEntry | RemoteHumanPromptEntry) => {
+    if (!("nodeId" in entry)) {
+      return (
+        environments.find((item) => item.id === entry.environmentId)?.name ?? entry.environmentId
+      );
+    }
+    const node = nodes.find((item) => item.nodeId === entry.nodeId);
+    const name =
+      node?.environments.find((item) => item.ref.environmentId === entry.environmentId)?.name ??
+      entry.environmentId;
+    return `${name} on ${node?.view.displayName ?? entry.nodeId}`;
+  };
 
   return (
     <CoordinatorPullRequestWatchProvider projectId={projectId}>
@@ -520,10 +609,12 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
 
         <HumanPromptBanner
           prompts={workerPrompts}
-          label={(entry) =>
-            environments.find((item) => item.id === entry.environmentId)?.name ??
-            entry.environmentId
-          }
+          label={promptLabel}
+          canOpen={(entry) => promptTarget(entry) !== null}
+          onOpen={(entry) => {
+            const target = promptTarget(entry);
+            if (target) openCoordinatorWorkTarget(target);
+          }}
         />
 
         <div className="relative flex min-h-0 flex-1">
@@ -617,9 +708,13 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
             counts={work.counts}
             openDelegations={work.openDelegations}
             onOpen={(target) => openCoordinatorWorkTarget(target)}
+            {...(snapshot.workspace.lifecycleState === "ready" && stopConversation
+              ? { onStop: stopWorker }
+              : {})}
             onClearFinished={clearFinishedWork}
           />
         </div>
+        <CoordinatorNextWakeLine items={work.items} quiet={paused || selectedTurnActive} />
         <div className="shrink-0 border-t border-border/60 px-3 py-1 text-center text-[11px] text-muted-foreground">
           Code changes, commands, builds and fixes run in build pipelines or prompt environments.
         </div>

@@ -59,7 +59,7 @@ type WriteKind = "whole" | "transactional";
  * each other and against deletion. A row transaction alone would not serialize
  * that read.
  */
-const LEASED_ROW_STORES = new Set(["environmentsFile"]);
+const LEASED_ROW_STORES = new Set(["environmentsFile", "projectsFile"]);
 
 /**
  * What a call of a member of a class the analysis does not read means. These
@@ -79,6 +79,7 @@ const PRIMITIVES = new Map<string, Primitive>([
   ["StorageContext.saveSensitiveJson", { kind: "write", write: "whole" }],
   ["StorageContext.deleteStore", { kind: "write", write: "whole" }],
   ["StorageContext.updateStore", { kind: "write", write: "transactional" }],
+  ["StorageContext.updateDocumentArrayRows", { kind: "write", write: "transactional" }],
   ["StorageContext.updateStoreRow", { kind: "write", write: "transactional" }],
   ["StorageContext.updateSensitiveStoreRow", { kind: "write", write: "transactional" }],
   ["StorageContext.atomically", { kind: "atomically" }],
@@ -1404,6 +1405,7 @@ const RAW_WRITERS = new Set([
   "deleteStore",
   "deleteStoreInTransaction",
   "updateStore",
+  "updateDocumentArrayRows",
   "updateStoreRow",
   "rows",
 ]);

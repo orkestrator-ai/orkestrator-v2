@@ -190,6 +190,82 @@ describe("preload API factory", () => {
     expect(invoke).toHaveBeenCalledTimes(2);
   });
 
+  test("rejects with the handler's own message, without Electron's remote-method wrapper", async () => {
+    const message = "Unable to reach GitHub. Check your network connection and try again.";
+    const invoke = mock(async (channel: string): Promise<never> => {
+      throw new Error(`Error invoking remote method '${channel}': Error: ${message}`);
+    });
+    const ipc = { invoke, on: () => undefined } as IpcRendererLike;
+
+    await expect(createOrkestratorElectronApi(ipc).invoke("get_projects")).rejects.toThrow(
+      new Error(message),
+    );
+    await expect(createPortalApi(ipc).invoke("get_projects")).rejects.toThrow(new Error(message));
+    await expect(createOrkestratorElectronApi(ipc).clipboard.readText()).rejects.toThrow(
+      new Error(message),
+    );
+  });
+
+  test.each(["TypeError", "RangeError", "NetworkError"])(
+    "strips a wrapped %s while preserving the handler message",
+    async (name) => {
+      const original = new Error(
+        `Error invoking remote method 'orkestrator:invoke': ${name}: fetch failed: offline`,
+      );
+      const ipc = {
+        invoke: async () => {
+          throw original;
+        },
+        on: () => undefined,
+      } as IpcRendererLike;
+      await expect(createOrkestratorElectronApi(ipc).invoke("get_projects")).rejects.toMatchObject({
+        message: "fetch failed: offline",
+      });
+    },
+  );
+
+  test("retains the original rejection and its custom diagnostics without mutating it", async () => {
+    const original = new Error(
+      "Error invoking remote method 'orkestrator:invoke': TypeError: fetch failed",
+      {
+        cause: new Error("socket closed"),
+      },
+    );
+    Object.defineProperty(original, "code", { value: "ECONNRESET", enumerable: false });
+    const ipc = {
+      invoke: async () => {
+        throw original;
+      },
+      on: () => undefined,
+    } as IpcRendererLike;
+    const rejection = await createOrkestratorElectronApi(ipc)
+      .invoke("get_projects")
+      .catch((error: unknown) => error);
+    expect(rejection).toBeInstanceOf(Error);
+    const readable = rejection as Error & { code: string };
+    expect(readable.message).toBe("fetch failed");
+    expect(readable.cause).toBe(original);
+    expect((readable.cause as Error).stack).toBe(original.stack);
+    expect((readable.cause as Error).cause).toBe(original.cause);
+    expect(readable.code).toBe("ECONNRESET");
+    expect(Object.getOwnPropertyDescriptor(readable, "code")).toEqual(
+      Object.getOwnPropertyDescriptor(original, "code"),
+    );
+    expect(original.message).toContain("Error invoking remote method");
+  });
+
+  test("leaves errors without the remote-method wrapper untouched", async () => {
+    const original = new TypeError("fetch failed");
+    const ipc = {
+      invoke: async () => {
+        throw original;
+      },
+      on: () => undefined,
+    } as IpcRendererLike;
+
+    await expect(createOrkestratorElectronApi(ipc).invoke("get_projects")).rejects.toBe(original);
+  });
+
   test("subscribes and unsubscribes renderer event callbacks by event name", () => {
     const { ipc, emit, on } = createIpcMock();
     const api = createOrkestratorElectronApi(ipc);

@@ -1,6 +1,6 @@
 # Background read flags before authoritative state under load
 
-- **ID:** 4842
+- **ID:** 5104
 - **Status:** open
 - **Date observed:** 2026-11-04
 - **Test:** `useNativeAgentSession background read flags > a background read before any authoritative state still reports connecting`.

@@ -155,5 +155,5 @@ The report measured nothing, and the maintainer gated this work on numbers. Deci
 - [1202 tasks 1 and 5](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md)
 - [0050 transcript history efficiency](../../todo/transcripts-and-observation/0050-transcript-history-efficiency.md)
 - [1202 tasks 1 and 4](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md)
-- [E8](0170-e8-agent-tab-polling.md): the client side of the same poll
+- [1202 task 4](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md): E8, the client side of the same poll, is done
 - [0160](#0160-a-transcript-delta-can-only-be-built-from-the-newest-cached-view): the backend's delta bases

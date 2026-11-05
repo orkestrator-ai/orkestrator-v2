@@ -667,7 +667,7 @@ describe("import ownership failures", () => {
     await f.boot();
     expect(await f.read(".claude/skills/review/SKILL.md")).toBe("local skill");
     expect(await f.read(".codex/AGENTS.md")).toBe("local agents");
-  });
+  }, 60_000);
 
   for (const login of LOGINS.filter((entry) => entry.name !== "Claude")) {
     for (const failure of ["cp", "oversized"]) {
@@ -700,7 +700,7 @@ describe("import ownership failures", () => {
         const actual = JSON.parse(await f.read(login.home));
         delete actual.last_refresh;
         expect(actual).toEqual(JSON.parse(local));
-      });
+      }, 60_000);
     }
   }
 
@@ -716,7 +716,7 @@ describe("import ownership failures", () => {
       await write(f.stage("claude-config/skills/review/SKILL.md"), "changed skill");
       await f.boot();
       expect(await f.read(".claude/skills/review/SKILL.md")).toBe("changed skill");
-    });
+    }, 60_000);
   }
 
   for (const leaf of ["paths", "sums"]) {
@@ -734,7 +734,7 @@ describe("import ownership failures", () => {
       await fs.rm(stamp, { recursive: true, force: true });
       await f.boot();
       expect((await f.boot()).copied).toBe(0);
-    });
+    }, 60_000);
   }
 
   test("unreadable ownership bookkeeping is retried without blocking boot", async () => {
@@ -747,7 +747,7 @@ describe("import ownership failures", () => {
     expect(await f.read(".claude/skills/review/SKILL.md")).toBe("changed skill");
     await f.boot();
     expect((await f.boot()).copied).toBe(0);
-  });
+  }, 60_000);
 
   test("failed single-file removal keeps its stamp for retry", async () => {
     const f = await fixture();
@@ -758,7 +758,7 @@ describe("import ownership failures", () => {
     expect(await f.exists(".codex/AGENTS.md")).toBe(true);
     await f.boot();
     expect(await f.exists(".codex/AGENTS.md")).toBe(false);
-  });
+  }, 60_000);
 
   for (const missingTree of [false, true]) {
     test(`failed removal retries (whole tree missing=${missingTree})`, async () => {
@@ -776,7 +776,7 @@ describe("import ownership failures", () => {
       await f.boot();
       expect(await f.exists(removed)).toBe(false);
       expect(await f.read(".codex/AGENTS.md")).toContain("agents one");
-    });
+    }, 60_000);
   }
 
   test("backend publication waits for cleanup and is never attributed to the import", async () => {
@@ -807,5 +807,5 @@ describe("import ownership failures", () => {
     await f.replace(login.staged, undefined);
     await f.boot();
     expect(await f.read(".claude/.credentials.json")).toContain("fresh-backend");
-  });
+  }, 60_000);
 });

@@ -48,4 +48,3 @@ Analysed 2026-11-05 against `main` at `41f9eb638`.
 ## Related
 
 - [Flake case 6600](../../tests/flaky-tests/aggregate-validation-runs/6600-live-head-preparation-owners-vary-with-load.md), the run this was found in.
-- [6602](../cross-cutting/6602-service-install-and-codex-host-rules-fail-alone.md), the two failures from that run that are not load-dependent.

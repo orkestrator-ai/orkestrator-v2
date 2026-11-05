@@ -458,6 +458,10 @@ describe("preload API factory", () => {
       channel: "orkestrator:window:set-zoom-factor",
       args: [1.5],
     });
+    await expect(api.window.setRendererDebugLogging(true)).resolves.toEqual<IpcEcho>({
+      channel: "orkestrator:window:set-renderer-debug",
+      args: [true],
+    });
     const bounds = { x: 10, y: 20, width: 640, height: 480 };
     await expect(
       api.browserPreview.attach({

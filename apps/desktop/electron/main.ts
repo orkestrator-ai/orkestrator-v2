@@ -120,6 +120,7 @@ import {
   registerWindowAllClosedQuit,
 } from "./quit-policy.js";
 import { createApplicationMenuTemplate } from "./application-menu.js";
+import { RendererDebugTools } from "./renderer-debug-tools.js";
 import {
   KeyboardShortcutsController,
   requestAppShortcut,
@@ -517,6 +518,9 @@ function focusedRenderer(): Electron.WebContents | null {
   ).renderer as Electron.WebContents;
 }
 
+// Help → Open Developer Tools, offered only while a renderer has debug logging on.
+const rendererDebugTools = new RendererDebugTools(() => createMenu());
+
 const keyboardShortcuts = new KeyboardShortcutsController();
 const shortcutRouting = new KeyboardShortcutsRouting(
   () => [...windowContexts.values(), ...realmContexts.values()],
@@ -879,6 +883,14 @@ function createMenu(): void {
         requestAppShortcut(context.window.webContents, "open-settings");
     },
     checkForUpdates: autoUpdate ? () => void autoUpdate?.checkNow() : undefined,
+    // The focused renderer (a realm or the window's own), then the window's own;
+    // only one that turned debug logging on is opened.
+    openDeveloperTools: rendererDebugTools.anyEnabled()
+      ? () => {
+          const context = focusedContext();
+          rendererDebugTools.open([focusedRenderer(), context?.contents]);
+        }
+      : undefined,
   });
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
@@ -1241,6 +1253,10 @@ function registerIpc(): void {
     },
     getMainWindow: (event) => ipcContextForEvent(event).window,
     getArtifactHosts: (event) => ipcContextForEvent(event).artifactHosts,
+    setRendererDebugLogging: (event, enabled) => {
+      const sender = event.sender ? webContents.fromId(event.sender.id) : undefined;
+      if (sender) rendererDebugTools.report(sender, enabled);
+    },
     ipc: ipcMain,
     clipboardApi: clipboard,
     createClipboardItem: (items) => new ClipboardItem(items),

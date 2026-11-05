@@ -139,6 +139,7 @@ function createHarness(
   const handOverCommandNode = mock(async () => null);
   const forgetConnection = mock(async () => connectionList);
   const openConnectionWindow = mock(async () => undefined);
+  const setRendererDebugLogging = mock((_event: unknown, _enabled: boolean) => undefined);
   const browserPreviewState = {
     tabId: "browser-1",
     url: "http://localhost:3000/",
@@ -198,6 +199,7 @@ function createHarness(
     forgetConnection,
     openConnectionWindow,
     browserPreviews: options.browserPreviews === false ? undefined : browserPreviews,
+    setRendererDebugLogging,
     trustedRendererUrl,
   });
 
@@ -258,6 +260,7 @@ function createHarness(
     forgetConnection,
     openConnectionWindow,
     browserPreviews,
+    setRendererDebugLogging,
   };
 }
 
@@ -438,6 +441,19 @@ describe("main IPC registration", () => {
       supported: false,
       missing: [],
     });
+  });
+
+  test("takes a renderer's debug logging preference only from a trusted renderer", async () => {
+    const harness = createHarness();
+    await expect(harness.invoke("orkestrator:window:set-renderer-debug", true)).resolves.toBe(true);
+    expect(harness.setRendererDebugLogging.mock.calls.map((call) => call[1])).toEqual([true]);
+    await expect(harness.invoke("orkestrator:window:set-renderer-debug", "1")).rejects.toThrow(
+      "Expected renderer debug logging on or off",
+    );
+    await expect(
+      harness.invokeFrom("https://evil.example/", "orkestrator:window:set-renderer-debug", true),
+    ).rejects.toThrow("untrusted renderer");
+    expect(harness.setRendererDebugLogging).toHaveBeenCalledTimes(1);
   });
 
   test("validates zoom factors and reports a missing main window", async () => {

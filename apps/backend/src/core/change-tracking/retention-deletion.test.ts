@@ -518,6 +518,26 @@ describe("a restore keeps what it needs", () => {
   const measurementRows = (h: Harness, id: string) =>
     count(h, "change_measurement_files", "measurement_id = ?", id);
 
+  for (const mode of ["purge", "age"] as const) {
+    test(`an applied restore releases its checkpoint during ${mode}`, async () => {
+      const h = setup();
+      const { token } = await restorable(h, "env-1");
+      expect(
+        (await h.service.restore.apply({ actionToken: token, idempotencyKey: mode })).kind,
+      ).toBe("applied");
+      expect(count(h, "change_references", "owner_kind = 'restore'")).toBeGreaterThan(0);
+      if (mode === "purge") h.service.environmentDeleted("env-1");
+      await h.service.retention.run(Date.now() + 92 * DAY);
+      expect(count(h, "change_restore_operations")).toBe(0);
+      expect(count(h, "change_references", "owner_kind = 'restore'")).toBe(0);
+      if (mode === "purge") {
+        expect(count(h, "change_snapshots")).toBe(0);
+        expect(count(h, "change_worktrees")).toBe(0);
+        expect(await h.service.objects.storedBytes()).toBe(0);
+      }
+    });
+  }
+
   test("an unexpired token defers the purge, and it runs once the token expires", async () => {
     const h = setup();
     const { turnId, measurementId } = await restorable(h, "env-1");
@@ -1023,5 +1043,149 @@ describe("the evidence body store's sweep", () => {
     expect(h.service.ledger.body(bodyId)?.state).toBe("available");
     await recordEdit(h, "env-1", "c2", "again\n");
     expect(await h.service.bodies.get(bodyId)).not.toBeNull();
+  });
+});
+
+describe("retirement regressions", () => {
+  test("a pin admitted between purge transactions stops later batches", async () => {
+    const h = setup();
+    const { turnId } = await runTurn(h, "env-1", "later");
+    const ledger = h.service.ledger;
+    const measurement = ledger.latestMeasurement("turn", turnId, "turn-net")!.measurementId;
+    await recordEdit(h, "env-1", "bulk");
+    const seed = ledger.db.query("SELECT * FROM change_evidence LIMIT 1").get() as Parameters<
+      typeof ledger.insertEvidence
+    >[0];
+    for (let i = 1; i <= 600; i++)
+      ledger.insertEvidence({ ...seed, revision: i + 10, revision_key: `extra-${i}` });
+    h.service.environmentDeleted("env-1");
+    const purges = h.service.retention.purges;
+    const original = purges.purgeEnvironmentBatch.bind(purges);
+    let release = () => {};
+    let batches = 0;
+    const spy = spyOn(purges, "purgeEnvironmentBatch").mockImplementation((...args) => {
+      const result = original(...args);
+      if (++batches === 1) release = ledger.pinMeasurement(measurement);
+      return result;
+    });
+    expect((await h.service.retention.run()).purgesWaiting).toBe(true);
+    expect(ledger.measurement(measurement)).not.toBeNull();
+    expect(count(h, "change_measurement_files", "measurement_id = ?", measurement)).toBeGreaterThan(
+      0,
+    );
+    spy.mockRestore();
+    release();
+    await h.service.retention.run(Date.now() + 2 * HOUR);
+    expect(ledger.measurement(measurement)).toBeNull();
+    // A completed purge releases the process-local admission block.
+    await runTurn(h, "env-1", "reused");
+    expect(ledger.turn(turnIdFor("env-1", SESSION, "reused"))).not.toBeNull();
+  });
+
+  test("a large evidence stream and pinned selection range obey every batch budget", async () => {
+    const h = setup();
+    const { turnId } = await runTurn(h, "env-1", "budget");
+    await recordEdit(h, "env-1", "bulk");
+    const ledger = h.service.ledger;
+    const measurementId = ledger.latestMeasurement("turn", turnId, "turn-net")!.measurementId;
+    const seed = ledger.db.query("SELECT * FROM change_evidence LIMIT 1").get() as Parameters<
+      typeof ledger.insertEvidence
+    >[0];
+    for (let i = 1; i <= 1000; i++) {
+      ledger.insertEvidence({ ...seed, revision: i + 10, revision_key: `extra-${i}` });
+      ledger.db
+        .query("INSERT INTO change_diff_identities VALUES (?, ?, ?, ?)")
+        .run(`identity-${i}`, measurementId, "{}", "2026-01-01");
+      ledger.db
+        .query("INSERT INTO change_evidence_chunks VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+        .run(seed.evidence_id, seed.revision_key, "target", i, `chunk-${i}`, i, "body", 0);
+      ledger.db
+        .query(
+          "INSERT INTO change_selections (selection_key, measurement_id, selector, revision, updated_at) VALUES (?, ?, 'latest', 1, '2026-01-01')",
+        )
+        .run(`commit/environment/env-1%40${i}/pinned`, "missing");
+    }
+    let done = false;
+    for (let i = 0; i < 500 && !done; i++) {
+      const before = (ledger.db.query("SELECT total_changes() AS n").get() as { n: number }).n;
+      const result = h.service.retention.purges.purgeEnvironmentBatch("env-1", 17);
+      const after = (ledger.db.query("SELECT total_changes() AS n").get() as { n: number }).n;
+      expect(after - before).toBeLessThanOrEqual(17);
+      expect(result.rows).toBe(after - before);
+      done = result.done;
+    }
+    expect(done).toBe(true);
+    expect(count(h, "change_evidence")).toBe(0);
+    expect(count(h, "change_evidence_chunks")).toBe(0);
+    expect(count(h, "change_selections")).toBe(0);
+  });
+
+  test("append targets and chunk bodies remain reachable until their evidence retires", async () => {
+    const h = setup();
+    await recordEdit(h, "env-1", "append");
+    const ledger = h.service.ledger;
+    const ids: string[] = [];
+    for (const value of ["append target", "append chunk", "metadata target"]) {
+      const bytes = new TextEncoder().encode(value);
+      const id = bodyIdFor(bytes);
+      ids.push(id);
+      await h.service.bodies.put(id, bytes);
+    }
+    const row = ledger.db
+      .query("SELECT evidence_id, revision_key FROM change_evidence LIMIT 1")
+      .get() as { evidence_id: string; revision_key: string };
+    ledger.db
+      .query("UPDATE change_evidence SET evidence_json = ? WHERE evidence_id = ?")
+      .run(JSON.stringify({ appendOf: { targetBodyId: ids[2] } }), row.evidence_id);
+    ledger.db
+      .query("INSERT INTO change_evidence_chunks VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+      .run(row.evidence_id, row.revision_key, ids[0]!, 0, "chunk", 0, ids[1]!, 1);
+    await h.service.retention.run(Date.now() + 2 * HOUR);
+    for (const id of ids) expect(await h.service.bodies.get(id)).not.toBeNull();
+    h.service.environmentDeleted("env-1");
+    await h.service.retention.run(Date.now() + 3 * HOUR);
+    for (const id of ids) expect(await h.service.bodies.get(id)).toBeNull();
+  });
+});
+
+describe("production retention scheduling", () => {
+  test("starts first and hourly timers, retries waiting purges, logs failures and clears timers on shutdown", async () => {
+    const { configureLogger, resetLogger } = await import("@orkestrator/protocol/logger");
+    const records: string[] = [];
+    configureLogger({ level: "warn", sink: (output) => records.push(output.line) });
+    const timeout = spyOn(globalThis, "setTimeout");
+    const interval = spyOn(globalThis, "setInterval");
+    const clearTimeoutSpy = spyOn(globalThis, "clearTimeout");
+    const clearIntervalSpy = spyOn(globalThis, "clearInterval");
+    const h = createHarness({ manualScheduling: false });
+    harnesses.push(h);
+    const run = spyOn(h.service.retention, "run");
+    const first = timeout.mock.calls.find((call) => call[1] === 120_000)!;
+    expect(first).toBeDefined();
+    expect(interval.mock.calls.some((call) => call[1] === HOUR)).toBe(true);
+    try {
+      // Obtain a genuine report before replacing the scheduled pass.
+      const base = await h.service.retention.run();
+      run.mockResolvedValue({ ...base, purgesWaiting: true });
+      (first[0] as () => void)();
+      await Promise.resolve();
+      const retry = timeout.mock.calls.find((call) => call[1] === 30_000)!;
+      expect(retry).toBeDefined();
+      run.mockRejectedValue(new Error("retention test failure"));
+      (retry[0] as () => void)();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(records.some((line) => line.includes("retention.failed"))).toBe(true);
+      h.service.shutdown();
+      expect(clearTimeoutSpy.mock.calls.length).toBeGreaterThanOrEqual(1);
+      expect(clearIntervalSpy.mock.calls.length).toBeGreaterThanOrEqual(1);
+    } finally {
+      run.mockRestore();
+      timeout.mockRestore();
+      interval.mockRestore();
+      clearTimeoutSpy.mockRestore();
+      clearIntervalSpy.mockRestore();
+      resetLogger();
+    }
   });
 });

@@ -91,6 +91,7 @@ export class ChangeRetentionService {
       bodies?: EvidenceBodyStore;
       policies: ChangeTrackingPolicyRegistry;
       readerPins: () => Iterable<string>;
+      onPurgeFinished?: (environmentId: string) => void;
       reachabilityCache?: Partial<ReachabilityCacheLimits>;
     },
   ) {
@@ -188,6 +189,7 @@ export class ChangeRetentionService {
     // After the sweep, which took the snapshots naming their worktrees.
     for (const purge of finishedPurges) {
       this.retirement.finishPurge(purge);
+      this.deps.onPurgeFinished?.(purge.environmentId);
       report.purgedEnvironments++;
     }
     stored = await store.currentBytes();
@@ -221,7 +223,7 @@ export class ChangeRetentionService {
         report.purgesWaiting = true;
         continue;
       }
-      if (!(await this.purgeEnvironment(purge, report, batches))) {
+      if (!(await this.purgeEnvironment(purge, report, batches, nowIso))) {
         report.purgesWaiting = true;
         continue;
       }
@@ -235,17 +237,24 @@ export class ChangeRetentionService {
     purge: EnvironmentPurge,
     report: RetentionReport,
     batches: { left: number },
+    nowIso: string,
   ): Promise<boolean> {
     const { environmentId } = purge;
     const complete = await this.retireInBatches(report, batches, () =>
-      this.retirement.purgeEnvironmentBatch(environmentId, RETIREMENT_ROWS_PER_BATCH),
+      this.retirement.purgeEnvironmentBatch(environmentId, RETIREMENT_ROWS_PER_BATCH, nowIso),
     );
     if (!complete) return false;
     if (!this.retirement.hasLegacySummaries(environmentId)) return true;
     let after: number | null = 0;
     while (after !== null) {
-      if (this.stopped) return false;
-      after = this.retirement.retireLegacySummariesPage(environmentId, after);
+      if (this.stopped || batches.left <= 0) return false;
+      batches.left--;
+      const outcome = this.deps.ledger.transaction(() => {
+        if (this.retirement.environmentHeld(environmentId, nowIso)) return { held: true };
+        return { next: this.retirement.retireLegacySummariesPage(environmentId, after!) };
+      });
+      if (outcome.held) return false;
+      after = outcome.next!;
       await yieldToEventLoop();
     }
     return true;
@@ -293,6 +302,7 @@ export class ChangeRetentionService {
       const outcome = batch();
       report.retiredRows += outcome.rows;
       await yieldToEventLoop();
+      if (outcome.held) return false;
       if (outcome.done) return true;
     }
     return false;

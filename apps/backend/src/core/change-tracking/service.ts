@@ -224,6 +224,7 @@ export class ChangeTrackingService {
       bodies: this.bodies,
       policies: this.policies,
       readerPins: () => this.diffBodies.readerPins.keys(),
+      onPurgeFinished: (id) => this.deletedEnvironments.delete(id),
     });
     this.restore = new ChangeRestoreService({
       ledger: this.ledger,

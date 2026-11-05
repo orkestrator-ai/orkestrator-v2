@@ -45,6 +45,7 @@ export interface EnvironmentPurge {
 export interface RetirementBatch {
   rows: number;
   done: boolean;
+  held?: boolean;
 }
 
 interface Budget {
@@ -186,8 +187,13 @@ export class LedgerRetirement {
   }
 
   /** Removes one batch of an environment's rows, in one transaction. */
-  purgeEnvironmentBatch(environmentId: string, rows: number): RetirementBatch {
+  purgeEnvironmentBatch(
+    environmentId: string,
+    rows: number,
+    nowIso = new Date().toISOString(),
+  ): RetirementBatch {
     return this.ledger.transaction(() => {
+      if (this.environmentHeld(environmentId, nowIso)) return { rows: 0, done: false, held: true };
       const budget: Budget = { left: rows };
       const done =
         this.purgeBindings(environmentId, budget) &&
@@ -204,7 +210,7 @@ export class LedgerRetirement {
       .all(environmentId) as Array<{ id: string }>;
     for (const { id } of bindings) {
       if (!this.retireBinding(id, budget)) return false;
-      this.spend(budget, this.db.query("DELETE FROM change_bindings WHERE id = ?").run(id).changes);
+      if (!this.drain("change_bindings", "id = ?", [id], budget)) return false;
     }
     return true;
   }
@@ -242,11 +248,7 @@ export class LedgerRetirement {
         .run(from, to, budget.left).changes,
     );
     if (budget.left <= 0) return false;
-    this.spend(
-      budget,
-      this.db.query("DELETE FROM change_evidence_gaps WHERE binding_id = ?").run(bindingId).changes,
-    );
-    return budget.left > 0;
+    return this.drain("change_evidence_gaps", "binding_id = ?", [bindingId], budget);
   }
 
   /** Frame keys are `<binding id>\0<frame id>`. */
@@ -258,13 +260,12 @@ export class LedgerRetirement {
     const owned = this.db.query(
       "SELECT turn_id AS id FROM change_turn_boundaries WHERE environment_id = ? LIMIT ?",
     );
-    const remove = this.db.query("DELETE FROM change_turn_boundaries WHERE turn_id = ?");
     while (budget.left > 0) {
       const turns = owned.all(environmentId, OWNERS_PER_QUERY) as Array<{ id: string }>;
       if (turns.length === 0) return true;
       for (const { id } of turns) {
         if (!this.retireTurn(id, budget)) return false;
-        this.spend(budget, remove.run(id).changes);
+        if (!this.drain("change_turn_boundaries", "turn_id = ?", [id], budget)) return false;
       }
     }
     return false;
@@ -299,11 +300,15 @@ export class LedgerRetirement {
         .all(`git-${scope}`, live, from, to) as Array<{ id: string }>;
       for (const { id } of owners)
         if (!this.retireOwner(`git-${scope}`, id, [id], budget)) return false;
-      this.db
-        .query(
-          "DELETE FROM change_selections WHERE selection_key = ? OR (selection_key >= ? AND selection_key < ?)",
+      if (
+        !this.drain(
+          "change_selections",
+          "selection_key = ? OR (selection_key >= ? AND selection_key < ?)",
+          [live, from, to],
+          budget,
         )
-        .run(live, from, to);
+      )
+        return false;
     }
     const [fileFrom, fileTo] = under(`${environmentId}:`);
     const files = this.db
@@ -317,11 +322,8 @@ export class LedgerRetirement {
     if (budget.left <= 0) return false;
     for (const prefix of [`conv:${environmentId}\0`, `fork:${environmentId}\0`]) {
       const [from, to] = under(prefix);
-      this.spend(
-        budget,
-        this.db.query("DELETE FROM change_ledger_meta WHERE key >= ? AND key < ?").run(from, to)
-          .changes,
-      );
+      if (!this.drain("change_ledger_meta", "key >= ? AND key < ?", [from, to], budget))
+        return false;
     }
     return budget.left > 0;
   }
@@ -349,16 +351,17 @@ export class LedgerRetirement {
         owner_id: string;
         worktree_id: string;
       }>;
-      // Summaries carry a provider-reported list, already bounded.
-      const budget: Budget = { left: Number.POSITIVE_INFINITY };
+      const budget: Budget = { left: WALK_PAGE_ROWS };
       for (const row of rows) {
         if (row.worktree_id !== `legacy:${environmentId}`) continue;
-        this.retireOwner(row.owner_kind, row.owner_id, operationKeys(row.owner_id), budget);
+        if (!this.retireOwner(row.owner_kind, row.owner_id, operationKeys(row.owner_id), budget))
+          return row.row - 1;
       }
       if (rows.length === WALK_PAGE_ROWS) return rows.at(-1)!.row;
       const [from, to] = under(legacyMarkerPrefix(environmentId));
-      this.db.query("DELETE FROM change_ledger_meta WHERE key >= ? AND key < ?").run(from, to);
-      return null;
+      return this.drain("change_ledger_meta", "key >= ? AND key < ?", [from, to], budget)
+        ? null
+        : afterRowid;
     });
   }
 
@@ -471,7 +474,12 @@ export class LedgerRetirement {
             done = true;
             break;
           }
-          if (this.ledger.removeReferences("turn", turn.turn_id) > 0) released++;
+          if (
+            this.ledger.db
+              .query("SELECT 1 FROM change_references WHERE owner_kind = 'turn' AND owner_id = ?")
+              .get(turn.turn_id)
+          )
+            released++;
           if (!this.retireTurn(turn.turn_id, budget)) {
             done = false;
             break;
@@ -630,7 +638,7 @@ export class LedgerRetirement {
            )`,
         )
         .run(cutoffIso, rows).changes;
-      removed += this.retireExpiredAttempts(cutoffIso, rows);
+      removed += this.retireExpiredAttempts(cutoffIso, rows - removed);
       removed += this.db
         .query(
           `DELETE FROM change_restore_tokens WHERE rowid IN (
@@ -639,16 +647,12 @@ export class LedgerRetirement {
              ) LIMIT ?2
            )`,
         )
-        .run(cutoffIso, rows).changes;
-      removed += this.db
-        .query(
-          `DELETE FROM change_restore_operations WHERE rowid IN (
-             SELECT rowid FROM change_restore_operations WHERE updated_at < ? AND state != 'applying' LIMIT ?
-           )`,
-        )
-        .run(cutoffIso, rows).changes;
-      removed += this.retireExpiredCursors(cutoffIso, rows);
-      removed += this.retireEmptyBindings(cutoffIso, rows);
+        .run(cutoffIso, rows - removed).changes;
+      const budget = { left: rows - removed };
+      this.retireRestores("updated_at < ? AND state != 'applying'", [cutoffIso], budget);
+      removed = rows - budget.left;
+      removed += this.retireExpiredCursors(cutoffIso, rows - removed);
+      removed += this.retireEmptyBindings(cutoffIso, rows - removed);
       return { rows: removed, done: removed === 0 };
     });
   }
@@ -794,22 +798,43 @@ export class LedgerRetirement {
     budget.left -= rows;
   }
 
+  /** Delete at most the remaining budget, keeping the parent discoverable on exhaustion. */
+  private drain(table: string, predicate: string, params: string[], budget: Budget): boolean {
+    if (budget.left <= 0) return false;
+    this.spend(
+      budget,
+      this.db
+        .query(
+          `DELETE FROM ${table} WHERE rowid IN (SELECT rowid FROM ${table} WHERE ${predicate} LIMIT ?)`,
+        )
+        .run(...params, budget.left).changes,
+    );
+    return !this.db.query(`SELECT 1 FROM ${table} WHERE ${predicate} LIMIT 1`).get(...params);
+  }
+
+  private retireRestores(predicate: string, params: string[], budget: Budget): boolean {
+    const operations = this.db
+      .query(`SELECT id FROM change_restore_operations WHERE ${predicate} LIMIT ?`)
+      .all(...params, budget.left) as Array<{ id: string }>;
+    for (const { id } of operations) {
+      if (!this.drain("change_references", "owner_kind = 'restore' AND owner_id = ?", [id], budget))
+        return false;
+      if (!this.drain("change_restore_operations", "id = ?", [id], budget)) return false;
+    }
+    return !this.db
+      .query(`SELECT 1 FROM change_restore_operations WHERE ${predicate} LIMIT 1`)
+      .get(...params);
+  }
+
   private retireOperation(operationId: string, budget: Budget): boolean {
     if (!this.retireOwner("operation", operationId, operationKeys(operationId), budget))
       return false;
     if (!this.retireEvidence("operation", operationId, budget)) return false;
     if (!this.retireEvidence("observation", operationId, budget)) return false;
-    this.spend(
-      budget,
-      this.db.query("DELETE FROM change_tool_windows WHERE operation_id = ?").run(operationId)
-        .changes,
-    );
-    this.db.query("DELETE FROM change_ledger_meta WHERE key = ?").run(`opturn:${operationId}`);
-    this.spend(
-      budget,
-      this.db.query("DELETE FROM change_operations WHERE operation_id = ?").run(operationId)
-        .changes,
-    );
+    if (!this.drain("change_tool_windows", "operation_id = ?", [operationId], budget)) return false;
+    if (!this.drain("change_ledger_meta", "key = ?", [`opturn:${operationId}`], budget))
+      return false;
+    if (!this.drain("change_operations", "operation_id = ?", [operationId], budget)) return false;
     return true;
   }
 
@@ -821,36 +846,48 @@ export class LedgerRetirement {
 
   /** Everything a turn owns; its boundary row is the caller's choice. */
   private retireTurn(turnId: string, budget: Budget): boolean {
-    this.ledger.removeReferences("turn", turnId);
+    if (!this.drain("change_references", "owner_kind = 'turn' AND owner_id = ?", [turnId], budget))
+      return false;
     const keys = [turnResourceKeys(turnId, null).turnNet, operationVolumeResourceKey(turnId)];
     if (!this.retireOwner("turn", turnId, keys, budget)) return false;
-    const attempts = this.db.query("DELETE FROM change_capture_attempts WHERE boundary_key = ?");
     for (const boundary of ["turn-start", "turn-end", "turn-settle"])
-      this.spend(budget, attempts.run(`${boundary}:${turnId}`).changes);
-    // A retried start names its attempt `turn-start:<turn>:<uuid>`.
+      if (
+        !this.drain(
+          "change_capture_attempts",
+          "boundary_key = ?",
+          [`${boundary}:${turnId}`],
+          budget,
+        )
+      )
+        return false;
     const [from, to] = under(`turn-start:${turnId}:`);
-    this.spend(
-      budget,
-      this.db
-        .query("DELETE FROM change_capture_attempts WHERE boundary_key >= ? AND boundary_key < ?")
-        .run(from, to).changes,
-    );
-    const meta = this.db.query("DELETE FROM change_ledger_meta WHERE key = ?");
-    meta.run(`turnops:${turnId}`);
-    meta.run(`pturn:${turnId}`);
+    if (
+      !this.drain(
+        "change_capture_attempts",
+        "boundary_key >= ? AND boundary_key < ?",
+        [from, to],
+        budget,
+      )
+    )
+      return false;
+    for (const key of [`turnops:${turnId}`, `pturn:${turnId}`])
+      if (!this.drain("change_ledger_meta", "key = ?", [key], budget)) return false;
     return true;
   }
 
   private retireSegment(segmentId: string, budget: Budget): boolean {
-    this.ledger.removeReferences("segment", segmentId);
-    this.ledger.removeReferences("segment-live", segmentId);
+    if (
+      !this.drain(
+        "change_references",
+        "owner_kind IN ('segment', 'segment-live') AND owner_id = ?",
+        [segmentId],
+        budget,
+      )
+    )
+      return false;
     const keys = [threadResourceKey(segmentId), operationVolumeResourceKey(segmentId, "segment")];
     if (!this.retireOwner("segment", segmentId, keys, budget)) return false;
-    this.spend(
-      budget,
-      this.db.query("DELETE FROM change_thread_segments WHERE segment_id = ?").run(segmentId)
-        .changes,
-    );
+    if (!this.drain("change_thread_segments", "segment_id = ?", [segmentId], budget)) return false;
     return true;
   }
 
@@ -862,14 +899,8 @@ export class LedgerRetirement {
       .all(ownerKind, ownerId) as Array<{ id: string }>;
     for (const { id } of revisions) {
       if (budget.left <= 0) return false;
-      this.spend(
-        budget,
-        this.db.query("DELETE FROM change_evidence_chunks WHERE evidence_id = ?").run(id).changes,
-      );
-      this.spend(
-        budget,
-        this.db.query("DELETE FROM change_evidence WHERE evidence_id = ?").run(id).changes,
-      );
+      if (!this.drain("change_evidence_chunks", "evidence_id = ?", [id], budget)) return false;
+      if (!this.drain("change_evidence", "evidence_id = ?", [id], budget)) return false;
     }
     return true;
   }
@@ -884,35 +915,18 @@ export class LedgerRetirement {
     selectionKeys: readonly string[],
     budget: Budget,
   ): boolean {
-    const selection = this.db.query("DELETE FROM change_selections WHERE selection_key = ?");
-    for (const key of selectionKeys) this.spend(budget, selection.run(key).changes);
+    for (const key of selectionKeys)
+      if (!this.drain("change_selections", "selection_key = ?", [key], budget)) return false;
     const measurements = this.db
       .query("SELECT id FROM change_measurements WHERE owner_kind = ? AND owner_id = ?")
       .all(ownerKind, ownerId) as Array<{ id: string }>;
     for (const { id } of measurements) {
       if (budget.left <= 0) return false;
-      this.db.query("DELETE FROM change_diff_identities WHERE measurement_id = ?").run(id);
-      this.db.query("DELETE FROM change_restore_tokens WHERE measurement_id = ?").run(id);
-      this.db.query("DELETE FROM change_restore_operations WHERE measurement_id = ?").run(id);
-      const limit = Number.isFinite(budget.left) ? budget.left : -1;
-      this.spend(
-        budget,
-        this.db
-          .query(
-            `DELETE FROM change_measurement_files WHERE measurement_id = ?1 AND ordinal IN (
-               SELECT ordinal FROM change_measurement_files WHERE measurement_id = ?1 LIMIT ?2
-             )`,
-          )
-          .run(id, limit).changes,
-      );
-      const drained = !this.db
-        .query("SELECT 1 FROM change_measurement_files WHERE measurement_id = ? LIMIT 1")
-        .get(id);
-      if (!drained) return false;
-      this.spend(
-        budget,
-        this.db.query("DELETE FROM change_measurements WHERE id = ?").run(id).changes,
-      );
+      if (!this.drain("change_diff_identities", "measurement_id = ?", [id], budget)) return false;
+      if (!this.drain("change_restore_tokens", "measurement_id = ?", [id], budget)) return false;
+      if (!this.retireRestores("measurement_id = ?", [id], budget)) return false;
+      if (!this.drain("change_measurement_files", "measurement_id = ?", [id], budget)) return false;
+      if (!this.drain("change_measurements", "id = ?", [id], budget)) return false;
     }
     return true;
   }

@@ -237,6 +237,8 @@ export async function withService(
     toolDetailCacheMaxBytes?: number;
     environmentFence?: NativeAgentServiceOptions["environmentFence"];
     projectedMessageCacheLimits?: NativeAgentServiceOptions["projectedMessageCacheLimits"];
+    toolDetailMemoLimits?: NativeAgentServiceOptions["toolDetailMemoLimits"];
+    progressiveHydrationSettleMs?: number;
     directHistoryPageCacheLimits?: NativeAgentServiceOptions["directHistoryPageCacheLimits"];
     artifactLedger?: NativeAgentServiceOptions["artifactLedger"];
     beforeMailInject?: NativeAgentServiceOptions["beforeMailInject"];
@@ -296,6 +298,10 @@ export async function withService(
     ...(setup.projectedMessageCacheLimits
       ? { projectedMessageCacheLimits: setup.projectedMessageCacheLimits }
       : {}),
+    ...(setup.toolDetailMemoLimits ? { toolDetailMemoLimits: setup.toolDetailMemoLimits } : {}),
+    ...(setup.progressiveHydrationSettleMs === undefined
+      ? {}
+      : { progressiveHydrationSettleMs: setup.progressiveHydrationSettleMs }),
     ...(setup.directHistoryPageCacheLimits
       ? { directHistoryPageCacheLimits: setup.directHistoryPageCacheLimits }
       : {}),

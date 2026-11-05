@@ -48,6 +48,7 @@ import type {
   GatewayEventClient,
 } from "./gateway-internals.js";
 import { compatibilityPathUsage } from "./core/compatibility-path-usage.js";
+import { isSpliceableResult, spliceEncodedJson } from "./core/native-agent-projection-encoding.js";
 import { backendMetricsSnapshot } from "./core/backend-metrics.js";
 
 const KEEPALIVE_EVENT_FRAME = `event: ${GATEWAY_KEEPALIVE_EVENT}\ndata: 1\n\n`;
@@ -153,7 +154,11 @@ export class GatewayHandlers {
           ? withRelayController(safeArgs, options.controllerId)
           : safeArgs,
       );
-      const responseBody = JSON.stringify({ result });
+      // A transcript answer's rows were each encoded already to size and hash
+      // them; splice those encodings in rather than serializing them again.
+      const responseBody = isSpliceableResult(result)
+        ? `{"result":${spliceEncodedJson(result)}}`
+        : JSON.stringify({ result });
       this.ctx.metrics.recordInvoke(
         command,
         requestBytes,

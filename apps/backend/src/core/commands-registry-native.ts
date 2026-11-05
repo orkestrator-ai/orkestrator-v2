@@ -8,6 +8,7 @@ import { NATIVE_AGENT_TRANSCRIPT_PATCH_VERSION } from "@orkestrator/protocol/nat
 import { BUILD_PIPELINE_AGENTS } from "@orkestrator/protocol/build-pipeline";
 import { nativeAgentSessionStorageKey } from "./native-agent-service.js";
 import { resetAgentMailBudget } from "./commands-registry-mail.js";
+import { markSpliceableResult } from "./native-agent-projection-encoding.js";
 import {
   asString,
   asRecord,
@@ -232,26 +233,28 @@ export function registerNativeAgentCommands(
     if (!context.nativeAgents) throw new Error("Native agent service is unavailable");
     if (args.viewVersion !== 1) throw new Error("Native agent progressive view is unsupported");
     assertNativeAgentLiveWindow(args.liveWindow);
-    return context.nativeAgents.getTranscriptUpdate({
-      environmentId: asNonBlankString(args.environmentId, "environmentId"),
-      agent: asString(args.agent, "agent") as import("./models.js").NativeAgentProvider,
-      logicalSessionKey: asNonBlankString(args.logicalSessionKey, "logicalSessionKey"),
-      viewVersion: 1,
-      liveWindow: { messages: 100, targetBytes: 512 * 1024 },
-      knownToken:
-        args.knownToken === undefined
-          ? undefined
-          : asBoundedNonBlankString(args.knownToken, "knownToken", 1024),
-      forceSnapshot:
-        args.forceSnapshot === undefined
-          ? undefined
-          : asRequiredBoolean(args.forceSnapshot, "forceSnapshot"),
-      // Any other value is a client this backend does not know how to answer
-      // with patches; it keeps whole-message deltas.
-      ...(args.patchVersion === NATIVE_AGENT_TRANSCRIPT_PATCH_VERSION
-        ? { patchVersion: NATIVE_AGENT_TRANSCRIPT_PATCH_VERSION }
-        : {}),
-    });
+    return markSpliceableResult(
+      await context.nativeAgents.getTranscriptUpdate({
+        environmentId: asNonBlankString(args.environmentId, "environmentId"),
+        agent: asString(args.agent, "agent") as import("./models.js").NativeAgentProvider,
+        logicalSessionKey: asNonBlankString(args.logicalSessionKey, "logicalSessionKey"),
+        viewVersion: 1,
+        liveWindow: { messages: 100, targetBytes: 512 * 1024 },
+        knownToken:
+          args.knownToken === undefined
+            ? undefined
+            : asBoundedNonBlankString(args.knownToken, "knownToken", 1024),
+        forceSnapshot:
+          args.forceSnapshot === undefined
+            ? undefined
+            : asRequiredBoolean(args.forceSnapshot, "forceSnapshot"),
+        // Any other value is a client this backend does not know how to answer
+        // with patches; it keeps whole-message deltas.
+        ...(args.patchVersion === NATIVE_AGENT_TRANSCRIPT_PATCH_VERSION
+          ? { patchVersion: NATIVE_AGENT_TRANSCRIPT_PATCH_VERSION }
+          : {}),
+      }),
+    );
   });
 
   register("get_native_agent_session_state_update", async (args, context) => {
@@ -279,25 +282,27 @@ export function registerNativeAgentCommands(
       throw new Error("Native agent live update is unsupported");
     }
     assertNativeAgentLiveWindow(args.liveWindow);
-    return context.nativeAgents.getLiveUpdate({
-      environmentId: asNonBlankString(args.environmentId, "environmentId"),
-      agent: asString(args.agent, "agent") as import("./models.js").NativeAgentProvider,
-      logicalSessionKey: asNonBlankString(args.logicalSessionKey, "logicalSessionKey"),
-      viewVersion: NATIVE_AGENT_LIVE_UPDATE_VERSION,
-      liveWindow: { messages: 100, targetBytes: 512 * 1024 },
-      transcriptToken:
-        args.transcriptToken === undefined
-          ? undefined
-          : asBoundedNonBlankString(args.transcriptToken, "transcriptToken", 1024),
-      stateToken:
-        args.stateToken === undefined
-          ? undefined
-          : asBoundedNonBlankString(args.stateToken, "stateToken", 1024),
-      // As on the transcript command: any other value keeps whole-message deltas.
-      ...(args.patchVersion === NATIVE_AGENT_TRANSCRIPT_PATCH_VERSION
-        ? { patchVersion: NATIVE_AGENT_TRANSCRIPT_PATCH_VERSION }
-        : {}),
-    });
+    return markSpliceableResult(
+      await context.nativeAgents.getLiveUpdate({
+        environmentId: asNonBlankString(args.environmentId, "environmentId"),
+        agent: asString(args.agent, "agent") as import("./models.js").NativeAgentProvider,
+        logicalSessionKey: asNonBlankString(args.logicalSessionKey, "logicalSessionKey"),
+        viewVersion: NATIVE_AGENT_LIVE_UPDATE_VERSION,
+        liveWindow: { messages: 100, targetBytes: 512 * 1024 },
+        transcriptToken:
+          args.transcriptToken === undefined
+            ? undefined
+            : asBoundedNonBlankString(args.transcriptToken, "transcriptToken", 1024),
+        stateToken:
+          args.stateToken === undefined
+            ? undefined
+            : asBoundedNonBlankString(args.stateToken, "stateToken", 1024),
+        // As on the transcript command: any other value keeps whole-message deltas.
+        ...(args.patchVersion === NATIVE_AGENT_TRANSCRIPT_PATCH_VERSION
+          ? { patchVersion: NATIVE_AGENT_TRANSCRIPT_PATCH_VERSION }
+          : {}),
+      }),
+    );
   });
 
   register("get_native_agent_discovery_update", async (args, context) => {
@@ -348,38 +353,42 @@ export function registerNativeAgentCommands(
     ) {
       throw new Error("Native agent live window is unsupported");
     }
-    return context.nativeAgents.getProjectionUpdate({
-      environmentId: asNonBlankString(args.environmentId, "environmentId"),
-      agent: asString(args.agent, "agent") as import("./models.js").NativeAgentProvider,
-      logicalSessionKey: asNonBlankString(args.logicalSessionKey, "logicalSessionKey"),
-      syncVersion: 1,
-      liveWindow: { messages: 100, targetBytes: 512 * 1024 },
-      knownToken:
-        args.knownToken === undefined
-          ? undefined
-          : asBoundedNonBlankString(args.knownToken, "knownToken", 1024),
-      forceSnapshot:
-        args.forceSnapshot === undefined
-          ? undefined
-          : asRequiredBoolean(args.forceSnapshot, "forceSnapshot"),
-    });
+    return markSpliceableResult(
+      await context.nativeAgents.getProjectionUpdate({
+        environmentId: asNonBlankString(args.environmentId, "environmentId"),
+        agent: asString(args.agent, "agent") as import("./models.js").NativeAgentProvider,
+        logicalSessionKey: asNonBlankString(args.logicalSessionKey, "logicalSessionKey"),
+        syncVersion: 1,
+        liveWindow: { messages: 100, targetBytes: 512 * 1024 },
+        knownToken:
+          args.knownToken === undefined
+            ? undefined
+            : asBoundedNonBlankString(args.knownToken, "knownToken", 1024),
+        forceSnapshot:
+          args.forceSnapshot === undefined
+            ? undefined
+            : asRequiredBoolean(args.forceSnapshot, "forceSnapshot"),
+      }),
+    );
   });
 
   register("get_native_agent_message_page", async (args, context) => {
     if (!context.nativeAgents) throw new Error("Native agent service is unavailable");
     if (args.syncVersion !== 1) throw new Error("Native agent sync version is unsupported");
-    return context.nativeAgents.getMessagePage({
-      environmentId: asNonBlankString(args.environmentId, "environmentId"),
-      agent: asString(args.agent, "agent") as import("./models.js").NativeAgentProvider,
-      logicalSessionKey: asNonBlankString(args.logicalSessionKey, "logicalSessionKey"),
-      syncVersion: 1,
-      before: asBoundedNonBlankString(args.before, "before", 1024),
-      limit: args.limit === undefined ? undefined : asPositiveInteger(args.limit, "limit"),
-      targetBytes:
-        args.targetBytes === undefined
-          ? undefined
-          : asPositiveInteger(args.targetBytes, "targetBytes"),
-    });
+    return markSpliceableResult(
+      await context.nativeAgents.getMessagePage({
+        environmentId: asNonBlankString(args.environmentId, "environmentId"),
+        agent: asString(args.agent, "agent") as import("./models.js").NativeAgentProvider,
+        logicalSessionKey: asNonBlankString(args.logicalSessionKey, "logicalSessionKey"),
+        syncVersion: 1,
+        before: asBoundedNonBlankString(args.before, "before", 1024),
+        limit: args.limit === undefined ? undefined : asPositiveInteger(args.limit, "limit"),
+        targetBytes:
+          args.targetBytes === undefined
+            ? undefined
+            : asPositiveInteger(args.targetBytes, "targetBytes"),
+      }),
+    );
   });
 
   register("get_native_agent_tool_details", async (args, context) => {

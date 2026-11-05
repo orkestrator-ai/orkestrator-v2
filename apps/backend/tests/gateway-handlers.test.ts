@@ -3,6 +3,10 @@ import { describe, expect, test } from "bun:test";
 import { requestUrl, startGateway } from "./gateway-test-harness.js";
 import { installBoundedConsole } from "../src/bounded-console.js";
 import { startEventLoopStallMonitor } from "@orkestrator/protocol/event-loop-stall-monitor";
+import {
+  encodedValue,
+  markSpliceableResult,
+} from "../src/core/native-agent-projection-encoding.js";
 
 describe("remote gateway", () => {
   test("authenticated metrics expose null diagnostics when the singletons are absent", async () => {
@@ -143,6 +147,45 @@ describe("remote gateway", () => {
     expect(failure.json()).toEqual({ error: "Sign in with gh on Build box.", code: "gh-auth" });
     for (code of [undefined, "x".repeat(65), "not a code", { nested: true }])
       expect((await invoke()).json()).toEqual({ error: "Sign in with gh on Build box." });
+  });
+
+  test("splices already-encoded rows into a marked result and serializes others whole", async () => {
+    const row = { id: "m1", role: "assistant", content: 'é "quoted"', parts: [{ type: "text" }] };
+    const fresh = { id: "m2", omitted: undefined, parts: [undefined, 1] };
+    encodedValue(row);
+    const marked = markSpliceableResult({
+      viewVersion: 1,
+      status: "snapshot",
+      skipped: undefined,
+      value: { messages: [row, fresh], revisedMessages: [row] },
+    });
+    // A marked result is still the plain object every other caller receives.
+    expect(Object.keys(marked)).toEqual(["viewVersion", "status", "skipped", "value"]);
+    const results: unknown[] = [marked];
+    const { info } = await startGateway({
+      env: {},
+      backend: { invoke: async () => results.shift() },
+    });
+    const invoke = () =>
+      requestUrl(`${info.url}__orkestrator/invoke`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${info.token}`, "content-type": "application/json" },
+        body: JSON.stringify({ command: "get_native_agent_transcript_update", args: {} }),
+      });
+    const spliced = await invoke();
+    expect(spliced.status).toBe(200);
+    expect(spliced.body).toBe(JSON.stringify({ result: marked }));
+
+    // Prove the row came from its memo, not a second serialization: a row
+    // changed behind the memo's back (never done in production) still shows
+    // what was encoded, while an unmarked result is serialized afresh.
+    (row as { content: string }).content = "changed after encoding";
+    const unmarked = { value: { messages: [row] } };
+    results.push(markSpliceableResult({ value: { messages: [row] } }), unmarked);
+    expect(((await invoke()).json() as any).result.value.messages[0].content).toBe('é "quoted"');
+    expect(((await invoke()).json() as any).result.value.messages[0].content).toBe(
+      "changed after encoding",
+    );
   });
 
   test("returns client errors for malformed, non-object, oversized, and incomplete settings bodies", async () => {

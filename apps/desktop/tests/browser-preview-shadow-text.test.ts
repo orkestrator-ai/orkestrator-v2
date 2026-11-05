@@ -85,7 +85,7 @@ function selectAcross(harness: Harness, start: Point, end: Point): void {
     let root = point.node.getRootNode() as ShadowRoot;
     while ((root as unknown) !== document) {
       localRoots.add(root);
-      root = root.host.getRootNode() as ShadowRoot;
+      root = root.host!.getRootNode() as ShadowRoot;
     }
   }
   for (const root of localRoots) {

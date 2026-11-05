@@ -82,7 +82,7 @@ Proved on this host, with `fseventsd` still at about 100% of a core: `worktree-w
 
 **Context.** The ticket's constraint: a change in a non-ignored file must still be noticed, including a file in a directory created after the watch began, on both macOS and Linux. Inotify is the kernel's, so the container is real evidence; the remaining risk is the file system and the live stack.
 
-**Investigation.** In that container: `worktree-watcher-real.test.ts` 13 of 13, `worktree-snapshots-git.test.ts` 7 of 7. Both are in the slow tier, so CI's `mise run test:full` runs them on Linux; that had not happened when this was written. A full inotify budget is handled: a watch that fails with `ENOSPC` closes the watcher and its owner falls back to polling, and that path has only a fake-watch test.
+**Investigation.** In that container: `worktree-watcher-real.test.ts` 13 of 13, `worktree-snapshots-git.test.ts` 7 of 7. Both are in the slow tier, so CI's `mise run test:full` runs them on Linux; that had not happened when this was written. A full inotify budget is handled: a watch that fails with `ENOSPC` closes the watcher and its owner falls back to polling, and that path has a fake-watch test. An opt-in real-kernel regression is now available in `apps/backend/src/core/worktree-watcher-enospc.integration.test.ts`; it has not yet run under exhaustion.
 
 **Decisions.** None: run both files and the benchmark on beelink, and a local environment in a `dev:test` profile there.
 
@@ -103,6 +103,33 @@ Proved on this host, with `fseventsd` still at about 100% of a core: `worktree-w
 `worktree-snapshots-git.test.ts` waited 15 s on one write's event, which this host cannot deliver for any program. On macOS it now repeats each change until a published scan shows it, for up to 180 s. Staging and ref movement also require the raw event from their own watch, and the no-scan assertion now delivers the ignored path explicitly through the real root watcher listener while withholding native callbacks, followed by a source-event positive control. The former quiet-window approach timed out again in full-suite review (flake 5061, reopened). The cache-hit assertions run on Linux only, because a late event can invalidate the cache on macOS. Native detection on Linux keeps one change, one event and the 15 s deadline; the isolated ignored-write assertion uses explicit delivery on both platforms.
 
 The alternatives were to keep the single write and leave the service unproved until a healthy Mac was available, which proves nothing here, or to restart `fseventsd`, which would affect everything else on a shared host and hide the state rather than cover it. A healthy host is still wanted for the single-write and callback questions above.
+
+
+### Task 4: bounded native inotify exhaustion qualification
+
+Added an opt-in regression that uses real Git, the real planner and real
+`fs.watch`. After attaching the root it consumes the remaining kernel watch
+quota, checks that child attachment reports `ENOSPC` without qualifying partial
+coverage, then releases the quota and checks recovery and a single source write.
+All test handles and files are released in `finally`.
+
+Run only in a disposable Linux VM with a dedicated user, Git and the pinned Bun,
+and `fs.inotify.max_user_watches` set to 64 **inside that disposable VM**:
+
+```sh
+ORKESTRATOR_TEST_INOTIFY_EXHAUSTION=1 mise run test:logged -- --name native-enospc -- bun test --cwd apps/backend ./src/core/worktree-watcher-enospc.integration.test.ts --parallel=1
+```
+
+The test refuses quotas outside 16–128 and allocates at most quota + 1 handles.
+It never changes sysctls. Do not lower the quota on a shared Linux host or in
+Docker Desktop's shared VM; the setting affects other processes. A disposable
+VM is preferred over exhausting a normal host's much larger shared quota, which
+would consume substantial kernel memory and interfere with other watchers.
+The test skips by default, including on macOS. A skip is **not** native Linux
+qualification. This address stage runs on macOS and has no disposable Linux VM
+with a bounded quota; task 4 and the review coverage gap remain open until the
+opt-in test runs there. The existing owner tests cover polling and bounded retry;
+this new test covers the native failure and recovery boundary only.
 
 ## Current state
 

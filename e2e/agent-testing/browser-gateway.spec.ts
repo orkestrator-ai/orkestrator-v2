@@ -637,12 +637,11 @@ test("real browser gateway exercises an authoritative local environment", async 
       } | null>("get_terminal_history_page", { sessionId: terminal.sessionId });
     const historyHas = (page: Awaited<ReturnType<typeof readHistory>>, text: string) =>
       page?.rows.some((row) => row.text.includes(text));
-    // The archive's write queue holds 256 records per session, so a burst that
-    // outruns a flush loses lines and reports `historyGap`. Without a gap, every
-    // line must be there.
+    // Queued whole, this burst stays inside the archive's 1 MiB per-session
+    // bound, so it is kept however the writes and this read are timed.
     const burstPage = await readHistory();
-    if (!burstPage?.historyGap) expect(historyHas(burstPage, "background-done")).toBe(true);
-    // Reading the page drained that queue, so output after a burst is always kept.
+    expect(burstPage?.historyGap).toBe(false);
+    expect(historyHas(burstPage, "background-done")).toBe(true);
     await invoke("local_terminal_write", {
       sessionId: terminal.sessionId,
       data: "printf 'history-%s\\n' resumed\n",

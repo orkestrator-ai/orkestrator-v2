@@ -48,4 +48,11 @@ Not a read-path difference: the archive dropped the line. The spec prints 1,100 
 - **Evidence:** `output/agent-testing/qa-browser-08cf3c58-15c/browser/artifacts/browser-gateway-real-brows-5ed26-oritative-local-environment/trace.zip`, from `mise run test:agent:browser:isolated` at `0f586e738`. The snapshot at 23:51:00.996 held the marker; the page 17 ms later had 258 rows, `historyGap: true` and no marker.
 - **Fix:** the spec keeps the strict check when the page reports no gap. It then prints a second line after that read, which drained the queue, and requires that line in the history whether or not the burst overflowed. The marker is printed with `printf 'background-%s\n' done`, so the echoed command can no longer satisfy the snapshot poll.
 - **Verification:** `real browser gateway exercises…` passed 3 of 3 with `--repeat-each=3 --workers=1`, alongside the other two cases in [0901](../web-ui/0901-cli-ui-fixture-project-hydration.md). Those runs do not show which branch of the check each one took.
-- **Follow-up:** the bound itself is to-do [4223](../../../todo/cross-cutting/4223-terminal-history-drops-burst-output.md). The blank page in the 2026-11-02 recurrence above was not checked against 0901's cause.
+- **Follow-up:** the bound itself was to-do 4223, closed below. The blank page in the 2026-11-02 recurrence above was not checked against 0901's cause.
+
+## Archive fix, 2026-11-05
+
+To-do 4223 changed the archive itself. A flush writes its records in one `appendFile` per segment and starts at 256 queued records or 256 KiB rather than waiting for the timer, and the queue holds 12,288 records per session and 196,608 overall. Each record now counts 80 bytes against the unchanged byte bounds of 1 MiB per session and 16 MiB overall. This burst queues about 600 KiB, so it fits whatever the timing, and the spec again requires the marker with no gap.
+
+- **Verification:** `real browser gateway exercises…` passed 3 of 3 with `--repeat-each=3 --workers=1` on a credential-free isolated profile. That profile's Claude login dialog blocks the page, so for those runs only, the case's two fixture-name visibility checks were removed and a handler for the dialog added. The checks on the terminal, the history and the diff ran unchanged. The unmodified spec on a credentialed profile was not run here.
+- **Remaining limit:** floods of very short lines can still overflow; see to-do [5660](../../../todo/cross-cutting/5660-terminal-history-short-line-floods.md).

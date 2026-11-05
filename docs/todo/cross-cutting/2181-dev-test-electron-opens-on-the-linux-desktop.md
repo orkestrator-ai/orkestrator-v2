@@ -143,8 +143,9 @@ Raised the default in `isolated-browser.ts` from 15 to 25 minutes, which reverse
 
 Changed the spec rather than the 256-record bound. The bound and its gap report are the
 documented contract for dropped output, and raising it is a product decision outside
-this ticket, recorded as [4223](4223-terminal-history-drops-burst-output.md). Without a
-gap the marker must still be present, and a line printed after the burst must always be.
+this ticket, recorded as to-do 4223, since done: the archive now keeps this burst and
+the spec requires it. Without a gap the marker must still be present, and a line printed
+after the burst must always be.
 
 ## Current state
 
@@ -203,7 +204,7 @@ last two were 47 passed, 94 skipped and 3 failed. All three causes are now found
 | Case | Cause | Fix | Result on a `--fixture` profile with no TTY |
 | --- | --- | --- | --- |
 | `local environment move…`, `persisted diff baselines…` | A client disconnect in `gateway-proxy.ts` destroyed a keep-alive socket already serving another request, which then answered 502 (flake [0901](../../tests/flaky-tests/web-ui/0901-cli-ui-fixture-project-hydration.md)) | Guard on `proxyRequest.destroyed`, with a regression test | Reload rounds with 502s: 3 of 40 before, 0 of 155 after. Both cases passed 3 of 3 |
-| `real browser gateway exercises…` | The burst overran the archive's 256-record queue (flake [2401](../../tests/flaky-tests/previews-annotations-and-gateway/2401-browser-smoke-terminal-history-marker.md), to-do [4223](4223-terminal-history-drops-burst-output.md)) | The spec checks what the archive promises, and a later line | Passed 3 of 3 |
+| `real browser gateway exercises…` | The burst overran the archive's 256-record queue (flake [2401](../../tests/flaky-tests/previews-annotations-and-gateway/2401-browser-smoke-terminal-history-marker.md), to-do 4223, since done) | The spec checks what the archive promises, and a later line | Passed 3 of 3 |
 | `a lost terminal write…` | The host has no `vim` ([4222](4222-browser-failures-left-after-headless-qualification.md)) | Falls back to `nvim` | Passed 6 of 6 |
 
 These were focused runs. The whole isolated suite is run by the next review preparation
@@ -249,4 +250,4 @@ branch to anything they load; see [4222](4222-browser-failures-left-after-headle
 ## Related
 
 - [0048](../transcripts-and-observation/0048-recurring-work-qualification.md), where this was found.
-- [4741](4741-project-home-terminal-check-vs-shell-osc-context.md), [4221](4221-design-canvas-spec-reachability-dialog.md), [4222](4222-browser-failures-left-after-headless-qualification.md) and [4223](4223-terminal-history-drops-burst-output.md), found while qualifying this.
+- [4741](4741-project-home-terminal-check-vs-shell-osc-context.md), [4221](4221-design-canvas-spec-reachability-dialog.md) and [4222](4222-browser-failures-left-after-headless-qualification.md), found while qualifying this. To-do 4223, also found here, is done.

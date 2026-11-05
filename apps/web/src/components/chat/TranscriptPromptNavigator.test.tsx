@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 import type { TranscriptScrollController } from "@/lib/transcript-scroll/transcript-scroll-controller";
 import { TranscriptPromptNavigator } from "./TranscriptPromptNavigator";
@@ -26,11 +26,12 @@ const MESSAGES = [
 
 function setup(messages: NativeMessage[] = MESSAGES) {
   const glideTo = mock(() => true);
-  const controller = { glideTo } as unknown as TranscriptScrollController;
+  const forwardWheel = mock(() => {});
+  const controller = { glideTo, forwardWheel } as unknown as TranscriptScrollController;
   const view = render(
     <TranscriptPromptNavigator messages={messages} controller={controller} bottomInsetPx={120} />,
   );
-  return { glideTo, controller, ...view };
+  return { glideTo, forwardWheel, controller, ...view };
 }
 
 const lines = () =>
@@ -86,6 +87,28 @@ describe("TranscriptPromptNavigator", () => {
     );
   });
 
+  test("forwards the native rail wheel event to the controller", () => {
+    const { forwardWheel } = setup();
+    const event = new WheelEvent("wheel", { deltaY: -80, bubbles: true });
+    fireEvent(lines()[0]!, event);
+    expect(forwardWheel).toHaveBeenCalledWith(event);
+  });
+
+  test("keyboard focus previews a prompt and blur clears it", () => {
+    setup();
+    const button = lines()[0]!;
+    const matches = spyOn(button, "matches").mockReturnValue(true);
+    fireEvent.focus(button);
+    expect(matches).toHaveBeenCalledWith(":focus-visible");
+    expect(screen.getByTestId("transcript-prompt-preview").textContent).toContain("Explain");
+    fireEvent.blur(button);
+    expect(screen.queryByTestId("transcript-prompt-preview")).toBeNull();
+    matches.mockReturnValue(false);
+    fireEvent.focus(button);
+    expect(screen.queryByTestId("transcript-prompt-preview")).toBeNull();
+    matches.mockRestore();
+  });
+
   test("a click leaves focus where it was, in the composer", () => {
     setup();
     // Not cancelled, the browser would move focus to the button on mouse down.
@@ -96,7 +119,7 @@ describe("TranscriptPromptNavigator", () => {
     setup();
     expect(lines().map((line) => line.tabIndex)).toEqual([-1, -1, 0]);
 
-    lines()[2]!.focus();
+    act(() => lines()[2]!.focus());
     fireEvent.keyDown(lines()[2]!, { key: "ArrowUp" });
     expect(document.activeElement).toBe(lines()[1]!);
     fireEvent.keyDown(lines()[1]!, { key: "ArrowDown" });

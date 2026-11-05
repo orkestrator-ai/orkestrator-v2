@@ -1488,6 +1488,18 @@ export class TranscriptScrollController {
     }
   }
 
+  /** Wheel input on a sibling overlay belongs to this viewport. */
+  forwardWheel(event: WheelEvent): void {
+    const el = this.scroller;
+    if (!el || !this.active || event.defaultPrevented || !classifyWheel(event, el)) return;
+    this.userInput();
+    event.preventDefault();
+    // WheelEvent units are pixels, lines, or viewport pages respectively.
+    const unit = event.deltaMode === 2 ? el.clientHeight : event.deltaMode === 1 ? 16 : 1;
+    el.scrollTop += event.deltaY * unit;
+    this.handleScroll(el);
+  }
+
   private listen(el: HTMLElement): () => void {
     const doc = el.ownerDocument;
     const view = doc.defaultView ?? window;

@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 import type { TranscriptScrollController } from "@/lib/transcript-scroll/transcript-scroll-controller";
 import {
@@ -47,6 +47,7 @@ export function TranscriptPromptNavigator({
   bottomInsetPx,
 }: TranscriptPromptNavigatorProps) {
   const prompts = useTranscriptPrompts(messages);
+  const navRef = useRef<HTMLElement>(null);
   const regionRef = useRef<HTMLDivElement>(null);
   const [active, setActive] = useState<{ id: string; centerPx: number } | null>(null);
   const activeIndex = active ? prompts.findIndex((prompt) => prompt.id === active.id) : -1;
@@ -56,6 +57,16 @@ export function TranscriptPromptNavigator({
     () => (activeId ? replyPreviewFor(messages, activeId) : ""),
     [activeId, messages],
   );
+
+  useEffect(() => {
+    const nav = navRef.current;
+    if (!nav) return;
+    const onWheel = (event: WheelEvent) => controller.forwardWheel(event);
+    // React wheel handlers are passive; claim the gesture here so the page
+    // cannot scroll as well as the transcript behind this sibling overlay.
+    nav.addEventListener("wheel", onWheel, { passive: false });
+    return () => nav.removeEventListener("wheel", onWheel);
+  }, [controller, prompts.length]);
 
   if (prompts.length === 0) return null;
 
@@ -84,6 +95,7 @@ export function TranscriptPromptNavigator({
       style={{ bottom: bottomInsetPx ?? 0 }}
     >
       <nav
+        ref={navRef}
         aria-label="Your prompts in this conversation"
         className="pointer-events-auto flex max-h-full w-8 flex-col"
         onPointerLeave={() => setActive(null)}

@@ -79,6 +79,7 @@ function harness({ scrollTop = 10_000, rowTop = 12_000, rendered = true } = {}) 
     scrollToIndex,
     cancelPendingNavigation,
     mountRow,
+    pendingFrames: () => Array.from(pending.values()),
     get rowOffset() {
       return currentRowTop - top;
     },
@@ -228,6 +229,104 @@ describe("gliding to a transcript row", () => {
     const stopped = view.top;
     view.run(600);
     expect(view.top).toBe(stopped);
+  });
+
+  test("an unmounted destination retries within a bounded budget and ignores a late mount", () => {
+    const view = harness({ rendered: false });
+    glide(view);
+    view.run(2400);
+    expect(view.scrollToIndex).toHaveBeenCalledTimes(3);
+    view.run(200);
+    expect(view.controller.currentOwner).toBeNull();
+    expect(view.controller.diagnostics().lastOutcome).toBe("unresolved");
+    const stopped = view.top;
+    view.mountRow();
+    view.run(600);
+    expect(view.top).toBe(stopped);
+    expect(view.cancelPendingNavigation).toHaveBeenCalled();
+  });
+
+  for (const phaseMs of [80, 320]) {
+    test(`reader input retires unmounted navigation at ${phaseMs}ms`, () => {
+      const view = harness({ rendered: false });
+      glide(view);
+      view.run(phaseMs);
+      const lateFrames = view.pendingFrames();
+      view.controller.forwardWheel(new WheelEvent("wheel", { deltaY: -40 }));
+      for (const callback of lateFrames) callback(performance.now());
+      expect(view.controller.diagnostics().staleCallbacksRefused).toBeGreaterThan(0);
+      expect(view.controller.currentOwner).toBeNull();
+      const stopped = view.top;
+      const seeks = view.scrollToIndex.mock.calls.length;
+      view.mountRow();
+      view.run(3000);
+      expect(view.top).toBe(stopped);
+      expect(view.scrollToIndex).toHaveBeenCalledTimes(seeks);
+      expect(view.controller.diagnostics().lastOutcome).toBe("cancelled");
+    });
+  }
+
+  test("a seek superseded by another glide cannot resume on a late mount", () => {
+    const view = harness({ rendered: false });
+    glide(view);
+    view.run(320);
+    const row = document.createElement("div");
+    row.dataset.chatMessageKey = "replacement";
+    row.getBoundingClientRect = () => ({ top: 8000 - view.top, height: 80 }) as DOMRect;
+    view.scroller.appendChild(row);
+    view.controller.glideTo({ kind: "row", index: 4, key: "replacement", offsetPx: 16 }, "row");
+    view.mountRow();
+    view.run(1000);
+    expect(Math.abs(view.top - 7984)).toBeLessThanOrEqual(1);
+    expect(view.controller.diagnostics().superseded).toBe(1);
+    expect(view.scrollToIndex).toHaveBeenCalledTimes(1);
+  });
+
+  test("an upward seek uses the resolved row index and completes its measured final leg", () => {
+    const view = harness({ rendered: false, rowTop: 8000 });
+    view.controller.setRowIndexResolver(() => 2);
+    glide(view); // The stale index is below the neighbour; the key resolves above it.
+    view.run(256);
+    expect(view.scrollToIndex).toHaveBeenCalledWith({
+      index: 2,
+      align: "start",
+      behavior: "auto",
+      offset: 304,
+    });
+    view.scroller.scrollTop = 8304;
+    view.mountRow();
+    view.frame();
+    view.changeHeightAbove(240);
+    view.run(600);
+    expect(Math.abs(view.rowOffset - 16)).toBeLessThanOrEqual(1);
+    expect(view.controller.currentOwner).toBeNull();
+  });
+
+  test("overscan mounting before mid-departure switches to a whole curve without a seek", () => {
+    const view = harness({ rendered: false });
+    glide(view);
+    view.run(48);
+    view.mountRow();
+    view.run(800);
+    expect(view.scrollToIndex).not.toHaveBeenCalled();
+    expect(Math.abs(view.rowOffset - 16)).toBeLessThanOrEqual(1);
+  });
+
+  test("forwarded wheels classify zoom and horizontal input and convert line/page units", () => {
+    const view = harness();
+    glide(view);
+    for (const init of [{ deltaY: 80, ctrlKey: true }, { deltaY: 10, deltaX: 90 }, { deltaY: 0 }]) {
+      const event = new WheelEvent("wheel", init);
+      for (const [key, value] of Object.entries(init)) Object.defineProperty(event, key, { value });
+      view.controller.forwardWheel(event);
+      expect(view.controller.currentOwner).toBe("row");
+      expect(view.top).toBe(10000);
+    }
+    view.controller.forwardWheel(new WheelEvent("wheel", { deltaY: -2, deltaMode: 1 }));
+    expect(view.top).toBe(9968);
+    expect(view.controller.currentOwner).toBeNull();
+    view.controller.forwardWheel(new WheelEvent("wheel", { deltaY: 1, deltaMode: 2 }));
+    expect(view.top).toBe(10568);
   });
 
   test("reduced motion goes straight there", () => {

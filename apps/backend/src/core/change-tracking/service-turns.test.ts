@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ChangeMeasurement } from "@orkestrator/protocol/change-measurements";
@@ -126,6 +126,82 @@ describe("turn and thread boundaries", () => {
     const final = turnMeasurement(h, requestId);
     expect(final.finality).toBe("final");
     expect(final.measurementId).not.toBe(moved.measurementId);
+  });
+
+  for (const failedCall of [1, 2]) {
+    test(`unchanged capture retries publication failure on call ${failedCall}`, async () => {
+      const h = harness({ policy: { provisionalSpacingLocalMs: 0 } });
+      await h.service.prepareTurnStart({
+        environmentId: "env-1",
+        logicalSessionKey: "env-env-1:tab",
+        requestId: "retry",
+        provider: "claude",
+      });
+      h.service.markTurnDispatched("env-1", "env-env-1:tab", "retry", "accepted");
+      const identity = await h.service.registry.resolve({ kind: "local", worktreePath: h.repo });
+      const owner = h.service.registry.owner(identity!);
+      writeFileSync(join(h.repo, "a.txt"), "changed\n");
+      const original = h.service.measurements.measureSnapshots.bind(h.service.measurements);
+      let calls = 0;
+      const spy = spyOn(h.service.measurements, "measureSnapshots").mockImplementation(
+        async (input) => {
+          if (++calls === failedCall) throw new Error("one-shot publication failure");
+          return original(input);
+        },
+      );
+      try {
+        await expect(h.service.turns.provisional("env-1", owner)).rejects.toThrow("one-shot");
+        expect(await h.service.turns.provisional("env-1", owner)).not.toEqual([]);
+        expect(turnMeasurement(h, "retry").totals.changedFiles).toBe(1);
+        expect(threadMeasurement(h).totals.changedFiles).toBe(1);
+        expect(turnMeasurement(h, "retry").afterSnapshotId).toBe(
+          threadMeasurement(h).afterSnapshotId,
+        );
+        expect(await h.service.turns.provisional("env-1", owner)).toEqual([]);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+  }
+
+  test("one capture publishes every running turn in a shared segment", async () => {
+    const h = harness({ policy: { provisionalSpacingLocalMs: 0 } });
+    for (const requestId of ["first", "second"]) {
+      await h.service.prepareTurnStart({
+        environmentId: "env-1",
+        logicalSessionKey: "env-env-1:tab",
+        requestId,
+        provider: "claude",
+      });
+      h.service.markTurnDispatched("env-1", "env-env-1:tab", requestId, "accepted");
+    }
+    const identity = await h.service.registry.resolve({ kind: "local", worktreePath: h.repo });
+    const owner = h.service.registry.owner(identity!);
+    writeFileSync(join(h.repo, "a.txt"), "both\n");
+    await h.service.turns.provisional("env-1", owner);
+    expect(turnMeasurement(h, "first").totals.changedFiles).toBe(1);
+    expect(turnMeasurement(h, "second").totals.changedFiles).toBe(1);
+    expect(turnMeasurement(h, "first").afterSnapshotId).toBe(
+      turnMeasurement(h, "second").afterSnapshotId,
+    );
+  });
+
+  test("a new turn publishes a revert to the prior turn's endpoint", async () => {
+    const h = harness({ policy: { provisionalSpacingLocalMs: 0 } });
+    await runTurn(h, "prior", () => writeFileSync(join(h.repo, "a.txt"), "prior\n"));
+    writeFileSync(join(h.repo, "a.txt"), "idle edit\n");
+    await h.service.prepareTurnStart({
+      environmentId: "env-1",
+      logicalSessionKey: "env-env-1:tab",
+      requestId: "revert",
+      provider: "claude",
+    });
+    h.service.markTurnDispatched("env-1", "env-env-1:tab", "revert", "accepted");
+    const identity = await h.service.registry.resolve({ kind: "local", worktreePath: h.repo });
+    writeFileSync(join(h.repo, "a.txt"), "prior\n");
+    await h.service.turns.provisional("env-1", h.service.registry.owner(identity!));
+    expect(turnMeasurement(h, "revert").totals.changedFiles).toBe(1);
+    expect(turnMeasurement(h, "revert").totals.additions.value).toBe(1);
   });
 
   test("H03: preexisting dirt with no writes is a zero turn delta", async () => {

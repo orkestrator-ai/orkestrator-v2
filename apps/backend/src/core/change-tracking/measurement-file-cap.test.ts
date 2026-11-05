@@ -1,5 +1,14 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  readlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import {
   FILE_ROWS_CAPPED_REASON,
@@ -396,6 +405,46 @@ describe("snapshot measurements past the cap", () => {
     expect(readFileSync(join(h.repo, "src", "old-name.ts"), "utf8")).toBe("same content\n");
     for (const created of ["new-1.ts", "new-2.ts", "new-name.ts"])
       expect(existsSync(join(h.repo, "src", created))).toBe(false);
+  });
+
+  test("restore includes omitted symlinks and gitlinks as explicit unsupported skips", async () => {
+    const h = harness(1);
+    symlinkSync("a.txt", join(h.repo, "z-link"));
+    const head = git(h.repo, "rev-parse", "HEAD").trim();
+    git(h.repo, "update-index", "--add", "--cacheinfo", `160000,${head},z-module`);
+    git(h.repo, "add", "z-link");
+    git(h.repo, "commit", "-qm", "seed special entries");
+    await runTurn(h, "special", () => {
+      writeFileSync(join(h.repo, "a.txt"), "keep the text row first\n");
+      rmSync(join(h.repo, "z-link"));
+      symlinkSync("b.txt", join(h.repo, "z-link"));
+      git(h.repo, "update-index", "--force-remove", "z-module");
+    });
+    const turn = turnMeasurement(h, "special");
+    expect(h.service.ledger.measurementFiles(turn.measurementId, 0, 10)).toHaveLength(1);
+    const preview = await h.service.restore.prepare({ measurementId: turn.measurementId });
+    if (preview.kind !== "preview") throw new Error(`expected preview, got ${preview.kind}`);
+    expect(preview.files).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          pathDisplay: "z-link",
+          action: "skip",
+          reasonKey: "changes.restore.symlink-unsupported",
+        }),
+        expect.objectContaining({
+          pathDisplay: "z-module",
+          action: "skip",
+          reasonKey: "changes.restore.gitlink-unsupported",
+        }),
+      ]),
+    );
+    expect(
+      await h.service.restore.apply({
+        actionToken: preview.actionToken,
+        idempotencyKey: "special",
+      }),
+    ).toMatchObject({ kind: "applied", outcome: "complete" });
+    expect(readlinkSync(join(h.repo, "z-link"))).toBe("b.txt");
   });
 
   test("a restore can name one path that has no stored row", async () => {

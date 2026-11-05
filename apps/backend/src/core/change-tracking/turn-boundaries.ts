@@ -657,7 +657,14 @@ export class TurnBoundaryService {
       if (outcome.kind !== "published") return [];
       const advanced: string[] = [];
       for (const turn of turns) {
-        if (this.sameAsLatestLive(turn.segment_id, outcome.manifestId, outcome.consistency))
+        if (
+          this.sameAsPublished(
+            turn.turn_id,
+            turn.segment_id,
+            outcome.manifestId,
+            outcome.consistency,
+          )
+        )
           continue;
         this.deps.ledger.transaction(() => {
           this.deps.ledger.updateSegment(turn.segment_id, {
@@ -685,15 +692,26 @@ export class TurnBoundaryService {
     }
   }
 
-  private sameAsLatestLive(segmentId: string, manifestId: string, consistency: string): boolean {
-    const latest = this.snapshotRow(
-      this.deps.ledger.segment(segmentId)?.latest_live_snapshot_id ?? null,
-    );
-    return (
-      latest !== null &&
-      latest.tree_oid === manifestId &&
-      (JSON.parse(latest.consistency_json) as { state: string }).state === consistency
-    );
+  private sameAsPublished(
+    turnId: string,
+    segmentId: string,
+    manifestId: string,
+    consistency: string,
+  ): boolean {
+    // Segment liveness advances before publication. Only durable measurements
+    // prove that both resources published this tree, including after a restart.
+    return [
+      this.deps.ledger.latestMeasurement("turn", turnId, "turn-net"),
+      this.deps.ledger.latestMeasurement("segment", segmentId, "thread-net"),
+    ].every((measurement) => {
+      const latest = this.snapshotRow(measurement?.afterSnapshotId ?? null);
+      return (
+        measurement?.finality === "provisional" &&
+        latest !== null &&
+        latest.tree_oid === manifestId &&
+        (JSON.parse(latest.consistency_json) as { state: string }).state === consistency
+      );
+    });
   }
 
   /**

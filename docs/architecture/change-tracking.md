@@ -302,7 +302,8 @@ provider's terminal turn report still says `may-write`, or one of the turn's
 background tasks is still running, writers have not settled: the turn is
 published `interrupted` with a running-observation end, never silently final. While a turn runs, watcher hints drive provisional captures at
 most once per second locally (five remotely). A provisional capture whose tree
-and consistency match the segment's latest live snapshot publishes nothing:
+and consistency match both the turn's and thread's latest published provisional
+measurements publishes nothing:
 every capture has a new snapshot id, so a publish would store the whole file
 list again. Its snapshot row is unreferenced and goes with the retention sweep
 after `orphanGraceMs`. A turn's end always publishes.

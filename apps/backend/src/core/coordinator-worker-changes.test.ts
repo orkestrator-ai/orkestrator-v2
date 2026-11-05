@@ -133,6 +133,25 @@ test("the uncommitted and committed keys are change tracking's own", () => {
 });
 
 describe("get_worker_changes reader", () => {
+  test("capped Git scopes keep positive flags and report omitted membership as unknown", async () => {
+    const { run } = changes(
+      {
+        [environmentKey]: [row("src/known.ts", 0), row("src/omitted.ts", 1)],
+        [uncommittedKey]: [row("src/known.ts", 0)],
+        [committedKey]: [row("src/known.ts", 0)],
+      },
+      200,
+      { [uncommittedKey]: 1, [committedKey]: 1 },
+    );
+    const result = await readWorkerChanges(run, environment, parseWorkerChangesOptions({}), null);
+    expect(result.sinceBase).toMatchObject({
+      files: [
+        { path: "src/known.ts", uncommitted: true, committed: true },
+        { path: "src/omitted.ts", uncommitted: null, committed: null },
+      ],
+    });
+  });
+
   test("reports commits, files since base with uncommitted marks, and diffs", async () => {
     const { run } = changes({
       [environmentKey]: [

@@ -44,7 +44,7 @@ Done, checked in code, in #1593 (`e668f0a6d`): the Pi, Cursor and ACP transcript
 ## Constraints and rationale
 
 - [Report invariants](../2026-10-27-efficiency.md#invariants-every-fix-must-keep): every ring has byte and count bounds, and missed events stay detectable. A collapse must not hide a gap from a client's cursor.
-- 1202's recommended order is after [0250](0250-br-7-codex-running-tool-cards.md).
+- 1202's recommended order is after BR-7, which is done ([1202 task 6](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md#6-bridge-hot-paths)).
 
 ## Related
 

@@ -1,6 +1,6 @@
 # Codex notification queue: read a real high-water mark
 
-Carried from efficiency report file `docs/reports/efficiency-logging-database/0140-br-13-serial-queue-bound.md` (batch E-0140, finding BR-13), deleted on 2026-11-05. Read the file at `69a3b4ca5` for its full text and outcome table. The bound is built and tested; only its open question about a real figure is left.
+Carried from efficiency report file `docs/reports/efficiency-logging-database/0140-br-13-serial-queue-bound.md` (batch E-0140, finding BR-13), deleted on 2026-11-05. Its original text is at `69a3b4ca5`; its last version, ending with its outcome table, is the parent of the commit that deleted it (`git log --diff-filter=D -- <path>`). The bound is built and tested; only its open question about a real figure is left.
 
 ## Task analysis
 

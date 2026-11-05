@@ -1,6 +1,6 @@
 # Pi resume list: the timeout's reason, its size and the barrier test
 
-Carried from efficiency report batch E21 (`docs/reports/efficiency-logging-database/0130-e21-pi-bridge.md`, findings BR-10 and BR-14), deleted on 2026-11-05. Read the file at `69a3b4ca5` for its full text and outcome table. The code for both parts is built; this is what the closing check could not confirm.
+Carried from efficiency report batch E21 (`docs/reports/efficiency-logging-database/0130-e21-pi-bridge.md`, findings BR-10 and BR-14), deleted on 2026-11-05. Its original text is at `69a3b4ca5`; its last version, ending with its outcome table, is the parent of the commit that deleted it (`git log --diff-filter=D -- <path>`). The code for both parts is built; this is what the closing check could not confirm.
 
 ## Task analysis
 

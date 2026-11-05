@@ -88,10 +88,11 @@ connects, and connecting is what starts the bridge. A second failure records
 itself again. Opening the panel does not clear the error, so a reload cannot
 hide it.
 
-### Reading while paused or after a failed start
+### Reading while paused, after a failed start, or with its platform unavailable
 
-A paused coordinator, or a conversation that failed to start, can be read but
-not run. `sendingHeldReason` on the tab holds sending and tells
+A paused coordinator, a conversation that failed to start, or one whose platform
+is turned off or below the coordinator safety level can be read but not run.
+`sendingHeldReason` on the tab holds sending and tells
 `useNativeAgentSession` not to establish a session: it never calls adopt or
 ensure, both of which resolve a provider, and that is what starts a bridge. It
 still reads, and the backend answers those reads from saved data without
@@ -100,6 +101,13 @@ display tail or a cached view, the session state from the session record
 (`idle`, nothing parked), and discovery as `missing`. Enter in the composer
 says why nothing was sent and keeps the draft. Resume or Retry connects the
 same pane without a remount.
+
+An unavailable platform is judged per conversation, by the same check that
+refuses its runtime (`coordinatorPlatformAllowed`), so a sibling on another
+platform keeps running. Its mail waits as a failed conversation's does.
+Turning the platform back on, or changing the safety level, announces a `config`
+change; the panel re-reads its snapshot and the pane connects. The waiting mail
+goes out on the next delivery pass.
 
 ### Workflow record limit and cleanup
 

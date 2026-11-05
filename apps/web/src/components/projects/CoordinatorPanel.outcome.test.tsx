@@ -15,6 +15,7 @@ import type { NativeAgentSessionProjection } from "@orkestrator/protocol/native-
 import * as realBackend from "@/lib/backend";
 import * as realNativeAgent from "@/components/native-agent";
 import * as clipboard from "@/lib/native/clipboard";
+import { dispatchResourceChange } from "@/lib/resource-sync";
 import { onGlobalSettingsRequest } from "@/lib/settings-navigation";
 import { useAppDialogStore } from "@/stores/appDialogStore";
 import { useConfigStore } from "@/stores/configStore";
@@ -832,6 +833,129 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
       expect(await screen.findByText("Coordination is paused. Resume to send.")).toBeTruthy();
       expect(dispatchIntent).not.toHaveBeenCalled();
       expect(ensureSession).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("reads while its platform is unavailable", () => {
+    const unavailableCodex = (reason: string) =>
+      withWorkspace(
+        {},
+        {
+          providerAvailability: {
+            codex: { tier: "advisory", available: false, reason, delegation: true },
+            claude: { tier: "enforced", available: true, delegation: true },
+          },
+        },
+      );
+    const savedTranscriptShown = () =>
+      waitFor(() =>
+        expect(
+          useNativeAgentProjectionStore
+            .getState()
+            .projections.get(sessionKey)
+            ?.messages.map((item) => (item as { id: string }).id),
+        ).toEqual(["saved"]),
+      );
+    const placeholder = (input: HTMLElement) =>
+      input.getAttribute("data-placeholder") ?? input.getAttribute("placeholder");
+
+    test.each([
+      {
+        cause: "turned off",
+        enabled: ["claude"] as const,
+        reason: "Codex is turned off. Turn it on to send.",
+        action: "Platform settings",
+      },
+      {
+        cause: "below the safety level",
+        enabled: ["codex", "claude"] as const,
+        reason: "Codex is below the coordinator safety level. Change it to send.",
+        action: "Coordinator settings",
+      },
+    ])(
+      "$cause: loads the saved transcript after a reload, establishing nothing and sending nothing",
+      async ({ enabled, reason, action }) => {
+        useRealAgentTab = true;
+        useConfigStore.getState().updateGlobalConfig({ enabledAgentPlatforms: [...enabled] });
+        ensuredSnapshot = unavailableCodex("Why it is unavailable.");
+        agentProjection = projection([
+          { id: "saved", role: "assistant", content: "Saved answer", parts: [] },
+        ]);
+        render(<CoordinatorPanel projectId="project-1" />);
+        await screen.findByText(/Codex is unavailable for Coordinator/);
+        expect(screen.getByRole("button", { name: action })).toBeTruthy();
+        await savedTranscriptShown();
+        const input = await screen.findByRole("textbox");
+        expect(placeholder(input)).toBe(reason);
+
+        // Enter says why, keeps the draft and sends nothing.
+        fireEvent.input(input, { target: { textContent: "Review this branch" } });
+        fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
+        expect(await screen.findByText(reason)).toBeTruthy();
+        expect(dispatchIntent).not.toHaveBeenCalled();
+        expect(ensureSession).not.toHaveBeenCalled();
+      },
+    );
+
+    test("turning the platform back on connects the same pane and sends", async () => {
+      useRealAgentTab = true;
+      useConfigStore.getState().updateGlobalConfig({ enabledAgentPlatforms: ["claude"] });
+      ensuredSnapshot = unavailableCodex("This agent platform is turned off in settings.");
+      agentProjection = projection([
+        { id: "saved", role: "assistant", content: "Saved answer", parts: [] },
+      ]);
+      render(<CoordinatorPanel projectId="project-1" />);
+      await screen.findByText(/Codex is unavailable for Coordinator/);
+      await savedTranscriptShown();
+      expect(ensureSession).not.toHaveBeenCalled();
+
+      // What saving the setting does: the panel learns from the config change.
+      useConfigStore.getState().updateGlobalConfig({ enabledAgentPlatforms: ["codex", "claude"] });
+      ensuredSnapshot = baseSnapshot;
+      act(() => {
+        dispatchResourceChange({ resource: "config", id: "app", revision: 2 });
+      });
+
+      await waitFor(() =>
+        expect(screen.queryByText(/Codex is unavailable for Coordinator/) === null).toBe(true),
+      );
+      await waitFor(() => expect(ensureSession).toHaveBeenCalled());
+      await waitFor(() =>
+        expect(
+          useNativeAgentProjectionStore.getState().projections.get(sessionKey)?.connection,
+        ).toBe("connected"),
+      );
+      const input = await screen.findByRole("textbox");
+      expect(placeholder(input)).toBe("What would you like to get done?");
+      fireEvent.input(input, { target: { textContent: "Review this branch" } });
+      fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
+      await waitFor(() => expect(dispatchIntent).toHaveBeenCalled());
+    });
+
+    test("an assigned platform missing from an older snapshot holds sending too", async () => {
+      useRealAgentTab = true;
+      useConfigStore.getState().updateGlobalConfig({ enabledAgentPlatforms: ["codex", "claude"] });
+      ensuredSnapshot = withWorkspace({}, { providerAvailability: {} });
+      render(<CoordinatorPanel projectId="project-1" />);
+      await screen.findByText(/Codex is unavailable for Coordinator/);
+      expect(placeholder(await screen.findByRole("textbox"))).toBe(
+        "Codex is below the coordinator safety level. Change it to send.",
+      );
+      expect(ensureSession).not.toHaveBeenCalled();
+    });
+
+    test("a pause says so first, because resuming comes before the platform", async () => {
+      useRealAgentTab = true;
+      useConfigStore.getState().updateGlobalConfig({ enabledAgentPlatforms: ["claude"] });
+      ensuredSnapshot = withWorkspace(
+        { lifecycleState: "paused" },
+        { providerAvailability: unavailableCodex("Off.").providerAvailability },
+      );
+      render(<CoordinatorPanel projectId="project-1" />);
+      await screen.findByText(/Coordination is paused/);
+      expect(placeholder(await screen.findByRole("textbox"))).toBe(
+        "Coordination is paused. Resume to send.",
+      );
     });
   });
 

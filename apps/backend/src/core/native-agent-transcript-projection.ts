@@ -2958,8 +2958,8 @@ export class NativeAgentTranscriptProjection {
 
   /**
    * The conversation this read names when it may be read but not run: paused,
-   * or failed to start. `undefined` for every other session, whose reads go on
-   * to the provider.
+   * failed to start, or on a platform that is unavailable. `undefined` for every
+   * other session, whose reads go on to the provider.
    */
   private async heldCoordinatorRead(
     input: NativeAgentProjectionInput,

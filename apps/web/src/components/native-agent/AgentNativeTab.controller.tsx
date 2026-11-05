@@ -345,7 +345,6 @@ export function SharedNativeAgentController({
   beforeSend,
   composerPlaceholder,
   composerHint,
-  connectionEnabled = true,
   sendingHeldReason,
 }: AgentNativeTabProps) {
   const isReadOnlyCoordinator = executionPolicy === "coordinator-read-only";
@@ -599,8 +598,7 @@ export function SharedNativeAgentController({
     defaultFastMode: configuredFastMode,
     defaultParameterValues: configuredParameterValues,
     isActive,
-    enabled:
-      connectionEnabled && !setupPending && !draft.submissionPending && !awaitingResumeChoice,
+    enabled: !setupPending && !draft.submissionPending && !awaitingResumeChoice,
     sendingHeld,
   });
   const isDispatching = runtimeIsDispatching || draft.submissionPending === true;

@@ -64,6 +64,7 @@ interface CoordinatorConversationPaneProps {
 function sendingHeldReason(
   snapshot: CoordinatorSnapshot,
   conversation: CoordinatorConversation,
+  platformOff: boolean,
 ): string | undefined {
   if (snapshot.workspace.lifecycleState === "paused") {
     return "Coordination is paused. Resume to send.";
@@ -72,6 +73,12 @@ function sendingHeldReason(
     return "The coordinator could not start. Retry to send.";
   }
   if (conversation.startupError) return "This conversation could not start. Retry to send.";
+  const agent = conversation.agent;
+  if (agent && !snapshot.providerAvailability[agent]?.available) {
+    return platformOff
+      ? `${AGENT_PLATFORM_LABELS[agent]} is turned off. Turn it on to send.`
+      : `${AGENT_PLATFORM_LABELS[agent]} is below the coordinator safety level. Change it to send.`;
+  }
   return undefined;
 }
 
@@ -174,11 +181,11 @@ export function CoordinatorConversationPane({
   // conversation stays readable while its platform is unavailable.
   const providerUnavailable = Boolean(conversation.agent && !providerState?.available);
   const side = conversation.role === "side";
-  const heldReason = sendingHeldReason(snapshot, conversation);
   // A platform turned off is Platforms' to fix; anything else here is the safety level.
   const platformOff = Boolean(
     conversation.agent && !normalizeAgentPlatforms(enabledPlatforms).includes(conversation.agent),
   );
+  const heldReason = sendingHeldReason(snapshot, conversation, platformOff);
   return (
     <div key={conversation.id} className="flex h-full min-h-0 flex-col">
       {conversation.startupError ? (
@@ -248,7 +255,6 @@ export function CoordinatorConversationPane({
               side ? COORDINATOR_SIDE_COMPOSER_PLACEHOLDER : COORDINATOR_COMPOSER_PLACEHOLDER
             }
             composerHint={side ? SIDE_COMPOSER_HINT : COORDINATOR_COMMAND_HINT}
-            connectionEnabled={providerState?.available !== false}
             {...(heldReason ? { sendingHeldReason: heldReason } : {})}
             // Only the main coordinator delegates, so only it is offered work
             // that has to run in a pipeline or environment.

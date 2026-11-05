@@ -263,6 +263,89 @@ const unassigned = (conversation: CoordinatorConversation) => ({
   agent: undefined,
 });
 
+function installPendingMail(): void {
+  const environmentId = coordinatorRuntimeId("coordinator-1", mainConversation.id);
+  const mailboxId = `${environmentId}\0${mainConversation.tabId}`;
+  useAgentMailStore.setState({
+    summary: new Map([
+      [
+        mailboxId,
+        {
+          mailboxId,
+          projectId: "project-1",
+          environmentId,
+          tabId: mainConversation.tabId,
+          unreadCount: 1,
+          userUnseenCount: 1,
+          agentUnackedCount: 1,
+          pendingInjectCount: 1,
+          failedInjectCount: 0,
+          revision: 1,
+        },
+      ],
+    ]),
+    mailboxes: new Map([
+      [
+        mailboxId,
+        {
+          descriptor: {
+            mailboxId,
+            incarnationId: "incarnation-1",
+            projectId: "project-1",
+            projectName: "Project",
+            environmentId,
+            environmentName: "Coordinator",
+            environmentStatus: "running",
+            tabId: mainConversation.tabId,
+            tabType: "agent-native",
+            title: "Coordinator",
+            displayName: "Coordinator",
+            tabOrdinal: 1,
+            agent: "codex",
+            kind: "native",
+            presence: "idle",
+            injectPolicy: "idle",
+            injectOverride: "idle",
+            mutedInbound: false,
+            mutedOutbound: false,
+            unreadCount: 1,
+            userUnseenCount: 1,
+            agentUnackedCount: 1,
+            pendingInjectCount: 1,
+            failedInjectCount: 0,
+            capabilities: { canPull: true, canSend: true, canInject: true },
+          },
+          messages: [
+            {
+              version: 1,
+              id: "pending-mail",
+              threadId: "thread-1",
+              requestId: "mail-request-1",
+              createdAt: new Date(0).toISOString(),
+              from: { kind: "user" },
+              toEnvironmentId: environmentId,
+              toTabId: mainConversation.tabId,
+              toIncarnationId: "incarnation-1",
+              bodyBytes: 5,
+              trust: "user",
+              injectDepth: 0,
+              threadDepth: 0,
+              placement: "pending-inject",
+              revision: 1,
+            },
+          ],
+          total: 1,
+          offset: 0,
+          limit: 100,
+          revision: 1,
+        },
+      ],
+    ]),
+    refreshSummary: async () => undefined,
+    refreshMailbox: async () => undefined,
+  });
+}
+
 describe("CoordinatorPanel outcome-first wording and banners", () => {
   beforeEach(() => {
     useRealAgentTab = false;
@@ -608,6 +691,33 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
     const details = await openBadgeDetails();
     expect(details.textContent).toContain("Grok Build's read-only protection is advisory.");
     expect(details.textContent).toContain("a tool that does not ask is not stopped");
+  });
+
+  test.each([
+    ["paused", "Coordination is paused. Resume to send."],
+    ["error", "The coordinator could not start. Retry to send."],
+    ["startup-failed", "This conversation could not start. Retry to send."],
+  ] as const)("a %s pane holds mail across remount until recovery", async (hold, reason) => {
+    ensuredSnapshot = withWorkspace(
+      hold === "startup-failed"
+        ? { conversations: [{ ...mainConversation, startupError: "bridge failed" }] }
+        : { lifecycleState: hold },
+    );
+    installPendingMail();
+    const mounted = render(<CoordinatorPanel projectId="project-1" />);
+    expect(await screen.findByText(`Delivery waiting: ${reason}`)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Deliver now" }) === null).toBe(true);
+    mounted.unmount();
+    const remounted = render(<CoordinatorPanel projectId="project-1" />);
+    expect(await screen.findByText(`Delivery waiting: ${reason}`)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Deliver now" }) === null).toBe(true);
+    expect(screen.getByRole("button", { name: "View" })).toBeTruthy();
+
+    remounted.unmount();
+    ensuredSnapshot = baseSnapshot;
+    render(<CoordinatorPanel projectId="project-1" />);
+    expect(await screen.findByRole("button", { name: "Deliver now" })).toBeTruthy();
+    expect(screen.queryByText(`Delivery waiting: ${reason}`) === null).toBe(true);
   });
 
   test("paused coordination keeps the transcript and resumes from the banner", async () => {

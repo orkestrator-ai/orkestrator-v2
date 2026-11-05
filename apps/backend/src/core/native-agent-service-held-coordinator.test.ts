@@ -58,6 +58,7 @@ async function withHeldConversation(
     aborted: () => number;
     holdAgain: () => Promise<void>;
     setRunning: (running: boolean) => void;
+    setStatusUnavailable: (unavailable: boolean) => void;
     mailAttempts: () => number;
     /** Turn the platform back on, or lower the safety level to admit it. */
     release: () => Promise<void>;
@@ -66,6 +67,7 @@ async function withHeldConversation(
   let starts = 0;
   let turns = 0;
   let running = false;
+  let statusUnavailable = false;
   let aborted = 0;
   let mailAttempts = 0;
   const stubs = new Map<AgentPlatform, ReturnType<typeof createProviderStub>>();
@@ -85,10 +87,14 @@ async function withHeldConversation(
                 parts: [],
               },
             ],
-            status: async () => (running ? "running" : "idle"),
+            status: async () => {
+              if (statusUnavailable) throw new Error("Status unavailable");
+              return running ? "running" : "idle";
+            },
             abort: async () => {
               aborted += 1;
               running = false;
+              statusUnavailable = false;
             },
             send: async () => {
               turns += 1;
@@ -179,6 +185,9 @@ async function withHeldConversation(
         setRunning: (value) => {
           running = value;
         },
+        setStatusUnavailable: (value) => {
+          statusUnavailable = value;
+        },
         holdAgain: () =>
           settings(
             hold === "platform-off"
@@ -200,6 +209,15 @@ async function withHeldConversation(
 const EVERY_HOLD = ["paused", "startup-failed", "platform-off", "safety-level"] as const;
 
 describe.each(EVERY_HOLD)("a %s coordinator conversation", (hold) => {
+  test("Stop without a cached provider returns null and starts nothing", async () => {
+    await withHeldConversation(hold, async ({ service, providerStarts, turns, aborted }) => {
+      expect(await service.stopProjectionSession(held(hold))).toBeNull();
+      expect(providerStarts()).toBe(0);
+      expect(turns()).toBe(0);
+      expect(aborted()).toBe(0);
+    });
+  });
+
   test("answers every read a connecting pane sends from saved data, starting nothing", async () => {
     await withHeldConversation(hold, async ({ service, providerStarts }) => {
       const input = held(hold);
@@ -347,6 +365,52 @@ describe.each(["platform-off", "safety-level"] as const)(
           });
           expect(aborted()).toBe(1);
           expect(providerStarts()).toBe(starts);
+          expect(await service.getSessionStateUpdate({ ...input, viewVersion: 1 })).toMatchObject({
+            value: { turn: { phase: "idle" } },
+          });
+        },
+      );
+    });
+
+    test("a failed cached status read preserves history and Stop without restarting a provider", async () => {
+      await withHeldConversation(
+        hold,
+        async ({
+          service,
+          providerStarts,
+          turns,
+          release,
+          holdAgain,
+          setStatusUnavailable,
+          aborted,
+        }) => {
+          const input = held(hold);
+          await release();
+          await service.ensureSession(input);
+          await holdAgain();
+          setStatusUnavailable(true);
+          const starts = providerStarts();
+          for (let read = 0; read < 2; read += 1) {
+            expect(await service.getSessionStateUpdate({ ...input, viewVersion: 1 })).toMatchObject(
+              {
+                status: "snapshot",
+                value: { turn: { phase: "running" }, interactions: [], composerControls: [] },
+              },
+            );
+            expect(await service.getProjection(input)).toMatchObject({
+              messages: [{ id: "row-held", content: "Saved answer" }],
+              turn: { phase: "running" },
+            });
+          }
+          // Cancellation must reach the cached provider even while its status
+          // reads fail. The fake abort restores its readable idle status.
+          expect(await service.stopProjectionSession(input)).toMatchObject({
+            turn: { phase: "idle" },
+          });
+          expect(aborted()).toBe(1);
+          expect(providerStarts()).toBe(starts);
+          expect(turns()).toBe(0);
+          setStatusUnavailable(false);
           expect(await service.getSessionStateUpdate({ ...input, viewVersion: 1 })).toMatchObject({
             value: { turn: { phase: "idle" } },
           });

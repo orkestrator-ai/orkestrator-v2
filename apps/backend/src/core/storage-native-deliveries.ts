@@ -479,64 +479,78 @@ export class NativeAgentDeliveries {
       if (session.pendingSteer)
         throw new PendingNativeAgentSteerError(session.pendingSteer.requestId);
       return this.repos.promptQueues.enqueuePromptQueueMutation(async () => {
-        const queues = await this.repos.promptQueues.loadPromptQueues();
         const queueKey = `${session.agent}\0${session.logicalSessionKey}`;
-        const queue = queues[queueKey];
-        if (!queue || queue.environmentId !== session.environmentId) return null;
-        if (queue.inFlight || queue.outstandingClaim)
-          throw new Error("A queued prompt is already being delivered; refresh before steering");
-        const index = queue.messages.findIndex((item) => isRecord(item) && item.id === messageId);
-        const message = queue.messages[index];
-        if (!isRecord(message)) return null;
-        const requestId = isNonBlankString(message.requestId) ? message.requestId : messageId;
-        if (
-          message.command !== undefined ||
-          message.origin !== undefined ||
-          nativeAsyncQuestionItemId(messageId) ||
-          nativeAsyncQuestionItemId(requestId) ||
-          (Array.isArray(message.attachments) && message.attachments.length > 0)
-        ) {
-          throw new Error("This queued item cannot be steered");
-        }
-        if (
-          !isNonBlankString(message.text) ||
-          Buffer.byteLength(message.text, "utf8") > 64 * 1024 ||
-          Buffer.byteLength(requestId, "utf8") > 512
-        )
-          throw new Error("Queued steering text or identity is invalid");
-        if (session.dispatchedRequestIds?.includes(requestId)) {
-          throw new Error("This queued request was already delivered; refresh before steering");
-        }
-        const pending: PersistedNativeAgentPendingSteer = {
-          requestId,
-          text: message.text.trim(),
-          inputDigest: createHash("sha256").update(message.text.trim()).digest("hex"),
-          expectedRunId,
-          state: "prepared",
-          sourceQueue: true,
-          createdAt: nowIso(),
-        };
-        const ahead = queue.messages[index - 1];
-        const restoreAfterId =
-          isRecord(ahead) &&
-          isNonBlankString(ahead.id) &&
-          Buffer.byteLength(ahead.id, "utf8") <= MAX_PROMPT_QUEUE_SOURCE_MESSAGE_ID_BYTES
-            ? ahead.id
-            : undefined;
-        queues[queueKey] = {
-          ...queue,
-          messages: queue.messages.filter((_, i) => i !== index),
-          inFlight: {
-            message,
-            requestId,
-            reservedAt: nowIso(),
-            steer: true,
-            ...(restoreAfterId ? { restoreAfterId } : {}),
-          },
-          updatedAt: nowIso(),
-          revision: queue.revision + 1,
-        };
-        await this.context.saveSensitiveJson(this.files.promptQueuesFile(), queues);
+        // Announced below, once the session holds the receipt as well.
+        const pending =
+          this.repos.promptQueues.updatePromptQueue<PersistedNativeAgentPendingSteer | null>(
+            queueKey,
+            (queue) => {
+              if (!queue || queue.environmentId !== session.environmentId) return { result: null };
+              if (queue.inFlight || queue.outstandingClaim)
+                throw new Error(
+                  "A queued prompt is already being delivered; refresh before steering",
+                );
+              const index = queue.messages.findIndex(
+                (item) => isRecord(item) && item.id === messageId,
+              );
+              const message = queue.messages[index];
+              if (!isRecord(message)) return { result: null };
+              const requestId = isNonBlankString(message.requestId) ? message.requestId : messageId;
+              if (
+                message.command !== undefined ||
+                message.origin !== undefined ||
+                nativeAsyncQuestionItemId(messageId) ||
+                nativeAsyncQuestionItemId(requestId) ||
+                (Array.isArray(message.attachments) && message.attachments.length > 0)
+              ) {
+                throw new Error("This queued item cannot be steered");
+              }
+              if (
+                !isNonBlankString(message.text) ||
+                Buffer.byteLength(message.text, "utf8") > 64 * 1024 ||
+                Buffer.byteLength(requestId, "utf8") > 512
+              )
+                throw new Error("Queued steering text or identity is invalid");
+              if (session.dispatchedRequestIds?.includes(requestId)) {
+                throw new Error(
+                  "This queued request was already delivered; refresh before steering",
+                );
+              }
+              const ahead = queue.messages[index - 1];
+              const restoreAfterId =
+                isRecord(ahead) &&
+                isNonBlankString(ahead.id) &&
+                Buffer.byteLength(ahead.id, "utf8") <= MAX_PROMPT_QUEUE_SOURCE_MESSAGE_ID_BYTES
+                  ? ahead.id
+                  : undefined;
+              return {
+                result: {
+                  requestId,
+                  text: message.text.trim(),
+                  inputDigest: createHash("sha256").update(message.text.trim()).digest("hex"),
+                  expectedRunId,
+                  state: "prepared",
+                  sourceQueue: true,
+                  createdAt: nowIso(),
+                },
+                value: {
+                  ...queue,
+                  messages: queue.messages.filter((_, i) => i !== index),
+                  inFlight: {
+                    message,
+                    requestId,
+                    reservedAt: nowIso(),
+                    steer: true,
+                    ...(restoreAfterId ? { restoreAfterId } : {}),
+                  },
+                  updatedAt: nowIso(),
+                  revision: queue.revision + 1,
+                },
+              };
+            },
+            { announce: false },
+          );
+        if (!pending) return null;
         await this.repos.nativeAgentSessions.saveNativeAgentSession(key, {
           ...session,
           pendingSteer: pending,
@@ -570,27 +584,28 @@ export class NativeAgentDeliveries {
     settlement: "applied" | "restore" | "discard",
   ): Promise<void> {
     await this.repos.promptQueues.enqueuePromptQueueMutation(async () => {
-      const queues = await this.repos.promptQueues.loadPromptQueues();
       const queueKey = `${session.agent}\0${session.logicalSessionKey}`;
-      const queue = queues[queueKey];
-      if (
-        !queue?.inFlight?.steer ||
-        queue.inFlight.requestId !== requestId ||
-        queue.environmentId !== session.environmentId
-      )
-        return;
-      const { inFlight, ...rest } = queue;
-      queues[queueKey] = {
-        ...rest,
-        messages:
-          settlement === "restore"
-            ? restoreSteeredQueueItem(inFlight, queue.messages)
-            : queue.messages,
-        updatedAt: nowIso(),
-        revision: queue.revision + 1,
-      };
-      await this.context.saveSensitiveJson(this.files.promptQueuesFile(), queues);
-      this.context.changes.announce("prompt-queue", session.environmentId);
+      this.repos.promptQueues.updatePromptQueue<void>(queueKey, (queue) => {
+        if (
+          !queue?.inFlight?.steer ||
+          queue.inFlight.requestId !== requestId ||
+          queue.environmentId !== session.environmentId
+        )
+          return { result: undefined };
+        const { inFlight, ...rest } = queue;
+        return {
+          result: undefined,
+          value: {
+            ...rest,
+            messages:
+              settlement === "restore"
+                ? restoreSteeredQueueItem(inFlight, queue.messages)
+                : queue.messages,
+            updatedAt: nowIso(),
+            revision: queue.revision + 1,
+          },
+        };
+      });
     });
   }
 

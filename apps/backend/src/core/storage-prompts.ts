@@ -223,7 +223,7 @@ export class PromptsRepository {
         environmentId,
         "Agent mail",
       );
-      const queue = (await this.repos.promptQueues.loadPromptQueues())[queueKey];
+      const queue = this.repos.promptQueues.loadPromptQueue(queueKey);
       if (
         queue &&
         (queue.outstandingClaim !== undefined ||
@@ -267,21 +267,21 @@ export class PromptsRepository {
         environmentId,
         "Prompt queue",
       );
-      const queues = await this.repos.promptQueues.loadPromptQueues();
-      const previous = queues[queueKey];
-      if (previous && previous.environmentId !== environmentId) {
-        throw new Error("Prompt queue belongs to another environment");
-      }
-      if (expectedRevision !== undefined && (previous?.revision ?? 0) !== expectedRevision) {
-        throw new Error("Prompt queue revision conflict");
-      }
-      return this.repos.promptQueues.savePromptQueueMutation(
-        queues,
-        queueKey,
-        environmentId,
-        messages,
-        previous,
-      );
+      return this.repos.promptQueues.updatePromptQueue(queueKey, (previous) => {
+        if (previous && previous.environmentId !== environmentId) {
+          throw new Error("Prompt queue belongs to another environment");
+        }
+        if (expectedRevision !== undefined && (previous?.revision ?? 0) !== expectedRevision) {
+          throw new Error("Prompt queue revision conflict");
+        }
+        const saved = this.repos.promptQueues.nextPromptQueue(
+          queueKey,
+          environmentId,
+          messages,
+          previous,
+        );
+        return { result: saved, value: saved };
+      });
     });
   }
 
@@ -311,25 +311,28 @@ export class PromptsRepository {
         environmentId,
         "Prompt queue",
       );
-      const queues = await this.repos.promptQueues.loadPromptQueues();
-      const previous = queues[queueKey];
-      if (previous && previous.environmentId !== environmentId) {
-        throw new Error("Prompt queue belongs to another environment");
-      }
-      if (
-        (previous?.outstandingClaim && previous.outstandingClaim.message.id === message.id) ||
-        (isRecord(previous?.inFlight?.message) && previous.inFlight.message.id === message.id) ||
-        previous?.messages.some((candidate) => isRecord(candidate) && candidate.id === message.id)
-      ) {
-        return previous;
-      }
-      return this.repos.promptQueues.savePromptQueueMutation(
-        queues,
-        queueKey,
-        environmentId,
-        [...(previous?.messages ?? []), message],
-        previous,
-      );
+      return this.repos.promptQueues.updatePromptQueue(queueKey, (previous) => {
+        if (previous && previous.environmentId !== environmentId) {
+          throw new Error("Prompt queue belongs to another environment");
+        }
+        if (
+          previous &&
+          ((previous.outstandingClaim && previous.outstandingClaim.message.id === message.id) ||
+            (isRecord(previous.inFlight?.message) && previous.inFlight.message.id === message.id) ||
+            previous.messages.some(
+              (candidate) => isRecord(candidate) && candidate.id === message.id,
+            ))
+        ) {
+          return { result: previous };
+        }
+        const saved = this.repos.promptQueues.nextPromptQueue(
+          queueKey,
+          environmentId,
+          [...(previous?.messages ?? []), message],
+          previous,
+        );
+        return { result: saved, value: saved };
+      });
     });
   }
 
@@ -378,8 +381,7 @@ export class PromptsRepository {
         environmentId,
         "Prompt queue",
       );
-      const queues = await this.repos.promptQueues.loadPromptQueues();
-      const previous = queues[queueKey];
+      const previous = this.repos.promptQueues.loadPromptQueue(queueKey) ?? undefined;
       if (previous && previous.environmentId !== environmentId) {
         throw new Error("Prompt queue belongs to another environment");
       }
@@ -436,8 +438,7 @@ export class PromptsRepository {
       // is no longer allowed (for example, a read-only session left Plan).
       if (!allowNewMessage) throw new Error(PROMPT_QUEUE_NEW_PUBLICATION_REFUSED);
 
-      const queue = await this.repos.promptQueues.savePromptQueueMutation(
-        queues,
+      const queue = this.repos.promptQueues.savePromptQueueMutation(
         queueKey,
         environmentId,
         [...(previous?.messages ?? []), message],
@@ -474,8 +475,7 @@ export class PromptsRepository {
         environmentId,
         "Job",
       );
-      const queues = await this.repos.promptQueues.loadPromptQueues();
-      const previous = queues[queueKey];
+      const previous = this.repos.promptQueues.loadPromptQueue(queueKey) ?? undefined;
       const existing = previous?.jobReceipts?.find(
         (entry) => entry.requestId === receipt.requestId,
       );
@@ -527,8 +527,7 @@ export class PromptsRepository {
       // Refuse rather than evict a binding and make an old retry publishable again.
       const retained = receipts;
       if (retained.length >= 256) throw new Error("Native job receipt capacity reached");
-      await this.repos.promptQueues.savePromptQueueMutation(
-        queues,
+      this.repos.promptQueues.savePromptQueueMutation(
         queueKey,
         environmentId,
         message && !duplicate
@@ -555,23 +554,25 @@ export class PromptsRepository {
     status: "accepted" | "unknown" | "rejected",
   ): Promise<void> {
     await this.repos.promptQueues.enqueuePromptQueueMutation(async () => {
-      const queues = await this.repos.promptQueues.loadPromptQueues();
-      const previous = queues[queueKey];
-      if (!previous?.jobReceipts) return;
-      const jobReceipts = previous.jobReceipts.flatMap((entry) =>
-        (entry.dispatchRequestId ?? entry.requestId) !== requestId
-          ? [entry]
-          : status === "rejected"
-            ? []
-            : [{ ...entry, status }],
-      );
-      await this.repos.promptQueues.savePromptQueueMutation(
-        queues,
-        queueKey,
-        previous.environmentId,
-        previous.messages,
-        { ...previous, jobReceipts },
-      );
+      this.repos.promptQueues.updatePromptQueue<void>(queueKey, (previous) => {
+        if (!previous?.jobReceipts) return { result: undefined };
+        const jobReceipts = previous.jobReceipts.flatMap((entry) =>
+          (entry.dispatchRequestId ?? entry.requestId) !== requestId
+            ? [entry]
+            : status === "rejected"
+              ? []
+              : [{ ...entry, status }],
+        );
+        return {
+          result: undefined,
+          value: this.repos.promptQueues.nextPromptQueue(
+            queueKey,
+            previous.environmentId,
+            previous.messages,
+            { ...previous, jobReceipts },
+          ),
+        };
+      });
     });
   }
 
@@ -619,26 +620,28 @@ export class PromptsRepository {
         environmentId,
         "Prompt queue",
       );
-      const queues = await this.repos.promptQueues.loadPromptQueues();
-      const previous = queues[queueKey];
-      if (!previous) return { removed: null, queue: null };
-      if (previous.environmentId !== environmentId) {
-        throw new Error("Prompt queue belongs to another environment");
-      }
-      const index = previous.messages.findIndex(
-        (candidate) => isRecord(candidate) && candidate.id === messageId,
-      );
-      if (index < 0) return { removed: null, queue: previous };
-      const messages = [...previous.messages];
-      const [removed] = messages.splice(index, 1);
-      const queue = await this.repos.promptQueues.savePromptQueueMutation(
-        queues,
-        queueKey,
-        environmentId,
-        messages,
-        previous,
-      );
-      return { removed: removed ?? null, queue };
+      return this.repos.promptQueues.updatePromptQueue<{
+        removed: unknown | null;
+        queue: PersistedPromptQueue | null;
+      }>(queueKey, (previous) => {
+        if (!previous) return { result: { removed: null, queue: null } };
+        if (previous.environmentId !== environmentId) {
+          throw new Error("Prompt queue belongs to another environment");
+        }
+        const index = previous.messages.findIndex(
+          (candidate) => isRecord(candidate) && candidate.id === messageId,
+        );
+        if (index < 0) return { result: { removed: null, queue: previous } };
+        const messages = [...previous.messages];
+        const [removed] = messages.splice(index, 1);
+        const queue = this.repos.promptQueues.nextPromptQueue(
+          queueKey,
+          environmentId,
+          messages,
+          previous,
+        );
+        return { result: { removed: removed ?? null, queue }, value: queue };
+      });
     });
   }
 
@@ -666,27 +669,30 @@ export class PromptsRepository {
         environmentId,
         "Prompt queue",
       );
-      const queues = await this.repos.promptQueues.loadPromptQueues();
-      const previous = queues[queueKey];
-      if (!previous) return null;
-      if (previous.environmentId !== environmentId) {
-        throw new Error("Prompt queue belongs to another environment");
-      }
-      const index = previous.messages.findIndex(
-        (candidate) => isRecord(candidate) && candidate.id === messageId,
-      );
-      const target = direction === "up" ? index - 1 : index + 1;
-      if (index < 0 || target < 0 || target >= previous.messages.length) {
-        return previous;
-      }
-      const messages = [...previous.messages];
-      [messages[index], messages[target]] = [messages[target], messages[index]];
-      return this.repos.promptQueues.savePromptQueueMutation(
-        queues,
+      return this.repos.promptQueues.updatePromptQueue<PersistedPromptQueue | null>(
         queueKey,
-        environmentId,
-        messages,
-        previous,
+        (previous) => {
+          if (!previous) return { result: null };
+          if (previous.environmentId !== environmentId) {
+            throw new Error("Prompt queue belongs to another environment");
+          }
+          const index = previous.messages.findIndex(
+            (candidate) => isRecord(candidate) && candidate.id === messageId,
+          );
+          const target = direction === "up" ? index - 1 : index + 1;
+          if (index < 0 || target < 0 || target >= previous.messages.length) {
+            return { result: previous };
+          }
+          const messages = [...previous.messages];
+          [messages[index], messages[target]] = [messages[target], messages[index]];
+          const saved = this.repos.promptQueues.nextPromptQueue(
+            queueKey,
+            environmentId,
+            messages,
+            previous,
+          );
+          return { result: saved, value: saved };
+        },
       );
     });
   }
@@ -698,29 +704,31 @@ export class PromptsRepository {
       throw new Error("Prompt queue key must not be blank");
     }
     return this.repos.promptQueues.enqueuePromptQueueMutation(async () => {
-      const queues = await this.repos.promptQueues.loadPromptQueues();
-      const previous = queues[queueKey];
-      if (!previous) return null;
-      if (previous.outstandingClaim || previous.dispatchError) return null;
-      if (previous.inFlight) return previous.inFlight;
-      const message = previous.messages[0];
-      if (!isRecord(message) || !isNonBlankString(message.id)) return null;
-      const inFlight = {
-        message,
-        requestId: isNonBlankString(message.requestId) ? message.requestId : message.id,
-        reservedAt: nowIso(),
-      };
-      const saved: PersistedPromptQueue = {
-        ...previous,
-        messages: previous.messages.slice(1),
-        inFlight,
-        updatedAt: nowIso(),
-        revision: previous.revision + 1,
-      };
-      queues[queueKey] = saved;
-      await this.context.saveSensitiveJson(this.files.promptQueuesFile(), queues);
-      this.context.changes.announce("prompt-queue", previous.environmentId);
-      return inFlight;
+      return this.repos.promptQueues.updatePromptQueue<PersistedPromptQueue["inFlight"] | null>(
+        queueKey,
+        (previous) => {
+          if (!previous) return { result: null };
+          if (previous.outstandingClaim || previous.dispatchError) return { result: null };
+          if (previous.inFlight) return { result: previous.inFlight };
+          const message = previous.messages[0];
+          if (!isRecord(message) || !isNonBlankString(message.id)) return { result: null };
+          const inFlight = {
+            message,
+            requestId: isNonBlankString(message.requestId) ? message.requestId : message.id,
+            reservedAt: nowIso(),
+          };
+          return {
+            result: inFlight,
+            value: {
+              ...previous,
+              messages: previous.messages.slice(1),
+              inFlight,
+              updatedAt: nowIso(),
+              revision: previous.revision + 1,
+            },
+          };
+        },
+      );
     });
   }
 
@@ -729,21 +737,21 @@ export class PromptsRepository {
     requestId: string,
   ): Promise<PersistedPromptQueue | null> {
     return this.repos.promptQueues.enqueuePromptQueueMutation(async () => {
-      const queues = await this.repos.promptQueues.loadPromptQueues();
-      const previous = queues[queueKey];
-      if (!previous?.inFlight || previous.inFlight.requestId !== requestId) {
-        return previous ?? null;
-      }
-      const { inFlight: _inFlight, ...withoutInFlight } = previous;
-      const saved: PersistedPromptQueue = {
-        ...withoutInFlight,
-        updatedAt: nowIso(),
-        revision: previous.revision + 1,
-      };
-      queues[queueKey] = saved;
-      await this.context.saveSensitiveJson(this.files.promptQueuesFile(), queues);
-      this.context.changes.announce("prompt-queue", previous.environmentId);
-      return saved;
+      return this.repos.promptQueues.updatePromptQueue<PersistedPromptQueue | null>(
+        queueKey,
+        (previous) => {
+          if (!previous?.inFlight || previous.inFlight.requestId !== requestId) {
+            return { result: previous ?? null };
+          }
+          const { inFlight: _inFlight, ...withoutInFlight } = previous;
+          const saved: PersistedPromptQueue = {
+            ...withoutInFlight,
+            updatedAt: nowIso(),
+            revision: previous.revision + 1,
+          };
+          return { result: saved, value: saved };
+        },
+      );
     });
   }
 
@@ -776,28 +784,28 @@ export class PromptsRepository {
       throw new Error("Prompt queue dispatch identity must not be blank");
     }
     return this.repos.promptQueues.enqueuePromptQueueMutation(async () => {
-      const queues = await this.repos.promptQueues.loadPromptQueues();
-      const previous = queues[queueKey];
-      if (!previous?.inFlight || previous.inFlight.requestId !== requestId) {
-        return previous ?? null;
-      }
-      if (field === "submittedAt" && previous.inFlight.submittingAt === undefined) {
-        throw new Error("Prompt queue dispatch was not fenced before submission");
-      }
-      if (previous.inFlight[field] !== undefined) return previous;
-      const saved: PersistedPromptQueue = {
-        ...previous,
-        inFlight: {
-          ...previous.inFlight,
-          [field]: nowIso(),
+      return this.repos.promptQueues.updatePromptQueue<PersistedPromptQueue | null>(
+        queueKey,
+        (previous) => {
+          if (!previous?.inFlight || previous.inFlight.requestId !== requestId) {
+            return { result: previous ?? null };
+          }
+          if (field === "submittedAt" && previous.inFlight.submittingAt === undefined) {
+            throw new Error("Prompt queue dispatch was not fenced before submission");
+          }
+          if (previous.inFlight[field] !== undefined) return { result: previous };
+          const saved: PersistedPromptQueue = {
+            ...previous,
+            inFlight: {
+              ...previous.inFlight,
+              [field]: nowIso(),
+            },
+            updatedAt: nowIso(),
+            revision: previous.revision + 1,
+          };
+          return { result: saved, value: saved };
         },
-        updatedAt: nowIso(),
-        revision: previous.revision + 1,
-      };
-      queues[queueKey] = saved;
-      await this.context.saveSensitiveJson(this.files.promptQueuesFile(), queues);
-      this.context.changes.announce("prompt-queue", previous.environmentId);
-      return saved;
+      );
     });
   }
 
@@ -811,42 +819,42 @@ export class PromptsRepository {
       throw new Error("Prompt queue failure identity must not be blank");
     }
     return this.repos.promptQueues.enqueuePromptQueueMutation(async () => {
-      const queues = await this.repos.promptQueues.loadPromptQueues();
-      const previous = queues[queueKey];
-      if (!previous?.inFlight || previous.inFlight.requestId !== requestId) {
-        return previous ?? null;
-      }
-      const { inFlight, ...withoutInFlight } = previous;
-      if (!isRecord(inFlight.message) || !isNonBlankString(inFlight.message.id)) {
-        return previous;
-      }
-      // Only an explicit retirement permits a fresh dispatch identity. Keep the
-      // stable row id, and leave the error latched until the user retries.
-      // Goal identity belongs to the iteration. Only goal resume may mint its
-      // next identity; a generic queue retry must not escape the goal fence.
-      const goalCarrier =
-        isRecord(inFlight.message.origin) && inFlight.message.origin.kind === "goal";
-      const failedMessage =
-        options?.requestIdRetired && !goalCarrier
-          ? { ...inFlight.message, requestId: randomUUID() }
-          : inFlight.message;
-      const saved: PersistedPromptQueue = {
-        ...withoutInFlight,
-        messages: [failedMessage, ...previous.messages],
-        dispatchError: {
-          requestId,
-          messageId: inFlight.message.id,
-          messageFingerprint: this.promptQueueMessageFingerprint(failedMessage),
-          message,
-          failedAt: nowIso(),
+      return this.repos.promptQueues.updatePromptQueue<PersistedPromptQueue | null>(
+        queueKey,
+        (previous) => {
+          if (!previous?.inFlight || previous.inFlight.requestId !== requestId) {
+            return { result: previous ?? null };
+          }
+          const { inFlight, ...withoutInFlight } = previous;
+          if (!isRecord(inFlight.message) || !isNonBlankString(inFlight.message.id)) {
+            return { result: previous };
+          }
+          // Only an explicit retirement permits a fresh dispatch identity. Keep the
+          // stable row id, and leave the error latched until the user retries.
+          // Goal identity belongs to the iteration. Only goal resume may mint its
+          // next identity; a generic queue retry must not escape the goal fence.
+          const goalCarrier =
+            isRecord(inFlight.message.origin) && inFlight.message.origin.kind === "goal";
+          const failedMessage =
+            options?.requestIdRetired && !goalCarrier
+              ? { ...inFlight.message, requestId: randomUUID() }
+              : inFlight.message;
+          const saved: PersistedPromptQueue = {
+            ...withoutInFlight,
+            messages: [failedMessage, ...previous.messages],
+            dispatchError: {
+              requestId,
+              messageId: inFlight.message.id,
+              messageFingerprint: this.promptQueueMessageFingerprint(failedMessage),
+              message,
+              failedAt: nowIso(),
+            },
+            updatedAt: nowIso(),
+            revision: previous.revision + 1,
+          };
+          return { result: saved, value: saved };
         },
-        updatedAt: nowIso(),
-        revision: previous.revision + 1,
-      };
-      queues[queueKey] = saved;
-      await this.context.saveSensitiveJson(this.files.promptQueuesFile(), queues);
-      this.context.changes.announce("prompt-queue", previous.environmentId);
-      return saved;
+      );
     });
   }
 
@@ -855,19 +863,19 @@ export class PromptsRepository {
       throw new Error("Prompt queue key must not be blank");
     }
     return this.repos.promptQueues.enqueuePromptQueueMutation(async () => {
-      const queues = await this.repos.promptQueues.loadPromptQueues();
-      const previous = queues[queueKey];
-      if (!previous?.dispatchError) return previous ?? null;
-      const { dispatchError: _dispatchError, ...withoutError } = previous;
-      const saved: PersistedPromptQueue = {
-        ...withoutError,
-        updatedAt: nowIso(),
-        revision: previous.revision + 1,
-      };
-      queues[queueKey] = saved;
-      await this.context.saveSensitiveJson(this.files.promptQueuesFile(), queues);
-      this.context.changes.announce("prompt-queue", previous.environmentId);
-      return saved;
+      return this.repos.promptQueues.updatePromptQueue<PersistedPromptQueue | null>(
+        queueKey,
+        (previous) => {
+          if (!previous?.dispatchError) return { result: previous ?? null };
+          const { dispatchError: _dispatchError, ...withoutError } = previous;
+          const saved: PersistedPromptQueue = {
+            ...withoutError,
+            updatedAt: nowIso(),
+            revision: previous.revision + 1,
+          };
+          return { result: saved, value: saved };
+        },
+      );
     });
   }
 
@@ -880,15 +888,8 @@ export class PromptsRepository {
       throw new Error("Prompt queue environment ID must not be blank");
     }
     return this.repos.promptQueues.enqueuePromptQueueMutation(async () => {
-      const queues = await this.repos.promptQueues.loadPromptQueues();
-      const removedKeys = Object.values(queues)
-        .filter((queue) => queue.environmentId === environmentId)
-        .map((queue) => queue.queueKey);
-      if (removedKeys.length > 0) {
-        for (const key of removedKeys) delete queues[key];
-        await this.context.saveSensitiveJson(this.files.promptQueuesFile(), queues);
-        this.context.changes.announce("prompt-queue", environmentId);
-      }
+      const removedKeys = await this.repos.promptQueues.deletePromptQueuesOwnedBy(environmentId);
+      if (removedKeys.length > 0) this.context.changes.announce("prompt-queue", environmentId);
 
       // Queued prompts carry user-authored text and pasted attachments, and
       // rotating the primary file leaves them readable in its backups. Always

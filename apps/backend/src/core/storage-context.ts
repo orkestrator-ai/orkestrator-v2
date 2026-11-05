@@ -300,15 +300,19 @@ export class StorageContext {
     filePath: string,
     key: string,
     mutate: (current: unknown) => RowUpdate<T>,
-    options: { collection?: string; archiveCleanup?: LegacyJsonItemCleanup } = {},
+    options: {
+      collection?: string;
+      archiveCleanup?: LegacyJsonItemCleanup;
+      unreadableRow?: "replace";
+    } = {},
   ): T {
     const store = this.storeForFile(filePath);
     if (store === null) throw new Error("updateStoreRow requires a database store");
-    const { archiveCleanup, collection } = options;
+    const { archiveCleanup, collection, unreadableRow } = options;
     if (archiveCleanup && hasLegacyJsonStore(this.dataDir, archiveCleanup.store)) {
       const scope = this.openAtomicScope();
       if (scope) {
-        const result = this.updateStoreRow(filePath, key, mutate, { collection });
+        const result = this.updateStoreRow(filePath, key, mutate, { collection, unreadableRow });
         scope.archiveCleanups.push(archiveCleanup);
         return result;
       }
@@ -317,7 +321,7 @@ export class StorageContext {
         this.database,
         this.dataDir,
         () => {
-          result = this.updateStoreRow(filePath, key, mutate, { collection });
+          result = this.updateStoreRow(filePath, key, mutate, { collection, unreadableRow });
         },
         [archiveCleanup],
       );
@@ -944,16 +948,19 @@ export class StorageContext {
    * every copy against the whole new value, as a whole-value save does. The
    * pruning intent commits with the row and replays after failure or restart.
    * Deletes journal removal of the whole archived key, even if already absent.
+   * `unreadableRow: "replace"` hands an unparsable row to `mutate` as absent; see
+   * {@link StorageDatabase.updateStoreRow}.
    */
   updateSensitiveStoreRow<T>(
     filePath: string,
     key: string,
     mutate: (current: unknown) => RowUpdate<T>,
+    options: { unreadableRow?: "replace" } = {},
   ): T {
     const store = this.storeForFile(filePath);
     if (store === null) throw new Error("updateSensitiveStoreRow requires a database store");
     if (!hasLegacyJsonStore(this.dataDir, store)) {
-      return this.updateStoreRow(filePath, key, mutate);
+      return this.updateStoreRow(filePath, key, mutate, options);
     }
     const cleanups: LegacyJsonCleanup[] = [];
     let result!: T;
@@ -967,20 +974,25 @@ export class StorageContext {
           unreadable = true;
         }
       }
-      result = this.updateStoreRow(filePath, key, (previous) => {
-        const update = mutate(previous);
-        if (update.delete) {
-          cleanups.push({ store, kind: "delete-row", key });
-        } else if (
-          "value" in update &&
-          (unreadable ||
-            previous === undefined ||
-            pruneRemovedContent(previous, update.value) !== previous)
-        ) {
-          cleanups.push({ store, kind: "prune-row", key, next: structuredClone(update.value) });
-        }
-        return update;
-      });
+      result = this.updateStoreRow(
+        filePath,
+        key,
+        (previous) => {
+          const update = mutate(previous);
+          if (update.delete) {
+            cleanups.push({ store, kind: "delete-row", key });
+          } else if (
+            "value" in update &&
+            (unreadable ||
+              previous === undefined ||
+              pruneRemovedContent(previous, update.value) !== previous)
+          ) {
+            cleanups.push({ store, kind: "prune-row", key, next: structuredClone(update.value) });
+          }
+          return update;
+        },
+        options,
+      );
       if (unreadable && cleanups.length > 0) {
         cleanups.splice(0, cleanups.length, {
           store,

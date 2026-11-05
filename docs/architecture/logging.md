@@ -887,7 +887,9 @@ every bridge line is on the logger, in `bridge.claude`, `bridge.codex`,
 covers them all. [The bridge hop](#the-bridge-hop) never filters, so a local bridge's
 line keeps the level it was written at whatever the backend's own levels are. Output
 that is not a logger call (a native crash, a runtime panic, a vendor's own printing)
-is captured as text whatever the level is.
+is captured as text whatever the level is. That is why a local bridge does not
+inherit vendor debug switches from the shell that launched Orkestrator
+([the bridge hop](#the-bridge-hop)).
 
 `error` cannot be filtered, because no level is below it. A stall of 10 seconds or
 more uses that: `event-loop` `stalled`, and the desktop's `main-thread.stalled`, are
@@ -970,6 +972,14 @@ flowchart LR
   The bridge retains its level override privately so live policy updates still
   respect the value supplied at launch.
   OpenCode runs its own server and receives no relay flag, including an inherited one.
+- **Vendor debug switches are dropped.** `DEBUG`, `RUST_LOG` and
+  `DEBUG_CLAUDE_AGENT_SDK` turn on a vendor's own printing, which is not a logger
+  call: the hop captures it whatever the level is, and it can quote prompts and tool
+  content. A local launch removes them from the bridge's environment, and so from the
+  vendor CLI and the commands it runs (`bridge-vendor-debug-env.ts`). To keep them,
+  start the backend with `ORKESTRATOR_KEEP_VENDOR_DEBUG=1`. A project command that
+  sets its own `DEBUG` is unaffected, and container bridges never inherit the host
+  environment.
   A bridge whose output nobody reads as records (one started by hand, or a model
   catalogue probe) stays on the format its environment asks for.
 - **Redaction runs before and after decoding.** Raw output is scrubbed per chunk.

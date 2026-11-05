@@ -6,7 +6,8 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
 import { useProjectStore } from "@/stores";
 import { SYSTEM_USAGE_STALE_AFTER_MS } from "./AgentInfoButton.panels";
-import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
+import { USAGE_READ_TIMEOUT_MS } from "@/hooks/useSystemUsage";
+import { READ_RETRY_MAX_MS, resetReadCoordinatorForTests } from "@/lib/read-coordinator";
 import {
   installFakeReadCoordinator,
   type FakeReadEnvironment,
@@ -301,6 +302,60 @@ describe("SystemUsageIndicator", () => {
     expect(trigger.getAttribute("data-stale")).toBe("true");
     expect(trigger.getAttribute("data-sampled-at")).toBe("2026-09-25T10:00:00.000Z");
     expect(screen.getByLabelText("Central processing unit (CPU) usage: —")).toBeTruthy();
+  });
+
+  test("says the process read failed rather than loading, and recovers by itself", async () => {
+    let failing = true;
+    nativeInvokeMock.mockImplementation(async (command: string) => {
+      if (command === "get_system_usage") return usageSnapshot();
+      if (command !== "get_environment_process_usage") return undefined;
+      if (failing) throw new Error("backend unavailable");
+      return processSnapshot();
+    });
+    render(<SystemUsageIndicator />);
+    openPanel();
+
+    expect(await screen.findByText("Couldn't read processes")).toBeTruthy();
+    expect(screen.queryByText("Loading processes…")).toBeNull();
+
+    failing = false;
+    await advance(READ_RETRY_MAX_MS);
+    expect(screen.queryByText("Couldn't read processes")).toBeNull();
+    expect(screen.getByLabelText("title-bar-layout processes")).toBeTruthy();
+  });
+
+  test("a process read that never answers stops looking like it is loading", async () => {
+    nativeInvokeMock.mockImplementation(async (command: string) => {
+      if (command === "get_system_usage") return usageSnapshot();
+      if (command === "get_environment_process_usage") return new Promise(() => {});
+      return undefined;
+    });
+    render(<SystemUsageIndicator />);
+    openPanel();
+
+    expect(await screen.findByText("Loading processes…")).toBeTruthy();
+    await advance(USAGE_READ_TIMEOUT_MS);
+    expect(screen.getByText("Couldn't read processes")).toBeTruthy();
+    expect(screen.queryByText("Loading processes…")).toBeNull();
+  });
+
+  test("the popover's meters say so when the host read failed with no sample", async () => {
+    let failing = true;
+    nativeInvokeMock.mockImplementation(async (command: string) => {
+      if (command === "get_environment_process_usage") return processSnapshot();
+      if (command !== "get_system_usage") return undefined;
+      if (failing) throw new Error("backend unavailable");
+      return usageSnapshot();
+    });
+    render(<SystemUsageIndicator />);
+    openPanel();
+
+    const panel = await screen.findByLabelText("System usage");
+    await waitFor(() => expect(within(panel).getByText("Data unavailable")).toBeTruthy());
+
+    failing = false;
+    await advance(READ_RETRY_MAX_MS);
+    expect(within(panel).queryByText("Data unavailable")).toBeNull();
   });
 
   test("opens a process panel from the meters and groups rows by environment", async () => {

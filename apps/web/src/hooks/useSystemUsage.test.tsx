@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, render } from "@testing-library/react";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
-import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
+import { READ_RETRY_MAX_MS, resetReadCoordinatorForTests } from "@/lib/read-coordinator";
 import {
   flushMicrotasks,
   installFakeReadCoordinator,
@@ -9,6 +9,7 @@ import {
 } from "@/lib/testing/read-coordinator";
 import {
   SYSTEM_USAGE_STALE_AFTER_MS,
+  USAGE_READ_TIMEOUT_MS,
   useEnvironmentProcessUsage,
   useSystemUsage,
   useMachineSystemUsage,
@@ -169,6 +170,84 @@ describe("useSystemUsage", () => {
     render(<Meter id="title" intervalMs={5_000} />);
     await advance(0);
     expect(views.get("title")!.sample).toBeNull();
+    expect(views.get("title")!.failed).toBe(true);
+  });
+
+  test("a read that never answers fails on time and sends no more until it settles", async () => {
+    let release!: (value: unknown) => void;
+    nextUsage = () =>
+      new Promise((resolve) => {
+        release = resolve;
+      });
+    render(<Meter id="title" intervalMs={5_000} />);
+    await advance(USAGE_READ_TIMEOUT_MS - 1);
+    expect(views.get("title")!.failed).toBe(false);
+    await advance(1);
+    expect(views.get("title")!.failed).toBe(true);
+
+    // Retries fail without adding requests that could never be aborted.
+    await advance(120_000);
+    expect(usageCalls).toHaveLength(1);
+    expect(views.get("title")!.failed).toBe(true);
+
+    // The late answer describes the past, so it is dropped; the next retry is new.
+    const stuck = release;
+    nextUsage = async () => sample(42);
+    stuck(sample(7));
+    await advance(0);
+    expect(views.get("title")!.sample).toBeNull();
+    await advance(READ_RETRY_MAX_MS);
+    expect(usageCalls.length).toBeGreaterThan(1);
+    expect(views.get("title")!.sample?.cpuPercent).toBe(42);
+    expect(views.get("title")!.failed).toBe(false);
+  });
+
+  test("an outstanding request does not block reads of a new server", async () => {
+    reads.coordinator.setConnection("local");
+    nextUsage = () => new Promise(() => {});
+    render(<Meter id="title" intervalMs={5_000} />);
+    await advance(USAGE_READ_TIMEOUT_MS);
+    expect(views.get("title")!.failed).toBe(true);
+
+    nextUsage = async () => sample(42);
+    act(() => reads.coordinator.setConnection("remote"));
+    await advance(2_000);
+    expect(usageCalls).toHaveLength(2);
+    expect(views.get("title")!.sample?.cpuPercent).toBe(42);
+    expect(views.get("title")!.failed).toBe(false);
+  });
+
+  test("failed holds while a retry is in flight, so the view does not flicker", async () => {
+    nextUsage = async () => {
+      throw new Error("backend unavailable");
+    };
+    render(<Meter id="title" intervalMs={5_000} />);
+    await advance(0);
+    expect(views.get("title")!.failed).toBe(true);
+
+    let release!: (value: unknown) => void;
+    nextUsage = () =>
+      new Promise((resolve) => {
+        release = resolve;
+      });
+    // A first failure retries at the healthy cadence.
+    await advance(5_000);
+    expect(usageCalls).toHaveLength(2);
+    expect(views.get("title")!.failed).toBe(true);
+
+    release(sample(9));
+    await advance(0);
+    expect(views.get("title")!.failed).toBe(false);
+    expect(views.get("title")!.sample?.cpuPercent).toBe(9);
+  });
+
+  test("a backend without the command reports failed; it is not left looking like loading", async () => {
+    nextUsage = async () => {
+      throw new Error("Unknown backend command: get_system_usage");
+    };
+    render(<Meter id="title" intervalMs={5_000} />);
+    await advance(60_000);
+    expect(usageCalls).toHaveLength(1);
     expect(views.get("title")!.failed).toBe(true);
   });
 

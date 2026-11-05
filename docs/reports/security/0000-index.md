@@ -20,12 +20,11 @@ A batch file combines several reports as numbered parts and takes the rating of 
 | 4 | [0170-l15-agent-tools-bind-address.md](0170-l15-agent-tools-bind-address.md) | Medium | No | L15: agent-tools server on `0.0.0.0` | The server is token-protected, so the wider bind adds reach for a leaked token rather than a direct way in. |
 | 5 | [0200-i1-workspace-grant-allowlist.md](0200-i1-workspace-grant-allowlist.md) | Medium | No | I1: grant deny-list against its documented guarantee | A grant holder can change global config and request host updates, but grants are short-lived and issued through the user's own command node. |
 | 6 | [0270-s8-ios-app-review.md](0270-s8-ios-app-review.md) | Medium | No | §8: the iOS app: Review the iOS app | It is a missing review of a client that holds the gateway token, with no specific defect known. |
-| 7 | [0260-live-checks-on-other-platforms.md](0260-live-checks-on-other-platforms.md) | Medium | No | §8: H1, M1 and M2 in shipping Safari, H3 on rootless Docker, and gateway reach on Linux Engine | The checks that could run here passed; what is left qualifies other platforms, and accepting a leaked session rests on the Linux Engine answer. |
-| 8 | [0020-m1-isolated-preview-default.md](0020-m1-isolated-preview-default.md) | Low | No | M1: legacy route retirement, and the two-machine run the default flip went ahead without | The sandbox header already closes the top-level path. The default is flipped; retirement waits on the support window in todo 0042. |
-| 9 | [0110-l18-dependency-advisories.md](0110-l18-dependency-advisories.md) | Low | No | L18: `undici`, `postcss-selector-parser`, Electron 45.x | The advisories are already accepted and blocked upstream in todo 0032. |
-| 10 | [0160-l12-descriptor-process-binding.md](0160-l12-descriptor-process-binding.md) | Low | No | L12: pid reuse by the same user | It needs a crashed backend, pid reuse and a co-tenant on the old port all at once. |
-| 11 | [0190-l17-provider-secrets-at-rest.md](0190-l17-provider-secrets-at-rest.md) | Low | No | L17: provider secrets in plaintext at 0600 | The report only says to consider it, and only a same-uid process can read the file. |
-| 12 | [0230-i5-preview-publication-domain.md](0230-i5-preview-publication-domain.md) | Low | No | I5: same-site check for the publication domain | Publication is off by default, and the gateway's Origin check and opaque sessions limit what a same-site host gains. |
+| 7 | [0020-m1-isolated-preview-default.md](0020-m1-isolated-preview-default.md) | Low | No | M1: legacy route retirement, and the two-machine run the default flip went ahead without | The sandbox header already closes the top-level path. The default is flipped; retirement waits on the support window in todo 0042. |
+| 8 | [0110-l18-dependency-advisories.md](0110-l18-dependency-advisories.md) | Low | No | L18: `undici`, `postcss-selector-parser`, Electron 45.x | The advisories are already accepted and blocked upstream in todo 0032. |
+| 9 | [0160-l12-descriptor-process-binding.md](0160-l12-descriptor-process-binding.md) | Low | No | L12: pid reuse by the same user | It needs a crashed backend, pid reuse and a co-tenant on the old port all at once. |
+| 10 | [0190-l17-provider-secrets-at-rest.md](0190-l17-provider-secrets-at-rest.md) | Low | No | L17: provider secrets in plaintext at 0600 | The report only says to consider it, and only a same-uid process can read the file. |
+| 11 | [0230-i5-preview-publication-domain.md](0230-i5-preview-publication-domain.md) | Low | No | I5: same-site check for the publication domain | Publication is off by default, and the gateway's Origin check and opaque sessions limit what a same-site host gains. |
 
 ## Parallel running
 
@@ -59,7 +58,6 @@ These still follow the lane and conflict rules above.
 | S-0160 | [Descriptor process binding](0160-l12-descriptor-process-binding.md) | `0160` | Gateway, 4 of 4 | None | None |
 | S-0230 | [Preview publication domain](0230-i5-preview-publication-domain.md) | `0230` | No lane | None | None |
 | S-0270 | [iOS app review](0270-s8-ios-app-review.md) | `0270` | No lane | None | None |
-| S-0260 | [Live checks on other platforms](0260-live-checks-on-other-platforms.md) | `0260` | No lane | None | None |
 
 ### Not ready to start
 
@@ -131,7 +129,7 @@ When one of these becomes ready, it joins the lane shown.
 | §8 `tmux-hooks` `find` not reviewed | No action | Read for this split: the path is quoted and the other value is a number (`apps/backend/src/core/tmux-hooks.ts:966-968`, `apps/backend/src/core/tmux-shared.ts:299-301`, `:700`) |
 | §8 Pi's `grep` and `find` tools | No action | They live in the Pi SDK outside this repository, and the report asks for nothing |
 | §8 iOS app not reviewed | Open | [0270-s8-ios-app-review.md](0270-s8-ios-app-review.md) |
-| §8 Dynamic testing | Partly done | H1, M1 and M2 in Chromium, Firefox and WebKit (`e2e/preview/gateway-browser-security.spec.ts`); H3 on Docker Desktop (`docs/development/container-qualification.md`); remainder in [0260-live-checks-on-other-platforms.md](0260-live-checks-on-other-platforms.md) |
+| §8 Dynamic testing | Partly done | H1, M1 and M2 in Chromium, Firefox and WebKit (`e2e/preview/gateway-browser-security.spec.ts`); H3 on Docker Desktop and rootless, and gateway reach on Docker Desktop and Linux Engine (`docs/development/container-qualification.md`); shipping Safari remains in [todo 5500](../../todo/previews-and-annotations/5500-shipping-safari-gateway-security-checks.md) |
 | §9 step 1 (H1 + M1) | Partly done | [Todo 2960](../../todo/cross-cutting/2960-host-prefixed-gateway-cookie.md), [0020-m1-isolated-preview-default.md](0020-m1-isolated-preview-default.md) |
 | §9 step 2 (H3) | Done | See H3 |
 | §9 step 3 (H2) | Done | See H2 |

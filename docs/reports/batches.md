@@ -68,7 +68,6 @@ These batches don't share a protected area. They only have to respect the confli
 - **E1 (Baseline run):** the baseline task in `0150`, `0160`, `0180`, `0190` and `0400`, in efficiency-logging-database
 - **S-0230 (Preview publication domain):** security `0230`
 - **S-0270 (iOS app review):** security `0270`
-- **S-0260 (Live checks on other platforms):** security `0260`
 - **E20 (ACP bridge):** efficiency-logging-database `0270`, `0260`, `0240`
 - **E21 (Pi bridge):** efficiency-logging-database `0130`, `0355`
 - **E23 (Renderer polling):** efficiency-logging-database `0620`, `0630`, `0660`

@@ -125,9 +125,9 @@ reveals or rotates the token only for the token sent as a bearer header. A
 leaked cookie still authenticates as that session until it ends; this was
 accepted on 2026-11-04, because a restricted container was refused at the
 gateway's port on Docker Desktop and binding a session to its peer address would
-not help (`docs/architecture/remote-gateway.md`, Security notes). Linux Engine
-is still to check
-([0260](security/0260-live-checks-on-other-platforms.md)). The `__Host-` name is
+not help (`docs/architecture/remote-gateway.md`, Security notes). Linux Engine,
+rootful and rootless, gave the same refusal on 2026-11-05
+(`docs/development/container-qualification.md`). The `__Host-` name is
 read and stripped but not issued yet, because older iOS builds look the cookie
 up by its plain name (todo 2960).
 **Actors:** A1 (container agent), A5
@@ -811,7 +811,7 @@ write and terminal calls when the policy denies them.
 - `tmux-hooks` `find` invocations were not reviewed.
 - Pi's `grep`/`find` tools live in the Pi SDK, outside this repo.
 - The iOS app (`apps/ios`) was not reviewed.
-- The initial review did no dynamic testing. H2 has since been checked against locally built before/after images with the root-boundary smoke test (see its Status above). H1, M1 and M2 pass in Chromium, Firefox and WebKit (`e2e/preview/gateway-browser-security.spec.ts`) and H3 on Docker Desktop (`docs/development/container-qualification.md`). Shipping Safari and rootless Docker remain ([0260](security/0260-live-checks-on-other-platforms.md)).
+- The initial review did no dynamic testing. H2 has since been checked against locally built before/after images with the root-boundary smoke test (see its Status above). H1, M1 and M2 pass in Chromium, Firefox and WebKit (`e2e/preview/gateway-browser-security.spec.ts`) and H3 on Docker Desktop and rootless Linux Engine (`docs/development/container-qualification.md`). Shipping Safari remains ([todo 5500](../todo/previews-and-annotations/5500-shipping-safari-gateway-security-checks.md)).
 
 ## 9. Recommended remediation order
 

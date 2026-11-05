@@ -152,3 +152,24 @@ test("the running-command poll stops while hidden and reads again on return", as
   cleanup();
   resetReadCoordinatorForTests();
 });
+
+test("refresh keeps its identity across renders and reads for the current tab", async () => {
+  const view = renderHook(({ tabId }) => useUserCommands("env", tabId), {
+    initialProps: { tabId: "tab" },
+  });
+  await flush();
+  const refresh = view.result.current.refresh;
+
+  view.rerender({ tabId: "tab" });
+  await flush();
+  expect(view.result.current.refresh).toBe(refresh);
+
+  view.rerender({ tabId: "other" });
+  await flush();
+  expect(view.result.current.refresh).toBe(refresh);
+  const count = calls.length;
+  act(() => refresh());
+  await flush();
+  expect(calls).toHaveLength(count + 1);
+  expect(calls.at(-1)).toBe("list_user_commands");
+});

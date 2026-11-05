@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import * as fs from "node:fs/promises";
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { tmpdir } from "node:os";
@@ -800,6 +801,63 @@ describe.serial("terminal history", () => {
     expect((await history.page("failing-write"))?.historyGap).toBe(true);
     expect(history.stats()).toMatchObject({ queuedBytes: 0, queuedRecords: 0 });
   });
+
+  for (const failure of ["partial append", "chmod"] as const) {
+    test(`rolls back ${failure} and preserves committed rows across refill and restart`, async () => {
+      const dataDir = await temporaryDirectory();
+      const id = `rollback-${failure}`;
+      const directory = await readySession(dataDir, id);
+      const file = path.join(directory, "segment-000001.jsonl");
+      const expected: string[] = [];
+      for (let burst = 0; burst < 4; burst += 1) {
+        const lines = Array.from({ length: 800 }, (_, i) => `${burst}:${i}`.padEnd(1_000, "x"));
+        history.append(id, `${lines.join("\r\n")}\r\n`, burst + 1, 1);
+        await history.settled();
+        expected.push(...lines);
+      }
+      const committedBytes = (await stat(file)).size;
+      const append = fs.appendFile;
+      const chmod = fs.chmod;
+      let injected = false;
+      const spy =
+        failure === "partial append"
+          ? spyOn(fs, "appendFile").mockImplementation(async (...args) => {
+              if (args[0] === file && !injected) {
+                injected = true;
+                // A real on-disk remnant larger than the maximum record allowance.
+                await append(file, String(args[1]).slice(0, 200 * 1024));
+                throw new Error("injected partial append");
+              }
+              return append(...args);
+            })
+          : spyOn(fs, "chmod").mockImplementation(async (...args) => {
+              if (args[0] === file && !injected) {
+                injected = true;
+                throw new Error("injected chmod failure after append");
+              }
+              return chmod(...args);
+            });
+      try {
+        history.append(id, `${"lost".padEnd(1_000, "x")}\r\n`.repeat(600), 5, 1);
+        await history.settled();
+        expect(injected).toBe(true);
+        expect((await stat(file)).size).toBe(committedBytes);
+      } finally {
+        spy.mockRestore();
+      }
+      expect(history.stats()).toMatchObject({ queuedBytes: 0, queuedRecords: 0 });
+      const recovered = Array.from({ length: 900 }, (_, i) => `recovered:${i}`.padEnd(1_000, "y"));
+      history.append(id, `${recovered.join("\r\n")}\r\n`, 6, 1);
+      expected.push(...recovered);
+      expect(await readAllRows(id)).toEqual(expected);
+      expect((await history.page(id))?.historyGap).toBe(true);
+      await history.flush();
+      restartHistory();
+      await readySession(dataDir, id);
+      expect(await readAllRows(id)).toEqual(expected);
+      expect((await history.page(id))?.historyGap).toBe(true);
+    });
+  }
 
   test("serializes pages with high-water writes through segment rollover", async () => {
     let entered!: () => void;

@@ -1087,11 +1087,17 @@ export class TerminalHistory {
         let batchBytes = 0;
         let batchLast = 0;
         const writeBatch = async (target: Manifest["segments"][number]) => {
-          await fs.appendFile(segmentPath(session, target.number), batch, {
-            encoding: "utf8",
-            mode: 0o600,
-          });
-          await fs.chmod(segmentPath(session, target.number), 0o600);
+          const file = segmentPath(session, target.number);
+          try {
+            await fs.appendFile(file, batch, { encoding: "utf8", mode: 0o600 });
+            await fs.chmod(file, 0o600);
+          } catch (error) {
+            // appendFile can leave a partial batch, and chmod can fail after a
+            // complete append. Keep the file at its last committed boundary so
+            // later appends cannot turn the unaccounted tail into durable rows.
+            await fs.truncate(file, target.bytes).catch(() => {});
+            throw error;
+          }
           target.bytes += batchBytes;
           target.last = batchLast;
           session.manifest.durableThroughSequence = batchLast;

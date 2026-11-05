@@ -618,6 +618,7 @@ mock.module("@/stores", () => ({
       selector?: (state: {
         environments: Environment[];
         deletingEnvironments: Set<string>;
+        deletingStartedAt: Map<string, string>;
         getEnvironmentById: (environmentId: string) => Environment | undefined;
         updateEnvironment: (environmentId: string, environment: Environment) => void;
         setEnvironmentPR: () => void;
@@ -641,6 +642,7 @@ mock.module("@/stores", () => ({
               : environment,
           ),
           deletingEnvironments: currentDeletingEnvironments,
+          deletingStartedAt: new Map<string, string>(),
           isDeleting: (id: string) => currentDeletingEnvironments.has(id),
           getEnvironmentById: (environmentId: string) =>
             environmentId === currentEnvironment.id

@@ -1,4 +1,5 @@
 import { PlanUsageFixture } from "./PlanUsageFixture";
+import { logDetailIsRaised } from "@orkestrator/protocol/log-policy";
 import { useState } from "react";
 import { GlobalSettings } from "../../apps/web/src/components/settings/GlobalSettings";
 import { useConfigStore } from "../../apps/web/src/stores/configStore";
@@ -13,6 +14,22 @@ function installGlobalSettingsFixture() {
     : config;
   const readConfig = (): AppConfig =>
     JSON.parse(localStorage.getItem("global-settings-config") ?? JSON.stringify(initialConfig));
+  const expiryBackend = new URLSearchParams(window.location.search).has("expiry-backend");
+  window.addEventListener("fixture-keep-raised", ((event: CustomEvent<boolean>) => {
+    const current = readConfig();
+    const next = {
+      ...current,
+      global: {
+        ...current.global,
+        logDetailKeepRaised: event.detail,
+        logDetailExpiresAt: event.detail
+          ? undefined
+          : new Date(Date.now() + 86_400_000).toISOString(),
+      },
+    };
+    localStorage.setItem("global-settings-config", JSON.stringify(next));
+    useConfigStore.getState().setConfig(next);
+  }) as EventListener);
   window.orkestrator = {
     ...window.orkestrator!,
     invoke: async <T,>(command: string, args?: Record<string, unknown>): Promise<T> => {
@@ -35,6 +52,20 @@ function installGlobalSettingsFixture() {
           for (const key of (args!.unset as string[] | undefined) ?? []) {
             delete (global as unknown as Record<string, unknown>)[key];
           }
+          if (expiryBackend) {
+            if (!logDetailIsRaised(global.logDetail ?? { level: "info", areaLevels: {} })) {
+              delete global.logDetailKeepRaised;
+              delete global.logDetailExpiresAt;
+            } else if (global.logDetailKeepRaised) {
+              delete global.logDetailExpiresAt;
+            } else {
+              global.logDetailExpiresAt = new Date(Date.now() + 86_400_000).toISOString();
+            }
+          }
+          localStorage.setItem(
+            "global-settings-patch-count",
+            String(Number(localStorage.getItem("global-settings-patch-count") ?? 0) + 1),
+          );
           const config = { ...current, global };
           localStorage.setItem("global-settings-last-write", JSON.stringify(global));
           localStorage.setItem("global-settings-last-unset", JSON.stringify(args!.unset ?? []));

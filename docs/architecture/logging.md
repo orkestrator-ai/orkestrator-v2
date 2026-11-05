@@ -406,6 +406,7 @@ along. The `source` a relay adds is kept only as a known provider plus an enviro
 | `logging` | `essential.started` | `owner` | This process began writing the file. |
 | `logging` | `essential.stopped` | `owner` | It stopped, in an orderly exit. |
 | `logging` | `entries.dropped` | `entries`, `bytes`, `reason` | Entries were lost; see below. |
+| `renderer-errors` | `error.recorded` | `errorClass`, `boundary`, `route`, `fingerprint`, `count` | A desktop window reported new occurrences of a renderer failure; see [Renderer failures in the essential log](#renderer-failures-in-the-essential-log). |
 
 A lease is **regained** by the next backend, not by the one that lost it: a lost lease
 is final until that process restarts, so `writer-lease.regained` is written by whichever
@@ -531,8 +532,67 @@ unexplained beyond its exit signal.
 Each line is a record `parseLogRecordLine` reads, so `jq` works on the file. **Open log
 folder** in Settings → Debug shows it, as `essential/`. The bug report prompt points
 agents at it first, and [the diagnostics bundle](#the-diagnostics-bundle) carries it.
-Later work may write to it (renderer diagnostics), which is not decided, and renderer
-lines do not reach it today.
+Renderer lines do not reach it; only the content-free entries of the renderer error
+ring below do.
+
+### Renderer failures in the essential log
+
+A renderer failure used to leave nothing behind: its console stays in the browser
+(see [What stays out of the persistent log](#what-stays-out-of-the-persistent-log)).
+Each renderer now keeps an error ring (`apps/web/src/lib/renderer-error-ring.ts`), and a
+desktop window sends its new counts to the backend it drives, which writes them here as
+`renderer-errors` `error.recorded`.
+
+An entry is five fields and nothing else, defined in
+`packages/protocol/src/renderer-errors.ts`:
+
+| Field | Holds |
+| --- | --- |
+| `errorClass` | A built-in error class, `ChunkLoadError`, or `NonErrorThrow`. A custom class name is application text, so it becomes `Error`. |
+| `boundary` | Where it was caught: `lazy-view`, `message-row` or `rich-block` (the boundaries that name themselves), `boundary` (any other), `root` (no boundary caught it), `recoverable` (React recovered), `window` or `rejection` (the window's own error and unhandled-rejection events). |
+| `route` | Which renderer: `window` (a desktop window's own), `realm` (a workspace realm in one) or `browser` (the web client). The app has no URL router, so the surface stands in for a route pattern. |
+| `fingerprint` | Eight hex digits of FNV-1a over the class, stack and component stack, the same one the boundaries already log. It tells failures apart without keeping what it was computed from. |
+| `count` | Occurrences since the last report, capped at 1,000,000. |
+
+The error is used only to compute the class and fingerprint; **no message and no
+stack** is kept, in the ring or anywhere after it.
+
+```mermaid
+flowchart LR
+  B["React root onCaughtError / onUncaughtError / onRecoverableError"] --> R[(ring, 100 entries)]
+  W["window error / unhandledrejection"] --> R
+  R -->|"new counts, ≤ 20 per write, every 10 s"| C["record_renderer_errors"]
+  C -->|"parsed again, 30 entries a minute"| E[(logs/essential)]
+```
+
+Pending metadata (including in-flight counts) is bounded to 100 entries in per-window
+session storage and removed after acknowledgement. Reloads can recover it; pagehide
+also attempts a flush. Blocked storage falls back to memory. A lost acknowledgement
+can cause a duplicate count after reload; this is best-effort diagnostic delivery.
+
+- **Recorded once, at the root.** Every boundary's catch passes through React's root
+  `onCaughtError`, which receives the boundary instance; a boundary names itself with a
+  static `diagnosticBoundary`. Nothing is added to each boundary's `componentDidCatch`.
+- **Bounded in the renderer.** At most 100 distinct entries, the least recently seen
+  dropped first. A repeat only raises a count.
+- **Sent by a desktop window only.** Its own renderer starts the upload
+  (`renderer-error-upload.ts`) once the app starts: promptly for the first failure, then every 10 seconds, up to 20
+  entries a write. A failed send puts the counts back and waits twice as long, up to five
+  minutes. A backend that predates the command answers "Unknown backend command", which
+  stops the upload for that load. A workspace realm and a browser tab keep their ring
+  in memory: whose log their entries belong in is open
+  ([6300](../todo/cross-cutting/6300-renderer-error-ring-for-realms-and-web-clients.md)).
+- **Validated and rate-bound in the backend.** `record_renderer_errors`
+  (`renderer-error-recorder.ts`) parses every entry against the fixed lists again: any
+  other key (a `message`, a `stack`) or any value outside its list refuses the whole
+  write. Across every client it writes at most 30 entries a minute and counts the rest
+  in one `report.rate-limited` line per minute. The essential log's own per-event budget
+  applies after that. A workspace client may not call it
+  (`workspace-grant-scope.ts`): this machine's log is its own.
+- **Not the startup markers.** The ring never writes to the console and never uses the
+  `desktop.startup` area, so the [exact-marker rule](#what-stays-out-of-the-persistent-log)
+  is unchanged. It is also separate from `recentRendererErrors`, the bug report's
+  in-memory list, which does hold messages and is redacted by the agent.
 
 ## Health summary and the clean exit marker
 
@@ -872,7 +932,7 @@ interrupts a running agent.
 | Control | Config keys | Decides |
 | --- | --- | --- |
 | **Save Logs to Disk**, with retention | `debugLogging`, `debugLogRetentionDays` | Whether what is written reaches the log file, and for how long it stays. The [essential log](#the-essential-event-log) follows neither. |
-| **Log Detail** | `logDetail` (`level`, `areaLevels`) | What each process writes: a default level and levels by area. It cannot switch off an essential event. |
+| **Log Detail** | `logDetail` (`level`, `areaLevels`), `logDetailKeepRaised`; `logDetailExpiresAt` is the backend's | What each process writes: a preset, a default level and levels by area. Raised detail goes back to `info` after 24 hours unless kept on. It cannot switch off an essential event. |
 
 An area covers its children unless a child has its own entry: `desktop=debug` also
 covers `desktop.dialog`. The default is `info`. Bridge snapshots
@@ -926,7 +986,8 @@ flowchart LR
   A config without `logDetail` is upgraded once by `normalizePersistedConfig`: on
   maps to `level: info`, `areaLevels: { bridge: debug }`, off to the defaults.
   `bridge.diagnostics` inherits `debug` from `bridge`, so someone upgrading with it
-  on keeps the per-minute snapshot stream unchanged. The
+  on initially keeps the per-minute snapshot stream. This raised bridge detail
+  expires after 24 hours unless **Keep raised detail on** is enabled. The
   key names stay, so a downgrade still reads them. `resolveLogDetail` applies the
   same mapping for a reader that gets there first (Electron starts before its
   backend). A save from a client that predates `logDetail` keeps the stored value.
@@ -937,8 +998,43 @@ flowchart LR
   A bridge the backend launches inherits the backend's value at launch, so the
   override sits on top there too; a bridge already running keeps what it started
   with. Unset, the settings are the whole answer.
+- **Presets are a shortcut, not a setting.** **Log Detail** offers Normal, Quiet,
+  Agent sessions (`bridge=debug`), Crashes and stopped processes (`backend`, `desktop`
+  and `local-server` at `debug`, the lines
+  [the crash guide](../debugging/process-crashes-and-kills.md) reads), Updates
+  (`updater=debug`) and Everything (`debug`). Choosing one writes ordinary `level` and
+  `areaLevels`, so nothing new is stored and an older client sees plain values. The
+  current preset is found by comparison (`log-detail-presets.ts`); a level changed by
+  hand shows **Custom**. A preset's meaning is the one in the client that applied it.
+- **Raised detail expires.** Any level above `info`, the default or an area's, is
+  raised. Every write of the global config recomputes the backend-owned
+  `logDetailExpiresAt` (`nextLogDetailExpiresAt`): the same raised levels keep their
+  expiry, changed ones get 24 hours from now, and detail at `info` stores none. A value
+  a client sends is ignored, so an older client that raises detail still gets one. The
+  backend checks at start and every minute (`LogPolicyService`,
+  `reconcileLogDetailExpiry`); when it is due, raised levels go back to `info` (a
+  lowered area such as `updater=warn` stays) through an ordinary config write, so the
+  audit line, this process and every bridge follow, and `logging` `policy.detail-expired`
+  is written. **Save Logs to Disk** is never touched. A raised setting with no expiry,
+  written by hand, by an older backend or by the upgrade from `debugLogging`, gets one
+  at the next check. The expiry is in `config.json`, so it survives a restart, and an
+  expiry that passed while the backend was stopped is honoured at its next start.
+- **Keeping it raised.** `logDetailKeepRaised`, the **Keep raised detail on** switch,
+  stores no expiry for a long investigation. Turning it off starts a fresh 24 hours. It
+  is dropped when detail goes back to `info`, so it applies to one investigation. A save
+  that omits it (a client that predates it) keeps the stored value; the settings form
+  sends `false` rather than unsetting it. A downgraded backend ignores both keys and
+  keeps raised detail until it is changed; upgrading again restores the expiry or
+  stamps a new one.
+- **What logs leave out.** Settings says logs are designed to leave out prompts,
+  terminal output, file contents and credentials. It does not say "never": a string
+  field and output that is not a logger call cannot be proved clean
+  ([Restricted fields](#restricted-fields), [the bridge hop](#the-bridge-hop)).
+- **`orkestrator serve` has no log flags.** `ORKESTRATOR_LOG_LEVEL` is the way to set a
+  service's levels at start ([public-cli.md](public-cli.md#log-levels-for-serve)); it is
+  read before flags are parsed and reaches the bridges the backend launches.
 - **Renderer logs are not part of this.** See [What stays out of the persistent
-  log](#what-stays-out-of-the-persistent-log).
+  log](#what-stays-out-of-the-persistent-log) and [The renderer](#the-renderer).
 
 Live bridge delivery sends stored levels; each receiving process applies its own
 `ORKESTRATOR_LOG_LEVEL` override, which the settings do not replace. Local targets are delivered before Docker discovery completes;
@@ -1189,8 +1285,10 @@ flowchart LR
   is made of, and `application-logging.test.ts` covers the file: the tee is installed
   only for the production flavor, which no test may run against real data.
 
-Whether more may be saved is undecided (recommendation R8 in the
-[review](../reports/2026-10-29-logging-and-database-efficiency.md)).
+Recommendation R8 in the [review](../reports/2026-10-29-logging-and-database-efficiency.md)
+asked whether more may be saved. The answer is the content-free error ring:
+[Renderer failures in the essential log](#renderer-failures-in-the-essential-log). The
+console itself still stays in the browser.
 
 ## The renderer
 
@@ -1202,8 +1300,23 @@ with one vocabulary file per domain (`web-kanban.ts`, `web-sync.ts`, and so on).
   reloading raises every area to `debug`: `applyRendererLogLevel`
   (`apps/web/src/lib/debug-log.ts`) reads it once at startup. This is the old
   `rendererDebugLog` gate, which every `debug` site now goes through, including those
-  that were plain `console.debug` and always wrote. It has no setting or UI, and
-  `trace` stays off.
+  that were plain `console.debug` and always wrote. `trace` stays off.
+- **Its switch.** Settings → Debug → **Renderer Debug Logging**
+  (`RendererDebugSettings.tsx`) sets or clears the key for this window and reloads. It
+  is per window by design: the key is in the window's own storage, so a browser tab or a
+  window on another machine sets its own, and a host setting never changes another
+  client's console. Renderer areas stay out of live policy.
+- **Developer Tools.** The packaged app opens DevTools only from **Help → Open Developer
+  Tools**, and that item exists only while a renderer has debug logging on. Each
+  renderer reports its state to the main process at start
+  (`orkestrator:window:set-renderer-debug`, on or off), and `renderer-debug-tools.ts`
+  rebuilds the menu when whether any renderer has it on changes. The item opens the
+  focused renderer, or its window's own, and only one that reported it on. Help is on
+  every platform; on macOS it is the system Help menu, with its search field. DevTools
+  shows what the renderer holds in memory, tokens included, which is why it is opt-in
+  and the switch says so. The artifact host and browser previews keep their own rules
+  (`artifact-host-session.ts`, `browser-preview-manager.ts`); the menu never targets
+  them.
 - **What a line now looks like.** One text line, not a console object: `error.name`,
   `error.message` and up to 8 relative frames, with no expandable object or
   source-mapped links in DevTools. Where a site logged an entity or a name, it now

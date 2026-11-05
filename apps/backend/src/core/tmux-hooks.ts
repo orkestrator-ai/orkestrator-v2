@@ -3,6 +3,8 @@ import {
   AGENT_INTERACTION_HOLD_CEILING_MS,
   type AgentInteractionHold,
 } from "@orkestrator/protocol/agent-interactions";
+import { isPeerMailCarrierContent } from "@orkestrator/protocol/agent-mail";
+import { stripSystemInstructions } from "@orkestrator/protocol/review-evidence-frames";
 import { stripTranscriptAnnotations } from "@orkestrator/protocol/transcript-annotations";
 import {
   AGENT_INTERACTION_DEFAULT_TIMEOUT_MS,
@@ -1142,7 +1144,7 @@ export async function listPreviousSessions(
 }
 
 /**
- * The first user message in the head of a transcript.
+ * The first user message in the head of a transcript that a person wrote.
  *
  * When the head was truncated its final line is a fragment — possibly cut mid
  * multi-byte character — so it is dropped rather than parsed.
@@ -1176,7 +1178,12 @@ export function titleFromTranscriptHead(head: string, truncated: boolean): strin
     const contentField = message?.content ?? record.content;
     // Title the session after the user's own words, not the inert reference
     // material an Orkestrator prompt quotes after them.
-    const text = stripTranscriptAnnotations(extractTextContent(contentField) ?? "").trim();
+    const text = stripSystemInstructions(
+      stripTranscriptAnnotations(extractTextContent(contentField) ?? ""),
+    ).trim();
+    // Mail can reach a tab before anyone types. It is not the user's words, and
+    // its subject is the sender's choice, so it never names their session.
+    if (isPeerMailCarrierContent(text, { requirePayloadFrame: true })) continue;
     if (text) return truncateTitle(text, 80);
   }
   return null;

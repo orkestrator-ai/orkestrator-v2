@@ -69,3 +69,10 @@ or skip was changed.
 ## Static Find repair aggregate, 2026-11-05
 
 `mise run test` after commit `c4448a5ad` timed out `root-change approval handles over-limit and still permits rejection` at 7424.08 ms (5000 ms limit). Web totals: 12590 pass, 10 skip, 1 fail. Evidence: `/tmp/orkestrator-test-run.PpclE3/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`. Complete unchanged owner rerun: `mise run test:logged -- --name approval-alone -- bun --cwd=apps/web test ./src/components/federation/node-action-requests.test.tsx --parallel=1 --only-failures`, passed, exit 0, 2.0 s. No cause established; no assertion changed.
+
+
+## Mail envelope review recurrence — 2026-11-05
+
+Preparation at `c394083df` repeated `root-change approval handles over-limit and still permits rejection` in `apps/web/src/components/federation/node-action-requests.test.tsx`: 5373.35 ms against the 5000 ms deadline. Original command: `mise run test:logged -- --name review-default-tests -- mise run test`. The supplied package does not record the worker grants; visible summaries total 33,391 tests (33,236 passed, 5 failed, 150 skipped). Evidence is `.orkestrator/review-artifacts/review-validation-66eeef27-a031-4c68-a36b-f870e73b9c33/validation-04.stderr.txt`.
+
+The unchanged owning file passed alone (exit 0, 3.1 s) with `NODE_ENV=test mise run test:logged -- --name root-approval-alone -- bun test --cwd apps/web ./src/components/federation/node-action-requests.test.tsx --parallel=1 --only-failures`. The logged runner removed passing output, so its test count was not retained. A two-owner diagnostic run also passed this test while repeating three fork failures in the other owner (`/tmp/orkestrator-test-run.8u8Xff/federation-focused.log.gz`, 109 passed, 3 failed). No assertion, timeout or production code for this case changed; no cause is established.

@@ -691,7 +691,9 @@ host-reachability check: each backend is a new Docker owner stopped seconds
 after `ready`, so its Linux probe network would belong to an owner nothing
 reaps. A later on-demand check (a container scenario on a rootless daemon, a
 workflow preflight) still runs. A scenario that needs the boot check passes
-the variable through its own `env`. `service-preview-electron.spec.ts` sets it
+the variable through its own `env`. `renderer-log-boundary-electron.spec.ts`
+sets it because the probe's container can make Chromium abort the window's Vite
+module loads (flake 2340). `service-preview-electron.spec.ts` sets it
 for both of its backends too (agent-test backends keep it, in
 `AGENT_TEST_SAFE_ENV_NAMES`): on a host whose firewall drops Docker traffic the
 check's result dialog opened mid-test and took keyboard focus (flake 0620).

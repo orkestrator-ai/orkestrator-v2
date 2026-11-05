@@ -257,3 +257,40 @@ describe("backend previous-run", () => {
     expect(projectEssentialRecord(entry("/home/someone"), TS)?.fields?.outcome).toBeUndefined();
   });
 });
+
+describe("renderer error entries", () => {
+  const fields = {
+    errorClass: "TypeError",
+    boundary: "message-row",
+    route: "window",
+    fingerprint: "0a1b2c3d",
+    count: 3,
+  };
+
+  test("an entry keeps its five fields and nothing a sender adds", () => {
+    const projected = projectEssentialRecord(
+      record("renderer-errors", "error.recorded", "warn", {
+        ...fields,
+        message: SECRET,
+        stack: `TypeError: ${SECRET}\n    at render (/Users/someone/app.js:1:1)`,
+      }),
+      TS,
+    );
+    expect(projected?.fields).toEqual(fields);
+    expect(JSON.stringify(projected)).not.toContain("someone");
+  });
+
+  test("a value outside its list is dropped, not written", () => {
+    const projected = projectEssentialRecord(
+      record("renderer-errors", "error.recorded", "warn", {
+        errorClass: "MyAppError",
+        boundary: SECRET,
+        route: "/settings/debug",
+        fingerprint: "not-a-hash",
+        count: 1,
+      }),
+      TS,
+    );
+    expect(projected?.fields).toEqual({ count: 1, droppedFields: 4 });
+  });
+});

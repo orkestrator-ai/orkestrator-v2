@@ -4,7 +4,7 @@ import { ownProcessGroup, stopProcessGroup } from "../process-cleanup";
 import { _electron as electron } from "playwright";
 import type { ElectronApplication, Page } from "playwright";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -233,6 +233,10 @@ test("a real window sends its startup markers to the main process and none of it
         ELECTRON_DEV: "1",
         VITE_DEV_SERVER_URL: rendererUrl,
         ORKESTRATOR_RUNTIME_PROFILE_FILE: profilePath,
+        // No startup container-to-host probe: its container changes an interface
+        // while the renderer is loading, and Chromium aborts the loopback module
+        // requests with ERR_NETWORK_CHANGED (flake 2340).
+        ORKESTRATOR_HOST_REACHABILITY_CHECK: "off",
       },
     });
     recordElectronDiagnostics(app);
@@ -274,6 +278,43 @@ test("a real window sends its startup markers to the main process and none of it
       timeout: 60_000,
     });
     expect(await emitDebugProbes(window)).toBe(true);
+    const previewDir = path.join(repositoryRoot, "output", "visual-previews");
+    await mkdir(previewDir, { recursive: true });
+    await window.screenshot({ path: path.join(previewDir, "e16-menu-before-devtools.png") });
+    // Invoke the real createMenu action while a different, non-opted-in window
+    // has focus. The globally offered action must still open opted-in contents.
+    await app.evaluate(async ({ BrowserWindow, Menu }) => {
+      const extra = new BrowserWindow({ show: true, webPreferences: { sandbox: true } });
+      await extra.loadURL("about:blank");
+      extra.focus();
+      const help = Menu.getApplicationMenu()!.items.find(
+        (item) => item.label === "Help" || item.role === "help",
+      )!;
+      const action = help.submenu!.items.find((item) => item.label === "Open Developer Tools")!;
+      action.click();
+      extra.close();
+    });
+    await expect
+      .poll(() =>
+        app.evaluate(({ BrowserWindow }) =>
+          BrowserWindow.getAllWindows().some((win) => win.webContents.isDevToolsOpened()),
+        ),
+      )
+      .toBe(true);
+    const inspectorImage = await app.evaluate(async ({ BrowserWindow }) => {
+      const inspector = BrowserWindow.getAllWindows().find((win) =>
+        win.webContents.isDevToolsOpened(),
+      )!.webContents.devToolsWebContents!;
+      return (await inspector.capturePage()).toPNG().toString("base64");
+    });
+    await writeFile(
+      path.join(previewDir, "e16-menu-after-devtools.png"),
+      Buffer.from(inspectorImage, "base64"),
+    );
+    await app.evaluate(({ BrowserWindow }) => {
+      for (const win of BrowserWindow.getAllWindows()) win.webContents.closeDevTools();
+    });
+
     await expect.poll(debugProbes).toEqual([
       { type: "debug", text: "[web.window] error.unhandled scope=debug-boundary-probe" },
       { type: "debug", text: "[terminal] connect.called scope=debug-boundary-probe" },
@@ -332,6 +373,82 @@ test("a real window sends its startup markers to the main process and none of it
     await expect.poll(essential, { timeout: 30_000 }).toContain('"event":"starting"');
     expect(await essential()).toContain('"owner":"desktop"');
     expect((await stat(essentialFile)).mode & 0o777).toBe(0o600);
+    // Use the renderer's actual ring and scheduled uploader, never invoke the
+    // recording command directly. Only metadata may cross the real relay.
+    await window.evaluate(async () => {
+      const ReactModule = await import(
+        /* @vite-ignore */ String("/node_modules/.vite/deps/react.js")
+      );
+      const React = ReactModule.default ?? ReactModule;
+      const ClientModule = await import(
+        /* @vite-ignore */ String("/node_modules/.vite/deps/react-dom_client.js")
+      );
+      const { createRoot } = ClientModule.default ?? ClientModule;
+      const { createReactRootErrorOptions } = await import(
+        /* @vite-ignore */ String("/src/lib/react-root-errors.ts")
+      );
+      const host = document.createElement("div");
+      document.body.append(host);
+      class Boundary extends React.Component {
+        static diagnosticBoundary = "message-row";
+        state = { failed: false };
+        static getDerivedStateFromError() {
+          return { failed: true };
+        }
+        render() {
+          return this.state.failed ? "Caught diagnostic probe" : this.props.children;
+        }
+      }
+      function Broken() {
+        const error = new TypeError("synthetic-private-renderer-message");
+        error.stack = "synthetic-private-renderer-stack";
+        throw error;
+      }
+      const root = createRoot(host, createReactRootErrorOptions());
+      root.render(React.createElement(Boundary, null, React.createElement(Broken)));
+      await new Promise<void>((resolve) => {
+        const observer = new MutationObserver(() => {
+          if (!host.textContent?.includes("Caught diagnostic probe")) return;
+          observer.disconnect();
+          resolve();
+        });
+        observer.observe(host, { childList: true, subtree: true });
+      });
+      root.unmount();
+      host.remove();
+    });
+    // Reload immediately after the caught failure, before the old ten-second interval.
+    await window.reload();
+    await expect.poll(essential, { timeout: 30_000 }).toContain('"event":"error.recorded"');
+    // Let the reloaded page finish starting. Closing it mid-request throws in the
+    // main process and loses the shutdown lines checked below (6303).
+    await expect(window).toHaveTitle(profile.electronTitle, { timeout: 60_000 });
+    await expect(window.getByRole("button", { name: "Global settings", exact: true })).toBeVisible({
+      timeout: 60_000,
+    });
+    const records = (await essential())
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    const failure = records.find(
+      (record) => record.area === "renderer-errors" && record.event === "error.recorded",
+    );
+    expect(failure.fields).toMatchObject({
+      errorClass: "TypeError",
+      boundary: "message-row",
+      route: "window",
+      count: 1,
+    });
+    expect(Object.keys(failure.fields).sort()).toEqual([
+      "boundary",
+      "count",
+      "errorClass",
+      "fingerprint",
+      "route",
+    ]);
+    expect(failure.fields.fingerprint).toMatch(/^[0-9a-f]{8}$/);
+    expect(await essential()).not.toContain("synthetic-private-renderer");
+
     await closeElectronWithin(launchedApp);
     launchedApp = null;
     await expect.poll(essential, { timeout: 10_000 }).toContain('"event":"essential.stopped"');

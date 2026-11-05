@@ -1843,8 +1843,7 @@ export class CoordinatorStatusWakes {
                 : state.tab,
           )
           .catch(() => "unknown" as const)
-      : delegation.waiting &&
-          (await this.storage.getEnvironment(association.resourceId))?.status === "stopped"
+      : (await this.storage.getEnvironment(association.resourceId))?.status === "stopped"
         ? "stopped"
         : await this.options.workerActivity!(association.resourceId, delegation.workerTabId);
     if (activity !== "waiting") {

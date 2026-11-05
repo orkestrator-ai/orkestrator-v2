@@ -325,6 +325,31 @@ describe("a delegation that keeps failing", () => {
     });
   });
 
+  for (const restart of [false, true]) {
+    test(`retirement receipt failure resumes only retirement (restart=${restart})`, async () => {
+      const world = await create({ delegations: { wakeRetireMinMs: 0 } });
+      const main = await world.main();
+      const worker = await world.addEnvironment("worker", { launched: true });
+      await closeDelegation(world, worker);
+      const ordinary = failNoticesFor(world, [worker]);
+      const receipt = spyOn(
+        world.storage.coordinators,
+        "markCoordinatorDelegationWakeFailed",
+      ).mockRejectedValueOnce(new Error("receipt write failed"));
+      await runPasses(world, RETIRE_ATTEMPTS);
+      ordinary.mockRestore();
+      receipt.mockRestore();
+      expect((await delegation(world, worker)).wakeRetirement).toBeDefined();
+      expect((await delegation(world, worker)).wokenAt).toBeUndefined();
+      if (restart) await world.restart();
+      await world.coordinator.deliverDelegationWakes();
+      expect((await delegation(world, worker)).wakeFailedAt).toBeString();
+      await world.deliver();
+      expect(world.received(main)).toHaveLength(1);
+      expect(world.received(main)[0]).toContain("will not be tried again");
+    });
+  }
+
   test("a burst of passes on a short fault does not retire it", async () => {
     const world = await create();
     const main = await world.main();
@@ -384,7 +409,7 @@ describe("a delegation that keeps failing", () => {
     const main = await world.main();
     await runPasses(world, 1);
     expect((await delegation(world, worker)).wokenAt).toBeString();
-    expect(await inboxSubjects(world, main)).toContain("Worker worker finished");
+    expect(await inboxSubjects(world, main)).toContain("wake failed");
   });
 
   test("keeps the wake owed without a main, then notifies a later main", async () => {
@@ -404,7 +429,7 @@ describe("a delegation that keeps failing", () => {
     const later = await world.main();
     await runPasses(world, 1);
     expect((await delegation(world, worker)).wokenAt).toBeString();
-    expect(await inboxSubjects(world, later)).toContain("Worker worker finished");
+    expect(await inboxSubjects(world, later)).toContain("wake failed");
   });
 
   test("a report still held for it is released as ordinary mail on the sweep", async () => {
@@ -604,6 +629,35 @@ describe("a delegation closing during a pass", () => {
 });
 
 describe("a main closed while its wake is on the way", () => {
+  test("a close during main reconciliation leaves report kind unselected until adoption", async () => {
+    const world = await create();
+    const main = await world.main();
+    const worker = await world.addEnvironment("worker", { launched: true });
+    await world.send(worker, main, "The report.");
+    await closeDelegation(world, worker);
+    const ensure = world.coordinator.ensureMainConversation.bind(world.coordinator);
+    let closed = false;
+    const spy = spyOn(world.coordinator, "ensureMainConversation").mockImplementation(
+      async (...args) => {
+        const result = await ensure(...args);
+        if (!closed) {
+          closed = true;
+          await world.coordinator.closeConversation(world.projectId, main.conversationId!);
+        }
+        return result;
+      },
+    );
+    await world.coordinator.deliverDelegationWakes();
+    spy.mockRestore();
+    expect((await delegation(world, worker)).wakeKind).toBeUndefined();
+    await world.coordinator.deliverDelegationWakes();
+    expect((await delegation(world, worker)).wakeKind).toBe("report");
+    const next = await world.main();
+    await world.deliver();
+    expect(world.received(next)).toEqual(["The report."]);
+    expect(world.wakes(main)).toBe(0);
+  });
+
   /** Close the main just before, or just after, the wake reaches the mail store. */
   function closeDuringWake(
     world: MailWorld,

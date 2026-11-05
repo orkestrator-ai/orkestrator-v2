@@ -1636,16 +1636,23 @@ while its wake is on the way, the delegation stays unwoken, the next main adopts
 it, and the mail already placed moves across with the rest of the closed
 conversation's inbox. Closing, selecting and pausing wait their turn with
 creating and assigning on the project's queue. A slow mail send does not hold
-that queue.
+that queue. Wake-kind selection shares the project queue with close: it checks
+the main is open, looks up held reports, and persists the kind together, so a
+closed mailbox cannot make a real report look missing.
 
 A wake that fails 10 passes across at least 10 minutes is given up on. Passes also
 run on turn ends, so the time bound stops a short fault retiring every wake owed.
-The retirement notice must reach the mail store first. If sending fails or no main
-is open, the wake stays owed for a later pass or main. After storing the notice,
+The selection of retirement (`wakeRetirement`, including the attempt count and
+error kind) is persisted before sending its notice. Retries, including after a
+restart or a failed receipt write, resume that path instead of sending an ordinary
+completion notice. The retirement notice must reach the mail store before the
+final receipt. If sending fails or no main is open, the wake stays owed for a later
+pass or main. After storing the notice,
 the pass rechecks that the main is still open before stamping retirement. A report
 still held is released as ordinary mail on the next sweep, and the delegation
 records `wakeFailedAt` with `wokenAt`, keeping `state` as the
-worker's own outcome. The count is in memory, so a restart restarts it. Messaging
+worker's own outcome. Before retirement is selected, the count is in memory, so a
+restart restarts it. Messaging
 turned off, or no room for a new main under the conversation limit, is a state the
 user can change rather than a fault: such a wake is held, not counted, and goes out
 once that changes.

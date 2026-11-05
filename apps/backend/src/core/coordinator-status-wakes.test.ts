@@ -1395,12 +1395,20 @@ describe("coordinator status wakes", () => {
 
     test("a stopped environment ends the episode on the sweep", async () => {
       const context = await createWorld();
-      const { world, worker, marker } = await notifiedEpisode(context);
+      const { world, worker, marker, coordinator } = await notifiedEpisode(context);
 
       // Mail waiting for it keeps the delegation open past the stop.
       await world.setEnvironmentStatus(worker, "stopped");
       await world.coordinator.reconcileWorkflowNotifications();
       expect(await marker()).toBeUndefined();
+      // The activity reader still says waiting. Further sweeps and debounce
+      // timers must not create a new episode for an environment still stopped.
+      await world.coordinator.reconcileWorkflowNotifications();
+      await advance(context, COORDINATOR_WAITING_DEBOUNCE_MS);
+      await advance(context, COORDINATOR_STATUS_COALESCE_MS + 1);
+      await world.deliver();
+      expect(await marker()).toBeUndefined();
+      expect(world.wakes(coordinator)).toBe(1);
     });
 
     test("the sweep finds a waiting episode whose edge was lost to a restart", async () => {

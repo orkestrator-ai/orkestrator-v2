@@ -1400,7 +1400,17 @@ export class CoordinatorService {
     });
     const minMs = this.options.wakeRetireMinMs ?? DELEGATION_WAKE_RETIRE_MIN_MS;
     if (attempts < DELEGATION_WAKE_RETIRE_ATTEMPTS || now - since < minMs) return;
-    await this.retireDelegationWake(association, attempts, error);
+    const retirement = { attempts, kind: logErrorKind(error) };
+    await this.storage.coordinators.updateCoordinatorWorkflowAssociation(
+      association.id,
+      (current) => {
+        if (!current.delegation || current.delegation.wokenAt || current.delegation.wakeRetirement)
+          return false;
+        current.delegation = { ...current.delegation, wakeRetirement: retirement };
+        return true;
+      },
+    );
+    await this.retireDelegationWake(association, retirement.attempts, retirement.kind);
   }
 
   /**
@@ -1408,8 +1418,9 @@ export class CoordinatorService {
    *
    * The notice must be stored before retirement, since it can fail for the same
    * reason the wake did. A missing main or failed send leaves the wake owed.
-   * It is idempotent per delegation, so a crash before the mark below only
-   * repeats the attempt. It goes to the open main rather than
+   * Retirement selection is persisted before publication, so a crash before
+   * the receipt retries only this idempotent notice, never ordinary delivery.
+   * It goes to the open main rather than
    * through `ensureMainConversation`, which may be what keeps failing. The mark
    * makes nothing owed any more, so a report still held for this delegation is
    * released as ordinary mail on the sweep (`releaseOrphanedDelegationHolds`).
@@ -1417,10 +1428,9 @@ export class CoordinatorService {
   private async retireDelegationWake(
     association: CoordinatorWorkflowAssociation,
     attempts: number,
-    cause: unknown,
+    kind: string,
   ): Promise<void> {
     const delegation = association.delegation!;
-    const kind = logErrorKind(cause);
     const owner = await this.storage.coordinators.getCoordinatorWorkspaceById(
       association.coordinatorId,
     );
@@ -1484,6 +1494,14 @@ export class CoordinatorService {
   private async deliverDelegationWake(association: CoordinatorWorkflowAssociation): Promise<void> {
     const delegation = association.delegation;
     if (!delegation || !association.conversationId) return;
+    if (delegation.wakeRetirement) {
+      await this.retireDelegationWake(
+        association,
+        delegation.wakeRetirement.attempts,
+        delegation.wakeRetirement.kind,
+      );
+      return;
+    }
     const owner = await this.storage.coordinators.getCoordinatorWorkspaceById(
       association.coordinatorId,
     );
@@ -1498,8 +1516,14 @@ export class CoordinatorService {
     // main starts with the default agent and takes this delegation over.
     const { workspace, main: conversation } = await this.ensureMainConversation(owner.projectId);
     const runtimeId = coordinatorRuntimeId(workspace.id, conversation.id);
-    let wakeKind = delegation.wakeKind;
-    if (!wakeKind) {
+    // Close uses the same project queue. Keep the open-main check, report
+    // lookup and durable kind selection together so a close cannot turn a
+    // held report into an apparent silent worker between those operations.
+    const wakeKind = await this.serialize(owner.projectId, async () => {
+      const latest = await this.storage.coordinators.getCoordinatorWorkspaceById(workspace.id);
+      if (!latest?.conversations.some((item) => item.id === conversation.id && !item.closedAt))
+        return undefined;
+      if (delegation.wakeKind) return delegation.wakeKind;
       const hasReport = await this.storage.hasDelegationHeldAgentMail(
         association.id,
         runtimeId,
@@ -1511,8 +1535,8 @@ export class CoordinatorService {
         association.id,
         hasReport ? "report" : "notice",
       );
-      wakeKind = prepared?.delegation?.wakeKind;
-    }
+      return prepared?.delegation?.wakeKind;
+    });
     if (!wakeKind) return;
     if (wakeKind === "report") {
       // A zero count is safe on retry: wakeKind was committed while the

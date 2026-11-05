@@ -293,6 +293,8 @@ export interface CoordinatorDelegation {
    * still says how the worker ended.
    */
   wakeFailedAt?: string;
+  /** Retirement was selected durably; retry only its notice until receipted. */
+  wakeRetirement?: { attempts: number; kind: string };
   /**
    * The worker has been waiting on input or an approval since `since`.
    *

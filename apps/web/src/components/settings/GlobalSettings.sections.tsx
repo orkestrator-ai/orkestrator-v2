@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ContainerResourceLimitsSettings } from "./ContainerResourceLimitsSettings";
 import { isWindowMachine, useAccountMachine } from "./account-machine";
+import { DatabaseStorageCard } from "./DatabaseStorageCard";
+import { DiagnosticsExportCard } from "./DiagnosticsExportCard";
 import { CoordinatorWebResearchSettings } from "./CoordinatorWebResearchSettings";
 import { AutoSteerSetting } from "./AutoSteerSetting";
 import { DataSavingSetting } from "./DataSavingSetting";
@@ -2399,6 +2401,8 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
             </AlertDialogContent>
           </AlertDialog>
         </div>
+        <DatabaseStorageCard />
+        <DiagnosticsExportCard />
         <p className="text-xs text-muted-foreground/60">
           Changes apply straight away, with no restart and without interrupting running agents.
         </p>

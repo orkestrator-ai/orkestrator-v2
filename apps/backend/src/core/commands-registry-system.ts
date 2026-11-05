@@ -1,6 +1,7 @@
 import { MACHINE_LOAD_COMMAND } from "@orkestrator/protocol/machine-load";
 import { APP_VERSION } from "./constants.js";
-import { assertOnlyKeys } from "./commands-validation.js";
+import { asString, assertOnlyKeys } from "./commands-validation.js";
+import { diagnosticsSources } from "./diagnostics-sources.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
 import {
   readEnvironmentProcessUsage as defaultReadEnvironmentProcessUsage,
@@ -101,6 +102,22 @@ export function registerSystemCommands(
   register("get_artifact_metrics", (args, context) => {
     assertOnlyKeys(args, [], "arguments");
     return context.transcriptArtifacts?.metrics.snapshot() ?? { counters: {}, droppedSeries: 0 };
+  });
+  /**
+   * Builds a diagnostics bundle and holds it in memory, answering with the
+   * manifest that is byte for byte the bundle's own. Nothing reaches the disk
+   * or the network here; {@link read_diagnostics_bundle} hands the bytes to the
+   * client that asked. Refused to workspace clients (`workspace-grant-scope.ts`).
+   */
+  register("plan_diagnostics_bundle", async (args, context) => {
+    assertOnlyKeys(args, [], "arguments");
+    if (!context.diagnostics) throw new Error("Diagnostics are not available here.");
+    return context.diagnostics.bundles.plan(() => diagnosticsSources(context));
+  });
+  register("read_diagnostics_bundle", (args, context) => {
+    assertOnlyKeys(args, ["planId", "offset"], "arguments");
+    if (!context.diagnostics) throw new Error("Diagnostics are not available here.");
+    return context.diagnostics.bundles.read(asString(args.planId, "planId"), Number(args.offset));
   });
   /**
    * Full diagnostic reconciliation for keyed scheduling (step 08). Every keyed

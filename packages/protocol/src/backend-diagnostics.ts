@@ -143,9 +143,11 @@ export interface DiagnosticsBundlePlan {
   manifest: DiagnosticsManifest;
 }
 
-/** One piece of a planned bundle, in order. */
+/** One piece of a planned bundle, in order. Says what the whole must add up to. */
 export interface DiagnosticsBundleChunk {
   planId: string;
+  fileName: string;
+  archive: { bytes: number; sha256: string };
   offset: number;
   /** Base64. */
   data: string;

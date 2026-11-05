@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { backendMetricsSnapshot } from "./backend-metrics.js";
 import type { ChangeTrackingService } from "./change-tracking/index.js";
 import { DatabaseSummaryCache } from "./database-summary.js";
+import { DiagnosticsBundles } from "./diagnostics-bundle.js";
 import { HealthSummary, readHealthRows, type HealthRow } from "./health-summary.js";
 import type { StorageDatabase } from "./storage-database.js";
 import { leaseWaitMetrics } from "./storage-lease-metrics.js";
@@ -21,6 +22,7 @@ export class BackendDiagnostics {
   private gatewayMetrics: (() => unknown) | null = null;
   readonly databaseSummary: DatabaseSummaryCache;
   readonly health: HealthSummary;
+  readonly bundles = new DiagnosticsBundles();
 
   constructor(
     private readonly options: {
@@ -71,6 +73,7 @@ export class BackendDiagnostics {
   close(options: { clean: boolean }): void {
     if (options.clean) this.health.recordCleanExit();
     else this.health.stop();
+    this.bundles.dispose();
     this.connection?.close();
     this.connection = null;
   }

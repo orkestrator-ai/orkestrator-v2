@@ -1182,7 +1182,7 @@ describe("what a worker row says about its request", () => {
     const item = row({});
     expect(item.summary).toBeUndefined();
     expect(item.agent).toBeUndefined();
-    expect(item.model).toBeUndefined();
+    expect(item!.model).toBeUndefined();
     expect(item.overridden).toBeUndefined();
     expect(item.age).toBe("1h");
     expect(item.stage).toBe("Worker · running");
@@ -1209,6 +1209,61 @@ describe("what a worker row says about its request", () => {
       }),
     );
     expect(item).toMatchObject({ summary: "Now add tests", agent: "claude", model: "opus" });
+  });
+
+  test.each([null, undefined])(
+    "a newer Codex job never inherits another tab's Claude model (%s)",
+    (model) => {
+      const old = {
+        ...delegated("worker-1", "completed", {
+          workerTabId: "old",
+          request: { summary: "Old", agent: "claude", model: "opus" },
+        }),
+        id: "old",
+      };
+      const next = {
+        ...delegated("worker-1", "running", {
+          requestedAt: at(-60_000),
+          workerTabId: "new",
+          request: { summary: "New", agent: "codex", ...(model === null ? { model } : {}) },
+        }),
+        id: "new",
+      };
+      const [item] = deriveCoordinatorWorkItems(
+        sources({
+          workflows: [old, next],
+          environments: new Map([["worker-1", environment("worker-1")]]),
+        }),
+      );
+      expect(item).toMatchObject({ summary: "New", agent: "codex" });
+      expect(item!.model).toBeUndefined();
+    },
+  );
+
+  test("a summary-only request on a new tab has no inherited selection", () => {
+    const old = {
+      ...delegated("worker-1", "completed", {
+        workerTabId: "old",
+        request: { agent: "claude", model: "opus" },
+      }),
+      id: "old",
+    };
+    const next = {
+      ...delegated("worker-1", "running", {
+        requestedAt: at(-60_000),
+        workerTabId: "new",
+        request: { summary: "Check the parser" },
+      }),
+      id: "new",
+    };
+    const [item] = deriveCoordinatorWorkItems(
+      sources({
+        workflows: [old, next],
+        environments: new Map([["worker-1", environment("worker-1")]]),
+      }),
+    );
+    expect(item?.agent).toBeUndefined();
+    expect(item?.model).toBeUndefined();
   });
 
   test("a finished row says how long ago, and offers no Stop", () => {

@@ -117,6 +117,12 @@ export function useNotificationSoundService(): void {
       const { attentionId, environmentId } = event.payload;
       if (!seen.add(attentionId)) return;
       if (environmentId === visibleEnvironmentRef.current) return;
+      if (
+        !normalizeNotificationSoundSettings(
+          useConfigStore.getState().config.global.notificationSounds,
+        ).agentStopped
+      )
+        return;
       const now = Date.now();
       if (now - lastCueAtRef.current < ATTENTION_COALESCE_MS) return;
       lastCueAtRef.current = now;
@@ -141,6 +147,12 @@ export function useNotificationSoundService(): void {
       if (!isCoordinatorWakeAttentionEvent(event.payload)) return;
       const { attentionId, projectId } = event.payload;
       if (!seen.add(attentionId) || coordinatorOnScreen(projectId)) return;
+      if (
+        !normalizeNotificationSoundSettings(
+          useConfigStore.getState().config.global.notificationSounds,
+        ).coordinatorReport
+      )
+        return;
       const now = Date.now();
       if (now - lastCueAtRef.current < ATTENTION_COALESCE_MS) return;
       lastCueAtRef.current = now;

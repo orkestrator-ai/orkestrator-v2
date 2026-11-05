@@ -502,11 +502,20 @@ function workerItem(
   };
 }
 
-/** The newest record that names a model, else the newest that names an agent. */
+/** Never carry a selection across tabs, agents, or an explicit model reset. */
 function selectionOf(delegations: readonly CoordinatorDelegation[]) {
-  const newest = delegations.toReversed();
-  return (newest.find((item) => item.request?.model) ?? newest.find((item) => item.request?.agent))
-    ?.request;
+  const latestTab = delegations.at(-1)?.workerTabId;
+  const newest = delegations.toReversed().filter((item) => item.workerTabId === latestTab);
+  const selected = newest.find((item) => item.request?.agent || item.request?.model !== undefined);
+  if (!selected?.request) return undefined;
+  if (selected.request.model !== undefined) return selected.request;
+  const previous = newest.find(
+    (item) =>
+      item.workerTabId === selected.workerTabId &&
+      item.request?.agent === selected.request?.agent &&
+      item.request?.model !== undefined,
+  );
+  return previous?.request ? { ...previous.request, ...selected.request } : selected.request;
 }
 
 function missingItem(

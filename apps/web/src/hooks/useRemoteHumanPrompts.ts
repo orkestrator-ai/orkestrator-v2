@@ -74,6 +74,18 @@ export function useRemoteHumanPrompts(
     let disposed = false;
     const sequence = new Map<string, number>();
     const read = (nodeId: string, environmentIds: ReadonlySet<string>) => {
+      if (
+        !portalStore.store.getState().nodes.some((node) => node.nodeId === nodeId && node.available)
+      ) {
+        sequence.set(nodeId, (sequence.get(nodeId) ?? 0) + 1);
+        setState((current) => {
+          if (!current?.byNode.has(nodeId)) return current;
+          const byNode = new Map(current.byNode);
+          byNode.delete(nodeId);
+          return { ...current, byNode };
+        });
+        return;
+      }
       const request = (sequence.get(nodeId) ?? 0) + 1;
       sequence.set(nodeId, request);
       void portalStore

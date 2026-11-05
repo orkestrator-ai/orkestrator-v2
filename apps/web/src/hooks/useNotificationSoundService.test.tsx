@@ -329,3 +329,56 @@ test("Home completion sounds while the board obscures it, but not while Home is 
   act(() => useEnvironmentStore.getState().updateEnvironment(home.id, { hasUnreadWork: true }));
   expect(playConfiguredNotificationSound).toHaveBeenCalledTimes(1);
 });
+
+test.each([false, true])(
+  "disabled paired cue does not suppress enabled cue (agent=%s)",
+  async (agentStopped) => {
+    resetClientStateCapabilitiesForTests({ environmentAttention: true } as never);
+    const handlers = new Map<string, (event: { payload: unknown }) => void>();
+    listenMock.mockImplementation(
+      (event: string, handler: (event: { payload: unknown }) => void) => {
+        handlers.set(event, handler);
+        return Promise.resolve(() => handlers.delete(event));
+      },
+    );
+    useUIStore.setState({ selectedProjectId: null });
+    useConfigStore.getState().updateGlobalConfig({
+      notificationSounds: {
+        agentStopped,
+        coordinatorReport: !agentStopped,
+        prMerged: false,
+      },
+    });
+    renderHook(() => useNotificationSoundService());
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    const events = [
+      [
+        ENVIRONMENT_ATTENTION_EVENT,
+        {
+          attentionId: "mixed-agent",
+          environmentId: "worker",
+          projectId: "project-1",
+          reason: "agent_finished",
+          occurredAt: new Date().toISOString(),
+        },
+      ],
+      [
+        COORDINATOR_WAKE_ATTENTION_EVENT,
+        {
+          attentionId: "mixed-wake",
+          projectId: "project-1",
+          coordinatorId: "c",
+          occurredAt: new Date().toISOString(),
+        },
+      ],
+    ] as const;
+    for (const [event, payload] of agentStopped ? events.toReversed() : events)
+      handlers.get(event)!({ payload });
+    expect(playConfiguredNotificationSound).toHaveBeenCalledTimes(1);
+    expect(playConfiguredNotificationSound).toHaveBeenCalledWith(
+      agentStopped ? "agent-stopped" : "coordinator-report",
+    );
+  },
+);

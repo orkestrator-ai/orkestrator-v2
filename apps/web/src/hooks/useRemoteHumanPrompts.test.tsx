@@ -156,3 +156,41 @@ test("a node reported unavailable drops its prompts: nobody can confirm they sti
   await flush();
   expect(result.current).toEqual([]);
 });
+
+test("reconnect requires a fresh answer and cannot resurrect cached credentials", async () => {
+  const { result } = renderHook(() => useRemoteHumanPrompts(WORKERS));
+  await flush();
+  expect(result.current).toHaveLength(1);
+  act(() => setNode(false, 2));
+  await flush();
+  answer = async () => {
+    throw new Error("offline");
+  };
+  act(() => setNode(true, 3));
+  await flush();
+  expect(result.current).toEqual([]);
+  answer = async () => ({ prompts: [prompt()] });
+  act(() => requestViewSafetyChecks("interval"));
+  await flush();
+  expect(result.current).toHaveLength(1);
+});
+
+test("a read begun before disconnect cannot repopulate the invalidated cache", async () => {
+  let resolve!: (value: unknown) => void;
+  answer = () =>
+    new Promise((done) => {
+      resolve = done;
+    });
+  const { result } = renderHook(() => useRemoteHumanPrompts(WORKERS));
+  await flush();
+  act(() => setNode(false, 2));
+  await flush();
+  resolve({ prompts: [prompt()] });
+  await flush();
+  answer = async () => {
+    throw new Error("offline");
+  };
+  act(() => setNode(true, 3));
+  await flush();
+  expect(result.current).toEqual([]);
+});

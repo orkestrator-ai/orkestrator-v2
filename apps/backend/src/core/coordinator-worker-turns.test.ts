@@ -437,37 +437,43 @@ describe("worker slash commands", () => {
     expect(JSON.stringify(listed)).not.toContain("executionKind");
   });
 
-  test("a turn-starting command runs as a selection and opens one delegation", async () => {
-    const w = await world([command("/review", { inputPolicy: { arguments: "required" } })]);
-    w.activity("idle");
-    const input = {
-      requestId: "review-1",
-      environmentId: "env-1",
-      tabId: w.tabId,
-      command: "review",
-      arguments: "the open  diff",
-    };
-    const ran = await w.run("run_coordinator_worker_command", { input });
-    expect(ran).toMatchObject({
-      commandId: "claude:/review",
-      command: "/review",
-      startsTurn: true,
-      outcome: "accepted",
-      delegationOpened: true,
-    });
-    expect(w.stub.sends.at(-1)?.prompt).toBe("/review the open  diff");
-    expect(String(w.stub.sends.at(-1)?.requestId)).toStartWith("coordinator-command:");
-    expect(w.sendOptions().at(-1)?.command).toMatchObject({ id: "claude:/review" });
-    expect(await w.openDelegations()).toHaveLength(1);
-    // A retry replays; a second request while the coordinator waits is refused.
-    expect(await w.run("run_coordinator_worker_command", { input })).toMatchObject({
-      replayed: true,
-    });
-    expect(w.stub.sends).toHaveLength(2);
-    await expect(
-      w.run("run_coordinator_worker_command", { input: { ...input, requestId: "review-2" } }),
-    ).rejects.toThrow("outstanding coordinator delegation");
-  });
+  test.each(["review", "/review", "claude:/review"])(
+    "a command (%s) stores its resolved name and opens one delegation",
+    async (selected) => {
+      const w = await world([command("/review", { inputPolicy: { arguments: "required" } })]);
+      w.activity("idle");
+      const input = {
+        requestId: "review-1",
+        environmentId: "env-1",
+        tabId: w.tabId,
+        command: selected,
+        arguments: "the open  diff",
+      };
+      const ran = await w.run("run_coordinator_worker_command", { input });
+      expect(ran).toMatchObject({
+        commandId: "claude:/review",
+        command: "/review",
+        startsTurn: true,
+        outcome: "accepted",
+        delegationOpened: true,
+      });
+      expect(w.stub.sends.at(-1)?.prompt).toBe("/review the open  diff");
+      expect(String(w.stub.sends.at(-1)?.requestId)).toStartWith("coordinator-command:");
+      expect(w.sendOptions().at(-1)?.command).toMatchObject({ id: "claude:/review" });
+      expect(await w.openDelegations()).toHaveLength(1);
+      expect((await w.openDelegations())[0]?.delegation?.request).toMatchObject({
+        summary: "/review",
+      });
+      // A retry replays; a second request while the coordinator waits is refused.
+      expect(await w.run("run_coordinator_worker_command", { input })).toMatchObject({
+        replayed: true,
+      });
+      expect(w.stub.sends).toHaveLength(2);
+      await expect(
+        w.run("run_coordinator_worker_command", { input: { ...input, requestId: "review-2" } }),
+      ).rejects.toThrow("outstanding coordinator delegation");
+    },
+  );
 
   test("a failed delegation open fails the command and a busy retry recovers the same turn", async () => {
     const w = await world([command("/review")]);

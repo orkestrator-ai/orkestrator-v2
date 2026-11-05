@@ -330,7 +330,9 @@ export function registerCoordinatorWorkerTurnActions(
               environmentId,
               tabId,
               requestId,
-              request: { summary: `/${command.command}` },
+              request: {
+                summary: `/${String(result.command ?? command.command).replace(/^\/+/, "")}`,
+              },
             },
           );
           delegationOpened = opened.opened === true;

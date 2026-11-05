@@ -343,7 +343,10 @@ export function registerCoordinatorForkWorker(
                   ...(agent ? { agent: agent as AgentPlatform } : {}),
                   ...(launch.modelId ? { model: launch.modelId } : {}),
                   ...(launch.reasoningId ? { reasoning: launch.reasoningId } : {}),
-                  source: launch.modelId ? ("requested" as const) : ("default" as const),
+                  source:
+                    launch.modelId || launch.reasoningId
+                      ? ("requested" as const)
+                      : ("default" as const),
                 },
               )
             )?.delegation?.state === "running";

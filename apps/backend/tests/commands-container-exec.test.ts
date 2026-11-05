@@ -141,6 +141,9 @@ describe("Electron backend command registry", () => {
     // What Git itself would send, through whichever helpers its config selects.
     function fill(env: NodeJS.ProcessEnv, url: string, extraEnv: NodeJS.ProcessEnv = {}) {
       return spawnSync("git", ["credential", "fill"], {
+        // A temporary global config alone does not suppress this checkout's
+        // local credential helpers. Keep the probe inside the fixture home.
+        cwd: env.HOME,
         env: { ...env, ...extraEnv },
         input: `url=${url}\n\n`,
         encoding: "utf8",

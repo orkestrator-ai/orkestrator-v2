@@ -42,7 +42,6 @@ function runningState(id: string): SessionState {
     ],
     activeSubagentToolIds: new Set(),
     activeSubagentDescriptors: new Map(),
-    settledCursorAgentIds: new Set(),
     subagentLimitExceeded: false,
     subagentToolIds: new Map(),
     cursorTodos: [],
@@ -101,6 +100,59 @@ test("ordinary saves include output still waiting on the streaming timer", async
   await context.persistenceTail;
   expect((await read()).sessions[0].messages[0].content).toBe("pending output");
   await writer.flushStreamingPersist();
+});
+
+test("a barrier writes the current state now, without waiting for the streaming timer", async () => {
+  sessions.clear();
+  const state = runningState("barrier");
+  const timer = spyOn(globalThis, "setTimeout");
+  try {
+    writer.scheduleStreamingPersist();
+    expect(timer.mock.calls.some((call) => call[1] === 1000)).toBe(true);
+    state.promptJournal.set("request-1", {
+      requestId: "request-1",
+      state: "accepted",
+      acceptedAt: 1,
+    });
+    state.messages[0]!.content = "output before the barrier";
+    await writer.persistState();
+    const saved = (await read()).sessions[0];
+    expect(saved.messages[0].content).toBe("output before the barrier");
+    expect(saved.promptJournal[0]).toMatchObject({ requestId: "request-1", state: "ambiguous" });
+  } finally {
+    timer.mockRestore();
+    await writer.flushStreamingPersist();
+  }
+});
+
+test("a state file carrying the removed Cursor fields still loads", async () => {
+  sessions.clear();
+  const state = runningState("legacy");
+  state.status = "idle";
+  state.messages[0]!.role = "assistant";
+  state.messages[0]!.parts = [
+    {
+      type: "tool-invocation",
+      toolUseId: "legacy-tool",
+      toolName: "Task",
+      toolState: "success",
+      content: "",
+    },
+  ];
+  await writer.persistState();
+  const saved = await read();
+  saved.sessions[0].settledCursorAgentIds = ["child-1"];
+  saved.sessions[0].messages[0].parts[0].cursorTaskPromptReported = true;
+  await fs.writeFile(join(directory, "state.json"), JSON.stringify(saved));
+  sessions.clear();
+  const { restorePersistedState } = await import("./acp-persistence.js");
+  await restorePersistedState();
+  const restored = sessions.get("legacy");
+  expect(restored?.messages[0]?.parts?.[0]).toMatchObject({ toolUseId: "legacy-tool" });
+  await writer.persistState();
+  const rewritten = (await read()).sessions[0];
+  expect(rewritten.settledCursorAgentIds).toBeUndefined();
+  expect(rewritten.messages[0].parts[0].cursorTaskPromptReported).toBeUndefined();
 });
 
 test("shutdown flushes a late tool update from child teardown before the streaming timer fires", async () => {

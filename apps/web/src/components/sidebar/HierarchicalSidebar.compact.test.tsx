@@ -417,7 +417,7 @@ describe("the keyboard", () => {
     expect(document.activeElement).toBe(app);
     // Native Enter activation is asserted in e2e/SidebarMotion.spec.ts.
     expect(app.tagName).toBe("BUTTON");
-    expect(app.className).toContain("focus-visible:ring-2");
+    expect(app.className).toContain("focus-hairline");
   });
 
   test("the rotate shortcut leaves compact and comes back", async () => {

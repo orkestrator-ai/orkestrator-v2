@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -30,6 +30,7 @@ import {
 import { Z_FULLSCREEN_DIALOG } from "@/constants/z-index";
 import * as backend from "@/lib/backend";
 import { useAccountMachine } from "@/components/settings/account-machine";
+import { OutcomeUnknownError } from "@/lib/portal/portal-store";
 import { formatBytes } from "./docker-stats-format";
 
 export const CLEANUP_REASONS: Record<Exclude<CleanupClassification, "eligible">, string> = {
@@ -100,6 +101,8 @@ export function DockerCleanupReview({ open, onOpenChange, onFinished }: DockerCl
   const [rebuilding, setRebuilding] = useState<ReadonlySet<string>>(new Set());
   const [refresh, setRefresh] = useState(0);
 
+  const selectionScope = useRef<{ machine: typeof machine } | null>(null);
+
   // Each opening reviews a fresh preview.
   const [wasOpen, setWasOpen] = useState(false);
   if (wasOpen !== open) {
@@ -113,7 +116,10 @@ export function DockerCleanupReview({ open, onOpenChange, onFinished }: DockerCl
   }
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      selectionScope.current = null;
+      return;
+    }
     let cancelled = false;
     const load = async () => {
       try {
@@ -123,7 +129,13 @@ export function DockerCleanupReview({ open, onOpenChange, onFinished }: DockerCl
         const eligibleKeys = next.rows
           .filter((row) => row.classification === "eligible")
           .map((row) => rowKey(row));
-        setSelected(new Set(eligibleKeys));
+        const fresh = !selectionScope.current || selectionScope.current.machine !== machine;
+        selectionScope.current = { machine };
+        // A refresh must never expand the removal the user already reviewed.
+        setSelected(
+          (current) =>
+            new Set(fresh ? eligibleKeys : eligibleKeys.filter((key) => current.has(key))),
+        );
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : String(err));
       } finally {
@@ -219,9 +231,14 @@ export function DockerCleanupReview({ open, onOpenChange, onFinished }: DockerCl
       );
     } catch (err) {
       const lifecycle = parseContainerLifecycleError(err);
-      toast.error("Rebuild did not complete", {
-        description: `${lifecycle?.message ?? (err instanceof Error ? err.message : String(err))} The original container was kept.`,
-      });
+      toast.error(
+        err instanceof OutcomeUnknownError
+          ? "Rebuild outcome unknown"
+          : "Could not confirm rebuild",
+        {
+          description: `${lifecycle?.message ?? (err instanceof Error ? err.message : String(err))} Check this environment’s Container settings for its current operation and recovery state before trying again.`,
+        },
+      );
     } finally {
       setRebuilding((current) => {
         const next = new Set(current);

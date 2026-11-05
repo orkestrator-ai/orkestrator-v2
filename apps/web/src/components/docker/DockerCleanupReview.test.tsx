@@ -5,6 +5,9 @@ import type { RebuildPreview } from "@orkestrator/protocol/container-lifecycle";
 import type { CleanupPreview } from "@orkestrator/protocol/container-recovery";
 
 import { invoke as nativeInvoke } from "@/lib/native/backend";
+import { AccountMachineProvider } from "@/components/settings/account-machine";
+import { OutcomeUnknownError, portalStore } from "@/lib/portal/portal-store";
+import type { BackendId } from "@orkestrator/protocol/federation";
 import { DockerCleanupReview } from "./DockerCleanupReview";
 
 const invokeMock = nativeInvoke as unknown as ReturnType<typeof mock>;
@@ -212,6 +215,8 @@ describe("docker cleanup review", () => {
       });
       const onFinished = mock(() => undefined);
       render(<DockerCleanupReview open onOpenChange={() => undefined} onFinished={onFinished} />);
+      await screen.findByText("Can be removed (2)");
+      fireEvent.click(screen.getByRole("checkbox", { name: /Container orphan/ }));
       fireEvent.click(await screen.findByRole("button", { name: "Rebuild Old environment" }));
       await screen.findByText("Rebuild container and keep its files?");
       expect(screen.getByText(/tracked, untracked and ignored files/)).toBeTruthy();
@@ -227,9 +232,50 @@ describe("docker cleanup review", () => {
       await waitFor(() => expect(onFinished).toHaveBeenCalledTimes(1));
       // The review reads again, so the rebuilt environment leaves the list.
       await waitFor(() => expect(screen.queryByText(/Older containers/)).toBeNull());
+      expect(
+        (screen.getByRole("checkbox", { name: /Container orphan/ }) as HTMLInputElement).checked,
+      ).toBe(false);
+      expect(screen.getByRole("button", { name: "Remove 1 selected" })).toBeTruthy();
       expect(invokeMock.mock.calls.some(([command]) => command === "docker_cleanup_execute")).toBe(
         false,
       );
+    });
+
+    test("routes a remote rebuild and reports an unknown outcome without claiming retention", async () => {
+      const failure = spyOn(toast, "error").mockImplementation(() => "toast");
+      const node = "remote-node" as BackendId;
+      const routed = spyOn(portalStore, "invokeOnNode").mockImplementation(
+        async <T,>(_node: BackendId, command: string): Promise<T> => {
+          if (command === "docker_cleanup_preview") return withLegacy as T;
+          if (command === "get_rebuild_preview") return rebuildPreview as T;
+          throw new OutcomeUnknownError(node, command, "request-key");
+        },
+      );
+      try {
+        render(
+          <AccountMachineProvider value={{ machine: node, name: "Remote" }}>
+            <DockerCleanupReview open onOpenChange={() => undefined} onFinished={() => undefined} />
+          </AccountMachineProvider>,
+        );
+        fireEvent.click(await screen.findByRole("button", { name: "Rebuild Old environment" }));
+        fireEvent.click(await screen.findByRole("button", { name: "Rebuild" }));
+        await waitFor(() => expect(failure).toHaveBeenCalled());
+        expect(routed).toHaveBeenCalledWith(node, "get_rebuild_preview", {
+          environmentId: "env-old",
+        });
+        expect(routed).toHaveBeenCalledWith(node, "recreate_environment", {
+          environmentId: "env-old",
+          intent: "preserve",
+          expectedContainerId: "old-container",
+        });
+        expect(failure.mock.calls[0]?.[0]).toBe("Rebuild outcome unknown");
+        const description = failure.mock.calls[0]?.[1]?.description;
+        expect(description).toContain("Container settings");
+        expect(description).not.toContain("original container was kept");
+      } finally {
+        routed.mockRestore();
+        failure.mockRestore();
+      }
     });
 
     test("an unavailable rebuild says why and offers nothing to run", async () => {
@@ -252,7 +298,7 @@ describe("docker cleanup review", () => {
       expect(recreate).not.toHaveBeenCalled();
     });
 
-    test("a rebuild the backend refuses reports that the original was kept", async () => {
+    test("a rebuild refusal directs the user to authoritative lifecycle state", async () => {
       const failure = spyOn(toast, "error").mockImplementation(() => "toast");
       install({
         docker_cleanup_preview: () => withLegacy,
@@ -266,8 +312,9 @@ describe("docker cleanup review", () => {
       fireEvent.click(await screen.findByRole("button", { name: "Rebuild Old environment" }));
       fireEvent.click(await screen.findByRole("button", { name: "Rebuild" }));
       await waitFor(() =>
-        expect(failure).toHaveBeenCalledWith("Rebuild did not complete", {
-          description: "The image is too old. The original container was kept.",
+        expect(failure).toHaveBeenCalledWith("Could not confirm rebuild", {
+          description:
+            "The image is too old. Check this environment’s Container settings for its current operation and recovery state before trying again.",
         }),
       );
       failure.mockRestore();

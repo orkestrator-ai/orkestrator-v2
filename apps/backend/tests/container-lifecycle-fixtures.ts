@@ -110,12 +110,13 @@ export const FIXTURE_IMAGE_ID = `sha256:${"c".repeat(64)}`;
 export async function imageManifestArchive(
   dir: string,
   capabilities: Record<string, number> = { "staged-inputs": 5 },
+  schemaVersion = 1,
 ): Promise<string> {
   const source = await fs.mkdtemp(path.join(dir, "manifest-"));
   await fs.writeFile(
     path.join(source, "image-manifest.json"),
     JSON.stringify({
-      schemaVersion: 1,
+      schemaVersion,
       appVersion: "1.0.0",
       sourceRevision: "b27421dcfa8de61b9c20a08e79efd7dfbd0c7fc2",
       architecture: "amd64",

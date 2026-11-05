@@ -137,6 +137,25 @@ describe("creating a container", () => {
     });
   }
 
+  test("a newer manifest is refused without claiming the image is old", async () => {
+    const { context, environment } = creationContext();
+    const archive = await imageManifestArchive(dir, { "staged-inputs": 5 }, 999);
+    await withDockerScript(daemonScript(`cat '${archive}'`), async (log) => {
+      let refusal: Error | undefined;
+      await createDockerContainer(environment, context, { imageId: FIXTURE_IMAGE_ID }).catch(
+        (error: Error) => {
+          refusal = error;
+        },
+      );
+      expect(refusal?.message).toContain("ContainerLifecycleError:capability-unavailable:");
+      expect(refusal?.message).toContain(IMAGE_NAME);
+      expect(refusal?.message).toContain("cannot be used by this Orkestrator version");
+      expect(refusal?.message).not.toContain("too old");
+      expect(await log.read()).not.toMatch(/^create --name/m);
+    });
+    await expect(fs.stat(path.join(dir, "environment-inputs"))).rejects.toThrow();
+  });
+
   test("an image Docker cannot read is not called old and is not created from", async () => {
     const { context, environment } = creationContext();
     await withDockerScript(

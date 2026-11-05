@@ -235,6 +235,12 @@ async function requireStagedInputsImage(
   if (!imageId || !read || read.kind === "unavailable") {
     throw new ContainerLifecycleError("daemon-unavailable", imageUnreadableMessage(named));
   }
+  if (read.kind === "invalid") {
+    throw new ContainerLifecycleError(
+      "capability-unavailable",
+      `The environment image ${named} has a manifest that cannot be used by this Orkestrator version. Nothing was created. Update Orkestrator or rebuild the image with a supported manifest, then retry.`,
+    );
+  }
   const capabilities = read.kind === "manifest" ? read.manifest.capabilities : null;
   if (!capabilities || !imageDeclaresStagedInputs(capabilities)) {
     throw new ContainerLifecycleError(

@@ -47,6 +47,24 @@ function controlRoutes() {
 }
 
 describe("authenticated hello handshake", () => {
+  test("carries the build commit only when this build has one", async () => {
+    for (const [buildCommit, expected] of [
+      ["abc1234", "abc1234"],
+      [null, undefined],
+      [undefined, undefined],
+    ] as const) {
+      const { info } = await startGateway({
+        backendHello: async () => ({ ...identity, buildCommit }),
+      });
+      const response = await requestUrl(helloUrl(info.url), {
+        headers: { authorization: `Bearer ${info.token}` },
+      });
+      expect(response.status).toBe(200);
+      expect((response.json() as { buildCommit?: unknown }).buildCommit).toBe(expected);
+      expect(parseBackendHello(response.json()).buildCommit).toBe(expected);
+    }
+  });
+
   for (const nodeMode of ["leaf", "command"] as const) {
     test(`${nodeMode} mode advertises remote mail steering on both listeners`, async () => {
       const { info } = await startGateway({

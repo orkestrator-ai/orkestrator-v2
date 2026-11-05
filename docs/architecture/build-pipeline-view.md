@@ -743,10 +743,15 @@ inspector links it. Nothing closes a pull request.
 
 Notes is the last step on the line, after the PR (or the "No PR" outcome). It
 is not an agent stage: it has no session, costs nothing and cannot fail. The
-node (`kind: "notes"`) is drawn ahead like the PR, is complete when the run is,
-and is not followed automatically, so a finished run still opens on the step it
-last reached. On a failed run it stays readable and its status says "So far".
-Only a cancelled run that never shipped omits it.
+node (`kind: "notes"`) is drawn ahead like the PR and is complete when the run
+is, which makes it the last step reached: a finished run opens on Notes, where
+the follow-ups are, unless the user has picked another node. Arriving there also
+scrolls to it (`landOnSelection`), at any width and over a remembered pan: the
+stacked column puts Notes at the top with its inspector below, and a tab hidden
+when the run finished lands when it is shown. It happens once per arrival, so the
+reader's own scrolling survives another pane taking over. On a failed run it
+stays readable, its status says "So far", and selection stays on the step that
+failed. Only a cancelled run that never shipped omits it.
 
 Its inspector (`PipelineNotesView`) shows the whole key information document
 (`KeyInformationDocument`, the same one the key information tab renders), with

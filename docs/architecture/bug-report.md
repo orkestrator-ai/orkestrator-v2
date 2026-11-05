@@ -22,6 +22,13 @@ web counterpart of `orkestrator --fix AGENT`
 | App context and renderer errors | [`client-context.ts`](../../apps/web/src/lib/bug-report/client-context.ts), [`renderer-errors.ts`](../../apps/web/src/lib/bug-report/renderer-errors.ts) |
 | Window capture | `orkestrator:bug-report:capture-window` in [`ipc.ts`](../../apps/desktop/electron/ipc.ts) |
 
+The shared prompt section sends the agent to the
+[essential event log](logging.md#the-essential-event-log) first, because it is written
+even with **Save Logs to Disk** off, and asks the user to turn saving on and reproduce the
+problem only if that log does not explain it. `orkestrator --fix` also mentions the
+[diagnostics bundle](logging.md#the-diagnostics-bundle) as something the user can attach.
+It never runs it: what goes into a public issue stays the user's decision.
+
 ## Lifecycle
 
 1. Opening the sheet reads `get_bug_report`. Without a report it calls

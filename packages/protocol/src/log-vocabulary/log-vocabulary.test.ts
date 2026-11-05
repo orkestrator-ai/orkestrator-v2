@@ -20,6 +20,7 @@ const essentialEvents = Object.entries(areas).flatMap(([area, spec]) =>
  * stance, so a new entry is a decision to review, here and in the logging guide.
  */
 const CURATED_ESSENTIAL_EVENTS = [
+  "backend previous-run",
   "backend shutdown.finished",
   "backend shutdown.signal-received",
   "backend starting",

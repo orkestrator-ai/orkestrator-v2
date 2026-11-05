@@ -62,7 +62,8 @@ test("related Debug controls and notes use section spacing", async ({ page }) =>
           child.getBoundingClientRect().top - node.children[index].getBoundingClientRect().bottom,
       ),
   );
-  expect(gaps.length).toBe(4);
+  // Essential-log note, database figures and diagnostics export also belong to this group.
+  expect(gaps.length).toBe(7);
   for (const gap of gaps) expect(gap).toBeCloseTo(12, 0);
 });
 

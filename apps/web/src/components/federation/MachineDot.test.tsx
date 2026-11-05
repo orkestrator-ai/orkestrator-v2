@@ -34,7 +34,7 @@ describe("CommandNodeHomeIcon", () => {
     for (const stale of ["h-3.5", "w-3.5", "h-5", "w-5", "rounded-[3px]", "rounded-[4px]"]) {
       expect(imageClasses).not.toContain(stale);
     }
-    expect(outline.querySelector("svg")).toBeNull();
+    expect(outline.querySelector("svg") === null).toBe(true);
   });
 
   for (const [name, projectIcon] of [
@@ -48,7 +48,7 @@ describe("CommandNodeHomeIcon", () => {
       expect(classesOf(outline)).toEqual(
         expect.arrayContaining(["size-8", "items-center", "justify-center"]),
       );
-      expect(within(outline).queryByTestId("project-icon")).toBeNull();
+      expect(within(outline).queryByTestId("project-icon") === null).toBe(true);
       const house = outline.querySelector("svg");
       expect(house).not.toBeNull();
       expect(classesOf(house!)).toEqual(expect.arrayContaining(["h-4", "w-4", "text-emerald-500"]));

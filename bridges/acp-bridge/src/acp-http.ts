@@ -120,8 +120,11 @@ import {
   endAcpTurnEvidence,
 } from "./change-evidence.js";
 import { holdParkedRequest, type AcpHoldFamily } from "./acp-interaction-hold.js";
+import { CredentialError } from "./acp-credentials.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const TRANSCRIPT_GENERATION = randomBytes(16).toString("hex");
+const log = createLogger("bridge.acp");
 
 /** A selected command stopped matching the live inventory before dispatch. */
 class CommandUnavailableError extends Error {}
@@ -193,7 +196,19 @@ export async function route(
     return json(response, 200, { models });
   }
   if (url.pathname === "/session/list" && request.method === "GET") {
-    return json(response, 200, { sessions: await listResumableSessions() });
+    try {
+      return json(response, 200, { sessions: await listResumableSessions() });
+    } catch (error) {
+      if (error instanceof HttpError || error instanceof CredentialError) throw error;
+      // Provider failures can contain paths or session contents. This reason
+      // reaches the resume dialog verbatim; neither the response nor the log
+      // may include the provider's message.
+      log.warn("http.route-failed", {
+        method: request.method,
+        error: formatLogError(error, { message: false }),
+      });
+      return json(response, 500, { error: "Failed to read session history" });
+    }
   }
   if (url.pathname === "/session/resume" && request.method === "POST") {
     const body = await readJson(request);

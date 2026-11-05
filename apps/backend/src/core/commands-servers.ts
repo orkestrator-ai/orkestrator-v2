@@ -1774,6 +1774,17 @@ export async function deleteEnvironment(
             });
           });
       }
+      // Tombstones its worktrees and records the purge of its change history and
+      // evidence bodies, which the retention pass carries out in bounded batches.
+      try {
+        context.runtime.changeTracking?.environmentDeleted(environmentId);
+      } catch (error) {
+        environmentLog.warn("delete.step-failed", {
+          environmentId,
+          step: "change-tracking",
+          error: formatLogError(error, { message: false }),
+        });
+      }
       // Schedules its agents own go with it; others' schedules aimed at it pause.
       try {
         context.scheduledJobs?.environmentDeleted(environmentId);

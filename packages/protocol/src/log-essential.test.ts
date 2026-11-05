@@ -239,3 +239,21 @@ test.each([1, true, null, { name: "TypeError", errno: -2 }])(
     });
   },
 );
+
+describe("backend previous-run", () => {
+  test("keeps its outcome and numbers, and refuses any other outcome", () => {
+    const entry = (outcome: string) =>
+      record("backend", "previous-run", "warn", {
+        outcome,
+        ranForMs: 5,
+        lastSeenAgoMs: 6,
+        extra: "/home/someone",
+      });
+    expect(projectEssentialRecord(entry("crashed"), TS)?.fields).toEqual({
+      outcome: "crashed",
+      ranForMs: 5,
+      lastSeenAgoMs: 6,
+    });
+    expect(projectEssentialRecord(entry("/home/someone"), TS)?.fields?.outcome).toBeUndefined();
+  });
+});

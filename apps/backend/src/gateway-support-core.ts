@@ -1,3 +1,4 @@
+import type { DatabaseStats } from "@orkestrator/protocol/backend-diagnostics";
 import { mkdir, open, readFile, rename, rm, writeFile } from "node:fs/promises";
 import {
   type IncomingHttpHeaders,
@@ -39,6 +40,10 @@ export type BackendInvoker = {
    * such as during shutdown.
    */
   hasCommand?(command: string): boolean;
+  /** The database figures `/metrics` reports; absent from a backend with no database. */
+  databaseStats?(): DatabaseStats;
+  /** Lets the backend's diagnostics read the same snapshot `/metrics` answers. */
+  attachGatewayMetrics?(source: () => unknown): void;
 };
 
 export type NetworkInterfaceMap = NodeJS.Dict<NetworkInterfaceInfo[]>;
@@ -88,6 +93,8 @@ export interface BackendHelloIdentity {
   installationId: string;
   generation: string;
   appVersion: string;
+  /** Absent or `null` when this build has no commit to report. */
+  buildCommit?: string | null;
   profile: import("@orkestrator/protocol/backend-profile").BackendProfile;
   /** Command-node role; absent from embedded gateways without command nodes. */
   nodeMode?: "standalone" | "command" | "leaf";

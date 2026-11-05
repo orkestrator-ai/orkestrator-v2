@@ -483,7 +483,6 @@ export class ArtifactPreviews {
           operationId,
         }),
       };
-      this.ctx.metrics.increment("deadlines", { kind: started.kind });
     }
     try {
       if (this.complete(environmentId, started, outcome, active))

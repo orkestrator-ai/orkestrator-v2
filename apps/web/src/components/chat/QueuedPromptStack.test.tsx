@@ -427,6 +427,6 @@ describe("QueuedPromptStack without a queue manager", () => {
     expect(screen.getByTestId("compose-queue-item-note").textContent).toBe(
       "Claude cannot be steered here, so this is sent when the turn ends.",
     );
-    expect(screen.queryByRole("button", { name: /^Steer queued prompt/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Steer queued prompt/ }) === null).toBe(true);
   });
 });

@@ -130,6 +130,6 @@ describe("PipelineNotesView", () => {
 
     expect(screen.getByText("Nothing was flagged for a person to look at.")).toBeTruthy();
     expect(screen.getByText("Nothing has been recorded yet")).toBeTruthy();
-    expect(screen.queryByRole("region", { name: "Needs a look" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "Needs a look" }) === null).toBe(true);
   });
 });

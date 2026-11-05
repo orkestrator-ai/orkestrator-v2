@@ -988,6 +988,23 @@ export const PUBLIC_ACTIONS = {
     milestone: "D",
     summary: "Read a bounded stdout/stderr window of an exec operation.",
   },
+  "diagnostics.plan": {
+    version: 1,
+    mutation: false,
+    effects: [],
+    observation: "immediate",
+    milestone: "D",
+    summary:
+      "Build a local diagnostics bundle in the backend's memory and read its manifest: exactly what the bundle holds, and what it leaves out.",
+  },
+  "diagnostics.read": {
+    version: 1,
+    mutation: false,
+    effects: [],
+    observation: "immediate",
+    milestone: "D",
+    summary: "Read one piece of a planned diagnostics bundle. Nothing is uploaded.",
+  },
   "host.status": {
     version: 1,
     mutation: false,

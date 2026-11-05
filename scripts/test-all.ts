@@ -1133,6 +1133,9 @@ export async function runAllTests(overrides: Partial<TestAllDependencies> = {}):
     // app) loads React's production build, which has no `act`, and fails every
     // component test in groups that Turbo does not already filter.
     delete sanitizedEnvironment.NODE_ENV;
+    // Test builds must stay unstamped and share their cache across commits,
+    // even when the caller is running inside a stamped build environment.
+    delete sanitizedEnvironment.ORKESTRATOR_BUILD_COMMIT;
     const runEnvironment: NodeJS.ProcessEnv = { ...sanitizedEnvironment };
     delete runEnvironment.ORKESTRATOR_VALIDATION_SCHEDULER_STATE;
     delete runEnvironment.ORKESTRATOR_VALIDATION_HEAD_REF;

@@ -90,6 +90,14 @@ immediately to drain the current window; only the final page advances the pollin
 watermark. Pending interactions repeat on the next polling window, rather than
 occupying every continuation page. Equal-time events have a stable tie breaker.
 
+There is no conditional read: each poll receives the pending items again and the
+poller drops the repeats, as `attention --follow` does with its `seen` set. A
+page is small enough for that, about 1.2 KB for three pending approvals and at
+most 80 KiB for a full page of over-long names (pinned in
+`public-api-attention.test.ts`, against 1 MiB for a transcript page). A real
+follower's typical size has not been measured; see
+[5560](../todo/cli-and-slash-commands/5560-attention-follow-page-size.md).
+
 ## Hosted voice platforms: a local relay
 
 The Control MCP listener is loopback-only, and this design adds no public

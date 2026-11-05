@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import type { AgentInteractionRequest } from "@orkestrator/protocol/agent-interactions";
+import { PUBLIC_API_LIMITS } from "@orkestrator/protocol/public-api";
 import type { PublicAttentionPage } from "@orkestrator/protocol/public-api-resources";
 import { decodeAttentionCursor, encodeAttentionCursor } from "./actions-attention.js";
 import { requestKey } from "./operation-ledger.js";
@@ -274,5 +275,47 @@ describe("attention.list", () => {
     const bad = await harness.call("attention.list", { cursor: "not-a-cursor" });
     expect(!bad.ok && bad.error.code).toBe("invalid-input");
     expect(decodeAttentionCursor(encodeAttentionCursor(1_234_567))).toBe(1_234_567);
+  });
+
+  // `attention --follow` re-reads every pending item on each poll, with no
+  // conditional read, because a page stays this small. Raising these budgets
+  // reopens that decision (docs/todo/cli-and-slash-commands/5560).
+  test("a full page of over-long names stays small enough to re-read on every poll", async () => {
+    const { harness, service, stub } = await setup();
+    const started = await harness.call<{ tabId: string }>(
+      "session.start",
+      { environmentId: "env-1", agent: "claude", prompt: "work" },
+      { requestId: "full-page" },
+    );
+    if (!started.ok) throw new Error(started.error.message);
+    const providerSessionId = stub.sends[0]!.sessionId;
+    const long = "語".repeat(400);
+    await harness.storage.updateEnvironment("env-1", { name: long });
+    for (let index = 0; index < PUBLIC_API_LIMITS.attentionMaxItems + 10; index += 1) {
+      stub.pending.push({
+        ...approval(providerSessionId),
+        id: `0194f0aa-7c11-7d3e-9a55-${String(index).padStart(12, "0")}`,
+        presentation: { title: long, body: "x".repeat(4096), questions: [] },
+      } as unknown as AgentInteractionRequest);
+    }
+    setActivity(service, "claude", started.result.tabId, providerSessionId, "waiting");
+
+    const read = async (input: Record<string, unknown>) => {
+      const response = await readAttention(harness, input);
+      if (!response.ok) throw new Error(response.error.message);
+      return { page: response.result, bytes: Buffer.byteLength(JSON.stringify(response.result)) };
+    };
+    const byDefault = await read({});
+    expect(byDefault.page.items).toHaveLength(PUBLIC_API_LIMITS.attentionDefaultItems);
+    expect(byDefault.bytes).toBeLessThanOrEqual(32 * 1024);
+
+    const largest = await read({ limit: PUBLIC_API_LIMITS.attentionMaxItems });
+    expect(largest.page.items).toHaveLength(PUBLIC_API_LIMITS.attentionMaxItems);
+    expect(largest.bytes).toBeLessThanOrEqual(80 * 1024);
+    expect(largest.page.items[0]).toMatchObject({
+      title: "語".repeat(200),
+      environmentName: "語".repeat(200),
+    });
+    expect(JSON.stringify(largest.page)).not.toContain("xxxx");
   });
 });

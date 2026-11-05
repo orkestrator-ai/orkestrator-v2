@@ -2233,4 +2233,4 @@ A test that injects `startWatch` almost always emits on a fake, so a default pla
 
 ### Task 7: the real-watch tests' deadlines (ST-17, 2026-11-04)
 
-`worktree-watcher-real.test.ts` keeps writing distinct files for up to 90 s and asserts an absence only against a later delivered event. On arktech-mini the first event has taken 35 s to arrive, so a shorter deadline measured `fseventsd` rather than the watcher. It is in the slow tier for that reason.
+`worktree-watcher-real.test.ts` keeps writing distinct files for up to 90 s and asserts an absence only against a later delivered event. On arktech-mini the first event has taken 35 s to arrive, so a shorter deadline measured `fseventsd` rather than the watcher. It is in the slow tier for that reason. `worktree-snapshots-git.test.ts` does the same on macOS since a side-by-side run showed the host losing events for Bun and Node alike (flake 5061).

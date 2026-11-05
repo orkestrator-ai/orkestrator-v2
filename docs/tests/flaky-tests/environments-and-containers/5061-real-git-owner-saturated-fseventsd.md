@@ -1,7 +1,7 @@
 # `real Git through the shared owner` loses events on a saturated `fseventsd`
 
 - **ID:** 5061
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-11-04
 - **File:** `apps/backend/src/core/worktree-snapshots-git.test.ts`
 - **Host:** arktech-mini, macOS arm64, external APFS volume, Bun 1.4.4. `fseventsd` was using 100–138% of a core with 8–11 GB resident after seven days of uptime, load average 6 to 10.
@@ -9,7 +9,9 @@
 - **Control:** the same file at `e198fd4a7`, unchanged, with only its deadlines raised to 120 s (`bun test --cwd apps/backend` on a temporary copy): 1 passed, 4 failed, each at 120 s. That file injects `startWatch`, so it runs the old whole-root watch and shows the failure does not need the watch plan. The file as changed for the plan, same deadlines: 1 passed, 6 failed. An earlier run of it at 180 s: 4 passed, 3 failed (one of those an assertion since replaced).
 - **Linux:** the file as changed passes, 7 of 7 in about 26 s (`oven/bun:1.4.4`, linux/arm64 on Docker Desktop).
 - **Assessment:** a single write's event did not arrive within minutes, so raising the deadline does not help. On the same host and volume, `worktree-watcher-real.test.ts` passes because it keeps writing distinct files until one is reported, and a separate probe saw the first event take 3 to 35 s. Lost or very late delivery from a saturated `fseventsd` fits all of this, but what keeps it busy was not established, and no restart of it was tried. No watcher delivery fix was made, and no deadline, assertion or skip was loosened.
-- **Follow-up:** re-run on a macOS host with a healthy `fseventsd`; [5060](../../../todo/cross-cutting/5060-worktree-watch-leftovers.md), task 3.
+- **Root cause:** the host's `fseventsd` loses and delays events for every program, and the file waited on one write's event. See the section below.
+- **Fix:** `6c454e5c5`. On macOS each detection repeats its change until a published scan shows it; Linux keeps one change, one event and the 15 s deadline.
+- **Follow-up:** whether one write's event arrives promptly on a healthy macOS host; [5060](../../../todo/cross-cutting/5060-worktree-watch-leftovers.md), task 3.
 
 ## 2026-11-05 address-findings observation
 
@@ -48,3 +50,36 @@ The remaining failures were service new-directory detection, ignored-write then
 source detection, minimum-gap detection, staging, and ref movement.
 Artifact: `orkestrator-test-run.ynvykA/watcher-real-recovery.log.gz`.
 All remain delivery deadlines; healthy-host service qualification is still open.
+
+## 2026-11-05 root cause and fix
+
+`fseventsd` was at about 100% of a core and 9 GB resident after seven days, as in the
+runs above. Three controls with no Orkestrator code, on the same volume:
+
+| Probe | Result |
+| --- | --- |
+| Bun 1.4.4 and Node 22.23.1 side by side, recursive `fs.watch` on one directory, 12 writes 3 s apart, 70 s to arrive | Each saw the same 6 of 12, 4.6 to 61.4 s late; the other 6 did not arrive |
+| Bun alone, 15 writes 500 ms apart, 20 s to arrive | 3 of 15; 0 of 15 in two further runs, one non-recursive, one on the internal disk |
+| Node alone, same | 15 of 15, up to 20.6 s late, after 55 s and 535 writes before the first event arrived |
+
+Two runtimes receiving identical events at identical latencies puts the loss below
+both of them. Neither Bun, the watch plan nor the service is needed to reproduce it. What
+keeps `fseventsd` busy is still not established.
+
+After `6c454e5c5`, all at the same `fseventsd` load:
+
+| Command | Result |
+| --- | --- |
+| `worktree-snapshots-git.test.ts` alone, macOS, three runs | 7 of 7 each, in 259.7 s, 77.8 s and 51.0 s |
+| With `worktree-watcher-real.test.ts`, macOS, two runs | Exit 0 in 124.7 s; 20 pass, 1 skip (Linux only), 0 fail in 100.8 s |
+| Mutation: `plan: null` in the service test, macOS | Fails at `expect(scansStarted).toBe(scansBefore)`, 6 expected, 7 received, so it detects the plan being off |
+| `worktree-snapshots-git.test.ts`, `oven/bun:1.4.4` linux/arm64, three runs, one change per detection | 7 of 7 each, about 29 s |
+| `worktree-watcher-real.test.ts`, split and plan tests, same container | 50 of 50 |
+
+An earlier combined run was stopped by the runner's five-minute no-output watchdog,
+because `--only-failures` prints nothing for a passing file. Both files now write a line
+to stderr per detection on macOS. `console.log` would not do: the test preload suppresses it.
+
+The cases [0947](0947-worktree-git-aggregate-timeouts.md) and
+[0957](0957-worktree-index-and-shared-ref-aggregate-timeouts.md) are on the same file and
+may share this cause on macOS. They stay open: no aggregate stress run was done here.

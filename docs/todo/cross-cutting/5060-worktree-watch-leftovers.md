@@ -8,7 +8,7 @@ Analysed 2026-11-04 against `main` at `e198fd4a7`. These are what was left when 
 
 1. **Scan rate during a real install** (report part 0420, Needs verification): measure it on a live stack. Status: open.
 2. **Other ignored directories** (report part 0420, task 2; part 0570, task 2): decide whether a build in `dist` should keep starting scans. Status: open.
-3. **macOS on a healthy `fseventsd`** (report part 0570, tasks 1 and 2, and the Needs verification): prove the service path, re-measure callbacks, then decide whether the root watch should change. Status: open.
+3. **macOS on a healthy `fseventsd`** (report part 0570, tasks 1 and 2, and the Needs verification): re-measure callbacks and the cost of extra recursive watches, then decide whether the root watch should change. The service path is proved. Status: open.
 4. **A real Linux host** (report part 0570, Needs verification): run the watch plan outside Docker Desktop. Status: open.
 5. **How often untracked counts matter** (report part 0450, Needs verification): find out how many untracked files worktrees really hold. Status: open.
 
@@ -53,13 +53,15 @@ Analysed 2026-11-04 against `main` at `e198fd4a7`. These are what was left when 
 
 ### 3. macOS on a healthy `fseventsd`
 
-**Problem.** On macOS the OS still delivers events under a left-out `node_modules`. They are dropped on arrival and start no scan, but each one still crosses into JavaScript, so the callback count the ticket wanted to reduce could not be shown to fall there. The watch plan is also unproven through the real service on macOS: only the watcher itself is.
+**Problem.** On macOS the OS still delivers events under a left-out `node_modules`. They are dropped on arrival and start no scan, but each one still crosses into JavaScript, so the callback count the ticket wanted to reduce could not be shown to fall there. Nor has a single write's prompt delivery been shown on macOS, since the host available loses events.
 
 **Context.** Report part 0570 recommended one recursive watch per top-level entry plus a non-recursive root. That option was not taken on macOS: see Investigation. Bun's `fs.watch` exposes no exclusion paths, and fsmonitor is no longer on, so the report's other option is gone.
 
 **Investigation.** On arktech-mini on 2026-11-04, `fseventsd` was using 100–138% of a core and about 11 GB resident after seven days of uptime, and the first event took 3 to 35 s to reach a new watch. Under that load, callback counts during an install were 54 and 6 before the plan and 6 and 12 after, so they prove nothing. Starting 5 recursive watches in one process blocked the JS thread for 2,882 ms and 20 for 19,836 ms (longest single start 4,424 ms); closing 20 took 994 ms in one run and 15,415 ms in another. Whether a healthy `fseventsd` removes that stall was not measured, and neither was what is keeping it busy here. Nothing has established whether Orkestrator contributes to it.
 
-Proved on this host: `worktree-watcher-real.test.ts` passes (12 passed, the Linux-only inotify count skipped), including a file in a directory created after the watch began, a tracked file under `node_modules`, and the control that the same write is reported with the plan off. Not proved: `worktree-snapshots-git.test.ts`, which waits on one write's event, fails here at a 120 s deadline even unchanged from `main` (flake [5061](../../tests/flaky-tests/environments-and-containers/5061-real-git-owner-saturated-fseventsd.md)). Re-run it on a healthy host.
+The loss is the host's, not the watcher's or Bun's. On 2026-11-05 Bun and Node watched one directory side by side with no Orkestrator code: each was handed the same 6 of 12 writes made 3 s apart, 4.6 to 61 s late, and the other six not within 70 s (flake [5061](../../tests/flaky-tests/environments-and-containers/5061-real-git-owner-saturated-fseventsd.md)). While `fseventsd` is in this state, a change whose event is lost shows only at the next event or the two-minute safety scan.
+
+Proved on this host, with `fseventsd` still at about 100% of a core: `worktree-watcher-real.test.ts`, including a file in a directory created after the watch began, a tracked file under `node_modules`, and the control that the same write is reported with the plan off; and `worktree-snapshots-git.test.ts` through the real service, including a delivered write under `node_modules` starting no scan and reaching no hint, and a later source edit being detected. With the plan disabled that test fails, because the write starts a scan. Not proved: that one write's event arrives promptly on macOS. Both files print how many changes each detection took, so a run on a healthy host answers it.
 
 **Decisions.**
 
@@ -93,6 +95,14 @@ Proved on this host: `worktree-watcher-real.test.ts` passes (12 passed, the Linu
 **Investigation.** Not measured. `scripts/benchmark-local-diff-scan.ts` shows 200 and 2,000 untracked files read per scan before and none after, on a synthetic workload.
 
 **Decisions.** None: sample `git status --porcelain=v1 -uall | wc -l` across real environments if this area is reopened; otherwise close this task.
+
+## Assumptions and decisions
+
+### Task 3: the macOS service proof repeats a change
+
+`worktree-snapshots-git.test.ts` waited 15 s on one write's event, which this host cannot deliver for any program. On macOS it now repeats each change until a published scan shows it, for up to 180 s. Staging and ref movement also require the raw event from their own watch, and the no-scan assertion counts only a window where the ignored write was delivered and nothing else arrived. The cache-hit assertions run on Linux only, because a late event can invalidate the cache on macOS. Linux keeps one change, one event and the 15 s deadline.
+
+The alternatives were to keep the single write and leave the service unproved until a healthy Mac was available, which proves nothing here, or to restart `fseventsd`, which would affect everything else on a shared host and hide the state rather than cover it. A healthy host is still wanted for the single-write and callback questions above.
 
 ## Current state
 

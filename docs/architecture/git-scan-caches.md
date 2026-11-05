@@ -107,12 +107,17 @@ This worktree has 11,904 directories, of which 311 are outside `node_modules`.
 macOS was run on arktech-mini, where `fseventsd` was using 100–138% of a core with
 about 11 GB resident after seven days, and the first event took 3 to 35 s to arrive. Its
 callback counts are not usable: before was 54 and 6, after was 6 and 12. What holds
-there is the behaviour, from `worktree-watcher-real.test.ts`: the same write under
-`node_modules` is reported with the plan off and not with it on. The service-level
-`worktree-snapshots-git.test.ts` fails on that host even unchanged from `main`
-([flake 5061](../tests/flaky-tests/environments-and-containers/5061-real-git-owner-saturated-fseventsd.md)),
-so macOS is proved at the watcher only. The stall per extra
-recursive watch, in the same conditions, is why macOS keeps one watch:
+there is the behaviour: `worktree-watcher-real.test.ts` shows the same write under
+`node_modules` reported with the plan off and not with it on, and
+`worktree-snapshots-git.test.ts` shows it through the real service, where a delivered
+ignored write starts no scan and a later source edit is detected. That host also
+loses events for every program: Bun and Node watching one directory were handed the
+same 6 of 12 writes, up to 61 s late and the rest not at all
+([flake 5061](../tests/flaky-tests/environments-and-containers/5061-real-git-owner-saturated-fseventsd.md)).
+A change whose event is lost is picked up by the next event or the safety scan, so on
+macOS these tests repeat a change until it is shown rather than expecting one write's
+event. The stall per extra recursive watch, in the same conditions, is why macOS keeps
+one watch:
 
 | Recursive watches started and closed in one process | Start, total (longest) | Close, total |
 | --- | --- | --- |

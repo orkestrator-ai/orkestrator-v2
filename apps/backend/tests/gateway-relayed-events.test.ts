@@ -7,8 +7,8 @@ import {
   type RelayedNodeEvent,
 } from "@orkestrator/protocol/node-events";
 import { ReconnectBackoff } from "@orkestrator/protocol/reconnect-backoff";
+import { RelayedEventStream } from "@orkestrator/protocol/relayed-event-stream";
 
-import { RelayedEventStream } from "../../web/src/lib/native/relayed-event-stream";
 import { compatibilityPathUsage } from "../src/core/compatibility-path-usage";
 import { OrkestratorGateway } from "../src/gateway";
 import { parseGatewayCursor, type GatewayEventReplay } from "../src/gateway-event-replay";
@@ -47,6 +47,12 @@ function rings(gateway: OrkestratorGateway) {
 
 function legacyUses(): number {
   return compatibilityPathUsage.snapshot().paths["relayed-node-event.legacy-stream"]?.count ?? 0;
+}
+
+function legacyDesktopUses(): number {
+  return (
+    compatibilityPathUsage.snapshot().paths["relayed-node-event.legacy-desktop-stream"]?.count ?? 0
+  );
 }
 
 async function closeAndWait(
@@ -182,10 +188,11 @@ describe("a client on an older version", () => {
     terminal.close();
   });
 
-  test("the desktop's explicit legacy stream gets the frames and is not counted as older", async () => {
+  test("an older desktop's explicit legacy stream gets the frames, on a counter of its own", async () => {
     const { gateway, info } = await startGateway();
     const main = await openEventStream(gateway, info, "?relayedEvents=legacy");
     const uses = legacyUses();
+    const desktopUses = legacyDesktopUses();
 
     emitRelayed(gateway, LEAF, "one");
     await waitUntil(
@@ -193,6 +200,7 @@ describe("a client on an older version", () => {
       "The desktop's main stream never received the frame",
     );
     expect(legacyUses()).toBe(uses);
+    expect(legacyDesktopUses()).toBe(desktopUses + 1);
     main.close();
   });
 });

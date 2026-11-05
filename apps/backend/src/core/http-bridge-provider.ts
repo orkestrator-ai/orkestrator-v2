@@ -101,6 +101,7 @@ import { bridgeChangeEvidenceSource } from "./http-bridge-change-evidence.js";
 import { readAcpTurnTerminalError } from "./http-bridge-turn-outcome.js";
 import { HttpBridgeObservationWakeup } from "./http-bridge-observation-stream.js";
 import { readBridgeResumableSessions } from "./http-bridge-resumable-sessions.js";
+import { HttpBridgeSteerQualification } from "./http-bridge-steer-qualification.js";
 
 export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
   readonly agent: HttpBridgeAgent;
@@ -132,6 +133,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
   readonly turnTerminalError?: (sessionId: string, requestId: string) => Promise<string | null>;
   /** Claude and Codex: the bridge event stream as the idle wakeup. */
   private readonly observationWakeup: HttpBridgeObservationWakeup;
+  private readonly steerQualification: HttpBridgeSteerQualification;
 
   constructor(
     private readonly connection: BridgeConnection,
@@ -141,6 +143,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     private readonly planUsage?: PlanUsageState,
   ) {
     this.agent = connection.agent as HttpBridgeAgent;
+    this.steerQualification = new HttpBridgeSteerQualification(this.agent, connection, fetchImpl);
     this.observationWakeup = new HttpBridgeObservationWakeup(
       connection,
       fetchImpl,
@@ -326,19 +329,8 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     return runId ? { state: "running", runId } : { state: "unknown" };
   }
 
-  async steerSupported(sessionId: string): Promise<boolean> {
-    const response = await bridgeFetch(
-      this.connection,
-      `/session/${encodeURIComponent(sessionId)}/steer/dispatch` +
-        `?requestId=${encodeURIComponent("orkestrator-steer-qualification")}`,
-      {},
-      this.fetchImpl,
-    ).catch(() => null);
-    if (!response?.ok) return false;
-    const body = asRecord(
-      await boundedJson(response, `${this.agent} steer qualification`).catch(() => null),
-    );
-    return body?.dispatch === "unknown" || body?.dispatch === "dispatched";
+  steerSupported(sessionId: string): Promise<boolean> {
+    return this.steerQualification.supported(sessionId);
   }
 
   async steerStatus(sessionId: string, requestId: string): Promise<ProviderSteerDispatchStatus> {

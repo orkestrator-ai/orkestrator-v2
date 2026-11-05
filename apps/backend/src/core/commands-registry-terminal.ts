@@ -46,10 +46,11 @@ import {
   inferLanguage,
   assertEditorTextFileSize,
   decodeEditorTextFile,
-  spawnCommand,
+  runCommand,
   writeFileBase64,
   CommandFailedError,
 } from "./shell.js";
+import { runContainerWrite } from "./container-write.js";
 import {
   INITIAL_PROMPT_STAGING_DIRECTORY,
   MAX_TOTAL_ATTACHMENT_BYTES,
@@ -1269,7 +1270,7 @@ export function registerTerminalCommands(
       // App-owned evidence: no symbolic link anywhere on the path, exclusive
       // temp file, atomic rename. A workspace cannot redirect this write.
       await runContainerEvidenceScript(
-        spawnCommand,
+        runCommand,
         id,
         CONTAINER_EVIDENCE_WRITER,
         ["/workspace", target, String(MAX_BASE64_PAYLOAD_BYTES)],
@@ -1278,31 +1279,16 @@ export function registerTerminalCommands(
       return fullPath;
     }
     const write = async () => {
-      const child = spawnCommand("docker", [
-        "exec",
-        "-i",
+      // A refused precondition exits before reading stdin, which is expected.
+      await runContainerWrite(
         id,
-        "bash",
-        "-lc",
-        containerFileWriteScript(fullPath, precondition),
-      ]);
-      // A refused precondition exits before reading stdin; the broken pipe that
-      // leaves behind is expected and must not surface as an unhandled error.
-      child.stdin.on("error", () => undefined);
-      child.stdin.write(data);
-      child.stdin.end();
-      await new Promise<void>((resolve, reject) => {
-        child.once("exit", (code) =>
-          code === 0
-            ? resolve()
-            : reject(
-                code === CONTAINER_WRITE_CONFLICT_EXIT
-                  ? fileWriteConflictError()
-                  : new Error(`docker exec exited with ${code}`),
-              ),
-        );
-        child.once("error", reject);
-      });
+        ["bash", "-lc", containerFileWriteScript(fullPath, precondition)],
+        data,
+        {
+          errorForExit: (code) =>
+            code === CONTAINER_WRITE_CONFLICT_EXIT ? fileWriteConflictError() : undefined,
+        },
+      );
       return fullPath;
     };
     return precondition ? serializeFileWrite(`container:${id}:${fullPath}`, write) : write();
@@ -1323,7 +1309,7 @@ export function registerTerminalCommands(
       throw new Error("paths must be at most 200 workspace-relative paths");
     }
     // Paths travel as JSON on stdin, never on the exec command line.
-    return runContainerPathCheck(spawnCommand, id, paths as string[]);
+    return runContainerPathCheck(runCommand, id, paths as string[]);
   });
   register("delete_container_annotation_evidence", async ({ containerId, filePath, digest }) => {
     const id = asString(containerId, "containerId");
@@ -1334,7 +1320,7 @@ export function registerTerminalCommands(
     const hash = asString(digest, "digest");
     if (!/^[a-f0-9]{64}$/.test(hash)) throw new Error("digest is invalid");
     const output = await runContainerEvidenceScript(
-      spawnCommand,
+      runCommand,
       id,
       CONTAINER_EVIDENCE_REMOVER,
       ["/workspace", target, hash, String(WEB_ANNOTATION_LIMITS.imageBytes)],
@@ -1602,28 +1588,19 @@ export function registerTerminalCommands(
           );
         } else {
           const fullPath = workspaceFilePath(relativePath);
-          const child = spawnCommand("docker", [
-            "exec",
-            "-i",
+          await runContainerWrite(
             environment.containerId!,
-            "node",
-            "-e",
-            CONTAINER_PINNED_ATTACHMENT_WRITE,
-            "/workspace",
-            batchRelativeDirectory,
-            name,
-            String(base64DecodedByteLength(data)),
-          ]);
-          await new Promise<void>((resolve, reject) => {
-            child.once("exit", (code) =>
-              code === 0 ? resolve() : reject(new Error(`docker exec exited with ${code}`)),
-            );
-            child.once("error", reject);
-            child.stdin.on("error", (error: NodeJS.ErrnoException) => {
-              if (error.code !== "EPIPE") reject(error);
-            });
-            child.stdin.end(data);
-          });
+            [
+              "node",
+              "-e",
+              CONTAINER_PINNED_ATTACHMENT_WRITE,
+              "/workspace",
+              batchRelativeDirectory,
+              name,
+              String(base64DecodedByteLength(data)),
+            ],
+            data,
+          );
           resolvedPath = fullPath;
         }
         saved.push({ name, path: resolvedPath });

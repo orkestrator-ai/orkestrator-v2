@@ -221,7 +221,7 @@ export class GatewayContext {
         ),
       onCredentialRevoked: (request, suppliedToken, close) => {
         const credential = suppliedToken ?? gatewayRequestCredential(request.headers);
-        return credential ? this.browserSessions.onRevoke(credential, close) : () => {};
+        return credential ? this.onCredentialRevoked(credential, close) : () => {};
       },
       originAllowed: (request) =>
         Boolean(
@@ -233,5 +233,16 @@ export class GatewayContext {
       maxChannelsPerSocket: options.terminalWebSocket?.maxChannelsPerSocket,
       maxChannels: options.terminalWebSocket?.maxChannels,
     });
+  }
+
+  /**
+   * Calls `listener` when this credential's client grant or browser session ends.
+   * Rotation ends a durable token, and whoever latched one is revoked directly.
+   */
+  onCredentialRevoked(credential: string, listener: () => void): () => void {
+    const unsubscribeGrant = credential.startsWith("okg_")
+      ? this.nodeHooks?.onGrantRevoked?.(credential, listener)
+      : null;
+    return unsubscribeGrant ?? this.browserSessions.onRevoke(credential, listener);
   }
 }

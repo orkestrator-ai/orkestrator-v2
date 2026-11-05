@@ -15,7 +15,7 @@ Analysed 2026-11-03 against main at `7b48c23fb`.
 
 **Context.** [0241](0241-leaked-reach-probe-networks.md) found and fixed the earlier leakers (`cli.test.ts` and `test:cli:scenarios`) and recorded a clean full run on beelink on 2026-10-31. The probe network is created per owner (`dockerOwnerNamespace(dataDir)`), so every temporary data directory is a new owner.
 
-**Investigation.** Creation dates of the 29 networks on 2026-11-03: 13 on 2026-10-31, 9 on 2026-11-01 and 7 on 2026-11-02 (the latest 05:50 UTC). All have no containers attached. The 2026-11-01 and 2026-11-02 networks postdate 0241's qualification, so either some harness still leaks or a `dev:test` profile was removed without `dev:reset` (which removes its own probe network). Not checked: which owners map to which data directories. Found while working on [2922](../cross-cutting/2922-full-and-isolated-suite-failures-on-main.md) task 5.
+**Investigation.** Creation dates of the 29 networks on 2026-11-03: 13 on 2026-10-31, 9 on 2026-11-01 and 7 on 2026-11-02 (the latest 05:50 UTC). All have no containers attached. The 2026-11-01 and 2026-11-02 networks postdate 0241's qualification, so either some harness still leaks or a `dev:test` profile was removed without `dev:reset` (which removes its own probe network). Not checked: which owners map to which data directories. Found while working on to-do 2922 task 5.
 
 **Decisions.**
 
@@ -48,5 +48,5 @@ Analysed 2026-11-03 against main at `7b48c23fb`.
 ## Related
 
 - [0241-leaked-reach-probe-networks.md](0241-leaked-reach-probe-networks.md), the original leak and its fix.
-- [2922-full-and-isolated-suite-failures-on-main.md](../cross-cutting/2922-full-and-isolated-suite-failures-on-main.md), task 5, where this was found.
+- To-do 2922 (finished and removed), task 5, where this was found.
 - [4730-disposable-docker-daemon-for-live-suites.md](4730-disposable-docker-daemon-for-live-suites.md), a way to run live suites while the pools are full.

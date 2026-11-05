@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { loseBunExitEvents } from "../testing/lost-exit.js";
 import { existsSync, readdirSync } from "node:fs";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { CommandFailedError } from "./command-capture.js";
 import {
   activateRelease,
   installRelease,
@@ -15,6 +17,7 @@ import {
   readStartupFailure,
   RELEASE_RUNTIME_PATH,
   releaseDirectory,
+  runFile,
   satisfiesBunRange,
   standaloneLayout,
   writeServiceConfig,
@@ -292,3 +295,97 @@ test.each(["bootFailure", "rollback"])(
     }
   },
 );
+
+describe.skipIf(process.platform === "win32")("runFile", () => {
+  test("returns both streams from a clean exit", async () => {
+    expect(
+      await runFile("sh", ["-c", "printf out; printf err >&2; pwd >&2"], {
+        cwd: dataDir,
+        timeoutMs: 10_000,
+      }),
+    ).toEqual({ stdout: "out", stderr: expect.stringContaining("err") });
+  });
+
+  test("a failing exit rejects with its code and output", async () => {
+    const error = await runFile("sh", ["-c", "printf nope >&2; exit 5"], {
+      timeoutMs: 10_000,
+    }).catch((reason: unknown) => reason);
+    expect(error).toBeInstanceOf(CommandFailedError);
+    expect(error).toMatchObject({ exitCode: 5, stderr: "nope", message: "nope" });
+  });
+
+  test("settles at exit while a background child holds its output", async () => {
+    const started = Date.now();
+    const { stdout } = await runFile("sh", ["-c", "printf done; sleep 5 & exit 0"], {
+      timeoutMs: 10_000,
+    });
+    expect(stdout).toBe("done");
+    expect(Date.now() - started).toBeLessThan(4_000);
+  });
+
+  test("a lost completion event fails at the deadline, never as a success", async () => {
+    const restore = loseBunExitEvents();
+    try {
+      await expect(runFile("sh", ["-c", "printf out"], { timeoutMs: 300 })).rejects.toMatchObject({
+        timedOut: true,
+      });
+    } finally {
+      restore();
+    }
+  });
+});
+
+test.skipIf(process.platform === "win32")(
+  "aborting a real detached installer kills it and removes staging",
+  async () => {
+    const layout = standaloneLayout(dataDir);
+    const controller = new AbortController();
+    let childPid = 0;
+    const run: CommandRunner = (_file, _args, options) =>
+      runFile("sh", ["-c", "echo $$; exec sleep 30"], options).catch((error) => {
+        childPid = Number(error.stdout.trim());
+        throw error;
+      });
+    const pending = installRelease(layout, "2.22.0", {
+      bun: "bun",
+      run,
+      signal: controller.signal,
+    });
+    const timer = setTimeout(() => controller.abort(), 150);
+    try {
+      await expect(pending).rejects.toMatchObject({ aborted: true });
+      // SIGKILL delivery precedes asynchronous process reaping.
+      for (let attempt = 0; attempt < 100; attempt++) {
+        try {
+          process.kill(childPid, 0);
+        } catch {
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      expect(childPid).toBeGreaterThan(0);
+      expect(() => process.kill(childPid, 0)).toThrow();
+      expect(readdirSync(layout.releases)).toEqual([]);
+      expect(existsSync(layout.current)).toBe(false);
+    } finally {
+      clearTimeout(timer);
+    }
+  },
+);
+
+test("an installer that returns after abort cannot publish a release", async () => {
+  const layout = standaloneLayout(dataDir);
+  const controller = new AbortController();
+  await expect(
+    installRelease(layout, "2.22.0", {
+      bun: "bun",
+      signal: controller.signal,
+      run: async (...args) => {
+        const result = await fakeInstall("2.22.0")(...args);
+        controller.abort(new Error("interrupted"));
+        return result;
+      },
+    }),
+  ).rejects.toThrow("interrupted");
+  expect(readdirSync(layout.releases)).toEqual([]);
+});

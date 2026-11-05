@@ -6,8 +6,10 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
 import { useProjectStore } from "@/stores";
 import { SYSTEM_USAGE_STALE_AFTER_MS } from "./AgentInfoButton.panels";
-import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
+import { USAGE_READ_TIMEOUT_MS } from "@/hooks/useSystemUsage";
+import { READ_RETRY_MAX_MS, resetReadCoordinatorForTests } from "@/lib/read-coordinator";
 import {
+  flushMicrotasks,
   installFakeReadCoordinator,
   type FakeReadEnvironment,
 } from "@/lib/testing/read-coordinator";
@@ -301,6 +303,85 @@ describe("SystemUsageIndicator", () => {
     expect(trigger.getAttribute("data-stale")).toBe("true");
     expect(trigger.getAttribute("data-sampled-at")).toBe("2026-09-25T10:00:00.000Z");
     expect(screen.getByLabelText("Central processing unit (CPU) usage: —")).toBeTruthy();
+  });
+
+  test("says the process read failed rather than loading, and recovers by itself", async () => {
+    let failing = true;
+    nativeInvokeMock.mockImplementation(async (command: string) => {
+      if (command === "get_system_usage") return usageSnapshot();
+      if (command !== "get_environment_process_usage") return undefined;
+      if (failing) throw new Error("backend unavailable");
+      return processSnapshot();
+    });
+    render(<SystemUsageIndicator />);
+    openPanel();
+
+    expect(await screen.findByText("Couldn't read processes")).toBeTruthy();
+    expect(screen.queryByText("Loading processes…") === null).toBe(true);
+
+    failing = false;
+    await advance(READ_RETRY_MAX_MS);
+    expect(screen.queryByText("Couldn't read processes") === null).toBe(true);
+    expect(screen.getByLabelText("title-bar-layout processes")).toBeTruthy();
+  });
+
+  for (const unsupported of [false, true]) {
+    test(`reopening retains a process failure without a sample (unsupported=${unsupported})`, async () => {
+      let calls = 0;
+      nativeInvokeMock.mockImplementation(async (command: string) => {
+        if (command === "get_system_usage") return usageSnapshot();
+        if (command !== "get_environment_process_usage") return undefined;
+        calls += 1;
+        throw new Error(
+          unsupported ? "Unknown backend command: get_environment_process_usage" : "offline",
+        );
+      });
+      render(<SystemUsageIndicator />);
+      openPanel();
+      expect(await screen.findByText("Couldn't read processes")).toBeTruthy();
+      fireEvent.click(
+        screen.getAllByRole("button", { name: "Close environment process usage" })[0]!,
+      );
+      openPanel();
+      await advance(0);
+      expect(screen.getByText("Couldn't read processes")).toBeTruthy();
+      expect(screen.queryByText("Loading processes…") === null).toBe(true);
+      expect(calls).toBe(1);
+    });
+  }
+
+  test("a process read that never answers stops looking like it is loading", async () => {
+    nativeInvokeMock.mockImplementation(async (command: string) => {
+      if (command === "get_system_usage") return usageSnapshot();
+      if (command === "get_environment_process_usage") return new Promise(() => {});
+      return undefined;
+    });
+    render(<SystemUsageIndicator />);
+    openPanel();
+
+    expect(await screen.findByText("Loading processes…")).toBeTruthy();
+    await advance(USAGE_READ_TIMEOUT_MS);
+    expect(screen.getByText("Couldn't read processes")).toBeTruthy();
+    expect(screen.queryByText("Loading processes…") === null).toBe(true);
+  });
+
+  test("the popover's meters say so when the host read failed with no sample", async () => {
+    let failing = true;
+    nativeInvokeMock.mockImplementation(async (command: string) => {
+      if (command === "get_environment_process_usage") return processSnapshot();
+      if (command !== "get_system_usage") return undefined;
+      if (failing) throw new Error("backend unavailable");
+      return usageSnapshot();
+    });
+    render(<SystemUsageIndicator />);
+    openPanel();
+
+    const panel = await screen.findByLabelText("System usage");
+    await waitFor(() => expect(within(panel).getByText("Data unavailable")).toBeTruthy());
+
+    failing = false;
+    await advance(READ_RETRY_MAX_MS);
+    expect(within(panel).queryByText("Data unavailable") === null).toBe(true);
   });
 
   test("opens a process panel from the meters and groups rows by environment", async () => {
@@ -642,6 +723,98 @@ describe("SystemUsageIndicator", () => {
     );
     expect(screen.getByText("node")).toBeTruthy();
     expect(screen.getAllByText("117 MB")).toHaveLength(2);
+  });
+
+  describe("a process read that fails with no earlier sample", () => {
+    const FAILURE = "Couldn't read processes";
+    let readProcesses: () => Promise<unknown>;
+
+    beforeEach(() => {
+      nativeInvokeMock.mockImplementation(async (command: string) => {
+        if (command === "get_system_usage") return usageSnapshot();
+        if (command === "get_environment_process_usage") return readProcesses();
+        return undefined;
+      });
+    });
+
+    test("shows a failure without the error text and recovers by itself", async () => {
+      readProcesses = async () => {
+        throw new Error("connect ECONNREFUSED /private/host/path");
+      };
+      render(<SystemUsageIndicator />);
+      openPanel();
+      await waitFor(() => expect(screen.getByText(FAILURE)).toBeTruthy());
+      expect(screen.queryByText("Loading processes…")).toBeNull();
+      expect(document.body.textContent).not.toContain("ECONNREFUSED");
+
+      readProcesses = async () => processSnapshot();
+      await advance(READ_RETRY_MAX_MS);
+      await waitFor(() => expect(screen.getByText("node")).toBeTruthy());
+      expect(screen.queryByText(FAILURE)).toBeNull();
+    });
+
+    test("a read that never returns says loading, then fails, and a retry in flight keeps the message", async () => {
+      let calls = 0;
+      let release!: (value: ReturnType<typeof processSnapshot>) => void;
+      readProcesses = () => {
+        calls += 1;
+        return new Promise((resolve) => {
+          release = resolve;
+        });
+      };
+      render(<SystemUsageIndicator />);
+      openPanel();
+      await advance(USAGE_READ_TIMEOUT_MS - 1);
+      expect(screen.getByText("Loading processes…")).toBeTruthy();
+
+      await advance(1);
+      expect(screen.getByText(FAILURE)).toBeTruthy();
+
+      // Retries reuse the hung request and do not flip back to loading.
+      await advance(READ_RETRY_MAX_MS * 2);
+      expect(calls).toBe(1);
+      expect(screen.getByText(FAILURE)).toBeTruthy();
+      expect(screen.queryByText("Loading processes…")).toBeNull();
+
+      await act(async () => {
+        release(processSnapshot());
+        await flushMicrotasks();
+      });
+      readProcesses = async () => processSnapshot();
+      await advance(READ_RETRY_MAX_MS + USAGE_READ_TIMEOUT_MS);
+      await waitFor(() => expect(screen.getByText("node")).toBeTruthy());
+    });
+
+    test("a backend without the command shows the failure instead of loading for ever", async () => {
+      readProcesses = async () => {
+        throw new Error("Unknown backend command: get_environment_process_usage");
+      };
+      render(<SystemUsageIndicator />);
+      openPanel();
+      await waitFor(() => expect(screen.getByText(FAILURE)).toBeTruthy());
+    });
+
+    test("an earlier sample stays across failures with no failure message, and refreshes on recovery", async () => {
+      readProcesses = async () => processSnapshot();
+      render(<SystemUsageIndicator />);
+      openPanel();
+      await waitFor(() => expect(screen.getByText("node")).toBeTruthy());
+
+      readProcesses = async () => {
+        throw new Error("ps unavailable");
+      };
+      await advance(ENVIRONMENT_PROCESS_POLL_INTERVAL_MS);
+      expect(screen.getByText("node")).toBeTruthy();
+      expect(screen.queryByText(FAILURE)).toBeNull();
+
+      readProcesses = async () =>
+        processSnapshot({
+          environments: [processGroup("env-local", "title-bar-layout", 55)],
+        });
+      await advance(READ_RETRY_MAX_MS);
+      await waitFor(() => expect(screen.getAllByText("55%").length).toBeGreaterThan(0));
+      expect(screen.queryByText(FAILURE)).toBeNull();
+    });
   });
 
   test("tears the meter poll down on unmount and pauses while the document is hidden", async () => {

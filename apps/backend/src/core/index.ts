@@ -804,6 +804,8 @@ export class OrkestratorBackend {
       forceRegistration: options.commandNode === true,
       portalOrigins: () => normalizePortalOrigins(this.portalOriginsSource()),
       selfAccess: () => this.selfAccessSource(),
+      // Work this node's coordinators were waiting on there can no longer arrive.
+      onNodesReleased: (nodes, reason) => void this.coordinators.nodesReleased(nodes, reason),
       ...(options.nodeLinks?.fetchImpl ? { fetchImpl: options.nodeLinks.fetchImpl } : {}),
       ...(options.nodeLinks?.timers ? { timers: options.nodeLinks.timers } : {}),
       ...(options.nodeLinks?.heartbeatMs ? { heartbeatMs: options.nodeLinks.heartbeatMs } : {}),
@@ -860,6 +862,7 @@ export class OrkestratorBackend {
         invokeOnNode: (input) => this.nodePortal.invokeOnNode(input),
         summaries: (nodeIds) => this.nodePortal.summaries(nodeIds),
         collectMail: (nodeId) => this.nodeCoordination.collector.collect(nodeId as BackendId),
+        registeredNodeIds: () => this.nodes.registeredNodeIds(),
       }),
     );
     this.coordinators.noticeRouter.setOutbox({
@@ -2932,6 +2935,7 @@ export class OrkestratorBackend {
       isPortalOriginAllowed: (origin) => this.nodes.isPortalOriginAllowed(origin),
       noteControllerContact: (id) => this.nodes.noteControllerContact(id),
       authenticateGrant: (token) => this.nodePortal.grants.authenticate(token)?.expiresAt ?? null,
+      onGrantRevoked: (token, listener) => this.nodePortal.grants.onRevoke(token, listener),
       relayTarget: (nodeId) => this.nodePortal.relayTarget(nodeId),
       isRelayedNodeWatched: (nodeId) => this.nodePortal.events.isWatched(nodeId),
     };

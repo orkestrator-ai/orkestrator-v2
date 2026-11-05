@@ -27,7 +27,7 @@ import {
  *   scans the container on its own clock (every 15 s, or on a worktree-signal
  *   ring) and pushes each revision, which the page applies even while hidden.
  *   Only the All files tab polls the container from the page (every 5 s), and
- *   that poll pauses while the document is hidden (todo 2922, task 5).
+ *   that poll pauses while the document is hidden.
  * - A revert from the Files panel restores the file without a fetch: the
  *   comparison base of a new container is its creation commit.
  * - On a watched local worktree, a tree revision announced while the document

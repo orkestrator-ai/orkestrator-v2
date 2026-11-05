@@ -1,6 +1,9 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 
 import type { BackendId } from "@orkestrator/protocol/federation";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("nodes");
 
 /**
  * Short-lived client grants a leaf issues to an attached command node, which
@@ -12,6 +15,8 @@ import type { BackendId } from "@orkestrator/protocol/federation";
  * - At most `MAX_GRANT_TTL_MS` per issue or renewal.
  * - Kept in memory as hashes only: a restart of the leaf revokes every grant
  *   and the command node issues a new one.
+ * - Whatever removes a grant tells the listeners of that grant (`onRevoke`), so
+ *   a connection authorized by it does not outlive it.
  * - Valid for the workspace only (see `isWorkspaceExcludedCommand`): agent
  *   chat, terminals, previews, files and the project boards. Never for
  *   administration: token rotation, attachment, grants, registry commands,
@@ -32,6 +37,8 @@ export interface ClientGrant {
 
 interface StoredGrant extends ClientGrant {
   hash: Buffer;
+  /** Held on the record, so they cannot outlive it. A removed grant never comes back. */
+  revocationListeners: Set<() => void>;
 }
 
 function hashToken(token: string): Buffer {
@@ -61,6 +68,7 @@ export class ClientGrantService {
       label: input.label.slice(0, 64),
       expiresAt: this.now() + ttlMs,
       hash: hashToken(token),
+      revocationListeners: new Set(),
     };
     this.grants.set(grantId, stored);
     return { grant: publicGrant(stored), token };
@@ -80,33 +88,44 @@ export class ClientGrantService {
   revoke(grantId: string, controllerId?: BackendId): boolean {
     const grant = this.grants.get(grantId);
     if (!grant || (controllerId && grant.controllerId !== controllerId)) return false;
-    return this.grants.delete(grantId);
+    this.remove([grant]);
+    return true;
   }
 
   revokeController(controllerId: BackendId): number {
-    let revoked = 0;
-    for (const [id, grant] of this.grants) {
-      if (grant.controllerId === controllerId) {
-        this.grants.delete(id);
-        revoked += 1;
-      }
-    }
-    return revoked;
+    const grants = Array.from(this.grants.values()).filter(
+      (grant) => grant.controllerId === controllerId,
+    );
+    this.remove(grants);
+    return grants.length;
   }
 
   revokeAll(): void {
-    this.grants.clear();
+    this.remove(Array.from(this.grants.values()));
+  }
+
+  /**
+   * Calls `listener` once when the grant this token proves is removed, whether
+   * revoked or found expired, and returns the unsubscribe. `null` means the token
+   * proves no grant held here. A grant past its deadline still counts until it
+   * is removed, so a subscriber racing that deadline hears about the removal
+   * rather than finding nothing to subscribe to.
+   */
+  onRevoke(token: string, listener: () => void): (() => void) | null {
+    const grant = this.find(token);
+    if (!grant || !timingSafeEqual(hashToken(token), grant.hash)) return null;
+    grant.revocationListeners.add(listener);
+    return () => {
+      grant.revocationListeners.delete(listener);
+    };
   }
 
   /** The live grant a bearer token proves, or `null`. Constant-time on the hash. */
   authenticate(token: string): ClientGrant | null {
-    if (!token.startsWith(GRANT_PREFIX)) return null;
-    const separator = token.indexOf(".");
-    if (separator <= GRANT_PREFIX.length) return null;
-    const grant = this.grants.get(token.slice(GRANT_PREFIX.length, separator));
+    const grant = this.find(token);
     if (!grant) return null;
     if (grant.expiresAt <= this.now()) {
-      this.grants.delete(grant.grantId);
+      this.remove([grant]);
       return null;
     }
     const hash = hashToken(token);
@@ -117,9 +136,32 @@ export class ClientGrantService {
     return token.startsWith(GRANT_PREFIX);
   }
 
+  private find(token: string): StoredGrant | null {
+    if (!token.startsWith(GRANT_PREFIX)) return null;
+    const separator = token.indexOf(".");
+    if (separator <= GRANT_PREFIX.length) return null;
+    return this.grants.get(token.slice(GRANT_PREFIX.length, separator)) ?? null;
+  }
+
   private prune(): void {
     const now = this.now();
-    for (const [id, grant] of this.grants) if (grant.expiresAt <= now) this.grants.delete(id);
+    this.remove(Array.from(this.grants.values()).filter((grant) => grant.expiresAt <= now));
+  }
+
+  /** Every record goes before any listener runs, and one that throws cannot strand the rest. */
+  private remove(grants: StoredGrant[]): void {
+    for (const grant of grants) this.grants.delete(grant.grantId);
+    for (const grant of grants) {
+      const listeners = Array.from(grant.revocationListeners);
+      grant.revocationListeners.clear();
+      for (const listener of listeners) {
+        try {
+          listener();
+        } catch (error) {
+          log.warn("grant.revocation-listener-failed", { error: formatLogError(error) });
+        }
+      }
+    }
   }
 }
 

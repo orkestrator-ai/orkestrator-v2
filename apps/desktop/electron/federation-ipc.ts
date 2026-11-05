@@ -101,6 +101,9 @@ export type FederationIpcDependencies = {
     command: string,
     args: Record<string, unknown>,
   ): Promise<unknown>;
+  addRelayedListen(event: IpcEventLike, channel: unknown, name: unknown): Promise<void>;
+  removeRelayedListen(event: IpcEventLike, channel: unknown, name: unknown): void;
+  resetRelayedListens(event: IpcEventLike, channel: unknown): void;
 };
 
 const MAX_ID_LENGTH = 256;
@@ -347,4 +350,26 @@ export function registerFederationIpc(deps: FederationIpcDependencies): void {
     if (typeof command !== "string" || !command) throw new Error("Expected a command");
     return deps.portalInvoke(event, command, args === undefined ? {} : record(args, "arguments"));
   });
+
+  // Which per-node relayed events a renderer listens to. Stopping needs no answer,
+  // and a window that has gone is already out of the filter.
+  handle("orkestrator:relayed-events:listen", (event, channel, name) =>
+    deps.addRelayedListen(event, channel, name),
+  );
+  const notify = (channel: string, listener: (event: IpcEventLike, ...args: unknown[]) => void) => {
+    deps.ipc.on?.(channel, (event, ...args) => {
+      if (!isTrustedSender(event)) return;
+      try {
+        listener(event, ...args);
+      } catch {
+        // The requesting renderer closed while this was on its way.
+      }
+    });
+  };
+  notify("orkestrator:relayed-events:unlisten", (event, channel, name) =>
+    deps.removeRelayedListen(event, channel, name),
+  );
+  notify("orkestrator:relayed-events:reset", (event, channel) =>
+    deps.resetRelayedListens(event, channel),
+  );
 }

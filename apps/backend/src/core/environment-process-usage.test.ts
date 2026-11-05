@@ -7,6 +7,7 @@ import {
   commandTouchesWorktree,
   environmentRootPids,
   MAX_CONCURRENT_CONTAINER_PROBES,
+  PROCESS_ENUMERATION_BUDGET_MS,
   MAX_PROCESSES_PER_ENVIRONMENT,
   MAX_SNAPSHOT_PROCESSES,
   mapWithConcurrency,
@@ -18,6 +19,12 @@ import {
   type EnvironmentProcessGroup,
   type ProcessUsageEnvironment,
 } from "./environment-process-usage.js";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { StorageService } from "./storage.js";
+import { seedStore } from "./storage-test-support.js";
+import { databaseStoreForPath } from "./storage-stores.js";
 
 function environment(
   overrides: Partial<ProcessUsageEnvironment> & Pick<ProcessUsageEnvironment, "id" | "name">,
@@ -115,6 +122,53 @@ describe("environment process usage", () => {
     expect(read).toHaveBeenCalledTimes(1);
     await expect(handler({}, context)).resolves.toMatchObject({ environments: [] });
     expect(read).toHaveBeenCalledTimes(2);
+  });
+
+  // Why the shared read carries no deadline of its own: nothing it awaits can stay
+  // pending. Environments are a synchronous database read, and every probe has a
+  // timeout that `runCommand` honours even for a child that ignores its signals
+  // (shell.test.ts, "settles and escalates when a descendant ignores SIGTERM").
+  test("awaits nothing that can stay pending for ever", async () => {
+    expect(databaseStoreForPath("environments.json")).toBe("environments");
+    const timeouts: number[] = [];
+    const environments = [
+      environment({ id: "env-local", name: "local" }),
+      environment({
+        id: "env-box",
+        name: "box",
+        environmentType: "containerized",
+        containerId: "container-1",
+      }),
+    ];
+    const root = await mkdtemp(path.join(tmpdir(), "ork-process-handler-"));
+    try {
+      const storage = new StorageService(root);
+      await storage.init();
+      seedStore(root, "environments.json", environments);
+      const commands = new Map<string, CommandHandler>();
+      registerSystemCommands(
+        (name, handler) => commands.set(name, handler),
+        undefined,
+        (stored) =>
+          readEnvironmentProcessUsage(stored, {
+            platform: "linux",
+            runCommand: async (_command, _args, options) => {
+              timeouts.push(options.timeoutMs);
+              throw new Error("Command timed out");
+            },
+          }),
+      );
+      const result = await commands.get("get_environment_process_usage")!({}, {
+        storage,
+      } as unknown as CommandContext);
+      expect(result).toMatchObject({
+        environments: expect.any(Array),
+        sampledAt: expect.any(String),
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+    expect(timeouts).toEqual([2_000, 2_000]);
   });
 
   test("rejects when stored environments cannot be loaded", async () => {
@@ -466,6 +520,45 @@ describe("environment process usage", () => {
         expect(process.command.length).toBeLessThanOrEqual(241);
       }
     }
+  });
+
+  test("large slow enumerations return useful partial results before the client deadline", async () => {
+    let now = 0;
+    const pending: Array<() => void> = [];
+    const execute = mock(
+      () =>
+        new Promise<{ stdout: string }>((resolve) => {
+          pending.push(() => resolve({ stdout: "10 1 2.0 1.0 100 node" }));
+        }),
+    );
+    const environments = Array.from({ length: 60 }, (_, index) =>
+      environment({
+        id: `ctr-${index}`,
+        name: `box-${index}`,
+        environmentType: "containerized",
+        containerId: `ctr-${index}`,
+      }),
+    );
+    const result = readEnvironmentProcessUsage(environments, {
+      now: () => now,
+      runCommand: execute,
+    });
+    // Sixty probes would take thirty seconds in batches of four. Advance one
+    // full two-second batch at a time, without waiting on the wall clock.
+    for (let batch = 0; batch < PROCESS_ENUMERATION_BUDGET_MS / 2_000; batch += 1) {
+      expect(pending).toHaveLength(4);
+      now += 2_000;
+      for (const finish of pending.splice(0)) finish();
+      for (let tick = 0; tick < 12; tick += 1) await Promise.resolve();
+    }
+    const snapshot = await result;
+    expect(now).toBeLessThan(20_000);
+    expect(execute).toHaveBeenCalledTimes(20);
+    expect(pending).toHaveLength(0);
+    expect(snapshot.environments).toHaveLength(60);
+    expect(snapshot.environments.filter((group) => group.processes.length > 0)).toHaveLength(20);
+    expect(snapshot.environments.slice(20).every((group) => group.truncated)).toBe(true);
+    expect(snapshot.truncated).toBe(true);
   });
 
   test("survives a failed host or container probe instead of failing the snapshot", async () => {

@@ -632,7 +632,7 @@ test.describe("live OpenCode", () => {
       const openEnvironment = sidebarNavigator(page, fixture.name);
       const openBuild = async () => {
         await openEnvironment(target.name);
-        const tab = page.getByRole("button", { name: new RegExp(`^Build: ${title}`) });
+        const tab = page.getByRole("tab", { name: new RegExp(`^Build: ${title}`) });
         await expect(tab).toBeVisible({ timeout: 30_000 });
         await tab.click();
       };

@@ -347,8 +347,12 @@ export class TerminalWebSocketGateway {
   revokeConnections(): void {
     // Queued operations check this flag when their turn comes. A plain disconnect
     // leaves it set on purpose so accepted input survives a reconnect; revocation
-    // refuses the whole queue, including one a closed socket left behind.
-    for (const state of this.operationSockets) state.authenticated = false;
+    // refuses the whole queue, including one a closed socket left behind. Nothing
+    // can change the answer after this, so a queue need not keep watching.
+    for (const state of this.operationSockets) {
+      state.authenticated = false;
+      this.releaseCredentialWatch(state);
+    }
     for (const state of Array.from(this.sockets)) {
       state.authenticated = false;
       state.ws.terminate();
@@ -1133,7 +1137,10 @@ export class TerminalWebSocketGateway {
       this.pendingOperationCount -= 1;
       this.pendingOperationBytes -= options.bytes;
       options.state.pendingOperations -= 1;
-      if (options.state.pendingOperations === 0) this.operationSockets.delete(options.state);
+      if (options.state.pendingOperations === 0) {
+        this.operationSockets.delete(options.state);
+        if (!this.sockets.has(options.state)) this.releaseCredentialWatch(options.state);
+      }
       if (this.sessionOperations.get(options.sessionId) === sequence && sequence.count === 0) {
         this.sessionOperations.delete(options.sessionId);
       }
@@ -1230,13 +1237,13 @@ export class TerminalWebSocketGateway {
   }
 
   private dispose(state: SocketState): void {
-    state.unsubscribeRevocation?.();
-    state.unsubscribeRevocation = null;
+    // A queue outlives its socket and is still refused if the credential that
+    // admitted it lapses, so the watch is released when the last operation settles.
+    // Each socket kept this way holds an operation, so the operation bounds bound it.
+    if (state.pendingOperations === 0) this.releaseCredentialWatch(state);
     if (state.authTimer) clearTimeout(state.authTimer);
-    if (state.credentialExpiryTimer) clearTimeout(state.credentialExpiryTimer);
     if (state.closeTimer) clearTimeout(state.closeTimer);
     state.authTimer = null;
-    state.credentialExpiryTimer = null;
     state.closeTimer = null;
     const channelCount = state.channels.size;
     state.channels.clear();
@@ -1252,37 +1259,51 @@ export class TerminalWebSocketGateway {
     this.options.metrics?.recordTerminalWebSocketClosed();
   }
 
+  private releaseCredentialWatch(state: SocketState): void {
+    state.unsubscribeRevocation?.();
+    state.unsubscribeRevocation = null;
+    if (state.credentialExpiryTimer) clearTimeout(state.credentialExpiryTimer);
+    state.credentialExpiryTimer = null;
+  }
+
+  /** Permanent: `onMessage` drops every frame once the close starts, so nothing can re-authenticate. */
+  private credentialLapsed(state: SocketState): void {
+    // Authentication reads can synchronously publish revocation before their
+    // caller also reports the lapse. Preserve the first graceful close.
+    if (!state.authenticated) return;
+    state.authenticated = false;
+    this.releaseCredentialWatch(state);
+    // Does nothing to a socket that has already closed and left its queue behind.
+    this.closeSocket(
+      state,
+      TERMINAL_WEBSOCKET_CLOSE.authenticationRequired,
+      "Authentication expired",
+    );
+  }
+
   private scheduleCredentialExpiry(
     state: SocketState,
     request: IncomingMessage,
     suppliedToken?: string,
   ): void {
-    if (state.credentialExpiryTimer) clearTimeout(state.credentialExpiryTimer);
-    state.credentialExpiryTimer = null;
-    state.unsubscribeRevocation?.();
+    this.releaseCredentialWatch(state);
     state.unsubscribeRevocation =
-      this.options.onCredentialRevoked?.(request, suppliedToken, () => {
-        state.authenticated = false;
-        this.closeSocket(
-          state,
-          TERMINAL_WEBSOCKET_CLOSE.authenticationRequired,
-          "Authentication expired",
-        );
-      }) ?? null;
+      this.options.onCredentialRevoked?.(request, suppliedToken, () =>
+        this.credentialLapsed(state),
+      ) ?? null;
+    // Reading a grant's deadline can find it expired and remove it, which runs the
+    // subscription above before this returns.
     const expiresAt = this.options.credentialExpiresAt?.(request, suppliedToken) ?? null;
-    if (expiresAt === null) return;
+    if (expiresAt === null || !state.authenticated) return;
     state.credentialExpiryTimer = setTimeout(
       () => {
         state.credentialExpiryTimer = null;
         if (!this.options.tokenMatches(request, suppliedToken)) {
-          state.authenticated = false;
-          this.closeSocket(
-            state,
-            TERMINAL_WEBSOCKET_CLOSE.authenticationRequired,
-            "Authentication expired",
-          );
+          this.credentialLapsed(state);
           return;
         }
+        // Still valid at its deadline (renewed or refreshed): keep watching, whether
+        // or not the socket is still open.
         this.scheduleCredentialExpiry(state, request, suppliedToken);
       },
       Math.max(1, expiresAt - Date.now()),

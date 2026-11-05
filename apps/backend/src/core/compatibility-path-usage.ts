@@ -119,6 +119,11 @@ export const COMPATIBILITY_PATH_IDS = [
    * old shared name: a renderer or desktop from before per-node names.
    */
   "relayed-node-event.legacy-stream",
+  /**
+   * A stream that asked for the old shared name got a relayed event under it: a
+   * desktop's main process from before it took per-node relayed events.
+   */
+  "relayed-node-event.legacy-desktop-stream",
 ] as const;
 
 export type CompatibilityPathId = (typeof COMPATIBILITY_PATH_IDS)[number];

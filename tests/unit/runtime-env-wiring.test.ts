@@ -354,8 +354,8 @@ describe("container runtime environment wiring", () => {
   test("Grok host state mounts do not replace its writable container home", () => {
     const backend = read("apps/backend/src/core/commands-containers.ts");
 
-    expect(backend).toContain('bindIfExists(grokStagingHome(grokRoots), "/grok-home")');
-    expect(backend).toContain('bindIfExists(grokStagingConfig(grokRoots), "/grok-config")');
+    expect(backend).not.toContain("/grok-home");
+    expect(backend).not.toContain("/grok-config");
     expect(backend).not.toContain('path.join(home, ".cursor"), "/home/node/.cursor"');
     expect(backend).not.toContain('"/cursor-config"');
     expect(backend).not.toContain('path.join(home, ".grok"), "/home/node/.grok"');

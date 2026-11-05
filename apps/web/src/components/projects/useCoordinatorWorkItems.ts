@@ -228,6 +228,7 @@ export function useCoordinatorWorkItems(
   const remoteRefs = useMemo(
     () =>
       associations.flatMap((association) =>
+        !association.nodeRelease &&
         association.nodeId &&
         (association.kind === "build-pipeline" ||
           association.kind === "multi-review" ||

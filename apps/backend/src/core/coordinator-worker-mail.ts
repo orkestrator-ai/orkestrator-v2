@@ -15,6 +15,7 @@ import {
   type ProjectHomeMessage,
 } from "@orkestrator/protocol/project-home-message";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { coordinatorDelegationNotOpenedNote } from "./coordinator-workflow-retention.js";
 import type { CommandContext } from "./commands-context.js";
 import {
   attachmentReferences,
@@ -221,7 +222,7 @@ async function sendCoordinatorWorkerMail(
           error: formatLogError(error),
         });
         // The message is already stored; say plainly that no wake will follow.
-        delegationNote = `The message was sent, but no delegation was opened, so you will not be woken when the worker answers: ${error instanceof Error && error.message !== COORDINATOR_REQUEST_ID_REUSED_ERROR ? error.message : "The delegation request ID may already belong to another worker. Do not resend the delivered message under a new ID."}`;
+        delegationNote = coordinatorDelegationNotOpenedNote(error, "sent");
       }
     }
     // Say plainly when the worker cannot read it yet: "pending" alone reads

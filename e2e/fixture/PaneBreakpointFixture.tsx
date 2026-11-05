@@ -40,7 +40,12 @@ const root: PaneSplit = {
     {
       kind: "leaf",
       id: "terminal-pane",
-      tabs: [{ id: TERMINAL_TAB_ID, type: "plain", displayTitle: "Shell" }],
+      tabs: [
+        { id: TERMINAL_TAB_ID, type: "plain", displayTitle: "Shell" },
+        ...(new URLSearchParams(window.location.search).has("keyboard")
+          ? [{ id: "spare-terminal", type: "plain" as const, displayTitle: "Spare shell" }]
+          : []),
+      ],
       activeTabId: TERMINAL_TAB_ID,
     },
     {

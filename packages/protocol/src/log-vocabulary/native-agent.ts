@@ -56,6 +56,10 @@ export const NATIVE_AGENT_LOG_AREAS = defineLogAreas({
         "Resending after a usage limit failed. An unknown send stays in the journal.",
       "title.strategy-failed":
         "A session title strategy failed, so the next is tried. Content-free: the error can quote the prompt.",
+      "steer.qualification-failed":
+        "A bridge's steer qualification failed or answered non-OK, so steering is not offered. Agent and status code or error class only.",
+      "steer.capability-cleared":
+        "A projection cleared `actions.steer` because its bridge did not qualify. Identifiers and turn status only.",
       ...THROTTLE_LOG_EVENTS,
     },
   },

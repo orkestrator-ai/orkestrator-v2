@@ -36,7 +36,7 @@ import {
   RelayedEventStream,
   type RelayedEventConnection,
   type RelayedEventConnectionHandlers,
-} from "@/lib/native/relayed-event-stream";
+} from "@orkestrator/protocol/relayed-event-stream";
 import { ReconnectBackoff } from "@orkestrator/protocol/reconnect-backoff";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
@@ -1678,7 +1678,10 @@ export function installLocalDesktopGateway(
     invoke: gateway.invoke,
     listen<T = unknown>(event: string, callback: EventCallback<T>): () => void {
       const unlistenGateway = gateway.listen(event, callback);
-      if (event.startsWith(TERMINAL_OUTPUT_EVENT_PREFIX)) return unlistenGateway;
+      // Main raises neither itself, so its relay has nothing to add here.
+      if (event.startsWith(TERMINAL_OUTPUT_EVENT_PREFIX) || isPerNodeRelayedEvent(event)) {
+        return unlistenGateway;
+      }
       const unlistenHost = host.api.listen(event, callback);
       return () => {
         unlistenHost();

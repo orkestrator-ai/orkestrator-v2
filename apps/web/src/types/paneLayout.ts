@@ -418,6 +418,20 @@ export function createDraggableTabId(tabId: string, paneId: string): DraggableTa
   return `tab:${tabId}:pane:${paneId}`;
 }
 
+/**
+ * The element id of a pane tab, which its pane's panel is labelled by. Pane and
+ * tab ids repeat across environments, and an IDREF cannot contain whitespace.
+ */
+export function createPaneTabElementId(
+  environmentId: string | undefined,
+  paneId: string,
+  tabId: string,
+): string {
+  return ["pane-tab", environmentId ?? "", paneId, tabId]
+    .map((part) => encodeURIComponent(part))
+    .join(":");
+}
+
 export function createEdgeDroppableId(paneId: string, direction: EdgeDirection): DroppableId {
   return `edge:${paneId}:${direction}`;
 }

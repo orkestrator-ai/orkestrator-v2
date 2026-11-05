@@ -17,7 +17,11 @@ import {
 } from "@orkestrator/protocol/native-agent";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import type { BuildPipelineContext } from "./build-pipeline-context.js";
-import { PromptRejectedError, ProviderUnavailableError } from "./build-pipeline-provider.js";
+import {
+  AmbiguousPromptDispatchError,
+  PromptRejectedError,
+  ProviderUnavailableError,
+} from "./build-pipeline-provider.js";
 import type { BuildPipelineAgents } from "./build-pipeline-service-agents.js";
 import {
   discardPreparationResult,
@@ -65,26 +69,19 @@ export async function dispatchUserMessageDuringBackgroundWork(
   session: PipelineSession,
   dispatchUserMessage: () => Promise<void>,
 ): Promise<void> {
-  const before = {
-    queue: pipeline.pendingUserMessages,
-    context: pipeline.activePromptContext,
-    stallWarning: pipeline.stallWarning,
-    session: {
-      validationPlan: session.validationPlan,
-      structuredRequestId: session.structuredRequestId,
-      structuredResultStatus: session.structuredResultStatus,
-      structuredWaitStartedAt: session.structuredWaitStartedAt,
-      turnStartedAt: session.turnStartedAt,
-      completedAt: session.completedAt,
-      usageFinalizationPolls: session.usageFinalizationPolls,
-    },
-  };
-  // As on an idle turn: the turn that started this work has ended.
-  session.validationPlan ??= pipeline.activePromptContext?.validationPlan;
-  delete pipeline.activePromptContext;
+  const before = pipeline.pendingPromptAttempt?.backgroundMessage;
+  if (!before) return dispatchUserMessage();
   try {
     await dispatchUserMessage();
   } catch (error) {
+    // Recovery probes can fail before proving absence. Only a closed dispatch
+    // window (or an unsent preparation) proves this message is safe to requeue.
+    if (
+      error instanceof AmbiguousPromptDispatchError ||
+      !pipeline.pendingPromptAttempt ||
+      pipeline.pendingPromptAttempt?.dispatchingAt !== undefined
+    )
+      throw error;
     if (!(error instanceof ProviderUnavailableError || error instanceof PromptRejectedError)) {
       throw error;
     }
@@ -93,17 +90,34 @@ export async function dispatchUserMessageDuringBackgroundWork(
       error: formatLogError(error),
     });
     delete pipeline.pendingPromptAttempt;
-    pipeline.pendingUserMessages = before.queue;
+    delete pipeline.reconnectAttempt;
+    delete pipeline.error;
+    pipeline.pendingUserMessages = [
+      before.message,
+      ...(pipeline.pendingUserMessages ?? []).filter((message) => message.id !== before.message.id),
+    ];
     pipeline.activePromptContext = before.context;
     pipeline.stallWarning = before.stallWarning;
+    for (const key of [
+      "validationPlan",
+      "structuredRequestId",
+      "structuredResultStatus",
+      "structuredWaitStartedAt",
+      "turnStartedAt",
+      "completedAt",
+      "usageFinalizationPolls",
+    ] as const)
+      delete session[key];
     Object.assign(session, before.session, {
       awaitingBackgroundWork: true,
+      backgroundMessageRefusal: error.message,
       backgroundMessageRetryAt: new Date(Date.now() + BACKGROUND_MESSAGE_RETRY_MS).toISOString(),
     });
     await ctx.save(pipeline, pipeline.backendRevision);
     return;
   }
-  ctx.settleArtifactTurn(pipeline, session, before.context?.requestId);
+  if (!pipeline.pendingPromptAttempt)
+    ctx.settleArtifactTurn(pipeline, session, before.context?.requestId);
 }
 
 function validatedUserMessage(text: string): string {

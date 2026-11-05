@@ -99,6 +99,7 @@ export interface PipelineComposerState {
   sendPending: boolean;
   messageBlocked: boolean;
   recoveredTexts: string[];
+  backgroundMessageRefusal?: string;
   send: () => Promise<void>;
   sendTitle: string;
   queue: NativeComposeQueueState;
@@ -276,6 +277,7 @@ export function usePipelineMessageComposer({
   const queued = pipeline.pendingUserMessages ?? [];
   const command = parseLeadingSlashCommand(draft);
   return {
+    backgroundMessageRefusal: queued.length ? session?.backgroundMessageRefusal : undefined,
     draft,
     setDraft,
     sendPending,
@@ -366,6 +368,12 @@ export function PipelineMessageComposer({ state }: { state: PipelineComposerStat
           <p className="mt-2 whitespace-pre-wrap break-words select-text">{text}</p>
         </details>
       ))}
+      {state.backgroundMessageRefusal && (
+        <p role="status" className="mb-2 text-sm text-muted-foreground">
+          Message queued: {state.backgroundMessageRefusal}. Waiting for background work to finish or
+          stop.
+        </p>
+      )}
       <QueuedPromptStack ref={queueStackRef} queue={queue} onExit={returnFromQueue} />
       <div className="rounded-2xl border border-border/70 bg-input-surface p-3 shadow-xl shadow-black/20">
         <div className="flex items-end gap-2">

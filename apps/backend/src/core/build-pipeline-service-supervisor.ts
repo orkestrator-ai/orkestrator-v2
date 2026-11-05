@@ -807,6 +807,9 @@ export class BuildPipelineSupervisor {
       pipeline.pendingPromptAttempt.sessionId === session.sdkSessionId
     ) {
       if (status === "running") {
+        const background = pipeline.pendingPromptAttempt.backgroundMessage;
+        if (background)
+          this.ctx.settleArtifactTurn(pipeline, session, background.context?.requestId);
         delete pipeline.pendingPromptAttempt;
         delete pipeline.reconnectAttempt;
         delete pipeline.error;
@@ -828,9 +831,7 @@ export class BuildPipelineSupervisor {
       (backgroundWorkLive === true || (retainedContinuationRequestIds?.length ?? 0) > 0);
     if (status === "running" || backgroundWorkPending) {
       if (backgroundWorkPending && userMessageDueDuringBackgroundWork(pipeline, session)) {
-        await dispatchUserMessageDuringBackgroundWork(this.ctx, pipeline, session, () =>
-          this.dispatchUserMessage(pipeline, provider, session),
-        );
+        await this.dispatchUserMessage(pipeline, provider, session, true);
         return;
       }
       const statusChanged = session.status !== "running";
@@ -1381,11 +1382,32 @@ export class BuildPipelineSupervisor {
     pipeline: BuildPipeline,
     provider: BuildPipelineProvider,
     session: PipelineSession,
+    duringBackgroundWork = false,
   ): Promise<void> {
     const [next, ...rest] = pipeline.pendingUserMessages ?? [];
     if (!next) return;
     const phase = resumablePhase(pipeline.phase);
     if (!phase) return;
+    const backgroundMessage = duringBackgroundWork
+      ? {
+          message: next,
+          context: pipeline.activePromptContext,
+          stallWarning: pipeline.stallWarning,
+          session: {
+            validationPlan: session.validationPlan,
+            structuredRequestId: session.structuredRequestId,
+            structuredResultStatus: session.structuredResultStatus,
+            structuredWaitStartedAt: session.structuredWaitStartedAt,
+            turnStartedAt: session.turnStartedAt,
+            completedAt: session.completedAt,
+            usageFinalizationPolls: session.usageFinalizationPolls,
+          },
+        }
+      : undefined;
+    if (duringBackgroundWork) {
+      session.validationPlan ??= pipeline.activePromptContext?.validationPlan;
+      delete pipeline.activePromptContext;
+    }
     if (phase === "building" || phase === "fixing") discardPreparationResult(session);
     if (rest.length) {
       pipeline.pendingUserMessages = rest;
@@ -1395,6 +1417,7 @@ export class BuildPipelineSupervisor {
     const requestId = randomUUID();
     const startedAt = new Date().toISOString();
     pipeline.pendingPromptAttempt = {
+      backgroundMessage,
       dispatchVersion: 1,
       id: next.id,
       sessionId: session.sdkSessionId,
@@ -2076,6 +2099,14 @@ export class BuildPipelineSupervisor {
   }
 
   dispatchPending(pipeline: BuildPipeline, provider: BuildPipelineProvider): Promise<void> {
+    const session = pipeline.sessions.find(
+      (s) => s.sdkSessionId === pipeline.pendingPromptAttempt?.sessionId,
+    );
+    if (session && pipeline.pendingPromptAttempt?.backgroundMessage) {
+      return dispatchUserMessageDuringBackgroundWork(this.ctx, pipeline, session, () =>
+        this.promptDispatch.dispatchPending(pipeline, provider),
+      );
+    }
     return this.promptDispatch.dispatchPending(pipeline, provider);
   }
 

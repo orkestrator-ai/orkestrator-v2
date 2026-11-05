@@ -852,6 +852,7 @@ export interface PipelineSession {
   awaitingBackgroundWork?: boolean;
   /** Earliest next try for a user message the bridge refused during that wait. */
   backgroundMessageRetryAt?: string;
+  backgroundMessageRefusal?: string;
   phase: PipelineSessionPhase;
   /**
    * The harness this session was created on.
@@ -1345,7 +1346,25 @@ export interface PipelineReconnectAttempt extends PipelineFailureContext {
   agent?: BuildPipelineAgent;
 }
 
+/** Durable rollback for a user message refused while background work owns the session. */
+export interface PipelineBackgroundMessage {
+  message: PipelineUserMessage;
+  context?: PipelineFailureContext;
+  stallWarning?: BuildPipeline["stallWarning"];
+  session: Pick<
+    PipelineSession,
+    | "validationPlan"
+    | "structuredRequestId"
+    | "structuredResultStatus"
+    | "structuredWaitStartedAt"
+    | "turnStartedAt"
+    | "completedAt"
+    | "usageFinalizationPolls"
+  >;
+}
+
 export interface PipelinePromptAttempt {
+  backgroundMessage?: PipelineBackgroundMessage;
   /** Version 1 distinguishes newly prepared attempts from legacy ambiguous sends. */
   dispatchVersion?: 1;
   /** Persist the preparation contract so a restart dispatches the same schema. */
@@ -1921,6 +1940,8 @@ function isPipelineSession(value: unknown): value is PipelineSession {
     (value.awaitingBackgroundWork === undefined ||
       typeof value.awaitingBackgroundWork === "boolean") &&
     (value.backgroundMessageRetryAt === undefined || isIsoDate(value.backgroundMessageRetryAt)) &&
+    (value.backgroundMessageRefusal === undefined ||
+      typeof value.backgroundMessageRefusal === "string") &&
     (value.structuredReportRepairAttempts === undefined ||
       isNonNegativeInteger(value.structuredReportRepairAttempts)) &&
     (value.interactionSummary === undefined ||
@@ -2128,9 +2149,33 @@ function isReconnectAttempt(value: unknown): value is PipelineReconnectAttempt {
   );
 }
 
+function isBackgroundMessage(value: unknown): value is PipelineBackgroundMessage {
+  if (!isRecord(value) || !isRecord(value.session)) return false;
+  const session = value.session;
+  return (
+    isUserMessage(value.message) &&
+    (value.context === undefined || isFailureContext(value.context)) &&
+    (value.stallWarning === undefined ||
+      (isRecord(value.stallWarning) &&
+        isNonBlankString(value.stallWarning.sessionId) &&
+        isIsoDate(value.stallWarning.detectedAt))) &&
+    (session.validationPlan === undefined || typeof session.validationPlan === "boolean") &&
+    (session.structuredRequestId === undefined || isNonBlankString(session.structuredRequestId)) &&
+    (session.structuredResultStatus === undefined ||
+      session.structuredResultStatus === "pending" ||
+      session.structuredResultStatus === "accepted") &&
+    [session.structuredWaitStartedAt, session.turnStartedAt, session.completedAt].every(
+      (v) => v === undefined || isIsoDate(v),
+    ) &&
+    (session.usageFinalizationPolls === undefined ||
+      isNonNegativeInteger(session.usageFinalizationPolls))
+  );
+}
+
 function isPromptAttempt(value: unknown): value is PipelinePromptAttempt {
   if (!isRecord(value)) return false;
   return (
+    (value.backgroundMessage === undefined || isBackgroundMessage(value.backgroundMessage)) &&
     isNonBlankString(value.id) &&
     isNonBlankString(value.sessionId) &&
     isNonBlankString(value.requestId) &&

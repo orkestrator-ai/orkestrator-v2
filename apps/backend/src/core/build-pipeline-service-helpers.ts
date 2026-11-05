@@ -206,6 +206,7 @@ export function discardPreparationResult(session: PipelineSession): void {
 export function clearBackgroundWait(session: PipelineSession): void {
   delete session.awaitingBackgroundWork;
   delete session.backgroundMessageRetryAt;
+  delete session.backgroundMessageRefusal;
 }
 
 export function resumablePhase(phase: BuildPhase): ResumableBuildPhase | null {

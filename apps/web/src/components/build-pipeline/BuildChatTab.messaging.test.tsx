@@ -1001,6 +1001,28 @@ describe("BuildChatTab agent messaging", () => {
     expect(screen.getByRole("button", { name: "Restart Review Stage" })).toBeTruthy();
   });
 
+  test("explains a background refusal beside the queued messages and clears it from snapshots", () => {
+    const waiting = {
+      ...running,
+      sessions: running.sessions.map((session) => ({
+        ...session,
+        awaitingBackgroundWork: true,
+        backgroundMessageRefusal: "Background work must finish or stop",
+      })),
+      pendingUserMessages: [{ id: "q1", text: "one", createdAt: "2026-07-29T00:02:00.000Z" }],
+      backendRevision: 50,
+    };
+    useBuildPipelineStore.getState().replacePipeline(waiting);
+    renderTab();
+    expect(screen.getByRole("status").textContent).toContain("Background work must finish or stop");
+    act(() =>
+      useBuildPipelineStore
+        .getState()
+        .replacePipeline({ ...waiting, sessions: running.sessions, backendRevision: 51 }),
+    );
+    expect(screen.queryByText(/Message queued:/)).toBeNull();
+  });
+
   test("reports a queue of more than one message as a queue", () => {
     useBuildPipelineStore.getState().replacePipeline({
       ...running,

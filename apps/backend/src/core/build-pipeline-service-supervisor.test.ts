@@ -30,7 +30,12 @@ import { StorageService } from "./storage.js";
 
 import { BuildPipelineService } from "./build-pipeline-service.js";
 
-import { ProviderSessionFailedError, ProviderUnavailableError } from "./build-pipeline-provider.js";
+import {
+  AmbiguousPromptDispatchError,
+  PromptRejectedError,
+  ProviderSessionFailedError,
+  ProviderUnavailableError,
+} from "./build-pipeline-provider.js";
 import {
   TEST_ADDRESS_FINDINGS_RESULT,
   TEST_REVIEW_PREPARATION,
@@ -127,6 +132,7 @@ class FakeProvider implements BuildPipelineProvider {
   verificationComplete = true;
   preparationResult = TEST_REVIEW_PREPARATION;
   fixResult: unknown = TEST_ADDRESS_FINDINGS_RESULT;
+  dispatchStatus?: BuildPipelineProvider["dispatchStatus"];
   settleTurn?: BuildPipelineProvider["settleTurn"];
   observeSession?: BuildPipelineProvider["observeSession"];
   usageFromMessages?: BuildPipelineProvider["usageFromMessages"];
@@ -1775,6 +1781,76 @@ describe("BuildPipelineService", () => {
           });
         });
       }
+
+      test.each(["ambiguous", "journaled"] as const)(
+        `recovers %s background messages with ${signalName}`,
+        async (mode) => {
+          await withService(async (service, storage, provider) => {
+            const { started, session } = await startBuilding(service, storage);
+            provider.observeSession = async () => observation;
+            await service.advanceNow(started.id);
+            const send = provider.send.bind(provider);
+            const requests: string[] = [];
+            provider.send = async (_id, _text, options) => {
+              requests.push(options.requestId);
+              throw new AmbiguousPromptDispatchError("response lost");
+            };
+            await service.sendMessage(started.id, "also update the README");
+            await service.advanceNow(started.id);
+            const parked = await pipeline(storage, started.id);
+            expect(
+              parked.pendingPromptAttempt?.backgroundMessage?.session.structuredRequestId,
+            ).toBe(session.structuredRequestId);
+            expect(parked.pendingUserMessages).toBeUndefined();
+            expect(parked.reconnectAttempt).toBeUndefined();
+            if (mode === "journaled") {
+              const record = (await storage.getBuildPipeline(started.id))!;
+              delete parked.pendingPromptAttempt!.dispatchingAt;
+              await storage.saveBuildPipeline(
+                record.id,
+                record.projectId,
+                record.environmentId,
+                record.version,
+                parked,
+                record.revision,
+              );
+            }
+            await service.shutdown();
+            const recovered = new BuildPipelineService(storage, async () => undefined as never, {
+              autoAdvance: false,
+              provider: async () => provider,
+            });
+            provider.dispatchStatus = async () => "absent";
+            provider.structured = async () => null;
+            provider.send = async (_id, _text, options) => {
+              requests.push(options.requestId);
+              throw new PromptRejectedError("Background work must finish or stop");
+            };
+            try {
+              await recovered.advanceNow(started.id);
+              const refused = await pipeline(storage, started.id);
+              expect(refused.phase).toBe("building");
+              expect(refused.error).toBeUndefined();
+              expect(refused.reconnectAttempt).toBeUndefined();
+              expect(refused.pendingPromptAttempt).toBeUndefined();
+              expect(refused.pendingUserMessages?.map((m) => m.text)).toEqual([
+                "also update the README",
+              ]);
+              expect(refused.sessions[0]?.structuredRequestId).toBe(session.structuredRequestId);
+              expect(refused.sessions[0]?.backgroundMessageRefusal).toBe(
+                "Background work must finish or stop",
+              );
+              expect(new Set(requests).size).toBe(1);
+              const count = requests.length;
+              provider.send = send;
+              await recovered.advanceNow(started.id);
+              expect(requests).toHaveLength(count);
+            } finally {
+              await recovered.shutdown();
+            }
+          });
+        },
+      );
 
       test(`keeps a refused message queued and the stage running with ${signalName}`, async () => {
         await withService(async (service, storage, provider) => {

@@ -65,6 +65,7 @@ describe("pipeline session graph fields", () => {
     expect(
       isBuildPipeline(
         pipelineWith({
+          backgroundMessageRefusal: "Background work must finish or stop",
           awaitingBackgroundWork: true,
           backgroundMessageRetryAt: "2026-10-27T20:00:00.000Z",
         }),
@@ -72,6 +73,43 @@ describe("pipeline session graph fields", () => {
     ).toBe(true);
     expect(isBuildPipeline(pipelineWith({ awaitingBackgroundWork: "yes" as never }))).toBe(false);
     expect(isBuildPipeline(pipelineWith({ backgroundMessageRetryAt: "tomorrow" }))).toBe(false);
+  });
+  test("validates durable background-message rollback after JSON roundtrip", () => {
+    const pipeline = pipelineWith({});
+    const backgroundMessage = {
+      message: { id: "q1", text: "follow up", createdAt: pipeline.createdAt },
+      session: { structuredRequestId: "old-result", structuredResultStatus: "pending" },
+      context: { phase: "reviewing", kind: "prompt-dispatch", requestId: "old-result" },
+      stallWarning: { sessionId: "sdk-review-1", detectedAt: pipeline.createdAt },
+    };
+    const attempt = {
+      id: "q1",
+      sessionId: "sdk-review-1",
+      requestId: "new-result",
+      phase: "reviewing",
+      prompt: "follow up",
+      useTaskImages: false,
+      startedAt: pipeline.createdAt,
+      backgroundMessage,
+    };
+    expect(
+      isBuildPipeline(JSON.parse(JSON.stringify({ ...pipeline, pendingPromptAttempt: attempt }))),
+    ).toBe(true);
+    for (const invalid of [
+      null,
+      {},
+      { ...backgroundMessage, session: { structuredResultStatus: "invalid" } },
+      { ...backgroundMessage, message: {} },
+      { ...backgroundMessage, context: {} },
+    ]) {
+      expect(
+        isBuildPipeline({
+          ...pipeline,
+          pendingPromptAttempt: { ...attempt, backgroundMessage: invalid },
+        }),
+      ).toBe(false);
+    }
+    expect(isBuildPipeline(pipelineWith({ backgroundMessageRefusal: 12 as never }))).toBe(false);
   });
   test("accepts the reviewer outcome, error and issue counts, and records without them", () => {
     expect(isBuildPipeline(pipelineWith({}))).toBe(true);

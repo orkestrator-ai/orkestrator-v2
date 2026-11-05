@@ -2,13 +2,19 @@
  * The user talking to a running build: the durable message queue and steering
  * (`build-pipeline-service-user-messages.ts`).
  */
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 import type { BuildPipeline } from "@orkestrator/protocol/build-pipeline";
 import { MAX_PIPELINE_USER_MESSAGES } from "@orkestrator/protocol/build-pipeline";
 import { newReviewValidationRun } from "@orkestrator/protocol/review-workflow";
+import { dispatchUserMessageDuringBackgroundWork } from "./build-pipeline-service-user-messages.js";
+import type { BuildPipelineContext } from "./build-pipeline-context.js";
 import { StorageService } from "./storage.js";
 import { BuildPipelineService } from "./build-pipeline-service.js";
-import { AmbiguousPromptDispatchError, PromptRejectedError } from "./build-pipeline-provider.js";
+import {
+  AmbiguousPromptDispatchError,
+  ProviderUnavailableError,
+  PromptRejectedError,
+} from "./build-pipeline-provider.js";
 import {
   ScriptedProvider,
   snapshot,
@@ -834,6 +840,81 @@ describe("BuildPipelineService queued message removal", () => {
 
       expect(result.removed).toBe(false);
       expect(result.pipeline.pendingUserMessages).toBeUndefined();
+    });
+  });
+});
+
+describe("background message rollback", () => {
+  test.each([
+    "refused",
+    "success",
+    "unrelated",
+    "ambiguous",
+    "probe-unavailable",
+    "parked",
+  ] as const)("handles %s without losing prior result authority", async (kind) => {
+    await withService(async ({ service, storage }) => {
+      const built = await startBuilding(service, storage);
+      const session = built.sessions.at(-1)!;
+      const context = built.activePromptContext!;
+      const warning = { sessionId: session.sdkSessionId, detectedAt: new Date().toISOString() };
+      const message = { id: "message", text: "follow up", createdAt: warning.detectedAt };
+      const originalSession = {
+        structuredRequestId: session.structuredRequestId,
+        validationPlan: true,
+      };
+      built.pendingPromptAttempt = {
+        id: message.id,
+        requestId: "new-turn",
+        sessionId: session.sdkSessionId,
+        phase: "building",
+        prompt: message.text,
+        useTaskImages: false,
+        startedAt: warning.detectedAt,
+        backgroundMessage: { message, context, stallWarning: warning, session: originalSession },
+      };
+      delete built.activePromptContext;
+      session.structuredRequestId = "new-turn";
+      session.completedAt = warning.detectedAt;
+      const settleArtifactTurn = mock(() => {});
+      const save = mock(async () => {});
+      const ctx = { settleArtifactTurn, save } as unknown as BuildPipelineContext;
+      if (kind === "probe-unavailable")
+        built.pendingPromptAttempt.dispatchingAt = warning.detectedAt;
+      const error =
+        kind === "refused"
+          ? new PromptRejectedError("Background work must finish or stop")
+          : kind === "ambiguous"
+            ? new AmbiguousPromptDispatchError("Unknown acceptance")
+            : kind === "probe-unavailable"
+              ? new ProviderUnavailableError("Probe unavailable")
+              : new Error("unrelated");
+      const dispatch = async () => {
+        if (kind === "success") delete built.pendingPromptAttempt;
+        else if (kind !== "parked") throw error;
+      };
+      const result = dispatchUserMessageDuringBackgroundWork(ctx, built, session, dispatch);
+      if (kind === "unrelated" || kind === "ambiguous" || kind === "probe-unavailable")
+        await expect(result).rejects.toBe(error);
+      else await result;
+      if (kind === "refused") {
+        expect(JSON.stringify(built.activePromptContext)).toBe(JSON.stringify(context));
+        expect(built.stallWarning).toEqual(warning);
+        expect(String(session.structuredRequestId)).toBe(
+          String(originalSession.structuredRequestId),
+        );
+        expect(session.completedAt).toBeUndefined();
+        expect(built.pendingUserMessages).toEqual([message]);
+        expect(session.backgroundMessageRefusal).toBe(error.message);
+        expect(save).toHaveBeenCalledTimes(1);
+      } else if (kind !== "success") {
+        expect(built.pendingPromptAttempt?.requestId).toBe("new-turn");
+        expect(built.pendingUserMessages).toBeUndefined();
+        expect(save).not.toHaveBeenCalled();
+      }
+      if (kind === "success")
+        expect(settleArtifactTurn).toHaveBeenCalledWith(built, session, context.requestId);
+      else expect(settleArtifactTurn).not.toHaveBeenCalled();
     });
   });
 });

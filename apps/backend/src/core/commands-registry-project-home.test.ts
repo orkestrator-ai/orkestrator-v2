@@ -230,6 +230,7 @@ test("base and detached homes never discover a PR or delete a remote ref", async
         prState: "merged",
       },
       storage,
+      context.runtime.gitHubCli,
     );
     const detached = path.join(root, "detached");
     await runCommand("git", ["clone", checkout, detached]);

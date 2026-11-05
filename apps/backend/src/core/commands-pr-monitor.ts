@@ -1,4 +1,4 @@
-import { gitHubCli } from "./github-cli-binary.js";
+import { gitHubCli, type GitHubCliSelection } from "./github-cli-binary.js";
 import { gitHubCliEnv, gitHubCredentialSource } from "./github-credentials.js";
 import { runCommand } from "./shell.js";
 import type { Environment } from "./models.js";
@@ -398,6 +398,8 @@ export async function detectEnvironmentPullRequest(
      * omitting storage uses the host login.
      */
     storage?: StorageService;
+    /** The backend's `gh` for local runs; omitted, `gh` comes from PATH. */
+    gitHubCli?: GitHubCliSelection;
     /** Fills `viewerCanMerge` for an open PR; omitted, it stays absent. */
     viewerPermissions?: PrViewerPermissionCache;
     /** Fills the check summary's `requiredFailed` when a check fails; omitted, it stays absent. */
@@ -446,7 +448,7 @@ export async function detectEnvironmentPullRequest(
     const stdout = reading
       ? JSON.stringify(reading.pullRequest)
       : (
-          await runCommand(gitHubCli(), request.args, {
+          await runCommand(gitHubCli(options.gitHubCli), request.args, {
             cwd: target.worktreePath,
             timeoutMs: PR_DETECTION_TIMEOUT_MS,
             env: await gitHubCliEnv(options.storage),
@@ -461,7 +463,7 @@ export async function detectEnvironmentPullRequest(
       options.viewerPermissions,
       async (args) =>
         (
-          await runCommand(gitHubCli(), args, {
+          await runCommand(gitHubCli(options.gitHubCli), args, {
             cwd: worktreePath,
             timeoutMs: PR_VIEWER_PERMISSION_TIMEOUT_MS,
             env: await gitHubCliEnv(options.storage),
@@ -476,7 +478,7 @@ export async function detectEnvironmentPullRequest(
       recurringWorkMetrics.requested("pr-check-rollup");
       const runGh = async (args: string[], timeoutMs: number) =>
         (
-          await runCommand(gitHubCli(), args, {
+          await runCommand(gitHubCli(options.gitHubCli), args, {
             cwd: worktreePath,
             timeoutMs,
             env: await gitHubCliEnv(options.storage),

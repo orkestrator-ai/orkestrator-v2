@@ -1250,7 +1250,7 @@ Re-checked and built 2026-11-04 on branch `desktop-window-transport-e6e965c2f004
 | **Serialisations per invoke** | **4** | **2** |
 | Crossings of the context bridge (copied, on top of the above) | 2 | 0 |
 
-These count events and serialisations. Electron main's CPU, the baseline [0400](../../reports/efficiency-logging-database/0400-e26-local-desktop-transport.md) recommends, was not measured.
+These count events and serialisations. Electron main's CPU, the baseline report part `0400` asked for, was measured on 2026-11-05 by the same spec: the direct transport does not lower it, and with two windows on a 1.29 MB burst raises it from 39–67 ms to 113–131 ms. The figures and the follow-up are in [5760](5760-local-transport-main-cpu.md); the outcome of the part is the [closing check of E26](../../reports/efficiency-logging-database/0000-index.md#closing-check-of-e26-local-desktop-transport).
 
 **DK-5 (fixed for full images, 2026-11-04).** A spooled capture image now crosses IPC as bytes in both directions (`BrowserPreviewPendingCaptureWire`, `imageBytes`), at its PNG size rather than a third larger, and main no longer base64-encodes it to read it. The preload makes and parses the data URLs, so `BrowserPreviewCaptureApi` and its consumers did not change. A region crop still crosses as a data URL. "Up to 12 PNG encodes" is the loop's safety cap: a screenshot whose size follows its area settled in two encodes at 2.2, 4 and 8 bytes a pixel, so the loop was left alone. Tests: `preload-api.test.ts` ("capture images across IPC"), `browser-preview-capture-store.test.ts`, `browser-preview-capture-image.test.ts`; `web-annotations-electron.spec.ts` still passes through a real window.
 

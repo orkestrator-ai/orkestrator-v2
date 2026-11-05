@@ -27,6 +27,7 @@ import {
   MAX_CODE_REWIND_PREVIEW_PATHS,
   type BuildPipelineCodeRewindPreview,
   type PipelineCodeRewind,
+  type PipelineRestartRequest,
   type TaskSnapshot,
 } from "@orkestrator/protocol/build-pipeline";
 import {
@@ -78,6 +79,7 @@ import {
   supersedeSessionsFrom,
   verificationFeedbackBefore,
 } from "./build-pipeline-rewind.js";
+import { isPanelReviewerSession } from "./build-pipeline-review-panel.js";
 import { pruneKeyInformationAfterRewind } from "./build-pipeline-key-information.js";
 import {
   codeRewindBackupRef,
@@ -670,8 +672,9 @@ export class BuildPipelineLifecycle {
       delete candidate.pausedFromPhase;
       delete candidate.pauseCause;
       delete candidate.error;
-      // Multi-model review resumes by opening a fresh panel. There is no one
-      // reviewer session a generic resume prompt could safely target.
+      // Multi-model review resumes the panel it paused: only what the pause
+      // interrupted runs again. There is no one reviewer session a generic resume
+      // prompt could safely target.
       if (phase === "reviewing" && usesReviewFanout(candidate)) {
         if (!candidate.reviewPackage) {
           // Nothing to review against: the retry path rebuilds the package.
@@ -681,16 +684,12 @@ export class BuildPipelineLifecycle {
           delete candidate.structuredReviewRequestId;
           return;
         }
-        // Not through `reviewRetryRequested`: an explicit retry now always
-        // re-runs package preparation, while a resume reuses the package the
-        // paused panel was reviewing. Pause already stopped the panel; abandon
-        // again so a reviewer whose abort failed then is retried, and leave no
-        // fan-out so the next pass verifies the package and opens a new one.
+        // Not through `reviewRetryRequested`: an explicit retry always re-runs
+        // package preparation, while a resume reuses the package the paused
+        // panel was reviewing, and the reports it already has. Pause already
+        // stopped the panel; abandon again so an abort that failed then is retried.
         await this.agents.abandonReviewFanout(candidate, "idle");
-        discardSessionReviewReports(candidate);
-        delete candidate.reviewFanout;
-        delete candidate.structuredReview;
-        delete candidate.structuredReviewRequestId;
+        await this.stageSupervisor.reviewFanout().resumeAfterPause(candidate);
         delete candidate.verificationResult;
         delete candidate.verificationFeedback;
         return;
@@ -1070,6 +1069,8 @@ export class BuildPipelineLifecycle {
       ) => Promise<PipelineCodeRewind | Error>;
       /** "Restart in…": the step runs from now on under this selection. */
       selection?: BuildPipelineRestartSelection;
+      /** The named reviewer alone runs again; the panel's other reports stay. */
+      rerunReviewer?: boolean;
     } = {},
   ): Promise<BuildPipeline> {
     let rejection: Error | undefined;
@@ -1125,6 +1126,20 @@ export class BuildPipelineLifecycle {
           rejection = new Error("This step cannot be restarted with a different agent or model.");
           return;
         }
+      }
+      // Consolidation, or one reviewer, restarts alone while the reports it
+      // needs survive. A code rewind changes what they describe, so it does not.
+      const keptPanel =
+        named && !options.resetCode
+          ? this.stageSupervisor
+              .reviewFanout()
+              .panelToKeep(candidate, named, Boolean(options.rerunReviewer))
+          : null;
+      if (options.rerunReviewer && (!keptPanel || !candidate.reviewPackage)) {
+        rejection = new Error(
+          "This reviewer's review is over. Restart from here to run the whole review again.",
+        );
+        return;
       }
       const rewindId = randomUUID();
       let code: PipelineCodeRewind | undefined;
@@ -1231,7 +1246,11 @@ export class BuildPipelineLifecycle {
         return currentIterationImplementation?.phase === "fix" ? "fix" : "build";
       };
 
-      if (target.kind === "validation") {
+      if (keptPanel) {
+        await this.stageSupervisor
+          .reviewFanout()
+          .reopenPanel(candidate, keptPanel, options.rerunReviewer ? named : undefined);
+      } else if (target.kind === "validation") {
         const plan = candidate.validationRun!.plan;
         candidate.validationRun = newReviewValidationRun(`review-validation-${randomUUID()}`, plan);
         candidate.restartRequest = {
@@ -1272,7 +1291,11 @@ export class BuildPipelineLifecycle {
         }
       }
 
-      const restart = candidate.restartRequest;
+      // A reopened panel needs no request: the next pass finds it live and
+      // advances it, which is the step running again.
+      const restart: PipelineRestartRequest = keptPanel
+        ? { kind: "session", phase: "review" }
+        : candidate.restartRequest!;
       const selectedPhase =
         restart.kind === "session" ? restart.phase : restart.implementationPhase;
       const selectedOrder = {
@@ -1289,7 +1312,7 @@ export class BuildPipelineLifecycle {
         delete candidate.reviewPackage;
         if (restart.kind !== "validation") delete candidate.validationRun;
       }
-      if (selectedOrder <= 2) {
+      if (selectedOrder <= 2 && !keptPanel) {
         discardSessionReviewReports(candidate);
         delete candidate.reviewFanout;
         delete candidate.structuredReview;
@@ -1322,6 +1345,11 @@ export class BuildPipelineLifecycle {
         { iteration, order: restartStepOrder(restart) },
         rewindId,
         at,
+        (session) =>
+          keptPanel !== null &&
+          session.reviewPassId !== undefined &&
+          session.reviewPassId === named?.reviewPassId &&
+          isPanelReviewerSession(session, session.reviewPassId),
       );
       pruneRoundReviewReports(candidate);
       pruneKeyInformationAfterRewind(
@@ -1597,6 +1625,91 @@ export class BuildPipelineLifecycle {
     });
     if (rejection) throw rejection;
     await this.stageSupervisor.runLocked(pipelineId);
+    return (await this.ctx.requireRecord(pipelineId)).snapshot as BuildPipeline;
+  }
+
+  /**
+   * Stops one reviewer of the running review. The rest of the panel carries on,
+   * and consolidation runs from the reports the others file.
+   */
+  async stopReviewer(pipelineId: string, reviewerId: string): Promise<BuildPipeline> {
+    let rejection: Error | undefined;
+    const pipeline = await this.ctx.mutate(pipelineId, async (candidate) => {
+      try {
+        await this.stageSupervisor.reviewFanout().stopReviewer(candidate, reviewerId);
+      } catch (error) {
+        rejection = error instanceof Error ? error : new Error(String(error));
+      }
+    });
+    if (rejection) throw rejection;
+    // With this reviewer out of the way the pass may already be able to
+    // consolidate. The answer does not wait for that pass: it can be held up by
+    // the reviewers still running.
+    void this.stageSupervisor.runLocked(pipelineId);
+    return pipeline;
+  }
+
+  /**
+   * Runs one reviewer again whatever state it is in, keeping the rest of the
+   * panel. In the running review its peers carry on undisturbed; for a pass the
+   * pipeline has moved on from, the round rewinds to the panel, as a restart does.
+   */
+  async restartReviewer(pipelineId: string, reviewerId: string): Promise<BuildPipeline> {
+    let rejection: Error | undefined;
+    let live = false;
+    await this.ctx.mutate(pipelineId, async (candidate) => {
+      const phase =
+        candidate.phase === "paused"
+          ? candidate.pausedFromPhase
+          : candidate.phase === "failed"
+            ? candidate.failureContext?.phase
+            : candidate.phase;
+      live =
+        phase === "reviewing" &&
+        Boolean(
+          candidate.reviewFanout?.reviewers.some(
+            (reviewer) => reviewer.id === reviewerId || reviewer.sessionKey === reviewerId,
+          ),
+        );
+      if (!live) return;
+      if (
+        candidate.phase === "failed" &&
+        candidate.failureContext?.kind === "interactive-request"
+      ) {
+        rejection = new Error("This build is not in a review that can restart a reviewer");
+        return;
+      }
+      try {
+        await this.stageSupervisor
+          .reviewFanout()
+          .prepareReviewerRetry(candidate, reviewerId, { anyStatus: true });
+      } catch (error) {
+        rejection = error instanceof Error ? error : new Error(String(error));
+        return;
+      }
+      if (candidate.phase === "failed" || candidate.phase === "paused") {
+        candidate.phase = "reviewing";
+        delete candidate.pausedFromPhase;
+        delete candidate.pauseCause;
+        delete candidate.error;
+        delete candidate.failureContext;
+        delete candidate.cancelledAt;
+        delete candidate.reconnectAttempt;
+        delete candidate.stageRetryRequested;
+        delete candidate.completionCommentStatus;
+        delete candidate.completionCommentError;
+      }
+      delete candidate.stallWarning;
+    });
+    if (rejection) throw rejection;
+    if (!live) {
+      return this.restartLocatedStage(
+        pipelineId,
+        (candidate) => locateSessionStep(candidate, reviewerId),
+        { rerunReviewer: true },
+      );
+    }
+    void this.stageSupervisor.runLocked(pipelineId);
     return (await this.ctx.requireRecord(pipelineId)).snapshot as BuildPipeline;
   }
 

@@ -10,6 +10,10 @@
  *   Every served request re-opens the file through it, so a file replaced by
  *   a symbolic link, moved out, or deleted stops being served. Ranged reads
  *   go straight to the opened handle; nothing is buffered whole.
+ * - No environment (a detached transcript): an absolute host path confined to
+ *   the readable roots `read_file_base64` uses (`readableHostFileRoots`).
+ *   The roots are rebuilt on every served request, so the route never reads
+ *   more than that RPC would, and a removed worktree stops being served.
  * - Container environments: the container safe reader
  *   (`buildContainerSafeBase64Reader`, `stream` mode: the attachment
  *   validation with raw output) copies the file once into a private backend
@@ -50,6 +54,8 @@ export const MEDIA_STAGING_TOTAL_QUOTA_BYTES = 2 * 1024 * 1024 * 1024;
 export const MEDIA_STAGING_MAX_CONCURRENT_COPIES = 2;
 export const MEDIA_STAGING_COPY_TIMEOUT_MS = 10 * 60 * 1000;
 export const MEDIA_STREAM_MAX_SESSIONS = 128;
+/** Revocation group of readable-roots streams, which belong to no environment. */
+export const READABLE_ROOTS_STREAM_OWNER = "readable-host-roots";
 const MEDIA_SWEEP_INTERVAL_MS = 60_000;
 
 /** The content listener's media surface (LoopbackArtifactContentServer). */
@@ -80,6 +86,11 @@ export interface TranscriptMediaStreamsOptions {
   getEnvironment: (environmentId: string) => Promise<MediaStreamEnvironment | null>;
   stagingRoot: string;
   spawnContainerReader: ContainerReaderSpawner;
+  /**
+   * The `read_file_base64` allowlist. Without it a request must name an
+   * environment, as before readable-roots streams existed.
+   */
+  readableHostRoots?: () => Promise<readonly string[]>;
   containerIdMatches?: (known: string, candidate: string) => boolean;
   limits?: Partial<{
     maxHostBytes: number;
@@ -93,8 +104,9 @@ export interface TranscriptMediaStreamsOptions {
 }
 
 interface StreamSession {
+  /** The owning environment, or {@link READABLE_ROOTS_STREAM_OWNER}. */
   environmentId: string;
-  kind: "host" | "container";
+  kind: "host" | "container" | "readable";
   worktreePath?: string;
   containerId?: string;
   stagedPath?: string;
@@ -197,10 +209,14 @@ export class TranscriptMediaStreams {
   async open(request: Record<string, unknown>): Promise<TranscriptMediaStreamResponse> {
     if (this.closed) fail("renderer_unavailable", "Media streaming is unavailable");
     const { environmentId, path: requestedPath, containerId } = request;
+    const readable =
+      (environmentId === undefined || environmentId === null || environmentId === "") &&
+      this.options.readableHostRoots !== undefined;
     if (
-      typeof environmentId !== "string" ||
-      environmentId.length === 0 ||
-      environmentId.length > 256
+      !readable &&
+      (typeof environmentId !== "string" ||
+        environmentId.length === 0 ||
+        environmentId.length > 256)
     ) {
       fail("invalid_input", "environmentId is required");
     }
@@ -214,10 +230,15 @@ export class TranscriptMediaStreams {
     if (containerId !== undefined && containerId !== null && typeof containerId !== "string") {
       fail("invalid_input", "containerId must be a string");
     }
+    if (readable && typeof containerId === "string" && containerId.length > 0) {
+      fail("invalid_input", "A container file needs its environmentId");
+    }
     const server = this.options.server();
     if (!server || server.origin() === null) {
       fail("renderer_unavailable", "The artifact content origin is unavailable");
     }
+    if (readable) return this.openReadable(server, requestedPath);
+    if (typeof environmentId !== "string") fail("invalid_input", "environmentId is required");
     const environment = await this.environment(environmentId);
     if (environment.environmentType === "local") {
       if (typeof containerId === "string" && containerId.length > 0) {
@@ -251,6 +272,8 @@ export class TranscriptMediaStreams {
         this.release(streamId);
         continue;
       }
+      // Readable-roots streams have no environment; every request re-checks the roots.
+      if (session.kind === "readable") continue;
       let present = environments.get(session.environmentId);
       if (present === undefined) {
         present = await this.options
@@ -298,6 +321,8 @@ export class TranscriptMediaStreams {
   }
 
   private async environmentStillServes(session: StreamSession): Promise<boolean> {
+    // The resolver re-applies the current readable roots on every request.
+    if (session.kind === "readable") return true;
     const environment = await this.options.getEnvironment(session.environmentId);
     if (!environment || environment.deletionRequestedAt) return false;
     if (session.kind === "host") {
@@ -331,8 +356,46 @@ export class TranscriptMediaStreams {
         fail("policy_denied", "The file is outside the environment's workspace");
       }
     }
+    const session: StreamSession = {
+      environmentId: environment.id,
+      kind: "host",
+      worktreePath,
+      stagedBytes: 0,
+    };
+    return this.mintHostFile(server, session, absolute, async () => roots);
+  }
+
+  /**
+   * An absolute host path confined to the `read_file_base64` roots, for a
+   * reference with no environment. A relative path has nothing to be relative
+   * to and is refused.
+   */
+  private async openReadable(
+    server: MediaStreamServer,
+    requestedPath: string,
+  ): Promise<TranscriptMediaStreamResponse> {
+    const roots = this.options.readableHostRoots!;
+    if (!path.isAbsolute(requestedPath)) {
+      fail("policy_denied", "The file is outside Orkestrator workspace storage");
+    }
+    const session: StreamSession = {
+      environmentId: READABLE_ROOTS_STREAM_OWNER,
+      kind: "readable",
+      stagedBytes: 0,
+    };
+    return this.mintHostFile(server, session, path.resolve(requestedPath), async () => [
+      ...(await roots()),
+    ]);
+  }
+
+  private async mintHostFile(
+    server: MediaStreamServer,
+    session: StreamSession,
+    absolute: string,
+    roots: () => Promise<string[]>,
+  ): Promise<TranscriptMediaStreamResponse> {
     const resolve = async (): Promise<OpenedMediaFile> => {
-      const { handle, stats } = await openReadableHostFile(absolute, roots);
+      const { handle, stats } = await openReadableHostFile(absolute, await roots());
       return { handle, size: stats.size, identity: identityOf(stats) };
     };
     let opened: OpenedMediaFile;
@@ -355,12 +418,6 @@ export class TranscriptMediaStreams {
         "unsupported_kind",
         "The file's contents are not a supported audio, video or image type",
       );
-    const session: StreamSession = {
-      environmentId: environment.id,
-      kind: "host",
-      worktreePath,
-      stagedBytes: 0,
-    };
     return this.mint(server, session, {
       mimeType,
       byteLength: opened.size,

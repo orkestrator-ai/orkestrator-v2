@@ -1,3 +1,8 @@
+import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
+import {
+  multiReviewWorkers,
+  type PipelineWorker,
+} from "@orkestrator/protocol/pipeline-worker-mail";
 import * as shared from "./storage-shared.js";
 import {
   AGENT_INTERACTION_JOURNAL_VERSION,
@@ -206,6 +211,45 @@ export class ReviewsRepository {
       )
       .map(([, workflow]) => workflow)
       .sort((left, right) => left.updatedAt.localeCompare(right.updatedAt));
+  }
+
+  /**
+   * The reviewers of reviews in their reviewers' stage, as agent mail workers,
+   * in the shape of `listBuildPipelineWorkers`. A review that has moved on drops
+   * out, and the directory retires its reviewers' mailboxes.
+   */
+  async listMultiReviewWorkers(environmentId?: string): Promise<
+    Array<{
+      pipelineId: string;
+      projectId: string;
+      environmentId: string;
+      terminal: boolean;
+      workers: PipelineWorker[];
+    }>
+  > {
+    const workflows = await this.context.loadJson<Record<string, PersistedMultiReviewWorkflow>>(
+      this.files.multiReviewsFile(),
+      () => ({}),
+    );
+    const result = [];
+    for (const [id, record] of Object.entries(workflows)) {
+      if (environmentId !== undefined && record?.environmentId !== environmentId) continue;
+      const snapshot = record?.snapshot as MultiReviewWorkflow | undefined;
+      if (snapshot?.phase !== "reviewing") continue;
+      result.push({
+        pipelineId: id,
+        projectId: snapshot.projectId,
+        environmentId: record.environmentId,
+        terminal: false,
+        workers: multiReviewWorkers({
+          id,
+          environmentId: record.environmentId,
+          phase: snapshot.phase,
+          reviewers: snapshot.reviewers,
+        }),
+      });
+    }
+    return result;
   }
 
   async listAllMultiReviewWorkflows(): Promise<PersistedMultiReviewWorkflow[]> {

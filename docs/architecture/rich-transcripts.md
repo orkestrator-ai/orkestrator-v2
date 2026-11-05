@@ -442,10 +442,13 @@ and no interactive links. `TextPart` passes a stable `richPartId`
   (`transcript_media_close_stream`); nothing else is cancelled. Only files
   the resolver itself would read from a live path stream
   (`mediaStreamTarget`: an absolute host path, or a safe workspace-relative
-  container path; never inline, remote or detail-reference bytes). The
+  container path; never inline, remote or detail-reference bytes). A
+  detached transcript streams a host path with no environment, under the
+  `read_file_base64` roots; its container paths keep the base64 read. The
   bounded base64 path stays the fallback: no reachable content origin, an
   older backend, a transient staging limit (`renderer_unavailable`,
-  `capacity_exceeded`, unknown command), or a stream that errors before its
+  `capacity_exceeded`, `invalid_input` from a backend that predates
+  environment-less streams, unknown command), or a stream that errors before its
   metadata loads (a desktop window attached to a remote backend). Refusals
   (`policy_denied`, `not_found`, `package_size_exceeded`,
   `unsupported_kind`) are shown as denied, unavailable, too large or

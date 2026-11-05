@@ -70,10 +70,12 @@ export function supersedeSessionsFrom(
   point: { iteration: number; order: number },
   rewindId: string,
   at: string,
+  /** Sessions a restart keeps though they sit at the point: a reopened panel's reviewers. */
+  keep: (session: PipelineSession) => boolean = () => false,
 ): number {
   let superseded = 0;
   for (const session of pipeline.sessions) {
-    if (isSupersededPipelineSession(session)) continue;
+    if (isSupersededPipelineSession(session) || keep(session)) continue;
     const after =
       session.iteration > point.iteration ||
       (session.iteration === point.iteration && sessionStepOrder(session) >= point.order);

@@ -44,7 +44,6 @@ Worked out on 2026-11-03 against `main` at `a44641cbc`, from the 167 work files 
 | Containers | 1. S-0080 (Legacy host mounts)<br>2. S-0100 (Egress SNI and DNS)<br>3. S-0170 (Agent-tools bind address)<br>4. E25 (Container start) | `commands-containers.ts`, `commands-registry-servers.ts` and the `docker/` entrypoint, setup and firewall scripts |
 | Transcript | 1. E9 (Transcript reads)<br>2. E10 (Conditional reads and deltas)<br>3. E11 (Projection hashing)<br>4. E12 (Renderer store) | `native-agent-transcript-projection.ts` (5,570 lines), `useNativeAgentSession.ts` (3,870 lines), `nativeAgentProjectionStore.ts` |
 | Storage | 1. S-0190 (Provider secrets at rest) | `storage-database.ts`, `storage-backups.ts`, `storage-stores.ts` |
-| Git scans and file reads | 1. E-0580 (File RPC and usage report) | `commands-files.ts`, `git-scopes.ts`, `diff-stats-service.ts` |
 | Desktop | 1. E26 (Local desktop transport) | `apps/desktop/electron/` windows, IPC and preloads, `backend-process.ts` |
 | Gateway | 1. E18 (Gateway events)<br>2. E24 (Gateway static and preview)<br>3. S-0160 (Descriptor process binding) | `gateway-auth.ts`, `gateway-events.ts`, `gateway-proxy.ts`, `gateway-support-*.ts`, `terminal-websocket-server.ts` |
 | Logging and diagnostics | 1. E17 (Dead code)<br>2. E15 (Health and diagnostics)<br>3. E16 (Log controls) | `application-logging.ts`, the metrics route and the logging settings |
@@ -83,10 +82,8 @@ These files are named by several batches that can still run together. The report
 | `gateway-support-core.ts` | E15, E17, E18, E24 |
 | `native-agent-transcript-projection.ts` | E15 (`0880` task 1) with the Transcript lane |
 | `native-agent-service.ts`, `control-mcp-tools.ts` | E9 with C2, C3 and X1 |
-| `commands-files.ts` | E-0580 |
 | `commands-servers.ts` | C6, E20 |
 | `GlobalSettings.sections.tsx` | C6, E15, E17 |
-| `usage-history-store.ts` | E15, E-0580 |
 | `MailTile.tsx` | E-0520, C7 |
 
 ## How this was worked out

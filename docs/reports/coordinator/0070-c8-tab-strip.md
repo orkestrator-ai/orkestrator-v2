@@ -150,3 +150,26 @@ How many rows the toolbar takes at phone width now; seen only in code.
 - [Architecture: One main coordinator](../../architecture/coordinator.md#one-main-coordinator-and-side-agents)
 - [Coordinator report, 4.4 (U11)](../2026-10-27-coordinator.md#44-ui-and-ux)
 - [Coordinator report, 4.4 (U13)](../2026-10-27-coordinator.md#44-ui-and-ux)
+
+## Outcome
+
+Checked back item by item on 2026-11-05. The work started from `main` at
+`69a3b4ca5`. The findings were re-checked first: the C9 split had moved the
+tab rendering to `CoordinatorPanel.tsx`'s `renderTab`, the toolbar to
+`CoordinatorToolbar.tsx` and the selection to `useCoordinatorSelection.ts`, and
+every finding still held. Live checks ran on an isolated `dev:test` profile with
+no agent credentials and no provider turn.
+
+| Part | Task | Outcome | Evidence |
+| --- | --- | --- | --- |
+| 0070 | 1. Add Change agent | Done; tab position after the change moved to to-do 5200 task 2 | Recommended option: a Change agent button on the assigned main tab and a menu item, both behind a confirmation that closes the main and then creates an unassigned main in the same group (`CoordinatorConversationTab.tsx`; `createConversation(replacingMain)` and the dialog in `CoordinatorPanel.tsx`). The dialog says open delegations move and that a report arriving first starts the default agent. Tests: `CoordinatorPanel.tabs.test.tsx` ("Change agent closes the main and opens an unassigned main in its place", "closing the main explains Change agent only when there is an agent to change"). Live: the old main closed, an unassigned main opened, and its composer held focus. |
+| 0070 | 2. Mark the main tab | Done | "Main" label and ", main" in the accessible name when more than one conversation is open (`CoordinatorConversationTab.tsx`). Test: "marks the main tab only once side agents are open beside it". |
+| 0070 | Current state: confirm closing the main | Already done; wording extended | The close dialog now also says open delegations move to the next main, and points to Change agent when the main has an agent. |
+| 0230 | 1. Use tab semantics without nesting | Done for the coordinator strip; environment strip moved to to-do 5200 task 1 | Recommended option. `tablist` around each strip's tabs, `role="tab"` button with `aria-selected` and an id, a `presentation` shell without `useSortable`'s button role or tab stop, a `tabpanel` labelled by the front tab, arrow keys, Home and End (`CoordinatorPaneTree.tsx`, `CoordinatorConversationTab.tsx`). Tests: `CoordinatorPaneTree.test.tsx` ("the draggable shell is not a control", "each group is a labelled tab list", "arrow keys, Home and End"). |
+| 0230 | 2. Give keyboard users a way to move tabs | Done | A tab menu opened by right-click, the context-menu key or Shift+F10, with Move to new group (`canSplitCoordinatorPane`) and Move to group N, and Change agent on the main (`CoordinatorConversationTab.tsx`, `coordinator-pane-layout.ts`). Tests: "the tab menu opens from the keyboard and moves a tab to a new group and back", `coordinator-pane-layout.test.ts`. Live: Shift+F10 then Enter split a side agent into its own group. |
+| 0230 | 3. Label the loading spinner | Done | `role="status"` with visually hidden text on the panel's loading state and the conversation's lazy-load fallback (`CoordinatorPanel.tsx`, `CoordinatorConversationPane.tsx`). Test: "the loading state is announced". |
+| 0420 | 1. Select once | Done | A press or focus inside a tab strip, or from a portalled menu, no longer focuses the group (`focusesPane` in `CoordinatorPaneTree.tsx`); every finished drag focuses the group it landed in or started from (`coordinatorDragEndChange`). Tests: "a click on a tab in another group writes the selection once" (fails with the old handlers), `CoordinatorPaneTree.test.tsx` ("a press in another group's strip", "every finished drag focuses a group"); the New side agent group test now asserts no write for the group's front tab. Live: a drag that dropped in place focused its group. |
+| 0430 | 1. Collapse New side agent to an icon | Done; its tooltip wording stays with C10 part 0320 | Below `sm` the label is visually hidden and the button keeps its name and a `title` (`CoordinatorPanel.tsx`); Sync and Pause do the same and the isolation badge shows its icon and "Advisory" (`CoordinatorToolbar.tsx`, `CoordinatorPanelNotices.tsx`). Test: "New side agent keeps its name when only its icon shows". The 0320 tooltip text is C10's and still open in `0240-c10-explanations.md`. |
+| 0430 | Needs verification: toolbar rows at phone width | Done | Measured live at 390 px: two rows before, one row after. |
+
+To-do needed: [5200](../../todo/coordinator-and-multi-review/5200-c8-tab-strip-follow-ups.md).

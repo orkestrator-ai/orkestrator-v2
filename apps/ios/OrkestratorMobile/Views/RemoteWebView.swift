@@ -6,9 +6,12 @@ struct RemoteWebView: UIViewRepresentable {
     @EnvironmentObject private var model: ConnectionModel
     let connection: RemoteConnection
     @Binding var state: WebViewState
+    var configureCoordinator: ((Coordinator) -> Void)?
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(model: model, state: $state)
+        let coordinator = Coordinator(model: model, state: $state)
+        configureCoordinator?(coordinator)
+        return coordinator
     }
 
     func makeUIView(context: Context) -> WKWebView {
@@ -129,6 +132,17 @@ struct RemoteWebView: UIViewRepresentable {
         var logoutSender: any GatewayLogoutSending = GatewayLogoutClient()
         private(set) var handledRetryID: UUID?
         private var readinessGeneration = UUID()
+        private var authenticationGeneration = UUID()
+        private var cookieMutationTask: Task<Void, Never>?
+        // Only native login establishes an issuer. Saved servers and the current
+        // page cannot establish who issued a cookie (cookies have no port).
+        private struct IssuedCookie {
+            let cookie: HTTPCookie
+            let address: URL
+        }
+        private var issuedCookies: [String: IssuedCookie] = [:]
+        /// Tests can delay a real WK insertion while a forget or switch arrives.
+        var cookieWriter: ((HTTPCookie, WKHTTPCookieStore) async -> Void)?
         var readinessCheckLimit = 100
         var readinessCheckDelay: Duration = .milliseconds(100)
         var javaScriptEvaluator: ((String) async throws -> Any?)?
@@ -184,13 +198,14 @@ struct RemoteWebView: UIViewRepresentable {
             authenticationTask?.cancel()
             invalidateReadiness()
             beginAuthenticationState(for: connection)
+            let generation = authenticationGeneration
             authenticationTask = Task { [weak self, weak webView] in
                 guard let self, let webView else { return }
                 do {
                     let cookie = try await self.loginCookie(for: connection)
                     try Task.checkCancellation()
                     guard connection.hasSameAuthenticationIdentity(as: self.requestedConnection) else { return }
-                    await self.set(cookie: cookie, in: webView)
+                    await self.installLoginCookie(cookie, for: connection, in: webView, generation: generation)
                     try Task.checkCancellation()
                     guard connection.hasSameAuthenticationIdentity(as: self.requestedConnection) else { return }
 
@@ -215,6 +230,7 @@ struct RemoteWebView: UIViewRepresentable {
         }
 
         func beginAuthenticationState(for connection: RemoteConnection) {
+            authenticationGeneration = UUID()
             requestedConnection = connection
             authenticatedConnection = nil
             // `makeUIView` and `updateUIView` both reach this method. Publishing
@@ -231,6 +247,7 @@ struct RemoteWebView: UIViewRepresentable {
         }
 
         func teardown() {
+            authenticationGeneration = UUID()
             authenticationTask?.cancel()
             invalidateReadiness()
             authenticationTask = nil
@@ -323,12 +340,36 @@ struct RemoteWebView: UIViewRepresentable {
             return cookie
         }
 
-        private func set(cookie: HTTPCookie, in webView: WKWebView) async {
-            await withCheckedContinuation { continuation in
-                webView.configuration.websiteDataStore.httpCookieStore.setCookie(cookie) {
-                    continuation.resume()
+        private static func cookieKey(_ cookie: HTTPCookie) -> String {
+            "\(cookie.domain.lowercased())|\(cookie.path)|\(cookie.name)"
+        }
+
+        /// Shares a mutation queue with forget. A forget waits for any insertion
+        /// already in WebKit; a later sign-in waits for deletion, but not logout.
+        func installLoginCookie(
+            _ cookie: HTTPCookie,
+            for connection: RemoteConnection,
+            in webView: WKWebView,
+            generation: UUID? = nil
+        ) async {
+            let expectedGeneration = generation ?? authenticationGeneration
+            let previous = cookieMutationTask
+            let cookieStore = webView.configuration.websiteDataStore.httpCookieStore
+            let operation = Task {
+                await previous?.value
+                guard self.authenticationGeneration == expectedGeneration,
+                      connection.hasSameAuthenticationIdentity(as: self.requestedConnection) else { return }
+                if let cookieWriter = self.cookieWriter {
+                    await cookieWriter(cookie, cookieStore)
+                } else {
+                    await cookieStore.setCookie(cookie)
                 }
+                // Record even if cancelled during setCookie: the queued forget
+                // must know the issuer of the cookie that WebKit just installed.
+                self.issuedCookies[Self.cookieKey(cookie)] = IssuedCookie(cookie: cookie, address: connection.address)
             }
+            cookieMutationTask = operation
+            await operation.value
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -663,38 +704,52 @@ struct RemoteWebView: UIViewRepresentable {
         /// slow or failed logout cannot hold up or change that. It also outlives
         /// `teardown`, because forgetting the last server dismantles this web view.
         private func endSession(of connection: RemoteConnection) {
-            let isRequested = connection.id == requestedConnection?.id
-            if isRequested { authenticationTask?.cancel() }
-            guard let cookieStore = webView?.configuration.websiteDataStore.httpCookieStore,
-                  Self.cookiesHoldSession(
-                    of: connection,
-                    isRequested: isRequested,
-                    remaining: model.vault.connections
-                  ) else { return }
+            if connection.id == requestedConnection?.id {
+                authenticationTask?.cancel()
+                authenticationGeneration = UUID()
+                requestedConnection = nil
+            }
+            guard let dataStore = webView?.configuration.websiteDataStore else { return }
+            let previous = cookieMutationTask
             let logoutSender = self.logoutSender
-            sessionEndTask = Task {
+            let hasSibling = model.vault.connections.contains {
+                $0.hostname.lowercased() == connection.hostname.lowercased()
+            }
+            var logoutCookies: [HTTPCookie] = []
+            let deletion = Task {
+                // WKHTTPCookieStore alone does not retain its nonpersistent jar
+                // when SwiftUI releases the last WKWebView.
+                defer { withExtendedLifetime(dataStore) {} }
+                let cookieStore = dataStore.httpCookieStore
+                await previous?.value
                 let cookies = await cookieStore.allCookies().filter {
                     Self.cookie($0, belongsToHostOf: connection.address)
                 }
                 for cookie in cookies {
+                    let key = Self.cookieKey(cookie)
+                    let issuer = self.issuedCookies[key]
+                    let knownIssuer = issuer.map { $0.cookie.value == cookie.value } == true
+                    let belongsToForgotten = knownIssuer && issuer.map {
+                        Self.sameOrigin($0.address, connection.address)
+                    } == true
+                    // Preserve a known sibling's cookie, even after it was removed
+                    // from the saved list. Unknown cookies may be removed only
+                    // when no saved sibling needs them, and are never sent out.
+                    guard belongsToForgotten || (!knownIssuer && !hasSibling) else { continue }
                     await cookieStore.deleteCookie(cookie)
+                    self.issuedCookies.removeValue(forKey: key)
+                    if belongsToForgotten && GatewayLogoutClient.sessionCookieNames.contains(cookie.name) {
+                        logoutCookies.append(cookie)
+                    }
                 }
-                for cookie in cookies where GatewayLogoutClient.sessionCookieNames.contains(cookie.name) {
+            }
+            cookieMutationTask = deletion
+            sessionEndTask = Task {
+                await deletion.value
+                for cookie in logoutCookies {
                     await logoutSender.logOut(address: connection.address, sessionCookie: cookie)
                 }
             }
-        }
-
-        /// Cookies ignore ports, so a saved server at another port of the same host
-        /// shares them, and the jar keeps only the last sign-in. Unless the forgotten
-        /// server is the one signed in, they may be the other server's live session,
-        /// which must neither be deleted nor sent to the forgotten server.
-        static func cookiesHoldSession(
-            of connection: RemoteConnection,
-            isRequested: Bool,
-            remaining: [RemoteConnection]
-        ) -> Bool {
-            isRequested || !remaining.contains { $0.hostname.lowercased() == connection.hostname.lowercased() }
         }
 
         static func cookie(_ cookie: HTTPCookie, belongsToHostOf address: URL) -> Bool {

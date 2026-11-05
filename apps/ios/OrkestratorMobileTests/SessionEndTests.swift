@@ -97,6 +97,22 @@ private final class FakeGateway: @unchecked Sendable {
     }
 }
 
+/// Controlled native login response; never uses a real gateway or credential.
+final class SessionLoginProtocol: URLProtocol, @unchecked Sendable {
+    static var onStart: ((SessionLoginProtocol) -> Void)?
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() { Self.onStart?(self) }
+    override func stopLoading() {}
+    func respond(value: String = "test-session") {
+        let response = HTTPURLResponse(url: request.url!, statusCode: 303, httpVersion: nil, headerFields: [
+            "Set-Cookie": "orkestrator_gateway_auth=\(value); Path=/; HttpOnly; Secure",
+        ])!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+}
+
 @MainActor
 final class SessionEndTests: XCTestCase {
     private var retainedWebViews: [WKWebView] = []
@@ -105,6 +121,7 @@ final class SessionEndTests: XCTestCase {
     override func tearDown() async throws {
         retainedWebViews = []
         model = nil
+        SessionLoginProtocol.onStart = nil
     }
 
     private func webCookie(
@@ -123,7 +140,8 @@ final class SessionEndTests: XCTestCase {
     private func makeCoordinator(
         store: MemoryCredentialStore,
         cookies: [HTTPCookie],
-        logoutSender: any GatewayLogoutSending
+        logoutSender: any GatewayLogoutSending,
+        recordIssuers: Bool = true
     ) async -> (RemoteWebView.Coordinator, WKHTTPCookieStore) {
         let model = ConnectionModel(credentialStore: store, validator: MockValidator())
         self.model = model
@@ -140,9 +158,33 @@ final class SessionEndTests: XCTestCase {
         coordinator.javaScriptEvaluator = { _ in nil }
         let cookieStore = configuration.websiteDataStore.httpCookieStore
         for cookie in cookies {
-            await cookieStore.setCookie(cookie)
+            if recordIssuers, GatewayLogoutClient.sessionCookieNames.contains(cookie.name),
+               let owner = store.vault.connections.first(where: { Self.matches(cookie, $0) }) {
+                coordinator.beginAuthenticationState(for: owner)
+                await coordinator.installLoginCookie(cookie, for: owner, in: webView)
+            } else {
+                await cookieStore.setCookie(cookie)
+            }
         }
+        if let active = model.activeConnection { coordinator.beginAuthenticationState(for: active) }
         return (coordinator, cookieStore)
+    }
+
+    private static func matches(_ cookie: HTTPCookie, _ connection: RemoteConnection) -> Bool {
+        RemoteWebView.Coordinator.cookie(cookie, belongsToHostOf: connection.address)
+    }
+
+    private func waitUntil(_ condition: () -> Bool) async throws {
+        for _ in 0..<200 {
+            if condition() { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTFail("Expected asynchronous operation did not arrive within two seconds")
+        throw TestFailure.expected
+    }
+
+    private func forget(_ connection: RemoteConnection, using coordinator: RemoteWebView.Coordinator) async {
+        await coordinator.handleBridgeRequest(id: UUID().uuidString, action: "forget", body: ["connectionId": connection.id.uuidString])
     }
 
     private func vault(_ connections: RemoteConnection..., active: RemoteConnection? = nil) -> ConnectionVault {
@@ -206,7 +248,8 @@ final class SessionEndTests: XCTestCase {
         XCTAssertEqual(model.vault, store.vault)
 
         // The forget stands whatever the parked request does, and the cookie goes first.
-        while logout.requests.isEmpty { await Task.yield() }
+        defer { logout.releaseHeldRequests() }
+        try await waitUntil { !logout.requests.isEmpty }
         let whileHeld = await cookieStore.allCookies()
         XCTAssertTrue(whileHeld.isEmpty)
         logout.releaseHeldRequests()
@@ -272,7 +315,10 @@ final class SessionEndTests: XCTestCase {
             body: ["connectionId": forgotten.id.uuidString]
         )
         // Forgetting the last server sends SwiftUI straight to the editor.
-        coordinator.teardown()
+        weak var releasedView = retainedWebViews.first
+        RemoteWebView.dismantleUIView(try XCTUnwrap(retainedWebViews.first), coordinator: coordinator)
+        retainedWebViews.removeAll()
+        try await waitUntil { releasedView == nil }
         await coordinator.sessionEndTask?.value
 
         let remaining = await cookieStore.allCookies()
@@ -308,7 +354,7 @@ final class SessionEndTests: XCTestCase {
         let sibling = connection(address: "https://desk.example")
         let logout = FakeLogoutSender()
         let (coordinator, cookieStore) = await makeCoordinator(
-            store: MemoryCredentialStore(vault: vault(forgotten, sibling, active: sibling)),
+            store: MemoryCredentialStore(vault: vault(sibling, forgotten, active: sibling)),
             cookies: [try webCookie(value: "sibling-session", domain: "desk.example")],
             logoutSender: logout
         )
@@ -326,15 +372,119 @@ final class SessionEndTests: XCTestCase {
         XCTAssertTrue(logout.requests.isEmpty, "Another server's session must not be sent to this one")
     }
 
-    func testTheSignedInServerEndsItsSessionEvenWithASavedServerOnTheSameHost() {
-        let forgotten = connection(address: "https://desk.example:8443")
-        let sibling = connection(address: "https://DESK.example")
-        let unrelated = connection(address: "https://other.example")
-        let coordinator = RemoteWebView.Coordinator.self
+    func testSequentialSameHostForgetsNeverSendTheFirstCookieToTheSecondPort() async throws {
+        for knownIssuer in [false, true] {
+            let a = connection(address: "https://desk.example")
+            let b = connection(address: "https://desk.example:8443")
+            let c = connection(address: "https://other.example")
+            let logout = FakeLogoutSender()
+            let (coordinator, cookieStore) = await makeCoordinator(
+                store: MemoryCredentialStore(vault: vault(a, b, c, active: c)),
+                cookies: [try webCookie(value: "a-session", domain: "desk.example")],
+                logoutSender: logout, recordIssuers: knownIssuer
+            )
+            await forget(a, using: coordinator)
+            await coordinator.sessionEndTask?.value
+            await forget(b, using: coordinator)
+            await coordinator.sessionEndTask?.value
+            XCTAssertFalse(logout.requests.contains { $0.address == b.address })
+            XCTAssertEqual(logout.requests.map(\.address), knownIssuer ? [a.address] : [])
+            let remaining = await cookieStore.allCookies()
+            XCTAssertTrue(remaining.isEmpty)
+        }
+    }
 
-        XCTAssertTrue(coordinator.cookiesHoldSession(of: forgotten, isRequested: true, remaining: [sibling]))
-        XCTAssertFalse(coordinator.cookiesHoldSession(of: forgotten, isRequested: false, remaining: [sibling]))
-        XCTAssertTrue(coordinator.cookiesHoldSession(of: forgotten, isRequested: false, remaining: [unrelated]))
+    func testLoginAfterSkippedUnknownCleanupUpdatesTheIssuer() async throws {
+        let a = connection(address: "https://desk.example")
+        let b = connection(address: "https://desk.example:8443")
+        let c = connection(address: "https://other.example")
+        let logout = FakeLogoutSender()
+        let (coordinator, cookieStore) = await makeCoordinator(
+            store: MemoryCredentialStore(vault: vault(a, b, c, active: c)),
+            cookies: [try webCookie(value: "unknown-session", domain: "desk.example")],
+            logoutSender: logout, recordIssuers: false
+        )
+        await forget(a, using: coordinator)
+        await coordinator.sessionEndTask?.value
+        XCTAssertTrue(logout.requests.isEmpty)
+        let preserved = await cookieStore.allCookies()
+        XCTAssertEqual(preserved.map(\.value), ["unknown-session"])
+
+        SessionLoginProtocol.onStart = { $0.respond(value: "b-session") }
+        coordinator.loginProtocolClasses = [SessionLoginProtocol.self]
+        coordinator.requestLoader = { _, _ in }
+        coordinator.authenticate(b)
+        await coordinator.authenticationTask?.value
+        await forget(b, using: coordinator)
+        await coordinator.sessionEndTask?.value
+        XCTAssertEqual(logout.requests.map(\.address), [b.address])
+        XCTAssertEqual(logout.requests.map(\.cookie.value), ["b-session"])
+    }
+
+    func testForgettingDuringARealLoginResponseNeverInstallsItsCookie() async throws {
+        let a = connection(address: "https://desk.example")
+        let c = connection(address: "https://other.example")
+        let logout = FakeLogoutSender()
+        let (coordinator, cookieStore) = await makeCoordinator(
+            store: MemoryCredentialStore(vault: vault(a, c)), cookies: [], logoutSender: logout
+        )
+        let started = expectation(description: "Native login POST started")
+        SessionLoginProtocol.onStart = { _ in started.fulfill() }
+        coordinator.loginProtocolClasses = [SessionLoginProtocol.self]
+        coordinator.requestLoader = { _, _ in XCTFail("Forgotten login must never load a page") }
+        // Make authenticate start even though the fixture marked A requested.
+        coordinator.beginAuthenticationState(for: c)
+        coordinator.authenticate(a)
+        let signIn = try XCTUnwrap(coordinator.authenticationTask)
+        await fulfillment(of: [started], timeout: 2)
+        await forget(a, using: coordinator)
+        await signIn.value
+        await coordinator.sessionEndTask?.value
+        let remaining = await cookieStore.allCookies()
+        XCTAssertTrue(signIn.isCancelled)
+        XCTAssertTrue(remaining.isEmpty)
+        XCTAssertTrue(logout.requests.isEmpty)
+    }
+
+    func testForgetWaitsForAnInflightWKWriteAndPreservesTheNextSameHostLogin() async throws {
+        let a = connection(address: "https://desk.example")
+        let b = connection(address: "https://desk.example:8443")
+        let logout = FakeLogoutSender()
+        let (coordinator, cookieStore) = await makeCoordinator(
+            store: MemoryCredentialStore(vault: vault(a, b)), cookies: [], logoutSender: logout
+        )
+        var releaseWrite: CheckedContinuation<Void, Never>?
+        coordinator.cookieWriter = { cookie, store in
+            if cookie.value == "a-session" {
+                await withCheckedContinuation { releaseWrite = $0 }
+            }
+            await store.setCookie(cookie)
+        }
+        defer { releaseWrite?.resume() }
+        SessionLoginProtocol.onStart = { request in
+            request.respond(value: request.request.url?.port == 8443 ? "b-session" : "a-session")
+        }
+        coordinator.loginProtocolClasses = [SessionLoginProtocol.self]
+        coordinator.requestLoader = { _, _ in }
+        coordinator.beginAuthenticationState(for: b)
+        coordinator.authenticate(a)
+        let firstSignIn = try XCTUnwrap(coordinator.authenticationTask)
+        try await waitUntil { releaseWrite != nil }
+        await forget(a, using: coordinator)
+        let cleanup = coordinator.sessionEndTask
+        coordinator.authenticate(b)
+        releaseWrite?.resume()
+        releaseWrite = nil
+        await firstSignIn.value
+        await coordinator.authenticationTask?.value
+        await cleanup?.value
+        let remaining = await cookieStore.allCookies()
+        XCTAssertEqual(remaining.map(\.value), ["b-session"])
+        XCTAssertEqual(logout.requests.map(\.address), [a.address])
+        XCTAssertEqual(logout.requests.map(\.cookie.value), ["a-session"])
+        await forget(b, using: coordinator)
+        await coordinator.sessionEndTask?.value
+        XCTAssertEqual(logout.requests.map(\.address), [a.address, b.address])
     }
 
     func testCookieHostMatchingIsExact() throws {
@@ -432,7 +582,8 @@ final class GatewayLogoutClientTests: XCTestCase {
         let webView = WKWebView(frame: .zero, configuration: configuration)
         coordinator.webView = webView
         coordinator.javaScriptEvaluator = { _ in nil }
-        await configuration.websiteDataStore.httpCookieStore.setCookie(try sessionCookie())
+        coordinator.beginAuthenticationState(for: forgotten)
+        await coordinator.installLoginCookie(try sessionCookie(), for: forgotten, in: webView)
 
         await coordinator.handleBridgeRequest(
             id: "forget-id",

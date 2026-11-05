@@ -1,6 +1,7 @@
 import Security
 import SwiftUI
 import UIKit
+import WebKit
 import XCTest
 @testable import OrkestratorMobile
 
@@ -23,6 +24,15 @@ private struct PhasedRoot: View {
             .environmentObject(model)
             .environment(\.scenePhase, box.phase)
             .preferredColorScheme(.dark)
+    }
+}
+
+private struct RemotePhasedRoot: View {
+    let root: RootView
+    @ObservedObject var box: ScenePhaseBox
+    let model: ConnectionModel
+    var body: some View {
+        root.environmentObject(model).environment(\.scenePhase, box.phase).preferredColorScheme(.dark)
     }
 }
 
@@ -113,6 +123,100 @@ final class PrivacyCoverTests: XCTestCase {
         let coveredOne = try await settledImage(of: try editor(address: "https://secret-one.example", phase: .inactive))
         let coveredTwo = try await settledImage(of: try editor(address: "https://secret-two.example", phase: .inactive))
         XCTAssertEqual(coveredOne, coveredTwo)
+    }
+
+    func testTheRemotePageIsCoveredAndReappearsAfterForegroundAndRemount() async throws {
+        let saved = connection(address: "https://synthetic.example")
+        let store = MemoryCredentialStore(vault: ConnectionVault(activeConnectionID: saved.id, connections: [saved]))
+        let model = ConnectionModel(credentialStore: store, validator: MockValidator())
+        await model.selectConnectionForLaunch(saved)
+        XCTAssertEqual(rootDestination(requiresLaunchSelection: model.requiresLaunchSelection, activeConnection: model.activeConnection), .remote(try XCTUnwrap(model.activeConnection)))
+        let box = ScenePhaseBox(.active)
+        var page: WKWebView?
+        var coordinator: RemoteWebView.Coordinator?
+        SessionLoginProtocol.onStart = { $0.respond() }
+        defer { SessionLoginProtocol.onStart = nil }
+        let root = RootView(configureWebView: { value in
+            coordinator = value
+            value.loginProtocolClasses = [SessionLoginProtocol.self]
+            value.requestLoader = { webView, _ in
+                page = webView
+                webView.loadHTMLString("<html><meta name='viewport' content='width=device-width'><body style='background:#185c82;color:white;font:28px sans-serif'><div id='root'><span>Synthetic remote page</span></div></body></html>", baseURL: saved.address)
+            }
+        })
+        let window = try show(RemotePhasedRoot(root: root, box: box, model: model))
+        for _ in 0..<200 {
+            if let page, (try? await page.evaluateJavaScript("document.getElementById('root')?.textContent")) as? String == "Synthetic remote page" { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let webView = try XCTUnwrap(page)
+        let content = try await webView.evaluateJavaScript("document.getElementById('root')?.textContent") as? String
+        XCTAssertEqual(content, "Synthetic remote page")
+        coordinator?.navigationDidFinish(at: saved.address)
+        await coordinator?.readinessTask?.value
+        XCTAssertEqual(coordinator?.state.wrappedValue, .ready)
+        let active = try await settledImage(of: window)
+        box.phase = .inactive
+        let inactive = try await settledImage(of: window)
+        let reference = try show(PhasedRoot(box: ScenePhaseBox(.inactive), model: makeModel(servers: ["https://other.example"])))
+        let opaque = try await settledImage(of: reference)
+        XCTAssertEqual(inactive, opaque, "No part of the WKWebView should show through")
+        XCTAssertNotEqual(active, inactive)
+        box.phase = .background
+        let background = try await settledImage(of: window)
+        XCTAssertEqual(background, inactive)
+        box.phase = .active
+        let returned = try await settledImage(of: window)
+        XCTAssertEqual(returned, active)
+        for (name, data) in [("remote-active", active), ("remote-inactive", inactive), ("remote-returned", returned)] {
+            let attachment = XCTAttachment(data: data, uniformTypeIdentifier: "public.png")
+            attachment.name = name
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+        // A fresh mount gets its selected server from the model's saved vault.
+        page = nil
+        window.rootViewController = UIHostingController(rootView: RemotePhasedRoot(root: root, box: box, model: model))
+        for _ in 0..<200 {
+            if let page, (try? await page.evaluateJavaScript("document.getElementById('root')?.textContent")) as? String == "Synthetic remote page" { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertNotNil(page)
+        coordinator?.navigationDidFinish(at: saved.address)
+        await coordinator?.readinessTask?.value
+        XCTAssertEqual(coordinator?.state.wrappedValue, .ready)
+        let remounted = try await settledImage(of: window)
+        XCTAssertEqual(remounted, active)
+    }
+
+    func testForegroundRecoveryKeepsTheRefusedDraftVisible() async throws {
+        let saved = connection(address: "https://saved.example")
+        let store = MemoryCredentialStore(vault: ConnectionVault(activeConnectionID: saved.id, connections: [saved]))
+        store.loadError = KeychainError(status: errSecInteractionNotAllowed)
+        let model = ConnectionModel(credentialStore: store, validator: MockValidator())
+        let box = ScenePhaseBox(.active)
+        model.draftAddress = "https://draft.example"
+        model.draftToken = "synthetic-test-token"
+        await model.connectDraft()
+        XCTAssertFalse(model.isShowingConnectionEditor)
+        let window = try show(PhasedRoot(box: box, model: model))
+        let refused = try await settledImage(of: window)
+        box.phase = .background
+        _ = try await settledImage(of: window)
+        store.loadError = nil
+        box.phase = .active
+        let recovered = try await settledImage(of: window)
+        XCTAssertTrue(model.isShowingConnectionEditor)
+        XCTAssertEqual(model.draftAddress, "https://draft.example")
+        XCTAssertEqual(model.draftToken, "synthetic-test-token")
+        XCTAssertNil(model.connectionError)
+        XCTAssertNotEqual(refused, recovered)
+        for (name, data) in [("draft-refused-before-recovery", refused), ("draft-preserved-after-recovery", recovered)] {
+            let attachment = XCTAttachment(data: data, uniformTypeIdentifier: "public.png")
+            attachment.name = name
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
     }
 
     func testReturningToTheForegroundRereadsAVaultThatCouldNotBeRead() async throws {

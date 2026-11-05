@@ -91,6 +91,8 @@ final class ConnectionModel: ObservableObject {
         do {
             _ = try await use(connectionID: connection.id.uuidString)
             requiresLaunchSelection = false
+            draftToken = ""
+            isShowingConnectionEditor = false
         } catch {
             connectionError = error.localizedDescription
         }
@@ -243,6 +245,11 @@ final class ConnectionModel: ObservableObject {
     private func applyStoredVault(_ storedVault: ConnectionVault) {
         vault = storedVault
         requiresLaunchSelection = !storedVault.connections.isEmpty
+        if !draftAddress.isEmpty || !draftToken.isEmpty {
+            // The failed launch read initially showed the inline editor. Keep
+            // that unfinished draft reachable when the saved list reappears.
+            isShowingConnectionEditor = !storedVault.connections.isEmpty
+        }
         unreadVaultMessage = nil
     }
 

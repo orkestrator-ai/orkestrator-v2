@@ -4,6 +4,7 @@ struct RootView: View {
     @EnvironmentObject private var model: ConnectionModel
     @Environment(\.scenePhase) private var scenePhase
     @State private var webState: WebViewState = .loading
+    var configureWebView: ((RemoteWebView.Coordinator) -> Void)?
 
     var body: some View {
         Group {
@@ -15,7 +16,7 @@ struct RootView: View {
                 LaunchConnectionPickerView()
             case .remote(let connection):
                 ZStack {
-                    RemoteWebView(connection: connection, state: $webState)
+                    RemoteWebView(connection: connection, state: $webState, configureCoordinator: configureWebView)
                         .environmentObject(model)
                         .ignoresSafeArea(.container, edges: .bottom)
 

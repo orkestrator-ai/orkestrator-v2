@@ -33,7 +33,7 @@ final class VaultReadFailureTests: XCTestCase {
         let model = ConnectionModel(credentialStore: store, validator: MockValidator())
         model.draftAddress = "https://new.example"
         model.draftToken = "gateway-token-new-123"
-        model.isShowingConnectionEditor = true
+        XCTAssertFalse(model.isShowingConnectionEditor)
 
         await model.connectDraft()
 
@@ -44,7 +44,33 @@ final class VaultReadFailureTests: XCTestCase {
         XCTAssertTrue(try XCTUnwrap(model.connectionError).contains("Nothing was saved"))
         // The user can try again after unlocking without typing the token again.
         XCTAssertEqual(model.draftToken, "gateway-token-new-123")
-        XCTAssertTrue(model.isShowingConnectionEditor)
+        XCTAssertFalse(model.isShowingConnectionEditor, "The failed launch read uses the inline editor")
+
+        store.loadError = nil
+        model.retryVaultReadIfFailed()
+        XCTAssertTrue(model.isShowingConnectionEditor, "Recovery presents the saved draft above the picker")
+        XCTAssertEqual(model.draftAddress, "https://new.example")
+        XCTAssertEqual(model.draftToken, "gateway-token-new-123")
+        XCTAssertNil(model.connectionError)
+        await model.connectDraft()
+        XCTAssertEqual(model.vault.connections.count, 3)
+        XCTAssertEqual(model.draftToken, "")
+        XCTAssertFalse(model.isShowingConnectionEditor)
+    }
+
+    func testSelectingASavedServerClearsARecoveredDraft() async {
+        let store = makeLockedStore()
+        let model = ConnectionModel(credentialStore: store, validator: MockValidator())
+        model.draftAddress = "https://new.example"
+        model.draftToken = "gateway-token-new-123"
+        await model.connectDraft()
+        store.loadError = nil
+        model.retryVaultReadIfFailed()
+        model.dismissConnectionEditor()
+        await model.selectConnectionForLaunch(first)
+        XCTAssertEqual(model.draftToken, "")
+        XCTAssertFalse(model.isShowingConnectionEditor)
+        XCTAssertFalse(model.requiresLaunchSelection)
     }
 
     func testConnectingAfterTheReadRecoversAddsToTheSavedServers() async throws {

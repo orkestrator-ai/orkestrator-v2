@@ -1,7 +1,7 @@
 # Agent card state authority timing
 
 - **ID:** 4842
-- **Status:** open
+- **Status:** resolved
 - **Observed:** 2026-11-05
 - **Test:** `AgentNativeTab progressive controller > keeps Claude agent-card position through unavailable-state until authority returns`
 - **File:** `apps/web/src/components/native-agent/AgentNativeTab.progressive.test.tsx`
@@ -35,3 +35,22 @@ changes no renderer code, test or mock that this file loads. One possible
 cause, not yet proven: after the `unavailable` read, the test's state mock answers
 `unchanged` (`state-unscripted`) until `stateUpdates` is reassigned. A poll in
 that window could restore Stop before the held state is installed.
+
+## Resolution (2026-11-05, C5 review repair)
+
+The captured run at `dacb38039` repeated the Stop-button assertion failure
+(1027.79 ms; 31,770 passed, 3 failed, 137 not run overall). The isolated
+owner also failed (41 passed, 1 failed, 7.6 s) using:
+
+```sh
+mise run test:logged -- --name address-progressive-owner -- env NODE_ENV=test bun test --cwd apps/web ./src/components/native-agent/AgentNativeTab.progressive.test.tsx --parallel=1 --only-failures
+```
+
+Evidence: `/tmp/orkestrator-test-run.fSBhmH/address-progressive-owner.log.gz`.
+The fixture consumed its one unavailable response, then answered subsequent
+polls with `unchanged`, which restores state authority. The assertion could
+therefore race a fixture-generated recovery before the held recovery read was
+installed. The fixture now repeats the outage until the explicit held recovery,
+and keeps that recovery held across additional reads. Assertions are unchanged.
+The complete isolated owner passed after repair (8.0 s). Aggregate verification
+is recorded in the Address Findings result.

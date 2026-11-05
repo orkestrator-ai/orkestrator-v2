@@ -168,7 +168,20 @@ element's top relative to the viewport.
   navigating, the deferred activation runs then.
 
 `activation: "latest"` is the documented exception for views that show what
-is happening now: the build pipeline transcript and the spec chat.
+is happening now: the build pipeline transcript, the Graph Run transcript and
+the spec chat.
+
+The two inspector transcripts were measured across a pane hide on 2026-11-05,
+in Playwright WebKit (build 2370) and Chromium, at phone and desktop widths
+(`e2e/InspectorTranscriptHide.spec.ts`). They do not lose their offset the way
+the plain overview scrollers did, so they do not use
+`useScrollOffsetAcrossHide`. A reader's first frame after the show was at the
+offset they left. Every case then settled on the newest message and left the
+overview's offset alone. The one difference between engines is a follower whose
+transcript has a review report in its footer: in WebKit they start up to about
+480 px short of the end, with "Scroll down" showing, and settle on the end within
+about 120 ms. The cause was not traced
+([5620](../todo/coordinator-and-multi-review/5620-pipeline-transcript-place-and-webkit-settling.md)).
 
 Persisted entries (bounded LRU, 200) hold the validated Virtuoso snapshot,
 follow intent, the semantic anchor, the scroller width and the layout the

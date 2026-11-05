@@ -838,7 +838,7 @@ test("archived Prepare checks and its read-only Tests view survive reload", asyn
   }
 });
 
-// WebKit resets a hidden scroller that holds a container query container (0860, 1080).
+// WebKit resets a hidden scroller that holds a container query container (0860).
 test("the overview keeps its scroll position behind another pane", async ({ page }) => {
   // Short enough that the wide layout overflows too.
   await page.setViewportSize({ width: page.viewportSize()!.width, height: 560 });

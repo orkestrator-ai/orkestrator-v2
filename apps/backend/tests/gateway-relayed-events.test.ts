@@ -441,3 +441,104 @@ describe("the renderer's relayed stream against a real gateway", () => {
     });
   });
 });
+
+describe("legacy recovery boundaries", () => {
+  for (const mode of ["", "&relayedEvents=legacy"]) {
+    test(`recovery precedes cursor advancement and caught-up recovery works ${mode}`, async () => {
+      const { gateway, info } = await startGateway();
+      gateway.emit("environment-renamed", { id: "before" });
+      const cursor = rings(gateway).eventReplay.latestCursor;
+      emitRelayed(gateway, LEAF, "missed");
+      gateway.emit("environment-renamed", { id: "after" });
+      const resumed = await openEventStream(gateway, info, `?since=${cursor}${mode}`);
+      await waitUntil(() => resumed.received().includes('"id":"after"'), "No replay");
+      expect(resumed.received().indexOf('"kind":"resync"')).toBeLessThan(
+        resumed.received().indexOf('"id":"after"'),
+      );
+      await closeAndWait(gateway, resumed);
+      // Dropping before the resync cannot advance past the original connected id.
+      const retry = await openEventStream(gateway, info, `?since=${cursor}${mode}`);
+      await waitUntil(() => retry.received().includes('"kind":"resync"'), "Lost recovery on retry");
+      await closeAndWait(gateway, retry);
+      const caughtUp = rings(gateway).eventReplay.latestCursor;
+      emitRelayed(gateway, LEAF, "also-missed");
+      const quiet = await openEventStream(gateway, info, `?since=${caughtUp}${mode}`);
+      await waitUntil(() => quiet.received().includes('"kind":"resync"'), "No caught-up recovery");
+      quiet.close();
+    });
+  }
+
+  test("metadata overflow explicitly reconciles a still-valid main cursor", async () => {
+    const { gateway, info } = await startGateway();
+    const cursor = rings(gateway).eventReplay.latestCursor;
+    for (let i = 0; i < 257; i++) emitRelayed(gateway, `bk_node${i}` as BackendId, "missed");
+    const resumed = await openEventStream(gateway, info, `?since=${cursor}`);
+    await waitUntil(
+      () => resumed.received().includes("gateway.reconcile-required"),
+      "Overflow was invisible",
+    );
+    resumed.close();
+  });
+
+  test("unwatched nodes do not receive recovery hints", async () => {
+    let watched = true;
+    const { gateway, info } = await startGateway({
+      nodeHooks: {
+        isPortalOriginAllowed: () => false,
+        noteControllerContact: () => undefined,
+        isRelayedNodeWatched: () => watched,
+      },
+    });
+    const cursor = rings(gateway).eventReplay.latestCursor;
+    emitRelayed(gateway, LEAF, "missed");
+    watched = false;
+    const resumed = await openEventStream(gateway, info, `?since=${cursor}`);
+    expect(resumed.received()).not.toContain('"kind":"resync"');
+    resumed.close();
+  });
+
+  test("explicit invalid modes retain legacy delivery without omission accounting", async () => {
+    const { gateway, info } = await startGateway();
+    const stream = await openEventStream(gateway, info, "?relayedEvents=bogus");
+    const uses = legacyUses();
+    emitRelayed(gateway, LEAF, "one");
+    await waitUntil(() => stream.received().includes(RELAYED_NODE_EVENT), "No legacy delivery");
+    expect(legacyUses()).toBe(uses);
+    stream.close();
+  });
+
+  test("expired relayed cursors have separate handshake metrics", async () => {
+    const { gateway, info } = await startGateway();
+    const cursor = rings(gateway).relayedEventReplay.latestCursor;
+    for (let i = 0; i < 513; i++) emitRelayed(gateway, LEAF, String(i));
+    const stream = await openEventStream(
+      gateway,
+      info,
+      `?includeEvents=${LEAF_EVENT}&since=${cursor}`,
+    );
+    const metrics = (await readGatewayMetrics(info)) as unknown as {
+      replay: { reconciled: number };
+      relayedReplay: { reconciled: number };
+    };
+    expect(metrics.replay.reconciled).toBe(0);
+    expect(metrics.relayedReplay.reconciled).toBe(1);
+    stream.close();
+  });
+
+  test("keepalive uses the relayed generation and ignores main omissions", async () => {
+    const { gateway, info } = await startGateway({ keepaliveMs: 15 });
+    const stream = await openEventStream(gateway, info, `?includeEvents=${LEAF_EVENT}`);
+    gateway.emit("environment-renamed", { id: "main" });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(eventFrames(stream.received(), GATEWAY_CURSOR_EVENT)).toHaveLength(0);
+    emitRelayed(gateway, OTHER, "omitted");
+    await waitUntil(
+      () => eventFrames(stream.received(), GATEWAY_CURSOR_EVENT).length > 0,
+      "No cursor",
+    );
+    expect(frameId(eventFrames(stream.received(), GATEWAY_CURSOR_EVENT)[0]!)).toBe(
+      rings(gateway).relayedEventReplay.latestCursor,
+    );
+    stream.close();
+  });
+});

@@ -45,10 +45,11 @@ export class GatewayEvents {
    * The main revision at each node's newest relayed event, oldest first. Relayed
    * events are outside the window a main stream replays, so a reconnecting
    * older client is told which nodes it may have missed something from. A watch
-   * names one node, so the bound on watches is also the most nodes that can be
-   * relaying at once.
+   * names one node, but historical node churn can exceed the live watch bound.
+   * Eviction retains a main-revision watermark requiring snapshot recovery.
    */
   private readonly relayedNodes = new Map<BackendId, number>();
+  private relayedOverflowRevision: number | null = null;
 
   constructor(private readonly ctx: GatewayContext) {}
 
@@ -171,7 +172,13 @@ export class GatewayEvents {
     this.relayedNodes.set(nodeId, this.ctx.eventReplay.latestRevision);
     if (this.relayedNodes.size > MAX_NODE_EVENT_WATCHES) {
       const oldest = this.relayedNodes.keys().next().value;
-      if (oldest !== undefined) this.relayedNodes.delete(oldest);
+      if (oldest !== undefined) {
+        this.relayedOverflowRevision = Math.max(
+          this.relayedOverflowRevision ?? 0,
+          this.relayedNodes.get(oldest)!,
+        );
+        this.relayedNodes.delete(oldest);
+      }
     }
   }
 
@@ -188,7 +195,8 @@ export class GatewayEvents {
   ): boolean {
     if (!this.takesLegacyRelayedFrames(state)) return true;
     for (const [nodeId, revision] of this.relayedNodes) {
-      if (revision < sinceRevision) continue;
+      if (revision < sinceRevision || this.ctx.nodeHooks?.isRelayedNodeWatched?.(nodeId) === false)
+        continue;
       const frame: RelayedNodeEvent = { nodeId, kind: "resync" };
       const message = encodeLegacyRelayedFrame(frame);
       if (!state.relayedEvents) compatibilityPathUsage.record("relayed-node-event.legacy-stream");
@@ -439,8 +447,24 @@ export class GatewayEvents {
       }
     }
 
+    if (
+      !reconcileReason &&
+      cursor.kind === "valid" &&
+      this.takesLegacyRelayedFrames(state) &&
+      this.relayedOverflowRevision !== null &&
+      cursor.revision <= this.relayedOverflowRevision
+    ) {
+      replay = null;
+      replayStatus = "reconcile";
+      reconcileReason = "cursor-expired";
+    }
     const replayedFrames = replay?.complete ? replay.frames.length : 0;
-    this.ctx.metrics.recordReplayHandshake(replayStatus, reconcileReason, replayedFrames);
+    this.ctx.metrics.recordReplayHandshake(
+      replayStatus,
+      reconcileReason,
+      replayedFrames,
+      state.relayedStream ?? false,
+    );
     if (
       !this.writeControlFrame(client, GATEWAY_CONNECTED_EVENT, connectedCursor, {
         generation: ring.generation,
@@ -469,9 +493,10 @@ export class GatewayEvents {
       if (!this.ctx.clients.has(client)) return;
       highestSent = ring.latestRevision;
     } else if (replay) {
+      // Recovery must precede every id that could advance beyond its watermark.
+      if (!this.writeLegacyRelayedResyncs(client, state, requestedRevision ?? 0)) return;
       if (!this.writeReplayFrames(client, state, replay.frames)) return;
       highestSent = Math.max(highestSent, replay.frames.at(-1)?.revision ?? 0);
-      if (!this.writeLegacyRelayedResyncs(client, state, requestedRevision ?? 0)) return;
     }
 
     // Stay in buffered mode until the dynamic end of the array. A write can

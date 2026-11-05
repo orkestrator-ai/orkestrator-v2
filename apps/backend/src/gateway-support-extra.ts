@@ -839,9 +839,9 @@ export function parseEventSubscriptionFilter(value: string | null): string[] | n
   return prefixes.length > 0 ? prefixes : null;
 }
 
-/** An unknown value counts as not asking, so it stays on the older path. */
+/** Explicit unknown values retain legacy delivery without counting as omission. */
 export function parseRelayedEventsMode(value: string | null): GatewayRelayedEventsMode | null {
-  return value === "per-node" || value === "legacy" ? value : null;
+  return value === null ? null : value === "per-node" ? "per-node" : "legacy";
 }
 
 export function eventMatchesSubscription(

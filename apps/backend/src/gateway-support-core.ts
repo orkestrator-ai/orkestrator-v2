@@ -95,6 +95,7 @@ export interface BackendHelloIdentity {
 
 /** Command-node hooks: attached controllers' portal origins and their last contact. */
 export interface GatewayNodeHooks {
+  isRelayedNodeWatched?(nodeId: import("@orkestrator/protocol/federation").BackendId): boolean;
   isPortalOriginAllowed(origin: string): boolean;
   noteControllerContact(controllerId: string): void;
   /** Expiry (ms) of a live client grant this token proves, else `null`. */
@@ -951,6 +952,20 @@ export class GatewayMetricsStore {
       "replay-too-large": 0,
     },
   };
+  private readonly relayedReplay: GatewayReplayMetrics = {
+    fresh: 0,
+    caughtUp: 0,
+    replayed: 0,
+    replayedFrames: 0,
+    reconciled: 0,
+    reasons: {
+      "invalid-cursor": 0,
+      "prior-generation": 0,
+      "cursor-expired": 0,
+      "cursor-ahead": 0,
+      "replay-too-large": 0,
+    },
+  };
   private readonly compression: GatewayCompressionMetrics;
   private readonly terminalWebSocket: GatewayTerminalWebSocketMetrics = {
     open: 0,
@@ -1271,15 +1286,17 @@ export class GatewayMetricsStore {
     status: "fresh" | "caught-up" | "replayed" | "reconcile",
     reason: GatewayReconcileReason | null,
     replayedFrames: number,
+    relayed = false,
   ): void {
-    if (status === "fresh") this.replay.fresh += 1;
-    else if (status === "caught-up") this.replay.caughtUp += 1;
+    const replay = relayed ? this.relayedReplay : this.replay;
+    if (status === "fresh") replay.fresh += 1;
+    else if (status === "caught-up") replay.caughtUp += 1;
     else if (status === "replayed") {
-      this.replay.replayed += 1;
-      this.replay.replayedFrames += replayedFrames;
+      replay.replayed += 1;
+      replay.replayedFrames += replayedFrames;
     } else {
-      this.replay.reconciled += 1;
-      if (reason) this.replay.reasons[reason] += 1;
+      replay.reconciled += 1;
+      if (reason) replay.reasons[reason] += 1;
     }
   }
 
@@ -1300,6 +1317,7 @@ export class GatewayMetricsStore {
       ),
       stream: { ...this.stream },
       replay: { ...this.replay, reasons: { ...this.replay.reasons } },
+      relayedReplay: { ...this.relayedReplay, reasons: { ...this.relayedReplay.reasons } },
       compression: { ...this.compression },
       terminalWebSocket: { ...this.terminalWebSocket },
       recentRouteSamples: [...this.recentRouteSamples],

@@ -70,9 +70,11 @@ describe("relaying another node's events on request", () => {
       { nodeId: "bk_leaf" as never, prefixes: ["a-", "b-"] },
     ]);
 
+    expect(command.portal.events.isWatched("bk_leaf" as never)).toBe(true);
     command.portal.events.unwatch(second.watchId);
     expect(command.portal.events.diagnostics().relays[0]?.prefixes).toEqual(["a-"]);
     command.portal.events.unwatch(first.watchId);
+    expect(command.portal.events.isWatched("bk_leaf" as never)).toBe(false);
     expect(command.portal.events.diagnostics().relays).toEqual([]);
 
     await settle(40);

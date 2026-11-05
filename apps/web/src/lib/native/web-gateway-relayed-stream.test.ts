@@ -234,3 +234,40 @@ test("a same-origin page reads it with an EventSource, whose ids advance the cur
   stop();
   stopOther();
 });
+
+test("unanswered retry replaces pending connections and leaves open connections alone", async () => {
+  const { RelayedEventStream } = await import("./relayed-event-stream");
+  const { ReconnectBackoff } = await import("@orkestrator/protocol/reconnect-backoff");
+  const attempts: Array<{
+    handlers: import("./relayed-event-stream").RelayedEventConnectionHandlers;
+    close: ReturnType<typeof mock>;
+  }> = [];
+  const stream = new RelayedEventStream({
+    backoff: new ReconnectBackoff({
+      initialDelayMs: 10000,
+      maxDelayMs: 10000,
+      healthyAfterMs: 1000,
+    }),
+    deliver: () => undefined,
+    open: (_events, _since, handlers) => {
+      const close = mock(() => undefined);
+      attempts.push({ handlers, close });
+      return { close };
+    },
+  });
+  stream.add(LEAF);
+  await flush();
+  stream.retryUnanswered();
+  await flush();
+  expect(attempts).toHaveLength(2);
+  expect(attempts[0]!.close).toHaveBeenCalledTimes(1);
+  attempts[1]!.handlers.onOpen();
+  stream.retryUnanswered();
+  await flush();
+  expect(attempts).toHaveLength(2);
+  stream.dropConnection();
+  stream.retryWaiting();
+  await flush();
+  expect(attempts).toHaveLength(3);
+  stream.dispose();
+});

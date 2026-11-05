@@ -97,6 +97,14 @@ export class NodeEventRelay {
     this.sync();
   }
 
+  /** Recovery hints only apply while a live lease still watches this node. */
+  isWatched(nodeId: BackendId): boolean {
+    const now = (this.options.now ?? Date.now)();
+    return Array.from(this.watches.values()).some(
+      (watch) => watch.nodeId === nodeId && watch.expiresAt > now,
+    );
+  }
+
   /** Create or renew a lease. Renewing may also change the node or its prefixes. */
   watch(args: Record<string, unknown>): NodeEventWatchResult {
     const nodeId = args.nodeId;

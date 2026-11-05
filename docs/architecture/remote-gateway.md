@@ -423,6 +423,17 @@ fires on what a current backend sends. The OpenCode-specific notice for
 backends older than 2.19.17 (raw `{ info, parts }` envelopes) was retired on
 2026-10-24, because those backends are outside the window.
 
+## Browser connection capacity
+
+A tab watching federated nodes also opens one filtered relayed-event stream.
+Together with the main stream this uses two persistent connections per tab,
+and terminals can add a third. Plain HTTP/1.1 browsers commonly allow only six
+connections per origin: three watching tabs can exhaust that budget and delay
+commands. Use an HTTP/2 frontend (for example the supported Tailscale Serve
+frontend) for multiple watching tabs. HTTPS alone does not imply HTTP/2.
+Cross-tab stream sharing is not implemented; a multi-tab plain-HTTP qualification
+is still required before claiming that configuration avoids starvation.
+
 ## Event stream reconnects
 
 A web client holds one authoritative event stream and its terminal output

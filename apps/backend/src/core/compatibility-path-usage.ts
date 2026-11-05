@@ -107,6 +107,11 @@ export const COMPATIBILITY_PATH_IDS = [
    * realm from before `patch_global_config` saving a model favourite.
    */
   "workspace-grant.config-echo",
+  /**
+   * A stream that did not say how it wants relayed node events got one under the
+   * old shared name: a renderer or desktop from before per-node names.
+   */
+  "relayed-node-event.legacy-stream",
 ] as const;
 
 export type CompatibilityPathId = (typeof COMPATIBILITY_PATH_IDS)[number];
@@ -118,7 +123,7 @@ export interface CompatibilityPathUsageEntry {
   lastSeenAt: string;
 }
 
-/** The persisted document, also what the command and `/api/metrics` return. */
+/** The persisted document, also what the command and `/__orkestrator/metrics` return. */
 export interface CompatibilityPathUsageSnapshot {
   version: 1;
   paths: Partial<Record<CompatibilityPathId, CompatibilityPathUsageEntry>>;

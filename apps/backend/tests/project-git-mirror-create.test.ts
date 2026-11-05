@@ -47,7 +47,8 @@ async function createCommand(options: {
       runtimes: { bun: "1.4.3", node: "24.21.0" },
       agents: { claude: "2.1.280" },
       bridges: ["claude-bridge"],
-      capabilities: options.capabilities,
+      // New containers need staged inputs, whatever else the image declares.
+      capabilities: { "staged-inputs": 5, ...options.capabilities },
       stateFormats: {},
     }),
   );

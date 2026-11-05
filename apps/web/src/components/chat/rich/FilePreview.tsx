@@ -546,17 +546,22 @@ function FilePreviewDialog({
     [containerId, detailRef, fileUrl, playable, referencePath],
   );
   const [streamFallback, setStreamFallback] = useState(false);
+  // A detached transcript has no environment: its absolute host paths stream
+  // under the backend's `read_file_base64` roots; container files need one.
   const streamable =
     !streamFallback &&
     streamTarget !== null &&
-    environmentId !== null &&
+    (environmentId !== null || streamTarget.containerId === undefined) &&
     typeof window !== "undefined" &&
     mediaStreamingAvailable(contentOrigin, window.location);
 
   useEffect(() => {
     if (loaded.status !== "loading" || !streamable) return;
     let cancelled = false;
-    openTranscriptMediaStream({ environmentId: environmentId!, ...streamTarget! }).then(
+    openTranscriptMediaStream({
+      ...(environmentId !== null ? { environmentId } : {}),
+      ...streamTarget!,
+    }).then(
       (stream) => {
         const streamedKind = previewKindForMime(stream.mimeType);
         const playableBytes = streamedKind === "video" || streamedKind === "audio";

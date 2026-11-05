@@ -823,6 +823,8 @@ describe("backend setup wrappers", () => {
     await backendWrappers.previewBuildPipelineCodeRewind("pipeline-1", "build-session");
     await backendWrappers.rewindBuildPipelineCode("pipeline-1", "build-session", "c".repeat(40));
     await backendWrappers.retryBuildPipelineReviewer("pipeline-1", "reviewer-2");
+    await backendWrappers.restartBuildPipelineReviewer("pipeline-1", "reviewer-2");
+    await backendWrappers.stopBuildPipelineReviewer("pipeline-1", "reviewer-2");
     await backendWrappers.restartBuildPipelineCurrentStep("pipeline-1");
     await backendWrappers.retryBuildPipelineInteractionFailure("pipeline-1");
     const legacySnapshots = [{ id: "legacy-pipeline" }];
@@ -864,6 +866,8 @@ describe("backend setup wrappers", () => {
         { pipelineId: "pipeline-1", stageId: "build-session", expectedHead: "c".repeat(40) },
       ],
       ["retry_build_pipeline_reviewer", { pipelineId: "pipeline-1", reviewerId: "reviewer-2" }],
+      ["restart_build_pipeline_reviewer", { pipelineId: "pipeline-1", reviewerId: "reviewer-2" }],
+      ["stop_build_pipeline_reviewer", { pipelineId: "pipeline-1", reviewerId: "reviewer-2" }],
       ["restart_build_pipeline_current_step", { pipelineId: "pipeline-1" }],
       [
         "retry_build_pipeline_interaction_failure",

@@ -212,10 +212,10 @@ export function defaultInputSourceRoots(
 ): InputSourceRoots {
   const agentTest = runtimeFlavor === "agent-test";
   return {
-    home: os.homedir(),
+    // `HOME`, not `os.homedir()`: Bun reads the latter once at startup.
+    home: process.env.HOME?.trim() || os.homedir(),
     agentTest,
     agentTestHostHome: process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME?.trim() || undefined,
-    // `HOME`, not `os.homedir()`: Bun reads the latter once at startup.
     ...(agentTest
       ? {
           grokHome:

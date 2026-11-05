@@ -16,11 +16,10 @@ A batch file combines several reports as numbered parts and takes the rating of 
 | --- | --- | --- | --- | --- | --- |
 | 1 | [0490-e25-container-start.md](0490-e25-container-start.md) | Medium | No | **E25, Container start.**<br>`0490`: DK-14: Agent-home inputs are copied in full per environment and again on every start<br>`0500`: DK-13: Each environment clones from the remote again | From `0490`: Every container start copies inputs again, at a size nobody has measured. |
 | 2 | [0790-e16-log-controls.md](0790-e16-log-controls.md) | Medium | No | **E16, Log controls.**<br>`0790`: R8's remainder (L7) and its control: a switch, DevTools and a persisted error ring.<br>`0890`: User controls: presets, auto-revert and privacy text.<br>`0900`: User controls: `--log-level` and `--log-category`. | From `0790`: Renderer bugs in the packaged app leave no trace, which is a supportability gap rather than broken behaviour. |
-| 3 | [0160-e10-conditional-reads-and-deltas.md](0160-e10-conditional-reads-and-deltas.md) | Low | No | **E10, Conditional reads and deltas.**<br>`0160`: TX-1: A transcript delta can only be built from the newest cached view<br>`0180`: TX-5: Session-state reads have no conditional path from the bridge<br>`0190`: TX-6: Bridge transcript windows are always sent whole | From `0160`: The report rates it High, but the maintainer gated it on a baseline, so it stays Low until that measurement arrives. |
-| 4 | [0385-tx-10-joined-history-pages.md](0385-tx-10-joined-history-pages.md) | Low | No | TX-10: Joined history pages read the whole transcript per page | A compatibility path that only older renderers use and that 0232 will remove, blocked on the support window. |
-| 5 | [0390-gw-7-websocket-compression.md](0390-gw-7-websocket-compression.md) | Low | No | GW-7: No WebSocket message compression | Deferred by 0052 decision D6 until the transport direction is chosen. |
-| 6 | [0560-st-9-agent-mail-store-remainder.md](0560-st-9-agent-mail-store-remainder.md) | Low | No | ST-9 (rest): Agent mail: pending injects and mailbox lists still sit on the whole store | The read cost the finding described has gone, and the rest needs a stored-format change only a measurement could justify. |
-| 7 | [0693-dk-10-second-claude-binary.md](0693-dk-10-second-claude-binary.md) | Low | No | DK-10: The image ships two Claude Code native binaries | It is an optional image-size saving that waits on a maintainer decision. |
+| 3 | [0385-tx-10-joined-history-pages.md](0385-tx-10-joined-history-pages.md) | Low | No | TX-10: Joined history pages read the whole transcript per page | A compatibility path that only older renderers use and that 0232 will remove, blocked on the support window. |
+| 4 | [0390-gw-7-websocket-compression.md](0390-gw-7-websocket-compression.md) | Low | No | GW-7: No WebSocket message compression | Deferred by 0052 decision D6 until the transport direction is chosen. |
+| 5 | [0560-st-9-agent-mail-store-remainder.md](0560-st-9-agent-mail-store-remainder.md) | Low | No | ST-9 (rest): Agent mail: pending injects and mailbox lists still sit on the whole store | The read cost the finding described has gone, and the rest needs a stored-format change only a measurement could justify. |
+| 6 | [0693-dk-10-second-claude-binary.md](0693-dk-10-second-claude-binary.md) | Low | No | DK-10: The image ships two Claude Code native binaries | It is an optional image-size saving that waits on a maintainer decision. |
 
 ## Parallel running
 
@@ -34,16 +33,12 @@ This index only changes when a branch merges, so it can't show what is running n
 
 | Batch | Name | Parts | Lane and position | Finish first | Not at the same time as |
 | --- | --- | --- | --- | --- | --- |
-| E1 | Baseline run | The baseline task in `0150`, `0160`, `0180` and `0190` | No lane | None | None |
 | E25 | [Container start](0490-e25-container-start.md) | `0490`, `0500` | Containers, 3 of 3 | None | None |
-| E10 | [Conditional reads and deltas](0160-e10-conditional-reads-and-deltas.md) | `0160`, `0180`, `0190` | Transcript, 1 of 1 | E1 (Baseline run) | None |
 | E16 | [Log controls](0790-e16-log-controls.md) | `0790`, `0890`, `0900` | Logging and diagnostics, 1 of 1 | None | None |
 
 Why these are grouped:
 
-- **E1:** The baseline task in `0150`, `0160`, `0180` and `0190`. A measurement on an isolated `dev:test` profile with no code change, and it must happen before E10. `0400`'s baseline was taken with E26; see the closing check of E26 below.
 - **E25:** `0500` depends on `0490`.
-- **E10:** Waiting on the baseline. `0190` links to `0160`.
 - **E16:** Linked settings for log detail.
 
 ### Files built on their own
@@ -667,7 +662,7 @@ Store writes were 0 idle and 160 per window streaming (both tabs) in every varia
 
 ## Closing check of E10 (Conditional reads and deltas)
 
-Checked back on 2026-11-05 on branch `conditional-reads-deltas-afdcaba484ae-r1`, based on `main` at `cbe0f9a5b`, item by item against the batch file before it was deleted; read it with `git show cbe0f9a5b:docs/reports/efficiency-logging-database/0160-e10-conditional-reads-and-deltas.md`. Every finding still held on the base, at the functions named below rather than the report's line numbers. This also ends batch E1 (Baseline run): 0150's baseline was taken in E9, and 0160's, 0180's and 0190's here. Nothing was built, because the baseline showed each change saving well under 1% of a core per streaming session; what is left is [6680](../../todo/transcripts-and-observation/6680-conditional-reads-and-deltas-measured.md).
+Checked back on 2026-11-05 on branch `conditional-reads-deltas-afdcaba484ae-r1`, based on `main` at `cbe0f9a5b`, item by item against the batch file before it was deleted; its last version, with every task's status and an outcome section, is the parent of the commit that deletes it (`49402626d` on that branch; after a rebase, the parent of the deletion). Every finding still held on the base, at the functions named below rather than the report's line numbers. This also ends batch E1 (Baseline run): 0150's baseline was taken in E9, and 0160's, 0180's and 0190's here. Nothing was built, because the baseline showed each change saving well under 1% of a core per streaming session; what is left is [6680](../../todo/transcripts-and-observation/6680-conditional-reads-and-deltas-measured.md).
 
 **Baseline.** Not on a `dev:test` profile: every figure is taken while a turn streams, and a profile cannot stream a turn without a provider (`session start` takes a prompt, and a local bridge cannot be pointed at a fake). Instead `apps/backend/scripts/conditional-reads-baseline.ts` ran the real `NativeAgentService` and `HttpBridgeProvider` against a fake bridge answered in process, whose transcript routes are the shared bridge code (`bridgeTranscriptRouteBody`, `RecentlyRevisedRows`): a temporary data directory, no port, no provider, no billed turn. The tail row grows every 100 ms, gains a tool part every 2 s and becomes a new response every 5 s; viewers poll transcript and state every 500 ms (a second tab offset by 250 ms, a lagging one every 1.5 s); windows of 161 KB and 517 KB as sent. Two runs of 10 s per case agreed to within a few percent. The full table is in 6680 task 1; the real-stack run is 6680 task 1 too.
 

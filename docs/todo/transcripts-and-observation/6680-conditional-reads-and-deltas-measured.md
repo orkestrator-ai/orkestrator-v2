@@ -2,7 +2,7 @@
 
 ## Task analysis
 
-Analysed 2026-11-05 against `main` at `cbe0f9a5b`. The E10 batch file (efficiency report parts 0160, 0180 and 0190) is deleted; read it with `git show cbe0f9a5b:docs/reports/efficiency-logging-database/0160-e10-conditional-reads-and-deltas.md`. Its outcome is the [closing check of E10](../../reports/efficiency-logging-database/0000-index.md#closing-check-of-e10-conditional-reads-and-deltas) in the efficiency index.
+Analysed 2026-11-05 against `main` at `cbe0f9a5b`. The E10 batch file (efficiency report parts 0160, 0180 and 0190) is deleted; its last version, with every task's status, is the parent of the commit that deleted it, and `git show cbe0f9a5b:docs/reports/efficiency-logging-database/0160-e10-conditional-reads-and-deltas.md` shows it as built from. Its outcome is the [closing check of E10](../../reports/efficiency-logging-database/0000-index.md#closing-check-of-e10-conditional-reads-and-deltas) in the efficiency index.
 
 ### Tasks
 

@@ -1,6 +1,7 @@
 import type {
   DiskUsageEnvironmentSummary,
   EnvironmentDiskUsage,
+  ProjectGitMirrorUsage,
   WorktreeLocationsSnapshot,
 } from "@orkestrator/protocol/disk-usage";
 
@@ -11,8 +12,16 @@ export type {
   DiskUsageEnvironmentSummary,
   DiskUsageItem,
   EnvironmentDiskUsage,
+  ProjectGitMirrorUsage,
   WorktreeLocationsSnapshot,
 } from "@orkestrator/protocol/disk-usage";
+
+/** Each project's Git mirror with its size, measured on each call. */
+export async function listProjectGitMirrorUsage(
+  machine?: AccountMachine,
+): Promise<ProjectGitMirrorUsage[]> {
+  return machineInvoke<ProjectGitMirrorUsage[]>(machine, "list_project_git_mirror_usage");
+}
 
 export async function listDiskUsageEnvironments(
   machine?: AccountMachine,

@@ -54,7 +54,7 @@ That branch changes nothing under `apps/web` or `packages/`.
 
 Unlike the earlier occurrences, the owning file also timed out alone, three
 times out of three (5857 to 7751 ms), at a host load average of 33 to 37 on 12
-cores:
+cores. The first of those ran beside three other owner reruns:
 
 ```sh
 mise run test:logged -- --name own-node-actions -- bun --cwd=apps/web test src/components/federation/node-action-requests.test.tsx --parallel=1 --only-failures

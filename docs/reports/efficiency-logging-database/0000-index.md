@@ -17,7 +17,6 @@ A batch file combines several reports as numbered parts and takes the rating of 
 | 1 | [0490-e25-container-start.md](0490-e25-container-start.md) | Medium | No | **E25, Container start.**<br>`0490`: DK-14: Agent-home inputs are copied in full per environment and again on every start<br>`0500`: DK-13: Each environment clones from the remote again | From `0490`: Every container start copies inputs again, at a size nobody has measured. |
 | 2 | [0160-e10-conditional-reads-and-deltas.md](0160-e10-conditional-reads-and-deltas.md) | Low | No | **E10, Conditional reads and deltas.**<br>`0160`: TX-1: A transcript delta can only be built from the newest cached view<br>`0180`: TX-5: Session-state reads have no conditional path from the bridge<br>`0190`: TX-6: Bridge transcript windows are always sent whole | From `0160`: The report rates it High, but the maintainer gated it on a baseline, so it stays Low until that measurement arrives. |
 | 3 | [0560-st-9-agent-mail-store-remainder.md](0560-st-9-agent-mail-store-remainder.md) | Low | No | ST-9 (rest): Agent mail: pending injects and mailbox lists still sit on the whole store | The read cost the finding described has gone, and the rest needs a stored-format change only a measurement could justify. |
-| 4 | [0693-dk-10-second-claude-binary.md](0693-dk-10-second-claude-binary.md) | Low | No | DK-10: The image ships two Claude Code native binaries | It is an optional image-size saving that waits on a maintainer decision. |
 
 ## Parallel running
 
@@ -54,7 +53,6 @@ When one of these becomes ready, it joins the lane shown.
 
 | File | Why it waits | Lane |
 | --- | --- | --- |
-| [`0693`](0693-dk-10-second-claude-binary.md) | Waits on a maintainer decision | Containers |
 | [`0560`](0560-st-9-agent-mail-store-remainder.md) | Needs a measurement to justify a stored-format change | Storage |
 
 `0390` (GW-7, WebSocket compression) left this table on 2026-11-05: its file is deleted and the work waits in [0052](../../todo/transcripts-and-observation/0052-remote-client-bandwidth.md) task 8, which starts only when the terminal WebSocket becomes the remote terminal transport; see [the closing check of E-0390](#closing-check-of-e-0390-websocket-compression).
@@ -179,7 +177,7 @@ When one of these becomes ready, it joins the lane shown.
 | DK-7 | Done | Order and split SDK layers, `docker/Dockerfile:40-65`, `:421-423` (fd679c0e2). |
 | DK-8 | Done | `mise link`, `docker/Dockerfile:399` (fd679c0e2). |
 | DK-9 | Done | `npm cache clean --force`, `docker/Dockerfile:218`, `:247`, `:321` (fd679c0e2). |
-| DK-10 | Open | Left for a maintainer, 1202 task 14; pins at `docker/Dockerfile:207`, `bridges/claude-bridge/package.json:16`; see 0693. |
+| DK-10 | Open | Waits on a maintainer decision, now [todo 6780](../../todo/containers-and-environments/6780-second-claude-binary-in-the-image.md). Pins unchanged on 2026-11-05 (`docker/Dockerfile:207`, `bridges/claude-bridge/package.json:16`); both binaries still byte-identical; the container bridge never runs the SDK's copy. See the closing note for 0693 below. |
 | DK-11 | Done | One `apt-get update`, `docker/Dockerfile:82`; `util-linux` in that layer, `:111` (fd679c0e2). |
 | DK-12 | Done | `move_clone_into_workspace`, `docker/workspace-setup.sh:406`, `:500` (2525fc05c). |
 | DK-13 | Open | Direct clone only, `docker/workspace-setup.sh:385-397`; see 0500. |
@@ -679,6 +677,18 @@ Checked back on 2026-11-05 on branch `renderer-store-report-cf7c05d19868-r1`, ba
 | 0640 reverted (2 runs) | 0 | 170 | 5.41 to 5.77 ms | 11.2 to 13.5 ms |
 
 Store writes were 0 idle and 160 per window streaming (both tabs) in every variant. Neither revert changes the commit count, and the per-commit differences are within noise. A Bun micro-benchmark of `setProjection` with 128 sessions held: 8.86 to 9.34 µs per write before 0640, 3.97 to 4.17 µs after. For 0510, 1202 task 3 already measured the merge at at most 0.3 ms per update before the fix and 0.03 to 0.06 ms after. Production React and a real bridge's cadence were not measured. The question was whether the work shows in a profile, and at this scale it does not.
+
+## Closing note for 0693 (DK-10, second Claude binary)
+
+`0693-dk-10-second-claude-binary.md` was checked back against the code on 2026-11-05, based on `main` at `cbe0f9a5b`, and deleted; its last version is in the commit before the one that deleted it. Its one task is a maintainer decision, so it moved to [todo 6780](../../todo/containers-and-environments/6780-second-claude-binary-in-the-image.md), which holds the facts, the options and the recommendation. The Dockerfile is unchanged.
+
+| Item | Outcome | Evidence or to-do |
+| --- | --- | --- |
+| Pins | Unchanged since `a2bba9d8` | `CLAUDE_CLI_VERSION=2.1.314` (`docker/Dockerfile:207`), `@anthropic-ai/claude-agent-sdk` `0.3.314` (`bridges/claude-bridge/package.json:16`). The SDK layer `COPY` moved from `:423` to `:425` with the root-ownership change. |
+| Needs verification: still byte-identical at these pins | Yes, on both architectures | Registry tarballs, integrity checked (the SDK's also against `bun.lock`). amd64: 298,229,464 bytes each, SHA-256 `4487042b4c4f5d88d4568f68ae98aae0b1ffae58864cf57fb868641bc5f84594`. arm64: 297,067,016 bytes each, SHA-256 `a66c0a8f5d0c87a439953d797985192bbcbaefbce2e0d7b2eaa8df30ef0f3ef2`. A local amd64 image at the same pins shows the same two files and hash; its claude-bridge SDK layer is 303 MB and its Claude Code npm layer 301 MB. |
+| Found by the check | The container bridge never runs the SDK's copy | Every production SDK call passes `pathToClaudeCodeExecutable` from `CLAUDE_CLI_PATH` (`claudeExecutableOptions`, `session-manager-core.ts:169-173`), and the container bridge, started by `docker exec`, inherits the image's `ENV CLAUDE_CLI_PATH` (`docker/Dockerfile:219`). |
+| Task 1: maintainer decision | Moved to a to-do | 6780 task 1. It keeps 0693's two options (symlink while identical; keep both) and adds dropping the SDK's platform binary in the builder, which it recommends: the saving holds after the pins diverge and DK-7's layer order is untouched. |
+| Constraints: separate release trains, DK-7 layer order | Hold | No pin or layer changed; 6780 carries both constraints for whichever option is built. |
 
 ## Closing check of E-0390 (WebSocket compression)
 

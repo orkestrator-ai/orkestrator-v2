@@ -34,7 +34,6 @@ Worked out on 2026-11-03 against `main` at `a44641cbc`, from the 167 work files 
 | E4 | [efficiency-logging-database/0430-e4-object-store.md](efficiency-logging-database/0430-e4-object-store.md) | `0430`, `0480`, `0530`, `0550` |
 | E5 | [efficiency-logging-database/0760-e5-database-upkeep.md](efficiency-logging-database/0760-e5-database-upkeep.md) | `0760`, `0800`, `0910`, `0920` |
 | E7 | [efficiency-logging-database/0420-e7-diff-scans.md](efficiency-logging-database/0420-e7-diff-scans.md) | `0420`, `0440`, `0450`, `0460`, `0570` |
-| E26 | [efficiency-logging-database/0400-e26-local-desktop-transport.md](efficiency-logging-database/0400-e26-local-desktop-transport.md) | `0400`, `0860` |
 | E18 | [efficiency-logging-database/0280-e18-gateway-events.md](efficiency-logging-database/0280-e18-gateway-events.md) | `0280`, `0290`, `0300`, `0370` |
 | E24 | [efficiency-logging-database/0310-e24-gateway-static-and-preview.md](efficiency-logging-database/0310-e24-gateway-static-and-preview.md) | `0310`, `0365` |
 | E13 | [efficiency-logging-database/0720-e13-silent-failures.md](efficiency-logging-database/0720-e13-silent-failures.md) | `0720`, `0830` |
@@ -56,7 +55,7 @@ Worked out on 2026-11-03 against `main` at `a44641cbc`, from the 167 work files 
 | Change tracking | 1. E3 (Retention and deletion)<br>2. E4 (Object store) | `apps/backend/src/core/change-tracking/` |
 | Storage | 1. E5 (Database upkeep)<br>2. S-0190 (Provider secrets at rest) | `storage-database.ts`, `storage-backups.ts`, `storage-stores.ts` |
 | Git scans and file reads | 1. E7 (Diff scans)<br>2. E-0580 (File RPC and usage report) | `commands-files.ts`, `git-scopes.ts`, `diff-stats-service.ts` |
-| Desktop | 1. E26 (Local desktop transport)<br>2. E-0691 (Preview capture data URLs) | `apps/desktop/electron/` windows, IPC and preloads, `backend-process.ts` |
+| Desktop | 1. E-0691 (Preview capture data URLs) | `apps/desktop/electron/` windows, IPC and preloads, `backend-process.ts` |
 | Gateway | 1. S-0200 (Workspace grant allowlist)<br>2. E18 (Gateway events)<br>3. E24 (Gateway static and preview)<br>4. S-0160 (Descriptor process binding) | `gateway-auth.ts`, `gateway-events.ts`, `gateway-proxy.ts`, `gateway-support-*.ts`, `terminal-websocket-server.ts` |
 | Logging and diagnostics | 1. E13 (Silent failures)<br>2. E17 (Dead code)<br>3. E15 (Health and diagnostics)<br>4. E16 (Log controls) | `application-logging.ts`, the metrics route and the logging settings |
 
@@ -65,7 +64,7 @@ Worked out on 2026-11-03 against `main` at `a44641cbc`, from the 167 work files 
 These batches don't share a protected area. They only have to respect the conflicts below.
 
 - **C-0410 (Leaf-mode gate):** coordinator `0410`
-- **E1 (Baseline run):** the baseline task in `0150`, `0160`, `0180`, `0190` and `0400`, in efficiency-logging-database
+- **E1 (Baseline run):** the baseline task in `0150`, `0160`, `0180` and `0190`, in efficiency-logging-database
 - **S-0230 (Preview publication domain):** security `0230`
 - **S-0270 (iOS app review):** security `0270`
 - **S-0260 (Live checks on other platforms):** security `0260`
@@ -100,7 +99,7 @@ Don't run these pairs at the same time.
 
 | Finish | Before |
 | --- | --- |
-| E1 (Baseline run) | E9, E10 and E26, on code those batches have not changed yet |
+| E1 (Baseline run) | E9 and E10, on code those batches have not changed yet |
 | `0530` in E4 | `0550` in E4 |
 | `0490` in E25 | `0500` in E25 |
 

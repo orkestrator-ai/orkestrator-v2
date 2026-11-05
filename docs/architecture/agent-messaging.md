@@ -442,7 +442,8 @@ The Claude tmux resume dialog skips mail rows when it titles a session
 (`titleFromTranscriptHead`), so the title is the next prompt a person wrote, or
 none: a subject is the sender's choice, and does not name the user's session.
 Voice `read_session` keeps the stored text in `messages`, and its spoken line
-names the sender and subject of the newest row when that row is mail
+names the sender and subject of the final carrier when a complete newest row is mail;
+a cut row reports that its latest sender and batch size cannot be determined
 ([control-mcp-voice.md](control-mcp-voice.md#the-tools)).
 
 **Presence.** Native inject uses `mailInjectPresence` (queue, compose draft,

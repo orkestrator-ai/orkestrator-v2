@@ -270,18 +270,26 @@ function spokenMailSender(from: MailActor): string {
  * is not. Reads the stored text, because mail is usually longer than the excerpt
  * `read_session` returns; a batch names its newest message.
  */
-function spokenMailRow(text: string): string | null {
+function spokenMailRow(text: string, textTruncated = false): string | null {
   const content = stripSystemInstructions(text);
-  if (!isPeerMailCarrierContent(content)) return null;
-  const { entries } = readAgentMailCarriers(content, { keepCutBody: true });
-  const newest = entries.findLast((entry) => entry !== null);
-  if (!newest) return "Latest message is delivered mail that could not be read here.";
+  if (!isPeerMailCarrierContent(content, { requirePayloadFrame: true })) return null;
+  // A cut row can hide whole later carriers, so neither its newest sender nor
+  // its total batch size can be inferred from the visible prefix.
+  if (textTruncated)
+    return "Latest message contains delivered mail, but the transcript is cut off. The latest sender and batch size cannot be determined here.";
+  const { entries, rest } = readAgentMailCarriers(content);
+  const trailing =
+    rest && !rest.startsWith("End your turn with exactly one JSON value")
+      ? ` User message: ${short(rest, 400)}`
+      : "";
+  const newest = entries.at(-1);
+  if (!newest) return `Latest message is delivered mail that could not be read here.${trailing}`;
   const mail = agentMailKind(newest) === "external" ? "untrusted mail" : "mail";
   const subject = short(newest.subject ?? "", 200);
   const heading = `Latest message is ${mail} from ${short(spokenMailSender(newest.from), 120)}${subject ? `, subject: ${subject}` : ""}.`;
   const others = entries.length - 1;
-  if (others === 0) return heading;
-  return `${heading} ${others} other ${others === 1 ? "message" : "messages"} came with it.`;
+  if (others === 0) return heading + trailing;
+  return `${heading} ${others} other ${others === 1 ? "message" : "messages"} came with it.${trailing}`;
 }
 
 export function attentionSentence(item: PublicAttentionItem): string {
@@ -772,7 +780,8 @@ export function registerVoiceTools(server: McpServer, caller: ControlMcpCaller):
         } as ControlMcpEnvelope;
         const last = messages.at(-1);
         const newest = page.messages.at(-1);
-        const spokenMail = newest?.role === "user" ? spokenMailRow(newest.text) : null;
+        const spokenMail =
+          newest?.role === "user" ? spokenMailRow(newest.text, newest.textTruncated) : null;
         return envelopeToolResult(bounded, profile, {
           say:
             spokenMail ??

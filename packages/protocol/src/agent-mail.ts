@@ -1126,11 +1126,19 @@ const PEER_MAIL_ANY_CARRIER_OPEN = /<orkestrator-peer-message(?:\s[^>]*)?>/y;
 const PEER_MAIL_ENVELOPE_START =
   /^\s*<orkestrator-peer-message(?:\s[^>]*)?>\s*<orkestrator-peer-payload-json>\s*(?:\{|$|[^]*?<\/orkestrator-peer-payload-json>)/;
 
-/** Whether a provider row is an injected mail prompt rather than something a person typed. */
-export function isPeerMailCarrierContent(content: string): boolean {
+/**
+ * Whether a provider row looks like injected mail. `requirePayloadFrame` keeps
+ * title and voice lookalikes as user text; the default preserves unreadable
+ * renderer tiles for legacy malformed carriers with only the outer frame.
+ */
+export function isPeerMailCarrierContent(
+  content: string,
+  options: { requirePayloadFrame?: boolean } = {},
+): boolean {
   return (
     PEER_MAIL_ENVELOPE_START.test(content) ||
-    /^\s*<orkestrator-peer-message(?:\s[^>]*)?>[^]*<\/orkestrator-peer-message>/.test(content)
+    (!options.requirePayloadFrame &&
+      /^\s*<orkestrator-peer-message(?:\s[^>]*)?>[^]*<\/orkestrator-peer-message>/.test(content))
   );
 }
 

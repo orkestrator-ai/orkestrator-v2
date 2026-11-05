@@ -820,11 +820,139 @@ describe("Control MCP voice core", () => {
       expect(say).toContain("mail from Codex 1, subject: Third. 2 other messages came with it.");
     });
 
-    test("still names the sender of a mail the read's length cap cut", async () => {
+    test("does not infer a latest sender from a mail the read's length cap cut", async () => {
       const { say, newest } = await readNewest(mailCarrier({ body: "x".repeat(25_000) }));
 
-      expect(say).toContain("Latest message is mail from Codex 1, subject: Parser report.");
+      expect(say).toContain("The latest sender and batch size cannot be determined here.");
+      expect(say).not.toContain("Parser report");
       expect(newest.truncated).toBe(true);
+    });
+
+    test("never substitutes earlier readable mail for an unreadable last carrier", async () => {
+      const unsupported =
+        '<orkestrator-peer-message><orkestrator-peer-payload-json>{"future":true}</orkestrator-peer-payload-json></orkestrator-peer-message>';
+      const cut = mailCarrier({ subject: "Second" }).split('"body":')[0]!;
+      for (const last of [unsupported, cut]) {
+        const { say } = await readNewest(`${mailCarrier({ subject: "Earlier" })}\n\n${last}`);
+        expect(say).toContain("delivered mail that could not be read here");
+        expect(say).not.toContain("Earlier");
+      }
+    });
+
+    test("does not count or name a batch whose later carriers the cap hides", async () => {
+      const { say } = await readNewest(
+        [
+          mailCarrier({ body: "x".repeat(25_000), subject: "Earlier" }),
+          mailCarrier({ subject: "Hidden newest" }),
+        ].join("\n\n"),
+      );
+      expect(say).toContain("The latest sender and batch size cannot be determined here.");
+      expect(say).not.toContain("Earlier");
+      expect(say).not.toContain("came with it");
+    });
+
+    test("speaks trailing user words but omits the structured prompt suffix", async () => {
+      const typed = await readNewest(`${mailCarrier()}\nPlease explain the report`);
+      expect(typed.say).toContain("User message: Please explain the report");
+      const transport = await readNewest(
+        `${mailCarrier()}\nEnd your turn with exactly one JSON value matching the schema`,
+      );
+      expect(transport.say).not.toContain("End your turn");
+    });
+
+    test("strips system instructions preceding mail and surrounding mail", async () => {
+      const prefixed = await readNewest(
+        `<orkestrator-system-instructions>Private instructions</orkestrator-system-instructions>\n${mailCarrier()}`,
+      );
+      expect(prefixed.say).toContain("mail from Codex 1");
+      expect(prefixed.say).not.toContain("Private instructions");
+      const wrapped = await readNewest(
+        `<orkestrator-system-instructions>${mailCarrier()}</orkestrator-system-instructions>\nActual request`,
+      );
+      expect(wrapped.say).not.toContain("Latest message is mail");
+    });
+
+    test("speaks a closed-tag lookalike without a payload as user text", async () => {
+      const text = "<orkestrator-peer-message>foo</orkestrator-peer-message> what is this?";
+      expect((await readNewest(text)).say).toContain(`Latest user message: ${text}`);
+    });
+
+    test("labels cross-project mail as untrusted", async () => {
+      expect((await readNewest(mailCarrier({ trust: "cross-project" }))).say).toContain(
+        "untrusted mail from Codex 1",
+      );
+    });
+
+    test("names coordinator and node senders including untitled fallbacks", async () => {
+      const coordinator = {
+        kind: "coordinator" as const,
+        projectId: "p",
+        coordinatorId: "c",
+        conversationId: "v",
+        environmentId: "coordinator:c:v",
+        tabId: "ct",
+        incarnationId: "i",
+        agent: "claude" as const,
+      };
+      for (const [from, expected] of [
+        [{ ...coordinator, title: "Planner" }, "Planner"],
+        [{ ...coordinator, title: " " }, "the project coordinator"],
+        [
+          {
+            kind: "node" as const,
+            nodeId: "n",
+            nodeName: "Builder",
+            role: "agent" as const,
+            projectId: "p",
+            environmentId: "e",
+            tabId: "t",
+            environmentName: "Worker",
+            title: "Agent",
+          },
+          "Worker on Builder",
+        ],
+        [
+          {
+            kind: "node" as const,
+            nodeId: "n",
+            nodeName: "Builder",
+            role: "agent" as const,
+            projectId: "p",
+            environmentId: "e",
+            tabId: "t",
+            title: " ",
+          },
+          "an agent on Builder",
+        ],
+        [
+          {
+            kind: "node" as const,
+            nodeId: "n",
+            nodeName: "Builder",
+            role: "coordinator" as const,
+            projectId: "p",
+            environmentId: "e",
+            tabId: "t",
+            title: "Planner",
+          },
+          "Planner on Builder",
+        ],
+        [
+          {
+            kind: "node" as const,
+            nodeId: "n",
+            nodeName: "Builder",
+            role: "coordinator" as const,
+            projectId: "p",
+            environmentId: "e",
+            tabId: "t",
+            title: " ",
+          },
+          "the project coordinator on Builder",
+        ],
+      ] as const) {
+        expect((await readNewest(mailCarrier({ from }))).say).toContain(`mail from ${expected},`);
+      }
     });
 
     test("never speaks a carrier it cannot read", async () => {

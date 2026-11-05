@@ -91,9 +91,24 @@ describe("titleFromTranscriptHead", () => {
     expect(titleFromTranscriptHead(`${userLine(pasted)}\n`, false)).toBeNull();
   });
 
+  test("strips system instructions before classifying mail", () => {
+    const frame = (text: string) =>
+      `<orkestrator-system-instructions>${text}</orkestrator-system-instructions>`;
+    expect(
+      titleFromTranscriptHead(
+        `${userLine(frame("Instructions") + mailCarrier())}\n${userLine("Request")}`,
+        false,
+      ),
+    ).toBe("Request");
+    expect(titleFromTranscriptHead(userLine(frame(mailCarrier()) + "Request"), false)).toBe(
+      "Request",
+    );
+  });
+
   test("still titles a session from a prompt that only looks like mail", () => {
     for (const prompt of [
       "What is <orkestrator-peer-message>?",
+      "<orkestrator-peer-message>foo</orkestrator-peer-message> why?",
       '<orkestrator-peer-message version="1"> is what I see',
       '<orkestrator-peer-message version="1"><orkestrator-peer-payload-json> is this?',
     ]) {

@@ -734,6 +734,17 @@ describe("reading a carrier back", () => {
     ).toBe(false);
   });
 
+  test("strict classification requires a payload but retains legacy renderer detection", () => {
+    const lookalike = "<orkestrator-peer-message>foo</orkestrator-peer-message> why?";
+    expect(isPeerMailCarrierContent(lookalike)).toBe(true);
+    expect(isPeerMailCarrierContent(lookalike, { requirePayloadFrame: true })).toBe(false);
+    expect(
+      isPeerMailCarrierContent(renderAgentMailCarrier(mailMessage()), {
+        requirePayloadFrame: true,
+      }),
+    ).toBe(true);
+  });
+
   test("reads back what the carrier was rendered from", () => {
     const { entries, rest } = readAgentMailCarriers(renderAgentMailCarrier(mailMessage()));
 

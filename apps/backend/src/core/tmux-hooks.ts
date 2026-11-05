@@ -1181,7 +1181,8 @@ export function titleFromTranscriptHead(head: string, truncated: boolean): strin
     const text = stripTranscriptAnnotations(extractTextContent(contentField) ?? "").trim();
     // Mail can reach a tab before anyone types. It is not the user's words, and
     // its subject is the sender's choice, so it never names their session.
-    if (isPeerMailCarrierContent(stripSystemInstructions(text))) continue;
+    if (isPeerMailCarrierContent(stripSystemInstructions(text), { requirePayloadFrame: true }))
+      continue;
     if (text) return truncateTitle(text, 80);
   }
   return null;

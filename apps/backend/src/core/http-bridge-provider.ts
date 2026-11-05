@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import type { StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 import type {
   AgentInteractionProviderCapability,
@@ -102,6 +104,8 @@ import { readAcpTurnTerminalError } from "./http-bridge-turn-outcome.js";
 import { HttpBridgeObservationWakeup } from "./http-bridge-observation-stream.js";
 import { readBridgeResumableSessions } from "./http-bridge-resumable-sessions.js";
 
+const log = createLogger("native-agent");
+
 export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
   readonly agent: HttpBridgeAgent;
   private readonly stageImages?: HttpBridgeProviderDependencies["stageImages"];
@@ -132,6 +136,11 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
   readonly turnTerminalError?: (sessionId: string, requestId: string) => Promise<string | null>;
   /** Claude and Codex: the bridge event stream as the idle wakeup. */
   private readonly observationWakeup: HttpBridgeObservationWakeup;
+  /**
+   * One per connection, so one bridge's success never reports a recovery for
+   * another's fault. Opaque because the line must not carry a session id.
+   */
+  private readonly steerQualificationLogScope: string;
 
   constructor(
     private readonly connection: BridgeConnection,
@@ -141,6 +150,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     private readonly planUsage?: PlanUsageState,
   ) {
     this.agent = connection.agent as HttpBridgeAgent;
+    this.steerQualificationLogScope = `${this.agent}:${randomUUID()}`;
     this.observationWakeup = new HttpBridgeObservationWakeup(
       connection,
       fetchImpl,
@@ -333,12 +343,40 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
         `?requestId=${encodeURIComponent("orkestrator-steer-qualification")}`,
       {},
       this.fetchImpl,
-    ).catch(() => null);
-    if (!response?.ok) return false;
+    ).catch((error: unknown) => {
+      // `message: false` because a fetch error can quote the session's URL.
+      log.throttled("warn", "steer.qualification-failed", {
+        scope: this.steerQualificationLogScope,
+        error,
+        fields: () => ({
+          agent: this.agent,
+          error: formatLogError(error, { message: false, stack: false }),
+        }),
+      });
+      return null;
+    });
+    if (!response) return false;
+    if (!response.ok) {
+      this.noteSteerQualificationRefused(`http-${response.status}`, response.status);
+      return false;
+    }
     const body = asRecord(
       await boundedJson(response, `${this.agent} steer qualification`).catch(() => null),
     );
-    return body?.dispatch === "unknown" || body?.dispatch === "dispatched";
+    if (body?.dispatch !== "unknown" && body?.dispatch !== "dispatched") {
+      this.noteSteerQualificationRefused("unexpected-answer", response.status);
+      return false;
+    }
+    log.recovered("steer.qualification-failed", this.steerQualificationLogScope);
+    return true;
+  }
+
+  private noteSteerQualificationRefused(kind: string, status: number): void {
+    log.throttled("warn", "steer.qualification-failed", {
+      scope: this.steerQualificationLogScope,
+      kind,
+      fields: () => ({ agent: this.agent, status }),
+    });
   }
 
   async steerStatus(sessionId: string, requestId: string): Promise<ProviderSteerDispatchStatus> {

@@ -259,7 +259,7 @@ recommendation:
   in-memory samples and is read only by tests, so it is not a surface anyone
   can read on a real machine. The compatibility store persists across
   restarts and is read through `get_compatibility_path_usage` and
-  `/api/metrics`. Its rule is "no session, agent, URL or version", so the
+  `/__orkestrator/metrics`. Its rule is "no session, agent, URL or version", so the
   causes stand in for the provider. `unpaged-source` is in practice the Claude
   `/messages` fallback. `unnamed-cursor` includes the OpenCode error-row case,
   an overlong cursor, and a pageable first-message snapshot whose projected

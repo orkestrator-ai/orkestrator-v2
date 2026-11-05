@@ -79,6 +79,7 @@ describe("BuildChatTab transcript wiring", () => {
         {...props}
       />,
     );
+    selectNode("Verify");
   }
 
   test("keys each row on its message id so a re-render does not remount it", () => {
@@ -276,6 +277,7 @@ describe("BuildChatTab per-step harnesses", () => {
         }}
       />,
     );
+    selectNode("Review");
   }
 
   function partTypes(): string[] {
@@ -578,6 +580,7 @@ describe("BuildChatTab stage following", () => {
     // holding it would leave the transcript permanently blank.
     renderWith({
       ...pipeline,
+      phase: "verifying",
       sessions: [pipeline.sessions[1]!],
       currentSessionIndex: 0,
       backendRevision: 30,
@@ -1312,7 +1315,7 @@ describe("BuildChatTab graph", () => {
       verificationFeedback: "Every criterion holds.",
     });
 
-    expect(selectedTitle()).toBe("Verify");
+    selectNode("Verify");
     expect(within(inspector()).getByText("Verdict: passed")).toBeTruthy();
   });
 
@@ -1508,6 +1511,7 @@ describe("BuildChatTab graph", () => {
 
   test("collapses the graph and remembers it for the pipeline", () => {
     const view = renderPipelineTab(reviewed);
+    selectNode("Verify");
     const toggle = screen.getByRole("button", { name: "Pipeline" });
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
 

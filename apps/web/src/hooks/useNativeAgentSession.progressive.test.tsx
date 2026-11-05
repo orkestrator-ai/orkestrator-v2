@@ -168,6 +168,8 @@ const stopNativeAgentSessionMock = mock(async () => {
   return next ? next() : null;
 });
 
+const adoptNativeAgentSessionMock = mock(async () => ({}));
+
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
   getNativeAgentSyncCapabilities: getNativeAgentSyncCapabilitiesMock,
@@ -176,7 +178,7 @@ mock.module("@/lib/backend", () => ({
   getNativeAgentDiscoveryUpdate: getNativeAgentDiscoveryUpdateMock,
   getNativeAgentMessagePage: getNativeAgentMessagePageMock,
   ensureNativeAgentSession: ensureNativeAgentSessionMock,
-  adoptNativeAgentSession: async () => ({}),
+  adoptNativeAgentSession: adoptNativeAgentSessionMock,
   stopNativeAgentSession: stopNativeAgentSessionMock,
   updateNativeAgentControls: updateNativeAgentControlsMock,
   resumeNativeAgentSession: async () => null,
@@ -368,6 +370,7 @@ beforeEach(() => {
   stopNativeAgentSessionMock.mockClear();
   updateNativeAgentControlsMock.mockReset();
   ensureNativeAgentSessionMock.mockClear();
+  adoptNativeAgentSessionMock.mockClear();
   usePaneLayoutStore.setState({
     environments: new Map(),
     hydration: new Map(),
@@ -460,6 +463,48 @@ describe("useNativeAgentSession progressive view", () => {
       await result.current.refresh();
     });
     expect(result.current.projection?.goal).toBeUndefined();
+  });
+
+  describe("while the owner holds sending", () => {
+    const renderHeld = (sendingHeld: boolean, initialProviderSessionId?: string) =>
+      renderHook(
+        ({ sendingHeld }) =>
+          useNativeAgentSession<TestMessage>({
+            platform: "codex",
+            environmentId: "env-1",
+            tabId: "tab-1",
+            isActive: true,
+            enabled: true,
+            sendingHeld,
+            ...(initialProviderSessionId ? { initialProviderSessionId } : {}),
+          }),
+        { initialProps: { sendingHeld } },
+      );
+
+    test.each([
+      ["a tab that knows its provider session", "session-1"],
+      ["a tab that does not", undefined],
+    ])("%s reads its transcript and establishes nothing", async (_label, sessionId) => {
+      transcriptUpdates = [() => transcriptSnapshot("transcript-1", [message("m1")])];
+      stateUpdates = [() => stateSnapshot("state-1")];
+      const { result } = renderHeld(true, sessionId);
+      await waitFor(() =>
+        expect(result.current.projection?.messages.map(({ id }) => id)).toEqual(["m1"]),
+      );
+      // Each of these resolves a provider on the backend, which starts its bridge.
+      expect(adoptNativeAgentSessionMock).not.toHaveBeenCalled();
+      expect(ensureNativeAgentSessionMock).not.toHaveBeenCalled();
+    });
+
+    test("connects once sending is allowed again, without a remount", async () => {
+      transcriptUpdates = [() => transcriptSnapshot("transcript-1", [message("m1")])];
+      stateUpdates = [() => stateSnapshot("state-1")];
+      const { rerender, result } = renderHeld(true);
+      await waitFor(() => expect(result.current.projection).not.toBeNull());
+      expect(ensureNativeAgentSessionMock).not.toHaveBeenCalled();
+      rerender({ sendingHeld: false });
+      await waitFor(() => expect(ensureNativeAgentSessionMock).toHaveBeenCalledTimes(1));
+    });
   });
 
   test("installs transcript text without waiting for held discovery", async () => {

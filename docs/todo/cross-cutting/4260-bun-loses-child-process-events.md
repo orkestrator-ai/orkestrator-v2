@@ -2,15 +2,15 @@
 
 ## Task analysis
 
-Analysed 2026-11-04 against `main` at `a44641cb`. Task 5 re-checked and acted on 2026-11-05 against `main` at `6e796ca32`.
+Analysed 2026-11-04 against `main` at `a44641cb`. Task 5 re-checked and acted on 2026-11-05 against `main` at `6e796ca32`. Task 4, and task 5's held files outside `change-tracking/`, re-checked and acted on 2026-11-05 against `main` at `0194a0675`.
 
 ### Tasks
 
 1. **Report the defect upstream**: give Bun the evidence and, ideally, a reduced case. Status: open.
 2. **Find a reduced case**: reproduce the lost event without this repository's code. Status: open.
 3. **Decide on a bound in `runCommand`**: stop a backend command waiting out its whole timeout for a child that has exited. Status: done (2026-11-04), through file capture and a macOS exit watchdog rather than a bound.
-4. **Unblock readers parked on a superseded scan**: a read already waiting when a retarget arrives still waits for that scan. Status: open.
-5. **Move the backend's other pipe captures off Bun's readers**: `node:child_process` captures outside `runCommand` can still stall. Status: done (2026-11-05) for every site not held for running work; re-check the held files in that task's subsection once their work lands. Captures that did not fit are in [6060](6060-pipe-captures-that-could-not-move-to-runcommand.md).
+4. **Unblock readers parked on a superseded scan**: a read already waiting when a retarget arrives still waits for that scan. Status: done (2026-11-05). The reader is released when the attempt is aborted; a read it then makes on the same worktree still queues in admission until the old scan settles.
+5. **Move the backend's other pipe captures off Bun's readers**: `node:child_process` captures outside `runCommand` can still stall. Status: done (2026-11-05) for every site not held for running work. The files held for E-0580 and S-0080 were re-checked on 2026-11-05 after both merged: nothing to move. Everything in `apps/backend/src/core/change-tracking/` stays held for E3 (#1833); re-check it when that lands. Captures that did not fit are in [6060](6060-pipe-captures-that-could-not-move-to-runcommand.md).
 6. **Reap children whose exit Bun lost**: on macOS such a child stays a zombie after its command settles. Status: open.
 
 ### 1. Report the defect upstream
@@ -74,9 +74,13 @@ Analysed 2026-11-04 against `main` at `a44641cb`. Task 5 re-checked and acted on
 
 **Problem.** Case 1537's superseded-scan change detaches new work from the old promise, but a same-worktree retarget still queues behind its admission lease. A `readFileList` already awaiting that scan's promise when the retarget arrives keeps waiting for it, then falls back to an ad hoc read. With task 3 done this waits only for real work, so it is a latency issue on a slow scan rather than a stall.
 
-**Context.** `readTrackedFileList` in `apps/backend/src/core/diff-stats-service.ts`. This was not seen in the original stress runs; a deterministic real-pool service test now confirms the wait and the subsequent ad hoc read of the original identity.
+**Context.** `readTrackedFileList` in `apps/backend/src/core/diff-stats-service.ts`. This was not seen in the original stress runs; a deterministic real-pool service test confirmed the wait and the subsequent ad hoc read of the original identity. Re-checked on 2026-11-05 at `0194a0675`, after #1837 and #1820: the read loop, `beginLineage` and the admission pool were unchanged, so the recommended option still fit.
 
-**Investigation.** A parked reader holds `attempt.promise` directly, so clearing `entry.inFlight` does not reach it. The scan's `abort` signal only cancels a queued admission, not a running child.
+**Investigation.** A parked reader holds `attempt.promise` directly, so clearing `entry.inFlight` does not reach it. The scan's `abort` signal only cancels a queued admission, not a running child. Every abort of an attempt also changes the lineage, pauses or drops the entry (`beginLineage`, `stopWork`), so a released reader always finds the loop's lineage check changed.
+
+What releasing the reader can and cannot shorten, with the production `git-docker-scan` pool (`maxPerTarget: 1`): the diff scan and the ad hoc file-list read share one admission target per worktree, and a parked reader's identity is always the old scan's worktree. So whatever the released reader reads next still queues until the old scan settles, which is the physical-release contract. What it no longer waits for is the replacement scan: before, the old lease passed to the queued replacement scan and the reader's read queued behind that too; now its read (`interactive`) is already queued and goes ahead of the replacement (`discovery`). Without an admission pool, or with a replacement on another worktree, it no longer waits for the old scan at all.
+
+**Outcome (2026-11-05).** `awaitAttempt` races the reader's wait against the attempt's abort signal. A released reader whose request the owner still serves (a resume with the same target) joins the new lineage's scan; any other reader reads its own identity ad hoc, as before. Tests in `apps/backend/tests/diff-stats-service.test.ts`, under "readers parked on a superseded scan" plus the path-changing retarget case, fail on the old code except the no-retarget case, which passes on both.
 
 **Decisions.**
 
@@ -98,9 +102,16 @@ Analysed 2026-11-04 against `main` at `a44641cb`. Task 5 re-checked and acted on
 
 **Held for running work, unchanged, to re-check when that work lands:**
 
-- `apps/backend/src/core/diff-stats-service.ts`, `commands-files.ts` and `change-tracking/git-scopes.ts` (E-0580). None imports `node:child_process` today; the last two use `runCommand` or `runCommandBuffer`.
-- Everything in `apps/backend/src/core/change-tracking/` (E3). `capture.ts` holds a synchronous `execFileSync` inside a `node -e` container helper, and `service-test-support.ts` and six tests import `execFileSync` directly.
-- `apps/backend/src/core/commands-containers.ts` and the Docker scripts (S-0080). `commands-containers.ts` imports `node:child_process` nowhere today.
+- Everything in `apps/backend/src/core/change-tracking/`, `git-scopes.ts` included (E3, #1833, still open). `capture.ts` holds a synchronous `execFileSync` inside a `node -e` container helper, and `service-test-support.ts` and six tests import `execFileSync` directly. `git-scopes.ts` uses `runCommandBuffer`.
+
+**Re-checked on 2026-11-05 at `0194a0675`, after E-0580 and S-0080 merged: nothing to move.**
+
+- `apps/backend/src/core/diff-stats-service.ts` (E-0580) starts no process: its scans and reads are injected.
+- `apps/backend/src/core/commands-files.ts` (E-0580) imports no `node:child_process`. Its Git commands use `runCommand`, and its container reads use `dockerExec` (`commands-container-exec.ts`), which also uses `runCommand`.
+- `apps/backend/src/core/commands-containers.ts` (S-0080) imports no `node:child_process`. Its `docker` commands use `runCommand` and `dockerExec`.
+- The Docker scripts (S-0080): `docker/image-manifest.ts` is the only importer under `docker/`. Its `runVersion` is a synchronous `spawnSync` in an image-build script outside the backend; it does not wait on Bun's asynchronous readers, and `runCommand` is async.
+
+The same `git grep` at `0194a0675` gives 151 files. Two test-only importers have appeared since the tables were written and are added to the test table: `container-data-directory-reach.test.ts` and `container-lifecycle-fixtures.ts`, both synchronous `spawnSync`.
 
 **Importer classification.** Checked on this branch at `a7db74658`, based on `main` at `af2e566e5`, with `git grep -l child_process -- apps/backend packages/protocol` over TypeScript and JavaScript files. That gives 149 files today and 154 at the merge base. Six moved sites no longer name the module, and `command-capture.ts` is new. The tables hold those 155 files, plus the held files that do not import it, which the ticket asked to list. A file with more than one site is classified by the site this task acted on, and its row says what stays.
 
@@ -128,12 +139,12 @@ Production code and files outside the test suites:
 | `apps/backend/src/preview-relay-supervisor.ts` | Live follower | Long-running `docker exec` relay carrying framed traffic in both directions. |
 | `apps/backend/src/core/change-tracking/ (every other file)` | Held | E3. Importers in that folder have their own rows. |
 | `apps/backend/src/core/change-tracking/capture.ts` | Held | E3. Synchronous `execFileSync` inside a `node -e` container helper. |
-| `apps/backend/src/core/change-tracking/git-scopes.ts` | Held | E-0580 and E3. No `node:child_process` import today; uses `runCommand` or `runCommandBuffer`. |
+| `apps/backend/src/core/change-tracking/git-scopes.ts` | Held | E3 (#1833). No `node:child_process` import; uses `runCommandBuffer`. E-0580 has merged. |
 | `apps/backend/src/core/change-tracking/service-test-support.ts` | Held | E3. Test support using synchronous `execFileSync`. |
-| `apps/backend/src/core/commands-containers.ts` | Held | S-0080. No `node:child_process` import today. |
-| `apps/backend/src/core/commands-files.ts` | Held | E-0580. No `node:child_process` import today; uses `runCommand` or `runCommandBuffer`. |
-| `apps/backend/src/core/diff-stats-service.ts` | Held | E-0580. No `node:child_process` import today. |
-| `docker/ scripts` | Held | S-0080. Outside the backend and protocol packages; `docker/image-manifest.ts` is the one importer there. |
+| `apps/backend/src/core/commands-containers.ts` | Nothing to move | Re-checked 2026-11-05 after S-0080 merged. No `node:child_process` import; uses `runCommand` and `dockerExec`. |
+| `apps/backend/src/core/commands-files.ts` | Nothing to move | Re-checked 2026-11-05 after E-0580 merged. No `node:child_process` import; uses `runCommand` and `dockerExec`. |
+| `apps/backend/src/core/diff-stats-service.ts` | Nothing to move | Re-checked 2026-11-05 after E-0580 merged. Starts no process; scans and reads are injected. |
+| `docker/image-manifest.ts` | Not fitting | Re-checked 2026-11-05 after S-0080 merged; the only importer under `docker/`. Synchronous `spawnSync` of `--version` in an image-build script outside the backend; `runCommand` is async. |
 | `apps/backend/src/core/agent-credential-files.ts` | Not fitting | No import: a comment names the module. |
 | `apps/backend/src/core/command-capture.ts` | Not fitting | No import: a comment names the module. This is `runCommand`'s new home, and it uses `Bun.spawn` with file capture. |
 | `apps/backend/src/core/design/export-writer.ts` | Not fitting | Also imported by Node-based browser tests, where `Bun` is undefined, and its spawn seam lets tests withhold a payload. 6060 task 3. |
@@ -253,6 +264,8 @@ Test files and helpers under `apps/backend/tests/`. None moved. The task covers 
 | `apps/backend/tests/commands-io-coverage.test.ts` | Not fitting | Type only. The test uses a fake or injected child. |
 | `apps/backend/tests/commands-servers-logging.test.ts` | Not fitting | Test code, not a backend capture: starts its own child as a fixture or as the process under test. |
 | `apps/backend/tests/container-live-workspace.ts` | Not fitting | Test helper: the name appears in source text run with `bun -e`. |
+| `apps/backend/tests/container-data-directory-reach.test.ts` | Not fitting | Added 2026-11-05. Test code, not a backend capture: synchronous `spawnSync` fixture call, and `runCommand` is async. |
+| `apps/backend/tests/container-lifecycle-fixtures.ts` | Not fitting | Added 2026-11-05. Test helper: synchronous `spawnSync` of `tar`, and `runCommand` is async. |
 | `apps/backend/tests/container-network.test.ts` | Not fitting | Test code, not a backend capture: synchronous fixture call, and `runCommand` is async. |
 | `apps/backend/tests/container-readiness.test.ts` | Not fitting | Test code, not a backend capture: synchronous fixture call, and `runCommand` is async. |
 | `apps/backend/tests/container-replacement-inputs.test.ts` | Not fitting | Test code, not a backend capture: synchronous fixture call, and `runCommand` is async. |
@@ -307,7 +320,15 @@ Test files and helpers under `apps/backend/tests/`. None moved. The task covers 
 
 ### Tasks 3 and 4: preserve physical admission during the case 1537 repair
 
-Chose to document and test the same-worktree admission wait and the already-parked reader instead of releasing a running scan's lease on abort. A real `WorkAdmissionPool` test verifies that a comparison-ref-only retarget stays queued until the old work settles; a path-changing retarget proceeds. Another verifies that a parked reader waits, then returns an ad hoc result for its original identity. Releasing on abort would allow overlapping work without proof that the process stopped, violating the pool's physical-release contract. Early reader release remains the open work in task 4.
+Chose to document and test the same-worktree admission wait and the already-parked reader instead of releasing a running scan's lease on abort. A real `WorkAdmissionPool` test verifies that a comparison-ref-only retarget stays queued until the old work settles; a path-changing retarget proceeds. Another verifies that a parked reader waits, then returns an ad hoc result for its original identity. Releasing on abort would allow overlapping work without proof that the process stopped, violating the pool's physical-release contract. Early reader release was then left to task 4; see the next entry.
+
+### Task 4: release the reader on abort, keep the lease
+
+Chose the recommended option, racing the parked reader's wait against the attempt's abort signal (`awaitAttempt`), over passing the abort signal down to the scan's commands. The re-check showed the limit of either option under the production pool: the follow-up read is on the old scan's worktree, so it queues until the old scan settles. Releasing the reader still removes its wait for the replacement scan and keeps the contract. Passing the signal down would end the old wait sooner, but it plumbs a signal through every local and container status read, including `change-tracking/` (held for E3), and the scan runs as a physical pass that other requesters can share, so one requester's abort must not kill it. A test shows the old scan keeping its lease, nothing else running on the worktree, and the reader's read going ahead of the replacement scan.
+
+### Task 4: a released reader joins the new lineage when its identity is unchanged
+
+When the entry is still active and its current target is exactly the request's identity (a pause and resume of the same target), the reader adopts the new lineage and joins its scan instead of making an ad hoc read. This returns the owner's result and view stamp and avoids a duplicate scan. Any other retarget keeps the ad hoc read of the request's own identity, because the request names its comparison ref and worktree and must not be answered for another.
 
 ### Task 3: file capture rather than a bound
 
@@ -351,6 +372,33 @@ Tmux capture now waits for its private process group and defaults to a 60 s dead
 
 Failed Keychain reads now discard all captured output and use a fixed diagnostic while retaining failure classification. Returning partial output would aid diagnosis but could disclose credential material in error messages. Tests cover timeout, overflow and nonzero exit.
 
+### Task 3: completion after daemon regression review
+
+Leader exit now ends default capture; explicit `waitForDescendants` retains late
+output and deadline-bound group waiting. Always waiting for the group preserved
+late output but blocked same-group fsmonitor daemons, so it was rejected. Tests
+cover helper survival, automatic daemon startup through project-home status,
+capture filesystem failures, and bounded unknown process inspection.
+
+### Task 5: login-shell completion and timeout-test determinism
+
+Exclude setup uses leader-exit completion through an explicit per-call option.
+Keeping group waiting everywhere retains output but also blocks on redirected
+profile services; opting out only for setup preserves transcript completeness
+and profile helper lifetime. A controlled fixture profile is sourced by a real
+login shell so this test does not read the developer's shell profile.
+
+Deadline-only assertions no longer require shell startup or output within 100 ms;
+nonzero-exit cases still verify byte and stream preservation. The real-process
+command-capture suite uses the integration naming convention, placing it in the
+slow tier without changing the shared tier runner. Docker overflow tests disable
+the command deadline and cover both successful exit and a still-running writer,
+so a timeout cannot masquerade as overflow handling.
+
+### Task 5: held files re-checked, nothing moved
+
+E-0580 and S-0080 merged, so their held files were re-checked against the task 5 rules on 2026-11-05. None holds a one-shot asynchronous capture outside `runCommand`, so none moved and no `runCommand` option was added. `docker/image-manifest.ts` stays on `spawnSync`: a synchronous call does not wait on the asynchronous readers that lose the event. `change-tracking/` was not opened for changes, because E3 (#1833) is still open.
+
 ## Constraints and rationale
 
 - Never raise a test deadline, skip or retry to hide this; see the [flake rules](../../tests/flaky-tests/0000-index.md).
@@ -373,29 +421,3 @@ Failed Keychain reads now discard all captured output and use a fixed diagnostic
 ## Replaces
 
 Nothing; new observation.
-
-## Assumptions and decisions
-
-### Task 3: completion after daemon regression review
-
-Leader exit now ends default capture; explicit `waitForDescendants` retains late
-output and deadline-bound group waiting. Always waiting for the group preserved
-late output but blocked same-group fsmonitor daemons, so it was rejected. Tests
-cover helper survival, automatic daemon startup through project-home status,
-capture filesystem failures, and bounded unknown process inspection.
-
-
-### Task 5: login-shell completion and timeout-test determinism
-
-Exclude setup uses leader-exit completion through an explicit per-call option.
-Keeping group waiting everywhere retains output but also blocks on redirected
-profile services; opting out only for setup preserves transcript completeness
-and profile helper lifetime. A controlled fixture profile is sourced by a real
-login shell so this test does not read the developer's shell profile.
-
-Deadline-only assertions no longer require shell startup or output within 100 ms;
-nonzero-exit cases still verify byte and stream preservation. The real-process
-command-capture suite uses the integration naming convention, placing it in the
-slow tier without changing the shared tier runner. Docker overflow tests disable
-the command deadline and cover both successful exit and a still-running writer,
-so a timeout cannot masquerade as overflow handling.

@@ -725,10 +725,19 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
       "before becoming healthy",
     );
     expect(revoke).toHaveBeenCalledWith(snapshot.workspace.id, conversation.id);
-    expect(await storage.coordinators.getCoordinatorWorkspace(project.id)).toMatchObject({
-      lifecycleState: "error",
-      lastStartupError: expect.stringContaining("before becoming healthy"),
-    });
+    // The conversation that failed carries it. The workspace, which an older
+    // client reads as "the coordinator is down", stays up for everything else.
+    const failed = (await storage.coordinators.getCoordinatorWorkspace(project.id))!;
+    expect(failed.lifecycleState).toBe("ready");
+    expect(failed.lastStartupError).toBeUndefined();
+    expect(failed.conversations[0]!.startupError).toContain("before becoming healthy");
+    expect(failed.conversations[0]!.bridgePort).toBeUndefined();
+
+    // Nothing starts its bridge again until the user retries.
+    await expect(startLocalServerUnlocked(runtimeId, context, "codex")).rejects.toThrow(
+      "could not start",
+    );
+    expect(context.runtime.localServers.process(`codex:${runtimeId}`)).toBeUndefined();
   });
 
   test("revokes a coordinator credential when process spawn fails synchronously", async () => {
@@ -847,6 +856,21 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
     );
     cleanupContext = context;
     cleanupRuntimeId = runtimeId;
+    // A legacy workspace error is an admission fence, not a state that a
+    // successful bridge can silently overwrite. Headless callers must ensure.
+    await storage.coordinators.mutateCoordinatorWorkspace(project.id, (current) =>
+      current
+        ? { ...current, lifecycleState: "error", lastStartupError: "legacy failure" }
+        : current,
+    );
+    await expect(startLocalServerUnlocked(runtimeId, context, "codex")).rejects.toThrow(
+      "Coordinator workspace is not ready",
+    );
+    expect(context.runtime.localServers.process(`codex:${runtimeId}`)).toBeUndefined();
+    expect((await storage.coordinators.getCoordinatorWorkspace(project.id))?.lifecycleState).toBe(
+      "error",
+    );
+    await coordinator.ensure(project.id);
     await startLocalServerUnlocked(runtimeId, context, "codex");
     const isolatedHome = path.join(
       storage.getDataDir(),

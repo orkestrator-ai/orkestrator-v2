@@ -4358,7 +4358,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       );
       return;
     }
-    const { status, error: statusDetail } = observation;
+    const { status, error: statusDetail, failureKind } = observation;
     await this.assertFence(workflow.id, token);
     // Consolidation is a read-only turn; where its commands ran without the
     // provider's sandbox, its step says so. Kept once seen.
@@ -4439,6 +4439,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         environmentId: workflow.environmentId,
         requestId: request.requestId,
         error: statusDetail,
+        ...(failureKind ? { failureKind } : {}),
         resends: request.usageLimitResends ?? 0,
         turnStartedAt: request.createdAt,
         session: { label: "Multi Review session" },

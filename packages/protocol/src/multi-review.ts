@@ -607,6 +607,8 @@ export interface MultiReviewActionResult {
   };
   /** A saved workflow is retained whenever presentation or cancellation fails. */
   recovery?: string;
+  /** The requestId had already run: this is that request's review, nothing new started. */
+  replayed?: true;
 }
 
 export function isLaunchMultiReviewActionInput(

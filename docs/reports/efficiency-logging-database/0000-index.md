@@ -30,10 +30,7 @@ A batch file combines several reports as numbered parts and takes the rating of 
 | 14 | [0390-gw-7-websocket-compression.md](0390-gw-7-websocket-compression.md) | Low | No | GW-7: No WebSocket message compression | Deferred by 0052 decision D6 until the transport direction is chosen. |
 | 15 | [0560-st-9-agent-mail-store-remainder.md](0560-st-9-agent-mail-store-remainder.md) | Low | No | ST-9 (rest): Agent mail: pending injects and mailbox lists still sit on the whole store | The read cost the finding described has gone, and the rest needs a stored-format change only a measurement could justify. |
 | 16 | [0580-st-21-file-rpc-and-usage-report.md](0580-st-21-file-rpc-and-usage-report.md) | Low | No | ST-21: Whole files cross RPC as base64, branch reads spawn twice, and usage reports parse every row | These are occasional, bounded reads. |
-| 17 | [0650-web-16-terminal-container-environment-subscription.md](0650-web-16-terminal-container-environment-subscription.md) | Low | No | WEB-16: `TerminalContainer` subscribes to the whole environment object | It is an unmeasured re-render, with launch-effect risk in the fix. |
-| 18 | [0691-dk-5-preview-capture-data-urls.md](0691-dk-5-preview-capture-data-urls.md) | Low | No | DK-5: Preview captures cross IPC as large data URLs | Captures are occasional and bounded. |
-| 19 | [0693-dk-10-second-claude-binary.md](0693-dk-10-second-claude-binary.md) | Low | No | DK-10: The image ships two Claude Code native binaries | It is an optional image-size saving that waits on a maintainer decision. |
-| 20 | [0694-dk-16-attention-follow-polling.md](0694-dk-16-attention-follow-polling.md) | Low | No | DK-16 (rest): CLI `attention --follow` re-downloads pending items on every poll | It affects only long-running followers, and pending pages are probably small. |
+| 17 | [0693-dk-10-second-claude-binary.md](0693-dk-10-second-claude-binary.md) | Low | No | DK-10: The image ships two Claude Code native binaries | It is an optional image-size saving that waits on a maintainer decision. |
 
 ## Parallel running
 
@@ -54,7 +51,7 @@ This index only changes when a branch merges, so it can't show what is running n
 | E11 | [Projection hashing](0210-e11-projection-hashing.md) | `0210`, `0220`, `0320`, `0330`, `0340`, `0345`, `0350`, `0380` | Transcript, 3 of 4 | None | None |
 | E12 | [Renderer store](0510-e12-renderer-store.md) | `0510`, `0590`, `0640` | Transcript, 4 of 4 | None | C6 (Errors and dead ends) |
 | E3 | [Retention and deletion](0540-e3-retention-and-deletion.md) | `0730`, `0540`, `0840` | Change tracking, 1 of 1 | None | None |
-| E26 | [Local desktop transport](0400-e26-local-desktop-transport.md) | `0400`, `0860` | Desktop, 1 of 2 | E1 (Baseline run) | None |
+| E26 | [Local desktop transport](0400-e26-local-desktop-transport.md) | `0400`, `0860` | Desktop, 1 of 1 | E1 (Baseline run) | None |
 | E18 | [Gateway events](0280-e18-gateway-events.md) | `0280`, `0290`, `0300`, `0370` | Gateway, 1 of 3 | None | None |
 | E24 | [Gateway static and preview](0310-e24-gateway-static-and-preview.md) | `0310`, `0365` | Gateway, 2 of 3 | None | None |
 | E17 | [Dead code](0770-e17-dead-code.md) | `0770`, `0930` | Logging and diagnostics, 1 of 3 | None | None |
@@ -84,9 +81,6 @@ These still follow the lane and conflict rules above.
 | Batch | Name | Files | Lane and position | Finish first | Not at the same time as |
 | --- | --- | --- | --- | --- | --- |
 | E-0580 | [File RPC and usage report](0580-st-21-file-rpc-and-usage-report.md) | `0580` | Git scans and file reads, 1 of 1 | None | None |
-| E-0691 | [Preview capture data URLs](0691-dk-5-preview-capture-data-urls.md) | `0691` | Desktop, 2 of 2 | None | None |
-| E-0650 | [Terminal container subscription](0650-web-16-terminal-container-environment-subscription.md) | `0650` | No lane | None | None |
-| E-0694 | [Attention follow polling](0694-dk-16-attention-follow-polling.md) | `0694` | No lane | None | None |
 
 ### Not ready to start
 
@@ -101,7 +95,7 @@ When one of these becomes ready, it joins the lane shown.
 
 ## Status of every efficiency finding
 
-15 done, 5 partly done, 17 open, 1 no action.
+91 done, 7 partly done, 23 open, 2 no action.
 
 | Finding | Disposition | Evidence |
 | --- | --- | --- |
@@ -170,7 +164,7 @@ When one of these becomes ready, it joins the lane shown.
 | WEB-13 | Done | `get_file_subtree` and `get_local_file_subtree` take `knownDigest` and answer `unchanged` with no contents, `commands-registry-terminal.ts`, `file-subtree-loads.ts` (#1754, `bfac1f577`); see [Closing check of E23](#closing-check-of-e23-renderer-polling). Expanded-folder counts in real use: [5460](../../todo/cross-cutting/5460-renderer-polling-live-evidence.md). |
 | WEB-14 | Open | Four Maps copied up front, `nativeAgentProjectionStore.ts:173-178`; see 0640. |
 | WEB-15 | Done | Memoised `readTranscriptTail`, `AgentNativeTab.controller.tsx:1152` (9c06cb7aa). |
-| WEB-16 | Open | Whole environment subscribed, `TerminalContainer.view.tsx:168-170`; see 0650. |
+| WEB-16 | Done | `useShallow` selector of the fields read, `TerminalContainer.view.tsx:160-199`; `reuseUnchangedFields`, `environmentStore.ts` (bfac1f577); guarded by `TerminalContainer.render-count.test.tsx`; see [1202 task 3](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md). The native tab's own whole-record selector is [5580](../../todo/cross-cutting/5580-agent-native-tab-environment-subscription.md). |
 | WEB-17 | Done | `LiveElapsed`, `ClaudeTmuxChatTab.tsx:1406`; `createRuntimeClock`, `MultiReviewTab.tsx:564` (387d1412f); `BuildChatTab.tsx` has no interval. |
 | WEB-18 | Done | Every named poll runs through `startCoordinatedPoll` (`lib/coordinated-poll.ts`), which reads nothing while the window is hidden (#1754, `bfac1f577`); see [Closing check of E23](#closing-check-of-e23-renderer-polling). A real Electron window: [5460](../../todo/cross-cutting/5460-renderer-polling-live-evidence.md). |
 | WEB-19 | Done | While a part streams, `MessageMarkdown` renders each completed segment once through `IncrementalMarkdownCache.render` (`incremental-parse.ts`) and reuses its elements, #1754 `bfac1f577`; Chromium Profiler numbers in the closing check of E22 below and in 1202 task 3. |
@@ -214,7 +208,7 @@ When one of these becomes ready, it joins the lane shown.
 | DK-2 | Partly done | Two serialisations per invoke on the gateway transport, behind the same off-by-default setting (2026-11-04, 1202 task 12); see 0400. |
 | DK-3 | Done | `file-stamps.ts:34` (da0f720fa). |
 | DK-4 | Done | Idle timeout and `Range:` resume, `download.ts:8-14` (da0f720fa). |
-| DK-5 | Done | Capture images cross IPC as bytes (2026-11-04, 1202 task 12); region crops still cross as data URLs; see 0691. |
+| DK-5 | Done | Capture images and region crops cross IPC as bytes, and the preload converts them with native base64 (`preload-api.ts`, `cropPng`); no custom scheme, because a real Electron run showed no renderer stall near the size limit (2026-11-05, 1202 task 12). PNG work left on main is todo 5540. |
 | DK-6 | Done | Tunnel v2 multiplexes an attachment's connections over one socket, `preview-tunnel-session.ts`, `preview-tunnel-mux-server.ts` (2026-11-04, [todo 4500](../../todo/cross-cutting/4500-preview-tunnel-one-socket-per-connection.md)); remote page-load timing is its task 1. |
 | DK-7 | Done | Order and split SDK layers, `docker/Dockerfile:40-65`, `:421-423` (fd679c0e2). |
 | DK-8 | Done | `mise link`, `docker/Dockerfile:399` (fd679c0e2). |
@@ -225,7 +219,7 @@ When one of these becomes ready, it joins the lane shown.
 | DK-13 | Open | Direct clone only, `docker/workspace-setup.sh:385-397`; see 0500. |
 | DK-14 | Partly done | Start copy stamped, `import_agent_input` in `docker/entrypoint.sh` (`staged-inputs=5`, 1202 task 15); the per-environment staging copy remains, see 0490. |
 | DK-15 | Done | Rename, repair and `EXDEV` fallback, `environment-move.ts:428`, `:470`, `:559` (2525fc05c). |
-| DK-16 | Partly done | Transcript `knownToken`, `session.ts:1085`, `actions-transcript.ts:154` (b68b6e710); `attention --follow` remains, see 0694. |
+| DK-16 | Partly done | Transcript `knownToken`, `session.ts:1085`, `actions-transcript.ts:154` (b68b6e710); `attention --follow` stays unconditional on fixture measurements, with 32/80 KiB default/maximum-page fixture budgets in `public-api-attention.test.ts` (not universal bounds); a real follower's page size is left in [5560](../../todo/cli-and-slash-commands/5560-attention-follow-page-size.md). |
 | DK-17 | Done | One bounded read, `packages/cli/src/client/transport.ts:134` (b68b6e710). |
 | DK-18 | Done | One `appendFile` per event-loop turn and `mkdir` only after a failure, in `packages/protocol/src/node/application-logging.ts`; see [1202](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md) task 16 and [E26 part 0860](0400-e26-local-desktop-transport.md#0860-finish-the-electron-relay-and-file-writer), task 1, shared with R7. |
 

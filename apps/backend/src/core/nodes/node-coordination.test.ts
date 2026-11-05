@@ -1010,6 +1010,8 @@ test("an approved account switch keeps its account fields and runs the Settings 
   expect(notice.mock.calls[0]![1]).toMatchObject({
     toEnvironmentId: main.environmentId,
     subject: expect.stringContaining("Switch the active Claude account on Leaf to “Work”"),
+    // Nothing restarts a tab a limit stopped; the coordinator is told to.
+    body: expect.stringContaining("send each listed tab of that provider one short prompt"),
   });
   notice.mockRestore();
   instance.collector.dispose();

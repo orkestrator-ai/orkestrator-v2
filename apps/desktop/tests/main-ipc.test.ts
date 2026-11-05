@@ -880,6 +880,14 @@ describe("main IPC registration", () => {
       ),
     ).rejects.toThrow("untrusted renderer");
     expect(harness.browserPreviews.listPendingCaptures).not.toHaveBeenCalled();
+    await expect(
+      harness.invokeFrom(
+        "https://evil.example/",
+        "orkestrator:browser-preview:capture-pending-read",
+        CAPTURE_ID,
+      ),
+    ).rejects.toThrow("untrusted renderer");
+    expect(harness.browserPreviews.readPendingCaptureWire).not.toHaveBeenCalled();
   });
 
   test("reports unavailable native browser preview controllers", async () => {

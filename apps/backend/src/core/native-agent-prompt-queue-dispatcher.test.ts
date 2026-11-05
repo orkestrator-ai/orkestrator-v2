@@ -469,6 +469,7 @@ test("a coordinator's queued message waits for the running turn, then is sent as
     await storage.enqueuePromptQueueMessage(coordinatorQueueKey, runtimeId, {
       id: "queued-1",
       text: "also check the open pull requests",
+      clientTimeZone: "Asia/Tokyo",
     });
 
     await dispatcher.drainPromptQueueForSession(coordinator);
@@ -484,6 +485,8 @@ test("a coordinator's queued message waits for the running turn, then is sent as
       logicalSessionKey: coordinator.logicalSessionKey,
       prompt: "also check the open pull requests",
       requestId: "queued-1",
+      // The queueing renderer's zone travels with the prompt to dispatch.
+      clientTimeZone: "Asia/Tokyo",
     });
     expect((await storage.getPromptQueue(coordinatorQueueKey))?.messages ?? []).toHaveLength(0);
   } finally {

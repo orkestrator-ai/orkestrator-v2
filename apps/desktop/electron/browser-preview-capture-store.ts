@@ -26,7 +26,6 @@ import type {
   BrowserPreviewCaptureMode,
   BrowserPreviewCapturePurpose,
   BrowserPreviewExpiredCaptureNotice,
-  BrowserPreviewPendingCapture,
   BrowserPreviewPendingCaptureWire,
   BrowserPreviewPendingCaptureDescriptor,
   BrowserPreviewReplaceImageInput,
@@ -120,16 +119,6 @@ export function decodePngDataUrl(value: unknown): DecodedPng {
     throw new BrowserPreviewCaptureSpoolError("invalid", "Expected a base64 PNG image");
   }
   return decodePngBytes(Buffer.from(base64, "base64"));
-}
-
-export function pendingCaptureWithDataUrl(
-  pending: BrowserPreviewPendingCaptureWire,
-): BrowserPreviewPendingCapture {
-  const { imageBytes, ...rest } = pending;
-  return {
-    ...rest,
-    imageDataUrl: imageBytes ? `${PNG_PREFIX}${Buffer.from(imageBytes).toString("base64")}` : null,
-  };
 }
 
 export interface BrowserPreviewCaptureStoreChange {
@@ -742,12 +731,7 @@ export class BrowserPreviewCaptureStore {
     });
   }
 
-  async read(captureId: string): Promise<BrowserPreviewPendingCapture | null> {
-    const pending = await this.readWire(captureId);
-    return pending && pendingCaptureWithDataUrl(pending);
-  }
-
-  /** The same read with the image as bytes, for IPC. */
+  /** Non-consuming read with the spooled image as PNG bytes. */
   async readWire(captureId: string): Promise<BrowserPreviewPendingCaptureWire | null> {
     if (!isBrowserPreviewCaptureId(captureId)) return null;
     return this.afterReady(async () => {

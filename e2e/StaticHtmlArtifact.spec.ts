@@ -162,6 +162,28 @@ test.describe("static HTML presentation", () => {
     await rendered(page);
   });
 
+  test("the real frame reports the document's text to the card, and nothing else", async ({
+    page,
+  }) => {
+    const mirror = page.locator("[data-artifact-search-body] [data-rich-search-mirror]");
+    await open(page);
+    await rendered(page);
+    await expect(mirror).toHaveCount(1);
+    const text = (await mirror.textContent()) ?? "";
+    expect(text).toContain("Agent activity and cost");
+    expect(text).toContain("UI polish");
+    expect(text).not.toContain("{");
+    await expect(mirror).toBeHidden();
+    await page.getByRole("button", { name: "Saved preview", exact: true }).click();
+    await expect(mirror).toHaveCount(0);
+
+    await open(page, "doc=hostile");
+    await rendered(page);
+    await expect(mirror).toHaveCount(1);
+    expect(await mirror.textContent()).toContain("Hostile report");
+    expect(await mirror.textContent()).not.toContain("__authored");
+  });
+
   test("a reload replays the same published document", async ({ page }) => {
     await open(page);
     await rendered(page);

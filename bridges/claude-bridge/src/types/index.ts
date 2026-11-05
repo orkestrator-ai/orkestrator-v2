@@ -466,6 +466,12 @@ export interface SessionState {
   lastActivity: Date;
   error?: string;
   /**
+   * `usage-limit` beside `status: "error"` when the failed turn's
+   * `rate_limit_event` said the request was `rejected`: the plan allowance is
+   * used up, whatever `error` says. Set and cleared with `error`.
+   */
+  errorCode?: import("@orkestrator/protocol/agent-usage-limits").TurnFailureKind;
+  /**
    * Set beside `status: "error"` when a bridge restart cut the last turn short:
    * the rollout is intact and a new prompt continues it. Cleared when the next
    * turn starts. See `session-manager-turn-interruption.ts`.

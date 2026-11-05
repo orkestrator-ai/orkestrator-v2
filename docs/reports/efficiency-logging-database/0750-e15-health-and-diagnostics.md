@@ -504,7 +504,7 @@ The `shift()` fix has no real choice: a fixed ring of the same size.
 - [Logging and database report, R12](../2026-10-29-logging-and-database-efficiency.md#r12-persist-a-small-rolling-health-summary-m1) and [the metrics findings, M1](../2026-10-29-logging-and-database-efficiency.md#metrics-and-diagnostics-findings)
 - [0741 backend responsiveness under load](../../todo/cross-cutting/0741-backend-responsiveness-under-load.md), which collected process figures by hand
 - [Logging and database report, R19](../2026-10-29-logging-and-database-efficiency.md#r19-database-observability-m6-d9) and [the metrics findings, M6](../2026-10-29-logging-and-database-efficiency.md#metrics-and-diagnostics-findings)
-- [0720](0720-e13-silent-failures.md#0720-log-the-failures-that-are-still-silent), [0780](#0780-an-export-diagnostics-bundle), [0820](#0820-persist-a-small-rolling-health-summary)
+- [E13](0000-index.md#closing-check-of-e13-silent-failures) (`0720`, done), [0780](#0780-an-export-diagnostics-bundle), [0820](#0820-persist-a-small-rolling-health-summary)
 - [1202 efficiency follow-ups](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md) task 1 needs this kind of baseline number.
 - [Logging and database report, R13](../2026-10-29-logging-and-database-efficiency.md#r13-consolidate-metric-primitives-m3-m4-m5) and [the metrics findings](../2026-10-29-logging-and-database-efficiency.md#metrics-and-diagnostics-findings)
 - [Logging and database report, R11](../2026-10-29-logging-and-database-efficiency.md#r11-export-diagnostics-bundle-m2-l7) and [the metrics findings, M2](../2026-10-29-logging-and-database-efficiency.md#metrics-and-diagnostics-findings)

@@ -146,7 +146,7 @@ No web getters were added for Cursor, Grok, or Pi because their only planned con
 
 ### Current state
 
-The writer, its rotation and the `local` driver landed in `#877`. Nothing in this recommendation has changed since the report. The environment filter from R10 is in [0830](0720-e13-silent-failures.md#0830-stop-inherited-vendor-debug-variables-reaching-local-bridges), and the relaunch deletion from L9 is in [0740](#0740-keep-the-previous-docker-bridge-log-across-a-relaunch).
+The writer, its rotation and the `local` driver landed in `#877`. Nothing in this recommendation has changed since the report. The environment filter from R10 landed with [E13](0000-index.md#closing-check-of-e13-silent-failures) (`0830`, [the bridge hop](../../architecture/logging.md#the-bridge-hop)), and the relaunch deletion from L9 is in [0740](#0740-keep-the-previous-docker-bridge-log-across-a-relaunch).
 
 ### Constraints and rationale
 
@@ -161,6 +161,6 @@ The writer, its rotation and the `local` driver landed in `#877`. Nothing in thi
 ## Related
 
 - [Logging and database report, R6](../2026-10-29-logging-and-database-efficiency.md#r6-an-always-on-essential-tier-that-closes-the-silent-gaps-l4) and [L4](../2026-10-29-logging-and-database-efficiency.md#l4-silent-failures-too-little-logging-high)
-- [0720](0720-e13-silent-failures.md#0720-log-the-failures-that-are-still-silent), [0850](#0850-bound-docker-log-fallbacks-and-report-dropped-writes)
+- [E13](0000-index.md#closing-check-of-e13-silent-failures) (`0720`, done), [0850](#0850-bound-docker-log-fallbacks-and-report-dropped-writes)
 - [Logging and database report, R10](../2026-10-29-logging-and-database-efficiency.md#r10-docker-log-hygiene-l9) and [L9](../2026-10-29-logging-and-database-efficiency.md#l9-docker-container-logging-medium)
 - [0022 container resource budgets](../../todo/containers-and-environments/0022-container-resource-budgets-and-performance.md)

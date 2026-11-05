@@ -38,7 +38,6 @@ Worked out on 2026-11-03 against `main` at `a44641cbc`, from the 167 work files 
 | E26 | [efficiency-logging-database/0400-e26-local-desktop-transport.md](efficiency-logging-database/0400-e26-local-desktop-transport.md) | `0400`, `0860` |
 | E18 | [efficiency-logging-database/0280-e18-gateway-events.md](efficiency-logging-database/0280-e18-gateway-events.md) | `0280`, `0290`, `0300`, `0370` |
 | E24 | [efficiency-logging-database/0310-e24-gateway-static-and-preview.md](efficiency-logging-database/0310-e24-gateway-static-and-preview.md) | `0310`, `0365` |
-| E13 | [efficiency-logging-database/0720-e13-silent-failures.md](efficiency-logging-database/0720-e13-silent-failures.md) | `0720`, `0830` |
 | E17 | [efficiency-logging-database/0770-e17-dead-code.md](efficiency-logging-database/0770-e17-dead-code.md) | `0770`, `0930` |
 | E15 | [efficiency-logging-database/0750-e15-health-and-diagnostics.md](efficiency-logging-database/0750-e15-health-and-diagnostics.md) | `0750`, `0820`, `0810`, `0880`, `0780` |
 | E16 | [efficiency-logging-database/0790-e16-log-controls.md](efficiency-logging-database/0790-e16-log-controls.md) | `0790`, `0890`, `0900` |
@@ -60,7 +59,7 @@ Worked out on 2026-11-03 against `main` at `a44641cbc`, from the 167 work files 
 | Git scans and file reads | 1. E7 (Diff scans)<br>2. E-0580 (File RPC and usage report) | `commands-files.ts`, `git-scopes.ts`, `diff-stats-service.ts` |
 | Desktop | 1. E26 (Local desktop transport)<br>2. E-0691 (Preview capture data URLs) | `apps/desktop/electron/` windows, IPC and preloads, `backend-process.ts` |
 | Gateway | 1. E-0120 (Bearer terminal streams)<br>2. S-0200 (Workspace grant allowlist)<br>3. E18 (Gateway events)<br>4. E24 (Gateway static and preview)<br>5. S-0160 (Descriptor process binding) | `gateway-auth.ts`, `gateway-events.ts`, `gateway-proxy.ts`, `gateway-support-*.ts`, `terminal-websocket-server.ts` |
-| Logging and diagnostics | 1. E13 (Silent failures)<br>2. E17 (Dead code)<br>3. E15 (Health and diagnostics)<br>4. E16 (Log controls) | `application-logging.ts`, the metrics route and the logging settings |
+| Logging and diagnostics | 1. E17 (Dead code)<br>2. E15 (Health and diagnostics)<br>3. E16 (Log controls) | `application-logging.ts`, the metrics route and the logging settings |
 
 ## Work with no lane
 
@@ -99,8 +98,6 @@ Don't run these pairs at the same time.
 | E3 (Retention and deletion) | E7 (Diff scans) | `change-tracking/service.ts` |
 | E5 (Database upkeep) | E15 (Health and diagnostics) | `storage-backups.ts` |
 | E26 (Local desktop transport) | E-0120 (Bearer terminal streams) | `web-gateway.ts` |
-| E13 (Silent failures) | E20 (ACP bridge) | `commands-servers.ts`, `acp-context.ts` |
-| E13 (Silent failures) | E21 (Pi bridge) | `agent-session.ts`, `bridges/pi-bridge/src/http.ts` |
 
 ## Must finish first
 
@@ -117,12 +114,12 @@ These files are named by several batches that can still run together. The report
 
 | File | Batches |
 | --- | --- |
-| `apps/backend/src/core/index.ts` | C5, E9, E13, E15, S-0170 |
+| `apps/backend/src/core/index.ts` | C5, E9, E15, S-0170 |
 | `gateway-support-core.ts` | E15, E17, E18, E24, E-0120 |
 | `native-agent-transcript-projection.ts` | E15 (`0880` task 1) with the Transcript lane |
 | `native-agent-service.ts`, `control-mcp-tools.ts` | E9 with C2, C3, C4, C5 and X1 |
 | `commands-files.ts` | E7, E-0580 |
-| `commands-servers.ts` | C6, E3, E13, E20 |
+| `commands-servers.ts` | C6, E3, E20 |
 | `GlobalSettings.sections.tsx` | C6, E15, E17 |
 | `native-agent-display-tail-store.ts` | E5, E11 |
 | `change-tracking/capture.ts` | E4, E7 |

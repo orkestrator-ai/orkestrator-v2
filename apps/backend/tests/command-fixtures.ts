@@ -1085,7 +1085,8 @@ printf '%s\\n' '{"slug":"${slug}"}' > "$out"
     // Their ad-hoc Docker scripts do not answer the boot probe; make that legacy
     // contract explicit instead of letting empty output bypass production
     // readiness checks. New containers do need staged inputs, so the image is
-    // resolved and declares that one capability unless the scenario refuses.
+    // resolved and declares that one capability unless the scenario refuses. Only
+    // a real image id gets a manifest: a scenario's placeholder stays unreadable.
     const manifestArchive = await imageManifestArchive(root);
     // Cached by image id, and another fixture may have answered for this id.
     resetImageManifestCache();
@@ -1101,8 +1102,9 @@ case "$*" in
       *) printf '%s\\t[]\\tamd64\\n' '${FIXTURE_IMAGE_ID}' ;;
     esac
     exit 0 ;;
+  create\\ *manifest-probe*sha256:*) printf 'manifest-probe\\n'; exit 0 ;;
   cp\\ manifest-probe:*) cat '${manifestArchive}'; exit 0 ;;
-  *manifest-probe*) [ "$1" = create ] && printf 'manifest-probe\\n'; exit 0 ;;
+  "rm -f manifest-probe") exit 0 ;;
 esac
 exec '${scenario}' "$@"
 `,

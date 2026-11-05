@@ -69,6 +69,8 @@ function publication(publicationId: string, sequence = 1): ArtifactPublicationVi
 let ledgers: Map<string, ArtifactPublicationView[]>;
 let ledgerFailure: Map<string, unknown>;
 let publicationFailure: Map<string, unknown>;
+/** Conversations whose ledger reads wait until the test releases them. */
+let heldLedgers: Map<string, Promise<void>>;
 
 function artifactFailure(code: string): Error {
   return Object.assign(new Error(JSON.stringify({ code, message: `${code} failure` })), { code });
@@ -86,10 +88,12 @@ beforeEach(() => {
   ledgers = new Map();
   ledgerFailure = new Map();
   publicationFailure = new Map();
+  heldLedgers = new Map();
   invokeMock.mockReset();
   invokeMock.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
     const conversation = String(args?.logicalSessionKey);
     if (command === TRANSCRIPT_ARTIFACT_COMMANDS.listPublications) {
+      await heldLedgers.get(conversation);
       if (ledgerFailure.has(conversation)) throw ledgerFailure.get(conversation);
       return { publications: ledgers.get(conversation) ?? [], nextSequence: null };
     }
@@ -198,6 +202,38 @@ describe("conversation deletion clears that conversation's protected rich conten
     await waitFor(() => expect(listCalls(DELETED.logicalSessionKey)).toBeGreaterThan(reads));
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(richContentResetCounters.conversation).toBe(1);
+  });
+
+  test("a sibling keeps showing its ledger while its re-read after the clear is pending", async () => {
+    const { deletedLedger, siblingLedger } = await showBoth();
+    let release = () => {};
+    heldLedgers.set(
+      SIBLING.logicalSessionKey,
+      new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+    );
+    const siblingReads = listCalls(SIBLING.logicalSessionKey);
+
+    ledgers.delete(DELETED.logicalSessionKey);
+    act(() =>
+      dispatchResourceChange({
+        resource: "transcript-artifact",
+        id: DELETED.logicalSessionKey,
+        revision: 10,
+      }),
+    );
+    await waitFor(() => expect(artifactConversationRevocationCounters.deleted).toBe(1));
+    await waitFor(() => expect(deletedLedger.result.current).toHaveLength(0));
+    // The clear re-reads the sibling too; that read has not answered yet.
+    await waitFor(() => expect(listCalls(SIBLING.logicalSessionKey)).toBeGreaterThan(siblingReads));
+    expect(siblingLedger.result.current).toHaveLength(1);
+
+    await act(async () => release());
+    expect(siblingLedger.result.current).toHaveLength(1);
+    // The sibling's cached ledger survived the clear: a new mount shows it at once.
+    const remounted = renderHook(() => useArtifactPublications(SIBLING, []));
+    expect(remounted.result.current).toHaveLength(1);
   });
 
   test("a hint that only changed drafts (ledger unchanged) clears nothing", async () => {

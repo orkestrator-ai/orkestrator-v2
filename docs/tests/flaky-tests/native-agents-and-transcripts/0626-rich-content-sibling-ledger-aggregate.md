@@ -1,7 +1,7 @@
 # Sibling rich-content ledger is empty in the aggregate
 
 - **ID:** 0626
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-21
 - **Test:** `conversation deletion clears that conversation's protected rich content > the backend's transcript-artifact hint for a deleted conversation clears it once`
 - **File:** `apps/web/src/lib/chat/rich-conversation-revocation.test.tsx:187`
@@ -165,6 +165,19 @@ remains unknown. No rich-content implementation or assertions changed.
 
 Preparation at `c0808605ddf1d4ecb421db6493f91018f1199b56` repeated the sibling ledger length mismatch (expected 1, received 0). Evidence: `.orkestrator/review-artifacts/review-validation-72ace150-e330-4d03-bde1-fdc95c60e6e0/validation-04.stdout.txt`; web group reported six failures. Complete unchanged owner rerun: `mise run test:logged -- --name revocation-alone -- bun --cwd=apps/web test ./src/lib/chat/rich-conversation-revocation.test.tsx --parallel=1 --only-failures`, passed, exit 0, 1.7 s. No cause established; preserve assertions.
 
+## Mail-envelope review repair — 2026-11-05
+
+Preparation's `mise run test` at `13aa5a949` repeated the sibling-ledger
+mismatch (169.58 ms): expected length 1, received 0 at line 187. The saved
+output is `.orkestrator/review-artifacts/review-validation-c7db4275-291a-4691-8733-69745a6cf87c/validation-04.stdout.txt`;
+the web workspace ran with two workers. The complete unchanged owner passed
+alone (exit 0, 1.5 s):
+`NODE_ENV=test mise run test:logged -- --name rich-revocation-alone -- bun test --cwd apps/web ./src/lib/chat/rich-conversation-revocation.test.tsx --parallel=1 --only-failures`.
+No assertion or implementation in this owner changed. Cause remains unknown.
+A first focused invocation without explicit `NODE_ENV=test` loaded React's
+production build and failed with `React.act is not a function`; that invocation
+is separate from the recorded sibling-ledger failure.
+
 ## To-do 2922 review recurrence, 2026-11-05
 
 - Original command: `mise run test` at `f8ce680624a7b912fa227c3b36192cb7881e8fc0`, concurrent aggregate groups; worker grants not established from the captured output. Backend/web summaries total 29,090 passes, two failures and 142 skips; bridges did not run.
@@ -172,3 +185,26 @@ Preparation at `c0808605ddf1d4ecb421db6493f91018f1199b56` repeated the sibling l
 - Evidence: `.orkestrator/review-artifacts/review-validation-33109580-25be-430c-acf4-c16e7bcdecd1/validation-04.stdout.txt`.
 - Complete unchanged owner rerun: `mise run test:logged -- --name rich-owner-focused -- env NODE_ENV=test bun test --cwd apps/web ./src/lib/chat/rich-conversation-revocation.test.tsx --parallel=1 --only-failures` passed, exit 0, in 1.8 s. Passing output was removed by the logged runner.
 - Cause remains unconfirmed. No rich-content implementation, deadline or assertion changed. Preparation triage was undetermined (known-flaky, dependency-graph-incomplete).
+
+## Root cause and fix — 2026-11-05
+
+- **Root cause:** `useArtifactPublications` keys its ledger cache by
+  `[backend, environment, session, epoch]` with one shared epoch. Clearing
+  one conversation (`clearArtifactPublicationsForConversation`) bumped that
+  epoch, so every other mounted hook's key changed while its cache entry
+  stayed under the old key. The sibling therefore showed an empty ledger
+  until its own re-read answered. The test's line-187 check is synchronous
+  after the wait for the deleted ledger, so it failed whenever the sibling's
+  re-read had not answered yet: a host under load. This was a real product
+  defect, not only a test race: deleting one conversation briefly emptied the
+  artifact ledger of every other open transcript.
+- **Fix:** `clearWhere` in `apps/web/src/hooks/useArtifactPublications.ts` now
+  carries every ledger it does not clear to the new epoch, in recency order.
+  A read in flight across the clear still cannot repopulate the cache.
+- **Regression:** `a sibling keeps showing its ledger while its re-read after
+  the clear is pending` in the owning file holds the sibling's re-read open,
+  so it fails on every run without the fix (`expected length 1, received 0`,
+  the recorded failure) and passes with it:
+  `NODE_ENV=test mise run test:logged -- --name revocation-after-fix -- bun test --cwd apps/web ./src/lib/chat/rich-conversation-revocation.test.tsx ./src/hooks/useArtifactPublications.test.ts --parallel=1 --only-failures`
+  (exit 0). The other artifact-ledger and rich-content reset owners pass
+  unchanged. No existing assertion, timeout or skip changed.

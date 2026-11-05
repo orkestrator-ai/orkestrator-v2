@@ -1,4 +1,5 @@
-import { expect, test } from "bun:test";
+import * as credentialModes from "../src/core/container-credential-mode.js";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 
@@ -14,6 +15,13 @@ const {
   path,
   withFakeDocker,
 } = await createCommandFixtures();
+
+// These replacement fixtures intentionally represent legacy token-file images.
+let modeSpy: ReturnType<typeof spyOn>;
+beforeEach(() => {
+  modeSpy = spyOn(credentialModes, "containerCredentialMode").mockResolvedValue("token-file");
+});
+afterEach(() => modeSpy.mockRestore());
 
 // Claude's stop/replacement lives in commands-containers; Codex's lives in
 // commands-registry-servers. Exercise both with the real HTTP health predicate.

@@ -403,3 +403,23 @@ liveOnOlderImage(
   },
   LIVE_TIMEOUT_MS,
 );
+
+live(
+  "Claude catalogue discovery alone starts a verifier bridge on capable images",
+  async () => {
+    await invoke("stop_claude_server", { containerId });
+    await invoke("get_claude_model_catalog", {
+      environmentId: `env-${RUN}-capable`,
+      forceRefresh: true,
+    });
+    const token = await readContainerBridgeToken(containerId, "claude");
+    expect(token).toMatch(/^okb_[A-Za-z0-9_-]{43}$/);
+    expect(await asAgent(`test ! -e ${CONTAINER_TOKEN_FILES.claude} && printf absent`)).toBe(
+      "absent",
+    );
+    expect(
+      await asAgent(`test ! -r ${containerCredentialFile("claude")} && printf unreadable`),
+    ).toBe("unreadable");
+  },
+  LIVE_TIMEOUT_MS,
+);

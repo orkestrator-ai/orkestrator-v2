@@ -89,6 +89,7 @@ beforeEach(async () => {
   storage = new StorageService(path.join(root, "data"));
   await storage.init();
   const project = await storage.addProject(createProject("remote", checkout));
+  await storage.patchRepositorySettings(project.id, { coordinatorOtherEnvironments: true });
   const coordinator = new CoordinatorService(storage, () => ({
     enabled: true,
     running: true,

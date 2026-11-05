@@ -229,7 +229,7 @@ export function agentMailSenderLabel(from: MailActor, environmentName?: string):
     case "external":
       return "External client";
     case "system":
-      return "Orkestrator workflow";
+      return from.source === "self-reminder" ? "Reminder you set" : "Orkestrator workflow";
     case "coordinator":
       return from.title || "Project coordinator";
     case "node":
@@ -325,7 +325,11 @@ function peerMailFromPayload(payload: unknown, createdAt: string): NativeMessage
       return null;
     }
   }
-  const from = value.from;
+  // The carrier spells a self-reminder as `workflow` for older renderers.
+  const from =
+    value.from.kind === "system" && value.from.selfReminder === true
+      ? { ...value.from, source: "self-reminder" }
+      : value.from;
   // Carrier metadata comes from transcript JSON, not a typed MailActor.
   // Nullable names are valid, but other types cannot reach the label formatter.
   if (
@@ -370,7 +374,7 @@ function peerMailFromPayload(payload: unknown, createdAt: string): NativeMessage
   if (
     from.kind === "system" &&
     (typeof from.projectId !== "string" ||
-      from.source !== "workflow" ||
+      (from.source !== "workflow" && from.source !== "self-reminder") ||
       typeof from.resourceId !== "string")
   )
     return null;

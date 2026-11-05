@@ -23,6 +23,7 @@ import {
   type MailAttachmentInvoker,
 } from "./coordinator-mail-attachments.js";
 import { asNonBlankString } from "./commands-helpers.js";
+import { assertCoordinatorMayActOnEnvironment } from "./coordinator-environment-scope.js";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import {
   coordinatorDeliverNowResult,
@@ -57,6 +58,7 @@ type CoordinatorSender = Scope & {
   kind: "coordinator";
   environmentId: string;
   tabId: string;
+  turnOrigin?: "mail";
 };
 interface OutgoingMail {
   requestId: string;
@@ -432,6 +434,9 @@ export function registerCoordinatorWorkerMailCommands(
         conversationId: conversation,
         environmentId: coordinatorRuntimeId(coordinator, conversation),
         tabId: tab.tabId,
+        // A turn the user did not start: its framing says so. The same line as
+        // the account-switch grant, which only the user's own turn can mint.
+        ...(tab.lastTurnOrigin !== "user" ? { turnOrigin: "mail" as const } : {}),
       };
       const stableRequestId = asNonBlankString(requestId, "requestId");
       const target = asNonBlankString(toEnvironmentId, "toEnvironmentId");
@@ -496,8 +501,10 @@ export function registerCoordinatorWorkerMailCommands(
         steer,
         own,
       };
-      if (destination.projectHome !== true)
+      if (destination.projectHome !== true) {
+        await assertCoordinatorMayActOnEnvironment(context, sender, destination.id);
         return sendCoordinatorWorkerMail(context, invokerFor(context), sender, destination, mail);
+      }
       const reason =
         typeof projectHomeReason === "string" ? projectHomeReason.trim().replace(/\s+/g, " ") : "";
       if (!reason) throw new Error(PROJECT_HOME_REASON_REQUIRED);

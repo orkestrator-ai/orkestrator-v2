@@ -84,6 +84,22 @@ export function selectCoordinatorWorkflowsToClear(
 
   const candidates: Array<{ id: string; createdAt: number; index: number }> = [];
   workflows.forEach((association, index) => {
+    // A leaf's late provisioning is learned on the next authority lookup.
+    // Retain that creation intent until the actual environment is known.
+    if (
+      association.nodeId &&
+      association.createsEnvironment &&
+      !association.createdEnvironmentId &&
+      !association.environmentCreationSettledAt
+    )
+      return;
+    // Creation provenance remains authoritative after the workflow itself is
+    // pruned. Remote existence is unknown, so retain it conservatively.
+    if (
+      association.createdEnvironmentId &&
+      (association.nodeId || input.environmentExists(association.createdEnvironmentId))
+    )
+      return;
     const createdAt = Date.parse(association.createdAt);
     // An unreadable timestamp cannot prove the record is recent.
     if (Number.isFinite(createdAt) && now - createdAt < replayWindowMs) return;
@@ -104,6 +120,11 @@ export function selectCoordinatorWorkflowsToClear(
     )
       return;
     if (!isFinished(association) && state !== "missing" && state !== "finished") return;
+    if (
+      association.environmentCreationSettledAt &&
+      now - Date.parse(association.environmentCreationSettledAt) < replayWindowMs
+    )
+      return;
     if (reviewsFollowed.has(association.id)) return;
     if (association.workerOutcome && !association.workerOutcome.ended) return;
     if (association.kind === "environment") {
@@ -131,7 +152,7 @@ function isFinished(association: CoordinatorWorkflowAssociation): boolean {
   }
   // An environment record without a delegation has nothing to report.
   if (association.kind === "environment") return true;
-  return Boolean(association.terminalNotifiedAt);
+  return Boolean(association.terminalNotifiedAt || association.environmentCreationSettledAt);
 }
 
 function delegationTabKey(association: CoordinatorWorkflowAssociation): string {

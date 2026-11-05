@@ -620,9 +620,14 @@ describe("coordinator command registry", () => {
     const buildBarrier = new Promise<void>((resolve) => {
       releaseBuild = resolve;
     });
-    const startBuild = mock(async () => {
+    const startBuild = mock(async (_input: unknown, coordinatorLaunchId?: string) => {
       await buildBarrier;
-      return { id: "pipeline-1", projectId: project.id };
+      return {
+        id: "pipeline-1",
+        projectId: project.id,
+        environmentId: "pipeline-environment",
+        coordinatorLaunchId,
+      };
     });
     context.buildPipelines = { start: startBuild } as unknown as CommandContext["buildPipelines"];
     const build = commands.get("start_coordinator_build_pipeline")!;
@@ -640,7 +645,12 @@ describe("coordinator command registry", () => {
     expect(
       await storage.coordinators.listCoordinatorWorkflowAssociations(project.id),
     ).toContainEqual(
-      expect.objectContaining({ kind: "build-pipeline", resourceId: "pipeline-1", pending: false }),
+      expect.objectContaining({
+        kind: "build-pipeline",
+        resourceId: "pipeline-1",
+        pending: false,
+        createdEnvironmentId: "pipeline-environment",
+      }),
     );
   });
 
@@ -656,7 +666,11 @@ describe("coordinator command registry", () => {
     };
     const ticket = await storage.kanban.addKanbanTask(project.id, "Task", "");
     const elsewhere = await storage.kanban.addKanbanTask(other.id, "Elsewhere", "");
-    const startBuild = mock(async () => ({ id: "pipeline-linked", projectId: project.id }));
+    const startBuild = mock(async (_input: unknown, coordinatorLaunchId?: string) => ({
+      id: "pipeline-linked",
+      projectId: project.id,
+      coordinatorLaunchId,
+    }));
     context.buildPipelines = { start: startBuild } as unknown as CommandContext["buildPipelines"];
     const input = (taskId: string) => ({
       taskId,
@@ -693,6 +707,7 @@ describe("coordinator command registry", () => {
         taskId: ticket.id,
         source: { type: "kanban", taskId: ticket.id },
       }),
+      expect.any(String),
     );
   });
 
@@ -786,7 +801,11 @@ describe("coordinator command registry", () => {
       coordinatorId: snapshot.workspace.id,
       conversationId: conversation.id,
     };
-    const startBuild = mock(async () => ({ id: "pipeline-defaults", projectId: project.id }));
+    const startBuild = mock(async (_input: unknown, coordinatorLaunchId?: string) => ({
+      id: "pipeline-defaults",
+      projectId: project.id,
+      coordinatorLaunchId,
+    }));
     context.buildPipelines = { start: startBuild } as unknown as CommandContext["buildPipelines"];
     await commands.get("start_coordinator_build_pipeline")!(
       {
@@ -819,6 +838,7 @@ describe("coordinator command registry", () => {
         reviewPreparation: opus,
         steps: expect.objectContaining({ review: opus, address: fix, verify: fix }),
       }),
+      expect.any(String),
     );
 
     // An explicit step replaces only that step; explicit reviewers replace the
@@ -859,6 +879,7 @@ describe("coordinator command registry", () => {
           verify: { agent: "claude", model: "sonnet" },
         }),
       }),
+      expect.any(String),
     );
 
     const environment = createEnvironment(project.id, { name: "worker", environmentType: "local" });
@@ -973,6 +994,7 @@ describe("coordinator command registry", () => {
 
   test("opens delegations only for scheduled mail; a follow-up joins the open one", async () => {
     const project = await storage.addProject(createProject("remote", checkout));
+    await storage.patchRepositorySettings(project.id, { coordinatorOtherEnvironments: true });
     const snapshot = await coordinator.ensure(project.id);
     const conversation = snapshot.workspace.conversations[0]!;
     await coordinator.assignConversationAgent(project.id, conversation.id, "codex");

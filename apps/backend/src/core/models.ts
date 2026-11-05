@@ -1112,6 +1112,11 @@ export interface RepositoryConfig {
    * application".
    */
   agentSettings?: AgentSettingsTier;
+  /**
+   * The user lets this project's coordinator send work to environments it did
+   * not create. Absent (every older record) means no.
+   */
+  coordinatorOtherEnvironments?: boolean;
 }
 
 export interface AppConfig {

@@ -293,6 +293,8 @@ beforeEach(async () => {
         return [{ id: PROJECT, gitUrl: "https://github.com/acme/site.git" }] as T;
       case "get_project_coordinator":
         return { workspace: currentWorkspace } as T;
+      case "assert_coordinator_environment_scope":
+        return { allowed: true } as never;
       case "get_config":
         return {
           global: {
@@ -437,7 +439,7 @@ describe("self-timers", () => {
     clock.now += 60_000;
     await fire();
     expect(mail).toHaveLength(1);
-    expect(mail[0]!.sender).toMatchObject({ kind: "system", source: "workflow" });
+    expect(mail[0]!.sender).toMatchObject({ kind: "system", source: "self-reminder" });
     expect(mail[0]!.input).toMatchObject({
       toEnvironmentId: "coordinator",
       body: expect.stringContaining("Check the workers for usage limits."),

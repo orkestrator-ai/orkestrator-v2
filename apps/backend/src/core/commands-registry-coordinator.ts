@@ -469,6 +469,13 @@ export function registerCoordinatorCommands(
       const coordinator = asNonBlankString(coordinatorId, "coordinatorId");
       const conversation = asNonBlankString(conversationId, "conversationId");
       await requireCoordinatorConversation(context, project, coordinator, conversation);
+      // Backend takeover (`force`) calls the store directly and is unaffected.
+      const workspace = await context.storage.coordinators.getCoordinatorWorkspaceById(coordinator);
+      if (workspace?.conversations.find((item) => item.id === conversation)?.role === "side") {
+        throw new Error(
+          "A side agent cannot adopt workflows: every worker reports to the main coordinator. Ask the main coordinator to adopt it.",
+        );
+      }
       return context.storage.coordinators.adoptCoordinatorWorkflowAssociation(
         project,
         coordinator,
@@ -726,6 +733,7 @@ export function registerCoordinatorCommands(
           conversationId,
           kind: "build-pipeline",
           resourceId: `pending:${stableRequestId}`,
+          createsEnvironment: !input.existingEnvironmentId,
           requestId: stableRequestId,
           payloadHash,
           baseBranch: input.delegationBaseBranch,
@@ -742,10 +750,22 @@ export function registerCoordinatorCommands(
         }
         // BuildPipelineService has its own durable admission key, so reclaiming a
         // reservation after a crash returns the already-created workflow.
-        const workflow = await buildPipelines.start({ ...input, source });
+        const workflow = await buildPipelines.start({ ...input, source }, receipt.association.id);
+        if (
+          !input.existingEnvironmentId &&
+          workflow.coordinatorLaunchId !== receipt.association.id
+        ) {
+          await context.storage.coordinators.releasePendingCoordinatorWorkflowAssociation(
+            receipt.association.id,
+          );
+          throw new Error(
+            "Build admission belongs to another caller; no creation authority granted",
+          );
+        }
         await context.storage.coordinators.completeCoordinatorWorkflowAssociation(
           receipt.association.id,
           workflow.id,
+          input.existingEnvironmentId ? undefined : workflow.environmentId,
         );
         return workflow;
       },

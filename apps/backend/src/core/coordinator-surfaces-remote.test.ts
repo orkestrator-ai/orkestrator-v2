@@ -71,7 +71,10 @@ beforeEach(async () => {
   rootContext = {
     storage: world.storage,
     coordinators: world.coordinator,
-    nodes: { status: async () => ({ nodeId: "bk_command", mode: "command" }) },
+    nodes: {
+      status: async () => ({ nodeId: "bk_command", mode: "command" }),
+      link: () => undefined,
+    },
     nodePortal: {
       summaries: async () => ({
         selfId: "bk_command",
@@ -821,3 +824,68 @@ test("a remote custom Address Findings refused before handoff can retry the same
   expect(retried.structuredContent).toMatchObject({ outcome: "pending" });
   expect(customAddressFindings).toHaveBeenCalledTimes(2);
 });
+
+for (const name of ["address_multi_review", "custom_fix_multi_review"]) {
+  test(`remote ${name} refuses a foreign environment before dispatch or adoption`, async () => {
+    const workflow = await readyReview();
+    await world.storage.patchRepositorySettings(scope.projectId, {}, [
+      "coordinatorOtherEnvironments",
+    ]);
+    const result = await tool(name, {
+      workflowId: workflow.id,
+      ...(name.startsWith("custom") ? { requestId: "denied", instruction: "Fix" } : {}),
+    });
+    expect(result.isError).toBe(true);
+    expect(result.text).toContain("did not create that environment");
+    expect(routed).not.toContain("controller_multi_review_surface");
+    expect(
+      await world.storage.coordinators.listCoordinatorWorkflowAssociations(scope.projectId),
+    ).toHaveLength(0);
+  });
+}
+
+for (const custom of [false, true]) {
+  test(`remote ${custom ? "custom fix" : "address"} dispatches for a created environment with opt-in off`, async () => {
+    const workflow = await readyReview();
+    await world.storage.patchRepositorySettings(scope.projectId, {}, [
+      "coordinatorOtherEnvironments",
+    ]);
+    await world.storage.coordinators.saveCoordinatorWorkflowAssociation({
+      id: "creator",
+      projectId: scope.projectId,
+      coordinatorId: scope.coordinatorId,
+      conversationId: scope.conversationId,
+      kind: "environment",
+      resourceId: workerId,
+      nodeId: "bk_leaf",
+      baseCommit: "a".repeat(40),
+      requestId: "created",
+      createdAt: new Date().toISOString(),
+    });
+    const dispatch = mock(async () => ({
+      ...workflow,
+      phase: "interactive",
+      addressPromptPending: true,
+    }));
+    leafContext.multiReviews = {
+      address: dispatch,
+      customAddressFindings: dispatch,
+    } as unknown as CommandContext["multiReviews"];
+    const name = custom ? "custom_fix_multi_review" : "address_multi_review";
+    const result = await tool(name, {
+      workflowId: workflow.id,
+      ...(custom ? { requestId: "owned-fix", instruction: "Fix" } : {}),
+    });
+    expect({ isError: result.isError, text: result.isError ? result.text : "ok" }).toEqual({
+      isError: false,
+      text: "ok",
+    });
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(routed).toContain("controller_multi_review_surface");
+    expect(
+      (
+        await world.storage.coordinators.listCoordinatorWorkflowAssociations(scope.projectId)
+      ).filter((row) => row.kind === "multi-review"),
+    ).toHaveLength(1);
+  });
+}

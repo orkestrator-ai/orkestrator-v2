@@ -720,7 +720,10 @@ disposable workspace. These invariants are enforced by the backend:
   launch, and address), because that would let a read-only coordinator delegate
   writes into the checkout it may only read. The one exception is a message,
   which needs a reason and usually the user's approval; see
-  [Messaging the project home](#messaging-the-project-home).
+  [Messaging the project home](#messaging-the-project-home). Its row in a
+  coordinator's `list_environments` carries `projectHome: true`, so the model can
+  tell it from a worker before acting on it; a worker's row has no such field, and
+  operator reads are unchanged.
 
 ## Choosing an agent
 
@@ -842,6 +845,27 @@ What each enforced platform actually does:
   the hook is the boundary: the CLI decides availability from the programs
   alone, so asking for a sandbox the probe found broken would start it and
   fail every command.
+
+  A Claude coordinator also cannot read Orkestrator's data directory, which holds
+  the operator credentials (`control-mcp.json`), the provider secrets
+  (`config.json` and its backups), the database and every account's login. The
+  launcher names the directory in
+  `ORKESTRATOR_COORDINATOR_PROTECTED_DATA_DIR`; `coordinatorReadBoundary` turns it
+  into `filesystem.denyRead`, with `filesystem.allowRead` carving back what the
+  turn is meant to read: that conversation's own Claude home (saved tool results
+  and memory; it never holds a login), its attachment directory, the skills
+  directory it was given, the checkout, and the managed toolchains (executables
+  only, and a shell's `rg` execs the CLI from there). The whole directory is denied
+  rather than a list of files, because a list goes stale silently when a store adds
+  a secret, while a missing allowance fails loudly. `allowRead` wins over `denyRead`.
+  The sandbox reaches commands only, so the read-only hook refuses the same paths
+  in `Read`, `Grep` and `Glob`, resolving links and refusing a search rooted above
+  the directory. It also refuses a command naming such a path, and, with no sandbox
+  behind it, one rooted above the directory. That is proven on the pinned CLI on
+  Seatbelt, against a fixture directory and a scripted model
+  (`conformance-coordinator-read-boundary-live.test.ts`). Bubblewrap, a read-only
+  review turn in a worker bridge, and the other providers are in
+  [6080](../todo/coordinator-and-multi-review/6080-x1-coordinator-trust-boundary-follow-ups.md).
 - **Pi** blocks every tool outside its read-only set in its own `tool_call`
   gate, which runs in the bridge process and cannot be switched off by the
   workspace.
@@ -1787,6 +1811,81 @@ It sits last so the changing line does not disturb the cached text ahead of it.
 Names, paths and titles from outside the backend go through
 `inlineCoordinatorContextText`, so none can add a line or close the block.
 
+### Which environments a coordinator may act on
+
+Worker mail is untrusted, so an injected worker can ask its coordinator to have
+some other environment run something, which that environment would then do
+under its own, possibly looser, policy. A coordinator therefore sends work only
+to environments it created. The setting **Let the coordinator use environments
+it did not create** (Project Settings, Coordinator;
+`coordinatorOtherEnvironments` on the repository record, absent meaning off)
+widens that, per project and for as long as it is on. A coordinator cannot
+change it: `update_repository_config` and `patch_repository_settings` are on the
+invoker's refused list. The refusal
+(`COORDINATOR_ENVIRONMENT_ORIGIN_REFUSAL`) names the setting, so the coordinator
+can tell the user what to do.
+
+The answer comes from `coordinatorCreatedEnvironment`
+(`coordinator-environment-scope.ts`), and it is per coordinator, not per
+conversation: every worker belongs to the main coordinator, so a takeover from a
+side agent, a new main after a closed one and an adopted workflow all keep their
+workers. An environment counts when this coordinator has, on the same node
+(`nodeId`), a settled record of:
+
+- an `environment` launch (it carries `baseCommit`; a `delegation:` record does
+  not, because asking an environment something does not make it yours);
+- a `build-pipeline` or local `graph-run` with `createdEnvironmentId` naming
+  the environment it actually created. The completion write records this only
+  for a new environment. Pipeline reservations also retain `createsEnvironment`
+  when requesting creation: a reclaimed admission may return before provisioning.
+  Local provisioning saves repair the receipt, including when provisioning wins
+  the race with association completion. For a remote pipeline, the next authority
+  lookup reads the node's pipeline and persists its environment ID; retention
+  keeps the unresolved remote creation intent until then. This marker alone
+  never grants access. Deferred graph provisioning records its environment when
+  published. Retention keeps the creation receipt while that local
+  environment exists, and keeps remote creation receipts conservatively.
+
+Workflow membership alone grants no authority. A review, a pipeline targeting
+an existing environment, or an existing-environment graph launched under the
+opt-in does not adopt that environment. Turning the setting off revokes access.
+Legacy workflow records without creation evidence fail closed; use the setting
+for those environments. Creation receipts remain sufficient even after the
+pipeline or graph history itself is removed.
+
+An environment with no such record, an older one included, is treated as not
+this coordinator's. Nothing distinguishes it from one the user made by hand, so
+allowing it would leave the check nothing to refuse. It takes the safe, explicit
+outcome [version-compatibility.md](version-compatibility.md) allows for a field
+an old version never wrote: the refusal, with the setting as the way out.
+
+What the check covers is listed tool by tool in
+`control-mcp-coordinator-environment-scope.ts`, and a test fails on an
+environment- or workflow-taking tool that is in no list:
+
+- **Checked:** `send_message` (`toEnvironmentId`, in its commands, because a
+  reply's destination is resolved inside the tool; replies get no exception),
+  `send_prompt_to_tab`, `launch_job`, `launch_terminal`, `stop_worker_turn`,
+  `run_worker_command`, `set_worker_goal`, `pause_worker_goal`,
+  `clear_worker_goal`, `fork_worker`, `start_environment`, `stop_environment`,
+  `open_worker_browser`, `edit_worker_tab`, `create_pr`, `resolve_conflicts`,
+  `launch_multi_review`, `start_build_pipeline` (`existingEnvironmentId`),
+  pipeline resume, restart, pause and cancel (resolved through `pipelineId`),
+  `launch_graph` (`environment.environmentId`), and `transfer_files` (its
+  destination). Standard and custom review addressing always take the check,
+  including reviews already followed by this coordinator, since addressing
+  starts an agent in that environment.
+- **Not checked, reads:** they send nothing and start nothing, including
+  `get_tab_transcript`, `get_worker_changes` and `list_worker_commands`.
+- **Not checked, user-approved requests:** `answer_worker_question`,
+  `request_root_changes`, `request_environment_deletion`,
+  `request_project_file_update`, `request_env_value_reveal`. The user is already
+  the one deciding.
+- **The project home** keeps its own rule below, which ends in the user's approval.
+
+Addresses that are coordinators (`"coordinator"`, a side agent, a node's main
+coordinator, the command node's) are not environments and are not checked.
+
 ### Messaging the project home
 
 Every other coordinator action refuses the project home (see
@@ -1828,6 +1927,26 @@ A connected node's project home cannot be messaged at all: `send_message` with
 `nodeId` (and a reply routed back to another node) goes through
 `coordinatorNodeTarget().environment()`, which refuses the node's project
 checkout as not a worker environment. That refusal is unchanged.
+
+### Mail from a turn the user did not start
+
+A coordinator's turn can begin with a worker's untrusted message, and whatever it
+then sends would otherwise reach its recipient as "an authenticated delegation".
+When the sending conversation's `lastTurnOrigin` is anything but `user`, the mail
+actor carries `turnOrigin: "mail"`, and the carrier adds
+`COORDINATOR_MAIL_ORIGIN_NOTE`: the request arose from agent mail, not from the
+user's instruction. Mail from a turn the user started is unchanged, byte for byte.
+
+The mark is coarse by design, the same line as the account-switch grant: it also
+marks a delegation that merely happened during such a turn, and a later user turn
+clears it even if the content carried over. An agent's reasoning cannot be traced
+to specific input, so tracking provenance per message would only look more
+precise. Three limits: a message the user approved
+(`send_approved_project_home_message`) is not marked, since they read it; a
+scheduled `send_message` reads whichever turn came last; and a leaf without
+`node-mail-turn-origin` frames mail as it always did. Prompts sent with
+`send_prompt_to_tab` and `launch_job` are not mail and carry no such note
+([6080](../todo/coordinator-and-multi-review/6080-x1-coordinator-trust-boundary-follow-ups.md)).
 
 ### Delegation round trip
 
@@ -2960,9 +3079,14 @@ selects Address Findings after confirmed dispatch when the foreground action ini
 attempt. A background retry or backend-restart resume publishes Address Findings without
 changing the current tab or pane. A repeated address call returns the existing
 interactive handoff. An unassociated workflow started from the renderer remains
-available within its project. When an association exists, these controls require
-it to belong to the current coordinator conversation; use `adopt_workflow` for
-an orphaned or closed conversation's association before opening it.
+available to open within its project, but addressing it starts an agent in its
+environment, so it takes the
+[origin check](#which-environments-a-coordinator-may-act-on). When an association
+exists, these controls require it to belong to the current coordinator
+conversation; use `adopt_workflow` for an orphaned or closed conversation's
+association before opening it. A side agent cannot adopt: the
+`adopt_coordinator_workflow` command refuses it, since every worker reports to the
+main. The backend's own takeover (`force`) calls the store directly and is unaffected.
 
 Read the result before reporting success:
 
@@ -3573,3 +3697,24 @@ guarantee, not by one end-to-end scenario replayed per platform:
 
 The runs that qualify each platform, and the scenarios still to add, are in
 [0024-coordinator-live-conformance.md](../todo/coordinator-and-multi-review/0024-coordinator-live-conformance.md).
+
+### Build admission provenance
+
+A coordinator's pipeline reservation ID is persisted as `coordinatorLaunchId`
+on the pipeline at initial admission, through a backend-only start argument.
+Admission reuse preserves the original identity. A new-environment coordinator
+launch refuses an admission belonging to another caller and grants no workflow
+or environment authority. Completion and delayed provisioning repair require
+that identity to match the reservation; requesting a new environment alone is
+not evidence of creation. Leaves must advertise `node-coordinator-build-origin` before a new-environment
+start is sent. Missing capability refuses before launch; missing or mismatched
+identity in a response also fails closed.
+
+Background workflow reconciliation also records late creation or settles missing
+and terminal pipelines, even after a status notice was delivered. Remote
+receipt repair checks at most 16 cooled-down records per origin check,
+rotating oldest checks first with a 60-second cooldown. Explicit project opt-in
+skips repair. Confirmed missing or terminal pipelines without an environment,
+and foreign admissions, receive `environmentCreationSettledAt`; they stop being
+polled and can be reclaimed after the 24-hour replay window. Transport errors
+remain unresolved. Existing creation receipts remain immediately authoritative.

@@ -23,6 +23,7 @@ import {
   type MultiReviewActionResult,
 } from "@orkestrator/protocol/multi-review";
 import { repositoryHint } from "@orkestrator/protocol/node-summaries";
+import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import { BACKEND_CAPABILITIES, hasBackendCapability } from "@orkestrator/protocol/backend-profile";
 import { isBackendId } from "@orkestrator/protocol/federation";
 import { isUnknownCommandError } from "@orkestrator/protocol/unknown-command";
@@ -51,6 +52,10 @@ import {
 } from "./coordinator-node-coordinator-mail.js";
 import type { CommandContext } from "./commands-context.js";
 import { asNonBlankString } from "./commands-helpers.js";
+import {
+  assertCoordinatorMayActOnEnvironment,
+  assertCoordinatorMayControlWorkflow,
+} from "./coordinator-environment-scope.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
 import {
   actionHash,
@@ -550,16 +555,88 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
    * as it is here: the coordinator is woken once, when that worker's turn
    * ends, and its report is held until then.
    */
+  // The origin check for a coordinator tool; see `coordinator-environment-scope.ts`.
+  register("assert_coordinator_environment_scope", async (args, context) => {
+    const caller = await identity(args.scope, context);
+    const named = record(args.target) ? args.target : {};
+    let environmentId = typeof named.environmentId === "string" ? named.environmentId : undefined;
+    // The tool's own checks answer for a coordinator's own runtime id.
+    if (environmentId && coordinatorIdFromRuntimeId(environmentId)) return { allowed: true };
+    const nodeId = typeof named.nodeId === "string" ? named.nodeId : undefined;
+    // transfer_files names this node by its own id.
+    const target =
+      nodeId && nodeId !== (await context.nodes?.status())?.nodeId
+        ? await coordinatorNodeTarget(context, caller.projectId, nodeId)
+        : null;
+    if (typeof named.pipelineId === "string") {
+      const pipeline = target
+        ? await target.call<{ snapshot?: { projectId?: string; environmentId?: string } }>(
+            "get_build_pipeline",
+            { pipelineId: named.pipelineId },
+          )
+        : await context.storage.getBuildPipeline(named.pipelineId);
+      const snapshot = record(pipeline?.snapshot) ? pipeline.snapshot : null;
+      if (snapshot?.projectId !== (target?.projectId ?? caller.projectId))
+        throw new Error("Build pipeline not found in this project");
+      environmentId =
+        typeof snapshot.environmentId === "string" ? snapshot.environmentId : undefined;
+      if (!environmentId) {
+        await assertCoordinatorMayControlWorkflow(
+          context,
+          caller,
+          {
+            kind: "build-pipeline",
+            resourceId: named.pipelineId,
+          },
+          target ?? undefined,
+        );
+        return { allowed: true };
+      }
+    }
+    if (typeof named.workflowId === "string") {
+      const review = target
+        ? await target.call<{ snapshot?: { projectId?: string; environmentId?: string } }>(
+            "get_multi_review_workflow",
+            { workflowId: named.workflowId },
+          )
+        : await context.storage.getMultiReviewWorkflow(named.workflowId);
+      const snapshot = record(review?.snapshot) ? review.snapshot : null;
+      if (snapshot?.projectId !== (target?.projectId ?? caller.projectId))
+        throw new Error("Multi Review not found in this project");
+      environmentId =
+        typeof snapshot.environmentId === "string" ? snapshot.environmentId : undefined;
+    }
+    if (!environmentId) throw new Error("Workflow has no environment");
+    // The project home has its own rule, and the tools refuse it by name.
+    const environment = target
+      ? await target.call<unknown>("get_environment", { environmentId })
+      : await context.storage.getEnvironment(environmentId);
+    if (!record(environment) || environment.projectId !== (target?.projectId ?? caller.projectId)) {
+      throw new Error(
+        target
+          ? "That environment does not belong to this project on that node."
+          : "That environment does not belong to this project.",
+      );
+    }
+    if (environment.projectHome === true) return { allowed: true };
+    await assertCoordinatorMayActOnEnvironment(context, caller, environmentId, target ?? undefined);
+    return { allowed: true };
+  });
   register("send_coordinator_node_mail", async (args, context) => {
     const caller = await identity(args.scope, context);
     const workspace = await context.storage.coordinators.getCoordinatorWorkspaceById(
       caller.coordinatorId,
     );
-    if (
-      workspace?.conversations.find((item) => item.id === caller.conversationId)?.role === "side"
-    ) {
+    const conversation = workspace?.conversations.find((item) => item.id === caller.conversationId);
+    if (conversation?.role === "side") {
       throw new Error('A side agent can only message the main coordinator. Send to "coordinator".');
     }
+    // An older leaf refuses the unknown key, so only one that says it reads it gets it.
+    const turnOrigin = (target: CoordinatorNodeTarget) =>
+      conversation?.lastTurnOrigin !== "user" &&
+      target.supports(BACKEND_CAPABILITIES.nodeMailTurnOrigin)
+        ? { turnOrigin: "mail" as const }
+        : {};
     const toEnvironmentId = asNonBlankString(args.toEnvironmentId, "toEnvironmentId");
     // Checked before anything happens, then copied to the node before the
     // message exists; a failure on either side means there is no message.
@@ -611,6 +688,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
       if (parent && (parent.from.kind !== "node" || parent.from.nodeId !== target.nodeId))
         throw new Error("Reply parent is not from that node");
       return sendToNodeCoordinator(target, {
+        ...turnOrigin(target),
         // An older node is refused below, naming the address it does not know.
         ...(target.supports(BACKEND_CAPABILITIES.nodeCoordinatorMail)
           ? await pushImages(target, { projectId: target.projectId })
@@ -631,17 +709,17 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
         body: asNonBlankString(args.body, "body"),
       });
     }
+    // Before any image reaches the node: the refusal is the whole answer.
+    const checkedTarget = await coordinatorNodeTarget(
+      context,
+      caller.projectId,
+      asNonBlankString(args.nodeId, "nodeId"),
+    );
+    await checkedTarget.environment(toEnvironmentId);
+    await assertCoordinatorMayActOnEnvironment(context, caller, toEnvironmentId, checkedTarget);
     // Outside the admission lock: a copy takes as long as the link takes.
     const pushed = images.length
-      ? await (async () => {
-          const target = await coordinatorNodeTarget(
-            context,
-            caller.projectId,
-            asNonBlankString(args.nodeId, "nodeId"),
-          );
-          await target.environment(toEnvironmentId);
-          return pushImages(target, { environmentId: toEnvironmentId });
-        })()
+      ? await pushImages(checkedTarget, { environmentId: toEnvironmentId })
       : {};
     return context.storage.withAgentMailWorkerAdmission(
       `node:${args.nodeId}:${toEnvironmentId}`,
@@ -715,6 +793,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
               ...(typeof args.subject === "string" ? { subject: args.subject } : {}),
               body: asNonBlankString(args.body, "body"),
               ...(steer ? { steer: true } : {}),
+              ...turnOrigin(target),
               ...pushed,
             },
             `mail:${caller.coordinatorId}:${requestId}`,
@@ -889,6 +968,15 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
       ) {
         throw new Error("Invalid scoped build pipeline request");
       }
+      if (
+        !input.existingEnvironmentId &&
+        !target.supports(BACKEND_CAPABILITIES.nodeCoordinatorBuildOrigin)
+      ) {
+        compatibilityPathUsage.record("coordinator-build.origin-upgrade-required");
+        throw new Error(
+          "Update this node before launching a coordinator build: it cannot prove build creation authority",
+        );
+      }
       if (typeof input.existingEnvironmentId === "string") {
         await target.environment(input.existingEnvironmentId);
       }
@@ -907,6 +995,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
           ...caller,
           kind: "build-pipeline",
           resourceId: `pending:${stableRequestId}`,
+          createsEnvironment: !input.existingEnvironmentId,
           nodeId: target.nodeId,
           requestId: stableRequestId,
           payloadHash,
@@ -933,6 +1022,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
           .call<JsonRecord>(
             "start_controller_build_pipeline",
             {
+              coordinatorLaunchId: receipt.association.id,
               input: {
                 ...input,
                 projectId: target.projectId,
@@ -956,9 +1046,23 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
         if (!record(workflow) || typeof workflow.id !== "string") {
           throw new Error("Build pipeline returned no result");
         }
+        if (
+          !input.existingEnvironmentId &&
+          workflow.coordinatorLaunchId !== receipt.association.id
+        ) {
+          await context.storage.coordinators.releasePendingCoordinatorWorkflowAssociation(
+            receipt.association.id,
+          );
+          throw new Error(
+            "Build admission belongs to another caller; no creation authority granted",
+          );
+        }
         await context.storage.coordinators.completeCoordinatorWorkflowAssociation(
           receipt.association.id,
           workflow.id,
+          input.existingEnvironmentId || typeof workflow.environmentId !== "string"
+            ? undefined
+            : workflow.environmentId,
         );
         if (boardTicket) {
           // Shown at once; the node then reports the build's own progress.
@@ -1189,6 +1293,15 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
     if (!owned && associations.length > 0) {
       throw new Error(
         "Adopt this workflow into the current coordinator conversation before opening it",
+      );
+    }
+    // Addressing starts a turn, even for a workflow already followed here.
+    if ((surface === "address" || surface === "custom-fix") && saved.snapshot.environmentId) {
+      await assertCoordinatorMayActOnEnvironment(
+        context,
+        caller,
+        saved.snapshot.environmentId,
+        target,
       );
     }
     // Addressing adopts the review so its fix outcome reaches this conversation.

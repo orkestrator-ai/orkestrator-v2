@@ -51,6 +51,7 @@ async function world(catalogue: NativeAgentSlashCommand[] = [command("/review")]
   // A coordinator needs a checkout to read; the worker stays env-1.
   const repository = await harness.createRepository("coordinated");
   await harness.storage.updateProject(projectId, { localPath: repository.projectPath });
+  await harness.storage.patchRepositorySettings(projectId, { coordinatorOtherEnvironments: true });
   const coordinators = new CoordinatorService(harness.storage, () => ({
     enabled: true,
     running: true,

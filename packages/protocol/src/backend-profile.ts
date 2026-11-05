@@ -195,6 +195,13 @@ export const BACKEND_CAPABILITIES = {
    */
   nodeMailSteer: "node-mail-steer",
   /**
+   * `deliver_node_mail` accepts `turnOrigin`, so a coordinator's mail from a
+   * turn the user did not start carries that framing on the leaf. An older
+   * leaf rejects the unknown key, so it is sent only to one advertising this;
+   * mail to an older leaf is framed as it always was.
+   */
+  nodeMailTurnOrigin: "node-mail-turn-origin",
+  /**
    * `deliver_node_mail` accepts `toEnvironmentId: "coordinator"` with the
    * leaf's `projectId`, delivering a command node coordinator's mail to the
    * leaf's main coordinator for that project, and the leaf answers
@@ -202,6 +209,8 @@ export const BACKEND_CAPABILITIES = {
    * as an environment and refuse, so the command node checks this first.
    */
   nodeCoordinatorMail: "node-coordinator-mail",
+  /** Backend admission persists and echoes the coordinator launch receipt. */
+  nodeCoordinatorBuildOrigin: "node-coordinator-build-origin",
   /**
    * The hierarchy of coordinator notices (`@orkestrator/protocol/coordinator-notices`).
    * `collect_node_outbox` and `ack_node_outbox` take `coordinatorNotices`, and the

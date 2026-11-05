@@ -16,9 +16,8 @@ A batch file combines several reports as numbered parts and takes the rating of 
 
 | Rank | File | Criticality | Finished | Covers | Why this rating |
 | --- | --- | --- | --- | --- | --- |
-| 1 | [0090-x1-coordinator-trust-boundary.md](../security/0090-x1-coordinator-trust-boundary.md) | High | No | **X1, Coordinator trust boundary.**<br>`Security 0090`: M11: delegation scope and marking mail-originated delegations<br>`Security 0180`: L16: operator token reads, confirm token wording, self-reminder framing<br>`Security 0210`: I2: two stale statements about side agents<br>`Coordinator 0120`: Labelling the home in `list_environments` and a live read-only step for the message gate.<br>`Coordinator 0310`: Refusing `adopt_workflow` from a side agent. | From `Security 0090`: An injected worker can reach a user-created environment under its looser policy, limited only by framing and budgets. |
-| 2 | [0080-c2-workflow-records.md](0080-c2-workflow-records.md) | Medium | No | **C2, Workflow records.**<br>`0080`: The swallowed delegation-open error, showing store-full to the user, and settling the shared cap.<br>`0100`: Closing work when a node is forgotten, and a notice for a long-offline node.<br>`0380`: One shared alias lookup.: Duplicated request-alias lookup | From `0080`: Retention makes it rare, and what remains is a functional gap when every record is in use. |
-| 3 | [0110-c3-sweep-and-reads.md](0110-c3-sweep-and-reads.md) | Medium | No | **C3, Sweep and reads.**<br>`0110`: Syncing once per sweep, a read-only `snapshot()`, batched wake writes and pruning below the limit.<br>`0370`: One own-mailbox check, and `coordinatorRuntimeId` everywhere. | From `0110`: Real repeated work that has not been measured, so it removes a risk rather than a known slowdown. |
+| 1 | [0080-c2-workflow-records.md](0080-c2-workflow-records.md) | Medium | No | **C2, Workflow records.**<br>`0080`: The swallowed delegation-open error, showing store-full to the user, and settling the shared cap.<br>`0100`: Closing work when a node is forgotten, and a notice for a long-offline node.<br>`0380`: One shared alias lookup.: Duplicated request-alias lookup | From `0080`: Retention makes it rare, and what remains is a functional gap when every record is in use. |
+| 2 | [0110-c3-sweep-and-reads.md](0110-c3-sweep-and-reads.md) | Medium | No | **C3, Sweep and reads.**<br>`0110`: Syncing once per sweep, a read-only `snapshot()`, batched wake writes and pruning below the limit.<br>`0370`: One own-mailbox check, and `coordinatorRuntimeId` everywhere. | From `0110`: Real repeated work that has not been measured, so it removes a risk rather than a known slowdown. |
 
 ## Parallel running
 
@@ -32,13 +31,11 @@ This index only changes when a branch merges, so it can't show what is running n
 
 | Batch | Name | Parts | Lane and position | Finish first | Not at the same time as |
 | --- | --- | --- | --- | --- | --- |
-| X1 | [Coordinator trust boundary](../security/0090-x1-coordinator-trust-boundary.md) | `0120` task 1, `0310`; also security `0090`, `0180`, `0210` | Coordinator backend, 1 of 3 | None | None |
-| C2 | [Workflow records](0080-c2-workflow-records.md) | `0080`, `0100`, `0380` | Coordinator backend, 2 of 3 | None | None |
-| C3 | [Sweep and reads](0110-c3-sweep-and-reads.md) | `0110`, `0370` | Coordinator backend, 3 of 3 | None | None |
+| C2 | [Workflow records](0080-c2-workflow-records.md) | `0080`, `0100`, `0380` | Coordinator backend, 1 of 2 | None | None |
+| C3 | [Sweep and reads](0110-c3-sweep-and-reads.md) | `0110`, `0370` | Coordinator backend, 2 of 2 | None | None |
 
 Why these are grouped:
 
-- **X1:** What a coordinator or side agent may reach, and how its mail is framed. `0120` task 2 is a live check and can run separately.
 - **C2:** Same workflow store, and `0100` links to `0080`.
 - **C3:** `0110` makes reads cheap. `0370` routes the copies through the same mailbox check.
 
@@ -48,7 +45,9 @@ None at the moment. C-0390 (Panel re-render cost) was the last, and is closed (b
 
 ## Status of every finding
 
-51 done, 5 partly done, 11 open, 7 no action.
+53 done, 6 partly done, 8 open, 7 no action.
+
+Batch X1 (Coordinator trust boundary) is closed; [the security index](../security/0000-index.md) has its record, and what it left is in to-do [6080](../../todo/coordinator-and-multi-review/6080-x1-coordinator-trust-boundary-follow-ups.md).
 
 Batch C9 (Panel split) is closed. Its task-by-task outcomes are in the [closing report](../2026-11-05-c9-closing-report.md).
 
@@ -90,11 +89,11 @@ Every task was done, so it left no to-do.
 | --- | --- | --- |
 | S1: `send_message` can write through the project home | Done | Reason and approval gate at `apps/backend/src/core/coordinator-worker-mail.ts:417-432` (`5161688cf`, #1632), which supersedes the report's refusal. |
 | S1: reachable through `create_schedule` | Done | The schedule calls the same tool with no reason field: `scheduled-jobs/tools.ts:219-229`, `scheduled-jobs/executor.ts:594-596`. |
-| S1: home unmarked in `list_environments` | Open | [X1 part Coordinator 0120](../security/0090-x1-coordinator-trust-boundary.md#coordinator-0120-label-the-project-home-in-listings-and-prove-the-message-gate-live) |
+| S1: home unmarked in `list_environments` | Done | `projectHome: true` on the coordinator's row only (`control-mcp-tools.ts`, `list_environments`); the batch that built it is X1. |
 | S1: one helper for every home check | No action | Superseded: the message route is now a designed exception, and `control-mcp-server.ts:603` refuses the others. |
 | S1: regression test | Done | `apps/backend/src/core/coordinator-worker-mail.test.ts`, `control-mcp-server-messaging.test.ts`. |
-| S1 and 7: live read-only step for mailing the home | Open | [X1 part Coordinator 0120](../security/0090-x1-coordinator-trust-boundary.md#coordinator-0120-label-the-project-home-in-listings-and-prove-the-message-gate-live) |
-| S2: side agents can adopt workflows | Open | [X1 part Coordinator 0310](../security/0090-x1-coordinator-trust-boundary.md#coordinator-0310-side-agents-can-call-adopt_workflow) |
+| S1 and 7: live read-only step for mailing the home | Partly done | The step exists and is checked offline (`homeMailGateFailures`, `coordinator-live.ts`). Its live run is [6080](../../todo/coordinator-and-multi-review/6080-x1-coordinator-trust-boundary-follow-ups.md) task 1. |
+| S2: side agents can adopt workflows | Done | Refused in `adopt_coordinator_workflow` (`commands-registry-coordinator.ts`); the backend's `force` takeover is unaffected. |
 | S2: doc drift on side-agent capabilities | Done | `docs/architecture/coordinator.md:351-353` (`3fa7d1733`, #1436). |
 | B1: associations never pruned | Done | `storage-coordinators.ts:146-174`, `coordinator-workflow-retention.ts` (`b0dcf1660`, #1620). |
 | B1: request aliases kept without limit | Done | Arrival timestamps and expiry, `docs/architecture/coordinator.md:87-90` (`b0dcf1660`). |

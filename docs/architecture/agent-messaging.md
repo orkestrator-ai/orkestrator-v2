@@ -414,6 +414,17 @@ persists it on the message (`AgentMailMessage.notice`, only for system senders,
 checked by `normalizeAgentMailNotice`), so `read_messages` and `get_message`
 return it too.
 
+A `system` sender's `source` says whose words these are: `workflow` is
+Orkestrator's own notice, and `self-reminder` is text a session scheduled for
+itself. A reminder is framed as the session's own note, not from Orkestrator or
+the user, so text an injected agent chose does not come back with more standing
+than it started with. The carrier still spells it `source: "workflow"` with
+`selfReminder: true`, because a renderer before it refuses any other `source` and
+shows the raw block; the stored message and the mail tools carry the real value
+(see the [register](version-compatibility.md#register)). A coordinator's mail may
+carry `turnOrigin: "mail"`, which adds its own sentence
+([coordinator.md](coordinator.md#mail-from-a-turn-the-user-did-not-start)).
+
 Views for a person draw a stored carrier as a mail tile, and one they cannot
 read as a plain notice, through `presentPeerMailCarrierRow`. That covers native
 tabs, stored pipeline, Multi Review and graph-run transcripts, and the Claude

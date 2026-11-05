@@ -1395,6 +1395,8 @@ export interface PipelinePromptAttempt {
 }
 
 export interface BuildPipeline {
+  /** Durable coordinator launch receipt installed at initial admission only. */
+  coordinatorLaunchId?: string;
   /** Authoritative cancellation transition, independent of earlier session completion. */
   cancelledAt?: string;
   id: string;

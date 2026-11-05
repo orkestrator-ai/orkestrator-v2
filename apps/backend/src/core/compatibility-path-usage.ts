@@ -19,6 +19,8 @@
  * each path's owner and removal condition.
  */
 export const COMPATIBILITY_PATH_IDS = [
+  /** A leaf cannot attest a coordinator build admission before launch. */
+  "coordinator-build.origin-upgrade-required",
   /** A container bridge's token was read from its `node`-readable `/tmp` file. */
   "bridge-credential.token-file",
   /** A session-route 404 was rejected as an outdated bridge, without reading a legacy route. */

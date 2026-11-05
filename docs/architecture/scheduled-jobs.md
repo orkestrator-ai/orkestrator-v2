@@ -194,7 +194,7 @@ policy).
 A **reminder to oneself** is the one addition. No tab may mail its own
 mailbox, so mail from an agent to its own environment (and tab), or from a
 coordinator to `"coordinator"` or its own runtime id, is delivered as a
-backend notice: a system sender (`source: "workflow"`, `resourceId` = the
+backend notice: a system sender (`source: "self-reminder"`, `resourceId` = the
 schedule id) like a workflow status notice, which wakes the recipient subject
 to mute, Off, pause and the hop budget. Mail to `"coordinator"` resolves to
 whichever conversation is main when it fires and starts one if none is open,

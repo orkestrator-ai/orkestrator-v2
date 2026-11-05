@@ -1774,3 +1774,23 @@ describe("BuildPipelineService", () => {
     });
   }
 });
+
+test("pipeline admission persists its original coordinator receipt across reuse", async () => {
+  await withService(
+    async (service, storage) => {
+      const input = startInput({
+        existingEnvironmentId: undefined,
+        delegationBaseBranch: "main",
+        delegationBaseCommit: "a".repeat(40),
+      });
+      const first = await service.start(input, "original-launch");
+      const reused = await service.start(input, "foreign-launch");
+      expect(reused.id).toBe(first.id);
+      expect(reused.coordinatorLaunchId).toBe("original-launch");
+      expect((await storage.getBuildPipeline(first.id))!.snapshot).toMatchObject({
+        coordinatorLaunchId: "original-launch",
+      });
+    },
+    { realKanban: true },
+  );
+});

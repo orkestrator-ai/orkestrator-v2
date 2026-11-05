@@ -66,6 +66,7 @@ async function setup() {
           ],
         },
       };
+    if (command === "assert_coordinator_environment_scope") result = { allowed: true };
     if (command === "dispatch_native_agent_intent") result = { outcome: "accepted" };
     if (command === "launch_control_job")
       result = { tabId: "job-tab", environmentId: args.environmentId, outcome: "accepted" };
@@ -120,6 +121,9 @@ async function setup() {
         break;
       case "get_environment_snapshots":
         result = [];
+        break;
+      case "assert_coordinator_environment_scope":
+        result = { allowed: true };
         break;
       case "get_config":
         result = {
@@ -354,7 +358,9 @@ test("authorized remote state changes stay on the matching project and node", as
       nodeId: "bk_leaf",
     });
   }
-  workflows.set("own", { snapshot: { id: "own", projectId: "p-leaf", phase: "running" } });
+  workflows.set("own", {
+    snapshot: { id: "own", projectId: "p-leaf", environmentId: "leaf-only", phase: "running" },
+  });
   for (const name of ["pause_build_pipeline", "cancel_build_pipeline", "cancel_multi_review"]) {
     const response = await call(name, { nodeId: "bk_leaf", pipelineId: "own", workflowId: "own" });
     expect(response.body.result?.isError).not.toBe(true);
@@ -366,7 +372,9 @@ test("authorized remote state changes stay on the matching project and node", as
   expect(JSON.stringify(running.body.result)).not.toContain("restart_build_pipeline_step");
   expect(JSON.stringify(running.body.result)).toContain("no action is needed");
   expect(routed.some((item) => item.command === "resume_build_pipeline")).toBe(false);
-  workflows.set("own", { snapshot: { id: "own", projectId: "p-leaf", phase: "paused" } });
+  workflows.set("own", {
+    snapshot: { id: "own", projectId: "p-leaf", environmentId: "leaf-only", phase: "paused" },
+  });
   const paused = await call("resume_build_pipeline", { nodeId: "bk_leaf", pipelineId: "own" });
   expect(paused.body.result?.isError).not.toBe(true);
   expect(routed.some((item) => item.command === "resume_build_pipeline")).toBe(true);

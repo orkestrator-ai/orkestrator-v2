@@ -3,6 +3,7 @@ import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { access, utimes } from "node:fs/promises";
 
+import { renderAgentMailCarrier } from "@orkestrator/protocol/agent-mail";
 import { MailWorld } from "../agent-mail-world-test-support.js";
 import type { CommandContext, CommandHandler } from "../commands-context.js";
 import { registerNodeCommands } from "../commands-registry-nodes.js";
@@ -157,6 +158,60 @@ describe("CO-05/UP-02 coordinator mail to and from a leaf agent", () => {
       });
     });
   }
+
+  test("mail-origin framing reaches the leaf's own coordinator", async () => {
+    const world = await MailWorld.create();
+    worlds.push(world);
+    const main = await world.main();
+    const { instance } = coordination(world, [{ id: "bk_cmd", name: "Office desktop" }]);
+    for (const origin of ["mail", undefined] as const) {
+      const { messageId } = await instance.deliverIncoming({
+        controllerId: "bk_cmd",
+        coordinatorEnvironmentId: "coordinator:c1:conv-1",
+        coordinatorTabId: "coord-tab",
+        projectId: world.projectId,
+        toEnvironmentId: "coordinator",
+        toTabId: "",
+        requestId: `origin-${origin}`,
+        body: "Status?",
+        ...(origin ? { turnOrigin: origin } : {}),
+      });
+      const message = await world.storage.getAgentMailMessage(
+        main.environmentId,
+        main.tabId,
+        messageId,
+      );
+      expect(renderAgentMailCarrier(message).includes("arose from agent mail")).toBe(
+        origin === "mail",
+      );
+      expect(message.from).toMatchObject({ kind: "node", role: "coordinator" });
+    }
+  });
+
+  test("a command node's mail from a turn the user did not start says so on the leaf", async () => {
+    const world = await MailWorld.create();
+    worlds.push(world);
+    const worker = await world.addEnvironment("worker");
+    const { instance } = coordination(world, [{ id: "bk_cmd", name: "Office desktop" }]);
+    world.startTurn(worker);
+    const input = {
+      controllerId: "bk_cmd",
+      coordinatorEnvironmentId: "coordinator:c1:conv-1",
+      coordinatorTabId: "coord-tab",
+      toEnvironmentId: worker.environmentId,
+      toTabId: worker.tabId,
+      body: "Please report your status.",
+    };
+    const carrier = async (requestId: string, extra: Record<string, unknown>) => {
+      const { messageId } = await instance.deliverIncoming({ ...input, requestId, ...extra });
+      return renderAgentMailCarrier(
+        await world.storage.getAgentMailMessage(worker.environmentId, worker.tabId, messageId),
+      );
+    };
+    expect(await carrier("from-mail", { turnOrigin: "mail" })).toContain("arose from agent mail");
+    expect(await carrier("from-user", {})).not.toContain("arose from agent mail");
+    await world.finishTurn(worker);
+  });
 
   test("delivers as ordinary incoming mail and routes the agent's answer to that command node's outbox", async () => {
     const world = await MailWorld.create();

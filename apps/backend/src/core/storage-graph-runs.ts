@@ -247,6 +247,7 @@ export class GraphRunsRepository {
           return { result: next, value: next };
         },
       );
+      await this.repos.coordinators.recordGraphEnvironmentCreation(created);
       this.context.changes.announce("graph-run", next.id, next.projectId);
       return created;
     });
@@ -280,7 +281,7 @@ export class GraphRunsRepository {
     this.checkedRun(candidate);
     return this.enqueueGraphRunMutation(async () => {
       await this.assertEnvironmentWritable(candidate.environmentId);
-      return this.context.database.transaction(() => {
+      const saved = this.context.database.transaction(() => {
         const saved = this.context.updateStoreRow<GraphRun>(
           this.graphRunsFile(),
           candidate.id,
@@ -327,6 +328,8 @@ export class GraphRunsRepository {
         this.context.changes.announce("graph-run", candidate.id, candidate.projectId);
         return saved;
       });
+      await this.repos.coordinators.recordGraphEnvironmentCreation(saved);
+      return saved;
     });
   }
 
@@ -602,6 +605,12 @@ export class GraphRunsRepository {
           right.endedAt.localeCompare(left.endedAt) || right.id.localeCompare(left.id),
       );
       const expired = finished.slice(keep);
+      // Repair the crash window between publishing a provisioned run and its
+      // creation receipt before disposable history can remove that evidence.
+      for (const run of expired)
+        await this.repos.coordinators.recordGraphEnvironmentCreation(
+          run.stored as unknown as GraphRun,
+        );
       for (const run of expired) this.removeRunRows(run.id, run.stored);
       return expired.map((run) => run.id);
     });

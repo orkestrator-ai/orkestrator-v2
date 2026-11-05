@@ -697,6 +697,11 @@ export interface RepositoryConfig {
   /** Entry port inside the container (e.g. 3000 for a web server).
    * New containers will automatically map this to an available host port. */
   entryPort?: number;
+  /**
+   * The user lets this project's coordinator send work to environments it did
+   * not create. Absent (every older record) means no.
+   */
+  coordinatorOtherEnvironments?: boolean;
 }
 
 /**

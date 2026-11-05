@@ -278,6 +278,14 @@ invariants keep it honest:
   also needs an explicit `required` sandbox decision: repository and ambient
   configuration can launch helpers even for `git diff` or `git status`, so
   hook-only turns use reading tools or delegate Git to a worker.
+- **A coordinator reads its own runtime and not the rest of the data
+  directory.** `read-only-path-boundary.ts` holds the rule for both layers: the
+  sandbox's `denyRead`/`allowRead` for commands, and the hook for `Read`, `Grep`
+  and `Glob`, which the CLI runs outside the sandbox. Something a coordinator must
+  newly read from the data directory goes in `coordinatorReadBoundary`'s
+  allowance, and a secret must never be placed where that allowance reaches.
+  `conformance-coordinator-read-boundary-live.test.ts` proves it on the pinned CLI
+  with a scripted model and a fixture directory.
 - **Git runs against the checkout and nothing else.** Options before the
   subcommand are an allowlist (`GIT_GLOBAL_OPTIONS`, exact match), because
   `--git-dir`, `--work-tree`, `-c` and `-C` choose which repository's config

@@ -1,4 +1,5 @@
 import type { WorkerTabCloseAdmission } from "./worker-tab-close-admission.js";
+import type { GraphRun } from "@orkestrator/protocol/graphs/run";
 import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -182,7 +183,8 @@ export class CoordinatorsRepository {
   private workflowResourceState(
     association: CoordinatorWorkflowAssociation,
   ): "active" | "finished" | "missing" | "unknown" {
-    if (association.nodeId) return "unknown";
+    if (association.nodeId)
+      return association.environmentCreationSettledAt ? "finished" : "unknown";
     if (association.kind === "feature-plan") return this.featurePlanResourceState(association);
     const file =
       association.kind === "multi-review"
@@ -439,6 +441,63 @@ export class CoordinatorsRepository {
     });
   }
 
+  /** Graph provisioning may finish after its launch receipt settled. Preserve
+   * creation before the graph's disposable run history can leave the store. */
+  async recordGraphEnvironmentCreation(run: GraphRun): Promise<void> {
+    if (!run.environmentId || !run.launch?.create || run.launch.requestedBy !== "coordinator")
+      return;
+    await this.enqueueCoordinatorMutation(async () => {
+      const store = await this.loadCoordinatorStore();
+      let changed = false;
+      for (const association of store.workflows) {
+        if (
+          association.kind !== "graph-run" ||
+          association.nodeId ||
+          association.projectId !== run.projectId ||
+          association.resourceId !== run.id ||
+          association.createdEnvironmentId === run.environmentId
+        )
+          continue;
+        association.createdEnvironmentId = run.environmentId;
+        changed = true;
+      }
+      if (!changed) return;
+      store.revision += 1;
+      await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
+    });
+  }
+
+  /** A reclaimed pipeline admission can settle its receipt before provisioning. */
+  async recordPipelineEnvironmentCreation(
+    pipelineId: string,
+    projectId: string,
+    environmentId: string,
+    coordinatorLaunchId?: string,
+  ): Promise<void> {
+    if (!environmentId || !coordinatorLaunchId) return;
+    await this.enqueueCoordinatorMutation(async () => {
+      const store = await this.loadCoordinatorStore();
+      let changed = false;
+      for (const association of store.workflows) {
+        if (
+          association.kind !== "build-pipeline" ||
+          association.id !== coordinatorLaunchId ||
+          association.nodeId ||
+          association.projectId !== projectId ||
+          association.resourceId !== pipelineId ||
+          association.createsEnvironment !== true ||
+          association.createdEnvironmentId
+        )
+          continue;
+        association.createdEnvironmentId = environmentId;
+        changed = true;
+      }
+      if (!changed) return;
+      store.revision += 1;
+      await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
+    });
+  }
+
   async saveCoordinatorWorkflowAssociation(
     association: CoordinatorWorkflowAssociation,
   ): Promise<CoordinatorWorkflowAssociation> {
@@ -518,6 +577,7 @@ export class CoordinatorsRepository {
   async completeCoordinatorWorkflowAssociation(
     associationId: string,
     resourceId: string,
+    createdEnvironmentId?: string,
   ): Promise<CoordinatorWorkflowAssociation> {
     if (!resourceId.trim()) throw new Error("Coordinator workflow resource id is required");
     return this.enqueueCoordinatorMutation(async () => {
@@ -573,6 +633,23 @@ export class CoordinatorsRepository {
         return owner;
       }
       association.resourceId = resourceId;
+      // Provisioning may have won the race with this completion. Look up the
+      // committed local pipeline as well as the start call's earlier snapshot.
+      if (
+        !createdEnvironmentId &&
+        association.kind === "build-pipeline" &&
+        !association.nodeId &&
+        association.createsEnvironment === true
+      ) {
+        const pipeline = await this.repos.buildPipelines.getBuildPipeline(resourceId);
+        if (
+          pipeline?.projectId === association.projectId &&
+          (pipeline.snapshot as { coordinatorLaunchId?: unknown } | null)?.coordinatorLaunchId ===
+            association.id
+        )
+          createdEnvironmentId = pipeline.environmentId || undefined;
+      }
+      if (createdEnvironmentId) association.createdEnvironmentId = createdEnvironmentId;
       association.pending = false;
       delete association.claimPid;
       store.revision += 1;

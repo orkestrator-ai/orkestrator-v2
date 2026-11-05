@@ -60,6 +60,8 @@ export async function sendToNodeCoordinator(
     nodeParent?: { id: string; threadId: string; hopCount: number };
     /** Already in that node's spool, for its `deliver_node_mail` to place. */
     attachments?: MailAttachmentBatch;
+    /** Sent only to a leaf that advertises `node-mail-turn-origin`. */
+    turnOrigin?: "mail";
   },
 ): Promise<JsonRecord> {
   if (!target.supports(BACKEND_CAPABILITIES.nodeCoordinatorMail)) {
@@ -82,6 +84,7 @@ export async function sendToNodeCoordinator(
       toEnvironmentId: COORDINATOR_MAIL_ADDRESS,
       projectId: target.projectId,
       ...(input.subject ? { subject: input.subject } : {}),
+      ...(input.turnOrigin ? { turnOrigin: input.turnOrigin } : {}),
       body: input.body,
       ...(input.nodeParent ? { nodeParent: input.nodeParent } : {}),
       ...(input.attachments ? { attachments: input.attachments } : {}),

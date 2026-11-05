@@ -50,3 +50,15 @@ behaviour, not its cause. No assertion, timeout or skip was changed.
 Preparation at cd5b0142 again failed this owner under `mise run test` (1169.12 ms; diagnostic in review-validation-6e251f8d-c76b-469b-b389-d7b80e76ea49/validation-04.stdout.txt). The owner passed in a sequential one-worker rerun alongside three other recorded backend owners:
 `mise run test:logged -- --name recorded-backend-failures -- bun --cwd=apps/backend test tests/shell.test.ts tests/claude-state-signal-integration.test.ts tests/commands-container-exec.test.ts src/core/preview-listener-ownership.test.ts --parallel=1 --only-failures`.
 The command passed in 6.1 seconds; passing output was deleted by the logged runner. No assertion changed.
+
+## X1 preparation recurrence, 2026-11-05
+
+Preparation at `e6d400a5a` failed the exact owner test with `working 4 0`
+instead of `working 20 0` (1386.84 ms), in `mise run test:logged -- --name
+review-default-tests -- mise run test`. Evidence: review-validation-cb344dc9-16d4-4c41-980a-8b2fc2a2e3b5/validation-04.stderr.txt.
+The aggregate selected concurrent workers through the tier runner; it has no
+reliable closing total. `mise run test:logged -- --name recorded-state-signal --
+bun test --cwd apps/backend ./tests/claude-state-signal-integration.test.ts
+--parallel=1 --only-failures` passed in 0.9 s (exit 0). Passing output was removed,
+so no totals are inferred. No implementation, assertion or timeout changed;
+the root cause and original aggregate remain unresolved.

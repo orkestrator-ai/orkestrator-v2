@@ -104,7 +104,10 @@ import {
 import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 import { resolveDefaultAgent } from "@orkestrator/protocol/agent-settings";
 import { PLAN_USAGE_PLATFORMS } from "@orkestrator/protocol/plan-usage";
-import { ALLOWLIST_ENTRY_HINT } from "@orkestrator/protocol/network-allowlist";
+import {
+  ALLOWLIST_ENTRY_HINT,
+  ALLOWLIST_RESIDUAL_RISK,
+} from "@orkestrator/protocol/network-allowlist";
 import { DEFAULT_CLAUDE_BACKGROUND_COMMAND_LIMIT_HOURS } from "@orkestrator/protocol/claude-background-commands";
 import { AgentDefaultsPane } from "./agent/AgentDefaultsPane";
 import { MultiReviewDefaultsEditor } from "./agent/MultiReviewDefaultsEditor";
@@ -1895,6 +1898,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
       description={<>Domains allowed in "Restricted" mode. {ALLOWLIST_ENTRY_HINT}</>}
     >
       <div className="space-y-4">
+        <p className="text-sm text-muted-foreground">{ALLOWLIST_RESIDUAL_RISK}</p>
         <Textarea
           value={allowedDomains}
           onChange={handleDomainsChange}

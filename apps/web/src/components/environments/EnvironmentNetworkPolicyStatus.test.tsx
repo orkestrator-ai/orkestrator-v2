@@ -159,4 +159,48 @@ describe("environment network policy status", () => {
     await screen.findByText(/cannot\s+change it in place/);
     expect(screen.queryAllByRole("button", { name: "Apply now" })).toHaveLength(0);
   });
+  test("says whether the gateway also checks names, and what it cannot see", async () => {
+    const effective = base.effective!;
+    install({
+      ...base,
+      policyVersion: 3,
+      enforcement: "gateway",
+      effective: { ...effective, egressFilter: "enforced" },
+    });
+    render(<EnvironmentNetworkPolicyStatus environmentId="env-net" />);
+    await screen.findByText(/Names are checked too/);
+    expect(screen.getByText(/hidden inside encrypted traffic/)).toBeTruthy();
+    cleanup();
+    install({
+      ...base,
+      policyVersion: 3,
+      enforcement: "gateway",
+      effective: { ...effective, egressFilter: "off" },
+    });
+    render(<EnvironmentNetworkPolicyStatus environmentId="env-net" />);
+    await screen.findByText(/Name checks were switched off/);
+    cleanup();
+    // An older image's gateway reports no such field: addresses only.
+    install({
+      ...base,
+      policyVersion: 3,
+      enforcement: "gateway",
+      effective: { ...effective, egressFilter: null },
+    });
+    render(<EnvironmentNetworkPolicyStatus environmentId="env-net" />);
+    await screen.findByText(/image predates name checks/);
+    cleanup();
+    // A backend that predates the field says nothing about name checks.
+    install({ ...base, policyVersion: 3, enforcement: "gateway" });
+    render(<EnvironmentNetworkPolicyStatus environmentId="env-net" />);
+    await screen.findByText(/Enforced by the environment's egress gateway/);
+    expect(screen.queryByText(/name checks/i) === null).toBe(true);
+    cleanup();
+    // An in-container firewall never had them; nothing is claimed either way.
+    install({ ...base, enforcement: "container" });
+    render(<EnvironmentNetworkPolicyStatus environmentId="env-net" />);
+    await screen.findByText(/Enforced inside the container/);
+    expect(screen.queryByText(/name checks/i) === null).toBe(true);
+    expect(screen.queryByText(/Names are checked/) === null).toBe(true);
+  });
 });

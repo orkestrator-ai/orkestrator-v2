@@ -31,8 +31,8 @@ const log = createLogger("storage");
  * effort:
  *
  * - `change-tracking-daily-<stamp>.sqlite`, taken by the same check when the
- *   newest is at least {@link LEDGER_INTERVAL_MS} old and the ledger changed
- *   since it. The newest {@link KEEP_LEDGER} stay. These give way first to the
+ *   newest is at least {@link LEDGER_INTERVAL_MS} old. The newest
+ *   {@link KEEP_LEDGER} stay. These give way first to the
  *   snapshot budget, and one that does not fit beside the others is skipped.
  * - `change-tracking-pre-migration-v<from>-<stamp>.sqlite`, before the ledger
  *   file's own schema is migrated. The newest {@link KEEP_PRE_MIGRATION} stay.

@@ -42,6 +42,42 @@ test.describe("static HTML presentation", () => {
     );
   });
 
+  test("fallback layout moves remount an open report with a fresh identity", async ({
+    page,
+  }, testInfo) => {
+    await open(page);
+    await rendered(page);
+    const before = await page.locator(IFRAME).getAttribute("srcdoc");
+    await page.screenshot({
+      path: `output/visual-previews/static-before-${testInfo.project.name}.png`,
+    });
+    await page.evaluate(async (modulePath) => {
+      // Force the Safari fallback even on Chromium.
+      Object.defineProperty(Element.prototype, "moveBefore", {
+        value: undefined,
+        configurable: true,
+      });
+      const { parkHost, placeHost } = await import(/* @vite-ignore */ modulePath);
+      const frame = document.querySelector('iframe[data-artifact-static-document="true"]')!;
+      const host = frame.closest<HTMLElement>("[data-artifact-static-state]")!;
+      const originalParent = host.parentElement!;
+      const park = document.createElement("div");
+      document.body.appendChild(park);
+      parkHost(host, park);
+      placeHost(host, originalParent);
+      park.remove();
+    }, `/@fs${process.cwd()}/apps/web/src/lib/stable-host.ts`);
+    const fresh = await rendered(page);
+    await expect(fresh.locator("h1")).toHaveText("Agent activity and cost");
+    expect(await page.locator(IFRAME).getAttribute("srcdoc")).not.toBe(before);
+    await expect(page.getByRole("button", { name: "Retry", exact: true })).toHaveCount(0);
+    await page.screenshot({
+      path: `output/visual-previews/static-after-${testInfo.project.name}.png`,
+    });
+    await page.reload();
+    await rendered(page);
+  });
+
   test("a session label can be selected and copied", async ({ page, context, browserName }) => {
     await open(page);
     const frame = await rendered(page);

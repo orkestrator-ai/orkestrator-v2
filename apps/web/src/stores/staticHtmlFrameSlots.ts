@@ -48,6 +48,10 @@ function allocate(): void {
       changed = true;
     }
   });
+  // A held claim can retain its current slot, but cannot queue for a new one.
+  for (const [id, claim] of Array.from(claims)) {
+    if (claim.rank === "held" && !claim.granted) claims.delete(id);
+  }
   if (changed) {
     version++;
     for (const listener of Array.from(listeners)) listener();
@@ -63,6 +67,7 @@ export function setStaticFrameClaim(id: string, rank: StaticFrameRank | null): v
     if (existing.rank === rank) return;
     existing.rank = rank;
   } else {
+    if (rank === "held") return;
     claims.set(id, { rank, order: nextOrder++, granted: false });
   }
   allocate();

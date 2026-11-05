@@ -29,6 +29,7 @@ import {
 import { useArtifactLiveHostStore } from "@/stores/artifactLiveHostStore";
 import { useRichContentViewStore } from "@/stores/richContentViewStore";
 import { resetStaticFrameSlots, staticFrameSlotStats } from "@/stores/staticHtmlFrameSlots";
+import { parkHost, placeHost } from "@/lib/stable-host";
 import { ArtifactPart } from "./ArtifactPart";
 
 const invokeMock = invoke as unknown as ReturnType<typeof mock>;
@@ -336,6 +337,27 @@ describe("StaticHtmlArtifactView", () => {
     readEffective = () => effective();
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     await awaitFrame(container);
+  });
+
+  test("fallback host moves replace the frame and channel without a manual retry", async () => {
+    const { container } = render(wrap(<ArtifactPart part={PART} />));
+    const iframe = await awaitFrame(container);
+    const { render: old } = completeHandshake(iframe);
+    const originalParent = container.parentElement!;
+    const park = document.createElement("div");
+    document.body.appendChild(park);
+    act(() => {
+      parkHost(container, park);
+      placeHost(container, originalParent);
+    });
+    const fresh = await awaitFrame(container);
+    expect(fresh).not.toBe(iframe);
+    expect(nonceOf(fresh)).not.toBe(nonceOf(iframe));
+    const { render: next } = completeHandshake(fresh);
+    expect(next.generation).not.toBe(old.generation);
+    expect(fresh.dataset.state).toBe("rendered");
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    park.remove();
   });
 
   test("a retry mounts a fresh frame with a fresh identity", async () => {

@@ -211,6 +211,7 @@ export function installStaticHtmlPresentationRuntime(config: {
   maxHtmlBytes: number;
   maxElements: number;
   maxLinkCharacters: number;
+  maxReportedHeight: number;
 }) {
   const CHANNEL = "orkestrator-static-html";
   const MOUNT_ID = /^[A-Za-z0-9_-]{16,64}$/;
@@ -331,7 +332,7 @@ export function installStaticHtmlPresentationRuntime(config: {
   function measure(): number {
     const root = document.documentElement.getBoundingClientRect().height;
     const body = document.body ? document.body.scrollHeight : 0;
-    return Math.ceil(Math.max(root, body));
+    return Math.min(config.maxReportedHeight, Math.ceil(Math.max(root, body)));
   }
   let lastHeight = -1;
   let sizeTimer: ReturnType<typeof setTimeout> | null = null;
@@ -509,6 +510,7 @@ function runtimeScript(nonce: string | null): string {
     maxHtmlBytes: STATIC_PRESENTATION_POLICY.maxDocumentBytes,
     maxElements: STATIC_PRESENTATION_POLICY.maxElements,
     maxLinkCharacters: FRAME_CHANNEL_POLICY.maxLinkCharacters,
+    maxReportedHeight: MAX_REPORTED_HEIGHT,
   };
   return `(${installStaticHtmlPresentationRuntime.toString()})(${JSON.stringify(config)});`;
 }

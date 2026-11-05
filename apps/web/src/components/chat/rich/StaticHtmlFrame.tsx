@@ -17,6 +17,7 @@ import {
 import { StaticHtmlFrameSession } from "@/lib/chat/static-html-frame-session";
 import { createUuid } from "@/lib/uuid";
 import { noteStaticFrameEvent } from "@/stores/staticHtmlFrameSlots";
+import { HOST_DETACHING_EVENT } from "@/lib/stable-host";
 import { cn } from "@/lib/utils";
 import { staticHtmlFrameSource } from "./static-html-frame-source";
 
@@ -46,6 +47,15 @@ function mountId(): string {
   return createUuid().replaceAll("-", "");
 }
 
+function freshMount() {
+  const nonce = mountId();
+  return {
+    nonce,
+    source: staticHtmlFrameSource(nonce),
+    session: new StaticHtmlFrameSession({ nonce, generation: mountId() }),
+  };
+}
+
 /**
  * One mounted static document. A presentation-only surface: it posts the
  * verified document once to its own freshly loaded frame and reports what the
@@ -73,14 +83,7 @@ export function StaticHtmlFrame({
   events: StaticFrameEvents;
 }) {
   const iframe = useRef<HTMLIFrameElement>(null);
-  const [mount] = useState(() => {
-    const nonce = mountId();
-    return {
-      nonce,
-      source: staticHtmlFrameSource(nonce),
-      session: new StaticHtmlFrameSession({ nonce, generation: mountId() }),
-    };
-  });
+  const [mount, setMount] = useState(freshMount);
   const appearance = useAppAppearance();
   const [themed, setThemed] = useState(true);
   const latest = useRef({ html, appearance, verifiedAppearance, events });
@@ -174,8 +177,19 @@ export function StaticHtmlFrame({
           break;
       }
     };
+    const element = iframe.current;
+    const onDetaching = () => {
+      // Never resend into the document reloaded by appendChild. Retire the old
+      // channel synchronously, then replace the iframe with a new identity.
+      session.invalidate();
+      settled = true;
+      clearTimeout(timeout);
+      setMount(freshMount());
+    };
+    element?.addEventListener(HOST_DETACHING_EVENT, onDetaching);
     window.addEventListener("message", onMessage);
     return () => {
+      element?.removeEventListener(HOST_DETACHING_EVENT, onDetaching);
       window.removeEventListener("message", onMessage);
       clearTimeout(timeout);
       if (pendingSize !== null) clearTimeout(pendingSize);
@@ -197,6 +211,7 @@ export function StaticHtmlFrame({
 
   return (
     <iframe
+      key={mount.nonce}
       ref={iframe}
       title={`Report: ${title}`}
       sandbox="allow-scripts"

@@ -47,6 +47,20 @@ describe("static frame slots", () => {
     expect(staticFrameSlotGranted(ids[0]!)).toBe(false);
   });
 
+  test("a displaced held claim cannot regain a freed slot until visible", () => {
+    const ids = fill();
+    const held = ids[0]!;
+    setStaticFrameClaim(held, "held");
+    setStaticFrameClaim("next", "visible");
+    expect(staticFrameSlotGranted(held)).toBe(false);
+    setStaticFrameClaim(ids[1]!, null);
+    setStaticFrameClaim(held, "held");
+    expect(staticFrameSlotGranted(held)).toBe(false);
+    expect(staticFrameSlotStats().claims).toBe(LIMIT - 1);
+    setStaticFrameClaim(held, "visible");
+    expect(staticFrameSlotGranted(held)).toBe(true);
+  });
+
   test("an expanded document takes priority over an inactive visible one", () => {
     const ids = fill();
     setStaticFrameClaim("wide", "expanded");

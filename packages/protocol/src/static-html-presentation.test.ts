@@ -46,6 +46,7 @@ async function frameWith(url = "https://frame.invalid/doc"): Promise<Frame> {
       maxHtmlBytes: STATIC_PRESENTATION_POLICY.maxDocumentBytes,
       maxElements: STATIC_PRESENTATION_POLICY.maxElements,
       maxLinkCharacters: FRAME_CHANNEL_POLICY.maxLinkCharacters,
+      maxReportedHeight: 100_000,
     })})`,
   );
   return {
@@ -78,6 +79,27 @@ describe("presentation runtime", () => {
     expect(frame.posted()).toEqual([
       { channel: STATIC_HTML_FRAME_CHANNEL, v: 1, type: "ready", nonce: NONCE },
     ]);
+  });
+
+  test("tall documents clamp rendered and later size reports to the parser limit", async () => {
+    const frame = await frameWith();
+    frame.evaluate("Element.prototype.getBoundingClientRect = () => ({ height: 150000 })");
+    await frame.send(renderMessage("<p>Tall report</p>"));
+    const rendered = frame.posted().find((message) => message.type === "rendered")!;
+    expect(rendered.height).toBe(100_000);
+    expect(parseStaticHtmlFrameMessage(rendered, GENERATION).ok).toBe(true);
+    frame.evaluate("Element.prototype.getBoundingClientRect = () => ({ height: 400 })");
+    frame.window.document.dispatchEvent(new frame.window.Event("toggle"));
+    await frame.window.happyDOM.waitUntilComplete();
+    frame.evaluate("Element.prototype.getBoundingClientRect = () => ({ height: 200000 })");
+    frame.window.document.dispatchEvent(new frame.window.Event("toggle"));
+    await frame.window.happyDOM.waitUntilComplete();
+    const size = frame
+      .posted()
+      .filter((message) => message.type === "size")
+      .at(-1)!;
+    expect(size.height).toBe(100_000);
+    expect(parseStaticHtmlFrameMessage(size, GENERATION).ok).toBe(true);
   });
 
   test("renders the reference dashboard as real selectable document content", async () => {

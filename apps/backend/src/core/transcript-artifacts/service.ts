@@ -333,7 +333,11 @@ export class TranscriptArtifactService {
       ...(status?.available === true
         ? {}
         : { previewReason: status?.reason ?? "Preview runtime is not installed" }),
-      interactive: status?.available === true && Boolean(this.ctx.runtime.preparer),
+      interactive:
+        status?.available === true &&
+        (status.interactiveIsolation === "container" ||
+          status.interactiveIsolation === "process") &&
+        Boolean(this.ctx.runtime.preparer),
     };
   }
 

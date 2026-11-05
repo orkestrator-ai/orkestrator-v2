@@ -317,6 +317,25 @@ describe("visual guidance and authoring availability", () => {
     expect(notice).toContain("html-static, mermaid and chart artifacts still work");
   });
 
+  test("interactive authoring requires explicit runner isolation even with a preparer", () => {
+    const status = h.runner.status();
+    for (const interactiveIsolation of [
+      undefined,
+      "unavailable",
+      "process",
+      "container",
+    ] as const) {
+      h.runner.status = () => ({ ...status, interactiveIsolation });
+      const availability = h.service.authoringAvailability();
+      expect(availability.preview).toBe(true);
+      expect(availability.interactive).toBe(
+        interactiveIsolation === "process" || interactiveIsolation === "container",
+      );
+      if (!availability.interactive)
+        expect(artifactAuthoringNotice(availability)).toContain("html-interactive");
+    }
+  });
+
   test("the service reports its real runner status", () => {
     expect(h.service.authoringAvailability().preview).toBe(true);
   });

@@ -597,6 +597,22 @@ export interface CoordinatorWorkflowAssociation {
    * a row that is no longer finished is listed again.
    */
   workHiddenAt?: string;
+  /**
+   * The record's node is no longer controlled from here: the user forgot it,
+   * handed it to another command node, or it was missing from this machine's
+   * registry when the record was found (`unregistered`, for nodes removed
+   * before this field existed). Its delegation was closed and its workflow
+   * marked reported, so retention treats its resources as gone. `notifiedAt`
+   * says the coordinator was told. Older backends ignore it and keep the
+   * record, as they did before.
+   */
+  nodeRelease?: CoordinatorNodeRelease;
+}
+
+export interface CoordinatorNodeRelease {
+  at: string;
+  reason: "forgotten" | "handed-over" | "unregistered";
+  notifiedAt?: string;
 }
 
 /**
@@ -915,7 +931,19 @@ export interface CoordinatorSnapshot {
   /** Absent from a backend older than this field, which says nothing about the setting. */
   agentMessaging?: { enabled: boolean };
   workflows: CoordinatorWorkflowAssociation[];
+  /**
+   * How close the shared workflow store is to refusing new records
+   * (`coordinator-workflow-retention.ts`). Absent from a backend older than
+   * this field, which says nothing about the store.
+   */
+  workflowStore?: CoordinatorWorkflowStoreState;
 }
+
+/**
+ * `near-limit`: fewer than one cleanup batch of records is left before the
+ * store refuses; `full`: every record is still in use, so new work is refused.
+ */
+export type CoordinatorWorkflowStoreState = "ok" | "near-limit" | "full";
 
 export interface ProjectGitError {
   operation: "status" | "fetch" | "sync" | "switch";

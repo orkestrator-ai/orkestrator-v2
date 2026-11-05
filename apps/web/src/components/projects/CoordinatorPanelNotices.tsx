@@ -1,7 +1,20 @@
 import type { ReactNode } from "react";
-import { AlertCircle, Copy, LockKeyhole, RotateCcw, Settings2, ShieldAlert, X } from "lucide-react";
+import {
+  AlertCircle,
+  Copy,
+  Database,
+  LockKeyhole,
+  RotateCcw,
+  Settings2,
+  ShieldAlert,
+  X,
+} from "lucide-react";
 import { toast } from "sonner";
-import type { CoordinatorProviderTier, ProjectGitStatus } from "@orkestrator/protocol/coordinator";
+import type {
+  CoordinatorProviderTier,
+  CoordinatorWorkflowStoreState,
+  ProjectGitStatus,
+} from "@orkestrator/protocol/coordinator";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -183,6 +196,43 @@ export function CoordinatorBanner({
       <div className="min-w-0 flex-1">{children}</div>
       {action}
     </div>
+  );
+}
+
+/**
+ * Says when the workflow store every project's coordinator shares is close to
+ * refusing new work, or refusing it, and what frees room. Nothing from a
+ * backend that predates `workflowStore`, which says nothing about the store.
+ * Clearing finished rows in the Work panel only hides them, so it is not
+ * offered as a way out.
+ */
+export function CoordinatorWorkflowStoreBanner({
+  state,
+}: {
+  state: CoordinatorWorkflowStoreState | undefined;
+}) {
+  if (state !== "near-limit" && state !== "full") return null;
+  const full = state === "full";
+  return (
+    <CoordinatorBanner
+      tone={full ? "error" : "warning"}
+      icon={<Database className="size-4 shrink-0" aria-hidden="true" />}
+    >
+      <span data-coordinator-workflow-store={state}>
+        <span className="font-medium">
+          {full
+            ? "Coordinator work records are full."
+            : "Coordinator work records are nearly full."}
+        </span>{" "}
+        <span className={full ? "text-red-200/80" : "text-amber-200/80"}>
+          {full
+            ? "New launches are refused, and messages to workers will not wake the coordinator, until room frees up."
+            : "The records every project's coordinator shares will soon refuse new launches."}{" "}
+          Delete finished worker environments, or let running work finish; finished work older than
+          a day is then cleared automatically. Clearing rows from the Work panel only hides them.
+        </span>
+      </span>
+    </CoordinatorBanner>
   );
 }
 

@@ -32,21 +32,7 @@ import {
 } from "./coordinator-launch-defaults.js";
 import { assertCoordinatorMayActOnEnvironment } from "./coordinator-environment-scope.js";
 import { isProjectHomeEnvironment } from "./project-home-environment.js";
-
-function requestAlias(
-  association: { requestAliases?: Array<{ requestId: string; payloadHash: string }> },
-  requestId: string,
-) {
-  return Array.isArray(association.requestAliases)
-    ? association.requestAliases.find(
-        (alias) =>
-          alias &&
-          typeof alias.requestId === "string" &&
-          typeof alias.payloadHash === "string" &&
-          alias.requestId === requestId,
-      )
-    : undefined;
-}
+import { coordinatorRequestMatch } from "./coordinator-workflow-retention.js";
 
 async function identity(scope: unknown, context: CommandContext) {
   if (!scope || typeof scope !== "object" || Array.isArray(scope))
@@ -353,12 +339,10 @@ export function registerCoordinatorReviewActions(
       const requestAssociation = associations.find(
         (item) =>
           item.coordinatorId === caller.coordinatorId &&
-          (item.requestId === input.requestId || requestAlias(item, input.requestId) !== undefined),
+          coordinatorRequestMatch(item, input.requestId) !== undefined,
       );
       const requestPayloadHash = requestAssociation
-        ? requestAssociation.requestId === input.requestId
-          ? requestAssociation.payloadHash
-          : requestAlias(requestAssociation, input.requestId)?.payloadHash
+        ? coordinatorRequestMatch(requestAssociation, input.requestId)?.payloadHash
         : undefined;
       if (
         requestAssociation &&

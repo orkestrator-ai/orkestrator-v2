@@ -446,7 +446,7 @@ pins were shown was a known gap, recorded in
 [2580](2580-shadow-root-annotation-follow-ups.md) task 3, with sensitive-field
 masks inside roots (task 1, which predates this work), text selections inside
 roots (task 2) and a live desktop run (task 4). Tasks 1 and 3 were done on
-2026-11-03.
+2026-11-03, and task 2 on 2026-11-05.
 
 ## Current state
 

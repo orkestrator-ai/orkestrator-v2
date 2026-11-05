@@ -16,8 +16,7 @@ A batch file combines several reports as numbered parts and takes the rating of 
 
 | Rank | File | Criticality | Finished | Covers | Why this rating |
 | --- | --- | --- | --- | --- | --- |
-| 1 | [0080-c2-workflow-records.md](0080-c2-workflow-records.md) | Medium | No | **C2, Workflow records.**<br>`0080`: The swallowed delegation-open error, showing store-full to the user, and settling the shared cap.<br>`0100`: Closing work when a node is forgotten, and a notice for a long-offline node.<br>`0380`: One shared alias lookup.: Duplicated request-alias lookup | From `0080`: Retention makes it rare, and what remains is a functional gap when every record is in use. |
-| 2 | [0110-c3-sweep-and-reads.md](0110-c3-sweep-and-reads.md) | Medium | No | **C3, Sweep and reads.**<br>`0110`: Syncing once per sweep, a read-only `snapshot()`, batched wake writes and pruning below the limit.<br>`0370`: One own-mailbox check, and `coordinatorRuntimeId` everywhere. | From `0110`: Real repeated work that has not been measured, so it removes a risk rather than a known slowdown. |
+| 1 | [0110-c3-sweep-and-reads.md](0110-c3-sweep-and-reads.md) | Medium | No | **C3, Sweep and reads.**<br>`0110`: Syncing once per sweep, a read-only `snapshot()`, batched wake writes and pruning below the limit.<br>`0370`: One own-mailbox check, and `coordinatorRuntimeId` everywhere. | From `0110`: Real repeated work that has not been measured, so it removes a risk rather than a known slowdown. |
 
 ## Parallel running
 
@@ -31,12 +30,10 @@ This index only changes when a branch merges, so it can't show what is running n
 
 | Batch | Name | Parts | Lane and position | Finish first | Not at the same time as |
 | --- | --- | --- | --- | --- | --- |
-| C2 | [Workflow records](0080-c2-workflow-records.md) | `0080`, `0100`, `0380` | Coordinator backend, 1 of 2 | None | None |
-| C3 | [Sweep and reads](0110-c3-sweep-and-reads.md) | `0110`, `0370` | Coordinator backend, 2 of 2 | None | None |
+| C3 | [Sweep and reads](0110-c3-sweep-and-reads.md) | `0110`, `0370` | Coordinator backend, 1 of 1 | None | None |
 
 Why these are grouped:
 
-- **C2:** Same workflow store, and `0100` links to `0080`.
 - **C3:** `0110` makes reads cheap. `0370` routes the copies through the same mailbox check.
 
 ### Files built on their own
@@ -45,7 +42,13 @@ None at the moment. C-0390 (Panel re-render cost) was the last, and is closed (b
 
 ## Status of every finding
 
-53 done, 6 partly done, 8 open, 7 no action.
+55 done, 8 partly done, 4 open, 7 no action.
+
+Batch C2 (Workflow records) is closed. Its report was analysed against `a2bba9d8` and built from `main` at `41f9eb638`; its task-by-task outcome table ends the last
+version of its deleted report, which the deletion commit's diff shows in full:
+`git show "$(git log -1 --format=%H --grep='close coordinator batch C2')"`.
+What it could not prove without real machines or a live stack is in to-do
+[6360](../../todo/coordinator-and-multi-review/6360-c2-workflow-records-live-checks.md).
 
 Batch X1 (Coordinator trust boundary) is closed; [the security index](../security/0000-index.md) has its record, and what it left is in to-do [6080](../../todo/coordinator-and-multi-review/6080-x1-coordinator-trust-boundary-follow-ups.md).
 
@@ -69,8 +72,8 @@ What it left is in to-dos
 Batch C8 (Tab strip) is closed. Its task-by-task outcome table ends the last
 version of its deleted report, which the deletion commit's diff shows in full:
 `git show "$(git log -1 --format=%H --grep='close coordinator batch C8')"`.
-What it left is in to-do
-[5200](../../todo/coordinator-and-multi-review/5200-c8-tab-strip-follow-ups.md).
+What it left, tab semantics on the environment strip, is done and to-do 5200
+is closed.
 
 Batch C6 (Errors and dead ends) is closed. Its task-by-task outcome table ends the last
 version of its deleted report, which the deletion commit's diff shows in full:
@@ -97,12 +100,12 @@ Every task was done, so it left no to-do.
 | S2: doc drift on side-agent capabilities | Done | `docs/architecture/coordinator.md:351-353` (`3fa7d1733`, #1436). |
 | B1: associations never pruned | Done | `storage-coordinators.ts:146-174`, `coordinator-workflow-retention.ts` (`b0dcf1660`, #1620). |
 | B1: request aliases kept without limit | Done | Arrival timestamps and expiry, `docs/architecture/coordinator.md:87-90` (`b0dcf1660`). |
-| B1: store-full visibility and swallowed delegation open | Open | [C2 part 0080](0080-c2-workflow-records.md#0080-a-full-workflow-store-is-invisible-to-the-user) |
-| B1: per-project cap | Open | [C2 part 0080](0080-c2-workflow-records.md#0080-a-full-workflow-store-is-invisible-to-the-user) (the code says shared on purpose, with no reason recorded). |
+| B1: store-full visibility and swallowed delegation open | Partly done | `send_message`'s `warning` when the delegation did not open, and `workflowStore` on the snapshot with `CoordinatorWorkflowStoreBanner` (`coordinator-workflow-retention.ts`, `storage-coordinators.ts`, `CoordinatorPanelNotices.tsx`), tested in `coordinator-worker-mail.test.ts`, `control-mcp-server-messaging.test.ts`, `coordinator-workflow-retention.test.ts` and `CoordinatorWorkflowStoreBanner.test.tsx`. The banner on a live stack: [6360](../../todo/coordinator-and-multi-review/6360-c2-workflow-records-live-checks.md) task 4. |
+| B1: per-project cap | Done | Kept shared, with the reason in the `MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS` comment and `docs/architecture/coordinator.md` (Workflow record limit and cleanup). |
 | B1: list walked long before the cap | Open | [C3 part 0110](0110-c3-sweep-and-reads.md#0110-the-sweep-and-every-snapshot-repeat-global-work) |
 | B2: no per-item catch in wake and reconcile loops | Done | `deliverDelegationWakesOnce` and `reconcileWorkerDelegations` in `coordinator-service.ts`, tested in `coordinator-delegation-wakes.test.ts`. A wake that keeps failing is retired with one notice (`wakeFailedAt`). |
 | B3: delegation closing mid-pass delayed | Done | `runDelegationWakePasses` in `coordinator-service.ts`, tested in `coordinator-delegation-wakes.test.ts`. |
-| B4: forgotten-node delegations never close | Open | [C2 part 0100](0080-c2-workflow-records.md#0100-delegations-to-a-forgotten-node-never-close) |
+| B4: forgotten-node delegations never close | Partly done | `CoordinatorService.nodesReleased` from `NodeService`'s `onNodesReleased` on forget and handover, the sweep's release of unregistered nodes, and a once-per-episode notice for a node unreachable for a day (`coordinator-node-release.ts`), tested in `coordinator-node-release.test.ts`, `nodes/node-service.test.ts` and `nodes/node-handover.test.ts`. Two-node runs: [6360](../../todo/coordinator-and-multi-review/6360-c2-workflow-records-live-checks.md) tasks 1–3. |
 | B5: held notices dropped after 24 h | Done | `coordinator-status-backfill.ts`, tested in `coordinator-status-wakes.test.ts`. Whether the remaining rule can go: [4860](../../todo/coordinator-and-multi-review/4860-c1-wake-reliability-follow-ups.md). |
 | B6: close during wake delivery | Done | The re-check before `markCoordinatorDelegationWoken` in `coordinator-service.ts`, tested in `coordinator-delegation-wakes.test.ts`. |
 | B6: waiting cleared only on working | Done | `endWaitingEpisode` in `coordinator-status-wakes.ts`, tested in `coordinator-status-wakes.test.ts` and `coordinator-remote.test.ts`. |
@@ -132,7 +135,7 @@ Every task was done, so it left no to-do.
 | U8: side agents never explained | Done | New side agent's tooltip, and a side composer's own placeholder and hint (`COORDINATOR_SIDE_AGENT_EXPLANATION`, `CoordinatorPanel.tsx`, `CoordinatorConversationPane.tsx`), tested in `CoordinatorPanel.tabs.test.tsx` and `CoordinatorPanel.outcome.test.tsx`. Batch C10. |
 | U9: dead-end states and scattered settings | Done | Buttons on the provider banner, empty-platform message and no-checkout card, and a Coordinator section in Settings: `CoordinatorConversationPane.tsx`, `CoordinatorPanel.tsx`, `GlobalSettings.sections.tsx`, tested in `CoordinatorPanel.outcome.test.tsx` and `GlobalSettings.coordinator-section.test.tsx`. |
 | U10: first sends in two groups | Done | One held prompt per conversation: `useCoordinatorLaunches.ts`. |
-| U11: accessibility | Done | Tab semantics, keyboard tab moves and a labelled spinner: `CoordinatorPaneTree.tsx`, `CoordinatorConversationTab.tsx`, tested in `CoordinatorPaneTree.test.tsx` and `CoordinatorPanel.tabs.test.tsx`. The environment strip, deliberately left: [5200](../../todo/coordinator-and-multi-review/5200-c8-tab-strip-follow-ups.md). |
+| U11: accessibility | Done | Tab semantics, keyboard tab moves and a labelled spinner: `CoordinatorPaneTree.tsx`, `CoordinatorConversationTab.tsx`, tested in `CoordinatorPaneTree.test.tsx` and `CoordinatorPanel.tabs.test.tsx`. The environment strip, deliberately left, followed in to-do 5200, now closed: `DraggableTab.tsx`, `DraggableTabBar.tsx`. |
 | U12: re-render cost | Done | Measured, then narrowed: `CoordinatorWorkArea.tsx` owns the Work panel's and prompts banner's store subscriptions with the conversations as its children, `useCoordinatorActiveTurn.ts` selects only home environment ids, and `CoordinatorConversationPane.tsx` gives the memoized agent tab stable props; tested in `CoordinatorPanel.render-cost.test.tsx` and `useCoordinatorActiveTurn.test.tsx`. Batch C-0390, below. |
 | U13: `Context rN` jargon | Done | Moved into the badge's details (`e5245dfd6`, #1644), a menu since C10 (`CoordinatorIsolationBadge`, `CoordinatorPanelNotices.tsx`). |
 | U13: `!` commands | Done | A hint under every coordinator composer, a footer about the coordinator's own work, and the first-message rule shown inline under the composer (`COORDINATOR_COMMAND_HINT`, `FIRST_MESSAGE_COMMAND_RULE` in `AgentNativeTab.helpers.tsx`), tested in `CoordinatorPanel.outcome.test.tsx`. Batch C10. |
@@ -154,7 +157,7 @@ Every task was done, so it left no to-do.
 | 6: reads that write | Open | [C3 part 0110](0110-c3-sweep-and-reads.md#0110-the-sweep-and-every-snapshot-repeat-global-work) |
 | 6: partial serialization | Done | `mutateSerialized` in `coordinator-service.ts`, tested in `coordinator-delegation-wakes.test.ts`. |
 | 6: copied mailbox check and hand-built runtime ids | Open | [C3 part 0370](0110-c3-sweep-and-reads.md#0370-duplicated-mailbox-authorization-and-runtime-ids-in-the-control-mcp-tools) |
-| 6: duplicated request-alias lookup | Open | [C2 part 0380](0080-c2-workflow-records.md#0380-duplicated-request-alias-lookup) |
+| 6: duplicated request-alias lookup | Done | `coordinatorRequestAlias` and `coordinatorRequestMatch` in `coordinator-workflow-retention.ts`, used by every alias lookup; tested in `coordinator-workflow-retention.test.ts`. |
 | 6: context prompt built inline | Done | `buildCoordinatorContext` in `packages/protocol/src/coordinator-context.ts`, tested in `coordinator-context.test.ts`. |
 | 1: Top 10 actions | No action | Each restates a finding above. |
 | 2: how it works today | No action | A description, not work. |

@@ -179,6 +179,28 @@ describe("shadow-root targets follow the backend's advertisement", () => {
     expect(withAdvertisedShadowScope(record.capture, false)).toBe(record.capture);
   });
 
+  test("a text range's container follows the advertisement too", () => {
+    const record = seedPending(createFakeCaptureApi().spool, { captureId: "cap-quote" });
+    const element = record.capture.target;
+    if (element.kind !== "element") throw new Error("expected an element fixture");
+    const capture = {
+      ...record.capture,
+      target: {
+        kind: "text-range" as const,
+        label: "“Quote”",
+        quote: { exact: "Quote", prefix: "", suffix: "" },
+        container: { ...element.anchor, scope: shadowScope },
+        rect: element.rect,
+        rects: [],
+      },
+    };
+    expect(withAdvertisedShadowScope(capture, true)).toBe(capture);
+    const older = withAdvertisedShadowScope(capture, false).target;
+    if (older.kind !== "text-range") throw new Error("expected a text range");
+    expect(older.container.scope).toEqual({ kind: "unsupported", reason: "shadow-root" });
+    expect(older.quote).toEqual(capture.target.quote);
+  });
+
   for (const [label, advertised, expected] of [
     ["sends the root path when the backend advertises it", true, shadowScope],
     [

@@ -271,8 +271,7 @@ const hostGhUpdate = taskHandler(
     }
     return { channel: input.channel as "pinned" | "latest" };
   },
-  (context, input: { channel: "pinned" | "latest" }) =>
-    startGhUpdate(context, input.channel, { pinned: context.pinnedGitHubCli }),
+  (context, input: { channel: "pinned" | "latest" }) => startGhUpdate(context, input.channel),
 );
 
 registerReconciler("host.update.apply", async (record, context) => {

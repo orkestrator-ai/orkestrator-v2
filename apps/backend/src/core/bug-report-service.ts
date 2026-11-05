@@ -366,7 +366,7 @@ async function fileBugReportOnce(
   if (input.via === "browser") return browserFallback(title, body, "Opened on GitHub");
 
   const config = await context.storage.loadConfig();
-  if (!(await resolveGitHubToken(config.global))) {
+  if (!(await resolveGitHubToken(config.global, context.runtime.gitHubCli))) {
     return browserFallback(title, body, "GitHub CLI is not signed in on this host");
   }
   const env = await gitHubCliEnv(context.storage);
@@ -381,7 +381,7 @@ async function fileBugReportOnce(
   let stdout: string;
   try {
     ({ stdout } = await runCommand(
-      gitHubCli(),
+      gitHubCli(context.runtime.gitHubCli),
       [
         "issue",
         "create",

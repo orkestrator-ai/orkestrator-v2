@@ -20,6 +20,7 @@ import {
 import { DockerContainerStateCache } from "./docker-container-state-cache.js";
 import { EnvironmentOperations } from "./environment-operations.js";
 import { FeatureBuildTasks } from "./feature-build-tasks.js";
+import { GitHubCliSelection } from "./github-cli-binary.js";
 import { IntegrationLocks } from "./integration-locks.js";
 import { LocalServerRuntime, type LocalServerRuntimeOptions } from "./local-server-runtime.js";
 import { PrMonitorRuntime, type PrMonitorRuntimeOptions } from "./pr-monitor-runtime.js";
@@ -64,6 +65,8 @@ export type BackendRuntimeOptions = {
  * load would freeze one instance's state into every later caller.
  */
 export class BackendRuntime {
+  /** The `gh` this backend runs: its toolchain's pin, or the latest channel's release. */
+  readonly gitHubCli = new GitHubCliSelection();
   readonly diffStats: DiffStatsTracking;
   readonly terminals: TerminalRuntime;
   readonly localServers: LocalServerRuntime;
@@ -116,7 +119,7 @@ export class BackendRuntime {
     this.localServers = new LocalServerRuntime(options.localServers);
     this.environments = new EnvironmentOperations();
     this.dockerAvailability = new DockerAvailabilityCache(options.dockerAvailability);
-    this.prMonitor = new PrMonitorRuntime(options.prMonitor);
+    this.prMonitor = new PrMonitorRuntime({ ...options.prMonitor, gitHubCli: this.gitHubCli });
     this.tmux = new TmuxRuntime(options.tmux);
     this.accounts = new AgentAccountsRuntime(options.accounts);
     this.containerOom = new ContainerOomEvents(

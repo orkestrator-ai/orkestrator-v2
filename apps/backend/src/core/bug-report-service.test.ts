@@ -29,6 +29,7 @@ import type { CommandContext } from "./commands-context.js";
 import { localServerFields } from "./commands-local-server-lifecycle.js";
 import { reapOrphanedLocalServers } from "./local-server-reaper.js";
 import * as credentials from "./github-credentials.js";
+import { GitHubCliSelection } from "./github-cli-binary.js";
 import * as shell from "./shell.js";
 import { StorageService } from "./storage.js";
 
@@ -49,6 +50,7 @@ async function createContext(): Promise<CommandContext> {
   await storage.init();
   return {
     storage,
+    runtime: { gitHubCli: new GitHubCliSelection() },
     toolchainBinDir: path.join(dataDir, "toolchain", "bin"),
   } as unknown as CommandContext;
 }
@@ -204,6 +206,8 @@ describe("bug report service", () => {
     const context = await createContext();
     const { report } = await createBugReport(context, {});
     scratchDirs.push(report!.scratchDir);
+    const selectedGh = path.join(context.toolchainBinDir!, "selected-gh");
+    context.runtime.gitHubCli.select(selectedGh);
     const sentinel = path.join(context.storage.getDataDir(), "sentinel");
     await fs.writeFile(sentinel, "untouched");
     const staged = path.join(report!.scratchDir, "issue-body.filed.md");
@@ -244,6 +248,7 @@ describe("bug report service", () => {
       { kind: "filed", url },
     ]);
     expect(run).toHaveBeenCalledTimes(1);
+    expect(run.mock.calls[0]![0]).toBe(selectedGh);
     expect(run.mock.calls[0]![1]).toContain("-");
     expect(run.mock.calls[0]![2]).toMatchObject({ stdin: approved.body });
     expect(await fs.readFile(sentinel, "utf8")).toBe("untouched");

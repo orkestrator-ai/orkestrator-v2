@@ -288,7 +288,8 @@ describe("startWorktreeWatcher", () => {
     // Native watcher registration may settle after startWorktreeWatcher
     // returns. Keep producing distinct writes until one is observed. The
     // production settle window is leading-edge and is not reset by bursts.
-    const deadline = Date.now() + 5000;
+    // A saturated `fseventsd` can take over a minute (flakes 0091, 5061).
+    const deadline = Date.now() + (process.platform === "darwin" ? 90_000 : 5000);
     let attempt = 0;
     while (changes === 0 && Date.now() < deadline) {
       await fs.writeFile(
@@ -310,7 +311,7 @@ describe("startWorktreeWatcher", () => {
     }
 
     expect(changes).toBeGreaterThan(0);
-  }, 10_000);
+  }, 100_000);
 });
 
 describe("classifyWorktreeChange", () => {

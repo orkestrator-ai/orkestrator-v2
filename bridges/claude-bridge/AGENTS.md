@@ -205,6 +205,13 @@ When touching the session catalogue (`session-manager-catalog.ts`):
   the rollout keeps (a task report, an interruption marker) must be produced
   by both the live loop and `normalizePersistedSessionMessages`, or a reload
   will disagree with the live tab.
+- **The SSE replay ring is the shared `EventRing`**
+  (`@orkestrator/protocol/node/event-ring`), fed the emitter's own revisions
+  (`appendAt`, `advanceTo`). A full `message.updated` collapses every earlier
+  `message.updated` and `message.patched` frame for that message, which a
+  full-mode replay sends as `bridge.cursor`. An observation replay
+  (`?observe=1`) still sends one content-free frame per revision under its
+  original type, so what the backend observer reads does not change.
 - **`DELETE /session/:id` is destructive.** It calls the SDK's
   `deleteSession`, which removes the `{sessionId}.jsonl` rollout. Tab close
   uses `POST /session/:id/close` (`closeSessionRetainingHistory`), which stops

@@ -978,6 +978,7 @@ export class DiffStatsService {
       },
       onCoverageChange: () => {
         if (!current()) return;
+        if (this.isQualified(entry)) entry.watcherFailures = 0;
         this.restartTimer(entry);
         this.publishSnapshot(entry);
       },
@@ -1001,6 +1002,7 @@ export class DiffStatsService {
       return;
     }
     entry.watcher = watcher;
+    if (this.isQualified(entry)) entry.watcherFailures = 0;
   }
 
   /**
@@ -1067,7 +1069,6 @@ export class DiffStatsService {
       this.attachWatcher(entry);
       const reattached = entry.watcher as WorktreeWatcher | undefined;
       if (!reattached?.watching) return;
-      entry.watcherFailures = 0;
       this.restartTimer(entry);
       this.tree.hint(entry.target.environmentId);
       this.request(entry, "hint");

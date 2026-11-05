@@ -9,6 +9,7 @@ import {
   readReleaseManifest,
   RELEASE_RUNTIME_PATH,
   releaseDirectory,
+  releaseEntry,
   runFile,
   standaloneLayout,
   type CommandRunner,
@@ -95,7 +96,7 @@ function packument(name: string, releases: Published[]): unknown {
 }
 
 const ENTRY = {
-  "bin/orkestrator.js": "// entry\n",
+  "bin/orkestrator.js": "console.log(require('mid'));\n",
   "bin/orkestrator-launcher.js": "// launcher\n",
 };
 
@@ -134,8 +135,15 @@ beforeAll(async () => {
   });
   registry = `http://127.0.0.1:${server.port}`;
 
-  await publish("leaf", "1.0.0", {});
-  await publish("mid", "1.0.0", { leaf: "^1.0.0" });
+  await publish("leaf", "1.0.0", {}, { "index.js": "module.exports = '1.0.0';\n" });
+  await publish(
+    "mid",
+    "1.0.0",
+    { leaf: "^1.0.0" },
+    {
+      "index.js": "module.exports = require('leaf');\n",
+    },
+  );
   await publish("extra", "1.0.0", {});
 
   // What the release's lock step does, while leaf 1.0.0 is the newest leaf.
@@ -181,7 +189,7 @@ beforeAll(async () => {
   );
 
   // Published after the lock step: a fresh resolution now picks this one.
-  await publish("leaf", "1.1.0", {});
+  await publish("leaf", "1.1.0", {}, { "index.js": "module.exports = '1.1.0';\n" });
 });
 
 afterAll(async () => {
@@ -195,18 +203,49 @@ describe("installRelease with real bun installs", () => {
 
   beforeEach(async () => {
     dataDir = await mkdtemp(path.join(scratch, "data-"));
-    // Deliberately share the caller cache: installRelease must override it.
+    // Use a caller cache that can be removed independently of the release.
     const cache = path.join(dataDir, "bun-cache");
-    run = (file, args, options) =>
-      runFile(file, args, {
+    run = async (file, args, options) => {
+      // A caller's isolated global store must not make a published release
+      // depend on install-cache links outside its directory.
+      await writeFile(
+        path.join(options.cwd!, "bunfig.toml"),
+        '[install]\nlinker = "isolated"\nglobalStore = true\n',
+      );
+      return runFile(file, args, {
         ...options,
-        env: { ...process.env, BUN_INSTALL_CACHE_DIR: cache, ...options?.env },
+        env: {
+          ...process.env,
+          BUN_INSTALL_CACHE_DIR: cache,
+          ...options?.env,
+          HOME: dataDir,
+          BUN_INSTALL: path.join(dataDir, ".bun"),
+        },
       });
+    };
   });
 
   async function installedVersion(releaseDir: string, name: string): Promise<string> {
     const manifest = path.join(releaseDir, "node_modules", name, "package.json");
     return (JSON.parse(await readFile(manifest, "utf8")) as { version: string }).version;
+  }
+
+  async function executedVersion(releaseDir: string): Promise<string> {
+    // Exercise resolution from the published entry, after its staging directory
+    // was renamed and the caller's package store is gone. A manifest check alone
+    // can pass while an isolated-store symlink still points outside the release.
+    await rm(path.join(dataDir, "bun-cache"), { recursive: true, force: true });
+    const executed = await runFile(BUN, [releaseEntry(releaseDir)], {
+      cwd: dataDir,
+      timeoutMs: 5_000,
+      env: {
+        ...process.env,
+        HOME: dataDir,
+        BUN_INSTALL: path.join(dataDir, ".bun"),
+        BUN_INSTALL_CACHE_DIR: path.join(dataDir, "bun-cache"),
+      },
+    });
+    return executed.stdout.trim();
   }
 
   function leftInReleases(): string[] {
@@ -222,6 +261,7 @@ describe("installRelease with real bun installs", () => {
     expect(readReleaseManifest(releaseDir)?.version).toBe("2.0.0");
     expect(await installedVersion(releaseDir, "mid")).toBe("1.0.0");
     expect(await installedVersion(releaseDir, "leaf")).toBe("1.0.0");
+    expect(await executedVersion(releaseDir)).toBe("1.0.0");
     expect(await readFile(path.join(releaseDir, "bun.lock"), "utf8")).toBe(lockedLockfile);
     // The fetch install's resolution left nothing behind.
     expect(leftInReleases()).toEqual(["2.0.0"]);
@@ -236,6 +276,7 @@ describe("installRelease with real bun installs", () => {
     });
 
     expect(readReleaseManifest(releaseDir)?.version).toBe("1.9.0");
+    expect(await executedVersion(releaseDir)).toBe("1.1.0");
     // What the lockfile prevents: this is why 2.0.0 above is not a coincidence.
     expect(await installedVersion(releaseDir, "leaf")).toBe("1.1.0");
   });

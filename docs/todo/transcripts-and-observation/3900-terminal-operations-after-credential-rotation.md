@@ -63,7 +63,7 @@ The recommended sites do not reach a socket that disconnected before the revocat
 
 ### Task 1: left a disconnected socket's own expiry or revocation to a new file
 
-A socket that disconnected and whose own credential then expired or was revoked still ran its queue, because `dispose` dropped its timer and revocation subscription. That needed a different mechanism and has since been done: a disconnected socket keeps both until its last queued operation settles, and client grants now publish their revocation. See [`remote-gateway.md`](../../architecture/remote-gateway.md#compression-and-terminal-transport).
+A socket that disconnects and whose own credential then expires or is revoked still runs its queue, because `dispose` drops its timer and revocation subscription. That needs a different mechanism, so it is filed as [4480](4480-terminal-operations-after-disconnected-credential-expiry.md).
 
 ### Task 2: tested at the backend boundary, with deterministic expiry
 
@@ -82,3 +82,4 @@ Before the fix, all five revocation cases failed with `["terminal_write", "termi
 ## Related
 
 - [0052-remote-client-bandwidth.md](0052-remote-client-bandwidth.md), task 4.
+- [4480-terminal-operations-after-disconnected-credential-expiry.md](4480-terminal-operations-after-disconnected-credential-expiry.md): the case this file leaves open.

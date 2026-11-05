@@ -36,10 +36,9 @@ A batch file combines several reports as numbered parts and takes the rating of 
 | 20 | [0580-st-21-file-rpc-and-usage-report.md](0580-st-21-file-rpc-and-usage-report.md) | Low | No | ST-21: Whole files cross RPC as base64, branch reads spawn twice, and usage reports parse every row | These are occasional, bounded reads. |
 | 21 | [0620-e23-renderer-polling.md](0620-e23-renderer-polling.md) | Low | No | **E23, Renderer polling.**<br>`0620`: WEB-12: One environment change refetches the project's whole environment list<br>`0630`: WEB-13: Expanded truncated folders are re-read every 5 s without a digest<br>`0660`: WEB-18: Some renderer polls keep running while the window is hidden | From `0620`: Bursts already collapse to one project read, so this should wait for a measurement. |
 | 22 | [0650-web-16-terminal-container-environment-subscription.md](0650-web-16-terminal-container-environment-subscription.md) | Low | No | WEB-16: `TerminalContainer` subscribes to the whole environment object | It is an unmeasured re-render, with launch-effect risk in the fix. |
-| 23 | [0680-bg-10-multi-review-snapshot-drift-checks.md](0680-bg-10-multi-review-snapshot-drift-checks.md) | Low | No | BG-10: Multi Review snapshot mode runs a drift check per reviewer | It costs a bounded number of extra git probes per review pass. |
-| 24 | [0691-dk-5-preview-capture-data-urls.md](0691-dk-5-preview-capture-data-urls.md) | Low | No | DK-5: Preview captures cross IPC as large data URLs | Captures are occasional and bounded. |
-| 25 | [0693-dk-10-second-claude-binary.md](0693-dk-10-second-claude-binary.md) | Low | No | DK-10: The image ships two Claude Code native binaries | It is an optional image-size saving that waits on a maintainer decision. |
-| 26 | [0694-dk-16-attention-follow-polling.md](0694-dk-16-attention-follow-polling.md) | Low | No | DK-16 (rest): CLI `attention --follow` re-downloads pending items on every poll | It affects only long-running followers, and pending pages are probably small. |
+| 23 | [0691-dk-5-preview-capture-data-urls.md](0691-dk-5-preview-capture-data-urls.md) | Low | No | DK-5: Preview captures cross IPC as large data URLs | Captures are occasional and bounded. |
+| 24 | [0693-dk-10-second-claude-binary.md](0693-dk-10-second-claude-binary.md) | Low | No | DK-10: The image ships two Claude Code native binaries | It is an optional image-size saving that waits on a maintainer decision. |
+| 25 | [0694-dk-16-attention-follow-polling.md](0694-dk-16-attention-follow-polling.md) | Low | No | DK-16 (rest): CLI `attention --follow` re-downloads pending items on every poll | It affects only long-running followers, and pending pages are probably small. |
 
 ## Parallel running
 
@@ -61,7 +60,6 @@ This index only changes when a branch merges, so it can't show what is running n
 | E11 | [Projection hashing](0210-e11-projection-hashing.md) | `0210`, `0220`, `0320`, `0330`, `0340`, `0345`, `0350`, `0380` | Transcript, 3 of 4 | None | None |
 | E12 | [Renderer store](0510-e12-renderer-store.md) | `0510`, `0590`, `0640` | Transcript, 4 of 4 | None | C6 (Errors and dead ends) |
 | E3 | [Retention and deletion](0540-e3-retention-and-deletion.md) | `0730`, `0540`, `0840` | Change tracking, 1 of 1 | None | None |
-| E4 | [Object store](0430-e4-object-store.md) | `0430`, `0480`, `0530`, `0550` | Change tracking, 2 of 2 | None | None |
 | E5 | [Database upkeep](0760-e5-database-upkeep.md) | `0760`, `0800`, `0910`, `0920` | Storage, 1 of 2 | None | E15 (Health and diagnostics) |
 | E26 | [Local desktop transport](0400-e26-local-desktop-transport.md) | `0400`, `0860` | Desktop, 1 of 2 | E1 (Baseline run) | None |
 | E18 | [Gateway events](0280-e18-gateway-events.md) | `0280`, `0290`, `0300`, `0370` | Gateway, 1 of 3 | None | None |
@@ -103,7 +101,6 @@ These still follow the lane and conflict rules above.
 | E-0580 | [File RPC and usage report](0580-st-21-file-rpc-and-usage-report.md) | `0580` | Git scans and file reads, 1 of 1 | None | None |
 | E-0691 | [Preview capture data URLs](0691-dk-5-preview-capture-data-urls.md) | `0691` | Desktop, 2 of 2 | None | None |
 | E-0650 | [Terminal container subscription](0650-web-16-terminal-container-environment-subscription.md) | `0650` | No lane | None | None |
-| E-0680 | [Multi Review drift checks](0680-bg-10-multi-review-snapshot-drift-checks.md) | `0680` | No lane | None | None |
 | E-0694 | [Attention follow polling](0694-dk-16-attention-follow-polling.md) | `0694` | No lane | None | None |
 
 ### Not ready to start
@@ -119,7 +116,7 @@ When one of these becomes ready, it joins the lane shown.
 
 ## Status of every efficiency finding
 
-85 done, 8 partly done, 28 open, 2 no action.
+86 done, 8 partly done, 27 open, 2 no action.
 
 | Finding | Disposition | Evidence |
 | --- | --- | --- |
@@ -222,7 +219,7 @@ When one of these becomes ready, it joins the lane shown.
 | BG-7 | Done | `terminalClaudeDemand`, `tmux-poll.ts:457`, `:802` (051261eee). |
 | BG-8 | Done | Follower widened, `container-oom-events.ts:25` (12289fc56); `ContainerLifecycleReactor`, `container-lifecycle-events.ts:30` (051261eee). |
 | BG-9 | Done | Revision reuse, `agent-human-prompt-monitor.ts:59`, `:249`; OpenCode tail, `opencode-provider.ts:904` (d7054dace). |
-| BG-10 | Open | `beforeAdmission` still package-only, `multi-review-service.ts:3631-3633`; per-prompt probe, `:5011-5033`; see 0680. |
+| BG-10 | Done 2026-11-05 | Snapshot mode checks the worktree once per admission pass through `beforeAdmission`, and every reviewer prompt in the pass reuses that answer (`reviewFanoutHost`, `multi-review-service.ts`); one probe is 2 `git status` runs, so N reviewers went from 2N per pass to 2. |
 | BG-11 | Done | Shared prompt per pass, `build-pipeline-review-fanout.ts:482-496` (d7054dace). |
 | BG-12 | Done | Digest first with one pass snapshot, `agent-accounts-containers.ts:1144` (d7054dace). |
 | BG-13 | Done | Queued sync shared by later callers, `pr-monitor-runtime.ts:116`, `:169-170` (5254f8e27); the project-scoped alternative was not needed. |

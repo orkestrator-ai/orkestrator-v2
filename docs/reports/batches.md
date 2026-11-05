@@ -69,7 +69,6 @@ These batches don't share a protected area. They only have to respect the confli
 - **E20 (ACP bridge):** efficiency-logging-database `0270`, `0260`, `0240`
 - **E23 (Renderer polling):** efficiency-logging-database `0620`, `0630`, `0660`
 - **E-0650 (Terminal container subscription):** efficiency-logging-database `0650`
-- **E-0680 (Multi Review drift checks):** efficiency-logging-database `0680`
 - **E-0694 (Attention follow polling):** efficiency-logging-database `0694`
 - **CI-0010 (Backend shard timeout):** ci-shard-validation `0010`
 

@@ -1062,9 +1062,11 @@ describe("Orkestrator control MCP server", () => {
       expect(instructions).not.toContain("Reuse requestId when retrying");
       expect(instructions).not.toContain("start_multi_review");
       const listed = await rpc(descriptor.url, descriptor.token, "tools/list", {});
-      const launch = (
-        listed.body.result?.tools as Array<{ name: string; description: string }>
-      ).find((tool) => tool.name === "launch_environment")!;
+      const tools = (listed.body.result?.tools ?? []) as Array<{
+        name: string;
+        description: string;
+      }>;
+      const launch = tools.find((tool) => tool.name === "launch_environment")!;
       expect(launch.description).toContain("Use a new requestId for each new launch");
     });
 

@@ -886,9 +886,8 @@ describe("Orkestrator control MCP server", () => {
     });
 
     const listed = await rpc(credential.url, credential.token, "tools/list", {});
-    const description = (
-      listed.body.result?.tools as Array<{ name: string; description: string }>
-    ).find((tool) => tool.name === "list_agents")!.description;
+    const tools = (listed.body.result?.tools ?? []) as Array<{ name: string; description: string }>;
+    const description = tools.find((tool) => tool.name === "list_agents")?.description;
     expect(description).not.toContain("instead of polling");
     expect(description).toContain("not to wait");
   });

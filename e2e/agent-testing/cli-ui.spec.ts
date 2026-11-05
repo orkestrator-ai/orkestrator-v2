@@ -1,5 +1,5 @@
 import { acknowledgeDockerReachabilityWarning } from "../docker-reachability-warning";
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page } from "./browser-test";
 import { pendingInteractionIds, waitPastResolved } from "./cli-ui-waits";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";

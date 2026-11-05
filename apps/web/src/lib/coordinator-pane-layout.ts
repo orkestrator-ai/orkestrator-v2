@@ -272,6 +272,12 @@ export function moveCoordinatorConversation(
   return settle({ root, activePaneId: toPaneId }, layout);
 }
 
+/** Whether one of a pane's tabs can be split off into a new group beside it. */
+export function canSplitCoordinatorPane(layout: CoordinatorPaneLayout, paneId: string): boolean {
+  const leaf = findCoordinatorLeaf(layout.root, paneId);
+  return (leaf?.conversationIds.length ?? 0) >= 2 && depth(layout.root) < MAX_SPLIT_DEPTH;
+}
+
 /** Drops a tab on a pane edge: that pane splits and the tab opens a new group there. */
 export function splitCoordinatorPaneAtEdge(
   layout: CoordinatorPaneLayout,

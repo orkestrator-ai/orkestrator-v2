@@ -3,8 +3,6 @@ import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { setManagedGitHubCli } from "../src/core/github-cli-binary";
-
 import { createCommandFixtures } from "./command-fixtures";
 
 const { createCommandRegistry, createContext, createEnvironment } = await createCommandFixtures();
@@ -327,7 +325,7 @@ describe("GitHub issue commands", () => {
         '#!/bin/sh\n[ "$*" = "auth token --hostname github.com" ] && echo gho_host_token\n',
       );
       await chmod(gh, 0o755);
-      setManagedGitHubCli(gh);
+      context.runtime.gitHubCli.pin(gh);
       await expect(
         commands.get("get_github_issues")?.({ projectId: "project-1" }, context),
       ).rejects.toThrow("GitHub authentication failed");
@@ -338,7 +336,6 @@ describe("GitHub issue commands", () => {
         commands.get("get_github_issues")?.({ projectId: "project-1" }, context),
       ).rejects.toThrow("gh auth login");
     } finally {
-      setManagedGitHubCli(undefined);
       globalThis.fetch = originalFetch;
       await rm(binDir, { recursive: true, force: true });
     }

@@ -1,5 +1,5 @@
 import { acknowledgeDockerReachabilityWarning } from "../docker-reachability-warning";
-import { expect, test, type Page, type Request } from "@playwright/test";
+import { expect, test, type Page, type Request } from "./browser-test";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";

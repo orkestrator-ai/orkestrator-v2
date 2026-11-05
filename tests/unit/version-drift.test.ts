@@ -449,6 +449,36 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     expect(script).toContain("shasum -a 256 -c -");
   });
 
+  test("Bun: the site's install.sh downloads the pinned Bun against stated hashes", () => {
+    // A new host without Bun gets this one; it must be the Bun the project
+    // builds and ships with, checked against the archives Bun published.
+    const installer = "apps/web-public/public/install.sh";
+    expect(getShellVar(installer, "PINNED_BUN")).toBe(getMiseToolVersion("bun"));
+    for (const [target, downloadVariable] of [
+      ["DARWIN_AARCH64", "BUN_DARWIN_AARCH64_SHA"],
+      ["DARWIN_X64", "BUN_DARWIN_X64_SHA"],
+      ["LINUX_AARCH64", "BUN_LINUX_AARCH64_SHA"],
+      ["LINUX_X64", "BUN_LINUX_X64_SHA"],
+    ] as const) {
+      expect(getShellVar(installer, `BUN_SHA256_${target}`)).toBe(
+        getShellVar("scripts/download-bun.sh", downloadVariable),
+      );
+    }
+    // The archives only Bun's installer would otherwise choose: no AVX2, musl.
+    for (const target of [
+      "DARWIN_X64_BASELINE",
+      "LINUX_AARCH64_MUSL",
+      "LINUX_X64_BASELINE",
+      "LINUX_X64_MUSL",
+      "LINUX_X64_MUSL_BASELINE",
+    ]) {
+      expect(getShellVar(installer, `BUN_SHA256_${target}`)).toMatch(/^[a-f0-9]{64}$/);
+    }
+    const script = read(installer);
+    expect(script).not.toContain("bun.com/install");
+    expect(script).not.toContain("releases/latest");
+  });
+
   test("Bun: package metadata requires the pinned runtime version", () => {
     const misePin = getMiseToolVersion("bun");
     const rootPackage = JSON.parse(read("package.json")) as { packageManager?: string };

@@ -24,7 +24,6 @@ A batch file combines several reports as numbered parts and takes the rating of 
 | 6 | [0110-c3-sweep-and-reads.md](0110-c3-sweep-and-reads.md) | Medium | No | **C3, Sweep and reads.**<br>`0110`: Syncing once per sweep, a read-only `snapshot()`, batched wake writes and pruning below the limit.<br>`0370`: One own-mailbox check, and `coordinatorRuntimeId` everywhere. | From `0110`: Real repeated work that has not been measured, so it removes a risk rather than a known slowdown. |
 | 7 | [0240-c10-explanations.md](0240-c10-explanations.md) | Medium | No | **C10, Explanations.**<br>`0320`: A tooltip, hint and placeholder for side agents.<br>`0330`: A dismissible first-run card.: Explain the coordinator once, in the product<br>`0400`: Discoverability of `!` commands, the footer wording, and a first message starting with `!`.<br>`0240`: Naming the tier in the picker and badge, and removing the repeated caveat. | From `0240`: The badge calls two different tiers advisory, so the user's main safety fact is blurred. |
 | 8 | [0390-panel-re-render-cost.md](0390-panel-re-render-cost.md) | Low | No | Narrowing the panel's subscriptions after measuring. | An optimisation that should wait for a measurement. |
-| 9 | [0410-leaf-mode-gate-edge-cases.md](0410-leaf-mode-gate-edge-cases.md) | Low | No | The gate's flash before status, an empty controller list, and what "open anyway" remembers. | Edge cases on a rare path. |
 
 ## Parallel running
 
@@ -63,11 +62,10 @@ These still follow the lane and conflict rules above.
 | Batch | Name | Files | Lane and position | Finish first | Not at the same time as |
 | --- | --- | --- | --- | --- | --- |
 | C-0390 | [Panel re-render cost, measure first](0390-panel-re-render-cost.md) | `0390` | Coordinator panel, 4 of 4 | None | None |
-| C-0410 | [Leaf-mode gate](0410-leaf-mode-gate-edge-cases.md) | `0410` | No lane | None | None |
 
 ## Status of every finding
 
-33 done, 10 partly done, 24 open, 7 no action.
+34 done, 9 partly done, 24 open, 7 no action.
 
 Batch C9 (Panel split) is closed. Its task-by-task outcomes are in the [closing report](../2026-11-05-c9-closing-report.md).
 
@@ -130,7 +128,7 @@ What it left is in to-do
 | U12: re-render cost | Open | [0390-panel-re-render-cost.md](0390-panel-re-render-cost.md) |
 | U13: `Context rN` jargon | Done | Moved into the badge's tooltip, `CoordinatorPanelNotices.tsx:75-78` (`e5245dfd6`, #1644). |
 | U13: `!` commands | Open | [C10 part 0400](0240-c10-explanations.md#0400--commands-in-the-coordinator-composer-are-undiscoverable) |
-| U13: leaf-mode gate | Partly done | [0410-leaf-mode-gate-edge-cases.md](0410-leaf-mode-gate-edge-cases.md) (the "for this session" wording is gone from the button). |
+| U13: leaf-mode gate | Done | `LeafModeCoordinatorGate.tsx` waits for portal status, names "the command node" when no controller is known, and remembers "open anyway" per project for the app session (`openedLeafCoordinators`, `uiStore.ts`); tested in `leaf-mode-coordinator-gate.test.tsx`. Batch C-0410; outcome table in the report's last version before deletion. |
 | U13: prompt subscriptions | Partly done | [C7 part 0280](0060-c7-work-panel-and-navigation.md#0280-remote-workers-sign-in-prompts-never-reach-the-banner) (retention bounds the set; remote prompts remain). |
 | U13: picker caveats and tier name | Open | [C10 part 0240](0240-c10-explanations.md#0240-make-the-read-only-tier-legible) |
 | U13: tab click writes selection twice | Done | `focusesPane` and `coordinatorDragEndChange` in `CoordinatorPaneTree.tsx`, tested in `CoordinatorPanel.tabs.test.tsx` and `CoordinatorPaneTree.test.tsx`. |

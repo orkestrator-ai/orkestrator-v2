@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { render, screen, within } from "@testing-library/react";
+import { emptyKeyInformation } from "@orkestrator/protocol/build-pipeline-key-information";
 import { keyInformation } from "./key-information-test-fixture";
 import { build, session } from "./pipeline-test-fixture";
 import { PipelineNotesView } from "./PipelineNotesView";
@@ -98,6 +99,30 @@ describe("PipelineNotesView", () => {
     const flagged = within(screen.getByRole("region", { name: "Needs a look" }));
     expect(flagged.getByText("Works on a real phone")).toBeTruthy();
     expect(screen.getByText("Nothing has been recorded yet")).toBeTruthy();
+  });
+
+  test("shows the nothing-flagged note between the summary and the rest of a recorded brief", () => {
+    render(
+      <PipelineNotesView
+        pipeline={build({
+          phase: "building",
+          keyInformation: {
+            ...emptyKeyInformation("2026-11-05T00:00:00.000Z"),
+            summary: "The recorded summary.",
+            statement: "The recorded objective.",
+            framing: "objective",
+          },
+        })}
+      />,
+    );
+
+    const summary = screen.getByRole("region", { name: "Summary" });
+    const note = screen.getByText("Nothing was flagged for a person to look at.");
+    const objective = screen.getByRole("region", { name: "Objective" });
+    expect(summary.compareDocumentPosition(note) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(note.compareDocumentPosition(objective) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "Needs a look" })).toBeNull();
+    expect(screen.queryByText("Nothing has been recorded yet")).toBeNull();
   });
 
   test("says when nothing was flagged, and when nothing was recorded", () => {

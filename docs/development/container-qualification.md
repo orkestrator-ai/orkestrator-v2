@@ -175,7 +175,7 @@ All commands use `mise run test:logged`:
   `mise run build` passed. The exact-head image build and final-image smoke passed.
 - The live egress file initially failed after worker restart, then the complete
   unchanged file passed alone in 33.7 s. Both observations remain in
-  [flake 6550](../tests/flaky-tests/environments-and-containers/6550-egress-worker-restart-dns-timeout.md).
+  [flake 9833](../tests/flaky-tests/environments-and-containers/9833-egress-worker-restart-dns-timeout.md).
 - The default suite at `9ffb0fe96` exited 1: protocol standalone-install ENOENT,
   CLI corrected-reinstall exit 4, two web schedule GMT/GMT+0 mismatches,
   backend coordinator-timer GMT/GMT+0 mismatch, and a Claude persisted-turn

@@ -1,6 +1,6 @@
 # DNS timeout after an egress-filter worker restart
 
-- **ID:** 6550
+- **ID:** 9833
 - **Status:** open
 - **Date observed:** 2026-11-05
 - **Test:** `M12 name checks at the egress gateway > SNI, Host and DNS are checked against the allowlist, edits apply in place, and a dead daemon fails closed`

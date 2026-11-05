@@ -1,0 +1,259 @@
+/**
+ * The egress gateway's name-check daemon (docker/orkestrator-egress-filter.pl),
+ * loaded as a library: its ClientHello, HTTP and DNS parsing and its name
+ * rules, without sockets. A real container run is in
+ * apps/backend/tests/container-live-egress-filter.test.ts.
+ */
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { root } from "./firewall-test-support";
+
+const DAEMON = join(root, "docker/orkestrator-egress-filter.pl");
+let dir = "";
+
+beforeAll(() => {
+  dir = mkdtempSync(join(tmpdir(), "ork-egress-filter-"));
+  writeFileSync(
+    join(dir, "names"),
+    [
+      "registry.npmjs.org tcp:443",
+      "db.example.test tcp:5432",
+      "Bad Line",
+      "quic.test udp:443",
+    ].join("\n"),
+  );
+  writeFileSync(
+    join(dir, "resolv-host"),
+    "nameserver 127.0.0.11\noptions ndots:0\n# ExtServers: [host(192.168.65.7)]\n",
+  );
+  writeFileSync(
+    join(dir, "resolv-ip"),
+    "nameserver 127.0.0.11\n# ExtServers: [203.0.113.53 198.51.100.53 host(10.0.0.1)]\n",
+  );
+});
+
+afterAll(() => {
+  if (dir) rmSync(dir, { recursive: true, force: true });
+});
+
+/** Runs Perl with the daemon loaded; `ARGV` carries hex inputs. */
+function perl(code: string, ...args: string[]): string {
+  const result = Bun.spawnSync({
+    cmd: [
+      "perl",
+      "-e",
+      `require ${JSON.stringify(DAEMON)}; $main::opt{names} = ${JSON.stringify(join(dir, "names"))}; main::load_names(); ${code}`,
+      "--",
+      ...args,
+    ],
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (result.exitCode !== 0) throw new Error(result.stderr.toString());
+  return result.stdout.toString();
+}
+
+const u16 = (value: number) => Buffer.from([value >> 8, value & 255]);
+
+function clientHello(serverName: string | null): Buffer {
+  const extensions: Buffer[] = [];
+  if (serverName !== null) {
+    const name = Buffer.from(serverName);
+    const entry = Buffer.concat([Buffer.from([0]), u16(name.length), name]);
+    const list = Buffer.concat([u16(entry.length), entry]);
+    extensions.push(Buffer.concat([u16(0), u16(list.length), list]));
+  }
+  // supported_versions (TLS 1.3), so the extension walk passes another one.
+  extensions.push(Buffer.concat([u16(43), u16(3), Buffer.from([2, 3, 4])]));
+  const all = Buffer.concat(extensions);
+  const body = Buffer.concat([
+    Buffer.from([3, 3]),
+    Buffer.alloc(32, 7),
+    Buffer.from([32]),
+    Buffer.alloc(32, 9),
+    u16(2),
+    Buffer.from([0x13, 0x01]),
+    Buffer.from([1, 0]),
+    u16(all.length),
+    all,
+  ]);
+  return Buffer.concat([Buffer.from([1, 0]), u16(body.length), body]);
+}
+
+const record = (handshake: Buffer) =>
+  Buffer.concat([Buffer.from([22, 3, 1]), u16(handshake.length), handshake]);
+
+const sni = (bytes: Buffer) =>
+  perl('print join("|", main::tls_server_name(pack("H*", $ARGV[0])));', bytes.toString("hex"));
+
+describe("TLS server_name", () => {
+  test("reads the name from a ClientHello, lower-cased and without a trailing dot", () => {
+    expect(sni(record(clientHello("Registry.NPMJS.org.")))).toBe("ok|registry.npmjs.org");
+  });
+
+  test("waits for a ClientHello split across records, then reads it", () => {
+    const handshake = clientHello("registry.npmjs.org");
+    const split = Buffer.concat([
+      record(handshake.subarray(0, 20)),
+      record(handshake.subarray(20)),
+    ]);
+    expect(sni(split.subarray(0, 30))).toBe("need");
+    expect(sni(split)).toBe("ok|registry.npmjs.org");
+  });
+
+  test("refuses a ClientHello without a name, and anything that is not one", () => {
+    expect(sni(record(clientHello(null)))).toBe("bad");
+    expect(sni(Buffer.from([22, 3, 1, 0, 4, 2, 0, 0, 0]))).toBe("bad");
+    expect(sni(record(clientHello("bad name.test")))).toBe("bad");
+  });
+});
+
+const http = (head: string) =>
+  perl(
+    'print join("|", main::http_host(pack("H*", $ARGV[0])));',
+    Buffer.from(head).toString("hex"),
+  );
+
+describe("HTTP Host", () => {
+  test("reads one Host header, without its port", () => {
+    expect(http("GET / HTTP/1.1\r\nHost: Registry.npmjs.org:80\r\nAccept: */*\r\n\r\n")).toBe(
+      "ok|registry.npmjs.org",
+    );
+  });
+
+  test("waits for the end of the head", () => {
+    expect(http("GET / HTTP/1.1\r\nHost: registry.npmjs.org")).toBe("need");
+  });
+
+  test("refuses a missing or repeated Host, CONNECT, and an absolute target naming another host", () => {
+    expect(http("GET / HTTP/1.1\r\nAccept: */*\r\n\r\n")).toBe("bad");
+    expect(http("GET / HTTP/1.1\r\nHost: a.test\r\nHost: b.test\r\n\r\n")).toBe("bad");
+    expect(http("CONNECT a.test:443 HTTP/1.1\r\nHost: a.test\r\n\r\n")).toBe("bad");
+    expect(http("GET http://evil.test/ HTTP/1.1\r\nHost: a.test\r\n\r\n")).toBe("bad");
+    expect(http("GET http://a.test/x HTTP/1.1\r\nHost: a.test\r\n\r\n")).toBe("ok|a.test");
+    expect(http("GET / HTTP/1.1\r\nHost: user@a.test\r\n\r\n")).toBe("bad");
+  });
+});
+
+describe("classification", () => {
+  const classify = (bytes: string) =>
+    perl(
+      'print join("|", map { $_ // "" } main::classify(pack("H*", $ARGV[0])));',
+      Buffer.from(bytes).toString("hex"),
+    );
+
+  test("tells TLS, HTTP and anything else apart", () => {
+    expect(classify("SSH-2.0-OpenSSH_9.6\r\n")).toBe("other");
+    expect(classify("GE")).toBe("need");
+    expect(classify("GET / HTTP/1.1\r\nHost: a.test\r\n\r\n")).toBe("http|ok|a.test");
+    expect(classify("\u0000\u0000\u0000\u0008")).toBe("other");
+  });
+
+  test("allows a name only on the ports its entries name, and GitHub's names on 443 and 22", () => {
+    const allowed = (name: string, port: number) =>
+      perl(`print main::name_allowed_on_port("${name}", ${port}) ? 1 : 0;`);
+    expect(allowed("registry.npmjs.org", 443)).toBe("1");
+    expect(allowed("registry.npmjs.org", 80)).toBe("0");
+    expect(allowed("db.example.test", 5432)).toBe("1");
+    expect(allowed("quic.test", 443)).toBe("0");
+    expect(allowed("codeload.github.com", 443)).toBe("1");
+    expect(allowed("objects.githubusercontent.com", 22)).toBe("1");
+    expect(allowed("github.com", 8443)).toBe("0");
+    // GitHub Pages serves any account's site from GitHub's addresses.
+    expect(allowed("attacker.github.io", 443)).toBe("0");
+    expect(allowed("evilgithub.com", 443)).toBe("0");
+  });
+});
+
+function query(name: string, options: { edns?: boolean; flags?: number } = {}): string {
+  const labels = name
+    .split(".")
+    .map((label) => Buffer.concat([Buffer.from([label.length]), Buffer.from(label)]));
+  const question = Buffer.concat([...labels, Buffer.from([0]), u16(1), u16(1)]);
+  const opt = options.edns
+    ? Buffer.concat([Buffer.from([0]), u16(41), u16(1232), Buffer.alloc(4), u16(0)])
+    : Buffer.alloc(0);
+  const header = Buffer.concat([
+    u16(0x1234),
+    u16(options.flags ?? 0x0100),
+    u16(1),
+    u16(0),
+    u16(0),
+    u16(options.edns ? 1 : 0),
+  ]);
+  return Buffer.concat([header, question, opt]).toString("hex");
+}
+
+describe("DNS", () => {
+  const resolvers = (resolv: string, name: string, loopback: boolean) =>
+    perl(
+      `$main::opt{resolv} = ${JSON.stringify(join(dir, resolv))}; main::load_resolvers(); print join(",", main::query_resolvers(main::normal_name("${name}"), ${loopback ? 1 : 0}));`,
+    );
+
+  test("forwards an allowed name where it was sent, and refuses everything else", () => {
+    // Docker contacts its upstreams from the host: its resolver is the only path.
+    expect(resolvers("resolv-host", "registry.npmjs.org", true)).toBe("127.0.0.11");
+    expect(resolvers("resolv-host", "registry.npmjs.org", false)).toBe("127.0.0.11");
+    // Docker names its upstreams by address: an off-host query goes to them.
+    expect(resolvers("resolv-ip", "registry.npmjs.org", true)).toBe("127.0.0.11");
+    expect(resolvers("resolv-ip", "registry.npmjs.org", false)).toBe("203.0.113.53,198.51.100.53");
+    // Any port or protocol of an entry makes its name resolvable.
+    expect(resolvers("resolv-ip", "quic.test", true)).toBe("127.0.0.11");
+    expect(resolvers("resolv-ip", "api.github.com", true)).toBe("127.0.0.11");
+    expect(resolvers("resolv-ip", "c2VjcmV0.exfil.attacker.invalid", true)).toBe("");
+    expect(resolvers("resolv-ip", "sub.registry.npmjs.org", true)).toBe("");
+  });
+
+  test("answers Docker's own names only for a query sent to Docker's resolver", () => {
+    expect(resolvers("resolv-ip", "host.docker.internal", true)).toBe("127.0.0.11");
+    expect(resolvers("resolv-ip", "host.docker.internal", false)).toBe("");
+  });
+
+  test("parses one ordinary query and refuses with an Extended DNS Error", () => {
+    const parsed = perl(
+      'my @q = main::parse_query(pack("H*", $ARGV[0])); print join("|", @q[0, 2, 4]);',
+      query("Exfil.Attacker.invalid", { edns: true }),
+    );
+    expect(parsed).toBe(`${0x1234}|exfil.attacker.invalid|1`);
+    const answer = perl(
+      'my $m = pack("H*", $ARGV[0]); my @q = main::parse_query($m); print unpack("H*", main::dns_answer($m, $q[1], $q[3], $q[4], 5));',
+      query("exfil.attacker.invalid", { edns: true }),
+    );
+    const bytes = Buffer.from(answer, "hex");
+    expect(bytes.readUInt16BE(0)).toBe(0x1234);
+    // Response, recursion desired echoed, recursion available, REFUSED.
+    expect(bytes.readUInt16BE(2)).toBe(0x8185);
+    expect(bytes.readUInt16BE(10)).toBe(1);
+    expect(bytes.toString("latin1")).toContain("not on this environment's network allowlist");
+    // EDE option 15, info code 18 (Prohibited).
+    expect(answer).toContain("000f");
+    expect(answer).toContain("0012");
+  });
+
+  test("ignores responses, several questions and malformed names", () => {
+    const parse = (hex: string) =>
+      perl('print scalar(my @q = main::parse_query(pack("H*", $ARGV[0])));', hex);
+    expect(parse(query("a.test", { flags: 0x8180 }))).toBe("0");
+    expect(parse(query("a.test").slice(0, 20))).toBe("0");
+    const twoQuestions = Buffer.from(query("a.test"), "hex");
+    twoQuestions.writeUInt16BE(2, 4);
+    expect(parse(twoQuestions.toString("hex"))).toBe("0");
+    // A label with a dot inside it is a name no allowlist entry can match.
+    const dotted = perl(
+      'my @q = main::parse_query(pack("H*", $ARGV[0])); print defined $q[2] ? $q[2] : "undef";',
+      Buffer.concat([
+        Buffer.from(query("a.test"), "hex").subarray(0, 12),
+        Buffer.from([3]),
+        Buffer.from("a.b"),
+        Buffer.from([4]),
+        Buffer.from("test"),
+        Buffer.from([0]),
+        u16(1),
+        u16(1),
+      ]).toString("hex"),
+    );
+    expect(dotted).toBe("undef");
+  });
+});

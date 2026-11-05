@@ -22,6 +22,11 @@
 # revoked (firewall-domains.sh). --add and --remove edit the stored list; the
 # app shows a list that differs from its saved one and replaces it the next
 # time it applies its own.
+#
+# In an egress gateway with name checks (firewall-domains.sh) a domain edit
+# also replaces the names the daemon allows. They are written before the new
+# list is resolved, because the gateway's own lookups go through the daemon,
+# and put back if the rebuild fails.
 
 set -euo pipefail
 # Root runs this, and the image PATH puts node-writable directories first.
@@ -113,9 +118,18 @@ set_domains() {
         return 0
     fi
     ipset list "$ORK_SET" >/dev/null 2>&1 || fail "the firewall is not initialized"
-    local effective
+    local effective filter
     effective=$(ork_effective_domains "$csv")
-    ork_rebuild_allowlist "$effective" || fail "the allowlist could not be rebuilt; the previous one is still active"
+    filter=$(ork_filter_state)
+    if [ "$filter" = enforced ]; then
+        ork_write_filter_names "$effective" || fail "the allowed names could not be written; the previous list is still active"
+    fi
+    if ! ork_rebuild_allowlist "$effective"; then
+        if [ "$filter" = enforced ]; then
+            ork_write_filter_names "$(ork_effective_domains "$(stored_domains)")" || true
+        fi
+        fail "the allowlist could not be rebuilt; the previous one is still active"
+    fi
     store_domains "$csv"
     refresh_status "$csv" 0
     echo -e "${GREEN}Applied $ORK_RESOLVED_DOMAINS domains ($ORK_UNRESOLVED_DOMAINS unresolved, $ORK_REVOKED_ENTRIES entries revoked)${NC}"
@@ -158,6 +172,11 @@ refresh_once() {
     effective=$(ork_effective_domains "$csv")
     IFS= read -r failures < "$ORK_FAILURES_FILE" 2>/dev/null || failures=0
     [[ "$failures" =~ ^[0-9]+$ ]] || failures=0
+    # The daemon restarts its own worker; a supervisor that is gone too is
+    # started again here. The namespace was closed in between.
+    if [ "$(ork_filter_state)" = enforced ] && ! ork_filter_running; then
+        ork_start_filter || true
+    fi
     if ork_rebuild_allowlist "$effective"; then
         # Unresolved domains count as a failed refresh for scheduling, so a
         # transient DNS outage is retried well before the carried addresses

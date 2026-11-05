@@ -171,7 +171,7 @@ describe("PipelineSessionTranscript agent mail", () => {
       },
     ]);
 
-    expect(container.querySelector("[data-mail-tile]")).toBeNull();
+    expect(container.querySelector("[data-mail-tile]") === null).toBe(true);
     expect(container.textContent).toContain(PEER_MAIL_UNREADABLE_TEXT);
     expect(container.textContent).toContain("Still working");
     expect(container.textContent).not.toContain("orkestrator-peer");
@@ -241,7 +241,7 @@ describe("PipelineSessionTranscript agent mail", () => {
 
     const tile = container.querySelector<HTMLElement>("[data-mail-tile]");
     expect(tile?.textContent).toContain("<img src=x onerror=alert(1)>");
-    expect(tile?.querySelector("img")).toBeNull();
+    expect(tile?.querySelector("img") === null).toBe(true);
   });
 
   test("keeps a person's message that names the tag as their own bubble", () => {
@@ -249,7 +249,7 @@ describe("PipelineSessionTranscript agent mail", () => {
       userRow("row-1", "Why does <orkestrator-peer-message> show up here?"),
     ]);
 
-    expect(container.querySelector("[data-mail-tile]")).toBeNull();
+    expect(container.querySelector("[data-mail-tile]") === null).toBe(true);
     expect(container.textContent).toContain("show up here?");
   });
 });

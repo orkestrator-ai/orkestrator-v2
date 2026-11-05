@@ -1,6 +1,8 @@
 # Key information list repair validation
 
-Status: open. Observed 2026-11-05 at `76e0fef73`.
+- **ID:** 4844
+- **Status:** open
+- **Observed:** 2026-11-05 at `76e0fef73`
 
 `mise run test:logged -- --name address-default -- mise run test` waited
 about 1,258 s for host capacity (workspace six slots, root one, bridges two).

@@ -576,7 +576,7 @@ describe("PaneLeafContainer", () => {
     );
     expect(screen.getByTestId("tab-launch-shimmer")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Select tab 2" }));
-    expect(screen.queryByTestId("tab-launch-shimmer")).toBeNull();
+    expect(screen.queryByTestId("tab-launch-shimmer") === null).toBe(true);
     expect(useTabLaunchStore.getState().launches.get("env-hidden")?.[0]?.focused).toBe(false);
   });
 
@@ -594,7 +594,7 @@ describe("PaneLeafContainer", () => {
     expect(container.firstElementChild?.hasAttribute("data-pane-leaf")).toBe(true);
     fireEvent.click(container.firstElementChild as HTMLElement);
     expect(useTabLaunchStore.getState().launches.get("env-hidden")?.[0]?.focused).toBe(false);
-    expect(screen.queryByTestId("tab-launch-shimmer")).toBeNull();
+    expect(screen.queryByTestId("tab-launch-shimmer") === null).toBe(true);
 
     expect(usePaneLayoutStore.getState().environments.get("env-hidden")?.activePaneId).toBe(
       "pane-hidden",

@@ -48,9 +48,7 @@ import type {
 } from "./gateway-internals.js";
 import { compatibilityPathUsage } from "./core/compatibility-path-usage.js";
 import { isSpliceableResult, spliceEncodedJson } from "./core/native-agent-projection-encoding.js";
-import { recurringWorkDiagnostics } from "./core/recurring-diagnostics.js";
-import { boundedConsoleStats } from "./bounded-console.js";
-import { eventLoopDiagnostics } from "@orkestrator/protocol/event-loop-stall-monitor";
+import { backendMetricsSnapshot } from "./core/backend-metrics.js";
 
 const KEEPALIVE_EVENT_FRAME = `event: ${GATEWAY_KEEPALIVE_EVENT}\ndata: 1\n\n`;
 
@@ -369,8 +367,13 @@ export class GatewayHandlers {
       response.end();
       return;
     }
+    jsonResponse(response, 200, this.metricsSnapshot());
+  }
+
+  /** What `/metrics` answers, also read in-process by the diagnostics bundle. */
+  metricsSnapshot() {
     const snapshot = this.ctx.metrics.snapshot();
-    jsonResponse(response, 200, {
+    return {
       ...snapshot,
       // Ring occupancy and eviction are otherwise invisible: a ring dropping
       // every gap looks exactly like one that never needed to retain anything.
@@ -379,15 +382,8 @@ export class GatewayHandlers {
         ring: this.ctx.eventReplay.getStats(),
         relayedRing: this.ctx.relayedEventReplay.getStats(),
       },
-      // Additive: bounded, content-free recurring-work counters (kinds only).
-      recurringWork: recurringWorkDiagnostics(),
-      // Additive: content-free mixed-version compatibility-path usage.
-      compatibilityPaths: compatibilityPathUsage.snapshot().paths,
-      // Additive: event-loop stalls and console lines dropped while the log
-      // reader was not draining (null outside the backend entrypoint).
-      eventLoop: eventLoopDiagnostics(),
-      consoleOutput: boundedConsoleStats(),
-    });
+      ...backendMetricsSnapshot(this.ctx.backend.databaseStats?.() ?? null),
+    };
   }
 
   async handleClientMetrics(

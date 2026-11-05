@@ -391,8 +391,9 @@ the installation identity.
 
 `GET /__orkestrator/hello` is the authenticated handshake on every listener
 (contract: `packages/protocol/src/backend-profile.ts`). It returns the
-installation identity, the generation, the app version, the client API range,
-capabilities, the profile and `endpointRole`. It never includes data paths,
+installation identity, the generation, the app version, the build commit when
+the build has one, the client API range, capabilities, the profile and
+`endpointRole`. It never includes data paths,
 the auth file, the token or the process ID.
 
 ## Vercel-hosted public client

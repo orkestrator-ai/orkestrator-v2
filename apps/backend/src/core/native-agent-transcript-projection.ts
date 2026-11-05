@@ -140,6 +140,7 @@ import {
   ProgressiveReadPhaseTimer,
   monotonicMs,
   type ProgressiveCacheTier,
+  type ProgressiveReadMetric,
   type ProgressiveReadOutcome,
   type ProgressiveReadPhases,
 } from "./native-agent-progressive-metrics.js";
@@ -546,6 +547,10 @@ export class NativeAgentTranscriptProjection {
   /** When the last exact recovery read started, per key; spaces those reads out. */
   private readonly progressiveHydrationReadStarts = new Map<string, number>();
   private readonly progressiveMetrics = new ProgressiveReadMetrics();
+  /** What `get_progressive_read_metrics` reports. */
+  progressiveReadSamples(): readonly ProgressiveReadMetric[] {
+    return this.progressiveMetrics.list();
+  }
   /** In-flight provider reads of remote tool details, one per reference. */
   private readonly remoteToolDetailReads = new Map<string, Promise<NativeAgentToolDetails>>();
   /** Projected rows reused while their provider rows are unchanged (step 12). */

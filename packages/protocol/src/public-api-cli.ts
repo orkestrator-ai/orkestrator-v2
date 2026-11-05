@@ -123,6 +123,8 @@ export const PUBLIC_ACTION_CLI_COMMANDS: Readonly<Record<PublicActionName, strin
     "run.discard": "orkestrator run discard",
     "run.cancel": "orkestrator run cancel",
     "run.output": "orkestrator run output",
+    "diagnostics.plan": "orkestrator diagnostics plan",
+    "diagnostics.read": "orkestrator diagnostics export",
     "host.status": "orkestrator host status",
     "host.update.channel": "orkestrator host update channel",
     "host.update.check": "orkestrator host update check",

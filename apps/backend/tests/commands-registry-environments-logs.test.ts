@@ -81,3 +81,51 @@ describe("log storage commands", () => {
     }
   });
 });
+
+describe("database and diagnostics commands", () => {
+  test("get_database_stats reports through the backend's diagnostics and refuses arguments", () => {
+    const commands = createCommandRegistry();
+    const stats = { generatedAt: "now", leaseWaits: {} };
+    const context = {
+      diagnostics: { databaseStats: () => stats },
+    } as unknown as CommandContext;
+    expect(commands.get("get_database_stats")?.({}, context) as unknown).toEqual(stats);
+    expect(() => commands.get("get_database_stats")?.({ path: "/etc" }, context)).toThrow(
+      /Unexpected arguments field: path/,
+    );
+  });
+
+  test("get_artifact_metrics exposes the counters, and is empty without artifacts", () => {
+    const commands = createCommandRegistry();
+    expect(
+      commands.get("get_artifact_metrics")?.({}, {} as unknown as CommandContext) as unknown,
+    ).toEqual({ counters: {}, droppedSeries: 0 });
+    const counters = { counters: { repairs: 2 }, droppedSeries: 0 };
+    expect(
+      commands.get("get_artifact_metrics")?.({}, {
+        transcriptArtifacts: { metrics: { snapshot: () => counters } },
+      } as unknown as CommandContext) as unknown,
+    ).toEqual(counters);
+  });
+
+  test("get_progressive_read_metrics answers from the native agent service", () => {
+    const commands = createCommandRegistry();
+    const samples = [{ domain: "state", cacheTier: "memory", outcome: "cached", durationMs: 1 }];
+    expect(
+      commands.get("get_progressive_read_metrics")?.({}, {
+        nativeAgents: { progressiveReadSamples: () => samples },
+      } as unknown as CommandContext) as unknown,
+    ).toEqual({ samples });
+  });
+
+  test("a workspace client cannot read this machine's diagnostics", async () => {
+    const { isWorkspaceExcludedCommand } = await import("../src/core/nodes/node-routing");
+    for (const command of [
+      "get_database_stats",
+      "plan_diagnostics_bundle",
+      "read_diagnostics_bundle",
+    ]) {
+      expect(isWorkspaceExcludedCommand(command)).toBe(true);
+    }
+  });
+});

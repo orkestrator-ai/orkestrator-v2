@@ -169,9 +169,9 @@ const {
   deleteProjectAndEnvironments,
   forkSidebarEnvironment,
   resolveSidebarReorder,
-  resolveSidebarSelection,
   sortEnvironmentsByActivity,
 } = await import("../../../apps/web/src/components/sidebar/HierarchicalSidebar");
+const { resolveSidebarSelection } = await import("../../../apps/web/src/lib/sidebar-selection");
 
 afterAll(() => {
   mock.module("@dnd-kit/core", () => realDndCoreSnapshot);

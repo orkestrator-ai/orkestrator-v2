@@ -37,7 +37,7 @@ test.each([false, true])(
     expect(screen.getByText("Loading…")).toBeTruthy();
     expect(await screen.findByRole("alert")).toBeTruthy();
     expect(screen.getByText("This part of the app failed to load")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Retry view" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry view" }) === null).toBe(true);
     expect(rejectImport).toHaveBeenCalled();
     expect(screen.getByRole("button", { name: "Reload application" })).toBeTruthy();
     expect(screen.getByText("Files shell")).toBeTruthy();

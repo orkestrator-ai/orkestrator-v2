@@ -33,7 +33,7 @@ test("Markdown render error keeps plain mail and the surrounding shell mounted",
     </main>,
   );
   const retry = await screen.findByRole("button", { name: "Retry formatting" });
-  expect(screen.queryByRole("button", { name: "Reload application" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Reload application" }) === null).toBe(true);
   expect(screen.getByText("read **this**")).toBeTruthy();
   expect(screen.getByText("Mail shell")).toBeTruthy();
   expect(onFailure).toHaveBeenCalledWith(expect.objectContaining({ kind: "render" }));

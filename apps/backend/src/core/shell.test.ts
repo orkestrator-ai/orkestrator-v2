@@ -471,8 +471,14 @@ describe("runCommand capture", () => {
     const original = process.env.TMPDIR;
     const directory = await mkdtemp(path.join(os.tmpdir(), "orkestrator-shell-test-"));
     process.env.TMPDIR = directory;
+    // An earlier test file in this worker can leave descriptors waiting on
+    // collection; closing mid-test, they would hide a leak or fail a clean run.
+    const openDescriptors = () => {
+      Bun.gc(true);
+      return readdirSync("/dev/fd").length;
+    };
     try {
-      const before = readdirSync("/dev/fd").length;
+      const before = openDescriptors();
       const listed = await runCommand("sh", ["-c", 'ls -A "$1"; echo done', "sh", directory]);
       expect(listed.stdout).toBe("done\n");
       for (let index = 0; index < 8; index += 1) {
@@ -480,7 +486,7 @@ describe("runCommand capture", () => {
         await runCommand("orkestrator-nonexistent-shell-test-command").catch(() => undefined);
         await runCommand("sh", ["-c", "sleep 5"], { timeoutMs: 20 }).catch(() => undefined);
       }
-      expect(readdirSync("/dev/fd").length).toBe(before);
+      expect(openDescriptors()).toBe(before);
       expect(readdirSync(directory)).toEqual([]);
     } finally {
       if (original === undefined) delete process.env.TMPDIR;

@@ -78,7 +78,7 @@ Analysed 2026-11-03 against `main` at `a2bba9d8`.
     - Pros: far more useful for a fix.
     - Cons: frames hold paths and function names, and the report says the ring must not include stacks to stay within the privacy rule.
 - **Where is it kept?**
-  - **Sent to the backend, into the essential log (recommended; depends on [0750](0750-e15-health-and-diagnostics.md#0750-an-always-on-essential-event-log)).**
+  - **Sent to the backend, into the essential log (recommended; [the essential log](../../architecture/logging.md#the-essential-event-log) is built).**
     - Pros: survives a renderer crash and appears in the export.
     - Cons: a new client-to-backend write that must be rate-bound and validated.
   - **`localStorage` only.**

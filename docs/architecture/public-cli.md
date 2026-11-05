@@ -250,6 +250,8 @@ not advertise at its version before sending it.
 | `run retry/discard` | `run.retry/discard` | `retry/discard_native_agent_dispatch` | provider |
 | `run cancel/output` | `run.cancel/output` | exec worker control | process / read |
 | `run receipts` | local | private local receipts | none |
+| `diagnostics plan` | `diagnostics.plan` | builds the bundle in the backend's memory ([logging.md](logging.md#the-diagnostics-bundle)); the manifest is the bundle's own | read |
+| `diagnostics export [--plan PLAN_ID] [--file PATH]` | `diagnostics.read` | reads a plan piece by piece and writes it **on this machine**, owner-only, never overwriting. Nothing is uploaded | read |
 | `host status` | `host.status` | `HostMaintenanceService` detailed snapshot (impact, tools, image) | read |
 | `host update channel stable/beta/unstable` | `host.update.channel` | persisted channel and a fresh check; refused while updating | metadata |
 | `host update check [--wait]` | `host.update.check` | check request answered by the host's updater | metadata |

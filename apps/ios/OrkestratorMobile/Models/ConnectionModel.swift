@@ -12,6 +12,9 @@ final class ConnectionModel: ObservableObject {
 
     private let credentialStore: any ConnectionCredentialStoring
     private let validator: any GatewayConnectionValidating
+    /// Set while the stored vault has not been read. `vault` is then only what the
+    /// UI shows, never a basis for what to write: a save replaces the whole item.
+    private var unreadVaultMessage: String?
 
     init(
         credentialStore: any ConnectionCredentialStoring = KeychainCredentialStore(),
@@ -24,11 +27,29 @@ final class ConnectionModel: ObservableObject {
             requiresLaunchSelection = !vault.connections.isEmpty
         } catch {
             vault = .empty
-            connectionError = error.localizedDescription
+            let message = Self.readFailureMessage(for: error)
+            unreadVaultMessage = message
+            connectionError = message
         }
     }
 
     var activeConnection: RemoteConnection? { vault.activeConnection }
+
+    /// Called when the app returns to the foreground, so a list that could not be
+    /// read while the device was locked reappears without a restart.
+    func retryVaultReadIfFailed() {
+        guard let previousMessage = unreadVaultMessage else { return }
+        do {
+            let isShowingReadFailure = connectionError == previousMessage
+                || connectionError == ConnectionModelError.saveRefused.errorDescription
+            applyStoredVault(try credentialStore.load())
+            if isShowingReadFailure { connectionError = nil }
+        } catch {
+            let message = Self.readFailureMessage(for: error)
+            unreadVaultMessage = message
+            if connectionError == previousMessage { connectionError = message }
+        }
+    }
 
     func showConnectionEditor(prefillActiveConnection: Bool = false, error: String? = nil) {
         if prefillActiveConnection, let activeConnection {
@@ -70,6 +91,8 @@ final class ConnectionModel: ObservableObject {
         do {
             _ = try await use(connectionID: connection.id.uuidString)
             requiresLaunchSelection = false
+            draftToken = ""
+            isShowingConnectionEditor = false
         } catch {
             connectionError = error.localizedDescription
         }
@@ -86,6 +109,7 @@ final class ConnectionModel: ObservableObject {
         let token = try validator.normalizedToken(tokenValue)
         let nickname = try RemoteConnection.normalizedNickname(nicknameValue)
         try await validator.check(address: address, token: token)
+        try rereadVaultBeforeWrite()
 
         var nextVault = vault
         if let index = nextVault.connections.firstIndex(where: { $0.address == address }) {
@@ -114,6 +138,7 @@ final class ConnectionModel: ObservableObject {
 
     @discardableResult
     func use(connectionID: String) async throws -> ConnectionListPayload {
+        try rereadVaultBeforeWrite()
         let connection = try savedConnection(connectionID: connectionID)
         let id = connection.id
 
@@ -147,6 +172,7 @@ final class ConnectionModel: ObservableObject {
     /// Sets or clears (`nil`/blank) a saved connection's display nickname.
     @discardableResult
     func rename(connectionID: String, nickname nicknameValue: String?) throws -> ConnectionListPayload {
+        try rereadVaultBeforeWrite()
         let connection = try savedConnection(connectionID: connectionID)
         let nickname = try RemoteConnection.normalizedNickname(nicknameValue)
         var nextVault = vault
@@ -162,6 +188,7 @@ final class ConnectionModel: ObservableObject {
     @discardableResult
     func forget(connectionID: String) throws -> ConnectionListPayload {
         guard let id = UUID(uuidString: connectionID) else { throw ConnectionModelError.missingConnection }
+        try rereadVaultBeforeWrite()
         var nextVault = vault
         nextVault.connections.removeAll { $0.id == id }
         if nextVault.activeConnectionID == id {
@@ -194,18 +221,49 @@ final class ConnectionModel: ObservableObject {
         )
     }
 
-    private func savedConnection(connectionID: String) throws -> RemoteConnection {
+    func savedConnection(connectionID: String) throws -> RemoteConnection {
         guard let id = UUID(uuidString: connectionID),
               let connection = vault.connections.first(where: { $0.id == id }) else {
             throw ConnectionModelError.missingConnection
         }
         return connection
     }
+
+    /// Refuses a write on anything but malformed data, whose documented recovery
+    /// is to connect again and replace what nothing can read.
+    private func rereadVaultBeforeWrite() throws {
+        guard unreadVaultMessage != nil else { return }
+        do {
+            applyStoredVault(try credentialStore.load())
+        } catch KeychainError.invalidData {
+            unreadVaultMessage = nil
+        } catch {
+            throw ConnectionModelError.saveRefused
+        }
+    }
+
+    private func applyStoredVault(_ storedVault: ConnectionVault) {
+        vault = storedVault
+        requiresLaunchSelection = !storedVault.connections.isEmpty
+        if !draftAddress.isEmpty || !draftToken.isEmpty {
+            // The failed launch read initially showed the inline editor. Keep
+            // that unfinished draft reachable when the saved list reappears.
+            isShowingConnectionEditor = !storedVault.connections.isEmpty
+        }
+        unreadVaultMessage = nil
+    }
+
+    private static func readFailureMessage(for error: Error) -> String {
+        if case KeychainError.invalidData = error { return error.localizedDescription }
+        return ConnectionModelError.vaultUnreadable.localizedDescription
+    }
 }
 
 enum ConnectionModelError: LocalizedError {
     case missingConnection
     case changedConnection
+    case vaultUnreadable
+    case saveRefused
 
     var errorDescription: String? {
         switch self {
@@ -213,6 +271,10 @@ enum ConnectionModelError: LocalizedError {
             return "That saved connection no longer exists."
         case .changedConnection:
             return "That saved connection changed while it was being checked. Try again."
+        case .vaultUnreadable:
+            return "Your saved servers could not be read right now. They have not been removed, and they will reappear when you return to the app with this device unlocked."
+        case .saveRefused:
+            return "Nothing was saved, because your saved servers could not be read and saving now would replace them. Unlock this device, return to the app, and try again."
         }
     }
 }

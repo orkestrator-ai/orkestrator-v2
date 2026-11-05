@@ -207,6 +207,14 @@ export function handleSessionMessage(message: JsonObject): boolean {
     return true;
   }
   if (message.method === "session/list" && typeof message.id === "number") {
+    if (process.env.FAKE_ACP_LIST_ERROR) {
+      write({
+        jsonrpc: "2.0",
+        id: message.id,
+        error: { code: -32603, message: process.env.FAKE_ACP_LIST_ERROR },
+      });
+      return true;
+    }
     const params = isObject(message.params) ? message.params : {};
     const cwd = typeof params.cwd === "string" ? params.cwd : process.cwd();
     const listedCwd =

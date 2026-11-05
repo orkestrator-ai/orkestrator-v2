@@ -162,6 +162,12 @@ export interface NodeSummary {
    * last-known value. Absent from a command node that predates it.
    */
   version?: string | null;
+  /**
+   * The commit in that same hello, under the same rule. Also `null` for a
+   * connected node whose hello has none. Absent from a command node that
+   * predates it.
+   */
+  buildCommit?: string | null;
   freshness: SummaryFreshness;
   /** When the summaries were last read from the node (command-node clock, ms). */
   loadedAt: number | null;

@@ -10,6 +10,7 @@ import { attentionCommands } from "./commands/attention.js";
 import { buildCommands } from "./commands/build.js";
 import { graphCommands } from "./commands/graphs.js";
 import { changesCommands } from "./commands/changes.js";
+import { diagnosticsCommands } from "./commands/diagnostics.js";
 import { completionCommands } from "./commands/completion.js";
 import { connectionCommands } from "./commands/connection.js";
 import { environmentCommands } from "./commands/environment.js";
@@ -58,6 +59,7 @@ export const CLIENT_COMMANDS: readonly CommandSpec[] = [
   ...runCommands,
   ...toolchainCommands,
   ...hostCommands,
+  ...diagnosticsCommands,
   ...serviceCommands,
   ...completionCommands(() => CLIENT_COMMANDS),
 ];

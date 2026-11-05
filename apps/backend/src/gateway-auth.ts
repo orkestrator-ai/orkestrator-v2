@@ -615,6 +615,7 @@ export class GatewayAuth {
       endpointRole: listenerKind === "control" ? "control" : "client",
     };
     if (identity.nodeMode) hello.nodeMode = identity.nodeMode;
+    if (identity.buildCommit) hello.buildCommit = identity.buildCommit;
     jsonResponse(response, 200, hello, { "cache-control": "no-store" });
   }
 

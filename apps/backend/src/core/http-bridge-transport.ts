@@ -38,6 +38,14 @@ const ACP_SESSION_START_TIMEOUT_MS = 75_000;
 // already moved on to re-listing stale rows.
 const BRIDGE_CATALOG_REFRESH_TIMEOUT_MS = 65_000;
 /**
+ * A resumable-session list outlasts the bridge's own 30 s ceiling on the read.
+ *
+ * The bridge answers a list that ran out of time with a 504 saying why, and its
+ * clock starts after this one. At the 30 s default this side always gave up
+ * first, so the user was told the bridge was unavailable, never the reason.
+ */
+export const BRIDGE_SESSION_LIST_TIMEOUT_MS = 35_000;
+/**
  * Prompt dispatch and session attach share one budget, because they do the same
  * work.
  *
@@ -57,7 +65,7 @@ const BRIDGE_ATTACH_TIMEOUT_MS = 90_000;
  * the same budget so call sites read as what they do.
  */
 export type BridgeRequestTimeoutKind =
-  "default" | "session-start" | "attach" | "prompt" | "catalog-refresh";
+  "default" | "session-start" | "attach" | "prompt" | "catalog-refresh" | "session-list";
 
 /**
  * Transport failures that are proven to precede the first written byte.
@@ -386,6 +394,7 @@ function bridgeRequestTimeoutMs(
   // benefits from the caller giving up while that work is still running.
   if (kind === "attach" || kind === "prompt") return BRIDGE_ATTACH_TIMEOUT_MS;
   if (kind === "catalog-refresh") return BRIDGE_CATALOG_REFRESH_TIMEOUT_MS;
+  if (kind === "session-list") return BRIDGE_SESSION_LIST_TIMEOUT_MS;
   return DEFAULT_BRIDGE_REQUEST_TIMEOUT_MS;
 }
 
@@ -511,14 +520,21 @@ export async function promptDispatchUnavailableError(
 export async function assertOkWithErrorDetail(
   response: Response,
   operation: string,
+  // For a message shown to the user as is: the bridge's own words say what
+  // happened, and the operation and status mean nothing to them. Without a
+  // detail the message still names both.
+  options: { detailAlone?: boolean } = {},
 ): Promise<void> {
   if (response.ok) return;
   const payload = asRecord(await boundedJson(response, operation).catch(() => null));
   const rawDetail = nonEmptyString(payload?.error)?.trim();
   const detail = rawDetail ? rawDetail.replace(/[\r\n\t]+/g, " ").slice(0, 500) : "";
-  const message = `${operation} ${
-    isTransientHttpStatus(response.status) ? "is temporarily unavailable" : "failed"
-  } (HTTP ${response.status})${detail ? `: ${detail}` : ""}`;
+  const message =
+    options.detailAlone && detail
+      ? detail
+      : `${operation} ${
+          isTransientHttpStatus(response.status) ? "is temporarily unavailable" : "failed"
+        } (HTTP ${response.status})${detail ? `: ${detail}` : ""}`;
   if (isTransientHttpStatus(response.status)) {
     throw new ProviderUnavailableError(message);
   }

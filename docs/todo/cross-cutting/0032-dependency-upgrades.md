@@ -39,7 +39,7 @@ Analysed 2026-10-27 against `main` at `863b5782`. Upstream checked the same day 
 
 **Problem.** Linux AppImage updates are trusted on the feed's SHA-512 alone, so a compromised GitHub release could push code to Linux users. Signed manifests (decision 3) close that, but only arrive with electron-builder 27.
 
-**Context.** The key decision is made: Ed25519, current and next key, release machines hold the current key. A signed release is a one-way door. `scripts/mac-update-feed.ts` edits the macOS feed after it is written, which would invalidate a signature.
+**Context.** Security finding L6 also tracks this, in [5020](5020-signed-appimage-update-manifests.md). The key decision is made: Ed25519, current and next key, release machines hold the current key. A signed release is a one-way door. `scripts/mac-update-feed.ts` edits the macOS feed after it is written, which would invalidate a signature.
 
 **Investigation.** Pins are `electron-builder ^26.18.0` (`package.json:29`) and `electron-updater 6.8.11` (`apps/desktop/package.json:30`). Upstream `next` moved to 27.0.0-alpha.13 and 7.0.0-alpha.12. Newly published: a `v26` dist-tag carrying electron-builder 26.18.1 and electron-updater 6.8.12, patch releases this file does not mention. `auto-update.ts` still sets `updater.autoInstallOnAppQuit = true` (`apps/desktop/electron/auto-update.ts:148`) and calls `quitAndInstall` at `:191` and `:339`. `scripts/mac-update-feed.ts:27` still writes `minimumSystemVersion` after the build.
 

@@ -1,0 +1,43 @@
+# Publish the npm package from CI with provenance
+
+Carried from security report batch S5, part `0140` task 3 (finding L6).
+
+## Task analysis
+
+Analysed 2026-11-04 against `main` at `e198fd4a7`.
+
+### Tasks
+
+1. **Publish the npm package from CI with provenance**: it is published from a workstation. Status: open (needs the maintainer's approval, because it changes how the package is published and changes npm settings).
+
+### 1. Publish the npm package from CI with provenance
+
+**Problem.** A workstation compromise could publish a malicious package, and nothing shows where a version came from.
+
+**Context.** `docs/development/releasing.md` describes `release:publish` running `publish:cli` locally, with web authentication approved in a browser. The image publish already attests provenance (`.github/workflows/publish-container.yml`, step "Attest build provenance"). Since the same batch, `install.sh` runs a pinned Stable release, and standalone updates install dependencies from a lockfile published in the package ([5022](5022-release-chain-live-evidence.md)). Neither shows where the package itself came from.
+
+**Investigation.** `scripts/publish-cli.ts:22-39` still builds `bun publish` with no provenance option, and `mise.toml:185-187` still runs it. No workflow publishes to npm: the `publish` matches under `.github/workflows` are the container and validation jobs. The report left open whether `bun publish` supports provenance. On Bun 1.4.4, `bun publish --help` lists `--tag`, `--otp` and `--auth-type` and no provenance option, so this step would need `npm publish` unless a later Bun adds one. Nothing was published to check this further.
+
+**Decisions.**
+
+- **Where should it publish from?**
+  - **A release workflow with `id-token: write` and npm trusted publishing (recommended).**
+    - Pros: provenance; no long-lived npm credential on a workstation; the workflow pattern already exists.
+    - Cons: moves a step out of the local release flow and needs npm package settings changed. `bun publish` shows no provenance option (see Investigation), so it likely needs `npm publish` for that step.
+  - **Keep it local, with the web approval.**
+    - Pros: a human approves each publish.
+    - Cons: no provenance, and the workstation stays the point of trust.
+
+## Constraints and rationale
+
+This changes how the package is published and needs npm settings changed, so it waits for the maintainer's approval. `bunx` does not check provenance, so this helps someone who looks, or a future check in the updater, rather than blocking a bad version by itself.
+
+## Needs verification
+
+- That `npm publish --provenance` under trusted publishing can publish the package `mise run smoke:cli` tested, with the bundled `resources/` intact.
+
+## Related
+
+- [Releasing the desktop app](../../development/releasing.md)
+- [5022](5022-release-chain-live-evidence.md)
+- [Security report, §5 Low severity](../../reports/2-26-10-27-security.md#5-low-severity) (L6)

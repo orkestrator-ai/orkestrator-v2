@@ -50,6 +50,14 @@ export const ON_DEMAND_BRIDGES: readonly OnDemandBridge[] = [
 /** Committed runtime manifests, relative to the package root. */
 export const BRIDGE_RUNTIMES_DIRECTORY = "bridge-runtimes";
 
+/**
+ * The committed manifest and lockfile of this package's own dependencies,
+ * relative to the package root. The build copies them to
+ * `RELEASE_RUNTIME_PATH` in `@orkestrator/protocol/node/standalone-service`, and
+ * the standalone updater installs from them with `--frozen-lockfile`.
+ */
+export const RELEASE_RUNTIME_DIRECTORY = "release-runtime";
+
 /** Where an on-demand bridge's install inputs land inside `resources/<name>/`. */
 export const RUNTIME_SUBDIRECTORY = "runtime";
 

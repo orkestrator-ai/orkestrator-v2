@@ -1,10 +1,12 @@
 import { createHash } from "node:crypto";
 import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { RELEASE_RUNTIME_PATH } from "@orkestrator/protocol/node/standalone-service";
 import {
   BRIDGE_RUNTIMES_DIRECTORY,
   BUNDLED_BRIDGES,
   ON_DEMAND_BRIDGES,
+  RELEASE_RUNTIME_DIRECTORY,
   RUNTIME_DESCRIPTOR,
   RUNTIME_SUBDIRECTORY,
 } from "./bridges.js";
@@ -96,6 +98,16 @@ async function stageRuntime(name: string): Promise<string> {
   );
   return path.join(destination, RUNTIME_DESCRIPTOR);
 }
+
+// The manifest and lockfile a standalone host installs this release's
+// dependencies from.
+await cp(
+  path.join(packageRoot, RELEASE_RUNTIME_DIRECTORY),
+  path.join(packageRoot, RELEASE_RUNTIME_PATH),
+  {
+    recursive: true,
+  },
+);
 
 const descriptors = await Promise.all(ON_DEMAND_BRIDGES.map((bridge) => stageRuntime(bridge.name)));
 

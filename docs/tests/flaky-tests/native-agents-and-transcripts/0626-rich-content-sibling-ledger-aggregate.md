@@ -1,7 +1,7 @@
 # Sibling rich-content ledger is empty in the aggregate
 
 - **ID:** 0626
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-21
 - **Test:** `conversation deletion clears that conversation's protected rich content > the backend's transcript-artifact hint for a deleted conversation clears it once`
 - **File:** `apps/web/src/lib/chat/rich-conversation-revocation.test.tsx:187`
@@ -177,3 +177,26 @@ No assertion or implementation in this owner changed. Cause remains unknown.
 A first focused invocation without explicit `NODE_ENV=test` loaded React's
 production build and failed with `React.act is not a function`; that invocation
 is separate from the recorded sibling-ledger failure.
+
+## Root cause and fix — 2026-11-05
+
+- **Root cause:** `useArtifactPublications` keys its ledger cache by
+  `[backend, environment, session, epoch]` with one shared epoch. Clearing
+  one conversation (`clearArtifactPublicationsForConversation`) bumped that
+  epoch, so every other mounted hook's key changed while its cache entry
+  stayed under the old key. The sibling therefore showed an empty ledger
+  until its own re-read answered. The test's line-187 check is synchronous
+  after the wait for the deleted ledger, so it failed whenever the sibling's
+  re-read had not answered yet: a host under load. This was a real product
+  defect, not only a test race: deleting one conversation briefly emptied the
+  artifact ledger of every other open transcript.
+- **Fix:** `clearWhere` in `apps/web/src/hooks/useArtifactPublications.ts` now
+  carries every ledger it does not clear to the new epoch, in recency order.
+  A read in flight across the clear still cannot repopulate the cache.
+- **Regression:** `a sibling keeps showing its ledger while its re-read after
+  the clear is pending` in the owning file holds the sibling's re-read open,
+  so it fails on every run without the fix (`expected length 1, received 0`,
+  the recorded failure) and passes with it:
+  `NODE_ENV=test mise run test:logged -- --name revocation-after-fix -- bun test --cwd apps/web ./src/lib/chat/rich-conversation-revocation.test.tsx ./src/hooks/useArtifactPublications.test.ts --parallel=1 --only-failures`
+  (exit 0). The other artifact-ledger and rich-content reset owners pass
+  unchanged. No existing assertion, timeout or skip changed.

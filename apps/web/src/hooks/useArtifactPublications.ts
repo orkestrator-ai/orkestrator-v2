@@ -1,7 +1,11 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { ArtifactPublicationView } from "@orkestrator/protocol/transcript-artifact-commands";
 import { listTranscriptArtifactPublications } from "@/lib/backend/transcript-artifacts";
-import { encodeRichKey, type RichTranscriptScope } from "@/lib/chat/rich-identity";
+import {
+  encodeRichKey,
+  type RichKeyPart,
+  type RichTranscriptScope,
+} from "@/lib/chat/rich-identity";
 import {
   decodeRichKey,
   registerProtectedRichCache,
@@ -62,8 +66,9 @@ const EMPTY_PUBLICATIONS: ArtifactPublicationLedger = [];
 /**
  * Bumped by every clear. Cache keys carry the epoch they were read under
  * (`[backend, environment, session, epoch]`), so a clear changes every
- * mounted hook's key (it drops what it shows and re-reads), and a read that
- * was in flight across a clear can never repopulate the cache.
+ * mounted hook's key (it re-reads), and a read that was in flight across a
+ * clear can never repopulate the cache. A cleared conversation shows nothing
+ * from then on; every other one keeps showing its ledger (`clearWhere`).
  */
 let cacheEpoch = 0;
 const epochListeners = new Set<() => void>();
@@ -88,12 +93,23 @@ function remember(key: string, publications: ArtifactPublicationLedger) {
   }
 }
 
+/**
+ * Drop the matching ledgers and move every other one to the new epoch, in
+ * recency order. The epoch is shared, so without the carry a clear of one
+ * conversation would leave every other mounted ledger with no cache entry
+ * under its new key: it would show nothing until its re-read answered.
+ */
 function clearWhere(matches: (parts: unknown[]) => boolean): void {
-  for (const key of Array.from(cache.keys())) {
+  const kept: [RichKeyPart[], ArtifactPublicationLedger][] = [];
+  for (const [key, publications] of Array.from(cache.entries())) {
     const parts = decodeRichKey(key);
-    if (!parts || matches(parts)) cache.delete(key);
+    if (parts && !matches(parts)) kept.push([parts.slice(0, 3) as RichKeyPart[], publications]);
   }
+  cache.clear();
   cacheEpoch++;
+  for (const [conversation, publications] of kept) {
+    cache.set(encodeRichKey([...conversation, cacheEpoch]), publications);
+  }
   for (const listener of Array.from(epochListeners)) listener();
 }
 

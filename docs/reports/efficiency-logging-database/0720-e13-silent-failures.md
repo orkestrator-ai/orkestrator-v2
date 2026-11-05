@@ -122,7 +122,7 @@ Tasks 1 to 5's logging is in, with the events listed in
 Already done from report L4's table, so not tasks here:
 
 - Environment deletion side steps log `delete.step-failed` (`commands-servers.ts:1611`, `:1696-1778`).
-- Container bridge log retrieval exists for Cursor and Grok (`commands-registry-servers.ts:655`) and predates the report (`#492`, 2026-08-27). The report said there was none. No web or CLI client calls it; see [0740](0740-e14-docker-logs.md#0740-keep-the-previous-docker-bridge-log-across-a-relaunch).
+- Container bridge log retrieval exists for Cursor and Grok (`commands-registry-servers.ts:655`) and predates the report (`#492`, 2026-08-27). The report said there was none. E14 added `previous: true` and the web getter `getContainerServerLog`; see [its closing check](0000-index.md#closing-check-of-e14-docker-logs).
 - Bridge and backend errors go through `formatLogError` (R5).
 
 ### Constraints and rationale
@@ -168,7 +168,7 @@ Already done from report L4's table, so not tasks here:
 
 ### Current state
 
-Nothing has landed. Split from [0850](0740-e14-docker-logs.md#0850-bound-docker-log-fallbacks-and-report-dropped-writes) because it can ship alone and is a privacy matter rather than a disk one.
+Nothing has landed. Split from 0850 (E14, now built; see [its closing check](0000-index.md#closing-check-of-e14-docker-logs)) because it can ship alone and is a privacy matter rather than a disk one.
 
 ### Needs verification
 

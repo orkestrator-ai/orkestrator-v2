@@ -23,6 +23,7 @@ import {
   useKeepActiveEntryInView,
   useKeyInformationSectionNav,
 } from "./key-information-section-nav";
+import { KeyInformationProse } from "./KeyInformationProse";
 import { KeyInformationText } from "./KeyInformationText";
 
 /**
@@ -528,9 +529,11 @@ function Section({ id, title, children }: { id: string; title: string; children:
 
 function Prose({ text }: { text: string }) {
   return (
-    <p className="break-words whitespace-pre-wrap text-foreground">
-      <KeyInformationText text={text} />
-    </p>
+    <KeyInformationProse
+      text={text}
+      className="text-foreground"
+      renderText={(value) => <KeyInformationText text={value} />}
+    />
   );
 }
 

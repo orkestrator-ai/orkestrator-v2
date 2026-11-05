@@ -255,13 +255,43 @@ describe("AgentAccountsSection", () => {
     await mount();
     const added = await screen.findByRole("listitem", { name: "second@example.com" });
     expect(
-      within(added).getByText(
-        "No longer shared with the host login: config.toml, rules. Codex saved its own copy, so changes here and on other accounts no longer reach each other.",
-      ),
+      within(added).getByText("Not shared with your other accounts: config.toml, rules"),
     ).toBeTruthy();
+    // The explanation stays behind the info icon until asked for.
+    expect(screen.queryByText(/Codex saved its own copy/) === null).toBe(true);
+    fireEvent.click(
+      within(added).getByRole("button", { name: "About config.toml, rules not being shared" }),
+    );
+    const tip = await screen.findByRole("tooltip");
+    expect(within(tip).getByText(/Codex saved its own copy of these/)).toBeTruthy();
+    expect(tip.textContent).toContain("To share them again");
+    expect(tip.textContent).toContain("CODEX_HOME if set, otherwise ~/.codex");
+    expect(within(tip).getByText(`agent-accounts/codex/${ADDED_ID}`)).toBeTruthy();
     const host = screen.getByRole("listitem", { name: "Host login" });
-    expect(within(host).queryByText(/No longer shared/) === null).toBe(true);
+    expect(within(host).queryByText(/Not shared/) === null).toBe(true);
   });
+
+  test.each([
+    ["claude", "Claude", "CLAUDE_CONFIG_DIR", "~/.claude"],
+    ["codex", "Codex", "CODEX_HOME", "~/.codex"],
+  ] as const)(
+    "%s recovery explains both configured and default homes for a single entry",
+    async (platform, cli, setting, fallback) => {
+      snapshot.accounts[2] = { ...snapshot.accounts[2]!, platform, privateEntries: ["rules"] };
+      render(<AgentAccountsSection platform={platform} />);
+      const added = await screen.findByRole("listitem", { name: "second@example.com" });
+      fireEvent.click(within(added).getByRole("button", { name: "About rules not being shared" }));
+      const tip = await screen.findByRole("tooltip");
+      expect(tip.textContent).toContain(`${cli} saved its own copy of this`);
+      expect(tip.textContent).toContain("To share it again");
+      expect(tip.textContent).toContain(
+        `configured ${cli} host directory on the machine that owns this account`,
+      );
+      expect(tip.textContent).toContain(`${setting} if set, otherwise ${fallback}`);
+      expect(tip.textContent).toContain("Verify the saved content is there before deleting rules");
+      expect(tip.textContent).toContain(`agent-accounts/${platform}/${ADDED_ID}`);
+    },
+  );
 
   test("lists the active account first, then the rest alphabetically", async () => {
     snapshot.accounts.push(

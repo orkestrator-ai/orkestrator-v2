@@ -479,6 +479,16 @@ run = [
   "bunx electron-builder --linux --dir --config electron-builder.packaged-test.config.ts --publish never",
 ]
 
+[tasks."package:mac:unpacked:test"]
+description = "Build the unpacked macOS application for the packaged Electron specs (inspect fuse on, ad-hoc identity) under release/packaged-test without installing it"
+env = { CSC_IDENTITY_AUTO_DISCOVERY = "false" }
+run = [
+  "bun install --frozen-lockfile",
+  "mise run download:bun",
+  "mise run build:all:test",
+  "bunx electron-builder --mac --dir --config electron-builder.packaged-test.config.ts --publish never",
+]
+
 [tasks."test:package:security"]
 description = "Build this host's unsigned shipping --dir package (macOS ad-hoc or Linux), read its fuses and run the shipping security smoke. Never signs with a Developer ID, notarizes, installs or publishes"
 env = { CSC_IDENTITY_AUTO_DISCOVERY = "false" }

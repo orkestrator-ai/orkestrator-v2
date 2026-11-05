@@ -1,13 +1,15 @@
 import type { NativeMessage, NativeMessagePart, PeerMailAddress } from "./native-message-types";
 import {
-  AGENT_MAIL_TRUST_CLASSES,
   agentMailAddressLabel,
   agentMailboxId,
   agentMailKind,
   agentMailParticipantKey,
   formatAgentMailAddressLabel,
-  normalizeAgentMailAttachments,
+  isPeerMailCarrierContent,
   normalizeAgentMailNotice,
+  readAgentMailCarriers,
+  STRUCTURED_PROMPT_SUFFIX_PREFIX,
+  type AgentMailCarrierMail,
   type AgentMailMessage,
   type MailActor,
 } from "@orkestrator/protocol/agent-mail";
@@ -147,35 +149,7 @@ export function isClientOnlyNativeMessage(message: Pick<NativeMessage, "id">): b
     message.id.startsWith(SUBORK_GROUP_MESSAGE_PREFIX)
   );
 }
-type PeerMailDisplayMessage = Pick<
-  AgentMailMessage,
-  "id" | "from" | "trust" | "subject" | "body" | "createdAt" | "notice" | "attachments"
-> & { to?: { environmentId: string; tabId: string } };
-
-const PEER_MAIL_CARRIER_OPEN = '<orkestrator-peer-message version="1">';
-const PEER_MAIL_CARRIER_CLOSE = "</orkestrator-peer-message>";
-const PEER_MAIL_PAYLOAD_OPEN = "<orkestrator-peer-payload-json>";
-const PEER_MAIL_PAYLOAD_CLOSE = "</orkestrator-peer-payload-json>";
-
-/** A carrier's open tag at any version; only {@link PEER_MAIL_CARRIER_OPEN} is parsed. */
-const PEER_MAIL_ANY_CARRIER_OPEN = /<orkestrator-peer-message(?:\s[^>]*)?>/y;
-
-/**
- * How `renderAgentMailCarrier` starts every carrier: the open tag, the payload
- * frame straight after it, then a JSON object or at least a closed frame.
- * Someone typing the tag's name, even as the first thing in a message, does not
- * write that. Any version counts, so a newer envelope is not taken for a person's words.
- */
-const PEER_MAIL_ENVELOPE_START =
-  /^\s*<orkestrator-peer-message(?:\s[^>]*)?>\s*<orkestrator-peer-payload-json>\s*(?:\{|$|[^]*?<\/orkestrator-peer-payload-json>)/;
-
-/** Whether a provider row is an injected mail prompt rather than something a person typed. */
-export function isPeerMailCarrierContent(content: string): boolean {
-  return (
-    PEER_MAIL_ENVELOPE_START.test(content) ||
-    /^\s*<orkestrator-peer-message(?:\s[^>]*)?>[^]*<\/orkestrator-peer-message>/.test(content)
-  );
-}
+type PeerMailDisplayMessage = AgentMailCarrierMail & Pick<AgentMailMessage, "createdAt">;
 
 /**
  * The agent tab a mail sender is, when it is one: a tab here or an agent on
@@ -302,168 +276,27 @@ export function splitPeerMailNativeMessageContent(content: string): PeerMailNati
   return { heading, warning, body: body.join("\n").replace(/^\n+/, "") };
 }
 
-function record(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-/** One carrier's JSON payload, validated, or null when it is not a carrier this renderer trusts. */
-function peerMailFromPayload(payload: unknown, createdAt: string): NativeMessage | null {
-  if (!record(payload)) return null;
-  const value = payload;
-  if (
-    typeof value.messageId !== "string" ||
-    typeof value.body !== "string" ||
-    typeof value.trust !== "string" ||
-    !AGENT_MAIL_TRUST_CLASSES.includes(value.trust as (typeof AGENT_MAIL_TRUST_CLASSES)[number]) ||
-    !record(value.from)
-  ) {
-    return null;
-  }
-  if (value.to !== undefined) {
-    if (!record(value.to)) return null;
-    if (typeof value.to.environmentId !== "string" || typeof value.to.tabId !== "string") {
-      return null;
-    }
-  }
-  // The carrier spells a self-reminder as `workflow` for older renderers.
-  const from =
-    value.from.kind === "system" && value.from.selfReminder === true
-      ? { ...value.from, source: "self-reminder" }
-      : value.from;
-  // Carrier metadata comes from transcript JSON, not a typed MailActor.
-  // Nullable names are valid, but other types cannot reach the label formatter.
-  if (
-    (from.title != null && typeof from.title !== "string") ||
-    (from.environmentName != null && typeof from.environmentName !== "string")
-  ) {
-    return null;
-  }
-  if (
-    from.kind !== "user" &&
-    from.kind !== "external" &&
-    from.kind !== "tab" &&
-    from.kind !== "coordinator" &&
-    from.kind !== "system" &&
-    from.kind !== "node"
-  )
-    return null;
-  if (
-    from.kind === "node" &&
-    (typeof from.nodeId !== "string" ||
-      typeof from.nodeName !== "string" ||
-      (from.role !== "coordinator" && from.role !== "agent") ||
-      typeof from.projectId !== "string" ||
-      typeof from.environmentId !== "string" ||
-      typeof from.tabId !== "string")
-  )
-    return null;
-  if (
-    (from.kind === "tab" || from.kind === "coordinator") &&
-    (typeof from.projectId !== "string" ||
-      typeof from.environmentId !== "string" ||
-      typeof from.tabId !== "string" ||
-      typeof from.incarnationId !== "string")
-  ) {
-    return null;
-  }
-  if (
-    from.kind === "coordinator" &&
-    (typeof from.coordinatorId !== "string" || typeof from.conversationId !== "string")
-  )
-    return null;
-  if (
-    from.kind === "system" &&
-    (typeof from.projectId !== "string" ||
-      (from.source !== "workflow" && from.source !== "self-reminder") ||
-      typeof from.resourceId !== "string")
-  )
-    return null;
-  const notice = from.kind === "system" ? normalizeAgentMailNotice(value.notice) : null;
-  const attachments = normalizeAgentMailAttachments(value.attachments);
-  const to = record(value.to)
-    ? { environmentId: value.to.environmentId as string, tabId: value.to.tabId as string }
-    : undefined;
-  return createPeerMailNativeMessage({
-    id: value.messageId,
-    ...(to ? { to } : {}),
-    from: from as MailActor,
-    trust: value.trust as AgentMailMessage["trust"],
-    ...(typeof value.subject === "string" ? { subject: value.subject } : {}),
-    ...(notice ? { notice } : {}),
-    ...(attachments.length ? { attachments } : {}),
-    body: value.body,
-    createdAt,
-  });
-}
-
-/** Find transport delimiters outside JSON strings, including escaped quotes. */
-function peerMailDelimiter(content: string, delimiter: string, start: number): number {
-  let quoted = false;
-  let escaped = false;
-  for (let index = start; index < content.length; index += 1) {
-    const character = content[index];
-    if (quoted) {
-      if (escaped) escaped = false;
-      else if (character === "\\") escaped = true;
-      else if (character === '"') quoted = false;
-    } else if (content.startsWith(delimiter, index)) return index;
-    else if (character === '"') quoted = true;
-  }
-  return -1;
-}
-
-/** One carrier's slice, as a mail row, or null when it cannot be read. */
-function peerMailFromCarrier(carrier: string, createdAt: string): NativeMessage | null {
-  if (!carrier.startsWith(PEER_MAIL_CARRIER_OPEN)) return null;
-  const payloadStart = carrier.indexOf(PEER_MAIL_PAYLOAD_OPEN);
-  const payloadEnd = peerMailDelimiter(
-    carrier,
-    PEER_MAIL_PAYLOAD_CLOSE,
-    payloadStart + PEER_MAIL_PAYLOAD_OPEN.length,
-  );
-  if (payloadStart < 0 || payloadEnd < 0) return null;
-  try {
-    const payload: unknown = JSON.parse(
-      carrier.slice(payloadStart + PEER_MAIL_PAYLOAD_OPEN.length, payloadEnd),
-    );
-    return peerMailFromPayload(payload, createdAt);
-  } catch {
-    // Malformed JSON, or an address the mailbox helpers refuse (empty or holding
-    // NUL). Rows are built while rendering, so this must not reach React.
-    return null;
-  }
-}
-
 /**
- * Read a provider row as carriers back to back, one entry per carrier (null for
- * one that cannot be read, including one cut off before its close tag), and
- * whatever text follows the last of them.
+ * Read a provider row's carriers as mail rows; see `readAgentMailCarriers`.
  */
 function readPeerMailCarriers(message: Pick<NativeMessage, "content" | "createdAt">): {
   entries: Array<NativeMessage | null>;
   rest: string;
 } {
-  const content = message.content.trim();
-  const entries: Array<NativeMessage | null> = [];
-  let cursor = 0;
-  while (cursor < content.length) {
-    PEER_MAIL_ANY_CARRIER_OPEN.lastIndex = cursor;
-    if (!PEER_MAIL_ANY_CARRIER_OPEN.test(content)) return { entries, rest: content.slice(cursor) };
-    // Stored input can be noncanonical: literal tags inside JSON are body text.
-    const carrierEnd = peerMailDelimiter(
-      content,
-      PEER_MAIL_CARRIER_CLOSE,
-      PEER_MAIL_ANY_CARRIER_OPEN.lastIndex,
-    );
-    if (carrierEnd < 0) {
-      entries.push(null);
-      break;
-    }
-    entries.push(peerMailFromCarrier(content.slice(cursor, carrierEnd), message.createdAt));
-    cursor = carrierEnd + PEER_MAIL_CARRIER_CLOSE.length;
-    while (/\s/.test(content.charAt(cursor))) cursor += 1;
-  }
-  return { entries, rest: "" };
+  const { entries, rest } = readAgentMailCarriers(message.content);
+  return {
+    entries: entries.map((mail) => {
+      if (!mail) return null;
+      try {
+        return createPeerMailNativeMessage({ ...mail, createdAt: message.createdAt });
+      } catch {
+        // An address the mailbox helpers refuse (empty or holding NUL). Rows are
+        // built while rendering, so this must not reach React.
+        return null;
+      }
+    }),
+    rest,
+  };
 }
 
 /**
@@ -499,7 +332,7 @@ export const PEER_MAIL_UNREADABLE_TEXT =
  * a prompt (`STRUCTURED_PROMPT_INSTRUCTION_PREFIX`). A reloaded row can carry it
  * after the carrier; it is transport, like the carrier's own instructions.
  */
-export const STRUCTURED_PROMPT_SUFFIX_PREFIX = "End your turn with exactly one JSON value";
+export { STRUCTURED_PROMPT_SUFFIX_PREFIX } from "@orkestrator/protocol/agent-mail";
 
 /**
  * A stored user row as a transcript presents it, or null when it is not mail.

@@ -913,6 +913,13 @@ stays "Orkestrator AI". A pass takes about 15 seconds on beelink, because
 nothing waits for Vite. Native menu key equivalents are still not exercised:
 Playwright sends keys through Chromium, not the OS (to-do 0036, task 3).
 
+`log-controls-packaged-electron.spec.ts` runs against the same build (macOS too:
+`mise run package:mac:unpacked:test`). It turns on the real Settings switch, reads
+Help from Electron's `Menu`, opens DevTools through the item, turns the switch off,
+and separately waits for the running backend's one-minute check to revert raised
+log detail. `.github/workflows/native-application-menu.yml` runs it on Linux and
+macOS. Headless on Linux means the native menu bar itself is not drawn or read.
+
 ### Electron specs and their display
 
 The specs in `playwright.electron.config.ts` (`mise run test:agent:electron`)
@@ -1868,7 +1875,7 @@ command transport.
 Mail tiles are judged on every scenario with mail (`async`, `family`, `status`,
 `deliver-now`, `goal` and each side of `peer`) by `e2e/agent-testing/coordinator-mail-tiles.ts`.
 Each provider echoes the injected carrier as a user row in its own way, and the
-transcript shows that row as tiles only when the renderer's
+transcript shows that row as tiles only when the protocol package's
 `isPeerMailCarrierContent` accepts its `content`. The check runs the
 renderer's own `createPeerMailNativeMessagesFromCarrier` over every echoed
 row and requires: no carrier row shown raw (a carrier only in the parts, or

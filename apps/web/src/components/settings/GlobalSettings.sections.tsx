@@ -15,6 +15,7 @@ import type {
   CoordinatorWebResearch,
 } from "@orkestrator/protocol/coordinator-web-research";
 import { isSessionTitleGenerationPolicy } from "@orkestrator/protocol/session-title-generation";
+import { resolveLogDetail } from "@orkestrator/protocol/log-policy";
 import type { Dispatch, SetStateAction } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -41,6 +42,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { LogDetailSettings } from "./LogDetailSettings";
+import { RendererDebugSettings } from "./RendererDebugSettings";
 import { appVersionSkew, BUNDLED_APP_VERSION, normalizeBackendVersion } from "@/lib/app-version";
 import { describeVersionReminder, versionClientKind } from "@/lib/version-reminder";
 import * as backend from "@/lib/backend";
@@ -358,6 +360,8 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     setDebugLogRetentionDays,
     logDetail,
     setLogDetail,
+    logDetailKeepRaised,
+    setLogDetailKeepRaised,
     webClientEnabled,
     setWebClientEnabled,
     reviewInstruction,
@@ -2449,7 +2453,16 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
           Changes apply straight away, with no restart and without interrupting running agents.
         </p>
       </div>
-      <LogDetailSettings value={logDetail} onChange={setLogDetail} />
+      <LogDetailSettings
+        value={logDetail}
+        onChange={setLogDetail}
+        stored={resolveLogDetail(global)}
+        expirySupported={!!global.logDetailExpiresAt || global.logDetailKeepRaised === true}
+        expiresAt={global.logDetailExpiresAt}
+        keepRaised={logDetailKeepRaised}
+        onKeepRaisedChange={setLogDetailKeepRaised}
+      />
+      <RendererDebugSettings />
     </SettingsPageLayout>
   );
 

@@ -26,6 +26,12 @@ export type ApplicationMenuActions = {
   openSettings(): void;
   /** Present only when this install can update itself. */
   checkForUpdates?(): void;
+  /**
+   * Present only while a renderer has debug logging on (`orkestrator:debug`,
+   * the Settings → Debug switch). DevTools shows what the renderer holds in
+   * memory, so it is never offered by default.
+   */
+  openDeveloperTools?(): void;
 };
 
 /**
@@ -84,6 +90,8 @@ function windowMenuItems(actions: ApplicationMenuActions): MenuItemConstructorOp
  * Linux therefore get the conventional layout instead: Settings… and Quit at
  * the end of File, About and updates under Help, and no Command accelerators.
  * On macOS Settings… sits in the app menu, where every Mac app keeps it.
+ * Help is on every platform; Open Developer Tools appears in it only while a
+ * renderer has debug logging on.
  */
 export function createApplicationMenuTemplate(
   actions: ApplicationMenuActions,
@@ -91,6 +99,9 @@ export function createApplicationMenuTemplate(
   const isMac = actions.platform === "darwin";
   const checkForUpdates: MenuItemConstructorOptions[] = actions.checkForUpdates
     ? [{ label: "Check for Updates…", click: actions.checkForUpdates }]
+    : [];
+  const developerTools: MenuItemConstructorOptions[] = actions.openDeveloperTools
+    ? [{ label: "Open Developer Tools", click: actions.openDeveloperTools }]
     : [];
   const settings: MenuItemConstructorOptions = {
     label: "Settings…",
@@ -199,17 +210,19 @@ export function createApplicationMenuTemplate(
         ...windowMenuItems(actions),
       ],
     },
-    ...(isMac
-      ? []
-      : [
-          {
-            label: "Help",
-            submenu: [
-              ...checkForUpdates,
-              ...(checkForUpdates.length > 0 ? [{ type: "separator" } as const] : []),
-              { role: "about" },
-            ],
-          } satisfies MenuItemConstructorOptions,
-        ]),
+    // Help is on every platform. On macOS the role adds the system's search
+    // field, and About and updates stay in the app menu.
+    isMac
+      ? { role: "help", submenu: developerTools }
+      : {
+          label: "Help",
+          submenu: [
+            ...developerTools,
+            ...(developerTools.length > 0 ? [{ type: "separator" } as const] : []),
+            ...checkForUpdates,
+            ...(checkForUpdates.length > 0 ? [{ type: "separator" } as const] : []),
+            { role: "about" },
+          ],
+        },
   ];
 }

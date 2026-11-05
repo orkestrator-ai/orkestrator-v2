@@ -112,6 +112,24 @@ describe("findCoordinatorCheckoutTurn", () => {
     expect(hasActiveCheckoutWork).toHaveBeenCalledWith("home");
   });
 
+  test.each([false, true])(
+    "a failed Home activity read rejects rather than reporting idle (projection confirmation: %s)",
+    async (confirmWithProjections) => {
+      hasActiveCheckoutWork.mockRejectedValueOnce(new Error("Home activity unavailable"));
+      await expect(
+        findCoordinatorCheckoutTurn(projectId, {
+          storage: {
+            coordinators: storage.coordinators,
+            getEnvironmentsByProject: async () => [{ id: "home", projectHome: true }],
+          } as unknown as CoordinatorCheckoutTurnSources["storage"],
+          nativeAgents: nativeAgents(),
+          confirmWithProjections,
+        }),
+      ).rejects.toThrow("Home activity unavailable");
+      expect(getProjection).not.toHaveBeenCalled();
+    },
+  );
+
   test("only a mutation's admission reads projections", async () => {
     getProjection.mockImplementation(async () => ({ turn: { phase: "recovering" } }));
     expect(await read(false)).toBeNull();

@@ -244,11 +244,18 @@ export function CoordinatorToolbar({
                 : ""}
             </AlertDialogDescription>
           </AlertDialogHeader>
+          {activeTurnReason ? (
+            <p role="status" className="text-sm text-muted-foreground">
+              {activeTurnReason}
+            </p>
+          ) : null}
           <AlertDialogFooter>
             <AlertDialogCancel>Keep changes</AlertDialogCancel>
             <AlertDialogAction
+              disabled={branchSwitchDisabled}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               onClick={() => {
+                if (branchSwitchDisabled) return;
                 const confirmation = pendingSwitch;
                 setPendingSwitch(null);
                 if (confirmation) void runGit("switch", confirmation.ref, confirmation);

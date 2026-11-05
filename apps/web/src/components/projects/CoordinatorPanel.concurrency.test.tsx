@@ -13,6 +13,8 @@ import {
 } from "@orkestrator/protocol/coordinator";
 import type { CoordinatorCheckoutTurn } from "@orkestrator/protocol/coordinator-activity";
 import type { NativeAgentSessionProjection } from "@orkestrator/protocol/native-agent";
+import * as realObservation from "@/lib/native-observation-events";
+import type { NativeObservationInvalidation } from "@/lib/native-observation-events";
 import * as realBackend from "@/lib/backend";
 import * as realNativeAgent from "@/components/native-agent";
 import {
@@ -22,6 +24,7 @@ import {
 } from "@/lib/coordinator-pane-layout";
 import { resetClientStateCapabilitiesForTests } from "@/lib/client-state-capabilities";
 import { resetUpstreamCheckForTests } from "@/lib/coordinator-upstream-check";
+import { installFakeReadCoordinator } from "@/lib/testing/read-coordinator";
 import { dispatchResourceChange } from "@/lib/resource-sync";
 import { createSessionKey } from "@/lib/utils";
 import { useCoordinatorPaneLayoutStore } from "@/stores/coordinatorPaneLayoutStore";
@@ -29,6 +32,19 @@ import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { useProjectStore } from "@/stores/projectStore";
 
+const observationSnapshot = { ...realObservation };
+const observationListeners = new Set<(hint: NativeObservationInvalidation) => void>();
+mock.module("@/lib/native-observation-events", () => ({
+  ...observationSnapshot,
+  subscribeNativeObservationInvalidations: (
+    listener: (hint: NativeObservationInvalidation) => void,
+  ) => {
+    observationListeners.add(listener);
+    return () => {
+      observationListeners.delete(listener);
+    };
+  },
+}));
 const backendSnapshot = { ...realBackend };
 const nativeAgentSnapshot = { ...realNativeAgent };
 
@@ -171,6 +187,16 @@ const assignAgent = mock(
   },
 );
 const closeConversation = mock(async (): Promise<CoordinatorSnapshot> => ensuredSnapshot);
+const switchBranch = mock(async () => ensuredGit);
+const prepareSwitch = mock(async (_projectId: string, ref: string) => ({
+  ref,
+  token: "confirm-token",
+  trackedChanges: 1,
+  untrackedFiles: 0,
+  nestedRepositories: [],
+  dirtySubmodules: [],
+  requiresEnhancedConfirmation: false,
+}));
 const getCheckoutTurn = mock(async (): Promise<CoordinatorCheckoutTurn | null> => null);
 
 mock.module("@/lib/backend", () => ({
@@ -181,6 +207,8 @@ mock.module("@/lib/backend", () => ({
   getProjectGitStatus: getGit,
   fetchProjectGit: fetchGit,
   syncProjectGit: syncGit,
+  switchProjectGitBranch: switchBranch,
+  prepareProjectGitBranchSwitch: prepareSwitch,
   checkCoordinatorUpstreamMerge: mock(async () => null),
   assignCoordinatorConversationAgent: assignAgent,
   closeCoordinatorConversation: closeConversation,
@@ -245,6 +273,8 @@ beforeEach(() => {
     fn.mockClear();
   }
   closeConversation.mockClear();
+  switchBranch.mockClear();
+  prepareSwitch.mockClear();
   getCheckoutTurn.mockReset();
   getCheckoutTurn.mockImplementation(async () => null);
   useEnvironmentStore.setState({ environments: [] });
@@ -273,6 +303,7 @@ afterEach(() => {
 
 afterAll(() => {
   mock.module("@/lib/backend", () => backendSnapshot);
+  mock.module("@/lib/native-observation-events", () => observationSnapshot);
   mock.module("@/components/native-agent", () => nativeAgentSnapshot);
 });
 
@@ -470,6 +501,7 @@ describe("branch switch and Sync while any turn runs", () => {
     await waitFor(() => expect(getCheckoutTurn).toHaveBeenCalled());
   }
 
+  let checkoutHintRevision = 10000;
   async function backendAnswers(turn: CoordinatorCheckoutTurn | null) {
     const reads = getCheckoutTurn.mock.calls.length;
     getCheckoutTurn.mockImplementation(async () => turn);
@@ -478,10 +510,12 @@ describe("branch switch and Sync while any turn runs", () => {
         resource: "coordinator",
         id: "project-1",
         projectId: "project-1",
-        revision: reads + 100,
+        revision: ++checkoutHintRevision,
       });
     });
-    await waitFor(() => expect(getCheckoutTurn.mock.calls.length).toBeGreaterThan(reads));
+    await waitFor(() => expect(getCheckoutTurn.mock.calls.length).toBeGreaterThan(reads), {
+      timeout: 3000,
+    });
   }
 
   test("a turn in a conversation behind the focused side agent disables both and names it", async () => {
@@ -504,6 +538,123 @@ describe("branch switch and Sync while any turn runs", () => {
     expect(branchPicker().getAttribute("title")).toBe("Switch branch");
     expect(sync().closest("span")?.hasAttribute("title")).toBe(false);
   });
+
+  test.each([
+    { kind: "project-home" } as const,
+    { kind: "conversation", conversationId: mainConversation.id } as const,
+  ])("an open discard confirmation waits for %j to finish", async (turn) => {
+    ensuredGit = {
+      ...gitStatus,
+      trackedChanges: 1,
+      branches: [
+        ...gitStatus.branches,
+        { ref: "refs/heads/feature", name: "feature", kind: "local" },
+      ],
+    };
+    await renderSideFocused();
+    await waitFor(() => expect(branchPicker().hasAttribute("disabled")).toBe(false));
+    fireEvent.click(branchPicker());
+    fireEvent.click(await screen.findByRole("option", { name: "feature" }));
+    const confirm = await screen.findByRole("button", { name: "Discard and switch" });
+    await waitFor(() => expect(confirm.hasAttribute("disabled")).toBe(false));
+    await backendAnswers(turn);
+    await waitFor(() => expect(confirm.hasAttribute("disabled")).toBe(true));
+    expect(screen.getByRole("alertdialog").querySelector('[role="status"]')?.textContent).toContain(
+      "is running a turn",
+    );
+    fireEvent.click(confirm);
+    expect(switchBranch).not.toHaveBeenCalled();
+    await backendAnswers(null);
+    await waitFor(() => expect(confirm.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(confirm);
+    await waitFor(() =>
+      expect(switchBranch).toHaveBeenCalledWith("project-1", "refs/heads/feature", {
+        confirmationToken: "confirm-token",
+        includeNestedRepositories: false,
+      }),
+    );
+  });
+
+  test("a failed read retains the last Home blocker until a successful idle answer", async () => {
+    const { clock } = installFakeReadCoordinator();
+    getCheckoutTurn.mockImplementation(async () => ({ kind: "project-home" }));
+    await renderSideFocused();
+    await waitFor(() => expect(gated()).toBe(true));
+    const reads = getCheckoutTurn.mock.calls.length;
+    let reject!: (error: Error) => void;
+    getCheckoutTurn.mockImplementation(
+      () =>
+        new Promise((_resolve, fail) => {
+          reject = fail;
+        }),
+    );
+    act(() =>
+      dispatchResourceChange({
+        resource: "coordinator",
+        id: "project-1",
+        revision: ++checkoutHintRevision,
+      }),
+    );
+    await waitFor(() => expect(getCheckoutTurn.mock.calls.length).toBeGreaterThan(reads), {
+      timeout: 3000,
+    });
+    await act(async () => reject(new Error("Home activity unavailable")));
+    expect(gated()).toBe(true);
+    expect(branchPicker().getAttribute("title")).toStartWith("Home is running a turn.");
+    getCheckoutTurn.mockImplementation(async () => null);
+    await act(async () => {
+      await clock.advance(30_000);
+    });
+    await waitFor(() => expect(gated()).toBe(false));
+  });
+
+  test.each(["observation", "session"] as const)(
+    "%s hints filter by Home and workspace runtime IDs",
+    async (source) => {
+      useEnvironmentStore.setState({
+        environments: [
+          { id: "home-1", projectId: "project-1", projectHome: true },
+          { id: "other-home", projectId: "other-project", projectHome: true },
+          { id: "ordinary", projectId: "project-1", projectHome: false },
+        ] as never,
+      });
+      await renderSideFocused();
+      await waitFor(() => expect(gated()).toBe(false));
+      let revision = 1000;
+      const hint = (environmentId: string) =>
+        act(() => {
+          if (source === "observation") {
+            for (const listener of observationListeners)
+              listener({ kind: "session", environmentId });
+          } else
+            dispatchResourceChange({
+              resource: "native-agent-session",
+              id: environmentId,
+              revision: revision++,
+            });
+        });
+      const reads = getCheckoutTurn.mock.calls.length;
+      hint("other-home");
+      hint("ordinary");
+      hint(coordinatorRuntimeId("another-workspace", mainConversation.id));
+      // A matching hint below is a scheduling barrier: only that hint should read.
+      getCheckoutTurn.mockImplementation(async () => ({ kind: "project-home" }));
+      hint("home-1");
+      await waitFor(() => expect(gated()).toBe(true));
+      expect(getCheckoutTurn.mock.calls.length).toBe(reads + 1);
+      getCheckoutTurn.mockImplementation(async () => null);
+      hint(coordinatorRuntimeId("coordinator-1", side.id));
+      await waitFor(() => expect(gated()).toBe(false));
+      expect(getCheckoutTurn.mock.calls.length).toBe(reads + 2);
+      if (source === "observation") {
+        getCheckoutTurn.mockImplementation(async () => ({ kind: "project-home" }));
+        act(() => {
+          for (const listener of observationListeners) listener({ kind: "all", reason: "gap" });
+        });
+        await waitFor(() => expect(gated()).toBe(true));
+      }
+    },
+  );
 
   test("the project home's turn disables both and is named", async () => {
     getCheckoutTurn.mockImplementation(async () => ({ kind: "project-home" }));

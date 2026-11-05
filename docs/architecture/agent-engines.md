@@ -479,8 +479,14 @@ other consumer — notifications go to a per-thread serial queue and fan out fro
 there. A slow consumer on one thread therefore cannot stall every other thread
 in the environment.
 
-SSE frames carry `id: <revision>`, and `event-ring.ts` keeps a bounded replay
-buffer so a reconnecting client can ask for exactly what it missed. The
+SSE frames carry `id: <revision>`, and `EventRing`
+(`packages/protocol/src/node/event-ring.ts`, shared with the Claude bridge)
+keeps a bounded replay buffer so a reconnecting client can ask for exactly what
+it missed. A newer full `message.updated` snapshot collapses the older frames
+for the same message to `bridge.cursor` frames that only keep the cursor dense;
+on the Claude bridge that includes the `message.patched` frames since the
+previous snapshot. An observation subscriber (`?observe=1`) of the Claude bridge
+still gets one content-free frame per revision. The
 `connected` frame echoes the client's own cursor rather than the latest
 revision, because a browser `EventSource` adopts every id it sees.
 

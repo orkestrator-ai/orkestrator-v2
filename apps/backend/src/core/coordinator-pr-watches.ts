@@ -41,6 +41,7 @@ import { parseGitHubRepositoryRemote } from "@orkestrator/protocol/github-reposi
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { CoordinatorNoticeRouter } from "./coordinator-notice-router.js";
 import { GitHubApiError } from "./github.js";
+import type { GitHubCliSelection } from "./github-cli-binary.js";
 import { resolveGitHubToken } from "./github-credentials.js";
 import {
   confirmGitHubPullRequestDeleted,
@@ -101,6 +102,8 @@ export interface CoordinatorPullRequestWatchOptions {
   confirmDeleted?: (token: string, ref: GitHubPullRequestRef) => Promise<boolean>;
   /** The Settings GitHub credential; undefined when none is configured. */
   token?: () => Promise<string | undefined>;
+  /** The backend's `gh`, which reads the host login when `token` is left out. */
+  gitHubCli?: GitHubCliSelection;
   now?: () => number;
   coalesceMs?: number;
 }
@@ -257,7 +260,8 @@ export class CoordinatorPullRequestWatches {
     this.confirmDeleted =
       options.confirmDeleted ?? ((token, ref) => confirmGitHubPullRequestDeleted(token, ref));
     this.token =
-      options.token ?? (async () => resolveGitHubToken((await this.storage.loadConfig()).global));
+      options.token ??
+      (async () => resolveGitHubToken((await this.storage.loadConfig()).global, options.gitHubCli));
     this.now = options.now ?? (() => Date.now());
     this.coalesceMs = options.coalesceMs ?? WATCHED_PR_COALESCE_MS;
   }

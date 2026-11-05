@@ -82,8 +82,6 @@ export type CommandContext = {
   workflowResults?: import("./workflow-result-service.js").WorkflowResultService;
   /** Remote-initiated Orkestrator updates of this host. */
   hostMaintenance?: import("./host-maintenance.js").HostMaintenanceService;
-  /** The pinned, managed `gh`, which `host.gh.update` switches back to. */
-  pinnedGitHubCli?: string;
   /** Environment deletion: drops the environment's workflow result slots. */
   deleteWorkflowResultsByEnvironment?: (environmentId: string) => Promise<unknown>;
   workflowResultRollout?: import("./workflow-result-rollout.js").WorkflowResultRollout;

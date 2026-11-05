@@ -20,6 +20,7 @@ import type { ChangeLedger } from "./change-ledger.js";
 import { MEASUREMENTS_KEPT_PER_OWNER } from "./measurement-service.js";
 import type { ObjectStore } from "./object-store.js";
 import type { ChangeTrackingPolicyRegistry } from "./policy-registry.js";
+import { ReachabilityCache, type ReachabilityCacheLimits } from "./reachability-cache.js";
 
 const log = createLogger("change-tracking");
 
@@ -50,6 +51,9 @@ export class ChangeRetentionService {
   private stopped = false;
   /** One drain per owner and scope; a publication during one is picked up by its next batch. */
   private readonly ownerDrains = new Map<string, Promise<void>>();
+  /** Object ids by manifest, kept between passes so a pass need not reparse them. */
+  private readonly reachability: ReachabilityCache;
+  private reachabilityHits = 0;
 
   constructor(
     private readonly deps: {
@@ -57,8 +61,11 @@ export class ChangeRetentionService {
       store: ObjectStore;
       policies: ChangeTrackingPolicyRegistry;
       readerPins: () => Iterable<string>;
+      reachabilityCache?: Partial<ReachabilityCacheLimits>;
     },
-  ) {}
+  ) {
+    this.reachability = new ReachabilityCache(deps.reachabilityCache);
+  }
 
   /** True while pinned data exceeds the hard ceiling; captures are refused. */
   get captureRefused(): boolean {
@@ -129,14 +136,15 @@ export class ChangeRetentionService {
       Number.POSITIVE_INFINITY,
     );
 
-    let stored = await store.storedBytes();
+    // The store keeps this figure current across puts and sweeps (ST-20).
+    let stored = await store.currentBytes();
     if (stored > policy.snapshotSoftBudgetBytes) {
       // Release the oldest finalized turn endpoints, a bounded batch per pass.
       report.releasedForQuota += this.releaseTurnEndpoints(() => true, 64);
     }
 
     await this.sweep(nowMs, report);
-    stored = await store.storedBytes();
+    stored = await store.currentBytes();
     report.storedBytes = stored;
     this.hardLimited = stored > policy.snapshotHardBudgetBytes;
     report.hardLimited = this.hardLimited;
@@ -228,6 +236,8 @@ export class ChangeRetentionService {
     }
     // Snapshot rows nothing references, older than the grace window, are retired.
     const reachable = new Set<string>();
+    const walked = new Set<string>();
+    this.reachability.beginPass();
     for (const snapshot of ledger.snapshots()) {
       const age = nowMs - Date.parse(snapshot.created_at);
       if (!referenced.has(snapshot.id) && age > graceMs) {
@@ -236,13 +246,47 @@ export class ChangeRetentionService {
         continue;
       }
       reachable.add(snapshot.tree_oid);
-      const manifest = await readManifest(store, snapshot.tree_oid, { scan: true });
-      for (const entry of manifest?.entries ?? []) if (entry.m !== "160000") reachable.add(entry.o);
+      // Snapshots of an unchanged tree share one manifest: read it once per pass.
+      // Kept apart from `reachable`, where a blob could have the same id.
+      if (walked.has(snapshot.tree_oid)) continue;
+      walked.add(snapshot.tree_oid);
+      await this.addManifestObjects(snapshot.tree_oid, reachable);
     }
+    // Only a completed walk may drop what it did not see.
+    this.reachability.endPass();
     // Live-detail blobs are referenced by diff identities, not snapshots.
     for (const blob of ledger.diffIdentityBlobs()) reachable.add(blob);
     const swept = await store.sweep(reachable, graceMs, nowMs);
     report.removedObjects = swept.removed;
     report.removedBytes = swept.bytes;
+  }
+
+  /**
+   * The objects one manifest names, from the reachability cache when it holds
+   * them. A hit still requires the manifest object, so a manifest that is gone
+   * contributes nothing, exactly as a read would.
+   */
+  private async addManifestObjects(manifestId: string, reachable: Set<string>): Promise<void> {
+    const { store } = this.deps;
+    if (!(await store.has(manifestId))) {
+      this.reachability.forget(manifestId);
+      await store.invalidateBytes();
+      return;
+    }
+    if (this.reachability.addTo(manifestId, reachable)) {
+      this.reachabilityHits++;
+      return;
+    }
+    const manifest = await readManifest(store, manifestId, { scan: true });
+    if (!manifest) return;
+    const oids: string[] = [];
+    for (const entry of manifest.entries) if (entry.m !== "160000") oids.push(entry.o);
+    for (const oid of oids) reachable.add(oid);
+    this.reachability.remember(manifestId, oids);
+  }
+
+  /** For tests and benchmarks: the reachability cache's sizes and hits. */
+  reachabilityStats() {
+    return { ...this.reachability.snapshot(), hits: this.reachabilityHits };
   }
 }

@@ -3608,6 +3608,15 @@ export class MultiReviewService implements KeyedWorkflowOwner {
    * reviewer has settled.
    */
   private reviewFanoutHost(workflow: MultiReviewWorkflow, token: string): ReviewFanoutHost {
+    // The host lives for one admission pass. Snapshot mode checks the live
+    // worktree once per pass, as package mode verifies its evidence once, and
+    // every reviewer prompt built in the pass reuses that answer. A change after
+    // the check is seen by the next pass, whose prompts then say so.
+    let passSnapshot: Promise<ReturnType<typeof promptWorktreeSnapshot>> | undefined;
+    const reviewSnapshotForPass = () =>
+      (passSnapshot ??= this.reviewSnapshotForDispatch(workflow, token).then(
+        promptWorktreeSnapshot,
+      ));
     return {
       workflowId: workflow.id,
       pollGate: {
@@ -3701,9 +3710,12 @@ export class MultiReviewService implements KeyedWorkflowOwner {
                 lens: reviewer.lens,
               }),
           }
-        : {}),
-      reviewSnapshot: async () =>
-        promptWorktreeSnapshot(await this.reviewSnapshotForDispatch(workflow, token)),
+        : {
+            beforeAdmission: async () => {
+              await reviewSnapshotForPass();
+            },
+          }),
+      reviewSnapshot: reviewSnapshotForPass,
       worktreeChangedDuringReview: () =>
         !workflow.reviewPackage && workflow.reviewSnapshotStale === true,
       resolveUnattendedInteractions: (provider, providerSessionId) =>

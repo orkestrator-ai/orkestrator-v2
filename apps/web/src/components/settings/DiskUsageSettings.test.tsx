@@ -67,6 +67,9 @@ test("lists each project's Git mirror with its size, largest as the backend send
   ]);
   render(<DiskUsageSettings />);
   await screen.findByText(/3 GB measured \(some sizes unavailable\) across 3 mirrors/);
+  expect(
+    screen.getByText(/each finished mirror is at most 2 GiB.*Sizes include temporary build data/),
+  ).toBeTruthy();
   const rows = screen
     .getAllByRole("listitem")
     .filter((item) => item.textContent?.includes("/data/git-mirrors/"));
@@ -294,3 +297,37 @@ for (const machine of [null, "leaf", "other"]) {
     }
   });
 }
+
+test("switching machines clears rows and ignores a late previous-machine refresh", async () => {
+  const pending = deferred<backend.ProjectGitMirrorUsage[]>();
+  const list = spyOn(backend, "listProjectGitMirrorUsage")
+    .mockResolvedValueOnce([
+      { projectId: "old", projectName: "Old mirror", path: "/old", bytes: GB },
+    ])
+    .mockImplementationOnce(() => pending.promise)
+    .mockResolvedValueOnce([
+      { projectId: "new", projectName: "New mirror", path: "/new", bytes: GB },
+    ]);
+  const view = render(
+    <AccountMachineProvider value={{ machine: "old", name: "Old" }}>
+      <DiskUsageSettings />
+    </AccountMachineProvider>,
+  );
+  await screen.findByText("Old mirror");
+  fireEvent.click(screen.getByRole("button", { name: "Refresh project Git mirrors" }));
+  view.rerender(
+    <AccountMachineProvider value={{ machine: "new", name: "New" }}>
+      <DiskUsageSettings />
+    </AccountMachineProvider>,
+  );
+  expect(screen.queryByText("Old mirror")).toBeNull();
+  await screen.findByText("New mirror");
+  await act(async () =>
+    pending.resolve([
+      { projectId: "stale", projectName: "Stale mirror", path: "/stale", bytes: GB },
+    ]),
+  );
+  expect(screen.queryByText("Stale mirror")).toBeNull();
+  expect(screen.getByText("New mirror")).toBeTruthy();
+  expect(list).toHaveBeenLastCalledWith("new");
+});

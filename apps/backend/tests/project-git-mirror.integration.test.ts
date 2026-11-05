@@ -9,6 +9,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { promises as fs, existsSync, writeFileSync } from "node:fs";
 import os from "node:os";
+import { createServer } from "node:net";
 import path from "node:path";
 import { cleanupProjectForRemoval } from "../src/core/commands-registry-projects";
 import type { CommandContext } from "../src/core/commands-context";
@@ -301,7 +302,18 @@ describe("seeding from the host checkout", () => {
     git(work, ["update-ref", "refs/remotes/fork/invented", unpushed]);
     git(work, ["update-ref", "refs/heads/invented", unpushed]);
 
-    expect(await refresh({}, seeded())).toBe("built");
+    let checkoutRead = false;
+    const run: typeof runCommand = async (command, args, options) => {
+      const result = await runCommand(command, args, options);
+      if (
+        args?.includes("fetch") &&
+        args.some((arg) => !arg.startsWith("--git-dir=") && arg.endsWith("/seed.git"))
+      )
+        checkoutRead = true;
+      return result;
+    };
+    expect(await refresh({ run }, seeded())).toBe("built");
+    expect(checkoutRead).toBe(true);
 
     expect(mirrorRefs()).toEqual(["refs/heads/main"]);
     expect(git(root, [`--git-dir=${mirrorPath()}`, "rev-parse", "main"])).toBe(pushed);
@@ -338,7 +350,18 @@ describe("seeding from the host checkout", () => {
       await fs.copyFile(script, path.join(work, ".git", "hooks", hook));
     }
 
-    expect(await refresh({}, seeded())).toBe("built");
+    let checkoutRead = false;
+    const run: typeof runCommand = async (command, args, options) => {
+      const result = await runCommand(command, args, options);
+      if (
+        args?.includes("fetch") &&
+        args.some((arg) => !arg.startsWith("--git-dir=") && arg.endsWith("/seed.git"))
+      )
+        checkoutRead = true;
+      return result;
+    };
+    expect(await refresh({ run }, seeded())).toBe("built");
+    expect(checkoutRead).toBe(true);
 
     expect(existsSync(marker)).toBe(false);
     expectExactlyTheRemote();
@@ -442,6 +465,132 @@ describe("seeding from the host checkout", () => {
     expect(existsSync(mirrorPath())).toBe(false);
     const state = JSON.parse(await fs.readFile(path.join(projectDir(), "state.json"), "utf8"));
     expect(state.oversizedUntil).toBeGreaterThan(0);
+  });
+
+  test("combined seed and remote data above the limit falls back before staging", async () => {
+    commitLargeHistory();
+    const behind = path.join(root, "behind");
+    git(root, ["clone", "-q", `file://${remote}`, behind]);
+    commitLargeHistory();
+    const maxBytes = 800 * 1024;
+    let seededCopy = false;
+    const run: typeof runCommand = (command, args, options) => {
+      if (
+        args?.includes("fetch") &&
+        args.some((arg) => !arg.startsWith("--git-dir=") && arg.endsWith("/seed.git"))
+      )
+        seededCopy = true;
+      return runCommand(command, args, options);
+    };
+    expect(
+      await refresh(
+        { run, maxBytes, freeBytes: async () => 1024 ** 3 + 3 * maxBytes },
+        seeded(behind),
+      ),
+    ).toBe("oversized");
+    expect(seededCopy).toBe(false);
+    expect(existsSync(mirrorPath())).toBe(false);
+    expect((await fs.readdir(projectDir())).filter((name) => name.startsWith("."))).toEqual([]);
+  });
+
+  test("failure after staging initialization falls back to a clean download", async () => {
+    let stagedFetch = false;
+    const run: typeof runCommand = (command, args, options) => {
+      if (
+        args?.includes("fetch") &&
+        args.some((arg) => !arg.startsWith("--git-dir=") && arg.endsWith("/seed.git"))
+      ) {
+        stagedFetch = true;
+        return Promise.reject(new Error("local copy failed"));
+      }
+      return runCommand(command, args, options);
+    };
+    expect(await refresh({ run }, seeded())).toBe("built");
+    expect(stagedFetch).toBe(true);
+    expectExactlyTheRemote();
+  });
+
+  for (const phase of ["checkout", "staged"]) {
+    test(`the running ${phase} copy guard aborts and falls back`, async () => {
+      let aborted = false;
+      const run: typeof runCommand = async (command, args = [], options) => {
+        const local =
+          args.includes("fetch") &&
+          (phase === "checkout"
+            ? args.includes(work)
+            : args.some((arg) => !arg.startsWith("--git-dir=") && arg.endsWith("/seed.git")));
+        if (!local) return runCommand(command, args, options);
+        const dest = args.find((arg) => arg.startsWith("--git-dir="))!.slice(10);
+        await fs.writeFile(
+          path.join(dest, "objects", "pack", "tmp_pack_test"),
+          Buffer.alloc(300 * 1024),
+        );
+        return new Promise((_resolve, reject) => {
+          options!.signal!.addEventListener(
+            "abort",
+            () => {
+              aborted = true;
+              reject(new Error("copy aborted"));
+            },
+            { once: true },
+          );
+        });
+      };
+      expect(await refresh({ run, maxBytes: 256 * 1024 }, seeded())).toBe("built");
+      expect(aborted).toBe(true);
+      expectExactlyTheRemote();
+      expect((await fs.readdir(projectDir())).filter((name) => name.startsWith("."))).toEqual([]);
+    }, 15000);
+  }
+
+  test("seeds and fetches missing history over a network Git remote", async () => {
+    commitLargeHistory();
+    const behind = path.join(root, "behind");
+    git(root, ["clone", "-q", `file://${remote}`, behind]);
+    commit("network.txt", "from network\n");
+    const reservation = createServer();
+    await new Promise<void>((resolve) => reservation.listen(0, "127.0.0.1", resolve));
+    const port = (reservation.address() as { port: number }).port;
+    await new Promise<void>((resolve) => reservation.close(() => resolve()));
+    const daemon = spawn("git", [
+      "daemon",
+      "--verbose",
+      "--export-all",
+      "--reuseaddr",
+      "--listen=127.0.0.1",
+      `--port=${port}`,
+      `--base-path=${root}`,
+      root,
+    ]);
+    try {
+      await new Promise<void>((resolve, reject) => {
+        daemon.stderr!.on("data", (data) => {
+          if (String(data).includes("Ready to rumble")) resolve();
+        });
+        daemon.once("error", reject);
+        daemon.once("exit", () => reject(new Error("Git daemon exited before readiness")));
+      });
+      let copied = false;
+      const run: typeof runCommand = (command, args, options) => {
+        if (
+          args?.includes("fetch") &&
+          args.some((arg) => !arg.startsWith("--git-dir=") && arg.endsWith("/seed.git"))
+        )
+          copied = true;
+        return runCommand(command, args, options);
+      };
+      expect(
+        await refresh({ run }, { ...seeded(behind), gitUrl: `git://127.0.0.1:${port}/remote.git` }),
+      ).toBe("built");
+      expect(copied).toBe(true);
+      expectExactlyTheRemote();
+    } finally {
+      daemon.kill();
+      await new Promise<void>((resolve) => {
+        if (daemon.exitCode !== null) resolve();
+        else daemon.once("exit", () => resolve());
+      });
+    }
   });
 
   test("a disk with room only for a download does not seed", async () => {

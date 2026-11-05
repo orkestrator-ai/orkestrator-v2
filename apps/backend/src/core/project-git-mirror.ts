@@ -471,10 +471,15 @@ async function seedMirror(transfer: Transfer, building: string, staged: string):
   const quarantine = path.join(building, "seed.git");
   try {
     await initBareRepository(transfer, quarantine);
-    await fetchCheckoutRefs(transfer, checkout, quarantine);
+    await fetchBoundedLocal(transfer, checkout, quarantine, SEED_REFSPEC);
     await fetchInto(transfer, quarantine, await packBytes(quarantine));
     await initBareRepository(transfer, staged);
-    await fetchLocal(transfer, quarantine, staged, MIRROR_REFSPEC);
+    // The quarantine may contain a full seed plus a full remote increment.
+    // Discard it before duplicating that data if it no longer fits one limit.
+    if ((await directoryBytes(quarantine)) > transfer.maxBytes) {
+      throw new Error("The seed and remote together exceed the mirror limit");
+    }
+    await fetchBoundedLocal(transfer, quarantine, staged, MIRROR_REFSPEC);
     log.info("git-mirror.seeded", { projectId: project.id });
     return true;
   } catch (error) {
@@ -498,14 +503,14 @@ async function seedableCheckout(project: MirrorProject): Promise<string | null> 
 }
 
 /**
- * Reads what the checkout has into the quarantine. Too much of it is no verdict
- * on the repository, whose branches may be a fraction of it, so it only ends the
- * seed.
+ * Bounds either local copy in a seed. Exceeding this limit ends only the seed:
+ * a plain remote download may still fit after discarding unreachable seed data.
  */
-async function fetchCheckoutRefs(
+async function fetchBoundedLocal(
   transfer: Transfer,
   checkout: string,
   quarantine: string,
+  refspec: string,
 ): Promise<void> {
   const limit = new AbortController();
   const guard = setInterval(() => {
@@ -515,7 +520,7 @@ async function fetchCheckoutRefs(
   }, GIT_MIRROR_SIZE_CHECK_MS);
   guard.unref?.();
   try {
-    await fetchLocal(transfer, checkout, quarantine, SEED_REFSPEC, limit.signal);
+    await fetchLocal(transfer, checkout, quarantine, refspec, limit.signal);
   } finally {
     clearInterval(guard);
   }
@@ -557,7 +562,9 @@ async function fetchLocal(
     {
       cwd: path.dirname(gitDir),
       timeoutMs: GIT_MIRROR_LOCAL_TIMEOUT_MS,
-      signal,
+      signal: signal
+        ? AbortSignal.any([signal, transfer.controller.signal])
+        : transfer.controller.signal,
       env: { ...gitLocalEnv(), GIT_ALLOW_PROTOCOL: "file", GIT_NO_LAZY_FETCH: "1" },
     },
   );

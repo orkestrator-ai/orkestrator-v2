@@ -525,7 +525,7 @@ function ProjectGitMirrors() {
               : "Measuring mirrors…"
             : mirrors.length === 0
               ? "New container environments clone from a mirror of their project once it exists."
-              : `${formatDiskBytes(total)}${incomplete ? " measured (some sizes unavailable)" : ""} across ${mirrors.length} mirror${mirrors.length === 1 ? "" : "s"}. New container environments clone from these; each is at most 2 GiB and is removed with its project.`}
+              : `${formatDiskBytes(total)}${incomplete ? " measured (some sizes unavailable)" : ""} across ${mirrors.length} mirror${mirrors.length === 1 ? "" : "s"}. New container environments clone from these; each finished mirror is at most 2 GiB and is removed with its project. Sizes include temporary build data.`}
         </SettingsSectionHeader>
         <Button
           variant="outline"

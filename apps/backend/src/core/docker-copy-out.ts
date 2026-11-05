@@ -1,5 +1,5 @@
 import { isDockerDaemonUnreachable, isDockerPathNotFound } from "./docker-cli-errors.js";
-import { spawnCommand } from "./shell.js";
+import { CommandFailedError, runCommandBuffer } from "./shell.js";
 
 /**
  * Bounded reads of one small file out of a container with `docker cp … -`,
@@ -15,50 +15,30 @@ export type CopyOutResult =
   | { kind: "failed" }
   | { kind: "oversized" };
 
+/** Docker's own message; generous so it cannot read as an oversized file. */
+const MAX_COPY_OUT_STDERR_BYTES = 64 * 1024;
+
 export async function copyOutBounded(
   containerId: string,
   filePath: string,
   maxBytes: number,
   timeoutMs = 30_000,
 ): Promise<CopyOutResult> {
-  // A tar stream of one small file is its content plus headers and padding.
-  const limit = maxBytes + 4 * 1024;
-  return new Promise((resolve) => {
-    const child = spawnCommand("docker", ["cp", `${containerId}:${filePath}`, "-"]);
-    const chunks: Buffer[] = [];
-    let total = 0;
-    let stderr = "";
-    let settled = false;
-    const finish = (value: CopyOutResult) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve(value);
-    };
-    const timer = setTimeout(() => {
-      child.kill("SIGKILL");
-      finish({ kind: "failed" });
-    }, timeoutMs);
-    child.stdout.on("data", (chunk: Buffer) => {
-      total += chunk.length;
-      if (total > limit) {
-        child.kill("SIGKILL");
-        finish({ kind: "oversized" });
-        return;
-      }
-      chunks.push(chunk);
+  try {
+    const { stdout } = await runCommandBuffer("docker", ["cp", `${containerId}:${filePath}`, "-"], {
+      timeoutMs,
+      // A tar stream of one small file is its content plus headers and padding.
+      maxOutputBytes: maxBytes + 4 * 1024,
+      maxStderrBytes: MAX_COPY_OUT_STDERR_BYTES,
     });
-    child.stderr.on("data", (chunk: Buffer) => {
-      if (stderr.length < 4_096) stderr += chunk.toString();
-    });
-    child.on("error", () => finish({ kind: "failed" }));
-    child.on("close", (code) => {
-      if (code === 0) finish({ kind: "bytes", tar: Buffer.concat(chunks) });
-      else if (isDockerPathNotFound(stderr)) finish({ kind: "absent" });
-      else if (isDockerDaemonUnreachable(stderr)) finish({ kind: "daemon-unavailable" });
-      else finish({ kind: "failed" });
-    });
-  });
+    return { kind: "bytes", tar: stdout };
+  } catch (error) {
+    if (!(error instanceof CommandFailedError) || error.timedOut) return { kind: "failed" };
+    if (error.outputLimitExceeded) return { kind: "oversized" };
+    if (isDockerPathNotFound(error.stderr)) return { kind: "absent" };
+    if (isDockerDaemonUnreachable(error.stderr)) return { kind: "daemon-unavailable" };
+    return { kind: "failed" };
+  }
 }
 
 /**

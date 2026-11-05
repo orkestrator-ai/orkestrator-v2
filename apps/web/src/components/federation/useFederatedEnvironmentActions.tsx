@@ -156,7 +156,9 @@ export function useFederatedEnvironmentActions(
           environmentId: fork.environmentId,
           title: fork.name,
         });
-        // Still under the fork's claim on this row: claiming again would refuse the start.
+        // This action still holds the row's claim, so a nested `run` would be
+        // refused and skip the start. The fork exists by now: a failed start
+        // is its own error, not a failed fork.
         await attempt(`Start fork ${fork.name}`, () =>
           startFederatedEnvironment(portal, {
             backendId: ref.backendId,

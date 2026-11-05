@@ -16,6 +16,43 @@ export const PROCESS_INSPECTION_OPTIONS = {
 
 export type CommandExit = { code: number | null; signal: NodeJS.Signals | null };
 
+export type BunFileSink = { end(): unknown };
+
+/**
+ * The parts of `Bun` this package calls. Written out rather than taken from
+ * `typeof Bun` because three bridges typecheck without Bun's global types.
+ */
+type BunRuntime = {
+  spawn(
+    argv: string[],
+    options: {
+      cwd?: string;
+      env?: NodeJS.ProcessEnv;
+      detached?: boolean;
+      windowsHide?: boolean;
+      stdin?: Buffer | "pipe";
+      stdout?: number;
+      stderr?: number;
+    },
+  ): {
+    pid: number;
+    stdin: unknown;
+    exited: Promise<number>;
+    exitCode: number | null;
+    signalCode: NodeJS.Signals | null;
+    kill(signal: NodeJS.Signals): void;
+  };
+  spawnSync(
+    argv: string[],
+    options: typeof PROCESS_INSPECTION_OPTIONS,
+  ): { stdout: { toString(): string }; success: boolean };
+};
+
+/** `Bun`, read per call. Undefined under Node, Electron's main process included. */
+export function bunRuntime(): BunRuntime | undefined {
+  return (globalThis as { Bun?: BunRuntime }).Bun;
+}
+
 export function decodeWaitStatus(status: number): CommandExit {
   const signalNumber = status & 0x7f;
   if (signalNumber === 0) return { code: (status >> 8) & 0xff, signal: null };
@@ -29,16 +66,42 @@ export function decodeWaitStatus(status: number): CommandExit {
  */
 export function readZombieExit(pid: number): CommandExit | undefined {
   try {
-    const { stdout, success } = Bun.spawnSync(
+    const result = bunRuntime()?.spawnSync(
       ["/bin/ps", "-o", "stat=,xstat=", "-p", String(pid)],
       PROCESS_INSPECTION_OPTIONS,
     );
-    if (!success) return undefined;
+    if (!result?.success) return undefined;
+    const { stdout } = result;
     const match = /^Z\S*\s+([0-9a-f]+)\s*$/i.exec(stdout.toString().trim());
     return match ? decodeWaitStatus(Number.parseInt(match[1]!, 16)) : undefined;
   } catch {
     return undefined;
   }
+}
+
+const EXIT_WATCH_MS = 1_000;
+const EXIT_WATCH_MAX_MS = 16_000;
+
+/**
+ * On macOS Bun can lose the exit itself, and the child waits as a zombie that
+ * nothing will reap. Its status is still readable, so ask once it has had time.
+ * Node never lost one, so this does nothing there. Returns what stops the watch.
+ */
+export function watchForLostExit(
+  pid: number | undefined,
+  onExit: (exit: CommandExit) => void,
+): () => void {
+  if (process.platform !== "darwin" || pid === undefined || !bunRuntime()) return () => undefined;
+  let timer: ReturnType<typeof setTimeout>;
+  const watch = (delayMs: number) => {
+    timer = setTimeout(() => {
+      const exit = readZombieExit(pid);
+      if (exit) onExit(exit);
+      else watch(Math.min(delayMs * 2, EXIT_WATCH_MAX_MS));
+    }, delayMs);
+  };
+  watch(EXIT_WATCH_MS);
+  return () => clearTimeout(timer);
 }
 
 function isLiveMember(state: string | undefined, groupId: string | undefined, pgid: number) {
@@ -62,12 +125,13 @@ function linuxGroupHasLiveMember(pgid: number): boolean {
 }
 
 function psGroupHasLiveMember(pgid: number): boolean {
-  const { stdout, success } = Bun.spawnSync(
+  // Unknown under Node, where nothing waits on a group, so it reads as yes.
+  const result = bunRuntime()?.spawnSync(
     ["/bin/ps", "-A", "-o", "pgid=,stat="],
     PROCESS_INSPECTION_OPTIONS,
   );
-  if (!success) return true;
-  return stdout
+  if (!result?.success) return true;
+  return result.stdout
     .toString()
     .split("\n")
     .some((line) => {

@@ -5,6 +5,7 @@ import os from "node:os";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 
 import { enqueueContainerBridgeOperation } from "../src/core/container-bridge-operations.js";
+import { boundedBackgroundLaunch } from "../src/core/container-log-bounds.js";
 
 import { DOCKER_LABEL_APP_VALUE } from "../src/core/constants";
 import { createCommandFixtures } from "./command-fixtures";
@@ -304,7 +305,9 @@ exit 0
         expect(execLog).toContain("export CWD=/workspace");
         expect(execLog).not.toContain("CODEX_HOME=");
         expect(execLog).toContain("export ORKESTRATOR_BRIDGE_DEBUG=1");
-        expect(execLog).toContain("setsid bun /opt/codex-bridge/dist/index.js");
+        expect(execLog).toContain(
+          boundedBackgroundLaunch("bun /opt/codex-bridge/dist/index.js", "/tmp/codex-bridge.log"),
+        );
         // Every start, including one that finds it running: the service dedupes.
         expect(bridgeStarted).toHaveBeenCalled();
         expect(bridgeStarted.mock.calls[0]![0]).toMatchObject({
@@ -312,7 +315,7 @@ exit 0
           baseUrl: `http://127.0.0.1:${hostPort}`,
         });
         expect(execLog).not.toContain("unset GITHUB_TOKEN GH_TOKEN");
-        expect(execLog).not.toContain("setsid node");
+        expect(execLog).not.toContain("node /opt/codex-bridge/dist/index.js");
       });
     } finally {
       const pid = await fs.readFile(pidFile, "utf8").catch(() => "");
@@ -446,7 +449,11 @@ exit 0
 
         const execLog = await fs.readFile(logs.exec, "utf8");
         // The SDK engine, not the ACP one, and nothing left over from it.
-        expect(execLog).toContain("setsid bun /opt/cursor-bridge/dist/index.js");
+        const launch = boundedBackgroundLaunch(
+          "bun /opt/cursor-bridge/dist/index.js",
+          "/tmp/cursor-bridge.log",
+        );
+        expect(execLog).toContain(launch);
         expect(execLog).not.toContain("/opt/acp-bridge/dist/index.js --provider=cursor");
         expect(execLog).not.toContain("export ACP_PROVIDER=");
         expect(execLog).not.toContain("export ACP_BRIDGE_TOKEN=");
@@ -490,10 +497,7 @@ exit 0
         // runs it under rather than trusting the interpolation.
         const detachedExec = execLog.slice(execLog.indexOf("exec -d "));
         const scriptStart = detachedExec.indexOf(" bash -lc ") + " bash -lc ".length;
-        const setsidLine = detachedExec.indexOf(
-          "setsid bun /opt/cursor-bridge/dist/index.js",
-          scriptStart,
-        );
+        const setsidLine = detachedExec.indexOf(launch, scriptStart);
         // The launch is an if/else choosing the rotating log writer; parse through
         // its closing fi.
         const scriptEnd = detachedExec.indexOf("\nfi", setsidLine) + "\nfi".length;
@@ -748,9 +752,11 @@ exit 0
         expect(execLog).toContain("cd /workspace");
         expect(execLog).toContain("export CWD=/workspace");
         expect(execLog).not.toContain("GROK_HOME=");
-        expect(execLog).toContain(
-          `setsid bun /opt/acp-bridge/dist/index.js --provider=${provider}`,
+        const launch = boundedBackgroundLaunch(
+          `bun /opt/acp-bridge/dist/index.js --provider=${provider}`,
+          "/tmp/grok-acp-bridge.log",
         );
+        expect(execLog).toContain(launch);
         expect(execLog).not.toContain("ACP_APPROVE_PROJECT_MCPS");
         // Parse the exact launch script with the same interpreter the container runs it under
         // (`docker exec ... bash -lc`), so an interpolation that produces
@@ -758,10 +764,7 @@ exit 0
         // inside a container. `-n` parses without executing.
         const detachedExec = execLog.slice(execLog.indexOf("exec -d "));
         const scriptStart = detachedExec.indexOf(" bash -lc ") + " bash -lc ".length;
-        const setsidLine = detachedExec.indexOf(
-          `setsid bun /opt/acp-bridge/dist/index.js --provider=${provider}`,
-          scriptStart,
-        );
+        const setsidLine = detachedExec.indexOf(launch, scriptStart);
         // The launch is an if/else choosing the rotating log writer; parse through
         // its closing fi.
         const scriptEnd = detachedExec.indexOf("\nfi", setsidLine) + "\nfi".length;
@@ -921,7 +924,9 @@ exit 0
         expect(execLog).toContain("export PI_SESSION_DIR=/home/node/.pi/agent/sessions");
         expect(execLog).toContain("export PI_BRIDGE_STATE_DIR=/tmp/orkestrator-pi-state");
         expect(execLog).not.toContain("PI_BRIDGE_PROJECT_RESOURCES");
-        expect(execLog).toContain("setsid bun /opt/pi-bridge/dist/index.js");
+        expect(execLog).toContain(
+          boundedBackgroundLaunch("bun /opt/pi-bridge/dist/index.js", "/tmp/pi-bridge.log"),
+        );
         expect(execLog).toContain("umask 077");
         // Both starts, the reused one too, hand over the host login access-only.
         const pushes = (await fs.readFile(importedAuth, "utf8")).trim().split("\n");
@@ -1465,7 +1470,9 @@ exit 0
         const reconcile = log.indexOf("rm -f /home/node/.claude/.credentials.json");
         const stamp = log.indexOf(`printf '%s' '${accountId}'`);
         const restrict = log.indexOf("let changed = false");
-        const launch = log.indexOf("setsid bun /opt/claude-bridge/dist/index.js");
+        const launch = log.indexOf(
+          boundedBackgroundLaunch("bun /opt/claude-bridge/dist/index.js", "/tmp/claude-bridge.log"),
+        );
         expect(reconcile).toBeGreaterThanOrEqual(0);
         expect(stamp).toBeGreaterThan(reconcile);
         expect(restrict).toBeGreaterThan(stamp);
@@ -1533,8 +1540,13 @@ exit 0
           expect(result.authToken).toMatch(/^okb_[A-Za-z0-9_-]{43}$/);
 
           const execLog = await fs.readFile(logs.exec, "utf8");
-          expect(execLog).toContain("setsid bun /opt/claude-bridge/dist/index.js");
-          expect(execLog).not.toContain("setsid node");
+          expect(execLog).toContain(
+            boundedBackgroundLaunch(
+              "bun /opt/claude-bridge/dist/index.js",
+              "/tmp/claude-bridge.log",
+            ),
+          );
+          expect(execLog).not.toContain("node /opt/claude-bridge/dist/index.js");
           expectKeepsPreviousLog(execLog, "/tmp/claude-bridge.log", "/tmp/claude-bridge.prev.log");
           // No CWD: discovery uses the process's own working directory, the
           // container's workspace (claudeWorkspaceCwd).

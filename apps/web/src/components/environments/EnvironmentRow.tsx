@@ -478,7 +478,7 @@ export function EnvironmentRow({
   const menuItems = environmentRowMenuItems(model, actions, () => setDeleteOpen(true));
 
   const activate = (event: React.MouseEvent | React.KeyboardEvent) => {
-    if (facts.deleting && (event.shiftKey || event.metaKey || event.ctrlKey)) return;
+    if (!model.selectable && (event.shiftKey || event.metaKey || event.ctrlKey)) return;
     onActivate({ shiftKey: event.shiftKey, metaKey: event.metaKey || event.ctrlKey });
   };
 
@@ -500,9 +500,10 @@ export function EnvironmentRow({
               model.dimmed && "opacity-60",
             )}
           >
-            {/* A deleting environment shows its spinner instead of a checkbox:
-                there is nothing useful left to select. */}
-            {multiSelectActive && !facts.deleting && (
+            {/* A delete in flight shows its spinner instead of a checkbox: there
+                is nothing useful left to select. A failed cleanup keeps both,
+                so a bulk delete can retry it. */}
+            {multiSelectActive && model.selectable && (
               <Checkbox
                 checked={multiSelect.checked}
                 onCheckedChange={multiSelect.onToggle}
@@ -513,8 +514,8 @@ export function EnvironmentRow({
               role="button"
               aria-busy={pending || undefined}
               tabIndex={0}
-              // A range runs over the rows as drawn; a deleting row has nothing to select.
-              data-environment-selection-id={facts.deleting ? undefined : multiSelect?.id}
+              // A range runs over the rows as drawn; a delete in flight has nothing to select.
+              data-environment-selection-id={model.selectable ? multiSelect?.id : undefined}
               onClick={activate}
               onKeyDown={(event) => {
                 if (event.key === "Enter" || event.key === " ") {

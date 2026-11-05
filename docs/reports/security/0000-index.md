@@ -24,7 +24,6 @@ A batch file combines several reports as numbered parts and takes the rating of 
 | 8 | [0110-l18-dependency-advisories.md](0110-l18-dependency-advisories.md) | Low | No | L18: `undici`, `postcss-selector-parser`, Electron 45.x | The advisories are already accepted and blocked upstream in todo 0032. |
 | 9 | [0160-l12-descriptor-process-binding.md](0160-l12-descriptor-process-binding.md) | Low | No | L12: pid reuse by the same user | It needs a crashed backend, pid reuse and a co-tenant on the old port all at once. |
 | 10 | [0190-l17-provider-secrets-at-rest.md](0190-l17-provider-secrets-at-rest.md) | Low | No | L17: provider secrets in plaintext at 0600 | The report only says to consider it, and only a same-uid process can read the file. |
-| 11 | [0230-i5-preview-publication-domain.md](0230-i5-preview-publication-domain.md) | Low | No | I5: same-site check for the publication domain | Publication is off by default, and the gateway's Origin check and opaque sessions limit what a same-site host gains. |
 
 ## Parallel running
 
@@ -55,7 +54,6 @@ These still follow the lane and conflict rules above.
 | S-0170 | [Agent-tools bind address](0170-l15-agent-tools-bind-address.md) | `0170` | Containers, 3 of 4 | None | None |
 | S-0190 | [Provider secrets at rest](0190-l17-provider-secrets-at-rest.md) | `0190` | Storage, 2 of 2 | None | None |
 | S-0160 | [Descriptor process binding](0160-l12-descriptor-process-binding.md) | `0160` | Gateway, 3 of 3 | None | None |
-| S-0230 | [Preview publication domain](0230-i5-preview-publication-domain.md) | `0230` | No lane | None | None |
 | S-0270 | [iOS app review](0270-s8-ios-app-review.md) | `0270` | No lane | None | None |
 | S-0260 | [Live checks on other platforms](0260-live-checks-on-other-platforms.md) | `0260` | No lane | None | None |
 
@@ -114,7 +112,7 @@ When one of these becomes ready, it joins the lane shown.
 | I2 | Partly done | `docs/architecture/coordinator.md:352` is corrected, `README.md:19` and `docs/architecture/control-mcp.md:505` are not; [X1 part Security 0210](0090-x1-coordinator-trust-boundary.md#security-0210-correct-what-the-docs-say-a-side-agent-can-do) |
 | I3 | Done | `docker/orkestrator-git-credential.sh`, `apps/backend/src/core/commands-files.ts:2429`; [container credential](../../architecture/github-cli.md#container-credential). An image older than `github-git-credential` keeps the rewrite. |
 | I4 | No action | Maintainer decision that `no-new-privileges` stays off because the entrypoint is `sudo` (`docs/architecture/container-lifecycle.md:1099`, `docs/todo/containers-and-environments/0018-container-network-and-credential-isolation.md:961`); policy 1 survives only on images older than policy 2 and is kept until rebuilt (`apps/backend/src/core/container-network.ts:47-50`, `docs/architecture/container-lifecycle.md:555`) |
-| I5 | Open | `apps/backend/src/preview-publication.ts:256-260`; [0230-i5-preview-publication-domain.md](0230-i5-preview-publication-domain.md) |
+| I5 | Partly done | Publication warns, and does not refuse, when its domain shares a site with the app: `sameSiteWarning` (`apps/backend/src/preview-publication.ts`), `apps/backend/src/core/host-site.ts` (each `ts.net` tailnet name is its own site), shown in `apps/web/src/components/settings/PreviewSettings.tsx`; `apps/backend/src/preview-publication.test.ts`, `apps/backend/src/core/host-site.test.ts`. Live check on a real private zone in [5240](../../todo/previews-and-annotations/5240-same-site-preview-domain-live.md) |
 | I6 | Done | `.github/workflows/publish-container.yml:71-72`, `tests/unit/publish-container-workflow.test.ts` |
 | I7 | Done | `apps/backend/src/core/container-log-bounds.ts:29-31` (commit `20e2863e5`); `okb_` and `oka_` from `packages/protocol/src/node/bridge-credential.ts`, caught by `packages/protocol/src/secret-redaction.ts`. The gateway token keeps its format, part of the client contract |
 | §7 Gateway controls | No action | The report records these as correct and asks for nothing; spot-checked only where a finding touched them |
@@ -138,4 +136,4 @@ When one of these becomes ready, it joins the lane shown.
 | §9 step 6 (M4, M5, L1) | Done | See M4, M5 and L1 |
 | §9 step 7 (M6, M7, L3, L4) | Done | See M6, M7, L3 and L4 |
 | §9 step 8 (H5, M8, M9) | Partly done | [0080-m9-legacy-host-mounts.md](0080-m9-legacy-host-mounts.md); H5 and M8 are done |
-| §9 step 9 (L18, remaining Low and Info) | Partly done | [0110-l18-dependency-advisories.md](0110-l18-dependency-advisories.md) to [0230-i5-preview-publication-domain.md](0230-i5-preview-publication-domain.md) |
+| §9 step 9 (L18, remaining Low and Info) | Partly done | [0110-l18-dependency-advisories.md](0110-l18-dependency-advisories.md) to [0190-l17-provider-secrets-at-rest.md](0190-l17-provider-secrets-at-rest.md); I5 is partly done (see I5) |

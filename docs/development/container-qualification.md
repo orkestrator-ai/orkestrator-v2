@@ -122,6 +122,72 @@ Live tests start runtimes through `tests/container-live-start.ts`
 running, so a bare `docker start` of a restricted runtime fails on a gateway
 image.
 
+## Remaining validation blockers repaired (2026-11-05)
+
+Follow-up source commit `4bf05e1e840e0258ee7e43e928b2a96d87bd760a`
+was rebased onto `main` at `cbe0f9a5b9914cc6780b8008d9da95a7f2518d38`.
+The five deterministic failures recorded below are now repaired:
+
+- Legacy standalone releases explicitly use Bun's hoisted linker, matching
+  the fetch and locked-install paths. A caller's isolated global store no
+  longer leaves a published release depending on an external package cache.
+  The regression publishes executable entry → mid → leaf fixtures, deletes
+  the caller cache, and executes the installed release. Both locked and legacy
+  releases retain the expected transitive dependency version. Before the fix,
+  the cache-deletion regression failed because the entry was unresolvable;
+  evidence is `orkestrator-test-run.w7rxDc/protocol-install-runtime-baseline.log.gz`
+  under the host temporary directory.
+- Schedule rendering canonicalizes zero-offset GMT labels, including `GMT+0`,
+  to `GMT`. Civil time, nonzero offsets and daylight abbreviations are unchanged.
+  Deterministic ICU-label tests include zero offset, BST, GMT+1 and a half-hour
+  offset. The unchanged web schedule and coordinator timer assertions pass;
+  browser coverage verifies rendering, inactive-view remount and reload.
+- The corrected-reinstall CLI test uses its real host platform for both manager
+  commands and process-identity validation. Spoofing Linux on macOS required
+  unavailable `/proc` identity data and incorrectly refused the ready descriptor.
+  Both native manager sequences and the original two-poll readiness/generation
+  assertions remain checked; no process-identity check is bypassed.
+
+The linker choice makes a release independent of caller cache preferences;
+keeping caller-selected linking would preserve that preference but permits the
+reproduced runtime failure. Canonicalizing only zero-offset aliases stabilizes
+the existing display contract while preserving useful daylight and numeric
+nonzero labels. These changes do not alter schedule firing instants.
+
+### Final qualification
+
+At `4bf05e1e8`, full typechecking, build, lint, formatting, installer owners,
+CLI reinstall owner, schedule-time owner, web schedule owner, backend timer owner,
+and the scheduler browser owner all passed through `mise run test:logged`.
+The packaged CLI scenarios passed **10 of 10**, with no cleanup errors; manifest:
+`output/cli-scenarios/2026-11-05T23-00-10-077Z-2d20a45b/manifest.json`.
+Scheduler screenshot comparisons, using an emulated ICU zero-offset spelling,
+are in `output/visual-previews/schedule-zone-*-card-*.png`.
+
+The first follow-up aggregate passed every runtime package but found a registry
+collision with newer main's independent case 6550. The branch's egress case was
+renumbered to [9833](../tests/flaky-tests/environments-and-containers/9833-egress-worker-restart-dns-timeout.md)
+and all references updated in metadata-only commit
+`74c7faeeeecee1b17e173a36432ae21dec5f2e02`. The registry guard and formatting
+passed, then a fresh complete default aggregate passed on that exact commit:
+
+```sh
+mise run test:logged -- --name remaining-final-default -- mise run test
+```
+
+The aggregate exited **0** in **196.0 s**: workspace, root/support, bridges and
+protocol-lockfile groups all passed. Durable passing summary:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.z71WBd/summary.json`.
+The previously intermittent Claude case did not fail in these aggregates; its
+existing open flake record is retained without claiming a root-cause fix.
+All validation/scenario processes finished and the source worktree was clean.
+No production backend, service manager or real application data was used.
+
+The Docker qualification below remains the last Docker run; this follow-up
+changes the standalone installer and schedule label formatting, not firewall,
+container lifecycle or bridge behavior. Native Linux/rootless, enabled IPv6,
+older-image and live-provider qualifications were not added by this follow-up.
+
 ## Egress review findings repaired (2026-11-05)
 
 The five review findings were repaired in source commit

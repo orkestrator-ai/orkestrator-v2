@@ -317,6 +317,35 @@ describe("AT-05 older nodes", () => {
 });
 
 describe("AT-02/RG-07/SC-03 forgetting and detaching", () => {
+  test("forgetting a node tells the coordinator once, after the registry write", async () => {
+    const network = new TestNodeNetwork();
+    const released: Array<{ nodes: string[]; reason: string; registered: string[] }> = [];
+    let command: TestNode;
+    command = await network.add("command", {
+      forceRegistration: true,
+      extra: {
+        onNodesReleased: (nodes, reason) => {
+          void command.service.registeredNodeIds().then((ids) =>
+            released.push({
+              nodes: nodes.map((node) => `${node.nodeId}:${node.name}`),
+              reason,
+              registered: [...ids],
+            }),
+          );
+        },
+      },
+    });
+    const leaf = await network.add("leaf");
+    await attach(command, leaf);
+    expect([...(await command.service.registeredNodeIds())]).toEqual(["bk_leaf"]);
+    await command.service.forgetNode({ nodeId: "bk_leaf" });
+    await command.service.forgetNode({ nodeId: "bk_leaf" });
+    await settle();
+    expect(released).toEqual([
+      { nodes: ["bk_leaf:leaf machine"], reason: "forgotten", registered: [] },
+    ]);
+  });
+
   test("forgetting detaches the leaf and calls nothing else on it", async () => {
     const network = new TestNodeNetwork();
     const command = await network.add("command", { forceRegistration: true });

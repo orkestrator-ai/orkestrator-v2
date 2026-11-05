@@ -39,13 +39,13 @@
  *   tree last changed as far as the agent is concerned.
  */
 
-import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { rmSync } from "node:fs";
 import { copyFile, lstat, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, isAbsolute, join, resolve } from "node:path";
 import type { MeasuredFileChange, MeasuredWorkspaceChange } from "../tool-diff.js";
+import { runCommand } from "./command-capture.js";
 
 export const DEFAULT_MAX_UNTRACKED_FILE_BYTES = 2 * 1024 * 1024;
 export const DEFAULT_MAX_UNTRACKED_FILES = 5_000;
@@ -84,35 +84,16 @@ export type GitRunner = (
   options: { cwd: string; env?: Record<string, string>; stdin?: string },
 ) => Promise<GitResult>;
 
-export const runGit: GitRunner = (args, options) =>
-  new Promise((resolvePromise, reject) => {
-    const env = { ...process.env, ...options.env, GIT_OPTIONAL_LOCKS: "0" };
-    if (options.stdin === undefined) {
-      execFile(
-        "git",
-        args,
-        { cwd: options.cwd, env, timeout: GIT_TIMEOUT_MS, maxBuffer: GIT_MAX_BUFFER },
-        (error, stdout) => (error ? reject(error) : resolvePromise({ stdout: String(stdout) })),
-      );
-      return;
-    }
-    const child = spawn("git", args, { cwd: options.cwd, env, timeout: GIT_TIMEOUT_MS });
-    let stdout = "";
-    let stdoutBytes = 0;
-    child.stdout.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => {
-      stdoutBytes += chunk.length;
-      if (stdoutBytes <= GIT_MAX_BUFFER) stdout += chunk;
-    });
-    child.stderr.resume();
-    child.on("error", reject);
-    child.on("close", (code) =>
-      code === 0 ? resolvePromise({ stdout }) : reject(new Error(`git exited with ${code}`)),
-    );
-    // A git that exits before reading stdin surfaces EPIPE here, not a crash.
-    child.stdin.on("error", () => {});
-    child.stdin.end(options.stdin);
+export const runGit: GitRunner = async (args, options) => {
+  const { stdout } = await runCommand("git", args, {
+    cwd: options.cwd,
+    env: { ...process.env, ...options.env, GIT_OPTIONAL_LOCKS: "0" },
+    timeoutMs: GIT_TIMEOUT_MS,
+    maxOutputBytes: GIT_MAX_BUFFER,
+    ...(options.stdin === undefined ? {} : { stdin: options.stdin }),
   });
+  return { stdout };
+};
 
 export interface WorkspaceChangeProbeOptions {
   git?: GitRunner;

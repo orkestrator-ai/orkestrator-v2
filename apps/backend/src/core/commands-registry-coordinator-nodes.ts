@@ -1,4 +1,8 @@
 import { createLogger } from "@orkestrator/protocol/logger";
+import {
+  coordinatorDelegationNotOpenedNote,
+  coordinatorRequestMatch,
+} from "./coordinator-workflow-retention.js";
 import { STARTUP_AGENT_TAB_ID } from "@orkestrator/protocol/tab-initial-prompt";
 import { offlineLaunchMessage } from "@orkestrator/protocol/ticket-sync";
 import { createHash, randomUUID } from "node:crypto";
@@ -11,7 +15,6 @@ import {
   coordinatorRuntimeId,
   normalizeCoordinatorDelegationRequest,
   type CoordinatorDelegationRequest,
-  type CoordinatorWorkflowAssociation,
 } from "@orkestrator/protocol/coordinator";
 import { launchDelegationRequest } from "./coordinator-delegation-request.js";
 import {
@@ -315,10 +318,6 @@ async function assertNodeDelegationAvailable(
   if (overlapping) {
     throw new Error("That worker tab already has an outstanding coordinator delegation");
   }
-}
-
-function requestAlias(association: CoordinatorWorkflowAssociation, requestId: string) {
-  return association.requestAliases?.find((alias) => alias.requestId === requestId);
 }
 
 export function registerCoordinatorNodeCommands(register: CommandRegistrar): void {
@@ -828,9 +827,8 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
                   summary: (typeof args.subject === "string" && args.subject) || String(args.body),
                 },
               );
-            } catch {
-              delegationNote =
-                "The message was delivered, but no delegation was opened. Do not resend it under a new requestId; you will not be woken automatically when the worker answers.";
+            } catch (error) {
+              delegationNote = coordinatorDelegationNotOpenedNote(error, "delivered");
             }
           }
           return {
@@ -1111,15 +1109,13 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
           const existing = associations.find(
             (item) =>
               item.coordinatorId === caller.coordinatorId &&
-              (item.requestId === input.requestId || requestAlias(item, input.requestId)),
+              coordinatorRequestMatch(item, input.requestId) !== undefined,
           );
           if (
             existing &&
             (existing.kind !== "multi-review" ||
               existing.nodeId !== target.nodeId ||
-              (existing.requestId === input.requestId
-                ? existing.payloadHash
-                : requestAlias(existing, input.requestId)?.payloadHash) !== payloadHash)
+              coordinatorRequestMatch(existing, input.requestId)?.payloadHash !== payloadHash)
           ) {
             throw new Error(COORDINATOR_REQUEST_ID_REUSED_ERROR);
           }

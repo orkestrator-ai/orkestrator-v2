@@ -39,6 +39,14 @@ function encodeLegacyRelayedFrame(payload: unknown): Buffer {
   return encodeGatewayFrame(`data: ${JSON.stringify({ event: RELAYED_NODE_EVENT, payload })}\n\n`);
 }
 
+function recordLegacyRelayedFrame(state: GatewayEventClient): void {
+  compatibilityPathUsage.record(
+    state.relayedEvents
+      ? "relayed-node-event.legacy-desktop-stream"
+      : "relayed-node-event.legacy-stream",
+  );
+}
+
 /** SSE fan-out, the replay handshake, and bounded per-client buffering. */
 export class GatewayEvents {
   /**
@@ -71,7 +79,7 @@ export class GatewayEvents {
       if (relayedNode && !state.relayedStream) {
         if (!this.takesLegacyRelayedFrames(state)) continue;
         legacyMessage ??= encodeLegacyRelayedFrame(payload);
-        if (!state.relayedEvents) compatibilityPathUsage.record("relayed-node-event.legacy-stream");
+        recordLegacyRelayedFrame(state);
         this.deliverEvent(
           client,
           state,
@@ -199,7 +207,7 @@ export class GatewayEvents {
         continue;
       const frame: RelayedNodeEvent = { nodeId, kind: "resync" };
       const message = encodeLegacyRelayedFrame(frame);
-      if (!state.relayedEvents) compatibilityPathUsage.record("relayed-node-event.legacy-stream");
+      recordLegacyRelayedFrame(state);
       if (
         !this.writeEventToClient(
           client,

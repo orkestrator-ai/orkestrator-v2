@@ -19,6 +19,8 @@ export const NODES_LOG_AREAS = defineLogAreas({
       "verification.record-failed": "A node verification could not be recorded.",
       "profile.record-failed": "A node profile could not be recorded.",
       "detach.unconfirmed": "A forgotten node has not confirmed the detach yet.",
+      "grant.revocation-listener-failed":
+        "A connection could not be told its client grant was removed; the grant is still gone.",
       "handover.recovery-pending": "Command handover recovery is still pending.",
       "ticket-sync.work-record-failed":
         "A remote build started but its ticket work location could not be saved.",

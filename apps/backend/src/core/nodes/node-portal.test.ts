@@ -328,6 +328,30 @@ describe("DP-01/DP-02 leaf workspaces and client grants", () => {
     expect(leaf.portal.grants.authenticate(opened.grant.token)).toBeNull();
   });
 
+  // The leaf's terminal sockets and event streams subscribe to this.
+  test("each route that ends a grant tells whoever is watching it", async () => {
+    const routes: Array<
+      [string, (command: TestNode, leaf: TestNode, workspaceId: string) => Promise<unknown> | void]
+    > = [
+      ["closing the workspace", (command, _leaf, id) => command.portal.closeWorkspace(id)],
+      [
+        "detaching the command node",
+        (command) => command.service.forgetNode({ nodeId: "bk_leaf" }),
+      ],
+      ["stopping the portal", (_command, leaf) => leaf.portal.stop()],
+    ];
+    for (const [name, route] of routes) {
+      const { command, leaf } = await commandWithLeaf();
+      const opened = await command.portal.openWorkspace("bk_leaf");
+      let revocations = 0;
+      leaf.portal.grants.onRevoke(opened.grant.token, () => {
+        revocations += 1;
+      });
+      await route(command, leaf, opened.workspaceId);
+      expect(revocations, name).toBe(1);
+    }
+  });
+
   test("only an attached command node can obtain grants", async () => {
     const network = new TestNodeNetwork();
     const leaf = await network.add("leaf");

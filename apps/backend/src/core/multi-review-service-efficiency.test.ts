@@ -48,6 +48,7 @@ class Provider {
     this.sessions += 1;
     return `session-${this.sessions}`;
   }
+  registerSession(_sessionId: string) {}
   async prepareDispatch() {}
   async send(sessionId: string, prompt: string, options: ProviderSendOptions) {
     if (this.failSendFor.has(sessionId)) {
@@ -277,6 +278,58 @@ test("a transient admission verification failure fails the workflow before any d
     ).toBe(true);
     await service.shutdown();
   } finally {
+    await env.cleanup();
+  }
+});
+
+test("a rejected dispatch target is shared by reviewers without failing an observing peer", async () => {
+  const env = await setup(3);
+  const service = env.createService();
+  try {
+    await service.advanceNow(env.workflowId);
+    const workflow = await env.snapshot();
+    // Two reviewers need dispatch; the third is already running and only observes.
+    for (const reviewer of workflow.reviewers.slice(0, 2)) {
+      reviewer.dispatchState = "prepared";
+      reviewer.agentStarted = false;
+    }
+    await env.storage.saveMultiReviewWorkflow(workflow.id, workflow.environmentId, 1, workflow);
+    const originalRead = env.storage.getEnvironment.bind(env.storage);
+    let failNextRead = false;
+    let rejectedReads = 0;
+    const register = jest.spyOn(env.provider, "registerSession").mockImplementation((id) => {
+      // Registration happens after session persistence and before dispatch.
+      if (id === "session-1") failNextRead = true;
+    });
+    const read = jest.spyOn(env.storage, "getEnvironment").mockImplementation(async (id) => {
+      if (failNextRead) {
+        failNextRead = false;
+        rejectedReads += 1;
+        throw new Error("dispatch target unavailable");
+      }
+      return originalRead(id);
+    });
+    try {
+      await service.advanceNow(env.workflowId);
+      const failed = await env.snapshot();
+      expect(rejectedReads).toBe(1);
+      expect(failed.phase).toBe("reviewing");
+      expect(failed.error).toBeUndefined();
+      for (const reviewer of failed.reviewers.slice(0, 2)) {
+        expect(reviewer.status).toBe("failed");
+        expect(reviewer.error).toContain("dispatch target unavailable");
+        expect(reviewer.dispatchState).toBe("prepared");
+        expect(reviewer.agentStarted).toBe(false);
+      }
+      expect(failed.reviewers[2]?.status).toBe("running");
+      expect(failed.reviewers[2]?.dispatchState).toBe("sent");
+      expect(env.provider.sends).toEqual(["session-1", "session-2", "session-3"]);
+    } finally {
+      read.mockRestore();
+      register.mockRestore();
+    }
+  } finally {
+    await service.shutdown();
     await env.cleanup();
   }
 });

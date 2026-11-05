@@ -164,3 +164,11 @@ remains unknown. No rich-content implementation or assertions changed.
 ## Static Find review recurrence, 2026-11-05
 
 Preparation at `c0808605ddf1d4ecb421db6493f91018f1199b56` repeated the sibling ledger length mismatch (expected 1, received 0). Evidence: `.orkestrator/review-artifacts/review-validation-72ace150-e330-4d03-bde1-fdc95c60e6e0/validation-04.stdout.txt`; web group reported six failures. Complete unchanged owner rerun: `mise run test:logged -- --name revocation-alone -- bun --cwd=apps/web test ./src/lib/chat/rich-conversation-revocation.test.tsx --parallel=1 --only-failures`, passed, exit 0, 1.7 s. No cause established; preserve assertions.
+
+## To-do 2922 review recurrence, 2026-11-05
+
+- Original command: `mise run test` at `f8ce680624a7b912fa227c3b36192cb7881e8fc0`, concurrent aggregate groups; worker grants not established from the captured output. Backend/web summaries total 29,090 passes, two failures and 142 skips; bridges did not run.
+- The same sibling-ledger assertion expected length 1, received 0 (143.46 ms).
+- Evidence: `.orkestrator/review-artifacts/review-validation-33109580-25be-430c-acf4-c16e7bcdecd1/validation-04.stdout.txt`.
+- Complete unchanged owner rerun: `mise run test:logged -- --name rich-owner-focused -- env NODE_ENV=test bun test --cwd apps/web ./src/lib/chat/rich-conversation-revocation.test.tsx --parallel=1 --only-failures` passed, exit 0, in 1.8 s. Passing output was removed by the logged runner.
+- Cause remains unconfirmed. No rich-content implementation, deadline or assertion changed. Preparation triage was undetermined (known-flaky, dependency-graph-incomplete).

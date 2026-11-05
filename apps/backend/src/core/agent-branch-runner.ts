@@ -525,9 +525,9 @@ export class AgentBranchRunner<B extends AgentBranchRecord> {
         throw new AgentBranchPolicyUnavailableError(error);
       }
     }
+    const workerTurn = agentMcp ? undefined : await host.workerMailTurn?.(branch);
     const resultTurn = host.resultTurn(branch, requestId);
     const artifactTurn = this.beginArtifactTurn(branch, index, agentMcp);
-    const workerTurn = agentMcp ? undefined : host.workerMailTurn?.(branch);
     const turnAgentMcp = artifactTurn?.agentMcp ?? agentMcp ?? workerTurn?.agentMcp;
     try {
       // Attach after the connection is resolved so broker registration happens

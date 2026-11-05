@@ -154,8 +154,8 @@ describe("docker cleanup review", () => {
         <DockerCleanupReview open onOpenChange={() => undefined} onFinished={() => undefined} />,
       );
       await screen.findByText("Can be removed (2)");
-      expect(screen.queryByText(/Older containers/)).toBeNull();
-      expect(screen.queryByRole("button", { name: /^Rebuild / })).toBeNull();
+      expect(screen.queryByText(/Older containers/) === null).toBe(true);
+      expect(screen.queryByRole("button", { name: /^Rebuild / }) === null).toBe(true);
     });
 
     test("a backend that predates the list shows no section and no claim", async () => {
@@ -164,8 +164,8 @@ describe("docker cleanup review", () => {
         <DockerCleanupReview open onOpenChange={() => undefined} onFinished={() => undefined} />,
       );
       await screen.findByText("Can be removed (2)");
-      expect(screen.queryByText(/Older containers/)).toBeNull();
-      expect(screen.queryByText(/did not answer/)).toBeNull();
+      expect(screen.queryByText(/Older containers/) === null).toBe(true);
+      expect(screen.queryByText(/did not answer/) === null).toBe(true);
     });
 
     test("lists each one with what it exposes and a Rebuild action per environment", async () => {
@@ -231,7 +231,7 @@ describe("docker cleanup review", () => {
       });
       await waitFor(() => expect(onFinished).toHaveBeenCalledTimes(1));
       // The review reads again, so the rebuilt environment leaves the list.
-      await waitFor(() => expect(screen.queryByText(/Older containers/)).toBeNull());
+      await waitFor(() => expect(screen.queryByText(/Older containers/) === null).toBe(true));
       expect(
         (screen.getByRole("checkbox", { name: /Container orphan/ }) as HTMLInputElement).checked,
       ).toBe(false);
@@ -294,7 +294,7 @@ describe("docker cleanup review", () => {
       );
       fireEvent.click(await screen.findByRole("button", { name: "Rebuild Old environment" }));
       await screen.findByText(/too old to rebuild from/);
-      expect(screen.queryByRole("button", { name: "Rebuild" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Rebuild" }) === null).toBe(true);
       expect(recreate).not.toHaveBeenCalled();
     });
 

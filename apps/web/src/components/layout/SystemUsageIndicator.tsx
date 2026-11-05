@@ -386,6 +386,7 @@ export function SystemUsageIndicator({
               <SystemUsagePanel
                 usage={usage}
                 stale={usageView.stale}
+                failed={usageView.failed}
                 sampledAt={usageView.sampledAt}
                 heading={false}
               />
@@ -429,7 +430,13 @@ function EnvironmentProcessPanel() {
   }
 
   if (snapshot === null) {
-    return <p className="text-xs text-muted-foreground">Loading processes…</p>;
+    return processView.failed ? (
+      <p className="text-xs text-muted-foreground" role="status">
+        Couldn't read processes
+      </p>
+    ) : (
+      <p className="text-xs text-muted-foreground">Loading processes…</p>
+    );
   }
 
   if (groups.length === 0) {

@@ -1,5 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
 import type { CpuInfo } from "node:os";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import type { CommandContext, CommandHandler } from "./commands-context.js";
 import { MachineLoadSampler } from "./machine-load.js";
 import { flushMicrotasks } from "./recurring-test-support.js";
@@ -9,6 +10,7 @@ import { createCommandRegistry } from "./commands-registry.js";
 import {
   cpuPercent,
   cpuTimes,
+  createBoundedRead,
   createCachedRamReader,
   createSystemUsageReader,
   darwinRamPercentFromVmStat,
@@ -336,6 +338,130 @@ describe("system usage", () => {
     expect((await first).cpuPercent).toBe(80);
     expect((await second).cpuPercent).toBe(80);
     expect(cpus).toHaveBeenCalledTimes(3);
+  });
+
+  test("a stalled disk costs only its figure, holds one call and recovers when it answers", async () => {
+    let clock = 0;
+    const stalled = deferred<number | null>();
+    const diskPercent = mock((_path: string) => stalled.promise);
+    const read = createSystemUsageReader({
+      platform: "linux",
+      cpus: () => [cpu(clock, clock)],
+      totalMemory: () => 1_000,
+      freeMemory: () => 250,
+      diskPercent,
+      gpuPercent: async () => 30,
+      now: () => clock,
+      delay: async (milliseconds) => {
+        clock += milliseconds;
+      },
+      sourceTimeoutMs: 5,
+    });
+
+    expect(await read("/data")).toMatchObject({
+      ramPercent: 75,
+      gpuPercent: 30,
+      diskPercent: null,
+    });
+    clock += 5_000;
+    expect((await read("/data")).diskPercent).toBeNull();
+    // The hung call is still running, so polling must not add another.
+    expect(diskPercent).toHaveBeenCalledTimes(1);
+
+    stalled.resolve(40);
+    await stalled.promise;
+    await flushMicrotasks();
+    diskPercent.mockImplementation(async () => 41);
+    clock += 5_000;
+    expect((await read("/data")).diskPercent).toBe(41);
+    expect(diskPercent).toHaveBeenCalledTimes(2);
+  });
+
+  test("a stalled disk does not hold up another path's reading", async () => {
+    const read = createBoundedRead<string, number | null>(
+      "disk",
+      (path) => (path === "/stalled" ? new Promise(() => {}) : Promise.resolve(7)),
+      null,
+      5,
+    );
+    expect(await Promise.all([read("/stalled"), read("/data")])).toEqual([null, 7]);
+  });
+
+  test("a bounded read passes on a failure, including one after its timeout", async () => {
+    const failing = createBoundedRead(
+      "disk",
+      async () => {
+        throw new Error("no disk");
+      },
+      null,
+      5,
+    );
+    await expect(failing(undefined)).rejects.toThrow("no disk");
+
+    // A late rejection must stay handled: unhandled ones end the backend.
+    let reject!: (error: Error) => void;
+    const late = createBoundedRead(
+      "disk",
+      () =>
+        new Promise<number | null>((_resolve, next) => {
+          reject = next;
+        }),
+      null,
+      5,
+    );
+    expect(await late(undefined)).toBeNull();
+    reject(new Error("late"));
+    await flushMicrotasks();
+  });
+
+  test("reports a stall once and recovery only when the last stalled key answers", async () => {
+    const capture = captureLogs();
+    try {
+      const stalled = deferred<number | null>();
+      const read = createBoundedRead<string, number | null>(
+        "disk",
+        (path) => (path === "/stalled" ? stalled.promise : Promise.resolve(7)),
+        null,
+        5,
+      );
+      const events = () => capture.records().map((record) => record.event);
+
+      expect(await read("/stalled")).toBeNull();
+      expect(await read("/stalled")).toBeNull();
+      expect(events()).toEqual(["usage.source-stalled"]);
+
+      // Another path answering says nothing about the stalled one.
+      expect(await read("/data")).toBe(7);
+      await flushMicrotasks();
+      expect(events()).toEqual(["usage.source-stalled"]);
+
+      stalled.resolve(40);
+      await flushMicrotasks();
+      expect(events()).toEqual(["usage.source-stalled", "throttle.recovered"]);
+    } finally {
+      capture.restore();
+    }
+  });
+
+  test("a stalled GPU sysfs read falls through to the next probe", async () => {
+    const stalledSysfs = createBoundedRead<void, number | null>(
+      "gpu-sysfs",
+      () =>
+        readLinuxGpuPercent({
+          platform: "linux",
+          listCards: async () => ["card0"],
+          readFile: () => new Promise(() => {}),
+        }),
+      null,
+      5,
+    );
+    expect(
+      await readGpuPercent({
+        linuxGpuPercent: stalledSysfs,
+        darwinGpuPercent: async () => null,
+        runCommand: async () => ({ stdout: "55\n" }),
+      }),
+    ).toBe(55);
   });
 
   test("reuses very recent CPU usage and handles zero total memory", async () => {

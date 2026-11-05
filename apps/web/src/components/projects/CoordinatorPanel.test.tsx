@@ -760,7 +760,7 @@ describe("CoordinatorPanel", () => {
     ensuredSnapshot = { ...snapshot, agentMessaging: { enabled: true } };
     render(<CoordinatorPanel projectId="project-1" />);
     await screen.findByRole("button", { name: /^Pause$/ });
-    expect(screen.queryByText(notice)).toBeNull();
+    expect(screen.queryByText(notice) === null).toBe(true);
     for (const enabled of [false, true]) {
       const reads = getCoordinatorView.mock.calls.length;
       act(() => {
@@ -778,14 +778,14 @@ describe("CoordinatorPanel", () => {
     ensuredSnapshot = { ...snapshot, agentMessaging: undefined };
     const { unmount } = render(<CoordinatorPanel projectId="project-1" />);
     await screen.findByRole("button", { name: /^Pause$/ });
-    expect(screen.queryByText(notice)).toBeNull();
+    expect(screen.queryByText(notice) === null).toBe(true);
     unmount();
     cleanup();
 
     ensuredSnapshot = { ...snapshot, agentMessaging: { enabled: true } };
     const second = render(<CoordinatorPanel projectId="project-1" />);
     await screen.findByRole("button", { name: /^Pause$/ });
-    expect(screen.queryByText(notice)).toBeNull();
+    expect(screen.queryByText(notice) === null).toBe(true);
     second.unmount();
     cleanup();
 
@@ -793,7 +793,7 @@ describe("CoordinatorPanel", () => {
     render(<CoordinatorPanel projectId="project-1" />);
     expect(await screen.findByText(notice)).toBeTruthy();
     // It stands alongside the Control MCP warning rather than replacing it.
-    expect(screen.queryByText(/Orchestration controls are unavailable/)).toBeNull();
+    expect(screen.queryByText(/Orchestration controls are unavailable/) === null).toBe(true);
     cleanup();
 
     ensuredSnapshot = {
@@ -2134,8 +2134,10 @@ describe("CoordinatorPanel", () => {
           tabId: "worker-tab",
         });
         act(() => portalStore.store.setState({ nodes: [{ ...node, available: false }] as never }));
-        await waitFor(() => expect(screen.queryByText(/Remote password:/)).toBeNull());
-        expect(screen.queryByRole("button", { name: "Open remote-api on Build box" })).toBeNull();
+        await waitFor(() => expect(screen.queryByText(/Remote password:/) === null).toBe(true));
+        expect(
+          screen.queryByRole("button", { name: "Open remote-api on Build box" }) === null,
+        ).toBe(true);
       } finally {
         cleanup();
         invoke.mockRestore();

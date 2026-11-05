@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
+import { CommandFailedError } from "@orkestrator/protocol/node/command-capture";
 import {
   createSshAdapterContext,
   type SshAdapterContext,
@@ -110,6 +111,21 @@ export function createFakeHarness(
   const children: FakeChild[] = [];
   const allocatedPorts: number[] = [];
   let port = 51_000;
+  const start = (command: string, args: readonly string[], env: NodeJS.ProcessEnv): FakeChild => {
+    const child = new FakeChild(command, args, env);
+    children.push(child);
+    if (child.isConfigInspection) {
+      setImmediate(() => {
+        child.writeStdout(options.sshGOutput ?? DEFAULT_SSH_G_OUTPUT);
+        child.exit(0);
+      });
+    } else if (child.isTunnel) {
+      (options.onTunnel ?? authenticatedTunnel)(child);
+    } else {
+      options.onOther?.(child);
+    }
+    return child;
+  };
   const context = createSshAdapterContext({
     knownHostsFile,
     overrides: {
@@ -127,21 +143,26 @@ export function createFakeHarness(
         return port;
       },
       probeForward: async (probePort) => (options.probe ? options.probe(probePort) : "open"),
-      spawn: (command, args, spawnOptions) => {
-        const child = new FakeChild(command, args, (spawnOptions.env ?? {}) as NodeJS.ProcessEnv);
-        children.push(child);
-        if (child.isConfigInspection) {
-          setImmediate(() => {
-            child.writeStdout(options.sshGOutput ?? DEFAULT_SSH_G_OUTPUT);
-            child.exit(0);
+      spawn: (command, args, spawnOptions) =>
+        start(command, args, (spawnOptions.env ?? {}) as NodeJS.ProcessEnv),
+      capture: (command, args, captureOptions) =>
+        new Promise((resolve, reject) => {
+          const child = start(command, args, captureOptions.env);
+          let stdout = "";
+          let stderr = "";
+          child.stdout.on("data", (chunk: Buffer) => (stdout += chunk.toString()));
+          child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
+          captureOptions.signal?.addEventListener("abort", () => child.kill("SIGTERM"), {
+            once: true,
           });
-        } else if (child.isTunnel) {
-          (options.onTunnel ?? authenticatedTunnel)(child);
-        } else {
-          options.onOther?.(child);
-        }
-        return child;
-      },
+          child.once("exit", (exitCode: number | null, signal: NodeJS.Signals | null) => {
+            // Let what the script wrote reach the listeners above first.
+            setImmediate(() => {
+              if (exitCode === 0) resolve({ stdout, stderr });
+              else reject(new CommandFailedError(stderr, { stdout, stderr, exitCode, signal }));
+            });
+          });
+        }),
       ...options.overrides,
     },
   });

@@ -159,3 +159,26 @@ root and agent-support tests, bridges and protocol lockfile checks passed.
 The resolved launcher owner, format, lint and typecheck checks also passed.
 No node-coordination code, assertion, deadline or skip changed. This confirms
 a recurrence that passes alone; the aggregate remains non-green.
+
+## MCP cleanup scan repair — 2026-11-05
+
+The MCP cleanup guard timed out again in the usage-limit review rerun
+(`mise run test:logged -- --name address-default-rerun -- mise run test`):
+`MCP fixture cleanup contract > every test importing createFixture from MCP
+test-support awaits or returns cleanup` took 6658.36 ms against its unchanged
+5000 ms timeout. Root ran with one isolated worker and reported 3595 passed,
+one skipped and one failed across 182 files (446.27 s). Evidence:
+`/tmp/orkestrator-test-run.NrGGXS/root-and-agent-support-tests.log`.
+
+The owning file also failed alone (10097.24 ms; two passed, one failed),
+so this observation alone does not establish a flake:
+`mise run test:logged -- --name address-mcp-cleanup-rerun -- bun test ./tests/unit/mcp-fixture-cleanup.test.ts --parallel=1 --only-failures`.
+Evidence: `/tmp/orkestrator-test-run.piuUPu/address-mcp-cleanup-rerun.log.gz`.
+
+The guard built an AST for every backend test before deciding whether it
+imported the fixture. It now filters source text for the imported identifier
+first, retaining Unicode-escaped identifiers as candidates. The existing AST
+import/cleanup checks, caller-count assertion and timeout are unchanged.
+After the repair the same owning-file command passed in 1.2 s (three tests).
+This repairs the MCP scan component of this multi-failure case; the other
+recorded failures remain open.

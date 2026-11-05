@@ -664,6 +664,7 @@ export class BuildPipelineSupervisor {
     const {
       status,
       error: statusDetail,
+      failureKind,
       turnSettled,
       backgroundWorkLive,
       retainedContinuationRequestIds,
@@ -733,6 +734,7 @@ export class BuildPipelineSupervisor {
           pipeline.activePromptContext?.requestId ??
           session.sdkSessionId,
         error: statusDetail,
+        ...(failureKind ? { failureKind } : {}),
         resends: session.usageLimitResends ?? 0,
         ...(session.turnStartedAt ? { turnStartedAt: session.turnStartedAt } : {}),
         session: { label: session.label },

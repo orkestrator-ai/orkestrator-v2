@@ -1,4 +1,5 @@
 import { invoke } from "@/lib/native/backend";
+import { hostTimeZone } from "@orkestrator/protocol/schedule-time";
 import { terminalWriteWasDelivered } from "@/lib/backend/shared";
 import type {
   CreateFeatureBuildInput,
@@ -950,8 +951,13 @@ export async function dispatchNativeAgentIntent(input: {
    * leading whitespace, so a command's arguments arrive exactly as typed.
    */
   command?: NativeAgentCommandIntent;
+  /** Defaults to this device's zone; a coordinator reads its user's zone from it. */
+  clientTimeZone?: string;
 }): Promise<NativeAgentDispatchOutcome> {
-  return invoke<NativeAgentDispatchOutcome>("dispatch_native_agent_intent", input);
+  return invoke<NativeAgentDispatchOutcome>("dispatch_native_agent_intent", {
+    ...input,
+    clientTimeZone: input.clientTimeZone ?? hostTimeZone(),
+  });
 }
 
 export async function retryNativeAgentDispatch(input: {

@@ -214,6 +214,12 @@ export interface ThreadContext {
    */
   turnStartedAt?: string;
   error?: string;
+  /**
+   * app-server's `codexErrorInfo` code for the failure in `error`, when the
+   * turn's terminal error carried one (`usageLimitExceeded`). Kept and cleared
+   * with `error`.
+   */
+  errorCode?: string;
   /** Set while a dispatch is mid-flight, so a second tab cannot interleave. */
   dispatchInFlight: boolean;
   /**
@@ -676,7 +682,7 @@ export class ThreadRegistry {
     if (busy) throw new OverlappingTurnError(context.threadId);
   }
 
-  setPhase(context: ThreadContext, phase: SessionPhase, error?: string): void {
+  setPhase(context: ThreadContext, phase: SessionPhase, error?: string, errorCode?: string): void {
     if (phase === "starting") {
       // Preserve this through running/cancelling/recovering so reconnects never
       // restart the timer from the client's observation time.
@@ -694,6 +700,7 @@ export class ThreadRegistry {
     }
     context.phase = phase;
     context.error = phase === "failed" ? error : undefined;
+    context.errorCode = phase === "failed" ? errorCode : undefined;
   }
 
   /** Every session that should be told about a thread-scoped change. */

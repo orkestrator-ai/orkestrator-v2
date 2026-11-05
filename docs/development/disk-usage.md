@@ -156,9 +156,9 @@ What it costs, on the two repositories measured:
   ([how](../architecture/container-lifecycle.md#project-git-mirror)). What the
   remote sent for this repository, from a local bare clone at 76 MiB: 72 MiB with
   no checkout, 6 MiB from a checkout 50 commits behind, nothing from a current one.
-  A seeded build took longer on that same disk (16 s without a checkout, 36 s and
-  55 s with one), which a real network's transfer time would offset; it runs in
-  the background either way.
+  On that same disk, with no network to wait for, a seeded build took longer: 16 s
+  without a checkout, 36 s and 55 s with one, one run each. It was not measured
+  against a real network remote. It runs in the background either way.
 - **It is only a cache.** To reclaim it by hand, delete only
   `<project id>/mount/mirror.git`, keeping the project directory and `mount/`.
   Existing clones are self-contained and the next creation rebuilds the mirror.

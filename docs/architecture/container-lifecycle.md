@@ -1573,7 +1573,8 @@ need it once cloned.
   a checkout never makes a mirror on its own. The seed reads the checkout as the
   backend's user, so what `upload-pack` still allows is the remaining exposure:
   Git calls its attack surface large. A host agent running as that user gains
-  nothing from it, and a container cannot reach the checkout.
+  nothing from it, and a container is not given the checkout: it gets a clone
+  and copied seed files, not a bind of `localPath`.
 - **Writers.** One refresh per mirror in a backend; a launch during a refresh joins
   it. A second backend on the same data directory holds no writer lease, so it
   creates no containers. Readers need no lock: Git publishes a pack before the refs

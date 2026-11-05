@@ -280,6 +280,27 @@ describe("agent mail protocol", () => {
     });
   });
 
+  test("keeps the node a worker runs on, and a notice without one stays local", () => {
+    const resource = { kind: "agent-tab", id: "tab", environmentId: "env", tabId: "tab" };
+    expect(
+      normalizeAgentMailNotice({
+        resource: { ...resource, nodeId: "bk_leaf" },
+        state: "completed",
+        tone: "success",
+      })?.resource.nodeId,
+    ).toBe("bk_leaf");
+    expect(
+      normalizeAgentMailNotice({ resource, state: "completed", tone: "success" })?.resource,
+    ).not.toHaveProperty("nodeId");
+    expect(
+      normalizeAgentMailNotice({
+        resource: { ...resource, nodeId: "n".repeat(257) },
+        state: "completed",
+        tone: "success",
+      })?.resource,
+    ).not.toHaveProperty("nodeId");
+  });
+
   test("normalizes notices to bounded, known values", () => {
     expect(
       normalizeAgentMailNotice({

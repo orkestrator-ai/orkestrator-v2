@@ -884,7 +884,7 @@ function createMenu(): void {
     },
     checkForUpdates: autoUpdate ? () => void autoUpdate?.checkNow() : undefined,
     // The focused renderer (a realm or the window's own), then the window's own;
-    // only one that turned debug logging on is opened.
+    // then an opted-in background renderer. Only opted-in contents are opened.
     openDeveloperTools: rendererDebugTools.anyEnabled()
       ? () => {
           const context = focusedContext();

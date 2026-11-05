@@ -7,7 +7,7 @@ Analysed 2026-11-05 against `main` at `1a66d95c3`. From efficiency report part `
 ### Tasks
 
 1. **Help → Open Developer Tools in a packaged app**: see the item appear, open and disappear on macOS, Windows and Linux. Status: open.
-2. **A desktop window's own error ring reaching the essential log**: one real renderer failure, end to end. Status: open.
+2. **A desktop window's own error ring reaching the essential log**: one real renderer failure, end to end. Status: done.
 3. **A raised setting reverting on the timer in a running app**: the one-minute check, not only the start check. Status: open.
 
 ### 1. Help → Open Developer Tools in a packaged app
@@ -30,7 +30,7 @@ Analysed 2026-11-05 against `main` at `1a66d95c3`. From efficiency report part `
 
 ### 2. A desktop window's own error ring reaching the essential log
 
-**Problem.** The backend half was seen live and the renderer half is tested, but not the two joined in a real Electron window.
+**Problem.** The original checks did not join the renderer ring to the essential log in a real Electron window.
 
 **Context.** `startRendererErrorUpload` runs only in a desktop window's own renderer (`rendererErrorRoute()` is `window`), sending `record_renderer_errors` every 10 seconds. The desktop main process owns the essential log in the app and receives the backend's entry over the relay.
 
@@ -69,3 +69,14 @@ Analysed 2026-11-05 against `main` at `1a66d95c3`. From efficiency report part `
 - [Application logging, live settings](../../architecture/logging.md#live-settings)
 - [Renderer failures in the essential log](../../architecture/logging.md#renderer-failures-in-the-essential-log)
 - [6300](6300-renderer-error-ring-for-realms-and-web-clients.md)
+
+## Assumptions and decisions
+
+### Task 2: automated Electron evidence
+
+The existing renderer-log-boundary Electron spec now mounts a throwing React
+component inside a boundary using the production root error callbacks. It waits
+for the normal scheduled uploader and checks the isolated profile's essential
+file for all five metadata fields and the absence of synthetic message and stack
+text. This exercises the selected transport, backend recorder and desktop relay.
+Task 1 still requires packaged native-menu checks on all three operating systems.

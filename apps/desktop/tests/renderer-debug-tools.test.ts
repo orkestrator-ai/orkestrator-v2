@@ -60,3 +60,13 @@ describe("renderer debug tools", () => {
     expect(preview.opened).toHaveLength(0);
   });
 });
+
+test("a globally visible menu action opens an opted-in background window", () => {
+  const tools = new RendererDebugTools(() => {});
+  const background = renderer(501);
+  const focused = renderer(502);
+  tools.report(background.contents, true);
+  expect(tools.open([focused.contents])).toBe(true);
+  expect(background.opened).toEqual([{ mode: "detach" }]);
+  expect(focused.opened).toEqual([]);
+});

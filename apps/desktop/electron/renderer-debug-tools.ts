@@ -57,11 +57,11 @@ export class RendererDebugTools {
 
   /**
    * Opens DevTools for the first candidate (the focused renderer, then its
-   * window's own) that has debug logging on. A renderer that never turned it on
+   * window's own, then an opted-in background renderer) that has debug logging on. A renderer that never turned it on
    * is not opened, even when it is focused.
    */
   open(candidates: ReadonlyArray<{ id: number } | null | undefined>): boolean {
-    for (const candidate of candidates) {
+    for (const candidate of [...candidates, ...this.enabled.values()]) {
       const renderer = candidate ? this.enabled.get(candidate.id) : undefined;
       if (renderer && !renderer.isDestroyed()) {
         renderer.openDevTools({ mode: "detach" });

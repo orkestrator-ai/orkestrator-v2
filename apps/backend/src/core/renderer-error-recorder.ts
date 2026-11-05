@@ -25,10 +25,16 @@ export class RendererErrorRecorder {
   private windowStartedAt = Number.NEGATIVE_INFINITY;
   private usedInWindow = 0;
   private droppedInWindow = 0;
+  private dropTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(
     private readonly now: () => number = Date.now,
     private readonly perWindow = RENDERER_ERROR_ENTRIES_PER_WINDOW,
+    private readonly schedule = (callback: () => void, delay: number) => {
+      const timer = setTimeout(callback, delay);
+      timer.unref();
+      return timer;
+    },
   ) {}
 
   record(value: unknown): RecordRendererErrorsResult {
@@ -40,6 +46,7 @@ export class RendererErrorRecorder {
     }
     const now = this.now();
     if (now - this.windowStartedAt >= RENDERER_ERROR_WINDOW_MS || now < this.windowStartedAt) {
+      this.flushDropped();
       this.windowStartedAt = now;
       this.usedInWindow = 0;
       this.droppedInWindow = 0;
@@ -57,10 +64,24 @@ export class RendererErrorRecorder {
     }
     const dropped = entries.length - accepted;
     if (dropped > 0) {
-      // One line per window: the first drop reports, later ones only count.
-      if (this.droppedInWindow === 0) log.warn("report.rate-limited", { dropped });
+      // One bounded timer reports the entire window even if requests stop.
       this.droppedInWindow += dropped;
+      if (this.dropTimer === undefined) {
+        this.dropTimer = this.schedule(
+          () => this.flushDropped(),
+          Math.max(0, this.windowStartedAt + RENDERER_ERROR_WINDOW_MS - now),
+        );
+      }
     }
     return { accepted, dropped };
+  }
+
+  private flushDropped(): void {
+    if (this.dropTimer !== undefined) clearTimeout(this.dropTimer);
+    this.dropTimer = undefined;
+    if (this.droppedInWindow > 0) {
+      log.warn("report.rate-limited", { dropped: this.droppedInWindow });
+      this.droppedInWindow = 0;
+    }
   }
 }

@@ -198,3 +198,34 @@ test("a rejected import still reports debug and uploads content-free failure on 
     applyRendererLogLevel();
   }
 });
+
+test("backend-unavailable still reports debug without importing the app or uploading", async () => {
+  document.body.innerHTML = '<div id="root"></div>';
+  const original = window.orkestrator;
+  const report = mock(async () => true);
+  window.orkestrator = { window: { setRendererDebugLogging: report } } as never;
+  localStorage.setItem("orkestrator:debug", "1");
+  applyRendererLogLevel();
+  const loadRenderer = mock(async () => ({ startRenderer: async () => {} }));
+  const startDiagnostics = mock(() => undefined);
+  try {
+    await bootstrapRenderer({
+      startDiagnostics,
+      startDesktop: (options) =>
+        startDesktopRenderer({
+          ...options,
+          target: { location: { protocol: "file:", reload() {} }, navigator, document } as never,
+          connect: async () => "backend-unavailable",
+        }),
+      loadRenderer,
+    });
+    expect(report).toHaveBeenCalledWith(true);
+    expect(loadRenderer).not.toHaveBeenCalled();
+    expect(startDiagnostics).not.toHaveBeenCalled();
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain("couldn’t connect");
+  } finally {
+    window.orkestrator = original;
+    localStorage.removeItem("orkestrator:debug");
+    applyRendererLogLevel();
+  }
+});

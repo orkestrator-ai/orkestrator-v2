@@ -1,4 +1,5 @@
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { reportRendererDebugLogging } from "./debug-log";
 import { startDesktopRenderer } from "./desktop-startup";
 import { emitDesktopStartupMarker } from "./desktop-startup-marker";
 import { startRendererDiagnostics } from "./renderer-diagnostics";
@@ -39,6 +40,9 @@ export async function bootstrapRenderer({
   loadRenderer = () => import("../renderer-entry"),
   emitMarker = emitDesktopStartupMarker,
 }: RendererBootstrapOptions = {}): Promise<void> {
+  // Preload IPC is available before the backend connection check. DevTools must
+  // remain reachable when that check fails; uploads still wait for readiness.
+  reportRendererDebugLogging((window.orkestrator ?? window.orkestratorDesktopHost?.api)?.window);
   let startupPending = true;
   const reportStartupError = () => {
     if (startupPending) emitMarker("renderer-error");

@@ -68,14 +68,40 @@ describe("recording renderer errors", () => {
     expect(recorder.record([entry])).toEqual({ accepted: 1, dropped: 0 });
   });
 
-  test("the drop is reported once per window, with only a count", () => {
+  test("the complete dropped count is reported once when the window rolls over", () => {
     const { lines } = capture();
     configureLogger({ level: "warn" });
-    const recorder = new RendererErrorRecorder(() => 0, 1);
+    let now = 0;
+    const recorder = new RendererErrorRecorder(() => now, 1);
     recorder.record([entry, entry]);
+    recorder.record([entry]);
+    now += RENDERER_ERROR_WINDOW_MS;
     recorder.record([entry]);
     const reports = lines.filter((line) => line.includes("report.rate-limited"));
     expect(reports).toHaveLength(1);
-    expect(reports[0]).toContain("dropped=1");
+    expect(reports[0]).toContain("dropped=2");
   });
+});
+
+test("a quiet window still emits the total from all dropped batches", () => {
+  const { lines } = capture();
+  configureLogger({ level: "warn" });
+  let flush: (() => void) | undefined;
+  let scheduled = 0;
+  const recorder = new RendererErrorRecorder(
+    () => 0,
+    1,
+    (callback, delay) => {
+      flush = callback;
+      scheduled++;
+      expect(delay).toBe(RENDERER_ERROR_WINDOW_MS);
+      return 123 as never;
+    },
+  );
+  recorder.record([entry, entry]);
+  recorder.record([entry, entry]);
+  expect(scheduled).toBe(1);
+  flush!();
+  expect(lines.filter((line) => line.includes("report.rate-limited"))).toHaveLength(1);
+  expect(lines.join("\n")).toContain("dropped=3");
 });

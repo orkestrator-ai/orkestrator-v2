@@ -31,8 +31,7 @@ A batch file combines several reports as numbered parts and takes the rating of 
 | 15 | [0390-gw-7-websocket-compression.md](0390-gw-7-websocket-compression.md) | Low | No | GW-7: No WebSocket message compression | Deferred by 0052 decision D6 until the transport direction is chosen. |
 | 16 | [0560-st-9-agent-mail-store-remainder.md](0560-st-9-agent-mail-store-remainder.md) | Low | No | ST-9 (rest): Agent mail: pending injects and mailbox lists still sit on the whole store | The read cost the finding described has gone, and the rest needs a stored-format change only a measurement could justify. |
 | 17 | [0580-st-21-file-rpc-and-usage-report.md](0580-st-21-file-rpc-and-usage-report.md) | Low | No | ST-21: Whole files cross RPC as base64, branch reads spawn twice, and usage reports parse every row | These are occasional, bounded reads. |
-| 18 | [0650-web-16-terminal-container-environment-subscription.md](0650-web-16-terminal-container-environment-subscription.md) | Low | No | WEB-16: `TerminalContainer` subscribes to the whole environment object | It is an unmeasured re-render, with launch-effect risk in the fix. |
-| 19 | [0693-dk-10-second-claude-binary.md](0693-dk-10-second-claude-binary.md) | Low | No | DK-10: The image ships two Claude Code native binaries | It is an optional image-size saving that waits on a maintainer decision. |
+| 18 | [0693-dk-10-second-claude-binary.md](0693-dk-10-second-claude-binary.md) | Low | No | DK-10: The image ships two Claude Code native binaries | It is an optional image-size saving that waits on a maintainer decision. |
 
 ## Parallel running
 
@@ -85,7 +84,6 @@ These still follow the lane and conflict rules above.
 | Batch | Name | Files | Lane and position | Finish first | Not at the same time as |
 | --- | --- | --- | --- | --- | --- |
 | E-0580 | [File RPC and usage report](0580-st-21-file-rpc-and-usage-report.md) | `0580` | Git scans and file reads, 1 of 1 | None | None |
-| E-0650 | [Terminal container subscription](0650-web-16-terminal-container-environment-subscription.md) | `0650` | No lane | None | None |
 
 ### Not ready to start
 
@@ -100,7 +98,7 @@ When one of these becomes ready, it joins the lane shown.
 
 ## Status of every efficiency finding
 
-15 done, 5 partly done, 17 open, 1 no action.
+90 done, 8 partly done, 23 open, 2 no action.
 
 | Finding | Disposition | Evidence |
 | --- | --- | --- |
@@ -169,7 +167,7 @@ When one of these becomes ready, it joins the lane shown.
 | WEB-13 | Done | `get_file_subtree` and `get_local_file_subtree` take `knownDigest` and answer `unchanged` with no contents, `commands-registry-terminal.ts`, `file-subtree-loads.ts` (#1754, `bfac1f577`); see [Closing check of E23](#closing-check-of-e23-renderer-polling). Expanded-folder counts in real use: [5460](../../todo/cross-cutting/5460-renderer-polling-live-evidence.md). |
 | WEB-14 | Open | Four Maps copied up front, `nativeAgentProjectionStore.ts:173-178`; see 0640. |
 | WEB-15 | Done | Memoised `readTranscriptTail`, `AgentNativeTab.controller.tsx:1152` (9c06cb7aa). |
-| WEB-16 | Open | Whole environment subscribed, `TerminalContainer.view.tsx:168-170`; see 0650. |
+| WEB-16 | Done | `useShallow` selector of the fields read, `TerminalContainer.view.tsx:160-199`; `reuseUnchangedFields`, `environmentStore.ts` (bfac1f577); guarded by `TerminalContainer.render-count.test.tsx`; see [1202 task 3](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md). The native tab's own whole-record selector is [5580](../../todo/cross-cutting/5580-agent-native-tab-environment-subscription.md). |
 | WEB-17 | Done | `LiveElapsed`, `ClaudeTmuxChatTab.tsx:1406`; `createRuntimeClock`, `MultiReviewTab.tsx:564` (387d1412f); `BuildChatTab.tsx` has no interval. |
 | WEB-18 | Done | Every named poll runs through `startCoordinatedPoll` (`lib/coordinated-poll.ts`), which reads nothing while the window is hidden (#1754, `bfac1f577`); see [Closing check of E23](#closing-check-of-e23-renderer-polling). A real Electron window: [5460](../../todo/cross-cutting/5460-renderer-polling-live-evidence.md). |
 | WEB-19 | Done | While a part streams, `MessageMarkdown` renders each completed segment once through `IncrementalMarkdownCache.render` (`incremental-parse.ts`) and reuses its elements, #1754 `bfac1f577`; Chromium Profiler numbers in the closing check of E22 below and in 1202 task 3. |

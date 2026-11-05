@@ -69,7 +69,17 @@ export class EvidenceBodyStore {
     if (!target || bodyIdFor(bytes) !== id) return false;
     if (await this.reuse(id)) return true;
     const directory = dirname(target);
-    const created = await mkdir(directory, { recursive: true, mode: 0o700 });
+    await this.exclusive(async () => {
+      const created = await mkdir(directory, { recursive: true, mode: 0o700 });
+      if (!this.durable || created === undefined) return;
+      // Register creation debt before staging can fail or another writer can
+      // observe the new directories. Keep it until a directory sync succeeds.
+      this.unsyncedDirectories.add(directory);
+      for (let parent = dirname(directory); ; parent = dirname(parent)) {
+        this.unsyncedDirectories.add(parent);
+        if (parent === dirname(created) || parent === dirname(parent)) break;
+      }
+    });
     const temp = `${target}.${randomUUID()}.tmp`;
     try {
       await writeFile(temp, bytes, { mode: 0o600 });
@@ -83,12 +93,6 @@ export class EvidenceBodyStore {
       await rename(temp, target);
       if (!this.durable) return;
       this.unsyncedDirectories.add(directory);
-      // `mkdir` names the first directory it made; each parent up to it gained an entry.
-      if (created !== undefined)
-        for (let parent = dirname(directory); ; parent = dirname(parent)) {
-          this.unsyncedDirectories.add(parent);
-          if (parent === dirname(created) || parent === dirname(parent)) break;
-        }
     });
     await this.syncDirectories();
     return true;

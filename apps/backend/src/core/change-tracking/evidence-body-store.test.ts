@@ -152,6 +152,75 @@ describe("EvidenceBodyStore.put", () => {
     expect(readdirSync(dirname(bodyPath(store, id)))).toEqual([]);
   });
 
+  test("retry after file-sync failure retains all newly created parent links", async () => {
+    const store = join(root(), "nested", "bodies");
+    const synced: string[] = [];
+    let failFile = true;
+    const bodies = new EvidenceBodyStore(store, true, async (path, kind) => {
+      if (kind === "file" && failFile) throw new Error("EIO");
+      if (kind === "directory") synced.push(path);
+    });
+    const bytes = encode("retry creation");
+    const id = bodyIdFor(bytes);
+    await expect(bodies.put(id, bytes)).rejects.toThrow("EIO");
+    failFile = false;
+    expect(await bodies.put(id, bytes)).toBe(true);
+    expect(synced.sort()).toEqual(
+      [
+        dirname(bodyPath(store, id)),
+        store,
+        dirname(store),
+        dirname(dirname(store)),
+        dirname(dirname(dirname(store))),
+      ].sort(),
+    );
+  });
+
+  test("another body cannot bypass its staging creator's parent syncs", async () => {
+    const store = root();
+    const first = encode("creator");
+    let second = encode("follower");
+    for (let index = 0; bodyIdFor(second).slice(7, 9) !== bodyIdFor(first).slice(7, 9); index++)
+      second = encode(`follower ${index}`);
+    const fileEntered = deferred();
+    const fileGate = deferred();
+    const parentEntered = deferred();
+    const parentGate = deferred();
+    const synced: string[] = [];
+    let firstFile = true;
+    const bodies = new EvidenceBodyStore(store, true, async (path, kind) => {
+      if (kind === "file" && firstFile) {
+        firstFile = false;
+        fileEntered.release();
+        await fileGate.promise;
+      }
+      if (kind === "directory") {
+        synced.push(path);
+        if (path === dirname(store)) {
+          parentEntered.release();
+          await parentGate.promise;
+        }
+      }
+    });
+    const creator = bodies.put(bodyIdFor(first), first);
+    try {
+      await fileEntered.promise;
+      const follower = bodies.put(bodyIdFor(second), second);
+      await parentEntered.promise;
+      expect(await settled(follower)).toBe(false);
+      expect(synced).toContain(store);
+      expect(synced).toContain(dirname(store));
+      parentGate.release();
+      expect(await follower).toBe(true);
+    } finally {
+      fileGate.release();
+      parentGate.release();
+      await creator;
+    }
+    expect(await bodies.get(bodyIdFor(first))).toEqual(first);
+    expect(await bodies.get(bodyIdFor(second))).toEqual(second);
+  });
+
   test("a failed directory sync rejects, and the next adoption retries it", async () => {
     const store = root();
     let failDirectories = true;
@@ -201,54 +270,60 @@ describe("EvidenceBodyStore.put", () => {
   });
 });
 
+function ingestionFixture() {
+  const h = createHarness({ repo: false });
+  harnesses.push(h);
+  const spool = new ChangeEvidenceSpool();
+  const recorder = new ChangeEvidenceRecorder({
+    spool,
+    provider: "claude",
+    capabilities: {
+      resolution: "resolved",
+      beforeTurn: "controlled-dispatch",
+      afterTurn: "terminal-observed",
+      beforeTool: "awaited",
+      afterTool: "awaited",
+      historicalCallIdentity: "stable",
+      fileEvidence: { resolution: "confirmed", kinds: ["replacement"] },
+      turnDiff: "absent",
+      captureExecutor: "host-worker",
+      captureAvailability: "ready",
+      backgroundCompletion: "launch-only",
+    },
+  });
+  recorder.tool(
+    { conversationId: "s1", callId: "c1" },
+    {
+      toolKind: "file-edit",
+      phase: "succeeded",
+      executionOccurrence: "started",
+      evidence: [
+        {
+          kind: "replacement",
+          path: "a.ts",
+          before: "one\ntwo\n",
+          after: "one\nthree\n",
+          extent: "fragment",
+          origin: "input",
+          claim: "proposal",
+        },
+      ],
+    },
+  );
+  const source = spoolSource(spool);
+  const acks: unknown[] = [];
+  const ack = source.ack;
+  source.ack = async (request) => {
+    acks.push(request);
+    await ack(request);
+  };
+
+  return { h, source, acks };
+}
+
 describe("evidence ingestion", () => {
   test("commits a body's row and acknowledges only after put resolves", async () => {
-    const h = createHarness({ repo: false });
-    harnesses.push(h);
-    const spool = new ChangeEvidenceSpool();
-    const recorder = new ChangeEvidenceRecorder({
-      spool,
-      provider: "claude",
-      capabilities: {
-        resolution: "resolved",
-        beforeTurn: "controlled-dispatch",
-        afterTurn: "terminal-observed",
-        beforeTool: "awaited",
-        afterTool: "awaited",
-        historicalCallIdentity: "stable",
-        fileEvidence: { resolution: "confirmed", kinds: ["replacement"] },
-        turnDiff: "absent",
-        captureExecutor: "host-worker",
-        captureAvailability: "ready",
-        backgroundCompletion: "launch-only",
-      },
-    });
-    recorder.tool(
-      { conversationId: "s1", callId: "c1" },
-      {
-        toolKind: "file-edit",
-        phase: "succeeded",
-        executionOccurrence: "started",
-        evidence: [
-          {
-            kind: "replacement",
-            path: "a.ts",
-            before: "one\ntwo\n",
-            after: "one\nthree\n",
-            extent: "fragment",
-            origin: "input",
-            claim: "proposal",
-          },
-        ],
-      },
-    );
-    const source = spoolSource(spool);
-    const acks: unknown[] = [];
-    const ack = source.ack;
-    source.ack = async (request) => {
-      acks.push(request);
-      await ack(request);
-    };
+    const { h, source, acks } = ingestionFixture();
 
     const gate = deferred();
     const put = h.service.bodies.put.bind(h.service.bodies);
@@ -274,4 +349,39 @@ describe("evidence ingestion", () => {
     expect(acks.length).toBeGreaterThan(0);
     expect(acks[0]).toMatchObject({ retainedBodyIds: expect.arrayContaining(putIds) });
   });
+  test.each(["file", "directory"] as const)(
+    "%s sync failure leaves ingestion unacknowledged and retryable",
+    async (failureKind) => {
+      const { h, source, acks } = ingestionFixture();
+      let failSync = true;
+      const bodies = new EvidenceBodyStore(root(), true, async (_path, kind) => {
+        if (failSync && kind === failureKind) throw new Error("EIO");
+      });
+      const ids: string[] = [];
+      const fetches: string[] = [];
+      const fetchBody = source.body;
+      source.body = async (id) => {
+        fetches.push(id);
+        return fetchBody(id);
+      };
+      const puts = spyOn(h.service.bodies, "put").mockImplementation(async (id, bytes) => {
+        ids.push(id);
+        return bodies.put(id, bytes);
+      });
+      try {
+        expect(await h.service.pullEvidence(source)).toBe(0);
+        expect(ids.length).toBeGreaterThan(0);
+        expect(h.service.ledger.body(ids[0]!)).toBeFalsy();
+        expect(acks).toEqual([]);
+        failSync = false;
+        await h.service.pullEvidence(source);
+        expect(fetches.filter((id) => id === ids[0]).length).toBe(2);
+        for (const id of ids) expect(h.service.ledger.body(id)?.state).toBe("available");
+        expect(acks.length).toBeGreaterThan(0);
+        expect(acks[0]).toMatchObject({ retainedBodyIds: expect.arrayContaining(ids) });
+      } finally {
+        puts.mockRestore();
+      }
+    },
+  );
 });

@@ -59,6 +59,16 @@ describe("Orkestrator control MCP server", () => {
       conversationMode: "build",
       title: "Fix the failing suite",
     });
+    expect(
+      invocations.find(({ command }) => command === "open_coordinator_delegation")?.args,
+    ).toMatchObject({
+      request: {
+        summary: "Diagnose and fix the failing test suite.",
+        agent: "codex",
+        model: "gpt-5.6-codex",
+        source: "requested",
+      },
+    });
     // A coordinator's prompt is framed as a delegation around the original text.
     expect(String(launch?.prompt)).toContain("Diagnose and fix the failing test suite.");
     expect(String(launch?.prompt)).toContain(COORDINATOR_WORKER_NO_PR_INSTRUCTION);

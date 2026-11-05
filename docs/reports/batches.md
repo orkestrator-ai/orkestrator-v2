@@ -19,7 +19,6 @@ Worked out on 2026-11-03 against `main` at `a44641cbc`, from the 167 work files 
 | X1 | [security/0090-x1-coordinator-trust-boundary.md](security/0090-x1-coordinator-trust-boundary.md) | `Security 0090`, `Security 0180`, `Security 0210`, `Coordinator 0120`, `Coordinator 0310` |
 | C2 | [coordinator/0080-c2-workflow-records.md](coordinator/0080-c2-workflow-records.md) | `0080`, `0100`, `0380` |
 | C3 | [coordinator/0110-c3-sweep-and-reads.md](coordinator/0110-c3-sweep-and-reads.md) | `0110`, `0370` |
-| C7 | [coordinator/0060-c7-work-panel-and-navigation.md](coordinator/0060-c7-work-panel-and-navigation.md) | `0060`, `0260`, `0280`, `0450` |
 | C6 | [coordinator/0020-c6-errors-and-dead-ends.md](coordinator/0020-c6-errors-and-dead-ends.md) | `0020`, `0180`, `0200`, `0210`, `0250`, `0440` |
 | C10 | [coordinator/0240-c10-explanations.md](coordinator/0240-c10-explanations.md) | `0320`, `0330`, `0400`, `0240` |
 | E25 | [efficiency-logging-database/0490-e25-container-start.md](efficiency-logging-database/0490-e25-container-start.md) | `0490`, `0500` |
@@ -39,7 +38,7 @@ Worked out on 2026-11-03 against `main` at `a44641cbc`, from the 167 work files 
 | Lane | Run order | Code it protects |
 | --- | --- | --- |
 | Coordinator backend | 1. X1 (Coordinator trust boundary)<br>2. C2 (Workflow records)<br>3. C3 (Sweep and reads) | `coordinator-service.ts`, `control-mcp-tools.ts`, the protocol's `coordinator.ts` and the context prompt in `native-agent-service.ts` |
-| Coordinator panel | 1. C7 (Work panel and navigation)<br>2. C6 (Errors and dead ends)<br>3. C10 (Explanations)<br>4. C-0390 (Panel re-render cost, measure first) | `CoordinatorPanel.tsx`, `CoordinatorPanelNotices.tsx`, `TabShell.tsx` |
+| Coordinator panel | 1. C6 (Errors and dead ends)<br>2. C10 (Explanations)<br>3. C-0390 (Panel re-render cost, measure first) | `CoordinatorPanel.tsx`, `CoordinatorPanelNotices.tsx`, `TabShell.tsx` |
 | Containers | 1. S-0100 (Egress SNI and DNS)<br>2. S-0170 (Agent-tools bind address)<br>3. E25 (Container start) | `commands-containers.ts`, `commands-registry-servers.ts` and the `docker/` entrypoint, setup and firewall scripts |
 | Transcript | 1. E9 (Transcript reads)<br>2. E10 (Conditional reads and deltas)<br>3. E11 (Projection hashing)<br>4. E12 (Renderer store) | `native-agent-transcript-projection.ts` (5,570 lines), `useNativeAgentSession.ts` (3,870 lines), `nativeAgentProjectionStore.ts` |
 | Change tracking | 1. E3 (Retention and deletion) | `apps/backend/src/core/change-tracking/` |
@@ -84,7 +83,6 @@ These files are named by several batches that can still run together. The report
 | `native-agent-service.ts`, `control-mcp-tools.ts` | E9 with C2, C3 and X1 |
 | `commands-servers.ts` | C6, E3, E20 |
 | `GlobalSettings.sections.tsx` | C6, E15 |
-| `MailTile.tsx` | E-0520, C7 |
 
 ## How this was worked out
 

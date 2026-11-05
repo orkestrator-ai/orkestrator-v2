@@ -147,7 +147,11 @@ describe("fork_coordinator_worker", () => {
       requestId: "fork:alt-1",
       baseBranch: "main",
       baseCommit: head,
-      delegation: { workerTabId: "startup-agent", state: "running" },
+      delegation: {
+        workerTabId: "startup-agent",
+        state: "running",
+        request: { summary: prompt.replace(/\s+/g, " ").trim(), agent: "codex", source: "default" },
+      },
     });
 
     // A retry replays; the same requestId with another payload is refused.
@@ -157,6 +161,26 @@ describe("fork_coordinator_worker", () => {
     await expect(
       fork({ requestId: "alt-1", environmentId: workerId, prompt: "Something else" }),
     ).rejects.toThrow("different payload");
+  });
+
+  test("a supported model and reasoning override is recorded as requested", async () => {
+    const result = await fork({
+      requestId: "with-selection",
+      environmentId: workerId,
+      prompt: "Check the parser",
+      modelId: "gpt-5",
+      reasoningId: "high",
+    });
+    const association = (
+      await storage.coordinators.listCoordinatorWorkflowAssociations(scope.projectId)
+    ).find((item) => item.resourceId === result.environmentId);
+    expect(association?.delegation?.request).toMatchObject({
+      summary: "Check the parser",
+      agent: "codex",
+      model: "gpt-5",
+      reasoning: "high",
+      source: "requested",
+    });
   });
 
   test("an unprompted fork starts without an agent turn or a delegation", async () => {

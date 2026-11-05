@@ -919,7 +919,7 @@ reading of either at or past 98% with its reset still ahead keeps that account o
 until the reset. A weekly reading with no reset to go on says too little to rule the
 account out, and it ranks last. A 5-hour window with no reset cannot outlast its own
 length from when it was read, so that is taken as its reset. A reset in the past is never a known reset: the window has
-started over (`stalePlanUsageSnapshot`, `weeklyLimitReading`), so it reads empty
+started over (`stalePlanUsageSnapshot`, `usageLimitReading`), so it reads empty
 with its next reset unknown, and ranks last.
 
 Ranking last would starve such an account: a fresh account always has a known

@@ -723,6 +723,67 @@ describe("the 5-hour limit", () => {
   });
   const ids = (ranked: AutoSwitchAccount[]) => ranked.map(({ account: entry }) => entry.id);
 
+  test.each(["claude", "codex"] as const)(
+    "%s inferred expiry also clears inferred paid usage, preserving explicit and other limits",
+    (platform) => {
+      const base = snapshot({
+        platform,
+        stale: true,
+        fetchedAt: inHours(-6),
+        paidOverage: { enabled: true },
+        windows: [
+          {
+            window: platform === "claude" ? "seven_day" : "secondary",
+            usedPercent: 20,
+            resetsAt: inHours(24),
+            windowMinutes: 10_080,
+          },
+          {
+            window: platform === "claude" ? "five_hour" : "primary",
+            usedPercent: 100,
+            windowMinutes: 300,
+          },
+        ],
+      });
+      const read = (value: PlanUsageSnapshot) => usageLimitReading(platform, value, NOW);
+      const recovered = read(base);
+      expect(recovered.fiveHour?.usedPercent).toBe(0);
+      expect(recovered.wouldPay).toBe(false);
+      const ranked = (value: UsageLimitReading) =>
+        ids(
+          rankAutoSwitchAccounts(
+            [account("active", { usedPercent: 20, resetsAt: at(48) }), account("return", value)],
+            "active",
+          ),
+        );
+      expect(ranked(recovered)[0]).toBe("return");
+      for (const stale of [false, true]) {
+        // Explicit provider credit/overage use stays authoritative even after reset.
+        const explicit = read({
+          ...base,
+          stale,
+          paidOverage: { enabled: true, inUse: true },
+          windows: base.windows.map((window) => ({
+            ...window,
+            ...(window.windowMinutes === 300 ? { resetsAt: inHours(-1) } : {}),
+          })),
+        });
+        expect(explicit.fiveHour?.usedPercent).toBe(0);
+        expect(explicit.wouldPay).toBe(true);
+        expect(ranked(explicit)).toEqual(["active"]);
+      }
+      const modelOut = read({
+        ...base,
+        windows: [
+          ...base.windows,
+          { window: "model_limit", usedPercent: 100, resetsAt: inHours(1) },
+        ],
+      });
+      expect(modelOut.wouldPay).toBe(true);
+      expect(ranked(modelOut)).toEqual(["active"]);
+    },
+  );
+
   test("is Claude's five_hour window and whichever Codex general slot is under a week", () => {
     const fiveHour = { window: "five_hour", usedPercent: 10, windowMinutes: 300 };
     const week = { window: "seven_day", usedPercent: 10, windowMinutes: 10_080 };

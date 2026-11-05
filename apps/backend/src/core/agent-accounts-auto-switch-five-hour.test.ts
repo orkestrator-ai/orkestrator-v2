@@ -281,13 +281,48 @@ describe("the check when a 5-hour limit resets", () => {
 
       h.advance(wake!.delay);
       wake!.run();
-      await h.switcher.evaluate("claude");
+      for (let attempt = 0; attempt < 100 && h.state.active !== "first"; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 1));
+      }
       expect(h.state.active).toBe("first");
       expect(h.notices.at(-1)?.reason).toBe("soonest-reset");
     } finally {
       h.switcher.stop();
     }
   });
+
+  test.each(["stop", "coordinator"] as const)(
+    "returns after a %s move when the next turn edge arms the reset wake",
+    async (path) => {
+      const h = harness("codex", limits(), "first");
+      h.switcher.start();
+      try {
+        if (path === "stop") expect(await h.stop()).toBe("resend");
+        else
+          expect(
+            await h.switcher.moveOffLimitedAccount("codex", (a) => a.id === "first"),
+          ).toMatchObject({ moved: true });
+        expect(h.state.active).toBe("second");
+        const { armed, spy } = capture();
+        h.switcher.noteTurnEnded("codex");
+        // Drain the asynchronous nudge without calling evaluate ourselves.
+        for (let attempt = 0; attempt < 100 && !armed.some((w) => w.delay >= HOUR); attempt++) {
+          await Promise.resolve();
+        }
+        spy.mockRestore();
+        const wake = armed.find((w) => w.delay >= HOUR);
+        expect(wake).toBeDefined();
+        h.advance(wake!.delay);
+        wake!.run();
+        for (let attempt = 0; attempt < 100 && h.state.active !== "first"; attempt++) {
+          await new Promise((resolve) => setTimeout(resolve, 1));
+        }
+        expect(h.state.active).toBe("first");
+      } finally {
+        h.switcher.stop();
+      }
+    },
+  );
 
   test("is not armed before the switcher runs, or with nothing to wait for", async () => {
     const idle = harness("claude", limits(), "first");

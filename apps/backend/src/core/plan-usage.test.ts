@@ -1,4 +1,8 @@
 import { describe, expect, test } from "bun:test";
+import {
+  usageLimitReading,
+  rankAutoSwitchAccounts,
+} from "@orkestrator/protocol/agent-account-auto-switch";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -245,6 +249,56 @@ describe("paid usage past the plan", () => {
     });
     expect(claudePaidOverage({ seven_day: { utilization: 1 } })).toBeUndefined();
     expect(claudePaidOverage(undefined)).toBeUndefined();
+  });
+
+  test("Codex credit use reported at a short-window limit survives a cached reset", () => {
+    const now = Date.parse("2026-11-01T12:00:00Z");
+    const body = {
+      credits: { has_credits: true },
+      rate_limit: {
+        allowed: true,
+        limit_reached: true,
+        primary_window: {
+          used_percent: 100,
+          limit_window_seconds: 18_000,
+          reset_at: now / 1000 - 60,
+        },
+        secondary_window: {
+          used_percent: 20,
+          limit_window_seconds: 604_800,
+          reset_at: now / 1000 + 86_400,
+        },
+      },
+    };
+    const parsed = codexPlanWindows(body, now);
+    for (const stale of [false, true]) {
+      const reading = usageLimitReading(
+        "codex",
+        {
+          platform: "codex",
+          status: "ok",
+          fetchedAt: new Date(now - 120_000).toISOString(),
+          stale,
+          windows: parsed.windows,
+          paidOverage: codexPaidOverage(body),
+        },
+        now,
+      );
+      expect(reading.fiveHour?.usedPercent).toBe(0);
+      expect(reading.wouldPay).toBe(true);
+      expect(
+        rankAutoSwitchAccounts(
+          [
+            {
+              account: { id: "cached", signedIn: true },
+              included: true,
+              reading,
+            },
+          ],
+          "other",
+        ),
+      ).toEqual([]);
+    }
   });
 
   test("Codex's credits and its ordinary-usage answer say whether it is on and in use", () => {

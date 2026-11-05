@@ -312,11 +312,15 @@ export function usageLimitReading(
   const freshness = snapshot.stale === true ? "stale" : "fresh";
   // Past its plan allowance on any other limit, an account with paid usage on
   // would bill the next turn, so its weekly room is no reason to move onto it.
+  const fiveHour = fiveHourLimitReading(platform, snapshot, now);
+  const shortWindow = fiveHourWindow(platform, snapshot.windows);
   const otherLimitOut =
     snapshot.paidOverage?.enabled === true &&
-    snapshot.windows.some((window) => (windowUsed(window, now) ?? 0) >= 100);
+    snapshot.windows.some(
+      (window) =>
+        ((window === shortWindow ? fiveHour?.usedPercent : windowUsed(window, now)) ?? 0) >= 100,
+    );
   const wouldPay = snapshot.paidOverage?.inUse === true || otherLimitOut;
-  const fiveHour = fiveHourLimitReading(platform, snapshot, now);
   const window = generalWeeklyWindow(platform, snapshot.windows);
   if (!window) return { freshness: "none", wouldPay, ...(fiveHour ? { fiveHour } : {}) };
   const reset = window.resetsAt ? Date.parse(window.resetsAt) : Number.NaN;

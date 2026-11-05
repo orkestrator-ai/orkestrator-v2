@@ -23,9 +23,11 @@ const SCENARIO_TIMEOUT_MS = 240_000;
 
 const CLIS: Record<StackPlatform, string | undefined> = {
   claude: policyQualificationCli("claude"),
-  codex: existsSync(path.join(repositoryRoot, "binaries", "codex"))
-    ? path.join(repositoryRoot, "binaries", "codex")
-    : undefined,
+  codex:
+    policyQualificationCli("codex") ??
+    (existsSync(path.join(repositoryRoot, "binaries", "codex"))
+      ? path.join(repositoryRoot, "binaries", "codex")
+      : undefined),
 };
 
 function newestSource(directory: string): number {
@@ -83,7 +85,11 @@ async function runScenario(
     }
     const line = stdout.split("\n").find((text) => text.startsWith(STACK_EVIDENCE_PREFIX));
     if (!line) throw new Error(`The scenario printed no evidence:\n${stdout.slice(-4_000)}`);
-    return JSON.parse(line.slice(STACK_EVIDENCE_PREFIX.length)) as StackEvidence;
+    const evidence = JSON.parse(line.slice(STACK_EVIDENCE_PREFIX.length)) as StackEvidence;
+    // --only-failures suppresses passing tests; keep the bounded runner informed
+    // that this multi-scenario suite is progressing without printing call content.
+    console.info(`Completed account-switch scenario: ${platform}/${scenario}`);
+    return evidence;
   } finally {
     await removeStackPaths(paths);
   }

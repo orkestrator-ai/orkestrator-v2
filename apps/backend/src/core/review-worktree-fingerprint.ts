@@ -12,7 +12,7 @@
  * `runCommand` in `@orkestrator/protocol/node/command-capture`, which this script
  * cannot import because it has to stay self-contained for the container. Under
  * Bun a pipe reader can miss the end of a stream, and a local worktree runs this
- * under the managed Bun (docs/todo/cross-cutting/4260-bun-loses-child-process-events.md).
+ * under the managed Bun (docs/tests/flaky-tests/environments-and-containers/1537-diff-base-override-scan-timeout.md).
  *
  * Every failure leaves through one of REVIEW_WORKTREE_PROBE_REASON_CODES.
  * The script never writes a repository path, a filename, or Git's own message

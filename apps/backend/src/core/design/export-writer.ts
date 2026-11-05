@@ -855,6 +855,12 @@ interface HelperOutcome {
   notStarted: boolean;
 }
 
+/**
+ * Captures through pipes rather than `runCommand`: Node-based browser tests import
+ * this module, where `Bun` is undefined, and the spawn seam lets tests withhold a
+ * payload from a real child. A stall in Bun's pipe readers is bounded by the
+ * deadline below, though it reports a completed write as an unknown outcome.
+ */
 function runContainerHelper(
   spawnFn: DesignExportSpawn,
   containerId: string,

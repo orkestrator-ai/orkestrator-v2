@@ -274,7 +274,7 @@ export function removeStaleBackupTemporaries(dataDir: string, now = Date.now()):
  * `dbstat` (Bun on macOS loads the system library) simply reports nothing.
  *
  * The verdict comes back through unlinked files, so no pipe reader has to see
- * the end of a stream (docs/todo/cross-cutting/4260-bun-loses-child-process-events.md).
+ * the end of a stream (docs/tests/flaky-tests/environments-and-containers/1537-diff-base-override-scan-timeout.md).
  * `runCommand` does not fit: stdin here stays open as the liveness pipe, and
  * closing it tells the supervisor the backend died. A child that never reports
  * its exit fails at a deadline: without an exit status the verdict is not read.

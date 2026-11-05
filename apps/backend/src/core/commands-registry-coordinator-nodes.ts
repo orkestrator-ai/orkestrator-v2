@@ -5,6 +5,7 @@ import { createHash, randomUUID } from "node:crypto";
 
 import type { AgentMailAttachment } from "@orkestrator/protocol/agent-mail";
 import {
+  COORDINATOR_REQUEST_ID_REUSED_ERROR,
   COORDINATOR_MAIL_ADDRESS,
   coordinatorIdFromRuntimeId,
   coordinatorRuntimeId,
@@ -251,7 +252,7 @@ async function openNodeDelegation(
     association.resourceId !== environmentId ||
     association.nodeId !== nodeId
   ) {
-    throw new Error("Coordinator request id was reused with a different delegation target");
+    throw new Error(COORDINATOR_REQUEST_ID_REUSED_ERROR);
   }
   const opened = await context.storage.coordinators.openCoordinatorDelegation(
     context.runtime.coordinatorRequests.workerTabs,
@@ -365,6 +366,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
               environmentId: receipt.association.resourceId,
             }),
             coordinatorDelegationOpened: receipt.association.delegation?.state === "running",
+            replayed: true,
           };
         }
         if (!receipt.claimed) {
@@ -856,7 +858,9 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
             pipelineId: receipt.association.resourceId,
           });
           if (!record(existing)) throw new Error("Associated build pipeline was not found");
-          return existing.snapshot;
+          return record(existing.snapshot)
+            ? { ...existing.snapshot, replayed: true }
+            : existing.snapshot;
         }
         if (!receipt.claimed) {
           throw new Error("Build pipeline creation is already in progress; retry this requestId");
@@ -952,11 +956,11 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
                 ? existing.payloadHash
                 : requestAlias(existing, input.requestId)?.payloadHash) !== payloadHash)
           ) {
-            throw new Error("Coordinator request id was reused with a different payload");
+            throw new Error(COORDINATOR_REQUEST_ID_REUSED_ERROR);
           }
           if (existing && existing.conversationId !== caller.conversationId) {
             throw new Error(
-              "This request belongs to another conversation; adopt its workflow before opening it",
+              "This requestId belongs to another conversation; adopt its workflow to open it, or use a new unique requestId for a new review",
             );
           }
           if (existing && !existing.pending) {
@@ -1055,7 +1059,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
               result.workflow.id,
             );
           }
-          return result;
+          return existing && !existing.pending ? { ...result, replayed: true as const } : result;
         },
       ),
     );

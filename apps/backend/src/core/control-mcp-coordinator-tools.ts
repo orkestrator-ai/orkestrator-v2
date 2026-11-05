@@ -1,5 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
+import { coordinatorReplayFields } from "./control-mcp-results.js";
 import {
   AUTO_ADDRESS_FINDINGS_FIELD_DESCRIPTION,
   AUTO_PR_FIELD_DESCRIPTION,
@@ -453,6 +454,7 @@ export function registerCoordinatorWorkflowTools(
       return toolResult({
         workflow: workflowSummary(record),
         ...onNodeResult(target),
+        ...coordinatorReplayFields(workflow),
         ...(await workflowStatusWakeResult(invoke)),
 
         selection: buildPipelineSelection(record, input),

@@ -509,6 +509,7 @@ export function registerCoordinatorCommands(
           return {
             environment,
             coordinatorDelegationOpened: receipt.association.delegation?.state === "running",
+            replayed: true,
           };
         }
         if (!receipt.claimed) {
@@ -700,7 +701,7 @@ export function registerCoordinatorCommands(
         if (!receipt.claimed && !receipt.association.pending) {
           const existing = await context.storage.getBuildPipeline(receipt.association.resourceId);
           if (!existing) throw new Error("Associated build pipeline was not found");
-          return existing.snapshot;
+          return { ...(existing.snapshot as Record<string, unknown>), replayed: true };
         }
         if (!receipt.claimed) {
           throw new Error("Build pipeline creation is already in progress; retry this requestId");

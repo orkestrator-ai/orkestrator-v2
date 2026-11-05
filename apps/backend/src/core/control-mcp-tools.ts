@@ -21,6 +21,7 @@ import {
   COORDINATOR_LAUNCH_DEFAULTS_RULE,
   COORDINATOR_PR_RULE,
   COORDINATOR_MAIL_ADDRESS,
+  COORDINATOR_REQUEST_ID_RULE,
   COORDINATOR_TIMERS_AND_ACCOUNTS_RULE,
   COORDINATOR_VALIDATION_RULE,
   COORDINATOR_WORKER_PROMPT_FORMAT_RULE,
@@ -34,6 +35,7 @@ import {
 } from "@orkestrator/protocol/review-evidence-frames";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
 import { z } from "zod";
+import { coordinatorReplayFields } from "./control-mcp-results.js";
 import {
   ticketKindField,
   ticketSectionsField,
@@ -655,9 +657,14 @@ export async function createControlMcp(
         "Use launch_environment for a new workspace and launch_job for an independent " +
         "agent tab in an existing ready environment. " +
         (coordinatorScope
-          ? "Every launch_environment call requires baseBranch and baseCommit; copy coordinatorBase from get_launch_options, the latest commit of the repository's base branch, unless the user asks to build on the current checkout (checkoutBase). Prefer launch_multi_review for the complete environment Multi Review button action; start_multi_review is a backend-only recovery primitive. Use open_multi_review or open_multi_review_fix to focus saved work. "
+          ? "Every launch_environment call requires baseBranch and baseCommit; copy coordinatorBase from get_launch_options, the latest commit of the repository's base branch, unless the user asks to build on the current checkout (checkoutBase). Use launch_multi_review for a Multi Review, and open_multi_review or open_multi_review_fix to focus saved work. "
           : "") +
-        "Reuse requestId when retrying mutations. " +
+        // Operator instructions below carry the operator's own request-id rule.
+        (coordinatorScope
+          ? `${COORDINATOR_REQUEST_ID_RULE} `
+          : operator
+            ? ""
+            : "Every mutation needs a new requestId; reuse one only to retry after an ambiguous response. ") +
         (coordinatorScope ? COORDINATOR_LAUNCH_DEFAULTS_RULE : LAUNCH_DEFAULTS_GUIDANCE) +
         // Side agents launch nothing, so these rules are the main coordinator's.
         // With messaging off they promise wakes, so the note below stands instead.
@@ -1594,7 +1601,7 @@ export async function createControlMcp(
         (coordinatorScope
           ? `Coordinator launches require baseBranch and baseCommit from get_launch_options. Use a prompt environment for investigation or interactive work; when the whole spec is known, start a pipeline environment with start_build_pipeline instead. ${COORDINATOR_WORKER_PROMPT_NOTE} `
           : "") +
-        "Reuse requestId when retrying.",
+        "Use a new requestId for each new launch; reuse one only to retry the same launch.",
       inputSchema: z.object({
         requestId: z.string().trim().min(1).max(256),
         projectId: z.string().trim().min(1).max(200),
@@ -1706,6 +1713,7 @@ export async function createControlMcp(
           ...onNodeResult(target),
           tabId: STARTUP_AGENT_TAB_ID,
           status: startError ? "created" : "accepted",
+          ...coordinatorReplayFields(launch),
           ...selection,
           ...(delegationOpened ? asyncDelegationResult() : {}),
           delegationBaseBranch: input.baseBranch,
@@ -1807,6 +1815,7 @@ export async function createControlMcp(
         environmentId: environment.id,
         tabId: STARTUP_AGENT_TAB_ID,
         status: startError ? "created" : "accepted",
+        ...coordinatorReplayFields(launch),
         ...selection,
         ...(delegationOpened ? asyncDelegationResult() : {}),
         ...(coordinatorScope

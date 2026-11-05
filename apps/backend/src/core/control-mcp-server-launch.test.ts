@@ -4,6 +4,10 @@ import {
   COORDINATOR_WORKER_NO_PR_INSTRUCTION,
   COORDINATOR_WORKER_VALIDATION_INSTRUCTION,
 } from "@orkestrator/protocol/review-evidence-frames";
+import {
+  COORDINATOR_REPLAYED_NOTE,
+  COORDINATOR_REQUEST_ID_RULE,
+} from "@orkestrator/protocol/coordinator";
 import { BASE, rpc, useControlMcpServerHarness } from "./control-mcp-server-test-support.js";
 
 /**
@@ -1041,6 +1045,45 @@ describe("Orkestrator control MCP server", () => {
       });
       expect(launched.body.result?.isError).toBe(true);
       expect(invocations.some(({ command }) => command === "launch_control_job")).toBe(false);
+    });
+  });
+
+  describe("request ids", () => {
+    test("coordinators are told to make a new id per action and reuse one only to retry", async () => {
+      const descriptor = coordinatorCredential(["discovery", "environments", "multi-review"]);
+      const initialized = await rpc(descriptor.url, descriptor.token, "initialize", {
+        protocolVersion: "2025-06-18",
+        capabilities: {},
+        clientInfo: { name: "test", version: "1.0.0" },
+      });
+      const instructions = (initialized.body.result as unknown as { instructions: string })
+        .instructions;
+      expect(instructions).toContain(COORDINATOR_REQUEST_ID_RULE);
+      expect(instructions).not.toContain("Reuse requestId when retrying");
+      expect(instructions).not.toContain("start_multi_review");
+      const listed = await rpc(descriptor.url, descriptor.token, "tools/list", {});
+      const launch = (
+        listed.body.result?.tools as Array<{ name: string; description: string }>
+      ).find((tool) => tool.name === "launch_environment")!;
+      expect(launch.description).toContain("Use a new requestId for each new launch");
+    });
+
+    test("a replayed launch says it started nothing new", async () => {
+      overrides.set("launch_coordinator_environment", () => ({
+        environment: { id: "env-earlier", projectId: "project-1", status: "running" },
+        coordinatorDelegationOpened: false,
+        replayed: true,
+      }));
+      const descriptor = coordinatorCredential(["discovery", "environments"]);
+      const launched = await rpc(descriptor.url, descriptor.token, "tools/call", {
+        name: "launch_environment",
+        arguments: { requestId: "launch-1", projectId: "project-1", prompt: "Go.", ...BASE },
+      });
+      expect(launched.body.result?.structuredContent).toMatchObject({
+        environmentId: "env-earlier",
+        replayed: true,
+        replayNote: COORDINATOR_REPLAYED_NOTE,
+      });
     });
   });
 });

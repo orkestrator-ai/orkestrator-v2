@@ -69,7 +69,7 @@ Analysed 2026-11-05 against `main` at `33b3d953a`.
 
 ### 4. Decide when the old-runtime paths can go
 
-**Problem.** Some code exists only for runtimes created before staged inputs: the entrypoint's raw `/claude-config.json` and home-mount copies, `applyActiveCodexLoginAfterLegacyBoot`, the plain-token and `host-mounts` reports. They can go only once no such runtime is left.
+**Problem.** Some code exists only for runtimes created before staged inputs: the entrypoint's raw `/claude-config.json` and home-mount copies, `applyActiveCodexLoginAfterLegacyBoot` and the `host-mounts` status. They can go only once no such runtime is left.
 
 **Context.** This is unmigrated user state, not version skew, so the support window does not retire it ([version-compatibility.md](../../architecture/version-compatibility.md#the-support-window)). The lifecycle document's rule stays: a start or a read never migrates a runtime.
 

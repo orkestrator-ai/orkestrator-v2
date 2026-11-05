@@ -71,3 +71,23 @@ Partly in place, so not in Tasks: the per-environment status and message above, 
 
 - [Security report, M9](../2-26-10-27-security.md#m9-legacy-pre-staged-inputs-images-still-mount-whole-host-agent-homes)
 - `docs/architecture/container-lifecycle.md`, "Rollout switches and legacy runtimes"
+
+## Outcome
+
+Built on 2026-11-05 from `main` at `33b3d953a`. Every claim above was re-checked against that commit and still held; only the line numbers had moved (in `commands-containers.ts` the staging check was at `:486` and the home-mount branch at `:518-588`, and `EnvironmentInputsSection.tsx` showed its sentence at `:104`).
+
+| Item | Outcome | Where |
+| --- | --- | --- |
+| Task 1: refuse to create from an image without `staged-inputs` (recommended) | Done, as recommended. The message names the image and asks for a current one, and a failed start persists it. Nothing is created, staged or mounted | `requireStagedInputsImage` (`apps/backend/src/core/commands-containers.ts`), `imageWithoutStagedInputsMessage` (`commands-error-text.ts`); `apps/backend/tests/container-legacy-host-mounts.test.ts` |
+| Task 1: home-mount branch | Removed, being unreachable, along with the `-e ANTHROPIC_API_KEY` and `-e CURSOR_API_KEY` forwards only it used | `commands-containers.ts` |
+| Task 1: a container from a current image | Created as before, with staged inputs. The existing creation suites keep covering it, now with a manifest that declares them | `container-legacy-host-mounts.test.ts`, `docker-image.test.ts` |
+| Task 1: existing containers (leave running, recommended) | Done, as recommended. A start or a read never reaches the create, so they keep their mounts and are not migrated | `container-legacy-host-mounts.test.ts` |
+| Task 1: lifecycle document | Updated | `docs/architecture/container-lifecycle.md`, "Rollout switches and legacy runtimes" |
+| Task 2: a row in the cleanup review (recommended) | Done, as recommended, with a Rebuild action per environment; nothing shows when there are none | `apps/backend/src/core/docker-cleanup-legacy-runtimes.ts`, `apps/web/src/components/docker/DockerCleanupReview.tsx` and its test |
+| Task 2: Rebuild uses the preserving rebuild | Done. The row confirms through the same dialog and sends `intent: "preserve"` with the reviewed container | `RebuildConfirmDialog.tsx`, `DockerCleanupReview.test.tsx` |
+| Constraint: policy 1 in the same list | Included. It reads one more label in the same inspect and needed no other design | `legacyExposures` |
+| Current state: per-environment notice | Kept. It reports `host-mounts` from a missing label alone, which the list does not; the difference is in the to-do | [5860](../../todo/containers-and-environments/5860-legacy-host-mounts-live-evidence.md) task 3 |
+| Needs verification: how many real environments | Not answered: only a running install can | [5860](../../todo/containers-and-environments/5860-legacy-host-mounts-live-evidence.md) task 1 |
+| Not in the report: a real old image | Tested with a fake Docker only | [5860](../../todo/containers-and-environments/5860-legacy-host-mounts-live-evidence.md) task 2 |
+
+Found while building, not in the report: a failed start persists only fixed category messages, so the refusal needed its own path through that classifier or the image name would never have reached the user; and Bun freezes `os.homedir()` at process start, so the staging roots now read `HOME` first and no test stages from a developer's real home.

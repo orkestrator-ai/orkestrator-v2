@@ -25,7 +25,6 @@ Worked out on 2026-11-03 against `main` at `a44641cbc`, from the 167 work files 
 | E11 | [efficiency-logging-database/0210-e11-projection-hashing.md](efficiency-logging-database/0210-e11-projection-hashing.md) | `0210`, `0220`, `0320`, `0330`, `0340`, `0345`, `0350`, `0380` |
 | E12 | [efficiency-logging-database/0510-e12-renderer-store.md](efficiency-logging-database/0510-e12-renderer-store.md) | `0510`, `0590`, `0640` |
 | E3 | [efficiency-logging-database/0540-e3-retention-and-deletion.md](efficiency-logging-database/0540-e3-retention-and-deletion.md) | `0730`, `0540`, `0840` |
-| E26 | [efficiency-logging-database/0400-e26-local-desktop-transport.md](efficiency-logging-database/0400-e26-local-desktop-transport.md) | `0400`, `0860` |
 | E15 | [efficiency-logging-database/0750-e15-health-and-diagnostics.md](efficiency-logging-database/0750-e15-health-and-diagnostics.md) | `0750`, `0820`, `0810`, `0880`, `0780` |
 | E16 | [efficiency-logging-database/0790-e16-log-controls.md](efficiency-logging-database/0790-e16-log-controls.md) | `0790`, `0890`, `0900` |
 
@@ -38,7 +37,6 @@ Worked out on 2026-11-03 against `main` at `a44641cbc`, from the 167 work files 
 | Containers | 1. S-0100 (Egress SNI and DNS)<br>2. S-0170 (Agent-tools bind address)<br>3. E25 (Container start) | `commands-containers.ts`, `commands-registry-servers.ts` and the `docker/` entrypoint, setup and firewall scripts |
 | Transcript | 1. E10 (Conditional reads and deltas)<br>2. E11 (Projection hashing)<br>3. E12 (Renderer store) | `native-agent-transcript-projection.ts` (5,570 lines), `useNativeAgentSession.ts` (3,870 lines), `nativeAgentProjectionStore.ts` |
 | Change tracking | 1. E3 (Retention and deletion) | `apps/backend/src/core/change-tracking/` |
-| Desktop | 1. E26 (Local desktop transport) | `apps/desktop/electron/` windows, IPC and preloads, `backend-process.ts` |
 | Gateway | 1. S-0160 (Descriptor process binding) | `gateway-auth.ts`, `gateway-events.ts`, `gateway-proxy.ts`, `gateway-support-*.ts`, `terminal-websocket-server.ts` |
 | Logging and diagnostics | 1. E15 (Health and diagnostics)<br>2. E16 (Log controls) | `application-logging.ts`, the metrics route and the logging settings |
 
@@ -46,7 +44,7 @@ Worked out on 2026-11-03 against `main` at `a44641cbc`, from the 167 work files 
 
 These batches don't share a protected area. They only have to respect the conflicts below.
 
-- **E1 (Baseline run):** the baseline task in `0150`, `0160`, `0180`, `0190` and `0400`, in efficiency-logging-database
+- **E1 (Baseline run):** the baseline task in `0150`, `0160`, `0180` and `0190`, in efficiency-logging-database
 - **CI-0010 (Backend shard timeout):** ci-shard-validation `0010`
 
 ## Conflicts between lanes
@@ -57,7 +55,7 @@ No pair of batches in different lanes must avoid running together at the moment.
 
 | Finish | Before |
 | --- | --- |
-| E1 (Baseline run) | E10 and E26, on code those batches have not changed yet |
+| E1 (Baseline run) | E10, on code that batch has not changed yet |
 | `0490` in E25 | `0500` in E25 |
 
 ## Rebase with care

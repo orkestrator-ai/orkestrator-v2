@@ -1727,6 +1727,26 @@ describe("useNativeAgentSession progressive view", () => {
     expect(projection?.messages[2]?.parts).toEqual(all);
   });
 
+  test.each([false, true])(
+    "drops earlier rows for an interior identity overlap when the part grew: %s",
+    async (grows) => {
+      const held = streamedParts(2);
+      const incoming = { ...held[0]!, content: grows ? "part-0 and more" : "part-0" };
+      const projection = await applyTrimmedHead(held, [incoming], 2);
+
+      expect(projection?.messages.map(({ id }) => id)).toEqual(["asst"]);
+      expect(projection?.messages[0]?.parts).toEqual([incoming, held[1]!]);
+    },
+  );
+
+  test("keeps earlier rows when a new part repeats content inside a fully omitted head", async () => {
+    const prefix = ["a", "b", "c"].map((content) => ({ type: "text", content }));
+    const projection = await applyTrimmedHead(prefix, [{ type: "text", content: "a" }], 3);
+
+    expect(projection?.messages.map(({ id }) => id)).toEqual(["old", "user", "asst"]);
+    expect(projection?.messages[2]?.parts).toEqual([...prefix, { type: "text", content: "a" }]);
+  });
+
   test("distinguishes Codex file changes that share a tool id", async () => {
     const files = ["a.ts", "b.ts", "c.ts", "d.ts"].map((path) => ({
       type: "tool-invocation",

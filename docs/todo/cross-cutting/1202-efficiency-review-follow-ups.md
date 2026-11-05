@@ -310,7 +310,7 @@ The report's 3.76 MB came from an older build, so the 4.23 MB baseline replaces 
 | Reparsed trimmed head, ids unchanged | 0.299 ms | 0.058 ms |
 | Reparsed trimmed head, ids reissued | 0.288 ms | 0.034 ms |
 
-These are small absolute costs, which matches the report's reasoning-only impact rating: the fix removes garbage per update rather than a visible stall. Found on the way and not changed: [4520](../transcripts-and-observation/4520-live-head-omitted-count-duplicate-part.md).
+These are small absolute costs, which matches the report's reasoning-only impact rating: the fix removes garbage per update rather than a visible stall. Found on the way and fixed separately on 2026-11-05: a held trimmed head as long as the omitted count showed a part twice; the merge now checks for overlap before reading the held row as the cut prefix.
 
 **WEB-10, find indexing.** `AgentChatSearchIndex` (`components/chat/agent-chat-search-index.ts`) keeps each row's text while find is open, reused until the row changes, and is cleared on close and with protected rich content. `matches` also ignored `isOpen`, so a closed bar with a query left in it kept indexing on every update; it is now gated (every consumer already checked `isOpen`). `AgentChatFind.indexing.test.tsx`: an update over 1,000 reparsed rows called `getSearchText` 1,000 times before and 0 now, one changed row calls it once, and typing another query reads nothing again. Five of its six tests fail on the old hook. Local measurement of the real `getNativeMessageSearchText` over Markdown rows:
 

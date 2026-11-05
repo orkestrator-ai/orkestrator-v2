@@ -1,8 +1,12 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import { preferCompleteLiveHead } from "./native-agent-live-head";
 
-// A verbatim copy of the merge as it was when it compared serialized parts, kept
-// so the parity test below proves the comparison change altered no result.
+// A copy of the merge as it was when it compared serialized parts, kept so the
+// parity test below proves the comparison change altered no result. It is verbatim
+// except where marked "To-do 4520", which changed those results on purpose: a held
+// row as long as the omitted count used to read as the cut prefix even when the
+// incoming parts overlapped it, and an unchanged row always reported a restored
+// prefix. The tests above the parity test pin the new answers directly.
 /* oxlint-disable no-unused-vars -- the old code destructured fields away to drop them. */
 /**
  * A provider identity for one part that survives its content changing: a
@@ -45,6 +49,8 @@ function oldLocateIncomingParts(
   local: readonly unknown[],
   incoming: readonly unknown[],
   hint: number | undefined,
+  // To-do 4520: the length rule below now asks for the loose match too.
+  acceptGrowth: boolean,
 ): number {
   if (local.length === 0 || incoming.length === 0) return -1;
   const serialized: Array<string | undefined> = [];
@@ -61,11 +67,14 @@ function oldLocateIncomingParts(
     } = part as Record<string, unknown>;
     return JSON.stringify(content);
   };
-  const match = (localIndex: number, incomingIndex: number): "strict" | "loose" | false => {
+  const match = (
+    localIndex: number,
+    incomingIndex: number,
+  ): "identity" | "strict" | "loose" | false => {
     const held = oldDurablePartIdentity(local[localIndex]);
     const next = oldDurablePartIdentity(incoming[incomingIndex]);
     if (held !== undefined || next !== undefined) {
-      if (held === next) return "strict";
+      if (held === next) return "identity";
       // A bridge may reissue source ids for otherwise identical parts.
       return contentWithoutIdentity(local[localIndex]) ===
         contentWithoutIdentity(incoming[incomingIndex])
@@ -75,23 +84,29 @@ function oldLocateIncomingParts(
     if (serialize(localIndex) === serializeIncoming(incomingIndex)) return "strict";
     const heldPart = local[localIndex] as { type?: unknown; content?: unknown } | null;
     const nextPart = incoming[incomingIndex] as { type?: unknown; content?: unknown } | null;
-    const growsHeldText =
-      heldPart?.type === "text" &&
-      nextPart?.type === "text" &&
+    const growsHeldPart =
+      (heldPart?.type === "text" || (acceptGrowth && heldPart?.type === "thinking")) &&
+      nextPart?.type === heldPart.type &&
       typeof heldPart.content === "string" &&
-      typeof nextPart.content === "string" &&
+      typeof nextPart?.content === "string" &&
       nextPart.content.startsWith(heldPart.content);
-    return localIndex === local.length - 1 && growsHeldText ? "loose" : false;
+    return localIndex === local.length - 1 && growsHeldPart ? "loose" : false;
   };
   const overlapAt = (offset: number) => {
     const overlap = Math.min(local.length - offset, incoming.length);
+    // To-do 4520 review: only content-only matches require a suffix.
+    let identity = false;
     let strict = 0;
     for (let index = 0; index < overlap; index += 1) {
       const result = match(offset + index, index);
       if (!result) return 0;
-      if (result === "strict") strict += 1;
+      if (result === "identity") identity = true;
+      if (result !== "loose") strict += 1;
     }
-    return strict > 0 ? overlap : 0;
+    // Repeated content inside a true prefix is ambiguous, but a shared identity
+    // proves this is a copy even when the incoming window ends before local.
+    if (acceptGrowth && offset + overlap < local.length && !identity) return 0;
+    return strict > 0 || acceptGrowth ? overlap : 0;
   };
   let bestOffset = -1;
   let bestOverlap = 0;
@@ -143,12 +158,17 @@ function oldPreferCompleteLiveHead<TMessage>(
   const localParts = (local as { parts?: unknown } | undefined)?.parts;
   const headParts = (head as { parts?: unknown }).parts;
   if (!Array.isArray(localParts) || !Array.isArray(headParts)) return incomingOnly();
-  const offset =
+  // To-do 4520: overlap comes first; content-only matches must be a suffix.
+  const located =
     headParts.length === 0 && (omittedParts ?? 0) > 0
       ? localParts.length
-      : omittedParts === localParts.length
-        ? localParts.length
-        : oldLocateIncomingParts(localParts, headParts, omittedParts);
+      : oldLocateIncomingParts(
+          localParts,
+          headParts,
+          omittedParts,
+          omittedParts === localParts.length,
+        );
+  const offset = located < 0 && omittedParts === localParts.length ? localParts.length : located;
   if (offset < 0 || (offset === 0 && headParts.length >= localParts.length)) {
     return incomingOnly();
   }
@@ -170,7 +190,11 @@ function oldPreferCompleteLiveHead<TMessage>(
       (part, index) => JSON.stringify(part) === JSON.stringify(localParts[offset + index]),
     )
   ) {
-    return { messages: [local, ...incoming.slice(1)], restoredPrefix: true };
+    return {
+      messages: [local, ...incoming.slice(1)],
+      // To-do 4520: an unchanged row short of the omitted count restores nothing.
+      restoredPrefix: omittedParts === undefined || offset >= omittedParts,
+    };
   }
   return {
     messages: [{ ...head, parts } as TMessage, ...incoming.slice(1)],
@@ -248,6 +272,155 @@ describe("preferCompleteLiveHead", () => {
     const result = preferCompleteLiveHead<unknown>([held], [incoming], 2);
     expect(result.messages[0]).toEqual(row([parts[0], parts[1], grown, textPart(3)]));
     expect(result.restoredPrefix).toBe(true);
+  });
+
+  describe("a held row as long as the omitted count", () => {
+    const plainText = (content: string) => ({ type: "text", content });
+
+    test("does not show a part twice when it is an earlier trimmed copy that grew", () => {
+      const held = row([textPart(1, "kept")]);
+      const incoming = row([textPart(1, "kept and grown")]);
+      const result = preferCompleteLiveHead<unknown>([held], [incoming], 1);
+      expect(result.messages[0]).toBe(incoming);
+      expect(result.restoredPrefix).toBe(false);
+    });
+
+    test("does not show a part twice when the trimmed copy has not changed", () => {
+      const held = row([textPart(1)]);
+      const incoming = row([textPart(1)]);
+      const result = preferCompleteLiveHead<unknown>([held], [incoming], 1);
+      expect(result.messages[0]).toBe(incoming);
+      expect(result.restoredPrefix).toBe(false);
+    });
+
+    test("does not show a part twice when the row shares its parts with the held row", () => {
+      const held = row([textPart(1)]);
+      const incoming = row(held.parts);
+      const result = preferCompleteLiveHead<unknown>([held], [incoming], 1);
+      expect(result.messages[0]).toBe(incoming);
+      expect(result.restoredPrefix).toBe(false);
+    });
+
+    test("keeps incoming parts authoritative where a trimmed copy partly overlaps", () => {
+      const grown = textPart(2, "text 2 and more");
+      const held = row([textPart(1), textPart(2)]);
+      const incoming = row([grown, textPart(3)]);
+      const result = preferCompleteLiveHead<unknown>([held], [incoming], 2);
+      expect(result.messages[0]).toEqual(row([textPart(1), grown, textPart(3)]));
+      // Part 0 is still missing: one held part cannot stand in for two omitted.
+      expect(result.restoredPrefix).toBe(false);
+    });
+
+    test("does not report a restored prefix for an unchanged copy that falls short", () => {
+      const held = row([textPart(1), textPart(2)]);
+      const result = preferCompleteLiveHead<unknown>([held], [row([textPart(2)])], 2);
+      expect(result.messages[0]).toBe(held);
+      expect(result.restoredPrefix).toBe(false);
+    });
+
+    test.each([false, true])(
+      "uses an interior durable-identity overlap when the incoming part grew: %s",
+      (grows) => {
+        const held = row([textPart(1), textPart(2)]);
+        const first = textPart(1, grows ? "text 1 and more" : "text 1");
+        const result = preferCompleteLiveHead<unknown>([held], [row([first])], 2);
+        expect(result.messages[0]).toEqual(row([first, textPart(2)]));
+        expect(result.restoredPrefix).toBe(false);
+        if (!grows) expect(result.messages[0]).toBe(held);
+      },
+    );
+
+    test("does not confuse reissued ids with a shared interior durable identity", () => {
+      const prefix = [textPart(1, "same"), textPart(2)];
+      const next = textPart(3, "same");
+      const result = preferCompleteLiveHead<unknown>([row(prefix)], [row([next])], 2);
+      expect(result.messages[0]).toEqual(row([...prefix, next]));
+      expect(result.restoredPrefix).toBe(true);
+    });
+
+    test("restores a true cut prefix that does not overlap the incoming parts", () => {
+      const held = row([textPart(0), textPart(1)]);
+      const incoming = row([textPart(2), textPart(3)]);
+      const result = preferCompleteLiveHead<unknown>([held], [incoming], 2);
+      expect(result.messages[0]).toEqual(row([textPart(0), textPart(1), textPart(2), textPart(3)]));
+      expect(result.restoredPrefix).toBe(true);
+    });
+
+    test("restores a true cut prefix with no durable identity when the content differs", () => {
+      const held = row([plainText("first")]);
+      const incoming = row([plainText("second")]);
+      const result = preferCompleteLiveHead<unknown>([held], [incoming], 1);
+      expect(result.messages[0]).toEqual(row([plainText("first"), plainText("second")]));
+      expect(result.restoredPrefix).toBe(true);
+    });
+
+    test("restores a true cut prefix when repeated content matches before its final part", () => {
+      const prefix = [plainText("a"), plainText("b"), plainText("c")];
+      const incoming = row([plainText("a")]);
+      const result = preferCompleteLiveHead<unknown>([row(prefix)], [incoming], 3);
+      expect(result.messages[0]).toEqual(row([...prefix, plainText("a")]));
+      expect(result.restoredPrefix).toBe(true);
+    });
+
+    test("uses a shorter suffix overlap instead of a longer match inside the prefix", () => {
+      const prefix = [plainText("a"), plainText("b"), plainText("c"), plainText("a")];
+      const incoming = row([plainText("a"), plainText("b")]);
+      const result = preferCompleteLiveHead<unknown>([row(prefix)], [incoming], 4);
+      expect(result.messages[0]).toEqual(row([...prefix, plainText("b")]));
+      expect(result.restoredPrefix).toBe(false);
+    });
+
+    test("reads a growing text part with no durable identity as an overlap", () => {
+      const held = row([plainText("kept")]);
+      const incoming = row([plainText("kept and grown")]);
+      const result = preferCompleteLiveHead<unknown>([held], [incoming], 1);
+      expect(result.messages[0]).toBe(incoming);
+      expect(result.restoredPrefix).toBe(false);
+    });
+
+    test("reads a growing thinking part with no durable identity as an overlap", () => {
+      const held = row([{ type: "thinking", content: "kept" }]);
+      const incoming = row([{ type: "thinking", content: "kept and grown" }]);
+      const result = preferCompleteLiveHead<unknown>([held], [incoming], 1);
+      expect(result.messages[0]).toBe(incoming);
+      expect(result.restoredPrefix).toBe(false);
+    });
+
+    // When the match reaches the held row's end, nothing in these parts separates
+    // a repeated part from the same part read twice. Showing it once and reporting
+    // no restored prefix is the safe answer:
+    // the caller falls back to the contiguous tail, and the cut part returns when
+    // a later read delivers the whole row.
+    test("shows equal parts once when no identity can tell a true prefix from a copy", () => {
+      const held = row([plainText("same")]);
+      const incoming = row([plainText("same")]);
+      const result = preferCompleteLiveHead<unknown>([held], [incoming], 1);
+      expect(result.messages[0]).toBe(incoming);
+      expect(result.restoredPrefix).toBe(false);
+    });
+
+    test("reads equal content under reissued ids as an overlap too", () => {
+      const held = row([textPart(1, "same")]);
+      const incoming = row([textPart(2, "same")]);
+      const result = preferCompleteLiveHead<unknown>([held], [incoming], 1);
+      expect(result.messages[0]).toBe(incoming);
+      expect(result.restoredPrefix).toBe(false);
+    });
+  });
+
+  test("counts growth alone as an overlap only for a held row as long as the omitted count", () => {
+    const held = row([textPart(0), { type: "text", content: "kept" }]);
+    const incoming = row([{ type: "text", content: "kept and grown" }]);
+    const result = preferCompleteLiveHead<unknown>([held], [incoming], 1);
+    expect(result.messages[0]).toBe(incoming);
+    expect(result.restoredPrefix).toBe(false);
+  });
+
+  test("does not report a restored prefix for an unchanged row short of the omitted count", () => {
+    const held = row([textPart(3), textPart(4), textPart(5)]);
+    const result = preferCompleteLiveHead<unknown>([held], [row([textPart(5)])], 5);
+    expect(result.messages[0]).toBe(held);
+    expect(result.restoredPrefix).toBe(false);
   });
 
   test("gives the old merge's answer for random heads", () => {

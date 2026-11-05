@@ -259,6 +259,33 @@ put on a failed turn's last row. A kept stop result is consumed by the full
 read the stop answers with, so it is not on the state view. The transcript
 view, its tokens and the restart preview stay the provider's rows only.
 
+### One request per round
+
+A visible tab polls, so what a round costs matters more than what one read
+costs. A background round over tokens the view already holds sends
+`get_native_agent_live_update`, which answers transcript and state with the same
+reads and token rules as their own commands (`native-agent-live-update.ts`). A
+backend advertises it in `liveUpdateVersions`; one that does not gets the two
+commands, and so does any first, manual or post-mutation read, so a cold
+transcript never travels with session state. The reads were separate so that a
+slow transcript could not hold back state, which carries pending approvals and
+the turn phase. The combined read keeps that: a part still running after 250 ms
+answers `pending` and the client reads it on its own, joining the read already in
+flight. A part that throws answers `unavailable`, as its own command would.
+
+Discovery is not in the round (`NativeDiscoveryReadSchedule`,
+`native-session-read-policy.ts`). A section refreshes only when a read finds it
+expired, 30 s after its last refresh, and the backend announces a refresh that
+changed anything (`discovery-renewal`, `discovery-deadline`, `command-catalog`
+and the model catalogue causes). So a view reads discovery on those causes, on a
+change with a cause it cannot place, on mount, a session change, a resync, a
+resume or reconnect, a phase change, an explicit read, and while a section is
+still `loading` or `stale` (2 s) or `unavailable` (5 s). A 30 s backstop with the
+view's token covers a missed announcement and is what makes the backend look
+again; with no read at all nothing would ever refresh, so nothing would ever be
+announced. Coalescing a burst of session changes keeps a cause that names
+discovery (`coalesceChanges`, `resource-sync.ts`).
+
 Read timings are kept in-process, per domain (`transcript`, `state`,
 `discovery`), with source, normalise and scheduler-wait phases
 (`native-agent-progressive-metrics.ts`). They hold durations only, never

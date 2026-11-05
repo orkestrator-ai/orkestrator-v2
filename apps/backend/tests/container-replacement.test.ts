@@ -85,6 +85,24 @@ exit 125
       },
     );
   }, 90_000);
+  test("the deadline fails the step even when neither child can be seen to close", async () => {
+    // A killed child's descendant still holds the pipes, so `close` does not fire:
+    // the same wait a lost completion event leaves.
+    await withDockerScript("#!/bin/sh\nsleep 8 &\nexec sleep 8\n", async () => {
+      const started = Date.now();
+      const result = await pipeContainerPath("source", "/workspace", ["run", "helper"], {
+        timeoutMs: 100,
+        settleGraceMs: 100,
+      });
+      expect(result).toEqual({
+        absent: false,
+        output: "",
+        producerFailed: true,
+        daemonUnavailable: false,
+      });
+      expect(Date.now() - started).toBeLessThan(4_000);
+    });
+  }, 15_000);
   test("only the daemon's answer that a path is missing counts as nothing to copy", async () => {
     // Reaching no daemon (its socket gone) also says "no such file"; that
     // step was not copied and must fail, never be skipped as absent.

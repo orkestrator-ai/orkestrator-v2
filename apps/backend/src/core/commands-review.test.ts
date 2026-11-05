@@ -1,10 +1,8 @@
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { BackendRuntime } from "./backend-runtime.js";
-import { EventEmitter } from "node:events";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { PassThrough } from "node:stream";
 import { REVIEW_PACKAGE_FORMAT, type ReviewPackage } from "@orkestrator/protocol/review-workflow";
 import {
   createPipelineEnvironmentGit,
@@ -17,13 +15,15 @@ import {
   REVIEW_ARTIFACT_STAT_SCRIPT,
   type ReviewArtifactSizes,
   statEnvironmentReviewArtifacts,
-  waitForContainerReviewPackageWrite,
+  writeContainerReviewPackage,
   writeEnvironmentReviewPackage,
 } from "./commands-review.js";
 import { StorageService } from "./storage.js";
 import { EnvironmentUnavailableError } from "./workspace-code-rewind.js";
 import { parsePrDetectionOutput } from "./commands-review.js";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
+import { loseBunExitEvents } from "@orkestrator/protocol/testing/lost-exit";
+import { runCommand } from "./command-capture.js";
 import { configureLogger } from "@orkestrator/protocol/logger";
 import * as shell from "./shell.js";
 import { validationStallReason } from "./build-pipeline-validation-stall.js";
@@ -62,22 +62,6 @@ function packageFixture(): ReviewPackage {
     uncommittedFiles: [],
     limitations: [],
   };
-}
-
-type FakeChild = EventEmitter & {
-  stdin: PassThrough;
-  stdout: PassThrough;
-  stderr: PassThrough;
-  kill: ReturnType<typeof mock>;
-};
-
-function fakeChild(): FakeChild {
-  const child = new EventEmitter() as FakeChild;
-  child.stdin = new PassThrough();
-  child.stdout = new PassThrough();
-  child.stderr = new PassThrough();
-  child.kill = mock(() => true);
-  return child;
 }
 
 async function git(cwd: string, ...args: string[]): Promise<void> {
@@ -626,72 +610,100 @@ describe("statEnvironmentReviewArtifacts in a container", () => {
 });
 
 describe("container review package publication", () => {
-  test("wires docker publication, captures helper stderr, and settles on close", async () => {
-    const child = fakeChild();
-    let stdin = "";
-    child.stdin.on("data", (chunk: Buffer) => (stdin += chunk.toString()));
-    child.stdin.once("finish", () => queueMicrotask(() => child.emit("close", 0)));
-    const spawned: unknown[][] = [];
+  const container = {
+    id: "env-1",
+    environmentType: "container",
+    containerId: "container-1",
+  } as never;
+
+  test("wires docker publication and delivers the package on stdin", async () => {
+    const calls: unknown[][] = [];
+    let stdin: string | Buffer | undefined;
+    const run = ((command: string, args: string[], options: { stdin?: string | Buffer }) => {
+      calls.push([command, args]);
+      stdin = options.stdin;
+      return Promise.resolve({ stdout: "", stderr: "" });
+    }) as never;
     const runnerCalls: Array<{ command: string; args: string[] }> = [];
     const reference = await writeEnvironmentReviewPackage(
-      {
-        id: "env-1",
-        environmentType: "container",
-        containerId: "container-1",
-      } as never,
+      container,
       async (command, args) => {
         runnerCalls.push({ command, args });
         return "";
       },
       packageFixture(),
-      {
-        spawn: ((...args: unknown[]) => {
-          spawned.push(args);
-          return child;
-        }) as never,
-        timeoutMs: 1_000,
-      },
+      { run, timeoutMs: 1_000 },
     );
 
-    expect(spawned[0]?.[0]).toBe("docker");
-    expect(spawned[0]?.[1]).toEqual(
+    expect(calls[0]?.[0]).toBe("docker");
+    expect(calls[0]?.[1]).toEqual(
       expect.arrayContaining(["exec", "-i", "container-1", "overwrite"]),
     );
-    expect(Buffer.from(stdin, "base64").byteLength).toBe(reference.bytes);
+    expect(Buffer.from(String(stdin), "base64").byteLength).toBe(reference.bytes);
     expect(runnerCalls.some((call) => call.command === "git")).toBe(true);
     expect(runnerCalls.some((call) => call.command === "chmod")).toBe(false);
+  });
 
-    const failed = fakeChild();
-    const failure = waitForContainerReviewPackageWrite(failed as never, Buffer.from("x"), 1_000);
-    failed.stderr.write("ENOSPC");
-    failed.emit("close", 76);
-    await expect(failure).rejects.toThrow("ENOSPC");
+  const running =
+    (script: string): typeof runCommand =>
+    (_command, _args, options) =>
+      runCommand("sh", ["-c", script], options);
+
+  test("reports the helper's own diagnostic", async () => {
+    await expect(
+      writeContainerReviewPackage(
+        running("cat >/dev/null; printf ENOSPC >&2; exit 76"),
+        "c1",
+        "dir",
+        "file",
+        Buffer.from("x"),
+      ),
+    ).rejects.toThrow("exited with 76: ENOSPC");
   });
 
   test("times out a wedged helper and refuses publication when Git exclusion fails", async () => {
-    const child = fakeChild();
     await expect(
-      waitForContainerReviewPackageWrite(child as never, Buffer.from("x"), 5),
+      writeContainerReviewPackage(
+        running("exec sleep 30"),
+        "c1",
+        "dir",
+        "file",
+        Buffer.from("x"),
+        50,
+      ),
     ).rejects.toThrow("timed out");
-    expect(child.kill).toHaveBeenCalledWith("SIGKILL");
 
-    const spawn = mock(() => fakeChild());
+    const run = mock(() => Promise.resolve({ stdout: "", stderr: "" }));
     await expect(
       writeEnvironmentReviewPackage(
-        {
-          id: "env-1",
-          environmentType: "container",
-          containerId: "container-1",
-        } as never,
+        container,
         async (command) => {
           if (command === "git") throw new Error("not ignored");
           return "";
         },
         packageFixture(),
-        { spawn: spawn as never },
+        { run: run as never },
       ),
     ).rejects.toThrow("not Git-excluded");
-    expect(spawn).not.toHaveBeenCalled();
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  test("a lost completion event fails the write at its deadline", async () => {
+    const restore = loseBunExitEvents();
+    try {
+      await expect(
+        writeContainerReviewPackage(
+          running("cat >/dev/null"),
+          "c1",
+          "dir",
+          "file",
+          Buffer.from("x"),
+          200,
+        ),
+      ).rejects.toThrow("timed out");
+    } finally {
+      restore();
+    }
   });
 });
 

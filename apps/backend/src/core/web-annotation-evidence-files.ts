@@ -14,12 +14,12 @@
  * Container variants run as `node -e` scripts inside the container, the same
  * way the existing safe container reader does.
  */
-import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { lstat, open, realpath, unlink } from "node:fs/promises";
 import path from "node:path";
 import { WEB_ANNOTATION_WORKSPACE_DIRECTORY } from "@orkestrator/protocol/web-annotations";
+import { CommandFailedError, type runCommand } from "./command-capture.js";
 
 /** True for app-generated evidence paths (relative to the workspace root). */
 export function isAnnotationEvidencePath(relativePath: string): boolean {
@@ -172,39 +172,43 @@ try {
 
 export type EvidenceRemovalOutcome = "removed" | "missing" | "mismatch";
 
-type SpawnPipe = (command: string, args: string[]) => ChildProcessWithoutNullStreams;
+/** A hung `docker exec` must not hold the request that started it forever. */
+export const CONTAINER_EVIDENCE_TIMEOUT_MS = 60_000;
+/** A path or a one-word outcome on stdout, a short message on stderr. */
+const MAX_EVIDENCE_OUTPUT_BYTES = 64 * 1024;
 
 /**
  * Run one of the scripts above inside a container (`docker exec -i ... node
- * -e`), piping `stdin` and returning bounded stdout. Failures surface the
- * script's own content-free message (first line, bounded).
+ * -e`), piping `stdin` and returning stdout. Failures surface the script's own
+ * content-free message (first line, bounded).
  */
-export function runContainerEvidenceScript(
-  spawn: SpawnPipe,
+export async function runContainerEvidenceScript(
+  run: typeof runCommand,
   containerId: string,
   script: string,
   args: string[],
   stdin: string,
+  options: { timeoutMs?: number } = {},
 ): Promise<string> {
-  return new Promise((resolvePromise, reject) => {
-    const child = spawn("docker", ["exec", "-i", containerId, "node", "-e", script, "--", ...args]);
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk: Buffer) => {
-      if (stdout.length < 8_192) stdout += chunk.toString("utf8");
-    });
-    child.stderr.on("data", (chunk: Buffer) => {
-      if (stderr.length < 2_048) stderr += chunk.toString("utf8");
-    });
-    child.once("error", reject);
-    child.once("close", (code) => {
-      if (code === 0) return resolvePromise(stdout);
-      const message = stderr.split("\n", 1)[0]?.trim().slice(0, 300);
-      reject(new Error(message || `docker exec exited with ${code}`));
-    });
-    child.stdin.on("error", () => undefined);
-    child.stdin.end(stdin);
-  });
+  try {
+    const { stdout } = await run(
+      "docker",
+      ["exec", "-i", containerId, "node", "-e", script, "--", ...args],
+      {
+        stdin,
+        timeoutMs: options.timeoutMs ?? CONTAINER_EVIDENCE_TIMEOUT_MS,
+        maxOutputBytes: MAX_EVIDENCE_OUTPUT_BYTES,
+      },
+    );
+    return stdout;
+  } catch (error) {
+    if (!(error instanceof CommandFailedError)) throw error;
+    if (error.timedOut) throw new Error("Container evidence script timed out");
+    if (error.outputLimitExceeded) throw new Error("Container evidence script wrote too much");
+    const message = error.stderr.split("\n", 1)[0]?.trim().slice(0, 300);
+    if (message) throw new Error(message);
+    throw error.exitCode === null ? error : new Error(`docker exec exited with ${error.exitCode}`);
+  }
 }
 
 /** False when a component is missing; throws on a link or a non-directory parent. */

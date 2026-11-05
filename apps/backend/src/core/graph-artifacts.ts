@@ -44,14 +44,11 @@ import {
   type GraphTypeDefinition,
   type GraphTypeValidationContext,
 } from "@orkestrator/protocol/graphs/types";
-import {
-  CONTAINER_PINNED_ATTACHMENT_REMOVE,
-  CONTAINER_PINNED_ATTACHMENT_WRITE,
-} from "./commands-files.js";
+import { CONTAINER_PINNED_ATTACHMENT_REMOVE } from "./commands-files.js";
 import {
   createGitEnvironmentCommandRunner,
   ensureWorkspaceArtifactIsGitExcluded,
-  waitForContainerReviewPackageWrite,
+  writeContainerReviewPackage,
   type EnvironmentCommandRunner,
 } from "./commands-review.js";
 import type { EnvironmentMutationFence } from "./environment-replacement-fence.js";
@@ -63,7 +60,7 @@ import {
   hashEnvironmentWorkspaceFile,
   type WorkspaceFileHashFailure,
 } from "./review-validation-artifacts.js";
-import { spawnCommand } from "./shell.js";
+import { runCommand } from "./shell.js";
 import {
   graphStorageHash,
   type GraphArtifactUsage,
@@ -124,7 +121,7 @@ export interface GraphArtifactStoreDependencies {
     fence: Pick<EnvironmentMutationFence, "beginMutation">,
   ) => EnvironmentCommandRunner;
   /** Spawns the in-container writer (`docker exec -i … node -e …`). */
-  spawn?: typeof spawnCommand;
+  run?: typeof runCommand;
   writeTimeoutMs?: number;
   now?: () => Date;
 }
@@ -146,7 +143,7 @@ const MAX_GRAPH_FILE_PERMITS = 512;
 
 export class GraphArtifactStore {
   private readonly createRunner: NonNullable<GraphArtifactStoreDependencies["createRunner"]>;
-  private readonly spawn: typeof spawnCommand;
+  private readonly run: typeof runCommand;
   private readonly now: () => Date;
   /**
    * Sealed-file verification permits (item 301), the graph form of Multi
@@ -167,7 +164,7 @@ export class GraphArtifactStore {
 
   constructor(private readonly dependencies: GraphArtifactStoreDependencies) {
     this.createRunner = dependencies.createRunner ?? createGitEnvironmentCommandRunner;
-    this.spawn = dependencies.spawn ?? spawnCommand;
+    this.run = dependencies.run ?? runCommand;
     this.now = dependencies.now ?? (() => new Date());
   }
 
@@ -405,22 +402,14 @@ export class GraphArtifactStore {
     }
     const release = this.dependencies.fence.beginMutation(environment.id);
     try {
-      const child = this.spawn("docker", [
-        "exec",
-        "-i",
+      await writeContainerReviewPackage(
+        this.run,
         environment.containerId,
-        "node",
-        "-e",
-        CONTAINER_PINNED_ATTACHMENT_WRITE,
-        "/workspace",
         path.posix.dirname(filePath),
         path.posix.basename(filePath),
-        String(contents.byteLength),
-        "",
-        "overwrite",
-        String(0o444),
-      ]);
-      await waitForContainerReviewPackageWrite(child, contents, this.dependencies.writeTimeoutMs);
+        contents,
+        this.dependencies.writeTimeoutMs,
+      );
     } finally {
       release();
     }

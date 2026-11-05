@@ -29,6 +29,7 @@ import {
   reconcileCoordinatorLayout,
   splitCoordinatorPaneAtEdge,
 } from "@/lib/coordinator-pane-layout";
+import { dispatchResourceChange } from "@/lib/resource-sync";
 import { resetClientStateCapabilitiesForTests } from "@/lib/client-state-capabilities";
 import { resetUpstreamCheckForTests } from "@/lib/coordinator-upstream-check";
 import { resetNativeAgentSyncCapabilityForTests } from "@/hooks/useNativeAgentSession";
@@ -367,6 +368,109 @@ describe("CoordinatorPanel tab strip", () => {
     expect(screen.queryByRole("button", { name: "Change agent" }) === null).toBe(true);
   });
 
+  for (const failure of [null, "close", "create"] as const) {
+    test(`split replacement preserves its group and handles ${failure ?? "delayed success"}`, async () => {
+      ensuredSnapshot = withWorkspace({ conversations: [mainConversation, sideConversation] });
+      const single = reconcileCoordinatorLayout(null, ["conversation-1", "side-1"]);
+      const split = splitCoordinatorPaneAtEdge(
+        single,
+        single.activePaneId,
+        "right",
+        "side-1",
+        single.activePaneId,
+      );
+      const originalMainPane = collectCoordinatorLeaves(split.root)[0]!.id;
+      useCoordinatorPaneLayoutStore.getState().setLayout("project-1", split);
+      const closed = withWorkspace({
+        conversations: [
+          { ...mainConversation, closedAt: new Date(1).toISOString() },
+          sideConversation,
+        ],
+        selectedConversationId: "side-1",
+      });
+      let resolveCreate!: (snapshot: CoordinatorSnapshot) => void;
+      let rejectCreate!: (cause: Error) => void;
+      const pendingCreate = new Promise<CoordinatorSnapshot>((resolve, reject) => {
+        resolveCreate = resolve;
+        rejectCreate = reject;
+      });
+      closeConversation.mockImplementation(async () => {
+        if (failure === "close") throw new Error("close rejected");
+        return closed;
+      });
+      createConversation.mockImplementation(() => pendingCreate);
+      render(<CoordinatorPanel projectId="project-1" />);
+      await screen.findByRole("tab", { name: "Coordinator, main, Codex" });
+      fireEvent.click(screen.getByRole("button", { name: "Change agent" }));
+      fireEvent.click(
+        within(await screen.findByRole("alertdialog")).getByRole("button", {
+          name: "Change agent",
+        }),
+      );
+      if (failure === "close") {
+        await screen.findByText("close rejected");
+        expect(createConversation).not.toHaveBeenCalled();
+        expect(screen.getByRole("tab", { name: "Coordinator, main, Codex" })).toBeTruthy();
+        expect(collectCoordinatorLeaves(storedLayout().root)).toHaveLength(2);
+        return;
+      }
+      await waitFor(() => expect(createConversation).toHaveBeenCalledTimes(1));
+      // All shell close actions share the conversation busy gate.
+      expect(screen.queryByRole("button", { name: "Close Side 1" })).toBeNull();
+      expect(screen.queryByRole("button", { name: /^Close Coordinator\./ })).toBeNull();
+      expect(collectCoordinatorLeaves(storedLayout().root)).toHaveLength(2);
+      // The background view can publish the successful close before the
+      // delayed creation response. Its reconciliation must retain the slot.
+      const reads = getCoordinatorView.mock.calls.length;
+      await act(async () => {
+        ensuredSnapshot = closed;
+        dispatchResourceChange({
+          resource: "coordinator",
+          id: "project-1",
+          projectId: "project-1",
+          revision: 2,
+        });
+      });
+      await waitFor(() => expect(getCoordinatorView.mock.calls.length).toBeGreaterThan(reads));
+      await waitFor(() =>
+        expect(screen.queryByRole("tab", { name: "Coordinator, main, Codex" })).toBeNull(),
+      );
+      expect(collectCoordinatorLeaves(storedLayout().root)).toHaveLength(2);
+      if (failure === "create") {
+        ensuredSnapshot = closed;
+        await act(async () => rejectCreate(new Error("create rejected")));
+        await screen.findByText("create rejected");
+        expect(screen.queryByRole("tab", { name: "Coordinator, main, Codex" })).toBeNull();
+        expect(screen.getByRole("tab", { name: "Side 1, Codex" })).toBeTruthy();
+        return;
+      }
+      const created = withWorkspace({
+        conversations: [
+          ...closed.workspace.conversations,
+          {
+            ...mainConversation,
+            id: "main-2",
+            tabId: "main-2",
+            agent: undefined,
+          },
+        ],
+        selectedConversationId: "main-2",
+      });
+      ensuredSnapshot = created;
+      await act(async () => resolveCreate(created));
+      await screen.findByRole("tab", { name: "Coordinator, main, no agent chosen yet" });
+      await waitFor(() => {
+        const leaves = collectCoordinatorLeaves(storedLayout().root);
+        expect(leaves).toHaveLength(2);
+        expect(leaves.find((pane) => pane.id === originalMainPane)!.conversationIds).toEqual([
+          "main-2",
+        ]);
+        expect(storedLayout().activePaneId).toBe(originalMainPane);
+      });
+      expect(screen.getByRole("button", { name: "Close Side 1" })).toBeTruthy();
+    });
+  }
+
   test("closing the main explains Change agent only when there is an agent to change", async () => {
     ensuredSnapshot = withWorkspace({ conversations: [mainConversation, sideConversation] });
     const assigned = render(<CoordinatorPanel projectId="project-1" />);
@@ -407,7 +511,7 @@ describe("CoordinatorPanel tab strip", () => {
     await waitFor(() => expect(screen.queryByRole("menu") === null).toBe(true));
 
     const moved = screen.getByRole("tab", { name: "Side 1, Codex" });
-    act(() => moved.focus());
+    await waitFor(() => expect(document.activeElement).toBe(moved));
     fireEvent.keyDown(moved, { key: "F10", shiftKey: true });
     menu = await screen.findByRole("menu");
     // A lone tab cannot open a group of its own.
@@ -422,6 +526,10 @@ describe("CoordinatorPanel tab strip", () => {
       "conversation-1",
       "side-1",
     ]);
+
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByRole("tab", { name: "Side 1, Codex" })),
+    );
 
     // Right-click opens the same menu, with Change agent on the main.
     fireEvent.contextMenu(screen.getByRole("tab", { name: "Coordinator, main, Codex" }));

@@ -485,10 +485,13 @@ A conversation's provider is fixed once it has a session, so changing the
 coordinator's agent means a new main conversation. **Change agent**, a button
 on the assigned main tab and an item in its tab menu, does that after a
 confirmation: it closes the main, then opens a fresh, unassigned main in the
-same tab group (`createConversation` with no main open), whose composer offers
+same tab group and tab position (`createConversation` with no main open), whose composer offers
 every qualified platform. If agent mail arrives before the user picks one, that
 new main is given the default agent as described below. Once side agents are
 open, the main tab shows a **Main** label, also in its accessible name.
+The renderer retains the replacement slot while creation is pending; if creation
+fails after a successful close, it publishes the closed snapshot and reports the
+error. Tab close actions are unavailable while a conversation action is pending.
 
 Closing the main tab without Change agent asks first, and nothing reopens it on
 its own until it is needed: the next agent mail to the coordinator, or a worker's

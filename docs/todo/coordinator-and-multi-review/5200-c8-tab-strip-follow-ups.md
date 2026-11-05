@@ -7,7 +7,7 @@ Analysed 2026-11-05 against main at 69a3b4ca5, with coordinator batch C8 (Tab st
 ### Tasks
 
 1. **Give the environment tab strip the same tab semantics**: the follow-up the C8 part `0230` decision left for later. Status: open.
-2. **Place a new main where the old one was**: after Change agent, the new main joins the end of its group. Status: open.
+2. **Place a new main where the old one was**: the C8 review repair now restores the replacement to the original group and index. Status: done.
 
 ### 1. Give the environment tab strip the same tab semantics
 
@@ -47,6 +47,17 @@ Analysed 2026-11-05 against main at 69a3b4ca5, with coordinator batch C8 (Tab st
   - **Leave it at the end.**
     - Pros: no code.
     - Cons: the main moves every time its agent changes.
+
+## Assumptions and decisions
+
+### Task 2: Preserve the replacement slot
+
+The C8 review repair retains the pre-close layout and replaces the old main ID
+in that layout after creation succeeds. This preserves the group even when it
+held only the main, and preserves its tab index. Close rejection leaves the old
+main visible; creation rejection publishes the successful close instead of
+leaving a closed conversation visible. Regression tests cover delayed creation
+in split groups and both rejection paths.
 
 ## Related
 

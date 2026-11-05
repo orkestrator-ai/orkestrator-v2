@@ -295,7 +295,13 @@ function PaneLeafView({ pane }: { pane: CoordinatorPaneLeaf }) {
       }}
       onFocusCapture={(event) => {
         if (!focusesPane(event.currentTarget, event.target)) return;
-        if (!event.currentTarget.contains(event.relatedTarget)) onFocusPane(pane.id);
+        if (
+          !event.currentTarget.contains(event.relatedTarget) ||
+          (event.relatedTarget instanceof Element &&
+            event.relatedTarget.closest("[data-coordinator-tab-strip]"))
+        ) {
+          onFocusPane(pane.id);
+        }
       }}
       onClick={() => onFocusPane(pane.id)}
     >
@@ -304,13 +310,18 @@ function PaneLeafView({ pane }: { pane: CoordinatorPaneLeaf }) {
         data-coordinator-tab-strip=""
         className={cn(TAB_STRIP_CLASS, "shrink-0 pr-2", isOver && "bg-primary/10")}
       >
+        {/* Own only tab controls, leaving adjacent action buttons outside
+            the tablist's accessibility ownership without changing the row. */}
         <div
           role="tablist"
           aria-label="Coordinator conversations"
           aria-orientation="horizontal"
-          className="flex shrink-0 items-center gap-0.5 self-stretch"
-          onKeyDown={moveTabFocus}
-        >
+          aria-owns={pane.conversationIds
+            .map((id) => coordinatorTabElementId(pane.id, id))
+            .join(" ")}
+          className="sr-only"
+        />
+        <div className="flex shrink-0 items-center gap-0.5 self-stretch" onKeyDown={moveTabFocus}>
           <SortableContext items={sortableIds} strategy={horizontalListSortingStrategy}>
             {pane.conversationIds.map((id) => renderTab(id, pane, isFocused))}
           </SortableContext>

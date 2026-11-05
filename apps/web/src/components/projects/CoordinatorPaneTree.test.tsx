@@ -90,7 +90,14 @@ function renderTree(layout: CoordinatorPaneLayout, onFocusPane = mock((_paneId: 
       onFocusPane={onFocusPane}
       conversationLabel={(id) => id}
       renderTab={(id, pane) => (
-        <SortableCoordinatorTab key={id} conversationId={id} paneId={pane.id} isActive={false}>
+        <SortableCoordinatorTab
+          key={id}
+          conversationId={id}
+          paneId={pane.id}
+          isActive={false}
+          onClose={() => {}}
+          closeLabel={`Close ${id}`}
+        >
           <button
             type="button"
             role="tab"
@@ -99,6 +106,7 @@ function renderTree(layout: CoordinatorPaneLayout, onFocusPane = mock((_paneId: 
           >
             {id}
           </button>
+          <button type="button">Change agent</button>
         </SortableCoordinatorTab>
       )}
       renderStripActions={() => <button type="button">New</button>}
@@ -113,8 +121,19 @@ test("each group is a labelled tab list whose panel is labelled by its front tab
   renderTree(layout);
   const lists = screen.getAllByRole("tablist", { name: "Coordinator conversations" });
   expect(lists).toHaveLength(2);
-  // Only tabs in the list; the strip's own actions sit beside it.
-  expect(lists[0]!.querySelectorAll("button:not([role=tab])")).toHaveLength(0);
+  // Realistic shells contain both close and change-agent actions. Only
+  // the role=tab controls are owned by each tablist through ID references.
+  expect(screen.getAllByRole("button", { name: "Change agent" }).length).toBeGreaterThan(0);
+  expect(screen.getAllByRole("button", { name: /^Close / }).length).toBeGreaterThan(0);
+  for (const list of lists) {
+    expect(list.querySelectorAll("button")).toHaveLength(0);
+    const owned = list
+      .getAttribute("aria-owns")!
+      .split(" ")
+      .map((id) => document.getElementById(id)!);
+    expect(owned.length).toBeGreaterThan(0);
+    expect(owned.every((element) => element.getAttribute("role") === "tab")).toBe(true);
+  }
   const [left] = collectCoordinatorLeaves(layout.root);
   const panel = screen.getAllByRole("tabpanel")[0]!;
   expect(panel.getAttribute("aria-labelledby")).toBe(
@@ -185,4 +204,15 @@ test("every finished drag focuses a group, since a drag does not click", () => {
   )(layout);
   expect(refused.activePaneId).toBe(right!.id);
   expect(collectCoordinatorLeaves(refused.root)).toHaveLength(2);
+});
+
+test("entering content from its own tab strip focuses the group", () => {
+  const layout = twoGroups();
+  const onFocusPane = renderTree(layout);
+  const [left] = collectCoordinatorLeaves(layout.root);
+  const tab = screen.getAllByRole("tab")[0]!;
+  fireEvent.focus(screen.getByRole("button", { name: `Content ${left!.id}` }), {
+    relatedTarget: tab,
+  });
+  expect(onFocusPane).toHaveBeenCalledWith(left!.id);
 });

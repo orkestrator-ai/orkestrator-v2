@@ -26,6 +26,15 @@ import { coordinatorTabElementId, SortableCoordinatorTab } from "./CoordinatorPa
 const TAB_ACTION_CLASS =
   "flex h-7 w-7 items-center justify-center text-muted-foreground opacity-100 transition-opacity hover:text-foreground focus-hairline disabled:pointer-events-none disabled:opacity-40 md:h-auto md:w-auto md:hover-fine:opacity-0 md:hover-fine:group-focus-within:opacity-100 md:hover-fine:group-hover:opacity-100 md:hover-fine:focus-visible:opacity-100";
 
+/** A keyboard move owns focus until the user leaves its destination tab. */
+function focusMovedTab(elementId: string) {
+  const tab = document.getElementById(elementId);
+  if (!tab) return;
+  tab.setAttribute("data-preserve-focus", "");
+  tab.addEventListener("blur", () => tab.removeAttribute("data-preserve-focus"), { once: true });
+  tab.focus();
+}
+
 interface CoordinatorConversationTabProps {
   conversation: CoordinatorConversation;
   pane: CoordinatorPaneLeaf;
@@ -63,6 +72,7 @@ export function CoordinatorConversationTab({
 }: CoordinatorConversationTabProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const tabRef = useRef<HTMLButtonElement>(null);
+  const movedTabId = useRef<string | null>(null);
   const isMain = item.role === "main";
   const isActive = pane.activeConversationId === item.id;
   const showMain = isMain && markMain;
@@ -81,7 +91,28 @@ export function CoordinatorConversationTab({
   const openMenu = (event: MouseEvent | KeyboardEvent) => {
     event.preventDefault();
     event.stopPropagation();
+    movedTabId.current = null;
     setMenuOpen(true);
+  };
+
+  const moveTab = (change: (current: CoordinatorPaneLayout) => CoordinatorPaneLayout) => {
+    let elementId: string | null = null;
+    onLayoutChange((current) => {
+      const next = change(current);
+      const destination = collectCoordinatorLeaves(next.root).find((group) =>
+        group.conversationIds.includes(item.id),
+      );
+      elementId = destination ? coordinatorTabElementId(destination.id, item.id) : null;
+      movedTabId.current = elementId;
+      return next;
+    });
+    // The split creates its ID once, in the applied layout change. Focus
+    // the mounted destination after the source menu has finished closing.
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (elementId) focusMovedTab(elementId);
+      });
+    });
   };
 
   return (
@@ -102,7 +133,7 @@ export function CoordinatorConversationTab({
           ? `Close ${item.title}. The next message for the coordinator starts a new one with the default agent.`
           : `Close ${item.title}`
       }
-      onClose={onClose}
+      onClose={conversationBusy ? undefined : onClose}
     >
       <button
         ref={tabRef}
@@ -176,7 +207,14 @@ export function CoordinatorConversationTab({
           onPointerDown={(event) => event.stopPropagation()}
           onCloseAutoFocus={(event) => {
             event.preventDefault();
-            tabRef.current?.focus();
+            if (movedTabId.current) {
+              const elementId = movedTabId.current;
+              requestAnimationFrame(() => {
+                requestAnimationFrame(() => focusMovedTab(elementId));
+              });
+            } else {
+              tabRef.current?.focus();
+            }
           }}
         >
           {isMain ? (
@@ -193,7 +231,7 @@ export function CoordinatorConversationTab({
           <DropdownMenuItem
             disabled={!canSplit}
             onSelect={() =>
-              onLayoutChange((current) =>
+              moveTab((current) =>
                 splitCoordinatorPaneAtEdge(current, pane.id, "right", item.id, pane.id),
               )
             }
@@ -205,7 +243,7 @@ export function CoordinatorConversationTab({
               <DropdownMenuItem
                 key={group.id}
                 onSelect={() =>
-                  onLayoutChange((current) =>
+                  moveTab((current) =>
                     moveCoordinatorConversation(current, pane.id, group.id, item.id),
                   )
                 }

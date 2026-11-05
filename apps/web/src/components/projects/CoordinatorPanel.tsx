@@ -1,3 +1,4 @@
+import { flushSync } from "react-dom";
 import { HumanPromptBanner } from "@/components/chat/HumanPromptBanner";
 import { useHumanPrompts } from "@/hooks/useUserCommands";
 import { useEffect, useMemo, useState } from "react";
@@ -14,6 +15,7 @@ import { CoordinatorConversationPane } from "./CoordinatorConversationPane";
 import { CoordinatorToolbar } from "./CoordinatorToolbar";
 import { CoordinatorWorkPanel } from "./CoordinatorWorkPanel";
 import { openCoordinatorWorkTarget } from "@/lib/coordinator-work-navigation";
+import { useCoordinatorPaneLayoutStore } from "@/stores/coordinatorPaneLayoutStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import { CoordinatorBanner } from "./CoordinatorPanelNotices";
@@ -80,6 +82,7 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
     paneId: string;
     changeAgent: boolean;
   } | null>(null);
+  const [replacement, setReplacement] = useState<{ projectId: string; id: string } | null>(null);
   const error = actionError ?? loadError;
 
   const { runGit, prepareSwitch, confirmUpstreamMerge } = useCoordinatorGitActions({
@@ -100,7 +103,13 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
       ),
     [snapshot],
   );
-  const conversationIds = useMemo(() => conversations.map((item) => item.id), [conversations]);
+  const conversationIds = useMemo(() => {
+    const ids = conversations.map((item) => item.id);
+    if (replacement?.projectId === projectId && !ids.includes(replacement.id)) {
+      ids.push(replacement.id);
+    }
+    return ids;
+  }, [conversations, projectId, replacement]);
   const {
     layout,
     backendSelectedId,
@@ -332,17 +341,49 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
     void runAction(
       "conversation",
       async () => {
-        if (replacingMain) {
-          setSnapshot(await backend.closeCoordinatorConversation(projectId, replacingMain));
+        const replacementLayout = replacingMain && layout ? structuredClone(layout) : null;
+        let closedSnapshot = null;
+        let createdSnapshot;
+        setReplacement(replacingMain ? { projectId, id: replacingMain } : null);
+        try {
+          closedSnapshot = replacingMain
+            ? await backend.closeCoordinatorConversation(projectId, replacingMain)
+            : null;
+          createdSnapshot = await backend.createCoordinatorConversation(
+            projectId,
+            undefined,
+            closeUnused,
+          );
+        } catch (cause) {
+          // Closing succeeded even though creation failed; never leave a
+          // closed conversation visible as though it were still usable.
+          if (closedSnapshot) setSnapshot(closedSnapshot);
+          setReplacement(null);
+          throw cause;
         }
-        const createdSnapshot = await backend.createCoordinatorConversation(
-          projectId,
-          undefined,
-          closeUnused,
-        );
-        setSnapshot(createdSnapshot);
+        // Publish the open set before the external layout store: a store
+        // notification can synchronously render and reconcile the new ID.
+        flushSync(() => {
+          setSnapshot(createdSnapshot);
+          setReplacement(null);
+        });
+        const replacementId = createdSnapshot.workspace.selectedConversationId;
+        if (replacementLayout && replacementId) {
+          // Restore from the pre-close layout even if a background snapshot
+          // reconciled the empty group while creation was pending.
+          for (const pane of collectCoordinatorLeaves(replacementLayout.root)) {
+            pane.conversationIds = pane.conversationIds.map((id) =>
+              id === replacingMain ? replacementId : id,
+            );
+            if (pane.conversationIds.includes(replacementId)) {
+              pane.activeConversationId = replacementId;
+              replacementLayout.activePaneId = pane.id;
+            }
+          }
+          useCoordinatorPaneLayoutStore.getState().setLayout(projectId, replacementLayout);
+        }
         const createdId = createdSnapshot.workspace.selectedConversationId;
-        if (createdId && selectionPending()) selectConversation(createdId);
+        if (createdId && (replacingMain || selectionPending())) selectConversation(createdId);
       },
       {
         failureMessage: replacingMain

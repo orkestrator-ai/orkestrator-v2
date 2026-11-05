@@ -108,12 +108,14 @@ function ExpiryNotice({
       </p>
       {onKeepRaisedChange ? (
         <div className="flex items-center justify-between gap-4">
-          <Label htmlFor="log-detail-keep-raised" className="text-sm">
-            Keep raised detail on
-            <span className="mt-0.5 block text-xs font-normal text-muted-foreground">
+          <div className="min-w-0">
+            <Label htmlFor="log-detail-keep-raised" className="text-sm">
+              Keep raised detail on
+            </Label>
+            <p className="mt-0.5 text-xs text-muted-foreground">
               For an investigation that takes more than a day.
-            </span>
-          </Label>
+            </p>
+          </div>
           <Switch
             id="log-detail-keep-raised"
             checked={keepRaised}

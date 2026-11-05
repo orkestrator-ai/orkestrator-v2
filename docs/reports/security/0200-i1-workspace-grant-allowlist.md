@@ -34,3 +34,17 @@ Analysed 2026-11-03 against `main` at `a2bba9d8`.
 
 - [Security report, §6 Informational](../2-26-10-27-security.md#6-informational) (I1)
 - `docs/architecture/federation.md`
+
+## Outcome
+
+Checked back on 2026-11-05 against `main` at `e1f4c875` (base of this work), implemented in commit `13d153e02`.
+
+| Item in this file | Outcome | Where |
+| --- | --- | --- |
+| Task 1: close the gap between the grant's guarantee and its deny-list | Done. Re-check: every finding still held at `e1f4c875` (`gateway-auth.ts` passes `refuseCommand: isWorkspaceExcludedCommand` at `:503-504`, the relay checks the same list at `node-relay.ts:144`, and none of the four named commands was on either list). The recommended option was taken: grants and the relay now also refuse `WORKSPACE_ADMINISTRATION_COMMANDS`, and the comment says what a grant can do, terminals included | `apps/backend/src/core/nodes/workspace-grant-scope.ts`, `isWorkspaceExcludedCommand` (`node-routing.ts`), the comment in `client-grants.ts`; tests in `apps/backend/tests/gateway-workspace-grant-scope.test.ts` (gateway and relay paths) and `apps/backend/src/core/nodes/workspace-grant-scope.test.ts` |
+| Investigation: `update_global_config` reachable through a grant | Done: refused through a grant and the relay. A write that changes nothing is answered with the current settings, because realms through v2.35.1-beta send one when they save a model favourite; counted as `workspace-grant.config-echo` and registered in `version-compatibility.md` | `isGlobalConfigEcho` (`workspace-grant-scope.ts`), `GatewayHandlers.handleInvoke` (`gateway-handlers.ts`), `answerConfigEcho` (`node-relay.ts`); same tests |
+| Investigation: `request_host_update` reachable through a grant | Done: refused with every host update and dependency command (`request_host_update_check`, `cancel_host_update`, `start_host_toolchain_repair`, `start_host_image_update`, `set_host_update_channel`, `set_host_gh_channel`) | `WORKSPACE_ADMINISTRATION_COMMANDS`; same tests |
+| Investigation: `start_local_terminal_session` and `local_terminal_write` reachable through a grant | No change needed: terminals are within a grant's stated purpose and stay allowed, now asserted | `a workspace keeps its terminals…` in `workspace-grant-scope.test.ts`; `still runs terminals` and `still relays terminals` in `gateway-workspace-grant-scope.test.ts` |
+| Decision: allowlist or deny-list | Done: deny-list (recommended), with the fail-open cost stated in the module comment and `command-nodes.md` | `workspace-grant-scope.ts`, `docs/architecture/command-nodes.md` |
+| Open question: which other registered commands count as administration | Done: a pass over the registry and the renderer's callers added `save_config`, `patch_global_config`, `update_notification_sound_settings`, the four credential setters, `update_backend_profile`, `update_worktree_locations`, `update_preview_settings`, `cleanup_logs` and `graph_capability_ceiling_set`; all are called only from Settings or window-only UI. Agent sign-in, accounts, repository settings and permission rules stay open: a realm's agent popover and dialogs use them | `WORKSPACE_ADMINISTRATION_COMMANDS`; the test that every entry is registered and still node-routable |
+| Live evidence on two machines, and with an older realm | Moved to a to-do | [5740](../../todo/cross-cutting/5740-workspace-grant-scope-live-evidence.md) |

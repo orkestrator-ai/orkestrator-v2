@@ -401,6 +401,7 @@ along. The `source` a relay adds is kept only as a known provider plus an enviro
 | `storage` | `snapshot.integrity-failed` | none | A snapshot failed its integrity check. |
 | `event-loop` | `stalled` | `lagMs`, `intervalMs` | A stall of 10 seconds or more: only at `error`, not the routine `warn`. |
 | `desktop` | `main-thread.stalled` | `lagMs`, `intervalMs` | The same, for the main process. |
+| `backend` | `previous-run` | `outcome`, `ranForMs`, `lastSeenAgoMs` | This start read how the previous run ended, from the [health summary](#health-summary-and-the-clean-exit-marker). |
 | `logging` | `essential.started` | `owner` | This process began writing the file. |
 | `logging` | `essential.stopped` | `owner` | It stopped, in an orderly exit. |
 | `logging` | `entries.dropped` | `entries`, `bytes`, `reason` | Entries were lost; see below. |

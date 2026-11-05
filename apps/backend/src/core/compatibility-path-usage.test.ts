@@ -37,6 +37,47 @@ function clock(start = Date.parse("2026-10-24T10:00:00.000Z")) {
 }
 
 describe("CompatibilityPathUsage", () => {
+  test("peek answers from memory after one first read, so a poll writes nothing", () => {
+    let merges = 0;
+    let writes = 0;
+    const stored = {
+      count: 5,
+      firstSeenAt: "2026-01-01T00:00:00.000Z",
+      lastSeenAt: "2026-01-02T00:00:00.000Z",
+    };
+    const usage = new CompatibilityPathUsage();
+    usage.attach({
+      merge(pending) {
+        merges += 1;
+        if (pending.size > 0) writes += 1;
+        return { version: 1, paths: { "history.joined-v1-page": stored } };
+      },
+    });
+    expect(usage.peek().paths["history.joined-v1-page"]?.count).toBe(5);
+    expect(merges).toBe(1);
+
+    usage.record("history.joined-v1-page");
+    usage.record("bridge-close.upgrade-required");
+    for (let index = 0; index < 3; index += 1) {
+      const { paths } = usage.peek();
+      expect(paths["history.joined-v1-page"]?.count).toBe(6);
+      expect(paths["bridge-close.upgrade-required"]?.count).toBe(1);
+    }
+    expect(merges).toBe(1);
+    expect(writes).toBe(0);
+
+    // The durable read still goes through the sink.
+    usage.snapshot();
+    expect(writes).toBe(1);
+    usage.detach(usage["sink"]!);
+  });
+
+  test("peek without a sink is the pending counts", () => {
+    const usage = new CompatibilityPathUsage();
+    usage.record("preview.tunnel-v1");
+    expect(usage.peek().paths["preview.tunnel-v1"]?.count).toBe(1);
+  });
+
   test("counts each path with its first and last use, without a sink", () => {
     const time = clock();
     const usage = new CompatibilityPathUsage(time.now);

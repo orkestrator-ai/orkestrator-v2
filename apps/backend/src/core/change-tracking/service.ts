@@ -51,7 +51,7 @@ import { ChangeTrackingPolicyRegistry, type ChangeTrackingPolicy } from "./polic
 import { ChangeProjectionService } from "./projection-service.js";
 import { ChangeResourcePublisher } from "./publisher.js";
 import { ChangeRestoreService } from "./restore.js";
-import { ChangeRetentionService } from "./retention.js";
+import { ChangeRetentionService, type RetentionReport } from "./retention.js";
 import {
   TurnBoundaryService,
   turnIdFor,
@@ -59,6 +59,7 @@ import {
   type TurnStartResult,
 } from "./turn-boundaries.js";
 import { RemoteSlots, WorktreeRegistry, type WorktreeTarget } from "./worktree-owner.js";
+import type { DatabaseRetentionSummary } from "@orkestrator/protocol/backend-diagnostics";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("change-tracking");
@@ -134,6 +135,8 @@ export class ChangeTrackingService {
   private readonly unsupported = new Map<string, number>();
   private readonly turnFinalizations = new Map<string, Promise<string[]>>();
   private retentionTimer: ReturnType<typeof setInterval> | null = null;
+  private retentionOutcome: { at: number; report: RetentionReport | null } | null = null;
+  private retentionFailures = 0;
   private firstRetentionTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly closeListeners: Array<() => void> = [];
   private readonly startListeners: Array<() => void> = [];
@@ -245,7 +248,7 @@ export class ChangeTrackingService {
     for (const listener of this.startListeners.splice(0)) listener();
     if (!this.options.manualScheduling) {
       const retain = () => {
-        void this.retention.run().catch(() => undefined);
+        void this.runRetentionPass();
         this.registry.sweepIdle();
       };
       this.firstRetentionTimer = setTimeout(retain, FIRST_RETENTION_DELAY_MS);
@@ -1095,6 +1098,34 @@ export class ChangeTrackingService {
     }
     if (imported > 0) this.publisher.drainOutbox();
     return imported;
+  }
+
+  /** One scheduled pass, whose report is kept for the database summary. Never rejects. */
+  async runRetentionPass(): Promise<void> {
+    try {
+      this.retentionOutcome = { at: Date.now(), report: await this.retention.run() };
+    } catch (error) {
+      this.retentionFailures += 1;
+      this.retentionOutcome = { at: Date.now(), report: null };
+      log.warn("retention.failed", { error: formatLogError(error, { message: false }) });
+    }
+  }
+
+  /** The ledger's connection, for the database summary. */
+  ledgerDatabase(): StorageDatabase {
+    return this.options.database();
+  }
+
+  /** The last scheduled retention pass; passes run for a backlog are not counted. */
+  lastRetention(): DatabaseRetentionSummary | null {
+    const outcome = this.retentionOutcome;
+    if (!outcome) return null;
+    return {
+      at: new Date(outcome.at).toISOString(),
+      outcome: outcome.report ? "completed" : "failed",
+      failedPasses: this.retentionFailures,
+      report: outcome.report,
+    };
   }
 
   /** Content-free diagnostics for operators. */

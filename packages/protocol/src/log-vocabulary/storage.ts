@@ -52,6 +52,8 @@ export const STORAGE_LOG_AREAS = defineLogAreas({
       "legacy-json.moved":
         "JSON store files written after the SQLite migration were archived, not imported.",
       "legacy-json.archive-failed": "Imported JSON store files could not be archived.",
+      "lease.timed-out":
+        "A waiter gave up on a lease; `lease` and `family` name it, `holderAgeMs` is the time since its holder's last heartbeat (null when the holder had just gone), `waitedMs` how long the waiter waited.",
       "lease.heartbeat-failed":
         "A held lease's heartbeat failed, which shortens the lease; the next one retries.",
       "scrub.vacuum-failed":
@@ -63,6 +65,8 @@ export const STORAGE_LOG_AREAS = defineLogAreas({
         "Refreshing the query planner's statistics failed; queries still run and the next check retries.",
       "ledger.moved":
         "The change-tracking ledger was moved out of the main database into its own file; `rows` and `durationMs` say how much and how long.",
+      "snapshot.top-tables-failed":
+        "The sampled table sizes from a finished snapshot could not be saved; the snapshot stands and the next one retries.",
       "snapshot.ledger-skipped":
         "The daily change-tracking ledger snapshot was skipped because the disk or the snapshot budget lacks room; `retryAt` says when it tries again.",
       "snapshot.ledger-failed":

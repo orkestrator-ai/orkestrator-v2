@@ -1,0 +1,153 @@
+/**
+ * The database figures `/__orkestrator/metrics`, `get_database_stats` and the
+ * diagnostics bundle share, and the bundle's plan and manifest. Numbers, fixed
+ * labels and table names only: never a key, a path or a row's value.
+ */
+
+/** One SQLite file. The page figures are `null` when no connection could read them. */
+export interface DatabaseFileSummary {
+  fileBytes: number;
+  walBytes: number;
+  pageBytes: number | null;
+  pageCount: number | null;
+  freelistPages: number | null;
+  /** Space inside the file that holds nothing and is reused or released later. */
+  freelistBytes: number | null;
+}
+
+export interface DatabaseBackupKindSummary {
+  count: number;
+  bytes: number;
+}
+
+export interface DatabaseBackupSummary {
+  count: number;
+  bytes: number;
+  newestAt: string | null;
+  kinds: Record<
+    "hourly" | "pre-migration" | "ledger" | "ledger-pre-migration",
+    DatabaseBackupKindSummary
+  >;
+}
+
+/** The last change-tracking retention pass this process ran. */
+export interface DatabaseRetentionSummary {
+  at: string;
+  outcome: "completed" | "failed";
+  /** Passes that failed since this process started. */
+  failedPasses: number;
+  report: {
+    prunedMeasurements: number;
+    prunedMeasurementFiles: number;
+    expiredReferences: number;
+    releasedForQuota: number;
+    deletedSnapshots: number;
+    removedObjects: number;
+    removedBytes: number;
+    storedBytes: number;
+    hardLimited: boolean;
+  } | null;
+}
+
+export interface DatabaseTopTable {
+  /** A table or index name from the schema. */
+  name: string;
+  bytes: number;
+}
+
+/** Sampled in the backup child from a finished copy, so as old as that copy. */
+export interface DatabaseTopTables {
+  takenAt: string;
+  tables: DatabaseTopTable[];
+}
+
+export interface DatabaseSummary {
+  generatedAt: string;
+  main: DatabaseFileSummary | null;
+  /** The change-tracking ledger's own file; `null` until it exists. */
+  ledger: DatabaseFileSummary | null;
+  backups: DatabaseBackupSummary;
+  retention: DatabaseRetentionSummary | null;
+  /** `null` until a copy has run, or where SQLite has no `dbstat`. */
+  topTables: { main: DatabaseTopTables | null; ledger: DatabaseTopTables | null };
+}
+
+/** Upper bounds in milliseconds; a wait past the last counts in the final bucket. */
+export const LEASE_WAIT_BUCKETS_MS = [1, 5, 25, 100, 500, 2_000, 10_000, 30_000] as const;
+
+export interface LeaseWaitFamilySnapshot {
+  acquired: number;
+  timedOut: number;
+  totalWaitMs: number;
+  maxWaitMs: number;
+  /** Per-bucket counts, one for each of {@link LEASE_WAIT_BUCKETS_MS} plus the overflow. */
+  buckets: number[];
+}
+
+export interface LeaseWaitSnapshot {
+  bucketsMs: readonly number[];
+  families: Record<string, LeaseWaitFamilySnapshot>;
+  /** Waits folded into `other` because the family table was full. */
+  overflowed: number;
+  /** Transactions that gave up with `SQLITE_BUSY` once `busy_timeout` ran out. */
+  transactionsBusy: number;
+}
+
+/** `get_database_stats`: the cached summary plus the live lease counters. */
+export interface DatabaseStats extends DatabaseSummary {
+  leaseWaits: LeaseWaitSnapshot;
+}
+
+export const DIAGNOSTICS_MANIFEST_SCHEMA_VERSION = 1;
+
+/** Says plainly what the pass does and does not establish. Shown wherever the manifest is. */
+export const DIAGNOSTICS_REDACTION_NOTICE =
+  "Redaction is a best-effort pass by pattern, not a proof: a credential or private text with no recognisable shape can survive it. Read the files before sharing this bundle. Nothing is uploaded; the bundle goes only where you save it.";
+
+/** The largest piece of a bundle one read returns; a plan is read piece by piece. */
+export const DIAGNOSTICS_CHUNK_BYTES = 256 * 1024;
+
+export interface DiagnosticsManifestEntry {
+  path: string;
+  bytes: number;
+  sha256: string;
+  description: string;
+  /** Pieces of text the redaction pass replaced in this file. */
+  redactions: number;
+}
+
+export interface DiagnosticsManifestAbsent {
+  name: string;
+  reason: string;
+}
+
+/** `manifest.json` in the archive, byte for byte what a plan reports. */
+export interface DiagnosticsManifest {
+  schemaVersion: typeof DIAGNOSTICS_MANIFEST_SCHEMA_VERSION;
+  createdAt: string;
+  appVersion: string;
+  platform: string;
+  arch: string;
+  bunVersion: string | null;
+  notice: string;
+  entries: DiagnosticsManifestEntry[];
+  absent: DiagnosticsManifestAbsent[];
+}
+
+/** One planned bundle: already built and held until it is read or expires. */
+export interface DiagnosticsBundlePlan {
+  planId: string;
+  fileName: string;
+  expiresAt: string;
+  archive: { bytes: number; sha256: string };
+  manifest: DiagnosticsManifest;
+}
+
+/** One piece of a planned bundle, in order. */
+export interface DiagnosticsBundleChunk {
+  planId: string;
+  offset: number;
+  /** Base64. */
+  data: string;
+  nextOffset: number | null;
+}

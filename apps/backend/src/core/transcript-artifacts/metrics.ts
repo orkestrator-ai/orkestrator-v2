@@ -8,8 +8,10 @@ const log = createLogger("transcript-artifacts");
  * Series names are fixed labels plus bounded enum values (kind, outcome,
  * error code). No ids, titles, sources, hashes or grants are ever recorded,
  * and the number of series is capped so a bug cannot grow memory without
- * bound. Operational logs use `logArtifactEvent`, which accepts only ids,
- * kinds, sizes, durations and reason codes.
+ * bound. Read through `get_artifact_metrics` and the diagnostics bundle. A failed
+ * operation also logs its reason code, so a deadline is not counted here too.
+ * Operational logs use `logArtifactEvent`, which accepts only ids, kinds, sizes,
+ * durations and reason codes.
  */
 const MAX_SERIES = 256;
 const LABEL = /^[a-z0-9_.:-]{1,64}$/;
@@ -20,7 +22,6 @@ export type ArtifactCounter =
   | "receipt_mismatches"
   | "publications"
   | "blocked_requests"
-  | "deadlines"
   | "worker_deaths"
   | "repairs"
   | "repair_budget_exhausted"

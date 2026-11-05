@@ -10,6 +10,7 @@ import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { leaseFamily, leaseLogName, leaseWaitMetrics } from "./storage-lease-metrics.js";
 
 const log = createLogger("storage");
 
@@ -463,7 +464,13 @@ export class StorageDatabase {
   }
 
   private runTransaction<T>(fn: () => T): T {
-    const result = this.db.transaction(fn).immediate();
+    let result: T;
+    try {
+      result = this.db.transaction(fn).immediate();
+    } catch (error) {
+      if ((error as { code?: unknown }).code === "SQLITE_BUSY") leaseWaitMetrics.transactionBusy();
+      throw error;
+    }
     if (result instanceof Promise) {
       throw new Error("Storage transactions must be synchronous");
     }
@@ -1141,6 +1148,16 @@ export class StorageDatabase {
     });
   }
 
+  /** The page figures of this file. Takes no write lock; a reader never waits on a writer. */
+  pageStats(): { pageBytes: number; pageCount: number; freelistPages: number } {
+    return {
+      pageBytes: (this.db.query("PRAGMA page_size").get() as { page_size: number }).page_size,
+      pageCount: (this.db.query("PRAGMA page_count").get() as { page_count: number }).page_count,
+      freelistPages: (this.db.query("PRAGMA freelist_count").get() as { freelist_count: number })
+        .freelist_count,
+    };
+  }
+
   /**
    * Returns up to `maxPages` free pages to the filesystem (with incremental
    * auto-vacuum; a no-op otherwise) and the number of free pages left (-1 on
@@ -1498,7 +1515,8 @@ export class StorageDatabase {
     const acquireTimeoutMs = options.acquireTimeoutMs ?? 20_000;
     const heartbeatMs = Math.max(1_000, Math.floor(staleMs / 3));
     const owner = randomUUID();
-    const deadline = Date.now() + acquireTimeoutMs;
+    const waitStartedAt = Date.now();
+    const deadline = waitStartedAt + acquireTimeoutMs;
     const claim = this.db.query(
       `INSERT INTO leases (name, owner, heartbeat_at) VALUES (?1, ?2, ?3)
        ON CONFLICT (name) DO UPDATE SET owner = excluded.owner, heartbeat_at = excluded.heartbeat_at
@@ -1514,8 +1532,14 @@ export class StorageDatabase {
         } | null;
         return row?.owner === owner;
       });
-      if (claimed) break;
-      if (Date.now() >= deadline) throw new Error(`Timed out waiting for ${description} lock`);
+      if (claimed) {
+        leaseWaitMetrics.acquired(name, Date.now() - waitStartedAt);
+        break;
+      }
+      if (Date.now() >= deadline) {
+        this.reportLeaseTimeout(name, Date.now() - waitStartedAt);
+        throw new Error(`Timed out waiting for ${description} lock`);
+      }
       await sleep(25);
     }
     const heartbeat = setInterval(() => {
@@ -1543,6 +1567,30 @@ export class StorageDatabase {
       if (this.closed) return;
       this.db.query("DELETE FROM leases WHERE name = ? AND owner = ?").run(name, owner);
     };
+  }
+
+  /**
+   * Names who is waiting on whom. Holder age is the time since the holder's last
+   * heartbeat, so a large one is a dead or stalled holder and a small one a live
+   * holder keeping the lease for longer than this waiter would wait.
+   */
+  private reportLeaseTimeout(name: string, waitedMs: number): void {
+    leaseWaitMetrics.timedOut(name, waitedMs);
+    let holderAgeMs: number | null = null;
+    try {
+      const holder = this.db.query("SELECT heartbeat_at FROM leases WHERE name = ?").get(name) as {
+        heartbeat_at: number;
+      } | null;
+      if (holder) holderAgeMs = Math.max(0, Date.now() - holder.heartbeat_at);
+    } catch {
+      // The age is detail: the timeout still gets its line.
+    }
+    log.warn("lease.timed-out", {
+      lease: leaseLogName(name),
+      family: leaseFamily(name),
+      holderAgeMs,
+      waitedMs,
+    });
   }
 }
 

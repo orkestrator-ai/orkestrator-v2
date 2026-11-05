@@ -80,6 +80,29 @@ export function registerSystemCommands(
     return compatibilityPathUsage.snapshot();
   });
   /**
+   * Database size, free pages, backups and retention of both databases, from
+   * the summary `/__orkestrator/metrics` reads, and lease waits per family.
+   */
+  register("get_database_stats", (args, context) => {
+    assertOnlyKeys(args, [], "arguments");
+    if (!context.diagnostics) throw new Error("Database figures are not available here.");
+    return context.diagnostics.databaseStats();
+  });
+  /**
+   * Bounded, content-free timings of the last progressive reads per domain. They
+   * have no other record, and a read that reaches this only reads memory.
+   */
+  register("get_progressive_read_metrics", (args, context) => {
+    assertOnlyKeys(args, [], "arguments");
+    if (!context.nativeAgents) throw new Error("Native agents are not available here.");
+    return { samples: context.nativeAgents.progressiveReadSamples() };
+  });
+  /** Content-free transcript artifact counters; an empty set where artifacts do not run. */
+  register("get_artifact_metrics", (args, context) => {
+    assertOnlyKeys(args, [], "arguments");
+    return context.transcriptArtifacts?.metrics.snapshot() ?? { counters: {}, droppedSeries: 0 };
+  });
+  /**
    * Full diagnostic reconciliation for keyed scheduling (step 08). Every keyed
    * owner re-reads authoritative storage now, independent of its safety
    * cadence, and reports content-free counts: obligations by kind, wakes by

@@ -93,6 +93,7 @@ import { DesignService } from "./design/index.js";
 import { PreviewRuntime } from "./preview-runtime.js";
 import type { RecurringJobKind } from "@orkestrator/protocol/recurring-work";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
+import { BackendDiagnostics } from "./backend-diagnostics.js";
 import { nativeSessionInvalidationMetrics } from "./native-session-invalidation-metrics.js";
 import { WorkAdmissionPool } from "./work-admission.js";
 import {
@@ -358,6 +359,7 @@ export class OrkestratorBackend {
   private activityLeaseSweep: ReturnType<typeof setInterval> | null = null;
   private hostSuspendDetector: HostSuspendDetector | null = null;
   private readonly machineLoad = new MachineLoadSampler();
+  private readonly diagnostics: BackendDiagnostics;
   private accountAutoSwitch!: AgentAccountAutoSwitcher;
   private usageLimitNotices!: CoordinatorUsageLimitNotices;
   private claudeLoginKeeper: ContainerClaudeLoginKeeper | null = null;
@@ -820,6 +822,11 @@ export class OrkestratorBackend {
       },
     });
     context.machineLoad = this.machineLoad;
+    this.diagnostics = new BackendDiagnostics({
+      dataDir: options.dataDir,
+      changeTracking: () => this.runtime.changeTracking,
+    });
+    context.diagnostics = this.diagnostics;
     context.nodes = this.nodes;
     // While a leaf, this node works with its command node's settings.
     storage.inheritedGlobalSettings = () => this.nodes.inheritedSettings.current();
@@ -2076,6 +2083,7 @@ export class OrkestratorBackend {
     });
     this.hostSuspendDetector.start();
     this.machineLoad.start();
+    if (process.env.NODE_ENV !== "test") this.diagnostics.health.start();
     this.accountAutoSwitch.start();
     // Containers hold Claude logins access-only; this hands them each host
     // renewal and renews the host login before it lapses.
@@ -3046,7 +3054,9 @@ export class OrkestratorBackend {
     // than racing it: every watcher holds a file descriptor and a debounce timer.
     this.runtime.shutdown();
     cancelScheduledEnvironmentCleanup(this.context.storage.getDataDir());
+    this.diagnostics.health.stop();
     const attempt = (async () => {
+      let drained = false;
       try {
         const lifecycleDeadline = Date.now() + this.environmentLifecycleDrainTimeoutMs;
         // Close both admission gates before waiting on any in-flight work.
@@ -3135,6 +3145,7 @@ export class OrkestratorBackend {
         });
         if (!commandTermination.stopped)
           throw new Error("User command termination could not be confirmed. Retry shutdown.");
+        drained = true;
       } finally {
         // Even failed shutdown must retain ownership until every mirror writer settles.
         this.environmentLifecycleTasks.beginShutdown(this.environmentLifecycleDrainTimeoutMs);
@@ -3163,6 +3174,8 @@ export class OrkestratorBackend {
           this.hostMaintenance.close();
           compatibilityPathUsage.detach(this.compatibilityPathSink);
           closeEnvironmentCleanupStorage();
+          // The last shutdown step: a failed drain leaves no clean-exit marker.
+          this.diagnostics.close({ clean: drained });
           this.context.storage.close();
         };
         if (this.environmentLifecycleTasks.pendingCount() > 0) {

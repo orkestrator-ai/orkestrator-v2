@@ -8,7 +8,7 @@
  * paths call {@link CompatibilityPathUsage.record}, which only bumps memory.
  * Once a sink is attached (the backend attaches its database at startup), the
  * pending counts are merged into the `compatibility-path-usage` store at most
- * once a minute, on every read, and at shutdown, so the totals and the first
+ * once a minute, on every durable read, and at shutdown, so the totals and the first
  * and last time each path was taken survive restarts and upgrades. The
  * database sink lives in `compatibility-path-usage-store.ts`, so the paths that
  * record here never import storage.
@@ -199,6 +199,8 @@ export class CompatibilityPathUsage {
   private sink: CompatibilityPathUsageSink | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private persisted: CompatibilityPathUsageSnapshot = { version: 1, paths: {} };
+  /** Whether {@link persisted} has been read from the attached sink. */
+  private loaded = false;
 
   constructor(
     private readonly now: () => Date = () => new Date(),
@@ -236,6 +238,7 @@ export class CompatibilityPathUsage {
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
     this.sink = null;
+    this.loaded = false;
     this.persisted = { version: 1, paths: {} };
     sink.close?.();
   }
@@ -254,6 +257,7 @@ export class CompatibilityPathUsage {
     try {
       const snapshot = this.sink.merge(pending);
       this.persisted = normalizeCompatibilityPathUsage(snapshot);
+      this.loaded = true;
       return snapshot;
     } catch {
       // Keep the counts and retry even when no further traffic arrives.
@@ -266,6 +270,21 @@ export class CompatibilityPathUsage {
   /** Persisted totals plus anything not yet flushed. */
   snapshot(): CompatibilityPathUsageSnapshot {
     return this.flush();
+  }
+
+  /**
+   * The last totals read or written plus what is pending, from memory: a poll
+   * costs no I/O and persistence stays with the once-a-minute flush. The first
+   * call reads the sink once, so a fresh process starts from the stored totals.
+   * Another backend's counts arrive with this one's next flush, so they can lag;
+   * for the durable truth call {@link snapshot}.
+   */
+  peek(): CompatibilityPathUsageSnapshot {
+    if (this.sink && !this.loaded) return this.flush();
+    return mergeCompatibilityPathUsage(
+      normalizeCompatibilityPathUsage(this.persisted),
+      this.pending,
+    );
   }
 
   private scheduleFlush(): void {

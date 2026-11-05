@@ -1268,6 +1268,9 @@ export class TerminalWebSocketGateway {
 
   /** Permanent: `onMessage` drops every frame once the close starts, so nothing can re-authenticate. */
   private credentialLapsed(state: SocketState): void {
+    // Authentication reads can synchronously publish revocation before their
+    // caller also reports the lapse. Preserve the first graceful close.
+    if (!state.authenticated) return;
     state.authenticated = false;
     this.releaseCredentialWatch(state);
     // Does nothing to a socket that has already closed and left its queue behind.

@@ -1,4 +1,5 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
+import type WebSocket from "ws";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import {
   encodeTerminalBinaryFrame,
@@ -21,6 +22,7 @@ import {
 } from "./gateway-test-harness.js";
 
 type WatchedSocket = {
+  ws: WebSocket;
   authenticated: boolean;
   credentialExpiryTimer: unknown;
   unsubscribeRevocation: unknown;
@@ -86,6 +88,9 @@ async function credentialFixture(options: { expiring?: boolean } = {}) {
     terminalWebSocket: internals.terminalWebSocket,
     expireGrant: () => {
       grantNow = issued.grant.expiresAt;
+    },
+    setGrantNow: (now: number) => {
+      grantNow = now;
     },
     expireSession: () => {
       sessionExpired = true;
@@ -362,6 +367,65 @@ describe("terminal operations after a credential lapses", () => {
     expect(fixture.listeners("client grant")).toBe(0);
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(state.credentialExpiryTimer).toBeNull();
+  });
+
+  for (const kind of ["browser session", "client grant"] as const) {
+    test(`expiry discovered during authentication closes a ${kind} gracefully once`, async () => {
+      const fixture = await credentialFixture({ expiring: true });
+      const terminal = await fixture.open(kind);
+      const state = onlySocket(fixture);
+      const close = spyOn(state.ws, "close");
+      const terminate = spyOn(state.ws, "terminate");
+      try {
+        const closed = new Promise<number>((resolve) => terminal.socket.once("close", resolve));
+        if (kind === "client grant") fixture.expireGrant();
+        else fixture.expireSession();
+        expect(await closed).toBe(TERMINAL_WEBSOCKET_CLOSE.authenticationRequired);
+        expect(close).toHaveBeenCalledTimes(1);
+        expect(terminate).not.toHaveBeenCalled();
+        expectWatchReleased(state);
+        expect(fixture.listeners(kind)).toBe(0);
+      } finally {
+        close.mockRestore();
+        terminate.mockRestore();
+        terminal.socket.terminate();
+      }
+    });
+  }
+
+  test("renewing a real grant preserves a disconnected queue past its original deadline", async () => {
+    const fixture = await credentialFixture({ expiring: true });
+    const terminal = await fixture.open("client grant");
+    try {
+      await queueBehindBlockedWrite(terminal, fixture.operations, fixture.terminalWebSocket);
+      const state = onlySocket(fixture);
+      await disconnect(fixture, terminal.socket);
+      const armed = state.credentialExpiryTimer;
+
+      fixture.setGrantNow(fixture.issued.grant.expiresAt - 1);
+      const renewed = fixture.grants.renew({
+        grantId: fixture.issued.grant.grantId,
+        controllerId: CONTROLLER,
+        ttlMs: MAX_GRANT_TTL_MS,
+      });
+      expect(renewed).not.toBeNull();
+      expect(renewed!.expiresAt).toBeGreaterThan(fixture.issued.grant.expiresAt);
+      fixture.expireGrant(); // Cross the original deadline with the renewed record in place.
+      await waitUntil(() => state.credentialExpiryTimer !== armed, "Renewed timer never re-armed");
+      expect(state.authenticated).toBe(true);
+      expectWatching(state);
+      expect(fixture.listeners("client grant")).toBe(1);
+      expect(fixture.operations).toEqual(["terminal_write"]);
+
+      fixture.release();
+      await drained(fixture);
+      expect(fixture.operations).toEqual(["terminal_write", "terminal_write", "terminal_resize"]);
+      expectWatchReleased(state);
+      expect(fixture.listeners("client grant")).toBe(0);
+    } finally {
+      fixture.release();
+      terminal.socket.terminate();
+    }
   });
 
   test("every disconnected socket holds one listener until its own queue settles", async () => {

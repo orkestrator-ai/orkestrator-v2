@@ -203,8 +203,6 @@ export function CoordinatorBanner({
  * Says when the workflow store every project's coordinator shares is close to
  * refusing new work, or refusing it, and what frees room. Nothing from a
  * backend that predates `workflowStore`, which says nothing about the store.
- * Clearing finished rows in the Work panel only hides them, so it is not
- * offered as a way out.
  */
 export function CoordinatorWorkflowStoreBanner({
   state,
@@ -229,7 +227,7 @@ export function CoordinatorWorkflowStoreBanner({
             ? "New launches are refused, and messages to workers will not wake the coordinator, until room frees up."
             : "The records every project's coordinator shares will soon refuse new launches."}{" "}
           Delete finished worker environments, or let running work finish; finished work older than
-          a day is then cleared automatically. Clearing rows from the Work panel only hides them.
+          a day is then cleared automatically.
         </span>
       </span>
     </CoordinatorBanner>

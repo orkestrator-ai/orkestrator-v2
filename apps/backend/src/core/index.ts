@@ -359,7 +359,7 @@ export class OrkestratorBackend {
   private activityLeaseSweep: ReturnType<typeof setInterval> | null = null;
   private hostSuspendDetector: HostSuspendDetector | null = null;
   private readonly machineLoad = new MachineLoadSampler();
-  private readonly diagnostics: BackendDiagnostics;
+  readonly diagnostics: BackendDiagnostics;
   private accountAutoSwitch!: AgentAccountAutoSwitcher;
   private usageLimitNotices!: CoordinatorUsageLimitNotices;
   private claudeLoginKeeper: ContainerClaudeLoginKeeper | null = null;
@@ -2938,6 +2938,14 @@ export class OrkestratorBackend {
   }
 
   /** Backend-owned preview services, for gateway transport adapters. */
+  databaseStats() {
+    return this.diagnostics.databaseStats();
+  }
+
+  attachGatewayMetrics(source: () => unknown): void {
+    this.diagnostics.attachGatewayMetrics(source);
+  }
+
   get previews(): PreviewRuntime | undefined {
     return this.context.previews;
   }

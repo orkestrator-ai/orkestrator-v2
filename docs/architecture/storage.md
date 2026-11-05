@@ -162,6 +162,7 @@ These keep their own modules but store their state as database rows:
 | Web annotations | `web-annotations/<environmentId>` (envelope: annotations, captures, entries, requests, results, assets metadata, receipts, drafts, records, meta) | Each commit is one transaction that reloads whatever another backend committed; old JSON is imported lazily per environment |
 | Compatibility-path usage | `compatibility-path-usage` (document: per path id, a count and the first and last use) | Counts are merged at most once a minute, on read and at shutdown, in one transaction; content-free ([version-compatibility.md](version-compatibility.md#usage-counters)) |
 | Host maintenance | `host-maintenance` (document: the current or last update job, the pending check request, the last check) | Each change is one transaction; a job left in progress by the previous process is settled at startup from the running version, never resumed |
+| Health summary | `health-summary` (one row per sample or marker) | One row every five minutes, pruned to 2,016 rows in the write's own transaction; numbers and job kinds only; on its own connection, and not counted as content for the hourly snapshot ([logging.md](logging.md#health-summary-and-the-clean-exit-marker)) |
 | Scheduled jobs | `scheduled-jobs` (one row per schedule, owner = the owner key) | Every write is one `updateStoreRow`, which is also the exactly-once fire claim across backends; bounded history inside the row; an environment's agent schedules are deleted with it ([scheduled-jobs.md](scheduled-jobs.md)) |
 | Agent usage history | `usage-history` (one row per agent session, owner = environment) | Each recorded turn is one `updateStoreRow`; reports walk every row uncached and never prune (retention is swept from the write path); day buckets past 400 days and the least recently used rows above 20,000 are pruned hourly, 250 rows per transaction with the event loop free between batches. Each row is read and decided inside its transaction, so a turn recorded during the sweep stays and a row it refreshed is not dropped. Turn ids are scoped by provider session, because a row outlives the conversation in its tab. A turn is bucketed by the day its bridge finalized it (`NativeAgentTurnUsage.at`), falling back to the day it was first seen. Rows outlive the environment they came from and are deleted only on request |
 
@@ -488,11 +489,15 @@ and its own, daily, best-effort copies (below):
 - `hourly-<stamp>.sqlite`, checked ten minutes after start-up and every five
   minutes, taken when the newest is an hour old **and** the content changed
   since it: any store's revision, the deletion bookkeeping in `storage_meta`
-  or the schema version. Lease heartbeats and writes that change nothing do
-  not count. A failed hourly snapshot only logs.
+  or the schema version. Lease heartbeats, writes that change nothing and
+  health summary rows do not count. A failed hourly snapshot only logs.
 - The hourly copy and its `quick_check` run in a child process at low
   priority (`copyDatabaseInChildProcess`): on a large database both take
-  minutes of disk I/O and must never block the backend's event loop. A separate
+  minutes of disk I/O and must never block the backend's event loop. That child
+  also reads `dbstat` on the finished copy, never the live file, and the largest
+  12 tables and indexes by bytes go to `backups/.top-tables.json`, one set per
+  database. Bun 1.4.4 on Linux has `dbstat`; a SQLite without it reports nothing
+  and the copy still counts. A separate
   responsive supervisor kills and reaps the copy worker when the backend's pipe
   closes (including SIGKILL), or the independent two-hour deadline expires. The
   pre-migration snapshot stays in-process, because the open waits for it.
@@ -546,6 +551,23 @@ nothing names yet, which retention prunes as usual. Restoring a
 ledger back inside `orkestrator.sqlite`, and the next start moves it out again,
 replacing `change-tracking.sqlite`. Snapshots are off by default under the
 test runner (`new StorageService(dir, { snapshots: true })` turns them on).
+
+### Size, waits and what fills the file
+
+`/__orkestrator/metrics` (`database`), `get_database_stats` and Settings → Debug read
+one summary (`database-summary.ts`), refreshed at most once a minute: file, WAL and
+free bytes of both databases, backup count and bytes, the last scheduled change
+retention pass and the top tables above. Top tables are as old as the last copy, so
+they are absent until one runs, and a machine with no changes takes no copy.
+
+`acquireLease` records every wait in a fixed-bucket histogram per lease family
+(`storage-lease-metrics.ts`): `native-agent-session-leases/<hash>` counts as
+`native-agent-session-leases`, a path outside the data directory as
+`outside-data-dir`, and the table holds at most 64 families. A timeout also writes
+`storage` `lease.timed-out` with the lease's name and `holderAgeMs`, the time since its
+holder's last heartbeat: a large one is a dead or stalled holder, and a small one a live
+holder keeping it for longer than the waiter would wait. A transaction that gives up
+with `SQLITE_BUSY` is counted as `transactionsBusy`.
 
 ## Migrations
 

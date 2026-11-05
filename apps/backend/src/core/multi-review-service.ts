@@ -1,3 +1,32 @@
+import { MultiReviewWorkerMail } from "./multi-review-worker-mail.js";
+import { workerMailTurnFor } from "./pipeline-worker-identity.js";
+import {
+  multiReviewWorkers,
+  pipelineWorkerTabId,
+} from "@orkestrator/protocol/pipeline-worker-mail";
+import type { PipelineWorkerMailbox } from "./build-pipeline-context.js";
+import {
+  assertNoOtherWorkflowWriting,
+  inspectCodeRewind,
+  resetWorktreeToCommit,
+  withWorkspaceCodeRewindReservation,
+  type EnvironmentGit,
+} from "./workspace-code-rewind.js";
+import {
+  multiReviewRewindBackupRef,
+  multiReviewRewindStateBlocker,
+  multiReviewRewindTarget,
+} from "./multi-review-code-rewind.js";
+import { probeReviewWorktree } from "./review-worktree-probe.js";
+import { EnvironmentMutationFence } from "./environment-replacement-fence.js";
+import {
+  MAX_CODE_REWIND_PREVIEW_PATHS,
+  type BuildPipelineCodeRewindPreview,
+} from "@orkestrator/protocol/build-pipeline";
+import type {
+  MultiReviewRewindStep,
+  MultiReviewSkippableStep,
+} from "@orkestrator/protocol/multi-review";
 import { recoveredDispatchAcceptance } from "./provider-dispatch-recovery.js";
 import {
   newReviewValidationRun,
@@ -564,6 +593,17 @@ export interface MultiReviewServiceOptions extends KeyedWorkflowServiceOptions {
     "openCodeClient" | "monitorRetryMs" | "planUsage" | "usageLimitStops"
   >;
   workflowResults?: WorkflowResultService;
+  /** Each reviewer's own mailbox identity on turns without a result tool. */
+  resolveWorkerToolConnection?: (
+    environmentId: string,
+    projectId: string,
+    target: "host" | "container",
+    tabId: string,
+  ) => AgentToolConnection;
+  /** Git in an environment, for "Rewind code to here". Absent, the action is refused. */
+  environmentGit?: EnvironmentGit;
+  environmentFence?: EnvironmentMutationFence;
+  assertEnvironmentQuiescent?: (environmentId: string) => Promise<void>;
   workflowResultRollout?: WorkflowResultRollout;
   resolveAgentToolConnection?: (
     environmentId: string,
@@ -678,6 +718,10 @@ export class MultiReviewService implements KeyedWorkflowOwner {
   private readonly pollGate: ElapsedPollGate;
   /** Findings live reviewers reported through `report_finding`, until a pass collects them. */
   private readonly provisionalFindings: ProvisionalFindingInbox;
+  private readonly rewindFence = new EnvironmentMutationFence();
+  /** Answers the mail drain about this service's reviewers. */
+  readonly workerMail: MultiReviewWorkerMail;
+  private workerMailbox: PipelineWorkerMailbox | null = null;
   /** Graph-engine runs projected with nothing to save, by run id (item 301). */
   private readonly graphProjected = new Map<string, number>();
 
@@ -693,6 +737,11 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       options.progressProbeIntervalMs ?? DEFAULT_PROGRESS_PROBE_INTERVAL_MS,
     );
     this.activityReads = new ActivityReadCoalescer(options.activityReadCoalesceWindowMs);
+    this.workerMail = new MultiReviewWorkerMail({
+      storage,
+      withLock: (workflowId, run) => this.withLock(workflowId, run),
+      provider: (workflow, selection) => this.provider(workflow, selection),
+    });
     this.provisionalFindings = new ProvisionalFindingInbox({
       slotOpen: async (scope, resultKey) =>
         (await this.options.workflowResults?.status(scope, resultKey))?.lifecycle === "open",
@@ -1021,6 +1070,68 @@ export class MultiReviewService implements KeyedWorkflowOwner {
    * Where `report_finding` calls land: the agent tools server lists the tool
    * for a reviewer attempt this accepts, and hands each call to it.
    */
+  /** The transcript behind a reviewer's worker address, or null when it names no reviewer. */
+  async workerTranscript(input: {
+    environmentId: string;
+    tabId: string;
+    limit?: number;
+  }): Promise<Record<string, unknown> | null> {
+    const located = await this.workerMail.locate(input.environmentId, input.tabId);
+    if (!located) return null;
+    const read = await this.reviewerTranscript(located.workflow.id, located.reviewer.id);
+    const limit = Math.min(200, Math.max(1, Math.trunc(input.limit ?? 50)));
+    const messages = Array.isArray(read.messages) ? read.messages : [];
+    return {
+      environmentId: input.environmentId,
+      tabId: input.tabId,
+      workflowId: located.workflow.id,
+      worker: multiReviewWorkers(located.workflow).find((w) => w.address === input.tabId),
+      agent: located.reviewer.agent,
+      messages: messages.slice(-limit),
+    };
+  }
+
+  /** Bound by the backend once agent mail exists. */
+  setWorkerMailbox(mailbox: PipelineWorkerMailbox | null): void {
+    this.workerMailbox = mailbox;
+  }
+
+  /**
+   * Hands a reviewer the mail queued for it as its next turn, before its result
+   * is accepted, with a fresh result key: the turn it just ended could not have
+   * taken the mail into account. True when a turn was queued.
+   */
+  private async prepareReviewerWorkerMail(
+    workflow: MultiReviewWorkflow,
+    token: string,
+    reviewer: MultiReviewWorkflow["reviewers"][number],
+  ): Promise<boolean> {
+    const mailbox = this.workerMailbox;
+    if (!mailbox || !reviewer.sessionKey) return false;
+    const tabId = pipelineWorkerTabId(reviewer.sessionKey);
+    const requestId = randomUUID();
+    const claim = await mailbox.claim(workflow.environmentId, tabId, requestId);
+    if (!claim) return false;
+    const oldRequestId = reviewer.requestId;
+    reviewer.requestId = requestId;
+    reviewer.continuationPrompt = claim.text;
+    delete reviewer.schemaRepairPrompt;
+    delete reviewer.idleResultPolls;
+    reviewer.resultSubmission = reviewer.resultTransport === "tool-v1" ? "preparing" : undefined;
+    reviewer.dispatchState = "prepared";
+    try {
+      await this.save(workflow, token);
+    } catch (error) {
+      await mailbox.settle(workflow.environmentId, tabId, claim.messageIds, "returned");
+      throw error;
+    }
+    await mailbox.settle(workflow.environmentId, tabId, claim.messageIds, "accepted");
+    if (oldRequestId && reviewer.resultTransport === "tool-v1") {
+      await this.options.workflowResults?.close(oldRequestId, "superseded");
+    }
+    return true;
+  }
+
   provisionalFindingSink(): ProvisionalFindingSink {
     return this.provisionalFindings;
   }
@@ -1645,18 +1756,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         if (workflow.phase !== "reviewing") {
           throw new Error("A reviewer can only be stopped while review is running");
         }
-        await this.abandonSession(workflow, reviewer, reviewer.providerSessionId);
-        if (reviewer.providerSessionId) this.progress.forget(reviewer.providerSessionId);
-        reviewer.status = "cancelled";
-        reviewer.completedAt = nowIso();
-        // The reviewers queued behind a stopped one move up.
-        compactReviewerAdmissionQueue(workflow.reviewers);
-        // The session id is kept so the read-only transcript stays reachable.
-        delete reviewer.idleResultPolls;
-        delete reviewer.stalledSince;
-        delete reviewer.progressDigest;
-        delete reviewer.schemaRepairPrompt;
-        delete reviewer.dispatchState;
+        await this.retireReviewer(workflow, reviewer);
         const saved = await this.save(workflow, token);
         if (isSupervisedPhase(saved.phase)) {
           handedToSupervisor = true;
@@ -1677,6 +1777,200 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         }
       }
     });
+  }
+
+  /** Ends one reviewer for good: a late submission from its turn is denied. */
+  private async retireReviewer(
+    workflow: MultiReviewWorkflow,
+    reviewer: MultiReviewWorkflow["reviewers"][number],
+  ): Promise<void> {
+    await this.abandonSession(workflow, reviewer, reviewer.providerSessionId);
+    if (reviewer.providerSessionId) this.progress.forget(reviewer.providerSessionId);
+    if (
+      reviewer.resultTransport === "tool-v1" &&
+      reviewer.requestId &&
+      !workflow.pendingResultConsumptions?.includes(reviewer.requestId)
+    ) {
+      await this.options.workflowResults?.close(reviewer.requestId, "superseded");
+    }
+    reviewer.status = "cancelled";
+    reviewer.completedAt = nowIso();
+    // The reviewers queued behind a stopped one move up.
+    compactReviewerAdmissionQueue(workflow.reviewers);
+    // The session id is kept so the read-only transcript stays reachable.
+    delete reviewer.idleResultPolls;
+    delete reviewer.stalledSince;
+    delete reviewer.progressDigest;
+    delete reviewer.schemaRepairPrompt;
+    delete reviewer.dispatchState;
+  }
+
+  /**
+   * Moves on without a step's result, as a build pipeline's Skip does.
+   *
+   * Skipping the review stops every reviewer still working, and consolidation
+   * runs from the reports it has; with none, the stage fails as any panel without
+   * reports does. Skipping Address Findings stops its turn and returns to `ready`
+   * on the same report, without a pull request: only a finished Address Findings
+   * authorizes one. Preparation and consolidation cannot be skipped, because
+   * everything after them reads what they produce; validation has its own stop.
+   */
+  async skipStep(workflowId: string, step: MultiReviewSkippableStep): Promise<MultiReviewWorkflow> {
+    await this.assertBespokeControl(workflowId, "skipping a step");
+    return this.withLock(workflowId, async () => {
+      const controlled = await this.loadControlled(workflowId);
+      if (!controlled) throw new Error(`Multi review workflow not found: ${workflowId}`);
+      const { workflow, token } = controlled;
+      let handedToSupervisor = false;
+      try {
+        if (step === "review") {
+          if (workflow.phase !== "reviewing") throw new Error("The review is not running");
+          for (const reviewer of workflow.reviewers) {
+            if (reviewer.status === "pending" || reviewer.status === "running") {
+              await this.retireReviewer(workflow, reviewer);
+            }
+          }
+          const saved = await this.save(workflow, token);
+          handedToSupervisor = true;
+          void this.advanceNow(workflowId);
+          return saved;
+        }
+        const running =
+          workflow.phase === "fixing" ||
+          (workflow.phase === "paused" && workflow.pausedStep === "fix");
+        if (!running) throw new Error("Address Findings is not running");
+        const errors = await this.stopStepForPause(workflow, token, "fix");
+        if (errors.length > 0) {
+          throw new Error(`Address Findings could not be stopped: ${errors.join("; ")}`);
+        }
+        supersedePendingAutoPr(workflow);
+        this.autoPrRetryAt.delete(workflow.id);
+        workflow.phase = "ready";
+        delete workflow.pausedFromPhase;
+        delete workflow.pausedStep;
+        delete workflow.addressPromptPending;
+        delete workflow.addressPromptAttempts;
+        clearPendingAddressFindingsIdentity(workflow);
+        delete workflow.fixResult;
+        delete workflow.error;
+        return await this.save(workflow, token);
+      } finally {
+        if (!handedToSupervisor) await this.release(workflow, token);
+      }
+    });
+  }
+
+  /**
+   * What "Rewind code to here" on `step` would do: the commits it drops and why
+   * it cannot run now, if it cannot. Reads only.
+   */
+  async previewCodeRewind(
+    workflowId: string,
+    step: MultiReviewRewindStep,
+  ): Promise<BuildPipelineCodeRewindPreview> {
+    const record = await this.storage.getMultiReviewWorkflow(workflowId);
+    if (!record) throw new Error(`Multi review workflow not found: ${workflowId}`);
+    const workflow = record.snapshot as MultiReviewWorkflow;
+    const preview: BuildPipelineCodeRewindPreview = {
+      pipelineId: workflowId,
+      sessionKey: step,
+      iteration: 0,
+      commits: [],
+      commitCount: 0,
+    };
+    const target = multiReviewRewindTarget(workflow, step);
+    const blockers: string[] = [];
+    const block = (reason: string | undefined) => {
+      if (reason) blockers.push(reason);
+    };
+    block(multiReviewRewindStateBlocker(workflow));
+    if (workflow.engine === "graph") block("Rewind this review's code from its graph run.");
+    const git = this.options.environmentGit;
+    if (!git) block("Rewinding code is not available on this backend.");
+    if (!target)
+      block("This step's starting commit was not recorded, so its code cannot be rewound.");
+    const environment = await this.storage.getEnvironment(workflow.environmentId);
+    if (environment?.prUrl) {
+      preview.pullRequest = { url: environment.prUrl, state: environment.prState ?? "unknown" };
+    }
+    if (environment?.prState === "merged") {
+      block("This environment's pull request has been merged.");
+    }
+    if (target) {
+      preview.targetCommit = target;
+      const worktree = await probeReviewWorktree(
+        (command, args) => this.invoke(command, args),
+        workflow.environmentId,
+      );
+      if (worktree.status === "unknown") {
+        block(`The worktree could not be read: ${worktree.reason}.`);
+      } else {
+        preview.head = worktree.head;
+        if (worktree.status === "dirty") {
+          preview.uncommittedPaths = worktree.paths.slice(0, MAX_CODE_REWIND_PREVIEW_PATHS);
+          block(
+            "The worktree has uncommitted changes, which a reset would destroy. Commit or discard them first.",
+          );
+        }
+        if (git) {
+          try {
+            const inspection = await inspectCodeRewind(git, workflow.environmentId, target);
+            Object.assign(preview, inspection);
+            if (inspection.upstream && inspection.upstream.droppedCommits > 0) {
+              block(
+                `${inspection.upstream.ref} already has commits this would drop, and a Multi Review cannot force-push. Rewind from a build pipeline, or reset the branch by hand.`,
+              );
+            }
+          } catch (error) {
+            block(errorMessage(error));
+          }
+        }
+      }
+    }
+    return blockers.length > 0 ? { ...preview, blocked: blockers[0] } : preview;
+  }
+
+  /**
+   * Resets the worktree to the commit `step` started from and restarts that step.
+   * Refused unless nothing is running, the worktree is clean, HEAD is still
+   * `expectedHead`, the one the user's confirmed preview showed, and the upstream
+   * has none of the dropped commits. The old tip stays at a backup ref.
+   */
+  async rewindCode(
+    workflowId: string,
+    step: MultiReviewRewindStep,
+    expectedHead: string,
+  ): Promise<MultiReviewWorkflow> {
+    await this.assertBespokeControl(workflowId, "rewinding code");
+    const git = this.options.environmentGit;
+    if (!git) throw new Error("Rewinding code is not available on this backend.");
+    await this.withLock(workflowId, async () => {
+      const preview = await this.previewCodeRewind(workflowId, step);
+      if (preview.blocked) throw new Error(preview.blocked);
+      if (preview.head !== expectedHead) {
+        throw new Error(
+          "The branch moved since the rewind was previewed. Review the commits it drops again.",
+        );
+      }
+      const record = await this.storage.getMultiReviewWorkflow(workflowId);
+      const workflow = record!.snapshot as MultiReviewWorkflow;
+      await withWorkspaceCodeRewindReservation({
+        fence: this.options.environmentFence ?? this.rewindFence,
+        storage: this.storage,
+        environmentId: workflow.environmentId,
+        assertQuiet: async () => {
+          await assertNoOtherWorkflowWriting(this.storage, workflow.environmentId, {});
+          await this.options.assertEnvironmentQuiescent?.(workflow.environmentId);
+        },
+        run: () =>
+          resetWorktreeToCommit(git, workflow.environmentId, {
+            from: expectedHead,
+            to: preview.targetCommit!,
+            backupRef: multiReviewRewindBackupRef(workflowId, randomUUID()),
+          }),
+      });
+    });
+    return this.restartStep(workflowId, step);
   }
 
   /** Stop the environment-owned validation process and continue with its partial evidence. */
@@ -1717,8 +2011,15 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     });
   }
 
-  /** Discard one reviewer's session and run that reviewer again from its original prompt. */
-  async restartReviewer(workflowId: string, reviewerId: string): Promise<MultiReviewWorkflow> {
+  /**
+   * Discard one reviewer's session and run that reviewer again from its original
+   * prompt. A `model` is "Restart in…": the reviewer runs on it from now on.
+   */
+  async restartReviewer(
+    workflowId: string,
+    reviewerId: string,
+    model?: MultiReviewModelSelection,
+  ): Promise<MultiReviewWorkflow> {
     await this.assertBespokeControl(workflowId, "restarting a reviewer");
     return this.withLock(workflowId, async () => {
       // An explicit restart starts a new admission generation.
@@ -1748,6 +2049,21 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         }
         const restartFixAfterConsolidation = addressFindingsStepHasStarted(workflow);
 
+        // Resolve the selection first: a refused model leaves the review untouched.
+        let restartedModel: MultiReviewModelSelection | undefined;
+        if (model) {
+          const environment = await this.storage.getEnvironment(workflow.environmentId);
+          if (!environment) throw new Error("Review environment no longer exists");
+          const config = await this.storage.loadConfig();
+          restartedModel = await this.configuredSelection(
+            model,
+            environment,
+            config,
+            config.repositories[workflow.projectId] ?? {},
+            this.catalogReaderFor(workflow.environmentId),
+          );
+        }
+
         supersedePendingAutoPr(workflow);
         this.autoPrRetryAt.delete(workflow.id);
 
@@ -1775,6 +2091,18 @@ export class MultiReviewService implements KeyedWorkflowOwner {
           workflow.fixSessionKey = rotatedSessionKey(fixSessionKey(workflow.id));
         }
         resetReviewerForRestart(workflow, reviewer);
+        if (restartedModel) {
+          reviewer.agent = restartedModel.agent;
+          reviewer.model = restartedModel.model;
+          if (restartedModel.reasoningEffort) {
+            reviewer.reasoningEffort = restartedModel.reasoningEffort;
+          } else delete reviewer.reasoningEffort;
+          if (typeof restartedModel.fastMode === "boolean") {
+            reviewer.fastMode = restartedModel.fastMode;
+          } else delete reviewer.fastMode;
+          delete reviewer.modelUnpinned;
+          delete reviewer.modelSubstitution;
+        }
         workflow.phase = "reviewing";
         clearReviewSession(workflow);
         delete workflow.activeRequest;
@@ -3607,7 +3935,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
    * persisted, which lease fences it, and what the phase becomes once every
    * reviewer has settled.
    */
-  private reviewFanoutHost(workflow: MultiReviewWorkflow, token: string): ReviewFanoutHost {
+  private reviewFanoutHost(workflow: MultiReviewWorkflow, token: string, target: "host" | "container"): ReviewFanoutHost {
     // The host lives for one admission pass. Snapshot mode checks the live
     // worktree once per pass, as package mode verifies its evidence once, and
     // every reviewer prompt built in the pass reuses that answer. A change after
@@ -3618,6 +3946,19 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         promptWorktreeSnapshot,
       ));
     return {
+      beforeResult: (reviewer) => this.prepareReviewerWorkerMail(workflow, token, reviewer),
+      workerMailTurn: (reviewer) =>
+        reviewer.sessionKey
+          ? workerMailTurnFor({
+              environmentId: workflow.environmentId,
+              projectId: workflow.projectId,
+              target,
+              sessionKey: reviewer.sessionKey,
+              agent: reviewer.agent,
+              signer: this.options.workflowResults,
+              resolveConnection: this.options.resolveWorkerToolConnection,
+            })
+          : undefined,
       workflowId: workflow.id,
       pollGate: {
         count: (scope) =>
@@ -3742,10 +4083,18 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     // Reviewer admission decides a transport, so the rollout snapshot has to be
     // current before the runner asks whether tool mode is allowed.
     await this.workflowRollout.refresh();
-    const runner = new ReviewFanoutRunner(this.reviewFanoutHost(workflow, token));
+    const environment = await this.storage.getEnvironment(workflow.environmentId);
+    const runner = new ReviewFanoutRunner(
+      this.reviewFanoutHost(
+        workflow,
+        token,
+        environment?.environmentType === "local" ? "host" : "container",
+      ),
+    );
     const outcome = await runner.advanceReviewers(workflow.reviewers);
     if (outcome.kind === "working") return;
     if (outcome.kind === "ready") {
+      await this.noteReviewWorktreeChange(workflow);
       workflow.phase = "consolidating";
       delete workflow.error;
       await this.save(workflow, token);
@@ -3755,6 +4104,27 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     workflow.error = outcome.error;
     await this.save(workflow, token);
     await this.release(workflow, token);
+  }
+
+  /**
+   * Marks the review when the worktree moved under reviewers reading a package.
+   * Stops nothing: the package is immutable, so the reports still describe what
+   * they read. Preparation can leave paths uncommitted on purpose, so only a new
+   * one counts. A worktree that cannot be read says nothing.
+   */
+  private async noteReviewWorktreeChange(workflow: MultiReviewWorkflow): Promise<void> {
+    const reviewPackage = workflow.reviewPackage;
+    if (!reviewPackage || workflow.reviewWorktreeChanged) return;
+    const current = await probeReviewWorktree(
+      (command, args) => this.invoke(command, args),
+      workflow.environmentId,
+    ).catch(() => null);
+    if (!current || current.status === "unknown") return;
+    const known = new Set(workflow.reviewWorktreeSnapshot?.paths ?? []);
+    const paths = current.status === "dirty" ? current.paths : [];
+    if (current.head !== reviewPackage.headRef || paths.some((path) => !known.has(path))) {
+      workflow.reviewWorktreeChanged = true;
+    }
   }
 
   /**
@@ -3969,6 +4339,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     settleStepRuntime(workflow, "prepare");
     delete workflow.activeRequest;
     delete workflow.reviewSnapshotStale;
+    delete workflow.reviewWorktreeChanged;
     await this.save(workflow, token);
   }
 
@@ -4654,6 +5025,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       settleStepRuntime(workflow, "prepare");
       delete workflow.activeRequest;
       delete workflow.reviewSnapshotStale;
+      delete workflow.reviewWorktreeChanged;
       this.stageWorkflowResultConsumption(workflow, request);
       await this.save(workflow, token);
       await this.consumePendingResults(workflow, token);

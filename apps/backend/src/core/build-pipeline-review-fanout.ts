@@ -44,7 +44,6 @@ import {
   type PipelineSessionPhase,
 } from "@orkestrator/protocol/build-pipeline";
 import {
-  reviewersSettled,
   usableReviewerReports,
   type ReviewerRecord,
   type ReviewConsolidationSession,
@@ -72,6 +71,7 @@ import {
   lastAssistantText,
   missingWorkflowResultMessage,
   workflowRestartContinuationPrompt,
+  workflowResumeContinuationPrompt,
   workflowUsageLimitContinuationPrompt,
   workflowResultReminderPrompt,
 } from "./workflow-result-missing.js";
@@ -117,8 +117,14 @@ import {
   type ReviewerPollGate,
 } from "./review-fanout.js";
 import { buildPipelineStage, buildPipelineStageTurn } from "./build-pipeline-stages.js";
-import { clearReviewerAdmission } from "./review-fanout-admission.js";
-import { dropProvisionalFindings } from "./review-provisional-findings.js";
+import {
+  clearReviewerAdmission,
+  compactReviewerAdmissionQueue,
+} from "./review-fanout-admission.js";
+import {
+  dropProvisionalFindings,
+  type ProvisionalFindingInbox,
+} from "./review-provisional-findings.js";
 import {
   DEFAULT_STALL_ABANDON_MS,
   DEFAULT_STALL_WARNING_MS,
@@ -138,6 +144,13 @@ import {
 } from "./workflow-artifact-turns.js";
 import type { ReviewPackageVerification } from "./commands-review.js";
 import { retainRoundReviewReport } from "./build-pipeline-rewind.js";
+import {
+  clearReviewerStopped,
+  isConsolidationSession,
+  markReviewerStopped,
+  panelFromSessions,
+  reviewerStoppedByUser,
+} from "./build-pipeline-review-panel.js";
 import { recordReviewIssuesInKeyInformation } from "./build-pipeline-key-information.js";
 import type { WorkspaceGitBaseline } from "@orkestrator/protocol/workspace-guard";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
@@ -226,14 +239,13 @@ export interface BuildPipelineReviewFanoutDeps {
    */
   captureWorkspaceBaseline(pipeline: BuildPipeline): Promise<WorkspaceGitBaseline>;
   /**
-   * The stage error when the worktree no longer matches the pass's baseline,
-   * or null. Asked when reviewer reports arrive and before the consolidated
-   * report is accepted.
+   * Whether the worktree no longer matches the pass's baseline. Asked when
+   * reviewer reports arrive and before the consolidated report is accepted. It
+   * marks the review stale and stops nothing.
    */
-  workspaceViolation(
-    pipeline: BuildPipeline,
-    subject: "review" | "consolidation",
-  ): Promise<string | null>;
+  workspaceChanged(pipeline: BuildPipeline): Promise<boolean>;
+  /** The findings live reviewers reported through `report_finding`. */
+  provisionalFindings?: Pick<ProvisionalFindingInbox, "take">;
 }
 
 /** What the supervisor should do after one fan-out pass. */
@@ -309,6 +321,7 @@ export class BuildPipelineReviewFanout {
       count: multiReviewDuplicateReviewerCount(pipeline.reviewFanout.reviewers),
     });
     pipeline.phase = "reviewing";
+    delete pipeline.stoppedReviewerIds;
     delete pipeline.structuredReview;
     delete pipeline.structuredReviewRequestId;
     delete pipeline.error;
@@ -336,13 +349,11 @@ export class BuildPipelineReviewFanout {
       // status it ends on — completed, failed, stopped — is only known here.
       // Without this the build tab shows finished reviewers as still running.
       await this.settleReviewerSessions(pipeline, state);
-      // A report is only usable from a worktree the panel left as it found it.
-      // Checked as reports arrive, so a reviewer that committed fails the pass
-      // without waiting for the rest of the panel, and again before
-      // consolidation reads them.
+      // A worktree that moved under the panel marks the review stale. Checked as
+      // reports arrive and again before consolidation reads them. The panel
+      // carries on: reviewers read the immutable package either way.
       if (outcome.kind === "ready" || completedReviewerCount(state.reviewers) > completedBefore) {
-        const violation = await this.deps.workspaceViolation(pipeline, "review");
-        if (violation) return { kind: "failed", error: violation };
+        await this.noteWorkspaceChange(pipeline, state);
       }
       if (outcome.kind === "working") return { kind: "working" };
       if (outcome.kind === "no-reports") return { kind: "failed", error: outcome.error };
@@ -351,71 +362,159 @@ export class BuildPipelineReviewFanout {
   }
 
   /**
-   * Discards only a failed consolidation attempt, keeping the completed
-   * reviewer panel that feeds it.
+   * Stops one reviewer of the running pass, keeping the rest of the panel. The
+   * caller persists the pipeline.
    *
-   * The pipeline exposes the whole fan-out as its `reviewing` phase, but the
-   * restart control promises to retry the stage that actually failed. Once the
-   * reviewers have settled with at least one report, that stage is
-   * consolidation. Rotating only its session avoids spending every reviewer's
-   * turn again while still giving a failed or exhausted consolidator a clean
-   * context and repair budget.
+   * The pass will not consolidate while a reviewer is pending or running, so one
+   * wedged reviewer otherwise holds the whole pipeline in review. A stopped
+   * reviewer counts as settled: consolidation runs from the others' reports,
+   * and stopping the last reviewer with no report fails the stage as any panel
+   * without reports does.
    *
-   * A reviewer-stage failure never writes a consolidation record, and
-   * `abandonReviewFanout` marks unfinished reviewers cancelled — which
-   * `reviewersSettled` treats as done. Either signal means this is not a
-   * consolidation failure, so the caller must recreate the panel.
+   * The abort is best effort, as in Multi Review: the reason to stop a reviewer
+   * is that it is unresponsive, so waiting on its provider would reproduce the
+   * stall. A later pause or cancel aborts its session again and reports an abort
+   * it cannot confirm.
    */
-  async restartConsolidation(pipeline: BuildPipeline): Promise<boolean> {
-    const state = pipeline.reviewFanout;
-    if (
-      !state ||
-      state.report ||
-      !state.consolidation ||
-      !reviewersSettled(state.reviewers) ||
-      state.reviewers.some((reviewer) => reviewer.status === "cancelled") ||
-      usableReviewerReports(state.reviewers).length === 0
-    ) {
-      return false;
-    }
-
-    const consolidation = state.consolidation;
-    if (consolidation) {
-      this.deps.progress.forget(consolidation.providerSessionId);
-      if (consolidation.resultTransport === "tool-v1") {
-        await this.deps.workflowResults?.close(consolidation.requestId, "superseded");
-      }
-    }
-    delete state.consolidation;
-    delete pipeline.structuredReview;
-    delete pipeline.structuredReviewRequestId;
-    await this.save(pipeline);
-    return true;
-  }
-
-  /**
-   * Runs one failed reviewer of the current pass again, keeping the rest of
-   * the panel. The caller persists the pipeline.
-   *
-   * Consolidation is derived from every reviewer's report, so an attempt that
-   * has started (or failed) is discarded: it runs again once the retried
-   * reviewer settles. An accepted consolidated report means the pass has
-   * moved on, and the reviewer can only be rerun by restarting the stage.
-   * The failed attempt's session stays in the pipeline as history; the retry
-   * opens a session of its own.
-   */
-  async prepareReviewerRetry(pipeline: BuildPipeline, reviewerId: string): Promise<void> {
+  async stopReviewer(pipeline: BuildPipeline, reviewerId: string): Promise<void> {
     const state = pipeline.reviewFanout;
     const reviewer = state?.reviewers.find((candidate) => candidate.id === reviewerId);
     if (!state || !reviewer) {
       throw new Error("This reviewer is no longer part of the current review");
     }
-    if (state.report) {
-      throw new Error("The review has been consolidated; restart the review stage to rerun it");
+    // Idempotent: a double click, or a reviewer that settled between the render
+    // and the command, must not rewrite a finished result.
+    if (reviewer.status !== "pending" && reviewer.status !== "running") return;
+    if (pipeline.phase !== "reviewing") {
+      throw new Error("A reviewer can only be stopped while the review is running");
     }
-    if (reviewer.status !== "failed") {
-      throw new Error("Only a failed reviewer can be retried");
+    markReviewerStopped(pipeline, reviewer);
+    if (reviewer.providerSessionId) {
+      this.deps.progress.forget(reviewer.providerSessionId);
+      await this.abandonSession(
+        pipeline,
+        reviewer.agent as BuildPipelineAgent,
+        reviewer.providerSessionId,
+      );
     }
+    // A late submission from the stopped turn must be denied, not consumed.
+    if (reviewer.resultTransport === "tool-v1" && reviewer.requestId) {
+      await this.deps.workflowResults?.close(reviewer.requestId, "superseded");
+    }
+    if (
+      reviewer.providerSessionId &&
+      pipeline.stallWarning?.sessionId === reviewer.providerSessionId
+    ) {
+      delete pipeline.stallWarning;
+    }
+    reviewer.status = "cancelled";
+    reviewer.completedAt = reviewFanoutNowIso();
+    // The reviewers queued behind a stopped one move up.
+    compactReviewerAdmissionQueue(state.reviewers);
+    // The session id is kept so the transcript stays reachable.
+    delete reviewer.idleResultPolls;
+    delete reviewer.stalledSince;
+    delete reviewer.progressDigest;
+    delete reviewer.schemaRepairPrompt;
+    delete reviewer.continuationPrompt;
+    delete reviewer.dispatchState;
+    this.projectReviewerOutcome(pipeline, reviewer);
+  }
+
+  /** Marks the review stale when the worktree moved. A failed probe says nothing. */
+  private async noteWorkspaceChange(
+    pipeline: BuildPipeline,
+    state: ReviewFanoutState,
+  ): Promise<void> {
+    if (state.snapshotStale) return;
+    if (!(await this.deps.workspaceChanged(pipeline))) return;
+    state.snapshotStale = true;
+    await this.save(pipeline);
+  }
+
+  /**
+   * Retries a failed review stage, keeping every report the panel already has.
+   *
+   * As in Multi Review: with a report in hand only the failed and interrupted
+   * reviewers run again and the user's stops hold; with none there is nothing to
+   * consolidate, so stopped reviewers run again too. Consolidation is derived
+   * from the reports, so its failed attempt is discarded and it opens again once
+   * the panel settles. False means the caller must start the stage over: there
+   * is no panel to keep, or its package no longer verifies.
+   */
+  async retryAfterFailure(pipeline: BuildPipeline): Promise<boolean> {
+    const state = pipeline.reviewFanout;
+    if (!state || state.report) return false;
+    const hasReport = usableReviewerReports(state.reviewers).length > 0;
+    const rerun = state.reviewers.filter(
+      (reviewer) =>
+        reviewer.status === "failed" ||
+        (reviewer.status === "cancelled" &&
+          (!hasReport || !reviewerStoppedByUser(pipeline, reviewer))),
+    );
+    if (rerun.length > 0) {
+      const reviewPackage = pipeline.reviewPackage;
+      if (!reviewPackage) return false;
+      if ("kind" in reviewPackage) {
+        try {
+          await this.deps.verifyReviewPackage(pipeline, reviewPackage);
+        } catch {
+          return false;
+        }
+      }
+    }
+    await this.discardConsolidation(pipeline, state);
+    await this.requeueReviewers(pipeline, rerun);
+    await this.save(pipeline);
+    return true;
+  }
+
+  /**
+   * Picks a review up where a pause stopped it, keeping the reports it has. The
+   * reviewers the pause interrupted run again; a consolidation it interrupted
+   * continues in its own session. The caller persists the pipeline.
+   */
+  async resumeAfterPause(pipeline: BuildPipeline): Promise<void> {
+    const state = pipeline.reviewFanout;
+    if (!state || state.report) return;
+    const consolidation = state.consolidation;
+    if (consolidation?.state === "dispatching") {
+      // Whether its prompt arrived is unknown, so a continuation could reach a
+      // session that never saw the reports. A fresh attempt carries them.
+      await this.discardConsolidation(pipeline, state);
+    } else if (consolidation) {
+      // The pause closed its result slot, so every next turn needs a new one.
+      consolidation.requestId = randomUUID();
+      if (consolidation.state === "sent") {
+        consolidation.continuationPrompt = workflowResumeContinuationPrompt({
+          workLabel: "consolidation",
+          resultLabel: "consolidated report",
+          ...(consolidation.resultTransport === "tool-v1"
+            ? { toolName: workflowResultToolName(CONSOLIDATION_RESULT_KIND) }
+            : {}),
+        });
+      }
+      consolidation.state = "prepared";
+      consolidation.createdAt = reviewFanoutNowIso();
+      consolidation.progressAt = consolidation.createdAt;
+      delete consolidation.idleResultPolls;
+      delete consolidation.progressDigest;
+      delete consolidation.stalledSince;
+      if (consolidation.resultTransport === "tool-v1") consolidation.resultSubmission = "preparing";
+    }
+    await this.requeueReviewers(
+      pipeline,
+      state.reviewers.filter(
+        (reviewer) => reviewer.status === "cancelled" && !reviewerStoppedByUser(pipeline, reviewer),
+      ),
+    );
+  }
+
+  /** Ends a consolidation attempt; the next pass opens a new one from the reports. */
+  private async discardConsolidation(
+    pipeline: BuildPipeline,
+    state: ReviewFanoutState,
+  ): Promise<void> {
     const consolidation = state.consolidation;
     if (consolidation) {
       this.deps.progress.forget(consolidation.providerSessionId);
@@ -442,20 +541,124 @@ export class BuildPipelineReviewFanout {
         session.completedAt ??= reviewFanoutNowIso();
       }
       delete state.consolidation;
-      delete pipeline.structuredReview;
-      delete pipeline.structuredReviewRequestId;
     }
-    // Pause interrupts the other queued/running reviewers too. Requeue those
-    // peers under fresh result slots before resuming, preserving completed reports.
-    for (const retry of state.reviewers.filter(
-      (candidate) => candidate === reviewer || candidate.status === "cancelled",
-    )) {
-      if (retry.providerSessionId) this.deps.progress.forget(retry.providerSessionId);
-      if (retry.resultTransport === "tool-v1" && retry.requestId) {
-        await this.deps.workflowResults?.close(retry.requestId, "superseded");
+    delete pipeline.structuredReview;
+    delete pipeline.structuredReviewRequestId;
+  }
+
+  /** Returns reviewers to the queue under fresh result slots. Their old sessions stay as history. */
+  private async requeueReviewers(
+    pipeline: BuildPipeline,
+    reviewers: readonly ReviewerRecord[],
+  ): Promise<void> {
+    for (const reviewer of reviewers) {
+      if (reviewer.providerSessionId) this.deps.progress.forget(reviewer.providerSessionId);
+      if (reviewer.resultTransport === "tool-v1" && reviewer.requestId) {
+        await this.deps.workflowResults?.close(reviewer.requestId, "superseded");
       }
-      resetReviewerForRetry(retry);
+      clearReviewerStopped(pipeline, reviewer);
+      resetReviewerForRetry(reviewer);
     }
+  }
+
+  /**
+   * The panel to keep when the user restarts `named`, or null when the whole
+   * pass has to run again: only consolidation or one reviewer of the current
+   * round can restart alone, and only while the reports they need survive. A
+   * later round's code means the round reviews again from its package.
+   */
+  panelToKeep(
+    pipeline: BuildPipeline,
+    named: PipelineSession,
+    rerunReviewer: boolean,
+  ): ReviewFanoutState | null {
+    if (named.iteration !== pipeline.iteration) return null;
+    if (!rerunReviewer && (!isConsolidationSession(named) || named.superseded === true)) {
+      return null;
+    }
+    const live = pipeline.reviewFanout;
+    const inLivePass =
+      live?.consolidation?.sessionKey === named.sessionKey ||
+      live?.reviewers.some((reviewer) => reviewer.sessionKey === named.sessionKey);
+    const panel = inLivePass ? live! : panelFromSessions(pipeline, named);
+    if (!panel) return null;
+    if (!rerunReviewer && usableReviewerReports(panel.reviewers).length === 0) return null;
+    return panel;
+  }
+
+  /** Makes `panel` the live pass again for {@link panelToKeep}'s restart. */
+  async reopenPanel(
+    pipeline: BuildPipeline,
+    panel: ReviewFanoutState,
+    rerun?: PipelineSession,
+  ): Promise<void> {
+    pipeline.reviewFanout = panel;
+    delete panel.report;
+    delete panel.consolidation;
+    delete pipeline.structuredReview;
+    delete pipeline.structuredReviewRequestId;
+    for (const reviewer of panel.reviewers) {
+      if (reviewer.status === "cancelled") markReviewerStopped(pipeline, reviewer);
+    }
+    const reviewer = rerun
+      ? panel.reviewers.find((candidate) => candidate.sessionKey === rerun.sessionKey)
+      : undefined;
+    if (reviewer) await this.requeueReviewers(pipeline, [reviewer]);
+  }
+
+  /**
+   * Runs one reviewer of the current pass again, keeping the rest of the panel.
+   * The caller persists the pipeline.
+   *
+   * Consolidation is derived from every reviewer's report, so an attempt that
+   * has started (or failed) is discarded: it runs again once the reviewer
+   * settles. An accepted consolidated report means the pass has moved on. The
+   * earlier attempt's session stays in the pipeline as history; the new attempt
+   * opens a session of its own. `anyStatus` is Restart, which takes a reviewer in
+   * any state; Retry takes only a failed one.
+   */
+  async prepareReviewerRetry(
+    pipeline: BuildPipeline,
+    reviewerId: string,
+    options: { anyStatus?: boolean } = {},
+  ): Promise<void> {
+    const state = pipeline.reviewFanout;
+    const reviewer = state?.reviewers.find(
+      (candidate) => candidate.id === reviewerId || candidate.sessionKey === reviewerId,
+    );
+    if (!state || !reviewer) {
+      throw new Error("This reviewer is no longer part of the current review");
+    }
+    if (state.report) {
+      throw new Error("The review has been consolidated; restart the review stage to rerun it");
+    }
+    if (!options.anyStatus && reviewer.status !== "failed") {
+      throw new Error("Only a failed reviewer can be retried");
+    }
+    // A pause or a failure cancels the reviewers still queued or running, and
+    // those go back in the queue with this one. In a running pass nothing was
+    // interrupted, and the user's own stops hold everywhere.
+    const interrupted =
+      pipeline.phase === "reviewing"
+        ? []
+        : state.reviewers.filter(
+            (candidate) =>
+              candidate.status === "cancelled" && !reviewerStoppedByUser(pipeline, candidate),
+          );
+    await this.discardConsolidation(pipeline, state);
+    if (reviewer.status === "pending" || reviewer.status === "running") {
+      if (reviewer.providerSessionId) {
+        await this.abandonSession(
+          pipeline,
+          reviewer.agent as BuildPipelineAgent,
+          reviewer.providerSessionId,
+        );
+      }
+      reviewer.status = "cancelled";
+      reviewer.completedAt = reviewFanoutNowIso();
+      this.projectReviewerOutcome(pipeline, reviewer);
+    }
+    await this.requeueReviewers(pipeline, [...new Set([reviewer, ...interrupted])]);
   }
 
   // -------------------------------------------------------------------------
@@ -627,6 +830,12 @@ export class BuildPipelineReviewFanout {
       // Keep the counter in the authoritative fan-out record until it can be
       // projected onto the durable pipeline session below. Persist the meter
       // with the transcript throttle, not on every poll.
+      ...(this.deps.provisionalFindings
+        ? {
+            takeProvisionalFindings: (reviewer: ReviewerRecord) =>
+              reviewer.requestId ? this.deps.provisionalFindings!.take(reviewer.requestId) : [],
+          }
+        : {}),
       captureReviewerUsage: true,
       persistReviewerUsageImmediately: false,
       onReviewerObserved: (reviewer, index, provider, readTranscript, settling) =>
@@ -723,71 +932,78 @@ export class BuildPipelineReviewFanout {
   ): Promise<void> {
     let changed = false;
     for (const reviewer of state.reviewers) {
-      if (!reviewer.sessionKey) continue;
-      const session = pipeline.sessions.find(
-        (candidate) => candidate.sessionKey === reviewer.sessionKey,
-      );
-      if (!session) continue;
-      const settled = reviewer.status !== "pending" && reviewer.status !== "running";
-      // A running reviewer record may be waiting for its final usage/result
-      // after its provider turn ended. Keep the status mirroring observed, or
-      // every idle poll would look like another terminal transition.
-      if (settled && session.status !== "idle") {
-        session.status = "idle";
-        changed = true;
-      }
-      if (reviewer.report && !session.reviewReport) {
-        session.reviewReport = reviewer.report;
-        session.structuredRequestId = reviewer.requestId;
-        session.structuredResultStatus = "accepted";
-        changed = true;
-      }
-      if (reviewer.report && !session.reviewIssueCounts) {
-        session.reviewIssueCounts = pipelineReviewIssueCounts(reviewer.report);
-        changed = true;
-      }
-      // The fan-out record is retired with its pass; the session keeps how
-      // this attempt ended, so the graph can still show a failed reviewer.
-      const outcome =
-        reviewer.status === "completed" ||
-        reviewer.status === "failed" ||
-        reviewer.status === "cancelled"
-          ? reviewer.status
-          : undefined;
-      if (outcome && session.reviewerOutcome !== outcome) {
-        session.reviewerOutcome = outcome;
-        changed = true;
-      }
-      const error =
-        reviewer.status === "failed" && reviewer.error?.trim()
-          ? boundedPipelineSessionError(reviewer.error)
-          : undefined;
-      if (error && session.error !== error) {
-        session.error = error;
-        changed = true;
-      }
-      if (reviewer.completedAt && session.completedAt !== reviewer.completedAt) {
-        session.completedAt = reviewer.completedAt;
-        changed = true;
-      }
-      if (
-        settled &&
-        reviewer.tokenCount !== undefined &&
-        session.tokenCount !== reviewer.tokenCount
-      ) {
-        session.tokenCount = reviewer.tokenCount;
-        changed = true;
-      }
-      if (
-        settled &&
-        reviewer.cacheReadTokens !== undefined &&
-        session.cacheReadTokens !== reviewer.cacheReadTokens
-      ) {
-        session.cacheReadTokens = reviewer.cacheReadTokens;
-        changed = true;
-      }
+      changed = this.projectReviewerOutcome(pipeline, reviewer) || changed;
     }
     if (changed) await this.save(pipeline);
+  }
+
+  /** One reviewer's part of {@link settleReviewerSessions}; true when it wrote anything. */
+  private projectReviewerOutcome(pipeline: BuildPipeline, reviewer: ReviewerRecord): boolean {
+    if (!reviewer.sessionKey) return false;
+    const session = pipeline.sessions.find(
+      (candidate) => candidate.sessionKey === reviewer.sessionKey,
+    );
+    if (!session) return false;
+    let changed = false;
+    const settled = reviewer.status !== "pending" && reviewer.status !== "running";
+    // A running reviewer record may be waiting for its final usage/result
+    // after its provider turn ended. Keep the status mirroring observed, or
+    // every idle poll would look like another terminal transition.
+    if (settled && session.status !== "idle") {
+      session.status = "idle";
+      changed = true;
+    }
+    if (reviewer.report && !session.reviewReport) {
+      session.reviewReport = reviewer.report;
+      session.structuredRequestId = reviewer.requestId;
+      session.structuredResultStatus = "accepted";
+      changed = true;
+    }
+    if (reviewer.report && !session.reviewIssueCounts) {
+      session.reviewIssueCounts = pipelineReviewIssueCounts(reviewer.report);
+      changed = true;
+    }
+    // The fan-out record is retired with its pass; the session keeps how
+    // this attempt ended, so the graph can still show a failed reviewer.
+    const outcome =
+      reviewer.status === "completed" ||
+      reviewer.status === "failed" ||
+      reviewer.status === "cancelled"
+        ? reviewer.status
+        : undefined;
+    if (outcome && session.reviewerOutcome !== outcome) {
+      session.reviewerOutcome = outcome;
+      changed = true;
+    }
+    const error =
+      reviewer.status === "failed" && reviewer.error?.trim()
+        ? boundedPipelineSessionError(reviewer.error)
+        : undefined;
+    if (error && session.error !== error) {
+      session.error = error;
+      changed = true;
+    }
+    if (reviewer.completedAt && session.completedAt !== reviewer.completedAt) {
+      session.completedAt = reviewer.completedAt;
+      changed = true;
+    }
+    if (
+      settled &&
+      reviewer.tokenCount !== undefined &&
+      session.tokenCount !== reviewer.tokenCount
+    ) {
+      session.tokenCount = reviewer.tokenCount;
+      changed = true;
+    }
+    if (
+      settled &&
+      reviewer.cacheReadTokens !== undefined &&
+      session.cacheReadTokens !== reviewer.cacheReadTokens
+    ) {
+      session.cacheReadTokens = reviewer.cacheReadTokens;
+      changed = true;
+    }
+    return changed;
   }
 
   private ensureSession(
@@ -1326,12 +1542,11 @@ export class BuildPipelineReviewFanout {
       if (previousUsagePolls !== session.usageFinalizationPolls) await this.save(pipeline);
       return { kind: "working" };
     }
-    // The consolidated report is consumed here. The submit-time check let the
-    // consolidator repair a change within its turn; this one decides.
-    const violation = await this.deps.workspaceViolation(pipeline, "consolidation");
-    if (violation) return { kind: "failed", error: violation };
+    await this.noteWorkspaceChange(pipeline, state);
     state.report = provenance.report;
     session.status = "idle";
+    // The fan-out record is retired with its pass; the session keeps the warning.
+    if (state.snapshotStale) session.reviewWorktreeChanged = true;
     session.reviewReport = provenance.report;
     session.reviewOverlap = consolidationOverlap(parsed.data, state.reviewers);
     session.reviewIssueCounts = pipelineReviewIssueCounts(provenance.report);

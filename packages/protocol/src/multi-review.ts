@@ -492,6 +492,13 @@ export interface MultiReviewWorkflow {
   reviewPackage?: ReviewPackageReference;
   /** Set when the live worktree changed during review, or immutable package evidence went stale. */
   reviewSnapshotStale?: boolean;
+  /**
+   * The worktree moved while reviewers read the package. The review carried on
+   * and its report stands; this says it may not describe the code as it is now.
+   * Written only when that happens, because an older client refuses a key it does
+   * not know.
+   */
+  reviewWorktreeChanged?: boolean;
   phase: MultiReviewPhase;
   /** Active backend-owned phase retained while its step is paused. */
   pausedFromPhase?: MultiReviewPausablePhase;
@@ -753,6 +760,19 @@ export function isMultiReviewStepControlInput(
     nonBlank(value.workflowId) &&
     MULTI_REVIEW_STEP_KINDS.includes(value.kind as MultiReviewStepKind)
   );
+}
+
+/** What Skip acts on: the reviewers still working, or the Address Findings turn. */
+export type MultiReviewSkippableStep = "review" | "fix";
+/** The steps with a recorded starting commit, which "Rewind code to here" can reach. */
+export type MultiReviewRewindStep = "prepare" | "fix";
+
+export function isMultiReviewSkippableStep(value: unknown): value is MultiReviewSkippableStep {
+  return value === "review" || value === "fix";
+}
+
+export function isMultiReviewRewindStep(value: unknown): value is MultiReviewRewindStep {
+  return value === "prepare" || value === "fix";
 }
 
 export function isRestartMultiReviewStepInput(
@@ -1051,6 +1071,7 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
       "validationRun",
       "validationStopRequested",
       "reviewSnapshotStale",
+      "reviewWorktreeChanged",
       "consolidatedReport",
       "consolidationOverlap",
       "fixResult",
@@ -1116,6 +1137,8 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
       (!isReviewPackageReference(value.reviewPackage) ||
         value.reviewPackage.targetBranch !== value.targetBranch)) ||
     (value.reviewSnapshotStale !== undefined && typeof value.reviewSnapshotStale !== "boolean") ||
+    (value.reviewWorktreeChanged !== undefined &&
+      typeof value.reviewWorktreeChanged !== "boolean") ||
     (value.pausedFromPhase !== undefined &&
       value.pausedFromPhase !== "preparing" &&
       value.pausedFromPhase !== "consolidating" &&

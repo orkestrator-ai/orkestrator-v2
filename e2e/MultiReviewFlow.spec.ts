@@ -17,6 +17,24 @@ const PHASES = [
 
 type Box = { x: number; y: number; width: number; height: number };
 
+test("a reviewer offers Restart in… and Skip, and a moved worktree is shown", async ({ page }) => {
+  await page.goto("/multi-review-flow?phase=reviewing&reviewers=3&worktreeChanged=1");
+  await expect(page.getByTestId("multi-review-worktree-changed")).toContainText("worktree changed");
+  const running = pipeline(page).getByRole("tab", { name: /^Reviewer 2/ });
+  await running.click({ button: "right" });
+  await expect(page.getByRole("menuitem", { name: "Restart in…" })).toBeVisible();
+  await expect(page.getByRole("menuitem", { name: "Skip remaining reviewers" })).toBeVisible();
+});
+
+test("Address Findings offers Skip and code rewind from its context menu", async ({ page }) => {
+  await page.goto("/multi-review-flow?phase=fixing&reviewers=3");
+  await pipeline(page)
+    .getByRole("tab", { name: /^Address Findings/ })
+    .click({ button: "right" });
+  await expect(page.getByRole("menuitem", { name: "Skip Address Findings" })).toBeVisible();
+  await expect(page.getByRole("menuitem", { name: "Rewind code to here…" })).toBeVisible();
+});
+
 function pipeline(page: Page) {
   return page.getByRole("tablist", { name: "Multi Review pipeline" });
 }

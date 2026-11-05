@@ -1006,7 +1006,10 @@ older image's bridge ignores both variables and keeps its plain lines.
 
 A relaunch keeps the run before it in `/tmp/<provider>-bridge.prev.log`, read with
 `previous: true` on the `get_*_server_log` commands
-([container-lifecycle.md](container-lifecycle.md#the-previous-run)).
+([container-lifecycle.md](container-lifecycle.md#the-previous-run)). Lines the
+writer could not write (a full disk, a failed rotation) are counted and reported
+by an `[orkestrator-log-writer] dropped N lines` line at its next successful write
+([container-lifecycle.md](container-lifecycle.md#bounded-logs-bounded-logs1)).
 
 ### A level replaced at runtime
 

@@ -92,3 +92,15 @@ The complete owner passed alone through
 install, also passed this owner in 20 repeats in a three-owner run (680 pass,
 20 fail, all failures in PreviewUpstreamPool). This establishes intermittence,
 not target-branch reproduction of this exact failure. No upload code changed.
+
+## E14 review repair, 2026-11-05
+
+Preparation at `a89e2e827` repeated the unchanged expiry assertion (expected
+false, received true, 36.90 ms) in `mise run test`, using package-configured
+parallel workers. Original evidence: `.orkestrator/review-artifacts/review-validation-81b1b0a7-2350-4eb7-aacc-cbbe84a9b965/validation-04.stdout.txt`.
+The consolidated review recorded 31,356 pass / 143 skipped / 4 failures.
+`mise run test:logged -- --name address-upload-expiry -- bun test --cwd apps/backend src/core/nodes/node-files.test.ts --parallel=1 --only-failures`
+passed the complete unchanged owner (exit 0, 0.4 s). No expiry implementation
+or assertion changed; the fixed wait remains a suspected contention race.
+The preparation triage marks this related by its transitive import of the
+changed Docker log vocabulary, so this pass alone does not establish causality.

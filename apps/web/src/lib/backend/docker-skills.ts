@@ -278,9 +278,28 @@ export interface OpenCodeModelCatalogSnapshot {
   models: CachedOpenCodeModel[];
 }
 
+/** Every container server with a `get_<provider>_server_log` command. */
+export type ContainerServerLogProvider = "opencode" | "claude" | "codex" | "cursor" | "grok" | "pi";
+
+/**
+ * A container server's bounded, redacted log tail (for debugging). With
+ * `previous`, the log of the run before the last relaunch instead, which is
+ * where a crash's evidence is; empty when there has been no relaunch.
+ */
+export async function getContainerServerLog(
+  provider: ContainerServerLogProvider,
+  containerId: string,
+  options: { previous?: boolean } = {},
+): Promise<string> {
+  return invoke<string>(`get_${provider}_server_log`, {
+    containerId,
+    ...(options.previous ? { previous: true } : {}),
+  });
+}
+
 /** Get the OpenCode server log from a container (for debugging) */
 export async function getOpenCodeServerLog(containerId: string): Promise<string> {
-  return invoke<string>("get_opencode_server_log", { containerId });
+  return getContainerServerLog("opencode", containerId);
 }
 
 /** Get OpenCode model preferences from ~/.local/state/opencode/model.json */
@@ -354,7 +373,7 @@ export async function cacheOpenCodeModelCatalog(
 
 /** Get the Claude bridge server log from a container (for debugging) */
 export async function getClaudeServerLog(containerId: string): Promise<string> {
-  return invoke<string>("get_claude_server_log", { containerId });
+  return getContainerServerLog("claude", containerId);
 }
 
 /** Read or refresh the backend-owned Claude model catalog for an environment. */
@@ -370,7 +389,7 @@ export async function getClaudeModelCatalog(
 
 /** Get the Codex bridge server log from a container (for debugging) */
 export async function getCodexServerLog(containerId: string): Promise<string> {
-  return invoke<string>("get_codex_server_log", { containerId });
+  return getContainerServerLog("codex", containerId);
 }
 
 // --- Credential Commands ---

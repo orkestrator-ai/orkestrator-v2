@@ -1056,26 +1056,29 @@ describe("EnvironmentItem menu actions and selection", () => {
     expect(onDelete).toHaveBeenCalledWith("env-1");
   });
 
-  test("context menu Delete still forwards a stale merge-cleanup environment", () => {
-    const onDelete = mock(() => {});
-    const env = makeEnvironment({
-      name: "failed-cleanup",
-      cleanupAfterMergeError: "delete failed",
-      deletionRequestedAt: "2026-01-02T00:00:00.000Z",
-    });
-    const { container } = renderItem(env, { onDelete });
+  test.each(["cleanupAfterMergeError", "deletionError"] as const)(
+    "Retry delete forwards %s",
+    (errorField) => {
+      const onDelete = mock(() => {});
+      const env = makeEnvironment({
+        name: "failed-cleanup",
+        [errorField]: "delete failed",
+        deletionRequestedAt: "2026-01-02T00:00:00.000Z",
+      });
+      const { container } = renderItem(env, { onDelete });
 
-    const deleteItem = findMenuItem(container, "Delete");
-    expect(deleteItem).not.toBeUndefined();
-    fireEvent.click(deleteItem!);
+      const deleteItem = findMenuItem(container, "Retry delete");
+      expect(deleteItem).not.toBeUndefined();
+      fireEvent.click(deleteItem!);
 
-    const confirmButton = Array.from(container.querySelectorAll("button")).find(
-      (button) => button.textContent === "Delete",
-    );
-    expect(confirmButton).not.toBeUndefined();
-    fireEvent.click(confirmButton!);
-    expect(onDelete).toHaveBeenCalledWith("env-1");
-  });
+      const confirmButton = Array.from(container.querySelectorAll("button")).find(
+        (button) => button.textContent === "Delete",
+      );
+      expect(confirmButton).not.toBeUndefined();
+      fireEvent.click(confirmButton!);
+      expect(onDelete).toHaveBeenCalledWith("env-1");
+    },
+  );
 
   test("click selection forwards ctrl or meta selection intent", () => {
     const onSelect = mock(() => {});

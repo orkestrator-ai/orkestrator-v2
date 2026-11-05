@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
@@ -182,7 +182,7 @@ describe("the helper process", () => {
   });
 
   test("establishes a watch on a directory and refuses a missing one", async () => {
-    directory = await mkdtemp(path.join(tmpdir(), "ork-watch-host-"));
+    directory = await realpath(await mkdtemp(path.join(tmpdir(), "ork-watch-host-")));
     const live = host.watch(directory, () => undefined, { recursive: false });
     await live.established;
     const missing = host.watch(path.join(directory, "absent"), () => undefined, {
@@ -193,7 +193,7 @@ describe("the helper process", () => {
   }, 60_000);
 
   test("is only used on macOS", async () => {
-    directory = await mkdtemp(path.join(tmpdir(), "ork-watch-host-"));
+    directory = await realpath(await mkdtemp(path.join(tmpdir(), "ork-watch-host-")));
     const inProcess = watchDirectory(directory, () => undefined, { recursive: false }, "linux");
     expect(inProcess.established).toBeUndefined();
     inProcess.close();

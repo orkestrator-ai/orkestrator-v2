@@ -1677,8 +1677,10 @@ export async function deleteEnvironment(
       await stopLocalServersForEnvironmentUnlocked(environmentId, context);
       // Nothing should scan or watch a tree while it is being removed. The
       // tombstone keeps later reconciliations from tracking it again.
-      context.runtime.diffStats.invalidatePendingSync();
-      context.runtime.diffStats.service.pause(environmentId);
+      await context.runtime.diffStats.pauseForRemoval(
+        environmentId,
+        cleanup?.worktreePath ?? environment?.worktreePath,
+      );
       if (cleanup?.worktreePath) {
         const worktreeRemoved = await runEnvironmentCleanupStep(cleanup, "worktree", context);
         // A branch still checked out in a surviving worktree cannot be judged or

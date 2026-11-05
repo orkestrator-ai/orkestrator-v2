@@ -49,7 +49,7 @@ const MAX_TEXT = 256;
 /** A directory name (the last path segment) is shown and matched, never the path. */
 const MAX_PATH_NAME = 128;
 const MAX_TIMESTAMP = 64;
-const MAX_DELETE_FAILURE = 240;
+export const NODE_DELETE_FAILURE = "Deletion failed. Retry on the owning machine.";
 
 export type SummaryFreshness = "initializing" | "current" | "catching-up" | "stale" | "degraded";
 
@@ -95,8 +95,9 @@ export interface NodeEnvironmentSummary {
   worktreeName?: string;
   /** Owner clock; the search falls back to it when there is no activity time. */
   createdAt?: string;
+  /** A retained deletion tombstone; true during failure as well as execution. */
   deleting: boolean;
-  /** Absent from older machines, whose failed deletes read as still `deleting`. */
+  /** Fixed content-free reason; absent on older machines. Overrides row progress, not availability. */
   deleteFailure?: string;
   /** When the running delete started, so a slow one can say how long it has taken. */
   deletingSince?: string;
@@ -353,8 +354,9 @@ export function toNodeEnvironmentSummary(
     ...(typeof raw.createdAt === "string" && raw.createdAt
       ? { createdAt: raw.createdAt.slice(0, MAX_TIMESTAMP) }
       : {}),
-    deleting: deleteFailure === null && environmentHasDeletionTombstone(raw),
-    ...(deleteFailure ? { deleteFailure: boundedText(deleteFailure, MAX_DELETE_FAILURE) } : {}),
+    // Availability stays fenced until the tombstone is removed, even on failure.
+    deleting: environmentHasDeletionTombstone(raw),
+    ...(deleteFailure ? { deleteFailure: NODE_DELETE_FAILURE } : {}),
     ...(deleteFailure === null &&
     environmentHasDeletionTombstone(raw) &&
     typeof raw.lifecycleOperationStartedAt === "string" &&

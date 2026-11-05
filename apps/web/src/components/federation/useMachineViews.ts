@@ -9,7 +9,13 @@ import {
   projectRef,
   type BackendId,
 } from "@orkestrator/protocol/federation";
-import type { NodeSummary, SelfNodeSummary } from "@orkestrator/protocol/node-summaries";
+import {
+  environmentDeletionFailure,
+  environmentHasDeletionTombstone,
+  NODE_DELETE_FAILURE,
+  type NodeSummary,
+  type SelfNodeSummary,
+} from "@orkestrator/protocol/node-summaries";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useEnvironmentStore, useProjectStore } from "@/stores";
 import type { MachineView } from "@/lib/federation/aggregate";
@@ -105,8 +111,13 @@ function boundEnvironments(
       ...(environment.prState ? { prState: environment.prState } : {}),
       hasUnreadWork: environment.hasUnreadWork === true,
       ...(environment.environmentType ? { environmentType: environment.environmentType } : {}),
-      deleting:
-        environment.lifecycleOperation === "deleting" || Boolean(environment.deletionRequestedAt),
+      deleting: environmentHasDeletionTombstone(environment),
+      ...(environmentDeletionFailure(environment) ? { deleteFailure: NODE_DELETE_FAILURE } : {}),
+      ...(!environmentDeletionFailure(environment) &&
+      environmentHasDeletionTombstone(environment) &&
+      environment.lifecycleOperationStartedAt
+        ? { deletingSince: environment.lifecycleOperationStartedAt }
+        : {}),
       isProjectHome: environment.projectHome === true,
     });
     byProject.set(environment.projectId, list);

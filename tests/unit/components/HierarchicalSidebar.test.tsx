@@ -2333,30 +2333,33 @@ describe("HierarchicalSidebar", () => {
     expect(useUIStore.getState().selectedEnvironmentIds).toEqual([]);
   });
 
-  test("forwards a fresh delete for an environment with a stale merge-cleanup error", async () => {
-    environmentsValue = [
-      {
-        ...createdEnvironment,
-        id: "env-failed-cleanup",
-        name: "Failed Cleanup",
-        cleanupAfterMergeError: "delete failed",
-        deletionRequestedAt: "2026-01-02T00:00:00.000Z",
-      },
-    ];
-    useUIStore.setState({
-      selectedProjectId: "project-1",
-      selectedEnvironmentId: "env-failed-cleanup",
-    });
-    render(<HierarchicalSidebar />);
+  test.each(["cleanupAfterMergeError", "deletionError"] as const)(
+    "Retry delete forwards %s",
+    async (errorField) => {
+      environmentsValue = [
+        {
+          ...createdEnvironment,
+          id: "env-failed-cleanup",
+          name: "Failed Cleanup",
+          [errorField]: "delete failed",
+          deletionRequestedAt: "2026-01-02T00:00:00.000Z",
+        },
+      ];
+      useUIStore.setState({
+        selectedProjectId: "project-1",
+        selectedEnvironmentId: "env-failed-cleanup",
+      });
+      render(<HierarchicalSidebar />);
 
-    fireEvent.contextMenu(screen.getByRole("button", { name: /^Failed Cleanup/ }));
-    fireEvent.click(await screen.findByRole("menuitem", { name: "Delete" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
+      fireEvent.contextMenu(screen.getByRole("button", { name: /^Failed Cleanup/ }));
+      fireEvent.click(await screen.findByRole("menuitem", { name: "Retry delete" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
 
-    await waitFor(() => {
-      expect(deleteEnvironmentMock).toHaveBeenCalledWith("env-failed-cleanup");
-    });
-  });
+      await waitFor(() => {
+        expect(deleteEnvironmentMock).toHaveBeenCalledWith("env-failed-cleanup");
+      });
+    },
+  );
 
   test("bulk-deletes a selected environment that still carries a stale merge-cleanup error", async () => {
     environmentsValue = [

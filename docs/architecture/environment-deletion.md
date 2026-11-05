@@ -129,7 +129,8 @@ Inside the local-server queue:
 8. Containers: drain a running container's processes, then run the
    `container`, `volumes` and `network` steps.
 9. Stop local servers, then stop watching and scanning the worktree
-   (`diffStats.service.pause`), and only then run the `worktree` step and, if
+   (`diffStats.pauseForRemoval`), wait for already-running physical scans of that
+   worktree (across comparison refs), and only then run the `worktree` step and, if
    it succeeded, the `branch` step. The tombstone keeps a later diff tracking
    reconciliation from tracking the environment again, so nothing watches a
    tree while it is removed. The `worktree` step first stops the worktree's
@@ -167,7 +168,10 @@ tombstone alone therefore does not mean a delete is running. Clients ask
 reason recorded the row stops spinning, shows the reason and offers **Retry**,
 which is the ordinary delete. A delete clears `deletionError` before it does
 anything else, and a restart still retries it. Node summaries carry this as
-`deleting: false` plus `deleteFailure`.
+`deleting: true` for every tombstone, including failed deletes, so availability
+filters keep fencing them. `deleteFailure` is a fixed, content-free message; raw
+errors stay on the owning machine. Rows suppress the spinner when that field is
+present. The bound machine view uses the same failure and tombstone helpers.
 
 A delete with no failure past two minutes says so under its name ("Still
 deleting after N min", from `lifecycleOperationStartedAt`, relayed as

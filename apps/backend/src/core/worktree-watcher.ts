@@ -297,6 +297,9 @@ export function startWorktreeWatcher(options: WorktreeWatcherOptions): WorktreeW
       void handle.established.then(
         () => {
           unestablished -= 1;
+          // Reconcile edits made after the initial scan but before this watch
+          // existed. No platform event can describe that uncovered interval.
+          schedule({ fileList: true, tree: true }, null);
           announceCoverage();
         },
         // Its `error` event closes this watcher, which ends coverage for good.

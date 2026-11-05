@@ -1,3 +1,4 @@
+import { toNodeEnvironmentSummary } from "@orkestrator/protocol/node-summaries";
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { StrictMode, Suspense } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -922,6 +923,14 @@ describe("ProviderMcpSettings on another machine", () => {
                 environmentType: "local",
                 deleting: false,
               },
+              toNodeEnvironmentSummary("leaf" as never, {
+                id: "failed-env",
+                projectId: "p",
+                name: "Failed worktree",
+                environmentType: "local",
+                deletionRequestedAt: "2026-11-05",
+                deletionError: "private failure",
+              })!,
             ],
           },
         ],
@@ -966,6 +975,7 @@ describe("ProviderMcpSettings on another machine", () => {
 
     fireEvent.keyDown(screen.getByLabelText("Configuration for"), { key: "Enter" });
     expect(await screen.findByRole("option", { name: "Leaf worktree (worktree)" })).toBeTruthy();
+    expect(screen.queryByRole("option", { name: /Failed worktree/ })).toBeNull();
   });
 });
 

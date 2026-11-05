@@ -153,3 +153,39 @@ for (const followupKey of ["key", "new-key"]) {
     }
   });
 }
+
+test("settling one physical worktree waits for all its refs without waiting for another tree", async () => {
+  const queue = new SharedScanQueue<void>();
+  let release!: () => void;
+  let releaseOther!: () => void;
+  const a = queue.run(
+    "local:/a\0main",
+    () =>
+      new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+  );
+  const b = queue.run(
+    "local:/b\0main",
+    () =>
+      new Promise<void>((resolve) => {
+        releaseOther = resolve;
+      }),
+  );
+  let settled = false;
+  const drain = queue.settled("local:/a\0").then(() => {
+    settled = true;
+  });
+  try {
+    await Bun.sleep(0);
+    expect(settled).toBe(false);
+    release();
+    await drain;
+    expect(settled).toBe(true);
+    expect(queue.stats().keys).toBe(1);
+  } finally {
+    release();
+    releaseOther();
+    await Promise.all([a, b]);
+  }
+});

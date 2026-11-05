@@ -51,7 +51,7 @@ export const WATCH_HOST_MAX_LINE_CHARS = 16 * 1024 * 1024;
  * neither side can queue without bound. It exits when the backend closes stdin,
  * which also covers the backend dying.
  */
-const WATCH_HOST_PROGRAM = String.raw`
+export const WATCH_HOST_PROGRAM = String.raw`
 const { watch } = require("node:fs");
 const MAX_EVENTS = ${WATCH_HOST_MAX_EVENTS_PER_FLUSH};
 const FLUSH_MS = ${WATCH_HOST_FLUSH_MS};

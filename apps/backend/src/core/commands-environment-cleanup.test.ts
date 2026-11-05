@@ -300,6 +300,74 @@ describe("delete_environment host cleanup", () => {
     );
   });
 
+  test("waits for an active scan's exclude write before removing its worktree", async () => {
+    let worktreePath = "";
+    await withDeleteCommand(
+      async (storage) => {
+        worktreePath = await seedWorktree(storage);
+        await runCommand("git", ["init", worktreePath]);
+      },
+      async (invokeDelete, _storage, context) => {
+        let reached!: () => void;
+        const atWrite = new Promise<void>((resolve) => {
+          reached = resolve;
+        });
+        let release!: () => void;
+        const gate = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        const mkdir = fs.mkdir.bind(fs);
+        const intercepted = spyOn(fs, "mkdir").mockImplementation((async (
+          ...args: Parameters<typeof fs.mkdir>
+        ) => {
+          if (String(args[0]) === path.join(worktreePath, ".git", "info")) {
+            reached();
+            await gate;
+          }
+          return mkdir(...args);
+        }) as typeof fs.mkdir);
+        const tracking = context.runtime.diffStats;
+        let deleting: Promise<void> | undefined;
+        try {
+          tracking.service.track({
+            environmentId: "e1",
+            kind: "local",
+            worktreePath,
+            comparisonRef: "HEAD",
+          });
+          await atWrite;
+          let paused!: () => void;
+          const atPause = new Promise<void>((resolve) => {
+            paused = resolve;
+          });
+          const pause = tracking.service.pause.bind(tracking.service);
+          const pauseSpy = spyOn(tracking.service, "pause").mockImplementation((id) => {
+            pause(id);
+            paused();
+          });
+          try {
+            deleting = invokeDelete();
+            await atPause;
+            // Pause cannot cancel mkdir/write work already admitted. Removal must wait.
+            expect(await exists(worktreePath)).toBe(true);
+            release();
+            await deleting;
+            await tracking.settled();
+            expect(await exists(worktreePath)).toBe(false);
+          } finally {
+            pauseSpy.mockRestore();
+          }
+        } finally {
+          release();
+          await deleting;
+          tracking.shutdown();
+          await tracking.settled();
+          intercepted.mockRestore();
+        }
+      },
+    );
+  });
+
   test("a delete that is stuck does not hold up another environment's", async () => {
     let stuckPath = "";
     let otherPath = "";

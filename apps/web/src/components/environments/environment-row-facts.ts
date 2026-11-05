@@ -90,9 +90,12 @@ export function nodeEnvironmentRowFacts(
     projectHome: environment.isProjectHome,
     environmentType: environment.environmentType,
     status: environment.status,
-    deleting: environment.deleting,
-    deleteFailure: environment.deleting ? null : (environment.deleteFailure ?? null),
-    deletingSince: environment.deleting ? (environment.deletingSince ?? null) : null,
+    deleting: environment.deleting && !environment.deleteFailure,
+    deleteFailure: environment.deleteFailure ?? null,
+    deletingSince:
+      environment.deleting && !environment.deleteFailure
+        ? (environment.deletingSince ?? null)
+        : null,
     buildPipeline: environment.buildPipeline === true,
     prState: environment.prState ?? null,
     autoMerge: environment.autoMerge === true,

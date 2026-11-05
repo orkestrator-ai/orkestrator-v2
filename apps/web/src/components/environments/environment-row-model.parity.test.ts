@@ -156,14 +156,19 @@ function nodeRow(environment: Environment, markers: Markers): Row {
   return row(nodeEnvironmentRowFacts(machine, summary, { busy: false, writable: true }, true));
 }
 
-/** Everything but the machine lines, which differ by design ("This window"). */
+/** Machine lines and failure detail differ by design: remote errors are content-free. */
 function comparable({ facts, model }: Row) {
   const { machine, ...otherFacts } = facts;
   const { markerMachine, cardMachine, ...otherModel } = model;
   return {
-    facts: { ...otherFacts, machine: machine && { name: machine.name } },
+    facts: {
+      ...otherFacts,
+      deleteFailure: Boolean(facts.deleteFailure),
+      machine: machine && { name: machine.name },
+    },
     model: {
       ...otherModel,
+      deleteFailureText: Boolean(model.deleteFailureText),
       markerMachine: markerMachine && { name: markerMachine.name },
       cardMachine: cardMachine && { name: cardMachine.name },
     },

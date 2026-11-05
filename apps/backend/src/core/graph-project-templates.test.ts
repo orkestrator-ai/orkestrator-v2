@@ -1,10 +1,11 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test, spyOn } from "bun:test";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { graphTemplateDigest } from "@orkestrator/protocol/graphs/compile";
 import { GRAPH_LIBRARY_BOUNDS } from "@orkestrator/protocol/graphs/library";
 import { GraphProjectTemplates } from "./graph-project-templates.js";
+import * as watchHost from "./watch-host.js";
 import { GraphTemplateError } from "./graph-template-errors.js";
 import {
   FakeGraphProjectWatch,
@@ -156,6 +157,40 @@ describe("watching", () => {
     await waitForGraphCondition(() => watch.open()[0] === graphs);
     expect(watch.open()).toEqual([graphs]);
     expect(watch.closed).toBe(1);
+  });
+
+  test("an asynchronously refused watch is dropped and the next scan retries", async () => {
+    reader.close();
+    let fail: ((error: Error) => void) | undefined;
+    let starts = 0;
+    let closes = 0;
+    const start = spyOn(watchHost, "watchDirectory").mockImplementation(() => {
+      starts += 1;
+      const handle = {
+        on: (_event: "error", listener: (error: Error) => void) => {
+          fail = listener;
+          return handle;
+        },
+        close: () => {
+          closes += 1;
+        },
+      };
+      return handle;
+    });
+    reader = new GraphProjectTemplates({ checkoutOf: async () => checkout });
+    try {
+      await reader.scan("p1");
+      await waitForGraphCondition(() => starts === 1);
+      expect(reader.watchedProjects()).toEqual(["p1"]);
+      fail!(Object.assign(new Error("refused"), { code: "ENOENT" }));
+      expect(reader.watchedProjects()).toEqual([]);
+      expect(closes).toBe(1);
+      await write("new.graph.json", sampleGraphTemplate("new"));
+      expect((await reader.scan("p1")).files).toHaveLength(1);
+      await waitForGraphCondition(() => starts === 2);
+    } finally {
+      start.mockRestore();
+    }
   });
 
   test("stops watching on close and evicts the least recently scanned project", async () => {

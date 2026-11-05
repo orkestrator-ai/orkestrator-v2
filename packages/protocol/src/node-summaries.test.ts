@@ -289,8 +289,8 @@ test("a failed delete is relayed as failed, not as still running", () => {
     lifecycleOperationStartedAt: "2026-11-05T12:00:00.000Z",
     deletionError: `reason ${"x".repeat(400)}`,
   });
-  expect(failed?.deleting).toBe(false);
-  expect(failed?.deleteFailure?.startsWith("reason")).toBe(true);
+  expect(failed?.deleting).toBe(true);
+  expect(failed?.deleteFailure).toBe("Deletion failed. Retry on the owning machine.");
   expect(failed?.deleteFailure?.length).toBeLessThanOrEqual(240);
   expect(failed?.deletingSince).toBeUndefined();
 
@@ -313,3 +313,19 @@ test("a failed delete is relayed as failed, not as still running", () => {
   expect(stale?.deleting).toBe(false);
   expect(stale?.deleteFailure).toBeUndefined();
 });
+
+for (const field of ["deletionError", "cleanupAfterMergeError"]) {
+  test(`summaries never relay raw ${field}`, () => {
+    const summary = toNodeEnvironmentSummary("bk_test" as never, {
+      id: "env",
+      projectId: "project",
+      deletionRequestedAt: "2026-11-05",
+      [field]:
+        "Cannot remove /Users/private/worktree: https://example.com/?token=secret-value C:\\Users\\private",
+    });
+    expect(summary?.deleteFailure).toBe("Deletion failed. Retry on the owning machine.");
+    expect(JSON.stringify(summary)).not.toContain("private");
+    expect(JSON.stringify(summary)).not.toContain("secret-value");
+    expect(JSON.stringify(summary)).not.toContain("example.com");
+  });
+}

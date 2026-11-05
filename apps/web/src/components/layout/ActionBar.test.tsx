@@ -8640,6 +8640,22 @@ describe("ActionBar merge completion", () => {
     expect(setEnvironmentPrBackendMock).not.toHaveBeenCalled();
   });
 
+  test("an ordinary delete failure keeps cleanup retry enabled", () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      deletionError: "ordinary deletion failed",
+      deletionRequestedAt: "2026-11-05T12:00:00Z",
+      lifecycleOperation: "deleting",
+    };
+    render(<ActionBar />);
+    const button = screen.getByRole("button", { name: "Clean Up" }) as HTMLButtonElement;
+    expect(button.disabled).toBe(false);
+    fireEvent.click(button);
+    expect(
+      (screen.getByRole("button", { name: "Delete Environment" }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+  });
+
   test("disables a newly visible cleanup action while backend merge cleanup is active", async () => {
     currentEnvironment = {
       ...selectedEnvironment,

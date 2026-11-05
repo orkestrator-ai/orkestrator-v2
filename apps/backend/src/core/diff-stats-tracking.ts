@@ -508,6 +508,16 @@ export class DiffStatsTracking {
       });
   }
 
+  /** Fence new scans, then drain this worktree's already-running filesystem work. */
+  async pauseForRemoval(environmentId: string, worktreePath?: string | null): Promise<void> {
+    this.invalidatePendingSync();
+    this.service.pause(environmentId);
+    if (worktreePath) {
+      const key = new PhysicalKeyResolver().key({ kind: "local", worktreePath });
+      await this.sharedScans.settled(`${key}\0`);
+    }
+  }
+
   /**
    * Resolves once no physical scan is running. `shutdown()` does not cancel a
    * scan already started, and its status read writes the worktree's Git

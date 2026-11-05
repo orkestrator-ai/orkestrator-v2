@@ -583,10 +583,14 @@ test("a watch set up after the call returns keeps coverage unqualified until it 
     establish = resolve;
   });
   let announced = 0;
+  const hints: WorktreeChangeHint[] = [];
   const handle = { on: () => handle, close: () => undefined, established };
   const watcher = startWorktreeWatcher({
     worktreePath: "/wt",
-    onChange: () => undefined,
+    settleMs: 1,
+    onChange: (hint) => {
+      if (hint) hints.push(hint);
+    },
     onCoverageChange: () => {
       announced += 1;
     },
@@ -606,6 +610,8 @@ test("a watch set up after the call returns keeps coverage unqualified until it 
   await Bun.sleep(0);
   expect(watcher.qualified).toBe(true);
   expect(announced).toBe(1);
+  await until(() => hints.length === 1);
+  expect(hints).toEqual([{ fileList: true, tree: true, overflow: false }]);
   watcher.close();
 });
 

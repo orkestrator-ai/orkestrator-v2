@@ -62,3 +62,14 @@ bun test --cwd apps/backend ./tests/claude-state-signal-integration.test.ts
 --parallel=1 --only-failures` passed in 0.9 s (exit 0). Passing output was removed,
 so no totals are inferred. No implementation, assertion or timeout changed;
 the root cause and original aggregate remain unresolved.
+## Egress name-check repair validation — 2026-11-05
+
+`mise run test:logged -- --name review-default-tests -- mise run test` reproduced
+`hook writers serialize counters and retain a completed turn without any config`
+in the workspace group (two backend workers): expected `working 20 0`, received
+`working 16 0`, 1,142.95 ms. The aggregate's final totals are recorded in the repair
+result; the owner and hook implementation are unchanged by the egress branch.
+`mise run test:logged -- --name claude-signal-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/claude-state-signal-integration.test.ts --parallel=1 --only-failures`
+passed with exit 0 in 2.1 s. The original failure remains in the logged workspace
+artifact (`orkestrator-test-run.LAWw4i` under the host temporary directory).
+No cause or fix is established by the isolated pass.

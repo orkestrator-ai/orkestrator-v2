@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import {
   formatInstantInZone,
   instantsForWallTime,
@@ -35,6 +35,32 @@ describe("time zones", () => {
     expect(isValidTimeZone(LONDON)).toBe(true);
     expect(isValidTimeZone("Mars/Olympus")).toBe(false);
   });
+
+  test.each([
+    ["GMT", "2026-12-01T12:00:00Z", LONDON, "2026-12-01 12:00 GMT"],
+    ["GMT+0", "2026-12-01T12:00:00Z", LONDON, "2026-12-01 12:00 GMT"],
+    ["GMT-00:00", "2026-12-01T12:00:00Z", LONDON, "2026-12-01 12:00 GMT"],
+    ["GMT+1", "2026-07-01T12:00:00Z", LONDON, "2026-07-01 13:00 GMT+1"],
+    ["BST", "2026-07-01T12:00:00Z", LONDON, "2026-07-01 13:00 BST"],
+    ["GMT+5:30", "2026-12-01T12:00:00Z", "Asia/Kolkata", "2026-12-01 17:30 GMT+5:30"],
+  ])(
+    "formats ICU zone label %s without losing the civil time or offset",
+    (label, instant, zone, expected) => {
+      const original = Intl.DateTimeFormat.prototype.formatToParts;
+      const formatter = spyOn(Intl.DateTimeFormat.prototype, "formatToParts").mockImplementation(
+        function (this: Intl.DateTimeFormat, date?: Date | number) {
+          return original
+            .call(this, date)
+            .map((part) => (part.type === "timeZoneName" ? { ...part, value: label } : part));
+        },
+      );
+      try {
+        expect(formatInstantInZone(Date.parse(instant), zone)).toBe(expected);
+      } finally {
+        formatter.mockRestore();
+      }
+    },
+  );
 
   test("a skipped wall time has no instant and resolves forward by the gap", () => {
     const wall = { year: 2026, month: 3, day: 29, hour: 1, minute: 30 };

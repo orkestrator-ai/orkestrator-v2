@@ -103,7 +103,7 @@ The material risks are concentrated in four themes:
 | M9 | Medium | Container | Legacy images still mount whole host agent homes | Fixed for new containers; existing ones are listed for rebuild (see §4) |
 | M10 | Medium | Mail | Coordinator mail can target the project-home environment (local path) | Potential |
 | M11 | Medium (design) | Mail | Prompt injection can propagate worker → coordinator → other worker | Reported |
-| M12 | Medium (design) | Firewall | IP-based allowlist (shared CDN fronts), allowed APIs accept attacker credentials, DNS tunnelling | Reported |
+| M12 | Medium (design) | Firewall | IP-based allowlist (shared CDN fronts), allowed APIs accept attacker credentials, DNS tunnelling | Partly fixed: the egress gateway checks SNI, Host and DNS names; the default allowlist is unchanged (see §4) |
 | M13 | Medium | Bridges | Codex worker shells inherit `*_TOKEN` env; ACP advertises write/terminal to read-only sessions | Fixed |
 | L1–L18 | Low | Various | See §5 | Mixed |
 | I1–I7 | Info | Various | See §6 | — |
@@ -643,7 +643,16 @@ unless the user opts in, and mark delegations that originated from worker mail.
 
 ### M12. Egress firewall limitations (design)
 
-**Status:** Reported
+**Status:** Partly fixed (2026-11-05). On images with `egress-filter=1` the
+egress gateway checks the name each connection asks for (TLS SNI, or the Host
+of plain HTTP on a named port) and answers DNS only for allowlisted names,
+without decrypting anything, and fails closed when its daemon dies; an older
+image's gateway keeps address-only enforcement until it is rebuilt. The
+network settings and the README state that an allowed service still accepts
+whatever it is sent, and what the checks cannot see (an encrypted
+ClientHello, domain fronting, UDP and other protocols). The default allowlist
+still carries the telemetry hosts until a check without them is run
+([todo 6100](../todo/containers-and-environments/6100-default-allowlist-telemetry-hosts.md)).
 
 - **IP-based allowlist.** Domains are resolved into an ipset, with no SNI or Host check (`docker/firewall-domains.sh`). Default hosts on shared fronts (Google front-ends, Azure Blob, Cloudflare-fronted npm/OpenAI) let traffic reach other tenants on the same edge IPs.
 - **Allowed APIs accept attacker credentials.** Examples: `sentry.io` with an attacker DSN, `api.anthropic.com` or `openrouter.ai` with an attacker key, GitHub gists. `init-firewall.sh:21-22` acknowledges this.

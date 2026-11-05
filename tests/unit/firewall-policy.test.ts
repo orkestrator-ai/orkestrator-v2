@@ -34,15 +34,22 @@ describe("container firewall policy", () => {
       .split("\n")
       .map((line) => line.trim())
       .filter((line) => line && !line.startsWith("#"));
-    const dnsRules = activeLines.filter((line) => line.includes("--dport 53"));
+    const dnsRules = activeLines.filter(
+      (line) => line.includes("--dport 53") && !line.includes("! --dport 53"),
+    );
 
-    // resolv.conf nameservers, plus the embedded resolver's upstreams that
-    // Docker names in resolv.conf on a user-defined network.
+    // With name checks every query is first redirected to the gateway's
+    // daemon (firewall-egress-filter.test.ts). Then: resolv.conf nameservers,
+    // plus the embedded resolver's upstreams that Docker names in resolv.conf
+    // on a user-defined network, for the daemon's marked queries only when it
+    // runs.
     expect(dnsRules).toEqual([
-      'iptables -A OUTPUT -p udp -d "$resolver" --dport 53 -j ACCEPT',
-      'iptables -A OUTPUT -p tcp -d "$resolver" --dport 53 -j ACCEPT',
-      'iptables -A OUTPUT -p udp -d "$upstream" --dport 53 -j ACCEPT',
-      'iptables -A OUTPUT -p tcp -d "$upstream" --dport 53 -j ACCEPT',
+      'iptables -t nat -I OUTPUT 1 -p "$protocol" --dport 53 ! -d 127.0.0.0/8 -m mark ! --mark "$ORK_FILTER_MARK" \\',
+      'iptables -t nat -I OUTPUT 1 -p "$protocol" --dport 53 -d 127.0.0.11 -m mark ! --mark "$ORK_FILTER_MARK" \\',
+      'iptables -A OUTPUT -p udp -d "$resolver" --dport 53 "${FILTER_MATCH[@]}" -j ACCEPT',
+      'iptables -A OUTPUT -p tcp -d "$resolver" --dport 53 "${FILTER_MATCH[@]}" -j ACCEPT',
+      'iptables -A OUTPUT -p udp -d "$upstream" --dport 53 "${FILTER_MATCH[@]}" -j ACCEPT',
+      'iptables -A OUTPUT -p tcp -d "$upstream" --dport 53 "${FILTER_MATCH[@]}" -j ACCEPT',
     ]);
     expect(activeLines.some((line) => line.includes("--dport 22"))).toBe(false);
   });

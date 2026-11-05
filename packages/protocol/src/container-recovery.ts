@@ -245,5 +245,14 @@ export interface EnvironmentNetworkPolicy {
     /** Entries removed from the allowlist by the last change, with their connections. */
     revokedEntries: number | null;
     revocation: "conntrack" | "unavailable" | null;
+    /**
+     * The egress gateway's name checks (`egress-filter=1`): `enforced` when
+     * TLS SNI, HTTP Host and DNS are checked against the allowlist; `off` for
+     * a gateway created with them switched off; `unavailable` where they do
+     * not run (an in-container firewall, a policy before 3). `null` when the
+     * report has no such field: an image from before the checks, which
+     * enforces addresses only.
+     */
+    egressFilter?: "enforced" | "off" | "unavailable" | null;
   } | null;
 }

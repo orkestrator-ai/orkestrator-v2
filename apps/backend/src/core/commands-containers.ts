@@ -127,6 +127,7 @@ import {
   DOCKER_LABEL_EGRESS_GATEWAY,
   createEgressGateway,
   egressEnforcement,
+  egressFilterEnvironment,
   egressGatewayName,
   removeRuntimeContainer,
 } from "./egress-gateway.js";
@@ -587,6 +588,7 @@ export async function createDockerContainer(
           NETWORK_MODE: "restricted",
           ALLOWED_DOMAINS: allowedDomainsValue,
           ...policyEnvironment,
+          ...egressFilterEnvironment(),
         },
         limits: {
           memory: capacity.support.memoryLimit === true,

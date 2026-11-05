@@ -64,6 +64,15 @@ export const IMAGE_CAPABILITIES = {
    * runs the firewall step itself and verifies a gateway's enforcement.
    */
   "egress-gateway": 1,
+  /**
+   * `orkestrator-egress-filter`: a gateway on network policy 3 also checks
+   * the name a connection asks for (TLS SNI, HTTP Host) against the
+   * allowlist and answers DNS only for allowlisted names. Recorded per
+   * gateway at its first boot and reported as `egressFilter` in its firewall
+   * report; a gateway from an older image reports nothing and keeps
+   * address-only enforcement until it is rebuilt.
+   */
+  "egress-filter": 1,
   /** Bridge diagnostic files rotated by a launch wrapper (step 11). */
   "bounded-logs": 1,
   /**

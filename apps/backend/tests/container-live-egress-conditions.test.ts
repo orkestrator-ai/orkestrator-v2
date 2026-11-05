@@ -588,7 +588,9 @@ async function assertEnforced(containerId: string, gateway: string): Promise<voi
         .at(-1),
     );
   expect(await curl("https://registry.npmjs.org/")).toBe(0);
-  expect(await curl("https://example.com/")).toBe(7);
+  // Refused at the connection (7), or already at DNS (6) by a gateway whose
+  // image checks names.
+  expect([6, 7]).toContain(await curl("https://example.com/"));
 }
 
 describe("Docker daemon restart", () => {

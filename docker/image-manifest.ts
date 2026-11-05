@@ -43,6 +43,10 @@ export const CONTRACT_FILES: ReadonlyArray<{ installed: string; source: string }
     installed: "/usr/local/bin/orkestrator-egress-gateway",
     source: "docker/orkestrator-egress-gateway.sh",
   },
+  {
+    installed: "/usr/local/bin/orkestrator-egress-filter",
+    source: "docker/orkestrator-egress-filter.pl",
+  },
   { installed: "/usr/local/bin/orkestrator-drain.sh", source: "docker/orkestrator-drain.sh" },
   { installed: "/usr/local/bin/orkestrator-storage.sh", source: "docker/orkestrator-storage.sh" },
   { installed: "/usr/local/bin/orkestrator-migrate.sh", source: "docker/orkestrator-migrate.sh" },

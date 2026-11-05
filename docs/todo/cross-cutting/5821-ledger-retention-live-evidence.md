@@ -106,7 +106,7 @@ Analysed 2026-11-05 against `main` at `0e8958f57`.
 
 ## Related
 
-- Batch file E3: `docs/reports/efficiency-logging-database/0540-e3-retention-and-deletion.md` at commit a95c0effb (`git show a95c0effb:docs/reports/efficiency-logging-database/0540-e3-retention-and-deletion.md`); its outcome table is at the end.
+- Batch file E3, parts 0730 and 0540 (deleted): its outcome is the [closing check of E3](../../reports/efficiency-logging-database/0000-index.md#closing-check-of-e3-retention-and-deletion), which names the commit that holds the file's last version.
 - [Change tracking](../../architecture/change-tracking.md#age-based-retention)
 - [5361](5361-retention-pass-on-a-large-real-store.md), the object store side of the pass
 - [5820](5820-removed-project-kanban-notes-plans.md), the rest of the same batch

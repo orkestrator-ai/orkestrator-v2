@@ -499,6 +499,8 @@ export interface MultiReviewWorkflow {
    * not know.
    */
   reviewWorktreeChanged?: boolean;
+  reviewPackagePaths?: string[];
+  pendingCodeRewind?: { step: MultiReviewRewindStep; from: string; to: string; backupRef: string };
   phase: MultiReviewPhase;
   /** Active backend-owned phase retained while its step is paused. */
   pausedFromPhase?: MultiReviewPausablePhase;
@@ -1037,6 +1039,25 @@ function isAutoPrLaunch(value: unknown): value is MultiReviewAutoPrLaunch {
 }
 
 export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkflow {
+  if (record(value)) {
+    const intent = value.pendingCodeRewind;
+    if (
+      intent !== undefined &&
+      (!record(intent) ||
+        (intent.step !== "prepare" && intent.step !== "fix") ||
+        !nonBlank(intent.from, 256) ||
+        !nonBlank(intent.to, 256) ||
+        !nonBlank(intent.backupRef, 512))
+    )
+      return false;
+    if (
+      value.reviewPackagePaths !== undefined &&
+      (!Array.isArray(value.reviewPackagePaths) ||
+        value.reviewPackagePaths.length > 10000 ||
+        !value.reviewPackagePaths.every((path) => typeof path === "string" && path.length <= 4096))
+    )
+      return false;
+  }
   if (
     !record(value) ||
     !hasOnlyKeys(value, [
@@ -1072,6 +1093,8 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
       "validationStopRequested",
       "reviewSnapshotStale",
       "reviewWorktreeChanged",
+      "reviewPackagePaths",
+      "pendingCodeRewind",
       "consolidatedReport",
       "consolidationOverlap",
       "fixResult",

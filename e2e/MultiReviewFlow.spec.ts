@@ -26,12 +26,17 @@ test("a reviewer offers Restart in… and Skip, and a moved worktree is shown", 
   await expect(page.getByRole("menuitem", { name: "Skip remaining reviewers" })).toBeVisible();
 });
 
-test("Address Findings offers Skip and code rewind from its context menu", async ({ page }) => {
-  await page.goto("/multi-review-flow?phase=fixing&reviewers=3");
+test("Address Findings offers Skip and code rewind from its context menu", async ({
+  page,
+}, testInfo) => {
+  await page.goto("/multi-review-flow?phase=interactive&reviewers=3");
   await pipeline(page)
     .getByRole("tab", { name: /^Address Findings/ })
     .click({ button: "right" });
-  await expect(page.getByRole("menuitem", { name: "Skip Address Findings" })).toBeVisible();
+  await expect(page.getByRole("menuitem", { name: "Skip Address Findings" })).toBeEnabled();
+  await page.screenshot({
+    path: `output/visual-previews/address-findings-skip-${testInfo.project.name}.png`,
+  });
   await expect(page.getByRole("menuitem", { name: "Rewind code to here…" })).toBeVisible();
 });
 

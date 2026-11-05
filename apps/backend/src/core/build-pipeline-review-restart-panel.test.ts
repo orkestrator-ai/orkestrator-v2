@@ -1,3 +1,4 @@
+import { panelFromSessions } from "./build-pipeline-review-panel.js";
 import { describe, expect, test } from "bun:test";
 import { isBuildPipeline, type BuildPipeline } from "@orkestrator/protocol/build-pipeline";
 import {
@@ -58,6 +59,13 @@ describe("build pipeline restart keeps the panel", () => {
       const started = await service.start(startInput(PANEL));
       const addressing = await advanceUntil(service, read, started.id, "addressing", 30);
       expect(addressing.reviewFanout).toBeUndefined();
+      const original = addressing.sessions.find((s) => s.label === "Consolidation")!;
+      expect(original.reviewWorkspaceBaseline).toBeDefined();
+      expect(panelFromSessions(addressing, original)?.workspaceBaseline).toEqual(
+        original.reviewWorkspaceBaseline,
+      );
+      original.reviewWorktreeChanged = true;
+      expect(panelFromSessions(addressing, original)?.snapshotStale).toBe(true);
       const first = addressing.sessions.find((s) => s.label === "Consolidation")!;
       const address = addressing.sessions.find((s) => s.phase === "address")!;
       provider.runningConsolidation = true;

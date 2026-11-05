@@ -10812,10 +10812,10 @@ test("Multi Review prepares and consolidates with its review model before openin
         1,
       );
       // A live checkout change must not invalidate the immutable evidence after
-      // preparation: one probe to pin the review, one to mark it stale if it moved.
+      // preparation: pin the review, record sealing paths, then check for movement.
       expect(
         commands.filter((entry) => entry.command === "get_environment_uncommitted_paths"),
-      ).toHaveLength(2);
+      ).toHaveLength(3);
       // One verification per phase — fan-out admission and consolidation —
       // independent of how many reviewers the panel has.
       expect(commands.filter((entry) => entry.command === "verify_review_package")).toHaveLength(2);
@@ -13089,6 +13089,13 @@ test("MultiReviewService rewinds code to preparation's starting commit and resta
       });
       const ready = (await snapshot(started.id))!;
       const target = ready.reviewWorktreeSnapshot!.head;
+      expect((await service.previewCodeRewind(started.id, "fix")).blocked).toContain(
+        "has not started",
+      );
+      await expect(service.rewindCode(started.id, "fix", target)).rejects.toThrow(
+        "has not started",
+      );
+      expect(calls.some((args) => args[0] === "reset")).toBe(false);
       head.value = target;
       const preview = await service.previewCodeRewind(started.id, "prepare");
       expect(preview.blocked).toBeUndefined();
@@ -13217,7 +13224,9 @@ test("MultiReviewService reviewers are mail workers while they review", async ()
         claim: async (_environmentId, tabId) => {
           expect(tabId).toBe(address);
           claims += 1;
-          return claims === 1 ? { text: "Check the migration too.", messageIds: ["m1"] } : null;
+          return claims === 1
+            ? { text: "Check the migration too." + "x".repeat(5000), messageIds: ["m1"] }
+            : null;
         },
         settle: async (_environmentId, _tabId, _messageIds, outcome) => {
           settled.push(outcome);
@@ -13235,11 +13244,203 @@ test("MultiReviewService reviewers are mail workers while they review", async ()
           sent.prompt.includes("Check the migration too."),
         );
       });
+      expect(isMultiReviewWorkflow((await snapshot(started.id))!)).toBe(true);
+      const transcript = await service.workerTranscript({
+        environmentId: "env-reviewer-mail",
+        tabId: address,
+        limit: 1,
+      });
+      expect(transcript?.workflowId).toBe(started.id);
       const after = (await snapshot(started.id))!.reviewers[0]!;
       expect(after.requestId).not.toBe(reviewer.requestId);
 
       await service.cancel(started.id);
       expect(await storage.listMultiReviewWorkers("env-reviewer-mail")).toEqual([]);
     },
+  );
+});
+
+test("MultiReviewService skips normal interactive Address Findings without a result", async () => {
+  await withService(
+    "env-skip-interactive",
+    new Provider(),
+    async ({ service, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+      await service.address(started.id);
+      expect((await snapshot(started.id))?.phase).toBe("interactive");
+      const skipped = await service.skipStep(started.id, "fix");
+      expect(skipped.phase).toBe("ready");
+      expect(skipped.fixResult).toBeUndefined();
+      expect(skipped.addressPromptPending).toBeUndefined();
+      expect(skipped.fixSession?.status).not.toBe("running");
+    },
+  );
+});
+
+test("MultiReviewService refused skip keeps a supervised controller", async () => {
+  const provider = new Provider();
+  provider.statusOverrides.set("session-1", "running");
+  await withService("env-skip-claim", provider, async ({ service, storage, start }) => {
+    const started = await start();
+    await service.advanceNow(started.id);
+    await expect(service.skipStep(started.id, "fix")).rejects.toThrow("not running");
+    expect(
+      (await storage.claimMultiReviewController(started.id, "other-owner", 15000)).granted,
+    ).toBe(false);
+  });
+});
+
+test("MultiReviewService recovers reset after restart persistence fails exactly once", async () => {
+  const provider = new Provider();
+  const head = { value: "" };
+  const base = rewindGit(head);
+  const refs = new Map<string, string>();
+  const git: typeof base.git = async (env, args) => {
+    if (args[0] === "update-ref") refs.set(args[1]!, args[2]!);
+    if (args[0] === "rev-parse" && refs.has(args[1]!)) return refs.get(args[1]!)!;
+    return base.git(env, args);
+  };
+  const invoke = async <T>(command: string, args?: Record<string, unknown>): Promise<T> => {
+    const result = await stableReviewInvoker<T>(command, args);
+    return command === "get_environment_uncommitted_paths" && head.value
+      ? ({ ...result, head: head.value } as T)
+      : result;
+  };
+  await withService(
+    "env-rewind-recovery",
+    provider,
+    async ({ service, storage, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+      head.value = "a".repeat(40);
+      const save = storage.saveMultiReviewWorkflow.bind(storage);
+      storage.saveMultiReviewWorkflow = (async (...args: Parameters<typeof save>) => {
+        const value = args[3] as MultiReviewWorkflow;
+        if (value.phase === "preparing" && !value.pendingCodeRewind)
+          throw new Error("restart save failed");
+        return save(...args);
+      }) as typeof save;
+      try {
+        await expect(service.rewindCode(started.id, "prepare", head.value)).rejects.toThrow(
+          "restart save failed",
+        );
+      } finally {
+        storage.saveMultiReviewWorkflow = save;
+      }
+      expect((await snapshot(started.id))?.pendingCodeRewind?.from).toBe("a".repeat(40));
+      await service.shutdown();
+      const recovered = new MultiReviewService(storage, invoke, {
+        autoAdvance: false,
+        provider: async () => provider,
+        environmentGit: git,
+      });
+      try {
+        await recovered.advanceNow(started.id);
+        expect((await snapshot(started.id))?.pendingCodeRewind).toBeUndefined();
+        expect(["preparing", "reviewing"]).toContain((await snapshot(started.id))!.phase);
+        expect((await snapshot(started.id))?.reviewWorktreeSnapshot?.head).toBe(REVIEW_HEAD);
+        expect(base.calls.filter((args) => args[0] === "reset")).toHaveLength(1);
+      } finally {
+        await recovered.shutdown();
+      }
+    },
+    { packageFlow: true, invoke, serviceOptions: { environmentGit: git } },
+  );
+});
+
+test("MultiReviewService uses package-sealing paths as the stale baseline", async () => {
+  let sealed = false;
+  await withService(
+    "env-preparation-leftovers",
+    new Provider(),
+    async ({ service, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+      expect((await snapshot(started.id))?.reviewPackagePaths).toEqual(["preparation.txt"]);
+      expect((await snapshot(started.id))?.reviewWorktreeChanged).toBeUndefined();
+    },
+    {
+      packageFlow: true,
+      invoke: async <T>(command: string, args?: Record<string, unknown>) => {
+        if (command === "generate_review_package") sealed = true;
+        const result = await stableReviewInvoker<T>(command, args);
+        if (sealed && command === "get_environment_uncommitted_paths") {
+          return { ...result, paths: ["preparation.txt"] } as T;
+        }
+        return result;
+      },
+    },
+  );
+});
+
+test("MultiReviewService refuses rewind for a running paused session or sibling review", async () => {
+  const head = { value: "a".repeat(40) };
+  const { git, calls } = rewindGit(head);
+  await withService(
+    "env-rewind-sibling",
+    new Provider(),
+    async ({ service, storage, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+      const ready = (await snapshot(started.id))!;
+      const sibling = { ...ready, id: "sibling-review", phase: "preparing" as const };
+      await storage.saveMultiReviewWorkflow(sibling.id, sibling.environmentId, 1, sibling);
+      expect((await service.previewCodeRewind(started.id, "prepare")).blocked).toContain(
+        "Another Multi Review",
+      );
+      await expect(service.rewindCode(started.id, "prepare", head.value)).rejects.toThrow(
+        "Another Multi Review",
+      );
+      expect(calls.some((args) => args[0] === "reset")).toBe(false);
+      const { multiReviewRewindStateBlocker } = await import("./multi-review-code-rewind.js");
+      expect(
+        multiReviewRewindStateBlocker({
+          ...ready,
+          phase: "paused",
+          pausedStep: "prepare",
+          reviewSession: { ...ready.fixSession!, status: "running" },
+        }),
+      ).toContain("still running");
+    },
+    { packageFlow: true, serviceOptions: { environmentGit: git } },
+  );
+});
+
+test("MultiReviewService rewinds an attempted Address Findings step to the package head", async () => {
+  const head = { value: REVIEW_HEAD };
+  const { git, calls } = rewindGit(head);
+  await withService(
+    "env-rewind-fix",
+    new Provider(),
+    async ({ service, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+      await service.address(started.id);
+      const preview = await service.previewCodeRewind(started.id, "fix");
+      expect(preview.blocked).toBeUndefined();
+      expect(preview.targetCommit).toBe((await snapshot(started.id))?.reviewPackage?.headRef);
+      const restarted = await service.rewindCode(started.id, "fix", head.value);
+      expect(restarted.phase).toBe("interactive");
+      expect(restarted.fixResult).toBeUndefined();
+      expect(restarted.pendingCodeRewind).toBeUndefined();
+      expect(calls).toContainEqual(["reset", "--hard", preview.targetCommit!]);
+    },
+    { packageFlow: true, serviceOptions: { environmentGit: git } },
   );
 });

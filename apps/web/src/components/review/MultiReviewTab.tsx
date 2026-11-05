@@ -1155,6 +1155,7 @@ function MultiReviewOverviewTab({
       bespoke &&
       Boolean(commands.skipStep) &&
       (workflow.phase === "fixing" ||
+        workflow.phase === "interactive" ||
         (workflow.phase === "paused" && workflow.pausedStep === "fix"));
     const skip = () => void skipStep("fix");
     const canRewind =

@@ -1547,6 +1547,7 @@ export class BuildPipelineReviewFanout {
     session.status = "idle";
     // The fan-out record is retired with its pass; the session keeps the warning.
     if (state.snapshotStale) session.reviewWorktreeChanged = true;
+    session.reviewWorkspaceBaseline = state.workspaceBaseline;
     session.reviewReport = provenance.report;
     session.reviewOverlap = consolidationOverlap(parsed.data, state.reviewers);
     session.reviewIssueCounts = pipelineReviewIssueCounts(provenance.report);

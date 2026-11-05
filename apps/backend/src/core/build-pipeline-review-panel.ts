@@ -159,5 +159,11 @@ export function panelFromSessions(
       ...(failure ? { error: failure.error, startFailed: failure.startFailed } : {}),
     });
   }
-  return { reviewers };
+  const evidence = pipeline.sessions.filter((session) => session.reviewPassId === passId);
+  const baseline = evidence.findLast((session) => session.reviewWorkspaceBaseline);
+  return {
+    reviewers,
+    ...(evidence.some((session) => session.reviewWorktreeChanged) ? { snapshotStale: true } : {}),
+    ...(baseline ? { workspaceBaseline: baseline.reviewWorkspaceBaseline } : {}),
+  };
 }

@@ -1,3 +1,4 @@
+import { isWorkspaceGitBaseline, type WorkspaceGitBaseline } from "./workspace-guard.js";
 import { isReviewValidationRun, type ReviewValidationRun } from "./review-validation.js";
 import { isStructuredReviewReport, type StructuredReviewReport } from "./structured-review.js";
 import { isPersistedReviewPackage, type PersistedReviewPackage } from "./review-workflow.js";
@@ -992,6 +993,7 @@ export interface PipelineSession {
    * stands; this says the report may not describe the code as it is now.
    */
   reviewWorktreeChanged?: boolean;
+  reviewWorkspaceBaseline?: WorkspaceGitBaseline;
   /**
    * The {@link PipelineRewind.id} of the restart that superseded this session.
    *
@@ -1913,6 +1915,8 @@ function isPipelineSession(value: unknown): value is PipelineSession {
         value.sessionlessReviewers.every(isPipelineSessionlessReviewer))) &&
     (value.superseded === undefined || typeof value.superseded === "boolean") &&
     (value.skipped === undefined || typeof value.skipped === "boolean") &&
+    (value.reviewWorkspaceBaseline === undefined ||
+      isWorkspaceGitBaseline(value.reviewWorkspaceBaseline)) &&
     (value.reviewWorktreeChanged === undefined ||
       typeof value.reviewWorktreeChanged === "boolean") &&
     (value.supersededBy === undefined ||

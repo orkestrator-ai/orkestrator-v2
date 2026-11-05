@@ -1112,6 +1112,10 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     const requestId = randomUUID();
     const claim = await mailbox.claim(workflow.environmentId, tabId, requestId);
     if (!claim) return false;
+    if (claim.text.length > 131_072) {
+      await mailbox.settle(workflow.environmentId, tabId, claim.messageIds, "returned");
+      return false;
+    }
     const oldRequestId = reviewer.requestId;
     reviewer.requestId = requestId;
     reviewer.continuationPrompt = claim.text;
@@ -1837,6 +1841,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         }
         const running =
           workflow.phase === "fixing" ||
+          workflow.phase === "interactive" ||
           (workflow.phase === "paused" && workflow.pausedStep === "fix");
         if (!running) throw new Error("Address Findings is not running");
         const errors = await this.stopStepForPause(workflow, token, "fix");
@@ -1855,7 +1860,8 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         delete workflow.error;
         return await this.save(workflow, token);
       } finally {
-        if (!handedToSupervisor) await this.release(workflow, token);
+        if (!handedToSupervisor && !isSupervisedPhase(workflow.phase))
+          await this.release(workflow, token);
       }
     });
   }
@@ -1884,6 +1890,18 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       if (reason) blockers.push(reason);
     };
     block(multiReviewRewindStateBlocker(workflow));
+    if (step === "fix" && !addressFindingsStepHasStarted(workflow))
+      block("Address Findings has not started");
+    if (step === "fix" && !workflow.consolidatedReport)
+      block("Address Findings cannot restart without a consolidated report");
+    if (step === "prepare" && !this.preparationHasStarted(workflow))
+      block("Review package preparation has not started");
+    if (workflow.pendingCodeRewind) block("A code rewind is pending recovery.");
+    try {
+      await this.assertRewindEnvironmentQuiet(workflow);
+    } catch (error) {
+      block(errorMessage(error));
+    }
     if (workflow.engine === "graph") block("Rewind this review's code from its graph run.");
     const git = this.options.environmentGit;
     if (!git) block("Rewinding code is not available on this backend.");
@@ -1952,25 +1970,75 @@ export class MultiReviewService implements KeyedWorkflowOwner {
           "The branch moved since the rewind was previewed. Review the commits it drops again.",
         );
       }
-      const record = await this.storage.getMultiReviewWorkflow(workflowId);
-      const workflow = record!.snapshot as MultiReviewWorkflow;
-      await withWorkspaceCodeRewindReservation({
-        fence: this.options.environmentFence ?? this.rewindFence,
-        storage: this.storage,
-        environmentId: workflow.environmentId,
-        assertQuiet: async () => {
-          await assertNoOtherWorkflowWriting(this.storage, workflow.environmentId, {});
-          await this.options.assertEnvironmentQuiescent?.(workflow.environmentId);
-        },
-        run: () =>
-          resetWorktreeToCommit(git, workflow.environmentId, {
-            from: expectedHead,
-            to: preview.targetCommit!,
-            backupRef: multiReviewRewindBackupRef(workflowId, randomUUID()),
-          }),
-      });
+      const controlled = await this.loadControlled(workflowId);
+      if (!controlled) throw new Error("Multi review workflow not found");
+      const { workflow, token } = controlled;
+      workflow.pendingCodeRewind = {
+        step,
+        from: expectedHead,
+        to: preview.targetCommit!,
+        backupRef: multiReviewRewindBackupRef(workflowId, randomUUID()),
+      };
+      await this.save(workflow, token);
+      await this.completeCodeRewind(workflow);
     });
-    return this.restartStep(workflowId, step);
+    return (await this.storage.getMultiReviewWorkflow(workflowId))!.snapshot as MultiReviewWorkflow;
+  }
+
+  /** The persisted intent survives reset and restart-publication failures. Called under the workflow lock. */
+  private async completeCodeRewind(workflow: MultiReviewWorkflow): Promise<void> {
+    const controlled = await this.loadControlled(workflow.id);
+    if (!controlled) throw new ControllerFenceError();
+    workflow = controlled.workflow;
+    const intent = workflow.pendingCodeRewind!;
+    if (intent.step === "prepare" && !this.preparationHasStarted(workflow))
+      throw new Error("Review package preparation has not started");
+    const blocker = multiReviewRewindStateBlocker(workflow);
+    if (blocker) throw new Error(blocker);
+    if (
+      intent.step === "fix" &&
+      (!addressFindingsStepHasStarted(workflow) || !workflow.consolidatedReport)
+    )
+      throw new Error("Address Findings is not eligible to restart");
+    const git = this.options.environmentGit;
+    if (!git) throw new Error("Rewinding code is not available on this backend.");
+    await withWorkspaceCodeRewindReservation({
+      fence: this.options.environmentFence ?? this.rewindFence,
+      storage: this.storage,
+      environmentId: workflow.environmentId,
+      assertQuiet: () => this.assertRewindEnvironmentQuiet(workflow),
+      run: async () => {
+        await resetWorktreeToCommit(git, workflow.environmentId, intent);
+        await this.restartStepLocked(workflow.id, intent.step);
+      },
+    });
+  }
+
+  private preparationHasStarted(workflow: MultiReviewWorkflow): boolean {
+    return (
+      workflow.stepRuntimes?.prepare !== undefined ||
+      workflow.reviewPackage !== undefined ||
+      workflow.validationRun !== undefined ||
+      workflow.activeRequest?.kind === "prepare" ||
+      workflow.phase === "preparing" ||
+      workflow.reviewers.some(
+        (reviewer) => reviewer.providerSessionId !== undefined || reviewer.report !== undefined,
+      )
+    );
+  }
+
+  private async assertRewindEnvironmentQuiet(workflow: MultiReviewWorkflow): Promise<void> {
+    await assertNoOtherWorkflowWriting(this.storage, workflow.environmentId, {});
+    for (const record of await this.storage.listMultiReviewWorkflows(workflow.environmentId)) {
+      if (
+        record.id !== workflow.id &&
+        isMultiReviewWorkflow(record.snapshot) &&
+        (hasWorkflowActivity(record.snapshot) || record.snapshot.pendingCodeRewind)
+      ) {
+        throw new Error("Another Multi Review may write to this environment.");
+      }
+    }
+    await this.options.assertEnvironmentQuiescent?.(workflow.environmentId);
   }
 
   /** Stop the environment-owned validation process and continue with its partial evidence. */
@@ -2138,198 +2206,193 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     model?: MultiReviewModelSelection,
   ): Promise<MultiReviewWorkflow> {
     await this.assertBespokeControl(workflowId, "restarting a step");
-    return this.withLock(workflowId, async () => {
-      // An explicit restart starts a new admission generation.
-      this.evidencePermits.invalidate(workflowId);
-      const controlled = await this.loadControlled(workflowId);
-      if (!controlled) throw new Error(`Multi review workflow not found: ${workflowId}`);
-      const { workflow, token } = controlled;
-      const phaseAtClaim = workflow.phase;
-      let handedToSupervisor = false;
-      try {
-        if (workflow.phase === "cancelling" || workflow.phase === "cancelled") {
-          throw new Error("A cancelled Multi Review cannot restart a step");
-        }
-        const packageStarted =
-          workflow.stepRuntimes?.prepare !== undefined ||
-          workflow.reviewPackage !== undefined ||
-          workflow.validationRun !== undefined ||
-          workflow.activeRequest?.kind === "prepare" ||
-          workflow.phase === "preparing" ||
-          workflow.reviewers.some(
-            (reviewer) => reviewer.providerSessionId !== undefined || reviewer.report !== undefined,
-          );
-        const consolidationStarted =
-          workflow.stepRuntimes?.consolidate !== undefined ||
-          workflow.consolidatedReport !== undefined ||
-          workflow.activeRequest?.kind === "consolidate" ||
-          workflow.phase === "consolidating";
-        if (kind === "prepare" && !packageStarted) {
-          throw new Error("Review package preparation has not started");
-        }
-        if (kind === "consolidate" && !consolidationStarted) {
-          throw new Error("Consolidation has not started");
-        }
-        if (kind === "fix" && !addressFindingsStepHasStarted(workflow)) {
-          throw new Error("Address Findings has not started");
-        }
-        if (
-          kind === "consolidate" &&
-          !workflow.reviewers.some((reviewer) => reviewer.report !== undefined)
-        ) {
-          throw new Error("Consolidation cannot restart without a reviewer report");
-        }
-        if (kind === "fix" && !workflow.consolidatedReport) {
-          throw new Error("Address Findings cannot restart without a consolidated report");
-        }
+    return this.withLock(workflowId, () => this.restartStepLocked(workflowId, kind, model));
+  }
 
-        // Snapshot capture can reject (unknown worktree, missing fingerprint,
-        // or too many changed paths). Resolve it before closing result slots or
-        // aborting provider sessions so a rejected command is a true no-op.
-        const restartedReviewWorktreeSnapshot =
-          kind === "prepare"
-            ? await this.captureReviewWorktreeSnapshot(workflow.environmentId)
-            : undefined;
-
-        // Resolve provider-owned settings before abandoning any session. A
-        // rejected model override must leave the current run untouched.
-        let restartedModel: MultiReviewModelSelection | undefined;
-        if (model) {
-          const environment = await this.storage.getEnvironment(workflow.environmentId);
-          if (!environment) throw new Error("Review environment no longer exists");
-          const config = await this.storage.loadConfig();
-          const repository = config.repositories[workflow.projectId] ?? {};
-          restartedModel = await this.configuredSelection(
-            model,
-            environment,
-            config,
-            repository,
-            this.catalogReaderFor(workflow.environmentId),
-          );
-        }
-
-        const shouldReplayAddressFindings =
-          kind !== "fix" && addressFindingsStepHasStarted(workflow);
-        const preserveSharedAddressFindingsSession =
-          kind === "fix" &&
-          restartedModel === undefined &&
-          !workflow.reviewModel &&
-          workflow.fixLaunch?.kind !== "custom";
-        // A new preparation or consolidation invalidates Address Findings result that
-        // authorized an undelivered PR launch.
-        supersedePendingAutoPr(workflow);
-        this.autoPrRetryAt.delete(workflow.id);
-        await this.supersedeRestartedResults(
-          workflow,
-          kind === "prepare" ? workflow.reviewers : [],
-        );
-        const activeReviewSession = reviewSession(workflow);
-        const abandonActiveReviewSession =
-          kind !== "fix" || (!workflow.reviewModel && !preserveSharedAddressFindingsSession);
-        if (abandonActiveReviewSession) {
-          await this.abandonSession(
-            workflow,
-            activeReviewSession ??
-              (kind === "prepare" ? preparationModel(workflow) : consolidationModel(workflow)),
-            activeReviewSession?.providerSessionId,
-          );
-          if (activeReviewSession) this.progress.forget(activeReviewSession.providerSessionId);
-        }
-        if (workflow.fixSession && workflow.fixSession !== activeReviewSession) {
-          await this.abandonSession(
-            workflow,
-            workflow.fixSession,
-            workflow.fixSession.providerSessionId,
-          );
-          this.progress.forget(workflow.fixSession.providerSessionId);
-        }
-
-        if (kind === "prepare") {
-          if (
-            workflow.validationRun &&
-            (workflow.validationRun.status === "planned" ||
-              workflow.validationRun.status === "running")
-          ) {
-            await this.invoke("cancel_review_validation", {
-              environmentId: workflow.environmentId,
-              run: workflow.validationRun,
-            }).catch(() => undefined);
-          }
-          for (const reviewer of workflow.reviewers) {
-            await this.abandonSession(workflow, reviewer, reviewer.providerSessionId);
-            if (reviewer.providerSessionId) this.progress.forget(reviewer.providerSessionId);
-            resetReviewerForRestart(workflow, reviewer);
-          }
-          workflow.reviewWorktreeSnapshot = restartedReviewWorktreeSnapshot!;
-          workflow.phase = "preparing";
-          delete workflow.reviewPackage;
-          delete workflow.validationRun;
-          delete workflow.validationStopRequested;
-          delete workflow.stepRuntimes;
-          delete workflow.reviewSnapshotStale;
-          clearReviewSession(workflow);
-        } else if (kind === "consolidate") {
-          workflow.phase = "consolidating";
-          delete workflow.stepRuntimes?.consolidate;
-          delete workflow.stepRuntimes?.fix;
-          clearReviewSession(workflow);
-        } else {
-          if (!preserveSharedAddressFindingsSession) {
-            delete workflow.fixSession;
-            workflow.fixSessionKey = rotatedSessionKey(fixSessionKey(workflow.id));
-          }
-          delete workflow.stepRuntimes?.fix;
-          if (restartedModel) {
-            workflow.fixModel = restartedModel;
-            if (workflow.fixLaunch?.kind === "custom") {
-              workflow.fixLaunch = { ...workflow.fixLaunch, model: restartedModel };
-            }
-          }
-          queueRestartedAddressFindings(workflow);
-        }
-
-        if (kind === "prepare" && restartedModel) {
-          workflow.reviewModel = restartedModel;
-          delete workflow.consolidationModel;
-        } else if (kind === "consolidate" && restartedModel) {
-          workflow.consolidationModel = restartedModel;
-        }
-
-        if (kind !== "fix") {
-          if (workflow.reviewModel || workflow.consolidationModel) {
-            delete workflow.fixSession;
-            workflow.fixSessionKey = rotatedSessionKey(fixSessionKey(workflow.id));
-          }
-          workflow.restartFixAfterConsolidation = shouldReplayAddressFindings || undefined;
-          delete workflow.consolidatedReport;
-          delete workflow.consolidationOverlap;
-        } else {
-          delete workflow.restartFixAfterConsolidation;
-        }
-        delete workflow.fixResult;
-        delete workflow.activeRequest;
-        delete workflow.pausedFromPhase;
-        delete workflow.pausedStep;
-        if (kind !== "fix") {
-          delete workflow.addressPromptPending;
-          delete workflow.addressPromptAttempts;
-          clearPendingAddressFindingsIdentity(workflow);
-          delete workflow.customFixInstruction;
-          delete workflow.customFixModel;
-          delete workflow.presentationError;
-        }
-        delete workflow.error;
-        const saved = await this.save(workflow, token);
-        if (!isSupervisedPhase(saved.phase)) await this.release(workflow, token);
-        handedToSupervisor = true;
-        void this.advanceNow(workflowId);
-        return saved;
-      } finally {
-        if (!handedToSupervisor && !isSupervisedPhase(phaseAtClaim)) {
-          await this.release(workflow, token);
-        }
+  private async restartStepLocked(
+    workflowId: string,
+    kind: MultiReviewStepKind,
+    model?: MultiReviewModelSelection,
+  ): Promise<MultiReviewWorkflow> {
+    // An explicit restart starts a new admission generation.
+    this.evidencePermits.invalidate(workflowId);
+    const controlled = await this.loadControlled(workflowId);
+    if (!controlled) throw new Error(`Multi review workflow not found: ${workflowId}`);
+    const { workflow, token } = controlled;
+    const phaseAtClaim = workflow.phase;
+    let handedToSupervisor = false;
+    try {
+      if (workflow.phase === "cancelling" || workflow.phase === "cancelled") {
+        throw new Error("A cancelled Multi Review cannot restart a step");
       }
-    });
+      const packageStarted = this.preparationHasStarted(workflow);
+      const consolidationStarted =
+        workflow.stepRuntimes?.consolidate !== undefined ||
+        workflow.consolidatedReport !== undefined ||
+        workflow.activeRequest?.kind === "consolidate" ||
+        workflow.phase === "consolidating";
+      if (kind === "prepare" && !packageStarted) {
+        throw new Error("Review package preparation has not started");
+      }
+      if (kind === "consolidate" && !consolidationStarted) {
+        throw new Error("Consolidation has not started");
+      }
+      if (kind === "fix" && !addressFindingsStepHasStarted(workflow)) {
+        throw new Error("Address Findings has not started");
+      }
+      if (
+        kind === "consolidate" &&
+        !workflow.reviewers.some((reviewer) => reviewer.report !== undefined)
+      ) {
+        throw new Error("Consolidation cannot restart without a reviewer report");
+      }
+      if (kind === "fix" && !workflow.consolidatedReport) {
+        throw new Error("Address Findings cannot restart without a consolidated report");
+      }
+
+      // Snapshot capture can reject (unknown worktree, missing fingerprint,
+      // or too many changed paths). Resolve it before closing result slots or
+      // aborting provider sessions so a rejected command is a true no-op.
+      const restartedReviewWorktreeSnapshot =
+        kind === "prepare"
+          ? await this.captureReviewWorktreeSnapshot(workflow.environmentId)
+          : undefined;
+
+      // Resolve provider-owned settings before abandoning any session. A
+      // rejected model override must leave the current run untouched.
+      let restartedModel: MultiReviewModelSelection | undefined;
+      if (model) {
+        const environment = await this.storage.getEnvironment(workflow.environmentId);
+        if (!environment) throw new Error("Review environment no longer exists");
+        const config = await this.storage.loadConfig();
+        const repository = config.repositories[workflow.projectId] ?? {};
+        restartedModel = await this.configuredSelection(
+          model,
+          environment,
+          config,
+          repository,
+          this.catalogReaderFor(workflow.environmentId),
+        );
+      }
+
+      const shouldReplayAddressFindings = kind !== "fix" && addressFindingsStepHasStarted(workflow);
+      const preserveSharedAddressFindingsSession =
+        kind === "fix" &&
+        restartedModel === undefined &&
+        !workflow.reviewModel &&
+        workflow.fixLaunch?.kind !== "custom";
+      // A new preparation or consolidation invalidates Address Findings result that
+      // authorized an undelivered PR launch.
+      supersedePendingAutoPr(workflow);
+      this.autoPrRetryAt.delete(workflow.id);
+      await this.supersedeRestartedResults(workflow, kind === "prepare" ? workflow.reviewers : []);
+      const activeReviewSession = reviewSession(workflow);
+      const abandonActiveReviewSession =
+        kind !== "fix" || (!workflow.reviewModel && !preserveSharedAddressFindingsSession);
+      if (abandonActiveReviewSession) {
+        await this.abandonSession(
+          workflow,
+          activeReviewSession ??
+            (kind === "prepare" ? preparationModel(workflow) : consolidationModel(workflow)),
+          activeReviewSession?.providerSessionId,
+        );
+        if (activeReviewSession) this.progress.forget(activeReviewSession.providerSessionId);
+      }
+      if (workflow.fixSession && workflow.fixSession !== activeReviewSession) {
+        await this.abandonSession(
+          workflow,
+          workflow.fixSession,
+          workflow.fixSession.providerSessionId,
+        );
+        this.progress.forget(workflow.fixSession.providerSessionId);
+      }
+
+      if (kind === "prepare") {
+        if (
+          workflow.validationRun &&
+          (workflow.validationRun.status === "planned" ||
+            workflow.validationRun.status === "running")
+        ) {
+          await this.invoke("cancel_review_validation", {
+            environmentId: workflow.environmentId,
+            run: workflow.validationRun,
+          }).catch(() => undefined);
+        }
+        for (const reviewer of workflow.reviewers) {
+          await this.abandonSession(workflow, reviewer, reviewer.providerSessionId);
+          if (reviewer.providerSessionId) this.progress.forget(reviewer.providerSessionId);
+          resetReviewerForRestart(workflow, reviewer);
+        }
+        workflow.reviewWorktreeSnapshot = restartedReviewWorktreeSnapshot!;
+        workflow.phase = "preparing";
+        delete workflow.reviewPackage;
+        delete workflow.validationRun;
+        delete workflow.validationStopRequested;
+        delete workflow.stepRuntimes;
+        delete workflow.reviewSnapshotStale;
+        clearReviewSession(workflow);
+      } else if (kind === "consolidate") {
+        workflow.phase = "consolidating";
+        delete workflow.stepRuntimes?.consolidate;
+        delete workflow.stepRuntimes?.fix;
+        clearReviewSession(workflow);
+      } else {
+        if (!preserveSharedAddressFindingsSession) {
+          delete workflow.fixSession;
+          workflow.fixSessionKey = rotatedSessionKey(fixSessionKey(workflow.id));
+        }
+        delete workflow.stepRuntimes?.fix;
+        if (restartedModel) {
+          workflow.fixModel = restartedModel;
+          if (workflow.fixLaunch?.kind === "custom") {
+            workflow.fixLaunch = { ...workflow.fixLaunch, model: restartedModel };
+          }
+        }
+        queueRestartedAddressFindings(workflow);
+      }
+
+      if (kind === "prepare" && restartedModel) {
+        workflow.reviewModel = restartedModel;
+        delete workflow.consolidationModel;
+      } else if (kind === "consolidate" && restartedModel) {
+        workflow.consolidationModel = restartedModel;
+      }
+
+      if (kind !== "fix") {
+        if (workflow.reviewModel || workflow.consolidationModel) {
+          delete workflow.fixSession;
+          workflow.fixSessionKey = rotatedSessionKey(fixSessionKey(workflow.id));
+        }
+        workflow.restartFixAfterConsolidation = shouldReplayAddressFindings || undefined;
+        delete workflow.consolidatedReport;
+        delete workflow.consolidationOverlap;
+      } else {
+        delete workflow.restartFixAfterConsolidation;
+      }
+      delete workflow.fixResult;
+      delete workflow.activeRequest;
+      delete workflow.pausedFromPhase;
+      delete workflow.pausedStep;
+      if (kind !== "fix") {
+        delete workflow.addressPromptPending;
+        delete workflow.addressPromptAttempts;
+        clearPendingAddressFindingsIdentity(workflow);
+        delete workflow.customFixInstruction;
+        delete workflow.customFixModel;
+        delete workflow.presentationError;
+      }
+      delete workflow.error;
+      delete workflow.pendingCodeRewind;
+      const saved = await this.save(workflow, token);
+      if (!isSupervisedPhase(saved.phase)) await this.release(workflow, token);
+      handedToSupervisor = true;
+      void this.advanceNow(workflowId);
+      return saved;
+    } finally {
+      if (!handedToSupervisor && !isSupervisedPhase(phaseAtClaim)) {
+        await this.release(workflow, token);
+      }
+    }
   }
 
   /** Stop one active backend-owned step without discarding its provider conversation. */
@@ -3079,6 +3142,10 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         },
         { ...existing.snapshot, backendRevision: existing.revision },
       );
+      return;
+    }
+    if (existing.snapshot.pendingCodeRewind) {
+      await this.completeCodeRewind(existing.snapshot);
       return;
     }
     const existingPhase = existing.snapshot.phase;
@@ -3935,7 +4002,11 @@ export class MultiReviewService implements KeyedWorkflowOwner {
    * persisted, which lease fences it, and what the phase becomes once every
    * reviewer has settled.
    */
-  private reviewFanoutHost(workflow: MultiReviewWorkflow, token: string, target: "host" | "container"): ReviewFanoutHost {
+  private reviewFanoutHost(
+    workflow: MultiReviewWorkflow,
+    token: string,
+    target: "host" | "container",
+  ): ReviewFanoutHost {
     // The host lives for one admission pass. Snapshot mode checks the live
     // worktree once per pass, as package mode verifies its evidence once, and
     // every reviewer prompt built in the pass reuses that answer. A change after
@@ -4120,7 +4191,9 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       workflow.environmentId,
     ).catch(() => null);
     if (!current || current.status === "unknown") return;
-    const known = new Set(workflow.reviewWorktreeSnapshot?.paths ?? []);
+    const known = new Set(
+      workflow.reviewPackagePaths ?? workflow.reviewWorktreeSnapshot?.paths ?? [],
+    );
     const paths = current.status === "dirty" ? current.paths : [];
     if (current.head !== reviewPackage.headRef || paths.some((path) => !known.has(path))) {
       workflow.reviewWorktreeChanged = true;
@@ -4334,6 +4407,9 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       round: 1,
       targetBranch: workflow.targetBranch,
     });
+    workflow.reviewPackagePaths = (
+      await this.captureReviewWorktreeSnapshot(workflow.environmentId)
+    ).paths;
     workflow.phase = "reviewing";
     delete workflow.validationStopRequested;
     settleStepRuntime(workflow, "prepare");
@@ -5019,6 +5095,9 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         round: 1,
         targetBranch: workflow.targetBranch,
       });
+      workflow.reviewPackagePaths = (
+        await this.captureReviewWorktreeSnapshot(workflow.environmentId)
+      ).paths;
       workflow.phase = "reviewing";
       session.status = "idle";
       session.completedAt = nowIso();

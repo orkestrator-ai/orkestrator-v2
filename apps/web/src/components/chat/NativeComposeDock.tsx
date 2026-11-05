@@ -54,10 +54,14 @@ export function NativeComposeDock({
       data-testid="compose-dock"
       className={cn(
         "absolute inset-x-0 z-20 px-2 transition-[top,transform] duration-300 ease-out motion-reduce:transition-none sm:px-4",
-        centered ? "top-1/2 -translate-y-1/2" : "top-full -translate-y-full",
+        centered
+          ? "top-1/2 max-h-full -translate-y-1/2 overflow-y-auto overscroll-contain py-2"
+          : "top-full -translate-y-full",
       )}
     >
-      <div className={cn("flex flex-col items-center", centered ? "gap-4" : "gap-0")}>
+      <div
+        className={cn("flex flex-col items-center [&>*]:shrink-0", centered ? "gap-4" : "gap-0")}
+      >
         <div
           className={cn(
             "overflow-hidden text-center transition-[max-height,opacity,transform] duration-300 ease-out motion-reduce:transition-none",

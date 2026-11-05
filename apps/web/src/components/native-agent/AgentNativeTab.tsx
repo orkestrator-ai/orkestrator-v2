@@ -423,6 +423,7 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
               : {})}
             {...(props.availablePlatforms ? { platformFilter: props.availablePlatforms } : {})}
             {...(props.platformNotes ? { platformNotes: props.platformNotes } : {})}
+            {...(props.platformBadges ? { platformBadges: props.platformBadges } : {})}
             {...((props.sendingHeldReason ??
             props.composerPlaceholder ??
             props.unassignedPlaceholder)
@@ -442,6 +443,8 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
             {...(props.unassignedStarterPrompts
               ? { starterPrompts: props.unassignedStarterPrompts }
               : {})}
+            {...(props.unassignedIntro ? { intro: props.unassignedIntro } : {})}
+            {...(props.composerHint ? { hint: props.composerHint } : {})}
           />
         </div>
       </div>

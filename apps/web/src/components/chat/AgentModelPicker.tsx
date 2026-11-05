@@ -48,6 +48,18 @@ import { synthesizedOpenCodeAgentModel } from "@orkestrator/protocol/native-agen
 import { AgentPlatformIcon } from "@/components/icons/AgentIcons";
 import { Button } from "@/components/ui/button";
 
+/**
+ * A short named property of a platform, shown on its rail row and as a pill in
+ * the note for the platform in view, such as a coordinator platform's
+ * read-only tier. `description` is the pill's tooltip.
+ */
+export interface AgentPlatformBadge {
+  label: string;
+  description?: string;
+  /** `positive` for a property that holds, `caution` for one that is weaker. */
+  tone: "positive" | "caution";
+}
+
 interface AgentModelPickerProps {
   id?: string;
   className?: string;
@@ -70,6 +82,8 @@ interface AgentModelPickerProps {
    * qualifies: it is visible in the menu where the choice is made.
    */
   platformNotes?: Partial<Record<AgentPlatform, string>>;
+  /** A named property per platform, shown with its caveat (see `AgentPlatformBadge`). */
+  platformBadges?: Partial<Record<AgentPlatform, AgentPlatformBadge>>;
   /**
    * Applies a chosen model and its platform in one update.
    *
@@ -183,16 +197,17 @@ function PlatformIcon({ platform }: { platform: AgentPlatform }) {
 /**
  * One platform in the picker's rail.
  *
- * A platform with a caveat carries a visible amber marker and the caveat itself
- * as its accessible name and tooltip, so the limitation is discoverable on the
- * row for that platform as well as in the note the picker shows for the
- * catalogue currently in view.
+ * A platform with a caveat or a badge carries a visible marker, amber unless
+ * its badge is positive, and the badge and caveat as its accessible name and
+ * tooltip, so the limitation is discoverable on the row for that platform as
+ * well as in the note the picker shows for the catalogue currently in view.
  */
 function PlatformRailButton({
   platform,
   active,
   disabled,
   caveat,
+  badge,
   className,
   onSelect,
 }: {
@@ -200,32 +215,55 @@ function PlatformRailButton({
   active: boolean;
   disabled: boolean;
   caveat?: string;
+  badge?: AgentPlatformBadge;
   className?: string;
   onSelect: (event: ReactMouseEvent) => void;
 }) {
+  const detail = [badge?.label, caveat].filter(Boolean).join(". ");
   return (
     <button
       type="button"
-      aria-label={caveat ? `${platform} models, ${caveat}` : `${platform} models`}
+      aria-label={detail ? `${platform} models, ${detail}` : `${platform} models`}
       aria-pressed={active}
       disabled={disabled}
-      title={caveat}
+      title={detail || undefined}
       data-platform-caveat={caveat ? "true" : undefined}
+      data-platform-badge={badge ? badge.tone : undefined}
       onClick={onSelect}
       className={cn(
         "relative grid size-8 place-items-center rounded disabled:cursor-not-allowed disabled:opacity-30",
+        badge && "h-auto min-h-8 w-full gap-1 p-1 text-center",
         active ? "bg-muted text-foreground" : "text-muted-foreground hover:bg-muted/60",
         className,
       )}
     >
       <PlatformIcon platform={platform} />
-      {caveat ? (
+      {badge ? <PlatformBadgePill badge={badge} /> : null}
+      {caveat && !badge ? (
         <span
           aria-hidden="true"
           className="absolute right-0.5 top-0.5 size-1.5 rounded-full bg-amber-400"
         />
       ) : null}
     </button>
+  );
+}
+
+/** A visible platform tier, shared by rail options and the selected note. */
+function PlatformBadgePill({ badge }: { badge: AgentPlatformBadge }) {
+  return (
+    <span
+      data-native-platform-badge={badge.tone}
+      title={badge.description}
+      className={cn(
+        "mr-1.5 inline-block rounded-full border px-1.5 py-px align-baseline text-[10px] leading-4 font-medium",
+        badge.tone === "positive"
+          ? "border-emerald-400/35 text-emerald-200"
+          : "border-amber-400/40 text-amber-200",
+      )}
+    >
+      {badge.label}
+    </span>
   );
 }
 
@@ -684,6 +722,7 @@ export function AgentModelPicker({
   onToggleFavorite,
   onReorderFavorites,
   platformNotes,
+  platformBadges,
   onModelSelect,
   selectedModelId,
   selectedModelLabel,
@@ -805,6 +844,7 @@ export function AgentModelPicker({
   // platform.
   const caveatPlatform = catalogView === "favorites" ? selectedPlatform : catalogView;
   const platformCaveat = caveatPlatform ? platformNotes?.[caveatPlatform] : undefined;
+  const platformBadge = caveatPlatform ? platformBadges?.[caveatPlatform] : undefined;
   const showSpeedControls = Boolean(onFastModeChange);
   // `fastModeEnabled === null` is an unknown snapshot only on a platform that
   // owns speed at all. OpenCode has no speed surface — it encodes speed in the
@@ -989,13 +1029,20 @@ export function AgentModelPicker({
           </div>
         ) : null}
 
-        {(!isMobile || mobileSubmenu === null) && platformCaveat ? (
+        {(!isMobile || mobileSubmenu === null) && (platformCaveat || platformBadge) ? (
           <p
-            data-native-platform-caveat={caveatPlatform}
+            data-native-platform-caveat={platformCaveat ? caveatPlatform : undefined}
+            data-native-platform-note={caveatPlatform}
             role="note"
-            className="mx-2 mb-2 rounded-md border border-amber-500/25 bg-amber-500/10 px-2 py-1.5 text-[11px] leading-snug text-amber-200"
+            className={cn(
+              "mx-2 mb-2 rounded-md border px-2 py-1.5 text-[11px] leading-snug",
+              platformCaveat || platformBadge?.tone !== "positive"
+                ? "border-amber-500/25 bg-amber-500/10 text-amber-200"
+                : "border-emerald-500/20 bg-emerald-500/5 text-emerald-100",
+            )}
           >
-            {platformCaveat}
+            {platformBadge ? <PlatformBadgePill badge={platformBadge} /> : null}
+            {platformCaveat ?? platformBadge?.description}
           </p>
         ) : null}
 
@@ -1084,7 +1131,10 @@ export function AgentModelPicker({
               Agent
             </DropdownMenuLabel>
             <div
-              className="flex max-w-full gap-1 overflow-x-auto px-2 pb-2"
+              className={cn(
+                "flex max-w-full gap-1 overflow-x-auto px-2 pb-2",
+                platformBadges && "flex-col",
+              )}
               role="group"
               aria-label="Agent platforms"
               data-native-mobile-platforms
@@ -1115,7 +1165,14 @@ export function AgentModelPicker({
                   {...(platformNotes?.[availablePlatform]
                     ? { caveat: platformNotes[availablePlatform] }
                     : {})}
-                  className="shrink-0"
+                  {...(platformBadges?.[availablePlatform]
+                    ? { badge: platformBadges[availablePlatform] }
+                    : {})}
+                  className={
+                    platformBadges?.[availablePlatform]
+                      ? "w-full shrink-0 grid-cols-[1rem_minmax(0,1fr)] justify-items-start"
+                      : "shrink-0"
+                  }
                   onSelect={(event) => {
                     event.preventDefault();
                     setSearch("");
@@ -1238,15 +1295,21 @@ export function AgentModelPicker({
             className={cn(
               "grid min-h-0 flex-1 overflow-hidden divide-x divide-zinc-700/60",
               showReasoningControls && showSpeedControls
-                ? "grid-cols-[3rem_repeat(3,minmax(0,1fr))]"
+                ? platformBadges
+                  ? "grid-cols-[11rem_repeat(3,minmax(0,1fr))]"
+                  : "grid-cols-[3rem_repeat(3,minmax(0,1fr))]"
                 : showReasoningControls || showSpeedControls
-                  ? "grid-cols-[3rem_repeat(2,minmax(0,1fr))]"
-                  : "grid-cols-[3rem_minmax(0,1fr)]",
+                  ? platformBadges
+                    ? "grid-cols-[11rem_repeat(2,minmax(0,1fr))]"
+                    : "grid-cols-[3rem_repeat(2,minmax(0,1fr))]"
+                  : platformBadges
+                    ? "grid-cols-[11rem_minmax(0,1fr)]"
+                    : "grid-cols-[3rem_minmax(0,1fr)]",
             )}
             onKeyDown={handleCatalogKeyDown}
           >
             <div
-              className="flex min-h-0 flex-col items-center gap-1 pr-1"
+              className="flex min-h-0 flex-col items-center gap-1 overflow-y-auto pr-1"
               role="group"
               aria-label="Agent platforms"
               aria-keyshortcuts="ArrowLeft ArrowRight"
@@ -1276,6 +1339,7 @@ export function AgentModelPicker({
                   active={catalogView === platform}
                   disabled={platformSelectionLocked && platform !== selectedPlatform}
                   {...(platformNotes?.[platform] ? { caveat: platformNotes[platform] } : {})}
+                  {...(platformBadges?.[platform] ? { badge: platformBadges[platform] } : {})}
                   onSelect={(event) => {
                     event.preventDefault();
                     setCatalogView(platform);

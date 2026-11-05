@@ -18,7 +18,7 @@ import {
   type FallbackExecutionProfileId,
 } from "@orkestrator/protocol/native-agent";
 import { Button } from "@/components/ui/button";
-import { AgentModelPicker } from "@/components/chat/AgentModelPicker";
+import { AgentModelPicker, type AgentPlatformBadge } from "@/components/chat/AgentModelPicker";
 import {
   approvalModeIconOption,
   ComposerIconPicker,
@@ -337,6 +337,10 @@ export function NativeAgentResumePlatformDialog({
   );
 }
 
+/** Why a first message cannot be a `!` command, shown under the composer. */
+export const FIRST_MESSAGE_COMMAND_RULE =
+  "Send a first message to start the conversation, then run ! commands here. To send this text to the agent, drop the !.";
+
 export function UnassignedNativeAgentComposer({
   isActive = true,
   ownsGlobalShortcuts,
@@ -349,10 +353,13 @@ export function UnassignedNativeAgentComposer({
   projectId,
   platformFilter,
   platformNotes,
+  platformBadges,
   placeholder,
   emptyPlatformsMessage,
   emptyPlatformsAction,
   starterPrompts,
+  intro,
+  hint,
   workspacePath,
   writeImage,
   initialAgentPlatform,
@@ -405,9 +412,15 @@ export function UnassignedNativeAgentComposer({
    * boundary or a mailbox that cannot deliver a worker's reply.
    */
   platformNotes?: Partial<Record<AgentPlatform, string>>;
+  /** A named property per platform in the same picker, such as a read-only tier. */
+  platformBadges?: Partial<Record<AgentPlatform, AgentPlatformBadge>>;
   placeholder?: string;
   emptyPlatformsMessage?: string;
   emptyPlatformsAction?: React.ReactNode;
+  /** An explanation above the composer, such as the coordinator's first-run card. */
+  intro?: React.ReactNode;
+  /** A short line under the composer. */
+  hint?: React.ReactNode;
   /**
    * Example requests offered beneath an empty composer. Choosing one fills the
    * message box with its text for the user to edit; it is never sent. They are
@@ -774,8 +787,14 @@ export function UnassignedNativeAgentComposer({
   const selectedReasoningLabel =
     selectedModel?.reasoning?.find((option) => option.id === selectedReasoningId)?.label ??
     "Default";
+  // Set when a first message starting with `!` was refused; shown under the
+  // composer until the text no longer starts with one.
+  const [commandRefused, setCommandRefused] = useState(false);
   const handleTextAndMentionsChange = useCallback(
-    (text: string, mentions: FileMention[]) => updateDraft(sessionKey, { text, mentions }),
+    (text: string, mentions: FileMention[]) => {
+      if (!parseUserCommand(text)) setCommandRefused(false);
+      updateDraft(sessionKey, { text, mentions });
+    },
     [sessionKey, updateDraft],
   );
   const handleFileMentionSelect = useCallback(
@@ -892,11 +911,11 @@ export function UnassignedNativeAgentComposer({
   const hasSendableAnnotations = sendableTranscriptAnnotations(draft.annotations).length > 0;
   const send = () => {
     // A `!` command needs the tab's conversation to show it and an agent to
-    // hear about it; neither exists until the first prompt starts one.
+    // hear about it; neither exists until the first prompt starts one. The
+    // rule stays under the composer, with the text still in the box, until
+    // the text changes so it no longer starts with `!`.
     if (parseUserCommand(draft.text)) {
-      toast.error(
-        "Send a first message to start the conversation, then run ! commands here. To send this text to the agent, drop the !.",
-      );
+      setCommandRefused(true);
       return;
     }
     const prompt = buildPromptWithTranscriptAnnotations(
@@ -964,6 +983,11 @@ export function UnassignedNativeAgentComposer({
           ) : null
         }
       >
+        {intro ? (
+          <div className="pointer-events-auto mx-auto flex w-full max-w-[56rem] sm:w-[min(calc(100%_-_2rem),56rem)]">
+            {intro}
+          </div>
+        ) : null}
         <NativeComposeBar
           testId="unassigned-native-compose-bar"
           layout="centered"
@@ -1045,6 +1069,7 @@ export function UnassignedNativeAgentComposer({
                 favorites={favorites}
                 enabledPlatforms={enabledPlatforms}
                 platformNotes={platformNotes}
+                platformBadges={platformBadges}
                 selectedPlatform={platform}
                 onPlatformChange={(next) => {
                   // The picker announces the platform on every model choice, not
@@ -1163,6 +1188,24 @@ export function UnassignedNativeAgentComposer({
           }
           sendTitle="Start agent"
           onSend={send}
+          footer={
+            commandRefused && parseUserCommand(draft.text) ? (
+              <p
+                role="alert"
+                data-unassigned-command-refusal
+                className="mt-1.5 px-1 text-center text-xs text-balance text-amber-300"
+              >
+                {FIRST_MESSAGE_COMMAND_RULE}
+              </p>
+            ) : hint ? (
+              <div
+                data-composer-hint
+                className="mt-1.5 px-1 text-center text-xs text-balance text-muted-foreground"
+              >
+                {hint}
+              </div>
+            ) : null
+          }
         />
         {starterPrompts && starterPrompts.length > 0 && !draft.text.trim() ? (
           <div

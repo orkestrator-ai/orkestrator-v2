@@ -174,6 +174,9 @@ const ProjectNavigationFixture = lazy(async () => ({
   default: (await import("./ProjectNavigationFixture")).ProjectNavigationFixture,
 }));
 
+const CoordinatorExplanationsFixture = lazy(async () => ({
+  default: (await import("./CoordinatorExplanationsFixture")).CoordinatorExplanationsFixture,
+}));
 const CoordinatorActivityFixture = lazy(async () => ({
   default: (await import("./CoordinatorActivityFixture")).CoordinatorActivityFixture,
 }));
@@ -2138,6 +2141,8 @@ function fixtureForPath() {
       </Suspense>
     );
   if (window.location.pathname === "/diff-base") return <DiffBaseFixture />;
+  if (window.location.pathname === "/coordinator-explanations")
+    return <CoordinatorExplanationsFixture />;
   if (window.location.pathname === "/read-coordinator") return <ReadCoordinatorFixture />;
   return <CreateEnvironmentFixture />;
 }

@@ -7879,6 +7879,21 @@ describe("AgentNativeTab", () => {
     expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.agentHandoffId).toBe(snapshot.id);
   });
 
+  test("renders the coordinator hint through the real assigned controller", async () => {
+    render(
+      <SharedNativeAgentController
+        tabId="assigned-hint"
+        data={identity("codex")}
+        isActive
+        composerHint="Side agents are extra read-only chats. Start a message with ! to run a command yourself."
+      />,
+    );
+    await screen.findByTestId("shared-native-compose-bar");
+    expect(screen.getByText(/Side agents are extra read-only chats/).textContent).toContain(
+      "! to run a command yourself",
+    );
+  });
+
   test("renders a mismatch notice instead of throwing on an unknown platform", async () => {
     // A persisted record can name a platform this build does not ship. Failing
     // here would throw out of the pane and take its sibling tabs down with it.

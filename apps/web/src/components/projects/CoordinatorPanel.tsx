@@ -28,7 +28,15 @@ import { portalStore } from "@/lib/portal/portal-store";
 import { useCoordinatorPaneLayoutStore } from "@/stores/coordinatorPaneLayoutStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
-import { CoordinatorActionAlert, CoordinatorBanner } from "./CoordinatorPanelNotices";
+import {
+  COORDINATOR_SIDE_AGENT_EXPLANATION,
+  COORDINATOR_TIER_LABELS,
+  COORDINATOR_TIER_MEANINGS,
+  CoordinatorActionAlert,
+  CoordinatorBanner,
+  coordinatorReadOnlyTier,
+} from "./CoordinatorPanelNotices";
+import type { AgentPlatformBadge } from "@/components/chat/AgentModelPicker";
 import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { CoordinatorPaneTree } from "./CoordinatorPaneTree";
 import { CoordinatorConversationTab } from "./CoordinatorConversationTab";
@@ -152,18 +160,25 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
   // nowhere near the picker. These are shown inside the model picker, so the
   // limitation is readable at the moment the platform is chosen — including a
   // mailbox that cannot deliver a worker's reply, and a read-only boundary
-  // nothing outside the agent verifies.
-  const platformNotes = useMemo(() => {
+  // nothing outside the agent verifies. The reason is shown as the backend
+  // wrote it: the tier pill beside it already says whether the boundary is
+  // verified, so the note does not say so a second time.
+  const { platformNotes, platformBadges } = useMemo(() => {
     const notes: Partial<Record<AgentPlatform, string>> = {};
+    const badges: Partial<Record<AgentPlatform, AgentPlatformBadge>> = {};
     for (const platform of availablePlatforms) {
       const qualification = snapshot?.providerAvailability[platform];
-      if (!qualification?.reason) continue;
-      notes[platform] =
-        qualification.tier === "enforced"
-          ? qualification.reason
-          : `${qualification.reason} Orkestrator cannot verify this boundary independently.`;
+      if (qualification?.reason) notes[platform] = qualification.reason;
+      const tier = coordinatorReadOnlyTier(qualification?.tier);
+      if (tier) {
+        badges[platform] = {
+          label: `Read-only · ${COORDINATOR_TIER_LABELS[tier]}`,
+          description: COORDINATOR_TIER_MEANINGS[tier],
+          tone: tier === "enforced" ? "positive" : "caution",
+        };
+      }
     }
-    return notes;
+    return { platformNotes: notes, platformBadges: badges };
   }, [availablePlatforms, snapshot]);
   const { pendingLaunches, startConversation } = useCoordinatorLaunches({
     projectId,
@@ -716,7 +731,7 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
                       updateLayout((current) => focusCoordinatorPane(current, pane.id));
                       createConversation();
                     }}
-                    title={newConversationLabel}
+                    title={hasMain ? COORDINATOR_SIDE_AGENT_EXPLANATION : newConversationLabel}
                   >
                     <Plus className="size-3.5" />
                     {/* The strip scrolls, so on a phone the action is its icon. */}
@@ -735,6 +750,7 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
                       snapshot={snapshot}
                       availablePlatforms={availablePlatforms}
                       platformNotes={platformNotes}
+                      platformBadges={platformBadges}
                       launch={conversationId ? pendingLaunches.get(conversationId) : undefined}
                       startConversation={startConversation}
                       confirmUpstreamMerge={confirmUpstreamMerge}
@@ -773,7 +789,8 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
         </div>
         <CoordinatorNextWakeLine items={work.items} quiet={paused || selectedTurnActive} />
         <div className="shrink-0 border-t border-border/60 px-3 py-1 text-center text-[11px] text-muted-foreground">
-          Code changes, commands, builds and fixes run in build pipelines or prompt environments.
+          The coordinator hands code changes, builds and fixes to build pipelines and prompt
+          environments.
         </div>
         <AlertDialog
           open={pendingMainClose !== null}

@@ -86,12 +86,14 @@ export function bridgeCredentialFromToken(token: string): BridgeCredential {
  * Linux under Bun only, and best-effort: failing costs a boundary rather than
  * the bridge, so it is logged and the bridge starts anyway.
  */
-export function markProcessNonDumpable(): boolean {
+export function markProcessNonDumpable(
+  loadFfi = () => createRequire(import.meta.url)("bun:ffi"),
+): boolean {
   if (process.platform !== "linux" || !process.versions.bun) return false;
   try {
     // Reached through createRequire because bridges bundle for `--target=node`,
     // and typed here because their tsconfigs do not load Bun's definitions.
-    const { dlopen, FFIType } = createRequire(import.meta.url)("bun:ffi") as {
+    const { dlopen, FFIType } = loadFfi() as {
       dlopen(
         path: string,
         symbols: Record<string, { args: unknown[]; returns: unknown }>,

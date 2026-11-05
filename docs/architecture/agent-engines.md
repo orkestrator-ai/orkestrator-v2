@@ -43,6 +43,9 @@ lists are the reason these engines are built the way they are. In short:
    an image with `bridge-credential=1` the token is in root-only
    `/run/orkestrator-bridge`; an older image's bridge keeps its token in `/tmp` and in
    its environment until the container is rebuilt. `bridges/AGENTS.md` has the rules.
+   Startup, including model discovery, selects credentials from the image capability.
+   An unavailable capability read refuses startup so a transient failure cannot
+   silently leave an agent-readable token. Retry once the image is readable.
    A missing or blank credential makes a bridge fall back to a random value nobody
    holds, so it fails closed rather than open.
 4. **Live events are incremental updates over authoritative snapshots.** Each

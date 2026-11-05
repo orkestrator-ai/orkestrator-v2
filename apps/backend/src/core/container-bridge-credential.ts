@@ -71,6 +71,7 @@ export interface ContainerBridgeLaunch {
 export interface ContainerScriptLaunch {
   /** The file and token to write as root, before the script runs. */
   rootCredential?: { kind: ContainerBridgeKind; token: string };
+  removeRootCredential?: ContainerBridgeKind;
   /** Exported at the top of the script, delivered on stdin. */
   secrets?: Record<string, string | undefined>;
 }
@@ -93,7 +94,7 @@ export function containerBridgeLaunch(
   }
   return {
     token,
-    launch: { secrets: { [tokenEnv]: token } },
+    launch: { secrets: { [tokenEnv]: token }, removeRootCredential: kind },
     script: `printf '%s' "$${tokenEnv}" > ${CONTAINER_TOKEN_FILES[kind]}`,
     bun: "bun",
   };
@@ -217,6 +218,9 @@ export async function launchContainerScript(
     ),
   );
   const redactValues = [...Object.values(secrets), launch.rootCredential?.token];
+  if (launch.removeRootCredential) {
+    await removeContainerBridgeCredential(containerId, launch.removeRootCredential);
+  }
   if (launch.rootCredential) {
     await writeContainerBridgeCredential(
       containerId,

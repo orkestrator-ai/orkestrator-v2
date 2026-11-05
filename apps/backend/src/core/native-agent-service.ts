@@ -916,6 +916,25 @@ export class NativeAgentService {
     return this.options.now?.() ?? Date.now();
   }
 
+  private readonly bridgeReplacements = new Set<string>();
+  private readonly bridgeAdmissions = new Map<string, number>();
+
+  private bridgeKey(input: NativeAgentProjectionInput): string {
+    return JSON.stringify([input.environmentId, input.agent]);
+  }
+
+  private beginBridgeWork(input: NativeAgentProjectionInput): () => void {
+    const key = this.bridgeKey(input);
+    if (this.bridgeReplacements.has(key))
+      throw new Error("Bridge replacement in progress; retry after it finishes");
+    this.bridgeAdmissions.set(key, (this.bridgeAdmissions.get(key) ?? 0) + 1);
+    return () => {
+      const count = (this.bridgeAdmissions.get(key) ?? 1) - 1;
+      if (count) this.bridgeAdmissions.set(key, count);
+      else this.bridgeAdmissions.delete(key);
+    };
+  }
+
   /** Resolve a provider, starting its bridge if needed. */
   private provider(input: EnsureNativeAgentSessionInput): Promise<NativeAgentRuntimeProvider> {
     return this.providerRegistry.resolve(input);
@@ -927,20 +946,30 @@ export class NativeAgentService {
    * another's turn, so the resume fails with what to do instead.
    */
   private async replaceBridgeForWiderPolicy(input: NativeAgentProjectionInput): Promise<void> {
-    if (await this.hasObservedLiveWork(input.environmentId, input.agent)) {
-      throw new Error(
-        `The wider execution policy cannot apply while a ${input.agent} turn is running in this environment. Resume this conversation again once it has finished.`,
-      );
+    const key = this.bridgeKey(input);
+    if (this.bridgeReplacements.has(key) || this.bridgeAdmissions.has(key)) {
+      throw new Error("Cannot replace a bridge with admitted work or a replacement in progress");
     }
-    const environment = await this.assertEnvironmentLive(input.environmentId);
-    if (environment.environmentType === "local") {
-      await this.invoke(localServerStopCommandName(input.agent), {
-        environmentId: environment.id,
-      });
-      return;
+    this.bridgeReplacements.add(key);
+    try {
+      if (await this.hasObservedLiveWork(input.environmentId, input.agent)) {
+        throw new Error(
+          `The wider execution policy cannot apply while a ${input.agent} turn is running in this environment. Resume this conversation again once it has finished.`,
+        );
+      }
+      const environment = await this.assertEnvironmentLive(input.environmentId);
+      if (environment.environmentType === "local") {
+        await this.invoke(localServerStopCommandName(input.agent), {
+          environmentId: environment.id,
+        });
+      } else {
+        if (!environment.containerId) throw new Error("Native agent container is unavailable");
+        await this.invoke(`stop_${input.agent}_server`, { containerId: environment.containerId });
+      }
+      await this.provider(input);
+    } finally {
+      this.bridgeReplacements.delete(key);
     }
-    if (!environment.containerId) throw new Error("Native agent container is unavailable");
-    await this.invoke(`stop_${input.agent}_server`, { containerId: environment.containerId });
   }
 
   /** Resolve a provider for observation only, never starting a bridge. */
@@ -1956,7 +1985,17 @@ export class NativeAgentService {
     try {
       // Reserve before identity/session reads: a close must see even a prompt
       // whose asynchronous preflight has not reached provider dispatch yet.
-      release = this.environmentFence.beginAgentWork(input.environmentId);
+      const releaseBridge = this.beginBridgeWork(input);
+      try {
+        const releaseEnvironment = this.environmentFence.beginAgentWork(input.environmentId);
+        release = () => {
+          releaseEnvironment();
+          releaseBridge();
+        };
+      } catch (error) {
+        releaseBridge();
+        throw error;
+      }
     } catch (error) {
       return { outcome: "rejected", error: error instanceof Error ? error.message : String(error) };
     }
@@ -3417,8 +3456,10 @@ export class NativeAgentService {
     recovery = false,
     onInstructionsIgnored?: () => void,
   ): Promise<PersistedNativeAgentSession> {
-    const releaseAgentWork = this.environmentFence.beginAgentWork(input.environmentId);
+    const releaseBridge = this.beginBridgeWork(input);
+    let releaseAgentWork: (() => void) | undefined;
     try {
+      releaseAgentWork = this.environmentFence.beginAgentWork(input.environmentId);
       return await this.promptQueues.withSessionMutationFence(input, () =>
         this.dispatchAdmittedPrompt(
           input,
@@ -3430,7 +3471,8 @@ export class NativeAgentService {
         ),
       );
     } finally {
-      releaseAgentWork();
+      releaseAgentWork?.();
+      releaseBridge();
     }
   }
 

@@ -67,13 +67,12 @@ import {
   conciseError,
   refreshClaudeModelCatalog,
 } from "./commands-helpers.js";
-import { containerImageCapabilitySupport } from "./claude-state-signal.js";
+import { containerCredentialMode } from "./container-credential-mode.js";
 import {
   containerBridgeLaunch,
   readContainerBridgeToken,
   removeContainerBridgeCredential,
   type ContainerBridgeKind,
-  type ContainerCredentialMode,
 } from "./container-bridge-credential.js";
 import {
   reconcileContainerAgentAccount,
@@ -102,24 +101,6 @@ function containerBridgeControl(
       if (hostPort) await waitForUnhealthy(hostPort);
     },
   };
-}
-
-/**
- * How a bridge started now receives its token: as a verifier on an image whose
- * bridges take one, otherwise as the token. An image this cannot read gets the
- * form every image accepts.
- */
-async function containerCredentialMode(
-  context: CommandContext,
-  containerId: string,
-): Promise<ContainerCredentialMode> {
-  const support = await containerImageCapabilitySupport(
-    containerId,
-    context,
-    "bridge-credential",
-    1,
-  ).catch(() => "unknown" as const);
-  return support === "supported" ? "verifier" : "token-file";
 }
 
 /** A stopped bridge's token is dead; if this fails, the next start overwrites it. */

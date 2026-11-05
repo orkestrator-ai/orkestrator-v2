@@ -26,7 +26,8 @@ if [ -n "$FAKE_DOCKER_FAIL" ]; then
   case "$*" in *"$FAKE_DOCKER_FAIL"*) exit 9 ;; esac
 fi
 case "$*" in
-  *"--user root"*"cat /run/orkestrator-bridge/"*) printf '%s' "$FAKE_ROOT_TOKEN" ;;
+  *"--user root"*"rm -f /run/orkestrator-bridge/"*) touch "$FAKE_DOCKER_EXEC_LOG.root-removed" ;;
+  *"--user root"*"cat /run/orkestrator-bridge/"*) if [ ! -f "$FAKE_DOCKER_EXEC_LOG.root-removed" ]; then printf '%s' "$FAKE_ROOT_TOKEN"; fi ;;
   *"cat /tmp/"*) printf '%s' "$FAKE_NODE_TOKEN" ;;
 esac
 exit 0
@@ -75,7 +76,10 @@ describe("containerBridgeLaunch", () => {
   test("an older image still gets the token, on stdin and in its /tmp file", () => {
     const launch = containerBridgeLaunch("codex", "token-file", TOKEN);
 
-    expect(launch.launch).toEqual({ secrets: { CODEX_BRIDGE_TOKEN: TOKEN } });
+    expect(launch.launch).toEqual({
+      secrets: { CODEX_BRIDGE_TOKEN: TOKEN },
+      removeRootCredential: "codex",
+    });
     expect(launch.script).toBe(`printf '%s' "$CODEX_BRIDGE_TOKEN" > /tmp/codex-bridge-token`);
     expect(launch.bun).toBe("bun");
   });
@@ -272,5 +276,21 @@ exit 0
       clearInterval(arrive);
       bridge?.stop(true);
     }
+  });
+});
+
+test("token-file launch removes the stale root token before starting", async () => {
+  await withDocker({ FAKE_ROOT_TOKEN: "o".repeat(43), FAKE_NODE_TOKEN: TOKEN }, async (read) => {
+    expect(await readContainerBridgeToken("container", "codex")).toBe("o".repeat(43));
+    const launch = containerBridgeLaunch("codex", "token-file", TOKEN);
+    await launchContainerScript("container", launch.script, launch.launch);
+    const { argv } = await read();
+    const removal = argv.findIndex((line) =>
+      line.includes("rm -f /run/orkestrator-bridge/codex-token"),
+    );
+    const start = argv.findIndex((line) => line.includes("exec -d"));
+    expect(removal).toBeGreaterThanOrEqual(0);
+    expect(start).toBeGreaterThan(removal);
+    expect(await readContainerBridgeToken("container", "codex")).toBe(TOKEN);
   });
 });

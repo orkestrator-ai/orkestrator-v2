@@ -1,3 +1,4 @@
+import * as credentialModes from "../src/core/container-credential-mode.js";
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import os from "node:os";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
@@ -39,12 +40,16 @@ function expectKeepsPreviousLog(execLog: string, logFile: string, previousFile: 
 }
 
 describe("Electron backend command registry", () => {
+  let modeSpy: ReturnType<typeof spyOn>;
   let previousLogLevel: string | undefined;
   beforeEach(() => {
+    // These fixtures model legacy token-file images; capability selection has its own tests.
+    modeSpy = spyOn(credentialModes, "containerCredentialMode").mockResolvedValue("token-file");
     previousLogLevel = process.env.ORKESTRATOR_LOG_LEVEL;
     process.env.ORKESTRATOR_LOG_LEVEL = "warn,bridge=debug";
   });
   afterEach(() => {
+    modeSpy.mockRestore();
     if (previousLogLevel === undefined) delete process.env.ORKESTRATOR_LOG_LEVEL;
     else process.env.ORKESTRATOR_LOG_LEVEL = previousLogLevel;
   });

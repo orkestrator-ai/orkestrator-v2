@@ -82,3 +82,43 @@ describe("bridge credential", () => {
     expect(credential.matches("abcdefg")).toBe(false);
   });
 });
+
+test("real Linux hardening sets PR_GET_DUMPABLE to zero in an isolated child", () => {
+  if (process.platform !== "linux") return;
+  const child = Bun.spawnSync([
+    process.execPath,
+    "--eval",
+    `
+    import { markProcessNonDumpable } from ${JSON.stringify(import.meta.dir + "/bridge-credential.ts")};
+    import { dlopen, FFIType } from 'bun:ffi';
+    if (!markProcessNonDumpable()) process.exit(1);
+    const lib = dlopen('libc.so.6', { prctl: { args: [FFIType.i32, FFIType.u64, FFIType.u64, FFIType.u64, FFIType.u64], returns: FFIType.i32 } });
+    process.exit(lib.symbols.prctl(3, 0n, 0n, 0n, 0n) === 0 ? 0 : 2);
+  `,
+  ]);
+  expect(child.exitCode).toBe(0);
+});
+
+test.each(["throw", "refuse"])("hardening logs a bounded failure when FFI %s", async (failure) => {
+  if (process.platform !== "linux") return;
+  const { configureLogger, resetLogger } = await import("../logger");
+  const { markProcessNonDumpable } = await import("./bridge-credential");
+  const events: unknown[] = [];
+  configureLogger({ sink: (output) => events.push(output.record) });
+  try {
+    expect(
+      markProcessNonDumpable(() => {
+        if (failure === "throw") throw new Error("unavailable");
+        return { FFIType: {}, dlopen: () => ({ symbols: { prctl: () => -1 }, close() {} }) };
+      }),
+    ).toBe(false);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        event: "credential.not-hardened",
+        fields: { reason: failure === "throw" ? "ffi-unavailable" : "prctl-refused" },
+      }),
+    );
+  } finally {
+    resetLogger();
+  }
+});

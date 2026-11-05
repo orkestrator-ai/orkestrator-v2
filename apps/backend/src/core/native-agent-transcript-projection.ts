@@ -166,6 +166,11 @@ import {
   type ProjectionDetailRegistration,
   type ProjectionEntryContext,
 } from "./native-agent-projection-entries.js";
+import {
+  NATIVE_TOOL_DETAIL_MEMO_LIMITS,
+  ToolDetailEncodingMemo,
+  type ToolDetailEncoding,
+} from "./native-agent-tool-detail-memo.js";
 import { NATIVE_AGENT_TRANSCRIPT_PATCH_VERSION } from "@orkestrator/protocol/native-agent-transcript-patch";
 import {
   chainedTranscriptDelta,
@@ -182,7 +187,7 @@ import {
   sameEncoding,
   sameIds,
   tailDeletions,
-  updateHashWithValues,
+  updateHashWithFingerprints,
   valueFingerprint,
 } from "./native-agent-projection-encoding.js";
 import { unsupportedCommandCatalogueState } from "@orkestrator/protocol/agent-command-catalogue";
@@ -195,7 +200,9 @@ import { nativeTerminalMessages } from "./native-terminal-messages.js";
 import {
   DIRECT_PAGE_ROW_MAX_BYTES,
   PROGRESSIVE_HYDRATION_MAX_ATTEMPTS,
+  PROGRESSIVE_HYDRATION_READ_STARTS_LIMIT,
   PROGRESSIVE_HYDRATION_RETRY_BASE_MS,
+  PROGRESSIVE_HYDRATION_SETTLE_MS,
   attachProgressToToolRows,
   backgroundTaskIdFromProjectedLaunch,
   discoveryAnnouncementKey,
@@ -231,8 +238,8 @@ export {
 } from "./native-agent-projection-helpers.js";
 
 /** Serialized body plus the cache's reference and bookkeeping allowance. */
-function toolDetailEntryBytes(serialized: string, localImagePath = ""): number {
-  return Buffer.byteLength(serialized) + Buffer.byteLength(localImagePath) + 64;
+function toolDetailEntryBytes(serializedBytes: number, localImagePath = ""): number {
+  return serializedBytes + Buffer.byteLength(localImagePath) + 64;
 }
 
 interface ProjectedProgressiveTranscript {
@@ -536,11 +543,15 @@ export class NativeAgentTranscriptProjection {
   });
   private readonly progressiveHydrations = new Map<string, ProgressiveHydrationEntry>();
   private readonly progressiveHydrationTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  /** When the last exact recovery read started, per key; spaces those reads out. */
+  private readonly progressiveHydrationReadStarts = new Map<string, number>();
   private readonly progressiveMetrics = new ProgressiveReadMetrics();
   /** In-flight provider reads of remote tool details, one per reference. */
   private readonly remoteToolDetailReads = new Map<string, Promise<NativeAgentToolDetails>>();
   /** Projected rows reused while their provider rows are unchanged (step 12). */
   private readonly projectedMessages: ProjectedMessageCache;
+  /** Detail references of inline bodies, so an unchanged one is not re-hashed. */
+  private readonly toolDetailEncodings: ToolDetailEncodingMemo;
   /** Immutable direct history pages of each session's current epoch (step 11). */
   private readonly directHistoryPages: DirectHistoryPageCache<{
     page: NativeAgentMessagePage;
@@ -597,6 +608,10 @@ export class NativeAgentTranscriptProjection {
         typeof this.storage.onNativeAgentDisplayTailDeleted === "function"
           ? this.storage.onNativeAgentDisplayTailDeleted(listener)
           : () => undefined,
+    });
+    this.toolDetailEncodings = new ToolDetailEncodingMemo({
+      ...NATIVE_TOOL_DETAIL_MEMO_LIMITS,
+      ...this.options.toolDetailMemoLimits,
     });
     this.projectedMessages = new ProjectedMessageCache({
       maxEntries: NATIVE_PROJECTED_MESSAGE_CACHE_MAX_ENTRIES,
@@ -705,6 +720,7 @@ export class NativeAgentTranscriptProjection {
         this.updateProjectionHistory(...args),
       toolDetailCache: this.toolDetailCache,
       toolDetailCacheBytes: () => this.toolDetailCacheBytes,
+      toolDetailEncodings: this.toolDetailEncodings,
       /** Simulate capacity eviction of every tool detail. */
       evictToolDetails: () => {
         this.toolDetailCache.clear();
@@ -732,6 +748,7 @@ export class NativeAgentTranscriptProjection {
     this.toolDetailCache.clear();
     this.pinnedToolDetailRefs.clear();
     this.toolDetailCacheBytes = 0;
+    this.toolDetailEncodings.clear();
     this.projectionRefreshes.clear();
     this.projectionRefreshDescriptors.clear();
     this.projectionEpochs.clear();
@@ -785,6 +802,7 @@ export class NativeAgentTranscriptProjection {
       ),
     );
     this.progressiveHydrations.clear();
+    this.progressiveHydrationReadStarts.clear();
     this.progressiveReads.clear();
     this.progressiveTranscriptCache.clear();
     this.transcriptDeltaBases.clear();
@@ -824,17 +842,23 @@ export class NativeAgentTranscriptProjection {
       maximumBytes?: number;
       /** Exact path observed in a trusted provider transcript. */
       localImagePath?: string;
+      /** The body's encoding when the caller already measured it. */
+      encoding?: ToolDetailEncoding;
     } = {},
   ): string {
-    const serializedDetails = JSON.stringify(details);
-    const detailRef = createHash("sha256")
-      .update(
-        `${sessionKey}\0${messageId}\0${partPath}\0${serializedDetails}\0${options.localImagePath ?? ""}`,
-      )
-      .digest("hex")
-      .slice(0, 32);
+    // Memoized per part: an unchanged body on a re-projected row is neither
+    // serialized nor hashed again. Its reference is still registered below.
+    const { detailRef, serializedBytes } =
+      options.encoding ??
+      this.toolDetailEncodings.encode(
+        sessionKey,
+        messageId,
+        partPath,
+        details,
+        options.localImagePath,
+      );
     let stored: NativeAgentToolDetails = { detailRef, ...details };
-    let bytes = toolDetailEntryBytes(serializedDetails, options.localImagePath);
+    let bytes = toolDetailEntryBytes(serializedBytes, options.localImagePath);
     let storedLocalImagePath = options.localImagePath;
     if (bytes > (options.maximumBytes ?? NATIVE_TOOL_DETAIL_MAX_BYTES)) {
       stored = {
@@ -987,29 +1011,43 @@ export class NativeAgentTranscriptProjection {
     const argsDetails = { toolArgs: projected.toolArgs as Record<string, unknown> };
     // Keep the full value inline when the cache cannot serve it. Count JSON
     // escaping, UTF-8 and entry overhead exactly as cacheToolDetails does.
+    const argsEncoding = argsPreview
+      ? this.toolDetailEncodings.encode(sessionKey, messageId, `${partPath}/args`, argsDetails)
+      : undefined;
     if (
-      argsPreview &&
-      toolDetailEntryBytes(JSON.stringify(argsDetails)) <= NATIVE_TOOL_DETAIL_MAX_BYTES
+      argsEncoding &&
+      toolDetailEntryBytes(argsEncoding.serializedBytes) <= NATIVE_TOOL_DETAIL_MAX_BYTES
     ) {
       projected.toolArgsDetailRef = this.cacheToolDetails(
         sessionKey,
         messageId,
         `${partPath}/args`,
         argsDetails,
+        { encoding: argsEncoding },
       );
       projected.toolArgs = argsPreview;
     }
     const thinkingPreview = deferredThinkingPreview(part, settled);
     const thinkingDetails = { thinking: part.content as string };
+    const thinkingEncoding =
+      thinkingPreview === undefined
+        ? undefined
+        : this.toolDetailEncodings.encode(
+            sessionKey,
+            messageId,
+            `${partPath}/thinking`,
+            thinkingDetails,
+          );
     if (
-      thinkingPreview !== undefined &&
-      toolDetailEntryBytes(JSON.stringify(thinkingDetails)) <= NATIVE_TOOL_DETAIL_MAX_BYTES
+      thinkingEncoding &&
+      toolDetailEntryBytes(thinkingEncoding.serializedBytes) <= NATIVE_TOOL_DETAIL_MAX_BYTES
     ) {
       projected.contentDetailRef = this.cacheToolDetails(
         sessionKey,
         messageId,
         `${partPath}/thinking`,
         thinkingDetails,
+        { encoding: thinkingEncoding },
       );
       projected.content = thinkingPreview;
     }
@@ -2014,6 +2052,20 @@ export class NativeAgentTranscriptProjection {
       holdPreview: (snapshot.omittedParts ?? 0) > 0,
     };
     this.progressiveHydrations.set(key, entry);
+    /*
+     * While a part-trimmed head is in the window every streamed revision lands
+     * here with a new source token, and each read below is a whole `messages`
+     * read whose head row alone outgrows the window. Recovery therefore starts
+     * at most once per settle interval: the first read for a quiet key starts
+     * at once, and a newer token arriving during the wait replaces the pending
+     * one without moving its deadline, so a streaming turn still recovers once
+     * an interval and a cached summary (the only thing that attaches a
+     * detached Codex thread) is never starved. The pending timer keeps the
+     * preview held meanwhile, as an in-flight read did.
+     */
+    const settleMs = this.options.progressiveHydrationSettleMs ?? PROGRESSIVE_HYDRATION_SETTLE_MS;
+    const lastStart = this.progressiveHydrationReadStarts.get(key);
+    const sinceLastStart = lastStart === undefined ? settleMs : monotonicMs() - lastStart;
     const scheduleAttempt = (delayMs: number): void => {
       const timer = setTimeout(() => {
         if (this.progressiveHydrationTimers.get(key) === timer) {
@@ -2021,6 +2073,7 @@ export class NativeAgentTranscriptProjection {
         }
         if (this.host.isStopped() || this.progressiveHydrations.get(key) !== entry) return;
         entry.attempts += 1;
+        this.recordProgressiveHydrationReadStart(key, settleMs);
         const promise = this.fillIncompleteProgressiveSnapshot(
           provider,
           sessionId,
@@ -2075,7 +2128,23 @@ export class NativeAgentTranscriptProjection {
       }, delayMs);
       this.progressiveHydrationTimers.set(key, timer);
     };
-    scheduleAttempt(0);
+    scheduleAttempt(Math.min(settleMs, Math.max(0, settleMs - sinceLastStart)));
+  }
+
+  private recordProgressiveHydrationReadStart(key: string, settleMs: number): void {
+    const now = monotonicMs();
+    this.progressiveHydrationReadStarts.delete(key);
+    this.progressiveHydrationReadStarts.set(key, now);
+    // A start older than the interval no longer delays anything.
+    if (this.progressiveHydrationReadStarts.size <= PROGRESSIVE_HYDRATION_READ_STARTS_LIMIT) return;
+    for (const [candidate, startedAt] of Array.from(this.progressiveHydrationReadStarts)) {
+      if (
+        this.progressiveHydrationReadStarts.size > PROGRESSIVE_HYDRATION_READ_STARTS_LIMIT ||
+        now - startedAt >= settleMs
+      ) {
+        this.progressiveHydrationReadStarts.delete(candidate);
+      }
+    }
   }
 
   private invalidateStaleProgressiveHydration(key: string, sourceToken: string): void {
@@ -2680,8 +2749,10 @@ export class NativeAgentTranscriptProjection {
     const value = projection.value;
     const observed = this.progressiveTranscriptCache.get(key);
     if (observed?.value === value) return observed.token;
-    const token = updateHashWithValues(
-      updateHashWithValues(
+    // Each row enters as its memoized fingerprint: a read that moved one row
+    // hashes that row once, not the whole window's JSON.
+    const token = updateHashWithFingerprints(
+      updateHashWithFingerprints(
         createHash("sha256").update(
           JSON.stringify([
             value.identity,
@@ -4820,6 +4891,7 @@ export class NativeAgentTranscriptProjection {
     // history may be reused, and a page read still in flight is not admitted.
     this.projectedMessages.forgetSession(key);
     this.directHistoryPages.forgetSession(key);
+    this.toolDetailEncodings.forgetSession(key);
     // The identity behind this key changed, so the grace the previous session
     // had spent says nothing about the new one. A tab that resumes into a
     // different provider session starts its reconnect from a full window.
@@ -4832,6 +4904,11 @@ export class NativeAgentTranscriptProjection {
       this.progressiveTranscriptCache.delete(candidate);
       this.transcriptDeltaBases.forget(candidate);
       this.progressiveSourceTokens.delete(candidate);
+    }
+    for (const candidate of Array.from(this.progressiveHydrationReadStarts.keys())) {
+      if (candidate.startsWith(progressivePrefix)) {
+        this.progressiveHydrationReadStarts.delete(candidate);
+      }
     }
     for (const candidate of Array.from(this.progressiveHydrations.keys())) {
       if (!candidate.startsWith(progressivePrefix)) continue;
@@ -5693,11 +5770,11 @@ export class NativeAgentTranscriptProjection {
       );
     }
     const previous = this.projectionCache.get(key);
-    const fingerprint = JSON.stringify({
-      ...candidate,
-      revision: 0,
-      cursor: candidate.cursor,
-    });
+    // Compared only for equality, so a digest stands in for the whole JSON:
+    // rows come through the per-object memo (projected values are immutable
+    // once `projectionMessages` returns them) instead of being serialized
+    // again, and the cache entry keeps 43 characters rather than the window.
+    const fingerprint = digestWithMessages("legacy-commit", { ...candidate, revision: 0 });
     if (previous && previous.generation === generation && previous.fingerprint === fingerprint) {
       return previous.projection;
     }

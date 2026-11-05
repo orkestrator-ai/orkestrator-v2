@@ -68,15 +68,33 @@ type Encode = (value: unknown) => string;
 
 const defaultEncode: Encode = (value) => JSON.stringify(value) ?? "null";
 
-function partsDigest(parts: readonly unknown[]): string {
-  const serialized = JSON.stringify(parts);
+/**
+ * Digest of a part list: two 32-bit FNV-style hashes over the characters of
+ * `JSON.stringify(parts)`. The text is fed piecewise — `[`, each part's
+ * encoding, `,` between them, `]` — which is exactly that string, so a
+ * memoizing `encode` (the backend's) avoids serializing parts it already
+ * encoded while the client, encoding with `JSON.stringify`, computes the same
+ * value. Changing the value requires a new patch version.
+ */
+export function nativeAgentPartsDigest(
+  parts: readonly unknown[],
+  encode: Encode = defaultEncode,
+): string {
   let first = 2_166_136_261;
   let second = 0x9e3779b9;
-  for (let index = 0; index < serialized.length; index += 1) {
-    const code = serialized.charCodeAt(index);
-    first = Math.imul(first ^ code, 16_777_619);
-    second = Math.imul(second ^ code, 0x85ebca6b);
+  const feed = (text: string): void => {
+    for (let index = 0; index < text.length; index += 1) {
+      const code = text.charCodeAt(index);
+      first = Math.imul(first ^ code, 16_777_619);
+      second = Math.imul(second ^ code, 0x85ebca6b);
+    }
+  };
+  feed("[");
+  for (let index = 0; index < parts.length; index += 1) {
+    if (index > 0) feed(",");
+    feed(encode(parts[index]));
   }
+  feed("]");
   return `${(first >>> 0).toString(36)}:${(second >>> 0).toString(36)}`;
 }
 
@@ -91,9 +109,46 @@ function partKey(part: unknown): string | undefined {
   return undefined;
 }
 
-function withoutContent(part: Record<string, unknown>): Record<string, unknown> {
-  const { content: _content, ...rest } = part;
-  return rest;
+/** Keys `JSON.stringify` writes for a record, in its order, other than `content`. */
+function encodedKeysWithoutContent(part: Record<string, unknown>): string[] {
+  const keys: string[] = [];
+  for (const key of Object.keys(part)) {
+    const value = part[key];
+    if (
+      key === "content" ||
+      value === undefined ||
+      typeof value === "function" ||
+      typeof value === "symbol"
+    ) {
+      continue;
+    }
+    keys.push(key);
+  }
+  return keys;
+}
+
+/**
+ * Whether two parts encode identically apart from `content`, compared field by
+ * field so each value's memoized encoding is reused rather than serializing a
+ * content-less copy of both parts. Same keys in the same order and equal
+ * encodings is exactly equal `JSON.stringify` output.
+ */
+function sameWithoutContent(
+  left: Record<string, unknown>,
+  right: Record<string, unknown>,
+  encode: Encode,
+): boolean {
+  const leftKeys = encodedKeysWithoutContent(left);
+  const rightKeys = encodedKeysWithoutContent(right);
+  if (leftKeys.length !== rightKeys.length) return false;
+  for (let index = 0; index < leftKeys.length; index += 1) {
+    const key = leftKeys[index]!;
+    if (key !== rightKeys[index]) return false;
+    const before = left[key];
+    const after = right[key];
+    if (before !== after && encode(before) !== encode(after)) return false;
+  }
+  return true;
 }
 
 const FORBIDDEN_KEYS: ReadonlySet<string> = new Set(["__proto__", "constructor", "prototype"]);
@@ -148,7 +203,7 @@ function fieldPatch(
       : {}),
   };
   // Only worth it when it is clearly smaller than the part it replaces.
-  return (JSON.stringify(patch) ?? "").length * 2 < encode(part).length ? patch : undefined;
+  return encode(patch).length * 2 < encode(part).length ? patch : undefined;
 }
 
 function buildPartPatches(
@@ -174,7 +229,7 @@ function buildPartPatches(
       typeof part.content === "string" &&
       part.content.length > candidate.content.length &&
       part.content.startsWith(candidate.content) &&
-      encode(withoutContent(candidate)) === encode(withoutContent(part))
+      sameWithoutContent(candidate, part, encode)
     ) {
       return {
         keep: candidateIndex,
@@ -248,7 +303,7 @@ export function buildNativeAgentMessagePatch(
   return {
     id: next.id,
     basePartsCount: previous.parts.length,
-    basePartsDigest: partsDigest(previous.parts),
+    basePartsDigest: nativeAgentPartsDigest(previous.parts, encode),
     fields,
     content,
     parts,
@@ -267,7 +322,7 @@ export function applyNativeAgentMessagePatch<TMessage>(
   if (!Array.isArray(previous.parts) || typeof previous.content !== "string") return null;
   if (
     previous.parts.length !== patch.basePartsCount ||
-    partsDigest(previous.parts) !== patch.basePartsDigest
+    nativeAgentPartsDigest(previous.parts) !== patch.basePartsDigest
   )
     return null;
   const parts = applyPartPatches(previous.parts as unknown[], patch.parts);

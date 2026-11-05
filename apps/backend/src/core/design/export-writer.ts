@@ -855,6 +855,12 @@ interface HelperOutcome {
   notStarted: boolean;
 }
 
+/**
+ * Captures through pipes to preserve the spawn seam used by tests to withhold a
+ * payload from a real child. Shared command capture supports Node too, so runtime
+ * compatibility does not require pipes. A stall in Bun's pipe readers is bounded by the
+ * deadline below, though it reports a completed write as an unknown outcome.
+ */
 function runContainerHelper(
   spawnFn: DesignExportSpawn,
   containerId: string,

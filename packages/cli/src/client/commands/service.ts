@@ -325,14 +325,16 @@ export const serviceCommands: CommandSpec[] = [
       throwIfInterrupted(context.signal);
       let releaseDir: string;
       try {
-        releaseDir = await service.installRelease(layout, version, { bun });
+        releaseDir = await service.installRelease(layout, version, { bun, signal: context.signal });
       } catch (error) {
+        throwIfInterrupted(context.signal);
         throw new CliError(
           "operation-failed",
           `Could not install orkestrator@${version}: ${error instanceof Error ? error.message : String(error)}`,
           { retryable: true },
         );
       }
+      throwIfInterrupted(context.signal);
       await service.installLauncher(layout, releaseDir);
       const rollbackTarget = service.nextRollbackTarget(
         layout,
@@ -340,6 +342,7 @@ export const serviceCommands: CommandSpec[] = [
         service.linkedVersion(layout.current),
         version,
       );
+      throwIfInterrupted(context.signal);
       await service.activateRelease(layout, version);
       const installGeneration = randomUUID();
       await service.writeServiceConfig(layout, {

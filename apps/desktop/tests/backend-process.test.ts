@@ -1232,7 +1232,8 @@ sleep 5
 
   test("HTTP client covers commands, settings, errors, and event delivery", async () => {
     const server = createServer(async (request, response) => {
-      if (new URL(request.url ?? "/", "http://fixture").pathname === "/__orkestrator/events") {
+      // The event stream carries query parameters (`relayedEvents`, `since`).
+      if (new URL(request.url ?? "/", "http://127.0.0.1").pathname === "/__orkestrator/events") {
         response.writeHead(200, { "content-type": "text/event-stream" });
         response.write(
           `: connected\n\n${FRESH_CONNECTED_FRAME}data: {"event":"changed","payload":{"ok":true}}\n\n`,

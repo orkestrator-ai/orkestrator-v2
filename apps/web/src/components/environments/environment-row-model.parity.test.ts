@@ -18,6 +18,7 @@ import type { PrMonitorEnvironmentState } from "@orkestrator/protocol/pr-monitor
 import { projectKey, projectRef } from "@orkestrator/protocol/federation";
 import { toNodeEnvironmentSummary } from "@orkestrator/protocol/node-summaries";
 import type { MachineView } from "@/lib/federation/aggregate";
+import { isLocalDeletionRetryable } from "@/lib/federation/selected-environments";
 import { localEnvironmentPrMergeState } from "@/lib/pr-merge-readiness";
 import type { Environment } from "@/types";
 import { localEnvironmentRowFacts, nodeEnvironmentRowFacts } from "./environment-row-facts";
@@ -113,6 +114,7 @@ function localRow(environment: Environment, markers: Markers): Row {
   return row(
     localEnvironmentRowFacts(environment, {
       deleting,
+      deletionRetryable: isLocalDeletionRetryable(environment, new Set()),
       activity: markers.buildActive ? "working" : (environment.agentActivityState ?? "idle"),
       // As `useEnvironmentDisplayActivity` decides it.
       running:
@@ -248,6 +250,24 @@ describe("an environment row looks the same on its own machine and through a com
   }
 });
 
+test("multi-select takes a failed cleanup but not a delete in flight, on either path", () => {
+  const failed = {
+    ...base,
+    deletionRequestedAt: "2026-10-21T09:00:00Z",
+    cleanupAfterMergeError: "failed",
+  } as Environment;
+  const failedInRecovery = { ...failed, lifecycleOperation: "deleting" } as Environment;
+  const inFlight = { ...base, lifecycleOperation: "deleting" } as Environment;
+  for (const environment of [failed, failedInRecovery]) {
+    expect(localRow(environment, {}).model.selectable).toBe(true);
+    expect(nodeRow(environment, {}).model.selectable).toBe(true);
+  }
+  expect(localRow(inFlight, {}).model.selectable).toBe(false);
+  expect(nodeRow(inFlight, {}).model.selectable).toBe(false);
+  expect(localRow(base, {}).model.selectable).toBe(true);
+  expect(nodeRow(base, {}).model.selectable).toBe(true);
+});
+
 test("offline, busy and unwritable node facts disable mutations and retain last-known activity", () => {
   const summary = toNodeEnvironmentSummary(NODE, { ...base, agentActivityState: "working" })!;
   for (const [transport, busy, writable] of [
@@ -273,6 +293,7 @@ test("offline, busy and unwritable node facts disable mutations and retain last-
 test("Docker unavailable blocks container actions while local worktree actions remain usable", () => {
   const facts = localEnvironmentRowFacts(base, {
     deleting: false,
+    deletionRetryable: false,
     activity: "idle",
     running: true,
     buildPipeline: false,

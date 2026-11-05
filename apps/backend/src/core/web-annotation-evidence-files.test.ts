@@ -5,11 +5,15 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { loseBunExitEvents } from "@orkestrator/protocol/testing/lost-exit";
+import { CommandFailedError, runCommand } from "./command-capture.js";
 import {
   CONTAINER_EVIDENCE_REMOVER,
+  CONTAINER_EVIDENCE_TIMEOUT_MS,
   CONTAINER_EVIDENCE_WRITER,
   isAnnotationEvidencePath,
   removeLocalEvidence,
+  runContainerEvidenceScript,
 } from "./web-annotation-evidence-files.js";
 import { makePng } from "./web-annotation-test-support.js";
 
@@ -184,4 +188,97 @@ describe("evidence removal", () => {
       "not an app-generated evidence path",
     );
   });
+});
+
+describe("runContainerEvidenceScript", () => {
+  /** Stands in for `docker exec -i <id> node -e SCRIPT -- ...` with a local `sh`. */
+  const running =
+    (script: string): typeof runCommand =>
+    (_command, _args, options) =>
+      runCommand("sh", ["-c", script], options);
+
+  test("runs the script through docker exec with its stdin", async () => {
+    const calls: Array<{ command: string; args: string[] }> = [];
+    const run: typeof runCommand = (command, args = [], options) => {
+      calls.push({ command, args });
+      const script = args[args.indexOf("-e") + 1]!;
+      return runCommand(
+        "node",
+        ["-e", script, "--", ...args.slice(args.indexOf("--") + 1)],
+        options,
+      );
+    };
+    const output = await runContainerEvidenceScript(
+      run,
+      "c1",
+      CONTAINER_EVIDENCE_WRITER,
+      [workspace, RELATIVE, "100000"],
+      png.toString("base64"),
+    );
+    expect(output).toEndWith(RELATIVE);
+    expect((await readFile(join(workspace, RELATIVE))).equals(png)).toBe(true);
+    expect(calls[0]?.command).toBe("docker");
+    expect(calls[0]?.args.slice(0, 5)).toEqual(["exec", "-i", "c1", "node", "-e"]);
+  });
+
+  test("a failure surfaces the first line the script wrote, or the status", async () => {
+    await expect(
+      runContainerEvidenceScript(running("echo 'first\nsecond' >&2; exit 3"), "c1", "", [], ""),
+    ).rejects.toThrow(/^first$/);
+    await expect(runContainerEvidenceScript(running("exit 3"), "c1", "", [], "")).rejects.toThrow(
+      "docker exec exited with 3",
+    );
+  });
+
+  test("always passes a deadline", async () => {
+    const seen: Array<number | undefined> = [];
+    const run: typeof runCommand = (_command, _args, options) => {
+      seen.push(options?.timeoutMs);
+      return runCommand("true", [], options);
+    };
+    await runContainerEvidenceScript(run, "c1", "", [], "");
+    expect(seen).toEqual([CONTAINER_EVIDENCE_TIMEOUT_MS]);
+    expect(CONTAINER_EVIDENCE_TIMEOUT_MS).toBeGreaterThan(0);
+  });
+
+  test("a hung exec can no longer wait forever", async () => {
+    await expect(
+      runContainerEvidenceScript(running("exec sleep 30"), "c1", "", [], "", { timeoutMs: 100 }),
+    ).rejects.toThrow("timed out");
+  });
+
+  test("a lost completion event fails at the deadline, never as a success", async () => {
+    const restore = loseBunExitEvents();
+    try {
+      await expect(
+        runContainerEvidenceScript(running("printf removed"), "c1", "", [], "", {
+          timeoutMs: 200,
+        }),
+      ).rejects.toThrow("timed out");
+    } finally {
+      restore();
+    }
+  });
+
+  test("output past its bound is a failure, never a truncated answer", async () => {
+    await expect(
+      runContainerEvidenceScript(running("head -c 70000 /dev/zero"), "c1", "", [], ""),
+    ).rejects.toThrow("wrote too much");
+  });
+});
+
+test("signal termination never exposes the evidence argv", async () => {
+  await expect(
+    runContainerEvidenceScript(
+      async () => {
+        throw new CommandFailedError("docker exec private-id secret-script /private/path", {
+          signal: "SIGKILL",
+        });
+      },
+      "private-id",
+      "secret-script",
+      ["/private/path"],
+      "",
+    ),
+  ).rejects.toThrow(/^Container evidence script terminated without an exit status$/);
 });

@@ -166,7 +166,9 @@ export interface AgentBranchHost<B extends AgentBranchRecord = AgentBranchRecord
    * connection (build pipeline workers). Absent: such turns keep the
    * bridge's environment connection.
    */
-  workerMailTurn?(branch: B): PipelineWorkerMailTurn | undefined;
+  workerMailTurn?(
+    branch: B,
+  ): PipelineWorkerMailTurn | undefined | Promise<PipelineWorkerMailTurn | undefined>;
   prepareResult?(branch: B, requestId: string, schema: JsonSchema): Promise<void>;
   supportsToolResult?(branch: B): boolean;
   readResult?<T>(requestId: string): Promise<StructuredOutputResult<T> | null>;

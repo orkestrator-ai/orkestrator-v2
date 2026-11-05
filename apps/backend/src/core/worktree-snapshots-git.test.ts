@@ -30,6 +30,7 @@ let linked: string;
 let service: DiffStatsService;
 let metrics: RecurringWorkMetrics;
 const events: Array<{ fileListRevision?: number; watched?: boolean }> = [];
+const hintedPaths: string[] = [];
 let watchingSupported = true;
 
 function run(cwd: string, ...args: string[]): void {
@@ -97,6 +98,10 @@ beforeAll(async () => {
         ...options,
         settleMs: 50,
         plan: worktreeWatchPlanIo,
+        onChange: (hint) => {
+          hintedPaths.push(...(hint?.paths ?? []));
+          options.onChange(hint);
+        },
         startWatch: (target, listener, watchOptions) =>
           watch(target, { ...watchOptions, persistent: false }, (event, filename) => {
             const name = filename?.toString() ?? null;
@@ -216,18 +221,15 @@ describe("real Git through the shared owner", () => {
     await until(() => latestRevision() > before);
   });
 
-  test("a write under the ignored node_modules changes nothing and starts no scan", async () => {
+  test("a write under the ignored node_modules reaches no hint", async () => {
     if (!watchingSupported) return;
-    const started = metrics.snapshot().kinds["diff-scan"]?.requested ?? 0;
     await fs.writeFile(path.join(linked, "node_modules", "pkg", "index.js"), "x\n");
     // A later source edit proves the watch delivered past the write above.
     const before = latestRevision();
     await fs.appendFile(path.join(linked, "a.txt"), "three\n");
     await until(() => latestRevision() > before);
-    // One hint for the edit, however many scans the gap merged it into.
-    expect((metrics.snapshot().kinds["diff-scan"]?.requested ?? 0) - started).toBeLessThanOrEqual(
-      2,
-    );
+    expect(hintedPaths).toContain("a.txt");
+    expect(hintedPaths).not.toContain("node_modules/pkg/index.js");
     expect((await readRows()).map((row) => row.path)).not.toContain("node_modules/pkg/index.js");
   });
 

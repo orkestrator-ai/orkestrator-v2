@@ -50,7 +50,7 @@ Analysed 2026-11-04 against `main` at `e198fd4a7`, with the E2 change applied.
 ## Needs verification
 
 - All sizes in the report come from one installation's snapshot of 2026-10-28.
-- The extra write transactions of the deferred drain were not measured with real fsyncs. The workload runs with `durable: false`, and [0760](../../reports/efficiency-logging-database/0760-e5-database-upkeep.md) owns measuring that cost.
+- The extra write transactions of the deferred drain were not measured with real fsyncs. The workload runs with `durable: false`, and [5180](5180-sqlite-durability-tiers.md) (from E5 part `0920`) owns measuring that cost.
 
 ## Related
 

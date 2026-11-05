@@ -15,8 +15,13 @@ import { LazyAgentNativeTab } from "@/components/native-agent/LazyAgentNativeTab
 import { Button } from "@/components/ui/button";
 import { requestGlobalSettings } from "@/lib/settings-navigation";
 import { useConfigStore } from "@/stores";
+import type { AgentPlatformBadge } from "@/components/chat/AgentModelPicker";
+import { CoordinatorIntroCard } from "./CoordinatorIntro";
 import {
+  COORDINATOR_COMMAND_HINT,
   COORDINATOR_COMPOSER_PLACEHOLDER,
+  COORDINATOR_SIDE_AGENT_EXPLANATION,
+  COORDINATOR_SIDE_COMPOSER_PLACEHOLDER,
   COORDINATOR_STARTER_PROMPTS,
   CoordinatorBanner,
   CoordinatorStartupFailure,
@@ -31,6 +36,8 @@ interface CoordinatorConversationPaneProps {
   snapshot: CoordinatorSnapshot;
   availablePlatforms: AgentPlatform[];
   platformNotes: Partial<Record<AgentPlatform, string>>;
+  /** Each available platform's read-only tier, as a pill in the picker. */
+  platformBadges: Partial<Record<AgentPlatform, AgentPlatformBadge>>;
   /**
    * This conversation's own first prompt, while it is held. Scoped to the
    * conversation that produced it, so another group cannot replay it into its own.
@@ -78,6 +85,7 @@ export function CoordinatorConversationPane({
   snapshot,
   availablePlatforms,
   platformNotes,
+  platformBadges,
   launch,
   startConversation,
   confirmUpstreamMerge,
@@ -116,6 +124,7 @@ export function CoordinatorConversationPane({
   // conversation stays readable while its platform is unavailable.
   const providerUnavailable = Boolean(conversation.agent && !providerState?.available);
   const environmentId = coordinatorRuntimeId(snapshot.workspace.id, conversation.id);
+  const side = conversation.role === "side";
   const heldReason = sendingHeldReason(snapshot, conversation);
   // A platform turned off is Platforms' to fix; anything else here is the safety level.
   const platformOff = Boolean(
@@ -188,13 +197,30 @@ export function CoordinatorConversationPane({
             coordinatorWorkspacePath={snapshot.projectPath}
             availablePlatforms={availablePlatforms}
             platformNotes={platformNotes}
-            composerPlaceholder={COORDINATOR_COMPOSER_PLACEHOLDER}
+            platformBadges={platformBadges}
+            // A side agent launches nothing, so it is not asked what to get
+            // done, and its hint says what it is for.
+            composerPlaceholder={
+              side ? COORDINATOR_SIDE_COMPOSER_PLACEHOLDER : COORDINATOR_COMPOSER_PLACEHOLDER
+            }
+            composerHint={
+              side ? (
+                <>
+                  {COORDINATOR_SIDE_AGENT_EXPLANATION} {COORDINATOR_COMMAND_HINT}
+                </>
+              ) : (
+                COORDINATOR_COMMAND_HINT
+              )
+            }
             connectionEnabled={providerState?.available !== false}
             {...(heldReason ? { sendingHeldReason: heldReason } : {})}
             // Only the main coordinator delegates, so only it is offered work
             // that has to run in a pipeline or environment.
             {...(conversation.role === "main"
-              ? { unassignedStarterPrompts: COORDINATOR_STARTER_PROMPTS }
+              ? {
+                  unassignedStarterPrompts: COORDINATOR_STARTER_PROMPTS,
+                  unassignedIntro: <CoordinatorIntroCard />,
+                }
               : {})}
             emptyPlatformsMessage="No agent platform meets this coordinator's read-only requirement on this machine. Enable a qualified platform, or lower the coordinator safety level in Settings."
             emptyPlatformsAction={
@@ -213,9 +239,7 @@ export function CoordinatorConversationPane({
                 : (platform, prompt, options) =>
                     startConversation(conversation, platform, options, prompt)
             }
-            beforeSend={
-              conversation.role === "side" ? undefined : () => confirmUpstreamMerge(conversation)
-            }
+            beforeSend={side ? undefined : () => confirmUpstreamMerge(conversation)}
             {...(launch
               ? {
                   initialPrompt: launch.prompt,

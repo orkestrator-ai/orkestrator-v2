@@ -328,6 +328,7 @@ const renderAgentNativeTab = mock((props: Record<string, unknown>) => (
     data-initial-prompt={String(props.initialPrompt ?? "")}
     data-initial-model={String(props.initialAgentModel ?? "")}
     data-platform-notes={JSON.stringify(props.platformNotes ?? {})}
+    data-platform-badges={JSON.stringify(props.platformBadges ?? {})}
   >
     {props.onAssignPlatform ? (
       <button
@@ -736,11 +737,22 @@ describe("CoordinatorPanel", () => {
     const agent = await screen.findByTestId("native-agent");
     const notes = JSON.parse(agent.getAttribute("data-platform-notes") ?? "{}");
     expect(notes.pi).toBe("Pi has no MCP client.");
-    // A weaker tier says so explicitly; an enforced one does not need the
-    // disclaimer and must not carry it.
-    expect(notes.cursor).toContain("cannot verify this boundary independently");
+    // The reason is passed as written: the tier pill says whether the boundary
+    // is verified, so the note does not repeat it.
+    expect(notes.cursor).toBe("Cursor applies the restriction.");
+    expect(JSON.stringify(notes)).not.toContain("cannot verify");
     expect(notes.codex).toBeUndefined();
     expect(notes.grok).toBeUndefined();
+    // Every available platform's tier is named, and an unavailable one has none.
+    const badges = JSON.parse(agent.getAttribute("data-platform-badges") ?? "{}");
+    expect(badges.codex).toMatchObject({ label: "Read-only · Enforced", tone: "positive" });
+    expect(badges.pi).toMatchObject({ label: "Read-only · Enforced", tone: "positive" });
+    expect(badges.cursor).toMatchObject({
+      label: "Read-only · Provider-configured",
+      tone: "caution",
+    });
+    expect(badges.cursor.description).toContain("no way for Orkestrator to verify");
+    expect(badges.grok).toBeUndefined();
   });
 
   test("refreshes the messaging notice after config changes without remounting", async () => {

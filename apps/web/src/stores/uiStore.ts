@@ -98,6 +98,11 @@ interface UIState {
    * the notice returns after a restart.
    */
   openedLeafCoordinators: string[];
+  /**
+   * The coordinator's first-run card was dismissed. Per user on this device,
+   * across projects: the coordinator works the same way in every project.
+   */
+  coordinatorIntroDismissed: boolean;
 
   // Actions
   selectProject: (projectId: string | null) => void;
@@ -145,6 +150,7 @@ interface UIState {
   setDataSaving: (enabled: boolean) => void;
   /** Remember, for this app session, that the user opened a gated coordinator. */
   openLeafCoordinator: (key: string) => void;
+  setCoordinatorIntroDismissed: (dismissed: boolean) => void;
 }
 
 export const createUIStore = () =>
@@ -172,6 +178,7 @@ export const createUIStore = () =>
         pipelineGraphHeight: null,
         dataSaving: false,
         openedLeafCoordinators: [],
+        coordinatorIntroDismissed: false,
 
         // Actions
         toggleWorkBucketCollapsed: (bucket) =>
@@ -313,6 +320,8 @@ export const createUIStore = () =>
               ? state
               : { openedLeafCoordinators: [...state.openedLeafCoordinators, key] },
           ),
+
+        setCoordinatorIntroDismissed: (dismissed) => set({ coordinatorIntroDismissed: dismissed }),
       }),
       {
         name: windowStorageKey("ui-storage"),
@@ -331,6 +340,7 @@ export const createUIStore = () =>
           multiReviewGraphHeight: state.multiReviewGraphHeight,
           pipelineGraphHeight: state.pipelineGraphHeight,
           dataSaving: state.dataSaving,
+          coordinatorIntroDismissed: state.coordinatorIntroDismissed,
         }),
       },
     ),

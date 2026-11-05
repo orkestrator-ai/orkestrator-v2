@@ -1,5 +1,3 @@
-# X1 coordinator trust boundary: follow-ups
-
 ## Task analysis
 
 Analysed 2026-11-05 against `main` at `af2e566e5`, from what the X1 batch (Coordinator trust boundary) could not prove or close. X1's outcome is the table ending `docs/reports/security/0090-x1-coordinator-trust-boundary.md`, in the parent of the commit that deleted it.
@@ -132,6 +130,14 @@ Analysed 2026-11-05 against `main` at `af2e566e5`, from what the X1 batch (Coord
 
 **Decisions.** None: remove each when the floor is at or above the first Stable release that has it.
 
+## Assumptions and decisions
+
+### Task 3: retained provider-secret storage decision
+
+The related provider-secrets decision lives in the storage architecture guide
+after report retirement. Link to that retained section so task 3's data-directory
+work can still reach the accepted-risk decision.
+
 ## Constraints and rationale
 
 - The data directory is denied as a whole, with an allowance, rather than file by file. A list goes stale silently when a store adds a secret. The allowance is the part to extend: see `coordinatorReadBoundary`.
@@ -145,4 +151,4 @@ Analysed 2026-11-05 against `main` at `af2e566e5`, from what the X1 batch (Coord
 
 - [`docs/architecture/coordinator.md`](../../architecture/coordinator.md#which-environments-a-coordinator-may-act-on)
 - [0024-coordinator-live-conformance.md](0024-coordinator-live-conformance.md)
-- [0190-l17-provider-secrets-at-rest.md](../../reports/security/0190-l17-provider-secrets-at-rest.md)
+- [Provider secrets at rest](../../architecture/storage.md#provider-secrets-at-rest)

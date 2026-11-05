@@ -180,7 +180,10 @@ export function shellCommandRefused(
             (token.startsWith("--") && "--dereference-recursive".startsWith(token)),
         )) ||
       (program === "diff" &&
-        tokens.some((token) => /^-[^-]*r/.test(token) || token === "--recursive")) ||
+        tokens.some(
+          (token) =>
+            /^-[^-]*r/.test(token) || (token.startsWith("--") && "--recursive".startsWith(token)),
+        )) ||
       ((program === "rg" ||
         program === "ag" ||
         program === "find" ||

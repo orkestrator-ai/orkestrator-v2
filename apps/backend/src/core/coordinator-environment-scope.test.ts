@@ -233,6 +233,194 @@ for (const provisionBeforeCompletion of [false, true]) {
   });
 }
 
+for (const remote of [false, true]) {
+  for (const action of ["pause", "cancel", "resume", "restart"] as const) {
+    test(`owned pipeline ${action} before environment publication (${remote ? "remote" : "local"})`, async () => {
+      const storage = remote ? leaf : world.storage;
+      const projectId = remote
+        ? (await leaf.getEnvironment(leafWorkerId))!.projectId
+        : world.projectId;
+      const pipelineId = "provisioning-pipeline";
+      const snapshot = {
+        id: pipelineId,
+        projectId,
+        environmentId: "",
+        phase: action === "resume" ? "paused" : action === "restart" ? "failed" : "preparing",
+      };
+      await storage.saveBuildPipeline(pipelineId, projectId, "", 1, snapshot);
+      const effect = mock(async () => snapshot);
+      const restart = mock(async () => ({
+        pipeline: snapshot,
+        step: { phase: "prepare", round: 1 },
+        alreadyRestarted: false,
+      }));
+      (remote ? leafContext : rootContext).buildPipelines = {
+        pause: effect,
+        cancel: effect,
+        resume: effect,
+        restartForCoordinator: restart,
+      } as unknown as CommandContext["buildPipelines"];
+      const association = {
+        id: "provisioning-launch",
+        projectId: scope.projectId,
+        coordinatorId: scope.coordinatorId,
+        conversationId: "earlier-conversation",
+        kind: "build-pipeline" as const,
+        resourceId: pipelineId,
+        requestId: "launch",
+        createsEnvironment: true,
+        createdAt: new Date().toISOString(),
+        ...(remote ? { nodeId: LEAF } : {}),
+      };
+      const invoke = () =>
+        tool(action === "restart" ? "restart_build_pipeline_step" : `${action}_build_pipeline`, {
+          pipelineId,
+          requestId: "restart",
+          ...(remote ? { nodeId: LEAF } : {}),
+        });
+      // Opt-in cannot stand in for a missing launch when there is no environment.
+      await allowOthers();
+      await world.storage.coordinators.saveCoordinatorWorkflowAssociation(association);
+      for (const wrong of [
+        { pending: true },
+        { coordinatorId: "another-coordinator" },
+        { resourceId: "another-pipeline" },
+        { kind: "graph-run" as const },
+        { nodeId: remote ? undefined : LEAF },
+      ]) {
+        await world.storage.coordinators.updateCoordinatorWorkflowAssociation(
+          association.id,
+          (row) => {
+            Object.assign(row, { pending: false, nodeId: undefined }, association, wrong);
+            return true;
+          },
+        );
+        refused(await invoke());
+      }
+      expect(effect).not.toHaveBeenCalled();
+      expect(restart).not.toHaveBeenCalled();
+      await world.storage.patchRepositorySettings(world.projectId, {}, [
+        "coordinatorOtherEnvironments",
+      ]);
+      await world.storage.coordinators.updateCoordinatorWorkflowAssociation(
+        association.id,
+        (row) => {
+          Object.assign(row, { pending: false, nodeId: undefined }, association);
+          return true;
+        },
+      );
+      const allowed = await invoke();
+      expect({ isError: allowed.isError, text: allowed.isError ? allowed.text : "ok" }).toEqual({
+        isError: false,
+        text: "ok",
+      });
+      if (action === "restart") {
+        expect(restart).toHaveBeenCalledTimes(1);
+        expect((await invoke()).isError).toBe(false);
+        expect(restart).toHaveBeenCalledTimes(1);
+        // Also exercise the command directly; the MCP preflight is not its authority.
+        await world.storage.coordinators.updateCoordinatorWorkflowAssociation(
+          association.id,
+          (row) => {
+            row.pending = true;
+            return true;
+          },
+        );
+        await expect(
+          commands.get("restart_coordinator_build_pipeline_step")!(
+            {
+              scope,
+              input: { pipelineId, requestId: "direct", ...(remote ? { nodeId: LEAF } : {}) },
+            },
+            rootContext,
+          ),
+        ).rejects.toThrow(COORDINATOR_ENVIRONMENT_ORIGIN_REFUSAL);
+      } else {
+        expect(effect).toHaveBeenCalledWith(pipelineId);
+      }
+      // Publication switches back to environment authority; membership cannot adopt it.
+      const environmentId = remote ? leafWorkerId : handMade;
+      await world.storage.coordinators.updateCoordinatorWorkflowAssociation(
+        association.id,
+        (row) => {
+          delete row.createsEnvironment;
+          return true;
+        },
+      );
+      await storage.saveBuildPipeline(pipelineId, projectId, environmentId, 2, {
+        ...snapshot,
+        environmentId,
+      });
+      refused(await invoke());
+    });
+  }
+}
+
+for (const status of ["provisioning", "failed", "cancelled", "cancelling"] as const) {
+  test(`owned graph cancellation without an environment (${status})`, async () => {
+    const run = graphRunFixture({ projectId: world.projectId, status });
+    delete run.environmentId;
+    const cancel = mock(async () => ({ ...run, status: "cancelled" as const }));
+    rootContext.graphRuns = {
+      get: async () => run,
+      cancel,
+    } as unknown as CommandContext["graphRuns"];
+    const invoke = () => tool("cancel_graph_run", { runId: run.id });
+    const association = {
+      id: "provisioning-graph",
+      projectId: scope.projectId,
+      coordinatorId: scope.coordinatorId,
+      conversationId: "earlier-conversation",
+      kind: "graph-run" as const,
+      resourceId: run.id,
+      requestId: "launch-graph",
+      createdAt: new Date().toISOString(),
+    };
+    await allowOthers();
+    await world.storage.coordinators.saveCoordinatorWorkflowAssociation(association);
+    for (const wrong of [
+      { pending: true },
+      { coordinatorId: "other" },
+      { resourceId: "other" },
+      { kind: "build-pipeline" as const },
+      { nodeId: LEAF },
+    ]) {
+      await world.storage.coordinators.updateCoordinatorWorkflowAssociation(
+        association.id,
+        (row) => {
+          Object.assign(row, { pending: false, nodeId: undefined }, association, wrong);
+          return true;
+        },
+      );
+      const denied = await invoke();
+      expect(denied.isError).toBe(true);
+      expect(denied.text).toContain(COORDINATOR_ENVIRONMENT_ORIGIN_REFUSAL);
+    }
+    expect(cancel).not.toHaveBeenCalled();
+    await world.storage.patchRepositorySettings(world.projectId, {}, [
+      "coordinatorOtherEnvironments",
+    ]);
+    await world.storage.coordinators.updateCoordinatorWorkflowAssociation(association.id, (row) => {
+      Object.assign(row, { pending: false, nodeId: undefined }, association);
+      return true;
+    });
+    const allowed = await invoke();
+    expect(allowed.isError).toBe(false);
+    expect(allowed.structuredContent).toMatchObject({ cancelled: status === "provisioning" });
+    expect(cancel).toHaveBeenCalledTimes(status === "provisioning" ? 1 : 0);
+    if (status === "provisioning") {
+      run.status = "cancelled";
+      expect((await invoke()).structuredContent).toMatchObject({ cancelled: false });
+      expect(cancel).toHaveBeenCalledTimes(1);
+    }
+    run.environmentId = handMade;
+    expect((await invoke()).isError).toBe(true);
+    delete run.environmentId;
+    run.projectId = "another-project";
+    expect((await invoke()).isError).toBe(true);
+  });
+}
+
 for (const workflow of ["graph", "review", "remote-review"] as const) {
   for (const authority of ["none", "opt-in", "creation"] as const) {
     test(`${workflow} cancellation requires environment authority: ${authority}`, async () => {

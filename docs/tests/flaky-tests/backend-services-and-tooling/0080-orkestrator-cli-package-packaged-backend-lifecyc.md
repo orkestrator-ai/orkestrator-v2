@@ -1,7 +1,7 @@
 # `orkestrator CLI package` packaged-backend lifecycle (`packages/cli/tests/cli.test.ts`)
 
 - **ID:** 0080
-- **Status:** resolved
+- **Status:** open
 - **Date observed:** 2026-08-14
 - **Original command:** `bun run test` (workspace group, Turbo task `@orkestrator/cli#test:workspace`).
 - **Worker configuration:** Turbo's workspace group running concurrently with the root, bridge, and protocol-lockfile groups. Unlike the resolved built-artifact flake above, the CLI file was selected exactly once — the duplicate-selection root cause fixed there does not apply here.
@@ -40,3 +40,33 @@
   the graceful-shutdown race, not the readiness budget, the thing to
   instrument next.
 - **Collateral note:** Because a workspace-group failure aborts the remaining Turbo tasks, this flake silently drops web/desktop/web-public coverage from an aggregate run. Treat a workspace-group failure as "the rest of that group did not run", not as "the rest of that group passed".
+
+## Recurrence: X1 review preparation, 2026-11-05
+
+- Original command: `mise run test:logged -- --name review-default-tests -- mise run test`
+  at `5bec27835ffc2feb843f17b6862779be45da14f6`. The captured CLI task used
+  `--parallel=2` inside the concurrent workspace/root/bridge/protocol run.
+- `orkestrator CLI package > starts and gracefully stops the packaged backend`
+  failed after 20,049.21 ms and `orkestrator CLI package > starts when the caller's
+  environment already sets NODE_ENV` failed after 20,008.72 ms. Both reported
+  `Packaged backend did not become ready:` with empty stderr.
+- Original evidence: `.orkestrator/review-artifacts/review-validation-b0c05d8b-b766-4f6d-a373-7333fcae7234/validation-04.stderr.txt`,
+  lines 2043–2077. The retained workspace log at
+  `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.SSasyB/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+  reports the CLI package's 467 passed, 6 skipped and 2 failed cases.
+- Isolated owner rerun: `mise run test:logged -- --name address-cli-diagnostics -- bun --cwd=packages/cli test tests/cli.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures`
+  passed in 6.3 s (exit 0). The logged runner deleted passing output, so no new
+  assertion or test count is claimed. No CLI implementation or timeout changed.
+- This establishes an intermittent readiness failure. The cause remains
+  unproven; contention alone is not evidence that the aggregate failure is
+  environmental. Review triage called these related through the README path,
+  so the isolated pass does not replace the failed aggregate's evidence.
+- Commit `5bec27835` was later reordered out of the X1 branch so the report
+  deletion stays last; its code equals the branch's code before the fix commit
+  that follows `f11de93f0`. That fix touches coordinator authority and the
+  Claude read hook, not backend startup.
+- Further reruns, 2026-11-05, after rebuilding `packages/cli` from the branch
+  head: `mise run test:logged -- --name x1-cli-lifecycle-1 -- bun --cwd=packages/cli test tests/cli.test.ts --preload ../../tests/setup-node.ts --parallel=2 --only-failures`
+  and the same as `x1-cli-lifecycle-2` both passed (exit 0, 3.8 s each), with the
+  aggregate's worker count. Still open: the readiness failure has not been
+  reproduced outside the concurrent aggregate.

@@ -306,6 +306,30 @@ describe("createCoordinatorReadOnlyHook", () => {
     expect(await run("Bash", { command: "rg fixture ." }, "unavailable")).toBeUndefined();
   });
 
+  test("hook-only diff denies every recursive abbreviation before reading descendant links", async () => {
+    const left = join(checkout, "diff-left");
+    const right = join(checkout, "diff-right");
+    mkdirSync(left);
+    mkdirSync(right);
+    symlinkSync(join(dataDir, "control-mcp.json"), join(left, "credential"));
+    writeFileSync(join(right, "credential"), "");
+    const commands = ["-r", "-ur"];
+    for (let length = 3; length <= "--recursive".length; length++) {
+      commands.push("--recursive".slice(0, length));
+    }
+    for (const flag of commands) {
+      const command = `diff ${flag} diff-left diff-right`;
+      const answer = await run("Bash", { command }, "unavailable");
+      expect({ flag, decision: answer?.permissionDecision }).toEqual({ flag, decision: "deny" });
+      expect(answer?.permissionDecisionReason).toContain("data directory");
+      expect(JSON.stringify(answer)).not.toContain("unique-credential-fixture-marker");
+    }
+    expect(
+      await run("Bash", { command: "diff README.md other.md" }, "unavailable"),
+    ).toBeUndefined();
+    expect(await run("Bash", { command: "diff --rec diff-left diff-right" })).toBeUndefined();
+  });
+
   test("hook-only commands deny clustered path operands before reading a credential fixture", async () => {
     const credentials = join(dataDir, "control-mcp.json");
     for (const operand of [

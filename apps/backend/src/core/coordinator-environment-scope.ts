@@ -106,3 +106,41 @@ export async function assertCoordinatorMayActOnEnvironment(
   if (config.repositories[scope.projectId]?.coordinatorOtherEnvironments === true) return;
   throw new Error(COORDINATOR_ENVIRONMENT_ORIGIN_REFUSAL);
 }
+
+/**
+ * Before provisioning publishes an environment, a settled launch association
+ * authorizes controls on that workflow alone. It never grants authority over
+ * an environment: once one exists the creation/opt-in boundary applies again.
+ * Callers must first verify the workflow's project against the target node.
+ */
+export async function assertCoordinatorMayControlWorkflow(
+  context: CommandContext,
+  scope: CoordinatorScope,
+  workflow: {
+    kind: "build-pipeline" | "graph-run";
+    resourceId: string;
+    environmentId?: string;
+  },
+  node?: CoordinatorEnvironmentNode,
+): Promise<void> {
+  if (workflow.environmentId) {
+    await assertCoordinatorMayActOnEnvironment(context, scope, workflow.environmentId, node);
+    return;
+  }
+  const records = await context.storage.coordinators.listCoordinatorWorkflowAssociations(
+    scope.projectId,
+  );
+  if (
+    records.some(
+      (association) =>
+        association.projectId === scope.projectId &&
+        association.coordinatorId === scope.coordinatorId &&
+        !association.pending &&
+        association.kind === workflow.kind &&
+        association.resourceId === workflow.resourceId &&
+        association.nodeId === node?.nodeId,
+    )
+  )
+    return;
+  throw new Error(COORDINATOR_ENVIRONMENT_ORIGIN_REFUSAL);
+}

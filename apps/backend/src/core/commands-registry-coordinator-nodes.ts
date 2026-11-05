@@ -51,7 +51,10 @@ import {
 } from "./coordinator-node-coordinator-mail.js";
 import type { CommandContext } from "./commands-context.js";
 import { asNonBlankString } from "./commands-helpers.js";
-import { assertCoordinatorMayActOnEnvironment } from "./coordinator-environment-scope.js";
+import {
+  assertCoordinatorMayActOnEnvironment,
+  assertCoordinatorMayControlWorkflow,
+} from "./coordinator-environment-scope.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
 import {
   actionHash,
@@ -576,6 +579,18 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
         throw new Error("Build pipeline not found in this project");
       environmentId =
         typeof snapshot.environmentId === "string" ? snapshot.environmentId : undefined;
+      if (!environmentId) {
+        await assertCoordinatorMayControlWorkflow(
+          context,
+          caller,
+          {
+            kind: "build-pipeline",
+            resourceId: named.pipelineId,
+          },
+          target ?? undefined,
+        );
+        return { allowed: true };
+      }
     }
     if (typeof named.workflowId === "string") {
       const review = target

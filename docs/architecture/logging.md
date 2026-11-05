@@ -726,7 +726,7 @@ Text is the default: one line per entry, in the old `[tag] message` shape.
 ```
 
 - Every entry is one line in either format. Newlines, control characters and
-  U+2028/9 in a value are escaped, because Node's readline ends a line at those.
+  U+2028/9 in a value are escaped, because Bun's readline ends a line at those (Node's does not).
 - In JSON mode the saved log file is JSON lines throughout. A console call that
   did not come from the logger is wrapped as `{"orklog":1,"ts","level","message"}`
   with no area or event, and an entry over the 64 KiB bound becomes a shortened
@@ -943,8 +943,21 @@ own backpressure and no ordering against stdout and stderr.
 The relay carries the [essential log](#the-essential-event-log) too, and its
 `essentialOnly` entries are the one thing it does not write to the normal log.
 
-The rest of the relay work (a line length bound, skipping the relay when nothing
-consumes it) is undecided and not built.
+**Lines are bounded.** The relay reads stdout and stderr through
+`forEachBoundedLine` (`packages/protocol/src/node/bounded-line-splitter.ts`), the
+same splitter the [bridge hop](#the-bridge-hop) uses, in place of `readline`, which
+held a whole line however long it grew. A line over 64 KiB (the file writer's
+per-entry bound) is passed on in 64 KiB pieces rather than held or dropped; a record
+cut that way stays as `[Backend]` text. Lines end where Node's `readline` ended them:
+at `\n`, `\r\n` and a lone `\r`. UTF-8 is decoded across chunk boundaries.
+
+**The relay runs even when nothing reads it.** With Save Logs to Disk off in a
+packaged app, every backend line is still parsed and written to a stdout nobody
+reads. It stays that way: it costs about 1–2.5 µs of CPU a line under Node
+(measured 2026-11-05 on macOS, 100,000 relayed record and raw lines with stdout at
+`/dev/null`), so the 12.5k lines a day one machine logged cost tens of milliseconds
+a day. The policy hint and the ready message arrive on the same lines, so a skip
+would not be a one-line change either.
 
 `writeProcessOutputLine` is how raw text enters the log. Only a stdio relay may
 call it: it bypasses levels because such text has none.
@@ -982,7 +995,11 @@ flowchart LR
   environment.
   A bridge whose output nobody reads as records (one started by hand, or a model
   catalogue probe) stays on the format its environment asks for.
-- **Redaction runs before and after decoding.** Raw output is scrubbed per chunk.
+- **Redaction runs before and after decoding.** Raw output is scrubbed per bounded
+  line. A constant-size continuation flag carries a pending credential introducer (such as `password:` or `Bearer`)
+  across line endings and blank lines. The next value is scrubbed using the
+  shared assignment rule, conservatively including values of six or seven
+  characters after an auth scheme.
   Recognized records then have every decoded string scrubbed, including formatted
   errors, stack frames and causes, because JSON escaping can hide credential syntax.
   If the raw pass breaks a record's JSON, the line is kept as plain output.
@@ -990,7 +1007,9 @@ flowchart LR
   it, overriding anything the bridge claimed, and puts it first so a record already
   at the field limit keeps it through the next relay.
 - **Each line is its own entry.** A chunk used to be one call, so only its first
-  line carried the prefix. Every line of a stack now has it.
+  line carried the prefix. Every line of a stack now has it. Lines are split by
+  the bounded splitter the Electron relay uses, so a line over 64 KiB arrives in
+  64 KiB pieces, and a token cut at that boundary is not redacted.
 - **Nothing is lost.** Unstructured output, and a record from another build naming an
   area or event this one does not list, stay captured as text. The hop never filters.
 - **Ordering.** stdout and stderr are read separately, as before, so an `info` and a

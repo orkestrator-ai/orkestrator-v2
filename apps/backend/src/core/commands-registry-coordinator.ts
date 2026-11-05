@@ -138,9 +138,18 @@ export function registerCoordinatorCommands(
     workflowStarts.set(key, started);
     return started;
   };
-  register("ensure_project_coordinator", async ({ projectId }, context) => {
+  register("ensure_project_coordinator", async ({ projectId, keepConversationErrors }, context) => {
     if (!context.coordinators) throw new Error("Coordinator service is unavailable");
-    return context.coordinators.ensure(asNonBlankString(projectId, "projectId"));
+    return context.coordinators.ensure(asNonBlankString(projectId, "projectId"), {
+      clearConversationErrors: keepConversationErrors !== true,
+    });
+  });
+  register("retry_coordinator_conversation", ({ projectId, conversationId }, context) => {
+    if (!context.coordinators) throw new Error("Coordinator service is unavailable");
+    return context.coordinators.retryConversation(
+      asNonBlankString(projectId, "projectId"),
+      asNonBlankString(conversationId, "conversationId"),
+    );
   });
   register("get_project_coordinator", async ({ projectId }, context) => {
     if (!context.coordinators) throw new Error("Coordinator service is unavailable");

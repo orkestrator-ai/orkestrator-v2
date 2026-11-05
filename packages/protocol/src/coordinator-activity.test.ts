@@ -56,6 +56,30 @@ function observing(states: Record<string, AgentActivityState | "unknown">) {
 }
 
 describe("coordinatorActivityByProject", () => {
+  test("a conversation that failed to start is not observed, and its siblings are", () => {
+    const { observe, seen } = observing({ "session-main": "working" });
+    const projects = coordinatorActivityByProject(
+      [
+        workspace("p1", [
+          {
+            id: "side",
+            logicalSessionKey: "session-side",
+            agent: "codex",
+            startupError: "bridge failed",
+          } as CoordinatorConversation,
+          {
+            id: "main",
+            logicalSessionKey: "session-main",
+            agent: "codex",
+          } as CoordinatorConversation,
+        ]),
+      ],
+      observe,
+    );
+    expect(seen).toEqual(["main"]);
+    expect(projects).toEqual({ p1: "working" });
+  });
+
   test("reports a project working while any open conversation works", () => {
     const { observe } = observing({ "session-main": "idle", "session-side": "working" });
     expect(

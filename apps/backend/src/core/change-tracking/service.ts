@@ -76,6 +76,8 @@ const EVIDENCE_UNSUPPORTED_RECHECK_MS = 5 * 60_000;
 const RETENTION_INTERVAL_MS = 60 * 60_000;
 /** The first retention pass, soon after start so a backlog is not left for an hour. */
 const FIRST_RETENTION_DELAY_MS = 2 * 60_000;
+/** A pass soon after an environment is deleted, so its content does not wait for the hour. */
+const PURGE_RETENTION_DELAY_MS = 30_000;
 
 /** One producer of canonical evidence (a bridge connection). */
 export interface EvidenceSource {
@@ -135,6 +137,9 @@ export class ChangeTrackingService {
   private readonly turnFinalizations = new Map<string, Promise<string[]>>();
   private retentionTimer: ReturnType<typeof setInterval> | null = null;
   private firstRetentionTimer: ReturnType<typeof setTimeout> | null = null;
+  private purgeRetentionTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Late events for these are dropped, so they cannot write rows a purge just removed. */
+  private readonly deletedEnvironments = new Set<string>();
   private readonly closeListeners: Array<() => void> = [];
   private readonly startListeners: Array<() => void> = [];
   private started = false;
@@ -216,8 +221,10 @@ export class ChangeTrackingService {
     this.retention = new ChangeRetentionService({
       ledger: this.ledger,
       store: this.objects,
+      bodies: this.bodies,
       policies: this.policies,
       readerPins: () => this.diffBodies.readerPins.keys(),
+      onPurgeFinished: (id) => this.deletedEnvironments.delete(id),
     });
     this.restore = new ChangeRestoreService({
       ledger: this.ledger,
@@ -239,20 +246,71 @@ export class ChangeTrackingService {
       this.ledger.transaction(() => this.ledger.recoverRestoreOperations());
       this.turns.reconcileAfterRestart();
       this.publisher.drainOutbox();
+      for (const purge of this.retention.purges.pendingPurges())
+        this.deletedEnvironments.add(purge.environmentId);
     } catch (error) {
       log.warn("startup.reconcile-failed", { error: formatLogError(error) });
     }
     for (const listener of this.startListeners.splice(0)) listener();
     if (!this.options.manualScheduling) {
-      const retain = () => {
-        void this.retention.run().catch(() => undefined);
-        this.registry.sweepIdle();
-      };
+      const retain = () => this.retainNow();
       this.firstRetentionTimer = setTimeout(retain, FIRST_RETENTION_DELAY_MS);
       this.firstRetentionTimer.unref?.();
       this.retentionTimer = setInterval(retain, RETENTION_INTERVAL_MS);
       this.retentionTimer.unref?.();
     }
+  }
+
+  private retainNow(): void {
+    void this.retention
+      .run()
+      .then((report) => {
+        if (report.purgesWaiting) this.scheduleRetentionSoon();
+      })
+      .catch((error) => {
+        // A pass still running at shutdown loses its database; that is no failure.
+        if (!this.stopped) log.warn("retention.failed", { error: formatLogError(error) });
+      });
+    this.registry.sweepIdle();
+  }
+
+  /** One pass shortly, for a purge that should not wait for the hourly one. */
+  private scheduleRetentionSoon(): void {
+    if (this.options.manualScheduling || this.stopped || this.purgeRetentionTimer) return;
+    this.purgeRetentionTimer = setTimeout(() => {
+      this.purgeRetentionTimer = null;
+      this.retainNow();
+    }, PURGE_RETENTION_DELAY_MS);
+    this.purgeRetentionTimer.unref?.();
+  }
+
+  /**
+   * An environment was deleted: tombstone the worktrees only it used and record
+   * the purge durably. The retention pass deletes its rows in bounded batches, so
+   * deletion never holds the write lock for a large ledger, and a crash or restart
+   * resumes the purge. A checkout other environments still use stays live.
+   */
+  environmentDeleted(environmentId: string): void {
+    const { purges } = this.retention;
+    purges.ensureIndexes();
+    this.deletedEnvironments.add(environmentId);
+    const worktreeIds = purges
+      .environmentWorktrees(environmentId)
+      .filter((worktreeId) => !purges.worktreeUsedElsewhere(worktreeId, environmentId));
+    for (const worktreeId of worktreeIds) this.registry.tombstone(worktreeId);
+    const sourceKeys = this.ledger.evidenceSources(environmentId);
+    for (const [key, source] of Array.from(this.sources)) {
+      if (source.environmentId !== environmentId) continue;
+      sourceKeys.push(source.sourceKey);
+      this.sources.delete(key);
+    }
+    purges.requestPurge({
+      environmentId,
+      requestedAt: new Date().toISOString(),
+      worktreeIds,
+      sourceKeys,
+    });
+    this.scheduleRetentionSoon();
   }
 
   shutdown(): void {
@@ -261,6 +319,8 @@ export class ChangeTrackingService {
     this.gitScopes.stop();
     if (this.firstRetentionTimer) clearTimeout(this.firstRetentionTimer);
     this.firstRetentionTimer = null;
+    if (this.purgeRetentionTimer) clearTimeout(this.purgeRetentionTimer);
+    this.purgeRetentionTimer = null;
     if (this.retentionTimer) clearInterval(this.retentionTimer);
     this.retentionTimer = null;
     for (const listener of this.closeListeners.splice(0)) {
@@ -298,6 +358,9 @@ export class ChangeTrackingService {
   /** Listener for the environment scan owner (`DiffStatsService.onScanEvent`). */
   readonly onDiffScanEvent = (event: DiffScanEvent): void => {
     if (this.stopped) return;
+    // A deleted environment still hears `removed`, which tells clients it is gone.
+    if (event.kind !== "removed" && this.deletedEnvironments.has(event.target.environmentId))
+      return;
     this.environments.handle(event);
     if (event.kind === "scanned") this.gitScopes.invalidate(event.target.environmentId);
     else if (event.kind === "removed") this.gitScopes.forget(event.environmentId);
@@ -342,6 +405,8 @@ export class ChangeTrackingService {
       providerSessionId?: string;
     },
   ): Promise<TurnStartResult> {
+    if (this.deletedEnvironments.has(context.environmentId))
+      return { kind: "untracked", reason: "environment-deleted" };
     try {
       await this.turnFinalizations.get(
         threadIdFor(context.environmentId, context.logicalSessionKey),
@@ -380,6 +445,7 @@ export class ChangeTrackingService {
     parentLogicalSessionKey: string;
     childProviderSessionId: string;
   }): void {
+    if (this.deletedEnvironments.has(input.environmentId)) return;
     const parent = this.ledger.currentSegment(
       threadIdFor(input.environmentId, input.parentLogicalSessionKey),
     );
@@ -436,6 +502,7 @@ export class ChangeTrackingService {
     requestId?: string | null;
     writersSettled?: boolean;
   }): Promise<string[]> {
+    if (this.deletedEnvironments.has(input.environmentId)) return Promise.resolve([]);
     const key = threadIdFor(input.environmentId, input.logicalSessionKey);
     // Select synchronously at the idle edge, before evidence I/O or queue drains.
     const ending = input.requestId
@@ -546,6 +613,10 @@ export class ChangeTrackingService {
    * flight per producer; a bridge without the route is rechecked later.
    */
   pullEvidence(source: EvidenceSource): Promise<number> {
+    if (this.deletedEnvironments.has(source.environmentId)) return Promise.resolve(0);
+    this.ledger.transaction(() =>
+      this.ledger.recordEvidenceSource(source.environmentId, source.sourceKey),
+    );
     this.sources.set(`${source.environmentId}\0${source.provider}`, source);
     if (this.sources.size > 1_024) {
       const oldest = this.sources.keys().next().value;

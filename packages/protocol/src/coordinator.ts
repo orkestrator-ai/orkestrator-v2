@@ -127,6 +127,13 @@ export interface CoordinatorConversation {
   bridgePort?: number;
   bridgePid?: number;
   /**
+   * Why this conversation's bridge last failed to start, already sanitized for
+   * display. While set, this conversation has no runtime: no credential, no
+   * mail, no bridge start. Every other conversation carries on. Cleared by a
+   * successful start or an explicit retry. An older backend ignores the field.
+   */
+  startupError?: string;
+  /**
    * `main` is the project's one coordinator: every worker reports to it and it
    * owns all delegation. A `side` agent (Side 1, Side 2…) can read the project
    * and exchange mail with the main coordinator only. Absent on records written
@@ -852,6 +859,11 @@ export interface CoordinatorWorkspace {
   repositoryContextEvents?: CoordinatorRepositoryContextEvent[];
   createdAt: string;
   updatedAt: string;
+  /**
+   * Written only by backends before `CoordinatorConversation.startupError`,
+   * which also set `lifecycleState: "error"`. Read for such a backend, and for
+   * a record it stored (version-compatibility.md).
+   */
   lastStartupError?: string;
   bridgePort?: number;
   bridgePid?: number;
@@ -944,6 +956,18 @@ export interface ProjectGitSwitchOptions {
   includeNestedRepositories?: boolean;
 }
 
+/**
+ * Whether this conversation may run: hold a credential, receive mail, start a
+ * bridge. Every "is this coordinator up?" question goes through this, because
+ * `lifecycleState` alone no longer answers it for one conversation.
+ */
+export function coordinatorConversationRunnable(
+  workspace: Pick<CoordinatorWorkspace, "lifecycleState">,
+  conversation: Pick<CoordinatorConversation, "startupError">,
+): boolean {
+  return workspace.lifecycleState === "ready" && !conversation.startupError;
+}
+
 export function coordinatorRuntimeId(coordinatorId: string, conversationId?: string): string {
   if (!coordinatorId || coordinatorId.includes("\0") || coordinatorId.includes(":")) {
     throw new Error("Invalid coordinator id");
@@ -1022,6 +1046,7 @@ export function isCoordinatorWorkspace(value: unknown): value is CoordinatorWork
           item.lastTurnOrigin === "user" ||
           item.lastTurnOrigin === "mail") &&
         (item.lastTurnStartedAt === undefined || typeof item.lastTurnStartedAt === "string") &&
+        (item.startupError === undefined || typeof item.startupError === "string") &&
         (item.sideOrdinal === undefined ||
           (Number.isSafeInteger(item.sideOrdinal) && (item.sideOrdinal as number) > 0))
       );

@@ -4,6 +4,7 @@ import {
   COORDINATOR_MAIL_ADDRESS,
   COORDINATOR_PROJECT_HOME_MESSAGE_WINDOW_MS,
   coordinatorConversationIdFromRuntimeId,
+  coordinatorConversationRunnable,
   coordinatorIdFromRuntimeId,
   coordinatorRuntimeId,
   type CoordinatorDelegationRequest,
@@ -422,7 +423,8 @@ export function registerCoordinatorWorkerMailCommands(
       const tab = workspace.conversations.find(
         (item) => item.id === conversation && !item.closedAt,
       );
-      if (!tab) throw new Error("Coordinator conversation is unavailable");
+      if (!tab || !coordinatorConversationRunnable(workspace, tab))
+        throw new Error("Coordinator conversation is unavailable");
       const sender: CoordinatorSender = {
         kind: "coordinator",
         projectId: project,
@@ -552,7 +554,7 @@ export function registerCoordinatorWorkerMailCommands(
     );
     if (!workspace || workspace.projectId !== projectId || !tab)
       return { result: "stale", reason: "The coordinator conversation that asked was closed." };
-    if (workspace.lifecycleState !== "ready")
+    if (!coordinatorConversationRunnable(workspace, tab))
       throw new Error("The coordinator is paused or unavailable; nothing was sent.");
     const home = await context.storage.getEnvironment(target.environmentId);
     if (!home || home.projectHome !== true || home.projectId !== projectId)

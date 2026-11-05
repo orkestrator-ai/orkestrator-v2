@@ -82,12 +82,12 @@ export async function readHttpBridgeLegacyTranscript(input: {
   const transcriptStatus = body?.status;
   const messages: unknown[] = Array.isArray(body?.messages) ? body.messages : [];
   const truncated = messageWindow?.truncated === true;
+  // A bridge that predates `?limit=` sends the whole window; the slice kept
+  // here then cuts rows the bridge did not report cutting.
+  const cut = input.limit !== undefined && messages.length > input.limit;
   return {
-    messages:
-      input.limit !== undefined && messages.length > input.limit
-        ? messages.slice(-input.limit)
-        : messages,
-    truncated,
+    messages: cut ? messages.slice(-input.limit!) : messages,
+    truncated: truncated || cut,
     // A tail read reports its own cut as truncation too. Exactly `limit` whole
     // rows is that cut; fewer, more (a bridge that ignored it) or shed parts are
     // the bridge's transport bound speaking.
@@ -129,6 +129,10 @@ export async function readHttpBridgeTranscriptSnapshot(input: {
    * the support-window floor reaches the first Stable release whose Claude
    * bridge materializes on `/transcript`. A session `/messages` cannot find
    * either is simply missing, and is not counted as compatibility use.
+   *
+   * `readLegacy` asks for the newest `limit` rows. `complete` then rests on
+   * `truncated`, which every bridge sets when `?limit=` cut rows and the
+   * legacy read sets when it had to cut them itself.
    */
   const legacyFallback = async (): Promise<ProviderTranscriptSnapshot> => {
     const legacy = await input.readLegacy();

@@ -57,15 +57,14 @@ export function CoordinatorWebResearchSettings({
   const [url, setUrl] = useState("");
   const draft = { name: name.trim(), url: url.trim() };
   const draftProblem =
-    !draft.name && !draft.url
-      ? undefined
-      : servers.some((server) => server.name === draft.name)
-        ? "A research server with this name is already listed."
-        : coordinatorResearchMcpServerProblem(draft);
-  const canAdd =
-    Boolean(draft.name && draft.url) &&
-    !draftProblem &&
-    servers.length < MAX_COORDINATOR_RESEARCH_MCP_SERVERS;
+    servers.length >= MAX_COORDINATOR_RESEARCH_MCP_SERVERS
+      ? `A coordinator can use at most ${MAX_COORDINATOR_RESEARCH_MCP_SERVERS} research servers. Remove one to add another.`
+      : !draft.name && !draft.url
+        ? undefined
+        : servers.some((server) => server.name === draft.name)
+          ? "A research server with this name is already listed."
+          : coordinatorResearchMcpServerProblem(draft);
+  const canAdd = Boolean(draft.name && draft.url) && !draftProblem;
 
   return (
     <div>
@@ -140,7 +139,21 @@ export function CoordinatorWebResearchSettings({
               ))}
             </ul>
           )}
-          <div className="flex items-start gap-2">
+          {/* Enter adds, and stops here: nothing else on the settings page acts on it. */}
+          <form
+            className="flex items-start gap-2"
+            onKeyDown={(event) => {
+              if (event.key === "Enter") event.stopPropagation();
+            }}
+            onSubmit={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              if (!canAdd) return;
+              setServers((current) => [...current, draft]);
+              setName("");
+              setUrl("");
+            }}
+          >
             <Input
               aria-label="Research server name"
               placeholder="name"
@@ -155,22 +168,11 @@ export function CoordinatorWebResearchSettings({
               onChange={(event) => setUrl(event.target.value)}
               className="h-8 flex-1 text-xs"
             />
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              className="h-8"
-              disabled={!canAdd}
-              onClick={() => {
-                setServers((current) => [...current, draft]);
-                setName("");
-                setUrl("");
-              }}
-            >
+            <Button type="submit" size="sm" variant="outline" className="h-8" disabled={!canAdd}>
               <Plus className="mr-1 size-3.5" />
               Add
             </Button>
-          </div>
+          </form>
           {draftProblem ? (
             <p role="alert" className="text-xs text-destructive">
               {draftProblem}

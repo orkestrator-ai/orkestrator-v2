@@ -417,6 +417,10 @@ observation time). Texts live in `apps/web/src/lib/view-freshness.ts`.
   speeds updates up: it shows `stale`/`degraded` as delayed announcements and
   says nothing for `unsupported`. `hydrating` is never shown, and a safety
   check that answers `unchanged` never leaves `current`, so neither flickers.
+  The Coordinator toolbar shows `stale`, then `degraded`, while its background
+  coordinator or repository read keeps failing (`readFailuresFreshnessNotice`).
+  One failure is left to the read's own retry, and the line goes when a read
+  succeeds.
 - **Container remote freshness.** On the Changes tab, `remote.state` `stale`
   reads "Base may be behind remote": the changes are exact against the
   clone's refs, which may be behind; it never means the list is unusable.

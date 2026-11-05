@@ -507,6 +507,11 @@ export class ControlMcpServer {
     if (workspace.lifecycleState !== "ready") {
       return { ok: false, status: 409, error: "Coordinator is paused or unavailable" };
     }
+    // This conversation's own bridge failed to start. Only its credential is
+    // refused; the main and every other conversation keep theirs.
+    if (typeof conversation.startupError === "string" && conversation.startupError) {
+      return { ok: false, status: 409, error: "This coordinator conversation could not start" };
+    }
     const invoke: ControlMcpInvoker = async <T>(
       command: string,
       args: Record<string, unknown> = {},

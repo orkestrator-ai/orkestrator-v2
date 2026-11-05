@@ -52,7 +52,7 @@ describe("NodeCoordinatorRemote", () => {
     expect(await access.nodeName("bk_leaf")).toBe("Build box");
   });
 
-  test("reads a worker's excerpt and waiting blocker from its projection on the node", async () => {
+  test("reads a worker's excerpt from its projection and its blocker from its state", async () => {
     const layout = {
       root: {
         kind: "leaf",
@@ -66,29 +66,37 @@ describe("NodeCoordinatorRemote", () => {
       get_pane_layout: layout,
       get_native_agent_projection: {
         messages: [{ role: "assistant", content: "Need to run the migration." }],
-        interactions: [{ kind: "question", state: "pending" }],
+      },
+      get_native_agent_session_state_update: {
+        status: "snapshot",
+        value: { interactions: [{ kind: "question", state: "pending" }] },
       },
     });
     expect(await access.lastAssistantExcerpt("bk_leaf", "e1", "startup-agent")).toBe(
       "Need to run the migration.",
     );
     expect(await access.waitingBlocker("bk_leaf", "e1", "startup-agent")).toBe("question");
-    expect(
-      calls
-        .filter((call) => call.command === "get_native_agent_projection")
-        .map((call) => call.args),
-    ).toEqual([
+    const reads = calls.filter((call) => call.command !== "get_pane_layout");
+    expect(reads).toEqual([
       {
-        environmentId: "e1",
-        agent: "codex",
-        logicalSessionKey: "env-e1:startup-agent",
-        messageLimit: 5,
+        command: "get_native_agent_projection",
+        args: {
+          environmentId: "e1",
+          agent: "codex",
+          logicalSessionKey: "env-e1:startup-agent",
+          messageLimit: 5,
+        },
       },
       {
-        environmentId: "e1",
-        agent: "codex",
-        logicalSessionKey: "env-e1:startup-agent",
-        messageLimit: 1,
+        // The blocker needs no transcript: a state read, not a projection.
+        command: "get_native_agent_session_state_update",
+        args: {
+          environmentId: "e1",
+          agent: "codex",
+          logicalSessionKey: "env-e1:startup-agent",
+          viewVersion: 1,
+          forceSnapshot: true,
+        },
       },
     ]);
     expect(await access.waitingBlocker("bk_leaf", "e1", "missing-tab")).toBeUndefined();

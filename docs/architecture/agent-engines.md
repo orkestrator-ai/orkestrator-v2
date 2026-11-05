@@ -437,6 +437,13 @@ Claude also has a second, unrelated execution mode: `apps/backend/src/core/tmux.
 drives the Claude Code CLI inside a tmux session and observes its terminal
 output. That path does not use the bridge or the SDK at all.
 
+Its chat tab reads the session's JSONL through `TmuxTranscriptReader`
+(`tmux-transcript-reader.ts`). A reopen reads one bounded page from the tail, and
+earlier history pages in on request, in one `docker exec` per page in a container.
+The file is read from its start only by the poll loop's tail, once per session in
+each backend process; that pass keeps the task list current and records each task
+call's snapshot, so a page from anywhere can stamp its lines without a replay.
+
 ## Codex
 
 **Bridge:** `bridges/codex-bridge/` · **Transport:** JSON-RPC over private stdio

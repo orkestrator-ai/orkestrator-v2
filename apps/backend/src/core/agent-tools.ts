@@ -59,6 +59,7 @@ import { registerWebAnnotationTools, WebAnnotationToolLimiter } from "./web-anno
 import {
   ARTIFACT_ONLY_SERVER_INSTRUCTIONS,
   ARTIFACT_TOOL_INSTRUCTIONS,
+  artifactAuthoringNotice,
   registerTranscriptArtifactTools,
   type TranscriptArtifactToolHost,
 } from "./transcript-artifacts/index.js";
@@ -859,7 +860,10 @@ async function createAgentToolServer(
         (annotationTools
           ? " Browser annotation tools read the annotation request assigned to this session and optionally report its result; they never resolve annotations."
           : "") +
-        (artifactTools ? ARTIFACT_TOOL_INSTRUCTIONS : ""),
+        (artifactTools
+          ? ARTIFACT_TOOL_INSTRUCTIONS +
+            artifactAuthoringNotice(artifactTools.authoringAvailability?.())
+          : ""),
     },
   );
 
@@ -937,7 +941,10 @@ function createArtifactOnlyServer(
 ): McpServer {
   const server = new McpServer(
     { name: ORKESTRATOR_ARTIFACT_MCP_SERVER_NAME, version: "1.0.0" },
-    { instructions: ARTIFACT_ONLY_SERVER_INSTRUCTIONS },
+    {
+      instructions:
+        ARTIFACT_ONLY_SERVER_INSTRUCTIONS + artifactAuthoringNotice(host.authoringAvailability?.()),
+    },
   );
   registerTranscriptArtifactTools(
     server,

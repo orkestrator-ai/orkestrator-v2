@@ -19,19 +19,25 @@
  * page's row lookups over `--manifest-entries` entries. A tmpfs temporary
  * directory hides the fsync cost, so point TMPDIR at a real disk for these.
  *
+ * One fixture for database growth: `measurement-rows` runs the same turn and
+ * environment history through the whole service on a temporary database, and
+ * reports the file rows written and kept and the database's size. It uses only
+ * routes that predate the row cap, so one script measures both sides of a change.
+ *
  * Fixture files are left to age `--settle-ms` before the first capture, so a
  * warm capture sees them as settled (see `STAT_SETTLE_WINDOW_MS` in capture.ts).
  *
  *   bun scripts/benchmark-change-tracking.ts [--sizes=100,1000,10000] [--runs=5]
  *     [--assets=20] [--asset-mib=8] [--changed=200] [--settle-ms=2500]
  *     [--blob-mib=16] [--durable-files=1000] [--manifest-entries=100000]
- *     [--only=capture,assets,long-turn,sharing,counting,large-blob,durable-cold,manifest]
+ *     [--bulk-files=20000] [--moving-passes=6] [--idle-passes=6] [--env-scans=12]
+ *     [--only=capture,assets,long-turn,sharing,counting,large-blob,durable-cold,manifest,measurement-rows]
  *     [--json]
  */
 
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { mkdtempSync, rmSync, symlinkSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, rmSync, statSync, symlinkSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { countRawLineChanges } from "../packages/protocol/src/node/change-tracking/raw-line-diff";
@@ -46,6 +52,8 @@ import { ObjectStore } from "../apps/backend/src/core/change-tracking/object-sto
 import { CHANGE_TRACKING_POLICY_V1 } from "../apps/backend/src/core/change-tracking/policy-registry";
 import { compareManifests } from "../apps/backend/src/core/change-tracking/snapshot-diff";
 import { SharedScanQueue } from "../apps/backend/src/core/change-tracking/shared-physical-work";
+import { ChangeTrackingService } from "../apps/backend/src/core/change-tracking/service";
+import { openBackendDatabase } from "../apps/backend/src/core/storage-stores";
 
 function arg(name: string, fallback: string): string {
   const match = process.argv.find((value) => value.startsWith(`--${name}=`));
@@ -62,10 +70,15 @@ const settleMs = Number(arg("settle-ms", "2500"));
 const blobMiB = Number(arg("blob-mib", "16"));
 const durableFiles = Number(arg("durable-files", "1000"));
 const manifestEntries = Number(arg("manifest-entries", "100000"));
+const bulkFiles = Number(arg("bulk-files", "20000"));
+const movingPasses = Number(arg("moving-passes", "6"));
+const idlePasses = Number(arg("idle-passes", "6"));
+const envScans = Number(arg("env-scans", "12"));
 const only = new Set(
-  arg("only", "capture,assets,long-turn,sharing,counting,large-blob,durable-cold,manifest").split(
-    ",",
-  ),
+  arg(
+    "only",
+    "capture,assets,long-turn,sharing,counting,large-blob,durable-cold,manifest,measurement-rows",
+  ).split(","),
 );
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, settleMs));
@@ -511,6 +524,138 @@ function benchCounting() {
   }
 }
 
+/**
+ * The workload called `measurement-rows`: one environment over a temporary
+ * database. A turn adds `--bulk-files` small files under one directory (a
+ * dependency install) and edits one source file, then runs `--moving-passes`
+ * provisional passes that each move the tree and `--idle-passes` that do not,
+ * and ends. The environment scan then reports the same bulk list `--env-scans`
+ * times, one path changing per scan. Nothing reads a real data directory.
+ */
+async function benchMeasurementRows() {
+  const repo = makeRepo(50);
+  const dataDir = mkdtempSync(path.join(tmpdir(), "ork-bench-ledger-"));
+  const database = openBackendDatabase(dataDir);
+  const service = new ChangeTrackingService({
+    dataDir,
+    database: () => database,
+    emit: () => undefined,
+    environmentTarget: async () => ({ kind: "local", worktreePath: repo }),
+    durable: false,
+    manualScheduling: true,
+    policy: { provisionalSpacingLocalMs: 0 },
+  });
+  service.start();
+  const count = (table: string) =>
+    (database.db.query(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n;
+  const pragma = (name: string) => {
+    const row = database.db.query(`PRAGMA ${name}`).get() as Record<string, number>;
+    return row[name] ?? 0;
+  };
+  const size = () => {
+    database.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+    return {
+      fileMiB:
+        Math.round((statSync(path.join(dataDir, "orkestrator.sqlite")).size / 2 ** 20) * 10) / 10,
+      freeMiB: Math.round(((pragma("freelist_count") * pragma("page_size")) / 2 ** 20) * 10) / 10,
+    };
+  };
+  let rowsWritten = 0;
+  let measurementsWritten = 0;
+  let peakRows = 0;
+  let peakFileMiB = 0;
+  const insert = service.ledger.insertMeasurement.bind(service.ledger);
+  service.ledger.insertMeasurement = (measurement, owner, files, seq) => {
+    rowsWritten += files.length;
+    measurementsWritten += 1;
+    insert(measurement, owner, files, seq);
+  };
+  const sample = async () => {
+    // Whatever a build defers runs before the sample, as it would between passes.
+    const retention = service.retention as unknown as { idle?: () => Promise<void> };
+    await retention.idle?.();
+    peakRows = Math.max(peakRows, count("change_measurement_files"));
+    peakFileMiB = Math.max(peakFileMiB, size().fileMiB);
+  };
+  try {
+    const requestId = "bench";
+    const session = { environmentId: "env", logicalSessionKey: "env-env:tab", requestId };
+    await service.prepareTurnStart({ ...session, provider: "claude" });
+    service.markTurnDispatched("env", "env-env:tab", requestId, "accepted");
+    const bulk = path.join(repo, "vendor");
+    mkdirSync(bulk, { recursive: true });
+    for (let index = 0; index < bulkFiles; index++)
+      writeFileSync(path.join(bulk, `dep${index}.js`), `module.exports = ${index};\n`);
+    const identity = await service.registry.resolve({ kind: "local", worktreePath: repo });
+    const owner = service.registry.owner(identity!);
+    for (let pass = 0; pass < movingPasses; pass++) {
+      writeFileSync(path.join(repo, "d0", "f0.ts"), `export const moved = ${pass};\n`);
+      await service.turns.provisional("env", owner);
+      await sample();
+    }
+    for (let pass = 0; pass < idlePasses; pass++) {
+      await service.turns.provisional("env", owner);
+      await sample();
+    }
+    await service.finalizeTurn(session);
+    await sample();
+    const target = {
+      environmentId: "env",
+      comparisonRef: "main",
+      kind: "local" as const,
+      worktreePath: repo,
+    };
+    for (let scan = 0; scan < envScans; scan++) {
+      const changes = Array.from({ length: bulkFiles }, (_, index) => {
+        const file = index === 0 ? `vendor/round${scan}.js` : `vendor/dep${index}.js`;
+        return {
+          path: file,
+          filename: file,
+          directory: "",
+          additions: 1,
+          deletions: 0,
+          status: "?",
+        };
+      });
+      const at = new Date().toISOString();
+      service.onDiffScanEvent({
+        kind: "scanned",
+        target,
+        result: {
+          stats: { additions: bulkFiles, deletions: 0, filesChanged: bulkFiles, truncated: false },
+          changes,
+          baseOid: "a".repeat(40),
+        },
+        changed: true,
+        at,
+        startedAt: at,
+      });
+      await service.environments.idle();
+      await sample();
+    }
+    const afterWorkload = { rows: count("change_measurement_files"), ...size() };
+    await service.retention.run();
+    rows.push({
+      workload: `measurement-rows (${bulkFiles} bulk files, ${movingPasses} moving + ${idlePasses} idle provisional passes, ${envScans} scans)`,
+      measurementsWritten,
+      rowsWritten,
+      peakRows,
+      peakFileMiB,
+      rowsAfterWorkload: afterWorkload.rows,
+      fileMiBAfterWorkload: afterWorkload.fileMiB,
+      rowsAfterRetention: count("change_measurement_files"),
+      ...Object.fromEntries(
+        Object.entries(size()).map(([key, value]) => [`${key}AfterRetention`, value]),
+      ),
+    });
+  } finally {
+    service.shutdown();
+    database.close();
+    rmSync(repo, { recursive: true, force: true });
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+}
+
 const startedRss = process.memoryUsage().rss;
 if (only.has("capture")) for (const size of sizes) await benchCapture(size);
 if (only.has("assets")) await benchAssets();
@@ -520,6 +665,7 @@ if (only.has("counting")) benchCounting();
 if (only.has("large-blob")) await benchLargeBlob();
 if (only.has("durable-cold")) await benchDurableCold();
 if (only.has("manifest")) await benchManifest();
+if (only.has("measurement-rows")) await benchMeasurementRows();
 const peakRssDeltaMiB = Math.round((process.memoryUsage().rss - startedRss) / 1024 / 1024);
 
 if (asJson) {

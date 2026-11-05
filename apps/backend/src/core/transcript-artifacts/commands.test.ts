@@ -73,7 +73,12 @@ describe("transcript artifact commands", () => {
       previewRenderer: { available: true, isolation: "process" },
       liveInteractive: true,
       contentOrigin: "http://localhost:4999",
-      rolloutFlags: { richMarkdown: true, artifactPublication: true, liveInteractive: true },
+      rolloutFlags: {
+        richMarkdown: true,
+        artifactPublication: true,
+        liveInteractive: true,
+        staticPresentation: true,
+      },
     });
   });
 

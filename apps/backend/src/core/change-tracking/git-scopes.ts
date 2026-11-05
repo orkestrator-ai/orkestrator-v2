@@ -614,11 +614,12 @@ export class GitScopeService {
       totals: { additions, deletions, changedFiles: input.changes.length },
     };
     const owner = { kind: `git-${input.scope}`, id: input.resourceKey };
-    const { measurement } = measurements.seal(draft, owner, null, undefined, files);
+    const cappedRows = measurements.capFileRows(draft, files);
+    const { measurement } = measurements.seal(cappedRows.draft, owner, null, undefined, files);
     measurements.publish({
       measurement,
       owner,
-      files,
+      files: cappedRows.rows,
       identity: null,
       resourceKey: input.resourceKey,
     });

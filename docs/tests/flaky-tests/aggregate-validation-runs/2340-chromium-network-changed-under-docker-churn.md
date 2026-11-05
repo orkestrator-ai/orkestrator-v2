@@ -189,3 +189,67 @@ browser journey exercises, so the choice for the whole suite is task 3 of to-do
 
 A run's output now names the failed cases whose trace has this error
 (`e2e/agent-testing/network-churn-report.ts`). The suite's result does not change.
+
+## Static HTML review repair, 2026-11-05
+
+At base commit `d52652aed`, the owning spec command below ran with two workers
+and returned **39 passed, 5 failed** in 117.4 seconds. All five failures had
+`net::ERR_NETWORK_CHANGED` console events in their retained traces:
+
+| Project | Exact test name | Network-change console events |
+| --- | --- | --- |
+| mobile-chromium | content is responsive and stays vector | 192 |
+| mobile-chromium | a native disclosure opens and closes, and the frame follows both ways | 145 |
+| desktop-chromium | authored code never runs and nothing is fetched | 279 |
+| desktop-chromium | opening and closing repeatedly converges and never reloads a frame | 26 |
+| desktop-chromium | static documents do not touch the single interactive host | 76 |
+
+All cases belong to `e2e/StaticHtmlArtifact.spec.ts`. The missing frames timed
+out at 30 seconds, except the two-frame count assertion, which timed out at
+5 seconds. Both new forced-`appendChild` regression cases passed.
+The failure log is
+`/tmp/orkestrator-test-run.mC54EI/static-html-browser.log.gz`.
+
+Original command and owning-file rerun command (identical):
+
+```bash
+ORKESTRATOR_E2E_PORT=15482 NODE_ENV=test mise run test:logged -- --name static-html-browser -- bunx playwright test --config e2e/playwright.config.ts e2e/StaticHtmlArtifact.spec.ts --workers=2
+```
+
+The trace evidence matches this existing environmental case; no assertions or
+timeouts were loosened.
+
+The identical owning-file rerun returned **39 passed, 5 failed** in 128.6
+seconds, with failure log
+`/tmp/orkestrator-test-run.FCB7FI/static-html-browser.log.gz`.
+Its failing cases also all had network-change console events:
+
+| Project | Exact test name | Network-change console events |
+| --- | --- | --- |
+| mobile-chromium | publishes as real document content with no preview worker or live host | 187 |
+| mobile-chromium | fallback layout moves remount an open report with a fresh identity | 293 |
+| desktop-chromium | authored code never runs and nothing is fetched | 251 |
+| desktop-chromium | opening and closing repeatedly converges and never reloads a frame | 2 |
+| desktop-chromium | a frame in a hidden tab keeps its last height | 1 |
+
+The forced-move mobile case failed before its initial document rendered, so the
+move itself was never exercised in that rerun. This is still environmental,
+rather than a test declared flaky from a passing isolated rerun.
+
+The new move regression was then run alone, serially, and passed **2/2** at
+desktop and narrow viewports (12.3 seconds):
+
+```bash
+ORKESTRATOR_E2E_PORT=15482 NODE_ENV=test mise run test:logged -- --name static-html-move-regression -- bunx playwright test --config e2e/playwright.config.ts e2e/StaticHtmlArtifact.spec.ts --grep 'fallback layout' --workers=1
+```
+
+Alternate-engine qualification was attempted with:
+
+```bash
+ORKESTRATOR_E2E_BROWSER=webkit ORKESTRATOR_E2E_PORT=15482 NODE_ENV=test mise run test:logged -- --name static-html-webkit -- bunx playwright test --config e2e/playwright.config.ts e2e/StaticHtmlArtifact.spec.ts --grep 'fallback layout|content is responsive|unexpected reload' --workers=2
+```
+
+All six selected cases failed to launch: the installed WebKit binary lacks host
+libraries (`libicu74`, `libxml2`, `libflite1`). No WebKit behavior was tested.
+Log: `/tmp/orkestrator-test-run.WPpVnX/static-html-webkit.log.gz`.
+This launch failure is separate from Chromium's network-change failures.

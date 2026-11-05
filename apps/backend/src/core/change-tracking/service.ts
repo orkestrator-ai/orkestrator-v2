@@ -169,7 +169,10 @@ export class ChangeTrackingService {
       },
     });
     this.ingestion = new ProviderEvidenceIngress(this.ledger, this.bodies);
-    this.measurements = new ChangeMeasurementService(this.ledger, this.bodies, this.objects);
+    this.measurements = new ChangeMeasurementService(this.ledger, this.bodies, this.objects, {
+      fileRowCap: () => policy().measurementFileRowCap,
+      onSupersededBacklog: (owner) => this.retention.drainOwner(owner),
+    });
     this.projections = new ChangeProjectionService(this.ledger, this.generation, {
       restoreEnabled: policy().restoreEnabled,
     });
@@ -254,6 +257,7 @@ export class ChangeTrackingService {
 
   shutdown(): void {
     this.stopped = true;
+    this.retention.stop();
     this.gitScopes.stop();
     if (this.firstRetentionTimer) clearTimeout(this.firstRetentionTimer);
     this.firstRetentionTimer = null;

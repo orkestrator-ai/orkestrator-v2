@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -13,6 +13,7 @@ import {
   readReleaseManifest,
   readServiceConfig,
   readStartupFailure,
+  RELEASE_RUNTIME_PATH,
   releaseDirectory,
   satisfiesBunRange,
   standaloneLayout,
@@ -58,8 +59,42 @@ describe("standalone releases", () => {
     const dir = await installRelease(layout, "2.22.0", { bun: "bun", run });
     expect(dir).toBe(releaseDirectory(layout, "2.22.0"));
     expect(readReleaseManifest(dir)).toEqual({ version: "2.22.0", engines: { bun: ">=1.4.3" } });
+    const installsForFirstRelease = installs;
     await installRelease(layout, "2.22.0", { bun: "bun", run });
-    expect(installs).toBe(1);
+    expect(installs).toBe(installsForFirstRelease);
+  });
+
+  test("the install that fetches the package runs no scripts and is not the one kept", async () => {
+    const layout = standaloneLayout(dataDir);
+    const installs: { args: string[]; cwd: string; env?: NodeJS.ProcessEnv }[] = [];
+    const run: CommandRunner = async (file, args, options) => {
+      installs.push({ args, cwd: options.cwd!, env: options.env });
+      // Only the first install lays out the package; the frozen one adds its
+      // dependencies, which this fake has none of.
+      if (installs.length > 1) return { stdout: "", stderr: "" };
+      const result = await fakeInstall("2.22.0")(file, args, options);
+      const runtime = path.join(options.cwd!, "node_modules", "orkestrator", RELEASE_RUNTIME_PATH);
+      await mkdir(runtime, { recursive: true });
+      await writeFile(path.join(runtime, "package.json"), "{}\n");
+      await writeFile(path.join(runtime, "bun.lock"), "{}\n");
+      return result;
+    };
+    await installRelease(layout, "2.22.0", { bun: "bun", run });
+    expect(installs).toHaveLength(2);
+    const [fetch, frozen] = installs;
+    expect(fetch!.args).toContain("--ignore-scripts");
+    expect(fetch!.args).not.toContain("--frozen-lockfile");
+    expect(frozen!.args).toContain("--frozen-lockfile");
+    expect(frozen!.args).toContain("--production");
+    expect(frozen!.args).toContain("--ignore-scripts");
+    const cache = (call: { args: string[] }) => call.args[call.args.indexOf("--cache-dir") + 1];
+    expect(cache(fetch!)).toBe(path.join(fetch!.cwd, ".cache"));
+    expect(cache(frozen!)).toBe(path.join(frozen!.cwd, ".cache"));
+    expect(cache(fetch!)).not.toBe(cache(frozen!));
+    expect(fetch!.env?.BUN_INSTALL_CACHE_DIR).toBe(cache(fetch!));
+    expect(frozen!.env?.BUN_INSTALL_CACHE_DIR).toBe(cache(frozen!));
+    expect(frozen!.cwd).not.toBe(fetch!.cwd);
+    expect(readdirSync(layout.releases)).toEqual(["2.22.0"]);
   });
 
   test("an install that produced nothing usable leaves no release behind", async () => {

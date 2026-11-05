@@ -1,3 +1,9 @@
+import {
+  seedStore,
+  seedUnreadableStore,
+  storageDatabase,
+  withTemporaryStorage,
+} from "../src/core/storage-test-support";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { describe, expect, mock, test, setDefaultTimeout } from "bun:test";
 
@@ -1329,6 +1335,39 @@ exit 0
     },
     ASYNC_TEST_BUDGET_MS,
   );
+
+  for (const damage of ["row", "document"] as const) {
+    test("environment deletion finishes despite damaged session " + damage, async () => {
+      await withTemporaryStorage(async (storage) => {
+        const environment = createEnvironment({
+          id: "env-damaged-sessions",
+          environmentType: "local",
+          worktreePath: undefined,
+          containerId: undefined,
+        });
+        const { context } = createContext(environment);
+        if (damage === "document") seedUnreadableStore(storage.getDataDir(), "sessions.json");
+        else {
+          seedStore(storage.getDataDir(), "sessions.json", [
+            {
+              id: "broken",
+              environmentId: environment.id,
+            },
+          ]);
+          storageDatabase(storage)
+            .db.query(
+              "UPDATE store_rows SET value = '{' WHERE store = 'sessions' AND key = 'broken'",
+            )
+            .run();
+        }
+        context.storage.removeSessionsByEnvironment =
+          storage.removeSessionsByEnvironment.bind(storage);
+        const commands = createCommandRegistry();
+        await commands.get("delete_environment")?.({ environmentId: environment.id }, context);
+        expect(context.storage.removeEnvironment).toHaveBeenCalledWith(environment.id);
+      });
+    });
+  }
 
   test(
     "clears retained setup state when the environment is deleted",

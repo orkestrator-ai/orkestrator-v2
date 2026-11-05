@@ -24,6 +24,8 @@ export interface EnvironmentChangeRows {
   resourceKey: string | null;
   rows: ChangeFileRow[];
   totalRows: number | null;
+  /** Changed files the backend stores no row for; no page reaches them. */
+  omittedRows: number;
   hasMore: boolean;
   loadingMore: boolean;
   /** The first page is being fetched (the projection arrived without one). */
@@ -135,6 +137,7 @@ export function useEnvironmentChangeRows(
     resourceKey,
     rows,
     totalRows,
+    omittedRows: firstPage?.omittedRows ?? 0,
     hasMore: nextCursor !== null,
     loadingMore,
     loadingFirstPage: needsFirstPage && settledPageRequest !== pageRequestKey,

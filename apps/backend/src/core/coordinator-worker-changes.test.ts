@@ -44,12 +44,22 @@ function row(path: string, index: number, extra: Partial<ChangeFileRow> = {}): C
 }
 
 /** A fake of the `changes_*` commands: pages of `pageSize` rows per resource. */
-function changes(resources: Record<string, ChangeFileRow[]>, diffLines = 3) {
+function changes(
+  resources: Record<string, ChangeFileRow[]>,
+  diffLines = 3,
+  omittedRows: Record<string, number> = {},
+) {
   const calls: Array<{ command: string; args: Record<string, unknown> }> = [];
   const page = (key: string, offset: number, size: number) => {
     const rows = resources[key]!.slice(offset, offset + size);
     const next = offset + size < resources[key]!.length ? String(offset + size) : null;
-    return { rows, nextCursor: next, totalRows: resources[key]!.length, snapshotToken: `t:${key}` };
+    return {
+      rows,
+      nextCursor: next,
+      totalRows: resources[key]!.length,
+      snapshotToken: `t:${key}`,
+      ...(omittedRows[key] ? { omittedRows: omittedRows[key] } : {}),
+    };
   };
   const run = async (command: string, args: Record<string, unknown>) => {
     calls.push({ command, args });
@@ -123,6 +133,48 @@ test("the uncommitted and committed keys are change tracking's own", () => {
 });
 
 describe("get_worker_changes reader", () => {
+  test("capped Git scopes keep positive flags and report omitted membership as unknown", async () => {
+    const { run } = changes(
+      {
+        [environmentKey]: [row("src/known.ts", 0), row("src/omitted.ts", 1)],
+        [uncommittedKey]: [row("src/known.ts", 0)],
+        [committedKey]: [row("src/known.ts", 0)],
+      },
+      200,
+      { [uncommittedKey]: 1, [committedKey]: 1 },
+    );
+    const result = await readWorkerChanges(run, environment, parseWorkerChangesOptions({}), null);
+    expect(result.sinceBase).toMatchObject({
+      files: [
+        { path: "src/known.ts", uncommitted: true, committed: true },
+        { path: "src/omitted.ts", uncommitted: null, committed: null },
+      ],
+    });
+  });
+
+  test("single-file requests beyond the cap disclose omissions without claiming no match", async () => {
+    const { run, calls } = changes(
+      {
+        [environmentKey]: [row("listed.ts", 0)],
+        [uncommittedKey]: [row("listed.ts", 0)],
+      },
+      3,
+      { [environmentKey]: 1, [uncommittedKey]: 1 },
+    );
+    const result = await readWorkerChanges(
+      run,
+      environment,
+      parseWorkerChangesOptions({ file: "unlisted.ts" }),
+      null,
+    );
+    expect(result.sinceBase).toMatchObject({ available: true, files: [], unlistedFiles: 1 });
+    expect(result.sinceBase).not.toHaveProperty("matchingFiles");
+    expect(result.uncommitted).toMatchObject({ files: [], unlistedFiles: 1 });
+    expect(result.diffs).toMatchObject({ files: [] });
+    expect(calls.some((call) => call.command === "changes_resolve_live_detail")).toBe(false);
+    expect(calls.some((call) => call.command === "changes_get_diff")).toBe(false);
+  });
+
   test("reports commits, files since base with uncommitted marks, and diffs", async () => {
     const { run } = changes({
       [environmentKey]: [
@@ -209,6 +261,23 @@ describe("get_worker_changes reader", () => {
       expect.objectContaining({ path: "dir1/f303.ts" }),
     ]);
     expect(paged.diffs).toBeUndefined();
+  });
+
+  test("past the measurement's row cap a filter gives no match count and names what is unlisted", async () => {
+    const rows = [row("dir0/f0.ts", 0), row("dir1/f1.ts", 1)];
+    const { run } = changes({ [environmentKey]: rows, [uncommittedKey]: [] }, 3, {
+      [environmentKey]: 40,
+    });
+    const result = await readWorkerChanges(
+      run,
+      environment,
+      parseWorkerChangesOptions({ paths: ["dir0"], includeDiff: false }),
+      async () => "",
+    );
+    const sinceBase = result.sinceBase as Record<string, unknown>;
+    expect(sinceBase.matchingFiles).toBeUndefined();
+    expect(sinceBase.unlistedFiles).toBe(40);
+    expect(sinceBase.truncated).toBe(false);
   });
 
   test("single-file mode renders one whole diff and a missing measurement is reported", async () => {

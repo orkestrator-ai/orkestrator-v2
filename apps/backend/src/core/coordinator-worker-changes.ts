@@ -185,12 +185,20 @@ function matches(row: ChangeFileRow, options: WorkerChangesOptions): boolean {
 
 /** Paths of the two Git scopes, for flagging a sinceBase file. */
 interface ChangeFlags {
-  uncommitted?: ReadonlySet<string>;
-  committed?: ReadonlySet<string>;
+  uncommitted?: { paths: ReadonlySet<string>; complete: boolean };
+  committed?: { paths: ReadonlySet<string>; complete: boolean };
 }
 
-function inSet(row: ChangeFileRow, paths: ReadonlySet<string>): boolean {
-  return paths.has(rowPath(row)) || (row.oldPathDisplay !== null && paths.has(row.oldPathDisplay));
+function inSet(
+  row: ChangeFileRow,
+  scope: { paths: ReadonlySet<string>; complete: boolean },
+): boolean | null {
+  if (
+    scope.paths.has(rowPath(row)) ||
+    (row.oldPathDisplay !== null && scope.paths.has(row.oldPathDisplay))
+  )
+    return true;
+  return scope.complete ? false : null;
 }
 
 function fileSummary(row: ChangeFileRow, flags: ChangeFlags = {}): JsonRecord {
@@ -300,7 +308,8 @@ async function readMeasurement(
   return {
     projection,
     rows,
-    matched: complete ? matched : null,
+    // Rows past the measurement's cap were never read, so a match count would be short.
+    matched: complete && !projection.filePage?.omittedRows ? matched : null,
     scanCapped: !complete && scanned >= L.maxScannedRows,
   };
 }
@@ -337,6 +346,7 @@ function measurementSummary(
     truncated: more,
     ...(more && pageable ? { nextOffset: options.offset + shown.length } : {}),
     ...(measurement.scanCapped ? { scanCapped: true } : {}),
+    ...(projection.filePage?.omittedRows ? { unlistedFiles: projection.filePage.omittedRows } : {}),
   };
 }
 
@@ -524,8 +534,22 @@ export async function readWorkerChanges(
     committed = unavailable;
   }
   const flags: ChangeFlags = {
-    ...(uncommitted.projection ? { uncommitted: new Set(uncommitted.rows.map(rowPath)) } : {}),
-    ...(committed.projection ? { committed: new Set(committed.rows.map(rowPath)) } : {}),
+    ...(uncommitted.projection
+      ? {
+          uncommitted: {
+            paths: new Set(uncommitted.rows.map(rowPath)),
+            complete: uncommitted.matched !== null,
+          },
+        }
+      : {}),
+    ...(committed.projection
+      ? {
+          committed: {
+            paths: new Set(committed.rows.map(rowPath)),
+            complete: committed.matched !== null,
+          },
+        }
+      : {}),
   };
   const base =
     environment.diffBaseOverride?.commit ??
@@ -605,7 +629,7 @@ export async function readWorkerChanges(
   );
   const sinceBaseSummary = measurementSummary(
     sinceBase,
-    "The worker's base commit to its working tree: committed and uncommitted changes together. uncommitted: true marks a file that also has uncommitted changes, committed: true one its commits changed.",
+    "The worker's base commit to its working tree: committed and uncommitted changes together. uncommitted: true marks a file that also has uncommitted changes, committed: true one its commits changed. A null flag means the scope list was incomplete and membership is unknown.",
     options,
     flags,
   );

@@ -4,14 +4,20 @@ import { readdirSync, readFileSync } from "node:fs";
 import { builtinModules } from "node:module";
 import os from "node:os";
 import path from "node:path";
+import { RELEASE_RUNTIME_PATH } from "@orkestrator/protocol/node/standalone-service";
 import {
   BRIDGE_RUNTIMES_DIRECTORY,
   BUNDLED_BRIDGES,
   ON_DEMAND_BRIDGES,
+  RELEASE_RUNTIME_DIRECTORY,
   RUNTIME_DESCRIPTOR,
   RUNTIME_SUBDIRECTORY,
 } from "../scripts/bridges.js";
-import { lockedPackages, runtimeManifest } from "../scripts/lock-bridge-runtimes.js";
+import {
+  lockedPackages,
+  releaseRuntimeManifest,
+  runtimeManifest,
+} from "../scripts/lock-bridge-runtimes.js";
 
 const packageRoot = path.resolve(import.meta.dir, "..");
 const repositoryRoot = path.resolve(packageRoot, "../..");
@@ -293,6 +299,31 @@ describe("orkestrator CLI package", () => {
     }
   });
 
+  test("commits the release runtime's manifest and lockfile in step with the package", async () => {
+    const directory = path.join(packageRoot, RELEASE_RUNTIME_DIRECTORY);
+    const committed = (await Bun.file(path.join(directory, "package.json")).json()) as {
+      dependencies?: Record<string, string>;
+    };
+    const lockfile = await readFile(path.join(directory, "bun.lock"), "utf8");
+
+    // Regenerate with `bun packages/cli/scripts/lock-bridge-runtimes.ts`.
+    expect(committed).toEqual(
+      releaseRuntimeManifest(await readManifest("packages/cli/package.json")) as typeof committed,
+    );
+    expect(Object.keys(committed.dependencies ?? {}).length).toBeGreaterThan(0);
+    for (const [name, version] of Object.entries(committed.dependencies ?? {})) {
+      expect(lockfile).toContain(`"${name}": "${version}"`);
+      expect(lockfile).toContain(`"${name}": ["${name}@${version}"`);
+    }
+    // The tarball carries this lockfile, so it cannot name the tarball's hash.
+    expect(lockedPackages(lockfile).has("orkestrator")).toBe(false);
+
+    // The build copies them where the standalone updater reads them.
+    const staged = path.join(packageRoot, RELEASE_RUNTIME_PATH);
+    expect(await readFile(path.join(staged, "bun.lock"), "utf8")).toBe(lockfile);
+    expect(await Bun.file(path.join(staged, "package.json")).json()).toEqual(committed);
+  });
+
   test("stages each on-demand bridge's install inputs and digest", async () => {
     for (const bridge of ON_DEMAND_BRIDGES) {
       const runtime = path.join(packageRoot, "resources", bridge.name, RUNTIME_SUBDIRECTORY);
@@ -398,6 +429,8 @@ describe("orkestrator CLI package", () => {
       "resources/pi-bridge/runtime/bun.lock",
       "resources/pi-bridge/runtime/install.json",
       "resources/pi-bridge/runtime/package.json",
+      "resources/release-runtime/bun.lock",
+      "resources/release-runtime/package.json",
     ]);
   });
 

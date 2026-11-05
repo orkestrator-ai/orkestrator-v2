@@ -13,6 +13,7 @@ import {
   GATEWAY_RENDERER_CONTENT_SECURITY_POLICY,
   GATEWAY_DESIGN_FRAME_CONTENT_SECURITY_POLICY,
   RENDERER_CONTENT_SECURITY_POLICY,
+  STATIC_HTML_FRAME_DOCUMENT,
 } from "@orkestrator/protocol/renderer-content-security-policy";
 import { resolveRuntimeProfile } from "../../apps/desktop/electron/runtime-profile";
 import { initializeProfile, reserveLoopbackPorts } from "../../apps/desktop/scripts/dev/profile-io";
@@ -22,6 +23,58 @@ import { packagedLaunchEnvironment, packagedLaunchSwitches } from "./packaged-el
 import { shippingPackage, verifyShippingPackage } from "../../scripts/packaged-security";
 
 const root = path.resolve(import.meta.dirname, "../..");
+
+/**
+ * The static HTML presentation handshake, run in a page: the emitted document
+ * announces itself with the URL fragment's nonce, renders once, and reports.
+ */
+async function probeStaticFrame(
+  src: string,
+): Promise<{ ready: boolean; rendered: boolean; origin: string; authored: boolean }> {
+  const nonce = "securityprobenonce0000000000000000";
+  const generation = "securityprobegeneration0000000000";
+  const frame = document.createElement("iframe");
+  frame.sandbox.add("allow-scripts");
+  frame.src = `${src}#${nonce}`;
+  frame.dataset.securityProbe = "static";
+  frame.style.cssText =
+    "position:fixed;inset:16px;width:400px;height:150px;z-index:2147483647;background:white;color:black";
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("Static frame timed out")), 15000);
+    let ready = false;
+    let authored = false;
+    const receive = (event: MessageEvent) => {
+      if (event.source !== frame.contentWindow) return;
+      if (event.data === "authored") authored = true;
+      const data = event.data as { channel?: string; type?: string; nonce?: string };
+      if (data?.channel !== "orkestrator-static-html") return;
+      if (data.type === "ready" && data.nonce === nonce) {
+        ready = true;
+        frame.contentWindow!.postMessage(
+          {
+            channel: "orkestrator-static-html",
+            v: 1,
+            type: "render",
+            generation,
+            verifiedAppearance: "light",
+            theme: { appearance: "light", reducedMotion: false, tokens: {} },
+            html: "<!doctype html><p>Packaged static document</p><script>parent.postMessage('authored', '*')</script>",
+          },
+          "*",
+        );
+      } else if (data.type === "rendered") {
+        clearTimeout(timer);
+        window.removeEventListener("message", receive);
+        resolve({ ready, rendered: true, origin: event.origin, authored });
+      } else if (data.type === "error") {
+        clearTimeout(timer);
+        reject(new Error("The static frame refused the document"));
+      }
+    };
+    window.addEventListener("message", receive);
+    document.body.append(frame);
+  });
+}
 
 test("shipping binary has the L3 fuses and ignores hostile dev variables, NODE_OPTIONS and Node inspector arguments", async () => {
   test.skip(
@@ -315,6 +368,21 @@ test("shipping binary has the L3 fuses and ignores hostile dev variables, NODE_O
     });
     await page.locator('iframe[data-security-probe="design"]').evaluate((frame) => frame.remove());
 
+    // The transcript's static document loads the same way, under its own policy.
+    expect(
+      await page.evaluate(probeStaticFrame, new URL(STATIC_HTML_FRAME_DOCUMENT, renderer).href),
+    ).toEqual({ ready: true, rendered: true, origin: "null", authored: false });
+    await expect(
+      page
+        .locator('iframe[data-security-probe="static"]')
+        .contentFrame()
+        .getByText("Packaged static document"),
+    ).toBeVisible();
+    await page.locator('iframe[data-security-probe="static"]').screenshot({
+      path: path.join(previewDir, "renderer-security-packaged-static-document-visible.png"),
+    });
+    await page.locator('iframe[data-security-probe="static"]').evaluate((frame) => frame.remove());
+
     expect(stderr).not.toContain("preload-failed");
     // file:// startup alone does not exercise the backend's HTTP renderer path.
     // Authenticate locally without putting the disposable token in any artifact.
@@ -406,6 +474,29 @@ test("shipping binary has the L3 fuses and ignores hostile dev variables, NODE_O
         });
       }, designUrl),
     ).toEqual({ origin: "null", result: true });
+    const staticResponse = await fetch(
+      `http://127.0.0.1:${gatewayPort}/${STATIC_HTML_FRAME_DOCUMENT}`,
+      { headers: { Authorization: `Bearer ${gatewayToken}` } },
+    );
+    expect(staticResponse.status).toBe(200);
+    expect(staticResponse.headers.get("content-security-policy")).toBe(
+      GATEWAY_DESIGN_FRAME_CONTENT_SECURITY_POLICY,
+    );
+    const staticBody = await staticResponse.text();
+    const staticUrl = `https://renderer-security.invalid/${STATIC_HTML_FRAME_DOCUMENT}`;
+    await policyPage.route(staticUrl, (route) =>
+      route.fulfill({
+        body: staticBody,
+        contentType: "text/html",
+        headers: { "content-security-policy": GATEWAY_DESIGN_FRAME_CONTENT_SECURITY_POLICY },
+      }),
+    );
+    expect(await policyPage.evaluate(probeStaticFrame, staticUrl)).toEqual({
+      ready: true,
+      rendered: true,
+      origin: "null",
+      authored: false,
+    });
     await policyBrowser.close();
     policyBrowser = undefined;
 

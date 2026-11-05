@@ -514,11 +514,16 @@ export function websocketInbox(socket: WebSocket): WebSocketInbox {
 
 export async function openTerminalSocket(
   info: { url: string; token: string },
-  options: { authenticate?: boolean; headers?: Record<string, string> } = {},
+  options: {
+    authenticate?: boolean;
+    headers?: Record<string, string>;
+    /** What the client offers; v1 alone, as an older renderer does, by default. */
+    protocols?: string | string[];
+  } = {},
 ): Promise<{ socket: WebSocket; inbox: WebSocketInbox }> {
   const socket = new WebSocket(
     `${info.url.replace(/^http/, "ws")}__orkestrator/terminal`,
-    TERMINAL_WEBSOCKET_SUBPROTOCOL,
+    options.protocols ?? TERMINAL_WEBSOCKET_SUBPROTOCOL,
     options.headers ? { headers: options.headers } : undefined,
   );
   const inbox = websocketInbox(socket);
@@ -543,4 +548,81 @@ export async function nextTerminalControl(
     const frame = parseTerminalWebSocketServerControlFrame(message.data.toString("utf8"));
     if (frame.type === type) return frame;
   }
+}
+
+export const nextTurn = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+export async function settleTurns(turns = 10) {
+  for (let turn = 0; turn < turns; turn += 1) await nextTurn();
+}
+
+export function terminalServerSocket(gateway: OrkestratorGateway): WebSocket {
+  const terminal = (
+    gateway as unknown as { terminalWebSocket: { sockets: Set<{ ws: WebSocket }> } }
+  ).terminalWebSocket;
+  const state = [...terminal.sockets][0];
+  if (!state) throw new Error("Expected terminal WebSocket state");
+  return state.ws;
+}
+
+/**
+ * Stands in for a peer that has stopped reading: every send stays in
+ * `bufferedAmount` with its callback unfired until the test releases it, in the
+ * order a socket would have. Measured against the real thing under Bun's `ws`
+ * by the `terminal-flood` workload in `scripts/gateway-frame-costs.ts`.
+ */
+export function stallSocket(ws: WebSocket) {
+  type Send = (
+    data: string | Uint8Array,
+    options: { binary: boolean },
+    callback: (error?: Error) => void,
+  ) => void;
+  const realSend = ws.send.bind(ws) as unknown as Send;
+  const held: Array<{ data: string | Uint8Array; release: () => void; fail: () => void }> = [];
+  let buffered = 0;
+  let peakBuffered = 0;
+  let sends = 0;
+  Object.defineProperty(ws, "bufferedAmount", {
+    configurable: true,
+    get: () => buffered,
+  });
+  (ws as unknown as { send: Send }).send = (data, options, callback) => {
+    const bytes = typeof data === "string" ? Buffer.byteLength(data) : data.byteLength;
+    sends += 1;
+    buffered += bytes;
+    peakBuffered = Math.max(peakBuffered, buffered);
+    held.push({
+      data,
+      fail: () => {
+        buffered -= bytes;
+        callback(new Error("send failed"));
+      },
+      release: () => {
+        buffered -= bytes;
+        realSend(data, options, callback);
+      },
+    });
+  };
+  return {
+    held,
+    buffered: () => buffered,
+    peakBuffered: () => peakBuffered,
+    sends: () => sends,
+    /** Lets the peer read everything held so far. New sends keep stalling. */
+    releaseHeld: () => {
+      for (const send of held.splice(0)) send.release();
+    },
+    /** Lets the peer read until the gateway has nothing left to send. */
+    drain: async () => {
+      for (let idleTurns = 0; idleTurns < 5;) {
+        if (held.length === 0) {
+          idleTurns += 1;
+        } else {
+          idleTurns = 0;
+          for (const send of held.splice(0)) send.release();
+        }
+        await settleTurns(2);
+      }
+    },
+  };
 }

@@ -161,17 +161,30 @@ export function clearLineCountCache(limits: { maxEntries?: number; maxBytes?: nu
   lineCountCacheStats.misses = 0;
 }
 
+type ComparisonBudget = Partial<RawLineDiffBudget> & {
+  /** List the changed files without reading a blob; every text count is unknown. */
+  pathsOnly?: boolean;
+};
+
 async function textCounts(
   store: ObjectStore,
   before: ManifestEntry | null,
   after: ManifestEntry | null,
-  budget: Partial<RawLineDiffBudget>,
+  budget: ComparisonBudget,
 ): Promise<TextCounts> {
   if ((after ?? before)!.m === "160000" || before?.m === "160000") {
     return {
       additions: notApplicableCount(),
       deletions: notApplicableCount(),
       fileKind: "gitlink",
+      reason: null,
+    };
+  }
+  if (budget.pathsOnly) {
+    return {
+      additions: unknownCount(),
+      deletions: unknownCount(),
+      fileKind: kindOf((after ?? before)!),
       reason: null,
     };
   }
@@ -255,7 +268,7 @@ export async function compareManifests(
   store: ObjectStore,
   before: Manifest | null,
   after: Manifest,
-  budget: Partial<RawLineDiffBudget> = {},
+  budget: ComparisonBudget = {},
 ): Promise<SnapshotComparison> {
   const base = before ?? EMPTY_MANIFEST;
   const oldEntries = new Map(base.entries.map((entry) => [entry.p, entry]));

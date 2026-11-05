@@ -5,7 +5,7 @@
  * repeats the few paths it needs because it must run without this package).
  *
  *   <dataDir>/backend/
- *     releases/<version>/            one `bun install orkestrator@<version>`
+ *     releases/<version>/            one install of `orkestrator@<version>`
  *       node_modules/orkestrator/    the package, with its dependencies
  *     current  -> releases/<version>  what the launcher starts
  *     previous -> releases/<version>  what it falls back to
@@ -24,6 +24,11 @@ const execFileAsync = promisify(execFile);
 
 export const STANDALONE_DIRECTORY = "backend";
 export const STANDALONE_PACKAGE = "orkestrator";
+/**
+ * Where a release publishes the `package.json` and `bun.lock` of its
+ * dependencies, relative to its package root.
+ */
+export const RELEASE_RUNTIME_PATH = "resources/release-runtime";
 /** Boots of a newly activated release before the launcher rolls back. */
 export const STANDALONE_MAX_BOOT_ATTEMPTS = 2;
 
@@ -309,9 +314,38 @@ export const runFile: CommandRunner = async (file, args, options) => {
   return { stdout: String(stdout), stderr: String(stderr) };
 };
 
+function installArguments(registry: string | undefined, ...flags: string[]): string[] {
+  return ["install", ...flags, "--no-progress", ...(registry ? ["--registry", registry] : [])];
+}
+
+async function writeReleaseManifest(directory: string, version: string): Promise<void> {
+  await writeFile(
+    path.join(directory, "package.json"),
+    `${JSON.stringify(
+      {
+        name: "orkestrator-release",
+        private: true,
+        dependencies: { [STANDALONE_PACKAGE]: version },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+}
+
 /**
- * Installs `orkestrator@<version>` with its dependencies into its own release
- * directory. Bun checks each tarball against the registry's integrity hash.
+ * Installs `orkestrator@<version>` with the dependencies it was published with
+ * into its own release directory. Bun checks each tarball against an integrity
+ * hash: the registry's for the package, the release's lockfile for the rest.
+ *
+ * The lockfile travels inside the package, so it cannot be read, or name the
+ * package's own hash, before the package is fetched. The first install exists
+ * only to fetch it. Each install uses its own fresh cache so fetched or host
+ * cache entries cannot bypass the frozen install's integrity checks. It resolves
+ * dependencies afresh, so it runs no scripts and
+ * everything but the package is discarded; a frozen install of the published
+ * lockfile then supplies the dependencies.
+ *
  * The directory appears only once the install verified, by one rename, and an
  * existing complete release is reused.
  */
@@ -323,33 +357,69 @@ export async function installRelease(
   const target = releaseDirectory(layout, version);
   if (readReleaseManifest(target)?.version === version) return target;
   const run = options.run ?? runFile;
+  const timeoutMs = 20 * 60 * 1000;
   await mkdir(layout.releases, { recursive: true });
   const staging = path.join(layout.releases, `.staging-${version}-${process.pid}`);
+  const fetching = `${staging}-fetch`;
   await rm(staging, { recursive: true, force: true });
+  await rm(fetching, { recursive: true, force: true });
   await mkdir(staging, { recursive: true });
+  await mkdir(fetching, { recursive: true });
   try {
-    await writeFile(
-      path.join(staging, "package.json"),
-      `${JSON.stringify(
-        {
-          name: "orkestrator-release",
-          private: true,
-          dependencies: { [STANDALONE_PACKAGE]: version },
-        },
-        null,
-        2,
-      )}\n`,
-    );
+    await writeReleaseManifest(fetching, version);
     await run(
       options.bun,
-      [
-        "install",
+      installArguments(
+        options.registry,
         "--production",
-        "--no-progress",
-        ...(options.registry ? ["--registry", options.registry] : []),
-      ],
-      { cwd: staging, timeoutMs: 20 * 60 * 1000 },
+        "--linker=hoisted",
+        "--ignore-scripts",
+        "--cache-dir",
+        path.join(fetching, ".cache"),
+      ),
+      {
+        cwd: fetching,
+        timeoutMs,
+        env: { ...process.env, BUN_INSTALL_CACHE_DIR: path.join(fetching, ".cache") },
+      },
     );
+    const fetched = path.join(fetching, "node_modules", STANDALONE_PACKAGE);
+    const runtime = path.join(fetched, RELEASE_RUNTIME_PATH);
+    if (existsSync(runtime)) {
+      // A runtime with no lockfile fails here: `--frozen-lockfile` only freezes
+      // a lockfile that exists, and without one bun would resolve afresh.
+      await copyFile(path.join(runtime, "package.json"), path.join(staging, "package.json"));
+      await copyFile(path.join(runtime, "bun.lock"), path.join(staging, "bun.lock"));
+      await run(
+        options.bun,
+        installArguments(
+          options.registry,
+          "--frozen-lockfile",
+          "--cache-dir",
+          path.join(staging, ".cache"),
+          "--production",
+          // Resolution from `node_modules/orkestrator` walks up to a flat tree.
+          "--linker=hoisted",
+          "--ignore-scripts",
+        ),
+        {
+          cwd: staging,
+          timeoutMs,
+          env: { ...process.env, BUN_INSTALL_CACHE_DIR: path.join(staging, ".cache") },
+        },
+      );
+      await rm(path.join(fetched, "node_modules"), { recursive: true, force: true });
+      await mkdir(path.join(staging, "node_modules"), { recursive: true });
+      await rename(fetched, path.join(staging, "node_modules", STANDALONE_PACKAGE));
+    } else {
+      // A release older than the published lockfile installs as it always did.
+      await writeReleaseManifest(staging, version);
+      await run(options.bun, installArguments(options.registry, "--production"), {
+        cwd: staging,
+        timeoutMs,
+      });
+    }
+    await rm(path.join(staging, ".cache"), { recursive: true, force: true });
     const manifest = readReleaseManifest(staging);
     if (manifest?.version !== version) {
       throw new Error(`Installing ${STANDALONE_PACKAGE}@${version} produced no usable release`);
@@ -358,6 +428,7 @@ export async function installRelease(
     await rename(staging, target);
   } finally {
     await rm(staging, { recursive: true, force: true });
+    await rm(fetching, { recursive: true, force: true });
   }
   return target;
 }

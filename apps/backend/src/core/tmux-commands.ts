@@ -20,6 +20,7 @@ import {
 import { TmuxBackend } from "./tmux-backend.js";
 import {
   TranscriptTail,
+  encodeCwd,
   installWorkspaceHooks,
   listPreviousSessions,
   restoreWorkspaceHooks,
@@ -37,6 +38,8 @@ import {
   resolveBackend,
   workspaceAndClaudeHome,
 } from "./tmux-session-manager.js";
+import { TmuxTranscriptReader } from "./tmux-transcript-reader.js";
+import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import { InteractiveTmuxTerminalManager } from "./tmux-interactive.js";
 import { ClaudeStatePollManager, environmentContainerId } from "./tmux-poll.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
@@ -343,13 +346,52 @@ export function registerTmuxBackendCommands(
         : undefined;
     return session.status(recent ?? (await session.tmuxAlive().catch(() => false)));
   });
-  register("claude_tmux_transcript", ({ tabId, environmentId }, context) =>
-    requireSession(
-      context,
-      asString(environmentId, "environmentId"),
-      asString(tabId, "tabId"),
-    ).transcriptLines(),
-  );
+  // Stopped history has no poll owner. Keep a small LRU so walking back
+  // reconstructs task state once, without retaining every stopped session.
+  const historyReaders = new Map<string, TmuxTranscriptReader>();
+  // `page` selects a bounded read; `page.before` is the cursor of an earlier
+  // page. Without it the caller predates paging and expects the whole file as
+  // an array (see the compatibility register in version-compatibility.md).
+  register("claude_tmux_transcript", async ({ tabId, environmentId, page }, context) => {
+    const envId = asString(environmentId, "environmentId");
+    const tab = asString(tabId, "tabId");
+    const session = context.runtime.tmux.sessions.get(envId, tab);
+    if (page === undefined) {
+      compatibilityPathUsage.record("tmux-transcript.whole-read");
+      return requireSession(context, envId, tab).transcriptLines();
+    }
+    const request = page as { before?: unknown; sessionId?: unknown } | null;
+    const before = typeof request?.before === "string" ? request.before : undefined;
+    if (session) return session.transcriptPage(context, before);
+
+    // A cursor identifies persisted history independently of the live tmux
+    // registry, including after a backend restart. Never accept a path here.
+    const sessionId =
+      typeof request?.sessionId === "string"
+        ? request.sessionId
+        : before?.slice(0, before.lastIndexOf(":"));
+    if (!sessionId || !/^[a-zA-Z0-9_-]+$/.test(sessionId)) {
+      throw new Error("tmux transcript session id required");
+    }
+    const backend = await resolveBackend(envId, context);
+    const { workspace, claudeHome } = workspaceAndClaudeHome(backend);
+    const file = `${claudeHome}/projects/${encodeCwd(workspace)}/${sessionId}.jsonl`;
+    const key = JSON.stringify([
+      envId,
+      backend.kind,
+      backend.containerId,
+      backend.cwd,
+      file,
+      sessionId,
+    ]);
+    const reader = historyReaders.get(key) ?? new TmuxTranscriptReader(backend, sessionId);
+    historyReaders.delete(key);
+    historyReaders.set(key, reader);
+    while (historyReaders.size > 4) {
+      historyReaders.delete(historyReaders.keys().next().value!);
+    }
+    return reader.readPage(file, before, () => undefined);
+  });
   // Authoritative task list for a tmux tab, for callers rehydrating without
   // replaying the whole transcript.
   register("claude_tmux_tasks", ({ tabId, environmentId }, context) =>

@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { CHART_PALETTE } from "@orkestrator/protocol/chart-svg";
 
 /**
  * Presentation theme for rich transcript content: the application's current
@@ -77,5 +78,21 @@ export function readArtifactThemeTokens(
     if (value) tokens[name] = value;
   }
   tokens["--ork-font-sans"] = "system-ui, -apple-system, Segoe UI, sans-serif";
+  return tokens;
+}
+
+/**
+ * The tokens a static HTML document receives: the artifact tokens plus the
+ * native chart palette of the current appearance, as `--ork-chart-1` to
+ * `--ork-chart-8`. The guide for agents documents these names.
+ */
+export function readStaticHtmlThemeTokens(
+  appearance: AppAppearance,
+  read?: (property: string) => string,
+): Record<string, string> {
+  const tokens = readArtifactThemeTokens(read);
+  CHART_PALETTE[appearance].forEach((color, index) => {
+    tokens[`--ork-chart-${index + 1}`] = color;
+  });
   return tokens;
 }

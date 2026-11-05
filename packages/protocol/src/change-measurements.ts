@@ -230,6 +230,13 @@ export interface ChangeMeasurement {
   supersedesMeasurementId: string | null;
 }
 
+/**
+ * `completeness.reasons` entry of a measurement that stores fewer file rows
+ * than it changed: its totals are still true and count every file, but its
+ * rows are not the whole change.
+ */
+export const FILE_ROWS_CAPPED_REASON = "file-rows-capped";
+
 // ---------------------------------------------------------------------------
 // LineCount constructors. Producers use these rather than object literals so a
 // null value can never carry an "exact" bound.

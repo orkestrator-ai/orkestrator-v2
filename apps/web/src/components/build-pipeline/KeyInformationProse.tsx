@@ -10,14 +10,11 @@ import { keyInformationBlocks } from "./key-information-blocks";
 export function KeyInformationProse({
   text,
   className,
-  paragraphClassName,
   renderText = (value) => value,
 }: {
   text: string;
   /** Classes for the wrapper: text size, colour, width. */
   className?: string;
-  /** Extra classes for each paragraph and list. */
-  paragraphClassName?: string;
   renderText?: (value: string) => ReactNode;
 }) {
   return (
@@ -25,7 +22,7 @@ export function KeyInformationProse({
       {keyInformationBlocks(text).map((block, index) => {
         if (block.kind === "paragraph") {
           return (
-            <p key={index} className={cn("break-words whitespace-pre-wrap", paragraphClassName)}>
+            <p key={index} className="break-words whitespace-pre-wrap">
               {renderText(block.text)}
             </p>
           );
@@ -34,14 +31,14 @@ export function KeyInformationProse({
         return (
           <List
             key={index}
-            className={cn(
-              "flex flex-col gap-1 pl-5",
-              block.ordered ? "list-decimal" : "list-disc",
-              paragraphClassName,
-            )}
+            className={cn("flex flex-col gap-1 pl-5", block.ordered ? "list-decimal" : "list-disc")}
           >
             {block.items.map((item, itemIndex) => (
-              <li key={itemIndex} className="break-words pl-0.5">
+              <li
+                key={itemIndex}
+                value={block.ordered ? block.values[itemIndex] : undefined}
+                className="break-words pl-0.5"
+              >
                 {renderText(item)}
               </li>
             ))}

@@ -11,7 +11,9 @@
  */
 
 export type KeyInformationBlock =
-  { kind: "paragraph"; text: string } | { kind: "list"; ordered: boolean; items: string[] };
+  | { kind: "paragraph"; text: string }
+  | { kind: "list"; ordered: false; items: string[] }
+  | { kind: "list"; ordered: true; items: string[]; values: number[] };
 
 const LIST_ITEM = /^(\s*)(?:([-*•])|(\d{1,3})[.)])\s+(\S.*)$/;
 
@@ -31,7 +33,7 @@ const ABBREVIATIONS = new Set(["e.g", "i.e", "etc", "vs", "cf", "approx", "incl"
 export function keyInformationBlocks(text: string): KeyInformationBlock[] {
   const normalized = text.replace(/\r\n?/g, "\n").trim();
   if (!normalized) return [];
-  if (!normalized.includes("\n")) {
+  if (!normalized.includes("\n") && !LIST_ITEM.test(normalized)) {
     return regroupSentences(normalized).map((paragraph) => ({
       kind: "paragraph",
       text: paragraph,
@@ -40,14 +42,14 @@ export function keyInformationBlocks(text: string): KeyInformationBlock[] {
 
   const blocks: KeyInformationBlock[] = [];
   let paragraph: string[] = [];
-  let list: { ordered: boolean; items: string[] } | undefined;
+  let list: Extract<KeyInformationBlock, { kind: "list" }> | undefined;
 
   const closeParagraph = () => {
     if (paragraph.length > 0) blocks.push({ kind: "paragraph", text: paragraph.join("\n") });
     paragraph = [];
   };
   const closeList = () => {
-    if (list) blocks.push({ kind: "list", ...list });
+    if (list) blocks.push(list);
     list = undefined;
   };
 
@@ -62,7 +64,10 @@ export function keyInformationBlocks(text: string): KeyInformationBlock[] {
       closeParagraph();
       const ordered = item[3] !== undefined;
       if (list && list.ordered !== ordered) closeList();
-      list ??= { ordered, items: [] };
+      list ??= ordered
+        ? { kind: "list", ordered: true, items: [], values: [] }
+        : { kind: "list", ordered: false, items: [] };
+      if (list.ordered) list.values.push(Number(item[3]));
       list.items.push((item[4] ?? "").trim());
       continue;
     }

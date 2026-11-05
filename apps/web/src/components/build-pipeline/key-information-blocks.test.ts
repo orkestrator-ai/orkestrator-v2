@@ -37,8 +37,28 @@ describe("keyInformationBlocks", () => {
 
   test("turns numbered lines into an ordered list and starts a new list on a marker change", () => {
     expect(keyInformationBlocks("1. first\n2) second\n- loose")).toEqual([
-      { kind: "list", ordered: true, items: ["first", "second"] },
+      { kind: "list", ordered: true, items: ["first", "second"], values: [1, 2] },
       { kind: "list", ordered: false, items: ["loose"] },
+    ]);
+  });
+
+  test.each(["", "\n", "\r\n"])("parses a single list item with trailing %j", (suffix) => {
+    expect(keyInformationBlocks(`- One change${suffix}`)).toEqual([
+      { kind: "list", ordered: false, items: ["One change"] },
+    ]);
+    expect(keyInformationBlocks(`1. One step${suffix}`)).toEqual([
+      { kind: "list", ordered: true, items: ["One step"], values: [1] },
+    ]);
+  });
+
+  test("preserves source numbering, gaps, and restarts across blank lines and prose", () => {
+    expect(
+      keyInformationBlocks("3. Resume\n5. Finish\n\n6. Deploy\nExplanation.\n8) Verify"),
+    ).toEqual([
+      { kind: "list", ordered: true, items: ["Resume", "Finish"], values: [3, 5] },
+      { kind: "list", ordered: true, items: ["Deploy"], values: [6] },
+      { kind: "paragraph", text: "Explanation." },
+      { kind: "list", ordered: true, items: ["Verify"], values: [8] },
     ]);
   });
 

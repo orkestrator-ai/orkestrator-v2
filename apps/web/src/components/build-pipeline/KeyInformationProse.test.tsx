@@ -44,6 +44,26 @@ describe("KeyInformationProse", () => {
     expect(within(numbered).getAllByRole("listitem")).toHaveLength(2);
   });
 
+  test.each(["", "\n", "\r\n"])("renders single-item lists with trailing %j", (suffix) => {
+    const { container } = render(<KeyInformationProse text={`- One change${suffix}`} />);
+    expect(container.querySelectorAll("ul > li")).toHaveLength(1);
+    expect(container.querySelector("li")?.textContent).toBe("One change");
+    cleanup();
+    const numbered = render(<KeyInformationProse text={`1. One step${suffix}`} />);
+    expect(numbered.container.querySelectorAll("ol > li")).toHaveLength(1);
+    expect(numbered.container.querySelector("li")?.getAttribute("value")).toBe("1");
+  });
+
+  test("renders source numbers across offsets, gaps, blank lines and prose", () => {
+    const { container } = render(
+      <KeyInformationProse text={"3. Resume\n5. Finish\n\n6. Deploy\nExplanation.\n8) Verify"} />,
+    );
+    expect(container.querySelectorAll("ol")).toHaveLength(3);
+    expect(
+      Array.from(container.querySelectorAll("ol > li"), (li) => li.getAttribute("value")),
+    ).toEqual(["3", "5", "6", "8"]);
+  });
+
   test("draws every run of text through renderText", () => {
     render(
       <KeyInformationProse

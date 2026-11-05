@@ -1027,11 +1027,13 @@ export class StorageDatabase {
    */
   scrubDeletedContent(): void {
     try {
-      // Return a bounded number of freed pages to the filesystem first, so a
-      // large delete shrinks the file without one long blocking vacuum.
-      this.db.exec(`PRAGMA incremental_vacuum(${INCREMENTAL_VACUUM_PAGES})`);
-    } catch {
-      // A concurrent writer holds the lock; the next scrub returns the pages.
+      if (this.releaseFreePages() >= 0) log.recovered("scrub.vacuum-failed", "scrub-vacuum");
+    } catch (error) {
+      log.throttled("warn", "scrub.vacuum-failed", {
+        scope: "scrub-vacuum",
+        error,
+        fields: () => ({ error: formatLogError(error, { message: false, stack: false }) }),
+      });
     }
     if (this.tryTruncateWal()) {
       this.cancelScrubRetry();
@@ -1138,14 +1140,19 @@ export class StorageDatabase {
 
   /**
    * Returns up to `maxPages` free pages to the filesystem (with incremental
-   * auto-vacuum; a no-op otherwise) and the number of free pages left. A
-   * bounded step, so a caller freeing much space can yield between steps.
+   * auto-vacuum; a no-op otherwise) and the number of free pages left (-1 on
+   * contention). A bounded step, so a caller freeing much space can yield between steps.
    */
   releaseFreePages(maxPages = INCREMENTAL_VACUUM_PAGES): number {
+    this.db.exec("PRAGMA busy_timeout = 0");
     try {
       this.db.exec(`PRAGMA incremental_vacuum(${Math.max(1, Math.floor(maxPages))})`);
-    } catch {
-      // A concurrent writer holds the lock; the next step retries.
+    } catch (error) {
+      const code = (error as { code?: string }).code;
+      if (code === "SQLITE_BUSY" || code === "SQLITE_LOCKED") return -1;
+      throw error;
+    } finally {
+      this.db.exec(`PRAGMA busy_timeout = ${this.busyTimeoutMs}`);
     }
     const { auto_vacuum } = this.db.query("PRAGMA auto_vacuum").get() as { auto_vacuum: number };
     // Without incremental auto-vacuum free pages are only reused, never released.

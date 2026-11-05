@@ -52,6 +52,7 @@
  * Exits 0 when every assertion held, 1 when one did not, 2 on setup errors.
  */
 import { Database } from "bun:sqlite";
+import { snapshotQualificationLedger } from "./qualification-ledger.js";
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
@@ -505,7 +506,7 @@ function readDatabase(): {
   storeVersion: number;
 } {
   const copy = mkdtempSync(path.join(temp, "db-"));
-  for (const file of SQLITE_FILES) {
+  for (const file of [...SQLITE_FILES, ...LEDGER_SQLITE_FILES]) {
     if (existsSync(path.join(dataDir, file)))
       copyFileSync(path.join(dataDir, file), path.join(copy, file));
   }
@@ -569,6 +570,7 @@ function readDatabase(): {
         .map((entry) => entry.sql ?? "")
         .join("\n"),
     );
+    Object.assign(rows, snapshotQualificationLedger(path.join(copy, "change-tracking.sqlite")));
   } finally {
     database.close();
     rmSync(copy, { recursive: true, force: true });

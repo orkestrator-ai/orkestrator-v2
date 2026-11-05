@@ -588,15 +588,16 @@ change-tracking ledger out of `orkestrator.sqlite` into
 small change to an app store (on one machine, 6.2 GB of snapshots for stores
 of about 0.6 MB). A second connection attaches the main file and copies the
 committed ledger rows in one transaction on the ledger file, replacing what it
-held; the migration then drops the tables, with `secure_delete` off for the
-drop because the rows live on in the ledger file. A crash before the commit
+held; the migration then drops the tables with `secure_delete` enabled so
+legacy databases cannot retain recoverable ledger bytes on free pages. A crash before the commit
 repeats the copy. A new database creates no ledger file here: the ledger
 opens it on first use. The ledger file is versioned on its own (`user_version`
 2, `CHANGE_LEDGER_FILE_SCHEMA_VERSION`), refuses to open when newer than the
 build, and takes its own pre-migration snapshot. Change tracking opens the
 main database before the ledger, so the move has always run before the ledger
 is first written. On a generated ledger of 2 million file rows (666 MB) the
-move took about 8 s, once, at the first start after the upgrade; the hourly
+move took about 8 s with secure deletion disabled (a historical measurement;
+the corrected migration keeps it enabled and has not been remeasured); the hourly
 copy afterwards was 48 KB in 19 ms. The pages the ledger freed are returned to
 the filesystem after start-up, 4 MiB at a time with the event loop free
 between steps (about 30 ms each), by the snapshot check's upkeep

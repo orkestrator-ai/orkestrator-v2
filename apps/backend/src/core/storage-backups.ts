@@ -818,7 +818,7 @@ export async function runDatabaseUpkeep(database: StorageDatabase): Promise<void
       if (database.isClosed()) return;
       const left = database.releaseFreePages(UPKEEP_RELEASE_PAGES);
       // Stop once nothing is left or a step makes no progress (a busy writer).
-      if (left === 0 || left >= previous) return;
+      if (left <= 0 || left >= previous) return;
       previous = left;
       await new Promise<void>((resolve) => setImmediate(resolve));
     }

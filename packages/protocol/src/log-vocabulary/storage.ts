@@ -54,6 +54,8 @@ export const STORAGE_LOG_AREAS = defineLogAreas({
       "legacy-json.archive-failed": "Imported JSON store files could not be archived.",
       "lease.heartbeat-failed":
         "A held lease's heartbeat failed, which shortens the lease; the next one retries.",
+      "scrub.vacuum-failed":
+        "Deleted-content page reclamation failed; the checkpoint is attempted independently.",
       "scrub.checkpoint-failed":
         "Deleted content could not be scrubbed from the WAL yet because the truncating checkpoint failed or a reader held an older snapshot; it is retried without waiting until it succeeds.",
       "optimize.failed":

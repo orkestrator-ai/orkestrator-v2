@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { Database } from "bun:sqlite";
 import { existsSync, promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
@@ -222,6 +223,53 @@ describe("database upkeep (reports 0760 and 0910)", () => {
     await runDatabaseUpkeep(main);
     expect(pragma("freelist_count")).toBe(0);
     expect(pragma("page_count")).toBeLessThan(pages / 2);
+  });
+
+  test("upkeep never waits for a writer and restores the timeout", async () => {
+    const directory = await dataDir();
+    const main = opened(openBackendDatabase(directory));
+    main.db.exec(
+      "CREATE TABLE waste (value BLOB); INSERT INTO waste VALUES (zeroblob(200000)); DROP TABLE waste",
+    );
+    const writer = new Database(main.path);
+    writer.exec("BEGIN IMMEDIATE");
+    const release = spyOn(main, "releaseFreePages");
+    try {
+      const started = performance.now();
+      await runDatabaseUpkeep(main);
+      expect(performance.now() - started).toBeLessThan(1000);
+      expect(release).toHaveBeenCalledTimes(1);
+      expect(main.db.query("PRAGMA busy_timeout").get()).toEqual({ timeout: 10000 });
+    } finally {
+      release.mockRestore();
+      writer.exec("ROLLBACK");
+      writer.close();
+    }
+  });
+
+  test("upkeep caps steps and stops on no progress, logging errors", async () => {
+    const main = opened(openBackendDatabase(await dataDir()));
+    let remaining = 1000;
+    const release = spyOn(main, "releaseFreePages").mockImplementation(() => --remaining);
+    const logs = captureLogs();
+    try {
+      await runDatabaseUpkeep(main);
+      expect(release).toHaveBeenCalledTimes(256);
+      expect(release.mock.calls.every(([pages]) => pages === 1024)).toBe(true);
+      release.mockClear();
+      release.mockReturnValue(100);
+      await runDatabaseUpkeep(main);
+      expect(release).toHaveBeenCalledTimes(2);
+      release.mockImplementation(() => {
+        throw Object.assign(new Error("PRIVATE"), { code: "SQLITE_IOERR" });
+      });
+      await runDatabaseUpkeep(main);
+      expect(logs.records().some((row) => row.event === "optimize.failed")).toBe(true);
+      expect(JSON.stringify(logs.records())).not.toContain("PRIVATE");
+    } finally {
+      release.mockRestore();
+      logs.restore();
+    }
   });
 
   test("upkeep on a closed database does nothing and never throws", async () => {

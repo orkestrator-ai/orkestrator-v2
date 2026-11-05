@@ -3,6 +3,7 @@ import { Database } from "bun:sqlite";
 import { existsSync, promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { createBackendChangeTracking } from "./backend-wiring.js";
 import { listStorageSnapshots } from "../storage-backups.js";
 import {
   STORAGE_DATABASE_FILE,
@@ -73,6 +74,54 @@ function count(db: Database, table: string): number {
 }
 
 describe("the change ledger's own file (report 0760)", () => {
+  test("migration scrubs old non-incremental pages and production wiring preserves rows before writing", async () => {
+    const directory = await dataDir();
+    const raw = new Database(path.join(directory, STORAGE_DATABASE_FILE));
+    raw.exec("PRAGMA auto_vacuum = NONE; CREATE TABLE legacy (id INTEGER)");
+    raw.close();
+    const before = openBeforeMove(directory);
+    seedLedger(before.db, 10);
+    const marker = "UNIQUE-LEGACY-LEDGER-SECRET-93483";
+    before.db.query("INSERT INTO change_ledger_meta VALUES ('secret', ?)").run(marker);
+    before.close();
+    const service = createBackendChangeTracking({
+      dataDir: directory,
+      storage: {
+        getEnvironment: async () => {
+          throw new Error("unused");
+        },
+        loadConfig: async () => {
+          throw new Error("unused");
+        },
+      },
+      emit: () => {},
+      refreshEnvironment: () => {},
+    });
+    try {
+      // First ledger write must migrate before it can replace the old rows.
+      service.ledger.setMeta("new", "written");
+      expect(service.ledger.meta("seq")).toBe("42");
+      expect(service.ledger.meta("secret")).toBe(marker);
+    } finally {
+      service.shutdown();
+    }
+    const main = openBackendDatabase(directory);
+    open.push(main);
+    expect(main.db.query("PRAGMA auto_vacuum").get()).toEqual({ auto_vacuum: 0 });
+    const ledger = openChangeLedgerDatabase(directory);
+    open.push(ledger);
+    ledger.db.exec("DELETE FROM change_ledger_meta WHERE key = 'secret'");
+    main.scrubDeletedContent();
+    ledger.scrubDeletedContent();
+    for (const file of [STORAGE_DATABASE_FILE, CHANGE_LEDGER_DATABASE_FILE]) {
+      for (const suffix of ["", "-wal"]) {
+        const location = path.join(directory, file + suffix);
+        if (existsSync(location))
+          expect((await fs.readFile(location)).includes(Buffer.from(marker))).toBe(false);
+      }
+    }
+  });
+
   test("migration 7 moves every ledger row out of orkestrator.sqlite, after a safety copy", async () => {
     const directory = await dataDir();
     const before = openBeforeMove(directory);

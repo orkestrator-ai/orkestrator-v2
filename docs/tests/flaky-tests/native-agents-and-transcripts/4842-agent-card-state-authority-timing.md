@@ -15,3 +15,14 @@ mise run test:logged -- --name recorded-agent-card -- bun --cwd=apps/web test sr
 ```
 
 The complete file passed in 8.5 seconds (114 output bytes; passing log removed by the logged runner). No assertion was weakened or skipped. The original failure remains in `.orkestrator/review-artifacts/review-validation-6e251f8d-c76b-469b-b389-d7b80e76ea49/validation-04.stdout.txt` around lines 1509–1522. The test waits for transcript text before checking state authority, while those reads run independently; ordering under aggregate load needs further investigation. This is a hypothesis, not an established cause.
+
+On 2026-11-05, preparation at `366fa15c7` again reported the same Stop-button
+assertion (1099.35 ms, line 676). The aggregate reported three failures (31,842
+passed, 150 not run); worker allocation was controlled by the aggregate runner.
+Evidence: `.orkestrator/review-artifacts/review-validation-4565b97a-56f2-49c1-85c0-4e153180ac69/validation-04.stderr.txt`, lines 568–580.
+The complete owner passed alone in 15.6 s with
+`NODE_ENV=test mise run test:logged -- --name recorded-agent-card -- bash -c 'cd apps/web && bun test ./src/components/native-agent/AgentNativeTab.progressive.test.tsx --parallel=1 --only-failures'`.
+An initial invocation without `NODE_ENV=test` loaded production React and failed
+with `React.act is not a function` (artifact `/tmp/orkestrator-test-run.FAgmsw`);
+that invocation did not exercise the assertion. No test or renderer behavior
+was changed. The existing independent-read ordering hypothesis remains unproven.

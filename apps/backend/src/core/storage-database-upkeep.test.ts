@@ -10,6 +10,7 @@ import {
   STORAGE_DATABASE_FILE,
   StorageDatabase,
 } from "./storage-database.js";
+import { runDatabaseUpkeep } from "./storage-backups.js";
 import { openBackendDatabase, storeLayout } from "./storage-stores.js";
 import { storageFilesContain } from "./storage-test-support.js";
 
@@ -122,6 +123,21 @@ describe("scrub checkpoint under a reader (report 0800)", () => {
     expect(() => jest.advanceTimersByTime(SCRUB_RETRY_MAX_MS)).not.toThrow();
   });
 
+  test("close truncates a deferred WAL once its reader leaves", async () => {
+    const directory = await dataDir();
+    const db = database(directory);
+    db.writeStore("records", { secret: "CLOSE-SECRET" });
+    const reader = holdReader(directory);
+    db.writeStore("records", {});
+    db.scrubDeletedContent();
+    expect(db.hasDeferredScrub()).toBe(true);
+    expect(walBytes(directory)).toBeGreaterThan(0);
+    reader.exec("COMMIT");
+    db.close();
+    expect(walBytes(directory)).toBe(0);
+    expect(storageFilesContain(directory, "CLOSE-SECRET")).toBe(false);
+  });
+
   test("with no reader the scrub truncates at once and schedules nothing", async () => {
     const directory = await dataDir();
     const db = database(directory);
@@ -146,12 +162,13 @@ describe("maintenance settings (report 0910)", () => {
       for (let index = 0; index < 2_000; index += 1) insert.run(`key-${index % 40}`);
     });
     ledger.db.query("SELECT * FROM change_outbox WHERE delivered = 0 ORDER BY sequence").all();
-    ledger.optimize();
+    await runDatabaseUpkeep(ledger);
     expect(
       ledger.db
         .query("SELECT count(*) AS count FROM sqlite_master WHERE name = 'sqlite_stat1'")
         .get(),
     ).toEqual({ count: 1 });
+    expect(ledger.db.query("SELECT * FROM sqlite_stat1").all().length).toBeGreaterThan(0);
   });
 
   test("optimize never waits for another writer and never throws", async () => {

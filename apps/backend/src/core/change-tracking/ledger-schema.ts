@@ -452,16 +452,9 @@ export const moveChangeLedgerMigration: StorageMigration = {
       database.openedAtVersion < CHANGE_LEDGER_MIGRATION_VERSION
         ? 0
         : copyCommittedLedger(dataDir, database.path);
-    // The rows now live in the ledger file, so zeroing every dropped page
-    // would only rewrite the whole ledger region for nothing. The free pages
-    // are returned to the filesystem in steps after start-up.
-    db.exec("PRAGMA secure_delete = OFF");
-    try {
-      // Dropping a table also removes its AUTOINCREMENT counter.
-      for (const table of tables) db.exec(`DROP TABLE IF EXISTS ${table}`);
-    } finally {
-      db.exec("PRAGMA secure_delete = ON");
-    }
+    // Keep secure deletion enabled: legacy non-incremental databases may
+    // retain freed pages indefinitely after these tables are dropped.
+    for (const table of tables) db.exec(`DROP TABLE IF EXISTS ${table}`);
     log.info("ledger.moved", { rows, durationMs: Math.round(performance.now() - started) });
   },
 };

@@ -96,7 +96,8 @@ function workerOf(association: CoordinatorWorkflowAssociation): string | undefin
 function canOwn(association: CoordinatorWorkflowAssociation): boolean {
   return (
     (association.kind === "environment" || association.kind === "build-pipeline") &&
-    !association.pending
+    !association.pending &&
+    !association.nodeRelease
   );
 }
 

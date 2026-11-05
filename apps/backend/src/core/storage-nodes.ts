@@ -187,8 +187,8 @@ export class NodesRepository {
     );
   }
 
-  async getNodeRegistry(): Promise<NodeRegistry> {
-    return this.readNodeRegistry();
+  async getNodeRegistry(strict = false): Promise<NodeRegistry> {
+    return this.readNodeRegistry(strict);
   }
 
   /**
@@ -231,9 +231,10 @@ export class NodesRepository {
     });
   }
 
-  private async readNodeRegistry(): Promise<NodeRegistry> {
+  private async readNodeRegistry(strict = false): Promise<NodeRegistry> {
     const { registry, dropped } = readStoredNodeRegistry(
       await this.context.loadJson<unknown>(this.nodeRegistryFile(), () => null),
+      strict,
     );
     if (dropped > 0 && !this.reportedDroppedNodes) {
       this.reportedDroppedNodes = true;

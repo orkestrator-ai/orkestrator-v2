@@ -1335,7 +1335,7 @@ test("build pipeline live steering persists while inactive and rehydrates after 
     };
     const openBuild = async () => {
       await openEnvironment(target!.name);
-      const tab = page.getByRole("button", { name: /^Build: Live steering fixture/ });
+      const tab = page.getByRole("tab", { name: /^Build: Live steering fixture/ });
       await expect(tab).toBeVisible({ timeout: 30_000 });
       await tab.click();
     };

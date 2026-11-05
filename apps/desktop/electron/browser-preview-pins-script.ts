@@ -212,7 +212,7 @@ function installBrowserPreviewPins(
       // Ranges can render through display: contents parents with no own box.
       // Their rectangles establish rendering; check the nearest box ancestor
       // as well to reject subtrees such as a closed dialog.
-      let box = pin.element ?? pin.range?.startContainer.parentElement ?? null;
+      let box = pin.element ?? kit.elementOf(pin.range?.startContainer);
       if (pin.range) {
         while (box && window.getComputedStyle(box).display === "contents") box = box.parentElement;
       }
@@ -397,7 +397,7 @@ function installBrowserPreviewPins(
   );
   if (config.scrollIntoView && focused) {
     try {
-      const target = focused.element ?? focused.range?.startContainer.parentElement ?? null;
+      const target = focused.element ?? kit.elementOf(focused.range?.startContainer);
       target?.scrollIntoView?.({ block: "center", inline: "nearest" });
       place();
     } catch {

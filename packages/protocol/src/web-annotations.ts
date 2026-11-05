@@ -200,8 +200,8 @@ export interface WebAnnotationAncestorDescriptor {
 }
 
 /**
- * The most open shadow roots an element anchor may sit inside. Deeper targets
- * are `unsupported` (`shadow-root`), and the desktop anchor kit mirrors this.
+ * The most open shadow roots an anchor may sit inside. Deeper targets are
+ * `unsupported` (`shadow-root`), and the desktop anchor kit mirrors this.
  */
 export const WEB_ANNOTATION_MAX_SHADOW_DEPTH = 8;
 
@@ -223,7 +223,9 @@ export type WebAnnotationAnchorScope =
   /**
    * Inside open shadow roots: `hosts` is the root path, outermost first. The
    * rest of the anchor (stable id, semantics, path) is scoped to the
-   * innermost root. Closed roots and frames stay `unsupported`.
+   * innermost root. Closed roots and frames stay `unsupported`. A text range
+   * at a root's top level has no element inside the root to name: its
+   * container carries the host's semantics, no stable id, and the path `:host`.
    */
   | { kind: "shadow"; hosts: WebAnnotationShadowHost[] }
   | { kind: "unsupported"; reason: "iframe" | "shadow-root" | "closed-root" | "cross-origin" };
@@ -1142,8 +1144,8 @@ export interface WebAnnotationCapabilities {
      */
     sourceHints?: boolean;
     /**
-     * Element anchors with a `shadow` scope (targets inside open shadow
-     * roots). Absent or false: clients send such a target with the scope
+     * Anchors with a `shadow` scope (element targets and text-range containers
+     * inside open shadow roots). Absent or false: clients send such a target with the scope
      * `{ kind: "unsupported", reason: "shadow-root" }` instead.
      */
     shadowTargets?: boolean;

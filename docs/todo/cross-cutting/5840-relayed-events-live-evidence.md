@@ -9,12 +9,13 @@ Analysed 2026-11-05 against `main` at `1e6d56391`.
 1. **Two-node browser check**: per-node relayed events between two real backends, in a real browser, with a busy leaf and an inactive tab. Status: open.
 2. **Older peers on real releases**: an older renderer on an upgraded command node, and a current renderer on an older command node. Status: open.
 3. **Production profile of the frame costs**: whether the shared frame buffer matters on a real fan-out. Status: open.
+4. **The desktop's relay between two real machines**: a desktop window and a realm's portal, with a leaf on another machine. Status: open.
 
 ### 1. Two-node browser check
 
 **Problem.** Efficiency report 0280 (E18) part `0370` (GW-11) was built and tested against a real gateway, with the renderer's stream class over a real socket and the node relay against a test node network. It has not run between two real backends in a real browser, so `EventSource` on the same-origin path and the reconnect of a tab that was away are not proven end to end.
 
-**Context.** Relayed events are named `relayed-node-event:<nodeId>` and kept in a second ring (`relayedEventReplay`, 512 frames, 512 KiB; `apps/backend/src/gateway-events.ts`). A renderer reads them on one filtered stream (`RelayedEventStream`, `apps/web/src/lib/native/relayed-event-stream.ts`), opened from `subscribeNodeEvents` (`apps/web/src/lib/federation/node-events.ts`) once `watch_node_events` answers `perNodeEvents`. This adds a third long-lived connection to a browser tab that watches a node, beside the main stream and the terminal fallback, and `web-gateway.ts` notes that WKWebView has a small per-origin allowance for those.
+**Context.** Relayed events are named `relayed-node-event:<nodeId>` and kept in a second ring (`relayedEventReplay`, 512 frames, 512 KiB; `apps/backend/src/gateway-events.ts`). A renderer reads them on one filtered stream (`RelayedEventStream`, `packages/protocol/src/relayed-event-stream.ts`), opened from `subscribeNodeEvents` (`apps/web/src/lib/federation/node-events.ts`) once `watch_node_events` answers `perNodeEvents`. This adds a third long-lived connection to a browser tab that watches a node, beside the main stream and the terminal fallback, and `web-gateway.ts` notes that WKWebView has a small per-origin allowance for those.
 
 **Investigation.** Not run here. The ticket forbade billed provider turns, and two attached `dev:test` profiles are a larger setup than the batch ran. The events involved (`change-projection-changed`, `resource-changed`) do not need a provider turn, so this check can avoid one. Already covered by automated tests: scoping, the cursor, replay across a filter change, a busy leaf expiring only relayed cursors, and the resync on a gap (`apps/backend/tests/gateway-relayed-events.test.ts`, `apps/web/src/lib/native/web-gateway-relayed-stream.test.ts`).
 
@@ -64,8 +65,25 @@ Analysed 2026-11-05 against `main` at `1e6d56391`.
     - Pros: a real figure.
     - Cons: effort with no decision depending on the answer.
 
+### 4. The desktop's relay between two real machines
+
+**Problem.** The desktop's main process now takes relayed events on one filtered stream, for what its windows listen to. That has run against a real gateway and in a real Electron window with a leaf on loopback, not across a real link to another machine, so a route that drops, a tailnet peer that vanishes and a leaf on another release are not proven end to end.
+
+**Context.** A renderer on the IPC path reports its per-node listens to main (`createRelayedListenReporter`, `apps/desktop/electron/preload-api.ts`). Main keeps their union per connection (`DesktopWindowContexts.syncRelayedEvents`) and runs the stream (`BackendHttpClient.setRelayedEvents`, `apps/desktop/electron/backend-process.ts`). It serves a realm's portal (`orkestrator:portal-event`) and a local window with `localWindowGatewayTransport` off. See [command nodes](../../architecture/command-nodes.md).
+
+**Investigation.** Not run: it needs two real machines, and the batch that built this could not contact other real nodes. Already covered by automated tests: scoping, filter changes from the cursor, a closed window or realm, a reload, replay and `resync` after a reconnect, and an older backend's old-name frames (`apps/backend/tests/gateway-desktop-relayed-stream.test.ts`, with a scripted older backend), plus a window, a reload and a realm's portal in real Electron against a loopback leaf (`e2e/agent-testing/relayed-events-electron.spec.ts`). No provider turn is needed for any of this.
+
+**Decisions.**
+
+- **How to qualify?**
+  - **A desktop on one machine with a leaf attached on another, with the transport setting off (recommended).** Watch the leaf's badges in the window, open its workspace in a realm, and change a fixture environment on the leaf. Check on `/__orkestrator/metrics` that only the watched node's frames are written, close the realm and check the filter narrows, then break the route for longer than the relayed window and check that both views re-read when it returns. Repeat once with the leaf on the last release before E18.
+    - Pros: exercises the real route handling and the path the support window promises.
+    - Cons: needs two machines and a built older release.
+  - **Rely on the automated tests and watch `relayed-node-event.legacy-desktop-stream`.**
+    - Pros: no setup.
+    - Cons: a real route's failure modes stay unproven, and the counter says only that older desktops still connect.
+
 ## Related
 
-- [5841](5841-desktop-main-relayed-stream.md): the desktop's own stream.
 - [1202 task 11](1202-efficiency-review-follow-ups.md)
 - [Command nodes](../../architecture/command-nodes.md)

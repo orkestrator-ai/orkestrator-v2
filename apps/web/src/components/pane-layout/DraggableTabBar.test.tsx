@@ -1,10 +1,14 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { DndContext } from "@dnd-kit/core";
+import type { ReactNode } from "react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { DndContext, KeyboardSensor, useSensor, useSensors } from "@dnd-kit/core";
+import { sortableKeyboardCoordinates } from "@dnd-kit/sortable";
 import type { PaneLeaf } from "@/types/paneLayout";
+import { createPaneTabElementId } from "@/types/paneLayout";
 import { useFileDirtyStore } from "@/stores/fileDirtyStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
+import { useTabLaunchStore } from "@/stores/tabLaunchStore";
 import { createSessionKey } from "@/lib/utils";
 import { invoke } from "@/lib/native/backend";
 import { DraggableTabBar } from "./DraggableTabBar";
@@ -67,6 +71,351 @@ describe("DraggableTabBar", () => {
     expect(tabBar?.className).toContain("border-border/80");
     fireEvent.click(screen.getByText("Terminal 1"));
     expect(onTabSelect).toHaveBeenCalledWith("terminal");
+  });
+
+  describe("tab semantics", () => {
+    const environmentId = "environment";
+
+    function renderStrip(ids: string[], activeTabId = ids[0]!) {
+      usePaneLayoutStore.getState().initialize("container", environmentId);
+      for (const id of ids) {
+        usePaneLayoutStore.getState().addTab("default", { id, type: "plain" }, environmentId);
+      }
+      usePaneLayoutStore.getState().setActiveTab("default", activeTabId, environmentId);
+      function Strip() {
+        const pane = usePaneLayoutStore((state) => state.getPane("default", environmentId))!;
+        return (
+          <DraggableTabBar
+            pane={pane}
+            environmentId={environmentId}
+            onTabSelect={(tabId) =>
+              usePaneLayoutStore.getState().setActiveTab("default", tabId, environmentId)
+            }
+          />
+        );
+      }
+      // The real sensors, so the keys below reach the drag the way the app's do.
+      function Sensors({ children }: { children: ReactNode }) {
+        const sensors = useSensors(
+          useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+        );
+        return (
+          <DndContext sensors={sensors} onDragStart={onDragStart}>
+            {children}
+          </DndContext>
+        );
+      }
+      return render(
+        <Sensors>
+          <Strip />
+        </Sensors>,
+      );
+    }
+
+    const onDragStart = mock(() => undefined);
+    const paneTabIds = () =>
+      usePaneLayoutStore
+        .getState()
+        .getPane("default", environmentId)
+        ?.tabs.map((tab) => tab.id);
+
+    beforeEach(() => onDragStart.mockClear());
+
+    test("exposes a tablist of one focusable tab per tab, with no other tab stops", () => {
+      const { container } = renderStrip(["one", "two"], "two");
+
+      const strip = screen.getByRole("tablist", { name: "Environment tabs" });
+      const tabs = within(strip).getAllByRole("tab");
+      expect(tabs.map((tab) => tab.getAttribute("aria-label"))).toEqual([
+        "Terminal 1",
+        "Terminal 2",
+      ]);
+      expect(tabs.map((tab) => tab.getAttribute("aria-selected"))).toEqual(["false", "true"]);
+      expect(tabs.map((tab) => tab.tabIndex)).toEqual([0, 0]);
+      const stops = Array.from(container.querySelectorAll<HTMLElement>("*")).filter(
+        (element) => element.tabIndex === 0,
+      );
+      expect(stops).toEqual(tabs);
+    });
+
+    test("Delete closes the focused tab and hands focus to the one in its place", async () => {
+      renderStrip(["one", "two", "three"]);
+      const two = screen.getByRole("tab", { name: "Terminal 2" });
+      two.focus();
+
+      fireEvent.keyDown(two, { key: "Delete", code: "Delete" });
+
+      await waitFor(() => expect(paneTabIds()).toEqual(["one", "three"]));
+      await waitFor(() => {
+        expect(document.activeElement?.getAttribute("aria-label")).toBe("Terminal 2");
+      });
+      // The first tab stays selected: closing another does not move the selection.
+      expect(screen.getByRole("tab", { name: "Terminal 1" }).getAttribute("aria-selected")).toBe(
+        "true",
+      );
+    });
+
+    test("closing the last tab in the strip hands focus to the one before it", async () => {
+      renderStrip(["one", "two"], "two");
+      const two = screen.getByRole("tab", { name: "Terminal 2" });
+      two.focus();
+
+      fireEvent.keyDown(two, { key: "Delete", code: "Delete" });
+
+      await waitFor(() => expect(paneTabIds()).toEqual(["one"]));
+      await waitFor(() => {
+        expect(document.activeElement?.getAttribute("aria-label")).toBe("Terminal 1");
+      });
+    });
+
+    test("a surface that took focus while the tab closed keeps it", async () => {
+      const { container } = renderStrip(["one", "two"]);
+      const terminal = document.createElement("textarea");
+      container.append(terminal);
+      const two = screen.getByRole("tab", { name: "Terminal 2" });
+      two.focus();
+
+      fireEvent.keyDown(two, { key: "Delete", code: "Delete" });
+      terminal.focus();
+
+      await waitFor(() => expect(paneTabIds()).toEqual(["one"]));
+      expect(document.activeElement).toBe(terminal);
+    });
+
+    test("Delete on a dirty file asks first, and Cancel leaves the tab open", async () => {
+      usePaneLayoutStore.getState().initialize("container", environmentId);
+      usePaneLayoutStore.getState().addTab(
+        "default",
+        {
+          id: "dirty-file",
+          type: "file",
+          fileData: { filePath: "src/dirty.ts", containerId: "container" },
+        },
+        environmentId,
+      );
+      useFileDirtyStore.getState().hydrateDraft("dirty-file", "changed", "disk");
+      const pane = usePaneLayoutStore.getState().getPane("default", environmentId)!;
+      render(
+        <DndContext>
+          <DraggableTabBar
+            pane={pane}
+            environmentId={environmentId}
+            onTabSelect={() => undefined}
+          />
+        </DndContext>,
+      );
+
+      fireEvent.keyDown(screen.getByRole("tab", { name: "dirty.ts, unsaved changes" }), {
+        key: "Delete",
+        code: "Delete",
+      });
+      fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+
+      expect(paneTabIds()).toEqual(["dirty-file"]);
+    });
+
+    for (const fromMenu of [false, true]) {
+      test(`dirty keyboard close restores focus after async confirmation (${fromMenu ? "menu" : "Delete"})`, async () => {
+        renderStrip(["one"]);
+        usePaneLayoutStore.getState().addTab(
+          "default",
+          {
+            id: "dirty",
+            type: "file",
+            fileData: { filePath: "dirty.ts", containerId: "container" },
+          },
+          environmentId,
+        );
+        useFileDirtyStore.getState().hydrateDraft("dirty", "changed", "disk");
+        const tab = await screen.findByRole("tab", { name: "dirty.ts, unsaved changes" });
+        tab.focus();
+        if (fromMenu) {
+          fireEvent.keyDown(tab, { key: "ContextMenu" });
+          const close = await screen.findByRole("menuitem", { name: /^Close$/ });
+          close.focus();
+          fireEvent.keyDown(close, { key: "Enter" });
+        } else fireEvent.keyDown(tab, { key: "Delete" });
+        let finish!: () => void;
+        (
+          invoke as unknown as { mockImplementation: (fn: () => Promise<unknown>) => void }
+        ).mockImplementation(
+          () =>
+            new Promise<void>((resolve) => {
+              finish = resolve;
+            }),
+        );
+        const confirm = await screen.findByRole("button", { name: "Close Without Saving" });
+        confirm.focus();
+        fireEvent.click(confirm);
+        await waitFor(() => expect(finish).toBeDefined());
+        expect(paneTabIds()).toContain("dirty");
+        finish();
+        await waitFor(() => expect(paneTabIds()).toEqual(["one"]));
+        await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+        await waitFor(() =>
+          expect(document.activeElement).toBe(screen.getByRole("tab", { name: "Terminal 1" })),
+        );
+      });
+    }
+
+    test.each(["file", "review"])(
+      "failed keyboard %s close cannot hand off focus after a later pointer close",
+      async (kind) => {
+        renderStrip(["one"]);
+        usePaneLayoutStore.getState().addTab(
+          "default",
+          {
+            id: "file",
+            type: kind === "file" ? "file" : "multi-review",
+            fileData:
+              kind === "file" ? { filePath: "file.ts", containerId: "container" } : undefined,
+            multiReviewTabData:
+              kind === "review" ? { environmentId, workflowId: "failed-review" } : undefined,
+          },
+          environmentId,
+        );
+        useMultiReviewStore.setState({
+          workflows: new Map([["failed-review", { phase: "cancelled" } as never]]),
+        });
+        await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(2));
+        const tab = screen.getAllByRole("tab")[1]!;
+        (
+          invoke as unknown as { mockImplementation: (fn: () => Promise<unknown>) => void }
+        ).mockImplementation(() => Promise.reject(new Error("discard unavailable")));
+        tab.focus();
+        fireEvent.keyDown(tab, { key: "Delete" });
+        await waitFor(() => expect(invoke).toHaveBeenCalled());
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        expect(paneTabIds()).toContain("file");
+        (
+          invoke as unknown as { mockImplementation: (fn: () => Promise<unknown>) => void }
+        ).mockImplementation(() => Promise.resolve());
+        fireEvent.click(within(tab).getByRole("button"));
+        await waitFor(() => expect(paneTabIds()).toEqual(["one"]));
+        expect(document.activeElement).not.toBe(screen.getByRole("tab", { name: "Terminal 1" }));
+      },
+    );
+
+    test("arrow keys, Home and End move focus without selecting", () => {
+      renderStrip(["one", "two", "three"]);
+      const [one, two, three] = screen.getAllByRole("tab");
+      one!.focus();
+
+      fireEvent.keyDown(one!, { key: "ArrowRight" });
+      expect(document.activeElement).toBe(two!);
+      fireEvent.keyDown(two!, { key: "End" });
+      expect(document.activeElement).toBe(three!);
+      fireEvent.keyDown(three!, { key: "ArrowRight" });
+      expect(document.activeElement).toBe(one!);
+      fireEvent.keyDown(one!, { key: "ArrowLeft" });
+      expect(document.activeElement).toBe(three!);
+      fireEvent.keyDown(three!, { key: "Home" });
+      expect(document.activeElement).toBe(one!);
+
+      expect(one!.getAttribute("aria-selected")).toBe("true");
+      expect(two!.getAttribute("aria-selected")).toBe("false");
+    });
+
+    test("a modified arrow key stays with whatever else owns it", () => {
+      renderStrip(["one", "two"]);
+      const one = screen.getByRole("tab", { name: "Terminal 1" });
+      one.focus();
+
+      fireEvent.keyDown(one, { key: "ArrowRight", altKey: true });
+
+      expect(document.activeElement).toBe(one);
+    });
+
+    test("arrow keys stay with the drag while a tab is being dragged", () => {
+      const pane: PaneLeaf = {
+        kind: "leaf",
+        id: "pane",
+        activeTabId: "one",
+        tabs: [
+          { id: "one", type: "plain" },
+          { id: "two", type: "plain" },
+        ],
+      };
+      render(
+        <DndContext>
+          <DraggableTabBar
+            pane={pane}
+            environmentId={environmentId}
+            onTabSelect={() => undefined}
+            activeDragId="tab:one:pane:pane"
+          />
+        </DndContext>,
+      );
+      const one = screen.getByRole("tab", { name: "Terminal 1" });
+      one.focus();
+
+      fireEvent.keyDown(one, { key: "ArrowRight" });
+
+      expect(document.activeElement).toBe(one);
+    });
+
+    test("Space picks the tab up through the real sensor, and Enter selects instead", () => {
+      renderStrip(["one", "two"]);
+      const two = screen.getByRole("tab", { name: "Terminal 2" });
+      two.focus();
+
+      fireEvent.keyDown(two, { key: "Enter", code: "Enter" });
+      expect(onDragStart).not.toHaveBeenCalled();
+      expect(two.getAttribute("aria-selected")).toBe("true");
+
+      fireEvent.keyDown(two, { key: " ", code: "Space" });
+      expect(onDragStart).toHaveBeenCalledTimes(1);
+      fireEvent.keyDown(document, { key: "Escape", code: "Escape" });
+    });
+  });
+
+  test("a launching tab joins the tablist as the selected tab and selects by keyboard", () => {
+    const environmentId = "environment";
+    usePaneLayoutStore.getState().initialize("container", environmentId);
+    usePaneLayoutStore
+      .getState()
+      .addTab("default", { id: "terminal", type: "plain" }, environmentId);
+    useTabLaunchStore.setState({
+      launches: new Map([
+        [
+          environmentId,
+          [{ tabId: "launch", title: "Claude", focused: true, arrived: false } as never],
+        ],
+      ]),
+    });
+    const pane = usePaneLayoutStore.getState().getPane("default", environmentId)!;
+    try {
+      render(
+        <DndContext>
+          <DraggableTabBar
+            pane={pane}
+            environmentId={environmentId}
+            onTabSelect={() => undefined}
+            isPaneFocused
+          />
+        </DndContext>,
+      );
+
+      const tabs = within(screen.getByRole("tablist")).getAllByRole("tab");
+      expect(tabs.map((tab) => tab.getAttribute("aria-selected"))).toEqual(["false", "true"]);
+      expect(tabs[1]?.getAttribute("tabindex")).toBe("0");
+      expect(tabs[1]?.id).toBe(createPaneTabElementId(environmentId, "default", "launch"));
+
+      for (const key of ["Enter", " "]) {
+        useTabLaunchStore.setState({
+          launches: new Map([
+            [
+              environmentId,
+              [{ tabId: "launch", title: "Claude", focused: false, arrived: false } as never],
+            ],
+          ]),
+        });
+        fireEvent.keyDown(screen.getByTestId("tab-launch-placeholder"), { key });
+        expect(useTabLaunchStore.getState().launches.get(environmentId)?.[0]?.focused).toBe(true);
+      }
+    } finally {
+      useTabLaunchStore.setState({ launches: new Map() });
+    }
   });
 
   test("requests refreshes only for server-backed tabs", () => {

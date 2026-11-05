@@ -56,6 +56,7 @@ describe("RG-01/RG-02 command-node stores", () => {
         },
         result: undefined,
       }));
+      await expect(storage.nodes.getNodeRegistry(true)).rejects.toThrow("Incomplete node registry");
       expect((await storage.nodes.getNodeRegistry()).nodes.map((node) => node.nodeId)).toEqual([
         "bk_leaf" as never,
       ]);

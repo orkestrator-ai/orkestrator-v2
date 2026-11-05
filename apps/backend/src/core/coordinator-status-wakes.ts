@@ -31,6 +31,7 @@
  * Progress is not a status: individual reviewers finishing never wake anyone,
  * and build-pipeline stages only do under the opt-in `stages` mode.
  */
+import { coordinatorRequestAlias } from "./coordinator-workflow-retention.js";
 import {
   needsPipelineCreationRepair,
   reconcilePipelineCreation,
@@ -811,8 +812,7 @@ function hasFollowRequest(
     (item) =>
       item.coordinatorId === coordinatorId &&
       (item.requestId === requestId ||
-        (item.kind === "pull-request" &&
-          item.requestAliases?.some((alias) => alias.requestId === requestId) === true)),
+        (item.kind === "pull-request" && coordinatorRequestAlias(item, requestId) !== undefined)),
   );
 }
 

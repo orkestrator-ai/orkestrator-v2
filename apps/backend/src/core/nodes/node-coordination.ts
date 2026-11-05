@@ -598,6 +598,7 @@ export class NodeCoordination {
         environmentId: mailbox.coordinatorEnvironmentId,
         tabId: mailbox.coordinatorTabId,
         title: "Project coordinator",
+        ...(args.turnOrigin === "mail" ? { turnOrigin: "mail" as const } : {}),
       },
       {
         requestId: `node:${controllerId}:${requestId}`.slice(0, 256),

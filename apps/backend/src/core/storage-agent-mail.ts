@@ -433,6 +433,7 @@ export class AgentMailRepository {
               incarnationId: senderMailbox.incarnationId,
               agent: senderMailbox.agent!,
               title: senderMailbox.title,
+              ...(sender.turnOrigin ? { turnOrigin: sender.turnOrigin } : {}),
             }
           : {
               kind: "tab",

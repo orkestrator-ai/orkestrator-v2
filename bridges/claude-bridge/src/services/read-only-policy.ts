@@ -14,6 +14,13 @@ import {
 } from "@orkestrator/protocol/native-agent";
 import type { CoordinatorCommandSandbox } from "@orkestrator/protocol/coordinator";
 import { claudeMcpToolPrefix } from "./mcp-tool-prefix.js";
+import {
+  claudeReadOnlyWorkspacePaths,
+  coordinatorReadBoundary,
+  readToolRefused,
+  shellCommandRefused,
+  type ReadBoundary,
+} from "./read-only-path-boundary.js";
 
 /**
  * Translation of the coordinator's read-only policy into this SDK's terms.
@@ -543,6 +550,8 @@ export function claudeReadOnlySandbox(
     workspaces?: readonly string[];
     /** The launcher's probe result; see `COORDINATOR_COMMAND_SANDBOX_ENV`. */
     commandSandbox?: CoordinatorCommandSandbox;
+    /** What the turn's commands may not read; see `read-only-path-boundary.ts`. */
+    readBoundary?: ReadBoundary | null;
   } = {},
 ): {
   enabled: boolean;
@@ -550,7 +559,7 @@ export function claudeReadOnlySandbox(
   autoAllowBashIfSandboxed: true;
   allowUnsandboxedCommands: false;
   excludedCommands: string[];
-  filesystem: { denyWrite: string[] };
+  filesystem: { denyWrite: string[]; denyRead?: string[]; allowRead?: string[] };
   network: {
     allowLocalBinding: boolean;
     strictAllowlist: true;
@@ -580,7 +589,14 @@ export function claudeReadOnlySandbox(
     excludedCommands: [],
     // Denials win over the sandbox's own write allowance, which includes the
     // working directory. Temporary directories stay writable for the shell.
-    filesystem: { denyWrite: [...new Set(options.workspaces ?? [])] },
+    filesystem: {
+      denyWrite: [...new Set(options.workspaces ?? [])],
+      // `allowRead` wins over `denyRead`, which is how the conversation's own
+      // runtime stays readable inside the denied data directory.
+      ...(options.readBoundary
+        ? { denyRead: options.readBoundary.deny, allowRead: options.readBoundary.allow }
+        : {}),
+    },
     network: {
       allowLocalBinding: policy.networkAccess === "full",
       strictAllowlist: true,
@@ -644,6 +660,8 @@ const REFUSALS = {
     mcp: (tool: string) =>
       `Coordinator sessions may only use Orkestrator's own tools, so ${tool} is not available.`,
     unsandboxed: "Coordinator commands may not run outside the sandbox.",
+    dataDirectory:
+      "Coordinators cannot read Orkestrator's data directory, which holds credentials with wider authority than this conversation. This conversation's own tool results, memory and attachments stay readable.",
   },
   "read-only": {
     composition:
@@ -670,6 +688,8 @@ const REFUSALS = {
     mcp: (tool: string) =>
       `This session may only use Orkestrator's own tools and the MCP servers granted to it, so ${tool} is not available.`,
     unsandboxed: "Commands in this session may not run outside the sandbox.",
+    dataDirectory:
+      "This session cannot read Orkestrator's data directory, which holds credentials with wider authority than this session. Its own tool results, memory and attachments stay readable.",
   },
 } as const satisfies Record<ReadOnlyRefusalRole, unknown>;
 
@@ -677,6 +697,8 @@ interface ReadOnlyCommandOptions {
   commandSandbox?: CoordinatorCommandSandbox;
   /** Whose refusals these are; default `coordinator`. */
   role?: ReadOnlyRefusalRole;
+  /** Tests name one; a bridge reads the launcher's from its environment. */
+  readBoundary?: ReadBoundary | null;
 }
 
 /** Whether one shell command only reads. Exported for its own tests. */
@@ -831,6 +853,10 @@ export function createCoordinatorReadOnlyHook(
     // policy never carries a grant.
     ...(nativeAgentUserMcpGrant(policy) ?? []).map(claudeMcpToolPrefix),
   ];
+  const readBoundary = (cwd: string) =>
+    options.readBoundary !== undefined
+      ? options.readBoundary
+      : coordinatorReadBoundary(claudeReadOnlyWorkspacePaths(cwd));
   return async (input): Promise<HookJSONOutput> => {
     if (input.hook_event_name !== "PreToolUse") return {};
     const toolName = input.tool_name;
@@ -862,6 +888,24 @@ export function createCoordinatorReadOnlyHook(
       const command = typeof toolInput?.command === "string" ? toolInput.command : "";
       const verdict = isReadOnlyShellCommand(command, options);
       if (!verdict.allowed) return deny(verdict.reason!);
+      const boundary = readBoundary(input.cwd);
+      if (
+        boundary &&
+        shellCommandRefused(boundary, command, input.cwd, {
+          traversal: options.commandSandbox === "unavailable",
+        })
+      ) {
+        return deny(refusals.dataDirectory);
+      }
+      return {};
+    }
+    // The CLI runs these itself, outside the sandbox, so only this stops them.
+    if (toolName === "Read" || toolName === "Grep" || toolName === "Glob") {
+      const boundary = readBoundary(input.cwd);
+      const toolInput = (input.tool_input ?? {}) as Record<string, unknown>;
+      if (boundary && readToolRefused(boundary, toolName, toolInput, input.cwd)) {
+        return deny(refusals.dataDirectory);
+      }
     }
     return {};
   };

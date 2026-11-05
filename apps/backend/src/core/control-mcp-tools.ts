@@ -108,6 +108,7 @@ import { registerVoiceTools } from "./control-mcp-voice.js";
 import { registerOperatorWorkflowTools } from "./control-mcp-operator-workflow-tools.js";
 import { createNodeTargets, NODE_TOOL_CAPABILITIES, type NodeTarget } from "./control-mcp-nodes.js";
 import { NODE_FILE_TOOL_CAPABILITIES } from "./control-mcp-node-files.js";
+import { COORDINATOR_ENVIRONMENT_ACTIONS } from "./control-mcp-coordinator-environment-scope.js";
 import { COORDINATOR_SURFACE_TOOL_CAPABILITIES } from "./control-mcp-coordinator-surfaces.js";
 import { COORDINATOR_WORKER_TOOL_CAPABILITIES } from "./control-mcp-coordinator-worker-tools.js";
 import { WORKER_TURN_TOOL_CAPABILITIES } from "./control-mcp-coordinator-worker-turns.js";
@@ -549,6 +550,7 @@ function filteredToolServer(
   server: McpServer,
   listed: (tool: string) => boolean,
   finishResult: (result: unknown) => unknown = (result) => result,
+  beforeCall?: (tool: string, input: unknown) => Promise<void>,
 ): McpServer {
   return {
     registerTool: ((name: string, ...rest: unknown[]) => {
@@ -557,7 +559,10 @@ function filteredToolServer(
       return (server.registerTool as (...args: unknown[]) => unknown)(
         name,
         ...rest.slice(0, -1),
-        async (...args: unknown[]) => finishResult(await handler(...args)),
+        async (...args: unknown[]) => {
+          await beforeCall?.(name, args[0]);
+          return finishResult(await handler(...args));
+        },
       );
     }) as McpServer["registerTool"],
   } as McpServer;
@@ -670,6 +675,17 @@ export async function createControlMcp(
       return operator.profile !== "voice" && operatorToolListed(operator, tool);
     },
     coordinatorScope && !messagingEnabled ? withoutWakePromise : undefined,
+    coordinatorScope
+      ? async (tool, input) => {
+          const target = COORDINATOR_ENVIRONMENT_ACTIONS.get(tool)?.(isRecord(input) ? input : {});
+          if (typeof target?.environmentId !== "string") return;
+          await invoke("assert_coordinator_environment_scope", {
+            scope: coordinatorScope,
+            environmentId: target.environmentId,
+            ...(typeof target.nodeId === "string" ? { nodeId: target.nodeId } : {}),
+          });
+        }
+      : undefined,
   );
 
   /**
@@ -985,6 +1001,8 @@ export async function createControlMcp(
         ...environmentSummary(environment),
         ...coordinatorPrFields(prReadingFrom(environment, health.get(String(environment.id)))),
         ...onNodeResult(target),
+        // The model can tell the user's own checkout from a worker before acting on it.
+        ...(coordinatorScope && environment.projectHome === true ? { projectHome: true } : {}),
       }));
       // A coordinator also sees where else this project runs (names and state
       // only); nodeId on any environment tool acts there.

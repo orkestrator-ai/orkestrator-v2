@@ -8,6 +8,7 @@ import {
   isAgentMailBudgetHeld,
   type AgentMailMessage,
   type AgentMailMessageSummary,
+  type AgentMailSystemSource,
   type AgentMessagingSettings,
   type MailboxKind,
   type MailboxPipelineWorker,
@@ -122,9 +123,11 @@ export type AgentMailSender =
       conversationId: string;
       environmentId: string;
       tabId: string;
+      /** The conversation's turn was not started by the user; see `MailActor`. */
+      turnOrigin?: "mail";
     }
   | { kind: "user" }
-  | { kind: "system"; projectId: string; source: "workflow"; resourceId: string }
+  | { kind: "system"; projectId: string; source: AgentMailSystemSource; resourceId: string }
   | { kind: "external" }
   /** Mail across the node link; see `NodeMailActor`. */
   | NodeMailActor;

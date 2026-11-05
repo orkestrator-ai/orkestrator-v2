@@ -117,6 +117,7 @@ import {
   COORDINATOR_CLAUDE_USER_SKILLS_DIR_ENV,
   COORDINATOR_CODEX_USER_SKILLS_DIR_ENV,
   COORDINATOR_COMMAND_SANDBOX_ENV,
+  COORDINATOR_PROTECTED_DATA_DIR_ENV,
   COORDINATOR_EXECUTION_POLICY,
   coordinatorIdFromRuntimeId,
 } from "@orkestrator/protocol/coordinator";
@@ -989,6 +990,7 @@ async function startLocalServerAttempt(
   delete env[COORDINATOR_WEB_RESEARCH_ENV];
   delete env[COORDINATOR_RESEARCH_MCP_ENV];
   delete env[COORDINATOR_COMMAND_SANDBOX_ENV];
+  delete env[COORDINATOR_PROTECTED_DATA_DIR_ENV];
   delete env[COORDINATOR_CLAUDE_USER_SKILLS_DIR_ENV];
   delete env[COORDINATOR_CODEX_USER_SKILLS_DIR_ENV];
   if (bugReportId) {
@@ -1023,6 +1025,8 @@ async function startLocalServerAttempt(
     env[COORDINATOR_COMMAND_SANDBOX_ENV] = defaultCoordinatorHostCapabilities().claudeSandbox
       ? "required"
       : "unavailable";
+    // What its turns may not read; the Claude bridge carves its own runtime back out.
+    env[COORDINATOR_PROTECTED_DATA_DIR_ENV] = context.storage.getDataDir();
   }
 
   if (kind === "opencode") {

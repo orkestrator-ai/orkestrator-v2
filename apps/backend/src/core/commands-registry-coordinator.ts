@@ -469,6 +469,13 @@ export function registerCoordinatorCommands(
       const coordinator = asNonBlankString(coordinatorId, "coordinatorId");
       const conversation = asNonBlankString(conversationId, "conversationId");
       await requireCoordinatorConversation(context, project, coordinator, conversation);
+      // Backend takeover (`force`) calls the store directly and is unaffected.
+      const workspace = await context.storage.coordinators.getCoordinatorWorkspaceById(coordinator);
+      if (workspace?.conversations.find((item) => item.id === conversation)?.role === "side") {
+        throw new Error(
+          "A side agent cannot adopt workflows: every worker reports to the main coordinator. Ask the main coordinator to adopt it.",
+        );
+      }
       return context.storage.coordinators.adoptCoordinatorWorkflowAssociation(
         project,
         coordinator,

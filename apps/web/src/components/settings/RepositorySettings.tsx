@@ -21,6 +21,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { useConfigStore } from "@/stores";
 import { useProjectModelCatalog } from "@/hooks/useBuildLaunchOptions";
 import * as backend from "@/lib/backend";
@@ -36,6 +37,7 @@ import {
   House,
   ImageUp,
   Settings2,
+  Bot,
   GitBranch,
   RefreshCw,
 } from "lucide-react";
@@ -47,6 +49,7 @@ import type { Project, RepositoryConfig, PortMapping, PortProtocol } from "@/typ
 import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
 import { SettingsPageLayout } from "./SettingsPageLayout";
 import { repositorySettingsPatch } from "./repository-settings-patch";
+import { COORDINATOR_OTHER_ENVIRONMENTS_SETTING_LABEL } from "@orkestrator/protocol/coordinator";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("web.settings");
@@ -117,6 +120,9 @@ export function RepositorySettings({
   const [entryPort, setEntryPort] = useState(
     initialConfig.entryPort != null ? String(initialConfig.entryPort) : "",
   );
+  const [coordinatorOtherEnvironments, setCoordinatorOtherEnvironments] = useState(
+    initialConfig.coordinatorOtherEnvironments === true,
+  );
   // The record the form was loaded from: a save sends only what differs from it.
   const [baselineConfig, setBaselineConfig] = useState<RepositoryConfig>(initialConfig);
   const tiers = useMemo(
@@ -151,6 +157,7 @@ export function RepositorySettings({
       setFilesToCopy(repoConfig.filesToCopy ?? []);
       setAgentSettings(normalizeAgentSettings(repoConfig.agentSettings));
       setEntryPort(repoConfig.entryPort != null ? String(repoConfig.entryPort) : "");
+      setCoordinatorOtherEnvironments(repoConfig.coordinatorOtherEnvironments === true);
     }
   }
   // A reset (or close) abandons any remote read still in flight.
@@ -475,6 +482,7 @@ export function RepositorySettings({
             ? parsedEntryPort
             : undefined,
         agentSettings: normalizeAgentSettings(agentSettings),
+        coordinatorOtherEnvironments: coordinatorOtherEnvironments ? true : undefined,
       };
 
       // Only the edited fields travel; the backend merges them onto its own
@@ -545,6 +553,7 @@ export function RepositorySettings({
     })),
     { id: "ports", label: "Ports", icon: <Network className="h-4 w-4" /> },
     { id: "files", label: "Files", icon: <FileText className="h-4 w-4" /> },
+    { id: "coordinator", label: "Coordinator", icon: <Bot className="h-4 w-4" /> },
   ];
 
   const renderRepoSection = (section: string) => {
@@ -753,6 +762,30 @@ export function RepositorySettings({
             disabled={isSaving}
             scopeLabel="this repository"
           />
+        );
+      case "coordinator":
+        return (
+          <div className="space-y-6">
+            <div className="flex items-start justify-between gap-4">
+              <div className="grid gap-1">
+                <Label htmlFor="coordinatorOtherEnvironments">
+                  {COORDINATOR_OTHER_ENVIRONMENTS_SETTING_LABEL}
+                </Label>
+                <p className="text-xs text-muted-foreground">
+                  Off: this project&apos;s coordinator sends work only to environments it launched,
+                  so a compromised worker cannot use it to reach an environment you made by hand.
+                  On: it can also message, prompt, start and stop your other environments here,
+                  which then run that work under their own permissions.
+                </p>
+              </div>
+              <Switch
+                id="coordinatorOtherEnvironments"
+                checked={coordinatorOtherEnvironments}
+                onCheckedChange={setCoordinatorOtherEnvironments}
+                disabled={isSaving}
+              />
+            </div>
+          </div>
         );
       case "ports":
         return (

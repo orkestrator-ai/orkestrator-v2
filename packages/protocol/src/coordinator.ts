@@ -16,6 +16,15 @@ export const COORDINATOR_RUNTIME_PREFIX = "coordinator:" as const;
  * launcher must not turn a missing sandbox into an unsandboxed coordinator.
  */
 export const COORDINATOR_COMMAND_SANDBOX_ENV = "ORKESTRATOR_COORDINATOR_COMMAND_SANDBOX";
+
+/**
+ * The backend's data directory, which holds the operator credentials, every
+ * account's login and the database. A coordinator bridge denies its turns reads
+ * below it, except for the conversation's own runtime and the few directories
+ * it is meant to read (`coordinatorReadBoundary` in the Claude bridge). Only
+ * the launcher's coordinator branch sets it, like the other process authority.
+ */
+export const COORDINATOR_PROTECTED_DATA_DIR_ENV = "ORKESTRATOR_COORDINATOR_PROTECTED_DATA_DIR";
 export type CoordinatorCommandSandbox = "required" | "unavailable";
 
 export function coordinatorCommandSandboxFromEnv(
@@ -147,6 +156,16 @@ export interface CoordinatorConversation {
 export type CoordinatorConversationRole = "main" | "side";
 
 export type CoordinatorTurnOrigin = "user" | "mail";
+
+/**
+ * The per-project setting's name, as Project Settings shows it. The refusal
+ * below repeats it, so what a coordinator tells the user is what they will find.
+ */
+export const COORDINATOR_OTHER_ENVIRONMENTS_SETTING_LABEL =
+  "Let the coordinator use environments it did not create";
+
+/** Why a coordinator was refused an environment it did not create, in words it can pass on. */
+export const COORDINATOR_ENVIRONMENT_ORIGIN_REFUSAL = `Not done: this coordinator did not create that environment, so it may not send it work. Do not retry. Use an environment this coordinator launched, or start a new one. If the user wants this coordinator to work in environments it did not create, tell them to turn on "${COORDINATOR_OTHER_ENVIRONMENTS_SETTING_LABEL}" in this project's settings, under Coordinator.`;
 
 /**
  * The address any agent in a project can mail to reach its coordinator.

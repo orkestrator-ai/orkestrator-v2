@@ -51,6 +51,7 @@ import {
 } from "./coordinator-node-coordinator-mail.js";
 import type { CommandContext } from "./commands-context.js";
 import { asNonBlankString } from "./commands-helpers.js";
+import { assertCoordinatorMayActOnEnvironment } from "./coordinator-environment-scope.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
 import {
   actionHash,
@@ -550,16 +551,41 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
    * as it is here: the coordinator is woken once, when that worker's turn
    * ends, and its report is held until then.
    */
+  // The origin check for a coordinator tool; see `coordinator-environment-scope.ts`.
+  register("assert_coordinator_environment_scope", async (args, context) => {
+    const caller = await identity(args.scope, context);
+    const environmentId = asNonBlankString(args.environmentId, "environmentId");
+    // The tool's own checks answer for a coordinator's own runtime id.
+    if (coordinatorIdFromRuntimeId(environmentId)) return { allowed: true };
+    const nodeId = typeof args.nodeId === "string" ? args.nodeId : undefined;
+    // transfer_files names this node by its own id.
+    const target =
+      nodeId && nodeId !== (await context.nodes?.status())?.nodeId
+        ? await coordinatorNodeTarget(context, caller.projectId, nodeId)
+        : null;
+    // The project home has its own rule, and the tools refuse it by name.
+    const environment = target
+      ? await target.call<unknown>("get_environment", { environmentId })
+      : await context.storage.getEnvironment(environmentId);
+    if (record(environment) && environment.projectHome === true) return { allowed: true };
+    await assertCoordinatorMayActOnEnvironment(context, caller, environmentId, target ?? undefined);
+    return { allowed: true };
+  });
   register("send_coordinator_node_mail", async (args, context) => {
     const caller = await identity(args.scope, context);
     const workspace = await context.storage.coordinators.getCoordinatorWorkspaceById(
       caller.coordinatorId,
     );
-    if (
-      workspace?.conversations.find((item) => item.id === caller.conversationId)?.role === "side"
-    ) {
+    const conversation = workspace?.conversations.find((item) => item.id === caller.conversationId);
+    if (conversation?.role === "side") {
       throw new Error('A side agent can only message the main coordinator. Send to "coordinator".');
     }
+    // An older leaf refuses the unknown key, so only one that says it reads it gets it.
+    const turnOrigin = (target: CoordinatorNodeTarget) =>
+      conversation?.lastTurnOrigin !== "user" &&
+      target.supports(BACKEND_CAPABILITIES.nodeMailTurnOrigin)
+        ? { turnOrigin: "mail" as const }
+        : {};
     const toEnvironmentId = asNonBlankString(args.toEnvironmentId, "toEnvironmentId");
     // Checked before anything happens, then copied to the node before the
     // message exists; a failure on either side means there is no message.
@@ -611,6 +637,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
       if (parent && (parent.from.kind !== "node" || parent.from.nodeId !== target.nodeId))
         throw new Error("Reply parent is not from that node");
       return sendToNodeCoordinator(target, {
+        ...turnOrigin(target),
         // An older node is refused below, naming the address it does not know.
         ...(target.supports(BACKEND_CAPABILITIES.nodeCoordinatorMail)
           ? await pushImages(target, { projectId: target.projectId })
@@ -631,17 +658,17 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
         body: asNonBlankString(args.body, "body"),
       });
     }
+    // Before any image reaches the node: the refusal is the whole answer.
+    const checkedTarget = await coordinatorNodeTarget(
+      context,
+      caller.projectId,
+      asNonBlankString(args.nodeId, "nodeId"),
+    );
+    await checkedTarget.environment(toEnvironmentId);
+    await assertCoordinatorMayActOnEnvironment(context, caller, toEnvironmentId, checkedTarget);
     // Outside the admission lock: a copy takes as long as the link takes.
     const pushed = images.length
-      ? await (async () => {
-          const target = await coordinatorNodeTarget(
-            context,
-            caller.projectId,
-            asNonBlankString(args.nodeId, "nodeId"),
-          );
-          await target.environment(toEnvironmentId);
-          return pushImages(target, { environmentId: toEnvironmentId });
-        })()
+      ? await pushImages(checkedTarget, { environmentId: toEnvironmentId })
       : {};
     return context.storage.withAgentMailWorkerAdmission(
       `node:${args.nodeId}:${toEnvironmentId}`,
@@ -715,6 +742,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
               ...(typeof args.subject === "string" ? { subject: args.subject } : {}),
               body: asNonBlankString(args.body, "body"),
               ...(steer ? { steer: true } : {}),
+              ...turnOrigin(target),
               ...pushed,
             },
             `mail:${caller.coordinatorId}:${requestId}`,
@@ -1189,6 +1217,19 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
     if (!owned && associations.length > 0) {
       throw new Error(
         "Adopt this workflow into the current coordinator conversation before opening it",
+      );
+    }
+    // As on this node: a review with no record here takes the origin check.
+    if (
+      !owned &&
+      (surface === "address" || surface === "custom-fix") &&
+      saved.snapshot.environmentId
+    ) {
+      await assertCoordinatorMayActOnEnvironment(
+        context,
+        caller,
+        saved.snapshot.environmentId,
+        target,
       );
     }
     // Addressing adopts the review so its fix outcome reaches this conversation.

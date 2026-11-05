@@ -548,6 +548,9 @@ export class ControlMcpServer {
       }
       const denied = new Set([
         "update_config",
+        // The project's settings are the user's, the origin check's above all.
+        "update_repository_config",
+        "patch_repository_settings",
         "remove_project",
         "merge_environment_pr",
         // Arming auto-merge is merge authority by another name.

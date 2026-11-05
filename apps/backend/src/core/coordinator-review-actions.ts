@@ -30,6 +30,7 @@ import {
   readLaunchModelCatalog,
   savedLaunchSettings,
 } from "./coordinator-launch-defaults.js";
+import { assertCoordinatorMayActOnEnvironment } from "./coordinator-environment-scope.js";
 import { isProjectHomeEnvironment } from "./project-home-environment.js";
 
 function requestAlias(
@@ -571,6 +572,11 @@ export function registerCoordinatorReviewActions(
       throw new Error(
         "Adopt this workflow into the current coordinator conversation before opening it",
       );
+    // A review with no record here was started in the UI. Addressing it starts
+    // an agent in its environment and adopts it, so it takes the origin check.
+    if (!ownedAssociation && surface === "address" && saved.snapshot.environmentId) {
+      await assertCoordinatorMayActOnEnvironment(context, caller, saved.snapshot.environmentId);
+    }
     const review = { snapshot: saved.snapshot, revision: saved.revision };
     if (reviewer) return runMultiReviewSurface(context, review, surface, undefined, reviewer);
     return runMultiReviewSurface(

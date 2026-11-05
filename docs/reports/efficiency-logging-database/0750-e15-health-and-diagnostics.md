@@ -510,4 +510,4 @@ The `shift()` fix has no real choice: a fixed ring of the same size.
 - [Logging and database report, R11](../2026-10-29-logging-and-database-efficiency.md#r11-export-diagnostics-bundle-m2-l7) and [the metrics findings, M2](../2026-10-29-logging-and-database-efficiency.md#metrics-and-diagnostics-findings)
 - [Report a bug](../../architecture/bug-report.md)
 - [0017 CLI command surface](../../todo/cli-and-slash-commands/0017-cli-command-surface.md), which does not cover this command
-- [0740](0740-e14-docker-logs.md#0740-keep-the-previous-docker-bridge-log-across-a-relaunch), [0820](#0820-persist-a-small-rolling-health-summary)
+- 0740, built in E14: `getContainerServerLog` in `apps/web/src/lib/backend/docker-skills.ts` reads every container server's log and, with `previous`, the run before its last relaunch ([closing check](0000-index.md#closing-check-of-e14-docker-logs)), [0820](#0820-persist-a-small-rolling-health-summary)

@@ -72,7 +72,25 @@ export function createBridgeOutputForwarder(
 ): { push: (chunk: Buffer | string) => void; flush: () => void } {
   // A line cut at the limit can split a token; that is the accepted cost of
   // keeping the buffer bounded.
-  return createBoundedLineSplitter((line) => write(redactBridgeOutput(line)), limit);
+  // Ask the shared rules whether this line ends in an introducer whose value
+  // could arrive on a later line. The probe is never emitted. Keep only a bit
+  // of context, so even arbitrarily many blank lines cannot grow the buffer.
+  const probe = "RedactionContinuationProbe12345678";
+  let awaitingValue = false;
+  return createBoundedLineSplitter((line) => {
+    let redacted = redactBridgeOutput(line);
+    if (awaitingValue) {
+      // A synthetic assignment applies the shared value rules to the next
+      // line without retaining the original diagnostic. This conservatively
+      // uses the assignment rule's six-character minimum for all schemes.
+      const prefix = "password: ";
+      redacted = redactBridgeOutput(prefix + line).slice(prefix.length);
+    }
+    awaitingValue =
+      (awaitingValue && /^\s*$/.test(line)) ||
+      !redactBridgeOutput(`${line}\n${probe}`).endsWith(probe);
+    write(redacted);
+  }, limit);
 }
 
 /**

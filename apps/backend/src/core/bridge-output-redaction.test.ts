@@ -67,6 +67,19 @@ describe("bridge output redaction", () => {
     expect(written).toHaveLength(2);
   });
 
+  test("keeps continuation state bounded across blank lines and flushes a final value", () => {
+    const written: string[] = [];
+    const forward = createBridgeOutputForwarder((text) => written.push(text), 64);
+    forward.push("password:\n");
+    for (let index = 0; index < 1000; index++) forward.push(" ".repeat(65) + "\n");
+    forward.push("opaque-test-canary-12345");
+    forward.flush();
+    forward.flush();
+    expect(written.at(-1)).toBe("[redacted]");
+    expect(written.every((line) => line.length <= 64)).toBe(true);
+    expect(written.join("\n")).not.toContain("opaque-test-canary-12345");
+  });
+
   test("a local bridge's stdout and stderr reach the console without a planted credential", async () => {
     const child = { stdout: new PassThrough(), stderr: new PassThrough() };
     const { output } = await captureOutput(async () => {
@@ -192,6 +205,39 @@ describe("bridge log levels across the hop", () => {
     expect(JSON.stringify(capture.records())).not.toContain("opaque-test-canary-12345");
     expect(capture.lines.join("\n")).not.toContain("opaque-test-canary-12345");
   });
+
+  test.each(["password:", "Bearer"])(
+    "raw %s value on the next line without a final newline",
+    async (introducer) => {
+      capture = captureLogs();
+      await forward((child) => child.stdout.write(`${introducer}\nopaque-test-canary-12345`));
+      expect(capture.lines.join("\n")).not.toContain("opaque-test-canary-12345");
+      expect(capture.lines.join("\n")).toContain("[redacted]");
+    },
+  );
+
+  for (const introducer of ["password:", "OPENAI_API_KEY=", "Bearer", "Basic"]) {
+    for (const ending of ["\n", "\r\n", "\r"]) {
+      for (const chunked of [false, true]) {
+        test(`raw ${introducer} continuation, ${JSON.stringify(ending)}, chunked=${chunked}`, async () => {
+          capture = captureLogs();
+          await forward((child) => {
+            for (const stream of [child.stdout, child.stderr]) {
+              const wire = `${introducer}${ending}opaqueTestCanary12345${ending}safe diagnostic${ending}`;
+              if (chunked) {
+                for (const byte of Buffer.from(wire)) stream.write(Buffer.from([byte]));
+              } else {
+                stream.write(wire);
+              }
+            }
+          });
+          expect(capture.lines.join("\n")).not.toContain("opaqueTestCanary12345");
+          expect(capture.lines.join("\n")).toContain("[redacted]");
+          expect(capture.lines.join("\n")).toContain("safe diagnostic");
+        });
+      }
+    }
+  }
 
   test("redacts decoded formatted error strings, stack frames and nested causes", async () => {
     capture = captureLogs();

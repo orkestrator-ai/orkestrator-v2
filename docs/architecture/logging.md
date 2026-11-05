@@ -985,7 +985,11 @@ flowchart LR
   OpenCode runs its own server and receives no relay flag, including an inherited one.
   A bridge whose output nobody reads as records (one started by hand, or a model
   catalogue probe) stays on the format its environment asks for.
-- **Redaction runs before and after decoding.** Raw output is scrubbed per chunk.
+- **Redaction runs before and after decoding.** Raw output is scrubbed per bounded
+  line. A constant-size continuation flag carries a pending credential introducer (such as `password:` or `Bearer`)
+  across line endings and blank lines. The next value is scrubbed using the
+  shared assignment rule, conservatively including values of six or seven
+  characters after an auth scheme.
   Recognized records then have every decoded string scrubbed, including formatted
   errors, stack frames and causes, because JSON escaping can hide credential syntax.
   If the raw pass breaks a record's JSON, the line is kept as plain output.

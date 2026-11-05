@@ -2,7 +2,7 @@
 
 ## Task analysis
 
-Analysed 2026-11-05 against `main` at `69a3b4ca5`, plus the E9 build (efficiency report batch file `0110-e9-transcript-reads.md`, read it with `git show 69a3b4ca5:docs/reports/efficiency-logging-database/0110-e9-transcript-reads.md`).
+Analysed 2026-11-05 against `main` at `69a3b4ca5`, plus the E9 build. The E9 batch file is deleted; read it as built from with `git show 69a3b4ca5:docs/reports/efficiency-logging-database/0110-e9-transcript-reads.md`, or with its outcome table at `1fcae2160`.
 
 ### Tasks
 

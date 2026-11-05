@@ -220,6 +220,15 @@ writer placed first has its fence renewed at the rename.
 Still on the event loop: `confinedRead` and two SHA-1 passes over a large file
 (about 5 to 7 ms each at 16 MiB), and the JSON work on a large manifest.
 
+Evidence bodies (`EvidenceBodyStore.put`) follow the same rules without a
+batch, because ingestion stores bodies one at a time: the temporary is synced
+before its rename and the fan-out directory (and any parent `mkdir` created)
+after it, both awaited off the event loop, before `put` resolves. Only then does
+ingestion commit the ledger row and acknowledge, which lets the bridge release
+its copy. Directory syncs are store-wide, so concurrent puts share one, and
+adopting a body whose directory sync is pending or failed waits for, or retries,
+that sync. A failed sync rejects the put, so the frame is not acknowledged.
+
 ## Manifest cache
 
 `readManifest` reads through `ObjectStore.manifests`: one LRU per store of parsed
@@ -244,7 +253,9 @@ first capture. `findManifestEntry` binary-searches on that order for diff pages
 and restore; UTF-16 string order differs for astral paths. The whitespace-ignore
 view renders each file once, with `ignoreWhitespace` passed to
 `renderSnapshotBodies`, so when a diff limit is reached the file names the limit
-of the diff it actually shows.
+of the diff it actually shows. It renders the whole page in one call, as the
+normal view does, so the page's `maxBatchBytes` bounds both views and later
+files on a large page show `changes.body.batch-limit`.
 
 ## Evidence pipeline
 

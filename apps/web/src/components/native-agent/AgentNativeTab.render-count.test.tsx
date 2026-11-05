@@ -5,7 +5,9 @@
  * write to anything else must not render them. These tests count React commits
  * under the tab with a transcript on screen, then pin the reads that a launch
  * depends on: those used to be refreshed by every write to the record, so each
- * case below also covers a field arriving after the tab mounted.
+ * case below also covers a field arriving after the tab mounted. The opening
+ * prompt cases also pin when its effect re-runs: not on a render that changes
+ * none of the send's inputs, but once each refusal that holds it is released.
  */
 import { afterAll, afterEach, beforeEach, expect, mock, test } from "bun:test";
 import { Profiler } from "react";
@@ -27,6 +29,8 @@ import { useNativeComposeStore } from "@/stores/nativeComposeStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { createSessionKey } from "@/lib/utils";
 import type { Environment } from "@/types";
+import { tabInitialPromptRequestId } from "@/lib/tab-initial-prompt";
+import type { AgentNativeTabProps } from "./adapter";
 
 const realBackendSnapshot = { ...realBackend };
 const realVirtualizedMessageListSnapshot = { ...realVirtualizedMessageList };
@@ -108,6 +112,10 @@ const ensureMock = mock(async (_input: Record<string, unknown>) => {
 const getLocalFileTreeMock = mock(async (_worktreePath: string) => [
   { name: "image.png", path: "src/image.png", isDirectory: false },
 ]);
+/** Queue items the session state carries; empty for every case but one. */
+let queuedItems: Array<{ id: string; text: string }> = [];
+const removeQueuedMock = mock(async (..._args: unknown[]) => {});
+const runUserCommandMock = mock(async (_input: Record<string, unknown>) => ({}));
 
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
@@ -158,6 +166,7 @@ mock.module("@/lib/backend", () => ({
         },
         capabilities: nativeAgentCapabilities(identity.platform),
         notices: [],
+        ...(queuedItems.length > 0 ? { queue: { items: queuedItems } } : {}),
       },
     }) satisfies NativeAgentSessionStateUpdate,
   getNativeAgentDiscoveryUpdate: async () => ({
@@ -177,6 +186,9 @@ mock.module("@/lib/backend", () => ({
   listNativeAgentResumableSessions: async () => [],
   getFileTree: async () => [],
   getLocalFileTree: getLocalFileTreeMock,
+  removePromptQueueMessage: removeQueuedMock,
+  runUserCommand: runUserCommandMock,
+  listUserCommands: async () => ({ commands: [] }),
 }));
 
 const { AgentNativeTab } = await import("./AgentNativeTab");
@@ -244,7 +256,10 @@ beforeEach(() => {
   identity = identityFor(OWN_TAB);
   served = transcript;
   ensureGate = undefined;
+  queuedItems = [];
   resetNativeAgentSyncCapabilityForTests();
+  removeQueuedMock.mockReset();
+  runUserCommandMock.mockReset();
   dispatchMock.mockClear();
   ensureMock.mockClear();
   getLocalFileTreeMock.mockClear();
@@ -286,6 +301,7 @@ async function renderTab(
   tabId: string,
   data: NativeAgentTabData,
   initialPrompt?: string,
+  props: Pick<AgentNativeTabProps, "beforeSend"> = {},
 ): Promise<(next: string | undefined) => void> {
   identity = identityFor(tabId);
   const tree = (prompt: string | undefined) => (
@@ -295,7 +311,7 @@ async function renderTab(
         commits += 1;
       }}
     >
-      <AgentNativeTab tabId={tabId} data={data} initialPrompt={prompt} isActive />
+      <AgentNativeTab tabId={tabId} data={data} initialPrompt={prompt} isActive {...props} />
     </Profiler>
   );
   const { rerender } = render(tree(initialPrompt));
@@ -583,6 +599,111 @@ test("a tab's own opening prompt is sent once, whatever writes surround it", asy
   await settle();
 
   expect(dispatchedRequestIds()).toEqual([requestId!]);
+});
+
+test("a render that changes none of the send's inputs does not re-run the opening-prompt effect", async () => {
+  served = [];
+  holdSessionCreation();
+  // A backend-owned launch clears the tab's prompt each time the effect runs;
+  // the mock leaves the prop in place, so every re-run is counted.
+  useEnvironmentStore.setState({
+    environments: [environment({ startupAgentSession: startupSession({ status: "running" }) })],
+  });
+  await renderTab(STARTUP_TAB, freshTab, LAUNCH_PROMPT);
+  const runs = clearTabInitialPromptMock.mock.calls.length;
+  expect(runs).toBeGreaterThan(0);
+
+  await writeEnvironment({ worktreePath: "/workspace/two" });
+  await settle();
+  expect(commits).toBeGreaterThan(0);
+
+  expect(clearTabInitialPromptMock).toHaveBeenCalledTimes(runs);
+});
+
+/** Puts text in the tab's draft and presses Enter in its composer. */
+async function sendFromComposer(tabId: string, text: string): Promise<void> {
+  await act(async () => {
+    useNativeComposeStore.getState().updateDraft(createSessionKey("env-1", tabId), { text });
+  });
+  await act(async () => {
+    fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
+  });
+}
+
+function deferred(): {
+  promise: Promise<void>;
+  resolve: () => void;
+  reject: (error: Error) => void;
+} {
+  let resolve!: () => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<void>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+const openingRequestId = tabInitialPromptRequestId("env-1", OWN_TAB);
+
+/** The opening prompt arrives while a refusal holds, then waits for its release. */
+async function expectOpeningPromptWaitsFor(
+  setInitialPrompt: (next: string | undefined) => void,
+  release: () => void,
+): Promise<void> {
+  await act(async () => setInitialPrompt(LAUNCH_PROMPT));
+  await settle();
+  expect(dispatchedRequestIds()).not.toContain(openingRequestId);
+
+  await act(async () => release());
+  await waitFor(() => expect(dispatchedRequestIds()).toContain(openingRequestId));
+  await settle();
+  expect(dispatchedRequestIds().filter((id) => id === openingRequestId)).toHaveLength(1);
+}
+
+test("an opening prompt refused during a pre-send check is sent once the check ends", async () => {
+  const check = deferred();
+  const beforeSend = mock(async () => {
+    await check.promise;
+    return false;
+  });
+  const setInitialPrompt = await renderTab(OWN_TAB, lockedTab, undefined, { beforeSend });
+  await sendFromComposer(OWN_TAB, "Typed while the opening prompt arrives");
+  await waitFor(() => expect(beforeSend).toHaveBeenCalledTimes(1));
+
+  await expectOpeningPromptWaitsFor(setInitialPrompt, () => check.resolve());
+});
+
+test("an opening prompt refused during another send is sent once that send ends", async () => {
+  const command = deferred();
+  runUserCommandMock.mockImplementation(async () => {
+    await command.promise;
+    return {};
+  });
+  const setInitialPrompt = await renderTab(OWN_TAB, lockedTab);
+  await sendFromComposer(OWN_TAB, "!ls");
+  await waitFor(() => expect(runUserCommandMock).toHaveBeenCalledTimes(1));
+
+  await expectOpeningPromptWaitsFor(setInitialPrompt, () =>
+    command.reject(new Error("command refused")),
+  );
+});
+
+test("an opening prompt refused during a queue edit is sent once the edit ends", async () => {
+  queuedItems = [{ id: "queued-1", text: "Queued task" }];
+  const removal = deferred();
+  removeQueuedMock.mockImplementation(async () => {
+    await removal.promise;
+  });
+  const setInitialPrompt = await renderTab(OWN_TAB, lockedTab);
+  await act(async () => {
+    fireEvent.click(await screen.findByRole("button", { name: "Edit queued prompt 1 of 1" }));
+  });
+  await waitFor(() => expect(removeQueuedMock).toHaveBeenCalledTimes(1));
+
+  await expectOpeningPromptWaitsFor(setInitialPrompt, () =>
+    removal.reject(new Error("queue unavailable")),
+  );
 });
 
 test("launch fields belong to the startup tab, so another tab still sends its own prompt", async () => {

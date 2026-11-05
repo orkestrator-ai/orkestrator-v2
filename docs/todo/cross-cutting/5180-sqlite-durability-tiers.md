@@ -16,7 +16,7 @@ Analysed 2026-11-05 against `main` at `69a3b4ca5`. Carried from part `0920` of t
 
 **Context.** E5 moved the change-tracking ledger into its own file, `change-tracking.sqlite` (storage migration 7, `change-tracking/ledger-schema.ts`), with its own connection and the same settings as the main file: WAL, `synchronous = FULL`, `secure_delete = ON` (`StorageDatabase`'s constructor, `storage-database.ts`). So the two files can now be tiered independently without any further move. Durability changes need the maintainer's sign-off (1202, "Constraints and rationale").
 
-**Investigation.** Nothing counts commits or fsyncs today; [0810](../../reports/efficiency-logging-database/0750-e15-health-and-diagnostics.md#0810-database-observability) adds lease and transaction waits. The measurement-rows workload (`scripts/benchmark-change-tracking.ts`) runs with `durable: false`, so it cannot stand in for real fsyncs; a busy real session needs a real provider turn, which a build may not run. 1202 task 1 owns baseline numbers.
+**Investigation.** Nothing counts commits or fsyncs today; lease waits and `SQLITE_BUSY` counts now exist ([storage](../../architecture/storage.md#size-waits-and-what-fills-the-file)), but commits are not timed. The measurement-rows workload (`scripts/benchmark-change-tracking.ts`) runs with `durable: false`, so it cannot stand in for real fsyncs; a busy real session needs a real provider turn, which a build may not run. 1202 task 1 owns baseline numbers.
 
 **Decisions.**
 

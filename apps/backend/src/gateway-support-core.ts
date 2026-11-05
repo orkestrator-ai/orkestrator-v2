@@ -1,3 +1,4 @@
+import type { DatabaseStats } from "@orkestrator/protocol/backend-diagnostics";
 import { mkdir, open, readFile, rename, rm, writeFile } from "node:fs/promises";
 import {
   type IncomingHttpHeaders,
@@ -39,6 +40,10 @@ export type BackendInvoker = {
    * such as during shutdown.
    */
   hasCommand?(command: string): boolean;
+  /** The database figures `/metrics` reports; absent from a backend with no database. */
+  databaseStats?(): DatabaseStats;
+  /** Lets the backend's diagnostics read the same snapshot `/metrics` answers. */
+  attachGatewayMetrics?(source: () => unknown): void;
 };
 
 export type NetworkInterfaceMap = NodeJS.Dict<NetworkInterfaceInfo[]>;
@@ -146,6 +151,11 @@ export interface OrkestratorGatewayOptions {
   allowedOrigins?: string[];
   compression?: GatewayCompressionMode;
   keepaliveMs?: number;
+  /** Optional traffic clock/scheduler, for deterministic burst attribution tests. */
+  trafficSummary?: Pick<
+    import("./gateway-traffic-summary.js").GatewayTrafficSummaryOptions,
+    "now" | "schedule"
+  >;
   proxyBodyIdleTimeoutMs?: number;
   /** Legacy browser-preview connect+headers deadline (default 30 s). */
   browserPreviewHeadersTimeoutMs?: number;

@@ -24,7 +24,7 @@ Analysed 2026-11-04 against `main` at `e198fd4a7`, with the E2 change applied.
 - **What decides that the soak passed?**
   - **Row count and file size per owner against the bound, over a run long enough for the hourly pass (recommended).**
     - Pros: the bound is two measurements per owner and scope times 2,000 rows, so a miss points at a specific owner; no dependency on one machine's history.
-    - Cons: needs `dbstat` or a row query during the run, which [0810](../../reports/efficiency-logging-database/0750-e15-health-and-diagnostics.md) has not built yet.
+    - Cons: needs `dbstat` or a row query during the run. The backup child now samples `dbstat` on each copy ([storage](../../architecture/storage.md#size-waits-and-what-fills-the-file)), at most hourly, by table rather than by owner.
   - **The report's whole-database target of under 100 MB.**
     - Pros: simple, and it is the number the report promised.
     - Cons: other tables and an existing file that only reuses its free pages can hide the result.

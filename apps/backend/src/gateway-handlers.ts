@@ -27,6 +27,7 @@ import {
   MAX_CLIENT_METRICS_BODY_BYTES,
   METRIC_UNKNOWN_COMMAND_KEY,
   METRIC_KEEPALIVE_KEY,
+  normalizeMetricLabel,
   InvalidRequestBodyError,
   RequestBodyTooLargeError,
   sanitizeClientBootReport,
@@ -47,9 +48,8 @@ import type {
   GatewayEventClient,
 } from "./gateway-internals.js";
 import { compatibilityPathUsage } from "./core/compatibility-path-usage.js";
-import { recurringWorkDiagnostics } from "./core/recurring-diagnostics.js";
-import { boundedConsoleStats } from "./bounded-console.js";
-import { eventLoopDiagnostics } from "@orkestrator/protocol/event-loop-stall-monitor";
+import { isSpliceableResult, spliceEncodedJson } from "./core/native-agent-projection-encoding.js";
+import { backendMetricsSnapshot } from "./core/backend-metrics.js";
 
 const KEEPALIVE_EVENT_FRAME = `event: ${GATEWAY_KEEPALIVE_EVENT}\ndata: 1\n\n`;
 
@@ -139,6 +139,13 @@ export class GatewayHandlers {
         ? (args as Record<string, unknown>)
         : {};
     const startedAt = Date.now();
+    // Attribute work to its arrival window, even if it outlives the burst.
+    // Without registry evidence, retain only the reserved unknown label.
+    this.ctx.traffic.noteInvoke(
+      normalizeMetricLabel(
+        this.ctx.backend.hasCommand?.(command) ? command : METRIC_UNKNOWN_COMMAND_KEY,
+      ),
+    );
 
     try {
       const result = await this.ctx.backend.invoke(
@@ -147,7 +154,11 @@ export class GatewayHandlers {
           ? withRelayController(safeArgs, options.controllerId)
           : safeArgs,
       );
-      const responseBody = JSON.stringify({ result });
+      // A transcript answer's rows were each encoded already to size and hash
+      // them; splice those encodings in rather than serializing them again.
+      const responseBody = isSpliceableResult(result)
+        ? `{"result":${spliceEncodedJson(result)}}`
+        : JSON.stringify({ result });
       this.ctx.metrics.recordInvoke(
         command,
         requestBytes,
@@ -364,8 +375,13 @@ export class GatewayHandlers {
       response.end();
       return;
     }
+    jsonResponse(response, 200, this.metricsSnapshot());
+  }
+
+  /** What `/metrics` answers, also read in-process by the diagnostics bundle. */
+  metricsSnapshot() {
     const snapshot = this.ctx.metrics.snapshot();
-    jsonResponse(response, 200, {
+    return {
       ...snapshot,
       // Ring occupancy and eviction are otherwise invisible: a ring dropping
       // every gap looks exactly like one that never needed to retain anything.
@@ -374,15 +390,8 @@ export class GatewayHandlers {
         ring: this.ctx.eventReplay.getStats(),
         relayedRing: this.ctx.relayedEventReplay.getStats(),
       },
-      // Additive: bounded, content-free recurring-work counters (kinds only).
-      recurringWork: recurringWorkDiagnostics(),
-      // Additive: content-free mixed-version compatibility-path usage.
-      compatibilityPaths: compatibilityPathUsage.snapshot().paths,
-      // Additive: event-loop stalls and console lines dropped while the log
-      // reader was not draining (null outside the backend entrypoint).
-      eventLoop: eventLoopDiagnostics(),
-      consoleOutput: boundedConsoleStats(),
-    });
+      ...backendMetricsSnapshot(this.ctx.backend.databaseStats?.() ?? null),
+    };
   }
 
   async handleClientMetrics(

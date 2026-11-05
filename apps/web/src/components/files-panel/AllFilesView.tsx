@@ -48,6 +48,7 @@ interface AllFilesViewProps {
   onReveal?: (path: string) => void;
   onRevert?: (path: string) => void;
   onDelete?: (paths: string[]) => void;
+  onDeleteFolder?: (path: string) => void;
   onMove?: (sourcePaths: string[], destinationDirectory: string) => void;
   onCopyFiles?: (files: File[], destinationDirectory: string) => void;
   onCreateFolder?: (parentDirectory: string, folderName: string) => Promise<string>;
@@ -84,6 +85,7 @@ export function AllFilesView({
   onReveal,
   onRevert,
   onDelete,
+  onDeleteFolder,
   onMove,
   onCopyFiles,
   onCreateFolder,
@@ -341,6 +343,7 @@ export function AllFilesView({
             onContextSelect={handleContextSelect}
             onRevert={onRevert}
             onDelete={onDelete}
+            onDeleteFolder={onDeleteFolder}
             onMove={onMove}
             onCopyFiles={onCopyFiles}
             onRequestMove={onMove ? setMoveSourcePaths : undefined}

@@ -5,6 +5,7 @@ import {
   type NativeAgentCapabilities,
   type NativeAgentTabData,
 } from "@orkestrator/protocol/native-agent";
+import type { AgentPlatformBadge } from "@/components/chat/AgentModelPicker";
 
 export interface AgentNativeTabProps {
   tabId: string;
@@ -70,6 +71,8 @@ export interface AgentNativeTabProps {
    * than discovered when a delegated worker never reports back.
    */
   platformNotes?: Partial<Record<AgentPlatform, string>>;
+  /** A named property per platform for the same picker, such as a read-only tier. */
+  platformBadges?: Partial<Record<AgentPlatform, AgentPlatformBadge>>;
   unassignedPlaceholder?: string;
   /** Composer copy shared by assigned and unassigned conversations. */
   composerPlaceholder?: string;
@@ -85,6 +88,13 @@ export interface AgentNativeTabProps {
   emptyPlatformsAction?: ReactNode;
   /** Example requests the unassigned composer offers while it is empty. */
   unassignedStarterPrompts?: readonly string[];
+  /** An explanation shown above the unassigned composer, such as a first-run card. */
+  unassignedIntro?: ReactNode;
+  /**
+   * A short line under the composer, assigned or not: what this conversation
+   * can do, or a way of using the composer nothing else on screen mentions.
+   */
+  composerHint?: ReactNode;
   /** Open the shared resume dialog as soon as the controller mounts. */
   initialResumeOpen?: boolean;
 }

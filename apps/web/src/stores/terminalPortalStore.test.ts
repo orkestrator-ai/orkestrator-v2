@@ -111,6 +111,9 @@ describe("terminal creation and lookup", () => {
       DEFAULT_TERMINAL_APPEARANCE.backgroundColor,
     );
     expect(data.terminal.options.scrollback).toBe(DEFAULT_TERMINAL_SCROLLBACK);
+    // Without it, macOS has no way to select text under tmux `mouse on`.
+    expect(data.terminal.options.macOptionClickForcesSelection).toBe(true);
+    expect(data.terminal.options.altClickMovesCursor).toBe(false);
     expect(data.fitAddon).toBeDefined();
     expect(data.serializeAddon).toBeDefined();
     expect(data.webLinksAddon).toBeDefined();

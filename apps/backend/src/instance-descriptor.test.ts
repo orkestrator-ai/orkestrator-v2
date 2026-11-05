@@ -121,6 +121,15 @@ describe("instance descriptor endpoints", () => {
       JSON.parse(await fs.readFile(instanceDescriptorPath(dataDir), "utf8")),
     );
     expect(stored.endpoints).toEqual(endpoints);
+    if (process.platform === "linux") {
+      const boot = (await fs.readFile("/proc/sys/kernel/random/boot_id", "utf8")).trim();
+      const stat = await fs.readFile("/proc/self/stat", "utf8");
+      const ticks = stat
+        .slice(stat.lastIndexOf(")") + 2)
+        .split(" ")
+        .at(19);
+      expect(stored.processIdentity).toBe(`${boot}:${ticks}`);
+    }
     await remove();
   });
 });
@@ -223,4 +232,16 @@ describe("liveInstanceIn", () => {
       if (child.exitCode === null && child.signalCode === null) child.kill();
     }
   });
+});
+
+test("preserves bounded Linux identity and rejects invalid field types", () => {
+  const processIdentity = "11111111-1111-1111-1111-111111111111:12345";
+  expect(parseBackendInstanceDescriptor({ ...base, processIdentity }).processIdentity).toBe(
+    processIdentity,
+  );
+  for (const value of [null, 42, "", "x".repeat(129)]) {
+    expect(() => parseBackendInstanceDescriptor({ ...base, processIdentity: value })).toThrow(
+      "processIdentity",
+    );
+  }
 });

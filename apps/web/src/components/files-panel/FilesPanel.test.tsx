@@ -7,6 +7,12 @@ import { mockToastError } from "../../../../../tests/mocks/sonner";
 import type { Environment, Project } from "@/types";
 
 const originalBackend = { ...realBackend };
+const deleteLocalFile = mock<(id: string, path: string) => Promise<string>>(
+  async (_id, path) => path,
+);
+const folderTree = [{ name: "docs", path: "docs", isDirectory: true, children: [] }];
+let remainingTree = folderTree;
+
 let rejectHome: (error: Error) => void;
 let resolveHome: (home: Environment) => void;
 const ensureHome = mock(
@@ -19,12 +25,22 @@ const ensureHome = mock(
 mock.module("@/lib/backend", () => ({
   ...originalBackend,
   ensureProjectHomeEnvironment: ensureHome,
+  deleteLocalFile,
+  getLocalFileTreeSnapshot: async () => ({
+    unchanged: false,
+    digest: JSON.stringify(remainingTree),
+    value: remainingTree,
+  }),
+  getLocalGitStatusSnapshot: async () => ({ unchanged: false, digest: "[]", value: [] }),
 }));
 const { FilesPanel } = await import("./FilesPanel");
 const { resetReadCoordinatorForTests } = await import("@/lib/read-coordinator");
 
 beforeEach(() => {
   ensureHome.mockClear();
+  deleteLocalFile.mockClear();
+  deleteLocalFile.mockImplementation(async (_id, path) => path);
+  remainingTree = folderTree;
   mockToastError.mockClear();
   useProjectStore.setState({ projects: [{ id: "project-1", localPath: "/checkout" } as Project] });
   useUIStore.setState({ selectedEnvironmentId: null, selectedProjectId: "project-1" });
@@ -164,3 +180,51 @@ test("a failed board file open strips Electron's invoke prefix from its toast", 
   expect(useUIStore.getState().selectedEnvironmentId).toBeNull();
   expect(useFilesPanelStore.getState().pendingFileOpens).toEqual([]);
 });
+
+for (const fails of [false, true]) {
+  test(`Delete folder runs the real menu/dialog/hook flow and ${fails ? "retains the failed action for retry" : "closes on success"}`, async () => {
+    const environment = {
+      id: "env-folder",
+      projectId: "project-1",
+      environmentType: "local",
+      worktreePath: "/checkout",
+      status: "running",
+    } as Environment;
+    useEnvironmentStore.setState({ environments: [environment] });
+    useUIStore.setState({ selectedEnvironmentId: environment.id });
+    render(
+      <TerminalProvider>
+        <FilesPanel />
+      </TerminalProvider>,
+    );
+    act(() => useFilesPanelStore.setState({ fileTree: folderTree, expandedFolders: ["docs"] }));
+    fireEvent.contextMenu(screen.getByRole("button", { name: "docs" }));
+    fireEvent.click(await screen.findByText("Delete folder"));
+    expect(await screen.findByRole("alertdialog")).toBeTruthy();
+    expect(screen.getByText("Delete folder?")).toBeTruthy();
+    if (fails)
+      deleteLocalFile.mockRejectedValueOnce(
+        new Error("Cannot delete docs: nested Git repository at docs/vendor"),
+      );
+    else remainingTree = [];
+    fireEvent.click(screen.getByRole("button", { name: /^Delete folder$/ }));
+    await waitFor(() => expect(deleteLocalFile).toHaveBeenCalledWith("env-folder", "docs"));
+    if (fails) {
+      await waitFor(() =>
+        expect(mockToastError).toHaveBeenCalledWith("Failed to delete folder", {
+          description: "Cannot delete docs: nested Git repository at docs/vendor",
+        }),
+      );
+      expect(screen.getByRole("alertdialog")).toBeTruthy();
+      expect(screen.getByRole("button", { name: /^Delete folder$/ }).hasAttribute("disabled")).toBe(
+        false,
+      );
+      remainingTree = [];
+      fireEvent.click(screen.getByRole("button", { name: /^Delete folder$/ }));
+    }
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(useFilesPanelStore.getState().expandedFolders).not.toContain("docs");
+    expect(useFilesPanelStore.getState().fileTree).toEqual([]);
+    expect(deleteLocalFile).toHaveBeenCalledTimes(fails ? 2 : 1);
+  });
+}

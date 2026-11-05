@@ -32,6 +32,8 @@ export const GATEWAY_LOG_AREAS = defineLogAreas({
       "events.client-dropped":
         "An event-stream client buffered too much and was dropped; it reconnects and refetches.",
       "proxy.client-disconnected": "A proxy client went away, so its upstream request was aborted.",
+      "traffic.burst":
+        "Connections or requests spiked. Counts by source address, route class, client family, listener and registered invoke command; never request content.",
       "throttle.suppressed":
         "Repeats of the throttled `site` were counted over a window, not written.",
       "throttle.recovered": "The throttled `site` succeeded again, so its fault has cleared.",

@@ -12,6 +12,7 @@ import {
   KEEP_HOURLY,
   MAX_BACKUP_AGE_MS,
   MAX_BACKUP_FAILURE_BACKOFF_MS,
+  MAX_TOP_TABLES,
   MIN_FREE_BYTES_AFTER_BACKUP,
   STALE_TEMPORARY_MS,
   copyDatabaseInChildProcess,
@@ -19,6 +20,7 @@ import {
   failureBackoffMs,
   listStorageSnapshots,
   purgeStorageSnapshots,
+  readTopTables,
   removeStaleBackupTemporaries,
   requiredFreeBytes,
   retainedHourlySnapshots,
@@ -26,6 +28,7 @@ import {
   type StorageSnapshot,
 } from "./storage-backups.js";
 import { STORAGE_DATABASE_FILE, StorageDatabase } from "./storage-database.js";
+import { HEALTH_SUMMARY_STORE } from "./health-summary-layout.js";
 import { openBackendDatabase, storeLayout } from "./storage-stores.js";
 
 const BACKOFF_FILE = ".hourly-backoff.json";
@@ -507,5 +510,67 @@ describe("database snapshots", () => {
     const directory = await dataDir();
     backend(directory);
     expect(listStorageSnapshots(directory)).toEqual([]);
+  });
+});
+
+describe("top tables from the backup child", () => {
+  test("Bun's SQLite has dbstat, so a finished copy is sized by table", async () => {
+    const directory = await dataDir();
+    const database = backend(directory);
+    database.writeStore("kanban", [{ id: "t1", projectId: "p1", title: "x".repeat(20_000) }]);
+
+    const file = await takeHourlySnapshotIfDue(database, directory);
+    expect(file).not.toBeNull();
+
+    const { main, ledger } = readTopTables(directory);
+    expect(ledger).toBeUndefined();
+    expect(Date.parse(main!.takenAt)).toBeGreaterThan(0);
+    expect(main!.tables.length).toBeGreaterThan(0);
+    expect(main!.tables.length).toBeLessThanOrEqual(MAX_TOP_TABLES);
+    expect(main!.tables[0]).toEqual({ name: "store_rows", bytes: expect.any(Number) });
+    // Names and sizes only: no keys, no values.
+    expect(JSON.stringify(main)).not.toContain("xxxx");
+    expect(JSON.stringify(main)).not.toContain("t1");
+  });
+
+  test("the scan runs on the copy, so the live file is not read for it", async () => {
+    const directory = await dataDir();
+    const database = backend(directory);
+    database.writeStore("kanban", [{ id: "t1", projectId: "p1" }]);
+    const source = path.join(directory, STORAGE_DATABASE_FILE);
+    const target = path.join(directory, "copy.sqlite");
+    let tables: Array<{ name: string; bytes: number }> | null = null;
+
+    await expect(
+      copyDatabaseInChildProcess(source, target, {
+        onTopTables: (value) => {
+          tables = value;
+        },
+      }),
+    ).resolves.toBe(true);
+
+    expect(tables).not.toBeNull();
+    // The helper reads dbstat from `copy`, the connection on the target.
+    const helper = await fs.readFile(new URL("./storage-backups.ts", import.meta.url), "utf8");
+    expect(helper).toMatch(/copy\s*\.query\(\s*"SELECT name, SUM\(pgsize\)/);
+    expect(helper.match(/FROM dbstat/g)).toHaveLength(1);
+  });
+
+  test("a replaced health row alone does not take another hourly copy", async () => {
+    const directory = await dataDir();
+    const database = backend(directory);
+    database.writeStore("kanban", [{ id: "t1", projectId: "p1" }]);
+    let now = Date.parse("2026-11-05T10:00:00.000Z");
+    const clock = () => now;
+    expect(await takeHourlySnapshotIfDue(database, directory, clock)).not.toBeNull();
+
+    database.transaction(() => {
+      database.rows(HEALTH_SUMMARY_STORE).put("row", JSON.stringify({ kind: "sample" }));
+    });
+    now += HOURLY_INTERVAL_MS + 1;
+    expect(await takeHourlySnapshotIfDue(database, directory, clock)).toBeNull();
+
+    database.writeStore("kanban", [{ id: "t2", projectId: "p1" }]);
+    expect(await takeHourlySnapshotIfDue(database, directory, clock)).not.toBeNull();
   });
 });

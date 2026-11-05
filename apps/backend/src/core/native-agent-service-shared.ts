@@ -607,8 +607,15 @@ export interface NativeAgentServiceOptions {
   toolDetailCacheMaxEntries?: number;
   /** Test seam for exercising deterministic detail-cache byte eviction. */
   toolDetailCacheMaxBytes?: number;
+  /** Test seam for the per-part detail-reference memo; `maxEntries: 0` disables it. */
+  toolDetailMemoLimits?: Partial<import("./native-agent-tool-detail-memo.js").ToolDetailMemoLimits>;
   /** Test seam for projected-row reuse bounds; `maxEntries: 0` disables reuse. */
   projectedMessageCacheLimits?: Partial<ProjectedMessageCacheLimits>;
+  /**
+   * Least time between two exact head-row recovery reads of one transcript
+   * view (`PROGRESSIVE_HYDRATION_SETTLE_MS`). Test seam.
+   */
+  progressiveHydrationSettleMs?: number;
   /** Test seam for direct history page cache bounds; `ttlMs: 0` disables it. */
   directHistoryPageCacheLimits?: Partial<DirectHistoryPageCacheLimits>;
   /** Test seam for the obsolete-provider disposal grace period. */

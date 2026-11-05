@@ -239,6 +239,8 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
 
     await waitFor(() => expect(startInteractiveTerminalMock).toHaveBeenCalledWith("pty-1"));
 
+    expect(terminalInstances[0]!.options.macOptionClickForcesSelection).toBe(true);
+    expect(terminalInstances[0]!.options.altClickMovesCursor).toBe(false);
     expect(createInteractiveTerminalMock).toHaveBeenCalledWith("tab-1", 120, 30, environmentId);
     expect(listenMock.mock.calls[0]?.[0]).toBe("terminal-output-pty-1");
     expect(resizeInteractiveTerminalMock).toHaveBeenCalledWith("pty-1", 120, 30);

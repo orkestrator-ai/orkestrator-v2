@@ -13,7 +13,7 @@ let commands: UserCommandRecord[];
 let prompts: HumanPromptEntry[];
 let readCommands: () => Promise<{ commands: UserCommandRecord[] }>;
 let readPrompts: () => Promise<{ prompts: HumanPromptEntry[] }>;
-let calls: string[];
+let calls: Array<{ command: string; args: unknown }>;
 let restore: Array<() => void>;
 let connected: () => unknown;
 let resync: (request: sync.ResourceResyncRequest) => unknown;
@@ -30,8 +30,11 @@ beforeEach(() => {
   prompts = [{ id: "old", environmentId: "env", tabId: "tab" } as HumanPromptEntry];
   readCommands = async () => ({ commands });
   readPrompts = async () => ({ prompts });
-  const invoke = spyOn(native, "invoke").mockImplementation((async (command: string) => {
-    calls.push(command);
+  const invoke = spyOn(native, "invoke").mockImplementation((async (
+    command: string,
+    args: unknown,
+  ) => {
+    calls.push({ command, args });
     if (command === "list_user_commands") return readCommands();
     if (command === "list_human_prompts") return readPrompts();
     throw new Error(command);
@@ -136,7 +139,7 @@ test("the running-command poll stops while hidden and reads again on return", as
   commands = [{ id: "running", status: "running" } as UserCommandRecord];
   renderHook(() => useUserCommands("env", "tab"));
   await flush();
-  const reads = () => calls.filter((call) => call === "list_user_commands").length;
+  const reads = () => calls.filter((call) => call.command === "list_user_commands").length;
   const afterMount = reads();
 
   await act(async () => clock.advance(3_000));
@@ -151,4 +154,27 @@ test("the running-command poll stops while hidden and reads again on return", as
   expect(reads()).toBe(afterMount + 2);
   cleanup();
   resetReadCoordinatorForTests();
+});
+
+test("refresh keeps its identity across renders and reads for the current tab", async () => {
+  const view = renderHook(({ tabId }) => useUserCommands("env", tabId), {
+    initialProps: { tabId: "tab" },
+  });
+  await flush();
+  const refresh = view.result.current.refresh;
+
+  view.rerender({ tabId: "tab" });
+  await flush();
+  expect(view.result.current.refresh).toBe(refresh);
+
+  view.rerender({ tabId: "other" });
+  await flush();
+  expect(view.result.current.refresh).toBe(refresh);
+  const count = calls.length;
+  act(() => refresh());
+  await flush();
+  expect(calls).toHaveLength(count + 1);
+  expect(calls.slice(count)).toEqual([
+    { command: "list_user_commands", args: { environmentId: "env", tabId: "other" } },
+  ]);
 });

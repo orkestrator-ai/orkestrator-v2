@@ -22,6 +22,7 @@ import {
   WEB_ANNOTATION_STORE_PREFIX,
 } from "./web-annotation-store-layout.js";
 import { USAGE_HISTORY_STORE_LAYOUTS } from "./usage-history-layout.js";
+import { HEALTH_SUMMARY_STORE_LAYOUTS } from "./health-summary-layout.js";
 import { SCHEDULED_JOBS_STORE_LAYOUTS } from "./scheduled-jobs/layout.js";
 import { PERMISSION_RULE_STORE_LAYOUTS } from "./permission-rules/layout.js";
 import {
@@ -141,6 +142,7 @@ const ENGINE_STORE_LAYOUTS: Record<string, StoreLayout> = {
   ...BUILD_PIPELINE_TRANSCRIPT_STORE_LAYOUTS,
   ...TRANSCRIPT_ARTIFACT_ENGINE_STORE_LAYOUTS,
   ...USAGE_HISTORY_STORE_LAYOUTS,
+  ...HEALTH_SUMMARY_STORE_LAYOUTS,
   ...SCHEDULED_JOBS_STORE_LAYOUTS,
   ...PERMISSION_RULE_STORE_LAYOUTS,
 };

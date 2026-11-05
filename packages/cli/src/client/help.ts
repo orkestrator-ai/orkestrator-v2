@@ -9,6 +9,7 @@ const GROUP_SUMMARIES: Record<string, string> = {
   session: "Start, prompt, control and inspect native-agent conversations.",
   changes: "Read the file and line changes the backend measures (read-only).",
   run: "Inspect, wait for and recover individual operations.",
+  diagnostics: "Save a local bundle of diagnostics to attach to a report (nothing is uploaded).",
 };
 
 function optionLine(option: OptionSpec): string {

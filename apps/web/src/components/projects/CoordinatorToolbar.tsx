@@ -32,7 +32,9 @@ import {
   coordinatorGitErrorText,
   CoordinatorErrorDetails,
   CoordinatorIsolationBadge,
+  coordinatorReadOnlyTier,
 } from "./CoordinatorPanelNotices";
+import { CoordinatorIntroButton } from "./CoordinatorIntro";
 
 function gitSummary(status: ProjectGitStatus | null): string {
   if (!status) return "Reading repository…";
@@ -108,15 +110,11 @@ export function CoordinatorToolbar({
     : undefined;
   const syncDisabled = branchSwitchDisabled || dirty;
   const canSync = Boolean(git?.upstream && git.behind && git.behind > 0 && !git.ahead && !blocked);
-  // The badge speaks for the conversation in front: its platform's read-only
-  // boundary is either enforced or only something the agent is asked to keep.
-  const selectedQualification = selectedAgent
-    ? snapshot.providerAvailability[selectedAgent]
-    : undefined;
-  const advisoryPlatform =
-    selectedAgent && selectedQualification && selectedQualification.tier !== "enforced"
-      ? AGENT_PLATFORM_LABELS[selectedAgent]
-      : null;
+  // The badge speaks for the conversation in front: it names how strongly that
+  // platform's read-only boundary holds.
+  const selectedTier = selectedAgent
+    ? coordinatorReadOnlyTier(snapshot.providerAvailability[selectedAgent]?.tier)
+    : null;
   const gitError = coordinatorGitErrorText(git);
 
   return (
@@ -128,8 +126,10 @@ export function CoordinatorToolbar({
           <CoordinatorIsolationBadge
             projectPath={snapshot.projectPath}
             contextRevision={snapshot.workspace.repositoryContextRevision}
-            advisoryPlatform={advisoryPlatform}
+            platform={selectedAgent ? AGENT_PLATFORM_LABELS[selectedAgent] : null}
+            tier={selectedTier}
           />
+          <CoordinatorIntroButton />
           <div className="min-w-3 flex-1" />
           <Select
             value={git?.branch ? `refs/heads/${git.branch}` : undefined}

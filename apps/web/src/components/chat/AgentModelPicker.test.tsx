@@ -888,6 +888,86 @@ describe("AgentModelPicker", () => {
     );
   });
 
+  test("names each platform's badge on its rail row and as a pill beside its caveat", () => {
+    setMobileViewport(false);
+    renderPicker({
+      models: [
+        { platform: "codex", id: "codex-model", label: "Codex model" },
+        { platform: "cursor", id: "cursor-model", label: "Cursor model" },
+      ],
+      enabledPlatforms: ["codex", "cursor"],
+      selectedPlatform: "codex",
+      selectedModelId: "codex-model",
+      platformNotes: { cursor: "Cursor exposes no approval callback to verify them." },
+      platformBadges: {
+        codex: {
+          label: "Read-only · Enforced",
+          description: "Blocked whatever the agent attempts.",
+          tone: "positive",
+        },
+        cursor: {
+          label: "Read-only · Provider-configured",
+          description: "Told to refuse, not verified.",
+          tone: "caution",
+        },
+      },
+    });
+
+    openPicker();
+    // An enforced platform with no caveat still shows its tier, with its meaning.
+    const codexNote = document.querySelector("[data-native-platform-note='codex']");
+    expect(codexNote?.textContent).toBe("Read-only · EnforcedBlocked whatever the agent attempts.");
+    expect(codexNote?.querySelector("[data-native-platform-badge='positive']")).toBeTruthy();
+    expect(document.querySelector("[data-native-platform-caveat]") === null).toBe(true);
+    expect(
+      screen.getByRole("button", { name: "codex models, Read-only · Enforced" }).dataset
+        .platformBadge,
+    ).toBe("positive");
+
+    const cursorButton = screen.getByRole("button", {
+      name: "cursor models, Read-only · Provider-configured. Cursor exposes no approval callback to verify them.",
+    });
+    expect(cursorButton.getAttribute("title")).toContain("Provider-configured");
+    fireEvent.click(cursorButton);
+    const cursorNote = document.querySelector("[data-native-platform-caveat='cursor']");
+    const pill = cursorNote?.querySelector("[data-native-platform-badge='caution']");
+    expect(pill?.textContent).toBe("Read-only · Provider-configured");
+    expect(pill?.getAttribute("title")).toBe("Told to refuse, not verified.");
+    // The caveat is stated once: the pill names the tier, the reason explains it.
+    expect(cursorNote?.textContent).toBe(
+      "Read-only · Provider-configuredCursor exposes no approval callback to verify them.",
+    );
+  });
+
+  for (const mobile of [false, true]) {
+    test(`shows every tier before selection (${mobile ? "touch" : "desktop"})`, () => {
+      setMobileViewport(mobile);
+      const tiers = { codex: "Enforced", cursor: "Provider-configured", pi: "Advisory" } as const;
+      renderPicker({
+        models: Object.keys(tiers).map((platform) => ({
+          platform: platform as "codex" | "cursor" | "pi",
+          id: platform,
+          label: platform,
+        })),
+        enabledPlatforms: ["codex", "cursor", "pi"],
+        selectedPlatform: "codex",
+        platformBadges: Object.fromEntries(
+          Object.entries(tiers).map(([platform, label]) => [
+            platform,
+            { label: `Read-only · ${label}`, description: label, tone: "caution" as const },
+          ]),
+        ),
+      });
+      openPicker();
+      for (const [platform, tier] of Object.entries(tiers)) {
+        const row = screen.getByRole("button", { name: `${platform} models, Read-only · ${tier}` });
+        expect(row.querySelector("[data-native-platform-badge]")?.textContent).toBe(
+          `Read-only · ${tier}`,
+        );
+      }
+    });
+  }
+
   test("renders no caveat when no platform notes are supplied", () => {
     setMobileViewport(false);
     renderPicker({

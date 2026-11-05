@@ -1,11 +1,6 @@
 import { flushSync } from "react-dom";
-import { HumanPromptBanner } from "@/components/chat/HumanPromptBanner";
-import { useHumanPrompts } from "@/hooks/useUserCommands";
-import { useRemoteHumanPrompts, type RemoteHumanPromptEntry } from "@/hooks/useRemoteHumanPrompts";
-import type { HumanPromptEntry } from "@orkestrator/protocol/human-prompts";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { useStore } from "zustand";
 import { AlertCircle, GitBranch, Loader2, Pause, Play, Plus, RotateCcw } from "lucide-react";
 import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
 import { useCoordinatorActions } from "./useCoordinatorActions";
@@ -14,21 +9,20 @@ import { useCoordinatorGitActions } from "./useCoordinatorGitActions";
 import { useCoordinatorLaunches } from "./useCoordinatorLaunches";
 import { useCoordinatorSelection } from "./useCoordinatorSelection";
 import { useCoordinatorPanelData } from "./useCoordinatorPanelData";
-import { useCoordinatorWorkItems } from "./useCoordinatorWorkItems";
 import { CoordinatorConversationPane } from "./CoordinatorConversationPane";
 import { CoordinatorToolbar } from "./CoordinatorToolbar";
-import { CoordinatorNextWakeLine, CoordinatorWorkPanel } from "./CoordinatorWorkPanel";
-import { openCoordinatorWorkTarget } from "@/lib/coordinator-work-navigation";
-import {
-  remoteWorkKey,
-  workerTabTarget,
-  type CoordinatorWorkStop,
-} from "@/lib/coordinator-work-items";
-import { portalStore } from "@/lib/portal/portal-store";
+import { CoordinatorWorkArea } from "./CoordinatorWorkArea";
+import type { CoordinatorWorkStop } from "@/lib/coordinator-work-items";
 import { useCoordinatorPaneLayoutStore } from "@/stores/coordinatorPaneLayoutStore";
-import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
-import { useMultiReviewStore } from "@/stores/multiReviewStore";
-import { CoordinatorActionAlert, CoordinatorBanner } from "./CoordinatorPanelNotices";
+import {
+  COORDINATOR_SIDE_AGENT_EXPLANATION,
+  COORDINATOR_TIER_LABELS,
+  COORDINATOR_TIER_MEANINGS,
+  CoordinatorActionAlert,
+  CoordinatorBanner,
+  coordinatorReadOnlyTier,
+} from "./CoordinatorPanelNotices";
+import type { AgentPlatformBadge } from "@/components/chat/AgentModelPicker";
 import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { CoordinatorPaneTree } from "./CoordinatorPaneTree";
 import { CoordinatorConversationTab } from "./CoordinatorConversationTab";
@@ -56,7 +50,6 @@ import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionSto
 import { useNativeComposeStore } from "@/stores/nativeComposeStore";
 import { useActiveCoordinatorConversationStore } from "@/stores/activeCoordinatorConversationStore";
 import { unusedCoordinatorConversationIds } from "@/lib/coordinator-unused-conversations";
-import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useProjectStore } from "@/stores/projectStore";
 import { CoordinatorPullRequestWatchProvider } from "@/lib/coordinator-pull-request-watch";
 
@@ -152,18 +145,25 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
   // nowhere near the picker. These are shown inside the model picker, so the
   // limitation is readable at the moment the platform is chosen — including a
   // mailbox that cannot deliver a worker's reply, and a read-only boundary
-  // nothing outside the agent verifies.
-  const platformNotes = useMemo(() => {
+  // nothing outside the agent verifies. The reason is shown as the backend
+  // wrote it: the tier pill beside it already says whether the boundary is
+  // verified, so the note does not say so a second time.
+  const { platformNotes, platformBadges } = useMemo(() => {
     const notes: Partial<Record<AgentPlatform, string>> = {};
+    const badges: Partial<Record<AgentPlatform, AgentPlatformBadge>> = {};
     for (const platform of availablePlatforms) {
       const qualification = snapshot?.providerAvailability[platform];
-      if (!qualification?.reason) continue;
-      notes[platform] =
-        qualification.tier === "enforced"
-          ? qualification.reason
-          : `${qualification.reason} Orkestrator cannot verify this boundary independently.`;
+      if (qualification?.reason) notes[platform] = qualification.reason;
+      const tier = coordinatorReadOnlyTier(qualification?.tier);
+      if (tier) {
+        badges[platform] = {
+          label: `Read-only · ${COORDINATOR_TIER_LABELS[tier]}`,
+          description: COORDINATOR_TIER_MEANINGS[tier],
+          tone: tier === "enforced" ? "positive" : "caution",
+        };
+      }
     }
-    return notes;
+    return { platformNotes: notes, platformBadges: badges };
   }, [availablePlatforms, snapshot]);
   const { pendingLaunches, startConversation } = useCoordinatorLaunches({
     projectId,
@@ -199,85 +199,6 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
     });
     return () => store.clear(projectId, selectedTabId);
   }, [projectId, selectedAgent, selectedId, selectedProviderSessionId, selectedTabId, workspaceId]);
-  const environments = useEnvironmentStore((state) => state.environments);
-  const pipelines = useBuildPipelineStore((state) => state.pipelines);
-  const multiReviews = useMultiReviewStore((state) => state.workflows);
-  /*
-   * Commands waiting on the user in this coordinator's work — a question, an
-   * approval, a sign-in link, a code — in its workers and in the environments
-   * its builds and reviews run in. Read once: the Work panel marks those rows
-   * as needing the user, and the banner shows the workers' own prompts so the
-   * person talking to the coordinator sees them without opening the worker.
-   * Workers on other nodes are read through each node's link, while a request
-   * to them is open (`useRemoteHumanPrompts`).
-   */
-  const workerEnvironmentIds = useMemo(
-    () =>
-      new Set(
-        snapshot
-          ? snapshot.workflows
-              .filter(
-                (association) =>
-                  association.kind === "environment" &&
-                  association.coordinatorId === snapshot.workspace.id &&
-                  !association.nodeId &&
-                  !association.pending,
-              )
-              .map((association) => association.resourceId)
-          : [],
-      ),
-    [snapshot],
-  );
-  const workEnvironmentIds = useMemo(() => {
-    if (!snapshot) return [];
-    const ids = new Set(workerEnvironmentIds);
-    for (const association of snapshot.workflows) {
-      if (association.coordinatorId !== snapshot.workspace.id || association.nodeId) continue;
-      const environmentId =
-        association.kind === "build-pipeline"
-          ? pipelines.get(association.resourceId)?.environmentId
-          : association.kind === "multi-review"
-            ? multiReviews.get(association.resourceId)?.environmentId
-            : undefined;
-      if (environmentId) ids.add(environmentId);
-    }
-    return Array.from(ids);
-  }, [snapshot, workerEnvironmentIds, pipelines, multiReviews]);
-  const workPrompts = useHumanPrompts(workEnvironmentIds);
-  const remoteWorkers = useMemo(
-    () =>
-      snapshot
-        ? snapshot.workflows.flatMap((association) =>
-            association.kind === "environment" &&
-            association.coordinatorId === snapshot.workspace.id &&
-            association.nodeId &&
-            !association.pending &&
-            association.delegation?.state === "running"
-              ? [{ nodeId: association.nodeId, environmentId: association.resourceId }]
-              : [],
-          )
-        : [],
-    [snapshot],
-  );
-  const remotePrompts = useRemoteHumanPrompts(remoteWorkers);
-  const workerPrompts = useMemo<Array<HumanPromptEntry | RemoteHumanPromptEntry>>(
-    () => [
-      ...workPrompts.filter((entry) => workerEnvironmentIds.has(entry.environmentId)),
-      ...remotePrompts,
-    ],
-    [workPrompts, workerEnvironmentIds, remotePrompts],
-  );
-  const promptEnvironmentIds = useMemo(
-    () =>
-      new Set([
-        ...workPrompts.map((entry) => entry.environmentId),
-        ...remotePrompts.map((entry) => remoteWorkKey(entry.nodeId, entry.environmentId)),
-      ]),
-    [workPrompts, remotePrompts],
-  );
-  const nodes = useStore(portalStore.store, (state) => state.nodes);
-  // Everything this coordinator started, from every conversation and node.
-  const work = useCoordinatorWorkItems(snapshot, promptEnvironmentIds);
   const selectedSessionKey =
     snapshot && selected
       ? createSessionKey(coordinatorRuntimeId(snapshot.workspace.id, selected.id), selected.tabId)
@@ -545,29 +466,6 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
       invalidateView();
     }
   };
-  const promptTarget = (entry: HumanPromptEntry | RemoteHumanPromptEntry) =>
-    workerTabTarget(
-      {
-        environmentId: entry.environmentId,
-        tabId: entry.tabId,
-        ...("nodeId" in entry ? { nodeId: entry.nodeId } : {}),
-        title: promptLabel(entry),
-      },
-      { environments, nodes },
-    );
-  const promptLabel = (entry: HumanPromptEntry | RemoteHumanPromptEntry) => {
-    if (!("nodeId" in entry)) {
-      return (
-        environments.find((item) => item.id === entry.environmentId)?.name ?? entry.environmentId
-      );
-    }
-    const node = nodes.find((item) => item.nodeId === entry.nodeId);
-    const name =
-      node?.environments.find((item) => item.ref.environmentId === entry.environmentId)?.name ??
-      entry.environmentId;
-    return `${name} on ${node?.view.displayName ?? entry.nodeId}`;
-  };
-
   // Keep action failures announced even when the repository retains the same error.
   const actionAlert = error;
 
@@ -652,17 +550,16 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
           </CoordinatorBanner>
         ) : null}
 
-        <HumanPromptBanner
-          prompts={workerPrompts}
-          label={promptLabel}
-          canOpen={(entry) => promptTarget(entry) !== null}
-          onOpen={(entry) => {
-            const target = promptTarget(entry);
-            if (target) openCoordinatorWorkTarget(target);
-          }}
-        />
-
-        <div className="relative flex min-h-0 flex-1">
+        {/* The Work area owns the app-wide subscriptions; the conversations are
+        its children, so a write it alone reads does not render them again. */}
+        <CoordinatorWorkArea
+          snapshot={snapshot}
+          quiet={paused || selectedTurnActive}
+          {...(snapshot.workspace.lifecycleState === "ready" && stopConversation
+            ? { onStop: stopWorker }
+            : {})}
+          onClearFinished={clearFinishedWork}
+        >
           <div className="relative min-h-0 min-w-0 flex-1">
             {layout ? (
               <CoordinatorPaneTree
@@ -716,7 +613,7 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
                       updateLayout((current) => focusCoordinatorPane(current, pane.id));
                       createConversation();
                     }}
-                    title={newConversationLabel}
+                    title={hasMain ? COORDINATOR_SIDE_AGENT_EXPLANATION : newConversationLabel}
                   >
                     <Plus className="size-3.5" />
                     {/* The strip scrolls, so on a phone the action is its icon. */}
@@ -735,6 +632,7 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
                       snapshot={snapshot}
                       availablePlatforms={availablePlatforms}
                       platformNotes={platformNotes}
+                      platformBadges={platformBadges}
                       launch={conversationId ? pendingLaunches.get(conversationId) : undefined}
                       startConversation={startConversation}
                       confirmUpstreamMerge={confirmUpstreamMerge}
@@ -760,20 +658,10 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
               />
             ) : null}
           </div>
-          <CoordinatorWorkPanel
-            items={work.items}
-            counts={work.counts}
-            openDelegations={work.openDelegations}
-            onOpen={(target) => openCoordinatorWorkTarget(target)}
-            {...(snapshot.workspace.lifecycleState === "ready" && stopConversation
-              ? { onStop: stopWorker }
-              : {})}
-            onClearFinished={clearFinishedWork}
-          />
-        </div>
-        <CoordinatorNextWakeLine items={work.items} quiet={paused || selectedTurnActive} />
+        </CoordinatorWorkArea>
         <div className="shrink-0 border-t border-border/60 px-3 py-1 text-center text-[11px] text-muted-foreground">
-          Code changes, commands, builds and fixes run in build pipelines or prompt environments.
+          The coordinator hands code changes, builds and fixes to build pipelines and prompt
+          environments.
         </div>
         <AlertDialog
           open={pendingMainClose !== null}

@@ -137,7 +137,9 @@ export function FilesPanel() {
       if (pendingAction.kind === "revert") {
         await revertFile(pendingAction.paths[0]!);
       } else {
-        await deleteFile(pendingAction.paths);
+        await deleteFile(pendingAction.paths, {
+          target: pendingAction.kind === "delete-folder" ? "folder" : "file",
+        });
       }
       setPendingAction(null);
     } catch (error) {
@@ -187,6 +189,7 @@ export function FilesPanel() {
                 onReveal={isLocalEnvironment && worktreePath ? revealFile : undefined}
                 onRevert={(path) => requestFileAction("revert", path)}
                 onDelete={(path) => requestFileAction("delete", path)}
+                onDeleteFolder={(path) => requestFileAction("delete-folder", path)}
                 onMove={moveFileInTree}
                 onCopyFiles={copyFilesIntoTree}
                 onCreateFolder={createFolder}

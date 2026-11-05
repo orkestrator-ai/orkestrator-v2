@@ -142,6 +142,8 @@ export function isEssentialLabel(
   if (field === "site") return Object.hasOwn(vocabulary[area]?.events ?? {}, value);
   if (field === "source" || (area === "local-server" && field === "key")) return SOURCE.test(value);
   if (area === "backend" && event === "starting" && field === "version") return VERSION.test(value);
+  if (area === "backend" && event === "previous-run" && field === "outcome")
+    return value === "clean" || value === "crashed";
   if (area === "docker" && field === "reason") {
     if (event === "writer-lease.lost") return ["reclaimed", "unreadable"].includes(value);
     if (event === "writer-lease.not-acquired")

@@ -659,7 +659,10 @@ describe("CoordinatorPanel tab strip", () => {
     hangLoads = false;
     render(<CoordinatorPanel projectId="project-1" />);
     const create = await screen.findByRole("button", { name: "New side agent" });
-    expect(create.getAttribute("title")).toBe("New side agent");
+    // Its tooltip says what a side agent is for, not only its name.
+    expect(create.getAttribute("title")).toBe(
+      "Side agents can read the project and talk to the main coordinator, but can't launch workers. Good for a second opinion or a parallel investigation.",
+    );
     expect(create.querySelector("span")?.className).toContain("max-sm:sr-only");
   });
 });

@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     "./action-defaults": "./src/action-defaults.ts",
+    "./backend-diagnostics": "./src/backend-diagnostics.ts",
     "./capacity-retry": "./src/capacity-retry.ts",
     "./agent-accounts": "./src/agent-accounts.ts",
     "./claude-login-notice": "./src/claude-login-notice.ts",

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { spawn, execFileSync } from "node:child_process";
+import { spawn, execFileSync, type SpawnOptions } from "node:child_process";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -354,6 +354,86 @@ describe("database snapshots", () => {
       locked.exec("ROLLBACK");
       locked.close();
     }
+  });
+
+  describe("the copy's result", () => {
+    /** A stand-in for the supervisor, given the real stdio the backend hands it. */
+    function supervisorRunning(script: string, seen?: (options: SpawnOptions) => void) {
+      return (_command: string, _args: string[], options: SpawnOptions) => {
+        seen?.(options);
+        return spawn("sh", ["-c", script], options);
+      };
+    }
+
+    test("takes its result from files, keeping stdin as the liveness pipe", async () => {
+      const directory = await dataDir();
+      let stdio: SpawnOptions["stdio"];
+      expect(
+        await copyDatabaseInChildProcess(path.join(directory, "a"), path.join(directory, "b"), {
+          spawn: supervisorRunning("printf sound", (options) => (stdio = options.stdio)),
+        }),
+      ).toBe(true);
+      expect(stdio).toEqual(["pipe", expect.any(Number), expect.any(Number)]);
+    });
+
+    // A pipe capture waits for this child to close its copy of the pipe.
+    test("settles at exit while a background child holds the output", async () => {
+      const directory = await dataDir();
+      const started = Date.now();
+      expect(
+        await copyDatabaseInChildProcess(path.join(directory, "a"), path.join(directory, "b"), {
+          spawn: supervisorRunning("printf unsound; sleep 5 & exit 0"),
+        }),
+      ).toBe(false);
+      expect(Date.now() - started).toBeLessThan(4_000);
+    });
+
+    test("a clean exit without a verdict is a failure, never a success", async () => {
+      const directory = await dataDir();
+      await expect(
+        copyDatabaseInChildProcess(path.join(directory, "a"), path.join(directory, "b"), {
+          spawn: supervisorRunning("exit 0"),
+        }),
+      ).rejects.toThrow("Database copy failed: exit 0");
+    });
+
+    test("a failed copy reports the last line of stderr", async () => {
+      const directory = await dataDir();
+      await expect(
+        copyDatabaseInChildProcess(path.join(directory, "a"), path.join(directory, "b"), {
+          spawn: supervisorRunning("printf 'early\\nlater' >&2; exit 1"),
+        }),
+      ).rejects.toThrow("Database copy failed: later");
+    });
+
+    test("a lost exit fails at the deadline even though the copy wrote its verdict", async () => {
+      const directory = await dataDir();
+      const lostExit = (_command: string, _args: string[], options: SpawnOptions) => {
+        const child = spawn("sh", ["-c", "printf sound"], options);
+        const once = child.once.bind(child);
+        child.once = ((event: string, listener: never) =>
+          event === "exit" || event === "close" ? child : once(event, listener)) as never;
+        return child;
+      };
+      const started = Date.now();
+      await expect(
+        copyDatabaseInChildProcess(path.join(directory, "a"), path.join(directory, "b"), {
+          spawn: lostExit,
+          timeoutMs: 100,
+          settleGraceMs: 100,
+        }),
+      ).rejects.toThrow("never reported an exit");
+      expect(Date.now() - started).toBeLessThan(5_000);
+    });
+
+    test("a supervisor that cannot start rejects", async () => {
+      const directory = await dataDir();
+      await expect(
+        copyDatabaseInChildProcess(path.join(directory, "a"), path.join(directory, "b"), {
+          spawn: (_command, _args, options) => spawn("/nonexistent/orkestrator-tool", [], options),
+        }),
+      ).rejects.toThrow();
+    });
   });
 
   test("abrupt backend death terminates the supervisor and its blocked copy before restart cleanup", async () => {

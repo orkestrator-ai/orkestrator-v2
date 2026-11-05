@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -11,6 +11,8 @@ import type {
   DatabaseTopTables,
 } from "@orkestrator/protocol/backend-diagnostics";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { openCaptureFile, readCaptureFile } from "@orkestrator/protocol/node/command-capture";
+import { watchForLostExit } from "@orkestrator/protocol/node/shell-process-state";
 import { HEALTH_SUMMARY_STORE } from "./health-summary-layout.js";
 
 const log = createLogger("storage");
@@ -99,6 +101,13 @@ export const MAX_BACKUP_FAILURE_BACKOFF_MS = 6 * HOURLY_INTERVAL_MS;
 export const STALE_TEMPORARY_MS = HOURLY_INTERVAL_MS;
 /** A copy still running after this long is killed. */
 const COPY_TIMEOUT_MS = 2 * HOURLY_INTERVAL_MS;
+/**
+ * The copy's own supervisor enforces the timeout. This is how much longer the
+ * backend waits to hear from it before treating the result as unknown.
+ */
+const COPY_SETTLE_GRACE_MS = 30_000;
+/** A verdict, and a line of at most {@link MAX_TOP_TABLES} names and sizes. */
+const MAX_COPY_OUTPUT_BYTES = 64 * 1024;
 /** Consecutive failures and the earliest next attempt, kept across restarts. */
 const BACKOFF_FILE = ".hourly-backoff.json";
 /** The same for the ledger's copies, so neither kind's failures delay the other. */
@@ -263,29 +272,61 @@ export function removeStaleBackupTemporaries(dataDir: string, now = Date.now()):
  * scans it too; `onTopTables` receives the result. That scan touches only the
  * finished copy, never the live file or this event loop, and SQLite without
  * `dbstat` (Bun on macOS loads the system library) simply reports nothing.
+ *
+ * The verdict comes back through unlinked files, so no pipe reader has to see
+ * the end of a stream (docs/todo/cross-cutting/4260-bun-loses-child-process-events.md).
+ * `runCommand` does not fit: stdin here stays open as the liveness pipe, and
+ * closing it tells the supervisor the backend died. A child that never reports
+ * its exit fails at a deadline: without an exit status the verdict is not read.
  */
 export function copyDatabaseInChildProcess(
   source: string,
   target: string,
-  options: { timeoutMs?: number; onTopTables?: (tables: DatabaseTopTable[]) => void } = {},
+  options: {
+    timeoutMs?: number;
+    onTopTables?: (tables: DatabaseTopTable[]) => void;
+    /** Starts the supervisor. Tests use this to withhold what the runtime reports. */
+    spawn?: (command: string, args: string[], options: SpawnOptions) => ChildProcess;
+    settleGraceMs?: number;
+  } = {},
 ): Promise<boolean> {
   return new Promise((resolve, reject) => {
-    const child = spawn(
-      process.execPath,
-      [
-        "-e",
-        DATABASE_COPY_SUPERVISOR,
-        "--",
-        source,
-        target,
-        String(options.timeoutMs ?? COPY_TIMEOUT_MS),
-        DATABASE_COPY_HELPER,
-      ],
-      {
-        // Only this backend owns the write end. Abrupt death closes it too.
-        stdio: ["pipe", "pipe", "pipe"],
-      },
-    );
+    const timeoutMs = options.timeoutMs ?? COPY_TIMEOUT_MS;
+    const captureFds: number[] = [];
+    const releaseCapture = () => {
+      for (const fd of captureFds.splice(0)) {
+        try {
+          fs.closeSync(fd);
+        } catch {
+          // Continue releasing the other stream.
+        }
+      }
+    };
+    let child: ChildProcess;
+    try {
+      captureFds.push(openCaptureFile(), openCaptureFile());
+      child = (options.spawn ?? spawn)(
+        process.execPath,
+        [
+          "-e",
+          DATABASE_COPY_SUPERVISOR,
+          "--",
+          source,
+          target,
+          String(timeoutMs),
+          DATABASE_COPY_HELPER,
+        ],
+        {
+          // Only this backend owns the write end. Abrupt death closes it too.
+          stdio: ["pipe", captureFds[0]!, captureFds[1]!],
+        },
+      );
+    } catch (error) {
+      releaseCapture();
+      reject(error);
+      return;
+    }
+    const [stdoutFd, stderrFd] = captureFds as [number, number];
     try {
       if (child.pid) os.setPriority(child.pid, 10);
     } catch {
@@ -295,24 +336,30 @@ export function copyDatabaseInChildProcess(
     const kill = () => child.stdin?.destroy();
     process.once("exit", kill);
 
-    let stdout = "";
-    let stderr = "";
-    child.stdout?.on("data", (chunk: Buffer) => {
-      if (stdout.length < 4096) stdout += chunk.toString();
-    });
-    child.stderr?.on("data", (chunk: Buffer) => {
-      if (stderr.length < 4096) stderr += chunk.toString();
-    });
-    const settle = () => {
+    let settled = false;
+    let stopExitWatch = () => {};
+    const settle = (): boolean => {
+      if (settled) return false;
+      settled = true;
+      clearTimeout(deadline);
+      stopExitWatch();
       process.removeListener("exit", kill);
       child.stdin?.destroy();
+      return true;
     };
-    child.once("error", (error) => {
-      settle();
-      reject(error);
-    });
-    child.once("close", (code, signal) => {
-      settle();
+    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+      if (!settle()) return;
+      let stdout: string;
+      let stderr: string;
+      try {
+        stdout = readCaptureFile(stdoutFd, MAX_COPY_OUTPUT_BYTES).toString();
+        stderr = readCaptureFile(stderrFd, MAX_COPY_OUTPUT_BYTES).toString();
+      } catch (error) {
+        reject(error);
+        return;
+      } finally {
+        releaseCapture();
+      }
       const [verdict, tables] = stdout.trim().split("\n", 2);
       if (code === 0 && verdict === "sound") {
         const parsed = parseTopTables(tables);
@@ -324,14 +371,32 @@ export function copyDatabaseInChildProcess(
           stderr.trim().split("\n").at(-1) || (signal ? `killed by ${signal}` : `exit ${code}`);
         reject(new Error(`Database copy failed: ${reason}`));
       }
+    };
+    const deadline = setTimeout(
+      () => {
+        if (!settle()) return;
+        child.kill("SIGKILL");
+        releaseCapture();
+        reject(new Error("Database copy failed: its process never reported an exit"));
+      },
+      timeoutMs + (options.settleGraceMs ?? COPY_SETTLE_GRACE_MS),
+    );
+    deadline.unref();
+    child.on("error", (error) => {
+      if (!settle()) return;
+      releaseCapture();
+      reject(error);
     });
+    child.once("exit", onExit);
+    stopExitWatch = watchForLostExit(child.pid, ({ code, signal }) => onExit(code, signal));
   });
 }
 
 /**
  * Stays responsive while SQLite blocks the worker. EOF survives SIGKILL of
  * the backend; the independent deadline also survives its event-loop stalls.
- * Waits for worker close before exiting, so no open copy allocation survives.
+ * Waits for the worker's exit, so no open copy allocation survives, but not
+ * forever once it has had SIGKILL: a lost exit event must still end this process.
  */
 const DATABASE_COPY_SUPERVISOR = String.raw`
 const { spawn } = require("node:child_process");
@@ -340,13 +405,17 @@ const worker = spawn(process.execPath, ["-e", helper, "--", source, target], {
   stdio: ["ignore", "inherit", "inherit"],
 });
 let stopped = false;
-const stop = () => { stopped = true; worker.kill("SIGKILL"); };
+const stop = () => {
+  stopped = true;
+  worker.kill("SIGKILL");
+  setTimeout(() => process.exit(1), 5000);
+};
 process.stdin.on("end", stop);
 process.stdin.on("error", stop);
 process.stdin.resume();
 const timer = setTimeout(stop, Number(timeoutMs));
 worker.on("error", () => { clearTimeout(timer); process.exit(1); });
-worker.on("close", (code) => { clearTimeout(timer); process.exit(stopped ? 1 : code ?? 1); });
+worker.on("exit", (code) => { clearTimeout(timer); process.exit(stopped ? 1 : code ?? 1); });
 `;
 
 /**

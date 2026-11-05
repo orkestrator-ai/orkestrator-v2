@@ -32,9 +32,11 @@ export type ProjectBoardTab =
   "home" | "coordinator" | "kanban" | "github" | "linear" | "features" | "notes" | "pull-requests";
 export type EnvironmentSortMode = "project" | "activity";
 /**
- * How "By activity" orders environments: `priority` puts unread work, then
- * waiting, then working before idle, newest first within each; `newest` and
- * `oldest` order by activity time alone. Defined with the shared comparator.
+ * How "By activity" orders environments. Every order keeps merged environments
+ * below unmerged ones and working environments below the others. Within those
+ * groups `priority` puts unread work, then waiting, before idle, newest first
+ * within each; `newest` and `oldest` order by activity time alone. Defined with
+ * the shared comparator.
  */
 export type { ActivitySortOrder } from "@orkestrator/protocol/environment-activity-order";
 
@@ -90,6 +92,12 @@ interface UIState {
    * changes another client's freshness or the backend's own cadence.
    */
   dataSaving: boolean;
+  /**
+   * Leaf-mode coordinator gates the user chose to open anyway, keyed by
+   * `leafCoordinatorGateKey`. Kept for the app session only: not persisted, so
+   * the notice returns after a restart.
+   */
+  openedLeafCoordinators: string[];
 
   // Actions
   selectProject: (projectId: string | null) => void;
@@ -135,6 +143,8 @@ interface UIState {
   /** Reset zoom to 100% */
   resetZoom: () => void;
   setDataSaving: (enabled: boolean) => void;
+  /** Remember, for this app session, that the user opened a gated coordinator. */
+  openLeafCoordinator: (key: string) => void;
 }
 
 export const createUIStore = () =>
@@ -161,6 +171,7 @@ export const createUIStore = () =>
         multiReviewGraphHeight: null,
         pipelineGraphHeight: null,
         dataSaving: false,
+        openedLeafCoordinators: [],
 
         // Actions
         toggleWorkBucketCollapsed: (bucket) =>
@@ -295,6 +306,13 @@ export const createUIStore = () =>
         resetZoom: () => set({ zoomLevel: ZOOM_DEFAULT }),
 
         setDataSaving: (enabled) => set({ dataSaving: enabled }),
+
+        openLeafCoordinator: (key) =>
+          set((state) =>
+            state.openedLeafCoordinators.includes(key)
+              ? state
+              : { openedLeafCoordinators: [...state.openedLeafCoordinators, key] },
+          ),
       }),
       {
         name: windowStorageKey("ui-storage"),

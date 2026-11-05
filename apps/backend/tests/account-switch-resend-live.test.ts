@@ -23,9 +23,11 @@ const SCENARIO_TIMEOUT_MS = 240_000;
 
 const CLIS: Record<StackPlatform, string | undefined> = {
   claude: policyQualificationCli("claude"),
-  codex: existsSync(path.join(repositoryRoot, "binaries", "codex"))
-    ? path.join(repositoryRoot, "binaries", "codex")
-    : undefined,
+  codex:
+    policyQualificationCli("codex") ??
+    (existsSync(path.join(repositoryRoot, "binaries", "codex"))
+      ? path.join(repositoryRoot, "binaries", "codex")
+      : undefined),
 };
 
 function newestSource(directory: string): number {
@@ -83,7 +85,11 @@ async function runScenario(
     }
     const line = stdout.split("\n").find((text) => text.startsWith(STACK_EVIDENCE_PREFIX));
     if (!line) throw new Error(`The scenario printed no evidence:\n${stdout.slice(-4_000)}`);
-    return JSON.parse(line.slice(STACK_EVIDENCE_PREFIX.length)) as StackEvidence;
+    const evidence = JSON.parse(line.slice(STACK_EVIDENCE_PREFIX.length)) as StackEvidence;
+    // --only-failures suppresses passing tests; keep the bounded runner informed
+    // that this multi-scenario suite is progressing without printing call content.
+    process.stderr.write(`Completed account-switch scenario: ${platform}/${scenario}\n`);
+    return evidence;
   } finally {
     await removeStackPaths(paths);
   }
@@ -156,6 +162,15 @@ describe.each(["claude", "codex"] as const)("automatic switching on the pinned %
     async () => {
       const evidence = await runScenario(platform, "native-two-tabs");
       expectContinuedOnNewAccount(evidence, 2);
+    },
+    SCENARIO_TIMEOUT_MS,
+  );
+
+  scenarioTest(
+    "a 5-hour refusal continues on the new account",
+    async () => {
+      const evidence = await runScenario(platform, "native-five-hour");
+      expectContinuedOnNewAccount(evidence);
     },
     SCENARIO_TIMEOUT_MS,
   );

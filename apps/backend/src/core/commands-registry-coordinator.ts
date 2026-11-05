@@ -4,7 +4,9 @@ import {
   coordinatorConversationIdFromRuntimeId,
   coordinatorIdFromRuntimeId,
   coordinatorRuntimeId,
+  normalizeCoordinatorDelegationRequest,
 } from "@orkestrator/protocol/coordinator";
+import { launchDelegationRequest } from "./coordinator-delegation-request.js";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import type { CommandContext } from "./commands-context.js";
 import { asNonBlankString, assertOnlyKeys } from "./commands-helpers.js";
@@ -46,7 +48,11 @@ import {
 } from "./coordinator-launch-defaults.js";
 import { CoordinatorViewRevisions } from "./coordinator-view-revisions.js";
 import { MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS } from "./coordinator-workflow-retention.js";
-import { actionHash, requireCoordinatorConversation } from "./coordinator-action-scope.js";
+import {
+  actionHash,
+  coordinatorLaunchIdentity,
+  requireCoordinatorConversation,
+} from "./coordinator-action-scope.js";
 import { coordinatorBuildTicketSource } from "./build-pipeline-launch.js";
 import {
   COORDINATOR_DELEGATION_PRESENTATION,
@@ -462,119 +468,145 @@ export function registerCoordinatorCommands(
       );
     },
   );
-  register("launch_coordinator_environment", async ({ scope, requestId, input }, context) => {
-    if (!record(scope) || !record(input)) throw new Error("Coordinator launch input is invalid");
+  register(
+    "launch_coordinator_environment",
+    async ({ scope, requestId, input, agentDefaulted }, context) => {
+      if (!record(scope) || !record(input)) throw new Error("Coordinator launch input is invalid");
+      const projectId = asNonBlankString(scope.projectId, "projectId");
+      const coordinatorId = asNonBlankString(scope.coordinatorId, "coordinatorId");
+      const conversationId = asNonBlankString(scope.conversationId, "conversationId");
+      await requireCoordinatorConversation(context, projectId, coordinatorId, conversationId);
+      const stableRequestId = asNonBlankString(requestId, "requestId");
+      if (
+        input.projectId !== projectId ||
+        typeof input.delegationBaseBranch !== "string" ||
+        typeof input.delegationBaseCommit !== "string" ||
+        !/^[0-9a-f]{40}$/i.test(input.delegationBaseCommit)
+      ) {
+        throw new Error("Coordinator launches require a scoped base branch and commit");
+      }
+      const delegationBaseBranch = input.delegationBaseBranch;
+      const delegationBaseCommit = input.delegationBaseCommit;
+      if (input.environmentType !== "local") {
+        await assertContainerDelegationCommitPublished(context, projectId, delegationBaseCommit);
+      }
+      const payloadHash = actionHash(coordinatorLaunchIdentity(input, agentDefaulted));
+      return runWorkflowStart(`${coordinatorId}\0${stableRequestId}`, async () => {
+        const receipt = await context.storage.coordinators.reserveCoordinatorWorkflowAssociation({
+          id: randomUUID(),
+          projectId,
+          coordinatorId,
+          conversationId,
+          kind: "environment",
+          resourceId: `pending:${stableRequestId}`,
+          requestId: stableRequestId,
+          payloadHash,
+          baseBranch: delegationBaseBranch,
+          baseCommit: delegationBaseCommit,
+          createdAt: new Date().toISOString(),
+        });
+        if (!receipt.claimed && !receipt.association.pending) {
+          const environment = await context.storage.getEnvironment(receipt.association.resourceId);
+          if (!environment) throw new Error("Associated worker environment was not found");
+          return {
+            environment,
+            coordinatorDelegationOpened: receipt.association.delegation?.state === "running",
+            replayed: true,
+          };
+        }
+        if (!receipt.claimed) {
+          throw new Error("Environment creation is already in progress; retry this requestId");
+        }
+        const delegation =
+          typeof input.initialPrompt === "string"
+            ? createCoordinatorDelegatedPrompt(
+                {
+                  projectId,
+                  coordinatorId,
+                  conversationId,
+                  baseBranch: delegationBaseBranch,
+                  baseCommit: delegationBaseCommit,
+                  instruction: localReportInstruction(),
+                },
+                input.initialPrompt,
+              )
+            : null;
+        const createdEnvironment = await dependencies.commands.get("create_environment")?.(
+          {
+            ...input,
+            initialPrompt: delegation?.source ?? input.initialPrompt,
+            controlRequestId: stableRequestId,
+          },
+          context,
+        );
+        if (!record(createdEnvironment) || typeof createdEnvironment.id !== "string") {
+          throw new Error("Environment creation returned no environment");
+        }
+        const environmentId = createdEnvironment.id;
+        const environment = delegation
+          ? await context.storage.updateEnvironment(environmentId, {
+              initialPromptPresentation: {
+                kind: COORDINATOR_DELEGATION_PRESENTATION,
+                frame: delegation.frame,
+              },
+            })
+          : createdEnvironment;
+        await context.storage.coordinators.completeCoordinatorWorkflowAssociation(
+          receipt.association.id,
+          environmentId,
+        );
+        let startError: string | undefined;
+        if (environment.status !== "running" && environment.status !== "creating") {
+          try {
+            await dependencies.commands.get("start_environment_background")?.(
+              { environmentId },
+              context,
+            );
+          } catch (error) {
+            startError = error instanceof Error ? error.message : "Environment start failed";
+          }
+        }
+        let coordinatorDelegationOpened = false;
+        if (!startError) {
+          // The worker owes this conversation exactly one answer only after it
+          // was successfully started. A failed start must not promise a wake.
+          coordinatorDelegationOpened = Boolean(
+            await context.storage.coordinators.openCoordinatorDelegation(
+              context.runtime.coordinatorRequests.workerTabs,
+              receipt.association.id,
+              STARTUP_AGENT_TAB_ID,
+              undefined,
+              launchDelegationRequest(input, environment),
+            ),
+          );
+        }
+        return {
+          environment,
+          coordinatorDelegationOpened,
+          ...(startError ? { startError } : {}),
+        };
+      });
+    },
+  );
+  register("get_coordinator_launch_environment", async ({ scope, requestId }, context) => {
+    if (!record(scope)) throw new Error("Coordinator scope is required");
     const projectId = asNonBlankString(scope.projectId, "projectId");
     const coordinatorId = asNonBlankString(scope.coordinatorId, "coordinatorId");
     const conversationId = asNonBlankString(scope.conversationId, "conversationId");
     await requireCoordinatorConversation(context, projectId, coordinatorId, conversationId);
-    const stableRequestId = asNonBlankString(requestId, "requestId");
-    if (
-      input.projectId !== projectId ||
-      typeof input.delegationBaseBranch !== "string" ||
-      typeof input.delegationBaseCommit !== "string" ||
-      !/^[0-9a-f]{40}$/i.test(input.delegationBaseCommit)
-    ) {
-      throw new Error("Coordinator launches require a scoped base branch and commit");
-    }
-    const delegationBaseBranch = input.delegationBaseBranch;
-    const delegationBaseCommit = input.delegationBaseCommit;
-    if (input.environmentType !== "local") {
-      await assertContainerDelegationCommitPublished(context, projectId, delegationBaseCommit);
-    }
-    const payloadHash = actionHash(input);
-    return runWorkflowStart(`${coordinatorId}\0${stableRequestId}`, async () => {
-      const receipt = await context.storage.coordinators.reserveCoordinatorWorkflowAssociation({
-        id: randomUUID(),
-        projectId,
-        coordinatorId,
-        conversationId,
-        kind: "environment",
-        resourceId: `pending:${stableRequestId}`,
-        requestId: stableRequestId,
-        payloadHash,
-        baseBranch: delegationBaseBranch,
-        baseCommit: delegationBaseCommit,
-        createdAt: new Date().toISOString(),
-      });
-      if (!receipt.claimed && !receipt.association.pending) {
-        const environment = await context.storage.getEnvironment(receipt.association.resourceId);
-        if (!environment) throw new Error("Associated worker environment was not found");
-        return {
-          environment,
-          coordinatorDelegationOpened: receipt.association.delegation?.state === "running",
-        };
-      }
-      if (!receipt.claimed) {
-        throw new Error("Environment creation is already in progress; retry this requestId");
-      }
-      const delegation =
-        typeof input.initialPrompt === "string"
-          ? createCoordinatorDelegatedPrompt(
-              {
-                projectId,
-                coordinatorId,
-                conversationId,
-                baseBranch: delegationBaseBranch,
-                baseCommit: delegationBaseCommit,
-                instruction: localReportInstruction(),
-              },
-              input.initialPrompt,
-            )
-          : null;
-      const createdEnvironment = await dependencies.commands.get("create_environment")?.(
-        {
-          ...input,
-          initialPrompt: delegation?.source ?? input.initialPrompt,
-          controlRequestId: stableRequestId,
-        },
-        context,
-      );
-      if (!record(createdEnvironment) || typeof createdEnvironment.id !== "string") {
-        throw new Error("Environment creation returned no environment");
-      }
-      const environmentId = createdEnvironment.id;
-      const environment = delegation
-        ? await context.storage.updateEnvironment(environmentId, {
-            initialPromptPresentation: {
-              kind: COORDINATOR_DELEGATION_PRESENTATION,
-              frame: delegation.frame,
-            },
-          })
-        : createdEnvironment;
-      await context.storage.coordinators.completeCoordinatorWorkflowAssociation(
-        receipt.association.id,
-        environmentId,
-      );
-      let startError: string | undefined;
-      if (environment.status !== "running" && environment.status !== "creating") {
-        try {
-          await dependencies.commands.get("start_environment_background")?.(
-            { environmentId },
-            context,
-          );
-        } catch (error) {
-          startError = error instanceof Error ? error.message : "Environment start failed";
-        }
-      }
-      let coordinatorDelegationOpened = false;
-      if (!startError) {
-        // The worker owes this conversation exactly one answer only after it
-        // was successfully started. A failed start must not promise a wake.
-        coordinatorDelegationOpened = Boolean(
-          await context.storage.coordinators.openCoordinatorDelegation(
-            context.runtime.coordinatorRequests.workerTabs,
-            receipt.association.id,
-            STARTUP_AGENT_TAB_ID,
-          ),
-        );
-      }
-      return {
-        environment,
-        coordinatorDelegationOpened,
-        ...(startError ? { startError } : {}),
-      };
-    });
+    const association = (
+      await context.storage.coordinators.listCoordinatorWorkflowAssociations(projectId)
+    ).find(
+      (item) =>
+        item.coordinatorId === coordinatorId &&
+        item.conversationId === conversationId &&
+        item.requestId === requestId &&
+        item.nodeId === undefined &&
+        item.kind === "environment" &&
+        !item.pending,
+    );
+    if (!association) return null;
+    return context.storage.getEnvironment(association.resourceId);
   });
   register(
     "assert_coordinator_delegation_available",
@@ -601,7 +633,7 @@ export function registerCoordinatorCommands(
   );
   register(
     "open_coordinator_delegation",
-    async ({ scope, environmentId, tabId, requestId }, context) => {
+    async ({ scope, environmentId, tabId, requestId, request }, context) => {
       if (!record(scope)) throw new Error("Coordinator scope is required");
       const projectId = asNonBlankString(scope.projectId, "projectId");
       const coordinatorId = asNonBlankString(scope.coordinatorId, "coordinatorId");
@@ -618,6 +650,7 @@ export function registerCoordinatorCommands(
         worker,
         asNonBlankString(tabId, "tabId"),
         asNonBlankString(requestId, "requestId"),
+        normalizeCoordinatorDelegationRequest(request),
       );
       return { opened };
     },
@@ -693,7 +726,7 @@ export function registerCoordinatorCommands(
         if (!receipt.claimed && !receipt.association.pending) {
           const existing = await context.storage.getBuildPipeline(receipt.association.resourceId);
           if (!existing) throw new Error("Associated build pipeline was not found");
-          return existing.snapshot;
+          return { ...(existing.snapshot as Record<string, unknown>), replayed: true };
         }
         if (!receipt.claimed) {
           throw new Error("Build pipeline creation is already in progress; retry this requestId");

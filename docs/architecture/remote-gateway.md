@@ -423,6 +423,17 @@ fires on what a current backend sends. The OpenCode-specific notice for
 backends older than 2.19.17 (raw `{ info, parts }` envelopes) was retired on
 2026-10-24, because those backends are outside the window.
 
+## Browser connection capacity
+
+A tab watching federated nodes also opens one filtered relayed-event stream.
+Together with the main stream this uses two persistent connections per tab,
+and terminals can add a third. Plain HTTP/1.1 browsers commonly allow only six
+connections per origin: three watching tabs can exhaust that budget and delay
+commands. Use an HTTP/2 frontend (for example the supported Tailscale Serve
+frontend) for multiple watching tabs. HTTPS alone does not imply HTTP/2.
+Cross-tab stream sharing is not implemented; a multi-tab plain-HTTP qualification
+is still required before claiming that configuration avoids starvation.
+
 ## Event stream reconnects
 
 A web client holds one authoritative event stream and its terminal output
@@ -469,7 +480,14 @@ reconnects on its own capped, jittered ladder (`ReconnectBackoff` from
   `gateway.cursor` frame per run of them, before the next matching frame or at
   the end of the window. An event larger than the replay ring's byte bound empties
   the window, so reconnecting clients reconcile, and it is counted in
-  `replay.ring.oversizedAppends` on `/__orkestrator/metrics`.
+  `replay.ring.oversizedAppends` on `/__orkestrator/metrics`. A scoped client's
+  replay is charged against its buffer for what it will be written: matching
+  frames and one cursor per run of skips, so a burst of unrelated events no
+  longer tells it `replay-too-large`.
+- Relayed node events are outside that window. They have a second ring
+  (`replay.relayedRing` in the metrics) and, in a renderer, a stream of their own
+  with its own cursor, so a busy leaf cannot make a client reconcile
+  ([command nodes](command-nodes.md)).
 - A link can drop with no answer at all (a tailnet peer that vanished), and then
   an open stream never errors: its socket waits on TCP for many minutes. So
   every client watches for silence. A main stream that shows no sign of life for
@@ -526,14 +544,25 @@ reconnects on its own capped, jittered ladder (`ReconnectBackoff` from
   on the Tailscale address) receives the cookie; the session limits what that
   exposes. A session that leaks this way still acts as the user until it ends,
   including opening host terminals, but it cannot read or rotate the token.
-  This is accepted rather than closed: a restricted container is refused at the
-  gateway's port, and binding a session to the peer address would not help,
-  because Tailscale Serve and Docker Desktop both show their clients as
-  loopback. A `full` mode container can reach the gateway, so `full` mode gives
-  up this protection. Observed on Docker Desktop only
-  ([qualification record](../development/container-qualification.md#project-seed-files-and-gateway-reach-on-docker-desktop-2026-11-04));
-  if a restricted container reaches the gateway elsewhere, revisit this
-  ([0260](../reports/security/0260-live-checks-on-other-platforms.md)).
+  This remains accepted on the strength of the observed restricted-container
+  firewall refusals, within the qualification limits linked below. Peer binding
+  could distinguish a rootful Linux container's own address from a browser
+  signed in from loopback or LAN on a direct gateway bind. It does not provide
+  consistent coverage: Tailscale Serve and Docker Desktop expose clients as
+  loopback, and rootless Linux exposes the host's own address. A `full` mode
+  container can reach a gateway the host's firewall lets it reach, so `full`
+  mode gives up this protection: on Docker Desktop even at a loopback bind,
+  on the tested rootless Linux daemon (host loopback off) at a non-loopback bind
+  and at Tailscale Serve's port, and on rootful Linux as far as a host firewall
+  such as ufw allows. Enabling rootless host loopback is expected to make
+  loopback-bound host services reachable too, potentially including the gateway;
+  that configuration was not qualified. Remaining Linux checks are tracked in
+  [todo 5510](../todo/previews-and-annotations/5510-linux-gateway-qualification-gaps.md).
+  Observed on Docker Desktop
+  ([record](../development/container-qualification.md#project-seed-files-and-gateway-reach-on-docker-desktop-2026-11-04))
+  and on Linux Engine
+  ([record](../development/container-qualification.md#gateway-reach-and-project-seed-files-on-linux-engine-2026-11-05));
+  if a restricted container reaches the gateway elsewhere, revisit this.
 - The cookie is `HttpOnly; SameSite=Strict; Path=/`, plus `Secure` when the
   browser reached the gateway over HTTPS (TLS, `X-Forwarded-Proto: https`, or
   a same-host `https:` `Origin`). The gateway reads and strips the

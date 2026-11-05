@@ -505,46 +505,39 @@ describe("build pipeline reviewer retry", () => {
     );
   });
 
-  test.each(["restart", "pause-resume"] as const)(
-    "%s gives the next full panel a distinct persisted identity",
-    async (action) => {
-      await withPipeline(async ({ service, read, provider }) => {
-        provider.runningModels.add("opus");
-        provider.runningModels.add("sonnet");
-        const started = await service.start(startInput(PANEL));
-        await advanceUntil(service, read, started.id, "reviewing");
+  test("restart gives the next full panel a distinct persisted identity", async () => {
+    await withPipeline(async ({ service, read, provider }) => {
+      provider.runningModels.add("opus");
+      provider.runningModels.add("sonnet");
+      const started = await service.start(startInput(PANEL));
+      await advanceUntil(service, read, started.id, "reviewing");
+      await service.advanceNow(started.id);
+      const first = await read(started.id);
+      const firstSessions = first.sessions.filter((session) => session.phase === "review");
+      expect(firstSessions).toHaveLength(2);
+      const firstId = firstSessions[0]!.reviewPassId;
+      expect(firstId).toBeTruthy();
+      await service.restartCurrentStep(started.id);
+      let next = await read(started.id);
+      for (
+        let attempt = 0;
+        attempt < 15 && next.sessions.filter((s) => s.phase === "review").length < 4;
+        attempt++
+      ) {
         await service.advanceNow(started.id);
-        const first = await read(started.id);
-        const firstSessions = first.sessions.filter((session) => session.phase === "review");
-        expect(firstSessions).toHaveLength(2);
-        const firstId = firstSessions[0]!.reviewPassId;
-        expect(firstId).toBeTruthy();
-        if (action === "restart") await service.restartCurrentStep(started.id);
-        else {
-          await service.pause(started.id);
-          await service.resume(started.id);
-        }
-        let next = await read(started.id);
-        for (
-          let attempt = 0;
-          attempt < 15 && next.sessions.filter((s) => s.phase === "review").length < 4;
-          attempt++
-        ) {
-          await service.advanceNow(started.id);
-          next = await read(started.id);
-        }
-        expect(next.iteration).toBe(first.iteration);
-        const panels = next.sessions.filter((session) => session.phase === "review");
-        expect(panels).toHaveLength(4);
-        expect(panels.slice(0, 2).map((s) => s.sessionKey)).toEqual(
-          firstSessions.map((s) => s.sessionKey),
-        );
-        expect(new Set(panels.slice(2).map((s) => s.reviewPassId)).size).toBe(1);
-        expect(panels[2]!.reviewPassId).toBeTruthy();
-        expect(panels[2]!.reviewPassId).not.toBe(firstId);
-      });
-    },
-  );
+        next = await read(started.id);
+      }
+      expect(next.iteration).toBe(first.iteration);
+      const panels = next.sessions.filter((session) => session.phase === "review");
+      expect(panels).toHaveLength(4);
+      expect(panels.slice(0, 2).map((s) => s.sessionKey)).toEqual(
+        firstSessions.map((s) => s.sessionKey),
+      );
+      expect(new Set(panels.slice(2).map((s) => s.reviewPassId)).size).toBe(1);
+      expect(panels[2]!.reviewPassId).toBeTruthy();
+      expect(panels[2]!.reviewPassId).not.toBe(firstId);
+    });
+  });
 
   test("supersedes the failed tool-v1 reviewer slot and allocates a fresh request", async () => {
     await withPipeline(

@@ -66,6 +66,7 @@ export const NODE_EXCLUDED_COMMANDS: ReadonlySet<string> = new Set([
   "list_node_action_requests",
   // Each machine's standing permission is for its own coordinators only.
   "run_granted_agent_account_switch",
+  "run_timer_agent_account_switch",
   "resolve_node_action_request",
   // Transfers and comparisons are run by the command node, not through it.
   "transfer_node_files",
@@ -149,7 +150,9 @@ export const NODE_EXCLUDED_COMMANDS: ReadonlySet<string> = new Set([
  */
 export function isWorkspaceExcludedCommand(command: string): boolean {
   return (
-    isNodeExcludedCommand(command) ||
+    // A workspace user may stop a worker on this coordinator. The handler
+    // revalidates the coordinator scope and worker; peer-node routing remains excluded.
+    (isNodeExcludedCommand(command) && command !== "stop_coordinator_worker_turn") ||
     WORKSPACE_ADMINISTRATION_COMMANDS.has(command) ||
     [
       "deliver_node_mail",

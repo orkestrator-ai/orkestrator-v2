@@ -29,6 +29,10 @@ import { ControlMcpServer, type ControlMcpInvoker } from "./control-mcp-server.j
 import { coordinatorRoleCapabilities } from "./control-mcp-tools.js";
 import type { Environment, PersistedNativeAgentSession } from "./models.js";
 import { executeAgentAccountSwitch } from "./nodes/node-account-switch.js";
+import {
+  accountSwitchGrantState,
+  runTimerAccountSwitch,
+} from "./nodes/node-account-switch-grant.js";
 import { NodeActionRequests, type NodeActionRequest } from "./nodes/node-action-requests.js";
 import { ScheduledJobExecutor } from "./scheduled-jobs/executor.js";
 import { ScheduledJobService } from "./scheduled-jobs/service.js";
@@ -59,11 +63,13 @@ let currentWorkspace: CoordinatorWorkspace;
 const mail: Array<{ sender: unknown; input: Record<string, unknown> }> = [];
 const switches: Array<{ machine: string; platform: string; accountId: string }> = [];
 const notified: NodeActionRequest[] = [];
+const switchEvents: Array<{ event: string; payload: unknown }> = [];
 let accounts: Record<string, AgentAccountSummary[]>;
 let usage: Record<string, Record<string, PlanUsageSnapshot>>;
 let environments: Environment[];
 let sessions: PersistedNativeAgentSession[];
 let invoke: ControlMcpInvoker;
+let remoteLimitsUnreadable = false;
 let autoSwitch: Record<string, AgentAccountAutoSwitchState | undefined>;
 const tickCalls: Array<{ machine: string; command: string; args: Record<string, unknown> }> = [];
 
@@ -210,12 +216,14 @@ beforeEach(async () => {
     ...(await storage.loadConfig()).global,
     experimentalScheduling: true,
   });
+  remoteLimitsUnreadable = false;
   currentWorkspace = initialWorkspace();
   // Real time: a timer's permission is checked against the wall clock.
   clock = { now: Date.now() };
   mail.length = 0;
   switches.length = 0;
   notified.length = 0;
+  switchEvents.length = 0;
   autoSwitch = {};
   accounts = {
     [SELF]: [
@@ -281,6 +289,8 @@ beforeEach(async () => {
     const own = commands.get(command);
     if (own) return (await own(args, context)) as T;
     switch (command) {
+      case "get_projects":
+        return [{ id: PROJECT, gitUrl: "https://github.com/acme/site.git" }] as T;
       case "get_project_coordinator":
         return { workspace: currentWorkspace } as T;
       case "get_config":
@@ -302,10 +312,32 @@ beforeEach(async () => {
               nodeId,
               available: true,
               view: { displayName: "Leaf" },
-              projects: [],
+              projects: [
+                {
+                  ref: { backendId: LEAF, projectId: "p-leaf" },
+                  repositoryHint: "github.com/acme/site",
+                },
+              ],
             })),
         } as T;
       case "invoke_on_node":
+        if (args.command === "get_project_usage_limits") {
+          if (remoteLimitsUnreadable) throw new Error("Unavailable");
+          return {
+            outcome: "ok",
+            result: {
+              limitedTabs: [
+                {
+                  agent: "claude",
+                  environmentId: "remote-env",
+                  tabId: "remote-tab",
+                  signal: "text",
+                },
+                { agent: "codex", environmentId: "remote-env", tabId: "other-tab" },
+              ],
+            },
+          } as T;
+        }
         return {
           outcome: "ok",
           result: accountCommand(
@@ -334,6 +366,16 @@ beforeEach(async () => {
         )) as T;
       case "create_node_action_request":
         return (await actions.create(args as Parameters<typeof actions.create>[0])) as T;
+      case "run_timer_agent_account_switch":
+        return (await runTimerAccountSwitch(
+          {
+            actions,
+            loadGlobalConfig: async () => ({}),
+            projectName: async () => "Project",
+            emit: (event, payload) => switchEvents.push({ event, payload }),
+          },
+          args,
+        )) as T;
       default:
         throw new Error(`Unexpected command: ${command}`);
     }
@@ -430,6 +472,44 @@ describe("self-timers", () => {
     expect(zoned.structuredContent).toMatchObject({
       timeZoneUsed: "America/New_York (as given)",
       nextFireAt: "2026-10-30T18:30:00.000Z",
+    });
+  });
+
+  test("an absolute time is read in the zone of the device the user last prompted from", async () => {
+    // The coordinator's machine is in London; the user's last prompt came from New York.
+    currentWorkspace.userTimeZone = "America/New_York";
+    clock.now = Date.parse("2026-10-30T09:00:00Z");
+    const created = await call("main", "create_schedule", {
+      requestId: "at-1430-user",
+      at: "14:30",
+      action: { type: "remind_me", body: "Afternoon check, user's time." },
+    });
+    expect(created.structuredContent).toMatchObject({
+      timeZone: "America/New_York",
+      nextFireAt: "2026-10-30T18:30:00.000Z",
+      timeZoneUsed: expect.stringContaining("the device they last prompted you from"),
+    });
+    // An explicit zone still wins.
+    const zoned = await call("main", "create_schedule", {
+      requestId: "at-1430-given",
+      at: "14:30",
+      timeZone: "Europe/London",
+      action: { type: "remind_me", body: "London afternoon." },
+    });
+    expect(zoned.structuredContent).toMatchObject({
+      timeZone: "Europe/London",
+      timeZoneUsed: "Europe/London (as given)",
+    });
+    // A stored zone this runtime cannot name is ignored, as if none were known.
+    currentWorkspace.userTimeZone = "Mars/Olympus_Mons";
+    const fallback = await call("main", "create_schedule", {
+      requestId: "at-1430-unknown",
+      at: "14:30",
+      action: { type: "remind_me", body: "Fallback afternoon." },
+    });
+    expect(fallback.structuredContent).toMatchObject({
+      timeZone: "Europe/London",
+      timeZoneUsed: expect.stringContaining("not known yet"),
     });
   });
 
@@ -936,6 +1016,19 @@ test("scenario: check in 2 hours, find usage limits, switch to an account with a
   ).filter((row) => row.hasAllocationLeft === true && row.active === false);
   expect(candidates.map((row) => row.accountId)).toEqual(["acct-work"]);
 
+  // A Codex tab stopped on Codex's limit: a Claude switch does not resume it.
+  sessions.push({
+    ...session("env-b", "tab-codex", [
+      {
+        requestId: "r4",
+        outcome: "failed",
+        error: "Request refused.",
+        failureKind: "usage-limit",
+        observedAt: "2026-10-30T10:30:00.000Z",
+      },
+    ]),
+    agent: "codex",
+  } as PersistedNativeAgentSession);
   const switched = await call("main", "switch_provider_account", {
     requestId: "scenario-switch",
     platform: "claude",
@@ -951,10 +1044,60 @@ test("scenario: check in 2 hours, find usage limits, switch to an account with a
     scope: "machine",
     authorizedBy: { scheduleId, userInstruction: instruction },
     effect: expect.stringContaining("next turn"),
+    nextStep: expect.stringContaining("resumeStep"),
+    // The tabs to resume: this provider's limited tabs only.
+    limitedTabs: [
+      {
+        environmentId: "env-a",
+        environmentName: "Feature A",
+        tabId: "tab-a",
+        observedAt: "2026-10-30T10:00:00.000Z",
+        signal: "text",
+      },
+    ],
+    resumeStep: expect.stringContaining("send_prompt_to_tab"),
   });
   expect(switches).toEqual([{ machine: SELF, platform: "claude", accountId: "acct-work" }]);
   // No approval was needed, and none is left waiting.
   expect(await actions.list({ pendingOnly: true })).toHaveLength(0);
+  // It is recorded as a switch that ran without asking, with the timer and
+  // the user's words, so the user sees it under the provider's accounts.
+  const [record] = await actions.list();
+  expect(record).toMatchObject({
+    kind: "switch-agent-account",
+    state: "executed",
+    authorizedBy: "self-timer",
+    selfTimer: { scheduleId, userInstruction: instruction },
+    reason: instruction,
+    targets: [{ nodeId: SELF, platform: "claude", accountId: "acct-work" }],
+  });
+  expect(notified).toHaveLength(0);
+  expect(switchEvents).toEqual([
+    {
+      event: "coordinator-account-switched",
+      payload: expect.objectContaining({
+        authorizedBy: "self-timer",
+        scheduleId,
+        userInstruction: instruction,
+        toAccountId: "acct-work",
+        fromAccountId: "default",
+        state: "executed",
+      }),
+    },
+  ]);
+  expect(
+    (await accountSwitchGrantState({ loadGlobalConfig: async () => ({}), actions })).recentSwitches,
+  ).toEqual([expect.objectContaining({ authorizedBy: "self-timer", toAccountId: "acct-work" })]);
+  // A retry with the same requestId reports the same switch and runs nothing.
+  const again = await call("main", "switch_provider_account", {
+    requestId: "scenario-switch",
+    platform: "claude",
+    accountId: "acct-work",
+    reason: instruction,
+    scheduleId,
+  });
+  expect(again.structuredContent).toMatchObject({ state: "already-active" });
+  expect(switches).toHaveLength(1);
 
   // The permission covers the machines the user named only.
   const elsewhere = await call("main", "switch_provider_account", {
@@ -968,6 +1111,63 @@ test("scenario: check in 2 hours, find usage limits, switch to an account with a
   expect(elsewhere.isError).toBe(true);
   expect(text(elsewhere)).toContain("may not switch accounts on Leaf");
 });
+
+test.each(["pending", "standing-grant"] as const)(
+  "timer retry preserves an existing %s request",
+  async (existing) => {
+    const pending = await call("main", "switch_provider_account", {
+      requestId: "shared",
+      platform: "claude",
+      accountId: "acct-work",
+      reason: "switch",
+    });
+    expect(pending.isError).not.toBe(true);
+    const [record] = await actions.list();
+    if (existing === "standing-grant") {
+      await actions.runUnattended(
+        {
+          requestId: "switch-account:coordinator-1:standing",
+          kind: "switch-agent-account",
+          targets: record!.targets,
+          requestedBy: record!.requestedBy,
+          reason: "switch",
+          authorizedBy: "standing-grant",
+        },
+        { count: 3, windowMs: 3_600_000, scope: () => true },
+      );
+    }
+    const timer = await call("main", "create_schedule", {
+      requestId: "retry-timer",
+      at: "+1h",
+      action: {
+        type: "remind_me",
+        body: "Switch",
+        authorizeAccountSwitch: {
+          platforms: ["claude"],
+          userInstruction: "switch",
+        },
+      },
+    });
+    clock.now += 3_600_000;
+    await fire();
+    // Restore a different active account so the call reaches request replay.
+    accounts[SELF] = accounts[SELF]!.map((row) => ({ ...row, isActive: row.id === "default" }));
+    const result = await call("main", "switch_provider_account", {
+      requestId: existing === "pending" ? "shared" : "standing",
+      platform: "claude",
+      accountId: "acct-work",
+      reason: "switch",
+      scheduleId: timer.structuredContent!.scheduleId,
+    });
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      approvalRequestId:
+        existing === "pending" ? record!.requestId : "switch-account:coordinator-1:standing",
+      state: existing === "pending" ? "pending" : "executed",
+    });
+    expect(await actions.list()).toHaveLength(existing === "pending" ? 1 : 2);
+  },
+);
 
 test("a timer's permission lapses two hours after it fired", async () => {
   clock.now = Date.now() - 5 * 3_600_000;
@@ -999,36 +1199,48 @@ test("a timer's permission lapses two hours after it fired", async () => {
   expect(switches).toHaveLength(0);
 });
 
-test("a timer's permission can name another machine, switched through the node link", async () => {
-  const timer = await call("main", "create_schedule", {
-    requestId: "leaf-timer",
-    at: "+1h",
-    action: {
-      type: "remind_me",
-      body: "Switch the leaf if limited.",
-      authorizeAccountSwitch: {
-        platforms: ["claude"],
-        nodeIds: [LEAF],
-        userInstruction: "switch the leaf",
+test.each([false, true])(
+  "remote timer switch returns tabs or unreadable fallback (%s)",
+  async (unreadable) => {
+    remoteLimitsUnreadable = unreadable;
+    const timer = await call("main", "create_schedule", {
+      requestId: "leaf-timer",
+      at: "+1h",
+      action: {
+        type: "remind_me",
+        body: "Switch the leaf if limited.",
+        authorizeAccountSwitch: {
+          platforms: ["claude"],
+          nodeIds: [LEAF],
+          userInstruction: "switch the leaf",
+        },
       },
-    },
-  });
-  clock.now += 3_600_000;
-  await fire();
-  const switched = await call("main", "switch_provider_account", {
-    requestId: "leaf-switch",
-    platform: "claude",
-    accountId: "acct-leaf",
-    nodeId: LEAF,
-    reason: "switch the leaf",
-    scheduleId: timer.structuredContent!.scheduleId,
-  });
-  expect(switched.structuredContent).toMatchObject({
-    state: "switched",
-    machine: { nodeId: LEAF, self: false },
-  });
-  expect(switches).toEqual([{ machine: LEAF, platform: "claude", accountId: "acct-leaf" }]);
-});
+    });
+    clock.now += 3_600_000;
+    await fire();
+    const switched = await call("main", "switch_provider_account", {
+      requestId: "leaf-switch",
+      platform: "claude",
+      accountId: "acct-leaf",
+      nodeId: LEAF,
+      reason: "switch the leaf",
+      scheduleId: timer.structuredContent!.scheduleId,
+    });
+    expect(switched.structuredContent).toMatchObject({
+      state: "switched",
+      machine: { nodeId: LEAF, self: false },
+    });
+    expect(switches).toEqual([{ machine: LEAF, platform: "claude", accountId: "acct-leaf" }]);
+    if (unreadable) {
+      expect(switched.structuredContent).not.toHaveProperty("limitedTabs");
+      expect(switched.structuredContent!.resumeStep).toContain("Call get_usage_limits");
+    } else {
+      expect(switched.structuredContent!.limitedTabs).toEqual([
+        expect.objectContaining({ environmentId: "remote-env", tabId: "remote-tab", nodeId: LEAF }),
+      ]);
+    }
+  },
+);
 
 test.each([{ cron: "0 * * * *" }, { everyMinutes: 60 }])(
   "recurring self-timers cannot carry account-switch permission: %j",

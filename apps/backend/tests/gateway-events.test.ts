@@ -1070,6 +1070,12 @@ describe("gateway terminal WebSocket", () => {
           "Real credential queue did not drain",
         );
         expect(operations).toEqual(["terminal_write"]);
+        // The client close event can precede the server's close callback.
+        // Queue completion does not imply that transport disposal has run.
+        await waitUntil(
+          () => wireGauges(gateway).terminalSockets === 0,
+          "Revoked terminal transport did not dispose",
+        );
         expect(wireGauges(gateway)).toEqual(ZERO_WIRE_GAUGES);
         if (cause === "client grant expiry") expect(grants.authenticate(issued.token)).toBeNull();
         else expect(sessions.has(session)).toBe(false);

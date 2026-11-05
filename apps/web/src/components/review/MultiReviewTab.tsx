@@ -6,17 +6,21 @@ import {
   AlertTriangle,
   ExternalLink,
   GitPullRequest,
+  History,
   Loader2,
   Pause,
   Play,
   RefreshCw,
   RotateCcw,
+  SkipForward,
   Square,
   Wrench,
 } from "lucide-react";
 import {
   multiReviewStepSessionAccess,
   type MultiReviewPhase,
+  type MultiReviewRewindStep,
+  type MultiReviewSkippableStep,
   type MultiReviewStepKind,
   type MultiReviewWorkflow,
 } from "@orkestrator/protocol/multi-review";
@@ -40,7 +44,8 @@ import { PipelineReviewTab } from "@/components/build-pipeline/PipelineReviewTab
 import * as backend from "@/lib/backend";
 import { openPullRequestUrl } from "@/lib/pull-request-opener";
 import { MultiReviewAddressFindingsPromptDialog } from "./MultiReviewAddressFindingsPromptDialog";
-import { MultiReviewRestartDialog } from "./MultiReviewRestartDialog";
+import { ModelRestartDialog, MultiReviewRestartDialog } from "./MultiReviewRestartDialog";
+import { usePipelineCodeRewind } from "@/components/build-pipeline/PipelineCodeRewindDialog";
 import { useReviewModelCatalog } from "@/hooks/useBuildLaunchOptions";
 import { useScrollOffsetAcrossHide } from "@/hooks/useScrollOffsetAcrossHide";
 import { formatElapsedWithHours } from "@/lib/format-elapsed";
@@ -115,7 +120,17 @@ interface MultiReviewCommands {
   cancel: (workflowId: string) => Promise<MultiReviewWorkflow>;
   stopValidation?: (workflowId: string) => Promise<MultiReviewWorkflow>;
   stopReviewer: (workflowId: string, reviewerId: string) => Promise<MultiReviewWorkflow>;
-  restartReviewer?: (workflowId: string, reviewerId: string) => Promise<MultiReviewWorkflow>;
+  restartReviewer?: (
+    workflowId: string,
+    reviewerId: string,
+    model?: MultiReviewWorkflow["fixModel"],
+  ) => Promise<MultiReviewWorkflow>;
+  skipStep?: (workflowId: string, step: MultiReviewSkippableStep) => Promise<MultiReviewWorkflow>;
+  rewindCode?: (
+    workflowId: string,
+    step: MultiReviewRewindStep,
+    expectedHead: string,
+  ) => Promise<MultiReviewWorkflow>;
   restartStep?: (
     workflowId: string,
     kind: MultiReviewStepKind,
@@ -135,6 +150,8 @@ const defaultCommands: MultiReviewCommands = {
   stopValidation: backend.stopMultiReviewValidation,
   stopReviewer: backend.stopMultiReviewReviewer,
   restartReviewer: backend.restartMultiReviewReviewer,
+  skipStep: backend.skipMultiReviewStep,
+  rewindCode: backend.rewindMultiReviewCode,
   restartStep: backend.restartMultiReviewStep,
   pauseStep: backend.pauseMultiReviewStep,
   resumeStep: backend.resumeMultiReviewStep,
@@ -552,6 +569,34 @@ function MultiReviewOverviewTab({
     action: "pause" | "resume";
   } | null>(null);
   const [restartDialogStep, setRestartDialogStep] = useState<MultiReviewStepKind | null>(null);
+  const [restartDialogReviewer, setRestartDialogReviewer] = useState<{
+    id: string;
+    name: string;
+    selection: MultiReviewWorkflow["fixModel"];
+  } | null>(null);
+  const [skippingStep, setSkippingStep] = useState<MultiReviewSkippableStep | null>(null);
+  const codeRewind = usePipelineCodeRewind(
+    workflow?.id ?? "",
+    async (stageId, expectedHead) => {
+      if (!workflow || !commands.rewindCode) return false;
+      setError(null);
+      try {
+        replaceWorkflow(
+          await commands.rewindCode(workflow.id, stageId as MultiReviewRewindStep, expectedHead),
+        );
+        return true;
+      } catch (reason) {
+        setError(reason instanceof Error ? reason.message : String(reason));
+        return false;
+      }
+    },
+    pending,
+    {
+      readPreview: (id, stageId) =>
+        backend.previewMultiReviewCodeRewind(id, stageId as MultiReviewRewindStep),
+      subject: "the review",
+    },
+  );
   const [restartDialogError, setRestartDialogError] = useState<string | null>(null);
   const [customAddressFindingsPromptOpen, setCustomAddressFindingsPromptOpen] = useState(false);
   const [customAddressFindingsPending, setCustomAddressFindingsPending] = useState(false);
@@ -761,6 +806,36 @@ function MultiReviewOverviewTab({
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
       setStoppingValidation(false);
+    }
+  };
+
+  const skipStep = async (step: MultiReviewSkippableStep) => {
+    if (!workflow || !commands.skipStep || skippingStep !== null || pending) return;
+    setSkippingStep(step);
+    setError(null);
+    try {
+      replaceWorkflow(await commands.skipStep(workflow.id, step));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setSkippingStep(null);
+    }
+  };
+
+  const restartReviewerIn = async (
+    reviewerId: string,
+    selection: MultiReviewWorkflow["fixModel"],
+  ) => {
+    if (!workflow || !commands.restartReviewer || reviewerAction !== null || pending) return;
+    setReviewerAction({ reviewerId, kind: "restart" });
+    setRestartDialogError(null);
+    try {
+      replaceWorkflow(await commands.restartReviewer(workflow.id, reviewerId, selection));
+      setRestartDialogReviewer(null);
+    } catch (reason) {
+      setRestartDialogError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setReviewerAction(null);
     }
   };
 
@@ -1074,6 +1149,21 @@ function MultiReviewOverviewTab({
     };
     const pause = () => void runStepLifecycle(kind, "pause", commands.pauseStep);
     const resume = () => void runStepLifecycle(kind, "resume", commands.resumeStep);
+    const bespoke = workflow.engine !== "graph";
+    const canSkip =
+      kind === "fix" &&
+      bespoke &&
+      Boolean(commands.skipStep) &&
+      (workflow.phase === "fixing" ||
+        workflow.phase === "interactive" ||
+        (workflow.phase === "paused" && workflow.pausedStep === "fix"));
+    const skip = () => void skipStep("fix");
+    const canRewind =
+      (kind === "prepare" || kind === "fix") &&
+      bespoke &&
+      status.state !== "not-started" &&
+      Boolean(commands.rewindCode);
+    const rewind = () => codeRewind.open(kind, title);
     const access = multiReviewStepSessionAccess(workflow, kind);
     const transcriptTabs = inspectorTranscriptTabs(
       key,
@@ -1141,6 +1231,18 @@ function MultiReviewOverviewTab({
                 Pause
               </ContextMenuItem>
             ) : null}
+            {canSkip ? (
+              <ContextMenuItem disabled={skippingStep !== null || restarting} onSelect={skip}>
+                <SkipForward />
+                Skip Address Findings
+              </ContextMenuItem>
+            ) : null}
+            {canRewind ? (
+              <ContextMenuItem disabled={restarting || lifecyclePending} onSelect={rewind}>
+                <History />
+                Rewind code to here…
+              </ContextMenuItem>
+            ) : null}
           </>
         ),
       },
@@ -1201,6 +1303,30 @@ function MultiReviewOverviewTab({
             >
               <Pause className="size-3.5" />
               Pause
+            </Button>
+          ) : null}
+          {canSkip ? (
+            <Button
+              variant="outline"
+              size="sm"
+              className={INSPECTOR_BUTTON_CLASS}
+              disabled={skippingStep !== null || restarting}
+              onClick={skip}
+            >
+              <SkipForward className="size-3.5" />
+              Skip
+            </Button>
+          ) : null}
+          {canRewind ? (
+            <Button
+              variant="outline"
+              size="sm"
+              className={INSPECTOR_BUTTON_CLASS}
+              disabled={restarting || lifecyclePending}
+              onClick={rewind}
+            >
+              <History className="size-3.5" />
+              Rewind code to here…
             </Button>
           ) : null}
         </>
@@ -1513,6 +1639,20 @@ function MultiReviewOverviewTab({
       });
     };
     const restart = () => void runReviewerAction(reviewer.id, "restart", commands.restartReviewer);
+    const restartIn = () => {
+      setRestartDialogError(null);
+      setRestartDialogReviewer({
+        id: reviewer.id,
+        name,
+        selection: {
+          agent: reviewer.agent,
+          model: reviewer.model,
+          ...(reviewer.reasoningEffort ? { reasoningEffort: reviewer.reasoningEffort } : {}),
+          ...(typeof reviewer.fastMode === "boolean" ? { fastMode: reviewer.fastMode } : {}),
+        },
+      });
+    };
+    const canSkipReview = stoppable && Boolean(commands.skipStep);
     const unstick = () => void runReviewerAction(reviewer.id, "unstick", commands.unstickReviewer);
     const stop = () => void stopReviewer(reviewer.id);
     const findings = reviewer.report
@@ -1554,6 +1694,13 @@ function MultiReviewOverviewTab({
               Restart
             </ContextMenuItem>
             <ContextMenuItem
+              disabled={!reviewerRestartable || reviewerActionsBlocked || !commands.restartReviewer}
+              onSelect={restartIn}
+            >
+              <RotateCcw />
+              Restart in…
+            </ContextMenuItem>
+            <ContextMenuItem
               disabled={!canUnstick || reviewerActionsBlocked || !commands.unstickReviewer}
               onSelect={unstick}
             >
@@ -1568,6 +1715,15 @@ function MultiReviewOverviewTab({
               )}
               Stop
             </ContextMenuItem>
+            {canSkipReview ? (
+              <ContextMenuItem
+                disabled={skippingStep !== null || reviewerActionsBlocked}
+                onSelect={() => void skipStep("review")}
+              >
+                <SkipForward />
+                Skip remaining reviewers
+              </ContextMenuItem>
+            ) : null}
           </>
         ),
       },
@@ -1595,6 +1751,19 @@ function MultiReviewOverviewTab({
                 <RotateCcw className="size-3.5" />
               )}
               Restart
+            </Button>
+          ) : null}
+          {reviewerRestartable && commands.restartReviewer ? (
+            <Button
+              variant="outline"
+              size="sm"
+              className={INSPECTOR_BUTTON_CLASS}
+              aria-label={`Restart ${name} in another model`}
+              title="Restart this reviewer on another agent or model"
+              disabled={reviewerActionsBlocked}
+              onClick={restartIn}
+            >
+              Restart in…
             </Button>
           ) : null}
           {canUnstick && commands.unstickReviewer ? (
@@ -1750,6 +1919,18 @@ function MultiReviewOverviewTab({
           </p>
         </div>
       </section>,
+    );
+  }
+  if (workflow.reviewWorktreeChanged === true) {
+    notices.push(
+      <div
+        key="worktree-changed"
+        data-testid="multi-review-worktree-changed"
+        className="rounded-lg border border-amber-500/30 bg-amber-500/8 p-3 text-sm text-amber-500"
+      >
+        The worktree changed during this review. The review carried on, so its report may not
+        describe the code as it is now.
+      </div>,
     );
   }
   if (workflow.reviewSnapshotStale === true && !workflow.reviewPackage) {
@@ -2025,6 +2206,24 @@ function MultiReviewOverviewTab({
           busy={customAddressFindingsPending}
           onSubmit={startCustomAddressFindings}
         />
+        {codeRewind.dialog}
+        {restartDialogReviewer ? (
+          <ModelRestartDialog
+            open
+            onOpenChange={(open) => {
+              if (!open) {
+                setRestartDialogReviewer(null);
+                setRestartDialogError(null);
+              }
+            }}
+            stepLabel={restartDialogReviewer.name}
+            catalog={modelCatalog}
+            defaultSelection={restartDialogReviewer.selection}
+            error={restartDialogError}
+            busy={reviewerAction?.reviewerId === restartDialogReviewer.id}
+            onSubmit={(selection) => void restartReviewerIn(restartDialogReviewer.id, selection)}
+          />
+        ) : null}
         {restartDialogStep ? (
           <MultiReviewRestartDialog
             open

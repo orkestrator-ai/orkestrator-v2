@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import type { BuildPipeline } from "@orkestrator/protocol/build-pipeline";
-import type { CoordinatorWorkflowAssociation } from "@orkestrator/protocol/coordinator";
+import type {
+  CoordinatorDelegation,
+  CoordinatorWorkflowAssociation,
+} from "@orkestrator/protocol/coordinator";
 import type { GraphRun } from "@orkestrator/protocol/graphs/run";
 import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
 import type { NodeSummary } from "@orkestrator/protocol/node-summaries";
@@ -15,6 +18,10 @@ import {
   type WorkEnvironment,
   type WorkPrReading,
   type WorkTicket,
+  nextWakeLine,
+  workAge,
+  workerTabTarget,
+  type CoordinatorWorkItem,
 } from "./coordinator-work-items";
 
 const NOW = Date.parse("2026-11-03T12:00:00.000Z");
@@ -1135,5 +1142,341 @@ describe("clearing finished work", () => {
     );
     expect(item).toMatchObject({ bucket: "finished", prOpen: true });
     expect(isClearableWorkItem(item!)).toBe(false);
+  });
+});
+
+describe("what a worker row says about its request", () => {
+  const row = (extra: Partial<CoordinatorDelegation>, createdAt = at(-HOUR)) =>
+    deriveCoordinatorWorkItems(
+      sources({
+        workflows: [
+          {
+            ...delegated("worker-1", "running", extra),
+            createdAt,
+          },
+        ],
+        environments: new Map([["worker-1", environment("worker-1")]]),
+      }),
+    )[0]!;
+
+  test("shows the summary, agent, model and age from the delegation", () => {
+    expect(
+      row({
+        request: {
+          summary: "Fix the parser",
+          agent: "codex",
+          model: "gpt-5",
+          source: "requested",
+        },
+      }),
+    ).toMatchObject({
+      summary: "Fix the parser",
+      agent: "codex",
+      model: "gpt-5",
+      overridden: true,
+      age: "1h",
+    });
+  });
+
+  test("a record from before the fields still renders, with an age from its request time", () => {
+    const item = row({});
+    expect(item.summary).toBeUndefined();
+    expect(item.agent).toBeUndefined();
+    expect(item!.model).toBeUndefined();
+    expect(item.overridden).toBeUndefined();
+    expect(item.age).toBe("1h");
+    expect(item.stage).toBe("Worker · running");
+  });
+
+  test("the summary is the newest request's; the selection keeps the newest that named a model", () => {
+    const launched = {
+      ...delegated("worker-1", "completed", {
+        request: { summary: "Build it", agent: "claude", model: "opus" },
+      }),
+      id: "launch",
+    };
+    const followUp = {
+      ...delegated("worker-1", "running", {
+        requestedAt: at(-60_000),
+        request: { summary: "Now add tests", agent: "claude" },
+      }),
+      id: "follow-up",
+    };
+    const [item] = deriveCoordinatorWorkItems(
+      sources({
+        workflows: [launched, followUp],
+        environments: new Map([["worker-1", environment("worker-1")]]),
+      }),
+    );
+    expect(item).toMatchObject({ summary: "Now add tests", agent: "claude", model: "opus" });
+  });
+
+  test.each([null, undefined])(
+    "a newer Codex job never inherits another tab's Claude model (%s)",
+    (model) => {
+      const old = {
+        ...delegated("worker-1", "completed", {
+          workerTabId: "old",
+          request: { summary: "Old", agent: "claude", model: "opus" },
+        }),
+        id: "old",
+      };
+      const next = {
+        ...delegated("worker-1", "running", {
+          requestedAt: at(-60_000),
+          workerTabId: "new",
+          request: { summary: "New", agent: "codex", ...(model === null ? { model } : {}) },
+        }),
+        id: "new",
+      };
+      const [item] = deriveCoordinatorWorkItems(
+        sources({
+          workflows: [old, next],
+          environments: new Map([["worker-1", environment("worker-1")]]),
+        }),
+      );
+      expect(item).toMatchObject({ summary: "New", agent: "codex" });
+      expect(item!.model).toBeUndefined();
+    },
+  );
+
+  test("a summary-only request on a new tab has no inherited selection", () => {
+    const old = {
+      ...delegated("worker-1", "completed", {
+        workerTabId: "old",
+        request: { agent: "claude", model: "opus" },
+      }),
+      id: "old",
+    };
+    const next = {
+      ...delegated("worker-1", "running", {
+        requestedAt: at(-60_000),
+        workerTabId: "new",
+        request: { summary: "Check the parser" },
+      }),
+      id: "new",
+    };
+    const [item] = deriveCoordinatorWorkItems(
+      sources({
+        workflows: [old, next],
+        environments: new Map([["worker-1", environment("worker-1")]]),
+      }),
+    );
+    expect(item?.agent).toBeUndefined();
+    expect(item?.model).toBeUndefined();
+  });
+
+  test("a finished row says how long ago, and offers no Stop", () => {
+    const item = row({ completedAt: at(-2 * HOUR), state: "completed" });
+    expect(item.bucket).toBe("finished");
+    expect(item.age).toBe("2h ago");
+    expect(item.stop).toBeUndefined();
+  });
+
+  test("a build row shows its agent", () => {
+    const [item] = deriveCoordinatorWorkItems(
+      sources({
+        workflows: [association({ kind: "build-pipeline", resourceId: "p1" })],
+        pipelines: new Map([["p1", pipeline("p1", { agentType: "claude" })]]),
+      }),
+    );
+    expect(item).toMatchObject({ kind: "build", agent: "claude", age: "2h" });
+  });
+
+  test("an unreadable creation time has no age rather than a fifty-year one", () => {
+    expect(workAge(0, false, NOW)).toBeUndefined();
+    expect(workAge(NOW, false, NOW)).toBe("under 1m");
+    expect(workAge(NOW, true, NOW)).toBe("just now");
+    expect(workAge(NOW - 3 * 24 * HOUR, false, NOW)).toBe("3d");
+  });
+});
+
+describe("Stop on a worker row", () => {
+  test("names every tab with a running turn the coordinator has not already stopped", () => {
+    const [item] = deriveCoordinatorWorkItems(
+      sources({
+        workflows: [
+          { ...delegated("worker-1", "running"), id: "one" },
+          {
+            ...delegated("worker-1", "running", { workerTabId: "second" }),
+            id: "two",
+          },
+          {
+            ...delegated("worker-1", "running", {
+              workerTabId: "stopping",
+              stopRequestedAt: at(-1),
+            }),
+            id: "three",
+          },
+        ],
+        environments: new Map([["worker-1", environment("worker-1")]]),
+      }),
+    );
+    expect(item?.stop).toEqual({
+      environmentId: "worker-1",
+      tabIds: ["tab-worker-1", "second"],
+    });
+  });
+
+  test("carries the node for a remote worker", () => {
+    const [item] = deriveCoordinatorWorkItems(
+      sources({
+        workflows: [{ ...delegated("leaf-env", "running"), nodeId: "bk_leaf" }],
+        nodes: [node("bk_leaf", "Studio", [{ environmentId: "leaf-env" }])],
+      }),
+    );
+    expect(item?.stop).toEqual({
+      environmentId: "leaf-env",
+      tabIds: ["tab-leaf-env"],
+      nodeId: "bk_leaf",
+    });
+  });
+
+  test("a row already stopping or whose environment is gone offers no Stop", () => {
+    const stopping = deriveCoordinatorWorkItems(
+      sources({
+        workflows: [delegated("worker-1", "running", { stopRequestedAt: at(-1) })],
+        environments: new Map([["worker-1", environment("worker-1")]]),
+      }),
+    )[0]!;
+    expect(stopping.stage).toBe("Worker · stopping");
+    expect(stopping.stop).toBeUndefined();
+    const gone = deriveCoordinatorWorkItems(
+      sources({
+        workflows: [
+          {
+            ...delegated("worker-1", "running"),
+            workerOutcome: { deletedAt: at(-1) } as never,
+          },
+        ],
+      }),
+    )[0]!;
+    expect(gone.stop).toBeUndefined();
+  });
+});
+
+describe("a remote worker's waiting prompt", () => {
+  const workflows = [{ ...delegated("leaf-env", "running"), nodeId: "bk_leaf" }];
+  const nodes = [node("bk_leaf", "Studio", [{ environmentId: "leaf-env" }])];
+
+  test("moves its row to Needs you by the node's key, not a local id", () => {
+    expect(
+      deriveCoordinatorWorkItems(
+        sources({
+          workflows,
+          nodes,
+          promptEnvironmentIds: new Set([remoteWorkKey("bk_leaf", "leaf-env")]),
+        }),
+      )[0]?.bucket,
+    ).toBe("needs-you");
+    // A local environment with the same id says nothing about the remote one.
+    expect(
+      deriveCoordinatorWorkItems(
+        sources({ workflows, nodes, promptEnvironmentIds: new Set(["leaf-env"]) }),
+      )[0]?.bucket,
+    ).toBe("running");
+  });
+});
+
+describe("workerTabTarget", () => {
+  const environments = [{ id: "local", projectId: "project-1" }];
+  const remoteNode = {
+    nodeId: "bk_leaf" as NodeSummary["nodeId"],
+    available: true,
+    environments: [
+      {
+        ref: { backendId: "bk_leaf", environmentId: "leaf-env" },
+        projectId: "leaf-project",
+        deleting: false,
+      },
+    ] as NodeSummary["environments"],
+  };
+  const lookup = { environments, nodes: [remoteNode] };
+
+  test("a worker here opens its tab", () => {
+    expect(workerTabTarget({ environmentId: "local", tabId: "t", title: "w" }, lookup)).toEqual({
+      type: "worker-tab",
+      projectId: "project-1",
+      environmentId: "local",
+      tabId: "t",
+    });
+  });
+
+  test("a worker on a node opens through that node, with its project", () => {
+    expect(
+      workerTabTarget(
+        { environmentId: "leaf-env", tabId: "t", nodeId: "bk_leaf", title: "w" },
+        lookup,
+      ),
+    ).toEqual({
+      type: "remote",
+      nodeId: "bk_leaf",
+      projectId: "leaf-project",
+      environmentId: "leaf-env",
+      title: "w",
+      workTarget: {
+        type: "worker-tab",
+        projectId: "leaf-project",
+        environmentId: "leaf-env",
+        tabId: "t",
+      },
+    });
+  });
+
+  test("anything it cannot reach is null", () => {
+    // A remote id with no node named (an older notice) is not a local worker.
+    expect(workerTabTarget({ environmentId: "leaf-env", title: "w" }, lookup)).toBeNull();
+    expect(
+      workerTabTarget({ environmentId: "gone", nodeId: "bk_leaf", title: "w" }, lookup),
+    ).toBeNull();
+    expect(
+      workerTabTarget({ environmentId: "leaf-env", nodeId: "bk_other", title: "w" }, lookup),
+    ).toBeNull();
+    expect(
+      workerTabTarget(
+        { environmentId: "leaf-env", nodeId: "bk_leaf", title: "w" },
+        { environments, nodes: [{ ...remoteNode, available: false }] },
+      ),
+    ).toBeNull();
+    expect(
+      workerTabTarget(
+        { environmentId: "leaf-env", nodeId: "bk_leaf", title: "w" },
+        {
+          environments,
+          nodes: [
+            {
+              ...remoteNode,
+              environments: [{ ...remoteNode.environments[0]!, deleting: true }],
+            },
+          ],
+        },
+      ),
+    ).toBeNull();
+    expect(
+      workerTabTarget(
+        { environmentId: "local", title: "w" },
+        { environments: [{ ...environments[0]!, deletionRequestedAt: at(-1) }], nodes: [] },
+      ),
+    ).toBeNull();
+  });
+});
+
+describe("nextWakeLine", () => {
+  const worker = (name: string, openDelegations: number) =>
+    ({ kind: "worker", name, openDelegations }) as CoordinatorWorkItem;
+
+  test("names one worker, counts several, and says nothing with none out", () => {
+    expect(nextWakeLine([])).toBeNull();
+    expect(nextWakeLine([worker("api-fix", 0)])).toBeNull();
+    expect(nextWakeLine([worker("api-fix", 1)])).toBe("Next wake when api-fix finishes");
+    expect(nextWakeLine([worker("api-fix", 1), worker("b", 1)])).toBe(
+      "Next wake when api-fix or 1 other finish",
+    );
+    expect(nextWakeLine([worker("api-fix", 2), worker("b", 1), worker("c", 1)])).toBe(
+      "Next wake when api-fix or 2 others finish",
+    );
+    expect(
+      nextWakeLine([{ kind: "build", name: "x", openDelegations: 1 } as CoordinatorWorkItem]),
+    ).toBeNull();
   });
 });

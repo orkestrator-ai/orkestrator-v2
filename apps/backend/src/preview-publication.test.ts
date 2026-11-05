@@ -518,6 +518,75 @@ describe("PreviewPublicationManager (private HTTPS origins)", () => {
     expect(manager.status().certificate!.validTo).not.toBe(before);
   });
 
+  test("a preview domain that shares a site with the application is served with a warning", async () => {
+    await manager.dispose();
+    const origins: string[] = ["http://127.0.0.1:4100", "https://ork.example.net"];
+    const logs = captureLogs();
+    try {
+      manager = new PreviewPublicationManager({
+        runtime: harness.runtime,
+        applicationOrigins: () => [...origins, null, "not an origin"],
+      });
+      await manager.start();
+      expect(manager.status().warning).toBeUndefined();
+      expect(manager.status().available).toBe(true);
+
+      // The application is served from a sibling of the preview hosts.
+      origins.push(`https://ork.${DOMAIN}`);
+      expect(manager.status()).toMatchObject({
+        available: true,
+        warning: expect.stringContaining(`same site as Orkestrator (ork.${DOMAIN})`),
+      });
+      // Warn, never refuse: the origin is still advertised.
+      expect(manager.originFor(serviceId)).not.toBeNull();
+      expect(harness.runtime.capabilities().surfaces.browserTopLevel.available).toBe(true);
+      expect(harness.runtime.diagnostics().publication).toMatchObject({
+        warning: expect.any(String),
+      });
+
+      await manager.reconfigure();
+      await harness.runtime.updateSettings((current) => ({
+        ...current,
+        publication: { ...current.publication, port: null },
+      }));
+      await manager.reconfigure();
+      const warned = logs.records().filter((record) => record.event === "publication.same-site");
+      expect(warned).toHaveLength(1);
+      expect(JSON.stringify(warned[0])).not.toContain(`ork.${DOMAIN}`);
+    } finally {
+      logs.restore();
+    }
+  });
+
+  test("tailnet names under ts.net are separate sites for the same-site warning", async () => {
+    await manager.dispose();
+    const origins = ["https://machine.tailnet.ts.net"];
+    manager = new PreviewPublicationManager({
+      runtime: harness.runtime,
+      applicationOrigins: () => origins,
+    });
+    const useDomain = async (domain: string) => {
+      await harness.runtime.updateSettings((current) => ({
+        ...current,
+        publication: { ...current.publication, domain },
+      }));
+      await manager.reconfigure();
+    };
+    await useDomain("preview.other.ts.net");
+    // Unavailable (the test certificate covers another name) but not same-site.
+    expect(manager.status().available).toBe(false);
+    expect(manager.status().warning).toBeUndefined();
+    await useDomain("preview.tailnet.ts.net");
+    expect(manager.status().warning).toContain("preview.tailnet.ts.net");
+    // Disabled publication has nothing to warn about.
+    await harness.runtime.updateSettings((current) => ({
+      ...current,
+      publication: { ...current.publication, enabled: false },
+    }));
+    await manager.reconfigure();
+    expect(manager.status().warning).toBeUndefined();
+  });
+
   test("public binds are refused", async () => {
     await harness.runtime.updateSettings((current) => ({
       ...current,

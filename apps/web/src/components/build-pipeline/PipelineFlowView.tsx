@@ -60,13 +60,17 @@ import { defaultFlowSelection } from "@/components/flow-graph/flow-graph-model";
 import { reviewerStatusNote } from "@/components/review/multi-review-steps";
 import { ReviewValidationStatus } from "@/components/review/ReviewValidationStatus";
 import { ReviewerStartFailureNotice } from "@/components/review/ReviewerStartFailureNotice";
+import { reviewerProvisionalSummary } from "@/components/review/multi-review-steps";
 import { WorkflowResultStatus } from "@/components/review/WorkflowResultStatus";
 import {
   pipelineFlowModel,
   pipelinePackageRestartStageId,
   pipelineReviewPassNodes,
   pipelineReviewerStartFailures,
+  pipelineRestartableReviewerId,
+  pipelineReviewWorktreeChanged,
   pipelineSkipAction,
+  pipelineStoppableReviewerId,
   type PipelineFlowModel,
   type PipelineFlowNode,
 } from "./pipeline-flow";
@@ -181,8 +185,8 @@ export interface PipelineFlowViewProps {
  *
  * The graph is a projection of the pipeline record; selection, zoom, pan and
  * whether the graph is collapsed are view state and never reach the record.
- * A node opens in the inspector on a click, and its session opens in a tab of
- * its own on a double click.
+ * A node opens in the inspector on a click, and its session, or the Notes
+ * step's notes, opens in a tab of its own on a double click.
  */
 export function PipelineFlowView({
   pipeline,
@@ -341,6 +345,12 @@ export function PipelineFlowView({
     if (!options || !createTab || !node.session) return;
     createTab(node.session.agent ?? pipeline.agentType, options);
   };
+  const openNotes = () => {
+    if (!createTab) return;
+    createTab("key-information", {
+      keyInformation: { environmentId, pipelineId: pipeline.id, view: "notes" },
+    });
+  };
   const openReview = (key: string) => {
     if (!createTab) return;
     createTab("multi-review", {
@@ -395,6 +405,14 @@ export function PipelineFlowView({
         onSelect: () => openSession(node),
       });
     }
+    if (node.kind === "notes" && createTab) {
+      actions.push({
+        key: "open-notes",
+        label: "Open notes in a tab",
+        icon: ExternalLink,
+        onSelect: openNotes,
+      });
+    }
     if (node.passKey && !passKey && createTab && !node.placeholder) {
       actions.push({
         key: "open-review",
@@ -426,6 +444,26 @@ export function PipelineFlowView({
         icon: RefreshCw,
         disabled,
         onSelect: () => controls.retryStage(),
+      });
+    }
+    const stoppableReviewer = pipelineStoppableReviewerId(pipeline, node);
+    if (stoppableReviewer) {
+      actions.push({
+        key: "stop-reviewer",
+        label: "Stop reviewer",
+        icon: Square,
+        disabled,
+        onSelect: () => controls.stopReviewer(stoppableReviewer),
+      });
+    }
+    const restartableReviewer = pipelineRestartableReviewerId(pipeline, node);
+    if (restartableReviewer) {
+      actions.push({
+        key: "restart-reviewer",
+        label: "Restart reviewer",
+        icon: RefreshCw,
+        disabled,
+        onSelect: () => controls.restartReviewer(restartableReviewer),
       });
     }
     if (node.session && !node.placeholder && !node.superseded) {
@@ -559,7 +597,9 @@ export function PipelineFlowView({
     const actions = actionsFor(node);
     nodeActions.set(node.id, actions);
     const canOpen =
-      Boolean(node.session && createTab) || (node.kind === "pr" && Boolean(pullRequest && shipped));
+      Boolean(node.session && createTab) ||
+      (node.kind === "pr" && Boolean(pullRequest && shipped)) ||
+      (node.kind === "notes" && Boolean(createTab));
     const view = pipelineNodeView({
       node,
       pipeline,
@@ -567,7 +607,11 @@ export function PipelineFlowView({
       now,
       modelLabel,
       canOpen,
-      onOpen: () => (node.kind === "pr" ? void viewPR() : openSession(node)),
+      onOpen: () => {
+        if (node.kind === "pr") void viewPR();
+        else if (node.kind === "notes") openNotes();
+        else openSession(node);
+      },
       contextMenu: contextMenuFor(actions),
     });
     if (
@@ -650,6 +694,15 @@ export function PipelineFlowView({
       <OverviewScroll>
         <div className="@container flex min-h-full flex-col">
           {notices}
+          {pipelineReviewWorktreeChanged(pipeline) ? (
+            <div
+              className="shrink-0 border-b border-divider bg-amber-500/8 px-3 py-2 text-sm text-amber-500"
+              data-testid="pipeline-review-stale"
+            >
+              The worktree changed during the latest review. The review carried on, so its report
+              may not describe the code as it is now.
+            </div>
+          ) : null}
           {startFailures.failures.length > 0 ? (
             <div className="shrink-0 border-b border-divider px-3 py-2">
               <ReviewerStartFailureNotice
@@ -883,6 +936,21 @@ function InspectorNotes({
       <p key="error" className="break-words whitespace-pre-wrap text-failure">
         {node.error}
       </p>,
+    );
+  }
+  const provisional = node.reviewer ? reviewerProvisionalSummary(node.reviewer) : null;
+  if (provisional) {
+    notes.push(
+      <div key="provisional" data-testid="pipeline-reviewer-provisional">
+        <p className="text-muted-foreground">{provisional}</p>
+        <ul className="mt-1 space-y-0.5">
+          {node.reviewer!.provisionalFindings!.map((finding) => (
+            <li key={finding.id} className="break-words">
+              {finding.issue.severity} · {finding.issue.title}
+            </li>
+          ))}
+        </ul>
+      </div>,
     );
   }
   if (session?.resultSubmission) {

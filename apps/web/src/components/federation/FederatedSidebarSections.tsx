@@ -811,6 +811,7 @@ function activitySortKey(
     activity: environment.buildActive ? "working" : environment.activity,
     activityUpdatedAt: environment.activityUpdatedAt,
     lastActivityAt: environment.lastActivityAt,
+    prState: environment.prState,
     machineId: machine.backendId,
     projectOrder,
     order: environment.order,

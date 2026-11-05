@@ -442,10 +442,13 @@ and no interactive links. `TextPart` passes a stable `richPartId`
   (`transcript_media_close_stream`); nothing else is cancelled. Only files
   the resolver itself would read from a live path stream
   (`mediaStreamTarget`: an absolute host path, or a safe workspace-relative
-  container path; never inline, remote or detail-reference bytes). The
+  container path; never inline, remote or detail-reference bytes). A
+  detached transcript streams a host path with no environment, under the
+  `read_file_base64` roots; its container paths keep the base64 read. The
   bounded base64 path stays the fallback: no reachable content origin, an
   older backend, a transient staging limit (`renderer_unavailable`,
-  `capacity_exceeded`, unknown command), or a stream that errors before its
+  `capacity_exceeded`, `invalid_input` from a backend that predates
+  environment-less streams, unknown command), or a stream that errors before its
   metadata loads (a desktop window attached to a remote backend). Refusals
   (`policy_denied`, `not_found`, `package_size_exceeded`,
   `unsupported_kind`) are shown as denied, unavailable, too large or
@@ -522,14 +525,31 @@ and chart labels, and artifact cards by their search roots: the summary,
 then — once the card has loaded and is showing it — the body
 (`artifactPartSearchSegments` in `lib/chat/rich-search-text.ts`). A chart
 artifact's body root holds its labels (`chartSpecSearchText`), a workflow
-snapshot's its title, description, node and edge labels, both as hidden
-mirrors bounded to 64 Ki characters; a Mermaid artifact's source is a search
-root only while its source view is shown. The card writes that text to a
-bounded synchronous cache keyed by publication id
+snapshot's its title, description, node and edge labels, a static document's
+the text its frame reported ([Static document
+presentation](#static-document-presentation)), all as hidden mirrors bounded to
+64 Ki characters; a Mermaid artifact's source is a search root only while its
+source view is shown. The card writes that text to a synchronous cache keyed by
+publication id and bounded by count and total characters
 (`rememberArtifactSearchBody` / `cachedArtifactSearchBody` in
-`artifact-requests.ts`), so an unloaded body contributes only the summary
-and find never reports a match it cannot reveal. Find's projection is
-recomputed when the transcript changes, not when a body finishes loading. Toolbar
+`artifact-requests.ts`), so an unloaded body contributes only the summary.
+Each entry names its conversation, so clearing a conversation's or
+environment's protected content takes its text too. A match in a chart's,
+workflow's or unframed document's mirror leads to its card; a framed static
+document highlights it inside the frame ([Static document
+presentation](#static-document-presentation)). While its bar is open,
+`useAgentChatFind` follows the cache (`artifactSearchBodyRevision`), so a body
+arriving or leaving updates the count with no query edit, in the same commit
+that changes the card's mirror, and counts and DOM pairing agree. A card that
+mounts again with the same body changes nothing, and a closed bar does not
+subscribe. The selection is held by identity
+(`agent-chat-find-selection.ts`): its row, its source in the row
+(`SearchProjection.roots`, a text part or an artifact's summary or body, named
+by its place in `message.parts`) and its offset in that source. Text arriving
+before it moves its position and its number in the count, not which match it is,
+and recomputing around the same selection is not a navigation, so a reader who
+scrolled away stays there. A selection whose text has gone falls to whatever now
+holds its place, which is a navigation. Toolbar
 chrome (`data-rich-chrome`) is excluded from find highlighting and copy.
 Find temporarily reveals a hidden match and restores the user's choice when
 find closes. Copy code, Copy source, Copy table, Copy data and Copy message
@@ -855,16 +875,66 @@ image's context digest, so refactoring it would invalidate every unpublished
 receipt and every prepared worker image with no change in behaviour. Unifying them
 belongs with the next intentional change to the design runtime.
 
-**Channel.** `render` and `theme` from the host; `ready`, `rendered`, `size`,
-`error`, `interaction`, `link-request` and `escape` from the frame. Nothing else
-exists: no backend invocation, tool, clipboard or generic key forwarding. The
+The presentation runtime is the other side of that line. Neither
+`installStaticHtmlPresentationRuntime` nor anything else in this file reaches the
+worker bundle, so changing it moves neither `STATIC_RENDERER_HASH` nor the context
+digest: no receipt is re-verified and no image rebuilt
+(`preview-worker-context-digest.test.ts` pins the bundle's contents).
+`rich-content-policy.ts` is different. The worker imports it, and
+`STATIC_PRESENTATION_POLICY` stays in its bundle, so a new value in that table does
+change the digest. A limit only the frame reads therefore lives beside the runtime
+(`STATIC_HTML_MAX_FIND_QUERY_CHARACTERS`).
+
+**Channel.** `render`, `theme` and `find` from the host; `ready`, `rendered`, `text`,
+`size`, `error`, `interaction`, `link-request`, `escape` and `find-match` from the
+frame. Nothing else exists: no backend invocation, tool, clipboard or generic key forwarding. The
 frame's origin is `"null"` and proves nothing, so `StaticHtmlFrameSession` checks
 the exact sender window, the per-mount nonce and generation, the protocol version,
 the exact keys and the size of every message. `render` goes out once, after this
 mount's own `ready`. A second `load` or `ready` invalidates the mount without
 resending anything; **Retry** mounts a new iframe with a new identity. An
 oscillating height or a message flood stops the mount with a stated reason.
-`interaction` carries three booleans and never any selected text.
+`interaction` carries three booleans and never any selected text; `find-match`
+carries two numbers.
+
+**Find.** After `rendered`, the runtime reads the sanitized document's text and
+posts it as `text` chunks, which is the only way it leaves the frame. The host
+never parses artifact HTML: the session reassembles the chunks and the card
+publishes the result to Find's cache and a hidden mirror, as a React text node.
+The text comes from the tree rather than layout, so a closed `<details>` counts,
+a hidden tab reports the same text, and `<head>`, `<style>`, `<noscript>` and the
+`hidden` attribute do not count (text hidden only by CSS does). Inline elements
+join their neighbours; any other element is a boundary a search does not match
+across. One report per mount, whole or not at all: a chunk out of sequence means
+the rate limiter dropped one, and that mount's text is abandoned. Scrolling away
+keeps the text and a remounted card reads it back from the cache; Saved preview,
+Source, a frame failure and a failed read withdraw it.
+
+An open Find bar asks each rendered frame in its transcript through `find`: the
+query, and the active match's occurrence if this document holds it
+(`StaticDocumentFindContext`, computed from the same matches Find counts). The
+frame draws every match and the active one with the CSS Custom Highlight API. The
+matching repeats `findAgentChatTextMatches` over the text the frame reported, and
+that text and the ranges come from one walk that remembers each character's node
+and offset, so ordinals agree, including across inline elements, Unicode case
+folding and the 64 Ki cut (`static-html-find-ordinals.test.ts` runs the real
+runtime against the real matcher). Nothing is written into the document, so the
+query never reaches its DOM and its authored CSS cannot observe it. No script of
+its own runs, and `connect-src 'none'` gives the frame nowhere to send anything;
+the query goes no further than `postMessage` to this mount's window and is never
+stored or logged. A closed `<details>` around the active match opens and closes
+again when the match moves on or Find closes, unless the reader toggled it. A
+document taller than its frame scrolls inside it. The frame then reports the
+match's box as `find-match`, at most ten times a second, and the transcript's
+navigation refines onto it (`staticDocumentMatchRect`), until the reader moves.
+The message has exact keys and a bounded query and occurrence, checked by the
+frame as well as by the session, which sends a query past its limit as a clear.
+A browser without the Highlight API still reveals and scrolls.
+
+A deferred card has no frame to ask and behaves as it did before: its text still
+counts if a frame reported it earlier, and the match leads to the card. So does a
+query past the limit, and text hidden only by the document's own CSS, which reports
+a height of 0.
 
 **Theme.** `--ork-*` tokens and `--ork-chart-1…8` (`readStaticHtmlThemeTokens`).
 The application currently ships dark only (`class="dark"`), while verified
@@ -885,6 +955,8 @@ paint an opaque canvas over a transparent themed document.
 | Size updates applied | 4 per second, latest wins | `FRAME_CHANNEL_POLICY`; the host coalesces rather than drops, so the final height always lands |
 | Frames per window | 4 | Initial resource policy, qualified below; not a performance guarantee |
 | Render timeout | 15 s | Then released, with retry. The saved preview stays on screen meanwhile, so it errs long: a page under a saturated host took over 5 s |
+| Text for Find | 64 Ki characters, in chunks of 2 Ki | The limit of other artifact bodies. A chunk of three-byte characters stays within `FRAME_CHANNEL_POLICY.maxMessageBytes`, and a full report's 32 chunks fit its burst of 40 |
+| Find query sent to a frame | 1,024 characters | Three-byte characters this many still fit `FRAME_CHANNEL_POLICY.maxMessageBytes`, which a test pins. Beside the runtime rather than in `STATIC_PRESENTATION_POLICY`, because that table feeds the worker's digest |
 
 **Allocation (`stores/staticHtmlFrameSlots.ts`).** Ranks, highest first:
 expanded, interacting (focus, selection or pointer down, reported by the frame),
@@ -936,9 +1008,13 @@ on a static document, so the frame bound is also asserted by
 The gate never held four frames on screen at once: the fixture's documents are 150
 messages apart, so four simultaneous frames are not separately measured.
 
-**Limits.** Text inside the frame does not participate in Find; the card's summary
-and source behaviour are unchanged. Multiple automatically executing JavaScript
-documents, more chart types and a convenience publishing tool are out of scope:
+**Limits.** Find covers a document only after its frame has rendered it in this
+session, so a report the reader has not reached matches only by its summary. Text
+beyond 64 Ki characters is not searchable, and the card does not say so. Indexing
+a report that was never shown is open:
+[`5780`](../todo/transcripts-and-observation/5780-find-inside-static-documents.md).
+Multiple automatically executing JavaScript documents, more chart types and a
+convenience publishing tool are out of scope:
 [`4650`](../todo/transcripts-and-observation/4650-static-html-presentation-follow-ups.md).
 
 ## Rollout

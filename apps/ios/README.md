@@ -31,9 +31,9 @@ Alternatively:
 3. Choose an iPhone or simulator and run the `OrkestratorMobile` scheme.
 4. Enter only the HTTPS origin, for example `https://workstation.tailnet.ts.net`, and the gateway token.
 
-The first successful connection is saved with `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`, so it is unavailable while the device is locked and is not migrated through backups. The token is never written to `UserDefaults`, local storage, or JavaScript. Each app process creates an ephemeral WebKit session and exchanges the Keychain token for the backend's HttpOnly session cookie.
+The first successful connection is saved with `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`, so it is unavailable while the device is locked and is not migrated through backups. A saved token is never written to `UserDefaults` or local storage and is never handed to JavaScript. Each app process creates an ephemeral WebKit session and exchanges the Keychain token for the backend's HttpOnly session cookie.
 
-On every cold launch, the native app asks which saved server to open. Returning to an app that is already running keeps the current server. Saved servers also appear in the existing server switcher inside Orkestrator's mobile sidebar; adding or switching there is routed back through the native Keychain store.
+On every cold launch, the native app asks which saved server to open. Returning to an app that is already running keeps the current server. Saved servers also appear in the existing server switcher inside Orkestrator's mobile sidebar; adding or switching there is routed back through the native Keychain store. A token added that way is typed into the current server's page before it reaches the native side ([to-do 5600](../../docs/todo/cross-cutting/5600-ios-bridge-user-consent.md)).
 
 If the active server is offline or its credential has expired, use **Switch saved server** on the native failure screen to reach another Keychain-backed connection without re-entering its token.
 
@@ -44,5 +44,18 @@ mise run test:logged -- --name ios-tests -- mise run test:ios
 ```
 
 If the runner reports that the Xcode license has not been accepted, it stops before Swift compilation and no test assertions execute. Open Xcode, review and accept its license, and complete first-launch setup before rerunning the command. An exit caused by this prerequisite leaves iOS validation incomplete; it is not an assertion failure.
+
+If `xcodebuild` finds no eligible destination ("iOS 26.5 is not installed"), the simulator platform matching your Xcode's SDK is missing, even when older simulator runtimes are installed. Install it under **Xcode > Settings > Components**. This too leaves iOS validation incomplete.
+
+On an Apple silicon Mac, the equivalent command-line setup is:
+
+```bash
+xcodebuild -downloadPlatform iOS -architectureVariant arm64
+mise run test:logged -- --name ios-tests -- mise run test:ios
+```
+
+The download is several gigabytes. Check `xcrun simctl runtime match list` if a downloaded runtime still does not satisfy Xcode: its build number must satisfy the SDK's runtime mapping, and `xcrun simctl runtime scan-and-mount` can reconcile an installed image that is not mounted. See [Apple's component installation guide](https://developer.apple.com/documentation/xcode/downloading-and-installing-additional-xcode-components).
+
+This runs the repository's shared `OrkestratorMobile` scheme, including its app host and asset catalog; a separate `swiftc` host does not validate those project settings. On 2026-11-05 the scheme passed all 66 tests on iOS 26.2, built with Xcode 26.6. [To-do 5601, task 1](../../docs/todo/cross-cutting/5601-ios-runtime-security-checks.md#1-run-the-suite-through-xcodes-own-scheme) records the runtime setup, command and result bundle. Device and signed-release checks remain open.
 
 Plain HTTP and invalid TLS certificates are intentionally rejected. Use Tailscale Serve HTTPS as described in the repository root README.

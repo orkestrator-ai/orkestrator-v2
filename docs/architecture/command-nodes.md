@@ -382,7 +382,14 @@ A command node attached to another command node operates in leaf mode:
   information, but they are mostly hidden: the portal and the node's own UI
   do not show them by default. They can be opened behind a warning that the
   node is in leaf mode and that coordination happens on the named command
-  node.
+  node ("the command node" when no controller name is known). Until the
+  node's portal status has loaded, the coordinator tab shows only "Checking
+  repository coordination…", so the coordinator neither flashes nor starts
+  before the node's mode is known; a failed status read counts as loaded and
+  opens the coordinator as on any other node. Opening it anyway is
+  remembered per node and project for the rest of the app session
+  (`openedLeafCoordinators` in the UI store, not persisted), so the warning
+  returns after a restart.
 - A window whose workspace is on a leaf follows its sidebar grouping.
   Grouped by repository, the window links each repository's projects
   across machines, so the leaf's coordinator is replaced by the same
@@ -440,9 +447,28 @@ A command node attached to another command node operates in leaf mode:
     may expand the subscription; removals filter locally until the last watch
     leaves. Accumulated prefixes are bounded. The relay filters against the
     current watch union and re-emits each matching event as
-    `relayed-node-event` `{ nodeId, kind: "event", event, payload }`. A
-    `{ nodeId, kind: "resync" }` frame (every stream open, every gap) means
+    `relayed-node-event:<nodeId>` `{ nodeId, kind: "event", event, payload }`.
+    A `{ nodeId, kind: "resync" }` frame (every stream open, every gap) means
     re-read what is shown from that node. Terminal output is never relayed.
+  - *Relayed frames have their own replay window.* The gateway keeps them in
+    a second ring (512 frames, 512 KiB; `relayedEventReplay`), with its own
+    generation and revisions, so a busy leaf can only expire relayed cursors
+    and never forces a client's main stream to reconcile. A renderer's main
+    stream asks for none of them (`relayedEvents=per-node`) and reads them on
+    one extra stream filtered to its watched nodes
+    (`includeEvents=relayed-node-event:<nodeId>,…`,
+    `lib/native/relayed-event-stream.ts`). Changing the filter reopens that
+    stream from its cursor, so nothing is lost and nothing re-reads. A gap the
+    ring cannot cover reaches each watched node as a `resync` frame.
+  - *Older peers.* A stream that does not ask for per-node names, which is what
+    an older renderer sends, gets each frame as `relayed-node-event` with no
+    `id`, and is sent a `resync` for the nodes that relayed something since its
+    cursor when it reconnects. An older command node answers `watch_node_events`
+    with no `perNodeEvents` and sends only that name, which the renderer always
+    listens for. The desktop's main process also takes the old name
+    (`relayedEvents=legacy`), because it forwards to windows without tracking
+    their watches ([5841](../todo/cross-cutting/5841-desktop-main-relayed-stream.md)).
+    See the [register](version-compatibility.md#register).
   - In the renderer, `lib/federation/node-events.ts` holds one lease per
     node for every view and tells each view when to read (first after its
     subscription, then after any possible gap). The sidebar's change badge

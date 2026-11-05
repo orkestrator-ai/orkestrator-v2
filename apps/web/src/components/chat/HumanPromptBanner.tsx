@@ -1,6 +1,7 @@
 import { AlertCircle } from "lucide-react";
 
 import { HumanPromptActions, humanPromptHeadline } from "@/components/chat/HumanPromptActions";
+import { Button } from "@/components/ui/button";
 import type { HumanPromptEntry } from "@orkestrator/protocol/human-prompts";
 
 /**
@@ -9,13 +10,19 @@ import type { HumanPromptEntry } from "@orkestrator/protocol/human-prompts";
  * command runs in and in the coordinator conversation that owns the worker,
  * from the same backend registry, so both clear when the command moves on.
  */
-export function HumanPromptBanner({
+export function HumanPromptBanner<Entry extends HumanPromptEntry & { nodeId?: string }>({
   prompts,
   label,
+  onOpen,
+  canOpen,
 }: {
-  prompts: readonly HumanPromptEntry[];
+  prompts: readonly Entry[];
   /** Where each prompt is, when the banner covers several environments. */
-  label?: (entry: HumanPromptEntry) => string | undefined;
+  label?: (entry: Entry) => string | undefined;
+  /** Opens the tab a prompt belongs to, when the banner is shown somewhere else. */
+  onOpen?: (entry: Entry) => void;
+  /** Whether `onOpen` has anywhere to go for this entry; every entry when absent. */
+  canOpen?: (entry: Entry) => boolean;
 }) {
   if (prompts.length === 0) return null;
   return (
@@ -28,7 +35,10 @@ export function HumanPromptBanner({
       {prompts.map((entry) => {
         const where = label?.(entry);
         return (
-          <div key={`${entry.environmentId}:${entry.id}`} className="min-w-0 space-y-1.5">
+          <div
+            key={`${entry.nodeId ?? ""}:${entry.environmentId}:${entry.id}`}
+            className="min-w-0 space-y-1.5"
+          >
             <div className="flex min-w-0 items-center gap-1.5 text-xs text-amber-200">
               <AlertCircle className="size-3.5 shrink-0" aria-hidden="true" />
               <span className="font-medium">{humanPromptHeadline(entry.prompt)}</span>
@@ -40,6 +50,18 @@ export function HumanPromptBanner({
                 >
                   {entry.command}
                 </code>
+              ) : null}
+              {onOpen && (canOpen?.(entry) ?? true) ? (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="ml-auto h-6 shrink-0 px-2 text-[11px]"
+                  aria-label={`Open ${where ?? "the worker's tab"}`}
+                  title="Open the worker's tab"
+                  onClick={() => onOpen(entry)}
+                >
+                  Open
+                </Button>
               ) : null}
             </div>
             {entry.prompt.url || entry.prompt.code ? (

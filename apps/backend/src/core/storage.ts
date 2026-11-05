@@ -18,7 +18,10 @@ export type { PublicOperationsStorage } from "./storage-public-operations.js";
 
 import type { NativeAgentGoal } from "@orkestrator/protocol/native-agent-goal";
 import type { NativeSessionInvalidationCause } from "@orkestrator/protocol/native-agent-observation";
-import type { EnvironmentAttentionEvent } from "@orkestrator/protocol/environment-attention";
+import type {
+  CoordinatorWakeAttentionEvent,
+  EnvironmentAttentionEvent,
+} from "@orkestrator/protocol/environment-attention";
 import type { ScheduledJobStore } from "./scheduled-jobs/store.js";
 import type { PermissionRuleStore } from "./permission-rules/store.js";
 import {
@@ -196,6 +199,7 @@ export class StorageService {
   async init(): Promise<void> {
     await this.context.open();
     this.context.startSnapshots();
+    await this.repos.config.restrictConfigFileModes();
     await this.repos.config.migrateConfigSchema();
     await this.repos.nativeAgentSessions.migrateNativeAgentSessionOwners();
   }
@@ -236,6 +240,15 @@ export class StorageService {
     return this.context.changes.addEnvironmentAttentionListener(listener);
   }
 
+  /** Observe coordinators woken for a worker they waited on (the "coordinator report" signal). */
+  addCoordinatorWakeListener(listener: (event: CoordinatorWakeAttentionEvent) => void): () => void {
+    return this.context.changes.addCoordinatorWakeListener(listener);
+  }
+
+  notifyCoordinatorWake(event: CoordinatorWakeAttentionEvent): void {
+    this.context.changes.notifyCoordinatorWake(event);
+  }
+
   /**
    * Publish a provider-authoritative projection after its cache is committed.
    * `cause` names the announcing code path (content-free; todo 0049 task 4).
@@ -273,6 +286,11 @@ export class StorageService {
   /** The prompts waiting on the user in an environment changed. */
   announceHumanPrompts(environmentId: string): void {
     this.context.changes.announce("human-prompt", environmentId);
+  }
+
+  /** Whether this backend fires schedules changed (its writer lease was lost). */
+  announceSchedulerStatus(): void {
+    this.context.changes.announce("scheduled-job", "scheduler");
   }
 
   scheduledJobStore(): ScheduledJobStore {
@@ -898,6 +916,13 @@ export class StorageService {
 
   getMultiReviewWorkflow(workflowId: string): Promise<PersistedMultiReviewWorkflow | null> {
     return this.repos.reviews.getMultiReviewWorkflow(workflowId);
+  }
+
+  /** Reviewers of reviews in their reviewers' stage, as agent mail workers. */
+  listMultiReviewWorkers(
+    environmentId?: string,
+  ): ReturnType<StorageRepositories["reviews"]["listMultiReviewWorkers"]> {
+    return this.repos.reviews.listMultiReviewWorkers(environmentId);
   }
 
   listMultiReviewWorkflows(environmentId: string): Promise<PersistedMultiReviewWorkflow[]> {

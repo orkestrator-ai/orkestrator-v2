@@ -5,9 +5,12 @@
  * machine's alike, so a row keeps its place when another machine comes into
  * view or is filtered out.
  *
- * - "priority": unread work first, then waiting, working and idle; newest
- *   first within each by last activity time, falling back to the snapshot
- *   only when the record has no last activity time.
+ * Every order keeps merged environments below unmerged ones and working
+ * environments below the others. Within those groups:
+ *
+ * - "priority": unread work first, then waiting and idle; newest first within
+ *   each by last activity time, falling back to the snapshot only when the
+ *   record has no last activity time.
  * - "newest"/"oldest": by the last activity time alone, which snapshot and
  *   lease writes do not move.
  *
@@ -27,6 +30,8 @@ export interface ActivitySortKey {
   activityUpdatedAt?: string;
   /** When a prompt or completion last happened. */
   lastActivityAt?: string;
+  /** The last PR reading; merged environments sort below unmerged ones. */
+  prState?: string | null;
   /** The owning machine's ID; equal for every row of one machine. */
   machineId: string;
   /** The project's sidebar order; unknown projects sort last. */

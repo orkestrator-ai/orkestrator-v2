@@ -160,6 +160,9 @@ export function useControlMcpServerHarness() {
         case "verify_project_launch_base":
           result = { contained: true };
           break;
+        case "get_pane_layout":
+        case "get_coordinator_launch_environment":
+        case "get_coordinator_node_launch_environment":
         case "get_opencode_model_catalog_cache":
           result = null;
           break;

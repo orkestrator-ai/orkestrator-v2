@@ -201,6 +201,7 @@ export class AgentMailBudgets {
               id: from.tabId,
               environmentId: from.environmentId,
               tabId: from.tabId,
+              ...(from.kind === "node" ? { nodeId: from.nodeId } : {}),
               ...(from.title ? { label: from.title } : {}),
             },
             state: "mail-held",

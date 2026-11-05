@@ -309,6 +309,7 @@ describe("setting a goal", () => {
     expect(resultText(result)).not.toContain("--budget 5");
     const open = await harness.storage.coordinators.listOpenCoordinatorDelegations();
     expect(open.map((item) => item.delegation?.workerTabId)).toEqual([owned]);
+    expect(open[0]?.delegation?.request).toMatchObject({ summary: objective });
   });
 
   test("an open delegation on the tab is the wake, and no second one opens", async () => {

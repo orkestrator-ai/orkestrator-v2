@@ -76,7 +76,6 @@ export function createMockAppConfig(overrides: Partial<AppConfig> = {}): AppConf
       allowedDomains: [],
       terminalAppearance: { ...DEFAULT_TERMINAL_APPEARANCE },
       terminalScrollback: DEFAULT_TERMINAL_SCROLLBACK,
-      experimentalCodexRawEventLogging: true,
     },
     repositories: {},
     ...overrides,

@@ -59,7 +59,8 @@ A schedule (`ScheduledJob`) records:
   `{kind: "interval", everySeconds, anchorAt}`, normalized at creation.
 - **timeZone**: an IANA zone, always stored. It defaults to the backend
   host's zone (`Intl.DateTimeFormat().resolvedOptions().timeZone`, `UTC` when
-  the runtime cannot name one).
+  the runtime cannot name one); a coordinator's `create_schedule` defaults to
+  the user's own zone instead once it is known (see [Self-timers](#self-timers)).
 - **action**: what fires (see [Actions](#actions)).
 - **catchUpMinutes**: the per-schedule missed-fire window (default 15, 0 to
   10 080).
@@ -150,6 +151,14 @@ after now.
   the registry writer lease (`registry-writer-lease.ts`), the same
   single-writer guard container reconciliation uses. Any backend may create
   and edit schedules; the writer picks the change up within one safety tick.
+  `list_scheduled_jobs` answers whether this backend fires in `scheduler`
+  (`{ firing: true }`, or `firing: false` with `writer-lease-lost`,
+  `another-backend` or `newer-data-directory`), and Settings → Schedules
+  shows a notice from `schedulerPausedMessage` when it does not and there are
+  schedules. A lost lease is final until a restart; losing it announces a
+  `scheduled-job` change, so an open Settings view rereads. The field is
+  additive: a renderer that predates it ignores it, and a backend that
+  predates it sends none, which reads as no known pause.
 - **One fire per schedule at a time.** A running fire or pending busy retry blocks the next slot
   until it settles.
 - **Request keys make re-runs replays.** Every dispatch carries the request
@@ -207,10 +216,17 @@ is `Self-timer: <body>`, so the inbox subject says what it is for.
   general 50 per owner. Agents' reminders to themselves keep the general
   limits.
 - **Time zone.** `at: "14:30"` and `"2026-10-30T14:30"` are read in the
-  schedule's zone, by default the backend host's, which for the coordinator's
-  own machine is the user's local zone. The create result adds `timeZoneUsed`
-  ("… (as given)" or "… (the user's local time zone: this machine's)") and
-  every schedule view adds `nextFireLocal`.
+  schedule's zone. For a coordinator that defaults to the user's own zone: the
+  renderer sends its IANA zone (`clientTimeZone`) with every prompt it
+  dispatches or queues, and a coordinator dispatch the user started records it
+  as the workspace's `userTimeZone` (mail, timers and recovery never do). So a
+  coordinator on a machine in another zone still means the user's 14:30. Until
+  a renderer has sent one (an older renderer, a CLI-only user), the backend
+  host's zone is used. The create result adds `timeZoneUsed` ("… (as given)",
+  "… (the user's local time zone: the device they last prompted you from)" or
+  "… (the user's local time zone is not known yet, so this machine's …)") and
+  every schedule view adds `nextFireLocal`. A user who moves changes the zone
+  with their next prompt.
 - **Busy.** A reminder is mail from a system sender, so a coordinator that is
   mid-turn when it fires gets it when the turn ends (the mail drain holds it
   as busy and retries); several waiting messages arrive in one turn. It never
@@ -226,7 +242,11 @@ is `Self-timer: <body>`, so the inbox subject says what it is for.
   promote it to a user turn. The fired reminder says what the permission
   covers and that it lasts `selfTimerGrantWindowMs` (2 hours) after delivery;
   `switch_provider_account` checks the timer's newest succeeded fire against
-  that window. See [agent-accounts.md](agent-accounts.md#coordinator-switching).
+  that window. Settings → Schedules badges a timer that carries it ("May
+  switch Claude accounts when it fires", "… until <time>", then "… lapsed"),
+  with the user's words in its tooltip, and a switch it allowed is recorded
+  and listed with the account. See
+  [agent-accounts.md](agent-accounts.md#coordinator-switching).
 
 A **launch** without `baseCommit` resolves its base when it fires: the newest
 commit of `baseBranch` (the repository's base branch by default), fetched

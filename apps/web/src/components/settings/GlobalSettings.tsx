@@ -154,7 +154,6 @@ export function storedCoreFields(global: GlobalConfig): CoreFieldsSnapshot {
       global.terminalHistoryGlobalRetentionMb ?? DEFAULT_TERMINAL_HISTORY_GLOBAL_RETENTION_MB,
     terminalHistoryRetentionDays:
       global.terminalHistoryRetentionDays ?? DEFAULT_TERMINAL_HISTORY_RETENTION_DAYS,
-    experimentalCodexRawEventLogging: global.experimentalCodexRawEventLogging ?? true,
     experimentalScheduling: global.experimentalScheduling ?? false,
     localWindowGatewayTransport: global.localWindowGatewayTransport ?? false,
     experimentalGraphs: global.experimentalGraphs ?? false,
@@ -245,7 +244,6 @@ export function globalFormSignature(global: GlobalConfig): string {
     global.terminalHistoryRetentionMb ?? DEFAULT_TERMINAL_HISTORY_RETENTION_MB,
     global.terminalHistoryGlobalRetentionMb ?? DEFAULT_TERMINAL_HISTORY_GLOBAL_RETENTION_MB,
     global.terminalHistoryRetentionDays ?? DEFAULT_TERMINAL_HISTORY_RETENTION_DAYS,
-    global.experimentalCodexRawEventLogging ?? true,
     global.experimentalScheduling ?? false,
     global.localWindowGatewayTransport ?? false,
     global.experimentalGraphs ?? false,
@@ -360,9 +358,6 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
   );
   const [terminalHistoryRetentionDays, setTerminalHistoryRetentionDays] = useState(
     global.terminalHistoryRetentionDays ?? DEFAULT_TERMINAL_HISTORY_RETENTION_DAYS,
-  );
-  const [experimentalCodexRawEventLogging, setExperimentalCodexRawEventLogging] = useState(
-    global.experimentalCodexRawEventLogging ?? true,
   );
   const [experimentalScheduling, setExperimentalScheduling] = useState(
     global.experimentalScheduling ?? false,
@@ -485,7 +480,6 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     setTerminalHistoryRetentionDays(
       global.terminalHistoryRetentionDays ?? DEFAULT_TERMINAL_HISTORY_RETENTION_DAYS,
     );
-    setExperimentalCodexRawEventLogging(global.experimentalCodexRawEventLogging ?? true);
     setExperimentalScheduling(global.experimentalScheduling ?? false);
     setLocalWindowGatewayTransport(global.localWindowGatewayTransport ?? false);
     setExperimentalGraphs(global.experimentalGraphs ?? false);
@@ -672,7 +666,6 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       terminalHistoryRetentionMb,
       terminalHistoryGlobalRetentionMb,
       terminalHistoryRetentionDays,
-      experimentalCodexRawEventLogging,
       experimentalScheduling,
       localWindowGatewayTransport,
       experimentalGraphs,
@@ -715,7 +708,6 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       terminalHistoryRetentionMb,
       terminalHistoryGlobalRetentionMb,
       terminalHistoryRetentionDays,
-      experimentalCodexRawEventLogging,
       experimentalScheduling,
       localWindowGatewayTransport,
       experimentalGraphs,
@@ -1134,8 +1126,6 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     setTerminalHistoryGlobalRetentionMb,
     terminalHistoryRetentionDays,
     setTerminalHistoryRetentionDays,
-    experimentalCodexRawEventLogging,
-    setExperimentalCodexRawEventLogging,
     experimentalScheduling,
     setExperimentalScheduling,
     localWindowGatewayTransport,

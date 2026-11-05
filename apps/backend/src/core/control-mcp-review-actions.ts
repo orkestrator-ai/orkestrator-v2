@@ -1,5 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
+import { coordinatorReplayFields } from "./control-mcp-results.js";
 import type { CoordinatorControlScope, ControlMcpInvoker } from "./control-mcp-server.js";
 import { COORDINATOR_WORKFLOW_STATUS_WAKE } from "@orkestrator/protocol/coordinator";
 import { workflowSummary } from "./control-workflow-summary.js";
@@ -122,6 +123,7 @@ async function response(
     ...(options.launchInput && value.workflow
       ? { selection: reviewSelection(value.workflow, options.launchInput) }
       : {}),
+    ...coordinatorReplayFields(value),
   };
   return {
     content: [{ type: "text" as const, text: JSON.stringify(summary) }],

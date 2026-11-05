@@ -170,6 +170,51 @@ test("unattended runs take the limit and the record together, and never mail", a
   await expect(actions.resolve("one", "approve")).rejects.toThrow("already executed");
 });
 
+test("a self-timer's switch is recorded with the timer, outside the standing permission's limit", async () => {
+  let executions = 0;
+  const actions = new NodeActionRequests({
+    load: async () => [],
+    save: async () => {},
+    emit: () => undefined,
+    executors: {
+      "switch-agent-account": async () => {
+        executions++;
+        return { code: "switched", message: "Switched." };
+      },
+    },
+  });
+  const switchInput = {
+    kind: "switch-agent-account" as const,
+    targets: [{ nodeId: "bk_leaf", nodeName: "Leaf", platform: "claude", accountId: "a" }],
+    requestedBy: input.requestedBy,
+  };
+  const limit = { count: 1, windowMs: 60_000, scope: () => true };
+  // The standing permission's one switch this hour.
+  expect(
+    await actions.runUnattended({ ...switchInput, requestId: "grant-1" }, limit),
+  ).toMatchObject({
+    ran: true,
+  });
+  const timer = { scheduleId: "s-1", userInstruction: "switch if limited", grantedAt: "t" };
+  const ran = await actions.runUnattended(
+    { ...switchInput, requestId: "timer-1", authorizedBy: "self-timer", selfTimer: timer },
+    null,
+  );
+  expect(ran).toMatchObject({
+    ran: true,
+    request: { authorizedBy: "self-timer", selfTimer: timer, state: "executed" },
+  });
+  // The timer's switch did not use up, nor is it stopped by, the hourly limit.
+  expect(await actions.runUnattended({ ...switchInput, requestId: "grant-2" }, limit)).toEqual({
+    overLimit: { recent: 1 },
+  });
+  expect(executions).toBe(2);
+  // The standing permission always has a limit.
+  await expect(
+    actions.runUnattended({ ...switchInput, requestId: "grant-3" }, null),
+  ).rejects.toThrow("always limited");
+});
+
 test("unattended allowance survives unrelated eviction and reload; interrupted runs never replay", async () => {
   let durable: NodeActionRequest[] = [];
   let executions = 0;

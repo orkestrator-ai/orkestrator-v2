@@ -35,7 +35,7 @@ export interface ModelCall {
   refused: boolean;
 }
 
-export interface WeeklyReading {
+export interface LimitReadings {
   weeklyUsedPercent: number;
   fiveHourUsedPercent?: number;
 }
@@ -43,7 +43,7 @@ export interface WeeklyReading {
 export interface StackProvider {
   calls: ModelCall[];
   behavior: Record<StackAccountName, ModelBehavior>;
-  readings: Record<StackAccountName, WeeklyReading>;
+  readings: Record<StackAccountName, LimitReadings>;
   /** Which limit a Claude refusal claims. The CLI words its error from this. */
   refusalClaim: "seven_day" | "five_hour";
   /** Applied the moment an account refuses, so no forced read can see the reading before it. */
@@ -331,8 +331,8 @@ export function installScriptedUsage(
       return Response.json({
         plan_type: "pro",
         rate_limit: {
-          allowed: weeklyUsedPercent < 100,
-          limit_reached: weeklyUsedPercent >= 100,
+          allowed: weeklyUsedPercent < 100 && fiveHourUsedPercent < 100,
+          limit_reached: weeklyUsedPercent >= 100 || fiveHourUsedPercent >= 100,
           primary_window: window(fiveHourUsedPercent, 300, fiveHourReset),
           secondary_window: window(weeklyUsedPercent, 10_080, weeklyReset),
         },
@@ -348,6 +348,7 @@ export const STACK_SCENARIOS = [
   "native-build",
   "native-plan-turn",
   "native-two-tabs",
+  "native-five-hour",
   "native-other-limit",
   "native-all-out",
   "multi-review",

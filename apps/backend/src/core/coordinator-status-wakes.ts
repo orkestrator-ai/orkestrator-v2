@@ -146,6 +146,8 @@ export interface CoordinatorStatusResource {
   id: string;
   environmentId?: string;
   tabId?: string;
+  /** The connected node a worker runs on, so its tile can open it there. */
+  nodeId?: string;
   label?: string;
 }
 
@@ -713,6 +715,7 @@ export function renderCoordinatorStatusNotice(
         id: resource.id,
         ...(resource.environmentId ? { environmentId: resource.environmentId } : {}),
         ...(resource.tabId ? { tabId: resource.tabId } : {}),
+        ...(resource.nodeId ? { nodeId: resource.nodeId } : {}),
         ...(resource.label ? { label: boundedLine(resource.label, MAX_LABEL_CHARS) } : {}),
       },
       state: status.state,
@@ -1969,7 +1972,13 @@ export class CoordinatorStatusWakes {
     resource: CoordinatorStatusResource,
     status: CoordinatorStatus,
   ): Promise<boolean> {
-    const { subject, body, notice } = renderCoordinatorStatusNotice(resource, status);
+    // A worker on another node: the transcript tile opens it through that node.
+    const { subject, body, notice } = renderCoordinatorStatusNotice(
+      association.nodeId && (resource.kind === "agent-tab" || resource.kind === "environment")
+        ? { ...resource, nodeId: association.nodeId }
+        : resource,
+      status,
+    );
     return this.router.deliver({
       projectId: association.projectId,
       coordinatorId: association.coordinatorId,

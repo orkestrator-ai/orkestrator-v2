@@ -2,7 +2,7 @@ import type { SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk"
 import type { BackgroundTaskSnapshot } from "../../types/index.js";
 import { sessionHealth } from "../../types/index.js";
 import { claudeToolResultOutcomes, recordClaudeToolResult } from "../change-evidence.js";
-import { commandChangeProbe } from "../command-changes.js";
+import { discardCommandChangeWindow } from "../command-changes.js";
 import { eventEmitter } from "../event-emitter.js";
 import {
   LIVE_BACKGROUND_TASK_STATUSES,
@@ -60,7 +60,7 @@ export function handleUserMessage(turn: TurnState, message: SDKMessage): void {
     // A call whose PostToolUse already ran has closed its window, so this
     // only drops one no hook will close: a call refused by `canUseTool`,
     // or one cut off by an interrupt.
-    commandChangeProbe.discard(toolUseId);
+    discardCommandChangeWindow(toolUseId);
     const pending = turn.pendingCommandChanges.get(toolUseId);
     if (pending) {
       turn.pendingCommandChanges.delete(toolUseId);

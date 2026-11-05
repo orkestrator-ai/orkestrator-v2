@@ -68,6 +68,7 @@ import {
 import { createSessionKey } from "@/lib/utils";
 import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
+import { useShallow } from "zustand/react/shallow";
 import { syncCachedAcpModels } from "@/stores/agentModelCatalogStore";
 import {
   nativeComposeDraft,
@@ -440,8 +441,22 @@ export function UnassignedNativeAgentComposer({
   const hasDraft = useNativeComposeStore((state) => state.drafts.has(sessionKey));
   const updateStoreDraft = useNativeComposeStore((state) => state.updateDraft);
   const config = useConfigStore((state) => state.config);
-  const environment = useEnvironmentStore((state) => state.getEnvironmentById(environmentId));
-  const worktreePath = environment?.worktreePath ?? workspacePath;
+  // Only the fields this composer reads, so unrelated environment writes (status,
+  // activity, pull request, name) do not re-render it and the picker beneath it.
+  const { envAgentSettings, envNetworkAccessMode, envProjectId, envType, envWorktreePath } =
+    useEnvironmentStore(
+      useShallow((state) => {
+        const env = state.environments.find((e) => e.id === environmentId);
+        return {
+          envAgentSettings: env?.agentSettings,
+          envNetworkAccessMode: env?.networkAccessMode,
+          envProjectId: env?.projectId,
+          envType: env?.environmentType,
+          envWorktreePath: env?.worktreePath,
+        };
+      }),
+    );
+  const worktreePath = envWorktreePath ?? workspacePath;
   const {
     favorites: allFavorites,
     enabledPlatforms: allEnabledPlatforms,
@@ -474,7 +489,7 @@ export function UnassignedNativeAgentComposer({
   // must win over the application one, constrained to platforms still enabled.
   const defaultPlatform = firstEnabledAgentPlatform(
     enabledPlatforms,
-    resolvedDefaultAgent(config, environment?.projectId ?? projectId, environment),
+    resolvedDefaultAgent(config, envProjectId ?? projectId, { agentSettings: envAgentSettings }),
   );
   const [resumePlatformDialogOpen, setResumePlatformDialogOpen] = useState(false);
   const [models, setModels] = useState<AgentModel[]>([]);
@@ -487,8 +502,8 @@ export function UnassignedNativeAgentComposer({
   const platform = draft.platform ?? defaultPlatform;
   const configured = resolvedPlatformSettings(
     config,
-    environment?.projectId ?? projectId,
-    environment,
+    envProjectId ?? projectId,
+    { agentSettings: envAgentSettings },
     platform,
   );
   const selectedAdapter = findNativeAgentAdapter(platform);
@@ -714,15 +729,15 @@ export function UnassignedNativeAgentComposer({
     LAUNCH_EXECUTION_PROFILES[0];
   // The backend resolves the session's policy from these same environment
   // settings and caps whatever is chosen here, so this list is only the offer.
-  const environmentApprovals = environment?.agentSettings?.executionPolicy?.approvals;
+  const environmentApprovals = envAgentSettings?.executionPolicy?.approvals;
   // Match backend boundary reconciliation: restricting a full-network
   // container also requires an inner provider sandbox.
   const launchSandbox =
-    environment?.environmentType === "containerized" &&
-    environment.agentSettings?.executionPolicy?.sandbox !== "provider" &&
+    envType === "containerized" &&
+    envAgentSettings?.executionPolicy?.sandbox !== "provider" &&
     !(
-      environment.networkAccessMode === "full" &&
-      environment.agentSettings?.executionPolicy?.networkAccess === "restricted"
+      envNetworkAccessMode === "full" &&
+      envAgentSettings?.executionPolicy?.networkAccess === "restricted"
     )
       ? ("container" as const)
       : undefined;
@@ -1035,8 +1050,8 @@ export function UnassignedNativeAgentComposer({
                   const nextAdapter = findNativeAgentAdapter(next);
                   const nextFastMode = resolvedPlatformSettings(
                     config,
-                    environment?.projectId ?? projectId,
-                    environment,
+                    envProjectId ?? projectId,
+                    { agentSettings: envAgentSettings },
                     next,
                   ).fastMode;
                   updateDraft(sessionKey, {

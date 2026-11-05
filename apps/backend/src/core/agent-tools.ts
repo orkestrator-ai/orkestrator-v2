@@ -8,6 +8,7 @@ import { createHash } from "node:crypto";
 import { mintAgentToolsToken } from "@orkestrator/protocol/node/bridge-credential";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { type AgentToolsPeerGate, dockerPeerFilter } from "./agent-tools-peer-filter.js";
+import { dockerOwnerNamespace } from "./docker-ownership.js";
 import { toNodeHandler } from "@modelcontextprotocol/node";
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
@@ -1005,7 +1006,8 @@ export class AgentToolsServer {
     private readonly design?: DesignService,
     peerFilter?: AgentToolsPeerGate,
   ) {
-    this.peerFilter = peerFilter ?? dockerPeerFilter(() => storage.getDataDir());
+    this.peerFilter =
+      peerFilter ?? dockerPeerFilter(() => dockerOwnerNamespace(storage.getDataDir()));
   }
 
   async start(): Promise<void> {

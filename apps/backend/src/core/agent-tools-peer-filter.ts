@@ -1,6 +1,5 @@
 import { createLogger } from "@orkestrator/protocol/logger";
 import { DOCKER_LABEL_OWNER } from "./constants.js";
-import { dockerOwnerNamespace } from "./docker-ownership.js";
 import { subscribeDockerNetworkChanges } from "./docker-network-changes.js";
 import { runCommand } from "./shell.js";
 
@@ -269,9 +268,13 @@ export async function loadOwnedDockerSubnets(
   return results.flat();
 }
 
-/** The production filter: loopback plus the Docker networks of `dataDir`'s owner. */
-export function dockerPeerFilter(dataDir: () => string): AgentToolsPeerFilter {
+/**
+ * The production filter: loopback plus the Docker networks of one owner
+ * namespace (`dockerOwnerNamespace` of the data directory whose environments
+ * call the server).
+ */
+export function dockerPeerFilter(ownerNamespace: () => string): AgentToolsPeerFilter {
   return new AgentToolsPeerFilter({
-    loadSubnets: () => loadOwnedDockerSubnets(dockerOwnerNamespace(dataDir())),
+    loadSubnets: () => loadOwnedDockerSubnets(ownerNamespace()),
   });
 }

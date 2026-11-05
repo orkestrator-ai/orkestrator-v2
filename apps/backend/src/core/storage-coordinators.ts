@@ -817,6 +817,27 @@ export class CoordinatorsRepository {
   }
 
   /**
+   * Give up on a wake that keeps failing. `wokenAt` is stamped with it because
+   * nothing further is owed: retention, adoption and the wake pass all read it
+   * that way, as they do for a delegation whose coordinator is gone. The
+   * worker's own outcome in `state` is left as it was.
+   */
+  async markCoordinatorDelegationWakeFailed(
+    associationId: string,
+    at = new Date().toISOString(),
+  ): Promise<void> {
+    await this.enqueueCoordinatorMutation(async () => {
+      const store = await this.loadCoordinatorStore();
+      const association = store.workflows.find((item) => item.id === associationId);
+      if (!association?.delegation || association.delegation.wokenAt) return;
+      association.delegation = { ...association.delegation, wokenAt: at, wakeFailedAt: at };
+      store.revision += 1;
+      await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
+      this.context.changes.announce("coordinator", association.projectId, association.projectId);
+    });
+  }
+
+  /**
    * Serialized read-modify-write of one association's bookkeeping.
    *
    * `mutate` edits the stored record in place and returns whether it changed;
@@ -1227,6 +1248,7 @@ export type CoordinatorsStorage = Pick<
   | "closeCoordinatorDelegation"
   | "prepareCoordinatorDelegationWake"
   | "markCoordinatorDelegationWoken"
+  | "markCoordinatorDelegationWakeFailed"
   | "updateCoordinatorWorkflowAssociation"
   | "updateCoordinatorWorkflowAssociations"
   | "hideCoordinatorWork"

@@ -203,7 +203,9 @@ Not proven live:
   others rely on fakes.
 - A context overflow during a goal. A compact while a goal waits stands in for it.
 - A goal extension on Pi, or a stop hook in a user's Cursor config.
-- A worker on another node: its delegation can wake a coordinator between iterations.
+- A worker on another node: its delegation holds while that node's registry says the
+  goal is running, which only fakes have exercised
+  ([4860](../todo/coordinator-and-multi-review/4860-c1-wake-reliability-follow-ups.md)).
 
 Known problems found on the way, not caused by goals and not fixed here: Grok's shell
 fails to spawn in Orkestrator sessions, and a typed `/compact` delivered through the

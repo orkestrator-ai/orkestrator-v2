@@ -46,7 +46,7 @@ This index only changes when a branch merges, so it can't show what is running n
 | Batch | Name | Parts | Lane and position | Finish first | Not at the same time as |
 | --- | --- | --- | --- | --- | --- |
 | E1 | Baseline run | The baseline task in `0150`, `0160`, `0180`, `0190` and `0400` | No lane | None | None |
-| E25 | [Container start](0490-e25-container-start.md) | `0490`, `0500` | Containers, 4 of 4 | None | None |
+| E25 | [Container start](0490-e25-container-start.md) | `0490`, `0500` | Containers, 3 of 3 | None | None |
 | E9 | [Transcript reads](0110-e9-transcript-reads.md) | `0150`, `0200`, `0110` | Transcript, 1 of 4 | E1 (Baseline run) | None |
 | E10 | [Conditional reads and deltas](0160-e10-conditional-reads-and-deltas.md) | `0160`, `0180`, `0190` | Transcript, 2 of 4 | E1 (Baseline run) | None |
 | E11 | [Projection hashing](0210-e11-projection-hashing.md) | `0210`, `0220`, `0320`, `0330`, `0340`, `0345`, `0350`, `0380` | Transcript, 3 of 4 | None | None |

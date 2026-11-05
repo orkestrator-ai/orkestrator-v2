@@ -39,14 +39,13 @@ A batch file combines several reports as numbered parts and takes the rating of 
 | 23 | [0385-tx-10-joined-history-pages.md](0385-tx-10-joined-history-pages.md) | Low | No | TX-10: Joined history pages read the whole transcript per page | A compatibility path that only older renderers use and that 0232 will remove, blocked on the support window. |
 | 24 | [0390-gw-7-websocket-compression.md](0390-gw-7-websocket-compression.md) | Low | No | GW-7: No WebSocket message compression | Deferred by 0052 decision D6 until the transport direction is chosen. |
 | 25 | [0560-st-9-agent-mail-store-remainder.md](0560-st-9-agent-mail-store-remainder.md) | Low | No | ST-9 (rest): Agent mail: pending injects and mailbox lists still sit on the whole store | The read cost the finding described has gone, and the rest needs a stored-format change only a measurement could justify. |
-| 26 | [0580-st-21-file-rpc-and-usage-report.md](0580-st-21-file-rpc-and-usage-report.md) | Low | No | ST-21: Whole files cross RPC as base64, branch reads spawn twice, and usage reports parse every row | These are occasional, bounded reads. |
-| 27 | [0620-e23-renderer-polling.md](0620-e23-renderer-polling.md) | Low | No | **E23, Renderer polling.**<br>`0620`: WEB-12: One environment change refetches the project's whole environment list<br>`0630`: WEB-13: Expanded truncated folders are re-read every 5 s without a digest<br>`0660`: WEB-18: Some renderer polls keep running while the window is hidden | From `0620`: Bursts already collapse to one project read, so this should wait for a measurement. |
-| 28 | [0650-web-16-terminal-container-environment-subscription.md](0650-web-16-terminal-container-environment-subscription.md) | Low | No | WEB-16: `TerminalContainer` subscribes to the whole environment object | It is an unmeasured re-render, with launch-effect risk in the fix. |
-| 29 | [0680-bg-10-multi-review-snapshot-drift-checks.md](0680-bg-10-multi-review-snapshot-drift-checks.md) | Low | No | BG-10: Multi Review snapshot mode runs a drift check per reviewer | It costs a bounded number of extra git probes per review pass. |
-| 30 | [0691-dk-5-preview-capture-data-urls.md](0691-dk-5-preview-capture-data-urls.md) | Low | No | DK-5: Preview captures cross IPC as large data URLs | Captures are occasional and bounded. |
-| 31 | [0692-dk-6-preview-tunnel-multiplexing.md](0692-dk-6-preview-tunnel-multiplexing.md) | Low | No | DK-6: The preview tunnel opens a WebSocket per TCP connection | The existing connection pool already removes most repeats. |
-| 32 | [0693-dk-10-second-claude-binary.md](0693-dk-10-second-claude-binary.md) | Low | No | DK-10: The image ships two Claude Code native binaries | It is an optional image-size saving that waits on a maintainer decision. |
-| 33 | [0694-dk-16-attention-follow-polling.md](0694-dk-16-attention-follow-polling.md) | Low | No | DK-16 (rest): CLI `attention --follow` re-downloads pending items on every poll | It affects only long-running followers, and pending pages are probably small. |
+| 26 | [0620-e23-renderer-polling.md](0620-e23-renderer-polling.md) | Low | No | **E23, Renderer polling.**<br>`0620`: WEB-12: One environment change refetches the project's whole environment list<br>`0630`: WEB-13: Expanded truncated folders are re-read every 5 s without a digest<br>`0660`: WEB-18: Some renderer polls keep running while the window is hidden | From `0620`: Bursts already collapse to one project read, so this should wait for a measurement. |
+| 27 | [0650-web-16-terminal-container-environment-subscription.md](0650-web-16-terminal-container-environment-subscription.md) | Low | No | WEB-16: `TerminalContainer` subscribes to the whole environment object | It is an unmeasured re-render, with launch-effect risk in the fix. |
+| 28 | [0680-bg-10-multi-review-snapshot-drift-checks.md](0680-bg-10-multi-review-snapshot-drift-checks.md) | Low | No | BG-10: Multi Review snapshot mode runs a drift check per reviewer | It costs a bounded number of extra git probes per review pass. |
+| 29 | [0691-dk-5-preview-capture-data-urls.md](0691-dk-5-preview-capture-data-urls.md) | Low | No | DK-5: Preview captures cross IPC as large data URLs | Captures are occasional and bounded. |
+| 30 | [0692-dk-6-preview-tunnel-multiplexing.md](0692-dk-6-preview-tunnel-multiplexing.md) | Low | No | DK-6: The preview tunnel opens a WebSocket per TCP connection | The existing connection pool already removes most repeats. |
+| 31 | [0693-dk-10-second-claude-binary.md](0693-dk-10-second-claude-binary.md) | Low | No | DK-10: The image ships two Claude Code native binaries | It is an optional image-size saving that waits on a maintainer decision. |
+| 32 | [0694-dk-16-attention-follow-polling.md](0694-dk-16-attention-follow-polling.md) | Low | No | DK-16 (rest): CLI `attention --follow` re-downloads pending items on every poll | It affects only long-running followers, and pending pages are probably small. |
 
 ## Parallel running
 
@@ -110,7 +109,6 @@ These still follow the lane and conflict rules above.
 
 | Batch | Name | Files | Lane and position | Finish first | Not at the same time as |
 | --- | --- | --- | --- | --- | --- |
-| E-0580 | [File RPC and usage report](0580-st-21-file-rpc-and-usage-report.md) | `0580` | Git scans and file reads, 1 of 1 | None | None |
 | E-0691 | [Preview capture data URLs](0691-dk-5-preview-capture-data-urls.md) | `0691` | Desktop, 2 of 2 | None | None |
 | E-0140 | [Codex queue bound](0140-br-13-serial-queue-bound.md) | `0140` | No lane | None | None |
 | E-0250 | [Codex running tool cards](0250-br-7-codex-running-tool-cards.md) | `0250` | No lane | None | None |
@@ -227,7 +225,7 @@ When one of these becomes ready, it joins the lane shown.
 | ST-18 | Done 2026-11-04 | Demand lasts 2 min from the last read, then a `reset` event; see [change-tracking.md](../../architecture/change-tracking.md#scopes). |
 | ST-19 | Partly done | Measurement pruning, `change-ledger.ts:1144`, `measurement-service.ts:213`, `retention.ts:122` (8a6bc2f84); `NOT IN` scan at `change-ledger.ts:931-936` remains, see 0540. |
 | ST-20 | Open | Two `storedBytes` walks, `retention.ts:95`, `:102`; sweep holds the mutex, `object-store.ts:194`; see 0550. |
-| ST-21 | Open | Base64 commands, `commands-registry-terminal.ts:940`, `:960`; two spawns, `commands-files.ts:2335-2361`; see 0580. |
+| ST-21 | Done 2026-11-05 | Environment-less media streams under the `read_file_base64` roots (`readable-host-roots.ts`) and stream-loaded file viewer images; one `git cat-file --batch` per branch read (`git-blob-read.ts`); the finished usage report kept per query and store revision (`usage-history-store.ts`); live evidence and a usage measurement in [5800](../../todo/cross-cutting/5800-file-read-streaming-leftovers.md). |
 | BG-1 | Done | Bound through the snapshot, `tmux-backend.ts:406`; bounded head and memo, `tmux-hooks.ts:978`, `:1025` (051261eee). |
 | BG-2 | Done | Idle cadence and doorbell, `tmux-session-manager.ts:696-707`, `tmux-hook-signal.ts:84` (051261eee). |
 | BG-3 | Done | Disabled returns early, `agent-mail-service.ts:380` (12289fc56); liveness reuse, `tmux-commands.ts:334-342` (d7054dace); paused refresh kept by decision, 1202 task 10. |

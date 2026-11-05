@@ -4,7 +4,7 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { CommandContext } from "./commands-context.js";
-import { gitHubCli, setManagedGitHubCli } from "./github-cli-binary.js";
+import { gitHubCli, GitHubCliSelection } from "./github-cli-binary.js";
 import { HostMaintenanceError, HostMaintenanceService } from "./host-maintenance.js";
 import {
   applyGhChannel,
@@ -23,6 +23,7 @@ import { CommandFailedError, runCommand } from "./shell.js";
 
 let dataDir: string;
 let service: HostMaintenanceService;
+let selection: GitHubCliSelection;
 
 beforeEach(async () => {
   dataDir = await mkdtemp(path.join(tmpdir(), "ork-host-tasks-"));
@@ -33,10 +34,11 @@ beforeEach(async () => {
     emit: () => undefined,
   });
   service.init();
+  selection = new GitHubCliSelection();
+  selection.pin("/managed/gh");
 });
 
 afterEach(async () => {
-  setManagedGitHubCli(undefined);
   service.close();
   await rm(dataDir, { recursive: true, force: true });
 });
@@ -45,6 +47,7 @@ function context(): CommandContext {
   return {
     hostMaintenance: service,
     storage: { getDataDir: () => dataDir },
+    runtime: { gitHubCli: selection },
   } as unknown as CommandContext;
 }
 
@@ -88,25 +91,21 @@ function github(version: string, archive: { name: string; bytes: Uint8Array }, c
 describe("gh channel", () => {
   test("installs the newest gh after checking GitHub's checksum and uses it", async () => {
     const archive = await ghRelease("2.200.0");
-    const task = startGhUpdate(context(), "latest", {
-      pinned: "/managed/gh",
-      fetchImpl: github("2.200.0", archive),
-    });
+    const task = startGhUpdate(context(), "latest", { fetchImpl: github("2.200.0", archive) });
     await until(() => service.task(task.id)?.state !== "running");
     expect(service.task(task.id)).toMatchObject({
       state: "succeeded",
       result: { channel: "latest", version: "2.200.0" },
     });
     expect(service.ghChannel()).toBe("latest");
-    expect(gitHubCli()).toBe((await installedLatestGh(dataDir)) ?? "");
-    expect(gitHubCli()).toContain(path.join("gh-latest", "2.200.0", "gh"));
+    expect(gitHubCli(selection)).toBe((await installedLatestGh(dataDir)) ?? "");
+    expect(gitHubCli(selection)).toContain(path.join("gh-latest", "2.200.0", "gh"));
     expect(await installedLatestGh(dataDir)).not.toBeNull();
   });
 
   test("refuses an archive that does not match its checksum", async () => {
     const archive = await ghRelease("2.200.0");
     const task = startGhUpdate(context(), "latest", {
-      pinned: "/managed/gh",
       fetchImpl: github("2.200.0", archive, true),
     });
     await until(() => service.task(task.id)?.state !== "running");
@@ -117,15 +116,16 @@ describe("gh channel", () => {
 
   test("going back to the pin selects the managed gh again", async () => {
     service.setGhChannel("latest");
-    const task = startGhUpdate(context(), "pinned", { pinned: "/managed/gh" });
+    selection.select("/elsewhere/gh");
+    const task = startGhUpdate(context(), "pinned");
     await until(() => service.task(task.id)?.state !== "running");
     expect(service.ghChannel()).toBe("pinned");
-    expect(gitHubCli()).toBe("/managed/gh");
+    expect(gitHubCli(selection)).toBe("/managed/gh");
   });
 
   test("at startup, latest without an installed copy falls back to the pin", async () => {
-    await applyGhChannel(context(), "latest", "/managed/gh");
-    expect(gitHubCli()).toBe("/managed/gh");
+    await applyGhChannel(context(), "latest");
+    expect(gitHubCli(selection)).toBe("/managed/gh");
   });
 });
 

@@ -1,5 +1,5 @@
 import { acknowledgeDockerReachabilityWarning } from "../docker-reachability-warning";
-import { expect, test, type Page, type Request } from "@playwright/test";
+import { expect, test, type Page, type Request } from "./browser-test";
 import { spawnSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import path from "node:path";

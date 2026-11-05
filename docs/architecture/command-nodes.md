@@ -382,7 +382,14 @@ A command node attached to another command node operates in leaf mode:
   information, but they are mostly hidden: the portal and the node's own UI
   do not show them by default. They can be opened behind a warning that the
   node is in leaf mode and that coordination happens on the named command
-  node.
+  node ("the command node" when no controller name is known). Until the
+  node's portal status has loaded, the coordinator tab shows only "Checking
+  repository coordination…", so the coordinator neither flashes nor starts
+  before the node's mode is known; a failed status read counts as loaded and
+  opens the coordinator as on any other node. Opening it anyway is
+  remembered per node and project for the rest of the app session
+  (`openedLeafCoordinators` in the UI store, not persisted), so the warning
+  returns after a restart.
 - A window whose workspace is on a leaf follows its sidebar grouping.
   Grouped by repository, the window links each repository's projects
   across machines, so the leaf's coordinator is replaced by the same
@@ -861,8 +868,18 @@ selected files across every node that has the project:
   addition.
 - Data-plane grants for direct streams are short-lived, revocable and
   never the leaf's gateway token, and they cannot be used for
-  administration (token rotation, attachment, grants, registry). The first
-  version is a workspace grant: one leaf, one controller and one client
+  administration (token rotation, attachment, grants, registry, the
+  machine's global settings and credentials, rollout switches, desktop
+  connections, installation-wide Docker limits and cleanup, host updates).
+  The operator `public_action` entrypoint is refused in full: workspace
+  renderers use the workspace commands, while public actions can also retry
+  operations and dispatch to other nodes under operator authority. Grants do
+  run the workspace: agent chat, terminals, previews, files, repository settings and
+  the project boards. The relay refuses the same commands
+  (`isWorkspaceExcludedCommand`, `nodes/workspace-grant-scope.ts`), which is
+  a deny-list: a new administration command has to be added there. Settings
+  reaches another machine's settings through `invoke_on_node` instead. The
+  first version is a workspace grant: one leaf, one controller and one client
   session. Narrowing to one environment and one stream (one terminal
   session, one preview, one download) is a later hardening.
 - Leaves still enforce their own approval and execution policies.

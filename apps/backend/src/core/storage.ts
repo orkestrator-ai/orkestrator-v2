@@ -275,6 +275,11 @@ export class StorageService {
     this.context.changes.announce("human-prompt", environmentId);
   }
 
+  /** Whether this backend fires schedules changed (its writer lease was lost). */
+  announceSchedulerStatus(): void {
+    this.context.changes.announce("scheduled-job", "scheduler");
+  }
+
   scheduledJobStore(): ScheduledJobStore {
     return this.repos.scheduledJobs.store();
   }

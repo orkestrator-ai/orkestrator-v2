@@ -177,3 +177,49 @@ test("a command node selected in a leaf window loads its capabilities without ch
     resetPreviewServiceSyncForTests();
   }
 });
+
+test("a same-site preview domain warning is shown beside the publication status", async () => {
+  resetPreviewServiceSyncForTests();
+  const warning =
+    "The preview domain preview.tailnet.ts.net is the same site as Orkestrator (machine.tailnet.ts.net).";
+  install({
+    get_preview_capabilities: () => fixturePreviewCapabilities(),
+    get_preview_settings: () => ({ stored: storedSettings, effective: storedSettings }),
+    get_preview_diagnostics: () => ({
+      ...diagnostics,
+      publication: {
+        enabled: true,
+        available: true,
+        warning,
+        domain: "preview.tailnet.ts.net",
+        listening: { address: "127.0.0.1", port: 8443 },
+        certificate: { validTo: "Jan 1 00:00:00 2027 GMT", coversHosts: true },
+      },
+    }),
+  });
+  try {
+    render(<PreviewSettings />);
+    expect((await screen.findByRole("alert")).textContent).toContain(warning);
+    expect(screen.getByText(/Listening on 127.0.0.1:8443/)).toBeTruthy();
+  } finally {
+    cleanup();
+    invokeMock.mockImplementation(() => Promise.resolve());
+  }
+});
+
+test("no warning is shown when the backend reports none", async () => {
+  resetPreviewServiceSyncForTests();
+  install({
+    get_preview_capabilities: () => fixturePreviewCapabilities(),
+    get_preview_settings: () => ({ stored: storedSettings, effective: storedSettings }),
+    get_preview_diagnostics: () => diagnostics,
+  });
+  try {
+    render(<PreviewSettings />);
+    await screen.findByText("Private preview publication is disabled.");
+    expectDomAbsent(screen.queryByRole("alert"), "same-site warning");
+  } finally {
+    cleanup();
+    invokeMock.mockImplementation(() => Promise.resolve());
+  }
+});

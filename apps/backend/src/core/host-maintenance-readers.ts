@@ -11,7 +11,6 @@ import { resolveManagedBinary } from "./commands-agent-support.js";
 import type { CommandContext } from "./commands-context.js";
 import { APP_VERSION } from "./constants.js";
 import { configuredImageRef, getImageStatus, resolveDockerImage } from "./docker-image.js";
-import { gitHubCli } from "./github-cli-binary.js";
 import { runCommand } from "./shell.js";
 
 /** The published image whose tag matches this backend (`publish-container.yml`). */
@@ -91,7 +90,7 @@ export async function readToolStatus(
   for (const [name, pinnedVersion] of Object.entries(PINNED_TOOL_VERSIONS) as Array<
     [ToolchainName, string]
   >) {
-    const managed = name === "gh" ? (gitHubCli() === "gh" ? undefined : gitHubCli()) : undefined;
+    const managed = name === "gh" ? context.runtime.gitHubCli.managed() : undefined;
     const executable = managed ?? resolveManagedBinary(context, name);
     const status: HostToolStatus = executable
       ? {

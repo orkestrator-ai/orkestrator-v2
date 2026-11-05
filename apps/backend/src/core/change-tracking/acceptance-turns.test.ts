@@ -16,7 +16,7 @@ import { ChangeEvidenceRecorder } from "@orkestrator/protocol/node/change-tracki
 import { ChangeEvidenceSpool } from "@orkestrator/protocol/node/change-tracking/evidence-spool";
 import { getLocalGitStatusDetailed, type LocalGitFetches } from "../commands-files.js";
 import type { DiffStatsTarget } from "../diff-stats-service.js";
-import { openBackendDatabase } from "../storage-stores.js";
+import { openChangeLedgerDatabase } from "./ledger-schema.js";
 import { operationIdFor, toolResourceKeys, turnResourceKeys } from "./identities.js";
 import type { ChangeTrackingPolicy } from "./policy-registry.js";
 import { ChangeTrackingService } from "./service.js";
@@ -156,7 +156,7 @@ function restart(
   policy?: Partial<ChangeTrackingPolicy>,
 ): { service: ChangeTrackingService; close(): void } {
   running.close();
-  const database = openBackendDatabase(h.dataDir);
+  const database = openChangeLedgerDatabase(h.dataDir);
   const service = new ChangeTrackingService({
     dataDir: h.dataDir,
     database: () => database,

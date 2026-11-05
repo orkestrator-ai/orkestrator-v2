@@ -1,4 +1,3 @@
-import { __testing as __seedTesting } from "./host-model-catalog-seed.js";
 import { describe, expect, jest, mock, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
@@ -661,7 +660,6 @@ describe("native agent model catalogue command", () => {
   });
 
   test("seeds enabled host catalogues when the startup cache read requests it", async () => {
-    __seedTesting.reset();
     const refresh = mock(async () => ({
       agent: "codex" as const,
       models: [
@@ -758,7 +756,6 @@ describe("native agent model catalogue command", () => {
   });
 
   test("downloads a missing Claude catalogue on first use and then serves it from the cache", async () => {
-    __seedTesting.reset();
     const refresh = mock(async () => ({
       agent: "claude" as const,
       models: [{ id: "sonnet", name: "Sonnet", resolvedModel: "claude-sonnet" }],
@@ -789,7 +786,6 @@ describe("native agent model catalogue command", () => {
   });
 
   test("reports a failed Claude first-use download so the picker can retry", async () => {
-    __seedTesting.reset();
     const warn = spyOn(console, "warn").mockImplementation(() => undefined);
     const refresh = mock(async () => {
       throw new Error("not signed in");
@@ -811,7 +807,6 @@ describe("native agent model catalogue command", () => {
   });
 
   test("bounds a host seed that does not settle and lets it finish in the background", async () => {
-    __seedTesting.reset();
     let refreshStarted!: () => void;
     const started = new Promise<void>((resolve) => {
       refreshStarted = resolve;
@@ -836,7 +831,6 @@ describe("native agent model catalogue command", () => {
       );
     } finally {
       jest.useRealTimers();
-      __seedTesting.reset();
     }
   });
 

@@ -51,9 +51,12 @@ export function CoordinatorIsolationBadge({
           )}
         >
           <Icon className="size-3.5 shrink-0" aria-hidden="true" />
-          <span className="truncate">Changes run in isolated environments</span>
+          <span className="truncate max-sm:sr-only">Changes run in isolated environments</span>
           {advisory ? (
-            <span className="shrink-0 text-amber-300">· Read-only protection is advisory</span>
+            <span className="shrink-0 text-amber-300">
+              <span className="max-sm:hidden">· Read-only protection is advisory</span>
+              <span className="sm:hidden">Advisory</span>
+            </span>
           ) : null}
         </button>
       </TooltipTrigger>

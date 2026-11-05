@@ -1,4 +1,4 @@
-import { gitHubCli } from "./github-cli-binary.js";
+import { gitHubCli, type GitHubCliSelection } from "./github-cli-binary.js";
 import { gitHubCliEnv, type GitHubCliConfigSource } from "./github-credentials.js";
 import { isGitRemoteUrl } from "@orkestrator/protocol/git-remote-url";
 import {
@@ -50,19 +50,21 @@ function outputLogins(stdout: string): string[] {
  */
 export async function listGitHubCloneAccounts(
   source: GitHubCliConfigSource | undefined,
+  selection: GitHubCliSelection | undefined,
   run: typeof runCommand,
 ): Promise<GitHubCloneAccount[]> {
+  const gh = gitHubCli(selection);
   let viewer: string[];
   let organizations: string[];
   try {
     const env = await gitHubCliEnv(source);
     [viewer, organizations] = await Promise.all([
-      run(gitHubCli(), ["api", "--hostname", GITHUB_HOST, "user", "--jq", ".login"], {
+      run(gh, ["api", "--hostname", GITHUB_HOST, "user", "--jq", ".login"], {
         timeoutMs: GITHUB_API_TIMEOUT_MS,
         env,
       }).then(({ stdout }) => outputLogins(stdout)),
       run(
-        gitHubCli(),
+        gh,
         [
           "api",
           "--hostname",
@@ -93,15 +95,11 @@ export async function listGitHubCloneAccounts(
   return accounts.sort((left, right) => compareGitHubNames(left.login, right.login));
 }
 
-async function preferredGitProtocol(run: typeof runCommand): Promise<"ssh" | "https"> {
+async function preferredGitProtocol(gh: string, run: typeof runCommand): Promise<"ssh" | "https"> {
   try {
-    const { stdout } = await run(
-      gitHubCli(),
-      ["config", "get", "git_protocol", "--host", GITHUB_HOST],
-      {
-        timeoutMs: GITHUB_API_TIMEOUT_MS,
-      },
-    );
+    const { stdout } = await run(gh, ["config", "get", "git_protocol", "--host", GITHUB_HOST], {
+      timeoutMs: GITHUB_API_TIMEOUT_MS,
+    });
     return stdout.trim() === "ssh" ? "ssh" : "https";
   } catch {
     return "https";
@@ -154,6 +152,7 @@ function parseRepository(value: unknown, protocol: "ssh" | "https"): GitHubClone
 /** One bounded page of repositories owned by a GitHub user or organization. */
 export async function listGitHubCloneRepositories(
   source: GitHubCliConfigSource | undefined,
+  selection: GitHubCliSelection | undefined,
   owner: string,
   run: typeof runCommand,
   cursor?: string,
@@ -163,10 +162,11 @@ export async function listGitHubCloneRepositories(
     throw new Error("Invalid GitHub repository cursor");
   }
   const env = await gitHubCliEnv(source);
+  const gh = gitHubCli(selection);
   const [protocol, stdout] = await Promise.all([
-    preferredGitProtocol(run),
+    preferredGitProtocol(gh, run),
     run(
-      gitHubCli(),
+      gh,
       [
         "api",
         "--hostname",

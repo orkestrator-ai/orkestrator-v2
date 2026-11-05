@@ -1,6 +1,6 @@
 import { containerCredentialMode } from "./container-credential-mode.js";
 import { bridgeDebugEnvValue } from "@orkestrator/protocol/log-policy";
-import { gitHubCli } from "./github-cli-binary.js";
+import { gitHubCli, type GitHubCliSelection } from "./github-cli-binary.js";
 import { gitHubCliEnv } from "./github-credentials.js";
 import { gitHubGitCredentials } from "./github-git-credentials.js";
 import { parseGitHubRepositoryRemote } from "@orkestrator/protocol/github-repository";
@@ -721,6 +721,7 @@ export async function initLocalProject(
 export async function createProjectFromScratch(
   requestedPath: string,
   storage: StorageService,
+  gitHubCliSelection: GitHubCliSelection | undefined,
   run: typeof runCommand,
 ): Promise<Project> {
   const projectPath = resolveNewProjectPath(requestedPath);
@@ -817,7 +818,7 @@ export async function createProjectFromScratch(
         // never deletes the only recoverable local repository in that case.
         remote.state = "ambiguous";
         await run(
-          gitHubCli(),
+          gitHubCli(gitHubCliSelection),
           [
             "repo",
             "create",

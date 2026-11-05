@@ -24,6 +24,13 @@
  * reports the file rows written and kept and the database's size. It uses only
  * routes that predate the row cap, so one script measures both sides of a change.
  *
+ * One fixture for the hourly retention pass (ST-20): `retention` stores
+ * `--retention-snapshots` snapshots of `--retention-files` real blobs, each a
+ * distinct tree, all still referenced, with the newest few manifests read as
+ * open diff views would. It reports two passes' duration, their longest
+ * event-loop stall, how many manifests each pass parsed or found cached, and
+ * how long a capture's write waited while a sweep ran.
+ *
  * Fixture files are left to age `--settle-ms` before the first capture, so a
  * warm capture sees them as settled (see `STAT_SETTLE_WINDOW_MS` in capture.ts).
  *
@@ -31,7 +38,8 @@
  *     [--assets=20] [--asset-mib=8] [--changed=200] [--settle-ms=2500]
  *     [--blob-mib=16] [--durable-files=1000] [--manifest-entries=100000]
  *     [--bulk-files=20000] [--moving-passes=6] [--idle-passes=6] [--env-scans=12]
- *     [--only=capture,assets,long-turn,sharing,counting,large-blob,durable-cold,manifest,measurement-rows]
+ *     [--retention-snapshots=400] [--retention-files=10000] [--live-views=8]
+ *     [--only=capture,assets,long-turn,sharing,counting,large-blob,durable-cold,manifest,measurement-rows,retention]
  *     [--json]
  */
 
@@ -53,7 +61,10 @@ import { CHANGE_TRACKING_POLICY_V1 } from "../apps/backend/src/core/change-track
 import { compareManifests } from "../apps/backend/src/core/change-tracking/snapshot-diff";
 import { SharedScanQueue } from "../apps/backend/src/core/change-tracking/shared-physical-work";
 import { ChangeTrackingService } from "../apps/backend/src/core/change-tracking/service";
-import { openBackendDatabase } from "../apps/backend/src/core/storage-stores";
+import {
+  CHANGE_LEDGER_DATABASE_FILE,
+  openChangeLedgerDatabase,
+} from "../apps/backend/src/core/change-tracking/ledger-schema";
 
 function arg(name: string, fallback: string): string {
   const match = process.argv.find((value) => value.startsWith(`--${name}=`));
@@ -74,10 +85,13 @@ const bulkFiles = Number(arg("bulk-files", "20000"));
 const movingPasses = Number(arg("moving-passes", "6"));
 const idlePasses = Number(arg("idle-passes", "6"));
 const envScans = Number(arg("env-scans", "12"));
+const retentionSnapshots = Number(arg("retention-snapshots", "400"));
+const retentionFiles = Number(arg("retention-files", "10000"));
+const liveViews = Number(arg("live-views", "8"));
 const only = new Set(
   arg(
     "only",
-    "capture,assets,long-turn,sharing,counting,large-blob,durable-cold,manifest,measurement-rows",
+    "capture,assets,long-turn,sharing,counting,large-blob,durable-cold,manifest,measurement-rows,retention",
   ).split(","),
 );
 
@@ -535,7 +549,7 @@ function benchCounting() {
 async function benchMeasurementRows() {
   const repo = makeRepo(50);
   const dataDir = mkdtempSync(path.join(tmpdir(), "ork-bench-ledger-"));
-  const database = openBackendDatabase(dataDir);
+  const database = openChangeLedgerDatabase(dataDir);
   const service = new ChangeTrackingService({
     dataDir,
     database: () => database,
@@ -556,7 +570,9 @@ async function benchMeasurementRows() {
     database.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
     return {
       fileMiB:
-        Math.round((statSync(path.join(dataDir, "orkestrator.sqlite")).size / 2 ** 20) * 10) / 10,
+        Math.round(
+          (statSync(path.join(dataDir, CHANGE_LEDGER_DATABASE_FILE)).size / 2 ** 20) * 10,
+        ) / 10,
       freeMiB: Math.round(((pragma("freelist_count") * pragma("page_size")) / 2 ** 20) * 10) / 10,
     };
   };
@@ -656,6 +672,117 @@ async function benchMeasurementRows() {
   }
 }
 
+/**
+ * The hourly pass over a history of distinct trees. Snapshot rows are written
+ * straight to the ledger, every one referenced, so the pass removes nothing
+ * and measures only its walks.
+ */
+async function benchRetention() {
+  const dataDir = mkdtempSync(path.join(tmpdir(), "ork-bench-retention-"));
+  const database = openBackendDatabase(dataDir);
+  const service = new ChangeTrackingService({
+    dataDir,
+    database: () => database,
+    emit: () => undefined,
+    environmentTarget: async () => ({ kind: "local", worktreePath: dataDir }),
+    durable: false,
+    manualScheduling: true,
+  });
+  service.start();
+  try {
+    const store = service.objects;
+    const batch = store.batch();
+    const entries = [];
+    for (let index = 0; index < retentionFiles; index++) {
+      const bytes = new TextEncoder().encode(`export const value${index} = ${index};\n`);
+      const { id } = await batch.put("blob", bytes);
+      entries.push({
+        p: encodePath(new TextEncoder().encode(`d${index % 50}/f${index}.ts`)),
+        m: "100644" as const,
+        o: id,
+        s: bytes.length,
+        t: 1 as const,
+      });
+    }
+    entries.sort((left, right) => Buffer.compare(Buffer.from(left.p), Buffer.from(right.p)));
+    const trees: string[] = [];
+    for (let index = 0; index < retentionSnapshots; index++) {
+      // One file changes per snapshot, so every tree is distinct.
+      const changed = entries.map((entry, position) =>
+        position === index % entries.length ? { ...entry, s: entry.s + index + 1 } : entry,
+      );
+      const manifest = { v: 1, root: "bench", entries: changed, omitted: [], unstable: [] };
+      const { id } = await batch.put(
+        "manifest",
+        new TextEncoder().encode(JSON.stringify(manifest)),
+      );
+      trees.push(id);
+      const at = new Date(Date.now() - (retentionSnapshots - index) * 1000).toISOString();
+      service.ledger.insertSnapshot({
+        id: `snap-${index}`,
+        worktree_id: "bench",
+        incarnation: "bench",
+        tree_oid: id,
+        object_format: "sha1",
+        policy_id: "bench",
+        capture_started_at: at,
+        capture_finished_at: at,
+        observation_epoch: 0,
+        coverage_json: "{}",
+        consistency_json: "{}",
+        closure_verified: 1,
+        file_count: retentionFiles,
+        retained_bytes: 0,
+        created_at: at,
+      });
+      service.ledger.addReference({
+        ownerKind: "bench",
+        ownerId: `owner-${index}`,
+        snapshotId: `snap-${index}`,
+        reason: "bench",
+      });
+    }
+    await batch.flush();
+    await batch.close();
+    for (const id of trees.slice(-liveViews)) await readManifest(store, id);
+    const passes: Row = {};
+    for (const pass of [1, 2]) {
+      const before = store.manifests.snapshot();
+      const reachabilityBefore = service.retention.reachabilityStats?.().hits ?? 0;
+      const { result, durationMs, stallMs } = await measureLoop(() =>
+        service.retention.run(Date.now()),
+      );
+      const after = store.manifests.snapshot();
+      passes[`pass${pass}Ms`] = Math.round(durationMs);
+      passes[`pass${pass}StallMs`] = Math.round(stallMs * 10) / 10;
+      passes[`pass${pass}ManifestsParsed`] = after.parses - before.parses;
+      passes[`pass${pass}ManifestHits`] = after.hits - before.hits;
+      // Absent before ST-20's reachability cache, so the script runs on both sides.
+      passes[`pass${pass}ReachabilityHits`] =
+        (service.retention.reachabilityStats?.().hits ?? 0) - reachabilityBefore;
+      passes[`pass${pass}RemovedObjects`] = result.removedObjects;
+    }
+    // How long one capture write waits on the store while a sweep walks it.
+    const reachable = new Set([...trees, ...entries.map((entry) => entry.o)]);
+    const sweep = store.sweep(reachable, CHANGE_TRACKING_POLICY_V1.orphanGraceMs);
+    const putStarted = performance.now();
+    await store.put("blob", randomBytes(64));
+    const putDuringSweepMs = performance.now() - putStarted;
+    const sweepStarted = performance.now();
+    await sweep;
+    rows.push({
+      workload: `retention over ${retentionSnapshots} snapshots of ${retentionFiles} files, ${liveViews} live views`,
+      ...passes,
+      putDuringSweepMs: Math.round(putDuringSweepMs * 10) / 10,
+      sweepTailMs: Math.round(performance.now() - sweepStarted),
+    });
+  } finally {
+    service.shutdown();
+    database.close();
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+}
+
 const startedRss = process.memoryUsage().rss;
 if (only.has("capture")) for (const size of sizes) await benchCapture(size);
 if (only.has("assets")) await benchAssets();
@@ -666,6 +793,7 @@ if (only.has("large-blob")) await benchLargeBlob();
 if (only.has("durable-cold")) await benchDurableCold();
 if (only.has("manifest")) await benchManifest();
 if (only.has("measurement-rows")) await benchMeasurementRows();
+if (only.has("retention")) await benchRetention();
 const peakRssDeltaMiB = Math.round((process.memoryUsage().rss - startedRss) / 1024 / 1024);
 
 if (asJson) {

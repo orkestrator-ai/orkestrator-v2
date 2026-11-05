@@ -4,6 +4,7 @@ import { installDesignRuntime } from "./design-runtime.js";
 import { FRAME_CHANNEL_POLICY, STATIC_PRESENTATION_POLICY } from "./rich-content-policy.js";
 import {
   STATIC_HTML_FRAME_CHANNEL,
+  STATIC_HTML_MAX_FIND_QUERY_CHARACTERS,
   STATIC_HTML_MAX_TEXT_CHUNKS,
   installStaticHtmlPresentationRuntime,
   parseStaticHtmlFrameMessage,
@@ -50,6 +51,7 @@ async function frameWith(url = "https://frame.invalid/doc"): Promise<Frame> {
       maxReportedHeight: 100_000,
       maxTextCharacters: STATIC_PRESENTATION_POLICY.maxSearchTextCharacters,
       textChunkCharacters: STATIC_PRESENTATION_POLICY.searchTextChunkCharacters,
+      maxFindQueryCharacters: STATIC_HTML_MAX_FIND_QUERY_CHARACTERS,
     })})`,
   );
   return {
@@ -409,6 +411,247 @@ describe("presentation runtime", () => {
   });
 });
 
+/** The rules the text walk replaced, one pass per rule: what it must still produce. */
+function textByRules(body: Node, maxCharacters: number): string {
+  const inline =
+    /^(?:a|abbr|b|bdi|bdo|cite|code|data|del|dfn|em|font|i|ins|kbd|label|mark|q|rp|rt|ruby|s|samp|small|span|strike|strong|sub|sup|time|tspan|tt|u|var|wbr)$/;
+  let text = "";
+  const visit = (node: Node) => {
+    if (node.nodeType === 3) text += (node.nodeValue ?? "").replace(/\s+/g, " ");
+    if (node.nodeType !== 1) return;
+    const element = node as Element;
+    if (/^(?:style|noscript)$/.test(element.localName) || element.hasAttribute("hidden")) return;
+    const boundary = inline.test(element.localName) ? "" : "\n";
+    text += boundary;
+    for (const child of Array.from(element.childNodes)) visit(child as unknown as Node);
+    text += boundary;
+  };
+  visit(body);
+  return text
+    .replace(/ +/g, " ")
+    .replace(/ *\n[ \n]*/g, "\n")
+    .trim()
+    .slice(0, maxCharacters);
+}
+
+describe("the text walk", () => {
+  test("produces the text the rules describe, for every shape of document", async () => {
+    for (const html of [
+      ACTIVITY_REPORT_HTML,
+      HOSTILE_REPORT_HTML,
+      PLAIN_REPORT_HTML,
+      "   ",
+      "<p>  leading and trailing  </p>",
+      "<p>one</p>  <p>two</p>\n\n<div> <span> three </span> </div>",
+      "<b>joined</b><i>inline</i> <em> spaced </em>tail",
+      "a\u00a0b\u2003c\u200bd\ufeffe",
+      "<ul><li>x</li> <li> y </li></ul><br>z<hr>",
+      "<details><summary>s</summary> hidden <b>body</b></details><div hidden>never</div>",
+      `<p>${"long ".repeat(20_000)}</p>`,
+    ]) {
+      const frame = await frameWith();
+      await frame.send(renderMessage(html));
+      const walked = reported(frame)
+        .map((message) => message.text)
+        .join("");
+      const body = frame.window.document.body as unknown as Node;
+      expect(walked).toBe(textByRules(body, STATIC_PRESENTATION_POLICY.maxSearchTextCharacters));
+    }
+  });
+});
+
+describe("find inside the frame", () => {
+  const DOCUMENT = `<h1>First needle</h1><p>Second <b>nee</b>dle</p>
+    <details id="outer"><summary>More</summary><details id="inner"><p>Third needle</p></details></details>
+    <p>Fourth needle</p>`;
+
+  async function rendered(html = DOCUMENT): Promise<Frame> {
+    const frame = await frameWith();
+    frame.evaluate(`
+      window.Highlight = class { constructor() { this.ranges = []; } add(range) { this.ranges.push(range); } };
+      Object.defineProperty(window, "CSS", { value: { highlights: new Map() } });
+    `);
+    await frame.send(renderMessage(html));
+    return frame;
+  }
+  const find = (query: string, occurrence: number | null) => ({
+    type: "find",
+    generation: GENERATION,
+    query,
+    occurrence,
+  });
+  const highlighted = (frame: Frame, name: string) =>
+    frame.evaluate(
+      `(window.CSS.highlights.get(${JSON.stringify(name)})?.ranges ?? []).map((range) => range.toString())`,
+    ) as string[];
+  const isOpen = (frame: Frame, id: string) =>
+    frame.evaluate(`document.getElementById(${JSON.stringify(id)}).open`);
+
+  test("highlights every match and the active occurrence, across inline elements", async () => {
+    const frame = await rendered();
+    await frame.send(find("NEEDLE", 1));
+    expect(highlighted(frame, "ork-find-match")).toEqual(["needle", "needle", "needle", "needle"]);
+    const active = frame.evaluate(
+      "(() => { const range = window.CSS.highlights.get('ork-find-active').ranges[0]; return [range.startContainer.parentElement.localName, range.endContainer.parentElement.localName]; })()",
+    );
+    expect(active).toEqual(["b", "p"]);
+    expect(frame.evaluate("window.CSS.highlights.get('ork-find-active').priority")).toBe(1);
+  });
+
+  test("an occurrence that is not this document's highlights no active match", async () => {
+    const frame = await rendered();
+    await frame.send(find("needle", null));
+    expect(highlighted(frame, "ork-find-match")).toHaveLength(4);
+    expect(highlighted(frame, "ork-find-active")).toEqual([]);
+    await frame.send(find("needle", 99));
+    expect(highlighted(frame, "ork-find-active")).toEqual([]);
+  });
+
+  test("leaves the query nowhere: not in the DOM, and not in anything posted", async () => {
+    const frame = await rendered();
+    const domBefore = frame.window.document.documentElement.outerHTML;
+    const secret = "needle";
+    const postedBefore = frame.posted().length;
+    await frame.send(find(secret, 0));
+    await frame.window.happyDOM.waitUntilComplete();
+    expect(frame.window.document.documentElement.outerHTML).toBe(domBefore);
+    const replies = frame.posted().slice(postedBefore);
+    expect(replies.length).toBeGreaterThan(0);
+    for (const reply of replies) expect(JSON.stringify(reply)).not.toContain(secret);
+  });
+
+  test("reports where the active match is, as numbers the parser accepts", async () => {
+    const frame = await rendered();
+    frame.evaluate(
+      "Range.prototype.getBoundingClientRect = () => ({ top: 40.5, bottom: 56.5, height: 16 })",
+    );
+    await frame.send(find("needle", 0));
+    await frame.window.happyDOM.waitUntilComplete();
+    const report = frame.posted().find((message) => message.type === "find-match")!;
+    expect(report).toEqual({
+      channel: STATIC_HTML_FRAME_CHANNEL,
+      v: 1,
+      type: "find-match",
+      generation: GENERATION,
+      top: 40.5,
+      height: 16,
+    });
+    expect(parseStaticHtmlFrameMessage(report, GENERATION).ok).toBe(true);
+  });
+
+  test("stepping faster than the channel allows sends one report per pace", async () => {
+    const frame = await rendered();
+    for (let step = 0; step < 20; step++) await frame.send(find("needle", step % 4));
+    await frame.window.happyDOM.waitUntilComplete();
+    const reports = frame.posted().filter((message) => message.type === "find-match");
+    expect(reports).toHaveLength(1);
+  });
+
+  test("a match with no active occurrence reports nothing", async () => {
+    const frame = await rendered();
+    await frame.send(find("needle", null));
+    await frame.window.happyDOM.waitUntilComplete();
+    expect(frame.posted().some((message) => message.type === "find-match")).toBe(false);
+  });
+
+  test("opens the disclosures around the active match and closes them when it moves on", async () => {
+    const frame = await rendered();
+    await frame.send(find("needle", 2));
+    expect(isOpen(frame, "inner")).toBe(true);
+    expect(isOpen(frame, "outer")).toBe(true);
+    await frame.send(find("needle", 3));
+    expect(isOpen(frame, "inner")).toBe(false);
+    expect(isOpen(frame, "outer")).toBe(false);
+  });
+
+  test("a disclosure the reader toggled stays as they left it", async () => {
+    const frame = await rendered();
+    await frame.send(find("needle", 2));
+    frame.window.document
+      .querySelector("#outer summary")!
+      .dispatchEvent(new frame.window.MouseEvent("click", { bubbles: true }));
+    // However the click left it, the reader's last word is that it stays open.
+    frame.evaluate("document.getElementById('outer').open = true");
+    await frame.send(find("", null));
+    expect(isOpen(frame, "inner")).toBe(false);
+    expect(isOpen(frame, "outer")).toBe(true);
+  });
+
+  test("a disclosure the author left open is never closed", async () => {
+    const frame = await rendered("<details id='open' open><p>needle</p></details><p>needle</p>");
+    await frame.send(find("needle", 0));
+    await frame.send(find("needle", 1));
+    await frame.send(find("", null));
+    expect(isOpen(frame, "open")).toBe(true);
+  });
+
+  test("an empty query clears every highlight", async () => {
+    const frame = await rendered();
+    await frame.send(find("needle", 0));
+    await frame.send(find("", null));
+    expect(highlighted(frame, "ork-find-match")).toEqual([]);
+    expect(highlighted(frame, "ork-find-active")).toEqual([]);
+  });
+
+  test("a query is matched literally", async () => {
+    const frame = await rendered("<p>a.c abc (x)+</p>");
+    await frame.send(find("a.c", 0));
+    expect(highlighted(frame, "ork-find-match")).toEqual(["a.c"]);
+    await frame.send(find("(x)+", 0));
+    expect(highlighted(frame, "ork-find-match")).toEqual(["(x)+"]);
+  });
+
+  test("refuses a message of any other shape, like the rest of the channel", async () => {
+    const frame = await rendered();
+    await frame.send(find("needle", 0));
+    const refused = [
+      { ...find("other", 0), extra: true },
+      { type: "find", generation: GENERATION, query: "other" },
+      find("x".repeat(STATIC_HTML_MAX_FIND_QUERY_CHARACTERS + 1), 0),
+      { ...find("other", 0), query: 5 },
+      find("other", -1),
+      find("other", 0.5),
+      find("other", STATIC_PRESENTATION_POLICY.maxSearchTextCharacters + 1),
+      { ...find("other", 0), occurrence: "0" },
+      { ...find("other", 0), generation: "x".repeat(32) },
+    ];
+    for (const message of refused) {
+      await frame.send(message as Record<string, unknown>);
+      expect(highlighted(frame, "ork-find-match")).toHaveLength(4);
+    }
+  });
+
+  test("before a document has rendered, there is nothing to find in", async () => {
+    const frame = await frameWith();
+    frame.evaluate(
+      "window.Highlight = class { add() {} }; Object.defineProperty(window, 'CSS', { value: { highlights: new Map() } });",
+    );
+    await frame.send(find("needle", 0));
+    expect(frame.evaluate("window.CSS.highlights.size")).toBe(0);
+  });
+
+  test("the longest query still fits the channel's message limit", () => {
+    const envelope = JSON.stringify({
+      channel: STATIC_HTML_FRAME_CHANNEL,
+      v: 1,
+      ...find("", 65_536),
+    });
+    expect(
+      new TextEncoder().encode(envelope).length + STATIC_HTML_MAX_FIND_QUERY_CHARACTERS * 3,
+    ).toBeLessThanOrEqual(FRAME_CHANNEL_POLICY.maxMessageBytes);
+  });
+
+  test("without the highlight API the document stays usable and still reports", async () => {
+    const frame = await frameWith();
+    await frame.send(renderMessage(DOCUMENT));
+    await frame.send(find("needle", 2));
+    await frame.window.happyDOM.waitUntilComplete();
+    expect(isOpen(frame, "inner")).toBe(true);
+    expect(frame.posted().some((message) => message.type === "find-match")).toBe(true);
+    expect(frame.posted().some((message) => message.type === "error")).toBe(false);
+  });
+});
+
 describe("parseStaticHtmlFrameMessage", () => {
   const envelope = { channel: STATIC_HTML_FRAME_CHANNEL, v: 1 };
   const reason = (data: unknown, generation: string | null = GENERATION) => {
@@ -432,8 +675,26 @@ describe("parseStaticHtmlFrameMessage", () => {
       },
       { type: "link-request", generation: GENERATION, url: "https://example.com/", label: "x" },
       { type: "escape", generation: GENERATION },
+      { type: "find-match", generation: GENERATION, top: 0, height: 16.5 },
     ])
       expect(reason({ ...envelope, ...message })).toBe("ok");
+  });
+
+  test("a find report carries two plausible numbers and nothing else", () => {
+    const report = { ...envelope, type: "find-match", generation: GENERATION };
+    for (const [top, height] of [
+      [Number.NaN, 1],
+      [-1, 1],
+      [100_001, 1],
+      [1, "16"],
+      ["needle", 1],
+    ])
+      expect(reason({ ...report, top, height })).toBe("bad-shape");
+    expect(reason({ ...report, top: 1, height: 1, text: "needle" })).toBe("bad-shape");
+    expect(reason({ ...report, top: 1 })).toBe("bad-shape");
+    expect(reason({ ...report, top: 1, height: 1, generation: "x".repeat(32) })).toBe(
+      "generation-mismatch",
+    );
   });
 
   test("rejects foreign, malformed and mismatched messages", () => {
@@ -596,5 +857,24 @@ describe("frame documents", () => {
       "text",
     ]);
     expect(frame.eval("window.__posted").at(-1).text).toBe("Rendered");
+    frame.eval(
+      "window.Highlight = class { constructor() { this.ranges = []; } add(range) { this.ranges.push(range); } }; Object.defineProperty(window, 'CSS', { value: { highlights: new Map() } });",
+    );
+    frame.dispatchEvent(
+      new frame.MessageEvent("message", {
+        data: {
+          channel: STATIC_HTML_FRAME_CHANNEL,
+          v: 1,
+          type: "find",
+          generation: GENERATION,
+          query: "render",
+          occurrence: 0,
+        },
+        source: frame.parent as never,
+      }),
+    );
+    expect(frame.eval("window.CSS.highlights.get('ork-find-active').ranges[0].toString()")).toBe(
+      "Render",
+    );
   });
 });

@@ -700,8 +700,8 @@ when the user said so in advance.
   says to read them with `get_usage_limits`. A switch tool that also spent
   turns would be harder to approve, so it does not.
 - `set_account_auto_switch` changes the ticks of
-  [automatic switching](#automatic-switching), which resends what the weekly limit
-  stopped by itself and tells the coordinator each time.
+  [automatic switching](#automatic-switching), which resends what a 5-hour or weekly
+  limit stopped by itself and tells the coordinator each time.
 
 Grok, Pi, OpenCode and Cursor have no accounts to switch; the tools say so.
 
@@ -748,10 +748,9 @@ accounts without asking**, off by default
   listed and toasted the same way, marked as allowed by a timer.
 - **Semantics.** Unchanged: machine-wide, a running turn finishes on the old
   account, and while automatic switching is on the switch pins the account and
-  turns it off, as any manual switch does. That is deliberate. Automatic
-  switching follows the weekly limit only, so if it stayed on it could move the
-  machine straight back to the account the coordinator moved it off for the
-  5-hour limit.
+  turns it off, as any manual switch does. That is deliberate. If it stayed on
+  it would move the machine straight back to the account with the soonest weekly
+  reset that has room, undoing the coordinator's choice.
 - A self-timer's permission (`scheduleId`) still takes precedence over the
   standing permission, and keeps its own rules.
 
@@ -775,9 +774,13 @@ predates the code still works through its text, counted as
 ## Automatic switching
 
 Off by default. One main tick per provider, Claude and Codex, keeps the machine
-on the signed-in account whose general weekly limit resets soonest, moves on when
-that limit runs out, and resends the work it stopped, so allowance is not lost to
-a reset. A tick per account says whether that account takes part. The backend
+on the signed-in account with room whose general weekly limit resets soonest. It
+moves on when that limit or the account's 5-hour limit runs out, comes back when
+the 5-hour limit resets, and resends the work either stopped. So each account is
+used up in the order its week ends, and allowance is not lost to a reset. A tick
+per account says whether that account takes part. These are the only two providers
+with accounts to switch between: Grok, Pi, OpenCode and Cursor hold one login per
+machine. The backend
 does all of it (`agent-accounts-auto-switch.ts`; the rule is pure, in
 `@orkestrator/protocol/agent-account-auto-switch`), so it needs no client and no
 coordinator. It never writes a credential: a switch only records which existing
@@ -787,13 +790,18 @@ bridges and the pinned CLIs against scripted provider servers
 are in
 [1250-automatic-account-switching-live-checks.md](../todo/agent-engines/1250-automatic-account-switching-live-checks.md).
 
-### Which limit counts
+### Which limits count
 
-Only the **general weekly limit** (`generalWeeklyWindow`).
+Two, doing different jobs. The **general weekly limit** (`generalWeeklyWindow`) sets
+the order and says who has room. The **5-hour limit** (`fiveHourWindow`) only says who
+has room, and never changes the order. A model or apps limit counts for neither.
 
-- **Claude:** window `seven_day`. `seven_day_<model>`, `seven_day_oauth_apps` and
-  `five_hour` never count.
-- **Codex:** whichever of `primary` and `secondary` is 10,080 minutes long. The
+- **Claude:** `seven_day` is the week and `five_hour` the 5-hour limit.
+  `seven_day_<model>` and `seven_day_oauth_apps` never count.
+- **Codex, the 5-hour limit:** whichever of `primary` and `secondary` is shorter than
+  a week, 300 minutes on the accounts seen so far. It goes by length rather than by
+  exactly 300, so a plan with another short window still works.
+- **Codex, the week:** whichever of `primary` and `secondary` is 10,080 minutes long. The
   slot itself says nothing, because the usage endpoint can report the week in
   either. Evidence, against the pinned 0.166.0: the app-server protocol's
   `rateLimitsByLimitId` is "keyed by metered `limit_id` (for example, `codex`)"
@@ -808,8 +816,8 @@ Only the **general weekly limit** (`generalWeeklyWindow`).
   feature's week into the account's. No real account has confirmed this live.
 
 A limit error's text cannot say which limit it was
-(`classifyUsageLimitError`), so a Fable, other model-specific, apps or 5-hour limit
-is told apart by reading usage, never by its words. Claude's refusal arrives as a
+(`classifyUsageLimitError`), so a Fable, other model-specific or apps limit is told
+apart from these two by reading usage, never by its words. Claude's refusal arrives as a
 result with `is_error` and its words only in `result`; the bridge now carries
 those words as the turn's error when they name a usage limit, where it used to
 substitute a fixed sentence the classifier could not match
@@ -819,9 +827,9 @@ older bridge still sends the fixed sentence, and so stays stopped.
 
 ### When it moves
 
-Among the included, signed-in accounts with room, the soonest reset comes first;
-an account with no known reset ranks after every account with one
-(`rankAutoSwitchAccounts`). A tie stays on the active account. The order is strict
+Among the included, signed-in accounts with room on both limits, the soonest weekly
+reset comes first; an account with no known weekly reset ranks after every account
+with one (`rankAutoSwitchAccounts`). A tie stays on the active account. The order is strict
 to the millisecond; two rules keep small differences from moving the machine:
 
 - **The same login is one account.** Entries with the same email (ignoring case),
@@ -842,37 +850,59 @@ to the millisecond; two rules keep small differences from moving the machine:
   reset more than an hour sooner than the active account
   (`AUTO_SWITCH_RESET_TOLERANCE_MS`); exactly an hour stays. The tolerance lives in
   `decideAutoSwitch` rather than the sort, because it is not transitive. `threshold`,
-  `limit`, `signed-out` and `not-included` moves are not held back by it.
+  `five-hour`, `limit`, `signed-out` and `not-included` moves are not held back by it.
+  A move back after a 5-hour limit resets is a `soonest-reset` move, so it is held
+  back too: an account whose week ends within the hour of the current one's is not
+  worth a move, and the two run out about together anyway.
 
 Before these rules, one machine moved between two entries for one login five times
 in 70 minutes, because their reset times differed by 60 ms.
 
-Three things can move it:
+A week with three accounts, weeks ending first to third:
+
+1. On the first. Its 5-hour limit reaches 98%, so the machine moves to the second
+   (`five-hour`).
+2. The second's 5-hour limit fills too, with the first's still out: on to the third.
+3. The first's 5-hour limit resets: straight back to the first (`soonest-reset`),
+   even with the second's still out.
+
+Every account out on one limit or the other leaves the machine where it is until one
+comes back.
+
+Four things can move it:
 
 - **Between turns.** A turn ending anywhere on the machine, at most once a minute,
-  and a ten-minute timer for work no turn-end edge reports, read each included
+  and a five-minute timer for work no turn-end edge reports, read each included
   account's usage (cached for two minutes, as for Settings) and move to the top of
-  the order. That is a move when the active limit reaches 98% used, and also when
-  another login resets more than an hour sooner, or the active account's own tick
-  is off. A running turn finishes on the old account, as with any switch. A native
+  the order. That is a move when the active account's weekly or 5-hour limit reaches
+  98% used, and also when another login with room resets more than an hour sooner,
+  or the active account's own tick is off. A running turn finishes on the old account, as with any switch. A native
   tab's next turn moves over. Workflow providers resolve the local bridge before
   creating a session or preparing each new turn, so an idle bridge moves over
   even when the provider is cached. A busy bridge stays on its running account (see
   [1250](../todo/agent-engines/1250-automatic-account-switching-live-checks.md#a-workflows-next-turn-after-a-between-turns-move)).
+- **A 5-hour limit resetting.** Each check arms one timer per provider for the
+  soonest reset of another included account only the 5-hour limit keeps out
+  (`nextFiveHourRefresh`), 15 seconds after it, so the machine is back on the soonest
+  weekly reset as it happens rather than at the next check. It costs one check. It is
+  in memory, and the next check after a restart arms it again.
 - **A limit error mid-turn.** The turn's error has to read as a usage limit, and
   then a forced read of the account the turn ran on has to show the general weekly
-  limit at 100%. Anything less and the turn stays stopped, with nothing moved
-  (`handleLimitStop`). Stops seen within two minutes share one confirmation. The
+  limit at 100% or the 5-hour limit at 98% or more. The 5-hour limit counts from the
+  threshold because it fills fast enough to read just under 100% at the refusal, and
+  the machine would leave at 98% anyway. Anything less and the turn stays stopped,
+  with nothing moved (`handleLimitStop`). Stops seen within two minutes share one confirmation. The
   session can already read the new account, when another stop's resend replaced a
   bridge they shared. Such a stop counts only if the turn was running before the
   last move, is not itself a resend, is seen within five minutes of the move, and a
-  fresh reading of the account left shows its weekly limit used up. A turn sent after
+  fresh reading of the account left confirms one of those limits. A turn sent after
   the move ran on the new account, so whatever stopped it, it stays stopped.
 - **A tick changing**, here or from the command node.
 
 With every included account out, nothing moves: work stops at the limit and
-nothing resumes by itself, including when an account later resets. Grok, Pi,
-OpenCode and Cursor have no accounts and are never involved. An isolated container
+nothing resumes by itself, including when an account later resets, though the machine
+still moves to the account that resets so the next prompt runs. Grok, Pi, OpenCode and
+Cursor have no accounts and are never involved. An isolated container
 keeps its own login, so a stop inside one is not this machine's to act on.
 
 ### Stale and unknown readings
@@ -884,11 +914,12 @@ stale waits (`wait`) up to 10 minutes for one that is not, for example through a
 429's wait, and then stays stopped.
 
 For choosing where to go, an idle Claude account's reading is usually stale,
-because its token has lapsed. A weekly limit does not fall before its reset, so a
-stale reading at or past 98% with its reset still ahead keeps that account out
-until the reset. With no reset to go on it says too little to rule the account
-out, and it ranks last. A reset in the past is never a known reset: the window has
-started over (`stalePlanUsageSnapshot`, `weeklyLimitReading`), so it reads empty
+because its token has lapsed. Neither limit falls before its reset, so a stale
+reading of either at or past 98% with its reset still ahead keeps that account out
+until the reset. A weekly reading with no reset to go on says too little to rule the
+account out, and it ranks last. A 5-hour window with no reset cannot outlast its own
+length from when it was read, so that is taken as its reset. A reset in the past is never a known reset: the window has
+started over (`stalePlanUsageSnapshot`, `usageLimitReading`), so it reads empty
 with its next reset unknown, and ranks last.
 
 Ranking last would starve such an account: a fresh account always has a known
@@ -919,7 +950,7 @@ Detectable, so the rule avoids it, within what a reading can show:
   `plan-usage.ts` reads these into `PlanUsageSnapshot.paidOverage`.
 - An account the provider says is past its included allowance, or one with paid
   usage on and any limit at 100%, is never a destination (`wouldPay`). An account
-  past 98% of its weekly limit is out anyway.
+  past 98% of its weekly or 5-hour limit is out anyway.
 - It cannot see an account with **no reading at all**, which ranks last and can
   still be chosen when nothing else has room. A fresh reading then arrives as soon
   as it is active, and it is moved off at the next check, but the resent turn may
@@ -998,7 +1029,8 @@ login, and its model endpoint answers everything, so no turn is billed.
 | Native tab | The refusal's process exits, a new bridge starts on the other login, and that login's request carries the stopped prompt once, from the shared transcript, then the continuation |
 | Planning turn | A plan prompt in a Build session is resent in plan mode |
 | Two tabs stopped together | Each continues once, over one replacement |
-| A 5-hour refusal | Nothing moves and one call is all there is |
+| A 5-hour refusal | Continues on the other login, as for a weekly one |
+| A refusal for any other limit | Neither limit reads out, so nothing moves and one call is all there is |
 | Every account out | One resend, refused, then nothing |
 | Multi Review preparation, build stage, graph agent node | The same continuation through each owner's own resend |
 | Two reviewers on one bridge | Each continues once, over one replacement, still `dontAsk` |
@@ -1139,7 +1171,7 @@ itself. Where each surface acts:
     where it does not. The preferred login switches nothing by itself: a leaf
     adding or removing a login, or a machine coming back online, never changes
     which account it uses. [Automatic switching](#automatic-switching) is a separate,
-    explicit opt-in, and it follows reset times rather than this preference. A preference change made in another client shows on the next full
+    explicit opt-in, and it follows limits and reset times rather than this preference. A preference change made in another client shows on the next full
     read (opening the page or the refresh button), not live. A machine's own
     settings dialog does not flag its row. Older command nodes reject the
     command, so the star reports an error there.
@@ -1244,7 +1276,7 @@ names another version.
 
 Coordinator authority: `set_account_auto_switch` may change email-matched inclusion ticks,
 enable automatic switching, or end a machine pin when the user explicitly requests it.
-These controls delegate subscription selection and bounded weekly-limit recovery to
-the backend. They do not use the single-account switch approval request. No-email
+These controls delegate subscription selection and bounded recovery from the 5-hour
+and weekly limits to the backend. They do not use the single-account switch approval request. No-email
 accounts require the user to include them in Settings; coordinator tools refuse to
 include them. Excluding such an account remains available.

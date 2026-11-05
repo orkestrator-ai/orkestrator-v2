@@ -16,6 +16,7 @@ import { createServer as createNetServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { MAX_GATEWAY_EVENT_FRAME_BYTES } from "@orkestrator/protocol/gateway-event-stream";
+import { PROCESS_OUTPUT_LINE_LIMIT } from "@orkestrator/protocol/node/bounded-line-splitter";
 import { configureLogger, formatLogError, resetLogger } from "@orkestrator/protocol/logger";
 import { applyPiHostCredentialEnvironment } from "../../backend/src/core/host-agent-credentials";
 import type { CommandContext } from "../../backend/src/core/commands-context";
@@ -1124,6 +1125,76 @@ sleep 5
         await waitForCapturedLine(errors, "[Backend] partial-stderr line");
         expect(logs.some((line) => line === "[Backend] partial-")).toBe(false);
         expect(errors.some((line) => line === "[Backend] partial-")).toBe(false);
+      } finally {
+        console.log = realLog;
+        console.error = realError;
+      }
+    },
+    SPAWN_TIMEOUT_MS,
+  );
+
+  test(
+    "relays a backend line with no newline in bounded pieces, losing none of it",
+    async () => {
+      globalThis.fetch = Bun.fetch;
+      const resourceRoot = await mkdtemp(path.join(os.tmpdir(), "orkestrator-backend-long-line-"));
+      directories.push(resourceRoot);
+      const authFile = path.join(resourceRoot, "auth.json");
+      await writeFile(authFile, JSON.stringify({ token: "fake-backend-token-1234567890" }));
+      await mkdir(path.join(resourceRoot, "bin"), { recursive: true });
+      const fakeBun = path.join(resourceRoot, "bin", "bun");
+      // 1 MiB of stdout and of stderr without a newline, then a short line each.
+      await writeFile(
+        fakeBun,
+        `#!/bin/sh
+printf '{"type":"orkestrator-backend-ready","url":"http://127.0.0.1:1/","authFile":"%s","bindAddress":"127.0.0.1","port":1}\\n' ${JSON.stringify(authFile)}
+head -c 1048576 /dev/zero | tr '\\0' x
+printf '\\nafter-long-stdout\\n'
+head -c 1048576 /dev/zero | tr '\\0' y >&2
+printf '\\nafter-long-stderr\\n' >&2
+sleep 5
+`,
+      );
+      await chmod(fakeBun, 0o755);
+
+      const logs: string[] = [];
+      const errors: string[] = [];
+      const realLog = console.log;
+      const realError = console.error;
+      console.log = ((...args: unknown[]) => {
+        logs.push(args.map(String).join(" "));
+      }) as typeof console.log;
+      console.error = ((...args: unknown[]) => {
+        errors.push(args.map(String).join(" "));
+      }) as typeof console.error;
+      try {
+        const backendProcess = new BackendProcess();
+        processes.push(backendProcess);
+        await backendProcess.start({
+          isDev: false,
+          appVersion: "9.9.9-long-line",
+          appRoot: resourceRoot,
+          resourceRoot,
+          dataDir: resourceRoot,
+          gatewayPort: 0,
+          onEvent: () => undefined,
+        });
+
+        await waitForCapturedLine(logs, "[Backend] after-long-stdout", 10_000);
+        await waitForCapturedLine(errors, "[Backend] after-long-stderr", 10_000);
+        for (const [captured, fill] of [
+          [logs, "x"],
+          [errors, "y"],
+        ] as const) {
+          const pieces = captured
+            .filter((line) => line.startsWith(`[Backend] ${fill}`))
+            .map((line) => line.slice("[Backend] ".length));
+          expect(pieces.length).toBeGreaterThan(1);
+          for (const piece of pieces) {
+            expect(piece.length).toBeLessThanOrEqual(PROCESS_OUTPUT_LINE_LIMIT);
+          }
+          expect(pieces.join("")).toBe(fill.repeat(1_048_576));
+        }
       } finally {
         console.log = realLog;
         console.error = realError;

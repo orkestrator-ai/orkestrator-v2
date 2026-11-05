@@ -351,6 +351,7 @@ export function UnassignedNativeAgentComposer({
   platformNotes,
   placeholder,
   emptyPlatformsMessage,
+  emptyPlatformsAction,
   starterPrompts,
   workspacePath,
   writeImage,
@@ -406,6 +407,7 @@ export function UnassignedNativeAgentComposer({
   platformNotes?: Partial<Record<AgentPlatform, string>>;
   placeholder?: string;
   emptyPlatformsMessage?: string;
+  emptyPlatformsAction?: React.ReactNode;
   /**
    * Example requests offered beneath an empty composer. Choosing one fills the
    * message box with its text for the user to edit; it is never sent. They are
@@ -932,10 +934,13 @@ export function UnassignedNativeAgentComposer({
   if (enabledPlatforms.length === 0) {
     return (
       <div className="grid h-full place-items-center p-8 text-center">
-        <p className="max-w-md text-sm text-muted-foreground">
-          {emptyPlatformsMessage ??
-            "No agent platform is available here. Enable one in Settings to continue."}
-        </p>
+        <div className="flex max-w-md flex-col items-center gap-3">
+          <p className="text-sm text-muted-foreground">
+            {emptyPlatformsMessage ??
+              "No agent platform is available here. Enable one in Settings to continue."}
+          </p>
+          {emptyPlatformsAction}
+        </div>
       </div>
     );
   }

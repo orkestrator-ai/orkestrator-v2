@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
+import { mkdtemp, rm, stat, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -93,6 +93,8 @@ describe("agent-test platform selection", () => {
     expect(config.global.defaultAgent).toBe("cursor");
     expect(config.global.theme).toBe("dark");
     expect(config.repositories).toEqual({ "/repo": { branchPrefix: "qa" } });
+    // The file can hold the profile's provider secrets.
+    expect((await stat(path.join(directory, "config.json"))).mode & 0o777).toBe(0o600);
     expect(await loadAgentPlatformSelection(directory)).toEqual({
       enabled: ["cursor", "grok"],
       needsFirstRunChoice: false,

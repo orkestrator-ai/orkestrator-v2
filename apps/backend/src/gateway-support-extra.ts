@@ -1,5 +1,6 @@
 import * as support from "./gateway-support-core.js";
 import { BROWSER_PREVIEW_ENVIRONMENT_HEADER } from "@orkestrator/protocol/browser-preview";
+import type { GatewayRelayedEventsMode } from "@orkestrator/protocol/gateway-event-stream";
 import { GATEWAY_LOGIN_CONTENT_SECURITY_POLICY } from "@orkestrator/protocol/renderer-content-security-policy";
 import {
   API_PREFIX,
@@ -774,6 +775,13 @@ export type GatewayEventClient = {
   includedPrefixes: string[] | null;
   /** Prefixes omitted unless explicitly restored by `includedPrefixes`. */
   excludedPrefixes: string[] | null;
+  /** How this stream asked for relayed node events; null when it did not say. */
+  relayedEvents?: GatewayRelayedEventsMode | null;
+  /**
+   * Carries only per-node relayed events. Its cursor and replay window are the
+   * relayed ring's, so nothing about it touches the main sequence.
+   */
+  relayedStream?: boolean;
   /** Sessions whose frames were dropped for this client since its last notice. */
   desyncedSessions: Set<string>;
   /**
@@ -829,6 +837,11 @@ export function parseEventSubscriptionFilter(value: string | null): string[] | n
     .map((prefix) => prefix.trim())
     .filter(Boolean);
   return prefixes.length > 0 ? prefixes : null;
+}
+
+/** Explicit unknown values retain legacy delivery without counting as omission. */
+export function parseRelayedEventsMode(value: string | null): GatewayRelayedEventsMode | null {
+  return value === null ? null : value === "per-node" ? "per-node" : "legacy";
 }
 
 export function eventMatchesSubscription(

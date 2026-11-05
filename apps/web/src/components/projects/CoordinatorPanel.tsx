@@ -1,7 +1,11 @@
 import { flushSync } from "react-dom";
 import { HumanPromptBanner } from "@/components/chat/HumanPromptBanner";
 import { useHumanPrompts } from "@/hooks/useUserCommands";
+import { useRemoteHumanPrompts, type RemoteHumanPromptEntry } from "@/hooks/useRemoteHumanPrompts";
+import type { HumanPromptEntry } from "@orkestrator/protocol/human-prompts";
 import { useEffect, useMemo, useState } from "react";
+import { toast } from "sonner";
+import { useStore } from "zustand";
 import { AlertCircle, GitBranch, Loader2, Pause, Play, Plus, RotateCcw } from "lucide-react";
 import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
 import { useCoordinatorActions } from "./useCoordinatorActions";
@@ -13,12 +17,18 @@ import { useCoordinatorPanelData } from "./useCoordinatorPanelData";
 import { useCoordinatorWorkItems } from "./useCoordinatorWorkItems";
 import { CoordinatorConversationPane } from "./CoordinatorConversationPane";
 import { CoordinatorToolbar } from "./CoordinatorToolbar";
-import { CoordinatorWorkPanel } from "./CoordinatorWorkPanel";
+import { CoordinatorNextWakeLine, CoordinatorWorkPanel } from "./CoordinatorWorkPanel";
 import { openCoordinatorWorkTarget } from "@/lib/coordinator-work-navigation";
+import {
+  remoteWorkKey,
+  workerTabTarget,
+  type CoordinatorWorkStop,
+} from "@/lib/coordinator-work-items";
+import { portalStore } from "@/lib/portal/portal-store";
 import { useCoordinatorPaneLayoutStore } from "@/stores/coordinatorPaneLayoutStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
-import { CoordinatorBanner } from "./CoordinatorPanelNotices";
+import { CoordinatorActionAlert, CoordinatorBanner } from "./CoordinatorPanelNotices";
 import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { CoordinatorPaneTree } from "./CoordinatorPaneTree";
 import { CoordinatorConversationTab } from "./CoordinatorConversationTab";
@@ -40,6 +50,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import * as backend from "@/lib/backend";
+import { useAppDialogStore } from "@/stores/appDialogStore";
 import { createSessionKey } from "@/lib/utils";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { useNativeComposeStore } from "@/stores/nativeComposeStore";
@@ -60,6 +71,8 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
     git,
     loading,
     error: loadError,
+    clearError: clearLoadError,
+    freshness,
     load,
     applySnapshot: setSnapshot,
     applyGit: setGit,
@@ -195,6 +208,8 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
    * its builds and reviews run in. Read once: the Work panel marks those rows
    * as needing the user, and the banner shows the workers' own prompts so the
    * person talking to the coordinator sees them without opening the worker.
+   * Workers on other nodes are read through each node's link, while a request
+   * to them is open (`useRemoteHumanPrompts`).
    */
   const workerEnvironmentIds = useMemo(
     () =>
@@ -229,14 +244,38 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
     return Array.from(ids);
   }, [snapshot, workerEnvironmentIds, pipelines, multiReviews]);
   const workPrompts = useHumanPrompts(workEnvironmentIds);
-  const workerPrompts = useMemo(
-    () => workPrompts.filter((entry) => workerEnvironmentIds.has(entry.environmentId)),
-    [workPrompts, workerEnvironmentIds],
+  const remoteWorkers = useMemo(
+    () =>
+      snapshot
+        ? snapshot.workflows.flatMap((association) =>
+            association.kind === "environment" &&
+            association.coordinatorId === snapshot.workspace.id &&
+            association.nodeId &&
+            !association.pending &&
+            association.delegation?.state === "running"
+              ? [{ nodeId: association.nodeId, environmentId: association.resourceId }]
+              : [],
+          )
+        : [],
+    [snapshot],
+  );
+  const remotePrompts = useRemoteHumanPrompts(remoteWorkers);
+  const workerPrompts = useMemo<Array<HumanPromptEntry | RemoteHumanPromptEntry>>(
+    () => [
+      ...workPrompts.filter((entry) => workerEnvironmentIds.has(entry.environmentId)),
+      ...remotePrompts,
+    ],
+    [workPrompts, workerEnvironmentIds, remotePrompts],
   );
   const promptEnvironmentIds = useMemo(
-    () => new Set(workPrompts.map((entry) => entry.environmentId)),
-    [workPrompts],
+    () =>
+      new Set([
+        ...workPrompts.map((entry) => entry.environmentId),
+        ...remotePrompts.map((entry) => remoteWorkKey(entry.nodeId, entry.environmentId)),
+      ]),
+    [workPrompts, remotePrompts],
   );
+  const nodes = useStore(portalStore.store, (state) => state.nodes);
   // Everything this coordinator started, from every conversation and node.
   const work = useCoordinatorWorkItems(snapshot, promptEnvironmentIds);
   const selectedSessionKey =
@@ -284,6 +323,15 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
             Coordinator reads the project’s real local checkout. Set a valid local path in
             Repository settings to continue.
           </p>
+          <Button
+            className="mt-4"
+            variant="outline"
+            onClick={() =>
+              useAppDialogStore.getState().open({ kind: "repository-settings", projectId })
+            }
+          >
+            Repository settings
+          </Button>
         </div>
       </div>
     );
@@ -449,6 +497,14 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
       { failureMessage: "Could not close conversation" },
     );
   };
+  const retryConversation = (conversationId: string) => {
+    void runAction(
+      "conversation",
+      async () =>
+        setSnapshot(await backend.retryCoordinatorConversation(projectId, conversationId)),
+      { failureMessage: "Could not retry conversation" },
+    );
+  };
   const clearFinishedWork = (associationIds: string[]) => {
     setError(null);
     return backend
@@ -458,6 +514,62 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
         setError(cause instanceof Error ? cause.message : "Could not clear finished work"),
       );
   };
+  // Any open conversation can carry the stop; the backend checks it belongs here.
+  const stopConversation = conversations[0];
+  const stopWorker = async (stop: CoordinatorWorkStop) => {
+    if (!stopConversation) return;
+    setError(null);
+    const scope = {
+      projectId,
+      coordinatorId: snapshot.workspace.id,
+      conversationId: stopConversation.id,
+    };
+    try {
+      const results = await Promise.all(
+        stop.tabIds.map((tabId) =>
+          backend.stopCoordinatorWorkerTurn(scope, {
+            // A new click is a new request: it stops whatever turn is running then.
+            requestId: `work-panel-stop:${crypto.randomUUID()}`,
+            environmentId: stop.environmentId,
+            tabId,
+            ...(stop.nodeId ? { nodeId: stop.nodeId } : {}),
+          }),
+        ),
+      );
+      if (!results.some((result) => result.stopped === true)) {
+        toast.info("That worker has no running turn to stop");
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not stop the worker");
+    } finally {
+      invalidateView();
+    }
+  };
+  const promptTarget = (entry: HumanPromptEntry | RemoteHumanPromptEntry) =>
+    workerTabTarget(
+      {
+        environmentId: entry.environmentId,
+        tabId: entry.tabId,
+        ...("nodeId" in entry ? { nodeId: entry.nodeId } : {}),
+        title: promptLabel(entry),
+      },
+      { environments, nodes },
+    );
+  const promptLabel = (entry: HumanPromptEntry | RemoteHumanPromptEntry) => {
+    if (!("nodeId" in entry)) {
+      return (
+        environments.find((item) => item.id === entry.environmentId)?.name ?? entry.environmentId
+      );
+    }
+    const node = nodes.find((item) => item.nodeId === entry.nodeId);
+    const name =
+      node?.environments.find((item) => item.ref.environmentId === entry.environmentId)?.name ??
+      entry.environmentId;
+    return `${name} on ${node?.view.displayName ?? entry.nodeId}`;
+  };
+
+  // Keep action failures announced even when the repository retains the same error.
+  const actionAlert = error;
 
   return (
     <CoordinatorPullRequestWatchProvider projectId={projectId}>
@@ -470,10 +582,11 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
         <CoordinatorToolbar
           snapshot={snapshot}
           git={git}
+          announcedError={actionAlert}
           gitBusy={gitBusy}
           fetching={fetching}
           conversationBusy={conversationBusy}
-          error={error}
+          freshness={freshness}
           runGit={runGit}
           prepareSwitch={prepareSwitch}
           activeTurn={activeTurn}
@@ -482,11 +595,31 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
           onPause={() => setPaused(true)}
         />
 
+        {actionAlert ? (
+          <CoordinatorActionAlert
+            message={actionAlert}
+            onDismiss={() => {
+              setError(null);
+              clearLoadError();
+            }}
+          />
+        ) : null}
+        {/* Only from a backend that predates per-conversation startup errors,
+        or a record one stored (version-compatibility.md). */}
         {snapshot.workspace.lifecycleState === "error" ? (
           <CoordinatorBanner
             tone="error"
             action={
-              <Button size="sm" variant="outline" onClick={() => void load()}>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={conversationBusy}
+                onClick={() =>
+                  void runAction("conversation", load, {
+                    failureMessage: "Could not open Coordinator",
+                  })
+                }
+              >
                 <RotateCcw className="size-3.5" />
                 Retry
               </Button>
@@ -514,16 +647,19 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
               </Button>
             }
           >
-            Coordination is paused. Messages will wait until you resume.
+            Coordination is paused. Mail and new turns wait until you resume; conversations stay
+            readable.
           </CoordinatorBanner>
         ) : null}
 
         <HumanPromptBanner
           prompts={workerPrompts}
-          label={(entry) =>
-            environments.find((item) => item.id === entry.environmentId)?.name ??
-            entry.environmentId
-          }
+          label={promptLabel}
+          canOpen={(entry) => promptTarget(entry) !== null}
+          onOpen={(entry) => {
+            const target = promptTarget(entry);
+            if (target) openCoordinatorWorkTarget(target);
+          }}
         />
 
         <div className="relative flex min-h-0 flex-1">
@@ -606,6 +742,18 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
                       newConversationLabel={newConversationLabel}
                       onCreateConversation={() => createConversation()}
                       onRetry={() => void load()}
+                      onRetryConversation={retryConversation}
+                      onCloseConversation={(id) => {
+                        const item = conversationById.get(id);
+                        if (item?.role === "main") {
+                          setPendingMainClose({
+                            id,
+                            title: item.title,
+                            paneId: pane.id,
+                            changeAgent: false,
+                          });
+                        } else closeConversation(id);
+                      }}
                     />
                   );
                 }}
@@ -617,9 +765,13 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
             counts={work.counts}
             openDelegations={work.openDelegations}
             onOpen={(target) => openCoordinatorWorkTarget(target)}
+            {...(snapshot.workspace.lifecycleState === "ready" && stopConversation
+              ? { onStop: stopWorker }
+              : {})}
             onClearFinished={clearFinishedWork}
           />
         </div>
+        <CoordinatorNextWakeLine items={work.items} quiet={paused || selectedTurnActive} />
         <div className="shrink-0 border-t border-border/60 px-3 py-1 text-center text-[11px] text-muted-foreground">
           Code changes, commands, builds and fixes run in build pipelines or prompt environments.
         </div>

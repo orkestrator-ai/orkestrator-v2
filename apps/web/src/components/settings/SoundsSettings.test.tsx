@@ -46,6 +46,7 @@ describe("SoundsSettings", () => {
     expect(update.mock.calls[0]?.[0]).toEqual({
       agentStopped: false,
       prMerged: true,
+      coordinatorReport: true,
     });
     expect(
       screen.getByRole("switch", { name: "Pull request merged sound" }).getAttribute("data-state"),
@@ -66,13 +67,21 @@ describe("SoundsSettings", () => {
     fireEvent.click(screen.getByRole("switch", { name: "Pull request merged sound" }));
 
     await waitFor(() => expect(update).toHaveBeenCalledTimes(2));
-    expect(update.mock.calls.at(-1)?.[0]).toEqual({ agentStopped: false, prMerged: false });
+    expect(update.mock.calls.at(-1)?.[0]).toEqual({
+      agentStopped: false,
+      prMerged: false,
+      coordinatorReport: true,
+    });
     update.mockRestore();
   });
 
   test("restores authoritative settings and reports the latest failed save", async () => {
     const authoritative = structuredClone(originalConfig);
-    authoritative.global.notificationSounds = { agentStopped: true, prMerged: false };
+    authoritative.global.notificationSounds = {
+      agentStopped: true,
+      prMerged: false,
+      coordinatorReport: true,
+    };
     const update = spyOn(backend, "updateNotificationSoundSettings").mockRejectedValue(
       new Error("disk unavailable"),
     );
@@ -122,7 +131,11 @@ describe("SoundsSettings", () => {
       ).toBe("unchecked"),
     );
     expect(getConfig).not.toHaveBeenCalled();
-    expect(update.mock.calls.at(-1)?.[0]).toEqual({ agentStopped: false, prMerged: false });
+    expect(update.mock.calls.at(-1)?.[0]).toEqual({
+      agentStopped: false,
+      prMerged: false,
+      coordinatorReport: true,
+    });
 
     getConfig.mockRestore();
     update.mockRestore();
@@ -151,16 +164,21 @@ describe("SoundsSettings", () => {
 
   test("previews the two distinct cues even when their toggles are off", async () => {
     useConfigStore.getState().updateGlobalConfig({
-      notificationSounds: { agentStopped: false, prMerged: false },
+      notificationSounds: { agentStopped: false, prMerged: false, coordinatorReport: true },
     });
     const play = spyOn(notificationSounds, "playNotificationSound").mockResolvedValue(true);
 
     render(<SoundsSettings />);
     fireEvent.click(screen.getByRole("button", { name: "Preview Agent stopped" }));
     fireEvent.click(screen.getByRole("button", { name: "Preview Pull request merged" }));
+    fireEvent.click(screen.getByRole("button", { name: "Preview Coordinator report" }));
 
-    await waitFor(() => expect(play).toHaveBeenCalledTimes(2));
-    expect(play.mock.calls.map(([kind]) => kind)).toEqual(["agent-stopped", "pr-merged"]);
+    await waitFor(() => expect(play).toHaveBeenCalledTimes(3));
+    expect(play.mock.calls.map(([kind]) => kind)).toEqual([
+      "agent-stopped",
+      "pr-merged",
+      "coordinator-report",
+    ]);
     play.mockRestore();
   });
 });
@@ -169,10 +187,18 @@ for (const machine of [null, "other"]) {
   test(`selected ${machine ?? "command node"} sound saves and recovery do not change leaf notification preferences`, async () => {
     window.orkestratorWorkspaceTarget = { nodeId: "leaf", nodeName: "Leaf", path: "direct" };
     const leaf = structuredClone(originalConfig);
-    leaf.global.notificationSounds = { agentStopped: true, prMerged: true };
+    leaf.global.notificationSounds = {
+      agentStopped: true,
+      prMerged: true,
+      coordinatorReport: true,
+    };
     useConfigStore.setState({ config: leaf });
     const selected = structuredClone(originalConfig);
-    selected.global.notificationSounds = { agentStopped: true, prMerged: false };
+    selected.global.notificationSounds = {
+      agentStopped: true,
+      prMerged: false,
+      coordinatorReport: true,
+    };
     const read = spyOn(backend, "getConfig").mockImplementation(async (target) =>
       target === undefined ? leaf : selected,
     );
@@ -199,11 +225,15 @@ for (const machine of [null, "other"]) {
       ).toBe("unchecked");
       fireEvent.click(toggle);
       await waitFor(() =>
-        expect(update).toHaveBeenCalledWith({ agentStopped: false, prMerged: false }, machine),
+        expect(update).toHaveBeenCalledWith(
+          { agentStopped: false, prMerged: false, coordinatorReport: true },
+          machine,
+        ),
       );
       expect(useConfigStore.getState().config.global.notificationSounds).toEqual({
         agentStopped: true,
         prMerged: true,
+        coordinatorReport: true,
       });
       await act(async () => fail(new Error("write failed")));
       await waitFor(() => expect(toggle.getAttribute("data-state")).toBe("checked"));
@@ -211,6 +241,7 @@ for (const machine of [null, "other"]) {
       expect(useConfigStore.getState().config.global.notificationSounds).toEqual({
         agentStopped: true,
         prMerged: true,
+        coordinatorReport: true,
       });
     } finally {
       cleanup();

@@ -9,12 +9,12 @@ export interface CoordinatorCheckoutTurnSources {
   storage: Pick<StorageService, "getEnvironmentsByProject" | "coordinators">;
   nativeAgents: Pick<
     NativeAgentService,
-    "hasActiveCheckoutWork" | "sessionTurnActivitySnapshot" | "getProjection"
+    "hasActiveCheckoutWork" | "sessionTurnActivitySnapshot" | "getSessionStateUpdate"
   >;
   /**
-   * Also read each conversation's projection when the observer has not seen it
-   * working. A mutation admission wants that certainty; a view does not, because
-   * a projection read reaches the session and this may be re-read on every
+   * Also read each conversation's session state when the observer has not seen
+   * it working. A mutation admission wants that certainty; a view does not,
+   * because a state read reaches the session and this may be re-read on every
    * activity hint.
    */
   confirmWithProjections: boolean;
@@ -49,15 +49,22 @@ export async function findCoordinatorCheckoutTurn(
     const turn = { kind: "conversation", conversationId: conversation.id } as const;
     if (observed === "working" || observed === "waiting") return turn;
     if (!confirmWithProjections) continue;
-    const projection = await nativeAgents
-      .getProjection({
+    // The state read: the turn phase without a transcript read.
+    const state = await nativeAgents
+      .getSessionStateUpdate({
         environmentId: runtimeId,
         agent: conversation.agent,
         logicalSessionKey: conversation.logicalSessionKey,
-        messageLimit: 1,
+        viewVersion: 1,
+        forceSnapshot: true,
       })
       .catch(() => null);
-    if (projection && ACTIVE_PROJECTION_PHASES.includes(projection.turn.phase)) return turn;
+    // A session that answered but could not be read is treated as busy, as the
+    // projection's error view (phase `recovering`) was.
+    if (state?.status === "unavailable") return turn;
+    if (state?.status === "snapshot" && ACTIVE_PROJECTION_PHASES.includes(state.value.turn.phase)) {
+      return turn;
+    }
   }
   return null;
 }

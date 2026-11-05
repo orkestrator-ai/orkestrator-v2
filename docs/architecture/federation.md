@@ -464,9 +464,12 @@ with `MachinesFilter`:
   from the project's Git URL (`repositoryHint`), or an explicit mapping
   argument. Names, paths and branches never group projects.
 - Activity order offers **Priority order** (the default for both local and
-  federated lists), **Newest first**, and **Oldest first**. Priority puts unread
-  work first, then waiting, working and idle, newest first within each group.
-  The local list, the federated list and `orkestrator environment list --sort`
+  federated lists), **Newest first**, and **Oldest first**. Every order keeps
+  merged environments below unmerged ones and, within each, working environments
+  below the others. Within those groups priority puts unread work first, then
+  waiting and idle, newest first within each; the other two order by time alone.
+  A machine that predates `prState` in its summary sends none, so its merged rows
+  stay with the unmerged ones. The local list, the federated list and `orkestrator environment list --sort`
   share one comparator (`@orkestrator/protocol/environment-activity-order`), and
   this machine's rows rank the activity they display in both lists, so an active
   build counts as working. All three orders use `lastActivityAt`, the time of actual user/agent
@@ -618,8 +621,8 @@ row, header, badge, icon, menu, hover card, filter or sort shows:
   test to `remote-row-parity.test.tsx`.
 - The only intended differences follow from the row being on another machine:
   clicking opens that machine's workspace, "Open workspace" and "Copy link"
-  exist, writes are disabled while it is unavailable, it takes no part in this
-  window's multi-select, and items that need this window's own host ("Copy
+  exist, writes are disabled while it is unavailable, and items that need this
+  window's own host ("Copy
   Address", "Copy Initial Prompt", "Merge PR", the clickable port, the
   design-canvas deletion notice) are absent. "Merge PR" opens this window's
   action-bar merge dialog for the environment (`mergePrRequestStore`), so it
@@ -629,10 +632,20 @@ row, header, badge, icon, menu, hover card, filter or sort shows:
   its summary read stamps on every row (`dockerAvailable`, from a 30-second
   cache of `check_docker` answers and a bounded probe). A machine that predates
   the field sends none, and its rows treat Docker as available, as before.
-- In the merged "By project" and "By repository" lists this window's projects
-  sit in the command node's order and folders, so a shift-click range runs
-  over that tree (`mergedProjectView`, `visibleBoundProjectIds`), never this
-  window's own project order.
+- Multi-select is the same for every row, whichever machine owns it
+  (`lib/sidebar-selection.ts`). Cmd/Ctrl-click toggles a row and Shift-click
+  selects a range, without opening anything. A range runs over the rows as
+  drawn (read from `data-environment-selection-id`), so it follows every
+  grouping, sort and filter and skips what is collapsed. A selection holds this
+  window's rows by environment ID, which is what its stores use, and another
+  machine's by node-qualified key, because the same ID can exist on two
+  machines.
+- Bulk Stop, Restart and Delete resolve each selected row to its owner
+  (`lib/federation/selected-environments.ts`) and send it through the same path
+  as that row's own action (`useSelectedEnvironmentActions`). An environment on
+  an unavailable machine is skipped and reported, and the delete confirmation
+  names each environment's machine. A row that no longer exists leaves the
+  selection.
 
 [2190](../todo/cross-cutting/2190-direct-and-command-node-sidebar-parity.md)
 records how the two paths were merged and what remains.

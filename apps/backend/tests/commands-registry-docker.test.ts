@@ -168,7 +168,6 @@ exit 0
 
         expect(failure).toBeInstanceOf(Error);
         expect((failure as Error).message).toContain("Docker permission denied");
-        expect((failure as Error).message).toContain("[REDACTED]");
         expect((failure as Error).message).not.toContain(githubToken);
         expect((failure as Error).message).not.toContain(anthropicApiKey);
         expect((failure as Error).message).not.toContain(cursorApiKey);
@@ -176,8 +175,9 @@ exit 0
         const dockerCalls = await fs.readFile(logs.all, "utf8");
         expect(dockerCalls).not.toContain("-e GITHUB_TOKEN");
         expect(dockerCalls).not.toContain("-e GH_TOKEN");
-        expect(dockerCalls).toContain("-e ANTHROPIC_API_KEY");
-        expect(dockerCalls).toContain("-e CURSOR_API_KEY");
+        // Staged inputs and the credential sync carry these; Docker never sees them.
+        expect(dockerCalls).not.toContain("ANTHROPIC_API_KEY");
+        expect(dockerCalls).not.toContain("CURSOR_API_KEY");
         expect(dockerCalls).not.toContain(githubToken);
         expect(dockerCalls).not.toContain(anthropicApiKey);
         expect(dockerCalls).not.toContain(cursorApiKey);

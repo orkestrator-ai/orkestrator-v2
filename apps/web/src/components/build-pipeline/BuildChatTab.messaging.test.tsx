@@ -79,6 +79,7 @@ describe("BuildChatTab transcript wiring", () => {
         {...props}
       />,
     );
+    selectNode("Verify");
   }
 
   test("keys each row on its message id so a re-render does not remount it", () => {
@@ -276,6 +277,7 @@ describe("BuildChatTab per-step harnesses", () => {
         }}
       />,
     );
+    selectNode("Review");
   }
 
   function partTypes(): string[] {
@@ -578,6 +580,7 @@ describe("BuildChatTab stage following", () => {
     // holding it would leave the transcript permanently blank.
     renderWith({
       ...pipeline,
+      phase: "verifying",
       sessions: [pipeline.sessions[1]!],
       currentSessionIndex: 0,
       backendRevision: 30,
@@ -1312,7 +1315,7 @@ describe("BuildChatTab graph", () => {
       verificationFeedback: "Every criterion holds.",
     });
 
-    expect(selectedTitle()).toBe("Verify");
+    selectNode("Verify");
     expect(within(inspector()).getByText("Verdict: passed")).toBeTruthy();
   });
 
@@ -1381,6 +1384,80 @@ describe("BuildChatTab graph", () => {
     });
   });
 
+  test("double-clicking the Notes node opens the notes in a tab of their own", () => {
+    renderWithTabs(pipeline);
+    const notes = graphNode("Notes");
+    expect(notes.getAttribute("title")).toBe(
+      "Double-click or press Enter to open the notes in a tab",
+    );
+
+    fireEvent.doubleClick(notes);
+
+    expect(createTab.mock.calls).toEqual([
+      [
+        "key-information",
+        {
+          keyInformation: {
+            environmentId: pipeline.environmentId,
+            pipelineId: pipeline.id,
+            view: "notes",
+          },
+        },
+      ],
+    ]);
+  });
+
+  test("Enter on the Notes node opens its notes tab", () => {
+    renderWithTabs(pipeline);
+    const notes = graphNode("Notes");
+    notes.focus();
+    expect(document.activeElement).toBe(notes);
+    fireEvent.keyDown(notes, { key: "Enter" });
+    expect(createTab.mock.calls).toEqual([
+      [
+        "key-information",
+        {
+          keyInformation: {
+            environmentId: pipeline.environmentId,
+            pipelineId: pipeline.id,
+            view: "notes",
+          },
+        },
+      ],
+    ]);
+  });
+
+  test("opens the notes from the Notes node's context menu and inspector", async () => {
+    renderWithTabs(pipeline);
+    const notesTab = {
+      keyInformation: {
+        environmentId: pipeline.environmentId,
+        pipelineId: pipeline.id,
+        view: "notes" as const,
+      },
+    };
+
+    fireEvent.contextMenu(graphNode("Notes"));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Open notes in a tab" }));
+    expect(createTab.mock.calls[0]).toEqual(["key-information", notesTab]);
+
+    selectNode("Notes");
+    fireEvent.click(within(inspector()).getByRole("button", { name: "Open notes in a tab" }));
+    expect(createTab.mock.calls[1]).toEqual(["key-information", notesTab]);
+  });
+
+  test("the Notes node only selects where no tab can be opened", () => {
+    renderPipelineTab(pipeline);
+    const notes = graphNode("Notes");
+    expect(notes.getAttribute("title")).toBeNull();
+
+    fireEvent.doubleClick(notes);
+    selectNode("Notes");
+
+    expect(createTab).not.toHaveBeenCalled();
+    expect(within(inspector()).queryByRole("button", { name: "Open notes in a tab" })).toBeNull();
+  });
+
   test("opens a session from the node's context menu", async () => {
     renderWithTabs(pipeline);
 
@@ -1434,6 +1511,7 @@ describe("BuildChatTab graph", () => {
 
   test("collapses the graph and remembers it for the pipeline", () => {
     const view = renderPipelineTab(reviewed);
+    selectNode("Verify");
     const toggle = screen.getByRole("button", { name: "Pipeline" });
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
 

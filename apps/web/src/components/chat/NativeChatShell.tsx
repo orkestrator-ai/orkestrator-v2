@@ -20,6 +20,7 @@ import {
   type TranscriptListScrollProps,
 } from "@/components/chat/VirtualizedMessageList";
 import { NativeMessage } from "@/components/chat/NativeMessage";
+import { TranscriptPromptNavigator } from "@/components/chat/TranscriptPromptNavigator";
 import { getNativeMessageSearchText } from "@/components/chat/native-message-search";
 import { formatElapsed } from "@/lib/format-elapsed";
 import { LiveElapsed } from "@/components/chat/LiveElapsed";
@@ -569,6 +570,14 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
           }
         />
       </div>
+
+      {scrollProps.controller && !composerCentered ? (
+        <TranscriptPromptNavigator
+          messages={messages}
+          controller={scrollProps.controller}
+          bottomInsetPx={measuredDockHeight}
+        />
+      ) : null}
 
       <NativeComposeDock
         rootRef={composeDockRef}

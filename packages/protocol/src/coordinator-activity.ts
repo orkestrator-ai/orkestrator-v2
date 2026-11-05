@@ -1,5 +1,5 @@
 import type { AgentActivityState } from "./agent-activity.js";
-import type { CoordinatorWorkspace } from "./coordinator.js";
+import { coordinatorConversationRunnable, type CoordinatorWorkspace } from "./coordinator.js";
 
 /**
  * What a project's coordinator icon shows, the same states an environment
@@ -44,6 +44,8 @@ export function coordinatorActivityByProject(
     if (workspace.lifecycleState !== "ready") continue;
     for (const conversation of workspace.conversations) {
       if (conversation.closedAt || !conversation.agent) continue;
+      // A conversation that failed to start is not swept either.
+      if (!coordinatorConversationRunnable(workspace, conversation)) continue;
       const state = observe(workspace, {
         conversationId: conversation.id,
         agent: conversation.agent,

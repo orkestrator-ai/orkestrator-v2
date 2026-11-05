@@ -611,6 +611,12 @@ interface UseNativeAgentSessionOptions {
   isActive?: boolean;
   /** Setup-gated tabs mount presentation without starting provider I/O. */
   enabled?: boolean;
+  /**
+   * The owner holds new turns: reads continue, but nothing establishes a
+   * session. Adopting or ensuring one resolves a provider, which starts its
+   * bridge. Reads answer from saved data while the backend holds the session.
+   */
+  sendingHeld?: boolean;
 }
 
 export interface NativeAgentSendOptions {
@@ -685,6 +691,7 @@ export function useNativeAgentSession<TMessage = unknown>({
   defaultParameterValues,
   isActive = true,
   enabled = true,
+  sendingHeld = false,
 }: UseNativeAgentSessionOptions) {
   const sessionKey = useMemo(() => createSessionKey(environmentId, tabId), [environmentId, tabId]);
   const initialLaunchOptionsRef = useRef({
@@ -2662,6 +2669,13 @@ export function useNativeAgentSession<TMessage = unknown>({
     setRuntimeError(null);
     setHasCompletedRead(false);
     establishmentFailureRef.current = false;
+    if (sendingHeld) {
+      try {
+        return await refresh();
+      } finally {
+        flushPendingReconcile();
+      }
+    }
     // Held only for as long as the provider mapping is genuinely missing, so
     // the reads that follow the adopt/ensure below still settle normally and a
     // session that really is gone is still reported as one.
@@ -2808,6 +2822,7 @@ export function useNativeAgentSession<TMessage = unknown>({
     flushPendingReconcile,
     platform,
     refresh,
+    sendingHeld,
     setIsRefreshing,
     setSessionStateRefreshing,
   ]);

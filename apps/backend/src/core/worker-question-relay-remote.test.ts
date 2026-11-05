@@ -109,8 +109,9 @@ beforeEach(async () => {
     nativeAgents: { sessionPendingInteractions: async () => pending },
   } as unknown as CommandContext;
   commands = createCommandRegistry();
-  commands.set("get_native_agent_projection", (async () => ({
-    interactions: pending,
+  commands.set("get_native_agent_session_state_update", (async () => ({
+    status: "snapshot",
+    value: { interactions: pending },
   })) as CommandHandler);
   commands.set("resolve_native_agent_interaction", resolve as unknown as CommandHandler);
   routed = [];
@@ -203,7 +204,7 @@ test("a worker on another node gets the approved answer once, through its contro
   expect(proposed.isError).not.toBe(true);
   const approvalRequestId = String(proposed.structuredContent?.approvalRequestId);
   // Reading the question crossed the link; answering did not.
-  expect(routed).toContain("get_native_agent_projection");
+  expect(routed).toContain("get_native_agent_session_state_update");
   expect(routed).not.toContain("answer_controller_worker_question");
   expect(resolve).not.toHaveBeenCalled();
   const [request] = await coordination.actions.list({ pendingOnly: true });

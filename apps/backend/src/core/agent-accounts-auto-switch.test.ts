@@ -215,13 +215,12 @@ describe("between turns", () => {
     expect(h.notices[0]?.reason).toBe("threshold");
   });
 
-  test("a Fable or 5-hour limit never moves the machine", async () => {
+  test("a Fable limit never moves the machine", async () => {
     const h = harness({
       active: "a",
       accounts: {
         a: usage({ used: 20, resetsInHours: 3 }, [
           { window: "seven_day_fable", usedPercent: 100, resetsAt: inHours(3) },
-          { window: "five_hour", usedPercent: 100, resetsAt: inHours(2) },
         ]),
         b: usage({ used: 5, resetsInHours: 90 }),
       },
@@ -546,7 +545,6 @@ describe("a limit error mid-turn", () => {
   });
 
   test.each([
-    ["a 5-hour limit", { window: "five_hour", usedPercent: 100, resetsAt: inHours(2) }],
     ["a Fable limit", { window: "seven_day_fable", usedPercent: 100, resetsAt: inHours(9) }],
     ["an Opus limit", { window: "seven_day_opus", usedPercent: 100, resetsAt: inHours(9) }],
     ["a Sonnet limit", { window: "seven_day_sonnet", usedPercent: 100, resetsAt: inHours(9) }],
@@ -949,12 +947,12 @@ describe("the provider a workflow holds", () => {
 });
 
 describe("weekly evidence lifetime", () => {
-  test("session-only active usage stays unknown and a stop waits", async () => {
+  test("session-only active usage with 5-hour room stays unknown and a stop waits", async () => {
     const partial: PlanUsageSnapshot = {
       platform: "claude",
       status: "ok",
       fetchedAt: inHours(0),
-      windows: [{ window: "five_hour", usedPercent: 100 }],
+      windows: [{ window: "five_hour", usedPercent: 40 }],
     };
     const h = harness({ accounts: { a: partial, b: usage({ used: 20, resetsInHours: 1 }) } });
     await h.switcher.evaluate("claude");

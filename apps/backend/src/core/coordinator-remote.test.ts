@@ -161,6 +161,18 @@ describe("remote delegations", () => {
     expect(notice).toContain('"nodeId": "bk_leaf"');
     expect(notice).toContain("Last message: All green.");
     expect(world.wakes(main)).toBe(1);
+    // The tile opens this worker on its own node, not a local id of the same name.
+    const stored = await world.storage.getAgentMailMailbox(main.environmentId, main.tabId);
+    const message = await world.storage.getAgentMailMessage(
+      main.environmentId,
+      main.tabId,
+      stored.messages.at(-1)!.id,
+    );
+    expect(message.notice?.resource).toMatchObject({
+      kind: "agent-tab",
+      environmentId: "leaf-env",
+      nodeId: "bk_leaf",
+    });
   });
 
   test("an idle turn between a goal's iterations is not the worker's answer", async () => {

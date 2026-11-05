@@ -1,5 +1,5 @@
 import { marked, Renderer, type Tokens } from "marked";
-import { artifactPartSearchSegments } from "@/lib/chat/rich-search-text";
+import { artifactPartSearchSegments, artifactVisibleSummary } from "@/lib/chat/rich-search-text";
 import { cachedArtifactSearchBody } from "@/lib/chat/artifact-requests";
 import { richMarkdownEnabled } from "@/hooks/useTranscriptArtifactCapabilities";
 import { parseLocalFileLinkTarget } from "@/lib/chat/file-url";
@@ -16,6 +16,7 @@ import {
   offsetSegments,
   withSearchProjection,
   type SearchProjection,
+  type SearchRoot,
   type SearchSegment,
 } from "@/lib/chat/rich-markdown/search-segments";
 import {
@@ -164,26 +165,40 @@ interface SearchSource {
   rich: boolean;
   /** Plain text rendered verbatim (an artifact card's summary). */
   literal?: boolean;
+  /** Names this source by its place in `message.parts`, whatever arrives around it. */
+  root: string;
+  /** The publication whose body this source is. */
+  publicationId?: string;
 }
 
 function textPartSources(parts: readonly NativeMessagePart[]): SearchSource[] {
-  return parts.flatMap((part): SearchSource[] => {
+  return parts.flatMap((part, index): SearchSource[] => {
     if (part.type === "text" || part.type === "async-question") {
-      return [{ source: part.content, rich: true }];
+      return [{ source: part.content, rich: true, root: `${index}:text` }];
     }
     if (part.type === "transcript-reference") {
       // Quoted excerpts and comments render through plain `MessageMarkdown`.
+      const content = { source: part.content, rich: false, root: `${index}:text` };
       return part.comment
-        ? [
-            { source: part.content, rich: false },
-            { source: part.comment, rich: false },
-          ]
-        : [{ source: part.content, rich: false }];
+        ? [content, { source: part.comment, rich: false, root: `${index}:comment` }]
+        : [content];
     }
     if (part.type === "artifact") {
       // The card's summary root plus, once its body has loaded, its label root.
+      const summary = artifactVisibleSummary(part);
+      const publicationId = (part.artifact as { publicationId?: unknown } | undefined)
+        ?.publicationId;
       return artifactPartSearchSegments(part, cachedArtifactSearchBody(part.artifact)).map(
-        (source) => ({ source, rich: false, literal: true }),
+        (source, segment) =>
+          segment === 0 && summary
+            ? { source, rich: false, literal: true, root: `${index}:summary` }
+            : {
+                source,
+                rich: false,
+                literal: true,
+                root: `${index}:body`,
+                ...(typeof publicationId === "string" ? { publicationId } : {}),
+              },
       );
     }
     return [];
@@ -217,18 +232,25 @@ function textPartSearchProjection(
 
 /** Join projections with `separator`, dropping empty ones and shifting segments. */
 function joinProjections(
-  chunks: readonly { projection: SearchProjection; part: number }[],
+  chunks: readonly {
+    projection: SearchProjection;
+    part: number;
+    root?: Pick<SearchRoot, "key" | "publicationId">;
+  }[],
   separator: string,
 ): SearchProjection {
   let text = "";
   const segments: SearchSegment[] = [];
-  for (const { projection, part } of chunks) {
+  const roots: SearchRoot[] = [];
+  for (const { projection, part, root } of chunks) {
     if (!projection.text) continue;
     if (text) text += separator;
     segments.push(...offsetSegments(projection.segments, text.length, part));
+    if (root)
+      roots.push({ ...root, start: text.length, end: text.length + projection.text.length });
     text += projection.text;
   }
-  return { text, segments };
+  return roots.length > 0 ? { text, segments, roots } : { text, segments };
 }
 
 function userTextPartSearchProjection(
@@ -309,11 +331,12 @@ export function getNativeMessageSearchProjection(message: NativeMessage): Search
   let promptPresentationAvailable = message.promptPresentation;
   let promptEvidenceAvailable = message.promptEvidence;
   return joinProjections(
-    sources.map(({ source, rich, literal }, part) => {
-      if (literal) return { projection: { text: source, segments: [] }, part };
-      if (!rich) return { projection: textPartSearchProjection(source, false, false), part };
+    sources.map(({ source, rich, literal, root: key, publicationId }, part) => {
+      const root = publicationId ? { key, publicationId } : { key };
+      if (literal) return { projection: { text: source, segments: [] }, part, root };
+      if (!rich) return { projection: textPartSearchProjection(source, false, false), part, root };
       if (message.role !== "user") {
-        return { projection: textPartSearchProjection(source, foldJsonPayload), part };
+        return { projection: textPartSearchProjection(source, foldJsonPayload), part, root };
       }
       const promptPresentation = promptPresentationAvailable;
       const promptEvidence = promptEvidenceAvailable;
@@ -322,6 +345,7 @@ export function getNativeMessageSearchProjection(message: NativeMessage): Search
       return {
         projection: userTextPartSearchProjection(source, promptPresentation, promptEvidence, part),
         part,
+        root,
       };
     }),
     "\n\n",

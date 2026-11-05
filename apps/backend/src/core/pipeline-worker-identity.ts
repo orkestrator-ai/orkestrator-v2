@@ -105,7 +105,7 @@ export function authenticatePipelineWorkerMailCapability(
 
 /** The worker mailbox tab id the attempt `resultKey` belongs to, or null. */
 export async function pipelineWorkerTabForResultKey(
-  storage: Pick<StorageService, "listBuildPipelinesForEnvironment">,
+  storage: Pick<StorageService, "listBuildPipelinesForEnvironment" | "listMultiReviewWorkflows">,
   scope: { environmentId: string; projectId: string },
   resultKey: string,
 ): Promise<string | null> {
@@ -139,5 +139,56 @@ export async function pipelineWorkerTabForResultKey(
     if (consolidation?.requestId === resultKey && typeof consolidation.sessionKey === "string")
       return pipelineWorkerTabId(consolidation.sessionKey);
   }
+  // A Multi Review's reviewers are workers too; its other steps are not.
+  for (const record of await storage.listMultiReviewWorkflows(scope.environmentId)) {
+    const snapshot = record.snapshot;
+    if (!isRecord(snapshot) || snapshot.projectId !== scope.projectId) continue;
+    const reviewers = Array.isArray(snapshot.reviewers) ? snapshot.reviewers.filter(isRecord) : [];
+    const reviewer = reviewers.find((candidate) => candidate.requestId === resultKey);
+    if (reviewer && typeof reviewer.sessionKey === "string")
+      return pipelineWorkerTabId(reviewer.sessionKey);
+  }
   return null;
+}
+
+/**
+ * A worker's own mail identity for a turn with no workflow-result connection, so
+ * it sends, replies and acks as itself and no other worker can use that mailbox.
+ * A bridge agent gets a credential scoped to its mailbox. OpenCode keeps one
+ * environment-wide registration and takes no per-turn connection, so it gets a
+ * signed capability naming the mailbox, delivered as a trusted instruction.
+ */
+export function workerMailTurnFor(input: {
+  environmentId: string;
+  projectId: string;
+  target: "host" | "container";
+  sessionKey: string;
+  agent: string | undefined;
+  signer?: WorkerMailSigner;
+  resolveConnection?: (
+    environmentId: string,
+    projectId: string,
+    target: "host" | "container",
+    tabId: string,
+  ) => AgentToolConnection;
+}): PipelineWorkerMailTurn | undefined {
+  const { environmentId, projectId, agent, signer, resolveConnection } = input;
+  if (!agent || !resolveConnection) return undefined;
+  const tabId = pipelineWorkerTabId(input.sessionKey);
+  try {
+    if (agent === "opencode") {
+      if (!signer) return undefined;
+      return {
+        workerMail: {
+          environmentId,
+          tabId,
+          capability: pipelineWorkerMailCapability(signer, { environmentId, projectId, tabId }),
+        },
+      };
+    }
+    return { agentMcp: resolveConnection(environmentId, projectId, input.target, tabId) };
+  } catch {
+    // The agent tools server is down: the turn keeps the bridge's own.
+    return undefined;
+  }
 }

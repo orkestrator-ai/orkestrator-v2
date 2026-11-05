@@ -7,8 +7,10 @@ import {
   COORDINATOR_REQUEST_ID_REUSED_ERROR,
   COORDINATOR_WORKSPACE_VERSION,
   isCoordinatorWorkspace,
+  normalizeCoordinatorDelegationRequest,
   normalizeCoordinatorRoles,
   normalizeCoordinatorSessionKeys,
+  type CoordinatorDelegationRequest,
   type CoordinatorWorkflowAssociation,
   type CoordinatorWorkspace,
 } from "@orkestrator/protocol/coordinator";
@@ -673,8 +675,11 @@ export class CoordinatorsRepository {
     associationId: string,
     workerTabId: string,
     at = new Date().toISOString(),
+    /** What was asked and on what; bounded here, because this store is rewritten whole. */
+    request?: CoordinatorDelegationRequest,
   ): Promise<CoordinatorWorkflowAssociation | null> {
     if (!workerTabId.trim()) throw new Error("Coordinator delegation worker tab id is required");
+    const boundedRequest = normalizeCoordinatorDelegationRequest(request);
     return this.enqueueCoordinatorMutation(async () => {
       const store = await this.loadCoordinatorStore();
       const association = store.workflows.find((item) => item.id === associationId);
@@ -716,7 +721,12 @@ export class CoordinatorsRepository {
         if (overlapping) {
           throw new Error("That worker tab already has an outstanding coordinator delegation");
         }
-        association.delegation = { requestedAt: at, workerTabId, state: "running" };
+        association.delegation = {
+          requestedAt: at,
+          workerTabId,
+          state: "running",
+          ...(boundedRequest ? { request: boundedRequest } : {}),
+        };
         store.revision += 1;
         await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
         this.context.changes.announce("coordinator", association.projectId, association.projectId);

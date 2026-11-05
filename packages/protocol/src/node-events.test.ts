@@ -1,7 +1,12 @@
 import { expect, test } from "bun:test";
+import type { BackendId } from "./federation.js";
 import {
   isNodeEventWatchId,
+  isPerNodeRelayedEvent,
+  isRelayableEvent,
   isRelayedNodeEvent,
+  relayedNodeEventName,
+  relayedNodeEventNodeId,
   parseNodeEventPrefixes,
   MAX_NODE_EVENT_PREFIXES,
   MAX_NODE_EVENT_PREFIX_LENGTH,
@@ -68,4 +73,24 @@ test("validates relayed frames before dispatch", () => {
     { nodeId: "bk_leaf", kind: "event", event: "resource-changed" },
   ])
     expect(isRelayedNodeEvent(value)).toBe(false);
+});
+
+test("a per-node name carries the node, is never relayed onward and cannot be watched", () => {
+  const nodeId = "bk_leaf" as BackendId;
+  const name = relayedNodeEventName(nodeId);
+  expect(name).toBe("relayed-node-event:bk_leaf");
+  expect(isPerNodeRelayedEvent(name)).toBe(true);
+  expect(relayedNodeEventNodeId(name)).toBe(nodeId);
+  expect(isRelayableEvent(name)).toBe(false);
+  expect(() => parseNodeEventPrefixes([name])).toThrow();
+  expect(relayedNodeEventNodeId(relayedNodeEventName("provisional:abc" as BackendId))).toBe(
+    "provisional:abc" as BackendId,
+  );
+
+  // The old shared name is not a per-node name, nor is anything malformed.
+  expect(isPerNodeRelayedEvent("relayed-node-event")).toBe(false);
+  expect(relayedNodeEventNodeId("relayed-node-event")).toBeNull();
+  expect(relayedNodeEventNodeId("relayed-node-event:")).toBeNull();
+  expect(relayedNodeEventNodeId("relayed-node-event:a,b")).toBeNull();
+  expect(relayedNodeEventNodeId("resource-changed")).toBeNull();
 });

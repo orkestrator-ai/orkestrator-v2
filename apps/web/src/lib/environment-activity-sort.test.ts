@@ -59,9 +59,9 @@ describe("sortEnvironmentsByActivity", () => {
         "priority",
         displayed,
       ).map(({ id }) => id),
-    ).toEqual(["runtime-waiting", "building", "newest"]);
+    ).toEqual(["runtime-waiting", "newest", "building"]);
 
-    // Chronological orders ignore activity state.
+    // Chronological orders read no other state, but a working row still sinks.
     expect(
       sortEnvironmentsByActivity(
         [building, runtimeWaiting, newest],
@@ -69,7 +69,21 @@ describe("sortEnvironmentsByActivity", () => {
         "newest",
         displayed,
       ).map(({ id }) => id),
-    ).toEqual(["newest", "building", "runtime-waiting"]);
+    ).toEqual(["newest", "runtime-waiting", "building"]);
+  });
+
+  test("puts merged environments below unmerged ones in every order", () => {
+    const rows = [
+      environment("merged-new", { prState: "merged", lastActivityAt: "2026-10-21T12:00:00Z" }),
+      environment("merged-old", { prState: "merged", lastActivityAt: "2026-10-21T09:00:00Z" }),
+      environment("open", { prState: "open", lastActivityAt: "2026-10-21T11:00:00Z" }),
+      environment("no-pr", { lastActivityAt: "2026-10-21T10:00:00Z" }),
+    ];
+    const ids = (order: "priority" | "newest" | "oldest") =>
+      sortEnvironmentsByActivity(rows, [project], order).map(({ id }) => id);
+    expect(ids("priority")).toEqual(["open", "no-pr", "merged-new", "merged-old"]);
+    expect(ids("newest")).toEqual(["open", "no-pr", "merged-new", "merged-old"]);
+    expect(ids("oldest")).toEqual(["no-pr", "open", "merged-old", "merged-new"]);
   });
 
   test("keeps the sidebar order for undated rows in oldest order without NaN comparisons", () => {

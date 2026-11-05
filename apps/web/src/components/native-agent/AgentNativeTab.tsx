@@ -388,7 +388,7 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
             tabId={props.tabId}
             environmentId={props.data.environmentId}
             containerId={props.data.containerId}
-            disabled={awaitingDurability}
+            disabled={awaitingDurability || props.sendingHeldReason !== undefined}
             initialAgentPlatform={props.initialAgentPlatform}
             initialAgentModel={props.initialAgentModel}
             initialReasoningEffort={props.initialReasoningEffort}
@@ -423,11 +423,21 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
               : {})}
             {...(props.availablePlatforms ? { platformFilter: props.availablePlatforms } : {})}
             {...(props.platformNotes ? { platformNotes: props.platformNotes } : {})}
-            {...((props.composerPlaceholder ?? props.unassignedPlaceholder)
-              ? { placeholder: props.composerPlaceholder ?? props.unassignedPlaceholder }
+            {...((props.sendingHeldReason ??
+            props.composerPlaceholder ??
+            props.unassignedPlaceholder)
+              ? {
+                  placeholder:
+                    props.sendingHeldReason ??
+                    props.composerPlaceholder ??
+                    props.unassignedPlaceholder,
+                }
               : {})}
             {...(props.emptyPlatformsMessage
               ? { emptyPlatformsMessage: props.emptyPlatformsMessage }
+              : {})}
+            {...(props.emptyPlatformsAction
+              ? { emptyPlatformsAction: props.emptyPlatformsAction }
               : {})}
             {...(props.unassignedStarterPrompts
               ? { starterPrompts: props.unassignedStarterPrompts }

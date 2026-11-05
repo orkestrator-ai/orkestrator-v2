@@ -76,8 +76,8 @@ export interface CreateTabOptions {
   /** The run a `graph-run` tab shows (one tab per run; opening it again focuses that tab). */
   graphRun?: import("@/types/paneLayout").GraphRunTabData;
   /**
-   * The build pipeline whose key information a `key-information` tab shows
-   * (one tab per pipeline; opening it again focuses that tab).
+   * The build pipeline whose key information or notes a `key-information` tab
+   * shows (one tab per pipeline and view; opening it again focuses that tab).
    */
   keyInformation?: import("@/types/paneLayout").KeyInformationTabData;
   /** Existing authoritative workflow opened by a Multi Review tab. */

@@ -51,6 +51,29 @@ export interface OperationBudget {
 }
 export const DEFAULT_OPERATION_BUDGET: OperationBudget = { maxFrames: 30, maxMs: 750 };
 
+/** Room for a glide's legs, the wait for a distant row, and settling (at 120 Hz). */
+const GLIDE_BUDGET: OperationBudget = { maxFrames: 360, maxMs: 2_500 };
+/** A glide across rendered rows: scaled to its distance, within these bounds. */
+const GLIDE_MIN_MS = 280;
+const GLIDE_MAX_MS = 560;
+const GLIDE_MS_PER_PX = 0.25;
+/**
+ * Each leg of a glide to an unrendered row: easing out of the current place,
+ * then into the target. Equal legs over equal distances meet at the same
+ * speed, so the jump between them reads as one continuous movement.
+ */
+const GLIDE_LEG_MS = 240;
+const GLIDE_LEG_MAX_PX = 320;
+const GLIDE_LEG_VIEWPORT_FRACTION = 0.6;
+
+const easeInCubic = (t: number) => t * t * t;
+const easeOutCubic = (t: number) => 1 - (1 - t) ** 3;
+const easeInOutCubic = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2);
+
+function prefersReducedMotion(): boolean {
+  return typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
 /** Re-issue index navigation for a target still not rendered after this many frames. */
 const REISSUE_AFTER_UNMOUNTED_FRAMES = 8;
 const MAX_INDEX_REISSUES = 2;
@@ -141,11 +164,39 @@ export interface ScrollDiagnostics {
   lastOutcome: OperationOutcome | null;
 }
 
+type RowTarget = Extract<NavigationTarget, { kind: "row" }>;
+
+/**
+ * An eased navigation's progress. A rendered target is tracked directly; an
+ * unrendered one has no known distance, so the viewport departs towards it,
+ * asks the virtualizer for a place one leg short of it, and tracks from there.
+ */
+type Glide =
+  | {
+      phase: "depart";
+      startedAt: number;
+      direction: 1 | -1;
+      distance: number;
+      /** Eased distance covered so far; writes are steps, so size compensation survives. */
+      covered: number;
+    }
+  | { phase: "seek"; direction: 1 | -1; distance: number }
+  | {
+      phase: "track";
+      startedAt: number;
+      durationMs: number;
+      /** The target's viewport offset when tracking began. */
+      fromOffset: number;
+      ease: (t: number) => number;
+    };
+
 interface Operation {
   generation: number;
   owner: NavigationOwner;
   target: NavigationTarget;
   motion: "instant" | "smooth";
+  budget: OperationBudget;
+  glide: Glide | null;
   startedAt: number;
   frames: number;
   stableFrames: number;
@@ -538,6 +589,32 @@ export class TranscriptScrollController {
   }
 
   /**
+   * `navigateTo`, eased in and out rather than instant. The target row follows
+   * the curve on screen whatever the rows around it measure as. Reader input
+   * retires it like any navigation; reduced motion makes it a plain jump.
+   */
+  glideTo(target: RowTarget, owner: NavigationOwner): boolean {
+    const el = this.scroller;
+    if (!el || prefersReducedMotion()) return this.navigateTo(target, owner);
+    if (!this.state.active || !Number.isInteger(target.index) || target.index < 0) return false;
+    const rect = this.resolve(target)?.() ?? null;
+    if (!rect && !this.adapter.ready) return false;
+    const op = this.begin(owner, target, "instant");
+    op.budget = GLIDE_BUDGET;
+    op.glide = rect
+      ? this.beginWholeGlide(el, op, rect)
+      : {
+          phase: "depart",
+          startedAt: now(),
+          direction: this.glideDirection(el, target),
+          distance: this.glideLegPx(el),
+          covered: 0,
+        };
+    this.schedule(op);
+    return true;
+  }
+
+  /**
    * Refine the target of `owner`'s current navigation (find's match box once
    * its row has rendered). If that navigation already finished, start a fresh
    * one only when nothing — not the reader, not another navigation — has
@@ -849,6 +926,8 @@ export class TranscriptScrollController {
       owner,
       target,
       motion,
+      budget: this.budget,
+      glide: null,
       startedAt: now(),
       frames: 0,
       stableFrames: 0,
@@ -900,7 +979,7 @@ export class TranscriptScrollController {
         return;
       }
       if (this.op !== op) return;
-      if (op.frames >= this.budget.maxFrames || now() - op.startedAt >= this.budget.maxMs) {
+      if (op.frames >= op.budget.maxFrames || now() - op.startedAt >= op.budget.maxMs) {
         this.finish(
           op,
           this.resolve(op.target) === null && op.target.kind !== "latest"
@@ -1032,6 +1111,128 @@ export class TranscriptScrollController {
     return Math.max(0, (clientHeight - rect.height) / 2);
   }
 
+  /** The length of one leg of a glide to an unrendered row. */
+  private glideLegPx(el: HTMLElement): number {
+    return Math.min(GLIDE_LEG_MAX_PX, el.clientHeight * GLIDE_LEG_VIEWPORT_FRACTION);
+  }
+
+  /** Which way an unrendered row lies: rendered rows are contiguous, so any one tells. */
+  private glideDirection(el: HTMLElement, target: RowTarget): 1 | -1 {
+    const row = el.querySelector<HTMLElement>("[data-chat-message-index]");
+    const resolved = target.key !== undefined ? (this.rowIndexOf?.(target.key) ?? -1) : -1;
+    const index = resolved >= 0 ? resolved : target.index;
+    return index > Number(row?.dataset.chatMessageIndex) ? 1 : -1;
+  }
+
+  /** One curve from where a rendered target is now, scaled to its distance. */
+  private beginWholeGlide(el: HTMLElement, op: Operation, rect: DOMRect): Glide {
+    const fromOffset = rect.top - el.getBoundingClientRect().top;
+    const distance = Math.abs(fromOffset - this.desiredOffset(op.target, rect, el.clientHeight));
+    return {
+      phase: "track",
+      startedAt: now(),
+      durationMs: Math.min(GLIDE_MAX_MS, Math.max(GLIDE_MIN_MS, distance * GLIDE_MS_PER_PX)),
+      fromOffset,
+      ease: easeInOutCubic,
+    };
+  }
+
+  /**
+   * The journey's last leg, from exactly one leg short of where it can stop.
+   * The place the virtualizer found is not that: it was asked for a leg short
+   * of the requested offset, which near the transcript's end is past where the
+   * scroller stops. Starting from a measured place keeps the departure's speed.
+   */
+  private beginFinalLeg(
+    el: HTMLElement,
+    op: Operation,
+    rect: DOMRect,
+    glide: { direction: 1 | -1; distance: number },
+  ): Glide {
+    const metrics = readScrollMetrics(el);
+    const offset = rect.top - el.getBoundingClientRect().top;
+    const clamp = (top: number) => Math.min(Math.max(top, 0), metrics.maxScrollTop);
+    const desired = this.desiredOffset(op.target, rect, metrics.clientHeight);
+    const end = clamp(metrics.scrollTop + offset - desired);
+    const start = clamp(end - glide.direction * glide.distance);
+    if (start !== metrics.scrollTop) this.adapter.writeScrollTop(start);
+    return {
+      phase: "track",
+      startedAt: now(),
+      durationMs: GLIDE_LEG_MS,
+      fromOffset: offset - (start - metrics.scrollTop),
+      ease: easeOutCubic,
+    };
+  }
+
+  /**
+   * Run one step of a glide's own movement. True when `reconcile` should carry
+   * on (tracking, or settling once the glide has finished); false when this
+   * step has done everything for this delivery.
+   */
+  private advanceGlide(op: Operation, el: HTMLElement, phase: "frame" | "layout"): boolean {
+    const glide = op.glide!;
+    if (glide.phase === "track") {
+      if (now() - glide.startedAt >= glide.durationMs) op.glide = null;
+      return true;
+    }
+    const target = op.target as RowTarget;
+    const rect = this.resolve(target)?.() ?? null;
+    if (glide.phase === "seek") {
+      // Not rendered yet: `reconcile` counts the frames and re-issues.
+      if (!rect) return true;
+      // The row is here, and the library's retries would now fight the curve.
+      this.adapter.cancelPendingNavigation();
+      op.glide = this.beginFinalLeg(el, op, rect, glide);
+      return true;
+    }
+    if (phase !== "frame") return false;
+    const progress = Math.min(1, (now() - glide.startedAt) / GLIDE_LEG_MS);
+    // Keep-mounted overscan can render a nearby target at once: one curve then.
+    if (rect && progress < 0.5) {
+      op.glide = this.beginWholeGlide(el, op, rect);
+      return true;
+    }
+    if (progress < 1) {
+      const covered = easeInCubic(progress) * glide.distance;
+      const metrics = readScrollMetrics(el);
+      const step = glide.direction * (covered - glide.covered);
+      glide.covered = covered;
+      this.counters.operationCorrections += 1;
+      this.adapter.writeScrollTop(
+        Math.min(Math.max(metrics.scrollTop + step, 0), metrics.maxScrollTop),
+      );
+      return false;
+    }
+    if (rect) {
+      op.glide = this.beginFinalLeg(el, op, rect, glide);
+      return true;
+    }
+    op.glide = { phase: "seek", direction: glide.direction, distance: glide.distance };
+    this.issueIndexNavigation(op, {
+      ...target,
+      offsetPx: (target.offsetPx ?? 0) + glide.direction * glide.distance,
+    });
+    return false;
+  }
+
+  /**
+   * Where a tracking glide wants the target now. A destination the transcript
+   * cannot reach (the last prompt, short of a viewport from the end) replaces
+   * the requested one, so the curve still decelerates into where it stops.
+   */
+  private glideOffset(
+    glide: Extract<Glide, { phase: "track" }>,
+    offset: number,
+    desired: number,
+    metrics: ReturnType<typeof readScrollMetrics>,
+  ): number {
+    const end = Math.min(Math.max(metrics.scrollTop + offset - desired, 0), metrics.maxScrollTop);
+    const reachable = offset - (end - metrics.scrollTop);
+    const progress = Math.min(1, (now() - glide.startedAt) / glide.durationMs);
+    return glide.fromOffset + (reachable - glide.fromOffset) * glide.ease(progress);
+  }
+
   private reconcile(op: Operation, phase: "frame" | "layout"): void {
     if (!this.isCurrent(op)) {
       this.counters.staleCallbacksRefused += 1;
@@ -1042,6 +1243,7 @@ export class TranscriptScrollController {
       this.reconcileLatest(op, el, phase);
       return;
     }
+    if (op.glide && !this.advanceGlide(op, el, phase)) return;
     let rectOf = this.resolve(op.target);
     const target = op.target;
     if (!rectOf && target.kind === "row" && target.partId) {
@@ -1084,12 +1286,19 @@ export class TranscriptScrollController {
     if (!rect) return;
     const viewportTop = el.getBoundingClientRect().top;
     const metrics = readScrollMetrics(el);
+    const offset = rect.top - viewportTop;
+    const desired = this.desiredOffset(op.target, rect, metrics.clientHeight);
     const error =
-      rect.top - viewportTop - this.desiredOffset(op.target, rect, metrics.clientHeight);
+      offset -
+      (op.glide?.phase === "track"
+        ? this.glideOffset(op.glide, offset, desired, metrics)
+        : desired);
     const nextTop = Math.min(Math.max(metrics.scrollTop + error, 0), metrics.maxScrollTop);
     const heightStable = metrics.scrollHeight === op.lastScrollHeight;
     op.lastScrollHeight = metrics.scrollHeight;
     if (Math.abs(nextTop - metrics.scrollTop) <= CONVERGENCE_TOLERANCE_PX) {
+      // A curve moving slowly is still moving: it cannot converge until it ends.
+      if (op.glide) return;
       // The transcript holds the frame (or cannot move further): the inner
       // viewport then puts the member back where the reader saw it, which
       // also absorbs what a clamped transcript could not.
@@ -1277,6 +1486,18 @@ export class TranscriptScrollController {
     if (top > previous && distance < STICK_RELEASE_DISTANCE_PX) {
       this.dispatch({ type: "user-arrived" });
     }
+  }
+
+  /** Wheel input on a sibling overlay belongs to this viewport. */
+  forwardWheel(event: WheelEvent): void {
+    const el = this.scroller;
+    if (!el || !this.active || event.defaultPrevented || !classifyWheel(event, el)) return;
+    this.userInput();
+    event.preventDefault();
+    // WheelEvent units are pixels, lines, or viewport pages respectively.
+    const unit = event.deltaMode === 2 ? el.clientHeight : event.deltaMode === 1 ? 16 : 1;
+    el.scrollTop += event.deltaY * unit;
+    this.handleScroll(el);
   }
 
   private listen(el: HTMLElement): () => void {

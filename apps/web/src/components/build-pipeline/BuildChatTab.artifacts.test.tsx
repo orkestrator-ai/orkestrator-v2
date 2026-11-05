@@ -3,7 +3,7 @@
  * session's own key owns them, and their cards resolve in that conversation.
  */
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { invoke } from "@/lib/native/backend";
 import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
@@ -148,6 +148,7 @@ describe("published artifacts in a build-pipeline stage transcript", () => {
         }}
       />,
     );
+    fireEvent.click(screen.getByRole("tab", { name: /^Build,/ }));
 
     expect(await screen.findByText("Coverage by package")).toBeTruthy();
     expect(screen.getByText("Publishing the coverage chart")).toBeTruthy();

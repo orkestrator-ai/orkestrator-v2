@@ -63,7 +63,7 @@ the change journal.
 | `ReviewsRepository` | `storage-reviews.ts` | Looped and Multi Review workflows |
 | `NativeAgentSessionsRepository` | `storage-native.ts` | Native agent sessions: records and their lease, owners, controls and resume identity, the interaction journal, display tails, turn outcomes and interrupts |
 | `NativeAgentDeliveries` | `storage-native-deliveries.ts` | The dispatch and steer journals on a session record, and a queued steer's reservation and settlement in the prompt queue |
-| `PromptQueueStore` | `storage-prompt-queue-store.ts` | The prompt-queue lease, load and save, and recovery of claims older backends left |
+| `PromptQueueStore` | `storage-prompt-queue-store.ts` | The prompt-queue lease, row reads and row writes, and recovery of claims older backends left |
 | `PromptsRepository` | `storage-prompts.ts` | Prompt-queue operations for dispatch, the compose-draft lease |
 | `BuildPipelinesRepository` | `storage-build-pipelines.ts` | Build pipelines and their transcripts |
 | `DraftsRepository` | `storage-drafts.ts` | Compose and file drafts, agent handoffs, session buffers, and the session and pane-layout edits they make |
@@ -130,7 +130,7 @@ a primitive or a repository helper the facade does not expose use
   toolchain installer read them, and on first run write them, before the
   backend starts. Those run under Node, which has no `bun:sqlite`. They keep
   the atomic-rename writer and backup ladder; `config.json` is written 0600
-  because it holds API keys.
+  because it holds API keys (see [Provider secrets at rest](#provider-secrets-at-rest)).
 - Descriptor files other processes read: `backend-instance.json`,
   `control-mcp.json`, `gateway-auth.json`.
 - Design canvases (records, pending operations, intent queues, history
@@ -230,8 +230,10 @@ from that.
   write costs O(row) and holders of different keys' leases cannot overwrite each
   other. An array item keeps its position when updated, a new one goes last, and
   its value must carry the row's key in the layout's key field. A store held
-  whole as a document falls back to a whole-value read-modify-write.
-  `archiveCleanup` commits an attributable archive cleanup with the row.
+  whole as a document falls back to a whole-value read-modify-write. An
+  unparsable row refuses the write, unless `unreadableRow: "replace"` hands it
+  to `mutate` as absent. `archiveCleanup` commits an attributable archive cleanup
+  with the row.
   `updateSensitiveStoreRow` is the same for a record store holding sensitive
   content: it also prunes what the row's new value drops from the retired JSON
   archive, as `saveSensitiveJson` does (see "Retired JSON archive").
@@ -272,6 +274,23 @@ from that.
   draft's `revision` in its own transaction, so typing never decodes or
   rewrites the other drafts. An owner sweep is one `updateStore` that removes
   only that owner's rows and writes nothing when the owner has none.
+
+  Prompt queues keep the store's lease, because some writers await between the
+  read and the write (an idempotent append and a job reservation read the native
+  session in between) and all must stay ordered against deletion. A session lease
+  is taken before it, never under it. Inside it a mutation is one
+  `updateSensitiveStoreRow` that decodes and writes only its queue, so a queue
+  holding attachments (up to 32 MiB) costs only its own mutations. A row gets the
+  claim recovery and validation a load applies, and an unreadable or invalid row
+  reads as absent, so that queue's next write replaces it; another queue's row is
+  never read or rewritten, so a record this build cannot read survives. Only
+  what walks the store still decodes every row: the listings behind the drain
+  scans and environment deletion. Both parse row by row, because no write would
+  clear a bad row now, and read whole it would hide every queue for good.
+  Deletion writes one row per queue, so a crash part-way leaves the rest for the
+  caller's retry. It also removes rows that name no environment, and keeps a row
+  naming another one. `storage-writer-guards.test.ts` holds the lease on every
+  row write of this store (`LEASED_ROW_STORES`).
 
   Environments keep their store lease too, because a write awaits between its
   read and its commit (a caller's `shouldUpdate` observation, the removal's
@@ -452,7 +471,10 @@ primitives above serialize their writes.
 - Cache sizes (`cache_size`, `mmap_size`, `temp_store`) are SQLite's defaults.
   They are revisited only with a measured read problem
   ([5181](../todo/cross-cutting/5181-sqlite-cache-sizes.md)).
-- The database file is 0600; SQLite gives `-wal` and `-shm` the same mode.
+- Every open sets the database file to 0600, along with any `-wal`, `-shm` or
+  `-journal` already beside it, because SQLite only gives the file's mode to
+  companions it creates. A new database's file exists at the default mode only
+  until that first open sets it, before any content is written.
 
 ### Snapshots
 
@@ -528,6 +550,87 @@ ledger back inside `orkestrator.sqlite`, and the next start moves it out again,
 replacing `change-tracking.sqlite`. Snapshots are off by default under the
 test runner (`new StorageService(dir, { snapshots: true })` turns them on).
 
+## Provider secrets at rest
+
+**Accepted risk (2026-11-05, security finding L17):** the stored provider secrets
+are plaintext in owner-only files. No keychain or `safeStorage` storage path
+exists for them, and none is planned while the reasoning below holds.
+
+The fields are `githubToken`, `anthropicApiKey`, `cursorApiKey` and
+`openCodeZenApiKey`, in `global` of the app config. They live here and nowhere
+else in the data directory:
+
+| File | Holds | Mode |
+| --- | --- | --- |
+| `config.json` | All four | 0600, set by every save and every backend start (`restrictConfigFileModes`) |
+| `config.json.bak.1` to `.bak.5` | Earlier values of all four | The same |
+| `.config.json.<uuid>.tmp` (also recovery and backup atomic-save remnants) | All four, if a save was interrupted | Created 0600; existing regular remnants tightened to 0600 at backend start |
+| `portable-inputs/<environment>/<revision>/claude-config/.orkestrator-anthropic-key` | `anthropicApiKey`, for a container whose image takes staged inputs | 0600 in a 0700 directory |
+
+`orkestrator.sqlite`, `change-tracking.sqlite`, their `-wal` and `-shm` and the
+snapshots in `backups/` do not hold these fields, because `config.json` is not a
+database store. They are 0600 (the directory 0700) for the other sensitive
+content they hold.
+
+**What protects them:**
+
+- The file modes above, against other users on the machine.
+- A container has no bind that reaches these files. Its binds are the project's
+  Git mirror directory, its own `portable-inputs` revision and, on an image older
+  than staged inputs, individual agent homes; none is the data directory.
+- Answers to clients leave them out. `redactGlobalConfig` reports only whether
+  each is configured, `stripRendererCredentials` ignores them in a settings save,
+  and a leaf node never inherits them from its command node.
+
+**What does not protect them:**
+
+- Anything running as the same user can read them, including an agent in a local
+  environment and any other program that user runs. So can root.
+- Backups and disk images hold them in plaintext: a Time Machine or `rsync` copy
+  of the data directory, or an image of an unencrypted disk. A copy made outside
+  the app can also lose the 0600 mode.
+- Clearing or replacing a key does not remove the old value from the backup
+  ladder until five further config saves have rotated it out. Interrupted-save
+  remnants are retained and tightened at startup, rather than deleted because
+  another backend may still be writing one. They can retain old keys indefinitely
+  until manually removed while all backends are stopped. A staged Anthropic
+  key also remains in its `portable-inputs` revision while any container of that
+  environment references it, including stopped containers and recovery copies.
+  Changing the setting does not rewrite that revision or the key already copied
+  into the container. Unreferenced revisions are eligible for pruning; a key that
+  may have leaked has to be revoked at its provider.
+- The modes guard the file, not the value. A container is deliberately given the
+  keys its settings allow: the Anthropic key as the staged file above, or an
+  environment variable on an older image; the Cursor key as an owner-only file in
+  the container, or an environment variable on an older image; `githubToken` when
+  [`containerGitHubCredential`](github-cli.md#container-credential) is `pat`. An
+  agent in that container can read what it was given. `openCodeZenApiKey` stays on
+  the host, where it reads plan usage.
+
+**Why this is accepted:**
+
+- A process running as the same user can already read the host logins and tokens
+  beside these files (`~/.claude`, `~/.codex`, `gateway-auth.json`,
+  `control-mcp.json`). Encrypting four fields would not change what it can reach,
+  and on Linux libsecret does not separate applications of one user either.
+- The backend also runs standalone. `safeStorage` belongs to Electron, and a
+  headless host has no session keyring, so a keychain would be a second storage
+  path with a migration, and either a backend that cannot start alone with its
+  config or a standalone install that gains nothing.
+- It matches Control MCP's credentials, which stay in plaintext at 0600 so Copy
+  setup works at any time
+  ([decision 2](../todo/mcp/0041-control-mcp-voice-surface.md#decisions)).
+
+Look at this again if a same-user process stops being able to read those host
+logins (for example, if every local agent runs in a sandbox that denies them), or
+if a container gains a bind on the data directory.
+
+`storage-secrets-at-rest.test.ts` checks the modes and scans a data directory to
+show that only `config.json` and its backups hold the fields.
+`container-data-directory-reach.test.ts` checks a container's binds and the staged
+key, and `commands-secret-sweep.test.ts` plants canaries and calls every
+registered command.
+
 ## Migrations
 
 `StorageDatabase` applies numbered migrations in one `BEGIN EXCLUSIVE`
@@ -550,10 +653,11 @@ One upgrade cannot run once: a backend up to v2.29.0-beta can write a
 prompt-queue claim (`outstandingClaim`), and one that opened the database before
 version 5 keeps writing until it stops, because the version is checked only at
 open. So `restoreLegacyPromptQueueClaims` (`storage-record-upgrades.ts`) runs on every
-load of the prompt queues (`loadPromptQueues`): live leases retain exclusion
+read of a prompt queue, one row or the whole list: live leases retain exclusion
 and survive queue writes until settlement or expiry. Expired or malformed
-leases restore their message to the head, and the next save persists that.
-Malformed message ids receive a stable recovery id.
+leases restore their message to the head, and the next write of that queue
+persists that; until then every read recovers it again. Malformed message ids
+receive a stable recovery id.
 
 Version 4 (`change-tracking/ledger-schema.ts`) adds the change-tracking
 ledger: the first engine with its own indexed tables (worktrees, evidence,

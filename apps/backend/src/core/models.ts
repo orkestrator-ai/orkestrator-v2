@@ -360,6 +360,12 @@ export interface Environment {
    * conflicts (`pr-auto-merge.ts`). Absent means off.
    */
   autoMerge?: boolean;
+  /**
+   * Delete this environment once auto-merge has merged its pull request (the
+   * Integrate dialog's "Auto-merge & Cleanup"). Only meaningful while
+   * `autoMerge` is on, and cleared with it.
+   */
+  autoMergeCleanup?: boolean;
   /** PR-specific authorization and freshness fence. */
   autoMergePrUrl?: string | null;
   autoMergeEnabledAt?: string | null;
@@ -367,6 +373,8 @@ export interface Environment {
   autoMergeError?: string | null;
   /** Recoverable Resolve identity, retained across pre-dispatch failures. */
   autoMergeResolveRequestId?: string;
+  autoMergeResolveCompletedAt?: string;
+  autoMergeResolveAttempts?: number;
   createdAt: string;
   /** Last prompt dispatch or agent completion/waiting transition. */
   lastActivityAt?: string;
@@ -1236,7 +1244,6 @@ export interface AppConfig {
     terminalHistoryRetentionMb?: number;
     terminalHistoryGlobalRetentionMb?: number;
     terminalHistoryRetentionDays?: number;
-    experimentalCodexRawEventLogging?: boolean;
     /**
      * Experimental gate for scheduled jobs. Off (or absent) hides Settings →
      * Schedules, refuses the schedule commands and public actions, withholds

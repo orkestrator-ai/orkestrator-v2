@@ -357,6 +357,9 @@ describe("Orkestrator control MCP server", () => {
 
     expect(sent.body.result?.isError).not.toBe(true);
     expect(
+      invocations.find(({ command }) => command === "open_coordinator_delegation")?.args,
+    ).toMatchObject({ request: { summary: "Continue.", agent: "codex" } });
+    expect(
       invocations.find(({ command }) => command === "dispatch_native_agent_intent")?.args,
     ).toEqual({
       environmentId: "env-1",

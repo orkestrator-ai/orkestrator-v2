@@ -21,7 +21,6 @@ describe("configStore", () => {
           allowedDomains: [],
           terminalAppearance: { ...DEFAULT_TERMINAL_APPEARANCE },
           terminalScrollback: DEFAULT_TERMINAL_SCROLLBACK,
-          experimentalCodexRawEventLogging: true,
           agentSettings: { platforms: { claude: { model: "claude-sonnet-4-6" } } },
         },
         repositories: {},
@@ -38,7 +37,6 @@ describe("configStore", () => {
     expect(state.config.global.containerResources.cpuCores).toBe(2);
     expect(state.config.global.containerResources.memoryGb).toBe(4);
     expect(state.config.global.envFilePatterns).toEqual([".env.local", ".env"]);
-    expect(state.config.global.experimentalCodexRawEventLogging).toBe(true);
     expect(state.config.global.agentSettings?.platforms?.claude?.model).toBe("claude-sonnet-4-6");
     expect(state.config.repositories).toEqual({});
     expect(state.isLoading).toBe(false);
@@ -229,14 +227,6 @@ describe("configStore", () => {
     expect(useConfigStore.getState().config.global.agentSettings?.platforms?.claude?.model).toBe(
       "default",
     );
-  });
-
-  test("updateGlobalConfig updates experimentalCodexRawEventLogging", () => {
-    useConfigStore.getState().updateGlobalConfig({
-      experimentalCodexRawEventLogging: false,
-    });
-
-    expect(useConfigStore.getState().config.global.experimentalCodexRawEventLogging).toBe(false);
   });
 
   test("updateGlobalConfig updates web client enablement", () => {

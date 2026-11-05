@@ -387,7 +387,11 @@ function sanitizeTab(value: unknown, context: PaneLayoutRestoreContext): TabInfo
     return {
       id,
       type,
-      keyInformationTabData: { environmentId: context.environmentId, pipelineId },
+      keyInformationTabData: {
+        environmentId: context.environmentId,
+        pipelineId,
+        ...(value.keyInformationTabData.view === "notes" ? { view: "notes" as const } : {}),
+      },
     };
   }
 

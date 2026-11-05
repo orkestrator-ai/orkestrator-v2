@@ -308,6 +308,67 @@ test("the PR node shows the link, its state and CI checks", async ({ page }) => 
   );
 });
 
+test("one running reviewer stops from its context menu, the rest of the panel carrying on", async ({
+  page,
+}) => {
+  await page.goto("/pipeline-flow?scenario=fanout");
+  const running = node(page, "Reviewer 1");
+  await expect(running).toHaveAttribute("data-flow-state", "running");
+  await running.click({ button: "right" });
+  const stop = page.getByRole("menuitem", { name: "Stop reviewer" });
+  await stop.click();
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        window.__pipelineCommands?.filter(
+          (entry) => entry.command === "stop_build_pipeline_reviewer",
+        ),
+      ),
+    )
+    .toHaveLength(1);
+  await expect(running).toHaveAttribute("data-flow-state", "cancelled");
+  await expect(node(page, "Reviewer 3")).not.toHaveAttribute("data-flow-state", "cancelled");
+
+  // A settled reviewer offers nothing to stop.
+  await running.click({ button: "right" });
+  await expect(page.getByRole("menuitem", { name: "Open session" })).toBeVisible();
+  await expect(page.getByRole("menuitem", { name: "Stop reviewer" })).toHaveCount(0);
+});
+
+test("a running reviewer restarts alone from its context menu", async ({ page }) => {
+  await page.goto("/pipeline-flow?scenario=fanout");
+  await node(page, "Reviewer 1").click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Restart reviewer" }).click();
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        window.__pipelineCommands?.filter(
+          (entry) => entry.command === "restart_build_pipeline_reviewer",
+        ),
+      ),
+    )
+    .toEqual([
+      {
+        command: "restart_build_pipeline_reviewer",
+        args: expect.objectContaining({ reviewerId: "r1" }),
+      },
+    ]);
+  // A failed reviewer keeps Retry; a queued one has nothing to restart yet.
+  await node(page, "Reviewer 2").click({ button: "right" });
+  await expect(page.getByRole("menuitem", { name: "Retry reviewer" })).toBeVisible();
+  await expect(page.getByRole("menuitem", { name: "Restart reviewer" })).toHaveCount(0);
+});
+
+test("a reviewer's focus, findings so far and a moved worktree are shown", async ({ page }) => {
+  await page.goto("/pipeline-flow?scenario=live-findings");
+  await expect(node(page, "Reviewer 1")).toContainText("Focus: Security");
+  await expect(page.getByTestId("pipeline-review-stale")).toContainText("worktree changed");
+  await node(page, "Reviewer 1").click();
+  const findings = page.getByTestId("pipeline-reviewer-provisional");
+  await expect(findings).toContainText("1 finding reported so far");
+  await expect(findings).toContainText("Retry drops the queued message");
+});
+
 test("node actions run from the context menu and the inspector", async ({ page }) => {
   await page.goto("/pipeline-flow?scenario=fanout");
   await node(page, "Reviewer 2").click({ button: "right" });
@@ -859,19 +920,250 @@ test("the overview keeps its scroll position behind another pane", async ({ page
   await expect.poll(() => overview.evaluate((element) => element.scrollTop)).toBe(offset);
 });
 
+async function expectOnScreen(page: Page, title: string) {
+  // The scroller's bounds, and the canvas's when the node pans inside one.
+  await expect
+    .poll(() =>
+      node(page, title).evaluate((element) => {
+        const box = element.getBoundingClientRect();
+        const bounds = [
+          element.closest('[data-testid="pipeline-flow-scroll"]'),
+          element.closest("[data-flow-viewport]"),
+        ].map((scroller) => scroller!.getBoundingClientRect());
+        return bounds.every(
+          (bound) =>
+            box.top >= bound.top &&
+            box.bottom <= bound.bottom &&
+            box.left >= bound.left &&
+            box.right <= bound.right,
+        );
+      }),
+    )
+    .toBe(true);
+}
+
+test("a finished run scrolls to Notes, with its contents below it", async ({ page }) => {
+  await page.goto("/pipeline-flow?scenario=notes");
+  await expect(node(page, "Notes")).toHaveAttribute("aria-selected", "true");
+  await expectOnScreen(page, "Notes");
+  // The node clears the sticky zoom controls, and the follow-ups start on screen.
+  const controls = await page.getByRole("group", { name: "Zoom" }).boundingBox();
+  const notes = await node(page, "Notes").boundingBox();
+  if (!isWide(page)) expect(notes!.y).toBeGreaterThanOrEqual(controls!.y + controls!.height);
+  await expect(page.getByRole("group", { name: "At a glance" })).toBeInViewport();
+});
+
+test("reopening a finished run lands on Notes over a remembered pan", async ({ page }) => {
+  await page.goto("/pipeline-flow?scenario=notes&paneControls");
+  await expectOnScreen(page, "Notes");
+  // Leave the node off screen, in whichever direction this layout scrolls.
+  await page.locator("[data-flow-viewport]").evaluate((element) => {
+    element.scrollLeft = 0;
+  });
+  await page.getByTestId("pipeline-flow-scroll").evaluate((element) => {
+    element.scrollTop = 0;
+  });
+  await expect
+    .poll(() =>
+      node(page, "Notes").evaluate((element) => {
+        const box = element.getBoundingClientRect();
+        const bound = element
+          .closest(
+            window.innerWidth >= 960
+              ? "[data-flow-viewport]"
+              : '[data-testid="pipeline-flow-scroll"]',
+          )!
+          .getBoundingClientRect();
+        return box.left >= bound.right || box.top >= bound.bottom;
+      }),
+    )
+    .toBe(true);
+  await page.getByRole("button", { name: "Reopen the tab" }).click();
+  await expect(node(page, "Notes")).toHaveAttribute("aria-selected", "true");
+  await expectOnScreen(page, "Notes");
+});
+
+test("a run finishing in view scrolls to Notes", async ({ page }) => {
+  await page.goto("/pipeline-flow?scenario=notes&unfinished&paneControls");
+  await expect(node(page, "Notes")).toHaveAttribute("aria-selected", "false");
+  await page.getByRole("button", { name: "Finish the run" }).click();
+  await expect(node(page, "Notes")).toHaveAttribute("aria-selected", "true");
+  await expectOnScreen(page, "Notes");
+});
+
+test("a run finishing behind another pane lands on Notes when shown, once", async ({ page }) => {
+  // Short enough that the wide layout overflows too.
+  await page.setViewportSize({ width: page.viewportSize()!.width, height: 560 });
+  await page.goto("/pipeline-flow?scenario=notes&unfinished&paneControls");
+  const overview = page.getByTestId("pipeline-flow-scroll");
+  await expect(graph(page)).toBeVisible();
+  await page.getByRole("button", { name: "Activate other pane" }).click();
+  await expect(overview).toBeHidden();
+  await page.getByRole("button", { name: "Finish the run" }).click();
+  await page.getByRole("button", { name: "Activate build pane" }).click();
+  await expect(node(page, "Notes")).toHaveAttribute("aria-selected", "true");
+  await expectOnScreen(page, "Notes");
+
+  // The landing is spent: the reader's own place survives the next hide.
+  await overview.evaluate((element) => {
+    element.scrollTop = 40;
+  });
+  await expect.poll(() => overview.evaluate((element) => element.scrollTop)).toBe(40);
+  await page.getByRole("button", { name: "Activate other pane" }).click();
+  await expect(overview).toBeHidden();
+  await page.getByRole("button", { name: "Activate build pane" }).click();
+  await expect(overview).toBeVisible();
+  await expect.poll(() => overview.evaluate((element) => element.scrollTop)).toBe(40);
+});
+
+test("completion before the hide observer waits for a visible pane", async ({ page }) => {
+  await page.setViewportSize({ width: page.viewportSize()!.width, height: 560 });
+  // Hold observer notifications so selection sees the previous measurable state.
+  await page.addInitScript(() => {
+    const Original = window.ResizeObserver;
+    const controls = { hold: false, pending: [] as (() => void)[] };
+    Object.assign(window, { __landingResize: controls });
+    window.ResizeObserver = class extends Original {
+      constructor(callback: ResizeObserverCallback) {
+        super((entries, observer) => {
+          const notify = () => callback(entries, observer);
+          if (controls.hold) controls.pending.push(notify);
+          else notify();
+        });
+      }
+    };
+  });
+  await page.goto("/pipeline-flow?scenario=notes&unfinished&paneControls");
+  await expect(graph(page)).toBeVisible();
+  await page.evaluate(() => {
+    (window as unknown as { __landingResize: { hold: boolean } }).__landingResize.hold = true;
+  });
+  await page.getByRole("button", { name: "Activate other pane" }).click();
+  await page.getByRole("button", { name: "Finish the run" }).click();
+  await page.evaluate(() => {
+    const controls = (
+      window as unknown as {
+        __landingResize: { hold: boolean; pending: (() => void)[] };
+      }
+    ).__landingResize;
+    controls.hold = false;
+    controls.pending.splice(0).forEach((notify) => notify());
+  });
+  await page.getByRole("button", { name: "Activate build pane" }).click();
+  await expectOnScreen(page, "Notes");
+  await expect(page.getByRole("group", { name: "At a glance" })).toBeInViewport();
+  const overview = page.getByTestId("pipeline-flow-scroll");
+  await overview.evaluate((element) => {
+    element.scrollTop = 40;
+  });
+  await page.getByRole("button", { name: "Activate other pane" }).click();
+  await page.getByRole("button", { name: "Activate build pane" }).click();
+  await expect.poll(() => overview.evaluate((element) => element.scrollTop)).toBe(40);
+});
+
+test("collapsing finished Notes preserves the reader's pan and panel position", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: page.viewportSize()!.width, height: 560 });
+  await page.goto("/pipeline-flow?scenario=notes");
+  await expectOnScreen(page, "Notes");
+  const overview = page.getByTestId("pipeline-flow-scroll");
+  const viewport = page.locator("[data-flow-viewport]");
+  await viewport.evaluate((element) => {
+    element.scrollLeft = 0;
+  });
+  await overview.evaluate((element) => {
+    element.scrollTop = 40;
+  });
+  const toggle = page.getByRole("button", { name: "Pipeline", exact: true });
+  // Programmatic activation keeps Playwright from scrolling the header into view.
+  await toggle.evaluate((element) => (element as HTMLElement).click());
+  await expect(graph(page)).toHaveCount(0);
+  await toggle.evaluate((element) => (element as HTMLElement).click());
+  await expect(graph(page)).toBeVisible();
+  await expect.poll(() => overview.evaluate((element) => element.scrollTop)).toBe(40);
+  await expect.poll(() => viewport.evaluate((element) => element.scrollLeft)).toBe(0);
+});
+
+test("completion returns a wide graph scrolled above the panel", async ({ page }) => {
+  test.skip(!isWide(page), "The stacked layout has its own landing coverage");
+  await page.setViewportSize({ width: page.viewportSize()!.width, height: 560 });
+  await page.goto("/pipeline-flow?scenario=notes&unfinished&paneControls");
+  const overview = page.getByTestId("pipeline-flow-scroll");
+  await expect(graph(page)).toBeVisible();
+  // Give the unfinished inspector enough content height to scroll fully past
+  // the graph; its default PR summary is only a few lines long.
+  await page.getByTestId("pipeline-inspector").evaluate((element) => {
+    element.style.minHeight = "1000px";
+  });
+  await overview.evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+  });
+  await expect(graph(page)).not.toBeInViewport();
+  await page.getByRole("button", { name: "Finish the run" }).click();
+  await expectOnScreen(page, "Notes");
+  await expect(page.getByRole("group", { name: "At a glance" })).toBeInViewport();
+});
+
+test("completion in fullscreen lands in the overlay and then the panel", async ({ page }) => {
+  await page.goto("/pipeline-flow?scenario=notes&unfinished&paneControls");
+  await page.getByRole("button", { name: "Fullscreen", exact: true }).click();
+  const overlay = page.locator("[data-flow-fullscreen]");
+  await expect(overlay).toBeVisible();
+  await page
+    .getByRole("button", { name: "Finish the run" })
+    .evaluate((element) => (element as HTMLElement).click());
+  await expect(node(page, "Notes")).toHaveAttribute("aria-selected", "true");
+  await expect
+    .poll(() =>
+      node(page, "Notes").evaluate((element) => {
+        const box = element.getBoundingClientRect();
+        const bounds = element.closest("[data-flow-fullscreen]")!.getBoundingClientRect();
+        return (
+          box.top >= bounds.top &&
+          box.bottom <= bounds.bottom &&
+          box.left >= bounds.left &&
+          box.right <= bounds.right
+        );
+      }),
+    )
+    .toBe(true);
+  if (!isWide(page))
+    expect(await overlay.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+  await page.getByRole("button", { name: "Exit fullscreen", exact: true }).click();
+  await expectOnScreen(page, "Notes");
+  await expect(page.getByRole("group", { name: "At a glance" })).toBeInViewport();
+  await page.reload();
+  // The fixture resets to unfinished on reload; finishing again is a fresh arrival.
+  await page.getByRole("button", { name: "Finish the run" }).click();
+  await expectOnScreen(page, "Notes");
+});
+
+test("a node the user picked is not scrolled away from when the run finishes", async ({ page }) => {
+  await page.goto("/pipeline-flow?scenario=notes&unfinished&paneControls");
+  const overview = page.getByTestId("pipeline-flow-scroll");
+  await node(page, "Ticket").click();
+  const before = await overview.evaluate((element) => element.scrollTop);
+  await page.getByRole("button", { name: "Finish the run" }).click();
+  await expect(node(page, "Notes")).toHaveAttribute("data-flow-state", "complete");
+  await expect(node(page, "Ticket")).toHaveAttribute("aria-selected", "true");
+  expect(await overview.evaluate((element) => element.scrollTop)).toBe(before);
+});
+
 test("Notes shows follow-ups and the full brief after reload", async ({ page }) => {
   await page.goto("/pipeline-flow?scenario=notes");
   for (const reload of [false, true]) {
     if (reload) await page.reload();
-    await expect(node(page, "PR")).toHaveAttribute("aria-selected", "true");
-    await node(page, "Notes").click();
     await expect(node(page, "Notes")).toHaveAttribute("aria-selected", "true");
+    await expect(node(page, "PR")).toHaveAttribute("aria-selected", "false");
     const notes = page.getByTestId("pipeline-notes");
     const followUps = notes.getByRole("region", { name: "Needs a look" });
     await expect(followUps).toContainText("Works on a real phone");
     await expect(followUps).toContainText("Needs a device.");
     await expect(followUps).toContainText("Rich text formatting");
     await expect(followUps).toContainText("mise run test:browser");
+    await expect(notes.getByRole("region").nth(0)).toHaveAttribute("aria-label", "Summary");
+    await expect(notes.getByRole("region").nth(1)).toHaveAttribute("aria-label", "Needs a look");
     for (const title of [
       "Objective",
       "Context",

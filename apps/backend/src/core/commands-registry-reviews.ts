@@ -11,6 +11,9 @@ import {
   isMultiReviewStepControlInput,
   isMultiReviewReviewerTranscriptRequest,
   isMultiReviewStepTranscriptRequest,
+  isMultiReviewModelSelection,
+  isMultiReviewRewindStep,
+  isMultiReviewSkippableStep,
   isRestartMultiReviewStepInput,
   isStartMultiReviewCustomAddressFindingsInput,
   isStartMultiReviewInput,
@@ -268,12 +271,39 @@ export function registerReviewWorkflowCommands(
       .stopValidation(asNonBlankString(workflowId, "workflowId"))
       .then(stripWorkflowSnapshotSecrets);
   });
-  register("restart_multi_review_reviewer", ({ workflowId, reviewerId }, context) => {
+  register("restart_multi_review_reviewer", ({ workflowId, reviewerId, model }, context) => {
     if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
+    if (model !== undefined && !isMultiReviewModelSelection(model)) {
+      throw new Error("Invalid multi review reviewer model");
+    }
     return context.multiReviews
       .restartReviewer(
         asNonBlankString(workflowId, "workflowId"),
         asNonBlankString(reviewerId, "reviewerId"),
+        model,
+      )
+      .then(stripWorkflowSnapshotSecrets);
+  });
+  register("skip_multi_review_step", ({ workflowId, step }, context) => {
+    if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
+    if (!isMultiReviewSkippableStep(step)) throw new Error("Invalid multi review step");
+    return context.multiReviews
+      .skipStep(asNonBlankString(workflowId, "workflowId"), step)
+      .then(stripWorkflowSnapshotSecrets);
+  });
+  register("preview_multi_review_code_rewind", ({ workflowId, step }, context) => {
+    if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
+    if (!isMultiReviewRewindStep(step)) throw new Error("Invalid multi review step");
+    return context.multiReviews.previewCodeRewind(asNonBlankString(workflowId, "workflowId"), step);
+  });
+  register("rewind_multi_review_code", ({ workflowId, step, expectedHead }, context) => {
+    if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
+    if (!isMultiReviewRewindStep(step)) throw new Error("Invalid multi review step");
+    return context.multiReviews
+      .rewindCode(
+        asNonBlankString(workflowId, "workflowId"),
+        step,
+        asNonBlankString(expectedHead, "expectedHead"),
       )
       .then(stripWorkflowSnapshotSecrets);
   });

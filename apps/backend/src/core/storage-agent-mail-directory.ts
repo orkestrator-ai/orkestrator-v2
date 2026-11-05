@@ -30,6 +30,7 @@ import {
 } from "@orkestrator/protocol/pipeline-worker-mail";
 import { paneLayoutLeaves } from "./storage-shared.js";
 import {
+  coordinatorConversationRunnable,
   coordinatorMainConversation,
   coordinatorRuntimeId,
   type CoordinatorWorkflowAssociation,
@@ -220,11 +221,20 @@ export class AgentMailboxDirectory {
     return workers.map((worker) => `${worker.address}=${worker.status}`).join(",");
   }
 
+  /** Every workflow's workers: build pipelines' and Multi Review reviewers'. */
+  private async workflowWorkers(environmentId?: string) {
+    const [pipelines, reviews] = await Promise.all([
+      this.repos.buildPipelines.listBuildPipelineWorkers(environmentId),
+      this.repos.reviews.listMultiReviewWorkers(environmentId),
+    ]);
+    return [...pipelines, ...reviews];
+  }
+
   private async pipelineWorkerFingerprintsByEnvironment(
     environmentId?: string,
   ): Promise<Map<string, string>> {
     const fingerprints = new Map<string, string>();
-    for (const entry of await this.repos.buildPipelines.listBuildPipelineWorkers(environmentId)) {
+    for (const entry of await this.workflowWorkers(environmentId)) {
       const previous = fingerprints.get(entry.environmentId);
       const next = `${entry.pipelineId}:${entry.terminal ? "ended" : "live"}:${AgentMailboxDirectory.workerFingerprint(entry.workers)}`;
       fingerprints.set(entry.environmentId, previous ? `${previous};${next}` : next);
@@ -389,7 +399,7 @@ export class AgentMailboxDirectory {
       this.repos.coordinators.listCoordinatorWorkspaces(),
       this.repos.coordinators.listAllCoordinatorWorkflowAssociations(),
       this.repos.config.loadConfig(),
-      this.repos.buildPipelines.listBuildPipelineWorkers(),
+      this.workflowWorkers(),
     ]);
     const coordinatorOrigins = coordinatorOriginsByEnvironment(coordinators, coordinatorWorkflows);
     if (!layoutsResult.available) return;
@@ -571,7 +581,9 @@ export class AgentMailboxDirectory {
           projectName: project.name,
           environmentId,
           environmentName: "Coordinator",
-          environmentStatus: workspace.lifecycleState === "ready" ? "running" : "stopped",
+          environmentStatus: coordinatorConversationRunnable(workspace, conversation)
+            ? "running"
+            : "stopped",
           tabId: conversation.tabId,
           tabType: "agent-native",
           title: conversation.title,

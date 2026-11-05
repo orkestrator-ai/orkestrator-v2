@@ -32,14 +32,9 @@ const log = createLogger("pull-request");
  * setting is on, and the shimmer follows the same setting; required checks
  * always do.
  *
- * Conflict resolution is launched at most once per conflict episode. The
- * Resolve job arms `prRecheckAfterAgentCompletionArmedAt`, which the monitor
- * clears only when GitHub stops reporting conflicts, so an armed token means
- * a Resolve (manual or automatic) already owns this episode. A Resolve that
- * finishes with conflicts still present is not relaunched; the user decides.
- * A reading that is still checking mergeability waits, and the monitor's next
- * announced reading decides again, so turning auto-merge on mid-check still
- * launches Resolve once GitHub reports the conflict.
+ * Completed automatic Resolve turns can retry after a fresh conflict reading,
+ * up to three attempts. Active or unconfirmed jobs retain the armed token.
+ * Exhaustion turns integration off and stores an actionable error.
  *
  * There is one Resolve tab per environment. A later conflict episode sends
  * the prompt again to the open Resolve tab (manual or automatic) through the
@@ -254,6 +249,42 @@ export class PrAutoMergeController {
     // A conflict-free reading ends the Resolve episode, and with it the hold or
     // backoff of its launch, so the next conflict is acted on at once.
     if (environment.hasMergeConflicts === false) this.clearRetry(environmentId, "resolve");
+    const completedAt = Date.parse(environment.autoMergeResolveCompletedAt ?? "");
+    const checkedAt = Date.parse(
+      this.options.monitorState(environmentId)?.lastSuccessfulCheckStartedAt ?? "",
+    );
+    const completionDecision = Number.isFinite(completedAt)
+      ? decideAutoMerge(environment, this.options.monitorState(environmentId), await this.policy())
+      : null;
+    if (
+      completionDecision?.kind === "wait" &&
+      completionDecision.reason === "resolve-pending" &&
+      environment.autoMerge &&
+      environment.hasMergeConflicts === true &&
+      environment.prRecheckAfterAgentCompletionArmedAt &&
+      checkedAt > completedAt
+    ) {
+      const attempts = (environment.autoMergeResolveAttempts ?? 0) + 1;
+      await this.options.storage.updateEnvironment(
+        environmentId,
+        {
+          ...(attempts >= 3
+            ? {
+                autoMerge: false,
+                autoMergeError:
+                  "Resolve still reports conflicts after three attempts. Inspect the Resolve tab, then enable Integrate to retry.",
+              }
+            : {}),
+          autoMergeResolveAttempts: attempts,
+          autoMergeResolveCompletedAt: undefined,
+          prRecheckAfterAgentCompletionArmedAt: undefined,
+        },
+        (current) =>
+          current.autoMergeEnabledAt === environment.autoMergeEnabledAt &&
+          current.autoMergeResolveCompletedAt === environment.autoMergeResolveCompletedAt,
+      );
+      return;
+    }
     const decision = decideAutoMerge(
       environment,
       this.options.monitorState(environmentId),
@@ -336,7 +367,8 @@ export class PrAutoMergeController {
    * The Merge PR button's command, pinned to the observed PR and head. The
    * pin makes the command refuse effects that differ from the ones it would
    * apply, so ask for exactly those: a project's home checkout keeps its
-   * branch, and a cleanup the user already requested still runs.
+   * branch, and a cleanup the user already requested, through Merge &
+   * Cleanup or by turning auto-merge on with cleanup, still runs.
    */
   private async merge(environment: Environment): Promise<boolean> {
     const headSha = this.options.monitorState(environment.id)?.headSha;
@@ -347,7 +379,9 @@ export class PrAutoMergeController {
       environmentId: environment.id,
       method: "squash",
       deleteBranch: !isProjectHomeEnvironment(current),
-      cleanupAfterMerge: Boolean(current.cleanupAfterMergeRequestedAt),
+      cleanupAfterMerge:
+        Boolean(current.cleanupAfterMergeRequestedAt) || current.autoMergeCleanup === true,
+      ...(current.autoMergeCleanup ? { autoMergeEnabledAt: current.autoMergeEnabledAt } : {}),
       expectedHeadSha: headSha,
       expectedPrUrl: environment.prUrl,
     });

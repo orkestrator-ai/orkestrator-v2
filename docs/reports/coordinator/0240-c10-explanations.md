@@ -144,3 +144,40 @@ Analysed 2026-11-03 against `main` at `a2bba9d8`.
 - [Coordinator report, 4.4 (U13)](../2026-10-27-coordinator.md#44-ui-and-ux)
 - [Coordinator report, 5.3](../2026-10-27-coordinator.md#53-make-the-read-only-tier-legible) and [4.4 (U13)](../2026-10-27-coordinator.md#44-ui-and-ux)
 - [0026-coordinator-read-only-adapters.md](../../todo/coordinator-and-multi-review/0026-coordinator-read-only-adapters.md): the per-platform decisions behind the tiers
+
+## Outcome
+
+Built on `main` at `a0a6d6206`. Every task was re-checked against that code
+first; every finding still held (line numbers had moved, mostly into
+`CoordinatorConversationPane.tsx` and `CoordinatorToolbar.tsx`). No task was
+carried into a to-do, so no to-do was needed.
+
+| Part | Task | Outcome | Code | Tests |
+| --- | --- | --- | --- | --- |
+| 0320 | 1. Explain side agents where they start | Done | New side agent's `title` is `COORDINATOR_SIDE_AGENT_EXPLANATION` (`CoordinatorPanel.tsx`); a side composer gets `COORDINATOR_SIDE_COMPOSER_PLACEHOLDER` ("Ask a question about this project") and the explanation as its `composerHint` (`CoordinatorConversationPane.tsx`); the hint renders under both the unassigned and the assigned composer (`AgentNativeTab.helpers.tsx`, `AgentNativeTab.controller.tsx`) | `CoordinatorPanel.tabs.test.tsx` ("New side agent keeps its name…"); `CoordinatorPanel.outcome.test.tsx` ("passes the outcome-first placeholder…", "a side composer says what a side agent is for…") |
+| 0330 | 1. Add a first-run card | Done | `CoordinatorIntroCard` in the empty main composer (`unassignedIntro`), dismissed per user in the UI store (`coordinatorIntroDismissed`, persisted); the toolbar's "?" (`CoordinatorIntroButton`) shows the same lines as a menu, which works whatever the conversation's state (an assigned main has no empty composer to show the card in) | `CoordinatorPanel.outcome.test.tsx` ("the first-run card explains the coordinator until dismissed, and ? shows it again"); `uiStore.persistence.test.ts` ("a dismissed coordinator first-run card stays dismissed…") |
+| 0400 | 1. Make `!` commands discoverable and correct the footer | Done | `COORDINATOR_COMMAND_HINT` under every coordinator composer; the footer now reads "The coordinator hands code changes, builds and fixes to build pipelines and prompt environments." (`CoordinatorPanel.tsx`) | `CoordinatorPanel.outcome.test.tsx` ("a side composer says…", "the footer speaks of the coordinator's work…") |
+| 0400 | 2. Handle a first message starting with `!` | Done (recommended option: keep the rule, show it inline) | The toast is replaced by `FIRST_MESSAGE_COMMAND_RULE` shown under the unassigned composer (`role="alert"`) until the text no longer starts with `!`; the text stays in the box (`AgentNativeTab.helpers.tsx`) | `CoordinatorPanel.outcome.test.tsx` ("a first message starting with ! shows the rule under the composer…") |
+| 0240 | 1. Show the tier by name | Done (recommended option; a menu instead of a tooltip) | The badge shows a "Read-only · <tier>" pill and opens a menu with the tier's meaning, the checkout and revision, and a "Coordinator safety level in Settings" item that opens Settings → Coordinator (C6's section, where the safety level lives) (`CoordinatorPanelNotices.tsx`); `provider-configured` is no longer called advisory. In the picker, `platformBadges` give each rail row a tier-coloured marker and the tier in its accessible name and tooltip, and the note for the platform in view starts with the pill (`AgentModelPicker.tsx`) | `CoordinatorPanel.outcome.test.tsx` ("the badge names the enforced tier…", "a provider-configured platform is named as such…", "an advisory platform is the only one…"); `CoordinatorPanel.test.tsx` ("a caveat on an available platform reaches the picker…"); `AgentModelPicker.test.tsx` ("names each platform's badge on its rail row…") |
+| 0240 | 2. Stop repeating the caveat | Done | `platformNotes` passes the qualification reason unchanged; "Orkestrator cannot verify this boundary independently." is no longer appended (`CoordinatorPanel.tsx`) | `CoordinatorPanel.test.tsx` ("a caveat on an available platform reaches the picker…"); `AgentModelPicker.test.tsx` ("names each platform's badge…": the caveat is stated once) |
+
+Choices that differ from the report's wording:
+
+- **The badge's explanation is a menu, not a tooltip.** The report allowed a
+  popover if a link in a tooltip does not work by touch. Radix tooltips do
+  not open by touch and their content cannot take keyboard focus, and the app
+  has no popover component, so the badge and the "?" use the existing
+  dropdown menu, which opens by pointer, touch and keyboard.
+- **The picker's rail rows are 32-pixel icon buttons**, so the tier name is
+  in each row's accessible name and tooltip, with a marker coloured by tier;
+  the visible pill is in the note for the platform in view, which follows the
+  row the user selects.
+- **The Settings link goes to Settings → Coordinator** (C6's section, which
+  holds the safety level) rather than Platforms.
+
+Screenshots of the live renderer were taken on an isolated `dev:test`
+profile. An assigned conversation needs a first prompt, which would be a
+billed provider turn, so the assigned-badge screenshots rewrote the
+coordinator snapshot in the browser only (main assigned to Codex, tier
+overridden) and refused every session start. The same paths are covered by
+the component tests above against the real components.

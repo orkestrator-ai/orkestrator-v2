@@ -165,6 +165,30 @@ is open for that case). A rerun of those two on a credential-free profile stoppe
 "Claude Code Is Not Logged In" modal in all six results, so it says nothing either way, and
 this build was not allowed to read the host's Claude credentials for a rerun that could.
 
+### Task 3: review guard coverage and qualification limits (2026-11-05)
+
+Replaced the extra-context guard's literal `browser.newContext()` counts with a syntax
+walk. It checks named contexts independently of the browser receiver's name, requires
+an awaited routing call for that context before `newPage`, rejects browser-level
+`newPage` shortcuts, and rejects direct Chromium/Firefox/WebKit launches (including
+renamed imports and namespace imports). Regression inputs cover these bypasses,
+wrong-context routing, late or unawaited routing, and harmless comments and strings.
+This is a conservative source guard, not whole-program type or control-flow analysis.
+It does not replace the live qualification below. The focused `browser-test.test.ts`
+run (`--parallel=2`), `bun check -p e2e/agent-testing/tsconfig.json`,
+`mise run format:check` and `mise run lint` passed; lint reported existing warnings
+outside the edited files.
+
+The address stage read review package
+`review-validation-40976e7e-9e38-4548-b855-3efbf8327fe0` for commit `e1921ed4d`:
+its `validation` array is empty, so it supplies no recorded commands or failure
+artifacts to repair. Earlier results above remain historical evidence. This stage
+preserves the ticket's restrictions on creating Docker networks and accessing host
+Claude credentials. It therefore cannot complete either the suite-wide artificial
+churn run or the credentialed regression comparison here. Both remain open; a
+credential-free repeat would hit the already demonstrated sign-in prerequisite
+and would not classify those two failures.
+
 ## Outstanding work
 
 - **Task 3: qualify the whole browser suite under network churn.** On a Linux host where

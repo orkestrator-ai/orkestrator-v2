@@ -2,6 +2,7 @@ import { describe, expect, mock, test } from "bun:test";
 import type { BrowserContext, Route } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { parseSync, visitorKeys, type Node } from "oxc-parser";
 import {
   LOOPBACK_URL,
   ModuleCache,
@@ -24,6 +25,95 @@ function browserSuiteSpecs(): string[] {
   return [...list.matchAll(/"([^"]+\.spec\.ts)"/g)].map((match) => match[1]!);
 }
 
+/** Conservative syntax guard: newPage is allowed only on an explicitly routed context.
+ * Inspect syntax rather than counting text so receiver aliases, bracket access,
+ * comments and unrelated routing calls cannot bypass the guard.
+ */
+function contextRoutingGaps(source: string): string[] {
+  const { program, errors } = parseSync("browser-spec.ts", source);
+  if (errors.length) throw new Error(errors[0]!.message);
+  const nodes: { node: Node; parent?: Node }[] = [];
+  function visit(node: Node, parent?: Node) {
+    nodes.push({ node, parent });
+    for (const key of visitorKeys[node.type] ?? []) {
+      const child = (node as unknown as Record<string, unknown>)[key];
+      if (Array.isArray(child)) {
+        for (const item of child) if (item) visit(item as Node, node);
+      } else if (child) visit(child as Node, node);
+    }
+  }
+  visit(program);
+  const contexts = new Map<string, number>();
+  const routed = new Map<string, number>();
+  const engines = new Set(["chromium", "firefox", "webkit"]);
+  for (const { node } of nodes) {
+    if (
+      node.type === "ImportSpecifier" &&
+      node.imported.type === "Identifier" &&
+      engines.has(node.imported.name)
+    ) {
+      engines.add(node.local.name);
+    }
+  }
+  const gaps: string[] = [];
+  const memberName = (node: Node): string | undefined => {
+    if (node.type !== "MemberExpression") return;
+    if (!node.computed && node.property.type === "Identifier") return node.property.name;
+    if (
+      node.computed &&
+      node.property.type === "Literal" &&
+      typeof node.property.value === "string"
+    )
+      return node.property.value;
+  };
+  for (const { node, parent } of nodes) {
+    if (node.type !== "CallExpression") continue;
+    if (
+      node.callee.type === "Identifier" &&
+      node.callee.name === "fetchModulesOutsideChromium" &&
+      parent?.type === "AwaitExpression"
+    ) {
+      const arg = node.arguments[0];
+      if (arg?.type === "Identifier") routed.set(arg.name, node.start);
+    }
+    const method = memberName(node.callee);
+    if (node.callee.type !== "MemberExpression") continue;
+    const receiver = node.callee.object;
+    if (method === "newContext") {
+      const declaration = nodes.find(
+        (entry) => entry.node.type === "VariableDeclarator" && entry.node.init === parent,
+      )?.node;
+      if (declaration?.type === "VariableDeclarator" && declaration.id.type === "Identifier") {
+        contexts.set(declaration.id.name, node.start);
+      } else gaps.push("newContext must be assigned to a named context");
+    }
+    if (method === "newPage") {
+      const name = receiver.type === "Identifier" ? receiver.name : "";
+      const created = contexts.get(name);
+      const installed = routed.get(name);
+      if (
+        created === undefined ||
+        installed === undefined ||
+        installed < created ||
+        installed > node.start
+      ) {
+        gaps.push("newPage requires an awaited route on its named context before use");
+      }
+    }
+    if (
+      (method === "launch" || method === "launchPersistentContext") &&
+      ((receiver.type === "Identifier" && engines.has(receiver.name)) ||
+        engines.has(memberName(receiver) ?? ""))
+    ) {
+      gaps.push("use the shared browser fixture instead of launching another browser");
+    }
+  }
+  for (const [name, created] of contexts) {
+    if ((routed.get(name) ?? -1) < created) gaps.push(`unrouted context: ${name}`);
+  }
+  return gaps;
+}
+
 describe("the browser suite's shared test", () => {
   test("every browser-suite spec takes `test` from it unless it is listed as direct", () => {
     const specs = browserSuiteSpecs();
@@ -40,11 +130,48 @@ describe("the browser suite's shared test", () => {
     const offenders = browserSuiteSpecs().flatMap((spec) => {
       if (DIRECT_SPECS.has(spec)) return [];
       const source = readFileSync(path.join(directory, spec), "utf8");
-      const created = source.match(/\bbrowser\.newContext\(/g)?.length ?? 0;
-      const routed = source.match(/\bfetchModulesOutsideChromium\(/g)?.length ?? 0;
-      return created > routed ? [spec] : [];
+      return contextRoutingGaps(source).map((gap) => `${spec}: ${gap}`);
     });
     expect(offenders).toEqual([]);
+  });
+
+  test("the context guard rejects browser shortcuts, renamed receivers and extra launches", () => {
+    for (const source of [
+      "await browser.newPage();",
+      "const renamed = browser; await renamed.newPage();",
+      "const second = await renamed.newContext();",
+      "const second = await renamed['newContext']();",
+      "import { chromium } from '@playwright/test'; await chromium.launch();",
+      "import { chromium as engine } from './browser-test'; await engine.launch();",
+      "import * as pw from '@playwright/test'; await pw.chromium.launch();",
+      // Routing a different context must not satisfy the check.
+      "const second = await browser.newContext(); await fetchModulesOutsideChromium(first);",
+      "const second = await browser.newContext(); second.newPage(); await fetchModulesOutsideChromium(second);",
+      "const second = await browser.newContext(); fetchModulesOutsideChromium(second); second.newPage();",
+    ]) {
+      expect(contextRoutingGaps(source).length, source).toBeGreaterThan(0);
+    }
+  });
+
+  test("the context guard accepts routed named contexts and ignores comments and strings", () => {
+    expect(
+      contextRoutingGaps(`
+      const second = await renamed.newContext();
+      await fetchModulesOutsideChromium(second);
+      const page = await second.newPage();
+      // browser.newPage(); chromium.launch();
+      const description = "browser.newContext()";
+    `),
+    ).toEqual([]);
+    expect(
+      contextRoutingGaps(`
+      const first = await browser.newContext();
+      await fetchModulesOutsideChromium(first);
+      const second = await browser.newContext();
+      await fetchModulesOutsideChromium(first);
+      second.newPage();
+    `),
+    ).not.toEqual([]);
   });
 
   test("routes loopback origins only", () => {

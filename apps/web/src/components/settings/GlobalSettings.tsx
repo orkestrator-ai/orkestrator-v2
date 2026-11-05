@@ -251,6 +251,7 @@ export function globalFormSignature(global: GlobalConfig): string {
     global.debugLogging ?? false,
     normalizeDebugLogRetentionDays(global.debugLogRetentionDays),
     resolveLogDetail(global),
+    global.logDetailKeepRaised === true,
     global.webClientEnabled ?? true,
     getSavedReviewInstruction(global.reviewInstruction),
     resolveReviewLensPresets(global.reviewLensPresets),
@@ -890,6 +891,9 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       // rejected edit. Keep a newer edit made while this request was in flight.
       setAutoSteer((current) =>
         current === autoSteer ? (newConfig.global.autoSteer ?? false) : current,
+      );
+      setLogDetailKeepRaised((current) =>
+        current === logDetailKeepRaised ? newConfig.global.logDetailKeepRaised === true : current,
       );
       syncedGlobalSignatureRef.current = globalFormSignature(newConfig.global);
       syncedGlobalRef.current = newConfig.global;

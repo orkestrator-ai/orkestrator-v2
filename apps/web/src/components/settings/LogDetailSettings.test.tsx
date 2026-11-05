@@ -102,6 +102,21 @@ describe("Log Detail privacy and expiry", () => {
     expect(screen.getByTestId("log-detail-expiry").textContent).toContain("24 hours after");
   });
 
+  test("first unsaved raise waits for backend confirmation", () => {
+    render(
+      <LogDetailSettings
+        value={bridgeDebug}
+        stored={normal}
+        onChange={() => {}}
+        expirySupported={false}
+      />,
+    );
+    const notice = screen.getByTestId("log-detail-expiry").textContent ?? "";
+    expect(notice).toContain("Save raised detail to confirm");
+    expect(notice).not.toContain("stays on");
+    expect(notice).not.toContain("24 hours");
+  });
+
   test("keeping it raised is a switch, and says it stays on", () => {
     const onKeepRaisedChange = mock((_keep: boolean) => {});
     const { rerender } = render(

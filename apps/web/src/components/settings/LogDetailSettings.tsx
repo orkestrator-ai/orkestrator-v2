@@ -98,13 +98,16 @@ function ExpiryNotice({
   const expiry = parseLogDetailExpiresAt(expiresAt);
   // An expiry belongs to what is stored; an unsaved change starts a new day.
   const pending = JSON.stringify(stored) !== JSON.stringify(value);
-  const notice = !expirySupported
-    ? "Automatic expiry is not confirmed by this backend. Raised detail stays on until you set it back."
-    : keepRaised
-      ? "Raised detail stays on until you set it back."
-      : expiry !== null && !pending
-        ? `Raised detail goes back to Info at ${formatExpiry(expiry)}. Saving logs to disk is not changed.`
-        : "Raised detail goes back to Info 24 hours after it is saved. Saving logs to disk is not changed.";
+  const notice =
+    pending && !expirySupported
+      ? "Save raised detail to confirm whether this backend supports automatic expiry."
+      : !expirySupported
+        ? "Automatic expiry is not confirmed by this backend. Raised detail stays on until you set it back."
+        : keepRaised
+          ? "Raised detail stays on until you set it back."
+          : expiry !== null && !pending
+            ? `Raised detail goes back to Info at ${formatExpiry(expiry)}. Saving logs to disk is not changed.`
+            : "Raised detail goes back to Info 24 hours after it is saved. Saving logs to disk is not changed.";
   return (
     <div className="max-w-xl space-y-2 rounded-lg border border-zinc-800 bg-zinc-900/40 p-3">
       <p className="text-xs text-muted-foreground" data-testid="log-detail-expiry">

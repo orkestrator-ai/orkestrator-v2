@@ -14,7 +14,7 @@ Analysed 2026-11-05 against `main` at `1a66d95c3`. From efficiency report part `
 
 **Problem.** A workspace realm (another machine's workspace shown inside a desktop window) records failures in its own renderer error ring, but never sends them, so a realm failure leaves no trace on any machine.
 
-**Context.** E16 built the ring (`apps/web/src/lib/renderer-error-ring.ts`) and a desktop window's upload (`renderer-error-upload.ts`, started in `renderer-entry.tsx` only when `rendererErrorRoute()` is `window`). The backend command `record_renderer_errors` is in `WORKSPACE_ADMINISTRATION_COMMANDS`, so a realm, which reaches its node through a workspace grant, is refused. An entry already carries `route: "realm"`, so the backend can tell one apart. See `docs/architecture/logging.md`, "Renderer failures in the essential log".
+**Context.** E16 built the ring (`apps/web/src/lib/renderer-error-ring.ts`) and a desktop window's upload (`renderer-error-upload.ts`, started by `renderer-diagnostics.ts` from `renderer-bootstrap.ts` only when `rendererErrorRoute()` is `window`). The backend command `record_renderer_errors` is in `WORKSPACE_ADMINISTRATION_COMMANDS`, so a realm, which reaches its node through a workspace grant, is refused. An entry already carries `route: "realm"`, so the backend can tell one apart. See `docs/architecture/logging.md`, "Renderer failures in the essential log".
 
 **Investigation.** A realm's `invoke` goes to the realm's own node, not the window's command node. The failure is in the window's process, but it concerns the remote node's workspace, and the user exporting diagnostics usually does it on the command node.
 
@@ -63,6 +63,12 @@ Analysed 2026-11-05 against `main` at `1a66d95c3`. From efficiency report part `
   - **`os_log` for the shell plus `isInspectable`.**
     - Pros: covers native failures.
     - Cons: a second logging system with its own privacy review.
+
+## Assumptions and decisions
+
+### Task 1: desktop upload reference
+
+Corrected the upload startup reference to `renderer-diagnostics.ts`, invoked by `renderer-bootstrap.ts`. This documentation correction leaves the three follow-up tasks open.
 
 ## Related
 

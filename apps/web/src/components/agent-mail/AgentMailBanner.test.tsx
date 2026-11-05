@@ -113,6 +113,37 @@ describe("AgentMailBanner", () => {
     useAgentMailStore.setState(useAgentMailStore.getInitialState());
   });
 
+  test.each(["pending-inject", "stored", "inject_failed"] as const)(
+    "a platform hold explains %s mail and prevents delivery until released",
+    (placement) => {
+      install(placement, { policy: placement === "stored" ? "off" : "idle" });
+      const view = render(
+        <AgentMailBanner
+          environmentId="env-1"
+          tabId="tab-1"
+          deliveryHeldReason="Codex is turned off. Turn it on to send."
+        />,
+      );
+      if (placement !== "inject_failed")
+        expect(
+          screen.getByText("Delivery waiting: Codex is turned off. Turn it on to send."),
+        ).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Deliver now" })).toBeNull();
+      if (placement === "inject_failed")
+        expect((screen.getByRole("button", { name: "Retry" }) as HTMLButtonElement).disabled).toBe(
+          true,
+        );
+      expect(screen.getByRole("button", { name: "View" })).toBeTruthy();
+      view.rerender(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
+      expect(screen.queryByText(/Delivery waiting: Codex/)).toBeNull();
+      expect(
+        screen.getByRole("button", {
+          name: placement === "inject_failed" ? "Retry" : "Deliver now",
+        }),
+      ).toBeTruthy();
+    },
+  );
+
   test("surfaces pull-only pending delivery in the recipient tab", () => {
     install("stored", { policy: "off" });
     render(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);

@@ -1506,7 +1506,11 @@ export function SharedNativeAgentController({
     queueEditPending || isSubmitting || (phase !== "idle" && phase !== "error");
   const isRunning = phase === "running";
   const isProviderTurnActive =
-    phase === "running" || phase === "recovering" || phase === "cancelling";
+    phase === "running" ||
+    phase === "recovering" ||
+    phase === "cancelling" ||
+    // Held panes withhold interactions, but blocked work must still offer Stop.
+    (sendingHeld && phase === "blocked");
   const isTurnActive = isDispatching || isProviderTurnActive;
   const turnActivity = phase === "running" ? projection?.turn.activity : undefined;
   /*

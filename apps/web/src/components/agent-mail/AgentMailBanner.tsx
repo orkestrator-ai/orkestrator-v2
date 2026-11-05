@@ -29,10 +29,13 @@ export function AgentMailBanner({
   environmentId,
   tabId,
   agentAvailable = true,
+  deliveryHeldReason,
 }: {
   environmentId: string;
   tabId: string;
   agentAvailable?: boolean;
+  /** This recipient can be read, but delivery waits for this hold to clear. */
+  deliveryHeldReason?: string;
 }) {
   const mailboxId = `${environmentId}\0${tabId}`;
   const entry = useAgentMailStore((state) => state.summary.get(mailboxId));
@@ -164,6 +167,7 @@ export function AgentMailBanner({
       paused.placementReason === AGENT_MAIL_HOURLY_LIMIT_REASON
         ? "Delivery paused: hourly limit · resumes on its own"
         : "Delivery paused: loop budget";
+  else if (deliveryHeldReason) text = `Delivery waiting: ${deliveryHeldReason}`;
   else if (pending?.placementReason === "retrying")
     text = "Delivery was refused · retrying automatically";
   else if (pending?.placementReason === "verifying")
@@ -190,6 +194,8 @@ export function AgentMailBanner({
   else
     text = `${entry.pendingInjectCount} message${entry.pendingInjectCount === 1 ? "" : "s"} waiting · delivers when this agent is idle`;
 
+  if (deliveryHeldReason && (failed || paused)) text += ` · ${deliveryHeldReason}`;
+
   return (
     <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-amber-400/25 bg-amber-400/[0.07] px-3 py-1.5 text-xs">
       {failed || paused || awaitingAgent.length > 0 ? (
@@ -201,7 +207,11 @@ export function AgentMailBanner({
       <span
         className={cn(
           "min-w-0 flex-1",
-          awaitingAgent.length === 0 && !delegationHeld && !undeliverable && "truncate",
+          awaitingAgent.length === 0 &&
+            !deliveryHeldReason &&
+            !delegationHeld &&
+            !undeliverable &&
+            "truncate",
         )}
       >
         {text}
@@ -213,7 +223,12 @@ export function AgentMailBanner({
       )}
       {failed && (
         <>
-          <Button size="sm" variant="ghost" onClick={() => void retry(failed.id)}>
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={deliveryHeldReason !== undefined}
+            onClick={() => void retry(failed.id)}
+          >
             <RotateCcw className="mr-1 h-3 w-3" />
             Retry
           </Button>
@@ -223,11 +238,16 @@ export function AgentMailBanner({
         </>
       )}
       {paused && (
-        <Button size="sm" variant="ghost" onClick={() => void retry(paused.id)}>
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={deliveryHeldReason !== undefined}
+          onClick={() => void retry(paused.id)}
+        >
           Resume
         </Button>
       )}
-      {(pending || releasable.length > 0) && (
+      {!deliveryHeldReason && (pending || releasable.length > 0) && (
         <Button size="sm" variant="ghost" onClick={() => void deliver()}>
           Deliver now
         </Button>

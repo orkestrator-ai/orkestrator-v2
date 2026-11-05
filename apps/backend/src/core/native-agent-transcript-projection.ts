@@ -349,6 +349,8 @@ export interface NativeAgentTranscriptProjectionHost {
   storage: StorageService;
   options: NativeAgentServiceOptions;
   catalogs: NativeAgentCatalogCache;
+  /** A provider already serving this runtime; never starts a bridge. */
+  cachedProvider?(input: NativeAgentProjectionInput): NativeAgentRuntimeProvider | undefined;
   /** Last provider-owned activity; read without touching the provider. */
   observedActivity(
     sessionKey: string,
@@ -2975,20 +2977,25 @@ export class NativeAgentTranscriptProjection {
     return { message: held.message };
   }
 
-  /**
-   * Session state for a held conversation, from the session record alone: the
-   * turn reads as over and nothing as parked, because the pane may not act on
-   * either while held. Answers without resolving a provider, which is what would
-   * start a bridge.
-   */
+  /** Held reads preserve an existing turn's activity so Stop stays available. */
   private async heldCoordinatorSessionState(
-    input: NativeAgentProgressiveInput,
+    input: NativeAgentProjectionInput,
     message: string,
   ): Promise<NativeAgentSessionStateView | null> {
     const session = await this.storage.getNativeAgentSession(
       nativeAgentSessionStorageKey(input.environmentId, input.agent, input.logicalSessionKey),
     );
     if (!session) return null;
+    const provider = this.host.cachedProvider?.(input);
+    const status = provider
+      ? await readProviderStatus(provider, session.providerSessionId).catch(() => ({
+          status: "running" as const,
+        }))
+      : undefined;
+    const phase =
+      status?.status === "running" || status?.status === "blocked" || status?.status === "error"
+        ? status.status
+        : "idle";
     return {
       identity: this.progressiveIdentity(
         { ...input, viewVersion: 1 },
@@ -2996,7 +3003,7 @@ export class NativeAgentTranscriptProjection {
         `saved:${input.agent}`,
       ),
       connection: "error",
-      turn: { phase: "idle", error: message },
+      turn: { phase, error: message },
       interactions: [],
       composerControls: [],
       capabilities: nativeCapabilities(input.agent),
@@ -5089,6 +5096,7 @@ export class NativeAgentTranscriptProjection {
         // Keep the original cached history: a one-message state read must
         // not narrow a later held transcript read.
         const saved = held.view;
+        const state = await this.heldCoordinatorSessionState(input, held.message);
         const savedGeneration = String(saved.identity.sourceGeneration);
         return {
           platform: input.agent,
@@ -5098,7 +5106,7 @@ export class NativeAgentTranscriptProjection {
           messages: saved.messages,
           messageWindow: saved.messageWindow,
           connection: "error",
-          turn: { phase: "idle", error: held.message },
+          turn: state?.turn ?? { phase: "idle", error: held.message },
           interactions: [],
           composerControls: [],
           capabilities: nativeCapabilities(input.agent),

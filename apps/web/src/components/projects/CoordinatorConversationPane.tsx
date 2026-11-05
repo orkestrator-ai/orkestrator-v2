@@ -66,6 +66,12 @@ function sendingHeldReason(
   conversation: CoordinatorConversation,
   platformOff: boolean,
 ): string | undefined {
+  const agent = conversation.agent;
+  if (agent && !snapshot.providerAvailability[agent]?.available) {
+    return platformOff
+      ? `${AGENT_PLATFORM_LABELS[agent]} is turned off. Turn it on to send.`
+      : `${AGENT_PLATFORM_LABELS[agent]} is below the coordinator safety level. Change it to send.`;
+  }
   if (snapshot.workspace.lifecycleState === "paused") {
     return "Coordination is paused. Resume to send.";
   }
@@ -73,12 +79,6 @@ function sendingHeldReason(
     return "The coordinator could not start. Retry to send.";
   }
   if (conversation.startupError) return "This conversation could not start. Retry to send.";
-  const agent = conversation.agent;
-  if (agent && !snapshot.providerAvailability[agent]?.available) {
-    return platformOff
-      ? `${AGENT_PLATFORM_LABELS[agent]} is turned off. Turn it on to send.`
-      : `${AGENT_PLATFORM_LABELS[agent]} is below the coordinator safety level. Change it to send.`;
-  }
   return undefined;
 }
 
@@ -226,7 +226,8 @@ export function CoordinatorConversationPane({
       <AgentMailBanner
         environmentId={data.environmentId}
         tabId={conversation.tabId}
-        agentAvailable={availablePlatforms.length > 0}
+        agentAvailable={conversation.agent ? !providerUnavailable : availablePlatforms.length > 0}
+        deliveryHeldReason={heldReason}
       />
       <div className="relative min-h-0 flex-1">
         <LazyLoadBoundary

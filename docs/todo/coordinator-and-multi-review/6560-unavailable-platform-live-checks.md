@@ -7,7 +7,7 @@ Analysed 2026-11-05 against main at 41f9eb638, with to-do 4881 (reading a conver
 ### Tasks
 
 1. **Turning the platform back on, against a real provider history**: needs a real provider session. Status: open.
-2. **A turn already running when its platform goes off**: decide what the pane should show. Status: open.
+2. **A turn already running when its platform goes off**: running state and Stop implemented with fake-provider coverage; live qualification remains. Status: open.
 
 ### 1. Turning the platform back on, against a real provider history
 
@@ -31,7 +31,7 @@ Analysed 2026-11-05 against main at 41f9eb638, with to-do 4881 (reading a conver
 
 **Problem.** Saving the setting does not stop a running turn, and the held pane then shows it as over.
 
-**Context.** From to-do 4881. `heldCoordinatorSessionState` answers `idle` with nothing parked. Pausing has the same gap, because `setPaused` changes only the workspace state.
+**Context.** From to-do 4881. The original held state always answered `idle`; the review repair now reads activity from an already cached provider and permits Stop against it. Pausing uses the same repair.
 
 **Investigation.** Read in code on 2026-11-05, not seen live. No backend path that reads `coordinatorProviderTiers` or `enabledAgentPlatforms` stops a turn when they change. The activity sweep still observes the conversation, because `coordinatorConversationRunnable` does not consider the platform, so the project's icon can show work while the pane reads as idle. The transcript is the saved tail, so it stops growing until the platform is back. Before 4881 the pane read nothing at all in this state, so the gap is not new, but it is now visible.
 
@@ -47,3 +47,23 @@ Analysed 2026-11-05 against main at 41f9eb638, with to-do 4881 (reading a conver
   - **Leave it as it is.**
     - Pros: no work.
     - Cons: the pane can read as idle while a turn runs.
+
+## Assumptions and decisions
+
+### Task 2: preserve existing work and expose Stop
+
+The review repair leaves existing turns running when settings change, and reads
+activity from the provider already cached in the backend. Stop uses that same
+provider and never resolves a new one while held. This preserves work and
+supports inactive panes and renderer reloads. When no provider is cached, reads
+keep saved idle state; this does not qualify backend-restart recovery of an
+already running bridge. Fake-provider tests cover both platform holds, repeated
+reads, refused new prompts, and Stop. A real running turn still needs live
+qualification under the original no-billed-turn constraint.
+
+### Task 1: prove continuity with recognizable fake history
+
+Both release tests now read the held transcript, release the platform hold,
+ensure the session, then read the live transcript and assert the original
+provider session id and recognizable history. This closes the fake-provider
+coverage gap; it does not replace the real-provider rollout check above.

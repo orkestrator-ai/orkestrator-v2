@@ -55,6 +55,9 @@ async function withHeldConversation(
     storage: StorageService;
     providerStarts: () => number;
     turns: () => number;
+    aborted: () => number;
+    holdAgain: () => Promise<void>;
+    setRunning: (running: boolean) => void;
     mailAttempts: () => number;
     /** Turn the platform back on, or lower the safety level to admit it. */
     release: () => Promise<void>;
@@ -62,6 +65,8 @@ async function withHeldConversation(
 ) {
   let starts = 0;
   let turns = 0;
+  let running = false;
+  let aborted = 0;
   let mailAttempts = 0;
   const stubs = new Map<AgentPlatform, ReturnType<typeof createProviderStub>>();
   await withService(
@@ -72,6 +77,19 @@ async function withHeldConversation(
         const stub =
           stubs.get(input.agent) ??
           createProviderStub(input.agent, {
+            messages: async (id) => [
+              {
+                id: `row-${id.replace("provider-", "")}`,
+                role: "assistant",
+                content: "Saved answer",
+                parts: [],
+              },
+            ],
+            status: async () => (running ? "running" : "idle"),
+            abort: async () => {
+              aborted += 1;
+              running = false;
+            },
             send: async () => {
               turns += 1;
             },
@@ -157,6 +175,16 @@ async function withHeldConversation(
         storage,
         providerStarts: () => starts,
         turns: () => turns,
+        aborted: () => aborted,
+        setRunning: (value) => {
+          running = value;
+        },
+        holdAgain: () =>
+          settings(
+            hold === "platform-off"
+              ? { enabledAgentPlatforms: ["codex"] }
+              : { coordinatorProviderTiers: "enforced" },
+          ),
         mailAttempts: () => mailAttempts,
         release: () =>
           settings(
@@ -288,6 +316,44 @@ describe.each(["platform-off", "safety-level"] as const)(
         dispatchMailInject: async () => ({ outcome: "accepted" }),
       });
 
+    test("a turn started before the hold stays visible and can be stopped without a provider start", async () => {
+      await withHeldConversation(
+        hold,
+        async ({ service, providerStarts, release, holdAgain, setRunning, aborted }) => {
+          const input = held(hold);
+          await release();
+          await service.ensureSession(input);
+          await service.dispatchPrompt({ ...input, requestId: "before-hold", prompt: "Run" });
+          setRunning(true);
+          await holdAgain();
+          const starts = providerStarts();
+          // New reads after an inactive pane or a reload use backend-owned state.
+          for (let read = 0; read < 2; read += 1) {
+            expect(await service.getSessionStateUpdate({ ...input, viewVersion: 1 })).toMatchObject(
+              {
+                status: "snapshot",
+                value: { turn: { phase: "running" } },
+              },
+            );
+            expect(await service.getProjection(input)).toMatchObject({
+              turn: { phase: "running" },
+            });
+          }
+          await expect(
+            service.dispatchPrompt({ ...input, requestId: "while-held", prompt: "Blocked" }),
+          ).rejects.toThrow();
+          expect(await service.stopProjectionSession(input)).toMatchObject({
+            turn: { phase: "idle" },
+          });
+          expect(aborted()).toBe(1);
+          expect(providerStarts()).toBe(starts);
+          expect(await service.getSessionStateUpdate({ ...input, viewVersion: 1 })).toMatchObject({
+            value: { turn: { phase: "idle" } },
+          });
+        },
+      );
+    });
+
     test("says why in what it answers", async () => {
       await withHeldConversation(hold, async ({ service }) => {
         expect(
@@ -371,9 +437,31 @@ describe.each(["platform-off", "safety-level"] as const)(
             await agentMail.drainInjects();
             expect(providerStarts()).toBe(0);
 
+            const before = await service.getTranscriptUpdate({
+              ...held(hold),
+              viewVersion: 1,
+              liveWindow,
+            });
+            expect(before).toMatchObject({
+              status: "snapshot",
+              value: {
+                identity: { providerSessionId: "provider-held" },
+                messages: [{ id: "row-held", content: "Saved answer" }],
+              },
+            });
             await release();
 
-            await service.ensureSession(held(hold));
+            const resumed = await service.ensureSession(held(hold));
+            expect(resumed.providerSessionId).toBe("provider-held");
+            expect(
+              await service.getTranscriptUpdate({ ...held(hold), viewVersion: 1, liveWindow }),
+            ).toMatchObject({
+              status: "snapshot",
+              value: {
+                identity: { providerSessionId: "provider-held" },
+                messages: [{ id: "row-held", content: "Saved answer" }],
+              },
+            });
             expect(providerStarts()).toBeGreaterThan(0);
             expect(
               await service.getSessionStateUpdate({ ...held(hold), viewVersion: 1 }),

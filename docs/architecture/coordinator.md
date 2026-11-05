@@ -97,8 +97,12 @@ is turned off or below the coordinator safety level can be read but not run.
 ensure, both of which resolve a provider, and that is what starts a bridge. It
 still reads, and the backend answers those reads from saved data without
 resolving a provider (`heldCoordinatorConversation`): the transcript from the
-display tail or a cached view, the session state from the session record
-(`idle`, nothing parked), and discovery as `missing`. Enter in the composer
+display tail or a cached view, and discovery as `missing`. State reads consult
+an already cached provider for activity; an existing running or blocked turn
+stays visible and Stop remains available. Stop uses only that cached provider
+while held, so it can interrupt existing work without starting a bridge. No
+cached provider means saved idle state. Held reads do not expose interactions
+or composer controls. Enter in the composer
 says why nothing was sent and keeps the draft. Resume or Retry connects the
 same pane without a remount.
 
@@ -107,7 +111,10 @@ refuses its runtime (`coordinatorPlatformAllowed`), so a sibling on another
 platform keeps running. Its mail waits as a failed conversation's does.
 Turning the platform back on, or changing the safety level, announces a `config`
 change; the panel re-reads its snapshot and the pane connects. The waiting mail
-goes out on the next delivery pass.
+goes out on the next delivery pass. While held, the mail banner states the hold
+reason and withholds Deliver now. An unavailable platform's reason precedes the
+pause reason in the composer, because Resume is refused until that platform is
+allowed again.
 
 ### Workflow record limit and cleanup
 

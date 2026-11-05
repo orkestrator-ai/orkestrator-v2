@@ -133,6 +133,7 @@ import {
 import {
   coordinatorRuntimeUnavailableMessage,
   resolveCoordinatorRuntime,
+  heldCoordinatorConversation,
   coordinatorRuntimeEnvironment,
 } from "./coordinator-runtime.js";
 import type { NativeAgentProviderEnvironment } from "./native-agent-provider.js";
@@ -702,6 +703,8 @@ export class NativeAgentService {
       options,
       ...(this.permissionRules ? { permissionRules: this.permissionRules } : {}),
       catalogs: this.catalogs,
+      cachedProvider: (input) =>
+        this.providerRegistry.cached(providerCacheKey(input.environmentId, input.agent)),
       observedActivity: (sessionKey) => this.launches.observedActivity(sessionKey),
       providerGeneration: (input) =>
         this.providerRegistry.connectionIdentity(
@@ -868,7 +871,7 @@ export class NativeAgentService {
       ...(this.permissionRules ? { permissionRules: this.permissionRules } : {}),
       now: () => this.now(),
       assertProjectionInput: (input) => this.assertProjectionInput(input),
-      resolveProjectionSession: (input) => this.resolveProjectionSession(input),
+      resolveProjectionSession: (input, stopping) => this.resolveProjectionSession(input, stopping),
       provider: (input) => this.provider(input),
       replaceBridgeForWiderPolicy: (input) => this.replaceBridgeForWiderPolicy(input),
       observeProvider: (input) => this.observeProvider(input),
@@ -2739,6 +2742,7 @@ export class NativeAgentService {
 
   private async resolveProjectionSession(
     input: NativeAgentProjectionInput,
+    stopping = false,
   ): Promise<ResolvedProjectionSession | null> {
     this.assertProjectionInput(input);
     const key = nativeAgentSessionStorageKey(
@@ -2749,7 +2753,20 @@ export class NativeAgentService {
     const session = await this.storage.getNativeAgentSession(key);
     if (!session) return null;
     this.assertSessionIdentity(session, input, key);
-    const provider = await this.provider(input);
+    // Stop may reach work already running behind a hold. Never start a bridge
+    // or reopen a provider session just to stop one.
+    const held = stopping && (await heldCoordinatorConversation(this.storage, input.environmentId));
+    if (
+      held &&
+      (held.conversation.agent !== input.agent ||
+        held.conversation.logicalSessionKey !== input.logicalSessionKey)
+    ) {
+      throw new Error("Native agent session key collision");
+    }
+    const provider = held
+      ? this.providerRegistry.cached(providerCacheKey(input.environmentId, input.agent))
+      : await this.provider(input);
+    if (!provider) return null;
     provider.registerSession?.(session.providerSessionId, {
       origin: session.origin,
       interactionPolicy: session.interactionPolicy,

@@ -59,6 +59,7 @@ export interface NativeAgentSessionOperationsHost {
   assertProjectionInput(input: NativeAgentProjectionInput): void;
   resolveProjectionSession(
     input: NativeAgentProjectionInput,
+    stopping?: boolean,
   ): Promise<ResolvedProjectionSession | null>;
   /** Resolve a provider, starting its bridge if needed. */
   provider(input: EnsureNativeAgentSessionInput): Promise<NativeAgentRuntimeProvider>;
@@ -105,7 +106,7 @@ export class NativeAgentSessionOperations {
   private async stopProjectionSessionWithIntent(
     input: NativeAgentProjectionInput,
   ): Promise<NativeAgentSessionProjection | null> {
-    const resolved = await this.host.resolveProjectionSession(input);
+    const resolved = await this.host.resolveProjectionSession(input, true);
     if (!resolved) return null;
     const providerSessionId = resolved.session.providerSessionId;
     // Mark the active turn before stopping it: a stopped turn reads as idle,

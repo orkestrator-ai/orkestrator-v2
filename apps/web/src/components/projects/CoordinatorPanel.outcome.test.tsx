@@ -18,6 +18,7 @@ import * as clipboard from "@/lib/native/clipboard";
 import { dispatchResourceChange } from "@/lib/resource-sync";
 import { onGlobalSettingsRequest } from "@/lib/settings-navigation";
 import { useAppDialogStore } from "@/stores/appDialogStore";
+import { useAgentMailStore } from "@/stores/agentMailStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useNativeComposeStore } from "@/stores/nativeComposeStore";
 import { useProjectStore } from "@/stores/projectStore";
@@ -265,6 +266,7 @@ const unassigned = (conversation: CoordinatorConversation) => ({
 describe("CoordinatorPanel outcome-first wording and banners", () => {
   beforeEach(() => {
     useRealAgentTab = false;
+    useAgentMailStore.setState(useAgentMailStore.getInitialState());
     useUIStore.setState({ coordinatorIntroDismissed: false });
     resetNativeAgentSyncCapabilityForTests();
     useConfigStore.setState({ config: initialConfig });
@@ -944,7 +946,65 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
       expect(ensureSession).not.toHaveBeenCalled();
     });
 
-    test("a pause says so first, because resuming comes before the platform", async () => {
+    test("mail on a platform-held pane waits for settings even with another platform available", async () => {
+      ensuredSnapshot = unavailableCodex("Off.");
+      useConfigStore.getState().updateGlobalConfig({ enabledAgentPlatforms: ["claude"] });
+      const environmentId = "coordinator:coordinator-1:conversation-1";
+      const mailboxId = `${environmentId}\0coordinator-tab`;
+      useAgentMailStore.setState({
+        summary: new Map([
+          [
+            mailboxId,
+            {
+              mailboxId,
+              projectId: "project-1",
+              environmentId,
+              tabId: "coordinator-tab",
+              unreadCount: 1,
+              userUnseenCount: 1,
+              agentUnackedCount: 1,
+              pendingInjectCount: 1,
+              failedInjectCount: 0,
+              revision: 1,
+            },
+          ],
+        ]),
+        refreshSummary: async () => undefined,
+        refreshMailbox: async () => undefined,
+      });
+      render(<CoordinatorPanel projectId="project-1" />);
+      expect(
+        await screen.findByText("Delivery waiting: Codex is turned off. Turn it on to send."),
+      ).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Deliver now" })).toBeNull();
+      expect(screen.getByRole("button", { name: "View" })).toBeTruthy();
+    });
+
+    test.each(["running", "blocked"] as const)(
+      "a held pane keeps Stop available for an existing %s turn after remount",
+      async (phase) => {
+        useRealAgentTab = true;
+        ensuredSnapshot = unavailableCodex("Off.");
+        useConfigStore.getState().updateGlobalConfig({ enabledAgentPlatforms: ["claude"] });
+        agentProjection = { ...projection(), turn: { phase } };
+        const stop = spyOn(realBackend, "stopNativeAgentSession").mockImplementation(async <
+          TMessage,
+        >() => {
+          agentProjection = { ...agentProjection, turn: { phase: "idle" } };
+          return agentProjection as NativeAgentSessionProjection<TMessage>;
+        });
+        const mounted = render(<CoordinatorPanel projectId="project-1" />);
+        await screen.findByTitle("Stop current query");
+        mounted.unmount();
+        render(<CoordinatorPanel projectId="project-1" />);
+        fireEvent.click(await screen.findByTitle("Stop current query"));
+        await waitFor(() => expect(stop).toHaveBeenCalledTimes(1));
+        expect(ensureSession).not.toHaveBeenCalled();
+        stop.mockRestore();
+      },
+    );
+
+    test("an unavailable platform takes precedence over pause until settings allow it", async () => {
       useRealAgentTab = true;
       useConfigStore.getState().updateGlobalConfig({ enabledAgentPlatforms: ["claude"] });
       ensuredSnapshot = withWorkspace(
@@ -954,7 +1014,15 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
       render(<CoordinatorPanel projectId="project-1" />);
       await screen.findByText(/Coordination is paused/);
       expect(placeholder(await screen.findByRole("textbox"))).toBe(
-        "Coordination is paused. Resume to send.",
+        "Codex is turned off. Turn it on to send.",
+      );
+      ensuredSnapshot = withWorkspace({ lifecycleState: "paused" });
+      useConfigStore.getState().updateGlobalConfig({ enabledAgentPlatforms: ["codex", "claude"] });
+      act(() => dispatchResourceChange({ resource: "config", id: "app", revision: 2 }));
+      await waitFor(() =>
+        expect(placeholder(screen.getByRole("textbox"))).toBe(
+          "Coordination is paused. Resume to send.",
+        ),
       );
     });
   });

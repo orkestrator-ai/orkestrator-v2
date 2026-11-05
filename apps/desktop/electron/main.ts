@@ -1254,8 +1254,7 @@ function registerIpc(): void {
     getMainWindow: (event) => ipcContextForEvent(event).window,
     getArtifactHosts: (event) => ipcContextForEvent(event).artifactHosts,
     setRendererDebugLogging: (event, enabled) => {
-      const sender = event.sender ? webContents.fromId(event.sender.id) : undefined;
-      if (sender) rendererDebugTools.report(sender, enabled);
+      rendererDebugTools.reportSender(event, enabled, (id) => webContents.fromId(id));
     },
     ipc: ipcMain,
     clipboardApi: clipboard,

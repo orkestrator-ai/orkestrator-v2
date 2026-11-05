@@ -25,7 +25,7 @@ const browserTimer: UploadTimer = {
  * batch at a time and no more often than every ten seconds. A failed send puts
  * the counts back and waits longer each time, up to five minutes; a backend
  * that predates the command stops the upload for this load. Only a desktop
- * window's own renderer starts this (`renderer-entry.tsx`).
+ * window's own renderer starts this (`renderer-diagnostics.ts`).
  */
 export function startRendererErrorUpload({
   ring,

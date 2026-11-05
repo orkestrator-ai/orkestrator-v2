@@ -256,3 +256,11 @@ receipts still load. `environmentCreationSettledAt` is additive bookkeeping;
 older backends ignore it and conservatively retain and poll those records.
 The refusal must remain for legacy data; peer handling can retire once the
 support floor includes admission identity in every published backend.
+
+### Log detail expiry metadata
+
+A backend that implements log-detail expiry returns `logDetailExpiresAt` for saved
+raised detail, or `logDetailKeepRaised: true` when kept on. Until either is present,
+the renderer does not promise automatic reversion or offer Keep raised. Older
+backends ignore those keys and require the user to lower detail manually. On a
+new backend, saving raised detail supplies the expiry and enables the controls.

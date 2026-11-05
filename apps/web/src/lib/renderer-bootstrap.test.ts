@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { captureLogs, type LogCapture } from "@orkestrator/protocol/testing/log-capture";
 import { bootstrapRenderer } from "./renderer-bootstrap";
+import { startRendererDiagnostics } from "./renderer-diagnostics";
+import { startRendererErrorUpload } from "./renderer-error-upload";
+import { startDesktopRenderer } from "./desktop-startup";
+import { applyRendererLogLevel } from "./debug-log";
 import { rendererErrorRing } from "./renderer-error-ring";
 
 describe("renderer entry bootstrap", () => {
@@ -144,4 +148,53 @@ describe("renderer entry bootstrap", () => {
     expect(JSON.stringify(recorded)).not.toContain("secret");
     expect(emitMarker).not.toHaveBeenCalled();
   });
+});
+
+test("a rejected import still reports debug and uploads content-free failure on the startup screen", async () => {
+  document.body.innerHTML = '<div id="root"></div>';
+  const original = window.orkestrator;
+  const report = mock(async () => true);
+  const invoke = mock(async () => ({}));
+  window.orkestrator = { invoke, window: { setRendererDebugLogging: report } } as never;
+  localStorage.setItem("orkestrator:debug", "1");
+  applyRendererLogLevel();
+  let tick: (() => void) | undefined;
+  let stop: (() => void) | undefined;
+  rendererErrorRing.takeUnsent(Number.MAX_SAFE_INTEGER);
+  try {
+    await bootstrapRenderer({
+      startDiagnostics: () => {
+        stop = startRendererDiagnostics(window, (options) =>
+          startRendererErrorUpload({
+            ...options,
+            timer: {
+              set: (callback) => {
+                tick = callback;
+                return 1;
+              },
+              clear: () => {},
+            },
+          }),
+        );
+      },
+      startDesktop: (options) => startDesktopRenderer({ ...options, connect: async () => "ready" }),
+      loadRenderer: async () => {
+        throw new TypeError("private bundle path");
+      },
+    });
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain("couldn’t connect");
+    expect(report).toHaveBeenCalledWith(true);
+    await tick?.();
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(invoke.mock.calls)).not.toContain("private");
+    expect(invoke.mock.calls[0]).toMatchObject([
+      "record_renderer_errors",
+      { entries: [{ errorClass: "TypeError", boundary: "window" }] },
+    ]);
+  } finally {
+    stop?.();
+    window.orkestrator = original;
+    localStorage.removeItem("orkestrator:debug");
+    applyRendererLogLevel();
+  }
 });

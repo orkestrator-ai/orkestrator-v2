@@ -107,10 +107,9 @@ export const rendererErrorRing = new RendererErrorRing();
 export function rendererErrorRoute(
   scope: {
     location?: { search: string };
-    orkestratorGateway?: { enabled?: boolean };
+    orkestratorGateway?: { enabled?: boolean; desktop?: boolean };
   } = globalThis as never,
 ): RendererErrorRoute {
-  if (scope.orkestratorGateway?.enabled) return "browser";
   try {
     if (new URLSearchParams(scope.location?.search ?? "").get("realm") === "workspace") {
       return "realm";
@@ -118,6 +117,7 @@ export function rendererErrorRoute(
   } catch {
     // An unreadable location is the window's own renderer.
   }
+  if (scope.orkestratorGateway?.enabled && !scope.orkestratorGateway.desktop) return "browser";
   return "window";
 }
 

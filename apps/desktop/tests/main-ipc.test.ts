@@ -1,4 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
+import { createApplicationMenuTemplate } from "../electron/application-menu";
+import type { MenuItemConstructorOptions } from "electron";
+import { RendererDebugTools, type DebugRenderer } from "../electron/renderer-debug-tools";
 import { registerMainIpc } from "../electron/ipc";
 import { MAX_CLIPBOARD_IMAGE_BYTES, type ClipboardItemLike } from "../electron/clipboard";
 import { fixtureTargets } from "@orkestrator/protocol/testing/web-annotations-fixtures";
@@ -19,6 +22,8 @@ function createHarness(
     backend?: { invoke: ReturnType<typeof mock> } | null;
     window?: unknown;
     browserPreviews?: boolean;
+    debugTools?: RendererDebugTools;
+    lookupRenderer?: (id: number) => DebugRenderer | undefined;
   } = {},
 ) {
   const trustedRendererUrl = "file:///app/web/index.html";
@@ -139,7 +144,9 @@ function createHarness(
   const handOverCommandNode = mock(async () => null);
   const forgetConnection = mock(async () => connectionList);
   const openConnectionWindow = mock(async () => undefined);
-  const setRendererDebugLogging = mock((_event: unknown, _enabled: boolean) => undefined);
+  const setRendererDebugLogging = mock((event: { sender?: { id: number } }, enabled: boolean) => {
+    options.debugTools?.reportSender(event, enabled, options.lookupRenderer ?? (() => undefined));
+  });
   const browserPreviewState = {
     tabId: "browser-1",
     url: "http://localhost:3000/",
@@ -206,7 +213,9 @@ function createHarness(
   const invokeFrom = (senderUrl: string, channel: string, ...args: unknown[]) => {
     const handler = handlers.get(channel);
     if (!handler) throw new Error(`missing handler: ${channel}`);
-    return Promise.resolve().then(() => handler({ senderFrame: { url: senderUrl } }, ...args));
+    return Promise.resolve().then(() =>
+      handler({ sender: { id: 7 }, senderFrame: { url: senderUrl } }, ...args),
+    );
   };
   const invoke = (channel: string, ...args: unknown[]) =>
     invokeFrom(trustedRendererUrl, channel, ...args);
@@ -1306,3 +1315,56 @@ test.each(["destroyed", "did-navigate", "explicit"])(
     expect(backend.invoke.mock.calls.every((call) => call[0] === "save_file_draft")).toBe(true);
   },
 );
+
+test("trusted debug IPC resolves webContents, rebuilds menu, and prefers the focused renderer", async () => {
+  let template: MenuItemConstructorOptions[] = [];
+  const menuChanged = mock(() => {
+    template = createApplicationMenuTemplate({
+      platform: "linux",
+      productName: "Orkestrator AI",
+      windows: [],
+      newWindow: () => {},
+      closeTab: () => {},
+      selectWindow: () => {},
+      zoom: () => {},
+      showKeyboardShortcuts: () => {},
+      openSettings: () => {},
+      openDeveloperTools: tools.anyEnabled()
+        ? () => {
+            tools.open([focused, shell]);
+          }
+        : undefined,
+    });
+  });
+  const tools = new RendererDebugTools(menuChanged);
+  const makeRenderer = (id: number): DebugRenderer => ({
+    id,
+    isDestroyed: () => false,
+    openDevTools: mock(() => {}),
+    once: () => {},
+  });
+  const focused = makeRenderer(7);
+  const shell = makeRenderer(3);
+  const lookup = mock((id: number) => (id === 7 ? focused : undefined));
+  const harness = createHarness({ debugTools: tools, lookupRenderer: lookup });
+  await harness.invoke("orkestrator:window:set-renderer-debug", true);
+  expect(lookup).toHaveBeenCalledWith(7);
+  expect(menuChanged).toHaveBeenCalledTimes(1);
+  tools.report(shell, true);
+  const helpItems = template.find((item) => item.label === "Help")!
+    .submenu as MenuItemConstructorOptions[];
+  const openTools = helpItems.find((item) => item.label === "Open Developer Tools")!;
+  expect(openTools).toBeDefined();
+  (openTools.click as () => void)();
+  expect(focused.openDevTools).toHaveBeenCalledTimes(1);
+  expect(shell.openDevTools).not.toHaveBeenCalled();
+  await harness.invoke("orkestrator:window:set-renderer-debug", false);
+  (openTools.click as () => void)();
+  expect(shell.openDevTools).toHaveBeenCalledTimes(1);
+  tools.report(shell, false);
+  expect(menuChanged).toHaveBeenCalledTimes(2);
+  expect(tools.anyEnabled()).toBe(false);
+  const disabledHelp = template.find((item) => item.label === "Help")!
+    .submenu as MenuItemConstructorOptions[];
+  expect(disabledHelp.some((item) => item.label === "Open Developer Tools")).toBe(false);
+});

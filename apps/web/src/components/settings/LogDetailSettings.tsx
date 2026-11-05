@@ -85,7 +85,9 @@ function ExpiryNotice({
   expiresAt,
   keepRaised,
   onKeepRaisedChange,
+  expirySupported,
 }: {
+  expirySupported: boolean;
   value: LogDetail;
   stored: LogDetail;
   expiresAt?: string;
@@ -96,17 +98,19 @@ function ExpiryNotice({
   const expiry = parseLogDetailExpiresAt(expiresAt);
   // An expiry belongs to what is stored; an unsaved change starts a new day.
   const pending = JSON.stringify(stored) !== JSON.stringify(value);
-  const notice = keepRaised
-    ? "Raised detail stays on until you set it back."
-    : expiry !== null && !pending
-      ? `Raised detail goes back to Info at ${formatExpiry(expiry)}. Saving logs to disk is not changed.`
-      : "Raised detail goes back to Info 24 hours after it is saved. Saving logs to disk is not changed.";
+  const notice = !expirySupported
+    ? "Automatic expiry is not confirmed by this backend. Raised detail stays on until you set it back."
+    : keepRaised
+      ? "Raised detail stays on until you set it back."
+      : expiry !== null && !pending
+        ? `Raised detail goes back to Info at ${formatExpiry(expiry)}. Saving logs to disk is not changed.`
+        : "Raised detail goes back to Info 24 hours after it is saved. Saving logs to disk is not changed.";
   return (
     <div className="max-w-xl space-y-2 rounded-lg border border-zinc-800 bg-zinc-900/40 p-3">
       <p className="text-xs text-muted-foreground" data-testid="log-detail-expiry">
         {notice}
       </p>
-      {onKeepRaisedChange ? (
+      {expirySupported && onKeepRaisedChange ? (
         <div className="flex items-center justify-between gap-4">
           <div className="min-w-0">
             <Label htmlFor="log-detail-keep-raised" className="text-sm">
@@ -139,6 +143,7 @@ export function LogDetailSettings({
   stored = value,
   expiresAt,
   keepRaised = false,
+  expirySupported = parseLogDetailExpiresAt(expiresAt) !== null || keepRaised,
   onKeepRaisedChange,
 }: {
   value: LogDetail;
@@ -148,6 +153,7 @@ export function LogDetailSettings({
   /** The backend's `logDetailExpiresAt` for what is saved. */
   expiresAt?: string;
   keepRaised?: boolean;
+  expirySupported?: boolean;
   onKeepRaisedChange?: (keep: boolean) => void;
 }) {
   const areas = useMemo(() => logDetailAreas(), []);
@@ -243,6 +249,7 @@ export function LogDetailSettings({
         </CollapsibleContent>
       </Collapsible>
       <ExpiryNotice
+        expirySupported={expirySupported}
         value={value}
         stored={stored}
         expiresAt={expiresAt}

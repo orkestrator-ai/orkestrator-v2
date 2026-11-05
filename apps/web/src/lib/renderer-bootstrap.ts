@@ -1,6 +1,7 @@
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { startDesktopRenderer } from "./desktop-startup";
 import { emitDesktopStartupMarker } from "./desktop-startup-marker";
+import { startRendererDiagnostics } from "./renderer-diagnostics";
 import { recordRendererFailure } from "./renderer-error-ring";
 
 const log = createLogger("web.window");
@@ -23,6 +24,7 @@ interface RendererBootstrapTarget {
 }
 
 interface RendererBootstrapOptions {
+  startDiagnostics?: typeof startRendererDiagnostics;
   target?: RendererBootstrapTarget;
   startDesktop?: typeof startDesktopRenderer;
   loadRenderer?: () => Promise<RendererModule>;
@@ -31,6 +33,7 @@ interface RendererBootstrapOptions {
 
 /** Install startup diagnostics before loading any module that can mount the application. */
 export async function bootstrapRenderer({
+  startDiagnostics = startRendererDiagnostics,
   target = window,
   startDesktop = startDesktopRenderer,
   loadRenderer = () => import("../renderer-entry"),
@@ -62,8 +65,14 @@ export async function bootstrapRenderer({
   try {
     await startDesktop({
       start: async () => {
-        const { startRenderer } = await loadRenderer();
-        await startRenderer({ reportStartupError });
+        startDiagnostics();
+        try {
+          const { startRenderer } = await loadRenderer();
+          await startRenderer({ reportStartupError });
+        } catch (error) {
+          recordRendererFailure(error, "window");
+          throw error;
+        }
       },
     });
   } finally {

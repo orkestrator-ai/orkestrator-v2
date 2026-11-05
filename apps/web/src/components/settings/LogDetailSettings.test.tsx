@@ -108,6 +108,7 @@ describe("Log Detail privacy and expiry", () => {
       <LogDetailSettings
         value={bridgeDebug}
         onChange={() => {}}
+        expirySupported
         onKeepRaisedChange={onKeepRaisedChange}
       />,
     );
@@ -118,9 +119,19 @@ describe("Log Detail privacy and expiry", () => {
         value={bridgeDebug}
         onChange={() => {}}
         keepRaised
+        expirySupported
         onKeepRaisedChange={onKeepRaisedChange}
       />,
     );
     expect(screen.getByTestId("log-detail-expiry").textContent).toContain("stays on");
   });
+});
+
+test("a backend without expiry metadata makes no automatic reversion promise", () => {
+  render(
+    <LogDetailSettings value={bridgeDebug} onChange={() => {}} onKeepRaisedChange={() => {}} />,
+  );
+  expect(screen.getByTestId("log-detail-expiry").textContent).toContain("not confirmed");
+  expect(screen.getByTestId("log-detail-expiry").textContent).not.toContain("24 hours");
+  expect(screen.queryByRole("switch", { name: "Keep raised log detail on" })).toBeNull();
 });

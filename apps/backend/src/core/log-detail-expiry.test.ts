@@ -199,3 +199,41 @@ describe("the policy service runs the check", () => {
     service.stop();
   });
 });
+
+test("the scheduled check reverts persisted detail and stop prevents future checks", async () => {
+  const storage = await storageIn();
+  await storage.patchGlobalConfig({ logDetail: { level: "debug", areaLevels: {} } });
+  let clock = Date.now();
+  let checks = 0;
+  const service = new LogPolicyService({
+    dataDir: directories.at(-1)!,
+    logging: null,
+    env: {},
+    listRunningBridges: async () => [],
+    now: () => clock,
+    expiryCheckIntervalMs: 10,
+    checkLogDetailExpiry: async (now) => {
+      checks++;
+      return storage.reconcileLogDetailExpiry(now);
+    },
+  });
+  try {
+    service.start();
+    await service.checkLogDetailExpiry();
+    clock += LOG_DETAIL_EXPIRY_MS + 1000;
+    const deadline = Date.now() + 2000;
+    while (
+      (await storage.loadOwnConfig()).global.logDetail?.level !== "info" &&
+      Date.now() < deadline
+    )
+      await Bun.sleep(10);
+    expect((await storage.loadOwnConfig()).global.logDetail?.level).toBe("info");
+    service.stop();
+    await service.checkLogDetailExpiry();
+    const stoppedCount = checks;
+    await Bun.sleep(40);
+    expect(checks).toBe(stoppedCount);
+  } finally {
+    service.stop();
+  }
+});

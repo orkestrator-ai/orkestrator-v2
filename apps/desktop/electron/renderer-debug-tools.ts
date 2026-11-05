@@ -41,6 +41,16 @@ export class RendererDebugTools {
     if (before !== this.anyEnabled()) this.changed();
   }
 
+  /** The trusted IPC adapter resolves the live webContents, never a renderer-supplied id. */
+  reportSender(
+    event: { sender?: { id: number } },
+    enabled: boolean,
+    lookup: (id: number) => DebugRenderer | undefined,
+  ): void {
+    const sender = event.sender ? lookup(event.sender.id) : undefined;
+    if (sender) this.report(sender, enabled);
+  }
+
   anyEnabled(): boolean {
     return this.enabled.size > 0;
   }

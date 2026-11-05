@@ -2451,6 +2451,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
         value={logDetail}
         onChange={setLogDetail}
         stored={resolveLogDetail(global)}
+        expirySupported={!!global.logDetailExpiresAt || global.logDetailKeepRaised === true}
         expiresAt={global.logDetailExpiresAt}
         keepRaised={logDetailKeepRaised}
         onKeepRaisedChange={setLogDetailKeepRaised}

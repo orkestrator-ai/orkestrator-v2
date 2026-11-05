@@ -44,8 +44,10 @@ The same job also runs two repository-wide test guards that need no build: the
 DOM absence scan (`never passes a DOM-producing query result directly to
 toBeNull` in `tests/unit/test-diagnostic-bounds.test.ts`) and the flaky-test
 index check (`tests/unit/flaky-tests-index.test.ts`), so a PR that breaks either
-fails within minutes. Both also stay in `mise run test`. A scan failure is fixed
-with `bun scripts/rewrite-bounded-dom-assertions.ts`.
+fails within minutes. The flaky-test index check also stays in `mise run test`.
+The DOM scan is in the slow tier: run `mise run test:slow` locally, or
+`mise run test:full` as CI does, to include it. A scan failure is fixed with
+`bun scripts/rewrite-bounded-dom-assertions.ts`.
 
 ## What is excluded, and why
 

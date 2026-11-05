@@ -16,9 +16,8 @@ A batch file combines several reports as numbered parts and takes the rating of 
 | --- | --- | --- | --- | --- | --- |
 | 1 | [0490-e25-container-start.md](0490-e25-container-start.md) | Medium | No | **E25, Container start.**<br>`0490`: DK-14: Agent-home inputs are copied in full per environment and again on every start<br>`0500`: DK-13: Each environment clones from the remote again | From `0490`: Every container start copies inputs again, at a size nobody has measured. |
 | 2 | [0160-e10-conditional-reads-and-deltas.md](0160-e10-conditional-reads-and-deltas.md) | Low | No | **E10, Conditional reads and deltas.**<br>`0160`: TX-1: A transcript delta can only be built from the newest cached view<br>`0180`: TX-5: Session-state reads have no conditional path from the bridge<br>`0190`: TX-6: Bridge transcript windows are always sent whole | From `0160`: The report rates it High, but the maintainer gated it on a baseline, so it stays Low until that measurement arrives. |
-| 3 | [0390-gw-7-websocket-compression.md](0390-gw-7-websocket-compression.md) | Low | No | GW-7: No WebSocket message compression | Deferred by 0052 decision D6 until the transport direction is chosen. |
-| 4 | [0560-st-9-agent-mail-store-remainder.md](0560-st-9-agent-mail-store-remainder.md) | Low | No | ST-9 (rest): Agent mail: pending injects and mailbox lists still sit on the whole store | The read cost the finding described has gone, and the rest needs a stored-format change only a measurement could justify. |
-| 5 | [0693-dk-10-second-claude-binary.md](0693-dk-10-second-claude-binary.md) | Low | No | DK-10: The image ships two Claude Code native binaries | It is an optional image-size saving that waits on a maintainer decision. |
+| 3 | [0560-st-9-agent-mail-store-remainder.md](0560-st-9-agent-mail-store-remainder.md) | Low | No | ST-9 (rest): Agent mail: pending injects and mailbox lists still sit on the whole store | The read cost the finding described has gone, and the rest needs a stored-format change only a measurement could justify. |
+| 4 | [0693-dk-10-second-claude-binary.md](0693-dk-10-second-claude-binary.md) | Low | No | DK-10: The image ships two Claude Code native binaries | It is an optional image-size saving that waits on a maintainer decision. |
 
 ## Parallel running
 
@@ -55,9 +54,10 @@ When one of these becomes ready, it joins the lane shown.
 
 | File | Why it waits | Lane |
 | --- | --- | --- |
-| [`0390`](0390-gw-7-websocket-compression.md) | Deferred by 0052 decision D6 | Gateway |
 | [`0693`](0693-dk-10-second-claude-binary.md) | Waits on a maintainer decision | Containers |
 | [`0560`](0560-st-9-agent-mail-store-remainder.md) | Needs a measurement to justify a stored-format change | Storage |
+
+`0390` (GW-7, WebSocket compression) left this table on 2026-11-05: its file is deleted and the work waits in [0052](../../todo/transcripts-and-observation/0052-remote-client-bandwidth.md) task 8, which starts only when the terminal WebSocket becomes the remote terminal transport; see [the closing check of E-0390](#closing-check-of-e-0390-websocket-compression).
 
 ## Status of every efficiency finding
 
@@ -71,7 +71,7 @@ When one of these becomes ready, it joins the lane shown.
 | GW-4 | Done | `SseFrameDecoder` keeps a chunk list and searches only the new text (`packages/protocol/src/gateway-event-stream.ts:162`, #1548 `12289fc56`), though the report's minor `indexOf` sub-fix in `parseSseBlock` (`:96`) was not taken, which leaves that parse linear per frame. |
 | GW-5 | Done | One `Buffer` per frame is written to every client, with its byte count passed to the writer (`apps/backend/src/gateway-events.ts:30`, `apps/backend/src/gateway-support-extra.ts:653`); see 1202 task 11 and the [E18 closing check](#closing-check-of-e18-gateway-events). |
 | GW-6 | Done | `flush` pauses channel frames at a 256 KiB watermark and resumes on the send callback (`apps/backend/src/terminal-websocket-server.ts:945`, `:972`); see 1202 task 11. |
-| GW-7 | Open | No compression option is set (`apps/backend/src/terminal-websocket-server.ts:193-198`), and 0052 D6 defers the work; see 0390. |
+| GW-7 | Open | No compression option is set (`apps/backend/src/terminal-websocket-server.ts:220-229`), and the terminal WebSocket is still opt-in, so 0052 D6 still defers the work. The 0390 file is deleted; the work, its trigger and a Bun loopback probe are in [0052](../../todo/transcripts-and-observation/0052-remote-client-bandwidth.md) task 8. See [the closing check of E-0390](#closing-check-of-e-0390-websocket-compression). |
 | GW-8 | Done | The private-origin proxy reuses pooled connections (`apps/backend/src/preview-http-proxy.ts:160`, `apps/backend/src/preview-upstream-pool.ts`, #1604 `b64242842`). |
 | GW-9 | Done | Compressed and rewritten bodies get a derived ETag that maps back upstream (`apps/backend/src/gateway-proxy.ts:188`, `:397`, `apps/backend/src/gateway-proxy-etag.ts`, #1604 `b64242842`). |
 | GW-10 | No action | Declined on first-load numbers: the rewrite is about 150–190 ms of a 1,754-module, 28 MB first load, a combined regex would save 46–93 ms of that, and a rewriter edit makes every module a full response once. The rewriter is unchanged (`apps/backend/src/gateway-support-extra.ts:569`). See the [E24 closing check](#closing-check-of-e24-gateway-static-and-preview). |
@@ -679,6 +679,17 @@ Checked back on 2026-11-05 on branch `renderer-store-report-cf7c05d19868-r1`, ba
 | 0640 reverted (2 runs) | 0 | 170 | 5.41 to 5.77 ms | 11.2 to 13.5 ms |
 
 Store writes were 0 idle and 160 per window streaming (both tabs) in every variant. Neither revert changes the commit count, and the per-commit differences are within noise. A Bun micro-benchmark of `setProjection` with 128 sessions held: 8.86 to 9.34 µs per write before 0640, 3.97 to 4.17 µs after. For 0510, 1202 task 3 already measured the merge at at most 0.3 ms per update before the fix and 0.03 to 0.06 ms after. Production React and a real bridge's cadence were not measured. The question was whether the work shows in a profile, and at this scale it does not.
+
+## Closing check of E-0390 (WebSocket compression)
+
+`0390-gw-7-websocket-compression.md` was checked back against the code on 2026-11-05 and deleted. Base commit `cbe0f9a5b`; its last version is the parent of the commit that deleted it. GW-7 in the table above summarises this. No compression code was added, and no new to-do was needed: [0052](../../todo/transcripts-and-observation/0052-remote-client-bandwidth.md) task 8 already owned the work and now carries the report's requirements.
+
+| Task | Outcome | Code, evidence or to-do |
+| --- | --- | --- |
+| 1. Prototype `permessage-deflate` if the WebSocket becomes the bulk transport | Still deferred: the condition is not met | The finding holds: `TerminalWebSocketGateway` sets no `perMessageDeflate` (`terminal-websocket-server.ts:220-229`). The WebSocket is used only when `terminalTransport` or the `orkestrator-terminal-transport` key selects it (`web-gateway.ts:177-184`); the shared terminal stream (GW-3) is SSE and local windows pin `http-sse`. 0052 task 2 is open and task 5 left the terminal transport unchanged, so D6 is not reopened. Trigger and requirements: 0052 task 8. |
+| Decision: none here (0052 D6) | Not reopened | Recorded in 0052, "Task 8: GW-7 re-check from efficiency report 0390". |
+| Requirement: about 1 KB threshold, bounded memory, check under Bun's `ws` | Bun check done; the rest carried to 0052 task 8 | Under Bun the bare `ws` import is Bun's built-in module, not the 8.22.0 pin. A loopback probe on Bun 1.4.4 through `handleUpgrade` negotiated the extension, left 64 B and 900 B messages uncompressed at a 1,024 B threshold, cut synthetic build output 16 KiB to 1,650 B and 64 KiB to 6,159 B, grew random 64 KiB by 1 %, and cost about 30 ms of extra send CPU per MB (911–993 ms against 37–57 ms for 29.7 MB). Per-socket zlib memory under Bun was not measured, so the byte bound stays a requirement in task 8. |
+| Constraint: every compression buffer has byte and count bounds | Carried to 0052 task 8 | Task 8's requirement 2. |
 
 ## Closing check of 0385 (TX-10, joined history pages)
 

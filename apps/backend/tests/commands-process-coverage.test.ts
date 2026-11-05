@@ -763,7 +763,11 @@ describe("process and platform command behavior", () => {
       ["container-a", "alpha"],
       ["container-b", "beta"],
     ]);
-    expect(await readCommandLog()).not.toContain(
+    // An earlier test's create prunes its input revisions in the background, by owner.
+    const listings = (await readCommandLog())
+      .split("\n")
+      .filter((line) => !line.includes("orkestrator-inputs-revision"));
+    expect(listings.join("\n")).not.toContain(
       `--filter label=orkestrator-owner=${dockerOwnerNamespace(root)} --format`,
     );
     expect(

@@ -896,6 +896,155 @@ describe("remote detail reads", () => {
       },
     );
   });
+
+  /*
+   * An evicted provider-held reference (0110). A raw `sync-v1` refresh cannot
+   * rebuild one, and the summary provider here throws on that path, so each
+   * test also proves no raw transcript read was made.
+   */
+  describe("after eviction", () => {
+    async function liveView(service: { getTranscriptUpdate: (input: never) => Promise<unknown> }) {
+      const update = (await service.getTranscriptUpdate({
+        ...identity,
+        viewVersion: 1,
+        liveWindow,
+        forceSnapshot: true,
+      } as never)) as {
+        status: string;
+        value: { messages: TestMessage[]; historyCursor?: string };
+      };
+      if (update.status !== "snapshot") throw new Error("expected a snapshot");
+      return update.value;
+    }
+
+    test("remote references are told apart from inline ones", async () => {
+      const history = heavyHistory(1);
+      history.messages[0]!.parts.push({
+        type: "tool-invocation",
+        content: "Run",
+        sourcePartId: "m0:1",
+        toolUseId: "call-small",
+        toolOutput: "short",
+      });
+      const { stub } = summaryProvider(history);
+      await withService(
+        { prefix: "orkestrator-summary-ref-kinds-", provider: async () => stub.provider },
+        async ({ service }) => {
+          await service.ensureSession(identity);
+          const [remote, inline] = (await liveView(service)).messages[0]!.parts;
+          expect(remote!.detailRef).toMatch(/^r[0-9a-f]{32}$/);
+          expect(inline!.detailRef).toMatch(/^[0-9a-f]{32}$/);
+        },
+      );
+    });
+
+    test("a row in the live window is registered again from the row cache, with no read", async () => {
+      const history = heavyHistory(3);
+      const { stub, legacyMessages, interactiveSnapshot } = summaryProvider(history);
+      await withService(
+        { prefix: "orkestrator-summary-evicted-live-", provider: async () => stub.provider },
+        async ({ service }) => {
+          await service.ensureSession(identity);
+          const detailRef = (await liveView(service)).messages[1]!.parts[0]!.detailRef as string;
+          projectionInternals(service).evictToolDetails();
+          const reads = stub.transcriptSnapshot!.mock.calls.length;
+          const details = await service.getProjectionToolDetails({ ...identity, detailRef });
+          expect(details.toolOutput).toBe(history.messages[1]!.parts[0]!.toolOutput as string);
+          expect(stub.transcriptSnapshot!.mock.calls.length).toBe(reads);
+          expect(legacyMessages).not.toHaveBeenCalled();
+          expect(interactiveSnapshot).not.toHaveBeenCalled();
+        },
+      );
+    });
+
+    test("a row of a cached page is registered again from the page cache", async () => {
+      const history = heavyHistory(250);
+      const { stub, legacyMessages, interactiveSnapshot } = summaryProvider(history);
+      await withService(
+        { prefix: "orkestrator-summary-evicted-page-", provider: async () => stub.provider },
+        async ({ service }) => {
+          await service.ensureSession(identity);
+          const before = (await liveView(service)).historyCursor!;
+          const page = await service.getMessagePage({ ...identity, syncVersion: 1, before });
+          const row = page.messages[10] as TestMessage;
+          const internals = projectionInternals(service);
+          internals.evictToolDetails();
+          internals.projectedMessages.clear();
+          const reads = stub.transcriptSnapshot!.mock.calls.length;
+          const details = await service.getProjectionToolDetails({
+            ...identity,
+            detailRef: row.parts[0]!.detailRef as string,
+          });
+          expect(details.toolOutput).toBe(
+            history.messages.find((entry) => entry.id === row.id)!.parts[0]!.toolOutput as string,
+          );
+          expect(stub.transcriptSnapshot!.mock.calls.length).toBe(reads);
+          expect(legacyMessages).not.toHaveBeenCalled();
+          expect(interactiveSnapshot).not.toHaveBeenCalled();
+        },
+      );
+    });
+
+    test("with nothing kept, a summary read of the live window recreates it", async () => {
+      const history = heavyHistory(3);
+      const { stub, legacyMessages, interactiveSnapshot } = summaryProvider(history);
+      await withService(
+        { prefix: "orkestrator-summary-evicted-reread-", provider: async () => stub.provider },
+        async ({ service }) => {
+          await service.ensureSession(identity);
+          const detailRef = (await liveView(service)).messages[2]!.parts[0]!.detailRef as string;
+          const internals = projectionInternals(service);
+          internals.evictToolDetails();
+          internals.projectedMessages.clear();
+          const reads = stub.transcriptSnapshot!.mock.calls.length;
+          const details = await service.getProjectionToolDetails({ ...identity, detailRef });
+          expect(details.toolOutput).toBe(history.messages[2]!.parts[0]!.toolOutput as string);
+          // One summary read, with the window the view was read with.
+          expect(stub.transcriptSnapshot!.mock.calls.length).toBe(reads + 1);
+          expect(stub.transcriptSnapshot!.mock.calls.at(-1)![1]).toMatchObject({
+            limit: liveWindow.messages,
+            targetBytes: liveWindow.targetBytes,
+            representation: "summary",
+          });
+          expect(legacyMessages).not.toHaveBeenCalled();
+          expect(interactiveSnapshot).not.toHaveBeenCalled();
+        },
+      );
+    });
+
+    test("an older row held nowhere asks for a reload, without a raw read", async () => {
+      const history = heavyHistory(250);
+      const { stub, legacyMessages, interactiveSnapshot } = summaryProvider(history);
+      await withService(
+        { prefix: "orkestrator-summary-evicted-gone-", provider: async () => stub.provider },
+        async ({ service }) => {
+          await service.ensureSession(identity);
+          const before = (await liveView(service)).historyCursor!;
+          const page = await service.getMessagePage({ ...identity, syncVersion: 1, before });
+          const detailRef = (page.messages[10] as TestMessage).parts[0]!.detailRef as string;
+          const internals = projectionInternals(service);
+          internals.evictToolDetails();
+          internals.projectedMessages.clear();
+          internals.directHistoryPages.clear();
+          await expect(
+            service.getProjectionToolDetails({ ...identity, detailRef }),
+          ).rejects.toThrow("Reload the conversation");
+          expect(legacyMessages).not.toHaveBeenCalled();
+          expect(interactiveSnapshot).not.toHaveBeenCalled();
+          // Loading the page again makes it resolvable, as the message says.
+          const again = await service.getMessagePage({ ...identity, syncVersion: 1, before });
+          const ref = (again.messages[10] as TestMessage).parts[0]!.detailRef as string;
+          expect(ref).toBe(detailRef);
+          expect(
+            (await service.getProjectionToolDetails({ ...identity, detailRef })).toolOutput,
+          ).toBe(
+            history.messages.find((entry) => entry.id === (again.messages[10] as TestMessage).id)!
+              .parts[0]!.toolOutput as string,
+          );
+        },
+      );
+    });
+  });
 });
 
 describe("direct history page cache", () => {

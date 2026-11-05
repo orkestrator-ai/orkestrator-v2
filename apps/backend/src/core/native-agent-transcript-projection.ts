@@ -84,6 +84,12 @@ import { coordinatorIdFromRuntimeId } from "@orkestrator/protocol/coordinator";
 import { openCoordinatorConversation } from "./coordinator-runtime.js";
 import { type CommandCatalogueSnapshot } from "./native-agent-command-catalogue.js";
 import {
+  findRemoteDetailRegistration,
+  isRemoteDetailRef,
+  recoveryLiveWindow,
+  REMOTE_DETAIL_REF_PREFIX,
+} from "./native-agent-remote-detail-recovery.js";
+import {
   nativeAsyncQuestionItemId,
   NATIVE_AGENT_PROGRESSIVE_VIEW_VERSION,
   NATIVE_AGENT_REVISED_MESSAGES_MAX,
@@ -300,6 +306,20 @@ type ProgressiveTranscriptEntry = {
   ledgerRevisedIds?: readonly string[];
 };
 
+/** One deferred detail: an inline body, an image path or a provider locator. */
+type ToolDetailCacheEntry = {
+  sessionKey: string;
+  details: NativeAgentToolDetails;
+  bytes: number;
+  /** Exact provider-reported image path; never supplied by the renderer. */
+  localImagePath?: string;
+  /**
+   * A provider-held body behind a summary locator, fetched on first
+   * expansion. `resolved` once `details` holds the exact body.
+   */
+  remote?: { providerSessionId: string; locator: string; resolved: boolean };
+};
+
 type ProgressiveHydrationEntry = {
   sourceToken: string;
   snapshot?: ProviderTranscriptSnapshot;
@@ -437,21 +457,7 @@ export class NativeAgentTranscriptProjection {
    */
   private readonly projectionMissingSince = new Map<string, number>();
   /** Heavy, reconstructible fields omitted from ordinary renderer snapshots. */
-  private readonly toolDetailCache = new Map<
-    string,
-    {
-      sessionKey: string;
-      details: NativeAgentToolDetails;
-      bytes: number;
-      /** Exact provider-reported image path; never supplied by the renderer. */
-      localImagePath?: string;
-      /**
-       * A provider-held body behind a summary locator, fetched on first
-       * expansion. `resolved` once `details` holds the exact body.
-       */
-      remote?: { providerSessionId: string; locator: string; resolved: boolean };
-    }
-  >();
+  private readonly toolDetailCache = new Map<string, ToolDetailCacheEntry>();
   /** Entries temporarily protected while an authoritative refresh recreates them. */
   private readonly pinnedToolDetailRefs = new Set<string>();
   private toolDetailCacheBytes = 0;
@@ -865,10 +871,14 @@ export class NativeAgentTranscriptProjection {
     partPath: string,
     remote: { providerSessionId: string; locator: string },
   ): string {
-    const detailRef = createHash("sha256")
-      .update(`remote\0${sessionKey}\0${messageId}\0${partPath}\0${remote.locator}`)
-      .digest("hex")
-      .slice(0, 32);
+    // The prefix tells a miss on this reference from one on an inline body,
+    // whose recovery differs (`getProjectionToolDetails`).
+    const detailRef =
+      REMOTE_DETAIL_REF_PREFIX +
+      createHash("sha256")
+        .update(`remote\0${sessionKey}\0${messageId}\0${partPath}\0${remote.locator}`)
+        .digest("hex")
+        .slice(0, 32);
     this.detailRegistrations?.push({
       ref: detailRef,
       remote: {
@@ -4224,6 +4234,67 @@ export class NativeAgentTranscriptProjection {
     return details;
   }
 
+  /**
+   * Register an evicted provider-held reference again (0110). A raw `sync-v1`
+   * refresh cannot: raw rows carry no locator, so it would read the whole
+   * transcript and still mint only inline references. Instead, in order:
+   *
+   * 1. the registration a cached row or direct history page kept, with no read;
+   * 2. a summary read of the session's live window, which re-projects its rows.
+   *
+   * A row in neither place is gone until its page is loaded again; the caller
+   * says so rather than retrying.
+   */
+  private async recoverRemoteToolDetails(
+    input: NativeAgentProjectionInput & { detailRef: string },
+    sessionKey: string,
+  ): Promise<ToolDetailCacheEntry | undefined> {
+    const reregister = () => {
+      const now = this.host.now();
+      const registration = findRemoteDetailRegistration(input.detailRef, [
+        ...this.projectedMessages.sessionDetails(sessionKey),
+        ...Array.from(
+          this.directHistoryPages.sessionValues(sessionKey, now),
+          (page) => page.details,
+        ),
+      ]);
+      if (!registration) return undefined;
+      const sink = this.detailRegistrations;
+      this.detailRegistrations = undefined;
+      try {
+        this.cacheRemoteToolDetails(sessionKey, registration.messageId, registration.partPath, {
+          providerSessionId: registration.providerSessionId,
+          locator: registration.locator,
+        });
+      } finally {
+        this.detailRegistrations = sink;
+      }
+      return this.toolDetailCache.get(input.detailRef);
+    };
+    const kept = reregister();
+    if (kept) return kept;
+    const liveWindow = recoveryLiveWindow(this.progressiveTranscriptCache.keys(), sessionKey);
+    const update = {
+      environmentId: input.environmentId,
+      agent: input.agent,
+      logicalSessionKey: input.logicalSessionKey,
+      viewVersion: NATIVE_AGENT_PROGRESSIVE_VIEW_VERSION,
+      liveWindow,
+      forceSnapshot: true,
+    } as const;
+    // Without its source token the read cannot be answered "unchanged", which
+    // would keep the view without projecting (and so registering) its rows.
+    const key = this.progressiveKey(
+      update,
+      `transcript:${liveWindow.messages}:${liveWindow.targetBytes}`,
+    );
+    const cached = this.progressiveTranscriptCache.get(key);
+    if (cached?.sourceToken)
+      this.progressiveTranscriptCache.set(key, { ...cached, sourceToken: undefined });
+    await this.getTranscriptUpdate(update).catch(() => undefined);
+    return this.toolDetailCache.get(input.detailRef) ?? reregister();
+  }
+
   async getProjectionToolDetails(
     input: NativeAgentProjectionInput & { detailRef: string },
   ): Promise<NativeAgentToolDetails> {
@@ -4237,24 +4308,33 @@ export class NativeAgentTranscriptProjection {
       input.logicalSessionKey,
     );
     let entry = this.toolDetailCache.get(input.detailRef);
+    const remote = isRemoteDetailRef(input.detailRef);
     if (!entry || entry.sessionKey !== sessionKey) {
       this.pinnedToolDetailRefs.add(input.detailRef);
       try {
-        // Rebuild details from the bounded retained history as well as the
-        // live tail. Otherwise expanding an older paged row after detail-cache
-        // eviction could never make its reference resolvable again.
-        await this.refreshProjection(
-          { ...input, messageLimit: NATIVE_SYNC_LIVE_MESSAGES, representation: "sync-v1" },
-          true,
-        );
-        entry = this.toolDetailCache.get(input.detailRef);
+        if (remote) {
+          entry = await this.recoverRemoteToolDetails(input, sessionKey);
+        } else {
+          // Rebuild details from the bounded retained history as well as the
+          // live tail. Otherwise expanding an older paged row after detail-cache
+          // eviction could never make its reference resolvable again.
+          await this.refreshProjection(
+            { ...input, messageLimit: NATIVE_SYNC_LIVE_MESSAGES, representation: "sync-v1" },
+            true,
+          );
+          entry = this.toolDetailCache.get(input.detailRef);
+        }
       } finally {
         this.pinnedToolDetailRefs.delete(input.detailRef);
         this.pruneToolDetailCache();
       }
     }
     if (!entry || entry.sessionKey !== sessionKey) {
-      throw new Error("Native agent tool details are no longer available");
+      throw new Error(
+        remote
+          ? "Native agent tool details are no longer available. Reload the conversation to show them again."
+          : "Native agent tool details are no longer available",
+      );
     }
     this.toolDetailCache.delete(input.detailRef);
     this.toolDetailCache.set(input.detailRef, entry);

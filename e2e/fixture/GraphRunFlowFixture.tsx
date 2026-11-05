@@ -1,14 +1,63 @@
-import { useLayoutEffect, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { GraphRunTab } from "../../apps/web/src/components/graph-run/GraphRunTab";
-import { act, runOf } from "../../apps/web/src/components/graph-run/graph-run.test-fixtures";
+import {
+  act,
+  agentSession,
+  FIXTURE_AT,
+  runOf,
+} from "../../apps/web/src/components/graph-run/graph-run.test-fixtures";
 import { useGraphRunStore } from "../../apps/web/src/stores/graphRunStore";
 
-/** Real run view and renderer; only snapshot transport is replaced. */
+function transcriptEntries(count: number) {
+  return Array.from({ length: count }, (_, index) => ({
+    id: `plan-${index + 1}`,
+    role: "assistant",
+    parts: [
+      {
+        type: "text",
+        content: `Transcript entry ${index + 1}. ${"This line gives the transcript enough height to scroll. ".repeat(6)}`,
+      },
+    ],
+  }));
+}
+
+/** What the run record holds for a stored transcript of `count` messages. */
+function transcriptReference(count: number) {
+  return {
+    version: 1 as const,
+    sdkSessionId: "provider-session-1",
+    manifestRevision: count,
+    revision: count,
+    messageCount: count,
+    bytes: 1,
+    complete: true,
+    committedAt: FIXTURE_AT,
+  };
+}
+
+/**
+ * Real run view and renderer; only snapshot transport is replaced.
+ * `?longTranscript` gives the running node a transcript that overflows its inspector.
+ */
 export function GraphRunFlowFixture() {
   const [isActive, setIsActive] = useState(true);
+  const [longTranscript] = useState(() =>
+    new URLSearchParams(window.location.search).has("longTranscript"),
+  );
+  const transcriptLength = useRef(40);
   const [initialRun] = useState(() =>
     runOf("multi-review", {
-      activations: [act({ nodeId: "plan" }, { state: "running" })],
+      activations: [
+        act(
+          { nodeId: "plan" },
+          {
+            state: "running",
+            ...(longTranscript
+              ? { session: agentSession({ transcript: transcriptReference(40) }) }
+              : {}),
+          },
+        ),
+      ],
     }),
   );
   useLayoutEffect(() => {
@@ -19,6 +68,16 @@ export function GraphRunFlowFixture() {
           return {
             status: "changed",
             run: useGraphRunStore.getState().runs.get(initialRun.id)?.run ?? initialRun,
+          } as T;
+        }
+        if (command === "graph_run_transcript") {
+          return {
+            status: "found",
+            messages: transcriptEntries(transcriptLength.current),
+            startIndex: 0,
+            messageCount: transcriptLength.current,
+            revision: transcriptLength.current,
+            complete: true,
           } as T;
         }
         return undefined as T;
@@ -52,6 +111,26 @@ export function GraphRunFlowFixture() {
         >
           Advance graph run
         </button>
+        {longTranscript ? (
+          <button
+            onClick={() => {
+              transcriptLength.current += 1;
+              const run = useGraphRunStore.getState().runs.get(initialRun.id)?.run ?? initialRun;
+              useGraphRunStore.getState().applyRun({
+                ...run,
+                revision: run.revision + 1,
+                activations: run.activations.map((activation) => ({
+                  ...activation,
+                  session: agentSession({
+                    transcript: transcriptReference(transcriptLength.current),
+                  }),
+                })),
+              });
+            }}
+          >
+            Append transcript entry
+          </button>
+        ) : null}
       </div>
       <div hidden={!isActive} className="relative flex min-h-0 flex-1 flex-col">
         <GraphRunTab

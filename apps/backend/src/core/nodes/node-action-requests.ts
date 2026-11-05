@@ -34,10 +34,10 @@ import type { ProjectHomeMessage } from "@orkestrator/protocol/project-home-mess
  *   Settings switch uses. It changes which subscription pays for every new
  *   turn there, so it needs the user unless a self-timer carries their
  *   permission or the user turned on the standing permission in Settings
- *   (see `control-mcp-account-tools.ts`). A switch under the standing
- *   permission is recorded here as a request that ran without a decision
- *   (`authorizedBy: "standing-grant"`, `runUnattended`), so the user can see
- *   it afterwards, and the hourly limit counts those records.
+ *   (see `control-mcp-account-tools.ts`). A switch under either permission is
+ *   recorded here as a request that ran without a decision (`authorizedBy`
+ *   `"standing-grant"` or `"self-timer"`, `runUnattended`), so the user can
+ *   see it afterwards; the hourly limit counts only the standing permission's.
  * - `answer-worker-question`: answer a question a worker on one node is
  *   waiting on, with the answer the coordinator proposed or the user's edit
  *   of it, through the same `resolve_native_agent_interaction` the worker's
@@ -101,6 +101,8 @@ export interface NodeActionTarget {
   previousAccountLabel?: string;
 }
 
+export type NodeActionAuthorization = "standing-grant" | "self-timer";
+
 export type NodeActionState =
   | "pending"
   | "approved"
@@ -126,10 +128,14 @@ export interface NodeActionRequest {
   /** `message-project-home`: the message held for the user's approval. */
   projectHomeMessage?: ProjectHomeMessage;
   /**
-   * Ran without a decision because the user granted it in advance in
-   * Settings. Such a record is created already approved and is never pending.
+   * Ran without a decision because the user granted it in advance: in
+   * Settings (`standing-grant`), or in their own turn on the self-timer that
+   * woke the coordinator (`self-timer`). Such a record is created already
+   * approved and is never pending.
    */
-  authorizedBy?: "standing-grant";
+  authorizedBy?: NodeActionAuthorization;
+  /** `self-timer`: the timer and the user's words its permission carries. */
+  selfTimer?: { scheduleId: string; userInstruction: string; grantedAt: string };
   /** The requesting coordinator's display name, for records the user reads later. */
   coordinatorName?: string;
   /** Why the user is asked although a standing permission exists (its limit). */
@@ -252,7 +258,7 @@ export class NodeActionRequests {
     }
     let interrupted = false;
     for (const request of this.requests) {
-      if (request.authorizedBy === "standing-grant" && request.state === "approved") {
+      if (request.authorizedBy && request.state === "approved") {
         request.state = "outcome-unknown";
         request.result = {
           code: "interrupted",
@@ -345,6 +351,10 @@ export class NodeActionRequests {
    *
    * A `requestId` already used returns that request as it is, whether it ran
    * unattended or is an ordinary request the user was asked about.
+   *
+   * `authorizedBy` defaults to the standing permission, the only one with a
+   * limit; a self-timer's permission is one switch the user asked for, so it
+   * passes no limit and is not counted against the standing permission's.
    */
   async runUnattended(
     input: {
@@ -354,8 +364,10 @@ export class NodeActionRequests {
       requestedBy: NodeActionRequest["requestedBy"];
       reason?: string;
       coordinatorName?: string;
+      authorizedBy?: NodeActionAuthorization;
+      selfTimer?: NodeActionRequest["selfTimer"];
     },
-    limit: { count: number; windowMs: number; scope(request: NodeActionRequest): boolean },
+    limit: { count: number; windowMs: number; scope(request: NodeActionRequest): boolean } | null,
   ): Promise<{ request: NodeActionRequest; ran: boolean } | { overLimit: { recent: number } }> {
     if (!input.requestId.trim() || input.requestId.length > 256)
       throw new Error("Expected a requestId of 1-256 characters");
@@ -376,21 +388,27 @@ export class NodeActionRequests {
       return { request: structuredClone(existing), ran: false };
     }
     this.requests = this.retain(this.requests);
-    if (limit.windowMs > SWITCH_WINDOW_MS) throw new Error("Unsupported allowance window.");
+    const authorizedBy = input.authorizedBy ?? "standing-grant";
+    if (authorizedBy === "standing-grant" && !limit)
+      throw new Error("The standing permission is always limited.");
+    if (limit && limit.windowMs > SWITCH_WINDOW_MS)
+      throw new Error("Unsupported allowance window.");
     if (
       this.requests.filter((request) => request.authorizedBy === "standing-grant").length >=
       MAX_PROTECTED_REQUESTS
     )
       throw new Error("Switch history capacity reached; try again later.");
     const now = this.now();
-    const recent = this.requests.filter(
-      (request) =>
-        request.authorizedBy === "standing-grant" &&
-        request.state !== "failed" &&
-        now - Date.parse(request.createdAt) < limit.windowMs &&
-        limit.scope(request),
-    ).length;
-    if (recent >= limit.count) return { overLimit: { recent } };
+    if (limit) {
+      const recent = this.requests.filter(
+        (request) =>
+          request.authorizedBy === "standing-grant" &&
+          request.state !== "failed" &&
+          now - Date.parse(request.createdAt) < limit.windowMs &&
+          limit.scope(request),
+      ).length;
+      if (recent >= limit.count) return { overLimit: { recent } };
+    }
     const at = new Date(now).toISOString();
     const request: NodeActionRequest = {
       requestId: input.requestId,
@@ -398,7 +416,16 @@ export class NodeActionRequests {
       targets: input.targets.map((target) => ({ ...target })),
       requestedBy: { ...input.requestedBy },
       ...(input.reason ? { reason: input.reason.slice(0, 500) } : {}),
-      authorizedBy: "standing-grant",
+      authorizedBy,
+      ...(authorizedBy === "self-timer" && input.selfTimer
+        ? {
+            selfTimer: {
+              scheduleId: input.selfTimer.scheduleId.slice(0, 100),
+              userInstruction: input.selfTimer.userInstruction.slice(0, 500),
+              grantedAt: input.selfTimer.grantedAt.slice(0, 64),
+            },
+          }
+        : {}),
       ...(input.coordinatorName ? { coordinatorName: input.coordinatorName.slice(0, 120) } : {}),
       createdAt: at,
       expiresAt: at,

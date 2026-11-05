@@ -193,6 +193,12 @@ export interface DispatchNativeAgentPromptInput extends EnsureNativeAgentSession
    * resolve typed commands, every other origin is literal.
    */
   command?: NativeAgentCommandIntent;
+  /**
+   * The IANA zone of the renderer that sent this prompt. A coordinator
+   * conversation records it as the user's zone when the user started the turn
+   * (`CoordinatorWorkspace.userTimeZone`); nothing else reads it.
+   */
+  clientTimeZone?: string;
 }
 
 export type MailInjectDispatchOutcome =

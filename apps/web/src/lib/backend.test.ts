@@ -1,3 +1,4 @@
+import { hostTimeZone } from "@orkestrator/protocol/schedule-time";
 import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import type { AppConfig } from "@/types";
 import type { BackendId } from "@orkestrator/protocol/federation";
@@ -1718,7 +1719,10 @@ describe("backend native agent and review workflow wrappers", () => {
       requestId: "request-stable",
       error: "response was lost",
     });
-    expect(invokeMock).toHaveBeenLastCalledWith("dispatch_native_agent_intent", input);
+    expect(invokeMock).toHaveBeenLastCalledWith("dispatch_native_agent_intent", {
+      ...input,
+      clientTimeZone: hostTimeZone(),
+    });
   });
 
   test("maps every multi review command and spreads the launch intent", async () => {

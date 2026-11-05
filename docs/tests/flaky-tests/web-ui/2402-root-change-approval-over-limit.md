@@ -27,3 +27,21 @@ Final aggregate counts: desktop 1,580 pass / 16 skip / 2 fail; backend
 13,138 pass / 97 skip / 3 fail; web 11,230 pass / 10 skip / 7 fail; root
 3,418 pass / 3 fail. Bridges and Codex protocol verification passed.
 The aggregate exited 1 after 1,152.1 seconds; no watchdog or output limit fired.
+
+## Usage-limit review recurrence — 2026-11-05
+
+`mise run test:logged -- --name address-default-rerun -- mise run test`
+repeated `root-change approval handles over-limit and still permits rejection` at 5359.63 ms against the 5000 ms deadline.
+The workspace group reserved six slots (backend up to four workers, web two)
+beside the one-worker root and two-worker bridge groups on the shared Linux
+host. The aggregate queued for about 740 s. The package reported 12496 passed, 10 skipped and one failed across 833 web files (754.86 s).
+
+The unchanged owning file passed alone in 8.1 s (exit zero):
+
+```sh
+mise run test:logged -- --name address-node-requests-rerun -- bun test --cwd apps/web ./src/components/federation/node-action-requests.test.tsx --parallel=1 --only-failures
+```
+
+Evidence: `/tmp/orkestrator-test-run.NrGGXS/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`. Passing owner output was removed by the logged runner.
+This confirms another aggregate-only occurrence; scheduling pressure remains a
+hypothesis, not a proven cause. No assertion, timeout or skip was changed.

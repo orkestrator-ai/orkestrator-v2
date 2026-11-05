@@ -1900,7 +1900,10 @@ published under a line tag (electron-builder 26 publishes under `v26`).
   every later change regenerates lockfiles with the Bun `mise.toml` pins. Bun is
   pinned in `mise.toml`, root `packageManager`, `packages/cli` `engines`,
   `scripts/download-bun.sh` (version and four SHA-256s; this Bun ships inside
-  the desktop app), both `oven/bun` base images and version checks in
+  the desktop app), the site's `apps/web-public/public/install.sh`
+  (`PINNED_BUN` and nine SHA-256s from the release's `SHASUMS256.txt`: the
+  four above plus the `-baseline` and `-musl` archives; this Bun is what a new
+  standalone host gets, and the change deploys with the site), both `oven/bun` base images and version checks in
   `docker/Dockerfile`, and the `@types/bun` ranges. `version-drift.test.ts`
   enforces them, `mise run docker:check-base` resolves the new base digest,
   and `.github/workflows/validate-bun-runtime.yml` runs on the change.

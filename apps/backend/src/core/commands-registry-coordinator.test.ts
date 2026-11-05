@@ -8,7 +8,10 @@ import { ProjectGitService } from "./project-git-service.js";
 import { CoordinatorService } from "./coordinator-service.js";
 import { createEnvironment, createProject, StorageService } from "./storage.js";
 import { runCommand } from "./shell.js";
-import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
+import {
+  COORDINATOR_REQUEST_ID_REUSED_ERROR,
+  coordinatorRuntimeId,
+} from "@orkestrator/protocol/coordinator";
 import { nativeAgentSessionStorageKey } from "./native-agent-service.js";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import {
@@ -23,7 +26,6 @@ import { MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS } from "./coordinator-workflow-re
 import { seedStore, readStoredValue } from "./storage-test-support.js";
 import { multiReviewInputWithDefaults } from "./coordinator-launch-defaults.js";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
-import { __testing as __seedTesting } from "./host-model-catalog-seed.js";
 
 describe("coordinator command registry", () => {
   let root: string;
@@ -203,7 +205,9 @@ describe("coordinator command registry", () => {
         frame: expect.stringContaining(COORDINATOR_DELEGATION_FRAME_OPEN),
       },
     });
-    await expect(launch(args, context)).resolves.toMatchObject({ environment: { id: "worker-1" } });
+    // The same request again replays, and says so.
+    const replay = (await launch(args, context)) as Record<string, unknown>;
+    expect(replay).toMatchObject({ environment: { id: "worker-1" }, replayed: true });
     expect(create).toHaveBeenCalledTimes(1);
     // Launch intent alone is delivery evidence, even before a session/mailbox exists.
     await storage.updateEnvironment("worker-1", { initialPrompt: undefined, status: "running" });
@@ -247,7 +251,55 @@ describe("coordinator command registry", () => {
         },
         context,
       ),
-    ).rejects.toThrow("different payload");
+    ).rejects.toThrow(COORDINATOR_REQUEST_ID_REUSED_ERROR);
+  });
+
+  test("a defaulted agent replays after the default agent changes", async () => {
+    const project = await storage.addProject(createProject("remote", checkout));
+    const snapshot = await coordinator.ensure(project.id);
+    const conversation = snapshot.workspace.conversations[0]!;
+    const head = (await runCommand("git", ["rev-parse", "HEAD"], { cwd: checkout })).stdout.trim();
+    const create = mock(async (args: Record<string, unknown>) => {
+      const environment = createEnvironment(project.id, {
+        name: "worker",
+        environmentType: "local",
+        initialPrompt: String(args.initialPrompt),
+      });
+      environment.id = "worker-default";
+      environment.status = "creating";
+      await storage.addEnvironment(environment);
+      return environment;
+    });
+    commands.set("create_environment", create);
+    const launch = commands.get("launch_coordinator_environment")!;
+    const args = (agent: string, agentDefaulted?: true) => ({
+      scope: {
+        projectId: project.id,
+        coordinatorId: snapshot.workspace.id,
+        conversationId: conversation.id,
+      },
+      requestId: "launch-default-agent",
+      input: {
+        projectId: project.id,
+        environmentType: "local",
+        delegationBaseBranch: "main",
+        delegationBaseCommit: head,
+        initialPrompt: "Implement it",
+        agentSettings: { defaultAgent: agent, platforms: { [agent]: { mode: "native" } } },
+      },
+      ...(agentDefaulted ? { agentDefaulted } : {}),
+    });
+    await launch(args("codex", true), context);
+    // The user switched their default to Claude before the retry arrived.
+    await expect(launch(args("claude", true), context)).resolves.toMatchObject({
+      environment: { id: "worker-default" },
+      replayed: true,
+    });
+    expect(create).toHaveBeenCalledTimes(1);
+    // Naming an agent is a different request from "the default".
+    await expect(launch(args("claude"), context)).rejects.toThrow(
+      COORDINATOR_REQUEST_ID_REUSED_ERROR,
+    );
   });
 
   test.each([false, true])(
@@ -349,7 +401,6 @@ describe("coordinator command registry", () => {
   });
 
   test("seeds a project-scoped OpenCode catalogue for an unassigned coordinator", async () => {
-    __seedTesting.reset();
     const project = await storage.addProject(createProject("remote", checkout));
     const config = await storage.loadConfig();
     await storage.updateGlobalConfig({

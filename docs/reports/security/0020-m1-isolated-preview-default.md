@@ -35,7 +35,7 @@ Done, so not in Tasks: every `browser/loopback` response carries `Content-Securi
 
 ## Needs verification
 
-- Browser behaviour of the sandbox header in shipping Safari; see [0260](0260-live-checks-on-other-platforms.md). Chromium, Firefox and WebKit pass `e2e/preview/gateway-browser-security.spec.ts`.
+- Browser behaviour of the sandbox header in shipping Safari; see [todo 5500](../../todo/previews-and-annotations/5500-shipping-safari-gateway-security-checks.md). Chromium, Firefox and WebKit pass `e2e/preview/gateway-browser-security.spec.ts`.
 - The two-machine run the default flipped without: [todo 0042](../../todo/previews-and-annotations/0042-service-preview-rollout.md) tasks 1 and 6. It needs SSH to mbp3, which refused connections on port 22 on 2026-11-04.
 
 ## Related

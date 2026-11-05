@@ -118,9 +118,9 @@ leaf's `deliver_node_mail`. That command accepts a fixed set of keys and
 rejects any other (`assertOnlyKeys`), so a new key would make an older leaf
 refuse the whole message. Backends advertise features through hello
 capabilities (`BACKEND_CAPABILITIES`,
-`packages/protocol/src/backend-profile.ts`). `send_node_message` has no
-`deliverNow` parameter at all (`apps/backend/src/core/control-mcp-nodes.ts`),
-so only `send_message` is affected.
+`packages/protocol/src/backend-profile.ts`). `send_node_message`, the older
+node tool, had no `deliverNow` parameter and has since been removed (report
+0040, part 0160), so only `send_message` is affected.
 
 **Investigation.** Built on this branch:
 
@@ -232,9 +232,10 @@ state and pending mail after the grace period, not a turn-end event.
 
 ### Task 3: `send_node_message`
 
-Left without `deliverNow`, as the analysis found: it is the older generic node
+Left without `deliverNow`, as the analysis found: it was the older generic node
 tool, and the coordinator's `send_message` with `nodeId` is the path that
-carries coordinator delegations.
+carries coordinator delegations. It has since been removed from the
+coordinator's tools (coordinator report 0040, part 0160).
 
 ## Current state
 

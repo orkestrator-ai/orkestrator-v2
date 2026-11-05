@@ -1,0 +1,15 @@
+# Claude command-change tests time out once the probe stops measuring a slow repository
+
+- **ID:** 5562
+- **Status:** resolved
+- **Date observed:** 2026-11-05
+- **Test/file:** `Bash command change measurement > a denied call's window is closed and does not taint the next one` (line 186) and `Bash command change measurement > an overlapping Edit marks the Bash measurement approximate` (line 206), both in bridges/claude-bridge/src/services/command-changes.test.ts.
+- **Original command:** `mise run test` during review preparation of the attention follow polling branch (`6be677167`), macOS arm64, Bun 1.4.4, group `@orkestrator/claude-bridge:test:bridge`, `bun test v1.4.4 1x PARALLEL`. The group finished 1,815 pass, 2 fail of 1,826 tests across 96 files in 54.44 s.
+- **Failure:** `error: Timed out waiting for condition` from `waitFor`, waiting for the Bash part's `commandChanges`, after 2,187.95 ms and 1,011.62 ms.
+- **Isolated rerun:** the owning file alone passed six times out of six at `5ad6ecae5` (8 pass, about 0.9 s each, load average about 20).
+- **Root cause:** `WorkspaceChangeProbe` stops measuring a repository for the life of the probe after two consecutive snapshots slower than 500 ms (`DEFAULT_SLOW_SNAPSHOT_MS`, `SLOW_SNAPSHOT_STRIKES`). The Claude bridge has one probe per process and every test in this file shares one fixture repository, so one slow spell left every later measurement in the file empty, and the tests waited on a value that could no longer arrive. The second failure's duration shows this: about 11 ms outside its 1,000 ms wait, with no time left for git snapshots, because the repository was already disabled.
+- **Reproduction:** a temporary `git` on `PATH` that sleeps 0.3 s per call once the third test's `early.txt` exists fails exactly these two tests at exactly these lines, in 2,357.65 ms and 1,003.59 ms, with the other six passing.
+- **Second, latent race:** both tests pushed the Bash call and then measured it without waiting for its part. A measurement that outruns its part is held in `pendingCommandChanges` and lands only when the tool result arrives, which these two tests never deliver. This was not the cause of the recorded failure, but it would produce the same timeout.
+- **Fix:** the file now uses a real probe with `slowSnapshotMs: Number.POSITIVE_INFINITY`, installed through `setCommandChangeProbeForTests` in `bridges/claude-bridge/src/services/command-changes.ts` (the seam the Pi bridge already has), and both tests wait for the part before opening a window. The production cut-off is unchanged and stays covered by `packages/protocol/src/node/workspace-change-probe.test.ts`.
+- **Verification:** with the fix, 8 pass, 0 fail with the same temporary `git` (11.07 s), with one sleeping 0.15 s on every call so that every snapshot passes the cut-off (9.41 s), and with no delay (1.28 s).
+- **Not measured:** snapshot times during the original preparation run, so that run is matched to this cause by its failing lines, durations and the reproduction above. What slowed the host during that run.

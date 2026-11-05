@@ -67,6 +67,10 @@ describe("MCP fixture cleanup contract", () => {
     for (const file of readdirSync(core, { recursive: true, encoding: "utf8" })) {
       if (!file.endsWith(".test.ts")) continue;
       const source = readFileSync(path.join(core, file), "utf8");
+      // Most backend tests cannot import this fixture. Avoid allocating their
+      // ASTs; retain escaped identifiers as candidates too, so the syntax-aware
+      // import check below still decides which callers must await cleanup.
+      if (!source.includes("createFixture") && !source.includes("\\u")) continue;
       // Covers the colocated MCP suites and command-registry callers elsewhere in core.
       const { program, errors } = parseSync(file, source);
       if (errors.length) throw new Error(`${file}: ${errors[0]!.message}`);

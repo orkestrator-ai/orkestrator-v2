@@ -28,7 +28,7 @@
  * it. Real turns cost tokens; this spec runs only when asked for. Nothing at
  * module scope spawns `mise`.
  */
-import { expect, test, type Response } from "@playwright/test";
+import { expect, test, type Response, fetchModulesOutsideChromium } from "./browser-test";
 import { withDesignLiveHeartbeat } from "./design-live-heartbeat";
 import {
   authenticatedInvoke,
@@ -101,6 +101,7 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["claude"] as Provid
         expect(status.status, `profile "${profile}" is not running`).toBe("ready");
         expect(status.flavor).toBe("agent-test");
         const second = await browser.newContext();
+        await fetchModulesOutsideChromium(second);
         try {
           const other = await second.newPage();
           const clients = [page, other];

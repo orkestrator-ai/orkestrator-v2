@@ -26,6 +26,9 @@ export function isFocusHeldElsewhere(target?: Element | null): boolean {
   const active = document.activeElement;
   if (!active || active === document.body || active === document.documentElement) return false;
   if (target && (target === active || target.contains(active))) return false;
+  // Explicit focus intents (for example a moved tab) also outlive a
+  // composer that mounts asynchronously after the menu has disappeared.
+  if (active.hasAttribute("data-preserve-focus")) return true;
   for (
     let surface = active.closest(SURFACE);
     surface;

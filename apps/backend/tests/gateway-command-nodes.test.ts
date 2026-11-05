@@ -130,9 +130,9 @@ test("public relay identity comes from the authenticated node transport, never r
         },
       }),
     });
-    expect(response.status).toBe(200);
+    expect(response.status).toBe(token === grant ? 403 : 200);
   }
-  expect(observed).toEqual([undefined, "bk_command", undefined]);
+  expect(observed).toEqual([undefined, "bk_command"]);
 });
 
 describe("DP-02 client grants at the leaf's gateway", () => {

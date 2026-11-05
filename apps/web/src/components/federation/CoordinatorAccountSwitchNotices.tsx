@@ -17,7 +17,11 @@ export function describeCoordinatorAccountSwitch(record: CoordinatorAccountSwitc
     record.state === "outcome-unknown"
       ? " The outcome is unknown. Check the active account on the target machine."
       : "";
-  return `The ${record.coordinatorName} ${action} the active ${provider} account on ${record.nodeName}${from ? ` from “${from}”` : ""} to “${record.toAccountLabel}”${record.reason ? `: “${record.reason}”` : "."}${check}`;
+  const timer =
+    record.authorizedBy === "self-timer"
+      ? ` A timer you set allowed it${record.userInstruction ? `: you asked “${record.userInstruction}”.` : "."}`
+      : "";
+  return `The ${record.coordinatorName} ${action} the active ${provider} account on ${record.nodeName}${from ? ` from “${from}”` : ""} to “${record.toAccountLabel}”${record.reason ? `: “${record.reason}”` : "."}${timer}${check}`;
 }
 
 function isRecord(value: unknown): value is CoordinatorAccountSwitchRecord {
@@ -33,7 +37,7 @@ function isRecord(value: unknown): value is CoordinatorAccountSwitchRecord {
 
 /**
  * Tells the user, as it happens, that a coordinator switched an account under
- * the standing permission in Settings. A missed notice loses nothing: each
+ * the standing permission in Settings, or under a self-timer's permission. A missed notice loses nothing: each
  * switch stays listed under that provider's accounts in Settings.
  */
 export function CoordinatorAccountSwitchNotices() {
@@ -43,7 +47,11 @@ export function CoordinatorAccountSwitchNotices() {
       if (!isRecord(payload)) return;
       const settled = payload.state === "executed";
       toast[settled ? "info" : "warning"](
-        settled ? "Account switched without asking" : "Account switch did not complete",
+        !settled
+          ? "Account switch did not complete"
+          : payload.authorizedBy === "self-timer"
+            ? "Account switched by your timer"
+            : "Account switched without asking",
         {
           id: `coordinator-account-switch:${source}:${payload.requestId}`,
           description: `${describeCoordinatorAccountSwitch(payload)}${settled || !payload.message ? "" : ` ${payload.message}`}`,

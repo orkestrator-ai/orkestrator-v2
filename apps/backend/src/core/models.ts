@@ -902,6 +902,14 @@ export interface PersistedNativeAgentTurnOutcome {
   outcome: "completed" | "failed";
   /** Bounded provider error detail for a failed turn. */
   error?: string;
+  /**
+   * `usage-limit` for a failed turn that stopped on the account's plan
+   * allowance: from the bridge's structured `errorCode` when it sent one,
+   * otherwise from the error text. Absent on every other outcome and on
+   * outcomes recorded before it, which readers classify by `error`
+   * (`usageLimitFailure`). An older backend ignores the field.
+   */
+  failureKind?: import("@orkestrator/protocol/agent-usage-limits").TurnFailureKind;
   observedAt: string;
 }
 

@@ -13,7 +13,7 @@ Analysed 2026-11-04 against `main` at `96ee1eb3e`.
 
 **Problem.** Finding DK-6 in [the 2026-10-27 efficiency report](../../reports/2026-10-27-efficiency.md) rates this Low with Medium confidence, and nothing has measured it.
 
-**Context.** Split out of [1202](1202-efficiency-review-follow-ups.md) task 12, which re-checked it on 2026-11-04 and found it still applies. `desktop.connect_ms` (`preview-transport-manager.ts`) already records each tunnel's open time.
+**Context.** Split out of [1202](1202-efficiency-review-follow-ups.md) task 12, which re-checked it on 2026-11-04 and found it still applies. It also carries the "Needs verification" item of efficiency report file `docs/reports/efficiency-logging-database/0692-dk-6-preview-tunnel-multiplexing.md` (batch E-0692), deleted on 2026-11-05 once its closing check confirmed everything else; its original text is at `69a3b4ca5`, and its last version, ending with its outcome table, is the parent of the commit that deleted it. `desktop.connect_ms` (`preview-transport-manager.ts`) already records each tunnel's open time.
 
 **Investigation.** Each new upstream connection pays TCP, TLS on an HTTPS route, the WebSocket upgrade, then HELLO and OPEN, which are pipelined and so cost one further round trip (read from code, not timed). The pool reuses an idle connection for 2 s and keeps up to six (`poolIdleMs`, `poolMax`), and `preview-transport-manager.test.ts` ("keep-alive upstream connections are pooled") covers it. So sequential requests share a socket, while parallel requests, WebSocket upgrades and a request after an idle gap each open one.
 
@@ -90,7 +90,7 @@ Any change keeps what `preview-tunnel-client.ts` and `preview-transport-manager.
 
 ## Needs verification
 
-- Page-load time over a remote (Tailscale) route on v1 and v2 (task 1). `desktop.connect_ms` now records each stream's time to `OPEN_OK`, including the session connect for the first one.
+- Page-load time over a remote (Tailscale) route on v1 and v2 (task 1). This is also report `0692`'s "first-load cost over a real remote link". `desktop.connect_ms` now records each stream's time to `OPEN_OK`, including the session connect for the first one.
 
 ## Related
 

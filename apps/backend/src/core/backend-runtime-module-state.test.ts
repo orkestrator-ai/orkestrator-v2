@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
 import type { AgentsMdPrResult } from "./agents-md-pr.js";
 import { BackendRuntime } from "./backend-runtime.js";
@@ -11,7 +14,14 @@ import {
 } from "./container-readiness.js";
 import { withCoordinatorReceipt } from "./coordinator-action-scope.js";
 import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
+import { gitHubCli } from "./github-cli-binary.js";
 import { GraphSystemActionMemory } from "./graph-system-action.js";
+import { applyGhChannel } from "./host-maintenance-tasks.js";
+import type { HostCatalog } from "./host-model-catalog-refresh.js";
+import {
+  resetHostModelCatalogSeedCooldown,
+  seedHostModelCatalogIfMissing,
+} from "./host-model-catalog-seed.js";
 import type { Environment, Project } from "./models.js";
 import { fixtureMcpServer } from "./opencode-coordinator-research-test-support.js";
 import { openCodeEnvironmentDependencies } from "./opencode-provider-environment.js";
@@ -390,5 +400,108 @@ describe("two BackendRuntimes in one process (todo 1070)", () => {
     first.beginClose("environment-1", "agent", "bk_leaf")();
     delegating();
     second.beginClose("environment-1", "agent", "bk_leaf")();
+  });
+
+  test("the managed gh is selected per backend", async () => {
+    const first = createRuntime();
+    const second = createRuntime();
+    const dataDir = await mkdtemp(path.join(tmpdir(), "ork-runtime-gh-"));
+    try {
+      first.gitHubCli.pin("/first/toolchain/gh");
+      second.gitHubCli.pin("/second/toolchain/gh");
+      expect(gitHubCli(first.gitHubCli)).toBe("/first/toolchain/gh");
+      expect(gitHubCli(second.gitHubCli)).toBe("/second/toolchain/gh");
+
+      // The second backend follows the latest channel from its own data directory.
+      const latest = path.join(dataDir, "toolchains", "gh-latest", "2.200.0", "gh");
+      await mkdir(path.dirname(latest), { recursive: true });
+      await writeFile(latest, "#!/bin/sh\n");
+      const secondContext = {
+        runtime: second,
+        storage: { getDataDir: () => dataDir },
+      } as unknown as CommandContext;
+      await applyGhChannel(secondContext, "latest");
+      expect(gitHubCli(second.gitHubCli)).toBe(latest);
+      expect(gitHubCli(first.gitHubCli)).toBe("/first/toolchain/gh");
+
+      // Going back to the pin restores the second backend's own pin.
+      await applyGhChannel(secondContext, "pinned");
+      expect(gitHubCli(second.gitHubCli)).toBe("/second/toolchain/gh");
+
+      // A backend that never pinned one runs gh from PATH.
+      expect(gitHubCli(createRuntime().gitHubCli)).toBe("gh");
+    } finally {
+      await rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("host catalogue seeds and their cooldown belong to one backend", async () => {
+    /** One backend's model cache, read and written by its own seeds. */
+    function catalogContext(runtime: BackendRuntime) {
+      const cache: Record<string, { updatedAt: string; models: unknown[] }> = {};
+      const context = {
+        runtime,
+        storage: {
+          getAgentModelCatalogCache: async () => cache,
+          cacheAgentModelCatalog: async (agent: string, models: unknown[]) => {
+            cache[agent] = { updatedAt: "2026-11-05T00:00:00.000Z", models };
+            return cache;
+          },
+        },
+      } as unknown as CommandContext;
+      return { context, cache };
+    }
+    const model = { id: "sonnet", name: "Sonnet", resolvedModel: "sonnet" };
+    const first = catalogContext(createRuntime());
+    const second = catalogContext(createRuntime());
+
+    // A download held in flight in the first backend is not joined by the
+    // second, which runs and stores its own.
+    const download = held<HostCatalog>();
+    const firstRefresh = async () => download.promise;
+    const firstSeed = seedHostModelCatalogIfMissing(first.context, "claude", firstRefresh as never);
+    let secondRefreshes = 0;
+    const secondRefresh = async () => {
+      secondRefreshes += 1;
+      return { agent: "claude", models: [model] } as HostCatalog;
+    };
+    expect(
+      await seedHostModelCatalogIfMissing(second.context, "claude", secondRefresh as never),
+    ).toBe(true);
+    expect(secondRefreshes).toBe(1);
+    expect(second.cache.claude?.models).toEqual([model]);
+    expect(first.cache.claude).toBeUndefined();
+    download.resolve({ agent: "claude", models: [model] } as HostCatalog);
+    expect(await firstSeed).toBe(true);
+    expect(first.cache.claude?.models).toEqual([model]);
+
+    // A failure cools down only the backend it happened in, and a sign-in in
+    // the other backend does not clear it.
+    const now = () => 1_000;
+    const failing = async () => {
+      throw new Error("not signed in");
+    };
+    let cursorRefreshes = 0;
+    const cursor = async () => {
+      cursorRefreshes += 1;
+      return { agent: "cursor", models: [model] } as unknown as HostCatalog;
+    };
+    expect(
+      await seedHostModelCatalogIfMissing(first.context, "cursor", failing as never, { now }),
+    ).toBe(false);
+    resetHostModelCatalogSeedCooldown(second.context, "cursor");
+    expect(
+      await seedHostModelCatalogIfMissing(first.context, "cursor", cursor as never, { now }),
+    ).toBe(false);
+    expect(cursorRefreshes).toBe(0);
+    expect(
+      await seedHostModelCatalogIfMissing(second.context, "cursor", cursor as never, { now }),
+    ).toBe(true);
+    expect(cursorRefreshes).toBe(1);
+    resetHostModelCatalogSeedCooldown(first.context, "cursor");
+    expect(
+      await seedHostModelCatalogIfMissing(first.context, "cursor", cursor as never, { now }),
+    ).toBe(true);
+    expect(cursorRefreshes).toBe(2);
   });
 });

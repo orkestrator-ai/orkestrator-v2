@@ -564,6 +564,18 @@ describe("a limit error mid-turn", () => {
     expect(h.notices).toEqual([]);
   });
 
+  test("the bridge's usage-limit code counts whatever the wording", async () => {
+    const h = harness({
+      active: "a",
+      accounts: {
+        a: usage({ used: 100, resetsInHours: 3 }),
+        b: usage({ used: 5, resetsInHours: 90 }),
+      },
+    });
+    expect(await h.stop({ error: "Request refused.", failureKind: "usage-limit" })).toBe("resend");
+    expect(h.state.active).toBe("b");
+  });
+
   test("a failure that is not a limit never reads usage", async () => {
     const h = harness({ active: "a", accounts: { a: usage({ used: 100, resetsInHours: 3 }) } });
     expect(await h.stop({ error: "The model is at capacity" })).toBe("stop");

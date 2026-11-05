@@ -58,7 +58,7 @@
  * never reach test output. Nothing at module scope or in a hook spawns `mise`
  * or reads profile state, so the file stays inert without the opt-in.
  */
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page } from "./browser-test";
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { openSync, promises as fs } from "node:fs";

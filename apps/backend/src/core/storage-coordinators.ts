@@ -4,6 +4,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 
 import {
+  COORDINATOR_REQUEST_ID_REUSED_ERROR,
   COORDINATOR_WORKSPACE_VERSION,
   isCoordinatorWorkspace,
   normalizeCoordinatorRoles,
@@ -266,10 +267,12 @@ export class CoordinatorsRepository {
           existing.projectId !== input.projectId ||
           existing.payloadHash !== input.payloadHash
         ) {
-          throw new Error("Coordinator request id was reused with a different payload");
+          throw new Error(COORDINATOR_REQUEST_ID_REUSED_ERROR);
         }
         if (existing.conversationId !== input.conversationId) {
-          throw new Error("This request belongs to another coordinator conversation");
+          throw new Error(
+            "This requestId was used by another conversation of this coordinator, so nothing was done. Use a new unique requestId for a new action.",
+          );
         }
         if (existing.state === "completed") return { receipt: existing, claimed: false };
         // This process included: a pending receipt it owns is still running
@@ -454,7 +457,7 @@ export class CoordinatorsRepository {
             association.payloadHash &&
             duplicate.payloadHash !== association.payloadHash)
         ) {
-          throw new Error("Coordinator request id was reused with a different payload");
+          throw new Error(COORDINATOR_REQUEST_ID_REUSED_ERROR);
         }
         return duplicate;
       }
@@ -483,7 +486,7 @@ export class CoordinatorsRepository {
           existing.nodeId !== association.nodeId ||
           existing.payloadHash !== association.payloadHash
         ) {
-          throw new Error("Coordinator request id was reused with a different payload");
+          throw new Error(COORDINATOR_REQUEST_ID_REUSED_ERROR);
         }
         if (!existing.pending) return { association: existing, claimed: false };
         let ownerAlive = false;
@@ -630,7 +633,7 @@ export class CoordinatorsRepository {
                 )?.payloadHash
               : undefined;
         if (existingRequest.id !== associationId || existingHash !== payloadHash) {
-          throw new Error("Coordinator request id was reused with a different payload");
+          throw new Error(COORDINATOR_REQUEST_ID_REUSED_ERROR);
         }
         return existingRequest;
       }
@@ -678,7 +681,7 @@ export class CoordinatorsRepository {
       if (!association) return null;
       if (association.delegation) {
         if (association.delegation.workerTabId !== workerTabId) {
-          throw new Error("Coordinator request id was reused for a different worker tab");
+          throw new Error(COORDINATOR_REQUEST_ID_REUSED_ERROR);
         }
         // A retry of the same request must neither reset a running delegation
         // nor reopen one that already produced its wake.
@@ -964,7 +967,7 @@ export class CoordinatorsRepository {
           same.resourceId !== input.environmentId ||
           same.nodeId !== input.nodeId
         )
-          throw new Error("Coordinator request id was reused with a different payload");
+          throw new Error(COORDINATOR_REQUEST_ID_REUSED_ERROR);
         return same;
       }
       const live = store.workflows.find(

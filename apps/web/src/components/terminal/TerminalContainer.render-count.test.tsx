@@ -114,8 +114,8 @@ async function renderContainer(): Promise<void> {
   containerRenders = 0;
 }
 
-test("an unrelated environment field does not re-render the container", async () => {
-  await renderContainer();
+/** Writes to env-1 that change only fields the container does not read. */
+async function writeUnrelatedFields(): Promise<void> {
   const store = useEnvironmentStore.getState();
   await act(async () => {
     store.updateEnvironment("env-1", { lastActivityAt: "2024-01-02T00:00:00.000Z" });
@@ -123,9 +123,51 @@ test("an unrelated environment field does not re-render the container", async ()
     store.setEnvironmentPR("env-1", "https://example.com/pr/1", "open", false);
     // A snapshot decodes new objects for every nested field it carries.
     store.mergeEnvironmentsForProject("project-1", [
-      environment({ status: "running", prUrl: "https://example.com/pr/2" }),
+      structuredClone({
+        ...store.getEnvironmentById("env-1")!,
+        status: "running" as const,
+        prUrl: "https://example.com/pr/2",
+      }),
     ]);
   });
+}
+
+/** A setup terminal, selected, beside the startup agent the backend published. */
+function seedStartupAgentPane(): void {
+  usePaneLayoutStore.setState({
+    environments: new Map([
+      [
+        "env-1",
+        {
+          root: {
+            kind: "leaf",
+            id: "default",
+            tabs: [
+              { id: "setup", type: "plain", isSetupTab: true },
+              {
+                id: "startup-agent",
+                type: "agent-native",
+                nativeAgentData: { platform: "codex", environmentId: "env-1" },
+              },
+            ],
+            activeTabId: "setup",
+          },
+          activePaneId: "default",
+          containerId: "container-1",
+        },
+      ],
+    ]),
+    hydration: new Map([["env-1", "done"]]),
+  } as never);
+}
+
+function selectedTabId(): string | null | undefined {
+  return usePaneLayoutStore.getState().getPane("default", "env-1")?.activeTabId;
+}
+
+test("an unrelated environment field does not re-render the container", async () => {
+  await renderContainer();
+  await writeUnrelatedFields();
   expect(containerRenders).toBe(0);
 });
 
@@ -153,4 +195,87 @@ test("a field the container reads still re-renders it", async () => {
     });
   });
   expect(containerRenders).toBeGreaterThan(0);
+});
+
+test("the launch handoff moves focus once, whatever unrelated writes surround it", async () => {
+  useEnvironmentStore.setState({
+    environments: [
+      environment({
+        setupPhase: "running",
+        pendingAgentLaunch: true,
+        startupAgentSession: {
+          tabId: "startup-agent",
+          agent: "codex",
+          style: "native",
+          status: "starting",
+        },
+      }),
+    ],
+  });
+  seedStartupAgentPane();
+  await renderContainer();
+
+  await writeUnrelatedFields();
+  expect(selectedTabId()).toBe("setup");
+
+  await act(async () => {
+    useEnvironmentStore.getState().updateEnvironment("env-1", { setupPhase: "ready" });
+  });
+  expect(selectedTabId()).toBe("startup-agent");
+
+  // The launch is still pending, so only the one-shot stops a second handoff
+  // taking the user off the terminal they went back to.
+  await act(async () => {
+    usePaneLayoutStore.getState().setActiveTab("default", "setup", "env-1");
+  });
+  await writeUnrelatedFields();
+  expect(selectedTabId()).toBe("setup");
+});
+
+test("the setup check still sees a user proceeding past a failed setup", async () => {
+  useEnvironmentStore.setState({
+    environments: [environment({ setupPhase: "failed", pendingAgentLaunch: true })],
+  });
+  seedStartupAgentPane();
+  await renderContainer();
+  expect(selectedTabId()).toBe("setup");
+
+  await act(async () => {
+    useEnvironmentStore.getState().updateEnvironment("env-1", { setupOverride: true });
+  });
+  expect(selectedTabId()).toBe("startup-agent");
+});
+
+test("a provider session binds when published and unrelated writes do not bind it again", async () => {
+  const realUpdate = usePaneLayoutStore.getState().updateTabNativeSessionId;
+  const updateTabNativeSessionId = mock(realUpdate);
+  usePaneLayoutStore.setState({ updateTabNativeSessionId });
+  try {
+    seedStartupAgentPane();
+    await renderContainer();
+    expect(updateTabNativeSessionId).not.toHaveBeenCalled();
+
+    await act(async () => {
+      useEnvironmentStore.getState().updateEnvironment("env-1", {
+        startupAgentSession: {
+          tabId: "startup-agent",
+          agent: "codex",
+          style: "native",
+          status: "running",
+          providerSessionId: "provider-session",
+        },
+      });
+    });
+    const startupTab = usePaneLayoutStore
+      .getState()
+      .getAllTabs("env-1")
+      .find((tab) => tab.id === "startup-agent");
+    expect(startupTab?.nativeAgentData?.sessionId).toBe("provider-session");
+
+    const bindsAfterPublish = updateTabNativeSessionId.mock.calls.length;
+    await writeUnrelatedFields();
+    expect(updateTabNativeSessionId).toHaveBeenCalledTimes(bindsAfterPublish);
+  } finally {
+    usePaneLayoutStore.setState({ updateTabNativeSessionId: realUpdate });
+  }
 });

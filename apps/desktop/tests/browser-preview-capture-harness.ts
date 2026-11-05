@@ -22,7 +22,7 @@ import {
   type BrowserPreviewCaptureStoreOptions,
 } from "../electron/browser-preview-capture-store";
 import type { CaptureStoreLike } from "../electron/browser-preview-capture";
-import { pngDataUrl } from "./png-fixture";
+import { pngBytes } from "./png-fixture";
 
 export type Json = Record<string, any>;
 export type Config = { captureId: string; nonce: string; mode: string; initialTarget?: unknown };
@@ -41,7 +41,7 @@ export function fakeImage(width: number, height: number, bitmap?: Buffer): Json 
     getSize: () => ({ width, height }),
     resize: ({ width: nextWidth, height: nextHeight }: { width: number; height: number }) =>
       fakeImage(nextWidth, nextHeight),
-    toDataURL: () => pngDataUrl(width, height),
+    toPNG: () => pngBytes(width, height),
     toBitmap: () => bitmap ?? Buffer.alloc(width * height * 4, 0xff),
     crop: (rect: { x: number; y: number; width: number; height: number }) =>
       fakeImage(rect.width, rect.height),

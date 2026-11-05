@@ -49,7 +49,7 @@
  * Playwright annotations in `results.json`; prompts and transcript text never
  * reach test output.
  */
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "./browser-test";
 import { expectPlaceHeld, holdPosition } from "../transcript-hold";
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";

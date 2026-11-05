@@ -70,7 +70,6 @@ These batches don't share a protected area. They only have to respect the confli
 - **E21 (Pi bridge):** efficiency-logging-database `0130`, `0355`
 - **E-0140 (Codex queue bound):** efficiency-logging-database `0140`
 - **E-0250 (Codex running tool cards):** efficiency-logging-database `0250`
-- **E-0360 (SSE replay rings):** efficiency-logging-database `0360`
 - **E-0520 (Startup bundle):** efficiency-logging-database `0520`
 - **E-0650 (Terminal container subscription):** efficiency-logging-database `0650`
 - **E-0680 (Multi Review drift checks):** efficiency-logging-database `0680`

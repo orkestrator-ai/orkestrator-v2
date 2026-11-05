@@ -888,6 +888,57 @@ describe("AgentModelPicker", () => {
     );
   });
 
+  test("names each platform's badge on its rail row and as a pill beside its caveat", () => {
+    setMobileViewport(false);
+    renderPicker({
+      models: [
+        { platform: "codex", id: "codex-model", label: "Codex model" },
+        { platform: "cursor", id: "cursor-model", label: "Cursor model" },
+      ],
+      enabledPlatforms: ["codex", "cursor"],
+      selectedPlatform: "codex",
+      selectedModelId: "codex-model",
+      platformNotes: { cursor: "Cursor exposes no approval callback to verify them." },
+      platformBadges: {
+        codex: {
+          label: "Read-only · Enforced",
+          description: "Blocked whatever the agent attempts.",
+          tone: "positive",
+        },
+        cursor: {
+          label: "Read-only · Provider-configured",
+          description: "Told to refuse, not verified.",
+          tone: "caution",
+        },
+      },
+    });
+
+    openPicker();
+    // An enforced platform with no caveat still shows its tier, with its meaning.
+    const codexNote = document.querySelector("[data-native-platform-note='codex']");
+    expect(codexNote?.textContent).toBe("Read-only · EnforcedBlocked whatever the agent attempts.");
+    expect(codexNote?.querySelector("[data-native-platform-badge='positive']")).toBeTruthy();
+    expect(document.querySelector("[data-native-platform-caveat]") === null).toBe(true);
+    expect(
+      screen.getByRole("button", { name: "codex models, Read-only · Enforced" }).dataset
+        .platformBadge,
+    ).toBe("positive");
+
+    const cursorButton = screen.getByRole("button", {
+      name: "cursor models, Read-only · Provider-configured. Cursor exposes no approval callback to verify them.",
+    });
+    expect(cursorButton.getAttribute("title")).toContain("Provider-configured");
+    fireEvent.click(cursorButton);
+    const cursorNote = document.querySelector("[data-native-platform-caveat='cursor']");
+    const pill = cursorNote?.querySelector("[data-native-platform-badge='caution']");
+    expect(pill?.textContent).toBe("Read-only · Provider-configured");
+    expect(pill?.getAttribute("title")).toBe("Told to refuse, not verified.");
+    // The caveat is stated once: the pill names the tier, the reason explains it.
+    expect(cursorNote?.textContent).toBe(
+      "Read-only · Provider-configuredCursor exposes no approval callback to verify them.",
+    );
+  });
+
   test("renders no caveat when no platform notes are supplied", () => {
     setMobileViewport(false);
     renderPicker({

@@ -343,6 +343,7 @@ export function SharedNativeAgentController({
   hiddenByLayout = false,
   beforeSend,
   composerPlaceholder,
+  composerHint,
   connectionEnabled = true,
   sendingHeldReason,
 }: AgentNativeTabProps) {
@@ -4292,70 +4293,79 @@ export function SharedNativeAgentController({
           }
           onSend={() => sendFromComposer(draft.text)}
           footer={
-            projection?.queue ? (
-              <QueuedPromptsDialog
-                open={queueDialogOpen}
-                onOpenChange={setQueueDialogOpen}
-                messages={queuedMessages}
-                onOpenWebAnnotationRequest={(requestId) =>
-                  openWebAnnotationRequest(data.environmentId, requestId)
-                }
-                onEdit={editQueuedPrompt}
-                onMove={async (fromIndex, toIndex) => {
-                  const message = queuedMessages[fromIndex];
-                  if (!message || fromIndex === toIndex) return;
-                  // The durable queue moves one position at a time, so a drag
-                  // across several rows is applied as that many steps rather
-                  // than silently landing one slot from where it was dropped.
-                  const direction = toIndex < fromIndex ? "up" : "down";
-                  for (let step = 0; step < Math.abs(toIndex - fromIndex); step += 1) {
-                    await moveQueued(message.id, direction);
+            <>
+              {composerHint ? (
+                <div data-composer-hint className="mt-1.5 px-1 text-xs text-muted-foreground">
+                  {composerHint}
+                </div>
+              ) : null}
+              {projection?.queue ? (
+                <QueuedPromptsDialog
+                  open={queueDialogOpen}
+                  onOpenChange={setQueueDialogOpen}
+                  messages={queuedMessages}
+                  onOpenWebAnnotationRequest={(requestId) =>
+                    openWebAnnotationRequest(data.environmentId, requestId)
                   }
-                }}
-                onRemove={async (messageId) => {
-                  await removeQueued(messageId);
-                }}
-                onSteer={steerQueuedPrompt}
-                canSteer={canSteerQueuedPrompt}
-                renderMeta={(message) => {
-                  const queued = message as Record<string, unknown>;
-                  const steerNote = queuedRowSteerNote(message);
-                  const attachments = Array.isArray(queued.attachments)
-                    ? queued.attachments.length
-                    : 0;
-                  return (
-                    <>
-                      {queued.mode === "plan" || queued.mode === "build" ? (
-                        <span>{queued.mode === "plan" ? "Plan" : "Build"}</span>
-                      ) : null}
-                      {typeof queued.model === "string" ? (
-                        <span>{resolveModelLabel(queued.model)}</span>
-                      ) : null}
-                      {typeof queued.reasoningEffort === "string" ? (
-                        <span>{reasoningLabel(queued.reasoningEffort)}</span>
-                      ) : null}
-                      {queued.fastMode === true ? <span>Fast mode</span> : null}
-                      {typeof queued.executionAgent === "string" ||
-                      typeof queued.agent === "string" ? (
-                        <span>{String(queued.executionAgent ?? queued.agent)}</span>
-                      ) : null}
-                      {attachments > 0 ? (
-                        <span>
-                          {attachments} attachment{attachments === 1 ? "" : "s"}
-                        </span>
-                      ) : null}
-                      {steerNote ? <span>{steerNote}</span> : null}
-                    </>
-                  );
-                }}
-                dispatchError={
-                  projection.queue.blocked ? { message: projection.queue.blocked.error } : undefined
-                }
-                onRetryDispatch={async () => {
-                  await retryQueue();
-                }}
-              />
-            ) : null
+                  onEdit={editQueuedPrompt}
+                  onMove={async (fromIndex, toIndex) => {
+                    const message = queuedMessages[fromIndex];
+                    if (!message || fromIndex === toIndex) return;
+                    // The durable queue moves one position at a time, so a drag
+                    // across several rows is applied as that many steps rather
+                    // than silently landing one slot from where it was dropped.
+                    const direction = toIndex < fromIndex ? "up" : "down";
+                    for (let step = 0; step < Math.abs(toIndex - fromIndex); step += 1) {
+                      await moveQueued(message.id, direction);
+                    }
+                  }}
+                  onRemove={async (messageId) => {
+                    await removeQueued(messageId);
+                  }}
+                  onSteer={steerQueuedPrompt}
+                  canSteer={canSteerQueuedPrompt}
+                  renderMeta={(message) => {
+                    const queued = message as Record<string, unknown>;
+                    const steerNote = queuedRowSteerNote(message);
+                    const attachments = Array.isArray(queued.attachments)
+                      ? queued.attachments.length
+                      : 0;
+                    return (
+                      <>
+                        {queued.mode === "plan" || queued.mode === "build" ? (
+                          <span>{queued.mode === "plan" ? "Plan" : "Build"}</span>
+                        ) : null}
+                        {typeof queued.model === "string" ? (
+                          <span>{resolveModelLabel(queued.model)}</span>
+                        ) : null}
+                        {typeof queued.reasoningEffort === "string" ? (
+                          <span>{reasoningLabel(queued.reasoningEffort)}</span>
+                        ) : null}
+                        {queued.fastMode === true ? <span>Fast mode</span> : null}
+                        {typeof queued.executionAgent === "string" ||
+                        typeof queued.agent === "string" ? (
+                          <span>{String(queued.executionAgent ?? queued.agent)}</span>
+                        ) : null}
+                        {attachments > 0 ? (
+                          <span>
+                            {attachments} attachment{attachments === 1 ? "" : "s"}
+                          </span>
+                        ) : null}
+                        {steerNote ? <span>{steerNote}</span> : null}
+                      </>
+                    );
+                  }}
+                  dispatchError={
+                    projection.queue.blocked
+                      ? { message: projection.queue.blocked.error }
+                      : undefined
+                  }
+                  onRetryDispatch={async () => {
+                    await retryQueue();
+                  }}
+                />
+              ) : null}
+            </>
           }
         />
       }

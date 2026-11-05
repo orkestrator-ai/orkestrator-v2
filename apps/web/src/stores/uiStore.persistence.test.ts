@@ -133,3 +133,17 @@ test("the data-saving preference is off by default and survives a reload", () =>
   createUIStore().getState().setDataSaving(false);
   expect(createUIStore().getState().dataSaving).toBe(false);
 });
+
+test("a dismissed coordinator first-run card stays dismissed for the window, in every project", () => {
+  window.orkestrator = undefined;
+  delete window.orkestratorWorkspaceTarget;
+  localStorage.clear();
+  const first = createUIStore();
+  expect(first.getState().coordinatorIntroDismissed).toBe(false);
+  first.getState().selectProject("project-a");
+  first.getState().setCoordinatorIntroDismissed(true);
+  const next = createUIStore();
+  expect(next.getState().coordinatorIntroDismissed).toBe(true);
+  next.getState().selectProject("project-b");
+  expect(next.getState().coordinatorIntroDismissed).toBe(true);
+});

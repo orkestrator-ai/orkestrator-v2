@@ -268,7 +268,7 @@ describe("StaticHtmlArtifactView", () => {
     expect(iframe.dataset.state).toBe("rendered");
     expect(iframe.hasAttribute("aria-hidden")).toBe(false);
     expect(iframe.title).toBe("Report: Report title");
-    expect(container.querySelector('[data-artifact-capture="true"]')).toBeNull();
+    expect(container.querySelector('[data-artifact-capture="true"]') === null).toBe(true);
   });
 
   test("a stale height from an earlier visit reserves space while the frame returns", async () => {
@@ -323,7 +323,7 @@ describe("StaticHtmlArtifactView", () => {
       await Bun.sleep(0);
     });
     await waitFor(() => expect(frameElement(container)).toBeNull());
-    expect(container.querySelector('[data-artifact-capture="true"]')).toBeNull();
+    expect(container.querySelector('[data-artifact-capture="true"]') === null).toBe(true);
     expect(container.textContent).not.toContain("Report title Revision");
     expect(staticFrameSlotStats().granted).toBe(0);
   });
@@ -381,7 +381,7 @@ describe("StaticHtmlArtifactView", () => {
     const { render: next } = completeHandshake(fresh);
     expect(next.generation).not.toBe(old.generation);
     expect(fresh.dataset.state).toBe("rendered");
-    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry" }) === null).toBe(true);
     park.remove();
   });
 
@@ -450,7 +450,7 @@ describe("StaticHtmlArtifactView", () => {
     const { render: message } = completeHandshake(iframe);
     fromFrame(iframe, { type: "error", generation: message.generation, code: "too-many-elements" });
     await waitFor(() => expect(screen.getByText(/more than 5000 elements/)).toBeTruthy());
-    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry" }) === null).toBe(true);
   });
 
   describe("document text in Find", () => {
@@ -508,7 +508,7 @@ describe("StaticHtmlArtifactView", () => {
       report(iframe, generation, hostile);
       await waitFor(() => expect(domSegments(container)).toContain(hostile));
       const mirror = container.querySelector<HTMLElement>("[data-rich-search-mirror]")!;
-      expect(mirror.querySelector("img")).toBeNull();
+      expect(mirror.querySelector("img") === null).toBe(true);
     });
 
     test("scrolling the card away keeps the text, and its return restores the search root at once", async () => {
@@ -841,7 +841,7 @@ describe("StaticHtmlArtifactView", () => {
     await waitFor(() =>
       expect(container.querySelector('[data-artifact-capture="true"]')).not.toBeNull(),
     );
-    expect(screen.queryByRole("button", { name: "Document" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Document" }) === null).toBe(true);
     expect(frameElement(container)).toBeNull();
   });
 });

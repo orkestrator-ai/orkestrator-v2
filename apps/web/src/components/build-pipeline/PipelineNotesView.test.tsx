@@ -121,8 +121,8 @@ describe("PipelineNotesView", () => {
     const objective = screen.getByRole("region", { name: "Objective" });
     expect(summary.compareDocumentPosition(note) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(note.compareDocumentPosition(objective) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(screen.queryByRole("region", { name: "Needs a look" })).toBeNull();
-    expect(screen.queryByText("Nothing has been recorded yet")).toBeNull();
+    expect(screen.queryByRole("region", { name: "Needs a look" }) === null).toBe(true);
+    expect(screen.queryByText("Nothing has been recorded yet") === null).toBe(true);
   });
 
   test("says when nothing was flagged, and when nothing was recorded", () => {

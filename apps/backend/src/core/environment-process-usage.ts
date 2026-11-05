@@ -60,6 +60,9 @@ interface ProcessUsageDependencies {
 }
 
 const PROCESS_PROBE_TIMEOUT_MS = 2_000;
+// Stop admitting probes after this budget. The final admitted batch can take
+// another two seconds, still below the renderer's 20-second read deadline.
+export const PROCESS_ENUMERATION_BUDGET_MS = 10_000;
 export const MAX_PROCESSES_PER_ENVIRONMENT = 40;
 export const MAX_CONCURRENT_CONTAINER_PROBES = 4;
 export const MAX_COMMAND_DISPLAY_LENGTH = 240;
@@ -356,6 +359,7 @@ export async function readEnvironmentProcessUsage(
   const platform = dependencies.platform ?? process.platform;
   const execute = dependencies.runCommand ?? runCommand;
   const now = dependencies.now ?? Date.now;
+  const deadline = now() + PROCESS_ENUMERATION_BUDGET_MS;
   const running = environments.filter((environment) => environment.status === "running");
   const needsHostListing = running.some((environment) => environment.environmentType === "local");
   let hostProcesses: ListedProcess[] = [];
@@ -374,6 +378,9 @@ export async function readEnvironmentProcessUsage(
       let summary = emptyProcessSummary();
       if (environment.environmentType === "local") {
         summary = summarizeListedProcesses(selectLocalListedProcesses(hostProcesses, environment));
+      } else if (environment.containerId && now() >= deadline) {
+        // Preserve completed groups and make the omitted measurement explicit.
+        summary.truncated = true;
       } else if (environment.containerId) {
         try {
           summary = summarizeListedProcesses(

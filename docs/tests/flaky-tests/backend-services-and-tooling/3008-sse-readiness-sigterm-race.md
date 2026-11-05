@@ -42,3 +42,11 @@ The unchanged complete owner passed alone with
 `env -u NODE_ENV mise run test:logged -- --name merge-sse-probe -- bun test --cwd apps/backend ./src/gateway-result-channels.test.ts --parallel=1 --only-failures`
 (exit 0, 6.4 s; passing counts not retained). The shutdown-handler race remains
 an unconfirmed hypothesis; no test or implementation was changed.
+
+## To-do 2922 address-findings recurrence, 2026-11-05
+
+- Required aggregate rerun: `mise run test:logged -- --name address-default-suite -- mise run test` on the worktree committed as `53c50ca28`. Exit 1 after 1305.3 s, including 936.5 s waiting for workspace capacity; workspace/root/bridge/protocol reservations were 6/1/2/1 slots.
+- Backend: 16,154 passed, 132 skipped, one failed. Web: 12,938 passed, 10 skipped, zero failed. Root, bridges and protocol check passed.
+- The same readiness test exited 143 instead of 0 (593.69 ms). Evidence: `/tmp/orkestrator-test-run.sdNf2r/address-default-suite.log.gz` and `/tmp/orkestrator-test-run.1IcDtS/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- Complete unchanged owner rerun: `mise run test:logged -- --name address-sse-probe-owner -- bun test --cwd apps/backend ./src/gateway-result-channels.test.ts --parallel=1 --only-failures` passed, exit 0, 5.2 s. Passing output was removed by the logged runner.
+- Neither the test nor SSE probe is changed by this branch relative to origin/main. The cause remains unconfirmed; the known shutdown-race hypothesis is not an established environmental excuse. The aggregate remains non-green and requires verifier disposition.

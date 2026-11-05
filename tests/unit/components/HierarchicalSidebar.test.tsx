@@ -2383,6 +2383,38 @@ describe("HierarchicalSidebar", () => {
     });
   });
 
+  test("a failed-cleanup row takes Cmd-click, but an in-flight delete does not", async () => {
+    environmentsValue = [
+      {
+        ...createdEnvironment,
+        id: "env-failed-cleanup",
+        name: "Failed Cleanup",
+        order: 0,
+        cleanupAfterMergeError: "delete failed",
+        deletionRequestedAt: "2026-01-02T00:00:00.000Z",
+        lifecycleOperation: "deleting",
+      },
+      {
+        ...createdEnvironment,
+        id: "env-in-flight",
+        name: "In Flight",
+        order: 1,
+        deletionRequestedAt: "2026-01-02T00:00:00.000Z",
+        lifecycleOperation: "deleting",
+      },
+    ];
+    useEnvironmentStore.getState().setEnvironments(environmentsValue);
+    render(<HierarchicalSidebar />);
+
+    fireEvent.click(screen.getByRole("button", { name: /^In Flight/ }), { metaKey: true });
+    expect(useUIStore.getState().selectedEnvironmentIds).toEqual([]);
+
+    fireEvent.click(screen.getByRole("button", { name: /^Failed Cleanup/ }), { metaKey: true });
+    await waitFor(() => {
+      expect(useUIStore.getState().selectedEnvironmentIds).toEqual(["env-failed-cleanup"]);
+    });
+  });
+
   test("runs bulk lifecycle actions only for local environments after Docker stops", async () => {
     const containerEnvironment = {
       ...createdEnvironment,

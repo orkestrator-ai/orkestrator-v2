@@ -43,7 +43,7 @@ These still follow the lane and conflict rules above.
 | Separate failures in the preparation's browser suite | No action | The report names no failure and CI's shards do not run that suite, so the current state was not determined here. |
 | Stable green on later runs (not a report item; found while checking) | Open | `a2bba9d8` is red on one test. The local cause is removed, and CI evidence is still needed: [0010-backend-shard-diff-base-override-timeout.md](0010-backend-shard-diff-base-override-timeout.md). |
 
-| `bounded test diagnostics` failing `main` since #1709 | Done | Incoming branch rewrote five files; recorded in [2922](../../todo/cross-cutting/2922-full-and-isolated-suite-failures-on-main.md). |
+| `bounded test diagnostics` failing `main` since #1709 | Done | Incoming branch rewrote five files; recorded in to-do 2922, since finished and removed. |
 | Diff-base override deadline miss | Done locally | File capture supersedes the incoming 5 s pipe-close bound; case [1537](../../tests/flaky-tests/environments-and-containers/1537-diff-base-override-scan-timeout.md). CI confirmation remains open above. |
 
 The incoming follow-up [0020](0020-git-output-lost-after-exit.md) records the

@@ -150,12 +150,17 @@ export function useFederatedEnvironmentActions(
           environmentId: fork.environmentId,
           title: fork.name,
         });
-        await run(`Start fork ${fork.name}`, () =>
-          startFederatedEnvironment(portal, {
+        // This action still holds the row's claim, so a nested `run` would be
+        // refused and skip the start. The fork exists by now: a failed start
+        // is its own error, not a failed fork.
+        try {
+          await startFederatedEnvironment(portal, {
             backendId: ref.backendId,
             environmentId: fork.environmentId,
-          }),
-        );
+          });
+        } catch (error) {
+          reportFederatedActionError(`Start fork ${fork.name}`, machine.name, error);
+        }
       });
     },
     remove: () => {

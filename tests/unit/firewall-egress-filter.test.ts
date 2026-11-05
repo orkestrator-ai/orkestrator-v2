@@ -112,7 +112,7 @@ describe("the names the daemon allows", () => {
 });
 
 /** Stubs for one init-firewall.sh boot on policy 3; `daemon` decides the filter. */
-function bootFixture(dir: string, daemon: "ready" | "never"): ReturnType<typeof Bun.spawnSync> {
+function bootFixture(dir: string, daemon: "ready" | "never") {
   const script = fixtureScript(dir, "init-firewall.sh");
   const filter = join(dir, "egress-filter-stub");
   // The installed daemon path, and a start bounded for the test.
@@ -183,7 +183,7 @@ function bootFixture(dir: string, daemon: "ready" | "never"): ReturnType<typeof 
 }
 
 describe("init-firewall.sh with name checks", () => {
-  test.skipIf(NO_GNU_DATE)(
+  test.skipIf(Boolean(NO_GNU_DATE))(
     titleWithSkip(
       "redirects TCP to allowed tuples and every DNS query to the daemon, and lets only marked traffic leave",
       NO_GNU_DATE,
@@ -196,7 +196,13 @@ describe("init-firewall.sh with name checks", () => {
         const mark = "0x6f726b";
         // Redirects, ahead of Docker's own DNS rules.
         expect(calls).toContain(
-          `iptables -t nat -I OUTPUT 1 -p tcp -m mark ! --mark ${mark} -m set --match-set allowed-domains dst,dst -j DNAT --to-destination 172.20.0.2:31443`,
+          `iptables -t nat -I OUTPUT 1 -p tcp ! --dport 53 -m mark ! --mark ${mark} -m set --match-set allowed-domains dst,dst -j DNAT --to-destination 172.20.0.2:31443`,
+        );
+        // The tuple proxy explicitly excludes DNS even though its -I puts it first.
+        const embeddedGuard = `iptables -A OUTPUT -d 127.0.0.11 -m mark ! --mark ${mark} -j REJECT`;
+        expect(calls).toContain(embeddedGuard);
+        expect(calls.indexOf(embeddedGuard)).toBeLessThan(
+          calls.indexOf("iptables -A OUTPUT -o lo -j ACCEPT"),
         );
         for (const protocol of ["udp", "tcp"]) {
           expect(calls).toContain(
@@ -234,7 +240,7 @@ describe("init-firewall.sh with name checks", () => {
     },
   );
 
-  test.skipIf(NO_GNU_DATE)(
+  test.skipIf(Boolean(NO_GNU_DATE))(
     titleWithSkip("a daemon that never starts leaves the namespace closed", NO_GNU_DATE),
     () => {
       withDir((dir) => {
@@ -310,7 +316,7 @@ esac`;
     });
   }
 
-  test.skipIf(NO_GNU_DATE)(
+  test.skipIf(Boolean(NO_GNU_DATE))(
     titleWithSkip(
       "writes the new names before resolving them, since the gateway's own lookups go through the daemon",
       NO_GNU_DATE,
@@ -329,7 +335,7 @@ esac`;
     },
   );
 
-  test.skipIf(NO_GNU_DATE)(
+  test.skipIf(Boolean(NO_GNU_DATE))(
     titleWithSkip("puts the previous names back when the rebuild fails", NO_GNU_DATE),
     () => {
       withDir((dir) => {

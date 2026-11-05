@@ -182,6 +182,12 @@ if [ "$FILTER_STATE" = enforced ]; then
     done
 fi
 
+# Docker's actual embedded resolver port is discoverable through procfs.
+# Only marked daemon queries may reach it, including after Docker's DNAT.
+if [ "$FILTER_STATE" = enforced ]; then
+    iptables -A OUTPUT -d 127.0.0.11 -m mark ! --mark "$ORK_FILTER_MARK" -j REJECT
+fi
+
 # Allow localhost
 iptables -A INPUT -i lo -j ACCEPT
 iptables -A OUTPUT -o lo -j ACCEPT
@@ -224,7 +230,7 @@ if [ "$FILTER_STATE" = enforced ]; then
     # Every new TCP connection the workload opens to an allowed tuple goes to
     # the daemon first; the daemon's own, marked, connection is the one that
     # leaves.
-    iptables -t nat -I OUTPUT 1 -p tcp -m mark ! --mark "$ORK_FILTER_MARK" \
+    iptables -t nat -I OUTPUT 1 -p tcp ! --dport 53 -m mark ! --mark "$ORK_FILTER_MARK" \
         -m set --match-set allowed-domains dst,dst -j DNAT --to-destination "$FILTER_ADDRESS:$ORK_FILTER_PROXY_PORT"
 fi
 

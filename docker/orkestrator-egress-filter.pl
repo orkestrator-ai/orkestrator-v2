@@ -197,7 +197,7 @@ sub marked_socket {
 sub listener {
     my ($type, $port) = @_;
     socket(my $fh, PF_INET, $type, 0) or die "socket: $!\n";
-    setsockopt($fh, SOL_SOCKET, SO_REUSEADDR, 1) or die "setsockopt: $!\n";
+    setsockopt($fh, SOL_SOCKET, SO_REUSEADDR, 1) or die "setsockopt: $!\n" if $type == SOCK_STREAM;
     # Every address in this namespace: loopback for queries to Docker's
     # resolver, the namespace's own address for everything init-firewall.sh
     # redirects there. The firewall admits nothing else from outside unless a
@@ -296,12 +296,13 @@ sub authority_host {
 # ('need') until the request head is complete, then ('ok', host) or ('bad').
 sub http_host {
     my ($buffer) = @_;
-    my $end = index($buffer, "\r\n\r\n");
+    $buffer =~ s/^(?:\r?\n)+//;
+    my $end = $buffer =~ /\r?\n\r?\n/ ? $-[0] : -1;
     return length($buffer) >= PEEK_LIMIT ? ('bad') : ('need') if $end < 0;
-    my ($line, @headers) = split /\r\n/, substr($buffer, 0, $end);
+    my ($line, @headers) = split /\r?\n/, substr($buffer, 0, $end);
     return ('bad') unless defined $line;
-    my ($method, $target) = $line =~ m{^([A-Z]{1,16}) (\S+) HTTP/1\.[01]$} or return ('bad');
-    return ('bad') if $method eq 'CONNECT';
+    my ($method, $target) = $line =~ m{^([!#\$%&'*+.^_`|~0-9A-Za-z-]+)[ \t\x0b\x0c\r]+(\S+)[ \t\x0b\x0c\r]+HTTP/1\.[01]$} or return ('bad');
+    return ('bad') if uc($method) eq 'CONNECT';
     my @hosts = map { /^host:[ \t]*(.*?)[ \t]*$/i ? ($1) : () } @headers;
     return ('bad') unless @hosts == 1;
     my $host = authority_host($hosts[0]) // return ('bad');
@@ -317,8 +318,18 @@ sub classify {
     my ($buffer) = @_;
     my $first = ord(substr($buffer, 0, 1));
     return ('tls', tls_server_name($buffer)) if $first == 22;
-    return ('http', http_host($buffer)) if $buffer =~ /^[A-Z]{1,16} /;
-    return ('need') if $buffer =~ /^[A-Z]{1,16}$/;
+    # Wait through fragmented blank preambles and request lines. A complete
+    # non-HTTP command line (EHLO, USER, AUTH, etc.) can pass by address.
+    my $head = $buffer;
+    $head =~ s/^(?:\r?\n)+//;
+    return ('need') if $head eq '' || $head eq "\r";
+    if ($head =~ /^([^\n]*)\n/) {
+        my $line = $1;
+        return ('http', http_host($buffer)) if $line =~ /HTTP\//i
+            || $line =~ /^(?:GET|HEAD|POST|PUT|DELETE|CONNECT|OPTIONS|TRACE|PATCH)[ \t\x0b\x0c\r]/i;
+        return ('other');
+    }
+    return ('need') if $head =~ /^[\x09\x0b\x0c\x0d\x20-\x7e]+$/;
     return ('other');
 }
 
@@ -532,27 +543,39 @@ sub proxy_event {
     update_masks($c);
 }
 
+# Snapshot and deduplicate before a callback removes either side of a pair.
+# A maintenance failure closes that connection, never the whole worker.
+sub maintain_connections {
+    my ($kind, $action) = @_;
+    my %seen;
+    my @snapshot = values %connections;
+    for my $c (@snapshot) {
+        next if !defined $c || $seen{$c}++ || $c->{closed} || $c->{kind} ne $kind;
+        eval { $action->($c); 1 } or do {
+            $kind eq 'proxy' ? drop_connection($c, 1) : dns_tcp_drop($c);
+        };
+    }
+}
+
 sub expire_connections {
     my $now = time;
-    my %seen;
-    for my $c (values %connections) {
-        next if $seen{$c}++ || $c->{closed} || $c->{kind} ne 'proxy' || $c->{classified};
+    maintain_connections('proxy', sub {
+        my ($c) = @_;
+        return if $c->{classified};
         if ($c->{first_byte} && $now - $c->{first_byte} > CLASSIFY_TIMEOUT) {
             decide($c, 1);
         } elsif (!$c->{first_byte} && $c->{port} == 443 && $now - $c->{created} > FIRST_BYTE_TIMEOUT) {
             refuse_connection($c, 'other');
         }
-    }
+    });
 }
 
-# A name that left the allowlist loses its open connections too, as an
-# address that leaves the set does.
+# A name that left loses its open connections, as an address leaving the set.
 sub revoke_connections {
-    my %seen;
-    for my $c (values %connections) {
-        next if $seen{$c}++ || $c->{closed} || $c->{kind} ne 'proxy' || !defined $c->{name};
-        drop_connection($c, 1) unless name_allowed_on_port($c->{name}, $c->{port});
-    }
+    maintain_connections('proxy', sub {
+        my ($c) = @_;
+        drop_connection($c, 1) if defined $c->{name} && !name_allowed_on_port($c->{name}, $c->{port});
+    });
 }
 
 # ---------------------------------------------------------------------------
@@ -619,7 +642,8 @@ sub query_resolvers {
     return $from_loopback ? @docker_resolvers : @external_resolvers;
 }
 
-my ($dns_udp, $dns_upstream);
+my $dns_udp;
+my %udp_sockets; # fileno of a connected query socket => upstream id
 
 sub dns_udp_query {
     while (1) {
@@ -636,7 +660,12 @@ sub dns_udp_query {
         }
         next if keys(%pending) >= MAX_PENDING_DNS;
         my $upstream_id;
-        do { $upstream_id = int(rand(65536)) } while exists $pending{$upstream_id};
+        do {
+            open(my $random, '<', '/dev/urandom') or die "random: $!\n";
+            read($random, my $bytes, 2) == 2 or die "random read: $!\n";
+            close $random;
+            $upstream_id = unpack('n', $bytes);
+        } while exists $pending{$upstream_id};
         $pending{$upstream_id} = {
             client => $from, id => $id, message => $message, flags => $flags,
             question_end => $question_end, edns => $edns,
@@ -646,26 +675,58 @@ sub dns_udp_query {
     }
 }
 
+sub close_query_socket {
+    my ($query) = @_;
+    if (my $fh = delete $query->{socket}) {
+        delete $udp_sockets{fileno($fh)};
+        soft_close($fh);
+    }
+}
+
 sub dns_send {
     my ($upstream_id) = @_;
     my $query = $pending{$upstream_id};
-    my $resolver = $query->{resolvers}[$query->{attempt} % @{$query->{resolvers}}];
+    close_query_socket($query);
+    my $resolver = $query->{resolvers}[$query->{attempt}];
     my $message = pack('n', $upstream_id) . substr($query->{message}, 2);
     $query->{sent} = time;
-    send($dns_upstream, $message, 0, pack_sockaddr_in(53, inet_aton($resolver)));
+    my $fh = marked_socket(SOCK_DGRAM) or return;
+    # A separate connected socket supplies a fresh ephemeral port and lets
+    # the kernel reject datagrams from any other resolver endpoint.
+    unless (connect($fh, pack_sockaddr_in(53, inet_aton($resolver)))) {
+        soft_close($fh);
+        return;
+    }
+    $query->{socket} = $fh;
+    $udp_sockets{fileno($fh)} = $upstream_id;
+    $poll->mask($fh => POLLIN);
+    send($fh, $message, 0);
+}
+
+sub dns_response_matches {
+    my ($message, $query, $id) = @_;
+    return 0 if length($message) < $query->{question_end};
+    my ($reply_id, $flags, $questions) = unpack('n3', $message);
+    return $reply_id == $id && ($flags & 0x8000) && $questions == 1
+        && ($flags & 0x7800) == ($query->{flags} & 0x7800)
+        && substr($message, 12, $query->{question_end} - 12)
+            eq substr($query->{message}, 12, $query->{question_end} - 12);
 }
 
 sub dns_udp_answer {
+    my ($fh) = @_;
+    my $upstream_id = $udp_sockets{fileno($fh)};
+    my $query = $pending{$upstream_id} or return;
     while (1) {
-        my $from = recv($dns_upstream, my $message, 65535, 0);
+        my $from = recv($fh, my $message, 65535, 0);
         last unless defined $from && length $from;
-        next if length($message) < 12;
-        my $upstream_id = unpack('n', $message);
-        my $query = $pending{$upstream_id} or next;
-        my (undef, $address) = unpack_sockaddr_in($from);
-        next unless grep { $_ eq inet_ntoa($address) } @{$query->{resolvers}};
+        my ($port, $address) = unpack_sockaddr_in($from);
+        next unless $port == 53 && inet_ntoa($address) eq $query->{resolvers}[$query->{attempt}];
+        next unless dns_response_matches($message, $query, $upstream_id);
         delete $pending{$upstream_id};
+        close_query_socket($query);
         send($dns_udp, pack('n', $query->{id}) . substr($message, 2), 0, $query->{client});
+        last;
     }
 }
 
@@ -679,6 +740,7 @@ sub expire_queries {
             next;
         }
         delete $pending{$upstream_id};
+        close_query_socket($query);
         send($dns_udp, dns_answer($query->{message}, $query->{flags}, $query->{question_end}, $query->{edns}, 2),
             0, $query->{client});
     }
@@ -746,24 +808,46 @@ sub dns_tcp_next {
         $c->{to_client} .= pack('n', length $reply) . $reply;
         return;
     }
-    my $upstream = marked_socket(SOCK_STREAM) or return dns_tcp_drop($c);
-    my $connected = connect($upstream, pack_sockaddr_in(53, inet_aton($resolvers[0])));
-    if (!$connected && $! != EINPROGRESS) {
-        soft_close($upstream);
-        return dns_tcp_drop($c);
+    $c->{query} = { message => $message, flags => $flags, question_end => $question_end, edns => $edns };
+    $c->{resolvers} = \@resolvers;
+    $c->{attempt} = 0;
+    dns_tcp_attempt($c);
+}
+
+sub dns_tcp_attempt {
+    my ($c) = @_;
+    if (my $old = delete $c->{upstream}) {
+        delete $connections{fileno($old)};
+        soft_close($old);
     }
-    $c->{upstream} = $upstream;
-    $c->{connecting} = $connected ? 0 : 1;
-    $c->{to_upstream} = pack('n', length $message) . $message;
-    $c->{answer} = '';
-    $connections{fileno($upstream)} = $c;
+    my $q = $c->{query};
+    while ($c->{attempt} < @{$c->{resolvers}}) {
+        my $resolver = $c->{resolvers}[$c->{attempt}++];
+        my $upstream = marked_socket(SOCK_STREAM);
+        next unless $upstream;
+        my $connected = connect($upstream, pack_sockaddr_in(53, inet_aton($resolver)));
+        if (!$connected && $! != EINPROGRESS) { soft_close($upstream); next; }
+        $c->{upstream} = $upstream;
+        $c->{connecting} = $connected ? 0 : 1;
+        $c->{to_upstream} = pack('n', length $q->{message}) . $q->{message};
+        $c->{answer} = '';
+        $c->{deadline} = time + DNS_TIMEOUT;
+        $connections{fileno($upstream)} = $c;
+        dns_tcp_masks($c);
+        return;
+    }
+    my $reply = dns_answer($q->{message}, $q->{flags}, $q->{question_end}, $q->{edns}, 2);
+    $c->{to_client} .= pack('n', length $reply) . $reply;
+    delete $c->{query};
+    $c->{deadline} = time + DNS_TCP_TIMEOUT;
+    dns_tcp_masks($c);
 }
 
 sub transient { return $! == EAGAIN || $! == EWOULDBLOCK || $! == EINTR; }
 
 sub dns_tcp_event {
     my ($c, $fh, $events) = @_;
-    return dns_tcp_drop($c) if $events & (POLLERR | POLLNVAL);
+    return $fh == $c->{client} ? dns_tcp_drop($c) : dns_tcp_attempt($c) if $events & (POLLERR | POLLNVAL);
     if ($fh == $c->{client}) {
         if (($events & POLLOUT) && length $c->{to_client}) {
             my $written = syswrite($fh, $c->{to_client});
@@ -783,21 +867,25 @@ sub dns_tcp_event {
     } else {
         if ($c->{connecting}) {
             my $error = unpack('i', getsockopt($fh, SOL_SOCKET, SO_ERROR) // pack('i', 1));
-            return dns_tcp_drop($c) if $error;
+            return dns_tcp_attempt($c) if $error;
             $c->{connecting} = 0;
         }
         if (length $c->{to_upstream}) {
             my $written = syswrite($fh, $c->{to_upstream});
-            return dns_tcp_drop($c) unless defined $written || transient();
+            return dns_tcp_attempt($c) unless defined $written || transient();
             substr($c->{to_upstream}, 0, $written, '') if $written;
         } elsif ($events & (POLLIN | POLLHUP)) {
             my $read = sysread($fh, my $data, READ_CHUNK);
-            return dns_tcp_drop($c) if defined $read && $read == 0;
-            return dns_tcp_drop($c) if !defined $read && !transient();
+            return dns_tcp_attempt($c) if defined $read && $read == 0;
+            return dns_tcp_attempt($c) if !defined $read && !transient();
             $c->{answer} .= $data if $read;
-            return dns_tcp_drop($c) if length($c->{answer}) > 65537;
+            return dns_tcp_attempt($c) if length($c->{answer}) > 65537;
             if (length($c->{answer}) >= 2 && length($c->{answer}) >= 2 + unpack('n', $c->{answer})) {
-                $c->{to_client} .= substr($c->{answer}, 0, 2 + unpack('n', $c->{answer}));
+                my $reply = substr($c->{answer}, 2, unpack('n', $c->{answer}));
+                return dns_tcp_attempt($c) unless dns_response_matches($reply, $c->{query}, unpack('n', $c->{query}{message}));
+                $c->{to_client} .= pack('n', length $reply) . $reply;
+                delete $c->{query};
+                $c->{deadline} = time + DNS_TCP_TIMEOUT;
                 delete $connections{fileno($fh)};
                 soft_close($fh);
                 $c->{upstream} = undef;
@@ -815,11 +903,10 @@ sub dns_tcp_event {
 
 sub expire_dns_tcp {
     my $now = time;
-    my %seen;
-    for my $c (values %connections) {
-        next if $seen{$c}++ || $c->{closed} || $c->{kind} ne 'dns';
-        dns_tcp_drop($c) if $now > $c->{deadline};
-    }
+    maintain_connections('dns', sub {
+        my ($c) = @_;
+        $c->{upstream} ? dns_tcp_attempt($c) : dns_tcp_drop($c) if $now > $c->{deadline};
+    });
 }
 
 # ---------------------------------------------------------------------------
@@ -827,13 +914,11 @@ sub expire_dns_tcp {
 # ---------------------------------------------------------------------------
 
 sub run_worker {
+    my ($proxy, $udp, $dns_tcp) = @_;
+    $dns_udp = $udp;
     load_resolvers();
     load_names();
-    my $proxy = listener(SOCK_STREAM, $opt{proxy_port});
-    $dns_udp = listener(SOCK_DGRAM, $opt{dns_port});
-    my $dns_tcp = listener(SOCK_STREAM, $opt{dns_port});
-    $dns_upstream = marked_socket(SOCK_DGRAM) or die "cannot open a marked socket: $!\n";
-    $poll->mask($_ => POLLIN) for $proxy, $dns_udp, $dns_tcp, $dns_upstream;
+    $poll->mask($_ => POLLIN) for $proxy, $dns_udp, $dns_tcp;
     my $tmp = "$opt{ready}.tmp.$$";
     open(my $ready, '>', $tmp) or die "ready: $!\n";
     print {$ready} "$$\n";
@@ -847,7 +932,7 @@ sub run_worker {
             next unless $events;
             if ($fh == $proxy) { accept_connections($proxy); next; }
             if ($fh == $dns_udp) { dns_udp_query(); next; }
-            if ($fh == $dns_upstream) { dns_udp_answer(); next; }
+            if (exists $udp_sockets{fileno($fh)}) { dns_udp_answer($fh); next; }
             if ($fh == $dns_tcp) { accept_dns_tcp($dns_tcp); next; }
             my $c = $connections{fileno($fh)} or next;
             next if $c->{closed};
@@ -902,6 +987,10 @@ sub parse_options {
 sub main {
     parse_options(@ARGV);
     $SIG{PIPE} = 'IGNORE';
+    # The supervisor holds these for its entire lifetime, including worker
+    # restart gaps. In particular, UDP must never permit a second bind.
+    my @listeners = (listener(SOCK_STREAM, $opt{proxy_port}),
+        listener(SOCK_DGRAM, $opt{dns_port}), listener(SOCK_STREAM, $opt{dns_port}));
 
     # Restarts the worker when it exits, so one crash costs a second of
     # egress rather than all of it. The namespace stays closed in between.
@@ -909,20 +998,22 @@ sub main {
         my $child = 0;
         $SIG{TERM} = $SIG{INT} = sub { kill 'TERM', $child if $child; exit 0; };
         while (1) {
+            unlink $opt{ready};
             my $pid = fork();
             if (!defined $pid) { sleep 1; next; }
             if ($pid == 0) {
                 $SIG{TERM} = $SIG{INT} = 'DEFAULT';
-                run_worker();
+                run_worker(@listeners);
                 exit 0;
             }
             $child = $pid;
             waitpid($pid, 0);
+            unlink $opt{ready};
             $child = 0;
             sleep 1;
         }
     }
-    run_worker();
+    run_worker(@listeners);
     exit 0;
 }
 

@@ -1,11 +1,11 @@
 /**
  * The egress gateway's name-check daemon (docker/orkestrator-egress-filter.pl),
  * loaded as a library: its ClientHello, HTTP and DNS parsing and its name
- * rules, without sockets. A real container run is in
+ * rules, connected DNS state and socket-backed maintenance. A real container run is in
  * apps/backend/tests/container-live-egress-filter.test.ts.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { root } from "./firewall-test-support";
@@ -151,6 +151,37 @@ describe("classification", () => {
     expect(classify("\u0000\u0000\u0000\u0008")).toBe("other");
   });
 
+  test("recognizes HTTP preambles, method case and whitespace across every byte split", () => {
+    for (const request of [
+      "\r\nGET / HTTP/1.1\r\nHost: tenant.invalid\r\n\r\n",
+      "\r\n\r\nget / HTTP/1.1\r\nHost: tenant.invalid\r\n\r\n",
+      "GET\t/\tHTTP/1.1\r\nHost: tenant.invalid\r\n\r\n",
+      "custom / HTTP/1.1\r\nHost: tenant.invalid\r\n\r\n",
+      "\nGET / HTTP/1.1\nHost: tenant.invalid\n\n",
+    ]) {
+      expect(classify(request)).toBe("http|ok|tenant.invalid");
+      expect(
+        perl(
+          `
+        my $request = pack("H*", $ARGV[0]);
+        for my $n (1 .. length($request) - 1) {
+          my ($kind) = main::classify(substr($request, 0, $n));
+          die "premature raw relay at $n" if $kind eq 'other';
+        }
+        print 'ok';`,
+          Buffer.from(request).toString("hex"),
+        ),
+      ).toBe("ok");
+    }
+    expect(classify("gEt / HTTP/9.9\r\nHost: tenant.invalid\r\n\r\n")).toBe("http|bad");
+  });
+
+  test("releases complete client-first protocol commands without waiting for HTTP headers", () => {
+    for (const line of ["EHLO mail.test", "USER alice", "AUTH secret", "PING"]) {
+      expect(classify(`${line}\r\n`)).toBe("other");
+    }
+  });
+
   test("allows a name only on the ports its entries name, and GitHub's names on 443 and 22", () => {
     const allowed = (name: string, port: number) =>
       perl(`print main::name_allowed_on_port("${name}", ${port}) ? 1 : 0;`);
@@ -255,5 +286,134 @@ describe("DNS", () => {
       ]).toString("hex"),
     );
     expect(dotted).toBe("undef");
+  });
+});
+
+/** Append a harness in the daemon's lexical scope, without a production test API. */
+function runtimePerl(code: string, prelude = ""): string {
+  const source = readFileSync(DAEMON, "utf8").replace("main() unless caller;", "");
+  const result = Bun.spawnSync({
+    cmd: ["perl", "-e", `${prelude}\n${source}\n${code}`],
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (result.exitCode !== 0) throw new Error(result.stderr.toString());
+  return result.stdout.toString();
+}
+
+describe("DNS reply authentication and failover", () => {
+  test("requires the response bit, id, opcode and exact original question", () => {
+    expect(
+      perl(
+        `
+      my $message = pack('H*', $ARGV[0]);
+      my ($id, $flags, undef, $end) = main::parse_query($message);
+      my $q = { message => $message, flags => $flags, question_end => $end };
+      my $reply = main::dns_answer($message, $flags, $end, 0, 0);
+      print main::dns_response_matches($reply, $q, $id) ? 'yes' : 'no';
+      for my $bad ($message, substr($reply, 0, -1),
+          pack('n', $id + 1) . substr($reply, 2),
+          substr($reply, 0, 2) . pack('n', 0x8980) . substr($reply, 4),
+          substr($reply, 0, -1) . pack('C', 2)) {
+        die 'accepted forged response' if main::dns_response_matches($bad, $q, $id);
+      }`,
+        query("registry.npmjs.org"),
+      ),
+    ).toBe("yes");
+  });
+
+  const tcpHarness = () => `
+    $opt{names} = ${JSON.stringify(join(dir, "names"))};
+    $opt{resolv} = ${JSON.stringify(join(dir, "resolv-ip"))};
+    load_names(); load_resolvers();
+    socketpair(my $client, my $reader, PF_UNIX, SOCK_STREAM, 0) or die $!;
+    nonblocking($client);
+    my $message = pack('H*', '${query("registry.npmjs.org")}');
+    my $c = { kind => 'dns', client => $client, inbound => pack('n', length $message) . $message,
+      to_client => '', from_loopback => 0, deadline => time + 10 };
+    $connections{fileno($client)} = $c; $dns_tcp_count++;
+    my @peers;
+    no warnings 'redefine';
+    local *main::marked_socket = sub {
+      socketpair(my $out, my $peer, PF_UNIX, SOCK_STREAM, 0) or die $!;
+      nonblocking($out); push @peers, $peer; return $out;
+    };
+    dns_tcp_next($c);
+  `;
+  const connectPrelude = `our @destinations;
+    BEGIN { *CORE::GLOBAL::connect = sub { push @main::destinations, $_[1]; return 1; }; }`;
+
+  test("retries another protected resolver on TCP error or deadline, then relays its answer", () => {
+    // Construct paths at test time, after beforeAll has created the fixtures.
+    const harness = tcpHarness();
+    for (const failure of [
+      "dns_tcp_event($c, $c->{upstream}, POLLERR);",
+      "$c->{deadline} = time - 1; expire_dns_tcp();",
+    ]) {
+      expect(
+        runtimePerl(
+          `${harness}
+        ${failure}
+        die 'no second resolver' unless $c->{attempt} == 2;
+        my (undef, $ip) = unpack_sockaddr_in($main::destinations[1]);
+        die 'wrong resolver' unless inet_ntoa($ip) eq '198.51.100.53';
+        $c->{to_upstream} = ''; $c->{connecting} = 0;
+        my $answer = dns_answer($message, 0x100, length($message), 0, 0);
+        syswrite($peers[1], pack('n', length $answer) . $answer);
+        dns_tcp_event($c, $c->{upstream}, POLLIN);
+        die 'answer lost' unless substr($c->{to_client}, 2) eq $answer;
+        die 'worker lost client' if $c->{closed};
+        print 'ok';`,
+          connectPrelude,
+        ),
+      ).toBe("ok");
+    }
+  });
+
+  test("exhausts TCP resolvers with SERVFAIL and never forwards forbidden names", () => {
+    const harness = tcpHarness();
+    expect(
+      runtimePerl(
+        `${harness}
+      dns_tcp_event($c, $c->{upstream}, POLLERR);
+      dns_tcp_event($c, $c->{upstream}, POLLERR);
+      die 'not SERVFAIL' unless (unpack('n', substr($c->{to_client}, 4, 2)) & 15) == 2;
+      my $blocked = pack('H*', '${query("blocked.invalid")}');
+      $c->{inbound} = pack('n', length $blocked) . $blocked; $c->{to_client} = '';
+      dns_tcp_next($c);
+      die 'forwarded blocked name' unless @main::destinations == 2;
+      die 'not REFUSED' unless (unpack('n', substr($c->{to_client}, 4, 2)) & 15) == 5;
+      print 'ok';`,
+        connectPrelude,
+      ),
+    ).toBe("ok");
+  });
+});
+
+describe("socket-backed maintenance", () => {
+  test("revocation and the 30/60 second expiry paths retain unrelated connections", () => {
+    expect(
+      runtimePerl(`
+      $opt{names} = ${JSON.stringify(join(dir, "names"))}; load_names();
+      my @clients;
+      for my $n (0 .. 3) {
+        socketpair(my $client, my $peer, PF_UNIX, SOCK_STREAM, 0) or die $!;
+        socketpair(my $upstream, my $server, PF_UNIX, SOCK_STREAM, 0) or die $!;
+        push @clients, $peer, $server;
+        my $c = { kind => 'proxy', client => $client, upstream => $upstream,
+          port => 443, created => time - 61, first_byte => 0,
+          classified => $n < 2 ? 1 : 0, peek => 'GET / HTTP/1.1',
+          to_client => '', to_upstream => '' };
+        $c->{name} = $n == 0 ? 'registry.npmjs.org' : 'revoked.invalid' if $n < 2;
+        $c->{first_byte} = time - 31 if $n == 2;
+        $connections{fileno($client)} = $connections{fileno($upstream)} = $c;
+        $connection_count++;
+      }
+      revoke_connections(); expire_connections();
+      die 'wrong survivors' unless $connection_count == 1 && keys(%connections) == 2;
+      maintain_connections('proxy', sub { die 'injected maintenance error'; });
+      die 'error escaped or connection leaked' unless $connection_count == 0 && keys(%connections) == 0;
+      print 'ok';`),
+    ).toBe("ok");
   });
 });

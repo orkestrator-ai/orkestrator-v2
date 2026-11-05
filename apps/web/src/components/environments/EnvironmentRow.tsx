@@ -1,4 +1,4 @@
-import { useId, useRef, useState, type ComponentType, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ComponentType, type ReactNode } from "react";
 import { toast } from "sonner";
 import {
   Container,
@@ -285,6 +285,27 @@ function copyEnvironmentId(environmentId: string) {
   );
 }
 
+/** How long a delete runs before its row says so. */
+export const SLOW_DELETE_NOTICE_MS = 2 * 60_000;
+const SLOW_DELETE_TICK_MS = 15_000;
+
+/** Tells apart a delete that is slow from a spinner that may never stop. */
+function SlowDeleteNotice({ since }: { since: string }) {
+  const startedAt = Date.parse(since);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), SLOW_DELETE_TICK_MS);
+    return () => clearInterval(timer);
+  }, []);
+  const elapsedMs = now - startedAt;
+  if (!Number.isFinite(elapsedMs) || elapsedMs < SLOW_DELETE_NOTICE_MS) return null;
+  return (
+    <span className="truncate text-[11px] font-normal leading-4 text-zinc-500">
+      Still deleting after {Math.floor(elapsedMs / 60_000)} min
+    </span>
+  );
+}
+
 /** The row's action list, the same for every row; disabled states come from the model. */
 export function environmentRowMenuItems(
   model: EnvironmentRowModel,
@@ -396,7 +417,7 @@ export function environmentRowMenuItems(
     { key: "delete-separator", separator: true },
     {
       key: "delete",
-      label: "Delete",
+      label: model.deleteFailureText ? "Retry delete" : "Delete",
       icon: <Trash2 className={icon} />,
       onSelect: requestDelete,
       disabled: model.menu.deleteDisabled,
@@ -597,6 +618,17 @@ export function EnvironmentRow({
                     {subtitle}
                   </span>
                 )}
+                {model.deleteFailureText && (
+                  <span
+                    className="truncate text-[11px] font-normal leading-4 text-destructive"
+                    title={model.deleteFailureText}
+                  >
+                    {model.deleteFailureText}
+                  </span>
+                )}
+                {facts.deleting && facts.deletingSince && (
+                  <SlowDeleteNotice since={facts.deletingSince} />
+                )}
               </span>
               {changes && (
                 // Last known while the machine is away.
@@ -608,6 +640,16 @@ export function EnvironmentRow({
                 </span>
               )}
             </div>
+            {model.deleteFailureText && !model.menu.deleteDisabled && (
+              <button
+                type="button"
+                onClick={() => setDeleteOpen(true)}
+                className="shrink-0 rounded px-1.5 text-[11px] leading-5 text-destructive transition-colors hover:bg-zinc-700/60 focus-hairline"
+                aria-describedby={nameId}
+              >
+                Retry
+              </button>
+            )}
             {stateDescription && (
               <span id={stateDescriptionId} className="sr-only">
                 {stateDescription}

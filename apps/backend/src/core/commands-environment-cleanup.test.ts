@@ -1,12 +1,15 @@
 import { readStoredValue, seedStore } from "./storage-test-support.js";
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
-import { promises as fs } from "node:fs";
+import { existsSync, promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createCommandRegistry, type CommandContext } from "./commands.js";
 import type { Environment } from "./models.js";
 import { StorageService } from "./storage.js";
-import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
+import {
+  EnvironmentLifecycleTaskTracker,
+  reconcileInterruptedEnvironmentLifecycleTasks,
+} from "./environment-lifecycle-tasks.js";
 import {
   closeEnvironmentCleanupStorage,
   ENVIRONMENT_CLEANUP_LEDGER_STORE,
@@ -211,18 +214,143 @@ describe("delete_environment host cleanup", () => {
         try {
           await expect(invokeDelete()).rejects.toThrow("Terminal process trees are still running");
           expect(await exists(worktreePath)).toBe(true);
-          expect(await storage.getEnvironment("e1")).toMatchObject({
+          // It says why, and keeps the tombstone a restart recovers from.
+          const failed = await storage.getEnvironment("e1");
+          expect(failed).toMatchObject({
             lifecycleOperation: "deleting",
+            deletionRequestedAt: expect.any(String),
+            deletionError: expect.stringContaining("Terminal process trees are still running"),
           });
           expect(await environmentCleanupLedger(storage.getDataDir()).get("e1")).toMatchObject({
             pending: ["worktree", "state-dirs"],
           });
+          // A restart finds it and re-admits the same delete.
+          expect(await reconcileInterruptedEnvironmentLifecycleTasks(storage)).toMatchObject({
+            deletionRecoveryEnvironmentIds: ["e1"],
+          });
           await fs.writeFile(path.join(worktreePath, "late-write"), "late");
           exited = true;
+          // A retry clears the reason before it does anything else.
+          let reasonDuringRetry: string | null | undefined = "unset";
+          const stopServers = context.runtime.terminals.terminateSessionsForEnvironment.bind(
+            context.runtime.terminals,
+          );
+          spyOn(context.runtime.terminals, "terminateSessionsForEnvironment").mockImplementation(
+            async (environmentId) => {
+              reasonDuringRetry = (await storage.getEnvironment("e1"))?.deletionError;
+              return stopServers(environmentId);
+            },
+          );
           await invokeDelete();
+          expect(reasonDuringRetry ?? null).toBeNull();
           expect(await exists(worktreePath)).toBe(false);
+          expect(await storage.getEnvironment("e1")).toBeNull();
           expect(await environmentCleanupLedger(storage.getDataDir()).list()).toEqual([]);
         } finally {
+          context.runtime.terminals.explicitlyCloseSession(id);
+        }
+      },
+    );
+  });
+
+  test("stops watching and scanning the worktree before it removes it", async () => {
+    let worktreePath = "";
+    await withDeleteCommand(
+      async (storage) => {
+        worktreePath = await seedWorktree(storage);
+      },
+      async (invokeDelete, _storage, context) => {
+        const service = context.runtime.diffStats.service;
+        let worktreeAtPause = null as boolean | null;
+        const pause = service.pause.bind(service);
+        spyOn(service, "pause").mockImplementation((environmentId) => {
+          if (environmentId === "e1") {
+            worktreeAtPause = existsSync(worktreePath);
+          }
+          pause(environmentId);
+        });
+        await invokeDelete();
+        expect(worktreeAtPause).toBe(true);
+        expect(await exists(worktreePath)).toBe(false);
+        expect(service.isTracked("e1")).toBe(false);
+      },
+    );
+  });
+
+  test("nothing re-creates the worktree after it is removed", async () => {
+    let worktreePath = "";
+    await withDeleteCommand(
+      async (storage) => {
+        worktreePath = await seedWorktree(storage);
+        await fs.mkdir(path.join(worktreePath, "node_modules", "pkg"), { recursive: true });
+        await fs.writeFile(path.join(worktreePath, "node_modules", "pkg", "index.js"), "");
+      },
+      async (invokeDelete, _storage, context) => {
+        const tracking = context.runtime.diffStats;
+        await tracking.sync(context);
+        await invokeDelete();
+        expect(await exists(worktreePath)).toBe(false);
+        // A reconciliation or scan that arrives late has nothing left to act on.
+        await tracking.sync(context);
+        tracking.service.pause("e1");
+        await Bun.sleep(20);
+        expect(tracking.service.isTracked("e1")).toBe(false);
+        expect(await exists(worktreePath)).toBe(false);
+      },
+    );
+  });
+
+  test("a delete that is stuck does not hold up another environment's", async () => {
+    let stuckPath = "";
+    let otherPath = "";
+    await withDeleteCommand(
+      async (storage) => {
+        stuckPath = await seedWorktree(storage);
+        otherPath = path.join(storage.getDataDir(), "workspaces", "project-e2");
+        await fs.mkdir(otherPath, { recursive: true });
+        await storage.addEnvironment(environment({ id: "e2", worktreePath: otherPath }));
+      },
+      async (invokeDelete, storage, context) => {
+        let release!: () => void;
+        const released = new Promise<boolean>((resolve) => {
+          release = () => resolve(true);
+        });
+        let terminating!: () => void;
+        const reachedTerminal = new Promise<void>((resolve) => {
+          terminating = resolve;
+        });
+        const process = {
+          pid: 1,
+          onData: () => ({ dispose: () => undefined }),
+          onExit: () => ({ dispose: () => undefined }),
+          write: () => undefined,
+          resize: () => undefined,
+          kill: () => undefined,
+          terminate: () => {
+            terminating();
+            return released;
+          },
+        } satisfies PtyProcess;
+        const id = setupTerminalSessionId("e1");
+        context.runtime.terminals.registerProcess(id, process);
+        try {
+          const stuck = invokeDelete();
+          await reachedTerminal;
+          const command = createCommandRegistry().get("delete_environment");
+          await command?.({ environmentId: "e2" }, context);
+          expect(await storage.getEnvironment("e2")).toBeNull();
+          expect(await exists(otherPath)).toBe(false);
+          // The stuck one is still there, tombstoned, with its worktree.
+          expect(await storage.getEnvironment("e1")).toMatchObject({
+            lifecycleOperation: "deleting",
+          });
+          expect(await exists(stuckPath)).toBe(true);
+          release();
+          await stuck;
+          expect(await storage.getEnvironment("e1")).toBeNull();
+          expect(await exists(stuckPath)).toBe(false);
+        } finally {
+          release();
           context.runtime.terminals.explicitlyCloseSession(id);
         }
       },

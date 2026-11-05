@@ -32,6 +32,10 @@ export interface EnvironmentRowFacts {
   environmentType: string | undefined;
   status: string;
   deleting: boolean;
+  /** Why its last delete failed. The row stops spinning and offers a retry. */
+  deleteFailure: string | null;
+  /** When the running delete started, if known. */
+  deletingSince: string | null;
   /** A build pipeline names this environment: the row carries the pipe. */
   buildPipeline: boolean;
   prState: PrState | null;
@@ -76,6 +80,8 @@ export interface EnvironmentRowModel {
   dimmed: boolean;
   /** A spinner replaces the marker. */
   spinner: "deleting" | "transition" | null;
+  /** Shown under the name when its last delete failed. */
+  deleteFailureText: string | null;
   /** What the row's button announces after its name, e.g. "Working". */
   activityText: string;
   /** The button's label where machines are shown: name, machine and activity. */
@@ -137,6 +143,8 @@ export function environmentRowModel(facts: EnvironmentRowFacts): EnvironmentRowM
     nameSignal,
     dimmed: facts.deleting || isStopping,
     spinner: facts.deleting ? "deleting" : isTransitioning || facts.busy ? "transition" : null,
+    deleteFailureText:
+      !facts.deleting && facts.deleteFailure ? `Delete failed: ${facts.deleteFailure}` : null,
     activityText,
     accessibleLabel: machine ? `${displayName}, on ${machine.name}, ${activityText}` : undefined,
     markerMachine: machine

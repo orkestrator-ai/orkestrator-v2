@@ -5,7 +5,10 @@
  * `environmentRowModel`, and `environment-row-model.parity.test.ts` checks
  * that the same environment produces the same row either way.
  */
-import type { AgentActivity } from "@orkestrator/protocol/node-summaries";
+import {
+  environmentDeletionFailure,
+  type AgentActivity,
+} from "@orkestrator/protocol/node-summaries";
 import { machineStatusText } from "@/components/federation/MachineDot";
 import type { MachineView } from "@/lib/federation/aggregate";
 import type { FederatedEnvironment } from "@/lib/federation/summaries";
@@ -42,6 +45,8 @@ export function localEnvironmentRowFacts(
     environmentType: environment.environmentType,
     status: environment.status,
     deleting: inputs.deleting,
+    deleteFailure: inputs.deleting ? null : environmentDeletionFailure(environment),
+    deletingSince: inputs.deleting ? (environment.lifecycleOperationStartedAt ?? null) : null,
     buildPipeline: inputs.buildPipeline,
     prState: environment.prState ?? null,
     autoMerge: environment.autoMerge === true,
@@ -86,6 +91,8 @@ export function nodeEnvironmentRowFacts(
     environmentType: environment.environmentType,
     status: environment.status,
     deleting: environment.deleting,
+    deleteFailure: environment.deleting ? null : (environment.deleteFailure ?? null),
+    deletingSince: environment.deleting ? (environment.deletingSince ?? null) : null,
     buildPipeline: environment.buildPipeline === true,
     prState: environment.prState ?? null,
     autoMerge: environment.autoMerge === true,

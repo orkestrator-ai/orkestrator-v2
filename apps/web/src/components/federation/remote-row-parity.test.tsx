@@ -101,6 +101,32 @@ function renderWithFederation(node: ReactNode) {
   return render(<FederationProvider>{node}</FederationProvider>);
 }
 
+test("a row whose delete failed says why and offers a retry instead of spinning", () => {
+  const row = environment("feature", { deleteFailure: "Terminal process trees are running" });
+  const { container } = render(
+    <RemoteEnvironmentItem machine={machineView([row])} environment={row} />,
+  );
+  expect(screen.getByText("Delete failed: Terminal process trees are running")).toBeTruthy();
+  expect(container.querySelector(".animate-spin")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+  expect(screen.getByRole("alertdialog")).toBeTruthy();
+});
+
+test("a delete past two minutes says how long it has been running", () => {
+  const started = new Date(Date.now() - 5 * 60_000).toISOString();
+  const slow = environment("slow", { deleting: true, deletingSince: started });
+  const { container } = render(
+    <RemoteEnvironmentItem machine={machineView([slow])} environment={slow} />,
+  );
+  expect(screen.getByText("Still deleting after 5 min")).toBeTruthy();
+  expect(container.querySelector(".animate-spin")).toBeTruthy();
+  cleanup();
+
+  const fresh = environment("fresh", { deleting: true, deletingSince: new Date().toISOString() });
+  render(<RemoteEnvironmentItem machine={machineView([fresh])} environment={fresh} />);
+  expect(screen.queryByText(/Still deleting/)).toBeNull();
+});
+
 test("another machine's row shows its unread agent mail and a failed delivery", () => {
   const row = environment("feature", { agentMailUnread: 120, agentMailFailed: true });
   render(<RemoteEnvironmentItem machine={machineView([row])} environment={row} />);

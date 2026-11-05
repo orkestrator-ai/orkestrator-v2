@@ -1,3 +1,7 @@
+import {
+  environmentDeletionFailure,
+  environmentHasDeletionTombstone,
+} from "@orkestrator/protocol/node-summaries";
 import { create } from "zustand";
 import { deepEqualJson } from "@/lib/chat/message-identity";
 import { clearRichEnvironmentContent } from "@/lib/chat/rich-content-reset";
@@ -230,6 +234,7 @@ export const useEnvironmentStore = create<EnvironmentState>()((set, get) => ({
     get().environments.some(
       (environment) =>
         environment.id === environmentId &&
-        (environment.lifecycleOperation === "deleting" || Boolean(environment.deletionRequestedAt)),
+        environmentHasDeletionTombstone(environment) &&
+        !environmentDeletionFailure(environment),
     ),
 }));

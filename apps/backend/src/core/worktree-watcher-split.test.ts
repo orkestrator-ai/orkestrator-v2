@@ -576,3 +576,68 @@ describe("startWorktreeWatcher, without a plan", () => {
     expect(context.state.listCalls).toBe(0);
   });
 });
+
+test("a watch set up after the call returns keeps coverage unqualified until it is", async () => {
+  let establish!: () => void;
+  const established = new Promise<void>((resolve) => {
+    establish = resolve;
+  });
+  let announced = 0;
+  const handle = { on: () => handle, close: () => undefined, established };
+  const watcher = startWorktreeWatcher({
+    worktreePath: "/wt",
+    onChange: () => undefined,
+    onCoverageChange: () => {
+      announced += 1;
+    },
+    plan: null,
+    startWatch: () => handle,
+    resolveGitPaths: async () => ({
+      linked: false,
+      gitDir: "/wt/.git",
+      commonDir: "/wt/.git",
+    }),
+  });
+  await Bun.sleep(0);
+  expect(watcher.watching).toBe(true);
+  expect(watcher.qualified).toBe(false);
+  expect(announced).toBe(0);
+  establish();
+  await Bun.sleep(0);
+  expect(watcher.qualified).toBe(true);
+  expect(announced).toBe(1);
+  watcher.close();
+});
+
+test("a watch that fails after the call returns closes the watcher through onError", async () => {
+  let reject!: (error: Error) => void;
+  const established = new Promise<void>((_resolve, rejectIt) => {
+    reject = rejectIt;
+  });
+  established.catch(() => undefined);
+  let report: ((error: Error) => void) | undefined;
+  const errors: unknown[] = [];
+  const handle = {
+    on: (_event: string, listener: (error: Error) => void) => {
+      report = listener;
+      return handle;
+    },
+    close: () => undefined,
+    established,
+  };
+  const watcher = startWorktreeWatcher({
+    worktreePath: "/gone",
+    onChange: () => undefined,
+    onError: (error) => errors.push(error),
+    plan: null,
+    startWatch: () => handle,
+    resolveGitPaths: null,
+  });
+  expect(watcher.watching).toBe(true);
+  const failure = new Error("gone");
+  reject(failure);
+  report?.(failure);
+  await Bun.sleep(0);
+  expect(errors).toEqual([failure]);
+  expect(watcher.watching).toBe(false);
+});

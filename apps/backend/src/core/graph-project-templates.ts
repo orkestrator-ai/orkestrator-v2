@@ -1,4 +1,4 @@
-import { constants as fsConstants, promises as fs, watch } from "node:fs";
+import { constants as fsConstants, promises as fs } from "node:fs";
 import path from "node:path";
 import {
   GRAPH_LIBRARY_BOUNDS,
@@ -12,6 +12,7 @@ import { graphTemplateDigest } from "@orkestrator/protocol/graphs/compile";
 import { parseGraphTemplate, type GraphTemplateV1 } from "@orkestrator/protocol/graphs/template";
 import { isPathInsideRoot } from "./commands-project-files.js";
 import { GraphTemplateError } from "./graph-template-errors.js";
+import { watchDirectory } from "./watch-host.js";
 
 /**
  * Project templates (D2, report §6.9): `.orkestrator/graphs/*.graph.json` in
@@ -31,8 +32,8 @@ import { GraphTemplateError } from "./graph-template-errors.js";
  * directory is noticed too). An event drops the cached scan and, after a
  * short settle, rescans; when the templates changed, `onChange` is called so
  * clients re-read. Events are hints: the fingerprint check on every scan is
- * what keeps a missed event harmless. Non-recursive watches close without the
- * multi-second stall a recursive macOS watch has.
+ * what keeps a missed event harmless. {@link watchDirectory} keeps a slow
+ * macOS watch start or close off this thread.
  */
 
 export interface GraphProjectTemplateFile {
@@ -65,7 +66,7 @@ export interface GraphProjectTemplatesOptions {
   checkoutOf: (projectId: string) => Promise<string | null>;
   /** The templates of a watched project changed on disk. */
   onChange?: (projectId: string) => void;
-  /** Injected for tests; defaults to a non-recursive, non-persistent `fs.watch`. */
+  /** Injected for tests; defaults to a non-recursive {@link watchDirectory}. */
   startWatch?: StartGraphProjectWatch | null;
   settleMs?: number;
   /** Projects watched at once; the least recently scanned stops first. */
@@ -77,7 +78,7 @@ const DEFAULT_MAX_WATCHED_PROJECTS = 32;
 const MAX_PROBLEM_ERRORS = 5;
 
 const defaultStartWatch: StartGraphProjectWatch = (directory, onEvent, onError) => {
-  const watcher = watch(directory, { persistent: false, recursive: false }, () => onEvent());
+  const watcher = watchDirectory(directory, () => onEvent(), { recursive: false });
   watcher.on("error", onError);
   return watcher;
 };
@@ -173,7 +174,7 @@ export class GraphProjectTemplates {
     this.forgetWatch(projectId);
   }
 
-  /** Stops every watch. Non-recursive watches close without blocking. */
+  /** Stops every watch. */
   close(): void {
     this.closed = true;
     for (const projectId of this.watches.keys()) this.forget(projectId);

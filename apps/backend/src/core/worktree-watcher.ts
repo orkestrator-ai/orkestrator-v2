@@ -1,5 +1,5 @@
-import { watch, type FSWatcher } from "node:fs";
 import path from "node:path";
+import { watchDirectory, type WatchHandle } from "./watch-host.js";
 import {
   isRelevantCommonDirChange,
   isRelevantGitDirChange,
@@ -30,8 +30,8 @@ import {
  * a recursive watch costs one inotify watch per directory, so the subtree is not
  * watched at all, and new directories are noticed and watched as they appear.
  * On macOS one recursive watch has no per-directory cost, while each extra one
- * stalls the event loop to start and to close, so the root stays one watch and
- * events under the subtree are dropped on arrival.
+ * makes the shared FSEvents stream rebuild (`watch-host.ts`), so the root stays
+ * one watch and events under the subtree are dropped on arrival.
  *
  * Events are hints, never proof. A burst is reported once, after
  * {@link WATCH_SETTLE_MS}, as a {@link WorktreeChangeHint} saying which views it
@@ -72,7 +72,7 @@ export type StartWatch = (
   target: string,
   listener: (eventType: string, filename: string | null) => void,
   options: { recursive: boolean },
-) => FSWatcher;
+) => WatchHandle;
 
 export interface WorktreeWatcherOptions {
   worktreePath: string;
@@ -84,7 +84,7 @@ export interface WorktreeWatcherOptions {
    * the baseline; omit it and only the index/HEAD are metadata changes.
    */
   comparisonRef?: string;
-  /** Injected for tests; defaults to node's fs.watch. */
+  /** Injected for tests; defaults to {@link watchDirectory}. */
   startWatch?: StartWatch;
   /**
    * Decides what may be left out. `null` watches the whole root. Defaults to real
@@ -168,7 +168,7 @@ export function classifyWorktreeChange(
 }
 
 const defaultStartWatch: StartWatch = (target, listener, options) =>
-  watch(target, { recursive: options.recursive, persistent: false }, listener);
+  watchDirectory(target, listener, options);
 
 /** A change that can alter which `node_modules` Git proves can be left out. */
 function canChangeExclusions(name: string): boolean {
@@ -200,9 +200,11 @@ export function startWorktreeWatcher(options: WorktreeWatcherOptions): WorktreeW
   let closed = false;
   const treeWatches = new Map<
     string,
-    { target: WatchTarget; handle: FSWatcher; identity: string | null }
+    { target: WatchTarget; handle: WatchHandle; identity: string | null }
   >();
-  const metadataWatchers: FSWatcher[] = [];
+  const metadataWatchers: WatchHandle[] = [];
+  // Watches asked for but not set up yet; a quiet watcher proves nothing until then.
+  let unestablished = 0;
   // A main checkout's metadata is below the root; a linked worktree's is not
   // until its extra watches are established.
   let metadataCovered = false;
@@ -227,7 +229,9 @@ export function startWorktreeWatcher(options: WorktreeWatcherOptions): WorktreeW
   };
 
   const announceCoverage = () => {
-    if (closed || coverageAnnounced || !metadataCovered || !treeCovered) return;
+    if (closed || coverageAnnounced || !metadataCovered || !treeCovered || unestablished > 0) {
+      return;
+    }
     coverageAnnounced = true;
     options.onCoverageChange?.();
   };
@@ -276,7 +280,7 @@ export function startWorktreeWatcher(options: WorktreeWatcherOptions): WorktreeW
     target: string,
     recursive: boolean,
     listener: (eventType: string, filename: string | null) => void,
-  ): FSWatcher => {
+  ): WatchHandle => {
     // Node types the name as `string | null`, but Bun on Linux passes
     // `undefined` when the watched directory itself is removed. Both mean
     // "unknown"; normalising here keeps every listener on one spelling instead
@@ -288,6 +292,17 @@ export function startWorktreeWatcher(options: WorktreeWatcherOptions): WorktreeW
     // runs out of descriptors or watches. Surfacing it lets the owner fall back
     // to polling instead of going quiet forever.
     handle.on("error", fail);
+    if (handle.established) {
+      unestablished += 1;
+      void handle.established.then(
+        () => {
+          unestablished -= 1;
+          announceCoverage();
+        },
+        // Its `error` event closes this watcher, which ends coverage for good.
+        () => undefined,
+      );
+    }
     return handle;
   };
 
@@ -537,13 +552,13 @@ export function startWorktreeWatcher(options: WorktreeWatcherOptions): WorktreeW
       return watchEstablished && !closed;
     },
     get qualified() {
-      return watchEstablished && !closed && metadataCovered && treeCovered;
+      return watchEstablished && !closed && metadataCovered && treeCovered && unestablished === 0;
     },
     close,
   };
 }
 
-function closeQuietly(handle: FSWatcher): void {
+function closeQuietly(handle: WatchHandle): void {
   try {
     handle.close();
   } catch {

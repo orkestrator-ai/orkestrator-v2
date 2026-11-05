@@ -1554,6 +1554,7 @@ export async function deleteEnvironment(
       await storage.updateEnvironment(environmentId, {
         deletionRequestedAt: new Date().toISOString(),
         cleanupAfterMergeError: null,
+        deletionError: null,
         lifecycleOperation: "deleting",
         lifecycleOperationStartedAt: new Date().toISOString(),
       });
@@ -1674,6 +1675,10 @@ export async function deleteEnvironment(
         await runEnvironmentCleanupStep(cleanup, "network", context);
       }
       await stopLocalServersForEnvironmentUnlocked(environmentId, context);
+      // Nothing should scan or watch a tree while it is being removed. The
+      // tombstone keeps later reconciliations from tracking it again.
+      context.runtime.diffStats.invalidatePendingSync();
+      context.runtime.diffStats.service.pause(environmentId);
       if (cleanup?.worktreePath) {
         const worktreeRemoved = await runEnvironmentCleanupStep(cleanup, "worktree", context);
         // A branch still checked out in a surviving worktree cannot be judged or
@@ -1841,10 +1846,14 @@ export async function deleteEnvironment(
     scheduleEnvironmentCleanupReconcile(context);
   } catch (error) {
     const environment = await context.storage.getEnvironment(environmentId).catch(() => null);
-    if (environment?.cleanupAfterMergeRequestedAt) {
+    const message = cleanupErrorMessage(error);
+    // A failed delete keeps its tombstone and its `deleting` marker, because a
+    // restart recovers from them. The reason is what tells a client it stopped.
+    if (environment?.cleanupAfterMergeRequestedAt || environment?.deletionRequestedAt) {
       await context.storage
         .updateEnvironment(environmentId, {
-          cleanupAfterMergeError: cleanupErrorMessage(error),
+          ...(environment.cleanupAfterMergeRequestedAt ? { cleanupAfterMergeError: message } : {}),
+          ...(environment.deletionRequestedAt ? { deletionError: message } : {}),
         })
         .catch(() => undefined);
     }
@@ -1906,11 +1915,22 @@ export async function tmuxLocalClaudeConfigDirectory(
  * The PR monitor observes merges but cannot import this module (it would be a
  * cycle), so the backend passes this function to `BackendRuntime` as
  * `prMonitor.scheduleMergeCleanup` (`index.ts`, `tests/command-fixtures.ts`).
+ *
+ * Recovery is for work no one is doing. A merge or delete running in this
+ * process owns the outcome and records any failure itself, so this stands aside
+ * rather than failing against its guard. Those guards live in memory, so after a
+ * restart they are clear and the delete resumes.
  */
 export function scheduleMergeCleanupRecovery(environmentId: string, context: CommandContext): void {
-  context.runtime.environments.scheduleMergeCleanupRecovery(environmentId, () =>
+  const environments = context.runtime.environments;
+  const owned = () =>
+    environments.isMerging(environmentId) || environments.isDeleting(environmentId);
+  if (owned()) return;
+  environments.scheduleMergeCleanupRecovery(environmentId, () =>
     (async () => {
       const environment = await context.storage.getEnvironment(environmentId);
+      // Either may have started while storage was read.
+      if (owned()) return;
       if (
         !environment?.cleanupAfterMergeRequestedAt ||
         environment.cleanupAfterMergeError ||

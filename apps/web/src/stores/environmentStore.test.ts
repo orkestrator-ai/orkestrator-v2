@@ -221,6 +221,19 @@ describe("environmentStore", () => {
     useEnvironmentStore.getState().removeEnvironment("live");
     expect(useEnvironmentStore.getState().isDeleting("live")).toBe(false);
   });
+
+  test("a delete that failed is not running, until this window retries it", () => {
+    useEnvironmentStore.getState().setEnvironments([
+      environment("failed", {
+        lifecycleOperation: "deleting",
+        deletionRequestedAt: "2026-11-05T12:00:00.000Z",
+        deletionError: "Terminal process trees are still running",
+      }),
+    ]);
+    expect(useEnvironmentStore.getState().isDeleting("failed")).toBe(false);
+    useEnvironmentStore.getState().setDeleting("failed", true);
+    expect(useEnvironmentStore.getState().isDeleting("failed")).toBe(true);
+  });
 });
 
 describe("snapshots keep what did not change", () => {

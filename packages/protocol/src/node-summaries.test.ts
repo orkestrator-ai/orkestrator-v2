@@ -279,3 +279,37 @@ test("environment summaries carry the machine's Docker availability only when it
     expect("dockerAvailable" in row).toBe(false);
   }
 });
+
+test("a failed delete is relayed as failed, not as still running", () => {
+  const failed = toNodeEnvironmentSummary("bk_test" as never, {
+    id: "env",
+    projectId: "project",
+    lifecycleOperation: "deleting",
+    deletionRequestedAt: "2026-11-05T12:00:00.000Z",
+    lifecycleOperationStartedAt: "2026-11-05T12:00:00.000Z",
+    deletionError: `reason ${"x".repeat(400)}`,
+  });
+  expect(failed?.deleting).toBe(false);
+  expect(failed?.deleteFailure?.startsWith("reason")).toBe(true);
+  expect(failed?.deleteFailure?.length).toBeLessThanOrEqual(240);
+  expect(failed?.deletingSince).toBeUndefined();
+
+  const running = toNodeEnvironmentSummary("bk_test" as never, {
+    id: "env",
+    projectId: "project",
+    lifecycleOperation: "deleting",
+    lifecycleOperationStartedAt: "2026-11-05T12:00:00.000Z",
+  });
+  expect(running?.deleting).toBe(true);
+  expect(running?.deleteFailure).toBeUndefined();
+  expect(running?.deletingSince).toBe("2026-11-05T12:00:00.000Z");
+
+  // An old error with no delete behind it says nothing about deleting.
+  const stale = toNodeEnvironmentSummary("bk_test" as never, {
+    id: "env",
+    projectId: "project",
+    cleanupAfterMergeError: "old",
+  });
+  expect(stale?.deleting).toBe(false);
+  expect(stale?.deleteFailure).toBeUndefined();
+});

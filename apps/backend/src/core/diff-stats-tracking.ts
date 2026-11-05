@@ -403,8 +403,11 @@ export class DiffStatsTracking {
               current: environment.diffBaseline ?? null,
             });
           }
-          const target =
-            environment.environmentType === "local"
+          // A tombstoned environment's worktree is going away; `deleteEnvironment`
+          // stops its work before removing the tree, and this keeps it stopped.
+          const target = environment.deletionRequestedAt
+            ? undefined
+            : environment.environmentType === "local"
               ? environment.worktreePath
                 ? {
                     environmentId: environment.id,

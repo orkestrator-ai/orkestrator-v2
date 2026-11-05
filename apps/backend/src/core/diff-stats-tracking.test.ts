@@ -672,3 +672,24 @@ test("diff tracking migrates app worktrees while preserving a linked project hom
     }
   }
 });
+
+test("a tombstoned environment is not tracked: nothing watches a tree being removed", async () => {
+  const { h, tracking } = await harness();
+  const stored = await h.storage.loadEnvironments();
+  const load = spyOn(h.storage, "loadEnvironments").mockResolvedValue([
+    {
+      ...stored[0],
+      id: "being-deleted",
+      projectId: "p",
+      environmentType: "local",
+      worktreePath: "/never/watched",
+      deletionRequestedAt: "2026-11-05T12:00:00.000Z",
+    } as never,
+  ]);
+  try {
+    await tracking.sync(h.context);
+    expect(tracking.service.isTracked("being-deleted")).toBe(false);
+  } finally {
+    load.mockRestore();
+  }
+});

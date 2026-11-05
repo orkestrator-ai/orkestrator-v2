@@ -16,7 +16,11 @@ import type { BackendId } from "@orkestrator/protocol/federation";
 import { isPrReadingConfirmedByMonitor } from "@orkestrator/protocol/pr-merge-readiness";
 import type { PrMonitorEnvironmentState } from "@orkestrator/protocol/pr-monitor";
 import { projectKey, projectRef } from "@orkestrator/protocol/federation";
-import { toNodeEnvironmentSummary } from "@orkestrator/protocol/node-summaries";
+import {
+  environmentDeletionFailure,
+  environmentHasDeletionTombstone,
+  toNodeEnvironmentSummary,
+} from "@orkestrator/protocol/node-summaries";
 import type { MachineView } from "@/lib/federation/aggregate";
 import { localEnvironmentPrMergeState } from "@/lib/pr-merge-readiness";
 import type { Environment } from "@/types";
@@ -108,7 +112,7 @@ const machine: MachineView = {
 
 function localRow(environment: Environment, markers: Markers): Row {
   const deleting =
-    environment.lifecycleOperation === "deleting" || Boolean(environment.deletionRequestedAt);
+    environmentHasDeletionTombstone(environment) && !environmentDeletionFailure(environment);
   const dockerAvailable = markers.dockerAvailable ?? true;
   return row(
     localEnvironmentRowFacts(environment, {
@@ -181,6 +185,15 @@ const cases: Array<[string, Partial<Environment>, Markers]> = [
   [
     "a failed deletion kept for retry",
     { deletionRequestedAt: "2026-10-21T09:00:00Z", cleanupAfterMergeError: "failed" },
+    {},
+  ],
+  [
+    "a failed deletion with its own reason",
+    {
+      lifecycleOperation: "deleting",
+      deletionRequestedAt: "2026-10-21T09:00:00Z",
+      deletionError: "Terminal process trees are still running",
+    },
     {},
   ],
   [

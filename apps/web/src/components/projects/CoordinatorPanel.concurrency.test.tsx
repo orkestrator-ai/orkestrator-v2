@@ -443,21 +443,20 @@ describe("Git and conversation actions", () => {
     await waitFor(() => expect(newSideAgent().disabled).toBe(false));
   });
 
-  test("the first of two overlapping actions to finish does not release the other", async () => {
+  test("a pending conversation action prevents a second shell close", async () => {
     ensuredSnapshot = snapshotOf([mainConversation, sideConversation(1), sideConversation(2)]);
     await renderSettled();
     const first = deferred<CoordinatorSnapshot>();
-    const second = deferred<CoordinatorSnapshot>();
     closeConversation.mockImplementationOnce(() => first.promise);
-    closeConversation.mockImplementationOnce(() => second.promise);
     fireEvent.click(screen.getByRole("button", { name: "Close Side 1" }));
-    fireEvent.click(screen.getByRole("button", { name: "Close Side 2" }));
-    await waitFor(() => expect(closeConversation).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(closeConversation).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole("button", { name: "Close Side 2" })).toBeNull();
+    expect(newSideAgent().disabled).toBe(true);
 
     await act(async () => first.resolve(ensuredSnapshot));
-    expect(newSideAgent().disabled).toBe(true);
-    await act(async () => second.resolve(ensuredSnapshot));
     await waitFor(() => expect(newSideAgent().disabled).toBe(false));
+    expect(screen.getByRole("button", { name: "Close Side 2" })).toBeTruthy();
+    expect(closeConversation).toHaveBeenCalledTimes(1);
   });
 
   test("closing a conversation clears the error an earlier action left", async () => {

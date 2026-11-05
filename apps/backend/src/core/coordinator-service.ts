@@ -35,6 +35,7 @@ import {
   CoordinatorStatusWakes,
   type CoordinatorStatusWakeOptions,
 } from "./coordinator-status-wakes.js";
+import { agentMessagingEnabled } from "./coordinator-context-reads.js";
 import { CoordinatorNoticeRouter } from "./coordinator-notice-router.js";
 import {
   decideDelegation,
@@ -602,6 +603,7 @@ export class CoordinatorService {
       projectPath,
       providerAvailability: availability,
       controlMcp: { enabled: mcp.enabled, running: mcp.running, error: mcp.error },
+      agentMessaging: { enabled: await agentMessagingEnabled(this.storage) },
       workflows: await this.storage.coordinators.listCoordinatorWorkflowAssociations(
         workspace.projectId,
       ),

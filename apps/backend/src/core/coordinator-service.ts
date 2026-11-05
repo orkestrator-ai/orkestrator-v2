@@ -46,7 +46,10 @@ import {
 } from "./coordinator-delegation-decision.js";
 import { AgentMailError } from "@orkestrator/protocol/agent-mail";
 import type { CoordinatorRemoteAccess } from "./coordinator-remote.js";
-import { CoordinatorPullRequestWatches } from "./coordinator-pr-watches.js";
+import {
+  CoordinatorPullRequestWatches,
+  type CoordinatorPullRequestWatchOptions,
+} from "./coordinator-pr-watches.js";
 import { createLogger, formatLogError, logErrorKind } from "@orkestrator/protocol/logger";
 
 const log = createLogger("coordinator");
@@ -247,7 +250,8 @@ export class CoordinatorService {
       tabId: string,
     ) => Promise<AgentActivityState | "unknown">,
     private readonly options: Omit<CoordinatorStatusWakeOptions, "workerActivity"> &
-      CoordinatorDelegationOptions = {},
+      CoordinatorDelegationOptions &
+      Pick<CoordinatorPullRequestWatchOptions, "gitHubCli"> = {},
   ) {
     this.noticeRouter = new CoordinatorNoticeRouter(storage, (projectId) =>
       this.startMainForNotice(projectId),
@@ -260,6 +264,7 @@ export class CoordinatorService {
     this.pullRequestWatches = new CoordinatorPullRequestWatches({
       storage,
       noticeRouter: this.noticeRouter,
+      ...(options.gitHubCli ? { gitHubCli: options.gitHubCli } : {}),
       ...(options.coalesceMs !== undefined ? { coalesceMs: options.coalesceMs } : {}),
     });
     // Mail to "coordinator", or to a conversation that has since closed, finds

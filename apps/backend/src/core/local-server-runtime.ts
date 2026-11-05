@@ -9,6 +9,7 @@ import {
 import { OpenCodeHostStartGate } from "./opencode-host-start.js";
 import { CursorSdkLoginSlot } from "./cursor-sdk-login.js";
 import { GitHubCliLoginSlot } from "./github-cli-login.js";
+import { HostCatalogSeeds } from "./host-catalog-seeds.js";
 import { OpenCodeProviderLoginSlot } from "./opencode-provider-login-slot.js";
 import { PiCatalogProbes, type PiCatalogProbesOptions } from "./pi-catalog-probes.js";
 import { redactSecrets } from "@orkestrator/protocol/secret-redaction";
@@ -115,6 +116,8 @@ export class LocalServerRuntime {
   readonly openCodeHostStart: OpenCodeHostStartGate;
   /** Pi's host catalogue probes (`pi-model-catalog-seeding.ts`). */
   readonly piCatalog: PiCatalogProbes;
+  /** Host model catalogue seeds and their failure cooldown (`host-model-catalog-seed.ts`). */
+  readonly catalogSeeds = new HostCatalogSeeds();
   /** The single in-flight Cursor SDK sign-in (`cursor-sdk-bridge.ts`). */
   readonly cursorSdkLogin = new CursorSdkLoginSlot();
   /** The single in-flight GitHub CLI sign-in (`github-cli-setup.ts`). */

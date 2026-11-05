@@ -9,7 +9,7 @@ import type { ChildProcess } from "node:child_process";
 import { parseGitHubDeviceLoginOutput } from "./agent-accounts-login.js";
 import type { CommandContext } from "./commands-context.js";
 import { createCommandRegistry } from "./commands.js";
-import { gitHubCli, setManagedGitHubCli } from "./github-cli-binary.js";
+import { gitHubCli, GitHubCliSelection } from "./github-cli-binary.js";
 import {
   cancelGitHubCliLogin,
   getGitHubCliStatus,
@@ -73,16 +73,17 @@ describe("GitHub CLI setup", () => {
   let previousPath: string | undefined;
   let reminderDismissed: boolean | undefined;
   let gitHubCliLogin: GitHubCliLoginSlot;
+  let gitHubCliSelection: GitHubCliSelection;
 
   beforeEach(() => {
     root = mkdtempSync(path.join(os.tmpdir(), "ork-github-cli-setup-"));
     previousPath = process.env.PATH;
     reminderDismissed = undefined;
     gitHubCliLogin = new GitHubCliLoginSlot();
+    gitHubCliSelection = new GitHubCliSelection();
   });
 
   afterEach(() => {
-    setManagedGitHubCli(undefined);
     if (previousPath === undefined) delete process.env.PATH;
     else process.env.PATH = previousPath;
     rmSync(root, { recursive: true, force: true });
@@ -98,7 +99,7 @@ describe("GitHub CLI setup", () => {
       toolchainBinDir,
       appRoot,
       resourceRoot: appRoot,
-      runtime: { localServers: { gitHubCliLogin } },
+      runtime: { localServers: { gitHubCliLogin }, gitHubCli: gitHubCliSelection },
       storage: {
         agentAccounts: {
           agentAccountsDirectory: () => path.join(root, "accounts"),
@@ -153,7 +154,7 @@ describe("GitHub CLI setup", () => {
   });
 
   test("builds a login that cannot reuse an inherited token or open a browser", () => {
-    const command = gitHubCliLoginCommand("/shim", {
+    const command = gitHubCliLoginCommand(gitHubCliSelection, "/shim", {
       PATH: "/usr/bin",
       GH_TOKEN: "inherited",
       GITHUB_TOKEN: "inherited",
@@ -162,8 +163,8 @@ describe("GitHub CLI setup", () => {
     expect(command.args).toEqual(["auth", "login", "--web", "--hostname", "github.com"]);
 
     // With a toolchain copy, sign-in drives the same gh every GitHub call uses.
-    setManagedGitHubCli("/toolchain/gh");
-    expect(gitHubCliLoginCommand("/shim", {}).command).toBe("/toolchain/gh");
+    gitHubCliSelection.pin("/toolchain/gh");
+    expect(gitHubCliLoginCommand(gitHubCliSelection, "/shim", {}).command).toBe("/toolchain/gh");
     expect(command.env.GH_TOKEN).toBeUndefined();
     expect(command.env.GITHUB_TOKEN).toBeUndefined();
     expect(command.env.GH_BROWSER).toBe("/shim/open");
@@ -337,7 +338,7 @@ describe("GitHub CLI setup", () => {
         const context = contextFor();
         const binary = writeGh(context.toolchainBinDir!, false);
         writeFileSync(binary, `#!/bin/sh\nprintf '%s\\n' '${GH_LOGIN_OUTPUT}'\nread answer\n`);
-        setManagedGitHubCli(binary);
+        gitHubCliSelection.pin(binary);
         try {
           const progress = await invoke("start_github_cli_login", {}, context);
           expect(progress).toMatchObject({
@@ -381,7 +382,7 @@ describe("GitHub CLI setup", () => {
       async () => {
         pathWith();
         const context = contextFor();
-        setManagedGitHubCli(writeGh(context.toolchainBinDir!, true));
+        gitHubCliSelection.pin(writeGh(context.toolchainBinDir!, true));
         reminderDismissed = true;
         expect(await invoke("get_github_cli_status", {}, context)).toEqual({
           installed: true,
@@ -398,7 +399,7 @@ describe("GitHub CLI setup", () => {
     async () => {
       pathWith();
       writeGh(path.join(root, "bin"), true);
-      expect(gitHubCli()).toBe("gh");
+      expect(gitHubCli(gitHubCliSelection)).toBe("gh");
       expect(await getGitHubCliStatus(contextFor())).toEqual({
         installed: true,
         authenticated: true,
@@ -413,7 +414,7 @@ describe("GitHub CLI setup", () => {
     async () => {
       pathWith();
       const context = contextFor();
-      setManagedGitHubCli(writeGh(context.toolchainBinDir!, true));
+      gitHubCliSelection.pin(writeGh(context.toolchainBinDir!, true));
       expect(await getGitHubCliStatus(context)).toEqual({
         installed: true,
         authenticated: true,
@@ -426,7 +427,7 @@ describe("GitHub CLI setup", () => {
   test.skipIf(process.platform === "win32")("reports a signed-out gh", async () => {
     pathWith();
     const context = contextFor();
-    setManagedGitHubCli(writeGh(context.toolchainBinDir!, false));
+    gitHubCliSelection.pin(writeGh(context.toolchainBinDir!, false));
     expect(await getGitHubCliStatus(context)).toEqual({
       installed: true,
       authenticated: false,
@@ -441,7 +442,7 @@ describe("GitHub CLI setup", () => {
 
   test.skipIf(process.platform === "win32")("reports a missing gh", async () => {
     pathWith();
-    expect(gitHubCli()).toBe("gh");
+    expect(gitHubCli(gitHubCliSelection)).toBe("gh");
     expect(await getGitHubCliStatus(contextFor())).toEqual({
       installed: false,
       authenticated: false,

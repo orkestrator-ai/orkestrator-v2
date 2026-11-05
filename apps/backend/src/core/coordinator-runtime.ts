@@ -156,7 +156,8 @@ export function coordinatorRuntimeUnavailableMessage(
       return "The coordinator conversation is unavailable";
     case "startup-failed":
       // An older renderer, which has no pane notice, shows this as the failure.
-      return `This coordinator conversation could not start: ${resolution.startupError ?? "unknown error"}`;
+      // "not ready" is what a schedule's retry looks for: Retry can still clear it.
+      return `This coordinator conversation is not ready because it could not start: ${resolution.startupError ?? "unknown error"}`;
     case "unassigned":
       return "This coordinator conversation has no agent yet; send its first prompt to choose one";
     case "unsupported-agent":

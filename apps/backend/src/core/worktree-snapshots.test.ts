@@ -252,6 +252,34 @@ describe("scan identity and joined reads", () => {
     }
   });
 
+  test("removal owns invalidated ad hoc reads and refuses later reads", async () => {
+    const gate = deferred<{ changes: unknown[]; truncated: boolean }>();
+    const owner = createOwner({ overrides: { readFiles: () => gate.promise } });
+    const read = readList(owner, localLookup, { includeUncommitted: false });
+    await flushMicrotasks();
+    // Cache invalidation drops the ad hoc join entry, but not the read's owner.
+    owner.service.invalidateChanges(localLookup);
+    let drained = false;
+    const drain = owner.service.pauseForRemoval("missing", localLookup).then(() => {
+      drained = true;
+    });
+    try {
+      await flushMicrotasks();
+      expect(drained).toBe(false);
+      await expect(readList(owner, localLookup, { includeUncommitted: false })).rejects.toThrow(
+        "being removed",
+      );
+      gate.resolve({ changes: [], truncated: false });
+      await drain;
+      expect(drained).toBe(true);
+      expect((await read).changes).toEqual([]);
+    } finally {
+      gate.resolve({ changes: [], truncated: false });
+      await Promise.allSettled([read, drain]);
+      owner.service.shutdown();
+    }
+  });
+
   test("distinct options never share a result; equal ad hoc reads join", async () => {
     const owner = createOwner({
       overrides: {

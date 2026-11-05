@@ -1,7 +1,4 @@
-import {
-  environmentDeletionFailure,
-  environmentHasDeletionTombstone,
-} from "@orkestrator/protocol/node-summaries";
+import { environmentHasDeletionTombstone } from "@orkestrator/protocol/node-summaries";
 import { create } from "zustand";
 import { deepEqualJson } from "@/lib/chat/message-identity";
 import { clearRichEnvironmentContent } from "@/lib/chat/rich-content-reset";
@@ -51,6 +48,8 @@ interface EnvironmentState {
   isLoading: boolean;
   error: string | null;
   deletingEnvironments: Set<string>;
+  /** This window's active attempt, independent of an older persisted failure. */
+  deletingStartedAt: Map<string, string>;
 
   setEnvironments: (environments: Environment[]) => void;
   mergeEnvironmentsForProject: (projectId: string, environments: Environment[]) => void;
@@ -81,6 +80,7 @@ export const useEnvironmentStore = create<EnvironmentState>()((set, get) => ({
   isLoading: false,
   error: null,
   deletingEnvironments: new Set<string>(),
+  deletingStartedAt: new Map<string, string>(),
 
   setEnvironments: (environments) =>
     set((state) => {
@@ -136,9 +136,12 @@ export const useEnvironmentStore = create<EnvironmentState>()((set, get) => ({
     set((state) => {
       const deletingEnvironments = new Set(state.deletingEnvironments);
       deletingEnvironments.delete(environmentId);
+      const deletingStartedAt = new Map(state.deletingStartedAt);
+      deletingStartedAt.delete(environmentId);
       return {
         environments: state.environments.filter((environment) => environment.id !== environmentId),
         deletingEnvironments,
+        deletingStartedAt,
       };
     });
   },
@@ -220,9 +223,16 @@ export const useEnvironmentStore = create<EnvironmentState>()((set, get) => ({
   setDeleting: (environmentId, isDeleting) =>
     set((state) => {
       const deletingEnvironments = new Set(state.deletingEnvironments);
-      if (isDeleting) deletingEnvironments.add(environmentId);
-      else deletingEnvironments.delete(environmentId);
-      return { deletingEnvironments };
+      const deletingStartedAt = new Map(state.deletingStartedAt);
+      if (isDeleting) {
+        deletingEnvironments.add(environmentId);
+        if (!deletingStartedAt.has(environmentId))
+          deletingStartedAt.set(environmentId, new Date().toISOString());
+      } else {
+        deletingEnvironments.delete(environmentId);
+        deletingStartedAt.delete(environmentId);
+      }
+      return { deletingEnvironments, deletingStartedAt };
     }),
 
   getEnvironmentById: (environmentId) =>
@@ -233,8 +243,6 @@ export const useEnvironmentStore = create<EnvironmentState>()((set, get) => ({
     get().deletingEnvironments.has(environmentId) ||
     get().environments.some(
       (environment) =>
-        environment.id === environmentId &&
-        environmentHasDeletionTombstone(environment) &&
-        !environmentDeletionFailure(environment),
+        environment.id === environmentId && environmentHasDeletionTombstone(environment),
     ),
 }));

@@ -229,7 +229,11 @@ beforeEach(() => {
     containerStateUpdatedAt: {},
   });
   useUIStore.setState({ selectedEnvironmentId: null });
-  useEnvironmentStore.setState({ deletingEnvironments: new Set<string>() });
+  useEnvironmentStore.setState({
+    deletingEnvironments: new Set<string>(),
+    deletingStartedAt: new Map(),
+    environments: [],
+  });
   useEnvironmentDiffStore.setState({ stats: new Map() });
   useBuildPipelineStore.setState({
     buildEnvironmentIds: new Set<string>(),
@@ -1079,6 +1083,25 @@ describe("EnvironmentItem menu actions and selection", () => {
       expect(onDelete).toHaveBeenCalledWith("env-1");
     },
   );
+
+  test("a local retry uses this attempt's time before the old backend snapshot changes", () => {
+    const env = makeEnvironment({
+      deletionRequestedAt: "2026-01-02T00:00:00.000Z",
+      lifecycleOperation: "deleting",
+      lifecycleOperationStartedAt: "2026-01-02T00:00:00.000Z",
+      deletionError: "failed",
+    });
+    useEnvironmentStore.getState().setEnvironments([env]);
+    const view = renderItem(env);
+    expect(view.container.textContent).toContain("Delete failed");
+    act(() => useEnvironmentStore.getState().setDeleting(env.id, true));
+    expect(view.container.textContent).not.toContain("Delete failed");
+    expect(view.container.textContent).not.toContain("Still deleting after");
+    expect(view.container.querySelector(".animate-spin")).not.toBeNull();
+    act(() => useEnvironmentStore.getState().setDeleting(env.id, false));
+    expect(view.container.textContent).toContain("Delete failed");
+    expect(view.container.querySelector(".animate-spin")).toBeNull();
+  });
 
   test("click selection forwards ctrl or meta selection intent", () => {
     const onSelect = mock(() => {});

@@ -129,8 +129,10 @@ Inside the local-server queue:
 8. Containers: drain a running container's processes, then run the
    `container`, `volumes` and `network` steps.
 9. Stop local servers, then stop watching and scanning the worktree
-   (`diffStats.pauseForRemoval`), wait for already-running physical scans of that
-   worktree (across comparison refs), and only then run the `worktree` step and, if
+   (`diffStats.pauseForRemoval`), fence new file-list and tree reads across aliases,
+   and wait for already-admitted reads and physical scans of that worktree
+   (including ad hoc committed-only and alternate-ref reads). Reader ownership
+   survives cache invalidation. Only then run the `worktree` step and, if
    it succeeded, the `branch` step. The tombstone keeps a later diff tracking
    reconciliation from tracking the environment again, so nothing watches a
    tree while it is removed. The `worktree` step first stops the worktree's

@@ -102,6 +102,7 @@ export const EnvironmentItem = memo(function EnvironmentItem({
   const boundMachine = multiMachineClient ? windowMachine : null;
   const { displayedActivityState, isRunning } = useEnvironmentDisplayActivity(environment);
   const deleting = useEnvironmentStore((s) => s.isDeleting(environment.id));
+  const deletingStartedAt = useEnvironmentStore((s) => s.deletingStartedAt.get(environment.id));
   // Its pull request is ready to merge or blocked by conflicts (pr-merge-readiness).
   const prMergeState = useEnvironmentPrMergeState(environment.id, environment);
   const buildPipeline = useBuildPipelineStore((s) => s.buildEnvironmentIds.has(environment.id));
@@ -129,6 +130,7 @@ export const EnvironmentItem = memo(function EnvironmentItem({
 
   const facts = localEnvironmentRowFacts(environment, {
     deleting,
+    deletingStartedAt,
     activity: displayedActivityState,
     running: isRunning,
     buildPipeline,

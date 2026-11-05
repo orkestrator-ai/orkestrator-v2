@@ -511,11 +511,11 @@ export class DiffStatsTracking {
   /** Fence new scans, then drain this worktree's already-running filesystem work. */
   async pauseForRemoval(environmentId: string, worktreePath?: string | null): Promise<void> {
     this.invalidatePendingSync();
-    this.service.pause(environmentId);
     if (worktreePath) {
+      const reads = this.service.pauseForRemoval(environmentId, { worktreePath });
       const key = new PhysicalKeyResolver().key({ kind: "local", worktreePath });
-      await this.sharedScans.settled(`${key}\0`);
-    }
+      await Promise.all([reads, this.sharedScans.settled(`${key}\0`)]);
+    } else this.service.pause(environmentId);
   }
 
   /**

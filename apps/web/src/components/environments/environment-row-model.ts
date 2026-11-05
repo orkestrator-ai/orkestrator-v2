@@ -32,6 +32,8 @@ export interface EnvironmentRowFacts {
   environmentType: string | undefined;
   status: string;
   deleting: boolean;
+  /** Availability fence retained after a delete fails; independent of progress. */
+  deletionPending?: boolean;
   /** Why its last delete failed. The row stops spinning and offers a retry. */
   deleteFailure: string | null;
   /** When the running delete started, if known. */
@@ -167,8 +169,18 @@ export function environmentRowModel(facts: EnvironmentRowFacts): EnvironmentRowM
       : null,
     menu: {
       settingsDisabled: !facts.writable,
-      forkLocalDisabled: blocked || isCreating || facts.deleting || !facts.localCheckoutAvailable,
-      forkContainerDisabled: blocked || isCreating || facts.deleting || !facts.dockerAvailable,
+      forkLocalDisabled:
+        blocked ||
+        isCreating ||
+        facts.deletionPending === true ||
+        facts.deleting ||
+        !facts.localCheckoutAvailable,
+      forkContainerDisabled:
+        blocked ||
+        isCreating ||
+        facts.deletionPending === true ||
+        facts.deleting ||
+        !facts.dockerAvailable,
       powerDisabled: blocked || isTransitioning || !facts.dockerAvailable,
       restartDisabled: blocked || isTransitioning || !facts.dockerAvailable || !facts.running,
       // A deletion that failed keeps its marker; deleting again retries it.

@@ -128,6 +128,64 @@ describe("reading .orkestrator/graphs", () => {
 });
 
 describe("watching", () => {
+  test.each([false, true])(
+    "reconciles startup-gap edits (directory initially missing: %s)",
+    async (missing) => {
+      reader.close();
+      if (!missing) await write("a.graph.json", sampleGraphTemplate("a"));
+      let ready!: () => void;
+      const established = new Promise<void>((resolve) => {
+        ready = resolve;
+      });
+      const targets: string[] = [];
+      reader = new GraphProjectTemplates({
+        checkoutOf: async () => checkout,
+        onChange: (id) => changes.push(id),
+        settleMs: 0,
+        startWatch: (target) => {
+          targets.push(target);
+          return { established, close() {} };
+        },
+      });
+      await reader.scan("p1");
+      await waitForGraphCondition(() => targets.length === 1);
+      await write("a.graph.json", { ...sampleGraphTemplate("a"), name: "Startup edit" });
+      expect(changes).toEqual([]);
+      ready();
+      await waitForGraphCondition(() => changes.length === 1);
+      expect((await reader.scan("p1")).files[0]?.template.name).toBe("Startup edit");
+      await waitForGraphCondition(() => targets.at(-1) === graphs);
+      expect(changes).toEqual(["p1"]);
+    },
+  );
+
+  test("readiness from a retired watch cannot rescan or rearm it", async () => {
+    reader.close();
+    let ready!: () => void;
+    const established = new Promise<void>((resolve) => {
+      ready = resolve;
+    });
+    let reads = 0;
+    reader = new GraphProjectTemplates({
+      checkoutOf: async () => {
+        reads++;
+        return checkout;
+      },
+      onChange: (id) => changes.push(id),
+      startWatch: () => ({ established, close() {} }),
+      settleMs: 0,
+    });
+    await reader.scan("p1");
+    await waitForGraphCondition(() => reader.watchedProjects().length === 1);
+    reader.forget("p1");
+    await write("a.graph.json", sampleGraphTemplate("a"));
+    ready();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(reads).toBe(1);
+    expect(changes).toEqual([]);
+    expect(reader.watchedProjects()).toEqual([]);
+  });
+
   test("watches the template directory without recursion and re-reads on an event", async () => {
     await write("a.graph.json", sampleGraphTemplate("a"));
     await reader.scan("p1");

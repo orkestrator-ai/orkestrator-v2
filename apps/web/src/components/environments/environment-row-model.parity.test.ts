@@ -17,7 +17,6 @@ import { isPrReadingConfirmedByMonitor } from "@orkestrator/protocol/pr-merge-re
 import type { PrMonitorEnvironmentState } from "@orkestrator/protocol/pr-monitor";
 import { projectKey, projectRef } from "@orkestrator/protocol/federation";
 import {
-  environmentDeletionFailure,
   environmentHasDeletionTombstone,
   toNodeEnvironmentSummary,
 } from "@orkestrator/protocol/node-summaries";
@@ -111,8 +110,7 @@ const machine: MachineView = {
 };
 
 function localRow(environment: Environment, markers: Markers): Row {
-  const deleting =
-    environmentHasDeletionTombstone(environment) && !environmentDeletionFailure(environment);
+  const deleting = environmentHasDeletionTombstone(environment);
   const dockerAvailable = markers.dockerAvailable ?? true;
   return row(
     localEnvironmentRowFacts(environment, {
@@ -337,3 +335,18 @@ test("a machine's Docker availability gates another machine's container actions;
     expect(model.isRunning).toBe(true);
   }
 });
+
+test.each(["deletionError", "cleanupAfterMergeError"] as const)(
+  "failed %s tombstones retain Retry without enabling either Fork action",
+  (field) => {
+    const environment = { ...base, deletionRequestedAt: "2026-11-05T12:00:00Z", [field]: "failed" };
+    for (const value of [localRow(environment, {}), nodeRow(environment, {})]) {
+      expect(value.facts.deletionPending).toBe(true);
+      expect(value.model.deleteFailureText).toContain("Delete failed");
+      expect(value.model.spinner).toBeNull();
+      expect(value.model.menu.deleteDisabled).toBe(false);
+      expect(value.model.menu.forkLocalDisabled).toBe(true);
+      expect(value.model.menu.forkContainerDisabled).toBe(true);
+    }
+  },
+);

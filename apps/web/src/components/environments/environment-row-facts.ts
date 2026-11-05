@@ -7,6 +7,7 @@
  */
 import {
   environmentDeletionFailure,
+  environmentHasDeletionTombstone,
   type AgentActivity,
 } from "@orkestrator/protocol/node-summaries";
 import { machineStatusText } from "@/components/federation/MachineDot";
@@ -21,6 +22,8 @@ import type { EnvironmentTooltipDetails } from "./EnvironmentTooltipBody";
 export interface LocalEnvironmentRowInputs {
   /** `useEnvironmentStore.isDeleting`: in flight here, or marked on the record. */
   deleting: boolean;
+  /** An attempt started in this window, before the backend updates its snapshot. */
+  deletingStartedAt?: string;
   /** `useEnvironmentDisplayActivity`: runtime activity, `working` during a build. */
   activity: AgentActivity;
   running: boolean;
@@ -38,15 +41,20 @@ export function localEnvironmentRowFacts(
   environment: Environment,
   inputs: LocalEnvironmentRowInputs,
 ): EnvironmentRowFacts {
+  const failure = environmentDeletionFailure(environment);
+  const deleting = inputs.deleting && (Boolean(inputs.deletingStartedAt) || !failure);
   return {
     environmentId: environment.id,
     name: environment.name,
     projectHome: environment.projectHome === true,
     environmentType: environment.environmentType,
     status: environment.status,
-    deleting: inputs.deleting,
-    deleteFailure: inputs.deleting ? null : environmentDeletionFailure(environment),
-    deletingSince: inputs.deleting ? (environment.lifecycleOperationStartedAt ?? null) : null,
+    deletionPending: inputs.deleting || environmentHasDeletionTombstone(environment),
+    deleting,
+    deleteFailure: deleting ? null : failure,
+    deletingSince: deleting
+      ? (inputs.deletingStartedAt ?? environment.lifecycleOperationStartedAt ?? null)
+      : null,
     buildPipeline: inputs.buildPipeline,
     prState: environment.prState ?? null,
     autoMerge: environment.autoMerge === true,
@@ -91,6 +99,7 @@ export function nodeEnvironmentRowFacts(
     environmentType: environment.environmentType,
     status: environment.status,
     deleting: environment.deleting && !environment.deleteFailure,
+    deletionPending: environment.deleting,
     deleteFailure: environment.deleteFailure ?? null,
     deletingSince:
       environment.deleting && !environment.deleteFailure

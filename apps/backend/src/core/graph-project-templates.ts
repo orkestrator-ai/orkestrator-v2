@@ -52,6 +52,8 @@ export interface GraphProjectTemplateScan {
 }
 
 export interface GraphProjectWatchHandle {
+  /** Helper registration finished; rejects if the watch failed or was closed. */
+  established?: Promise<void>;
   close(): void;
 }
 
@@ -360,7 +362,18 @@ export class GraphProjectTemplates {
         // fingerprint the directory, so changes are seen on the next list.
         return;
       }
-      this.watches.set(projectId, { target, handle, signature: scanSignature(scan) });
+      const watch: ProjectWatch = { target, handle, signature: scanSignature(scan) };
+      this.watches.set(projectId, watch);
+      // The first scan precedes registration in the helper. Reconcile even
+      // without an event, but never let an old watch affect its replacement.
+      void handle.established?.then(
+        () => {
+          if (!this.closed && this.watches.get(projectId) === watch) this.onEvent(projectId);
+        },
+        () => {
+          if (this.watches.get(projectId) === watch) this.forget(projectId);
+        },
+      );
       while (this.watches.size > this.maxWatchedProjects) {
         const oldest = this.watches.keys().next().value;
         if (oldest === undefined) break;

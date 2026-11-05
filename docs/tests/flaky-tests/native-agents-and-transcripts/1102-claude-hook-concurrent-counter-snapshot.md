@@ -50,3 +50,21 @@ behaviour, not its cause. No assertion, timeout or skip was changed.
 Preparation at cd5b0142 again failed this owner under `mise run test` (1169.12 ms; diagnostic in review-validation-6e251f8d-c76b-469b-b389-d7b80e76ea49/validation-04.stdout.txt). The owner passed in a sequential one-worker rerun alongside three other recorded backend owners:
 `mise run test:logged -- --name recorded-backend-failures -- bun --cwd=apps/backend test tests/shell.test.ts tests/claude-state-signal-integration.test.ts tests/commands-container-exec.test.ts src/core/preview-listener-ownership.test.ts --parallel=1 --only-failures`.
 The command passed in 6.1 seconds; passing output was deleted by the logged runner. No assertion changed.
+
+## 2026-11-05 environment-deletion review recurrence
+
+Preparation at `2350d1e8da1f721a4e8b11886ccc84df1304c77c` ran
+`mise run test:logged -- --name review-default-tests -- mise run test` and
+observed `working 11 0` instead of `working 20 0` (1178.65 ms). The immutable
+diagnostic is `.orkestrator/review-artifacts/review-validation-99e6b0c3-c310-4ab4-a4da-4957c80f5523/validation-04.stderr.txt:1203`.
+The package's triage marks it related through an indirect import of
+`diff-stats-tracking.ts`; it also identifies this open flake. The package
+reports no reliable complete aggregate count (including two between-test
+errors), so no additional suite total is inferred here.
+
+The owning file passed alone, unchanged, in 0.7 s:
+`mise run test:logged -- --name address-recorded-hook -- bun test --cwd apps/backend ./tests/claude-state-signal-integration.test.ts --parallel=1 --only-failures`.
+This confirms recurrence of intermittent behavior, not a repair. The hook
+script's one-second lock deadline can skip a write on contention while exiting
+successfully, but that path was not instrumented in the captured run; no cause
+is established. No assertion, timeout, skip or hook implementation was changed.

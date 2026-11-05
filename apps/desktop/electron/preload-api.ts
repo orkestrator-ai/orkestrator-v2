@@ -690,6 +690,10 @@ export function createOrkestratorElectronApi(rawIpcRenderer: IpcRendererLike) {
       setZoomFactor(factor: number): Promise<boolean> {
         return ipcRenderer.invoke("orkestrator:window:set-zoom-factor", factor);
       },
+      /** This renderer's debug logging preference, so Help can offer DevTools. */
+      setRendererDebugLogging(enabled: boolean): Promise<boolean> {
+        return ipcRenderer.invoke("orkestrator:window:set-renderer-debug", enabled);
+      },
     },
 
     browserPreview: {

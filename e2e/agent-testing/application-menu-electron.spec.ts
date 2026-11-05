@@ -9,12 +9,103 @@ import type {} from "../fixtures/application-menu-electron";
 import { withCleanup } from "../process-cleanup";
 import { closeElectronWithin } from "./design-electron-cleanup";
 import {
+  HEADLESS_ELECTRON_SWITCHES,
+  headlessElectronRequested,
+  withoutDisplay,
+} from "./electron-launch-switches";
+import {
   nativeMenuAlt,
   nativeMenuFocus,
   nativeMenuKeys,
   nativeMenuScreenshot,
   nativeMenuWindows,
 } from "./native-menu-input";
+
+/**
+ * Runs on macOS too, where the first test skips: there Help comes from the
+ * `help` role with an empty submenu until a renderer turns debug logging on.
+ * The whole-app path through Settings is log-controls-packaged-electron.spec.ts.
+ */
+test("Help offers Open Developer Tools only while a renderer has debug logging on", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "orkestrator-menu-"));
+  let app: ElectronApplication | undefined;
+  await withCleanup(async () => {
+    const fixture = path.join(directory, "main.cjs");
+    execFileSync(
+      "bun",
+      [
+        "build",
+        "e2e/fixtures/application-menu-electron.ts",
+        "--target=node",
+        "--format=cjs",
+        "--external=electron",
+        `--outfile=${fixture}`,
+      ],
+      { timeout: 30_000 },
+    );
+    const headless = headlessElectronRequested();
+    const inherited = headless ? withoutDisplay(process.env) : process.env;
+    const env = Object.fromEntries(
+      Object.entries(inherited).filter(
+        (entry): entry is [string, string] =>
+          entry[1] !== undefined && entry[0] !== "ELECTRON_RUN_AS_NODE",
+      ),
+    );
+    app = await electron.launch({
+      executablePath: createRequire(import.meta.url)("electron") as string,
+      args: [
+        "--no-sandbox",
+        ...(headless ? HEADLESS_ELECTRON_SWITCHES : []),
+        "--lang=en-US",
+        `--user-data-dir=${path.join(directory, "profile")}`,
+        fixture,
+      ],
+      env,
+    });
+    const page = await app.firstWindow();
+    await expect(page).toHaveTitle("Orkestrator menu qualification");
+    const launched = app;
+    const helpLabels = () =>
+      launched.evaluate(({ Menu }) =>
+        Menu.getApplicationMenu()!
+          .items.find((item) => item.label === "Help" || item.role === "help")!
+          .submenu!.items.map((item) => item.label),
+      );
+    const report = (enabled: boolean) =>
+      launched.evaluate((_, on) => globalThis.reportRendererDebug(on), enabled);
+    const devToolsOpen = () =>
+      launched.evaluate(({ BrowserWindow }) =>
+        BrowserWindow.getAllWindows().some((window) => window.webContents.isDevToolsOpened()),
+      );
+
+    expect(await helpLabels()).not.toContain("Open Developer Tools");
+
+    await report(true);
+    expect(await helpLabels()).toContain("Open Developer Tools");
+    await launched.evaluate(({ Menu, BrowserWindow }) => {
+      const window = BrowserWindow.getAllWindows()[0]!;
+      Menu.getApplicationMenu()!
+        .items.find((item) => item.label === "Help" || item.role === "help")!
+        .submenu!.items.find((item) => item.label === "Open Developer Tools")!
+        .click({} as Electron.KeyboardEvent, window, window.webContents);
+    });
+    await expect.poll(devToolsOpen).toBe(true);
+    await launched.evaluate(({ BrowserWindow }) => {
+      for (const window of BrowserWindow.getAllWindows()) window.webContents.closeDevTools();
+    });
+    await expect.poll(devToolsOpen).toBe(false);
+
+    await report(false);
+    expect(await helpLabels()).not.toContain("Open Developer Tools");
+    await test.info().attach("native-menu-developer-tools", {
+      body: JSON.stringify({ platform: process.platform, headless }),
+      contentType: "application/json",
+    });
+  }, [
+    async () => void (await closeElectronWithin(app)),
+    () => rm(directory, { recursive: true, force: true }),
+  ]);
+});
 
 test("built application menu resolves native roles and dispatches callbacks", async () => {
   test.skip(process.platform === "darwin", "Windows/Linux menu qualification");

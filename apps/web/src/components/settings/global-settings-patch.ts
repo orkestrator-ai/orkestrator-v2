@@ -62,6 +62,8 @@ export interface CoreFieldsSnapshot {
   debugLogging: boolean;
   debugLogRetentionDays: number;
   logDetail: LogDetail;
+  /** Sent as `false` rather than unset: a save without it keeps the stored choice. */
+  logDetailKeepRaised: boolean;
   webClientEnabled: boolean;
   reviewInstruction: string;
   /** Resolved: the shipped five when none are stored. */
@@ -99,6 +101,7 @@ const STORED_AS_IS = [
   "debugLogging",
   "debugLogRetentionDays",
   "logDetail",
+  "logDetailKeepRaised",
   "webClientEnabled",
   "multiReviewEngine",
 ] as const satisfies readonly (keyof CoreFieldsSnapshot & keyof GlobalConfig)[];

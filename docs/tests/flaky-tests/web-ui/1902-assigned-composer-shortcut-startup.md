@@ -90,3 +90,13 @@ retained. This owner reused the broad run's fixture server; it was a
 single-file rerun, not an idle-host qualification. No owner assertion, timeout,
 skip or fixture logic changed. The cause of the intermittent observation
 remains unestablished.
+
+
+### Broad rerun outcome
+
+The bounded runner stopped the broad command at its 1,800 s absolute deadline
+(exit 1), after the reporter started case 856 of 1,596. It named three failed
+cases but emitted no closing component totals; the public-site phase did not
+run. `summary.json` alongside the compressed log records `timeoutReason:
+"absolute"`. The broad check remains incomplete; passing this owner does not
+waive that timeout or establish a green browser suite.

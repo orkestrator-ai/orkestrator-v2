@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { loseBunExitEvents } from "../testing/lost-exit.js";
 import { existsSync, readdirSync } from "node:fs";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { CommandFailedError } from "./command-capture.js";
 import {
   activateRelease,
   installRelease,
@@ -15,6 +17,7 @@ import {
   readStartupFailure,
   RELEASE_RUNTIME_PATH,
   releaseDirectory,
+  runFile,
   satisfiesBunRange,
   standaloneLayout,
   writeServiceConfig,
@@ -292,3 +295,42 @@ test.each(["bootFailure", "rollback"])(
     }
   },
 );
+
+describe.skipIf(process.platform === "win32")("runFile", () => {
+  test("returns both streams from a clean exit", async () => {
+    expect(
+      await runFile("sh", ["-c", "printf out; printf err >&2; pwd >&2"], {
+        cwd: dataDir,
+        timeoutMs: 10_000,
+      }),
+    ).toEqual({ stdout: "out", stderr: expect.stringContaining("err") });
+  });
+
+  test("a failing exit rejects with its code and output", async () => {
+    const error = await runFile("sh", ["-c", "printf nope >&2; exit 5"], {
+      timeoutMs: 10_000,
+    }).catch((reason: unknown) => reason);
+    expect(error).toBeInstanceOf(CommandFailedError);
+    expect(error).toMatchObject({ exitCode: 5, stderr: "nope", message: "nope" });
+  });
+
+  test("settles at exit while a background child holds its output", async () => {
+    const started = Date.now();
+    const { stdout } = await runFile("sh", ["-c", "printf done; sleep 5 & exit 0"], {
+      timeoutMs: 10_000,
+    });
+    expect(stdout).toBe("done");
+    expect(Date.now() - started).toBeLessThan(4_000);
+  });
+
+  test("a lost completion event fails at the deadline, never as a success", async () => {
+    const restore = loseBunExitEvents();
+    try {
+      await expect(runFile("sh", ["-c", "printf out"], { timeoutMs: 300 })).rejects.toMatchObject({
+        timedOut: true,
+      });
+    } finally {
+      restore();
+    }
+  });
+});

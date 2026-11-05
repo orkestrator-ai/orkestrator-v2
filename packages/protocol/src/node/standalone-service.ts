@@ -14,13 +14,10 @@
  *     restart-requested              the backend exited to be restarted
  *     launcher.js                    the launcher, copied from the release
  */
-import { execFile } from "node:child_process";
 import { existsSync, readFileSync, readlinkSync } from "node:fs";
 import { copyFile, mkdir, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
-
-const execFileAsync = promisify(execFile);
+import { runCommand } from "./command-capture.js";
 
 export const STANDALONE_DIRECTORY = "backend";
 export const STANDALONE_PACKAGE = "orkestrator";
@@ -304,15 +301,13 @@ export type CommandRunner = (
   options: { cwd?: string; timeoutMs: number; env?: NodeJS.ProcessEnv },
 ) => Promise<{ stdout: string; stderr: string }>;
 
-export const runFile: CommandRunner = async (file, args, options) => {
-  const { stdout, stderr } = await execFileAsync(file, args, {
+export const runFile: CommandRunner = (file, args, options) =>
+  runCommand(file, args, {
     cwd: options.cwd,
-    timeout: options.timeoutMs,
+    timeoutMs: options.timeoutMs,
     env: options.env ?? process.env,
-    maxBuffer: 16 * 1024 * 1024,
+    maxOutputBytes: 16 * 1024 * 1024,
   });
-  return { stdout: String(stdout), stderr: String(stderr) };
-};
 
 function installArguments(registry: string | undefined, ...flags: string[]): string[] {
   return ["install", ...flags, "--no-progress", ...(registry ? ["--registry", registry] : [])];

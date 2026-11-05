@@ -2,7 +2,7 @@
 
 Which files under `docs/reports` can be built together, and which pieces of work must not run at the same time. Each folder's `0000-index.md` has the same information for its own files, in a **Parallel running** section.
 
-Worked out on 2026-11-03 against `main` at `a44641cbc`, from the 167 work files in the four folders. On 2026-11-04, 137 of them were combined into the 41 batch files listed under [Batch files](#batch-files), which keep each report as a numbered part, with repeated text removed. That leaves 71 files. The other 30 are built on their own, need a decision or measurement first, or are blocked. E1 is a set of baseline tasks inside other batch files, so it has no file of its own. E8 (Agent tab polling) was built on 2026-11-04 and its file deleted, so this plan no longer lists it; its result is in [1202 task 4](../todo/cross-cutting/1202-efficiency-review-follow-ups.md). E4 (Object store) was built on 2026-11-05 and its file deleted the same way; its outcome is the closing check in [the efficiency index](efficiency-logging-database/0000-index.md#closing-check-of-e4-object-store). E-0120 (Bearer terminal streams) was built on 2026-11-05 and its file deleted too; GW-3 is recorded as done in the efficiency index. E21, E-0140, E-0250, E-0520 and E-0692 were finished, checked back and deleted on 2026-11-05; their outcome is in the efficiency index's [closing check](efficiency-logging-database/0000-index.md#closing-check-of-e21-e-0140-e-0250-e-0520-and-e-0692).
+Worked out on 2026-11-03 against `main` at `a44641cbc`, from the 167 work files in the four folders. On 2026-11-04, 137 of them were combined into the 41 batch files listed under [Batch files](#batch-files), which keep each report as a numbered part, with repeated text removed. That leaves 71 files. The other 30 are built on their own, need a decision or measurement first, or are blocked. E1 is a set of baseline tasks inside other batch files, so it has no file of its own. E8 (Agent tab polling) was built on 2026-11-04 and its file deleted, so this plan no longer lists it; its result is in [1202 task 4](../todo/cross-cutting/1202-efficiency-review-follow-ups.md). E4 (Object store) was built on 2026-11-05 and its file deleted the same way; its outcome is the closing check in [the efficiency index](efficiency-logging-database/0000-index.md#closing-check-of-e4-object-store). E-0120 (Bearer terminal streams) was built on 2026-11-05 and its file deleted too; GW-3 is recorded as done in the efficiency index. E21, E-0140, E-0250, E-0520 and E-0692 were finished, checked back and deleted on 2026-11-05; their outcome is in the efficiency index's [closing check](efficiency-logging-database/0000-index.md#closing-check-of-e21-e-0140-e-0250-e-0520-and-e-0692). S-0200 (Workspace grant allowlist) was built on 2026-11-05 and its file deleted too; I1 is recorded as done in the security index, and its live checks are in [todo 5740](../todo/cross-cutting/5740-workspace-grant-scope-live-evidence.md).
 
 ## Rules
 
@@ -54,7 +54,7 @@ Worked out on 2026-11-03 against `main` at `a44641cbc`, from the 167 work files 
 | Storage | 1. E5 (Database upkeep)<br>2. S-0190 (Provider secrets at rest) | `storage-database.ts`, `storage-backups.ts`, `storage-stores.ts` |
 | Git scans and file reads | 1. E-0580 (File RPC and usage report) | `commands-files.ts`, `git-scopes.ts`, `diff-stats-service.ts` |
 | Desktop | 1. E26 (Local desktop transport)<br>2. E-0691 (Preview capture data URLs) | `apps/desktop/electron/` windows, IPC and preloads, `backend-process.ts` |
-| Gateway | 1. S-0200 (Workspace grant allowlist)<br>2. E18 (Gateway events)<br>3. E24 (Gateway static and preview)<br>4. S-0160 (Descriptor process binding) | `gateway-auth.ts`, `gateway-events.ts`, `gateway-proxy.ts`, `gateway-support-*.ts`, `terminal-websocket-server.ts` |
+| Gateway | 1. E18 (Gateway events)<br>2. E24 (Gateway static and preview)<br>3. S-0160 (Descriptor process binding) | `gateway-auth.ts`, `gateway-events.ts`, `gateway-proxy.ts`, `gateway-support-*.ts`, `terminal-websocket-server.ts` |
 | Logging and diagnostics | 1. E13 (Silent failures)<br>2. E17 (Dead code)<br>3. E15 (Health and diagnostics)<br>4. E16 (Log controls) | `application-logging.ts`, the metrics route and the logging settings |
 
 ## Work with no lane
@@ -68,7 +68,6 @@ These batches don't share a protected area. They only have to respect the confli
 - **S-0260 (Live checks on other platforms):** security `0260`
 - **E20 (ACP bridge):** efficiency-logging-database `0270`, `0260`, `0240`
 - **E23 (Renderer polling):** efficiency-logging-database `0620`, `0630`, `0660`
-- **E-0360 (SSE replay rings):** efficiency-logging-database `0360`
 - **E-0650 (Terminal container subscription):** efficiency-logging-database `0650`
 - **E-0680 (Multi Review drift checks):** efficiency-logging-database `0680`
 - **E-0694 (Attention follow polling):** efficiency-logging-database `0694`

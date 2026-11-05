@@ -30,17 +30,16 @@ A batch file combines several reports as numbered parts and takes the rating of 
 | 14 | [0240-e20-acp-bridge.md](0240-e20-acp-bridge.md) | Low | No | **E20, ACP bridge.**<br>`0270`: BR-16: ACP's Cursor replay looks like dead code<br>`0260`: BR-12: ACP stdout framing is quadratic for large frames<br>`0240`: BR-1 (remainder): ACP still serialises every session on each state write | From `0240`: The write rate is already down to once a second, so the remaining cache should wait for a measurement. |
 | 15 | [0280-e18-gateway-events.md](0280-e18-gateway-events.md) | Low | No | **E18, Gateway events.**<br>`0280`: GW-5: Events are measured and encoded again for each subscriber<br>`0290`: GW-12: Scoped stream replay writes one cursor frame per skipped event<br>`0300`: GW-14: Replay lookup is a linear filter and an oversized event is invisible<br>`0370`: GW-11: Relayed federation events share one name and the main replay window | From `0280`: A small per-subscriber cost that should wait for a profile. |
 | 16 | [0310-e24-gateway-static-and-preview.md](0310-e24-gateway-static-and-preview.md) | Low | No | **E24, Gateway static and preview.**<br>`0310`: GW-15: Static fallback compression runs before the 304 check<br>`0365`: GW-10: The preview body rewrite makes many full regex passes | From `0310`: Wasted compression only for revalidated static files that have no precompressed sibling. |
-| 17 | [0360-br-15-sse-replay-rings.md](0360-br-15-sse-replay-rings.md) | Low | No | BR-15 (remainder): Two SSE replay rings with uneven quality | Duplicate ring code whose backend subscriber only receives small observation frames. |
-| 18 | [0385-tx-10-joined-history-pages.md](0385-tx-10-joined-history-pages.md) | Low | No | TX-10: Joined history pages read the whole transcript per page | A compatibility path that only older renderers use and that 0232 will remove, blocked on the support window. |
-| 19 | [0390-gw-7-websocket-compression.md](0390-gw-7-websocket-compression.md) | Low | No | GW-7: No WebSocket message compression | Deferred by 0052 decision D6 until the transport direction is chosen. |
-| 20 | [0560-st-9-agent-mail-store-remainder.md](0560-st-9-agent-mail-store-remainder.md) | Low | No | ST-9 (rest): Agent mail: pending injects and mailbox lists still sit on the whole store | The read cost the finding described has gone, and the rest needs a stored-format change only a measurement could justify. |
-| 21 | [0580-st-21-file-rpc-and-usage-report.md](0580-st-21-file-rpc-and-usage-report.md) | Low | No | ST-21: Whole files cross RPC as base64, branch reads spawn twice, and usage reports parse every row | These are occasional, bounded reads. |
-| 22 | [0620-e23-renderer-polling.md](0620-e23-renderer-polling.md) | Low | No | **E23, Renderer polling.**<br>`0620`: WEB-12: One environment change refetches the project's whole environment list<br>`0630`: WEB-13: Expanded truncated folders are re-read every 5 s without a digest<br>`0660`: WEB-18: Some renderer polls keep running while the window is hidden | From `0620`: Bursts already collapse to one project read, so this should wait for a measurement. |
-| 23 | [0650-web-16-terminal-container-environment-subscription.md](0650-web-16-terminal-container-environment-subscription.md) | Low | No | WEB-16: `TerminalContainer` subscribes to the whole environment object | It is an unmeasured re-render, with launch-effect risk in the fix. |
-| 24 | [0680-bg-10-multi-review-snapshot-drift-checks.md](0680-bg-10-multi-review-snapshot-drift-checks.md) | Low | No | BG-10: Multi Review snapshot mode runs a drift check per reviewer | It costs a bounded number of extra git probes per review pass. |
-| 25 | [0691-dk-5-preview-capture-data-urls.md](0691-dk-5-preview-capture-data-urls.md) | Low | No | DK-5: Preview captures cross IPC as large data URLs | Captures are occasional and bounded. |
-| 26 | [0693-dk-10-second-claude-binary.md](0693-dk-10-second-claude-binary.md) | Low | No | DK-10: The image ships two Claude Code native binaries | It is an optional image-size saving that waits on a maintainer decision. |
-| 27 | [0694-dk-16-attention-follow-polling.md](0694-dk-16-attention-follow-polling.md) | Low | No | DK-16 (rest): CLI `attention --follow` re-downloads pending items on every poll | It affects only long-running followers, and pending pages are probably small. |
+| 17 | [0385-tx-10-joined-history-pages.md](0385-tx-10-joined-history-pages.md) | Low | No | TX-10: Joined history pages read the whole transcript per page | A compatibility path that only older renderers use and that 0232 will remove, blocked on the support window. |
+| 18 | [0390-gw-7-websocket-compression.md](0390-gw-7-websocket-compression.md) | Low | No | GW-7: No WebSocket message compression | Deferred by 0052 decision D6 until the transport direction is chosen. |
+| 19 | [0560-st-9-agent-mail-store-remainder.md](0560-st-9-agent-mail-store-remainder.md) | Low | No | ST-9 (rest): Agent mail: pending injects and mailbox lists still sit on the whole store | The read cost the finding described has gone, and the rest needs a stored-format change only a measurement could justify. |
+| 20 | [0580-st-21-file-rpc-and-usage-report.md](0580-st-21-file-rpc-and-usage-report.md) | Low | No | ST-21: Whole files cross RPC as base64, branch reads spawn twice, and usage reports parse every row | These are occasional, bounded reads. |
+| 21 | [0620-e23-renderer-polling.md](0620-e23-renderer-polling.md) | Low | No | **E23, Renderer polling.**<br>`0620`: WEB-12: One environment change refetches the project's whole environment list<br>`0630`: WEB-13: Expanded truncated folders are re-read every 5 s without a digest<br>`0660`: WEB-18: Some renderer polls keep running while the window is hidden | From `0620`: Bursts already collapse to one project read, so this should wait for a measurement. |
+| 22 | [0650-web-16-terminal-container-environment-subscription.md](0650-web-16-terminal-container-environment-subscription.md) | Low | No | WEB-16: `TerminalContainer` subscribes to the whole environment object | It is an unmeasured re-render, with launch-effect risk in the fix. |
+| 23 | [0680-bg-10-multi-review-snapshot-drift-checks.md](0680-bg-10-multi-review-snapshot-drift-checks.md) | Low | No | BG-10: Multi Review snapshot mode runs a drift check per reviewer | It costs a bounded number of extra git probes per review pass. |
+| 24 | [0691-dk-5-preview-capture-data-urls.md](0691-dk-5-preview-capture-data-urls.md) | Low | No | DK-5: Preview captures cross IPC as large data URLs | Captures are occasional and bounded. |
+| 25 | [0693-dk-10-second-claude-binary.md](0693-dk-10-second-claude-binary.md) | Low | No | DK-10: The image ships two Claude Code native binaries | It is an optional image-size saving that waits on a maintainer decision. |
+| 26 | [0694-dk-16-attention-follow-polling.md](0694-dk-16-attention-follow-polling.md) | Low | No | DK-16 (rest): CLI `attention --follow` re-downloads pending items on every poll | It affects only long-running followers, and pending pages are probably small. |
 
 ## Parallel running
 
@@ -65,8 +64,8 @@ This index only changes when a branch merges, so it can't show what is running n
 | E4 | [Object store](0430-e4-object-store.md) | `0430`, `0480`, `0530`, `0550` | Change tracking, 2 of 2 | None | None |
 | E5 | [Database upkeep](0760-e5-database-upkeep.md) | `0760`, `0800`, `0910`, `0920` | Storage, 1 of 2 | None | E15 (Health and diagnostics) |
 | E26 | [Local desktop transport](0400-e26-local-desktop-transport.md) | `0400`, `0860` | Desktop, 1 of 2 | E1 (Baseline run) | None |
-| E18 | [Gateway events](0280-e18-gateway-events.md) | `0280`, `0290`, `0300`, `0370` | Gateway, 2 of 4 | None | None |
-| E24 | [Gateway static and preview](0310-e24-gateway-static-and-preview.md) | `0310`, `0365` | Gateway, 3 of 4 | None | None |
+| E18 | [Gateway events](0280-e18-gateway-events.md) | `0280`, `0290`, `0300`, `0370` | Gateway, 1 of 3 | None | None |
+| E24 | [Gateway static and preview](0310-e24-gateway-static-and-preview.md) | `0310`, `0365` | Gateway, 2 of 3 | None | None |
 | E13 | [Silent failures](0720-e13-silent-failures.md) | `0720`, `0830` | Logging and diagnostics, 1 of 4 | None | E20 (ACP bridge) |
 | E17 | [Dead code](0770-e17-dead-code.md) | `0770`, `0930` | Logging and diagnostics, 2 of 4 | None | None |
 | E15 | [Health and diagnostics](0750-e15-health-and-diagnostics.md) | `0750`, `0820`, `0810`, `0880`, `0780` | Logging and diagnostics, 3 of 4 | None | E5 (Database upkeep) |
@@ -103,7 +102,6 @@ These still follow the lane and conflict rules above.
 | --- | --- | --- | --- | --- | --- |
 | E-0580 | [File RPC and usage report](0580-st-21-file-rpc-and-usage-report.md) | `0580` | Git scans and file reads, 1 of 1 | None | None |
 | E-0691 | [Preview capture data URLs](0691-dk-5-preview-capture-data-urls.md) | `0691` | Desktop, 2 of 2 | None | None |
-| E-0360 | [SSE replay rings](0360-br-15-sse-replay-rings.md) | `0360` | No lane | None | None |
 | E-0650 | [Terminal container subscription](0650-web-16-terminal-container-environment-subscription.md) | `0650` | No lane | None | None |
 | E-0680 | [Multi Review drift checks](0680-bg-10-multi-review-snapshot-drift-checks.md) | `0680` | No lane | None | None |
 | E-0694 | [Attention follow polling](0694-dk-16-attention-follow-polling.md) | `0694` | No lane | None | None |
@@ -121,7 +119,7 @@ When one of these becomes ready, it joins the lane shown.
 
 ## Status of every efficiency finding
 
-80 done, 9 partly done, 32 open, 2 no action.
+85 done, 8 partly done, 28 open, 2 no action.
 
 | Finding | Disposition | Evidence |
 | --- | --- | --- |
@@ -173,7 +171,7 @@ When one of these becomes ready, it joins the lane shown.
 | BR-12 | Done | `JsonlLineFramer` searches only the new chunk (`bridges/acp-bridge/src/acp-jsonl-framer.ts`); see 1202 task 6. |
 | BR-13 | Done | `SerialQueue` drains an array per key with count and byte bounds, and overflow replaces the child (`bridges/codex-bridge/src/app-server/jsonl-rpc-client.ts`); see 1202 task 6. A real high-water mark is still to be read: [5481](../../todo/agent-engines/5481-codex-notification-queue-headroom.md). |
 | BR-14 | Done | `encodeStateWithinBudget` encodes each record once (`bridges/pi-bridge/src/persistence.ts`); see 1202 task 6. A test that the durability barrier rejects state that cannot fit is [5480](../../todo/agent-engines/5480-pi-resume-list-timeout-leftovers.md) task 4. |
-| BR-15 | Partly done | The transcript helpers moved to `packages/protocol/src/node` (#1593 `e668f0a6d`), but the rings remain separate (`bridges/codex-bridge/src/event-ring.ts:62`, `bridges/claude-bridge/src/routes/events.ts:101`); see 0360. |
+| BR-15 | Done | The transcript helpers moved to `packages/protocol/src/node` (#1593 `e668f0a6d`), and both bridges now use one replay ring, `EventRing` (`packages/protocol/src/node/event-ring.ts`); Claude collapses superseded frames and reuses each frame's byte count (`bridges/claude-bridge/src/routes/events.ts`). See the closing check of E-0360 below. |
 | BR-16 | Done | The replay and its gates are removed and the harness uses `acp-fixture`; the method-gated `cursor/*` handlers are [4540](../../todo/agent-engines/4540-acp-bridge-cursor-extension-leftovers.md). See 1202 task 6. |
 | WEB-1 | Done | A background round is one request plus discovery when due, 3 requests per round to 1.04 (`useNativeAgentSession.ts`); the finding's note that Claude and Codex idle views never back off no longer held (`turn.quietObservation`, `native-session-read-policy.ts`); see [1202 task 4](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md). |
 | WEB-2 | Done | Identity kept and recency condition gone (12289fc56); the hook reads its sync and progressive caches with `getState()` (`useNativeAgentSession.ts`, 2026-11-04); see 0590 and [1202](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md). |
@@ -317,6 +315,18 @@ The outcome of every task in the E2 batch file, checked back against the code on
 | 0710 | 3. Decide the provisional spacing | Moved to a to-do | Spacing is unchanged, as the report recommended. The measurement and decision are [4962](../../todo/cross-cutting/4962-provisional-capture-spacing.md). |
 | 0710 | Needs verification: how often a dirty hint finds an unchanged tree | Moved to a to-do | [4962](../../todo/cross-cutting/4962-provisional-capture-spacing.md) task 1. |
 | 0710 | Needs verification: size swings come from one machine and date | Moved to a to-do | [4960](../../todo/cross-cutting/4960-measurement-rows-live-soak.md), "Needs verification". |
+
+## Closing check of E-0360 (SSE replay rings)
+
+The outcome of every task in `0360-br-15-sse-replay-rings.md`, checked back against the code on 2026-11-05 before the file was deleted. The build began at `69a3b4ca5`, where every finding still held; read the file there, or with its outcome table at `0b7acc8c3`. BR-15 in the table above summarises this. No to-do was needed.
+
+| Task | Outcome | Code, evidence or to-do |
+| --- | --- | --- |
+| 1. Move one ring into the protocol package | Done | `EventRing` in `packages/protocol/src/node/event-ring.ts`, used by Codex (`bridges/codex-bridge/src/index.ts`) and by Claude's `createReplayBuffer` and `supersedeReplayFrame` (`bridges/claude-bridge/src/routes/events.ts`). Tests: `event-ring.test.ts` ("EventRing supersede", "EventRing with an outside sequence"); `events.test.ts` ("SSE replay collapse", "replays collapsed frames as cursor frames before the newest snapshot", "an observation subscriber's replay is unchanged by the collapse"). |
+| 1. Decision: move with BR-15 or separately after BR-7 | Done, recommended option | Separately after BR-7, which was finished first (0250). |
+| 2. Stop re-measuring frames per subscriber | Done | `serializeEvent` and `SseFrame.dataBytes` (`events.ts`). Tests: "uses a frame's known byte count rather than measuring its data again", "measures an event's encoded bytes once with its serialization" (`events.test.ts`). |
+| Constraint: byte and count bounds kept, and no collapse hides a gap | Done | 512 frames and 4 MiB; collapsed entries keep their revisions, and a revision jump drops what is retained. Tests: "a jump past the next revision drops what a replay could no longer cover densely", "a skipped revision makes an older cursor require a reset". |
+| Compatibility | Done | Observation replays, the backend's only stream, are unchanged; full mode adds only `bridge.cursor`, which Codex already sends. |
 
 ## Closing check of E22 (Chat rendering)
 

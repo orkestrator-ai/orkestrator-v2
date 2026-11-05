@@ -2937,15 +2937,17 @@ export class OrkestratorBackend {
     this.selfAccessSource = source;
   }
 
-  /** Backend-owned preview services, for gateway transport adapters. */
+  /** Cached database diagnostics for gateway transport adapters. */
   databaseStats() {
     return this.diagnostics.databaseStats();
   }
 
+  /** Supplies the gateway metrics included in diagnostics exports. */
   attachGatewayMetrics(source: () => unknown): void {
     this.diagnostics.attachGatewayMetrics(source);
   }
 
+  /** Backend-owned preview services, for gateway transport adapters. */
   get previews(): PreviewRuntime | undefined {
     return this.context.previews;
   }

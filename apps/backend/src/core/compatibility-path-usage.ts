@@ -228,7 +228,7 @@ export class CompatibilityPathUsage {
   attach(sink: CompatibilityPathUsageSink): void {
     if (this.sink && this.sink !== sink) this.detach(this.sink);
     this.sink = sink;
-    if (this.pending.size > 0) this.scheduleFlush();
+    this.scheduleFlush();
   }
 
   /** Flushes into `sink`, then stops persisting and closes it, if it is still attached. */
@@ -258,11 +258,12 @@ export class CompatibilityPathUsage {
       const snapshot = this.sink.merge(pending);
       this.persisted = normalizeCompatibilityPathUsage(snapshot);
       this.loaded = true;
+      this.scheduleFlush();
       return snapshot;
     } catch {
       // Keep the counts and retry even when no further traffic arrives.
       this.pending = pending;
-      if (pending.size > 0) this.scheduleFlush();
+      this.scheduleFlush();
       return mergeCompatibilityPathUsage(normalizeCompatibilityPathUsage(this.persisted), pending);
     }
   }
@@ -276,7 +277,7 @@ export class CompatibilityPathUsage {
    * The last totals read or written plus what is pending, from memory: a poll
    * costs no I/O and persistence stays with the once-a-minute flush. The first
    * call reads the sink once, so a fresh process starts from the stored totals.
-   * Another backend's counts arrive with this one's next flush, so they can lag;
+   * Another backend's counts arrive within the periodic flush interval;
    * for the durable truth call {@link snapshot}.
    */
   peek(): CompatibilityPathUsageSnapshot {

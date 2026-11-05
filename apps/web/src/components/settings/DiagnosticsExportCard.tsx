@@ -41,7 +41,13 @@ async function fetchBundle(
     offset = chunk.nextOffset;
   }
   if (received !== plan.archive.bytes) throw new Error("The bundle did not arrive intact.");
-  return new Blob(parts, { type: "application/gzip" });
+  const blob = new Blob(parts, { type: "application/gzip" });
+  const digest = await crypto.subtle.digest("SHA-256", await blob.arrayBuffer());
+  const sha256 = Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
+  if (sha256 !== plan.archive.sha256) throw new Error("The bundle did not arrive intact.");
+  return blob;
 }
 
 /**

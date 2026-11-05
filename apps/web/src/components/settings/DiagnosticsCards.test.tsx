@@ -79,7 +79,7 @@ const PLAN: DiagnosticsBundlePlan = {
   planId: "plan-1",
   fileName: "orkestrator-diagnostics-2026.tar.gz",
   expiresAt: "2026-11-05T12:15:00.000Z",
-  archive: { bytes: 6, sha256: "x" },
+  archive: { bytes: 6, sha256: "bef57ec7f53a6d40beb640a780a639c83bc29ac8a9816f1fc6c5c6dcd93c4721" },
   manifest: {
     schemaVersion: 1,
     createdAt: "2026-11-05T12:00:00.000Z",
@@ -224,4 +224,23 @@ test("a failed plan says why and offers the button again", async () => {
   expect(
     (screen.getByRole("button", { name: "Export diagnostics" }) as HTMLButtonElement).disabled,
   ).toBe(false);
+});
+
+test("same-length corrupted archive bytes are refused before download", async () => {
+  spyOn(backend, "planDiagnosticsBundle").mockResolvedValue(PLAN);
+  spyOn(backend, "readDiagnosticsBundle").mockResolvedValue({
+    planId: PLAN.planId,
+    fileName: PLAN.fileName,
+    archive: PLAN.archive,
+    offset: 0,
+    data: btoa("abcdeg"),
+    nextOffset: null,
+  });
+  const download = spyOn(downloads, "downloadBlob").mockImplementation(() => undefined);
+  mount(<DiagnosticsExportCard />);
+  fireEvent.click(screen.getByRole("button", { name: "Export diagnostics" }));
+  const dialog = await screen.findByRole("dialog");
+  fireEvent.click(within(dialog).getByRole("button", { name: "Save bundle" }));
+  await within(dialog).findByText("The bundle did not arrive intact.");
+  expect(download).not.toHaveBeenCalled();
 });

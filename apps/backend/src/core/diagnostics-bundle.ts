@@ -85,9 +85,19 @@ async function redactLines(
   raw: string,
   redactor: DiagnosticsRedactor,
 ): Promise<{ text: string; redactions: number }> {
-  const lines = raw.split("\n");
+  // Process PEM blocks before line boundaries erase their context. An unfinished
+  // block consumes the remaining tail rather than exporting its body.
+  let blockRedactions = 0;
+  const withoutKeys = raw.replace(
+    /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g,
+    () => {
+      blockRedactions += 1;
+      return "[redacted]";
+    },
+  );
+  const lines = withoutKeys.split("\n");
   const output: string[] = [];
-  let redactions = 0;
+  let redactions = blockRedactions;
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index]!.replace(/\r$/, "");
     const redacted = redactor.line(line);

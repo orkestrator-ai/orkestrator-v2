@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { createHash } from "node:crypto";
+import { createHash, generateKeyPairSync } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -77,7 +77,7 @@ function hostileLines(): string[] {
     }),
     `\\"password\\":\\"hunter2hunter2\\"`,
     `Cookie: session=${TOKENS.bearer}; other=1`,
-    `-----BEGIN RSA PRIVATE KEY-----`,
+    `-----BEGIN RSA PRIVATE KEY-----fixture-----END RSA PRIVATE KEY-----`,
     `opening ${HOME_DIR}/.config/orkestrator/orkestrator.sqlite`,
     ...OTHER_HOMES.map((home) => `reading ${home}/secret.txt`),
     JSON.stringify({ path: "C:\\Users\\winperson\\AppData\\x" }),
@@ -427,4 +427,25 @@ describe("DiagnosticsBundles", () => {
     expect(builds).toBe(1);
     bundles.dispose();
   });
+});
+
+test("archives remove generated multiline private keys and truncated blocks", async () => {
+  const logsDir = await fixtureDirectory();
+  const { privateKey } = generateKeyPairSync("ed25519");
+  const pem = privateKey.export({ type: "pkcs8", format: "pem" }).toString();
+  const body = pem.split("\n").filter((line) => line && !line.startsWith("-----"));
+  for (const truncated of [false, true]) {
+    await fs.writeFile(
+      path.join(logsDir, "orkestrator-backend-2026-11-05.log"),
+      "before\n" + (truncated ? pem.slice(0, pem.indexOf("-----END")) : pem) + "after\n",
+    );
+    const { archive } = await buildDiagnosticsBundle(sources(logsDir));
+    const log = (await untar(archive))
+      .get("logs/debug/orkestrator-backend-2026-11-05.log")!
+      .toString();
+    expect(log).toContain("before");
+    for (const line of body) expect(log).not.toContain(line);
+    expect(log).not.toContain("PRIVATE KEY");
+    if (!truncated) expect(log).toContain("after");
+  }
 });

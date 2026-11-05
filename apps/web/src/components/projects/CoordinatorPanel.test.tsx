@@ -264,7 +264,7 @@ async function refreshCoordinator(assignedSnapshot: CoordinatorSnapshot, revisio
     });
   });
   await waitFor(() => expect(getCoordinatorView.mock.calls.length).toBeGreaterThan(reads));
-  await screen.findByRole("button", { name: `Refreshed ${revision}, Claude Code` });
+  await screen.findByRole("tab", { name: `Refreshed ${revision}, Claude Code` });
 }
 
 mock.module("@/lib/backend", () => ({
@@ -569,7 +569,7 @@ describe("CoordinatorPanel", () => {
     // as "locked to codex".
     expect(agent.getAttribute("data-platform")).toBe("");
     expect(agent.getAttribute("data-available-platforms")).toBe("claude,codex");
-    const unassignedTab = screen.getByRole("button", { name: "First, no agent chosen yet" });
+    const unassignedTab = screen.getByRole("tab", { name: "First, no agent chosen yet" });
     expect(unassignedTab.querySelector("svg.text-muted-foreground")).toBeTruthy();
     expect(screen.getByText("Choose agent")).toBeTruthy();
 
@@ -1475,7 +1475,7 @@ describe("CoordinatorPanel", () => {
   test("reports selection and pause failures", async () => {
     const first = render(<CoordinatorPanel projectId="project-1" />);
     await screen.findByTestId("native-agent");
-    fireEvent.click(screen.getByRole("button", { name: "First, Codex" }));
+    fireEvent.click(screen.getByRole("tab", { name: "First, Codex" }));
     expect(await screen.findByText("select failed")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Pause" }));
     await waitFor(() => expect(pause).toHaveBeenCalledTimes(1));
@@ -1528,8 +1528,8 @@ describe("CoordinatorPanel", () => {
       },
     };
     render(<CoordinatorPanel projectId="project-1" />);
-    const main = await screen.findByRole("button", { name: "Coordinator, Codex" });
-    const side = screen.getByRole("button", { name: "Side 1, Codex" });
+    const main = await screen.findByRole("tab", { name: "Coordinator, main, Codex" });
+    const side = screen.getByRole("tab", { name: "Side 1, Codex" });
     expect(main.compareDocumentPosition(side) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.getByRole("button", { name: "New side agent" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Start coordinator" }) === null).toBe(true);
@@ -1538,7 +1538,7 @@ describe("CoordinatorPanel", () => {
   test("selects a conversation from the full tab shell and shows its agent brand", async () => {
     render(<CoordinatorPanel projectId="project-1" />);
 
-    const selectionButton = await screen.findByRole("button", { name: "First, Codex" });
+    const selectionButton = await screen.findByRole("tab", { name: "First, Codex" });
     expect(selectionButton.querySelector("svg.text-emerald-400")).toBeTruthy();
 
     const tabShell = selectionButton.parentElement;
@@ -1849,7 +1849,7 @@ describe("CoordinatorPanel", () => {
       });
     });
     await waitFor(() => expect(getCoordinatorView.mock.calls.length).toBeGreaterThan(reads));
-    await screen.findAllByRole("button", { name: "After context change, Codex" });
+    await screen.findAllByRole("tab", { name: "After context change, Codex" });
     expectNoContextNotice();
     cleanup();
 
@@ -2244,14 +2244,6 @@ describe("CoordinatorPanel", () => {
 
   test("New side agent from a non-focused group places and focuses the created conversation there", async () => {
     const layout = setupGroups();
-    const beforeCreate = ensuredSnapshot;
-    let resolveFocus!: (value: CoordinatorSnapshot) => void;
-    select.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          resolveFocus = resolve;
-        }),
-    );
     select.mockImplementationOnce(async () => ensuredSnapshot);
     const [, right] = collectCoordinatorLeaves(layout.root);
     const created = {
@@ -2278,21 +2270,17 @@ describe("CoordinatorPanel", () => {
     const newButton = Array.from(sidePane.querySelectorAll("button")).find((button) =>
       button.textContent?.includes("New side agent"),
     )!;
+    select.mockClear();
     fireEvent.pointerDown(newButton);
+    fireEvent.focus(newButton);
     fireEvent.click(newButton);
-    await waitFor(() => expect(screen.getByRole("button", { name: "Side 3, Codex" })).toBeTruthy());
-    await act(async () => {
-      resolveFocus({
-        ...beforeCreate,
-        workspace: { ...beforeCreate.workspace, selectedConversationId: "side-1" },
-      });
-    });
-    await waitFor(() => expect(select).toHaveBeenLastCalledWith("project-1", "side-3"));
+    await waitFor(() => expect(screen.getByRole("tab", { name: "Side 3, Codex" })).toBeTruthy());
     await waitFor(() => expect(focusedCoordinatorConversationId(storedLayout())).toBe("side-3"));
     const stored = storedLayout();
     expect(stored.activePaneId).toBe(right!.id);
     expect(collectCoordinatorLeaves(stored.root)[1]!.conversationIds).toEqual(["side-1", "side-3"]);
-    expect(focusedCoordinatorConversationId(stored)).toBe("side-3");
+    // Pressing in the strip no longer selects the group's front tab on the way.
+    expect(select.mock.calls.some((call) => (call as unknown[])[1] === "side-1")).toBe(false);
   });
 
   test("New side agent names the empty unassigned side agents for the backend to close", async () => {

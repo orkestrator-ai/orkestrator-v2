@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  canSplitCoordinatorPane,
   collectCoordinatorLeaves,
   focusCoordinatorPane,
   focusedCoordinatorConversationId,
@@ -241,5 +242,30 @@ describe("coordinator pane layout", () => {
       root: { kind: "leaf", id: "p", conversationIds: ["a"], activeConversationId: "a" },
       activePaneId: "p",
     });
+  });
+
+  test("a tab can be split off only a group that keeps another tab, below the depth limit", () => {
+    const layout = single();
+    expect(canSplitCoordinatorPane(layout, layout.activePaneId)).toBe(true);
+    const split = splitCoordinatorPaneAtEdge(
+      layout,
+      layout.activePaneId,
+      "right",
+      "side-2",
+      layout.activePaneId,
+    );
+    const [left, right] = collectCoordinatorLeaves(split.root);
+    expect(canSplitCoordinatorPane(split, left!.id)).toBe(true);
+    expect(canSplitCoordinatorPane(split, right!.id)).toBe(false);
+    expect(canSplitCoordinatorPane(split, "missing")).toBe(false);
+
+    const open = Array.from({ length: MAX_SPLIT_DEPTH + 2 }, (_, index) => `tab-${index}`);
+    let deep = reconcileCoordinatorLayout(null, open);
+    const crowded = deep.activePaneId;
+    for (let index = 0; index < MAX_SPLIT_DEPTH; index += 1) {
+      deep = splitCoordinatorPaneAtEdge(deep, crowded, "right", open[index]!, crowded);
+    }
+    expect(collectCoordinatorLeaves(deep.root)).toHaveLength(MAX_SPLIT_DEPTH + 1);
+    expect(canSplitCoordinatorPane(deep, crowded)).toBe(false);
   });
 });

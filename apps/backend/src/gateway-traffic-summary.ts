@@ -237,12 +237,12 @@ export class GatewayTrafficSummary {
     merge(burst.clients, tally.clients);
     merge(burst.listeners, tally.listeners);
     merge(burst.invokes, tally.invokes);
+    burst.peakRequests = Math.max(burst.peakRequests, tally.requests);
+    burst.peakConnections = Math.max(burst.peakConnections, tally.connections);
     if (hot) {
       burst.windows += 1;
       burst.lastHotAt = endedAt;
       burst.quietWindows = 0;
-      burst.peakRequests = Math.max(burst.peakRequests, tally.requests);
-      burst.peakConnections = Math.max(burst.peakConnections, tally.connections);
     } else {
       burst.quietWindows += 1;
     }

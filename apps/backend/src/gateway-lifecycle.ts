@@ -1,4 +1,7 @@
 import { createServer } from "node:http";
+import { PREVIEW_TUNNEL_PATH } from "@orkestrator/protocol/preview-access";
+import { TERMINAL_WEBSOCKET_PATH } from "@orkestrator/protocol/terminal-websocket";
+import { NODE_RELAY_PREFIX } from "./core/nodes/index.js";
 import type { GatewayTokenSettings } from "@orkestrator/protocol/web-client";
 import {
   GatewayTokenValidationError,
@@ -249,6 +252,18 @@ export class GatewayLifecycle {
     });
     server.on("upgrade", (request, socket, head) => {
       try {
+        // Upgrades bypass the HTTP request callback. Count them once here,
+        // including rejected upgrades, using only fixed route labels.
+        const pathname = new URL(request.url ?? "/", "http://orkestrator.local").pathname;
+        const route =
+          pathname === TERMINAL_WEBSOCKET_PATH
+            ? "upgrade-terminal"
+            : pathname === PREVIEW_TUNNEL_PATH
+              ? "upgrade-preview-tunnel"
+              : pathname.startsWith(NODE_RELAY_PREFIX)
+                ? "upgrade-node-relay"
+                : "upgrade-other";
+        this.ctx.traffic.noteRequest(request, route);
         if (!this.ctx.hostPolicy.allows(request.headers.host)) {
           socket.end("HTTP/1.1 421 Misdirected Request\r\nConnection: close\r\n\r\n");
           return;

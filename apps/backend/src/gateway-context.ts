@@ -81,7 +81,7 @@ export class GatewayContext {
   readonly replayHandshakeMaxBytes: number;
   readonly metrics: GatewayMetricsStore;
   /** Per-second connection and request counts; logs `traffic.burst` on a spike. */
-  readonly traffic = new GatewayTrafficSummary({ openSockets: () => this.sockets.size });
+  readonly traffic: GatewayTrafficSummary;
   readonly terminalWebSocket: TerminalWebSocketGateway;
   /** Backend-owned preview services, when this gateway fronts a full backend. */
   readonly previews?: PreviewRuntime;
@@ -127,6 +127,10 @@ export class GatewayContext {
     private readonly credentials: GatewayCredentialChecks,
   ) {
     this.backend = options.backend;
+    this.traffic = new GatewayTrafficSummary({
+      ...options.trafficSummary,
+      openSockets: () => this.sockets.size,
+    });
     this.dataDir = options.dataDir;
     this.rendererRoot = options.rendererRoot;
     this.rendererDevServerUrl = options.rendererDevServerUrl;

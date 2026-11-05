@@ -149,6 +149,40 @@ describe("GatewayTrafficSummary", () => {
     });
   });
 
+  test("a connection-hot burst includes quiet-window requests in its peak", () => {
+    const { summary, reports, advance } = harness();
+    for (let i = 0; i < 100; i += 1) summary.noteConnection("browser");
+    advance(1_000);
+    for (let i = 0; i < 99; i += 1) summary.noteRequest(viaServe("100.64.0.7"), "invoke");
+    advance(5_000);
+    expect(reports).toHaveLength(1);
+    expect(reports[0]).toMatchObject({
+      windows: 1,
+      durationMs: 1_000,
+      requests: 99,
+      connections: 100,
+      peakRequests: 99,
+      peakConnections: 100,
+    });
+  });
+
+  test("a request-hot burst includes quiet-window connections in its peak", () => {
+    const { summary, reports, advance } = harness();
+    for (let i = 0; i < 100; i += 1) summary.noteRequest(viaServe("100.64.0.7"), "invoke");
+    advance(1_000);
+    for (let i = 0; i < 99; i += 1) summary.noteConnection("browser");
+    advance(5_000);
+    expect(reports).toHaveLength(1);
+    expect(reports[0]).toMatchObject({
+      windows: 1,
+      durationMs: 1_000,
+      requests: 100,
+      connections: 99,
+      peakRequests: 100,
+      peakConnections: 99,
+    });
+  });
+
   test("bursts closer together than thirty seconds share one line", () => {
     const { summary, reports, advance } = harness();
     const spike = () => {

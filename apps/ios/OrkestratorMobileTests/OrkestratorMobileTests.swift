@@ -537,6 +537,41 @@ private final class StubURLProtocol: URLProtocol, @unchecked Sendable {
     override func stopLoading() {}
 }
 
+/// Redirects the status check to another origin, whose answer would pass it.
+private final class RedirectingURLProtocol: URLProtocol, @unchecked Sendable {
+    static var requestedURLs: [URL] = []
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        let url = request.url!
+        Self.requestedURLs.append(url)
+        if url.host == "desk.example" {
+            let target = URL(string: "https://attacker.example/collect")!
+            let redirect = HTTPURLResponse(
+                url: url,
+                statusCode: 302,
+                httpVersion: "HTTP/1.1",
+                headerFields: ["Location": target.absoluteString]
+            )!
+            client?.urlProtocol(self, wasRedirectedTo: URLRequest(url: target), redirectResponse: redirect)
+            // A declined redirect leaves the 302 as the response, as a real loader does.
+            client?.urlProtocol(self, didReceive: redirect, cacheStoragePolicy: .notAllowed)
+        } else {
+            client?.urlProtocol(
+                self,
+                didReceive: HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: nil)!,
+                cacheStoragePolicy: .notAllowed
+            )
+            client?.urlProtocol(self, didLoad: Data(#"{"ok":true}"#.utf8))
+        }
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
+}
+
 /// `URLProtocol` hands the body back as a stream, so `httpBody` alone is not
 /// enough to see what a request actually sent.
 private func httpBody(of request: URLRequest) -> String {
@@ -591,6 +626,23 @@ final class GatewayConnectionValidatorTests: XCTestCase {
             )
         }
         try await validator().check(address: URL(string: "https://desk.example")!, token: "gateway-token-123456")
+    }
+
+    func testCheckDoesNotAcceptAnAnswerFromARedirectTarget() async {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [RedirectingURLProtocol.self]
+        RedirectingURLProtocol.requestedURLs = []
+        let validator = GatewayConnectionValidator(session: URLSession(configuration: configuration))
+
+        // The target answers the status check without ever seeing the token, so
+        // following it would save a connection nobody validated.
+        await assertAsyncErrorContains("HTTP 302") {
+            try await validator.check(address: URL(string: "https://desk.example")!, token: "gateway-token-123456")
+        }
+        XCTAssertEqual(
+            RedirectingURLProtocol.requestedURLs.map(\.absoluteString),
+            ["https://desk.example/__orkestrator/status"]
+        )
     }
 
     func testCheckMapsHTTPAndMalformedResponses() async {
@@ -872,6 +924,52 @@ final class RemoteWebViewPolicyTests: XCTestCase {
         XCTAssertFalse(RemoteWebView.Coordinator.isTrustedBridgeOrigin(
             isMainFrame: true, scheme: "https", host: "desk.example", port: 443, connection: nil
         ))
+    }
+
+    func testBridgeRefusesTheEmptyOriginOfASandboxedDocumentWithoutCrashing() {
+        // What WebKit reports for a `Content-Security-Policy: sandbox` main frame.
+        // Assigning this scheme to `URLComponents` would end the whole app.
+        XCTAssertFalse(RemoteWebView.Coordinator.isTrustedBridgeOrigin(
+            isMainFrame: true, scheme: "", host: "", port: 0, connection: saved
+        ))
+    }
+
+    func testSessionCookieKeepsItsProtectionsInTheWebViewStore() async throws {
+        let loginURL = URL(string: "https://desk.example/__orkestrator/login")!
+        for name in ["orkestrator_gateway_auth", "__Host-orkestrator_gateway_auth"] {
+            let response = HTTPURLResponse(url: loginURL, statusCode: 303, httpVersion: "HTTP/1.1", headerFields: [
+                "Set-Cookie": "\(name)=session-value; HttpOnly; SameSite=Strict; Path=/; Secure",
+            ])!
+            let cookie = try RemoteWebView.Coordinator.loginCookie(from: response, loginURL: loginURL)
+
+            let configuration = WKWebViewConfiguration()
+            configuration.websiteDataStore = .nonPersistent()
+            let webView = WKWebView(frame: .zero, configuration: configuration)
+            let store = configuration.websiteDataStore.httpCookieStore
+            await store.setCookie(cookie)
+
+            let cookies = await store.allCookies()
+            let stored = try XCTUnwrap(cookies.first { $0.name == name })
+            XCTAssertTrue(stored.isHTTPOnly)
+            XCTAssertTrue(stored.isSecure)
+            XCTAssertEqual(stored.sameSitePolicy, .sameSiteStrict)
+            XCTAssertTrue(stored.isSessionOnly)
+
+            // Page script on the gateway's own origin must not be able to read it.
+            webView.loadHTMLString("<!doctype html>", baseURL: URL(string: "https://desk.example/")!)
+            var atGatewayOrigin = false
+            for _ in 0..<100 {
+                if let origin = try? await webView.evaluateJavaScript("self.origin"),
+                   origin as? String == "https://desk.example" {
+                    atGatewayOrigin = true
+                    break
+                }
+                try await Task.sleep(for: .milliseconds(50))
+            }
+            XCTAssertTrue(atGatewayOrigin)
+            let visible = try await webView.evaluateJavaScript("document.cookie") as? String
+            XCTAssertEqual(visible, "")
+        }
     }
 
     func testNavigationPolicyKeepsOnlySameOriginWebPagesInProcess() {
@@ -1877,6 +1975,31 @@ final class RemoteWebViewPolicyTests: XCTestCase {
         XCTAssertEqual(request.value(forHTTPHeaderField: "Cache-Control"), "no-store")
     }
 
+    func testLoginExchangeEscapesEveryFormReservedCharacterInTheToken() async throws {
+        let target = connection(address: "https://desk.example", token: "gateway+token&a=b c%d")
+        let (coordinator, _) = makeCoordinator()
+        coordinator.loginProtocolClasses = [StubURLProtocol.self]
+        var captured: URLRequest?
+        StubURLProtocol.handler = { request in
+            captured = request
+            return (
+                HTTPURLResponse(url: request.url!, statusCode: 303, httpVersion: "HTTP/1.1", headerFields: [
+                    "Set-Cookie": "orkestrator_gateway_auth=session-value; Path=/; Secure; HttpOnly; SameSite=Strict",
+                ])!,
+                Data()
+            )
+        }
+
+        _ = try await coordinator.loginCookie(for: target)
+
+        // The gateway reads this with `URLSearchParams`, where a bare `+` is a
+        // space: the bearer check would accept the token and the login refuse it.
+        XCTAssertEqual(
+            httpBody(of: try XCTUnwrap(captured)),
+            "token=gateway%2Btoken%26a%3Db%20c%25d"
+        )
+    }
+
     func testLoginExchangeSurfacesRejectedTokensAndTransportFailures() async {
         let target = connection(address: "https://desk.example", token: "gateway-token-secret-01")
         let (coordinator, _) = makeCoordinator()
@@ -1900,9 +2023,9 @@ final class RemoteWebViewPolicyTests: XCTestCase {
         }
     }
 
-    func testLoginRedirectBlockerRefusesToFollowRedirects() {
+    func testRedirectBlockerRefusesToFollowRedirects() {
         let loginURL = URL(string: "https://desk.example/__orkestrator/login")!
-        let blocker = LoginRedirectBlocker()
+        let blocker = GatewayRedirectBlocker()
         let session = URLSession(configuration: .ephemeral)
         defer { session.invalidateAndCancel() }
         let task = session.dataTask(with: loginURL)

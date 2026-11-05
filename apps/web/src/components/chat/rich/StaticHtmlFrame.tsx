@@ -30,6 +30,8 @@ export interface StaticFrameEvents {
   /** Coalesced to the frame channel's size rate; the latest height always arrives. */
   onHeight: (height: number) => void;
   onFailure: (failure: StaticFrameFailure) => void;
+  /** The rendered document's bounded text, reported whole, at most once per mount. */
+  onText: (text: string) => void;
   onInteraction: (interacting: boolean) => void;
   onLink: (link: { href: string; hostname: string; label: string }) => void;
   onEscape: () => void;
@@ -144,6 +146,9 @@ export function StaticHtmlFrame({
           latest.current.events.onHeight(outcome.height);
           latest.current.events.onRendered();
           break;
+        case "text":
+          latest.current.events.onText(outcome.text);
+          break;
         case "size":
           reportSize(outcome.height);
           break;
@@ -173,6 +178,7 @@ export function StaticHtmlFrame({
         case "escape":
           latest.current.events.onEscape();
           break;
+        case "text-partial":
         case "rejected":
           break;
       }

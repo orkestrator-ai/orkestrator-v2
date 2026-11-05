@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { STATIC_PRESENTATION_POLICY } from "@orkestrator/protocol/rich-content-policy";
-import { STATIC_HTML_FRAME_CHANNEL } from "@orkestrator/protocol/static-html-presentation";
+import {
+  STATIC_HTML_FRAME_CHANNEL,
+  STATIC_HTML_MAX_TEXT_CHUNKS,
+} from "@orkestrator/protocol/static-html-presentation";
 import { StaticHtmlFrameSession } from "./static-html-frame-session";
 
 const NONCE = "n".repeat(32);
@@ -202,6 +205,58 @@ describe("StaticHtmlFrameSession", () => {
     expect(
       send({ type: "link-request", generation: GENERATION, url: "javascript:x", label: "" }),
     ).toEqual({ kind: "rejected", reason: "bad-shape" });
+  });
+
+  describe("document text", () => {
+    const chunk = (index: number, count: number, text = `part ${index} `) => ({
+      type: "text",
+      generation: GENERATION,
+      index,
+      count,
+      text,
+    });
+
+    test("is reassembled, and handed over only once it is whole", () => {
+      const { send, rendered } = setup();
+      rendered();
+      expect(send(chunk(0, 3))).toEqual({ kind: "text-partial" });
+      expect(send(chunk(1, 3))).toEqual({ kind: "text-partial" });
+      expect(send(chunk(2, 3))).toEqual({ kind: "text", text: "part 0 part 1 part 2 " });
+    });
+
+    test("is refused before the document has rendered", () => {
+      const { send, ready } = setup();
+      ready();
+      expect(send(chunk(0, 1))).toEqual({ kind: "rejected", reason: "not-rendering" });
+    });
+
+    test("is reported once per mount", () => {
+      const { send, rendered } = setup();
+      rendered();
+      expect(send(chunk(0, 1, "first")).kind).toBe("text");
+      expect(send(chunk(0, 1, "second"))).toEqual({ kind: "rejected", reason: "bad-shape" });
+    });
+
+    test("with a chunk missing is abandoned rather than indexed in part", () => {
+      const { send, rendered } = setup();
+      rendered();
+      send(chunk(0, 3));
+      expect(send(chunk(2, 3))).toEqual({ kind: "rejected", reason: "bad-shape" });
+      expect(send(chunk(1, 3))).toEqual({ kind: "rejected", reason: "bad-shape" });
+    });
+
+    test("of a full report is not refused by the channel's rate limit", () => {
+      const { send, rendered } = setup();
+      rendered();
+      const kinds = Array.from(
+        { length: STATIC_HTML_MAX_TEXT_CHUNKS },
+        (_, index) => send(chunk(index, STATIC_HTML_MAX_TEXT_CHUNKS)).kind,
+      );
+      expect(kinds.at(-1)).toBe("text");
+      expect(kinds.filter((kind) => kind === "text-partial")).toHaveLength(
+        STATIC_HTML_MAX_TEXT_CHUNKS - 1,
+      );
+    });
   });
 
   test("a frame error ends the mount", () => {

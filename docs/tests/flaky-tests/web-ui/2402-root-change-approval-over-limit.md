@@ -45,3 +45,27 @@ mise run test:logged -- --name address-node-requests-rerun -- bun test --cwd app
 Evidence: `/tmp/orkestrator-test-run.NrGGXS/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`. Passing owner output was removed by the logged runner.
 This confirms another aggregate-only occurrence; scheduling pressure remains a
 hypothesis, not a proven cause. No assertion, timeout or skip was changed.
+
+## Pipe capture move recurrence — 2026-11-05
+
+Review preparation of `76136cdb7` on `move-pipe-captures-c7893f496669-r1`, based
+on `af2e566e5`, reported this test timing out at 7024.18 ms in `mise run test`.
+That branch changes nothing under `apps/web` or `packages/`.
+
+Unlike the earlier occurrences, the owning file also timed out alone, three
+times out of three (5857 to 7751 ms), at a host load average of 33 to 37 on 12
+cores. The first of those ran beside three other owner reruns:
+
+```sh
+mise run test:logged -- --name own-node-actions -- bun --cwd=apps/web test src/components/federation/node-action-requests.test.tsx --parallel=1 --only-failures
+```
+
+The timed-out test then left an unhandled `TestingLibraryElementError` between
+tests. Adding `--timeout=60000` on the command line, for diagnosis only, the test
+filtered with `-t over-limit` passed in 14.8 s at a load average of 39, so it was
+slow rather than stalled. No idle-host rerun was possible. No assertion, timeout
+or skip was changed.
+
+## Static Find repair aggregate, 2026-11-05
+
+`mise run test` after commit `c4448a5ad` timed out `root-change approval handles over-limit and still permits rejection` at 7424.08 ms (5000 ms limit). Web totals: 12590 pass, 10 skip, 1 fail. Evidence: `/tmp/orkestrator-test-run.PpclE3/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`. Complete unchanged owner rerun: `mise run test:logged -- --name approval-alone -- bun --cwd=apps/web test ./src/components/federation/node-action-requests.test.tsx --parallel=1 --only-failures`, passed, exit 0, 2.0 s. No cause established; no assertion changed.

@@ -233,7 +233,10 @@ export class ChangeProjectionService {
       };
     }
     if (!measurement) {
-      const unavailable = freshness?.unavailableReason;
+      const turn = parts.ownerKind === "turn" ? this.ledger.turn(parts.ownerId) : null;
+      const unavailable =
+        freshness?.unavailableReason ??
+        (turn && this.ledger.turnRetired(turn) ? "history-expired" : null);
       return {
         ...base,
         measurementId: null,

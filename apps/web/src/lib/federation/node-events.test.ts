@@ -8,6 +8,7 @@ import {
   NODE_EVENT_WATCH_RENEW_MS,
   NODE_EVENT_WATCH_TTL_MS,
   RELAYED_NODE_EVENT,
+  relayedNodeEventName,
 } from "@orkestrator/protocol/node-events";
 import { FakeIntervals } from "@orkestrator/protocol/testing/fake-intervals";
 import { invoke } from "@/lib/native/backend";
@@ -18,6 +19,8 @@ import { resetNodeEventsForTests, subscribeNodeEvents } from "./node-events";
 const invokeMock = invoke as unknown as ReturnType<typeof mock>;
 const listenMock = listen as unknown as ReturnType<typeof mock>;
 const LEAF = "bk_leaf" as BackendId;
+const PER_NODE_EVENT = relayedNodeEventName(LEAF);
+let perNodeListenGate: Promise<void> | null = null;
 const originalInterval = globalThis.setInterval;
 const originalClear = globalThis.clearInterval;
 let clock: FakeIntervals;
@@ -28,6 +31,8 @@ let listenGate: Promise<void> | null;
 let failListen: boolean;
 let failWatch: boolean;
 let renewed: boolean;
+let perNodeEvents: boolean;
+let listenOrder: string[];
 let expiresAt: number;
 let stopped: number;
 let savedWorkspaceTarget: Window["orkestratorWorkspaceTarget"];
@@ -56,6 +61,8 @@ beforeEach(() => {
   failListen = false;
   failWatch = false;
   renewed = true;
+  perNodeEvents = false;
+  listenOrder = [];
   stopped = 0;
   expiresAt = NODE_EVENT_WATCH_TTL_MS;
   portalStore.store.setState({ selfId: "bk_command" as BackendId });
@@ -63,6 +70,8 @@ beforeEach(() => {
   listenMock.mockImplementation(async (event: string, handler) => {
     if (failListen) throw new Error("listen failed");
     if (event === RELAYED_NODE_EVENT && listenGate) await listenGate;
+    if (event === PER_NODE_EVENT && perNodeListenGate) await perNodeListenGate;
+    listenOrder.push(event);
     const set = handlers.get(event) ?? new Set();
     set.add(handler);
     handlers.set(event, set);
@@ -81,6 +90,7 @@ beforeEach(() => {
         watchId: args.watchId,
         expiresAt: clock.now + NODE_EVENT_WATCH_TTL_MS,
         renewed: renewed && clock.now < expiresAt,
+        ...(perNodeEvents ? { perNodeEvents: true } : {}),
       };
       expiresAt = result.expiresAt;
       return result;
@@ -98,6 +108,114 @@ afterEach(() => {
   listenMock.mockReset();
   listenMock.mockImplementation(async () => () => undefined);
   invokeMock.mockReset();
+});
+
+test("listens on the node's own name when the command node relays that way", async () => {
+  perNodeEvents = true;
+  const sub = subscriber();
+  const stop = subscribeNodeEvents(LEAF, sub);
+  await settle();
+  expect(listenOrder).toContain(PER_NODE_EVENT);
+  expect(sub.onResync).toHaveBeenCalledTimes(1);
+
+  emit(PER_NODE_EVENT, {
+    nodeId: LEAF,
+    kind: "event",
+    event: "change-projection-changed",
+    payload: 7,
+  });
+  expect(sub.onEvent).toHaveBeenCalledWith("change-projection-changed", 7);
+  emit(PER_NODE_EVENT, { nodeId: LEAF, kind: "resync" });
+  expect(sub.onResync).toHaveBeenCalledTimes(2);
+
+  // A renewal does not add a second listener, and releasing removes it.
+  clock.tick(NODE_EVENT_WATCH_RENEW_MS);
+  await settle();
+  expect(listenOrder.filter((event) => event === PER_NODE_EVENT)).toHaveLength(1);
+  stop();
+  await settle();
+  expect(handlers.get(PER_NODE_EVENT)?.size).toBe(0);
+});
+
+test("the first read waits for the per-node stream, and a release during it leaves nothing", async () => {
+  perNodeEvents = true;
+  let open!: () => void;
+  perNodeListenGate = new Promise<void>((done) => {
+    open = done;
+  });
+  const sub = subscriber();
+  const stop = subscribeNodeEvents(LEAF, sub);
+  await settle();
+  expect(calls.some((call) => call.command === "watch_node_events")).toBe(true);
+  expect(sub.onResync).not.toHaveBeenCalled();
+  open();
+  perNodeListenGate = null;
+  await settle();
+  expect(sub.onResync).toHaveBeenCalledTimes(1);
+  stop();
+  await settle();
+
+  perNodeListenGate = new Promise<void>((done) => {
+    open = done;
+  });
+  const late = subscriber();
+  const release = subscribeNodeEvents(LEAF, late);
+  await settle();
+  release();
+  await settle();
+  open();
+  perNodeListenGate = null;
+  await settle();
+  expect(late.onResync).not.toHaveBeenCalled();
+  expect(handlers.get(PER_NODE_EVENT)?.size).toBe(0);
+});
+
+test("an older command node relays on the old name, and no per-node listener opens", async () => {
+  const sub = subscriber();
+  const stop = subscribeNodeEvents(LEAF, sub);
+  await settle();
+  expect(listenOrder).not.toContain(PER_NODE_EVENT);
+  emit(RELAYED_NODE_EVENT, {
+    nodeId: LEAF,
+    kind: "event",
+    event: "change-projection-changed",
+    payload: 1,
+  });
+  expect(sub.onEvent).toHaveBeenCalledWith("change-projection-changed", 1);
+  emit(RELAYED_NODE_EVENT, { nodeId: LEAF, kind: "resync" });
+  expect(sub.onResync).toHaveBeenCalledTimes(2);
+  stop();
+  await settle();
+});
+
+test("frames on the old name still arrive with a per-node command node, for the desktop relay", async () => {
+  perNodeEvents = true;
+  const sub = subscriber();
+  const stop = subscribeNodeEvents(LEAF, sub);
+  await settle();
+  emit(RELAYED_NODE_EVENT, {
+    nodeId: LEAF,
+    kind: "event",
+    event: "change-projection-changed",
+    payload: 2,
+  });
+  expect(sub.onEvent).toHaveBeenCalledTimes(1);
+  stop();
+  await settle();
+});
+
+test("a command node downgraded under the lease drops the per-node listener", async () => {
+  perNodeEvents = true;
+  const sub = subscriber();
+  const stop = subscribeNodeEvents(LEAF, sub);
+  await settle();
+  expect(handlers.get(PER_NODE_EVENT)?.size).toBe(1);
+  perNodeEvents = false;
+  clock.tick(NODE_EVENT_WATCH_RENEW_MS);
+  await settle();
+  expect(handlers.get(PER_NODE_EVENT)?.size).toBe(0);
+  stop();
+  await settle();
 });
 
 test("renews the same lease before expiry; an expired lease resyncs every subscriber", async () => {

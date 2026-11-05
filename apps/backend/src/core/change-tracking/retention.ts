@@ -12,11 +12,22 @@
  * body that is removed answers `body-expired` with its retained counts — never
  * a live-file fallback. If pinned data alone exceeds the hard ceiling, new
  * captures are refused with an explicit reason.
+ *
+ * Each pass also purges deleted environments and retires ledger rows past the
+ * archive window, in bounded batches ({@link LedgerRetirement}). Both delete only
+ * rows and references; the reachability sweeps here take the snapshots, objects
+ * and evidence bodies nothing names any more, so shared content survives.
  */
 
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { readManifest } from "./capture.js";
 import type { ChangeLedger } from "./change-ledger.js";
+import type { EvidenceBodyStore } from "./evidence-body-store.js";
+import {
+  LedgerRetirement,
+  type EnvironmentPurge,
+  type RetirementBatch,
+} from "./ledger-retirement.js";
 import { MEASUREMENTS_KEPT_PER_OWNER } from "./measurement-service.js";
 import type { ObjectStore } from "./object-store.js";
 import type { ChangeTrackingPolicyRegistry } from "./policy-registry.js";
@@ -29,6 +40,16 @@ const MEASUREMENT_PRUNE_BATCH_FILE_ROWS = 256;
 const MEASUREMENT_PRUNE_BATCH = 64;
 /** Freed database pages are released in steps of this many 4 KiB pages. */
 const RELEASE_PAGES_PER_STEP = 128;
+/** Ledger rows deleted per transaction by a purge or age-based retention. */
+const RETIREMENT_ROWS_PER_BATCH = 256;
+/** A first run on an old ledger faces its whole backlog: later passes take the rest. */
+const RETIREMENT_BATCHES_PER_PASS = 4_096;
+/** Finished turns whose endpoints quota pressure releases, per transaction and per pass. */
+const QUOTA_RELEASE_BATCH = 16;
+const QUOTA_RELEASES_PER_PASS = 64;
+const SNAPSHOTS_PER_TRANSACTION = 32;
+const DIFF_IDENTITIES_PER_PAGE = 512;
+const LIVE_IDENTITY_AGE_MS = 86_400_000;
 
 /** Lets requests run between bounded batches of database maintenance. */
 const yieldToEventLoop = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -36,11 +57,18 @@ const yieldToEventLoop = () => new Promise<void>((resolve) => setTimeout(resolve
 export interface RetentionReport {
   prunedMeasurements: number;
   prunedMeasurementFiles: number;
+  purgedEnvironments: number;
+  /** Rows age-based retention and environment purges deleted. */
+  retiredRows: number;
+  /** A purge has work this pass could not do: a restore holds it, or its batches ran out. */
+  purgesWaiting: boolean;
   expiredReferences: number;
   releasedForQuota: number;
   deletedSnapshots: number;
   removedObjects: number;
   removedBytes: number;
+  removedBodies: number;
+  removedBodyBytes: number;
   storedBytes: number;
   hardLimited: boolean;
 }
@@ -54,17 +82,26 @@ export class ChangeRetentionService {
   /** Object ids by manifest, kept between passes so a pass need not reparse them. */
   private readonly reachability: ReachabilityCache;
   private reachabilityHits = 0;
+  private readonly retirement: LedgerRetirement;
 
   constructor(
     private readonly deps: {
       ledger: ChangeLedger;
       store: ObjectStore;
+      bodies?: EvidenceBodyStore;
       policies: ChangeTrackingPolicyRegistry;
       readerPins: () => Iterable<string>;
+      onPurgeFinished?: (environmentId: string) => void;
       reachabilityCache?: Partial<ReachabilityCacheLimits>;
     },
   ) {
     this.reachability = new ReachabilityCache(deps.reachabilityCache);
+    this.retirement = new LedgerRetirement(deps.ledger);
+  }
+
+  /** The ledger queries behind purges, for the delete path that requests one. */
+  get purges(): LedgerRetirement {
+    return this.retirement;
   }
 
   /** True while pinned data exceeds the hard ceiling; captures are refused. */
@@ -116,57 +153,194 @@ export class ChangeRetentionService {
     const report: RetentionReport = {
       prunedMeasurements: 0,
       prunedMeasurementFiles: 0,
+      purgedEnvironments: 0,
+      retiredRows: 0,
+      purgesWaiting: false,
       expiredReferences: 0,
       releasedForQuota: 0,
       deletedSnapshots: 0,
       removedObjects: 0,
       removedBytes: 0,
+      removedBodies: 0,
+      removedBodyBytes: 0,
       storedBytes: 0,
       hardLimited: false,
     };
+    this.retirement.ensureIndexes();
     report.expiredReferences = ledger.transaction(() =>
       ledger.expireReferences(new Date(nowMs).toISOString()),
     );
     await this.pruneMeasurements(nowMs, report);
 
-    // Archived turn endpoints beyond the retention window lose their pins.
-    const cutoff = new Date(nowMs - policy.archivedBodyRetentionDays * 86_400_000).toISOString();
-    report.releasedForQuota += this.releaseTurnEndpoints(
-      (turn) => (turn.finished_at ?? turn.started_at) < cutoff,
-      Number.POSITIVE_INFINITY,
-    );
+    const batches = { left: RETIREMENT_BATCHES_PER_PASS };
+    const finishedPurges = await this.purgeEnvironments(nowMs, report, batches);
+    // Past the window a turn's rows go, which releases its endpoints too.
+    await this.retireExpired(nowMs, report, batches);
 
     // The store keeps this figure current across puts and sweeps (ST-20).
     let stored = await store.currentBytes();
     if (stored > policy.snapshotSoftBudgetBytes) {
       // Release the oldest finalized turn endpoints, a bounded batch per pass.
-      report.releasedForQuota += this.releaseTurnEndpoints(() => true, 64);
+      report.releasedForQuota += await this.releaseForQuota();
     }
 
     await this.sweep(nowMs, report);
+    await this.sweepBodies(nowMs, report);
+    // After the sweep, which took the snapshots naming their worktrees.
+    for (const purge of finishedPurges) {
+      this.retirement.finishPurge(purge);
+      this.deps.onPurgeFinished?.(purge.environmentId);
+      report.purgedEnvironments++;
+    }
     stored = await store.currentBytes();
     report.storedBytes = stored;
     this.hardLimited = stored > policy.snapshotHardBudgetBytes;
     report.hardLimited = this.hardLimited;
-    ledger.transaction(() => {
-      ledger.pruneOutbox(10_000);
-      ledger.pruneLiveIdentities(new Date(nowMs - 86_400_000).toISOString());
-    });
+    ledger.transaction(() => ledger.pruneOutbox(10_000));
+    await this.pruneLiveIdentities(nowMs);
+    await this.releaseFreePages();
     return report;
+  }
+
+  /**
+   * Each pending purge, in bounded batches. A restore that still needs one of the
+   * environment's measurements defers it to a later pass. An entry outlives its
+   * rows by the orphan grace: a late write already under way when the environment
+   * was deleted lands before that, and the next pass finds it. Returns the purges
+   * that can finish.
+   */
+  private async purgeEnvironments(
+    nowMs: number,
+    report: RetentionReport,
+    batches: { left: number },
+  ): Promise<EnvironmentPurge[]> {
+    const finished: EnvironmentPurge[] = [];
+    const nowIso = new Date(nowMs).toISOString();
+    const graceMs = this.deps.policies.policy.orphanGraceMs;
+    for (const purge of this.retirement.pendingPurges()) {
+      if (this.stopped) break;
+      if (this.retirement.environmentHeld(purge.environmentId, nowIso)) {
+        report.purgesWaiting = true;
+        continue;
+      }
+      if (!(await this.purgeEnvironment(purge, report, batches, nowIso))) {
+        report.purgesWaiting = true;
+        continue;
+      }
+      if (nowMs - Date.parse(purge.requestedAt) > graceMs) finished.push(purge);
+    }
+    return finished;
+  }
+
+  /** True once none of the environment's rows are left. */
+  private async purgeEnvironment(
+    purge: EnvironmentPurge,
+    report: RetentionReport,
+    batches: { left: number },
+    nowIso: string,
+  ): Promise<boolean> {
+    const { environmentId } = purge;
+    const complete = await this.retireInBatches(report, batches, () =>
+      this.retirement.purgeEnvironmentBatch(environmentId, RETIREMENT_ROWS_PER_BATCH, nowIso),
+    );
+    if (!complete) return false;
+    if (!this.retirement.hasLegacySummaries(environmentId)) return true;
+    let after: number | null = 0;
+    while (after !== null) {
+      if (this.stopped || batches.left <= 0) return false;
+      batches.left--;
+      const outcome = this.deps.ledger.transaction(() => {
+        if (this.retirement.environmentHeld(environmentId, nowIso)) return { held: true };
+        return { next: this.retirement.retireLegacySummariesPage(environmentId, after!) };
+      });
+      if (outcome.held) return false;
+      after = outcome.next!;
+      await yieldToEventLoop();
+    }
+    return true;
+  }
+
+  /** Rows of finished work past the archive window, oldest first. */
+  private async retireExpired(
+    nowMs: number,
+    report: RetentionReport,
+    batches: { left: number },
+  ): Promise<void> {
+    const { retirement } = this;
+    const nowIso = new Date(nowMs).toISOString();
+    const windowMs = this.deps.policies.policy.archivedBodyRetentionDays * 86_400_000;
+    const cutoff = new Date(nowMs - windowMs).toISOString();
+    const rows = RETIREMENT_ROWS_PER_BATCH;
+    let afterOperation = 0;
+    const steps: Array<() => RetirementBatch> = [
+      () => retirement.retireExpiredFrames(cutoff, rows),
+      () => {
+        const batch = retirement.retireExpiredTurns(cutoff, nowIso, rows);
+        report.releasedForQuota += batch.released;
+        return batch;
+      },
+      () => {
+        const batch = retirement.retireExpiredOperations(cutoff, nowIso, afterOperation, rows);
+        afterOperation = batch.next;
+        return batch;
+      },
+      () => retirement.retireExpiredProviderTurns(nowIso, rows),
+      () => retirement.retireExpiredSegments(cutoff, nowIso, rows),
+      () => retirement.retireExpiredRecords(cutoff, rows),
+    ];
+    for (const step of steps) await this.retireInBatches(report, batches, step);
+  }
+
+  /** Runs `batch` until it is done, yielding between transactions. False if it was cut short. */
+  private async retireInBatches(
+    report: RetentionReport,
+    batches: { left: number },
+    batch: () => RetirementBatch,
+  ): Promise<boolean> {
+    while (!this.stopped && batches.left > 0) {
+      batches.left--;
+      const outcome = batch();
+      report.retiredRows += outcome.rows;
+      await yieldToEventLoop();
+      if (outcome.held) return false;
+      if (outcome.done) return true;
+    }
+    return false;
+  }
+
+  /** Oldest finished turns first; their rows stay, only their endpoints go. */
+  private async releaseForQuota(): Promise<number> {
+    let released = 0;
+    let after: readonly [string, string] | null = null;
+    while (!this.stopped && released < QUOTA_RELEASES_PER_PASS) {
+      const limit = Math.min(QUOTA_RELEASE_BATCH, QUOTA_RELEASES_PER_PASS - released);
+      const batch = this.retirement.releaseOldestTurnEndpoints(limit, after);
+      released += batch.released;
+      after = batch.next;
+      if (batch.released < limit) break;
+      await yieldToEventLoop();
+    }
+    return released;
   }
 
   /**
    * Prunes superseded measurements in bounded batches, yielding between
    * them: a backlog can be tens of millions of file rows, and one long
-   * transaction would block every request. Then returns the freed pages to
-   * the filesystem, again in steps.
+   * transaction would block every request.
    */
   private async pruneMeasurements(nowMs: number, report: RetentionReport): Promise<void> {
-    const { ledger } = this.deps;
     const pruned = await this.pruneBatches(nowMs);
     report.prunedMeasurements += pruned.measurements;
     report.prunedMeasurementFiles += pruned.files;
-    // Also when this pass pruned nothing: publications and owner drains free pages too.
+  }
+
+  /**
+   * Returns freed pages to the filesystem in steps, after everything this pass
+   * deleted. Also when it deleted nothing: publications and owner drains free
+   * pages too.
+   */
+  private async releaseFreePages(): Promise<void> {
+    const { ledger } = this.deps;
     let previous = Number.POSITIVE_INFINITY;
     while (true) {
       const left = ledger.releaseFreePages(RELEASE_PAGES_PER_STEP);
@@ -202,29 +376,13 @@ export class ChangeRetentionService {
     return total;
   }
 
-  private releaseTurnEndpoints(
-    eligible: (turn: { finished_at: string | null; started_at: string }) => boolean,
-    limit: number,
-  ): number {
-    const { ledger } = this.deps;
-    let released = 0;
-    const rows = ledger.turnsByAge();
-    for (const turn of rows) {
-      if (released >= limit) break;
-      if (!["finalized", "interrupted", "end-unavailable", "abandoned"].includes(turn.lifecycle))
-        continue;
-      if (!eligible(turn)) continue;
-      const removed = ledger.transaction(() => ledger.removeReferences("turn", turn.turn_id));
-      if (removed > 0) released++;
-    }
-    return released;
-  }
-
   private async sweep(nowMs: number, report: RetentionReport): Promise<void> {
     const { ledger, store, policies } = this.deps;
     const graceMs = policies.policy.orphanGraceMs;
     const referenced = ledger.referencedSnapshotIds();
     for (const id of this.deps.readerPins()) referenced.add(id);
+    for (const id of this.retirement.heldSnapshots(new Date(nowMs).toISOString()))
+      referenced.add(id);
     for (const attempt of ledger.pendingCaptures())
       if (attempt.snapshot_id) referenced.add(attempt.snapshot_id);
     for (const turn of ledger.activeTurns()) {
@@ -238,11 +396,21 @@ export class ChangeRetentionService {
     const reachable = new Set<string>();
     const walked = new Set<string>();
     this.reachability.beginPass();
-    for (const snapshot of ledger.snapshots()) {
+    let retiring: string[] = [];
+    const retire = async () => {
+      const ids = retiring;
+      retiring = [];
+      ledger.transaction(() => {
+        for (const id of ids) ledger.deleteSnapshot(id);
+      });
+      report.deletedSnapshots += ids.length;
+      await yieldToEventLoop();
+    };
+    for (const snapshot of ledger.snapshotAges()) {
       const age = nowMs - Date.parse(snapshot.created_at);
       if (!referenced.has(snapshot.id) && age > graceMs) {
-        ledger.transaction(() => ledger.deleteSnapshot(snapshot.id));
-        report.deletedSnapshots++;
+        retiring.push(snapshot.id);
+        if (retiring.length >= SNAPSHOTS_PER_TRANSACTION) await retire();
         continue;
       }
       reachable.add(snapshot.tree_oid);
@@ -252,13 +420,68 @@ export class ChangeRetentionService {
       walked.add(snapshot.tree_oid);
       await this.addManifestObjects(snapshot.tree_oid, reachable);
     }
+    if (retiring.length > 0) await retire();
     // Only a completed walk may drop what it did not see.
     this.reachability.endPass();
     // Live-detail blobs are referenced by diff identities, not snapshots.
-    for (const blob of ledger.diffIdentityBlobs()) reachable.add(blob);
+    let afterIdentity: number | null = 0;
+    while (afterIdentity !== null) {
+      const page: { blobs: string[]; next: number | null } = ledger.diffIdentityBlobsPage(
+        afterIdentity,
+        DIFF_IDENTITIES_PER_PAGE,
+      );
+      for (const blob of page.blobs) reachable.add(blob);
+      afterIdentity = page.next;
+      if (afterIdentity !== null) await yieldToEventLoop();
+    }
     const swept = await store.sweep(reachable, graceMs, nowMs);
     report.removedObjects = swept.removed;
     report.removedBytes = swept.bytes;
+  }
+
+  /**
+   * Evidence bodies are content-addressed, so one can be shared: only a body no
+   * evidence row names goes, past the grace fence that covers a body stored just
+   * before the row naming it commits. A frame's raw slice has no row naming it; no
+   * producer sends one today, and nothing reads one.
+   */
+  private async sweepBodies(nowMs: number, report: RetentionReport): Promise<void> {
+    const { bodies, policies } = this.deps;
+    if (!bodies) return;
+    const { retirement } = this;
+    const reachable = new Set<string>();
+    for (const list of [
+      (after: number) => retirement.evidenceBodiesPage(after),
+      (after: number) => retirement.chunkBodiesPage(after),
+    ]) {
+      let after: number | null = 0;
+      while (after !== null) {
+        const page: { ids: string[]; next: number | null } = list(after);
+        for (const id of page.ids) reachable.add(id);
+        after = page.next;
+        await yieldToEventLoop();
+      }
+    }
+    const graceMs = policies.policy.orphanGraceMs;
+    const swept = await bodies.sweep(reachable, graceMs, nowMs, (id) => retirement.forgetBody(id));
+    report.removedBodies = swept.removed;
+    report.removedBodyBytes = swept.bytes;
+    const olderThan = new Date(nowMs - graceMs).toISOString();
+    let after: number | null = 0;
+    while (after !== null) {
+      after = retirement.retireUnstoredBodiesPage(reachable, olderThan, after);
+      await yieldToEventLoop();
+    }
+  }
+
+  /** Live-detail identities are transient views. The walk takes a page per transaction. */
+  private async pruneLiveIdentities(nowMs: number): Promise<void> {
+    const olderThan = new Date(nowMs - LIVE_IDENTITY_AGE_MS).toISOString();
+    let after: number | null = 0;
+    while (after !== null) {
+      after = this.deps.ledger.pruneLiveIdentitiesPage(olderThan, after, DIFF_IDENTITIES_PER_PAGE);
+      if (after !== null) await yieldToEventLoop();
+    }
   }
 
   /**

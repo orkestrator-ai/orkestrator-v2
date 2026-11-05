@@ -106,6 +106,13 @@ export function SoundsSettings() {
           onEnabledChange={(prMerged) => updateSettings({ prMerged })}
           onPreview={() => void preview("pr-merged")}
         />
+        <SoundRow
+          label="Coordinator report"
+          description="Play a cue when a coordinator is woken by a worker it was waiting on, unless that coordinator is on screen."
+          enabled={settings.coordinatorReport}
+          onEnabledChange={(coordinatorReport) => updateSettings({ coordinatorReport })}
+          onPreview={() => void preview("coordinator-report")}
+        />
       </div>
 
       <div className="flex h-5 items-center gap-2 text-xs text-muted-foreground" aria-live="polite">

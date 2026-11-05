@@ -91,6 +91,7 @@ describe("BuildChatTab reports and verdicts", () => {
       ],
     });
 
+    selectNode("Verify");
     expect(screen.queryByText("Verification failed") === null).toBe(true);
     expect(screen.getAllByText("Verification passed")).toHaveLength(1);
     expect(visibleToolInvocations()).toEqual(["bun test", "bun run build"]);
@@ -136,6 +137,7 @@ describe("BuildChatTab reports and verdicts", () => {
       ],
     });
 
+    selectNode("Verify");
     expect(screen.getAllByText("Verification passed")).toHaveLength(1);
     expect(screen.queryByText(final) === null).toBe(true);
     expect(visibleTextContents()).toEqual([prose, final]);
@@ -569,7 +571,7 @@ describe("BuildChatTab reports and verdicts", () => {
 
   test("walks the graph with the arrow keys, as a tablist promises", async () => {
     renderTab(reviewed);
-    expect(selectedTitle()).toBe("Verify");
+    selectNode("Verify");
 
     const press = (key: string) => {
       const focused = within(graph())
@@ -613,7 +615,7 @@ describe("BuildChatTab reports and verdicts", () => {
       currentSessionIndex: 3,
       validationRun: validationRun({ id: "validation-keys" }),
     });
-    expect(selectedTitle()).toBe("Verify");
+    selectNode("Verify");
 
     fireEvent.keyDown(graphNode("Verify"), { key: "ArrowLeft" });
     await waitFor(() => expect(selectedTitle()).toBe("Review"));
@@ -667,7 +669,7 @@ describe("BuildChatTab reports and verdicts", () => {
         .map((tab) => tab.getAttribute("aria-label")?.split(", ")[0]);
 
     // Otherwise Tab walks every node before reaching the inspector.
-    expect(tabStops()).toEqual(["Verify"]);
+    expect(tabStops()).toEqual(["Notes"]);
 
     selectNode("Build");
     await waitFor(() => expect(tabStops()).toEqual(["Build"]));
@@ -689,7 +691,7 @@ describe("BuildChatTab reports and verdicts", () => {
 
     // The review's outcome lives on its node and in the key information
     // panel, not in a banner above the graph.
-    expect(selectedTitle()).toBe("Verify");
+    expect(selectedTitle()).toBe("Notes");
     expect(screen.queryByRole("button", { name: /The review reported/ }) === null).toBe(true);
 
     selectNode("Review");
@@ -984,6 +986,7 @@ describe("BuildChatTab reports and verdicts", () => {
       backendRevision: 49,
     });
 
+    selectNode("Verify");
     expect(within(inspector()).getByText("2 input requests auto-declined")).toBeTruthy();
     expect(screen.getByText(/3 unattended input requests were auto-declined/)).toBeTruthy();
     expect(screen.getByText(/Verify choice/)).toBeTruthy();

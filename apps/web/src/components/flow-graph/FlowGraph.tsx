@@ -99,6 +99,8 @@ export interface FlowNodeModel {
   /** One more row on the node's face, e.g. a pull request's checks. */
   extra?: ReactNode;
   canOpen: boolean;
+  /** The tooltip for what opening does, when it is not opening a session. */
+  openHint?: string;
   onOpen: () => void;
   contextMenu: ReactNode;
 }
@@ -291,7 +293,9 @@ function FlowNode({
 }) {
   const errorId = useId();
   const failure = node.state === "failed" && node.error?.trim() ? node.error : undefined;
-  const openHint = node.canOpen ? "Double-click or press Enter to open the session" : undefined;
+  const openHint = node.canOpen
+    ? (node.openHint ?? "Double-click or press Enter to open the session")
+    : undefined;
   const muted = node.state === "not-started" || node.state === "cancelled";
   const runtimeRow = flowNodeHasRuntimeRow(node);
   // Live under the owning view's clock: only this node re-renders on a tick.
@@ -738,6 +742,13 @@ export interface FlowGraphProps {
   fitControl?: boolean;
   /** How a failed node's face shows its error; its first line by default. */
   errorFace?: FlowErrorFace;
+  /**
+   * The selection is where the reader should arrive: bring it on screen once,
+   * over a remembered view and wherever the panel around the graph has scrolled.
+   */
+  landOnSelection?: boolean;
+  /** A measured landing in the panel has completed. */
+  onSelectionLanded?: () => void;
 }
 
 /**
@@ -745,6 +756,9 @@ export interface FlowGraphProps {
  * column and its padding below.
  */
 const STACKED_FIT_MARGIN = 96;
+
+/** Room a landing leaves above a stacked node: the sticky zoom controls and the stage's label. */
+const STACKED_LANDING_MARGIN = 88;
 
 function scrollingAncestor(element: HTMLElement | null): HTMLElement | null {
   for (let node = element?.parentElement ?? null; node; node = node.parentElement) {
@@ -764,6 +778,7 @@ function scrollingAncestor(element: HTMLElement | null): HTMLElement | null {
  * graph zooms and pans inside its viewport (see `useFlowViewport`), and a node
  * reached from the keyboard is scrolled into view first. When the selection
  * moves to another stage, that stage is centred as far as the canvas scrolls.
+ * `landOnSelection` also moves the panel around the graph, once per arrival.
  */
 export function FlowGraph({
   nodes,
@@ -785,13 +800,15 @@ export function FlowGraph({
   minHeight,
   fitControl = false,
   errorFace = "first-line",
+  landOnSelection = false,
+  onSelectionLanded,
 }: FlowGraphProps) {
   const stackedWrapperRef = useRef<HTMLDivElement | null>(null);
   const [fullscreen, toggleFullscreen] = useFlowFullscreen(stackedWrapperRef, isActive);
   const overlayClass = fullscreenContainer ? "absolute inset-0 z-30" : "fixed inset-0 z-50";
   const present = (graph: ReactNode) =>
     fullscreen ? createPortal(graph, fullscreenContainer ?? document.body) : graph;
-  const [measureRef, measuredWidth] = useMeasuredWidth();
+  const [measureRef, measuredWidth, wrapperMeasurable] = useMeasuredWidth();
   const [measureViewportRef, viewportWidth, viewportMeasurable] = useMeasuredWidth();
   const viewportElementRef = useRef<HTMLDivElement | null>(null);
   // In fullscreen the viewport takes the overlay's height rather than its own.
@@ -874,7 +891,8 @@ export function FlowGraph({
 
   // A new stage is centred once the viewport is measured, and again when the
   // width changes, since that resets the scroll. On the first measurement a
-  // remembered view wins, so returning to the workflow keeps where it was left.
+  // remembered view wins, so returning to the workflow keeps where it was left,
+  // unless this is a landing.
   const selectedNode = order.find((node) => node.id === selectedId);
   const selectedStage = selectedNode ? (selectedNode.stage ?? selectedNode.kind) : undefined;
   const centredRef = useRef<{ key: string; stage: string | undefined; width: number } | null>(null);
@@ -893,7 +911,11 @@ export function FlowGraph({
         return;
       centredRef.current = { key: viewKey, stage: selectedStage, width: viewportWidth };
       if (last && last.stage === selectedStage && last.width === viewportWidth) return;
-      if (!last && useFlowGraphViewStore.getState().views.get(viewKey)?.width === viewportWidth)
+      if (
+        !last &&
+        !landOnSelection &&
+        useFlowGraphViewStore.getState().views.get(viewKey)?.width === viewportWidth
+      )
         return;
       const rect = nodeRect(selectedId);
       if (rect) flowViewport.center(rect, { smooth: last?.width === viewportWidth });
@@ -902,6 +924,44 @@ export function FlowGraph({
   useEffect(() => {
     centerRef.current();
   }, [selectedStage, viewportWidth, viewportMeasurable, stacked, viewKey]);
+
+  // A landing waits until the graph can be measured, so a tab hidden when the
+  // selection arrived lands when it is shown. It happens once: after that the
+  // scroll is the reader's, behind another pane too. The stacked column puts the
+  // node at the top, with its inspector right below; the wide graph only has to
+  // be back in view, since the canvas has already centred the node.
+  const landedRef = useRef<string | null>(null);
+  const landRef = useRef(() => {});
+  useLayoutEffect(() => {
+    landRef.current = () => {
+      if (!landOnSelection) {
+        landedRef.current = null;
+        return;
+      }
+      const landingKey = `${viewKey}\u0000${fullscreen ? "overlay" : "panel"}`;
+      if (landedRef.current === landingKey || !wrapperMeasurable) return;
+      if (stacked && columnHeight === null) return;
+      const wrapper = stackedWrapperRef.current;
+      const node = nodeRefs.current.get(selectedId);
+      const scroller = fullscreen ? wrapper : scrollingAncestor(wrapper);
+      // ResizeObserver can still describe the visible pane after it was hidden.
+      // Never spend the arrival using zero geometry from the current DOM.
+      if (!wrapper?.clientWidth || !node || !scroller) return;
+      const nodeBounds = node.getBoundingClientRect();
+      if (!nodeBounds.width || !nodeBounds.height) return;
+      landedRef.current = landingKey;
+      const top = scroller.getBoundingClientRect().top;
+      scroller.scrollTop += stacked
+        ? node.getBoundingClientRect().top - top - STACKED_LANDING_MARGIN
+        : Math.min(0, wrapper.getBoundingClientRect().top - top);
+      // The overlay has its own scroller; the panel still needs its arrival
+      // when fullscreen closes.
+      if (!fullscreen) onSelectionLanded?.();
+    };
+  });
+  useEffect(() => {
+    landRef.current();
+  }, [landOnSelection, selectedId, wrapperMeasurable, stacked, columnHeight, viewKey, fullscreen]);
 
   const handleKeyDown = (event: KeyboardEvent<HTMLButtonElement>, node: FlowNodeModel) => {
     if (event.key === "Enter") {

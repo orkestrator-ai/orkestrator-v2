@@ -100,7 +100,7 @@ The material risks are concentrated in four themes:
 | M6 | Medium | Web/Electron | No CSP on the main renderer or the gateway-served app, which hold a generic command bridge | Verified |
 | M7 | Medium | Electron | OS sandbox disabled for every window that loads the preload | Reported |
 | M8 | Medium | Container | Host `~/.claude.json` staged unfiltered and readable in the container | Fixed; running containers require stop/start (see §4) |
-| M9 | Medium | Container | Legacy images still mount whole host agent homes | Reported |
+| M9 | Medium | Container | Legacy images still mount whole host agent homes | Fixed for new containers; existing ones are listed for rebuild (see §4) |
 | M10 | Medium | Mail | Coordinator mail can target the project-home environment (local path) | Potential |
 | M11 | Medium (design) | Mail | Prompt injection can propagate worker → coordinator → other worker | Reported |
 | M12 | Medium (design) | Firewall | IP-based allowlist (shared CDN fronts), allowed APIs accept attacker credentials, DNS tunnelling | Reported |
@@ -570,7 +570,7 @@ does not sanitize it. The stopped-container start path filters the staged file
 in place and the entrypoint rebuilds the relay and imported copies. Until that
 stop/start, those running containers can still expose the old raw content.
 This does not revoke any secrets previously read; rotate exposed API keys or
-Control MCP tokens as needed. Legacy direct mounts still require the M9 fix.
+Control MCP tokens as needed. Legacy direct mounts persist only on runtimes created before the M9 fix, until they are rebuilt.
 
 Live qualification (`apps/backend/tests/claude-config-filter-docker.test.ts`,
 run by `mise run test:agent:docker:isolated` against the image it builds, so
@@ -596,7 +596,7 @@ the user configured are all exposed to the agent.
 
 ### M9. Legacy (pre-staged-inputs) images still mount whole host agent homes
 
-**Status:** Reported
+**Status:** Fixed for new containers on 2026-11-05: creating one from such an image is refused by name. Existing ones keep running until the user rebuilds them, and the cleanup review lists them with a Rebuild action.
 
 **Where:** `apps/backend/src/core/commands-containers.ts:470-535`. `~/.claude`,
 `~/.codex`, `~/.pi`, `~/.config/opencode` and `~/.local/share/opencode` are
@@ -699,7 +699,7 @@ write and terminal calls when the policy denies them.
 | L14 | Malformed relay credit frame can crash the backend | `preview-relay-supervisor.ts:389` | Relay is off by default. Validate frame lengths and catch errors in `onData`. | Fixed (2026-11-03): every fixed-size inbound frame must have its exact payload length (credit 4 bytes; opened, eof and close 0), and the `onData` frame loop is wrapped in try/catch; both paths shut the relay down with category `internal` instead of throwing out of the stdout listener. Tests: "a 0-byte / 2-byte / 5-byte credit frame shuts the relay down instead of throwing", "a 4-byte credit frame grants credit to its channel" and "an exception while handling a frame shuts the relay down, not the backend" in `apps/backend/src/preview-relay-supervisor.test.ts` |
 | L15 | Agent-tools MCP server binds `0.0.0.0` on the host | `apps/backend/src/core/agent-tools.ts:642` | Token-protected, but reachable from the LAN or tailnet. Bind to the Docker bridge or loopback addresses. | Verified |
 | L16 | Control MCP and scheduling soft spots | `control-mcp-confirm.ts`, `control-mcp-credentials.ts:330-345`, `scheduled-jobs/executor.ts:681-689`, `read-only-policy.ts:537` | **Confirmation:** the agent can complete it itself (HMAC-bound, but a speed bump, not human approval). **Operator token:** readable by the coordinator; add `denyRead` for the data directory. **Self-reminders:** presented as authenticated `system` notices. **Cursor/Pi:** accept some policy fields from the request body. | Reported |
-| L17 | Provider secrets stored in plaintext in SQLite (0600) | `storage-config.ts:786-824` | Consider `safeStorage`/libsecret. Remote-connection tokens already use `safeStorage`. | Reported |
+| L17 | Provider secrets stored in plaintext in SQLite (0600) | `storage-config.ts:786-824` | Consider `safeStorage`/libsecret. Remote-connection tokens already use `safeStorage`. | Accepted (2026-11-05): plaintext at 0600 is recorded as an accepted risk in [storage.md](../architecture/storage.md#provider-secrets-at-rest); no keychain or `safeStorage` path was built. Re-checking found the secrets in `config.json` and its backups, not SQLite. Two mode gaps were fixed: every start now tightens those files, and every open tightens the database's companion files. Tests: `apps/backend/src/core/storage-secrets-at-rest.test.ts`, `apps/backend/tests/container-data-directory-reach.test.ts` |
 | L18 | Dependency advisories | `bun audit` | `undici@8.10.2` (via `pi-bridge`): 1 high (DoS on excessive content-encodings), 2 moderate (GHSA-xjj6-f33q-929c, -4qv8-2p9j-2685, -f72v-6w45-q472). `postcss-selector-parser@6.0.10` (dev, moderate). Electron is locked at `45.0.0`; check for later 45.x security releases. Run `bun audit fix`. | Verified |
 
 ## 6. Informational

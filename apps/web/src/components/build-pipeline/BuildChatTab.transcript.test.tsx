@@ -160,6 +160,7 @@ function renderTab() {
     />
   );
   const view = render(element(true));
+  fireEvent.click(screen.getByRole("tab", { name: /^Verify,/ }));
   return { rerender: (isActive = true) => view.rerender(element(isActive)) };
 }
 

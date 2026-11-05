@@ -221,7 +221,7 @@ test("a command window with a leaf selected only offers scheduling on the window
     answer("command", command, args),
   );
   mount("experimental");
-  await screen.findByText("Codex Raw Event Logging");
+  await screen.findByText(/Experimental settings belong to the machine this window runs on/);
   expect(screen.queryByRole("switch", { name: "Enable scheduling" }) === null).toBe(true);
   expect(screen.queryAllByRole("button", { name: "Schedules" })).toHaveLength(0);
   expect(writes).toEqual([]);
@@ -243,7 +243,7 @@ test("a command window with a leaf selected only offers scheduling on the window
     expect(screen.getAllByRole("button", { name: "Schedules" }).length).toBeGreaterThan(0),
   );
   fireEvent.click(screen.getAllByRole("button", { name: /^Leaf/ })[0]!);
-  await screen.findByText("Codex Raw Event Logging");
+  await screen.findByText(/Experimental settings belong to the machine this window runs on/);
   expect(screen.queryByRole("switch", { name: "Enable scheduling" }) === null).toBe(true);
   fireEvent.click(screen.getAllByRole("button", { name: "Schedules" })[0]!);
   await waitFor(() =>

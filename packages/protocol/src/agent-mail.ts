@@ -494,6 +494,12 @@ export interface AgentMailNotice {
     id: string;
     environmentId?: string;
     tabId?: string;
+    /**
+     * The connected node the worker runs on, when it is not this machine. Absent
+     * on notices written before it existed, so an id no local store knows is
+     * "not reachable from here", never a local worker.
+     */
+    nodeId?: string;
     /** Human-facing name, such as the environment name. */
     label?: string;
   };
@@ -535,6 +541,7 @@ export function normalizeAgentMailNotice(value: unknown): AgentMailNotice | null
   }
   const environmentId = boundedNoticeString(source.environmentId, AGENT_MAIL_NOTICE_MAX_ID_LENGTH);
   const tabId = boundedNoticeString(source.tabId, AGENT_MAIL_NOTICE_MAX_ID_LENGTH);
+  const nodeId = boundedNoticeString(source.nodeId, AGENT_MAIL_NOTICE_MAX_ID_LENGTH);
   const label = boundedNoticeString(source.label, AGENT_MAIL_NOTICE_MAX_LABEL_LENGTH);
   return {
     resource: {
@@ -542,6 +549,7 @@ export function normalizeAgentMailNotice(value: unknown): AgentMailNotice | null
       id,
       ...(environmentId ? { environmentId } : {}),
       ...(tabId ? { tabId } : {}),
+      ...(nodeId ? { nodeId } : {}),
       ...(label ? { label } : {}),
     },
     state: record.state,

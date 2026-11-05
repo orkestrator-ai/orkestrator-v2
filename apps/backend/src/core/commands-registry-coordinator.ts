@@ -4,7 +4,9 @@ import {
   coordinatorConversationIdFromRuntimeId,
   coordinatorIdFromRuntimeId,
   coordinatorRuntimeId,
+  normalizeCoordinatorDelegationRequest,
 } from "@orkestrator/protocol/coordinator";
+import { launchDelegationRequest } from "./coordinator-delegation-request.js";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import type { CommandContext } from "./commands-context.js";
 import { asNonBlankString, assertOnlyKeys } from "./commands-helpers.js";
@@ -136,9 +138,18 @@ export function registerCoordinatorCommands(
     workflowStarts.set(key, started);
     return started;
   };
-  register("ensure_project_coordinator", async ({ projectId }, context) => {
+  register("ensure_project_coordinator", async ({ projectId, keepConversationErrors }, context) => {
     if (!context.coordinators) throw new Error("Coordinator service is unavailable");
-    return context.coordinators.ensure(asNonBlankString(projectId, "projectId"));
+    return context.coordinators.ensure(asNonBlankString(projectId, "projectId"), {
+      clearConversationErrors: keepConversationErrors !== true,
+    });
+  });
+  register("retry_coordinator_conversation", ({ projectId, conversationId }, context) => {
+    if (!context.coordinators) throw new Error("Coordinator service is unavailable");
+    return context.coordinators.retryConversation(
+      asNonBlankString(projectId, "projectId"),
+      asNonBlankString(conversationId, "conversationId"),
+    );
   });
   register("get_project_coordinator", async ({ projectId }, context) => {
     if (!context.coordinators) throw new Error("Coordinator service is unavailable");
@@ -573,6 +584,8 @@ export function registerCoordinatorCommands(
               context.runtime.coordinatorRequests.workerTabs,
               receipt.association.id,
               STARTUP_AGENT_TAB_ID,
+              undefined,
+              launchDelegationRequest(input, environment),
             ),
           );
         }
@@ -629,7 +642,7 @@ export function registerCoordinatorCommands(
   );
   register(
     "open_coordinator_delegation",
-    async ({ scope, environmentId, tabId, requestId }, context) => {
+    async ({ scope, environmentId, tabId, requestId, request }, context) => {
       if (!record(scope)) throw new Error("Coordinator scope is required");
       const projectId = asNonBlankString(scope.projectId, "projectId");
       const coordinatorId = asNonBlankString(scope.coordinatorId, "coordinatorId");
@@ -646,6 +659,7 @@ export function registerCoordinatorCommands(
         worker,
         asNonBlankString(tabId, "tabId"),
         asNonBlankString(requestId, "requestId"),
+        normalizeCoordinatorDelegationRequest(request),
       );
       return { opened };
     },

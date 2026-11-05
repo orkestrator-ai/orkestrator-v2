@@ -1,14 +1,14 @@
 /**
- * The read-only guard applied to the build pipeline's non-writing turns:
- * Review (one reviewer, or every reviewer of a panel), the panel's
- * consolidation, and Verify.
+ * The read-only guard applied to the build pipeline's non-writing turns.
  *
  * Verify may write ignored compiler output and caches but must not commit or
- * leave Git-visible changes. Reviewers and the consolidator run in provider
- * read-only mode where the provider supports it; the guard is the backstop on
- * every provider. The generic mechanics live in `workspace-read-only-guard.ts`;
- * this module knows only where a pipeline keeps each baseline and which turn a
- * submitted result belongs to.
+ * leave Git-visible changes; a change refuses its result and fails the stage.
+ * Review (one reviewer, or every reviewer of a panel) and the panel's
+ * consolidation run in provider read-only mode where the provider supports it,
+ * and a worktree that moves under them only marks the review stale, as in Multi
+ * Review: nothing is refused or stopped. The generic mechanics live in
+ * `workspace-read-only-guard.ts`; this module knows only where a pipeline keeps
+ * each baseline and which turn a submitted result belongs to.
  *
  * - A single Review or Verify session keeps its baseline in its own session
  *   fields (`build-pipeline-validation-worktree.ts`).
@@ -17,8 +17,8 @@
  *   share the worktree, so they share it too.
  *
  * Sessions and passes recorded before the guard existed have no baseline. A
- * Review without one is not certified (an upgrade must not fail a review in
- * flight); a Verify without one fails, as it always has.
+ * Review without one cannot be marked stale; a Verify without one fails, as it
+ * always has.
  */
 import {
   isBuildPipeline,
@@ -33,10 +33,10 @@ import { sessionWorkspaceBaseline } from "./build-pipeline-validation-worktree.j
 import type { StorageService } from "./storage.js";
 import {
   WorkspaceReadOnlyGuard,
-  WorkspaceReadOnlyViolationError,
   readOnlyAcceptanceCheck,
   type ReadOnlyGuardSubject,
   type ReadOnlyGuardedAttempt,
+  type WorkspaceBaselineState,
   type WorkspaceSnapshotProbe,
 } from "./workspace-read-only-guard.js";
 import type { WorkflowResultAttempt, WorkflowResultService } from "./workflow-result-service.js";
@@ -48,12 +48,8 @@ export const PIPELINE_READ_ONLY_SUBJECTS = {
   verify: { stage: "Verification", activity: "validation" },
 } as const satisfies Record<string, ReadOnlyGuardSubject>;
 
-/** The result kinds whose submissions belong to a guarded pipeline turn. */
-const GUARDED_RESULT_KINDS = [
-  "review-report",
-  "consolidated-review",
-  "verification-result",
-] as const;
+/** The result kinds whose submissions a pipeline turn's guard can refuse. */
+const GUARDED_RESULT_KINDS = ["verification-result"] as const;
 
 export class BuildPipelineReadOnlyGuard {
   readonly guard: WorkspaceReadOnlyGuard;
@@ -96,49 +92,40 @@ export class BuildPipelineReadOnlyGuard {
   }
 
   /**
-   * When a single Review or Verify result is consumed. Throws
-   * `WorkspaceReadOnlyViolationError`; the supervisor fails the stage with its
-   * message and leaves the worktree as the evidence.
+   * When a Verify result is consumed. Throws `WorkspaceReadOnlyViolationError`;
+   * the supervisor fails the stage with its message and leaves the worktree as
+   * the evidence.
    */
   async certifySession(
     pipeline: BuildPipeline,
     session: PipelineSession,
     options: { repairableOnly?: boolean } = {},
   ): Promise<void> {
-    const baseline = sessionWorkspaceBaseline(session);
-    if (session.phase === "review" && !baseline) return;
     await this.guard.certify(
       pipeline.environmentId,
-      baseline,
-      session.phase === "review"
-        ? PIPELINE_READ_ONLY_SUBJECTS.review
-        : PIPELINE_READ_ONLY_SUBJECTS.verify,
+      sessionWorkspaceBaseline(session),
+      PIPELINE_READ_ONLY_SUBJECTS.verify,
       options,
     );
   }
 
-  /**
-   * When a panel pass consumes reviewer reports or the consolidated report:
-   * the stage error, or null when the worktree still matches (or the pass
-   * predates the guard).
-   */
-  async panelViolation(
-    pipeline: BuildPipeline,
-    subject: "review" | "consolidation",
-  ): Promise<string | null> {
-    const baseline = pipeline.reviewFanout?.workspaceBaseline;
-    if (!baseline) return null;
-    try {
-      await this.guard.certify(
-        pipeline.environmentId,
-        baseline,
-        PIPELINE_READ_ONLY_SUBJECTS[subject],
-      );
-      return null;
-    } catch (error) {
-      if (error instanceof WorkspaceReadOnlyViolationError) return error.message;
-      throw error;
-    }
+  /** Whether a single Review's worktree moved. Marks the review stale; stops nothing. */
+  async sessionChanged(pipeline: BuildPipeline, session: PipelineSession): Promise<boolean> {
+    return this.changed(pipeline.environmentId, sessionWorkspaceBaseline(session));
+  }
+
+  /** Whether a panel's worktree moved. Marks the review stale; stops nothing. */
+  async panelChanged(pipeline: BuildPipeline): Promise<boolean> {
+    return this.changed(pipeline.environmentId, pipeline.reviewFanout?.workspaceBaseline ?? null);
+  }
+
+  /** A pass from before the guard, or a failed probe, shows no change. */
+  private async changed(
+    environmentId: string,
+    baseline: WorkspaceBaselineState | null,
+  ): Promise<boolean> {
+    const { kind } = await this.guard.compare(environmentId, baseline);
+    return kind === "head" || kind === "added" || kind === "removed";
   }
 
   /** The submit-time refusal for an attempt, or null. Exposed for tests. */
@@ -166,41 +153,12 @@ function ownedByPipeline(
   attempt: WorkflowResultAttempt,
 ): ReadOnlyGuardedAttempt | null {
   const environmentId = pipeline.environmentId;
-  if (attempt.kind === "verification-result") {
-    if (pipeline.phase !== "verifying") return null;
-    const session = sessionForCurrentPhase(pipeline);
-    if (session?.phase !== "verify" || session.structuredRequestId !== attempt.resultKey)
-      return null;
-    return {
-      environmentId,
-      baseline: sessionWorkspaceBaseline(session),
-      subject: PIPELINE_READ_ONLY_SUBJECTS.verify,
-    };
-  }
-  if (pipeline.phase !== "reviewing") return null;
-  const panel = pipeline.reviewFanout;
-  if (panel) {
-    const baseline = panel.workspaceBaseline ?? null;
-    if (
-      attempt.kind === "review-report" &&
-      panel.reviewers.some((reviewer) => reviewer.requestId === attempt.resultKey)
-    ) {
-      return { environmentId, baseline, subject: PIPELINE_READ_ONLY_SUBJECTS.review };
-    }
-    if (
-      attempt.kind === "consolidated-review" &&
-      panel.consolidation?.requestId === attempt.resultKey
-    ) {
-      return { environmentId, baseline, subject: PIPELINE_READ_ONLY_SUBJECTS.consolidation };
-    }
-    return null;
-  }
-  if (attempt.kind !== "review-report") return null;
+  if (attempt.kind !== "verification-result" || pipeline.phase !== "verifying") return null;
   const session = sessionForCurrentPhase(pipeline);
-  if (session?.phase !== "review" || session.structuredRequestId !== attempt.resultKey) return null;
+  if (session?.phase !== "verify" || session.structuredRequestId !== attempt.resultKey) return null;
   return {
     environmentId,
     baseline: sessionWorkspaceBaseline(session),
-    subject: PIPELINE_READ_ONLY_SUBJECTS.review,
+    subject: PIPELINE_READ_ONLY_SUBJECTS.verify,
   };
 }

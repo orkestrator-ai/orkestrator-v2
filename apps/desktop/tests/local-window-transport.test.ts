@@ -161,7 +161,7 @@ describe("changing whether the stream carries terminal output", () => {
     const client = new BackendHttpClient("http://127.0.0.1:34121/", "fixture-token");
     client.listen(() => undefined);
     await settle(urls, 1);
-    expect(urls[0]).toBe("http://127.0.0.1:34121/__orkestrator/events");
+    expect(urls[0]).toBe("http://127.0.0.1:34121/__orkestrator/events?relayedEvents=legacy");
     client.setTerminalOutputRelay(true);
     await settle(urls, 2);
     expect(urls).toHaveLength(1);
@@ -186,6 +186,8 @@ describe("changing whether the stream carries terminal output", () => {
     const reopened = new URL(urls[1]!);
     expect(reopened.searchParams.has("excludeEvents")).toBe(false);
     expect(reopened.searchParams.get("since")).toBe("backend1:7");
+    // Main forwards to windows without tracking their watches.
+    expect(reopened.searchParams.get("relayedEvents")).toBe("legacy");
     expect(events.filter((event) => event === "terminal-event-stream-connected").length).toBe(
       opensBefore + 1,
     );

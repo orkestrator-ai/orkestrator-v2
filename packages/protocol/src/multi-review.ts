@@ -492,6 +492,15 @@ export interface MultiReviewWorkflow {
   reviewPackage?: ReviewPackageReference;
   /** Set when the live worktree changed during review, or immutable package evidence went stale. */
   reviewSnapshotStale?: boolean;
+  /**
+   * The worktree moved while reviewers read the package. The review carried on
+   * and its report stands; this says it may not describe the code as it is now.
+   * Written only when that happens, because an older client refuses a key it does
+   * not know.
+   */
+  reviewWorktreeChanged?: boolean;
+  reviewPackagePaths?: string[];
+  pendingCodeRewind?: { step: MultiReviewRewindStep; from: string; to: string; backupRef: string };
   phase: MultiReviewPhase;
   /** Active backend-owned phase retained while its step is paused. */
   pausedFromPhase?: MultiReviewPausablePhase;
@@ -548,7 +557,7 @@ export interface MultiReviewWorkflow {
     resultReminderSent?: boolean;
     /** The step's one continuation after a provider restart was spent. */
     restartContinuationSent?: boolean;
-    /** Times this step turn was resent after the weekly limit stopped it. */
+    /** Times this step turn was resent after a usage limit stopped it. */
     usageLimitResends?: number;
     idleResultPolls?: number;
     /** Bounded terminal polls while the provider finalizes cumulative usage. */
@@ -755,6 +764,19 @@ export function isMultiReviewStepControlInput(
     nonBlank(value.workflowId) &&
     MULTI_REVIEW_STEP_KINDS.includes(value.kind as MultiReviewStepKind)
   );
+}
+
+/** What Skip acts on: the reviewers still working, or the Address Findings turn. */
+export type MultiReviewSkippableStep = "review" | "fix";
+/** The steps with a recorded starting commit, which "Rewind code to here" can reach. */
+export type MultiReviewRewindStep = "prepare" | "fix";
+
+export function isMultiReviewSkippableStep(value: unknown): value is MultiReviewSkippableStep {
+  return value === "review" || value === "fix";
+}
+
+export function isMultiReviewRewindStep(value: unknown): value is MultiReviewRewindStep {
+  return value === "prepare" || value === "fix";
 }
 
 export function isRestartMultiReviewStepInput(
@@ -1019,6 +1041,25 @@ function isAutoPrLaunch(value: unknown): value is MultiReviewAutoPrLaunch {
 }
 
 export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkflow {
+  if (record(value)) {
+    const intent = value.pendingCodeRewind;
+    if (
+      intent !== undefined &&
+      (!record(intent) ||
+        (intent.step !== "prepare" && intent.step !== "fix") ||
+        !nonBlank(intent.from, 256) ||
+        !nonBlank(intent.to, 256) ||
+        !nonBlank(intent.backupRef, 512))
+    )
+      return false;
+    if (
+      value.reviewPackagePaths !== undefined &&
+      (!Array.isArray(value.reviewPackagePaths) ||
+        value.reviewPackagePaths.length > 10000 ||
+        !value.reviewPackagePaths.every((path) => typeof path === "string" && path.length <= 4096))
+    )
+      return false;
+  }
   if (
     !record(value) ||
     !hasOnlyKeys(value, [
@@ -1053,6 +1094,9 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
       "validationRun",
       "validationStopRequested",
       "reviewSnapshotStale",
+      "reviewWorktreeChanged",
+      "reviewPackagePaths",
+      "pendingCodeRewind",
       "consolidatedReport",
       "consolidationOverlap",
       "fixResult",
@@ -1118,6 +1162,8 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
       (!isReviewPackageReference(value.reviewPackage) ||
         value.reviewPackage.targetBranch !== value.targetBranch)) ||
     (value.reviewSnapshotStale !== undefined && typeof value.reviewSnapshotStale !== "boolean") ||
+    (value.reviewWorktreeChanged !== undefined &&
+      typeof value.reviewWorktreeChanged !== "boolean") ||
     (value.pausedFromPhase !== undefined &&
       value.pausedFromPhase !== "preparing" &&
       value.pausedFromPhase !== "consolidating" &&

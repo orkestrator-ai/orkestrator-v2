@@ -1,4 +1,5 @@
 import { findCoordinatorCheckoutTurn } from "./coordinator-checkout-turn.js";
+import { combineWorkerMailPorts } from "./build-pipeline-worker-mail.js";
 import { usageLimitAccountRouting } from "./coordinator-usage-limit-account-routing.js";
 import { stopProjectGitMirrorRefreshes } from "./project-git-mirror.js";
 import { runCoordinatorMaintenance } from "./coordinator-maintenance.js";
@@ -48,7 +49,10 @@ import {
 } from "./nodes/index.js";
 import { isBackendId, type BackendId } from "@orkestrator/protocol/federation";
 import type { GatewayNodeHooks } from "../gateway-support-core.js";
-import { AGENT_ACCOUNT_AUTO_SWITCHED_EVENT } from "@orkestrator/protocol/agent-account-auto-switch";
+import {
+  AGENT_ACCOUNT_AUTO_SWITCHED_EVENT,
+  legacyAutoSwitchEvent,
+} from "@orkestrator/protocol/agent-account-auto-switch";
 import {
   AGENT_ACCOUNT_PLATFORMS,
   AGENT_ACCOUNTS_CHANGED_EVENT,
@@ -128,7 +132,10 @@ import {
   composeWebAnnotationDispatchText,
 } from "./web-annotation-brief.js";
 import type { WebAnnotationToolHost } from "./web-annotation-contracts.js";
-import type { ProvisionalFindingSink } from "./review-provisional-findings.js";
+import {
+  combineProvisionalFindingSinks,
+  type ProvisionalFindingSink,
+} from "./review-provisional-findings.js";
 import {
   createMcpRuntimeProbe,
   mcpRolloutLoader,
@@ -218,7 +225,7 @@ import {
   coordinatorIdFromRuntimeId,
   coordinatorRuntimeId,
 } from "@orkestrator/protocol/coordinator";
-import type { Environment } from "./models.js";
+import type { Environment, PersistedNativeAgentSession } from "./models.js";
 import {
   ENVIRONMENT_LIFECYCLE_DRAIN_TIMEOUT_MS,
   EnvironmentLifecycleTaskTracker,
@@ -761,7 +768,9 @@ export class OrkestratorBackend {
         // A build pipeline worker's turn, read from its pipeline: an ended
         // worker reads idle, so a delegation to it settles.
         if (isPipelineWorkerTabId(tabId)) {
-          const status = await this.buildPipelines.workerMail.state(environmentId, tabId);
+          const status =
+            (await this.buildPipelines.workerMail.state(environmentId, tabId)) ??
+            (await this.multiReviews.workerMail.state(environmentId, tabId));
           return status === "running" ? "working" : status === null ? "unknown" : "idle";
         }
         return (await workerSessionActivity(storage, this.nativeAgents, environmentId, tabId)).turn;
@@ -925,7 +934,7 @@ export class OrkestratorBackend {
       notify: async ({ quietProjectId, ...notice }) => {
         // An older command node hears through its event stream; a newer one
         // ignores that and takes this machine's notice from its outbox.
-        options.emit(AGENT_ACCOUNT_AUTO_SWITCHED_EVENT, notice);
+        options.emit(AGENT_ACCOUNT_AUTO_SWITCHED_EVENT, legacyAutoSwitchEvent(notice));
         await this.coordinators.noticeRouter.deliverAutoSwitch(notice, "this machine", {
           coalesceMs: COORDINATOR_STATUS_COALESCE_MS,
           ...(quietProjectId ? { quietProjectId } : {}),
@@ -1390,9 +1399,20 @@ export class OrkestratorBackend {
           usageLimitStops: this.accountAutoSwitch,
         },
         resolveAgentToolConnection,
+        resolveWorkerToolConnection: (environmentId, projectId, target, tabId) =>
+          this.agentTools.connection(environmentId, projectId, target, tabId),
         assertAgentToolsReachable,
         artifactDispatch,
         artifactLedger,
+        environmentFence: context.runtime.environments.fence,
+        assertEnvironmentQuiescent: async (environmentId) => {
+          if (await this.nativeAgents.hasActiveCheckoutWork(environmentId)) {
+            throw new Error(
+              "An agent may still write to this environment. Stop it before rewinding code.",
+            );
+          }
+        },
+        environmentGit: createPipelineEnvironmentGit(storage, context.runtime.environments.fence),
         dispatchAddressFindingsPrompt: (workflow, presentation) =>
           dispatchMultiReviewAddressFindingsPrompt(
             this.nativeAgents,
@@ -1686,7 +1706,12 @@ export class OrkestratorBackend {
       this.agentTools as {
         setProvisionalFindingSink?: (sink: ProvisionalFindingSink | null) => void;
       }
-    ).setProvisionalFindingSink?.(this.multiReviews.provisionalFindingSink());
+    ).setProvisionalFindingSink?.(
+      combineProvisionalFindingSinks([
+        this.multiReviews.provisionalFindingSink(),
+        this.buildPipelines.provisionalFindingSink(),
+      ]),
+    );
     this.featurePlanning = new FeaturePlanningService(
       storage,
       async <T>(command: string, args: Record<string, unknown> = {}) => {
@@ -1724,15 +1749,24 @@ export class OrkestratorBackend {
           if (handler) await handler({ environmentId }, context);
         },
       ),
-      pipelineWorkers: this.buildPipelines.workerMail,
+      pipelineWorkers: combineWorkerMailPorts([
+        this.buildPipelines.workerMail,
+        this.multiReviews.workerMail,
+      ]),
     });
-    // A pipeline worker's queued mail becomes its next turn at its turn end.
-    this.buildPipelines.setWorkerMailbox({
-      claim: (environmentId, tabId, requestId) =>
+    // A worker's queued mail becomes its next turn at its turn end.
+    const workerMailbox = {
+      claim: (environmentId: string, tabId: string, requestId: string) =>
         this.agentMail.claimPipelineWorkerMail(environmentId, tabId, requestId),
-      settle: (environmentId, tabId, messageIds, outcome) =>
-        this.agentMail.settlePipelineWorkerMail(environmentId, tabId, messageIds, outcome),
-    });
+      settle: (
+        environmentId: string,
+        tabId: string,
+        messageIds: readonly string[],
+        outcome: "accepted" | "returned",
+      ) => this.agentMail.settlePipelineWorkerMail(environmentId, tabId, messageIds, outcome),
+    };
+    this.buildPipelines.setWorkerMailbox(workerMailbox);
+    this.multiReviews.setWorkerMailbox(workerMailbox);
     context.drainAgentMail = () => this.agentMail.drainInjects();
     // Scoped workflow wakeups (step 08), subscribed before any owner's first
     // discovery so nothing that commits during startup is missed. Each wake
@@ -1812,26 +1846,44 @@ export class OrkestratorBackend {
     environmentId: string,
     tabId: string,
   ): Promise<string | undefined> {
-    return lastAssistantText((await this.workerProjection(environmentId, tabId, 6))?.messages);
+    const projection = await this.workerRead(environmentId, tabId, (agent, logicalSessionKey) =>
+      this.nativeAgents.getProjection({
+        environmentId,
+        agent,
+        logicalSessionKey,
+        messageLimit: 6,
+      }),
+    );
+    return lastAssistantText(projection?.messages);
   }
 
   /**
    * Whether a waiting worker tab is blocked on an approval or a question, from
    * its pending interactions rather than its activity state, which cannot say.
+   * Reads session state only: the interactions need no transcript.
    */
   private async waitingBlocker(
     environmentId: string,
     tabId: string,
   ): Promise<CoordinatorWaitingBlocker | undefined> {
-    return waitingBlocker((await this.workerProjection(environmentId, tabId, 1))?.interactions);
+    const state = await this.workerRead(environmentId, tabId, (agent, logicalSessionKey) =>
+      this.nativeAgents.getSessionStateUpdate({
+        environmentId,
+        agent,
+        logicalSessionKey,
+        viewVersion: 1,
+        forceSnapshot: true,
+      }),
+    );
+    return waitingBlocker(state?.status === "snapshot" ? state.value.interactions : undefined);
   }
 
-  /** A short projection read of one worker tab with a deadline; null when unavailable. */
-  private async workerProjection(
+  /** A short read of one worker tab's session with a deadline; null when unavailable. */
+  private async workerRead<T>(
     environmentId: string,
     tabId: string,
-    messageLimit: number,
-  ): Promise<{ messages?: unknown; interactions?: unknown } | null | undefined> {
+    read: (agent: PersistedNativeAgentSession["agent"], logicalSessionKey: string) => Promise<T>,
+  ): Promise<T | null | undefined> {
     const logicalSessionKey = `env-${environmentId}:${tabId}`;
     const session = (await this.context.storage.readNativeAgentSessionsSnapshot()).find(
       (candidate) =>
@@ -1846,14 +1898,7 @@ export class OrkestratorBackend {
     });
     try {
       return await Promise.race([
-        this.nativeAgents
-          .getProjection({
-            environmentId,
-            agent: session.agent,
-            logicalSessionKey,
-            messageLimit,
-          })
-          .catch(() => null),
+        read(session.agent, logicalSessionKey).catch(() => null),
         deadline,
       ]);
     } finally {
@@ -2878,6 +2923,7 @@ export class OrkestratorBackend {
       noteControllerContact: (id) => this.nodes.noteControllerContact(id),
       authenticateGrant: (token) => this.nodePortal.grants.authenticate(token)?.expiresAt ?? null,
       relayTarget: (nodeId) => this.nodePortal.relayTarget(nodeId),
+      isRelayedNodeWatched: (nodeId) => this.nodePortal.events.isWatched(nodeId),
     };
   }
 

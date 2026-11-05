@@ -4,6 +4,8 @@ import { resolve } from "node:path";
 import { JsonlLineFramer, type JsonlFrameFailure } from "./acp-jsonl-framer.js";
 
 const LIMIT = 256;
+/** `MAX_LINE_BYTES`, written out so a changed limit fails the probe test below. */
+const REAL_LIMIT = 4 * 1024 * 1024;
 
 type Outcome = { lines: string[]; failure?: JsonlFrameFailure };
 
@@ -108,7 +110,112 @@ describe("JsonlLineFramer", () => {
   });
 });
 
+describe("JsonlLineFramer at the bridge's frame limit", () => {
+  function pieces(bytes: Buffer, pieceBytes: number): Buffer[] {
+    const chunks: Buffer[] = [];
+    for (let at = 0; at < bytes.length; at += pieceBytes) {
+      chunks.push(bytes.subarray(at, at + pieceBytes));
+    }
+    return chunks;
+  }
+
+  function accept(chunks: readonly Buffer[]): { bytes: number[]; failure?: JsonlFrameFailure } {
+    const framer = new JsonlLineFramer(REAL_LIMIT);
+    const bytes: number[] = [];
+    for (const chunk of chunks) {
+      const failure = framer.accept(chunk, (line) => bytes.push(line.length));
+      if (failure) return { bytes, failure };
+    }
+    return { bytes };
+  }
+
+  test("a terminated line closes one byte past the limit, however it was split", () => {
+    for (const pieceBytes of [4 * 1024, 64 * 1024, REAL_LIMIT + 2]) {
+      const atLimit = Buffer.alloc(REAL_LIMIT + 1, 97);
+      atLimit[REAL_LIMIT] = 0x0a;
+      expect(accept(pieces(atLimit, pieceBytes))).toEqual({ bytes: [REAL_LIMIT] });
+    }
+    // The newline shares a chunk with the last byte, so only the terminated
+    // check can see this line.
+    const held = Buffer.alloc(REAL_LIMIT, 97);
+    expect(accept([held, Buffer.from("a\n")])).toEqual({ bytes: [], failure: "oversized" });
+    const whole = Buffer.alloc(REAL_LIMIT + 2, 97);
+    whole[REAL_LIMIT + 1] = 0x0a;
+    expect(accept([whole])).toEqual({ bytes: [], failure: "oversized" });
+  });
+
+  test("an unterminated line closes one byte past the limit, however it was split", () => {
+    for (const pieceBytes of [4 * 1024, 64 * 1024, REAL_LIMIT + 1]) {
+      const over = Buffer.alloc(REAL_LIMIT + 1, 97);
+      expect(accept(pieces(over, pieceBytes))).toEqual({
+        bytes: [],
+        failure: "unterminated-oversized",
+      });
+    }
+    expect(accept(pieces(Buffer.alloc(REAL_LIMIT, 97), 64 * 1024))).toEqual({ bytes: [] });
+  });
+
+  test("copies and searches each byte of a frame once, whatever the chunk size", () => {
+    const concat = Buffer.concat;
+    const indexOf = Buffer.prototype.indexOf;
+    let copiedBytes = 0;
+    let searchedBytes = 0;
+    Buffer.concat = ((list: readonly Uint8Array[], totalLength?: number) => {
+      const joined = concat(list, totalLength);
+      copiedBytes += joined.length;
+      return joined;
+    }) as typeof Buffer.concat;
+    Buffer.prototype.indexOf = function (this: Buffer, value: number, from?: number) {
+      searchedBytes += this.length - (from ?? 0);
+      return indexOf.call(this, value, from);
+    } as typeof Buffer.prototype.indexOf;
+    const frame = Buffer.alloc(REAL_LIMIT + 1, 97);
+    frame[REAL_LIMIT] = 0x0a;
+    const chunks = pieces(frame, 1024);
+    let outcome: ReturnType<typeof accept>;
+    try {
+      outcome = accept(chunks);
+    } finally {
+      Buffer.concat = concat;
+      Buffer.prototype.indexOf = indexOf;
+    }
+    expect(outcome).toEqual({ bytes: [REAL_LIMIT] });
+    expect(copiedBytes).toBe(REAL_LIMIT);
+    // The search after the newline starts past it, so it adds nothing.
+    expect(searchedBytes).toBe(REAL_LIMIT + 1);
+  });
+});
+
 describe("AcpProcess stdout", () => {
+  test("closes at the same frame size for a terminated and an unterminated line", () => {
+    const probe = spawnSync(
+      process.execPath,
+      [resolve(import.meta.dir, "testing/stdout-frame-limit-probe.ts")],
+      {
+        encoding: "utf8",
+        timeout: 60_000,
+        maxBuffer: 16 * 1024 * 1024,
+        env: { ...process.env, NODE_ENV: "test" },
+      },
+    );
+    expect(probe.status).toBe(0);
+    const result = JSON.parse(probe.stdout.trim().split("\n").at(-1)!);
+    expect(result.limit).toBe(REAL_LIMIT);
+    const frameOverhead = '{"jsonrpc":"2.0","id":1,"result":{"text":""}}'.length;
+    const answeredBytes = REAL_LIMIT - frameOverhead;
+    expect(result.terminatedAtLimit).toEqual({ answeredBytes, closedAfter: false });
+    // At the limit with no newline yet stays open until the newline arrives.
+    expect(result.newlineAfterLimit).toEqual({ answeredBytes, closedAfter: false });
+    expect(result.terminatedOverLimit).toEqual({
+      error: "framing ACP emitted an oversized JSONL frame",
+      closedAfter: true,
+    });
+    expect(result.unterminatedOverLimit).toEqual({
+      error: "framing ACP emitted an unterminated oversized JSONL frame",
+      closedAfter: true,
+    });
+  }, 90_000);
+
   test("copies a frame spread over many chunks once, not once per chunk", () => {
     const probe = spawnSync(
       process.execPath,

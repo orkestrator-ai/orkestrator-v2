@@ -195,7 +195,7 @@ declaration:
 | `environment-cleanup-reconciler.ts` | `reportedStrayWithContent`, `scheduled` | Keyed by the resolved data directory. |
 | `bug-report-service.ts` | `filingFlights` | Keyed by data directory and report id. |
 | `git-fsmonitor.ts` | `fsmonitorMigrations` | Keyed by worktree path: the migration edits that worktree's config file on the host. |
-| `shell.ts` | `commandInvocations`, `commandObservers` | Count this process's own subprocesses for benchmarks; `runCommand` has no backend in reach. |
+| `command-capture.ts` | `commandInvocations`, `commandObservers` | Count this process's own subprocesses for benchmarks; `runCommand` has no backend in reach. |
 | `transcript-artifacts/preview-supervisor.ts` | `backendStartIdentity` | The start identity of this process, which names the preview scratch it owns. |
 | `transcript-artifacts/dependency-manifest.ts` | `cache` | Verified bytes of a pinned bundle file, keyed by bundle and directory. |
 | `control-mcp-direct-tools.ts` | `compiled` | Schemas compiled from constants. |

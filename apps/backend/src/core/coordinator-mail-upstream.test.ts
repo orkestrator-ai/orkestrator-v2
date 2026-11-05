@@ -69,6 +69,7 @@ describe("fastForwardBeforeCoordinatorMail", () => {
     ["a conversation with no agent yet", runtimeId, storageWith({ agent: undefined })],
     ["a paused coordinator", runtimeId, storageWith({}, { lifecycleState: "paused" } as never)],
     ["a closed conversation", runtimeId, storageWith({ closedAt: "2026-01-01T00:00:00Z" })],
+    ["a main that failed to start", runtimeId, storageWith({ startupError: "bridge failed" })],
     ["a missing coordinator", coordinatorRuntimeId("other", "conv-1"), storageWith()],
   ])("skips %s", async (_label, id, storage) => {
     const git = fakeGit();

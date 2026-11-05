@@ -58,6 +58,11 @@ describe("StorageService store writers", () => {
       kind: "whole",
       leases: ["previewSettingsFile"],
     });
+    // Row writes too, reached from every queue mutation and steer path.
+    expect(stores.get("promptQueuesFile")).toMatchObject({
+      kind: "transactional",
+      leases: ["promptQueuesFile"],
+    });
     // The machine profile's compare-and-swap edit and its create-once read
     // share one lease, through a private helper.
     expect(stores.get("backendProfileFile")).toMatchObject({
@@ -147,6 +152,119 @@ describe("StorageService store writers", () => {
     expect(sources.some((source) => source.source.includes("return (async () => {"))).toBe(true);
     const result = analyzeStorageWriters(sources, { rootClass: "StorageService" });
     expect(result.violations.join("\n")).toContain("acknowledgeStartupAgentSession");
+  });
+
+  describe("prompt queue writers", () => {
+    const queueSites = () =>
+      analyzeStorageService().sites.filter((site) => site.store === "promptQueuesFile");
+
+    test("every writer is a row write under the queue lease, on every path", () => {
+      const sites = queueSites();
+      expect(new Set(sites.map((site) => site.call))).toEqual(
+        new Set(["context.updateSensitiveStoreRow"]),
+      );
+      const entries = new Set(
+        sites.flatMap((site) => site.paths.map((route) => route.entry?.name ?? "(none)")),
+      );
+      // The member holding the lease on each path, including both steer paths.
+      expect([...entries].sort()).toEqual(
+        [
+          "acknowledgePromptQueueDispatch",
+          "deletePromptQueuesByEnvironment",
+          "enqueuePromptQueueMessage",
+          "enqueuePromptQueueMessageIfAbsent",
+          "failPromptQueueDispatch",
+          "markPromptQueueDispatchBoundary",
+          "movePromptQueueMessage",
+          "removePromptQueueMessage",
+          "reserveNativeAgentJobRequest",
+          "reservePromptQueueHeadForDispatch",
+          "reservePromptQueueSteer",
+          "retryPromptQueueDispatch",
+          "savePromptQueue",
+          "settleNativeAgentJobRequest",
+          "settlePromptQueueSteerSource",
+        ].sort(),
+      );
+      for (const site of sites) {
+        for (const route of site.paths) {
+          expect(route.leases.map((lease) => lease.name)).toContain("promptQueuesFile");
+        }
+      }
+    });
+
+    test("whole-store scans are limited to listings and environment deletion", () => {
+      const callers = readStorageSources().flatMap(({ file, source }) =>
+        [...source.matchAll(/\b(?:loadPromptQueues|readStoredPromptQueues)\(\)/g)].map((match) => {
+          const line = source.slice(0, match.index).split("\n").length;
+          return `${path.basename(file)}: ${source.split("\n")[line - 1]!.trim()}`;
+        }),
+      );
+      expect(callers.sort()).toEqual(
+        [
+          "storage-prompt-queue-store.ts: async loadPromptQueues(): Promise<Record<string, PersistedPromptQueue>> {",
+          "storage-prompt-queue-store.ts: const stored = await this.readStoredPromptQueues();",
+          "storage-prompt-queue-store.ts: for (const [queueKey, stored] of Object.entries(await this.readStoredPromptQueues())) {",
+          "storage-prompt-queue-store.ts: private async readStoredPromptQueues(): Promise<Record<string, unknown>> {",
+          "storage-prompts.ts: return Object.values(await this.repos.promptQueues.loadPromptQueues());",
+          "storage-prompts.ts: return Object.values(await this.repos.promptQueues.loadPromptQueues()).filter(",
+        ].sort(),
+      );
+    });
+
+    test("a whole-value save brought back beside the row writes is refused", () => {
+      const sources = readStorageSources().map((source) => ({
+        ...source,
+        source: source.source.replace(
+          "const removedKeys = await this.repos.promptQueues.deletePromptQueuesOwnedBy(environmentId);",
+          `await this.context.saveSensitiveJson(this.files.promptQueuesFile(), {});
+      const removedKeys = await this.repos.promptQueues.deletePromptQueuesOwnedBy(environmentId);`,
+        ),
+      }));
+      expect(sources.some((source) => source.source.includes("promptQueuesFile(), {});"))).toBe(
+        true,
+      );
+      const { violations } = analyzeStorageWriters(sources, { rootClass: "StorageService" });
+      expect(violations.join("\n")).toContain("promptQueuesFile");
+    });
+
+    test("a queue row write outside the queue lease is refused", () => {
+      const sources = readStorageSources().map((source) => ({
+        ...source,
+        source: source.source
+          .replace(
+            `return this.repos.promptQueues.enqueuePromptQueueMutation(async () => {
+      return this.repos.promptQueues.updatePromptQueue<PersistedPromptQueue | null>(
+        queueKey,
+        (previous) => {
+          if (!previous?.dispatchError) return { result: previous ?? null };`,
+            `return (async () => {
+      return this.repos.promptQueues.updatePromptQueue<PersistedPromptQueue | null>(
+        queueKey,
+        (previous) => {
+          if (!previous?.dispatchError) return { result: previous ?? null };`,
+          )
+          .replace(
+            `return { result: saved, value: saved };
+        },
+      );
+    });
+  }
+
+  promptQueueMessageFingerprint(message: unknown): string {`,
+            `return { result: saved, value: saved };
+        },
+      );
+    })();
+  }
+
+  promptQueueMessageFingerprint(message: unknown): string {`,
+          ),
+      }));
+      expect(sources.some((source) => source.source.includes("return (async () => {"))).toBe(true);
+      const { violations } = analyzeStorageWriters(sources, { rootClass: "StorageService" });
+      expect(violations.join("\n")).toContain("retryPromptQueueDispatch");
+    });
   });
 
   test("the facade's area fields make their picked members entry points", () => {

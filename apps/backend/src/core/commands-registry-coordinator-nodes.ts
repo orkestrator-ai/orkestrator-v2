@@ -9,8 +9,11 @@ import {
   COORDINATOR_MAIL_ADDRESS,
   coordinatorIdFromRuntimeId,
   coordinatorRuntimeId,
+  normalizeCoordinatorDelegationRequest,
+  type CoordinatorDelegationRequest,
   type CoordinatorWorkflowAssociation,
 } from "@orkestrator/protocol/coordinator";
+import { launchDelegationRequest } from "./coordinator-delegation-request.js";
 import {
   isLaunchMultiReviewActionInput,
   isMultiReviewModelSelection,
@@ -237,6 +240,7 @@ async function openNodeDelegation(
   environmentId: string,
   tabId: string,
   requestId: string,
+  request?: CoordinatorDelegationRequest,
 ): Promise<boolean> {
   const association = await context.storage.coordinators.saveCoordinatorWorkflowAssociation({
     id: randomUUID(),
@@ -258,6 +262,8 @@ async function openNodeDelegation(
     context.runtime.coordinatorRequests.workerTabs,
     association.id,
     tabId,
+    undefined,
+    request,
   );
   if (!opened) throw new Error("Coordinator delegation association was not found");
   await startRemoteRequest(context, caller, association.id, { nodeId, environmentId, tabId });
@@ -462,6 +468,8 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
               context.runtime.coordinatorRequests.workerTabs,
               receipt.association.id,
               STARTUP_AGENT_TAB_ID,
+              undefined,
+              launchDelegationRequest(input, environment),
             ),
           );
           await startRemoteRequest(context, caller, receipt.association.id, {
@@ -503,7 +511,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
 
   register(
     "open_coordinator_node_delegation",
-    async ({ scope, nodeId, environmentId, tabId, requestId }, context) => {
+    async ({ scope, nodeId, environmentId, tabId, requestId, request }, context) => {
       const caller = await identity(scope, context);
       const target = await coordinatorNodeTarget(
         context,
@@ -528,6 +536,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
             worker,
             workerTab,
             asNonBlankString(requestId, "requestId"),
+            normalizeCoordinatorDelegationRequest(request),
           ),
         };
       } finally {
@@ -736,6 +745,9 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
                 toEnvironmentId,
                 workerTab,
                 requestId,
+                {
+                  summary: (typeof args.subject === "string" && args.subject) || String(args.body),
+                },
               );
             } catch {
               delegationNote =

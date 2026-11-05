@@ -159,6 +159,61 @@ describe("PipelineKeyInformationTab", () => {
     expect(screen.queryByText("Loading key information…") === null).toBe(true);
   });
 
+  describe("notes view", () => {
+    const renderNotes = () =>
+      render(
+        <PipelineKeyInformationTab
+          data={{ environmentId: ENVIRONMENT_ID, pipelineId: PIPELINE_ID, view: "notes" }}
+        />,
+      );
+
+    test("places what needs a look under the summary, updating in place", () => {
+      seed({ ...pipeline, keyInformation, backendRevision: 2 });
+      renderNotes();
+      const tab = screen.getByTestId("pipeline-key-information-tab");
+
+      expect(tab.textContent).toContain("Notes ·");
+      const flagged = within(tab).getByRole("region", { name: "Needs a look" });
+      expect(within(flagged).getByText("Rich text formatting")).toBeTruthy();
+      expect(within(section(tab, "Solution")).getByText(keyInformation.solution!)).toBeTruthy();
+      expect(section(tab, "Summary").compareDocumentPosition(flagged)).toBe(
+        Node.DOCUMENT_POSITION_FOLLOWING,
+      );
+
+      act(() =>
+        useBuildPipelineStore.setState({
+          pipelines: new Map([[PIPELINE_ID, { ...pipeline, backendRevision: 3 }]]),
+        }),
+      );
+      expect(within(tab).queryByRole("region", { name: "Needs a look" })).toBeNull();
+      expect(within(tab).getByText("Nothing was flagged for a person to look at.")).toBeTruthy();
+    });
+
+    test("names the notes while it loads an uncached pipeline", async () => {
+      useBuildPipelineStore.setState({ pipelines: new Map() });
+      let finish!: () => void;
+      hydrate.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finish = () => {
+              seed(pipeline);
+              resolve(pipeline);
+            };
+          }),
+      );
+      renderNotes();
+      expect(screen.getByRole("status").textContent).toBe("Loading notes…");
+      await act(async () => finish());
+      expect(screen.getByText("Nothing was flagged for a person to look at.")).toBeTruthy();
+    });
+
+    test("the key information view stays the brief alone", () => {
+      const tab = renderTab({ ...pipeline, keyInformation, backendRevision: 2 });
+      expect(tab.textContent).toContain("Key information ·");
+      expect(within(tab).queryByRole("region", { name: "Needs a look" })).toBeNull();
+    });
+  });
+
   test("explains that nothing is recorded yet", () => {
     const tab = renderTab(pipeline);
     expect(within(tab).getByText("Nothing has been recorded yet")).toBeTruthy();
@@ -204,10 +259,11 @@ describe("PipelineKeyInformationTab", () => {
       const statement = section(tab, title);
       expect(within(tab).getAllByRole("region")[0]).toBe(statement);
       expect(within(tab).queryByRole("region", { name: "Summary" })).toBeNull();
-      const prose = within(statement).getByText(legacy.statement!);
+      // The paragraph sits in the prose block that carries the lead styling.
+      const prose = within(statement).getByText(legacy.statement!).parentElement!;
       expect(prose.classList.contains("text-[15px]")).toBe(true);
       expect(prose.classList.contains("leading-7")).toBe(true);
-      expect(prose.parentElement!.classList.contains("border-amber-400/60")).toBe(true);
+      expect(prose.parentElement!.classList.contains("border-blue-400/60")).toBe(true);
       const nav = within(tab).getByRole("navigation", { name: "Key information sections" });
       expect(within(nav).getAllByRole("button")[0]!.textContent).toBe(title);
       expect(within(nav).queryByRole("button", { name: "Summary" })).toBeNull();
@@ -224,10 +280,11 @@ describe("PipelineKeyInformationTab", () => {
     const regions = within(tab).getAllByRole("region");
     expect(regions).toHaveLength(1);
     expect(regions[0]).toBe(section(tab, "Summary"));
-    const prose = within(regions[0]!).getByText(summary);
+    // The paragraph sits in the prose block that carries the lead styling.
+    const prose = within(regions[0]!).getByText(summary).parentElement!;
     expect(prose.classList.contains("text-[15px]")).toBe(true);
     expect(prose.classList.contains("leading-7")).toBe(true);
-    expect(prose.parentElement!.classList.contains("border-amber-400/60")).toBe(true);
+    expect(prose.parentElement!.classList.contains("border-blue-400/60")).toBe(true);
     expect(within(tab).queryByText("Nothing has been recorded yet")).toBeNull();
     const nav = within(tab).getByRole("navigation", { name: "Key information sections" });
     expect(

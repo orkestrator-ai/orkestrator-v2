@@ -4,8 +4,10 @@ import {
   COORDINATOR_MAIL_ADDRESS,
   COORDINATOR_PROJECT_HOME_MESSAGE_WINDOW_MS,
   coordinatorConversationIdFromRuntimeId,
+  coordinatorConversationRunnable,
   coordinatorIdFromRuntimeId,
   coordinatorRuntimeId,
+  type CoordinatorDelegationRequest,
 } from "@orkestrator/protocol/coordinator";
 import {
   PROJECT_HOME_MESSAGE_LIMITS,
@@ -99,6 +101,7 @@ export async function openWorkerDelegation(
   workerEnvironmentId: string,
   workerTabId: string,
   requestId: string,
+  request?: CoordinatorDelegationRequest,
 ): Promise<boolean> {
   const association = await context.storage.coordinators.saveCoordinatorWorkflowAssociation({
     id: randomUUID(),
@@ -120,6 +123,8 @@ export async function openWorkerDelegation(
     context.runtime.coordinatorRequests.workerTabs,
     association.id,
     workerTabId,
+    undefined,
+    request,
   );
   if (!opened) throw new Error("Coordinator delegation association was not found");
   return opened.delegation?.state === "running";
@@ -206,6 +211,7 @@ async function sendCoordinatorWorkerMail(
           destination.id,
           destinationTabId,
           requestId,
+          { summary: mail.subject || mail.body },
         );
       } catch (error) {
         log.warn("delegation.open-failed", {
@@ -417,7 +423,8 @@ export function registerCoordinatorWorkerMailCommands(
       const tab = workspace.conversations.find(
         (item) => item.id === conversation && !item.closedAt,
       );
-      if (!tab) throw new Error("Coordinator conversation is unavailable");
+      if (!tab || !coordinatorConversationRunnable(workspace, tab))
+        throw new Error("Coordinator conversation is unavailable");
       const sender: CoordinatorSender = {
         kind: "coordinator",
         projectId: project,
@@ -547,7 +554,7 @@ export function registerCoordinatorWorkerMailCommands(
     );
     if (!workspace || workspace.projectId !== projectId || !tab)
       return { result: "stale", reason: "The coordinator conversation that asked was closed." };
-    if (workspace.lifecycleState !== "ready")
+    if (!coordinatorConversationRunnable(workspace, tab))
       throw new Error("The coordinator is paused or unavailable; nothing was sent.");
     const home = await context.storage.getEnvironment(target.environmentId);
     if (!home || home.projectHome !== true || home.projectId !== projectId)

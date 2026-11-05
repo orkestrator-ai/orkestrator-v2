@@ -767,7 +767,7 @@ exit 0
     );
   });
 
-  test("agent-test container mounts come from the isolated profile paths, not the host home", async () => {
+  test("agent-test containers stage from the isolated profile paths, never bind a host home", async () => {
     const environment = createEnvironment({
       id: "env-agent-test-mounts",
       environmentType: "containerized",
@@ -843,6 +843,8 @@ exit 0
             await fs.mkdir(directory, { recursive: true });
           await fs.writeFile(path.join(hostHome, ".claude.json"), "{}");
           await fs.writeFile(path.join(home, ".claude.json"), "{}");
+          await fs.writeFile(path.join(claudeConfigDir, "CLAUDE.md"), "isolated memory\n");
+          await fs.writeFile(path.join(home, ".claude", "CLAUDE.md"), "developer memory\n");
           await fs.writeFile(path.join(xdgStateHome, "opencode", "model.json"), "{}");
 
           process.env.CLAUDE_CONFIG_DIR = claudeConfigDir;
@@ -859,28 +861,36 @@ exit 0
           ).catch(() => undefined);
 
           const log = await fs.readFile(all, "utf8");
-          expect(log).toContain(`-v ${claudeConfigDir}:/claude-config:ro`);
-          expect(log).toContain(`-v ${codexHome}:/codex-home:ro`);
-          expect(log).toContain(`-v ${path.join(xdgConfigHome, "opencode")}:/opencode-config:ro`);
-          expect(log).toContain(`-v ${path.join(xdgDataHome, "opencode")}:/opencode-data:ro`);
-          expect(log).toContain(
-            `-v ${path.join(xdgStateHome, "opencode", "model.json")}:/opencode-state/model.json:ro`,
-          );
-          expect(log).not.toContain(":/cursor-config:ro");
-          expect(log).toContain(`-v ${path.join(home, ".grok")}:/grok-home:ro`);
-          expect(log).toContain(`-v ${path.join(home, ".config", "grok")}:/grok-config:ro`);
-          expect(log).not.toContain(`${path.join(hostHome, ".grok")}:`);
-          expect(log).not.toContain(`${path.join(hostHome, ".config", "grok")}:`);
-          expect(log).toContain("-e CURSOR_API_KEY");
+          expect(log).toContain("--label orkestrator-inputs-revision=");
+          // Nothing is bound from a host agent home, isolated or not: each mount
+          // is a private staged copy of the allowlisted files.
+          for (const source of [
+            claudeConfigDir,
+            codexHome,
+            xdgConfigHome,
+            xdgDataHome,
+            xdgStateHome,
+            hostHome,
+            path.join(home, ".claude"),
+            path.join(home, ".codex"),
+            path.join(home, ".grok"),
+            path.join(home, ".config", "opencode"),
+            path.join(home, ".claude.json"),
+          ]) {
+            expect(log).not.toContain(`-v ${source}`);
+            expect(log).not.toContain(`src=${source},`);
+          }
+          expect(log).not.toContain(":/claude-config.json:ro");
+          expect(log).not.toContain("CURSOR_API_KEY");
           expect(log).not.toContain("agent-test-cursor-key");
-          // `.claude.json` has no CLAUDE_CONFIG_DIR equivalent, so it is the one
-          // path resolved against the recorded host home rather than an env var.
-          expect(log).toContain(`-v ${path.join(hostHome, ".claude.json")}:/claude-config.json:ro`);
-
-          expect(log).not.toContain(`${path.join(home, ".claude")}:/claude-config`);
-          expect(log).not.toContain(`${path.join(home, ".codex")}:`);
-          expect(log).not.toContain(`${path.join(home, ".config", "opencode")}:`);
-          expect(log).not.toContain(`${path.join(home, ".claude.json")}:`);
+          // The staged copy comes from the isolated profile path.
+          const stagedClaude = /--mount type=bind,src=([^,]+),dst=\/claude-config,readonly/.exec(
+            log,
+          )?.[1];
+          expect(stagedClaude).toBeTruthy();
+          expect(await fs.readFile(path.join(stagedClaude!, "CLAUDE.md"), "utf8")).toBe(
+            "isolated memory\n",
+          );
           // The developer's actual HOME and gitconfig remain outside the profile.
           expect(log).not.toContain("/tmp/gitconfig");
         },
@@ -923,6 +933,8 @@ exit 0
           const claudeConfigDir = path.join(home, "isolated", "claude");
           await fs.mkdir(codexHome, { recursive: true });
           await fs.mkdir(claudeConfigDir, { recursive: true });
+          await fs.writeFile(path.join(codexHome, "config.toml"), "model = 'fixture'\n");
+          await fs.writeFile(path.join(claudeConfigDir, "CLAUDE.md"), "not allowed\n");
           process.env.CODEX_HOME = codexHome;
           process.env.CLAUDE_CONFIG_DIR = claudeConfigDir;
 
@@ -931,7 +943,7 @@ exit 0
           ).catch(() => undefined);
 
           const log = await fs.readFile(all, "utf8");
-          expect(log).toContain(`-v ${codexHome}:/codex-home:ro`);
+          expect(log).toMatch(/--mount type=bind,src=[^,]+,dst=\/codex-home,readonly/);
           // The Claude directory exists and is readable; only the profile's
           // credential-source list keeps it out of the container.
           expect(log).not.toContain("/claude-config");

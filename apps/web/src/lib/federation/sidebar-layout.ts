@@ -402,26 +402,6 @@ export function mergedProjectView(
   };
 }
 
-/**
- * This window's own projects in a merged tree, top to bottom as drawn,
- * without those inside a collapsed folder or repository group. A shift-click
- * range runs over these, not over this window's own project tree, whose order
- * and folders the merged list does not use.
- */
-export function visibleBoundProjectIds(
-  tree: readonly ProjectTreeEntry<MergedProject>[],
-  isFolderCollapsed: (name: string) => boolean,
-): string[] {
-  const members = tree.flatMap((entry) =>
-    entry.kind === "project"
-      ? [entry.project]
-      : isFolderCollapsed(entry.name)
-        ? []
-        : entry.projects,
-  );
-  return members.filter((item) => item.machine.bound).map((item) => item.project.ref.projectId);
-}
-
 /** Repository drags reorder whole groups or members within their own group. */
 export function resolveRepositoryArrangement(
   activeId: string,

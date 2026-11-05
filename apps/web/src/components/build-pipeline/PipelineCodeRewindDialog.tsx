@@ -37,7 +37,15 @@ export function usePipelineCodeRewind(
   pipelineId: string,
   rewind: (stageId: string, expectedHead: string) => Promise<boolean>,
   pending: boolean,
+  options: {
+    /** Where the preview comes from; a build pipeline's by default. */
+    readPreview?: (id: string, stageId: string) => Promise<BuildPipelineCodeRewindPreview>;
+    /** What restarts: "the pipeline" by default. */
+    subject?: string;
+  } = {},
 ) {
+  const readPreview = options.readPreview ?? backend.previewBuildPipelineCodeRewind;
+  const subject = options.subject ?? "the pipeline";
   const [request, setRequest] = useState<CodeRewindRequest | null>(null);
   // Answers for a request the user has since closed or replaced are dropped.
   const generation = useRef(0);
@@ -45,7 +53,7 @@ export function usePipelineCodeRewind(
   const open = (stageId: string, title: string) => {
     const current = ++generation.current;
     setRequest({ stageId, title });
-    backend.previewBuildPipelineCodeRewind(pipelineId, stageId).then(
+    readPreview(pipelineId, stageId).then(
       (preview) => {
         if (generation.current === current) {
           setRequest((previous) => (previous ? { ...previous, preview } : previous));
@@ -79,7 +87,7 @@ export function usePipelineCodeRewind(
           <AlertDialogTitle>Rewind code to {request?.title}?</AlertDialogTitle>
           <AlertDialogDescription>
             Resets the branch to {shortSha(preview?.targetCommit)}, the commit this step started
-            from, and restarts the pipeline from this step. The steps after it become a previous
+            from, and restarts {subject} from this step. The steps after it become a previous
             attempt.
           </AlertDialogDescription>
         </AlertDialogHeader>

@@ -63,7 +63,7 @@ import {
   browserPreviewContentDecoder,
   rewriteBrowserPreviewBody,
 } from "./gateway-internals.js";
-import type { StaticContentEncoding } from "./gateway-internals.js";
+import type { StaticCompressionEncoding, StaticContentEncoding } from "./gateway-internals.js";
 import { compatibilityPathUsage } from "./core/compatibility-path-usage.js";
 import { createLogger } from "@orkestrator/protocol/logger";
 
@@ -83,6 +83,35 @@ function staticDocumentContentSecurityPolicy(root: string, filePath: string): st
   if (relativePath === DESIGN_FRAME_DOCUMENT || relativePath === STATIC_HTML_FRAME_DOCUMENT)
     return GATEWAY_DESIGN_FRAME_CONTENT_SECURITY_POLICY;
   return null;
+}
+
+/**
+ * The on-the-fly variant a revalidation already holds, found without compressing.
+ * Only the source file's identity goes into these tags, so a match costs a string
+ * comparison. A holder keeps valid bytes for its tag even if compressing again
+ * would now fail or choose another coding. `*` names no variant, so the answer's
+ * coding is not known until the normal path has run.
+ */
+function heldStaticFallbackEncoding(
+  ifNoneMatch: string | string[] | undefined,
+  source: { mtimeMs: number; size: number },
+  encodings: StaticCompressionEncoding[],
+  identityAcceptable: boolean,
+): StaticContentEncoding | null {
+  const value = Array.isArray(ifNoneMatch) ? ifNoneMatch.join(",") : ifNoneMatch;
+  // With no encoding to try, or a source over the cap, compressing is a no-op.
+  if (!value || encodings.length === 0 || source.size > MAX_STATIC_FALLBACK_SOURCE_BYTES) {
+    return null;
+  }
+  if (value.split(",").some((entry) => entry.trim() === "*")) return null;
+  const variants: StaticContentEncoding[] = identityAcceptable
+    ? [...encodings, "identity"]
+    : encodings;
+  return (
+    variants.find((encoding) =>
+      ifNoneMatchMatches(value, etagForStaticVariant(source.mtimeMs, source.size, encoding)),
+    ) ?? null
+  );
 }
 
 export function createSseGzipCompressor(): Gzip {
@@ -803,7 +832,21 @@ export class GatewayProxy {
       }
     }
 
-    if (selectedEncoding === "identity" && request.method !== "HEAD") {
+    const heldEncoding =
+      selectedEncoding === "identity" && request.method !== "HEAD"
+        ? heldStaticFallbackEncoding(
+            request.headers["if-none-match"],
+            fileStat,
+            preferredEncodings,
+            identityQuality > 0,
+          )
+        : null;
+    if (heldEncoding) {
+      // The 304 below answers this. Its headers are the ones the client's 200
+      // carried, except a coded length, which only compressing would tell us.
+      selectedEncoding = heldEncoding;
+      omitContentLength = heldEncoding !== "identity";
+    } else if (selectedEncoding === "identity" && request.method !== "HEAD") {
       const outcome = await compressStaticFileWithinLimits(
         filePath,
         fileStat.mtimeMs,

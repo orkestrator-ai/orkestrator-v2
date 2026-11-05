@@ -4,9 +4,9 @@ import { appendFileSync, closeSync, existsSync } from "node:fs";
 export type JsonObject = Record<string, unknown>;
 
 export const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
-export const provider = process.env.ACP_PROVIDER === "grok" ? "grok" : "cursor";
+export const provider = process.env.ACP_PROVIDER === "grok" ? "grok" : "acp-fixture";
 
-export const cursorConfig = {
+export const genericConfig = {
   sessionId: "fake-session",
   modes: {
     currentModeId: "agent",
@@ -76,38 +76,36 @@ export const grokConfig = {
 
 export interface FakeAgentState {
   provider: typeof provider;
-  cursorConfig: typeof cursorConfig;
+  genericConfig: typeof genericConfig;
   grokConfig: typeof grokConfig;
   promptRequestId: number | null;
   flattenedResourceExhaustedAttempts: number;
   flattenedResourceExhaustedScenario: boolean;
   rpcResourceExhaustedAttempts: number;
   rpcResourceExhaustedScenario: boolean;
-  backgroundRelaunches: number;
 }
 
 export const state: FakeAgentState = {
   provider,
-  cursorConfig,
+  genericConfig,
   grokConfig,
   promptRequestId: null,
   flattenedResourceExhaustedAttempts: 0,
   flattenedResourceExhaustedScenario: false,
   rpcResourceExhaustedAttempts: 0,
   rpcResourceExhaustedScenario: false,
-  backgroundRelaunches: 0,
 };
 
 export function sessionPayload(sessionId = "fake-session"): JsonObject {
-  const config = provider === "grok" ? grokConfig : cursorConfig;
+  const config = provider === "grok" ? grokConfig : genericConfig;
   // An agent that advertises no model option at all. The bridge must then leave
   // the composer with no selection rather than inventing one, and assistant
   // messages must carry no model attribution.
   const withoutModel =
     provider !== "grok" && process.env.FAKE_ACP_NO_MODEL_OPTION === "1"
       ? {
-          ...cursorConfig,
-          configOptions: cursorConfig.configOptions.filter((option) => option.id !== "model"),
+          ...genericConfig,
+          configOptions: genericConfig.configOptions.filter((option) => option.id !== "model"),
         }
       : config;
   return {

@@ -5,6 +5,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type ChangeEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type RefObject,
@@ -12,7 +13,17 @@ import {
 import { ChevronDown, ChevronUp, Search, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import {
+  artifactSearchBodyRevision,
+  subscribeArtifactSearchBodies,
+} from "@/lib/chat/artifact-requests";
 import { registerProtectedRichCache } from "@/lib/chat/rich-content-reset";
+import type { SearchProjection } from "@/lib/chat/rich-markdown/search-segments";
+import {
+  resolveFindSelection,
+  selectionOfMatch,
+  type AgentChatFindSelection,
+} from "./agent-chat-find-selection";
 import { AgentChatSearchIndex } from "./agent-chat-search-index";
 
 export interface AgentChatFindMatch {
@@ -29,8 +40,11 @@ export interface AgentChatTextMatch {
 interface UseAgentChatFindOptions<TItem> {
   items: TItem[];
   getSearchText: (item: TItem) => string;
+  /** Names a match by its source in the row, so text arriving before it cannot move it. */
+  getSearchProjection?: (item: TItem) => SearchProjection;
   isActive: boolean;
   ownerRef: RefObject<HTMLElement | null>;
+  /** Called once per selected match; recomputing around a selection is not a navigation. */
   onNavigate: (match: AgentChatFindMatch, query: string) => void;
 }
 
@@ -97,27 +111,37 @@ export function findAgentChatTextMatches(searchText: string, query: string): Age
   return matches;
 }
 
+const NO_BODY_SUBSCRIPTION = () => () => {};
+const NO_BODY_REVISION = () => 0;
+
 export function useAgentChatFind<TItem>({
   items,
   getSearchText,
+  getSearchProjection,
   isActive,
   ownerRef,
   onNavigate,
 }: UseAgentChatFindOptions<TItem>) {
   const [isOpen, setIsOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
+  const [selection, setSelection] = useState<AgentChatFindSelection | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
   const [searchIndex] = useState(() => new AgentChatSearchIndex<TItem>());
   const searching = isActive && isOpen;
+  // A closed bar stays out of this: a card publishing its body must not re-render
+  // the transcript around it.
+  const bodyRevision = useSyncExternalStore(
+    searching ? subscribeArtifactSearchBodies : NO_BODY_SUBSCRIPTION,
+    searching ? artifactSearchBodyRevision : NO_BODY_REVISION,
+  );
 
   const matches = useMemo(
     () =>
       searching && query.trim()
-        ? findAgentChatMatches(searchIndex.texts(items, getSearchText), query)
+        ? findAgentChatMatches(searchIndex.texts(items, getSearchText, bodyRevision), query)
         : [],
-    [getSearchText, items, query, searchIndex, searching],
+    [bodyRevision, getSearchText, items, query, searchIndex, searching],
   );
 
   useEffect(() => {
@@ -133,10 +157,22 @@ export function useAgentChatFind<TItem>({
       }),
     [searchIndex, searchIndexCacheId],
   );
-  const normalizedCurrentMatchIndex =
-    matches.length === 0 ? -1 : Math.min(currentMatchIndex, matches.length - 1);
+  const resolved = useMemo(
+    () => resolveFindSelection(selection, matches, items, getSearchProjection),
+    [getSearchProjection, items, matches, selection],
+  );
+  if (resolved.selection !== selection) setSelection(resolved.selection);
+  const normalizedCurrentMatchIndex = resolved.index;
   const currentMatch =
     normalizedCurrentMatchIndex >= 0 ? matches[normalizedCurrentMatchIndex] : null;
+  const selectionIdentity = resolved.selection
+    ? JSON.stringify([
+        query,
+        resolved.selection.key,
+        resolved.selection.root,
+        resolved.selection.offset,
+      ])
+    : null;
 
   const open = useCallback(() => {
     if (!isOpen) {
@@ -160,12 +196,10 @@ export function useAgentChatFind<TItem>({
   const move = useCallback(
     (direction: 1 | -1) => {
       if (matches.length === 0) return;
-      setCurrentMatchIndex((current) => {
-        const normalized = Math.min(current, matches.length - 1);
-        return (normalized + direction + matches.length) % matches.length;
-      });
+      const next = (normalizedCurrentMatchIndex + direction + matches.length) % matches.length;
+      setSelection(selectionOfMatch(matches[next]!, next, items, getSearchProjection));
     },
-    [matches.length],
+    [getSearchProjection, items, matches, normalizedCurrentMatchIndex],
   );
 
   useEffect(() => {
@@ -174,10 +208,17 @@ export function useAgentChatFind<TItem>({
     inputRef.current?.select();
   }, [isOpen]);
 
+  // Matches are recomputed whenever the rows or a body change (every streaming
+  // update while find is open); only a different selection is a navigation.
+  // Going back to the same one would pull a reader who scrolled away back to it.
+  const navigatedRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!isActive || !isOpen || !currentMatch) return;
+    // Clearing the query starts a new search even if it returns to the same match.
+    if (!isOpen || !query.trim()) navigatedRef.current = null;
+    if (!isActive || !isOpen || !currentMatch || selectionIdentity === navigatedRef.current) return;
+    navigatedRef.current = selectionIdentity;
     onNavigate(currentMatch, query);
-  }, [currentMatch, isActive, isOpen, onNavigate, query]);
+  }, [currentMatch, isActive, isOpen, onNavigate, query, selectionIdentity]);
 
   useEffect(() => {
     if (!isActive) return;
@@ -209,7 +250,7 @@ export function useAgentChatFind<TItem>({
 
   const onQueryChange = useCallback((event: ChangeEvent<HTMLInputElement>) => {
     setQuery(event.target.value);
-    setCurrentMatchIndex(0);
+    setSelection(null);
   }, []);
 
   const onInputKeyDown = useCallback(

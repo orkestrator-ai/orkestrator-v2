@@ -118,6 +118,7 @@ export function sortEnvironmentsByActivity(
       : null,
     hasUnreadWork: environment.activity.hasUnreadWork,
     lastActivityAt: environment.lastActivityAt,
+    prState: environment.pr.state,
   });
   return environments
     .map((environment, index) => ({ environment, index, fields: fields(environment) }))

@@ -29,6 +29,7 @@ import {
   HardDrive,
   ChartArea,
   GitBranch,
+  Workflow,
 } from "lucide-react";
 import { AgentPlatformIcon, DockerIcon } from "@/components/icons/AgentIcons";
 import { DockerSettings } from "@/components/docker";
@@ -65,6 +66,7 @@ const MENU_ITEMS: SettingsMenuItem<GlobalSettingsSection>[] = [
   { id: "usage", label: "Usage", icon: <ChartArea className="h-4 w-4" /> },
   { id: "defaults", label: "Defaults", icon: <SlidersHorizontal className="h-4 w-4" /> },
   { id: "platforms", label: "Platforms", icon: <Boxes className="h-4 w-4" /> },
+  { id: "coordinator", label: "Coordinator", icon: <Workflow className="h-4 w-4" /> },
   { id: "review", label: "Review", icon: <Eye className="h-4 w-4" /> },
   {
     id: "claude",

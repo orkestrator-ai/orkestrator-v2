@@ -1,3 +1,12 @@
+import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  RegistryWriterLease,
+  REGISTRY_WRITER_LEASE_FILE,
+} from "../../../../backend/src/core/registry-writer-lease";
+import { StorageService } from "../../../../backend/src/core/storage";
+import { schedulerStatus } from "../../../../backend/src/core/commands-registry-scheduled-jobs";
 import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
@@ -8,7 +17,7 @@ import {
   type SchedulerStatus,
 } from "@orkestrator/protocol/scheduled-jobs";
 import * as realBackend from "@/lib/backend";
-import { requestViewSafetyChecks } from "@/lib/resource-sync";
+import { dispatchResourceChange, requestViewSafetyChecks } from "@/lib/resource-sync";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
 import { useProjectStore } from "@/stores";
 import type { Project } from "@/types";
@@ -183,6 +192,46 @@ describe("SchedulesSettings", () => {
     requestViewSafetyChecks("resource-gap");
     await screen.findByText(/No schedules yet/);
     expectDomAbsent(screen.queryByTestId("scheduler-paused"), "scheduler notice with no schedules");
+  });
+
+  test("lease loss reaches the mounted view through the storage resource feed and survives remount", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "schedule-view-lease-"));
+    const storage = new StorageService(directory);
+    await storage.init();
+    const lease = await RegistryWriterLease.acquire(directory, {
+      onLost: () => storage.announceSchedulerStatus(),
+    });
+    storage.setResourceChangeListener((change) => {
+      scheduler = schedulerStatus(lease);
+      dispatchResourceChange(change);
+    });
+    try {
+      scheduler = schedulerStatus(lease);
+      const view = render(<SchedulesSettings />);
+      await screen.findAllByTestId("schedule-row");
+      expectDomAbsent(screen.queryByTestId("scheduler-paused"), "held writer");
+      await writeFile(
+        join(directory, REGISTRY_WRITER_LEASE_FILE),
+        JSON.stringify({
+          token: "replacement",
+          pid: 1,
+          acquiredAt: new Date().toISOString(),
+        }),
+      );
+      expect(lease.isHeld()).toBe(false);
+      expect((await screen.findByTestId("scheduler-paused")).textContent).toBe(
+        schedulerPausedMessage("writer-lease-lost"),
+      );
+      view.unmount();
+      render(<SchedulesSettings />);
+      expect((await screen.findByTestId("scheduler-paused")).textContent).toBe(
+        schedulerPausedMessage("writer-lease-lost"),
+      );
+    } finally {
+      await lease.release();
+      storage.close();
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 
   test("a backend that predates the field shows no notice", async () => {

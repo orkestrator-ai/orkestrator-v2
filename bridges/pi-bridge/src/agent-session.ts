@@ -1097,7 +1097,13 @@ export function sessionManagerFor(state: SessionState): SessionManager {
       // Report lost context only when the bridge has evidence of prior activity.
       const hasHistory = (statSync(state.sessionFile, { throwIfNoEntry: false })?.size ?? 0) > 0;
       const manager = SessionManager.open(state.sessionFile, directory, workingDirectory);
-      if (!hasHistory && (state.messages.length > 0 || state.promptSequence > 0)) {
+      if (hasHistory) state.resumeFallbackFile = undefined;
+      if (
+        !hasHistory &&
+        state.resumeFallbackFile !== state.sessionFile &&
+        (state.messages.length > 0 || state.promptSequence > 0)
+      ) {
+        state.resumeFallbackFile = state.sessionFile;
         log.warn("session.resume-fell-back", { sessionId: state.id });
         appendResumeFallbackNotice(state);
       }

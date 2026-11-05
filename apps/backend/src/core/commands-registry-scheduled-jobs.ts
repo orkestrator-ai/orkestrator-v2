@@ -142,12 +142,14 @@ export function scheduleListFilter(args: Record<string, unknown>): ScheduleListF
  */
 export function schedulerStatus(
   writer: Pick<NonNullable<CommandContext["registryWriterLease"]>, "state"> | undefined,
-): SchedulerStatus {
+): SchedulerStatus | undefined {
   switch (writer?.state() ?? "held") {
     case "held":
       return { firing: true };
-    case "lost":
+    // A clean shutdown is not evidence that another backend reclaimed ownership.
     case "released":
+      return undefined;
+    case "lost":
       return { firing: false, reason: "writer-lease-lost" };
     case "busy":
       return { firing: false, reason: "another-backend" };

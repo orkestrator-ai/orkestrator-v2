@@ -31,7 +31,7 @@ describe("schedulerStatus", () => {
   test.each([
     ["held", { firing: true }],
     ["lost", { firing: false, reason: "writer-lease-lost" }],
-    ["released", { firing: false, reason: "writer-lease-lost" }],
+    ["released", undefined],
     ["busy", { firing: false, reason: "another-backend" }],
     ["schema-incompatible", { firing: false, reason: "newer-data-directory" }],
   ] as const)("a %s writer lease answers %o", (state, expected) => {
@@ -50,6 +50,9 @@ describe("list_scheduled_jobs", () => {
       schedules: [],
       scheduler: { firing: false, reason: "writer-lease-lost" },
     });
+    expect(JSON.parse(JSON.stringify(await list({}, context("released"))))).not.toHaveProperty(
+      "scheduler",
+    );
     expect(await list({}, context("held"))).toMatchObject({ scheduler: { firing: true } });
     expect(await list({}, context(undefined))).toMatchObject({ scheduler: { firing: true } });
   });

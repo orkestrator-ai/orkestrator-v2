@@ -326,6 +326,8 @@ export interface SessionState {
    * resume both take, and the only place the model's context actually lives.
    */
   sessionFile?: string;
+  /** Empty file whose context-loss warning has already been published. */
+  resumeFallbackFile?: string;
   /** Pi's own session id, reported by the SDK once a session exists. */
   piSessionId?: string;
   status: SessionStatus;
@@ -558,6 +560,8 @@ export interface PersistedSession {
   policy?: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy;
   clientSessionKey?: string;
   sessionFile?: string;
+  /** Empty file whose context-loss warning has already been published. */
+  resumeFallbackFile?: string;
   piSessionId?: string;
   status: SessionStatus;
   error?: string;

@@ -339,19 +339,16 @@ test("a main conversation keeps its workers after takeover from a side agent", a
 
 test("a workflow adopted from a closed conversation passes", async () => {
   const association = await launched(handMade, { conversationId: "closed-conversation" });
-  expect(
-    (
-      await commands.get("adopt_coordinator_workflow")!(
-        {
-          projectId: scope.projectId,
-          coordinatorId: scope.coordinatorId,
-          conversationId: scope.conversationId,
-          associationId: association.id,
-        },
-        rootContext,
-      )
-    ).conversationId,
-  ).toBe(scope.conversationId);
+  const adopted = (await commands.get("adopt_coordinator_workflow")!(
+    {
+      projectId: scope.projectId,
+      coordinatorId: scope.coordinatorId,
+      conversationId: scope.conversationId,
+      associationId: association.id,
+    },
+    rootContext,
+  )) as { conversationId?: string };
+  expect(adopted.conversationId).toBe(scope.conversationId);
   expect((await tool("send_message", message(handMade))).isError).toBe(false);
 });
 

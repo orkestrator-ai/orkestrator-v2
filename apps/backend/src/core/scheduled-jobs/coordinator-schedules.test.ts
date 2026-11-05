@@ -231,7 +231,12 @@ describe("coordinator schedules", () => {
     await fire();
     expect(mail).toEqual([
       {
-        sender: { kind: "system", projectId: "project-1", source: "self-reminder", resourceId: job.id },
+        sender: {
+          kind: "system",
+          projectId: "project-1",
+          source: "self-reminder",
+          resourceId: job.id,
+        },
         input: expect.objectContaining({
           requestId: `sched:${job.id}@${Date.parse("2026-10-26T03:12:00Z")}`,
           toEnvironmentId: "coordinator",

@@ -40,6 +40,8 @@ type Address = MailActor | typeof COORDINATOR_MAIL_ADDRESS | { environmentId: st
 const BASE_COMMIT = "a".repeat(40);
 
 export type MailWorldOptions = {
+  /** Off keeps the project's default, the origin check refusing what it did not create. */
+  coordinatorOtherEnvironments?: boolean;
   /** Status-wake collaborators for the coordinator service, kept across restarts. */
   statusWakes?: CoordinatorStatusWakeOptions;
   delegations?: CoordinatorDelegationOptions;

@@ -35,7 +35,16 @@ import {
 import { claudeCommandChangesDir } from "./claude-home.js";
 
 /** One per bridge process: snapshots are shared and serialized per repository. */
-export const commandChangeProbe = new WorkspaceChangeProbe();
+let commandChangeProbe = new WorkspaceChangeProbe();
+
+export function setCommandChangeProbeForTests(replacement?: WorkspaceChangeProbe): void {
+  commandChangeProbe = replacement ?? new WorkspaceChangeProbe();
+}
+
+/** Drop a call's open window, for a call no post-tool hook will close. */
+export function discardCommandChangeWindow(toolUseId: string): void {
+  commandChangeProbe.discard(toolUseId);
+}
 
 /**
  * Only the tools the hooks care about, so every other call skips the control

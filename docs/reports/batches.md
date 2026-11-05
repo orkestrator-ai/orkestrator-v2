@@ -43,7 +43,6 @@ Worked out on 2026-11-03 against `main` at `a44641cbc`, from the 167 work files 
 | E16 | [efficiency-logging-database/0790-e16-log-controls.md](efficiency-logging-database/0790-e16-log-controls.md) | `0790`, `0890`, `0900` |
 | E20 | [efficiency-logging-database/0240-e20-acp-bridge.md](efficiency-logging-database/0240-e20-acp-bridge.md) | `0270`, `0260`, `0240` |
 | E21 | [efficiency-logging-database/0130-e21-pi-bridge.md](efficiency-logging-database/0130-e21-pi-bridge.md) | `0130`, `0355` |
-| E23 | [efficiency-logging-database/0620-e23-renderer-polling.md](efficiency-logging-database/0620-e23-renderer-polling.md) | `0620`, `0630`, `0660` |
 
 ## Lanes
 
@@ -71,7 +70,6 @@ These batches don't share a protected area. They only have to respect the confli
 - **S-0260 (Live checks on other platforms):** security `0260`
 - **E20 (ACP bridge):** efficiency-logging-database `0270`, `0260`, `0240`
 - **E21 (Pi bridge):** efficiency-logging-database `0130`, `0355`
-- **E23 (Renderer polling):** efficiency-logging-database `0620`, `0630`, `0660`
 - **E-0140 (Codex queue bound):** efficiency-logging-database `0140`
 - **E-0250 (Codex running tool cards):** efficiency-logging-database `0250`
 - **E-0360 (SSE replay rings):** efficiency-logging-database `0360`
@@ -90,7 +88,6 @@ Don't run these pairs at the same time.
 | --- | --- | --- |
 | C3 (Sweep and reads) | C6 (Errors and dead ends) | `coordinator-service.ts`, `control-mcp-server.ts` |
 | C6 (Errors and dead ends) | E12 (Renderer store) | `useNativeAgentSession.ts`, `AgentNativeTab.controller.tsx` |
-| C7 (Work panel and navigation) | E23 (Renderer polling) | `useUserCommands.ts` |
 | E3 (Retention and deletion) | E7 (Diff scans) | `change-tracking/service.ts` |
 | E5 (Database upkeep) | E15 (Health and diagnostics) | `storage-backups.ts` |
 | E13 (Silent failures) | E20 (ACP bridge) | `commands-servers.ts`, `acp-context.ts` |
@@ -120,7 +117,7 @@ These files are named by several batches that can still run together. The report
 | `native-agent-display-tail-store.ts` | E5, E11 |
 | `change-tracking/capture.ts` | E4, E7 |
 | `usage-history-store.ts` | E15, E-0580 |
-| `App.tsx`, `MailTile.tsx` | E-0520 with E23 (`App.tsx`) and C7 (`MailTile.tsx`) |
+| `MailTile.tsx` | E-0520, C7 |
 
 ## How this was worked out
 

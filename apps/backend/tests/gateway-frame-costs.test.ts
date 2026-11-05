@@ -4,7 +4,7 @@ import { EventEmitter } from "node:events";
 import { gunzipSync } from "node:zlib";
 
 import { OrkestratorGateway } from "../src/gateway";
-import type { GatewayEventReplay } from "../src/gateway-event-replay";
+import { parseGatewayCursor, type GatewayEventReplay } from "../src/gateway-event-replay";
 import { GzipEventClientWriter, IdentityEventClientWriter } from "../src/gateway-support-extra";
 import {
   eventClients,
@@ -425,6 +425,119 @@ describe("scoped replay cursor frames", () => {
     expect(internals.clients.has(client)).toBe(false);
     expect(client.destroy).toHaveBeenCalledTimes(1);
     replay.releaseRetained();
+  });
+});
+
+describe("the replay budget of a scoped client", () => {
+  const HARD_LIMIT = 8 * 1024 * 1024;
+
+  function replayingClient(writableLength: number) {
+    const writes: string[] = [];
+    return {
+      writes,
+      client: {
+        writableLength,
+        write: mock((chunk: string | Buffer) => {
+          writes.push(String(chunk));
+          return true;
+        }),
+        destroy: mock(() => undefined),
+      },
+    };
+  }
+
+  function replay(
+    gateway: OrkestratorGateway,
+    client: object,
+    prefixes: string[] | null,
+    cursor: string,
+  ) {
+    const state = {
+      prefixes,
+      includedPrefixes: null,
+      excludedPrefixes: null,
+      desyncedSessions: new Set<string>(),
+      handshake: { events: [], bytes: 0 },
+      tracksReplayCursor: true,
+      sentRevision: 0,
+      omittedRevision: null,
+    };
+    const internals = gateway as unknown as {
+      clients: Map<object, typeof state>;
+      initializeEventReplay(client: object, state: object, cursor: unknown): void;
+    };
+    internals.clients.set(client, state);
+    internals.initializeEventReplay(client, state, parseGatewayCursor(cursor));
+    return internals.clients;
+  }
+
+  test("skipped frames are charged a cursor, so a small real replay is not refused", () => {
+    const gateway = offlineGateway();
+    const ring = replayOf(gateway);
+    const cursor = ring.latestCursor;
+    const skipped = ring.append("environment-renamed", { id: "x".repeat(64 * 1024) });
+    ring.append("menu-zoom", "in");
+
+    // Room for what this client is written, but not for the frame it skips.
+    const { client, writes } = replayingClient(HARD_LIMIT - skipped.encodedBytes + 1);
+    const clients = replay(gateway, client, ["menu-"], cursor);
+
+    const received = writes.join("");
+    expect(received).toContain('"status":"replayed"');
+    expect(received).not.toContain("replay-too-large");
+    expect(eventFrames(received, "gateway.cursor")).toHaveLength(1);
+    expect(eventFrames(received, "menu-zoom")).toHaveLength(1);
+    expect(clients.has(client)).toBe(true);
+    ring.releaseRetained();
+  });
+
+  test("an unscoped client with the same room is still told to reconcile", () => {
+    const gateway = offlineGateway();
+    const ring = replayOf(gateway);
+    const cursor = ring.latestCursor;
+    const skipped = ring.append("environment-renamed", { id: "x".repeat(64 * 1024) });
+    ring.append("menu-zoom", "in");
+
+    const { client, writes } = replayingClient(HARD_LIMIT - skipped.encodedBytes + 1);
+    replay(gateway, client, null, cursor);
+
+    expect(writes.join("")).toContain('"reason":"replay-too-large"');
+    ring.releaseRetained();
+  });
+
+  test("the figure stays an upper bound on what the replay writes", () => {
+    const gateway = offlineGateway();
+    const ring = replayOf(gateway);
+    // Early cursors are the shortest, so a run is never charged less than it costs.
+    for (let index = 0; index < 1_500; index += 1) {
+      ring.append(index % 2 === 0 ? "environment-renamed" : "menu-zoom", { index });
+    }
+    const frames = ring.since(0).frames;
+    const state = {
+      prefixes: ["menu-"],
+      includedPrefixes: null,
+      excludedPrefixes: null,
+      desyncedSessions: new Set<string>(),
+    };
+    const internals = gateway as unknown as {
+      clients: Map<object, unknown>;
+      writeReplayFrames(client: object, state: object, frames: readonly unknown[]): boolean;
+      events: {
+        replayFitsClientBudget(client: object, state: object, frames: readonly unknown[]): boolean;
+      };
+    };
+    const { client, writes } = replayingClient(0);
+    internals.clients.set(client, state);
+    expect(internals.writeReplayFrames(client, state, frames)).toBe(true);
+    const written = Buffer.byteLength(writes.join(""));
+    const fits = (room: number) =>
+      internals.events.replayFitsClientBudget({ writableLength: HARD_LIMIT - room }, state, frames);
+
+    // One byte short of the real cost is refused, so the charge is at least the cost.
+    expect(fits(written - 1)).toBe(false);
+    // And it is close: 750 runs, each cursor at most three digits longer than its own.
+    expect(fits(written + 750 * 3)).toBe(true);
+    ring.releaseRetained();
   });
 });
 

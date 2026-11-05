@@ -18,6 +18,7 @@ import {
   createUnzip,
   gzip,
 } from "node:zlib";
+import { RELAYED_NODE_EVENT, RELAYED_NODE_EVENT_PREFIX } from "@orkestrator/protocol/node-events";
 import type { GatewayTokenSettings, WebClientStatus } from "@orkestrator/protocol/web-client";
 import type {
   HostMaintenanceSnapshot,
@@ -94,6 +95,7 @@ export interface BackendHelloIdentity {
 
 /** Command-node hooks: attached controllers' portal origins and their last contact. */
 export interface GatewayNodeHooks {
+  isRelayedNodeWatched?(nodeId: import("@orkestrator/protocol/federation").BackendId): boolean;
   isPortalOriginAllowed(origin: string): boolean;
   noteControllerContact(controllerId: string): void;
   /** Expiry (ms) of a live client grant this token proves, else `null`. */
@@ -164,6 +166,11 @@ export interface OrkestratorGatewayOptions {
     idleRetentionMs?: number;
     handshakeFrameCapacity?: number;
     handshakeMaxBytes?: number;
+  };
+  relayedEventReplay?: {
+    frameCapacity?: number;
+    maxBytes?: number;
+    idleRetentionMs?: number;
   };
   /** Optional admission overrides, primarily for constrained deployments and boundary tests. */
   terminalWebSocket?: {
@@ -855,6 +862,7 @@ export const PER_ENTITY_EVENT_PREFIXES: readonly [prefix: string, label: string]
   [`${DROPPABLE_EVENT_PREFIX}tmux:`, "terminal-output-tmux"],
   [DROPPABLE_EVENT_PREFIX, "terminal-output"],
   ["claude-state-", "claude-state"],
+  [RELAYED_NODE_EVENT_PREFIX, RELAYED_NODE_EVENT],
 ];
 
 export function normalizeGatewayEventMetricKey(event: string): string {
@@ -931,6 +939,20 @@ export class GatewayMetricsStore {
     encodedBodyBytes: 0,
   };
   private readonly replay: GatewayReplayMetrics = {
+    fresh: 0,
+    caughtUp: 0,
+    replayed: 0,
+    replayedFrames: 0,
+    reconciled: 0,
+    reasons: {
+      "invalid-cursor": 0,
+      "prior-generation": 0,
+      "cursor-expired": 0,
+      "cursor-ahead": 0,
+      "replay-too-large": 0,
+    },
+  };
+  private readonly relayedReplay: GatewayReplayMetrics = {
     fresh: 0,
     caughtUp: 0,
     replayed: 0,
@@ -1264,15 +1286,17 @@ export class GatewayMetricsStore {
     status: "fresh" | "caught-up" | "replayed" | "reconcile",
     reason: GatewayReconcileReason | null,
     replayedFrames: number,
+    relayed = false,
   ): void {
-    if (status === "fresh") this.replay.fresh += 1;
-    else if (status === "caught-up") this.replay.caughtUp += 1;
+    const replay = relayed ? this.relayedReplay : this.replay;
+    if (status === "fresh") replay.fresh += 1;
+    else if (status === "caught-up") replay.caughtUp += 1;
     else if (status === "replayed") {
-      this.replay.replayed += 1;
-      this.replay.replayedFrames += replayedFrames;
+      replay.replayed += 1;
+      replay.replayedFrames += replayedFrames;
     } else {
-      this.replay.reconciled += 1;
-      if (reason) this.replay.reasons[reason] += 1;
+      replay.reconciled += 1;
+      if (reason) replay.reasons[reason] += 1;
     }
   }
 
@@ -1293,6 +1317,7 @@ export class GatewayMetricsStore {
       ),
       stream: { ...this.stream },
       replay: { ...this.replay, reasons: { ...this.replay.reasons } },
+      relayedReplay: { ...this.relayedReplay, reasons: { ...this.relayedReplay.reasons } },
       compression: { ...this.compression },
       terminalWebSocket: { ...this.terminalWebSocket },
       recentRouteSamples: [...this.recentRouteSamples],

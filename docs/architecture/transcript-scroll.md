@@ -56,6 +56,25 @@ operation owns it) or **inactive**.
   `followOutput !== false`, so a function returning false still scrolls.
   The same rule applies to the inner group viewport.
 
+### Eased navigation
+
+`glideTo` is `navigateTo` with an ease-in, ease-out curve, used by the prompt
+navigator (`TranscriptPromptNavigator`, on the native chat shell's left edge).
+It is an ordinary row navigation: reader input retires it, reduced motion makes
+it a jump, and it ends by converging on measured geometry like any other.
+
+- The curve is applied to the target row's offset in the viewport, not to
+  `scrollTop`. Rows measured during the movement shift `scrollTop` without
+  moving the target off its curve, and a destination past the end of the
+  transcript is replaced by where the scroller stops, so it still decelerates.
+- A rendered target gets one curve, scaled to its distance.
+- An unrendered target has no known distance, and flying through the rows
+  between would mount all of them. The viewport instead eases out of its place
+  for one leg, the virtualizer places the target, and a second leg eases in
+  from exactly one leg short of where the journey can stop. Equal legs over
+  equal distances meet at the same speed, so the jump between them is not seen
+  as a stop.
+
 ### Reader input
 
 `scroll-input.ts` classifies wheel (ignoring pinch-zoom, mostly horizontal

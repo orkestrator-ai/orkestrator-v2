@@ -906,6 +906,13 @@ export class StorageService {
     return this.repos.reviews.getMultiReviewWorkflow(workflowId);
   }
 
+  /** Reviewers of reviews in their reviewers' stage, as agent mail workers. */
+  listMultiReviewWorkers(
+    environmentId?: string,
+  ): ReturnType<StorageRepositories["reviews"]["listMultiReviewWorkers"]> {
+    return this.repos.reviews.listMultiReviewWorkers(environmentId);
+  }
+
   listMultiReviewWorkflows(environmentId: string): Promise<PersistedMultiReviewWorkflow[]> {
     return this.repos.reviews.listMultiReviewWorkflows(environmentId);
   }

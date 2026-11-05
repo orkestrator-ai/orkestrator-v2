@@ -2668,7 +2668,7 @@ describe("web gateway browser API", () => {
       platform: unknown;
     }> = [];
     globalThis.fetch = mock(async (input, init) => {
-      if (String(input).endsWith("/events?excludeEvents=terminal-output-")) {
+      if (String(input).endsWith("/events?excludeEvents=terminal-output-&relayedEvents=per-node")) {
         return new Response(new ReadableStream({ start() {} }), { status: 200 });
       }
       const headers = new Headers(init?.headers);
@@ -3527,7 +3527,7 @@ describe("web gateway browser API", () => {
     const source = MockEventSource.instances[0];
     if (!source) throw new Error("EventSource was not created");
     expect(source.url).toBe(
-      "/__orkestrator/events?excludeEvents=terminal-output-&keepaliveEvents=1",
+      "/__orkestrator/events?excludeEvents=terminal-output-&relayedEvents=per-node&keepaliveEvents=1",
     );
     expect(source.options).toEqual({ withCredentials: true });
 
@@ -3606,7 +3606,7 @@ describe("web gateway browser API", () => {
       );
       const secondSource = MockEventSource.instances[1]!;
       expect(secondSource.url).toBe(
-        "/__orkestrator/events?excludeEvents=terminal-output-&since=12345678%3A5&keepaliveEvents=1",
+        "/__orkestrator/events?excludeEvents=terminal-output-&since=12345678%3A5&relayedEvents=per-node&keepaliveEvents=1",
       );
       secondSource.onmessage?.(
         new MessageEvent("message", {
@@ -3625,7 +3625,7 @@ describe("web gateway browser API", () => {
       const stopReplacement = api.listen("menu-zoom", () => undefined);
       expect(MockEventSource.instances).toHaveLength(3);
       expect(MockEventSource.instances[2]?.url).toBe(
-        "/__orkestrator/events?excludeEvents=terminal-output-&since=12345678%3A8&keepaliveEvents=1",
+        "/__orkestrator/events?excludeEvents=terminal-output-&since=12345678%3A8&relayedEvents=per-node&keepaliveEvents=1",
       );
       stopReplacement();
     } finally {
@@ -3658,7 +3658,7 @@ describe("web gateway browser API", () => {
         "The authoritative stream was not rebuilt after a fatal error",
       );
       expect(MockEventSource.instances[1]?.url).toBe(
-        "/__orkestrator/events?excludeEvents=terminal-output-&since=12345678%3A4&keepaliveEvents=1",
+        "/__orkestrator/events?excludeEvents=terminal-output-&since=12345678%3A4&relayedEvents=per-node&keepaliveEvents=1",
       );
 
       // The abandoned socket must not keep dispatching into the live listeners.
@@ -3749,7 +3749,7 @@ describe("web gateway browser API", () => {
     const stopReplacement = api.listen("menu-zoom", () => undefined);
     const replacement = MockEventSource.instances.at(-1);
     expect(replacement?.url).toBe(
-      "/__orkestrator/events?excludeEvents=terminal-output-&since=12345678%3A3&keepaliveEvents=1",
+      "/__orkestrator/events?excludeEvents=terminal-output-&since=12345678%3A3&relayedEvents=per-node&keepaliveEvents=1",
     );
     stopReplacement();
   });

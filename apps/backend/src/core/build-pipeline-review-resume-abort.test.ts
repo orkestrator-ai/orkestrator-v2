@@ -6,7 +6,7 @@ import {
 } from "./build-pipeline-review-fanout-test-support.js";
 
 test.each([false, true])(
-  "resume replaces a panel after a failed pause abort (retry fails: %s)",
+  "resume reruns a panel after a failed pause abort (retry fails: %s)",
   async (retryFails) => {
     await withPipeline(async ({ service, read, provider, packageGeneration }) => {
       provider.runningModels.add("opus");
@@ -51,7 +51,7 @@ test.each([false, true])(
         expect(abortAttempts).toEqual(expect.arrayContaining(oldIds));
         expect(resumed.phase).toBe("reviewing");
         expect(resumed.error).toBeUndefined();
-        expect(resumed.reviewFanout).toBeUndefined();
+        expect(resumed.reviewFanout?.reviewers.every((r) => r.status === "pending")).toBe(true);
         expect(resumed.structuredReview).toBeUndefined();
         expect(resumed.verificationResult).toBeUndefined();
         expect(resumed.reviewRetryRequested).toBeUndefined();
@@ -61,9 +61,6 @@ test.each([false, true])(
           retryFails ? "running" : "idle",
         );
 
-        await service.advanceNow(started.id);
-        // Opening the verified panel creates pending reviewers; the next
-        // supervisor pass dispatches their independent turns.
         await service.advanceNow(started.id);
         const reopened = await read(started.id);
         expect(reopened.phase).toBe("reviewing");

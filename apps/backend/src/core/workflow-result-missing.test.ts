@@ -6,6 +6,7 @@ import {
   missingWorkflowResultMessage,
   workflowResultReminderPrompt,
   workflowRestartContinuationPrompt,
+  workflowUsageLimitContinuationPrompt,
 } from "./workflow-result-missing.js";
 
 const BASE = {
@@ -222,4 +223,14 @@ test("the production read bound finds same-turn JSON behind seventeen tool-only 
       finalText,
     }),
   ).toContain("You wrote the report as reply text");
+});
+
+test("workflow quota continuation names both supported windows", () => {
+  const prompt = workflowUsageLimitContinuationPrompt({
+    workLabel: "review",
+    resultLabel: "report",
+    toolName: "submit_review_report",
+  });
+  expect(prompt).toContain("five-hour or weekly usage limit ran out");
+  expect(prompt).toContain("submit_review_report");
 });

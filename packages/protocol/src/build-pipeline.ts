@@ -1,3 +1,4 @@
+import { isWorkspaceGitBaseline, type WorkspaceGitBaseline } from "./workspace-guard.js";
 import { isReviewValidationRun, type ReviewValidationRun } from "./review-validation.js";
 import { isStructuredReviewReport, type StructuredReviewReport } from "./structured-review.js";
 import { isPersistedReviewPackage, type PersistedReviewPackage } from "./review-workflow.js";
@@ -988,6 +989,12 @@ export interface PipelineSession {
   /** The user skipped this stage; the pipeline moved on without its result. */
   skipped?: boolean;
   /**
+   * The worktree changed during this review. The review carried on and its report
+   * stands; this says the report may not describe the code as it is now.
+   */
+  reviewWorktreeChanged?: boolean;
+  reviewWorkspaceBaseline?: WorkspaceGitBaseline;
+  /**
    * The {@link PipelineRewind.id} of the restart that superseded this session.
    *
    * Set on the restarted step's old session and on every session after it
@@ -1417,6 +1424,13 @@ export interface BuildPipeline {
    * finishes, because everything downstream reads `structuredReview`.
    */
   reviewFanout?: ReviewFanoutState;
+  /**
+   * Reviewers of the live pass the user stopped. A pause or a failure cancels
+   * reviewers too, and those run again when the review carries on; these do not.
+   * Kept here rather than on the reviewer record, whose guard refuses a key an
+   * older client does not know.
+   */
+  stoppedReviewerIds?: string[];
   phase: BuildPhase;
   sessions: PipelineSession[];
   currentSessionIndex: number;
@@ -1901,6 +1915,10 @@ function isPipelineSession(value: unknown): value is PipelineSession {
         value.sessionlessReviewers.every(isPipelineSessionlessReviewer))) &&
     (value.superseded === undefined || typeof value.superseded === "boolean") &&
     (value.skipped === undefined || typeof value.skipped === "boolean") &&
+    (value.reviewWorkspaceBaseline === undefined ||
+      isWorkspaceGitBaseline(value.reviewWorkspaceBaseline)) &&
+    (value.reviewWorktreeChanged === undefined ||
+      typeof value.reviewWorktreeChanged === "boolean") &&
     (value.supersededBy === undefined ||
       (isNonBlankString(value.supersededBy) && value.supersededBy.length <= 128)) &&
     (value.supersededAt === undefined || isIsoDate(value.supersededAt)) &&
@@ -2329,6 +2347,14 @@ function isNonBlankString(value: unknown): value is string {
  * It intentionally requires the backend controller marker. A client-authored
  * legacy snapshot cannot enter the current read model.
  */
+function isStoppedReviewerIds(value: unknown): boolean {
+  return (
+    Array.isArray(value) &&
+    value.length <= REVIEW_FANOUT_MAX_REVIEWERS &&
+    value.every((id) => isNonBlankString(id))
+  );
+}
+
 export function isBuildPipeline(value: unknown): value is BuildPipeline {
   if (!isRecord(value)) return false;
   if (
@@ -2457,6 +2483,7 @@ export function isBuildPipeline(value: unknown): value is BuildPipeline {
     (value.environmentOptions !== undefined &&
       !isBuildPipelineEnvironmentOptions(value.environmentOptions)) ||
     (value.reviewFanout !== undefined && !isReviewFanoutState(value.reviewFanout)) ||
+    (value.stoppedReviewerIds !== undefined && !isStoppedReviewerIds(value.stoppedReviewerIds)) ||
     (value.source !== undefined && !isPipelineSource(value.source)) ||
     !isOptionalNonBlankString(value.featurePlanId) ||
     !isOptionalNonBlankString(value.admissionKey) ||

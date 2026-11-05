@@ -32,7 +32,7 @@ governs, marked "Decided".
 4. **Live agent view requests**: discovery out of the 500 ms round, a combined read, then bridge state ETags and transcript deltas (WEB-1, GW-1, GW-3, TX-5, TX-6). Status: open (WEB-1 and GW-1 done 2026-11-04, a visible running tab from 3 requests per round to 1.04; GW-3 done 2026-11-05; TX-5 and TX-6 open).
 5. **Transcript pipeline**: delta-base ring, unlimited post-dispatch reads, memoised fingerprints and the smaller items (TX-1 to TX-3, TX-7 to TX-9, TX-11 to TX-18). Status: open (TX-1 and TX-2 done 2026-11-04, focused tests only; live before-and-after numbers stay with task 1; TX-3, TX-7 to TX-9 and TX-11 to TX-18 open).
 6. **Bridge hot paths**: Codex config reads, cached transcript measurement, tool-card fast paths, Claude part identity, stream framing and shared helpers (BR-2, BR-4 to BR-16). Status: done (BR-1 and BR-3 done, without new tests; BR-4 to BR-6 and the transcript half of BR-15 done 2026-11-02; BR-2, BR-8, BR-9 and BR-11 done 2026-11-03; BR-7, BR-10, BR-12 to BR-14 and BR-16 done 2026-11-04; BR-15's SSE replay rings done 2026-11-05).
-7. **Change tracking and git scans**: stamp short-circuit, count memo, manifest cache, off-loop zlib and the git scan costs (ST-1 to ST-6, ST-13 to ST-21). Status: open (ST-1, ST-2 and ST-4 done on 2026-11-02; ST-3, ST-14, ST-15, ST-16 and ST-18 done 2026-11-04, warm capture over 10,000 files with one changed from 681–797 ms to 211–319 ms p50, and a warm local diff scan from 7 git processes and every untracked file read to 4 and none; ST-2's directory-handle cache deliberately not done; ST-16's dropping of hints under ignored directories not done; ST-5 and ST-6 done 2026-11-04, longest event-loop stall during a capture storing a 16 MiB blob from 107–143 ms to 12–13 ms p50 and a cold durable capture of 1,000 files from 3.3–4.1 s to 0.6–1.1 s; ST-13, ST-17 and ST-19 to ST-21 open).
+7. **Change tracking and git scans**: stamp short-circuit, count memo, manifest cache, off-loop zlib and the git scan costs (ST-1 to ST-6, ST-13 to ST-21). Status: open (ST-1, ST-2 and ST-4 done on 2026-11-02; ST-3, ST-14, ST-15, ST-16 and ST-18 done 2026-11-04, warm capture over 10,000 files with one changed from 681–797 ms to 211–319 ms p50, and a warm local diff scan from 7 git processes and every untracked file read to 4 and none; ST-2's directory-handle cache deliberately not done; ST-17 done 2026-11-04 on Linux, a proved ignored `node_modules` taking no watches (4,672 to 170 on `watch-nm-4k`) and on macOS its events dropped on arrival; what is left of ST-16 and ST-17 is [5060](5060-worktree-watch-leftovers.md), which also has the outcome of every task in batch E7; ST-5 and ST-6 done 2026-11-04, longest event-loop stall during a capture storing a 16 MiB blob from 107–143 ms to 12–13 ms p50 and a cold durable capture of 1,000 files from 3.3–4.1 s to 0.6–1.1 s; ST-13 and ST-19 to ST-21 open).
 8. **tmux and container polling**: the rest of BG-1, BG-2 and BG-8, plus BG-7, BG-14 and BG-15. Status: open (BG-1, BG-2, BG-7 and BG-8 done 2026-11-03, image proven locally; BG-14 done 2026-11-04, its remaining live evidence in [5120](../transcripts-and-observation/5120-tmux-transcript-reopen-live-evidence.md); BG-15 open).
 9. **PR monitor cost**: batched queries, then activity backoff (BG-6, BG-13). Status: done (2026-11-03; live before-and-after numbers stay with task 1).
 10. **Other background jobs**: the rest of BG-3, plus BG-9, BG-11 and BG-12. Status: done (2026-11-02; live before-and-after numbers stay with task 1).
@@ -668,6 +668,8 @@ The large file's capture takes longer in total, because compression now runs in 
 
 Also done on 2026-11-04: ST-14 (one `git diff --raw --numstat -z -M` per scan on local, container and Git-scope paths, the base's commit reused, the exclude file ensured once per worktree or container), ST-15 (a per-worktree count cache keyed by stat stamp with the settle-window rule, and bounded concurrency in `git-scopes.ts`) and ST-18 (scope demand lasts `gitScopeDemandTtlMs` from the last read; expiry sends a `reset` event so an open view reads again). Tests: `git-diff-summary.test.ts`, `local-git-scan-caches.test.ts`, `commands-files-local-scan.test.ts`, `git-scopes.test.ts` "Git scope demand". [git-scan-caches.md](../../architecture/git-scan-caches.md) has the design and [change-tracking.md](../../architecture/change-tracking.md) the demand rule.
 
+Done on 2026-11-04 (ST-17 and the rest of ST-16), re-checked first against `main` at `e198fd4a7`; the batch's report file was deleted with this work, and [5060](5060-worktree-watch-leftovers.md) holds its last outcomes and what is left. `startWorktreeWatcher` leaves out a `node_modules` Git proves ignored and free of tracked files. On Linux the subtree takes no watches. On macOS one recursive root stays and events under the subtree are dropped on arrival. Either way an install there starts no scan. Tests: `worktree-watch-plan.test.ts`, `worktree-watcher-split.test.ts` and, on both platforms, `worktree-watcher-real.test.ts`. `worktree-snapshots-git.test.ts` passes on Linux and on arktech-mini after repeating mutations to tolerate lost or delayed macOS events (resolved flake [5061](../../tests/flaky-tests/environments-and-containers/5061-real-git-owner-saturated-fseventsd.md)). [git-scan-caches.md](../../architecture/git-scan-caches.md#what-the-worktree-watch-leaves-out) has the design and the numbers.
+
 **Grace-window reasoning (ST-3).** An object's mtime is the orphan fence: `sweep` deletes an unreachable object only when its mtime is more than `orphanGraceMs` old (1 h), and that fence is the only thing protecting an object a capture has adopted but no ledger row names yet. A sweep's reachable set can also be stale, because it is built before the sweep takes the store lock. So a reused object needs to stay undeletable until the capture has committed and a later sweep can see the commit. Skipping the renewal below half the grace leaves at least the other half (30 min) for that, against capture deadlines of 10 to 30 s plus the sweep's walk of the ledger. Without the skip the same assumption held with a full hour; the margin shrinks, the assumption does not change. Past half the grace the object is renewed as before, under the store lock, so the renewal can never land between a sweep's `lstat` and its `rm`.
 
 **Investigation.** ST-14, ST-15 and ST-18, re-checked on 2026-11-04 against `main` at `a8bdce444`: a warm local scan spawned 7 git processes, or 8 with no `origin/<ref>` (the exclude path, the base check, the filter config, two diffs, status, the base oid). A scope view reads a resource once on mount and on a resync, then follows `change-projection-changed` events with no timers (`apps/web/src/lib/changes/subscriptions.ts`); the `reset` event was already in the protocol and handled by both the local and the federated client, but the backend never sent it. `bun scripts/benchmark-local-diff-scan.ts`, workload `scan-1k` (1,000 tracked files, 20 modified, 5 renamed with an edit, 5 deleted, 200 untracked, settled), three interleaved rounds of old and new code, 30 warm scans each, p50 range, load average 10 to 18 on the shared build host (the last row: 2,000 untracked, two rounds of 15):
@@ -870,13 +872,36 @@ A micro-benchmark over 10,000 small files two directories deep (5 rounds, median
   - **Share the budget.**
     - Pros: the same bound as the normal view.
     - Cons: a visible change the ticket did not ask for.
-- **Should ST-16 also drop hints whose paths are all under ignored directories, as the report suggests?** Not done.
-  - **Leave them counting; the gap bounds their cost (recommended).**
-    - Pros: `classifyWorktreeChange` already records why: a build directory can hold tracked or visible untracked files, so a path's location does not prove the file list is unchanged.
-    - Cons: an install still costs a scan every 2 s or so while it runs.
-  - **Filter hints against the worktree's ignore rules.**
+- **Should ST-16 also drop hints whose paths are all under ignored directories, as the report suggests?** Done 2026-11-04 for `node_modules` only; the rest is [5060](5060-worktree-watch-leftovers.md), task 2.
+  - **Leave out a `node_modules` Git proves ignored and free of tracked files, per plan rather than per burst; leave other ignored directories to the gap (recommended).**
+    - Pros: an install starts no scan; dropped events do not count towards an overflow; Git's answer is read once per settled change to the index or a `.gitignore`, not per burst, which answers the report's objection to `check-ignore`; the tree view skips `node_modules`, so nothing visible goes stale.
+    - Cons: a build in `dist` still costs a scan every 2 s or so; two more git processes per plan.
+  - **Leave them all counting; the gap bounds their cost (the report's recommendation, and this task's earlier decision).**
+    - Pros: no new state. `classifyWorktreeChange` records why a location alone is not proof: a build directory can hold tracked or visible untracked files.
+    - Cons: an install still costs a scan every 2 s or so while it runs, though once ST-17 stops watching the subtree on Linux no hint exists to count.
+  - **Filter hints against the worktree's ignore rules for every ignored directory.**
     - Pros: no scans at all for writes that truly are ignored.
     - Cons: needs an ignore matcher kept current per worktree, and a wrong answer freezes the counts until the two-minute safety scan.
+- **Which subtrees may a watch leave out (ST-17)?** Done as recommended.
+  - **Only `node_modules`, when `ls-files --directory` and `check-ignore` prove it (recommended).**
+    - Pros: it is over 97% of this worktree's directories; the tree view hides it at every depth, so no view depends on its events; a tracked file inside keeps it watched.
+    - Cons: `dist`, `.turbo` and `target` stay watched.
+  - **Every directory Git proves ignored, as the report says.**
+    - Pros: the fewest watches.
+    - Cons: the tree view shows those directories and a watched tree is trusted until a hint, so the Files panel would go stale for up to the two-minute safety scan.
+  - **The name alone, with no Git process.**
+    - Pros: no process.
+    - Cons: a tracked file under `node_modules` would be seen only by the safety scan, which the ticket's constraint rules out.
+- **What does the watch look like (ST-17)?** The report's recommendation on Linux; re-check showed it does not fit macOS.
+  - **Linux: non-recursive on the root and each ancestor of a left-out subtree, recursive on every other child. macOS: one recursive root, dropping events on arrival (chosen).**
+    - Pros: each platform pays only what it charges: 4,672 to 170 inotify watches on Linux, no extra stall on macOS; nested `node_modules` are covered, which a top-level-only split would not be.
+    - Cons: two behaviours to test; on macOS events still reach JavaScript.
+  - **One recursive watch per top-level entry plus a non-recursive root, on every platform (the report's recommendation).**
+    - Pros: one behaviour.
+    - Cons: on arktech-mini 20 recursive watches blocked the JS thread for 19,836 ms to start, against 2 ms for one; in a monorepo it still watches every nested `node_modules`.
+  - **Keep the recursive root on every platform.**
+    - Pros: complete and simple.
+    - Cons: Bun on Linux takes one inotify watch per directory and walks all of `node_modules`; measured 4,672 on `watch-nm-4k`.
 - **What ends a Git scope's demand (ST-18)?** Done as recommended.
   - **A TTL since the last read, and at expiry a `reset` event that makes any open view read again (recommended).**
     - Pros: no new protocol, client change or bookkeeping across reconnects, since the event and its handling already exist; with nothing open a scope costs nothing after one event; an open view stays correct for one extra read per TTL under activity; a lost event is recovered by the resync read.
@@ -905,7 +930,7 @@ A micro-benchmark over 10,000 small files two directories deep (5 rounds, median
   - **Remember the file and its stamp, and compare one `stat` per scan (recommended).**
     - Pros: no process and no read after the first scan; a file rewritten or removed by something else is repaired on the next scan.
     - Cons: one `stat` per scan; an extra `stat` and read beside each ensure.
-  - **A bounded set of ensured worktrees, as `0420-e7-diff-scans.md` recommended.**
+  - **A bounded set of ensured worktrees, as batch E7's report recommended.**
     - Pros: no system call at all.
     - Cons: an exclude file edited away is not restored until a restart. `commands-integration.test.ts` already requires that repair.
 - **Container wire format (ST-14)?** Done as recommended.
@@ -2389,6 +2414,22 @@ Verification named four desktop failures. None of them came from a gateway chang
 **Revoked-access recovery (three cases in `preview-transport-manager.test.ts`).** A real bug in tunnel v2: a pooled stream stayed reusable between the session `error` frame and the close frame, so a request after a revocation got a 502. Fixed in `PreviewTunnelSession`; the choice is recorded in [4500](4500-preview-tunnel-one-socket-per-connection.md).
 
 **Node pull-mode receive window (`preview-tunnel-session.test.ts`).** On Node 26.7.0 `read()` with no size returned one 64 KiB chunk of the four buffered, where the test expected all of them. The credit logic was correct, so the test now drains the stream until `read()` returns null. Only Node 26.7.0 is installed on the host, so the test was not run on an older Node.
+
+### Task 7: how the watch plan degrades and when it reads Git again (ST-17, 2026-11-04)
+
+Anything that cannot be planned watches the whole worktree: no answer from Git, more than 256 left-out subtrees, more than 1,024 watches, or a directory name that did not decode (`fs` could not reopen it). Too many events are a cost; too few would be a wrong count. Git is asked again on a settled burst touching the index or a `.gitignore`, and at once when a `node_modules` appears, so it is left out before an install enters it. `.git/info/exclude` and global ignore files do not ask again: a linked worktree's `info/exclude` is outside anything watched, and watching it for a change that almost never happens was not worth a watch per environment.
+
+### Task 7: a watcher with an injected `startWatch` has no plan unless given one (ST-17, 2026-11-04)
+
+A test that injects `startWatch` almost always emits on a fake, so a default plan would start Git against a path like `/wt` and swap the fake's root. `plan` defaults to `null` in that case and a test that wants one passes `worktreeWatchPlanIo`, as `worktree-snapshots-git.test.ts` does.
+
+### Task 7: the real-watch tests' deadlines (ST-17, 2026-11-04)
+
+`worktree-watcher-real.test.ts` keeps writing distinct files for up to 90 s and asserts an absence only against a later delivered event. On arktech-mini the first event has taken 35 s to arrive, so a shorter deadline measured `fseventsd` rather than the watcher. It is in the slow tier for that reason. `worktree-snapshots-git.test.ts` does the same on macOS since a side-by-side run showed the host losing events for Bun and Node alike (flake 5061).
+
+### Task 7: review follow-up status (2026-11-05)
+
+Corrected the ST-17 status to the recorded passing macOS service runs in resolved flake 5061. Healthy-host single-write delivery remains in 5060; these runs do not establish it.
 
 ### Task 11: GW-16 cumulative input results (2026-11-04)
 

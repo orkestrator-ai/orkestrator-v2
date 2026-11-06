@@ -735,9 +735,11 @@ the coordinator sandbox live test (macOS only), the vendored build, the
 typecheck and the full bridge suite. The only SDK union change was a new
 `SDKStartupFailureReason`, `sandbox_required_unavailable`, now mapped in
 `claudeStartupFailureMessage`. Not rerun at 2.1.314: the Linux sandbox probe
-(needs a Linux host), the billed coordinator-skills probe and
-`claude-host-login-refresh.ts` (still as checked against 2.1.296; it needs a
-container with a fake login).
+(needs a Linux host) and the billed coordinator-skills probe.
+`claude-host-login-refresh.ts`'s trigger was re-checked with a fake login in
+a container on 2.1.314 on 2026-11-06 (0018 task 5): still refreshes in the
+last five minutes, still exits 1 on the API's error, but the CLI now sends
+the unknown model to the API instead of refusing it itself.
 
 The compatibility test's deterministic CLI fixture does not authenticate or
 spend credits, but it is not a full real-CLI smoke test. Before release, start a

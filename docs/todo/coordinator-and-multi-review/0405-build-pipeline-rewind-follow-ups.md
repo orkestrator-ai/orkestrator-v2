@@ -2,8 +2,9 @@
 
 Checked against the branch that made build pipeline restarts rewind
 (2026-10-27), the branch that built the code items below (2026-10-28), the
-branch that ran the code rewind in a real container (2026-11-01) and the
-branch that ran the stacked bypass in WebKit (2026-11-06). The
+branch that ran the code rewind in a real container (2026-11-01), the
+branch that ran the stacked bypass in WebKit (2026-11-06) and the branch that
+ran task 9's delete in a real container (2026-11-06). The
 design is in
 [build-pipeline-view.md](../../architecture/build-pipeline-view.md#restarting-a-step).
 
@@ -16,8 +17,11 @@ listed as done and covered by "Assumptions and decisions" below. Item 7 was
 run against a real container on 2026-11-01 (rechecked against `main` at
 `93b99bfb`) and is done. Item 8's WebKit half was run on 2026-11-06
 (against `main` at `e6c3da899`) and passes; it found and fixed one WebKit-only
-fault in the graph's fullscreen. What is left is live qualification: three runs
-that need provider logins (items 1, 2 and 9; item 2 also needs a GitHub
+fault in the graph's fullscreen. Item 9 was run in a real container on
+2026-11-06 (against `main` at `ee2cc8423`) on the fake-provider Docker
+harness, which is harness evidence rather than the UI run its steps describe;
+it passes and found no defect. What is left is live qualification: two runs
+that need provider logins (items 1 and 2; item 2 also needs a GitHub
 repository), and item 8's physical phone. Since #1376 the Git side
 moved to `workspace-code-rewind.ts`, shared with graph runs' code rewinds
 (#1436), the reset became a journaled intent finished under the environment's
@@ -35,7 +39,7 @@ exclusive mutation fence, and worktree reads retry once without fsmonitor
 6. **Package-only restart on the single-review path**: "Prepare package again". Status: done.
 7. **Code rewind in a container environment**: `git update-ref` and `git reset --hard` through `docker exec`. Status: done.
 8. **Stacked bypass on WebKit and a physical phone**. Status: open (the WebKit half done 2026-11-06; the physical phone not run).
-9. **Delete a pipeline whose code rewind can never finish, in a real container**: Pause and Cancel refuse with the rewind message, and Delete removes the pipeline. Moved from to-do 2120 (deleted 2026-11-06). Status: open (needs a live provider).
+9. **Delete a pipeline whose code rewind can never finish, in a real container**: Pause and Cancel refuse with the rewind message, and Delete removes the pipeline. Moved from to-do 2120 (deleted 2026-11-06). Status: done 2026-11-06 (harness evidence: the fake-provider Docker harness in a real container, not the UI run; no defect found).
 
 ### 1. A real rewind end to end
 
@@ -208,15 +212,66 @@ prove it.
 4. Delete the pipeline from the UI. Check that it disappears, and that its
    Kanban ticket moves back with no completion comment.
 
+Run on 2026-11-06 (harness evidence, not the UI run above). Two cases
+were added to the opt-in live test
+`apps/backend/tests/build-pipeline-code-rewind-docker.test.ts`, which boots
+the development image's real entrypoint (`orkestrator-v2:dev-9d09d1a49df5`,
+built from `ee2cc8423`, Claude Code 2.1.314) on this host's Docker Engine
+(beelink, Linux amd64) and drives the service harness on fake providers, with
+Git through the production `createPipelineEnvironmentGit` and a real
+`EnvironmentMutationFence`. No provider turn, login, profile or UI was used.
+In each case a completed pipeline with a Kanban ticket (`in-progress`, one
+existing comment) has "Rewind code to here" confirmed on its Build, and the
+container is stopped (`docker stop`) just as the backup ref is about to be
+written, so the reset is journaled and cannot run.
+
+- **Stopped, then the branch moved.** While the container is stopped,
+  Pause and Cancel refuse with "The code rewind to <commit> has not finished,
+  so this build cannot continue yet. The environment's container is not
+  running." and a supervisor pass starts nothing. The container is started
+  again and a commit is made by hand on the branch: the supervisor's reset
+  now refuses, the rewind stays pending, and Pause and Cancel refuse with
+  "The branch moved since the rewind was previewed." Delete then removes the
+  pipeline: the record is gone, the ticket moved to `backlog` with exactly
+  one `update_kanban_task` and no `add_kanban_comment`, a later supervisor
+  pass starts nothing, the fence is released, and in the container the
+  hand-made commit is still checked out, the worktree is clean and no backup
+  ref was written.
+- **Deleted while still stopped.** Delete removes the pipeline with the same
+  ticket and supervisor checks while the container is stopped. Once it is
+  started again nothing is reset: HEAD is still the pipeline's old tip and no
+  backup ref exists.
+
+All five cases in the file passed (34.5 s; no container left behind). With
+the pending-rewind branch of `remove` disabled by hand (not committed), both
+new cases failed (Delete went through Cancel, which waits for the reset and
+refused with the rewind's reason) and the three earlier cases passed, so the
+cases exercise `deleteWithPendingCodeRewind` itself. The run found no defect.
+"Recreate the workspace" in step 2 was covered by moving the branch, which is
+the same refusal (`head !== from`) in `resetWorktreeToCommit`.
+
+Not covered: the Delete button and the pipeline disappearing from the UI
+(step 4's renderer half). The button's `delete_build_pipeline` command
+calls `remove` (`commands-registry-build.ts`), which this run drove directly;
+on the renderer side only the wrapper's mapping onto that command is tested
+(`apps/web/src/lib/backend.test.ts`).
+
 **Decisions.**
 
 - **Run it with task 1 or alone?**
-  - **On task 1's profile, after its rewind run (recommended).**
-    - Pros: the pipeline and provider are already there.
-    - Cons: needs a container environment in that profile.
-  - **Alone.**
-    - Pros: smaller run.
+  - **On task 1's profile, after its rewind run.**
+    - Pros: the pipeline and provider are already there; the UI half is seen.
+    - Cons: needs a container environment in that profile, and waits on a
+      live provider.
+  - **Alone, on a `dev:test` profile with a live provider.**
+    - Pros: smaller run; the UI half is seen.
     - Cons: a second billed pipeline.
+  - **The fake-provider Docker harness, extended (recommended; done
+    2026-11-06).**
+    - Pros: no provider, login or billed turn; repeatable; runs in the Linux
+      Engine qualification workflow beside task 7's cases; asserts the
+      container's Git state and the Kanban calls exactly.
+    - Cons: harness evidence: the renderer's Delete button is not exercised.
 
 ## Current state
 
@@ -244,6 +299,13 @@ environment, through `docker exec`, by the opt-in live test
 the production Git port and fence). An unreachable container is now refused
 with a readable reason, and a reset journaled before the container stopped
 says it is outstanding, logs once, and finishes when the container answers.
+
+Run on 2026-11-06 (item 9, harness evidence): deleting a pipeline whose
+journaled code rewind cannot run, in a real container. While the container
+is stopped, and after the branch moved, Pause and Cancel refuse with the
+rewind's reason; Delete removes the pipeline, moves its Kanban ticket back
+with no completion comment, and leaves the container's branch untouched.
+No defect found.
 
 Run on 2026-11-06 (item 8, WebKit half): the stacked-bypass check passes in
 Playwright WebKit at 390 px and 1024 px, headless on macOS, three times. The
@@ -293,6 +355,11 @@ two scenarios in `e2e/PipelineFlow.spec.ts` (`rewound-loop`, `code-rewind`).
 7. **Code rewind in a container environment.** Run live on this machine's
    Docker with fake providers; three failure-reporting faults fixed with
    regression tests; decisions 9 to 11.
+
+9. **Delete a pipeline whose code rewind can never finish, in a real
+   container.** Two cases in the fake-provider Docker harness, passing on
+   this host's Docker Engine; harness evidence, not the UI run; no defect;
+   decision 14.
 
 Partly done:
 
@@ -353,6 +420,10 @@ Known limits, by design:
   network policy, but the qualification workflow's arm64 and amd64 runs are
   the next evidence. A real provider session committing in the container is
   covered by task 1 or 2 if either runs on a container environment.
+- Task 9 is harness evidence: the backend's `remove` was driven directly in
+  a real container. The Delete button and the pipeline leaving the list were
+  not seen in a browser; a container-environment run of task 1 can look at
+  them in passing.
 - The stacked bypass on a physical phone (task 8). Playwright WebKit passed
   on 2026-11-06; no phone or real Safari was used. The fullscreen fix was
   checked in Playwright WebKit and headless Chromium only, not in macOS
@@ -516,3 +587,17 @@ Decisions made on 2026-11-06 while running the WebKit half of item 8.
     saves it), so it relies on that record staying current; Chromium with
     classic scrollbars never reaches it, because the width changes and the
     reset path re-centres instead.
+
+Decisions made on 2026-11-06 while running item 9.
+
+14. **How to run task 9 without a provider** (task 9). Options: (a) the UI
+    steps on a `dev:test` profile with a live provider (on task 1's profile
+    or alone); (b) extend the fake-provider Docker harness of task 7. Chose
+    (b), as the ticket asked: no billed turns or real logins were allowed.
+    Pros: the container, the stop, the hand-moved branch, the refusals, the
+    delete and the Kanban calls are all real or production code; the cases
+    run again in CI's Linux Engine qualification workflow. Cons: the
+    renderer's Delete button is not exercised, so this is recorded as
+    harness evidence; the container is stopped rather than removed, because
+    the harness shares one container across its cases (a removed container
+    takes the same `deleteWithPendingCodeRewind` path, which reads no Git).

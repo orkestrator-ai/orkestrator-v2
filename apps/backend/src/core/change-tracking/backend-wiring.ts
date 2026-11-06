@@ -21,6 +21,8 @@ export function createBackendChangeTracking(input: {
   storage: Pick<StorageService, "getEnvironment" | "loadConfig">;
   emit: (event: string, payload: unknown) => void;
   refreshEnvironment: (environmentId: string) => void;
+  /** A user's manual refresh; also refreshes a container's remote base. */
+  refreshEnvironmentExplicitly?: (environmentId: string) => void;
 }): ChangeTrackingService {
   // The ledger has its own file, change-tracking.sqlite, opened on first use,
   // after storage init.
@@ -51,6 +53,7 @@ export function createBackendChangeTracking(input: {
         : null;
     },
     requestEnvironmentRefresh: input.refreshEnvironment,
+    requestExplicitEnvironmentRefresh: input.refreshEnvironmentExplicitly,
     prBaseBranch: async (environmentId) => {
       const environment = await input.storage.getEnvironment(environmentId).catch(() => null);
       if (!environment) return null;

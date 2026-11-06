@@ -650,6 +650,8 @@ export class OrkestratorBackend {
           emit: (event, payload) => options.emit(event, payload),
           refreshEnvironment: (environmentId) =>
             this.runtime.diffStats.service.refresh(environmentId),
+          refreshEnvironmentExplicitly: (environmentId) =>
+            this.runtime.diffStats.refreshExplicitly(environmentId),
         }),
       );
     }

@@ -1,6 +1,6 @@
 # Native tab render count after an unrelated environment update
 
-- **ID:** 6601
+- **ID:** 6561
 - **Status:** open
 - **Observed:** 2026-11-06 on macOS
 - **Test:** `an unrelated environment field does not render a tab holding a transcript`

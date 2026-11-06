@@ -16,6 +16,7 @@ import {
 } from "../src/core/docker-cleanup-preview";
 import { loadProtection } from "../src/core/docker-cleanup-inventory";
 import { buildEnvironmentCleanupEntry } from "../src/core/environment-cleanup";
+import { subscribeDockerNetworkChanges } from "../src/core/docker-network-changes";
 import { dockerOwnerNamespace } from "../src/core/docker-ownership";
 import {
   assertRuntimeGeneration,
@@ -468,6 +469,48 @@ describe("deletion and cleanup protection", () => {
     expect(classify("unreferenced", "env-lifecycle")).toBe("live-environment-label");
     expect(classify("leftover", "env-deleted-long-ago")).toBe("eligible");
     expect(classify("theirs", "env-deleted-long-ago", "someone-else")).toBe("foreign-owner");
+  });
+
+  test("reviewed network cleanup reports its removal to peer admission", async () => {
+    const { dir, owner } = await dataDir();
+    const { context } = memoryLifecycleContext([], dir);
+    const labels = `app=orkestrator-v2,orkestrator-owner=${owner},environment-id=gone,orkestrator-resource-role=network`;
+    await withDockerScript(
+      `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+case "$1:$2" in
+ network:ls) printf '%s\\n' '{"Name":"reviewed-net","Labels":"${labels}"}' ;;
+ network:inspect) printf '%s\\t0\\n' '{"app":"orkestrator-v2","orkestrator-owner":"${owner}","environment-id":"gone","orkestrator-resource-role":"network"}' ;;
+esac
+exit 0
+`,
+      async (log) => {
+        let changes = 0;
+        const unsubscribe = subscribeDockerNetworkChanges(() => {
+          changes += 1;
+        });
+        try {
+          const preview = await previewDockerCleanup(context);
+          expect(changes).toBe(0);
+          const result = await executeDockerCleanup(
+            {
+              selectionToken: preview.selectionToken,
+              containerIds: [],
+              volumeNames: [],
+              networkNames: ["reviewed-net"],
+            },
+            context,
+          );
+          expect(result.outcomes).toEqual([
+            { kind: "network", id: "reviewed-net", outcome: "removed" },
+          ]);
+          expect(await log.read()).toContain("network rm reviewed-net");
+          expect(changes).toBe(1);
+        } finally {
+          unsubscribe();
+        }
+      },
+    );
   });
 
   test("execution removes only the reviewed selection and rechecks each resource", async () => {

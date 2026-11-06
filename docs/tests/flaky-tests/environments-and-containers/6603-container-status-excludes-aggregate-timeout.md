@@ -1,6 +1,6 @@
 # Container status: exclude repair timed out in the aggregate suite
 
-- **ID:** 9834
+- **ID:** 6603
 - **Status:** open
 - **Date observed:** 2026-11-05
 - **Test:** `container status > repairs excludes after same-container replacement, deletion, rewrite and failed housekeeping`

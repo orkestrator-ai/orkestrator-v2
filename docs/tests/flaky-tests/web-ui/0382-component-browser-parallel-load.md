@@ -456,3 +456,29 @@ those six owners were not retained. Existing cases 0749, 1249, 1902, 2392 and
 1121 retain their focused history. No assertions, timeouts, skips or product
 implementation were changed to hide these failures. Broad validation remains
 incomplete and non-green.
+
+
+## Unavailable-platform merge notice-owner recurrence — 2026-11-06
+
+The resumed `merge-browser-owners` run selected 42 cases from AgentUsage,
+BackgroundTaskOutcome and FloatingNotices with one worker. Its saved desktop
+error context for `128px panes contain long-label pills and their opened cards`
+(`e2e/FloatingNotices.spec.ts:111`) records a 30-second timeout while waiting
+for `getByTestId("constrained-pane").boundingBox()`. The retained log stops at
+case 39/42 without closing totals or a final exit status. The original shell
+invocation was not retained; its log is
+`/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.2PtUJj/merge-browser-owners.log`,
+and the error context and trace are under
+`output/agent-testing/merge-unavailable-ff79/browser-owners/FloatingNotices-128px-pane-a4e21-ills-and-their-opened-cards-desktop-chromium/`.
+
+The complete unchanged FloatingNotices owner then passed alone with one worker,
+exit 0, in 77.8 seconds, on the final merged tree:
+
+```sh
+ORKESTRATOR_E2E_PORT=51587 mise run test:logged -- --name merge-final-notices-browser -- bunx playwright test --config e2e/playwright.config.ts e2e/FloatingNotices.spec.ts --workers=1 --output output/agent-testing/merge-unavailable-ff79/final-notices
+```
+
+Passing output was deleted by the logged runner; per-case totals were not
+retained. No product code, assertion, timeout or skip changed between these
+runs. This shows intermittence for this notice case, without establishing its
+cause or excusing the other owners' failures or incomplete broad validation.

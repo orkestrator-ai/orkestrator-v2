@@ -15,6 +15,7 @@ import {
   parseFirewallStatus,
   removeEnvironmentNetwork,
 } from "../src/core/container-network";
+import { subscribeDockerNetworkChanges } from "../src/core/docker-network-changes";
 import { dockerOwnerNamespace } from "../src/core/docker-ownership";
 import { resetImageManifestCache } from "../src/core/docker-image";
 import {
@@ -53,6 +54,7 @@ async function context() {
   cleanup.push(dir);
   return {
     ...memoryLifecycleContext([lifecycleEnvironment()], dir),
+    dir,
     owner: dockerOwnerNamespace(dir),
   };
 }
@@ -100,6 +102,46 @@ exit 0
     );
   });
 
+  for (const mode of ["create", "adopt", "ambiguous-create"] as const) {
+    test(`${mode} reports the environment network change`, async () => {
+      const { context: ctx, owner, dir } = await context();
+      const labels = JSON.stringify({
+        app: "orkestrator-v2",
+        "orkestrator-owner": owner,
+        "environment-id": "env-lifecycle",
+        "orkestrator-resource-role": "network",
+      });
+      let changes = 0;
+      const unsubscribe = subscribeDockerNetworkChanges(() => {
+        changes += 1;
+      });
+      try {
+        await withDockerScript(
+          `#!/bin/sh
+case "$1:$2" in
+ network:inspect)
+   if [ "${mode}" = adopt ] || [ -f "${dir}/created" ]; then
+     printf '%s\\t0\\n' '${labels}'
+   else
+     echo 'No such network' >&2; exit 1
+   fi ;;
+ network:create)
+   touch "${dir}/created"
+   [ "${mode}" != ambiguous-create ] || exit 1 ;;
+esac
+exit 0
+`,
+          async () => {
+            await ensureEnvironmentNetwork(ctx, "env-lifecycle");
+            expect(changes).toBe(1);
+          },
+        );
+      } finally {
+        unsubscribe();
+      }
+    });
+  }
+
   test("reports exhausted address pools without falling back", async () => {
     const { context: ctx } = await context();
     await withDockerScript(
@@ -133,8 +175,17 @@ printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 exit 0
 `,
         async (log) => {
-          expect(await removeEnvironmentNetwork(ctx, "env-lifecycle")).toBe(expected);
-          expect((await log.read()).includes("network rm")).toBe(expected === "removed");
+          let changes = 0;
+          const unsubscribe = subscribeDockerNetworkChanges(() => {
+            changes += 1;
+          });
+          try {
+            expect(await removeEnvironmentNetwork(ctx, "env-lifecycle")).toBe(expected);
+            expect((await log.read()).includes("network rm")).toBe(expected === "removed");
+            expect(changes).toBe(expected === "removed" ? 1 : 0);
+          } finally {
+            unsubscribe();
+          }
         },
       );
     }

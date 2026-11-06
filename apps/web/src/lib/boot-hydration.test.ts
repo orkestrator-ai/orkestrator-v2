@@ -108,22 +108,50 @@ describe("EnvironmentHydrationBatcher", () => {
     expect(await healthy).toEqual([queue("healthy")]);
   });
 
-  test("a failed batch rejects that batch's environments and leaves the next one unaffected", async () => {
-    let calls = 0;
-    const { instance, scheduler } = batcher({
-      listBatch: async (ids) => {
+  test.each(["node unavailable", "invalid environment id"])(
+    "a failed batch (%s) falls back with isolated lists and retries batching next time",
+    async (message) => {
+      let calls = 0;
+      const listBatch = mock(async (ids: string[]) => {
         calls += 1;
-        if (calls === 1) throw new Error("node unavailable");
+        if (calls === 1) throw new Error(message);
         return answer(ids);
-      },
-    });
-    const first = instance.promptQueues("e1").catch((error: Error) => error.message);
-    scheduler.run();
-    expect(await first).toBe("node unavailable");
-    const second = instance.promptQueues("e1");
-    scheduler.run();
-    expect(await second).toEqual([queue("e1")]);
-  });
+      });
+      const listPromptQueues = mock(async (id: string) => {
+        if (id === "broken-queue") throw new Error("queue unavailable");
+        return [queue(id)];
+      });
+      const listMultiReviewWorkflows = mock(async (id: string) => {
+        if (id === "broken-workflow") throw new Error("workflow unavailable");
+        return [workflow(id)];
+      });
+      const { instance, scheduler } = batcher({
+        listBatch,
+        listPromptQueues,
+        listMultiReviewWorkflows,
+      });
+      const ids = ["healthy", "broken-queue", "broken-workflow"];
+      const reads = Promise.allSettled(
+        ids.flatMap((id) => [instance.promptQueues(id), instance.multiReviewWorkflows(id)]),
+      );
+      scheduler.run();
+      expect(await reads).toEqual([
+        { status: "fulfilled", value: [queue("healthy")] },
+        { status: "fulfilled", value: [workflow("healthy")] },
+        { status: "rejected", reason: new Error("queue unavailable") },
+        { status: "fulfilled", value: [workflow("broken-queue")] },
+        { status: "fulfilled", value: [queue("broken-workflow")] },
+        { status: "rejected", reason: new Error("workflow unavailable") },
+      ]);
+      expect(listPromptQueues.mock.calls).toEqual(ids.map((id) => [id]));
+      expect(listMultiReviewWorkflows.mock.calls).toEqual(ids.map((id) => [id]));
+      const next = instance.promptQueues("healthy");
+      scheduler.run();
+      expect(await next).toEqual([queue("healthy")]);
+      expect(listBatch).toHaveBeenCalledTimes(2);
+      expect(listPromptQueues).toHaveBeenCalledTimes(3);
+    },
+  );
 
   test("never joins a request already in flight, so no read predates its request", async () => {
     const gates: Array<(batch: Batch) => void> = [];

@@ -112,11 +112,12 @@ export class EnvironmentHydrationBatcher {
       try {
         response = await this.dependencies.listBatch(ids);
       } catch (error) {
-        if (!isUnknownCommandError(error, LIST_ENVIRONMENT_HYDRATION_COMMAND)) {
-          for (const id of ids) rejectAll(batch.get(id)!, error);
-          return;
+        // A failed batch must not make an unrelated environment's lists fail.
+        // Only an unsupported command disables batching for future requests;
+        // transient transport/validation failures fall back for this chunk.
+        if (isUnknownCommandError(error, LIST_ENVIRONMENT_HYDRATION_COMMAND)) {
+          this.batchSupported = false;
         }
-        this.batchSupported = false;
         return this.sendSeparately(ids, batch);
       }
       const answered = new Map(response.environments.map((entry) => [entry.environmentId, entry]));
@@ -131,7 +132,7 @@ export class EnvironmentHydrationBatcher {
     return this.sendSeparately(ids, batch);
   }
 
-  /** The per-environment reads, for a backend without the batch command. */
+  /** Isolated reads when a batch fails or the backend lacks the command. */
   private async sendSeparately(
     ids: string[],
     batch: Map<string, PendingEnvironment>,
@@ -167,11 +168,6 @@ function settle<T>(
     part ? `The ${name} read failed for this environment` : `The batch omitted ${name}`,
   );
   for (const waiter of waiters) waiter.reject(error);
-}
-
-function rejectAll(entry: PendingEnvironment, error: unknown): void {
-  for (const waiter of entry.promptQueues) waiter.reject(error);
-  for (const waiter of entry.multiReviewWorkflows) waiter.reject(error);
 }
 
 async function forward<T>(waiters: Array<Waiter<T>>, load: () => Promise<T>): Promise<void> {

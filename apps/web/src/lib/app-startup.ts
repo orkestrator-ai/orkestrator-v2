@@ -13,7 +13,7 @@ export interface StartAppOptions {
   render(): void;
   /** Reads the stored catalogues only; it must not download anything. */
   hydrate?: () => Promise<void>;
-  /** Downloads missing catalogues and updates the stores; runs after the read. */
+  /** Downloads missing catalogues after rendering, once the read settles or times out. */
   seed?: () => Promise<void>;
   timeoutMs?: number;
   timer?: StartupTimer;
@@ -35,9 +35,9 @@ const monotonicNow = () => globalThis.performance?.now() ?? Date.now();
  *
  * The first render waits only on the cached read, bounded by `timeoutMs` so an
  * unavailable gateway cannot leave a blank page. The seed, which may start a
- * bridge and its CLI per platform, starts after the render and once that read
- * has settled (so its result is compared against the stores the read filled),
- * and never holds the render: a realm on a node with a broken platform used to wait the whole
+ * bridge and its CLI per platform, starts after the render, once the read
+ * settles or reaches its timeout. It never holds the render or waits forever
+ * for an unavailable cache: a realm on a node with a broken platform used to wait the whole
  * bound on every cold open. The stores update when the seed finishes.
  */
 export async function startApp({
@@ -51,8 +51,8 @@ export async function startApp({
   beginRealmBoot();
   let cacheTimeout: unknown;
   const readStarted = now();
-  // The read stays live after the timeout and may still fill the stores; the
-  // seed waits for it either way.
+  // A late read may still fill the stores; hydration's identity checks keep
+  // it from overwriting a newer catalogue installed by the background seed.
   const read = Promise.resolve()
     .then(hydrate)
     .then(
@@ -94,5 +94,5 @@ export async function startApp({
   }
 
   render();
-  void read.then(startSeed);
+  void Promise.resolve().then(startSeed);
 }

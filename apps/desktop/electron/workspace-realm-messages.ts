@@ -17,7 +17,9 @@ export function postFromWorkspaceRealm(
   if (isRealmBootTimingMessage(message)) {
     const record = views.viewForWebContents(senderId);
     const target = record ? realmBindings.get(record.scope)?.target : null;
-    if (!target) throw new Error("Only a workspace realm can report its boot.");
+    // Diagnostic messages can race eviction/close; an unbound sender has no
+    // trusted node attribution, so discard its timing instead of failing IPC.
+    if (!target) return;
     logRealmBootTiming(message, {
       nodeId: target.nodeId,
       nodeName: target.nodeName,

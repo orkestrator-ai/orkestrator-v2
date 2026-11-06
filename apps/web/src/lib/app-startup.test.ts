@@ -160,7 +160,7 @@ describe("startApp", () => {
     }
   });
 
-  test("starts the seed only after the cached read settles, even past the timeout", async () => {
+  test("starts the seed once after timeout and does not repeat it when the read settles", async () => {
     const read = deferred<void>();
     const seed = mock(async () => {});
     const render = mock(() => {});
@@ -171,11 +171,34 @@ describe("startApp", () => {
     timer.fire();
     await startup;
     expect(render).toHaveBeenCalledTimes(1);
-    expect(seed).not.toHaveBeenCalled();
+    for (let tick = 0; tick < 5; tick += 1) await Promise.resolve();
+    expect(seed).toHaveBeenCalledTimes(1);
 
     read.resolve();
     for (let tick = 0; tick < 5; tick += 1) await Promise.resolve();
     expect(seed).toHaveBeenCalledTimes(1);
+  });
+
+  test("a never-settling cached read cannot suppress rendering or background seeding", async () => {
+    const order: string[] = [];
+    const timer = controlledTimer();
+    const startup = startApp({
+      hydrate: () => new Promise<void>(() => {}),
+      seed: async () => {
+        order.push("seed");
+      },
+      render: () => {
+        order.push("render");
+      },
+      timer: timer.timer,
+    });
+    await Promise.resolve();
+    expect(order).toEqual([]);
+    timer.fire();
+    await startup;
+    for (let tick = 0; tick < 5; tick += 1) await Promise.resolve();
+    expect(order).toEqual(["render", "seed"]);
+    expect(timer.clear).toHaveBeenCalledWith(timer.handle);
   });
 
   test("the default first read asks for the stored cache only", async () => {

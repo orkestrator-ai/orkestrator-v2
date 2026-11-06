@@ -26,15 +26,15 @@ test("main channel binds timing to its sender and consumes it before window forw
         durationMs: 12,
       },
     ]);
-    expect(() => postFromWorkspaceRealm(7, timing, views, realmBindings)).toThrow(
-      "Only a workspace realm",
-    );
+    expect(() => postFromWorkspaceRealm(7, timing, views, realmBindings)).not.toThrow();
     expect(() => postFromWorkspaceRealm(undefined, timing, views, realmBindings)).toThrow(
       "Only a workspace realm",
     );
-    expect(() => postFromWorkspaceRealm(99, timing, views, realmBindings)).toThrow(
-      "Only a workspace realm",
-    );
+    expect(() => postFromWorkspaceRealm(99, timing, views, realmBindings)).not.toThrow();
+    realmBindings.delete("realm-42");
+    expect(() => postFromWorkspaceRealm(42, timing, views, realmBindings)).not.toThrow();
+    expect(post).not.toHaveBeenCalled();
+    expect(views.msSinceOpened).toHaveBeenCalledTimes(1);
     postFromWorkspaceRealm(42, { type: "selection" }, views, realmBindings);
     expect(post).toHaveBeenCalledTimes(1);
     expect(post).toHaveBeenCalledWith(42, { type: "selection" });

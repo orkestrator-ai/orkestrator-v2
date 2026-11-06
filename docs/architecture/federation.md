@@ -456,8 +456,8 @@ opens of omarchy-hp from mbp3 were slow, warm opens fast):
   with `get_agent_model_catalog_cache` `{ seed: false }` (the cache as stored:
   no download, no Pi probe), bounded at 2 s, then renders. The seed (`seed:
   true`, which can start a bridge and CLI per enabled platform with no cached
-  list) runs after the render, once that read has settled, and updates the
-  model stores when it answers. An older backend treats `seed: false` as an
+  list) runs after the render, once that read settles or reaches the timeout,
+  and updates the model stores when it answers. An older backend treats `seed: false` as an
   omitted `seed`.
 - **A failing seed is not retried every boot.** A failed or empty host
   catalogue download cools down for 15 minutes
@@ -476,8 +476,9 @@ opens of omarchy-hp from mbp3 were slow, warm opens fast):
   `boot-hydration.ts`) collects the environments requested in one task and
   reads them with one `list_environment_hydration` call per 100
   environments, instead of two requests per environment; each environment and
-  list still fails on its own. Against an older backend the batcher falls back
-  to the per-environment reads after one "unknown command". A 10-project,
+  list still fails on its own. A failed batch falls back to individual list reads
+  for its chunk, isolating transport or validation failures. Against an older
+  backend the batcher falls back to the per-environment reads after one "unknown command". A 10-project,
   120-environment boot restores with 10 requests instead of 240
   (`boot-hydration.test.ts`). The manifest resync's own per-environment reads
   (`store-resource-sync.ts`) are bounded but not batched.

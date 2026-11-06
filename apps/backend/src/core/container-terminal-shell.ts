@@ -60,6 +60,7 @@ export function containerTerminalCloseArgs(shell: ContainerTerminalShell): strin
 export async function closeContainerTerminalShell(
   shell: ContainerTerminalShell,
   signal: AbortSignal,
+  execute: typeof runCommand = runCommand,
 ): Promise<void> {
   try {
     assertContainerNotDraining(shell.containerId);
@@ -67,7 +68,7 @@ export async function closeContainerTerminalShell(
     return;
   }
   try {
-    await runCommand("docker", containerTerminalCloseArgs(shell), {
+    await execute("docker", containerTerminalCloseArgs(shell), {
       timeoutMs: CONTAINER_TERMINAL_CLOSE_TIMEOUT_MS,
       signal,
     });

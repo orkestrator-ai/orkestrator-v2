@@ -140,12 +140,12 @@ if [ -n "${ORKESTRATOR_TERMINAL_SESSION:-}" ]; then
       [ -f "$orkestrator_terminal_file" ] || continue
       orkestrator_terminal_token="${orkestrator_terminal_file##*/}"
       orkestrator_terminal_pid=""
-      read -r orkestrator_terminal_pid < "$orkestrator_terminal_file" 2>/dev/null
+      read -r orkestrator_terminal_pid orkestrator_terminal_sid < "$orkestrator_terminal_file" 2>/dev/null
       grep -qzxF "ORKESTRATOR_TERMINAL_SESSION=${orkestrator_terminal_token%.pid}" "/proc/${orkestrator_terminal_pid:-0}/environ" 2>/dev/null || rm -f "$orkestrator_terminal_file"
     done
-    echo "$$" > "$orkestrator_terminal_dir/${ORKESTRATOR_TERMINAL_SESSION}.pid"
+    echo "$$ $(ps -o sid= -p $$)" > "$orkestrator_terminal_dir/${ORKESTRATOR_TERMINAL_SESSION}.pid"
   fi
-  unset orkestrator_terminal_dir orkestrator_terminal_file orkestrator_terminal_token orkestrator_terminal_pid
+  unset orkestrator_terminal_dir orkestrator_terminal_file orkestrator_terminal_token orkestrator_terminal_pid orkestrator_terminal_sid
 fi
 exec zsh -l'
 # A token, as the backend passes one, so the shell records its PID too.
@@ -175,21 +175,27 @@ marker="ORKESTRATOR_TERMINAL_SESSION=$token"
 dir="/tmp/orkestrator-terminals-$(id -u)"
 file="$dir/$token.pid"
 pid=""
+sid=""
 if [ -d "$dir" ] && [ ! -L "$dir" ] && [ -O "$dir" ] && [ -f "$file" ] && [ ! -L "$file" ]; then
-  read -r pid < "$file" 2>/dev/null
+  read -r pid sid < "$file" 2>/dev/null
   rm -f "$file"
 fi
+case "$sid" in ""|*[!0-9]*) sid="" ;; esac
 case "$pid" in
   ""|*[!0-9]*) ;;
   *) if grep -qzxF "$marker" "/proc/$pid/environ" 2>/dev/null; then
+       [ -n "$sid" ] || sid=$(ps -o sid= -p "$pid" 2>/dev/null | tr -d " ")
        kill -s HUP -- "-$pid" 2>/dev/null || kill -s HUP "$pid" 2>/dev/null
      fi ;;
 esac
+[ -n "$sid" ] || exit 0
 for environ in /proc/[0-9]*/environ; do
   candidate="${environ#/proc/}"
   candidate="${candidate%/environ}"
   [ "$candidate" = "$$" ] && continue
-  grep -qzxF "$marker" "$environ" 2>/dev/null && kill -s HUP "$candidate" 2>/dev/null
+  grep -qzxF "$marker" "$environ" 2>/dev/null || continue
+  candidate_sid=$(ps -o sid= -p "$candidate" 2>/dev/null | tr -d " ")
+  [ "$candidate_sid" = "$sid" ] && kill -s HUP "$candidate" 2>/dev/null
 done
 exit 0'
 docker exec --env PATH="$ROOT_PATH" --user orkroot "$RUN" sh -c "$CLOSE_SCRIPT" orkestrator-terminal-close "$TERMINAL_TOKEN" \

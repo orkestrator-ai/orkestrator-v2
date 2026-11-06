@@ -279,15 +279,16 @@ setup itself.
 A container terminal is a host `docker exec -it` client, and Docker does not
 end an exec when its client goes away. So each terminal shell is started with
 a fresh random token in `ORKESTRATOR_TERMINAL_SESSION` (one per PTY lifetime,
-never reused by a stable tab's next shell) and records its PID as
+never reused by a stable tab's next shell) and records its PID and session ID as
 `/tmp/orkestrator-terminals-<uid>/<token>.pid`
 (`CONTAINER_TERMINAL_PID_RECORD_COMMAND`). Whenever the PTY goes away, closed
 by the user, superseded, reaped as an orphan or exited, the backend runs
 `CONTAINER_TERMINAL_CLOSE_SCRIPT` in the container as the terminal's own user
 (`container-terminal-shell.ts`). The script removes the record, sends SIGHUP to
 the recorded shell's process group once `/proc/<pid>/environ` proves the PID
-still carries the token, then to every other process carrying it, because zsh
-gives each job its own process group. A program that ignores SIGHUP (`nohup`)
+still carries the token, then to other processes carrying it in the recorded session, because zsh
+gives each job its own process group. Detached sessions (including tmux) survive;
+a missing session identity skips the scan. A program that ignores SIGHUP (`nohup`)
 survives, as it would a closed terminal. Each shell start sweeps its uid's
 records whose PID no longer carries its token, and the entrypoint removes
 `node`'s records at every container start. A container an explicit stop is

@@ -62,7 +62,7 @@ export function recordedTerminalShellPids(containerId: string): number[] {
   if (result.status !== 0) throw new Error("docker exec failed reading terminal records");
   return result.stdout
     .split("\n")
-    .map((line) => line.trim())
+    .map((line) => line.trim().split(/\s+/)[0]!)
     .filter((line) => /^\d+$/.test(line))
     .map(Number);
 }

@@ -459,6 +459,34 @@ describe("a main opened after the last one closed", () => {
     expect(moved[0]!.placement).toBe("inject-held");
   });
 
+  test("every path that opens a main goes through ensureMainConversation", async () => {
+    const world = await create();
+    const opens = spyOn(world.coordinator, "ensureMainConversation");
+    try {
+      const other = await addProject(world, "opened");
+      expect(opens).toHaveBeenCalledWith(other.projectId, { opened: true });
+      opens.mockClear();
+
+      const owner = await own(world);
+      const side = await world.addSide();
+      const worker = await addWorker(world, owner, "side-worker", side.conversationId!);
+      await world.closeMain();
+      opens.mockClear();
+      const snapshot = await world.coordinator.createConversation(world.projectId);
+      expect(opens).toHaveBeenCalledTimes(1);
+      expect(opens).toHaveBeenCalledWith(world.projectId, { opened: true });
+      // A main the user just opened stays unassigned, and an open side keeps
+      // its own work.
+      expect(coordinatorMainConversation(snapshot.workspace)!.agent).toBeUndefined();
+      const association = (
+        await world.storage.coordinators.getCoordinatorReconciliationState()
+      ).workflows.find((item) => item.id === worker.associationId)!;
+      expect(association.conversationId).toBe(side.conversationId);
+    } finally {
+      opens.mockRestore();
+    }
+  });
+
   test("a failed replacement-main repair cannot turn a held report into a silent-worker notice", async () => {
     const world = await create();
     const owner = await own(world);

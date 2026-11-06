@@ -668,9 +668,11 @@ Reading a coordinator (`CoordinatorService.get`, so `get_project_coordinator`,
 the panel's view and every coordinator `read_messages`) repairs nothing and
 writes nothing. The work and mail closed conversations leave behind move to the
 main at three points instead (`coordinator-closed-conversations.ts`): when a main
-opens (`ensureMainConversation`, a new coordinator in `ensure`, and
-`createConversation` with no main open, which keeps the new main unassigned),
-when a conversation closes, and on the 60-second `coordinator-repair` sweep. The
+opens, when a conversation closes, and on the 60-second `coordinator-repair`
+sweep. Every path that opens a main goes through `ensureMainConversation`: mail,
+wakes and notices directly, and a new coordinator in `ensure` and
+`createConversation` with no main open through its `opened` form, which keeps
+the new main unassigned and leaves open side conversations their own work. The
 sweep syncs mailboxes and reads the owed delegations once for every coordinator,
 not once each, and re-reads the open delegations only after the store has
 changed (`coordinator-open-delegations.ts`). A main that appears any other way

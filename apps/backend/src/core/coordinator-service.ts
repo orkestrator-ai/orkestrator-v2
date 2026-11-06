@@ -388,16 +388,23 @@ export class CoordinatorService {
    * An open main that has never run gets the default agent the same way: with
    * no agent it could neither read this mail nor be woken for it. With no
    * qualified agent it stays unassigned and the mail waits for the user.
+   *
+   * Every path that opens a main comes through here. `opened` is one the user
+   * just opened (`ensure`, `createConversation`): it stays unassigned, and
+   * open side conversations keep their own work.
    */
   async ensureMainConversation(
     projectId: string,
+    options: { opened?: boolean } = {},
   ): Promise<{ workspace: CoordinatorWorkspace; main: CoordinatorConversation }> {
+    const opened = options.opened === true;
     const result = await this.serialize(projectId, async () => {
       const existing = await this.storage.coordinators.getCoordinatorWorkspace(projectId);
       if (!existing) throw new Error("Coordinator workspace was not found");
       const open = coordinatorMainConversation(existing);
       if (open?.agent) return { workspace: existing, main: open };
       if (open) {
+        if (opened) return { workspace: existing, main: open };
         const agent = await this.preferredAgent(projectId).catch(() => undefined);
         if (!agent) return { workspace: existing, main: open };
         const workspace = await this.storage.coordinators.mutateCoordinatorWorkspace(
@@ -429,7 +436,7 @@ export class CoordinatorService {
         existing.id,
         "main",
         undefined,
-        await this.preferredAgent(projectId).catch(() => undefined),
+        opened ? undefined : await this.preferredAgent(projectId).catch(() => undefined),
       );
       const workspace = await this.storage.coordinators.mutateCoordinatorWorkspace(
         projectId,
@@ -447,21 +454,28 @@ export class CoordinatorService {
       const main = coordinatorMainConversation(workspace) ?? created;
       return { workspace, main };
     });
-    await this.settleOpenedMain(result.workspace, result.main);
+    // What every path that opens or uses a main does next: the work other
+    // conversations still owe moves onto it, and so does the mail waiting in
+    // a closed main's inbox. Reads never do this (`snapshot`); the sweep
+    // repeats the closed-conversation half for every coordinator at once.
+    await reconcileMainMail(this.storage, result.workspace, result.main, opened);
     return { workspace: result.workspace, main: result.main };
   }
 
-  /**
-   * What every path that opens or uses a main does next: the work other
-   * conversations still owe moves onto it, and so does the mail waiting in a
-   * closed main's inbox. Reads never do this (`snapshot`); the sweep repeats
-   * the closed-conversation half for every coordinator at once.
-   */
-  private settleOpenedMain(
+  /** A failure is logged, not thrown: the sweep repeats the repair. */
+  private async settleNewMain(
+    projectId: string,
     workspace: CoordinatorWorkspace,
-    main: CoordinatorConversation,
-  ): Promise<void> {
-    return reconcileMainMail(this.storage, workspace, main, false);
+  ): Promise<CoordinatorWorkspace> {
+    try {
+      return (await this.ensureMainConversation(projectId, { opened: true })).workspace;
+    } catch (error: unknown) {
+      log.warn("mail.reconcile-failed", {
+        coordinatorId: workspace.id,
+        error: formatLogError(error, { stack: false }),
+      });
+      return workspace;
+    }
   }
 
   /**
@@ -565,7 +579,7 @@ export class CoordinatorService {
     projectId: string,
     options: { clearConversationErrors?: boolean } = {},
   ): Promise<CoordinatorSnapshot> {
-    return this.serialize(projectId, async () => {
+    const ensured = await this.serialize(projectId, async () => {
       const projectPath = await this.canonicalProjectPath(projectId);
       const before = await this.storage.coordinators.getCoordinatorWorkspace(projectId);
       // A workspace only reaches `error` as a record an older backend stored:
@@ -610,19 +624,14 @@ export class CoordinatorService {
         },
       );
       if (!workspace) throw new Error("Coordinator workspace could not be created");
-      // A new coordinator opens its first main: its mailbox comes from the
-      // same step as every other main's, here rather than on the next sweep.
-      const main = coordinatorMainConversation(workspace);
-      if (!before && main) {
-        await reconcileMainMail(this.storage, workspace, main).catch((error: unknown) => {
-          log.warn("mail.reconcile-failed", {
-            coordinatorId: workspace.id,
-            error: formatLogError(error, { stack: false }),
-          });
-        });
-      }
-      return this.snapshot(workspace, projectPath);
+      return { workspace, projectPath, created: !before };
     });
+    // A new coordinator's first main is settled now, not on the next sweep.
+    const workspace =
+      ensured.created && coordinatorMainConversation(ensured.workspace)
+        ? await this.settleNewMain(projectId, ensured.workspace)
+        : ensured.workspace;
+    return this.snapshot(workspace, ensured.projectPath);
   }
 
   async get(projectId: string): Promise<CoordinatorSnapshot | null> {
@@ -635,7 +644,7 @@ export class CoordinatorService {
    * What a coordinator looks like now. A read, and nothing more: no adoption,
    * mail move or other write, so the panel's view and every agent's
    * `read_messages` stay cheap. Work and mail closed conversations left behind
-   * move when a main opens (`settleOpenedMain`), when a conversation closes,
+   * move when a main opens (`ensureMainConversation`), when a conversation closes,
    * and on the sweep (`reconcileWorkerDelegations`).
    */
   private async snapshot(
@@ -769,24 +778,16 @@ export class CoordinatorService {
       );
       return { workspace, projectPath, hadMain };
     });
-    // With no main open this started one. It takes over the work and mail
-    // closed conversations left, as the read that followed used to do. Not
-    // through `ensureMainConversation`, which would also give this main an
-    // agent: a new conversation is deliberately unassigned.
-    const main = coordinatorMainConversation(created.workspace);
-    if (!created.hadMain && main) {
-      await reconcileMainMail(this.storage, created.workspace, main).catch((error: unknown) => {
-        log.warn("mail.reconcile-failed", {
-          coordinatorId: created.workspace.id,
-          error: formatLogError(error, { stack: false }),
-        });
-      });
+    // With no main open this started one, which takes over closed work.
+    let workspace = created.workspace;
+    if (!created.hadMain && coordinatorMainConversation(workspace)) {
+      workspace = await this.settleNewMain(projectId, workspace);
     } else {
       // Side conversations need a mailbox immediately too; snapshots no longer
       // perform this synchronization as a side effect.
       await this.storage.synchronizeAgentMailboxes();
     }
-    return this.snapshot(created.workspace, created.projectPath);
+    return this.snapshot(workspace, created.projectPath);
   }
 
   /**

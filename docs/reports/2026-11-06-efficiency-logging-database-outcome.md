@@ -22,10 +22,17 @@ status counts were recounted, and the run-order text under Parallel running is
 in the past tense now that nothing is left to run. [batches.md](batches.md)
 records the group as closed.
 
-A deleted batch file's last version, which usually ends with its outcome table,
-is the parent of the commit that deleted it. The **Closed in** column below
-names that commit; read the file with
-`git show <commit>^:docs/reports/efficiency-logging-database/<file>`.
+The **Closed in** column names the merged pull request and commit that deleted
+each batch file. For a squash merge,
+`git show <commit>^:docs/reports/efficiency-logging-database/<file>`
+reads the version on main before the pull request, which can contain only the
+pre-build tasks, without the branch's outcome table. Use the outcome links in the
+table below for the preserved closing records. To investigate the original
+branch report, consult the corresponding pull request's branch history; its
+outcome version is not necessarily retained in main's history.
+
+References in the historical closing checks below to a deletion commit's parent
+describe the original build branch, not the squash merge in **Closed in**.
 
 ## Batch record
 

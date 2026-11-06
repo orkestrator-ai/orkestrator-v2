@@ -51,7 +51,7 @@ export async function reconcileMainMail(
   storage: Storage,
   workspace: CoordinatorWorkspace,
   main: CoordinatorConversation,
-  closedOnly = true,
+  { closedOnly = true }: { closedOnly?: boolean } = {},
 ): Promise<void> {
   await adoptLiveWork(storage, workspace, main, closedOnly);
   await storage.synchronizeAgentMailboxes();
@@ -167,4 +167,36 @@ async function adoptLiveWork(
         log.warn("work.move-failed", { error: formatLogError(error) });
       });
   }
+}
+
+/**
+ * Choose under the coordinator store lock, before close commits. A report in
+ * the current main can be recorded immediately. A report still held by a
+ * closed main must first be moved by delivery's repair; retained empty inboxes
+ * do not prevent combining the notice kind with the close write.
+ */
+export async function closingDelegationWakeKind(
+  storage: Pick<StorageService, "hasDelegationHeldAgentMail">,
+  association: CoordinatorWorkflowAssociation,
+  owner: CoordinatorWorkspace | null,
+): Promise<"report" | "notice" | undefined> {
+  const delegation = association.delegation;
+  const main = owner ? coordinatorMainConversation(owner) : undefined;
+  if (!owner || !main || !delegation) return undefined;
+  const hasReport = (conversation: CoordinatorConversation) =>
+    storage.hasDelegationHeldAgentMail(
+      association.id,
+      coordinatorRuntimeId(owner.id, conversation.id),
+      conversation.tabId,
+      association.resourceId,
+      delegation.workerTabId,
+      { includeClosedMailbox: Boolean(conversation.closedAt) },
+    );
+  if (await hasReport(main)) return "report";
+  for (const conversation of owner.conversations) {
+    if (conversation.role === "main" && conversation.closedAt && (await hasReport(conversation))) {
+      return undefined;
+    }
+  }
+  return "notice";
 }

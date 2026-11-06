@@ -54,7 +54,7 @@ So 1,400 finished records cost 5 to 8 ms on a sweep that runs every 60 s and abo
 
 ## Current state
 
-C3 made the sweep's mailbox sync and owed-delegation reads run once per pass, made coordinator reads write nothing, and cut a delegation wake to two coordinator writes and one announcement. Its outcome table is in the last version of the deleted report: `git show "$(git log -1 --format=%H --grep='close coordinator batch C3')"`.
+C3 made the sweep's mailbox sync and owed-delegation reads run once per pass, made coordinator reads write nothing, and cut a delegation wake to two coordinator writes and one announcement. Its outcome table is in the last version of the deleted report: `git show b0fbe4ee1^:docs/reports/coordinator/0110-c3-sweep-and-reads.md`.
 
 ## Needs verification
 
@@ -64,3 +64,16 @@ C3 made the sweep's mailbox sync and owed-delegation reads run once per pass, ma
 
 - [Coordinator review index](../../reports/coordinator/0000-index.md), finding B1 ("list walked long before the cap")
 - [6360-c2-workflow-records-live-checks.md](6360-c2-workflow-records-live-checks.md): the store-full banner on a live stack, which needs the same kind of seeded store
+
+## Assumptions and decisions
+
+### Task 2: retained closed mains and wake selection
+
+The review fix checks closed mains for this worker's held report before deferring
+notice selection. Empty historical inboxes allow two coordinator writes after a
+successful replacement; a held report still waits for repair. Keeping the blanket
+history guard would preserve three writes even when repair has finished. This does
+not remove the per-wake repair or replace task 2's measurement.
+
+The recovery command uses the final deletion's parent so it includes the corrected
+main-opening path list, rather than finding the earlier deletion by its subject.

@@ -1943,6 +1943,7 @@ export class StorageService {
     coordinatorTabId: string,
     workerEnvironmentId: string,
     workerTabId: string,
+    options?: { includeClosedMailbox?: boolean },
   ): Promise<boolean> {
     return this.repos.agentMailInjects.hasDelegationHeldAgentMail(
       associationId,
@@ -1950,6 +1951,7 @@ export class StorageService {
       coordinatorTabId,
       workerEnvironmentId,
       workerTabId,
+      options,
     );
   }
 

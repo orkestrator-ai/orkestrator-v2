@@ -553,6 +553,66 @@ describe("one delegation wake", () => {
     return { writes: (coordinators.coordinatorStoreRevision() ?? 0) - start, announced };
   }
 
+  test("a silent worker after a repaired replacement main still writes twice", async () => {
+    const world = await create();
+    const previous = await own(world);
+    await world.closeMain();
+    const snapshot = await world.coordinator.createConversation(world.projectId);
+    const main = coordinatorMainConversation(snapshot.workspace)!;
+    await world.coordinator.assignConversationAgent(world.projectId, main.id, "codex");
+    const owner = await own(world);
+    expect(owner.main.conversationId).not.toBe(previous.main.conversationId);
+    const worker = await addWorker(world, owner, "silent-after-replacement");
+    const observed = await observe(world, () =>
+      world.coordinator.settleWorkerDelegations({
+        environmentId: worker.environmentId,
+        tabId: worker.tabId,
+        state: "completed",
+      }),
+    );
+    expect(observed).toEqual({ writes: 2, announced: [2] });
+    expect(await delegationOf(world, worker.associationId)).toMatchObject({
+      wakeKind: "notice",
+      wokenAt: expect.any(String),
+    });
+    expect(await inbox(world, owner.main)).toHaveLength(1);
+  });
+
+  test("with no open main defers kind selection until delivery opens one", async () => {
+    const world = await create();
+    const owner = await own(world);
+    const worker = await addWorker(world, owner, "silent-without-main");
+    await world.closeMain();
+    const coordinators = world.storage.coordinators;
+    const prepare = coordinators.prepareCoordinatorDelegationWake.bind(coordinators);
+    const seen: Array<{ state: string; wakeKind?: string }> = [];
+    const spy = spyOn(coordinators, "prepareCoordinatorDelegationWake").mockImplementation(
+      async (...args) => {
+        const delegation = await delegationOf(world, worker.associationId);
+        seen.push({ state: delegation.state, wakeKind: delegation.wakeKind });
+        return prepare(...args);
+      },
+    );
+    try {
+      await world.coordinator.settleWorkerDelegations({
+        environmentId: worker.environmentId,
+        tabId: worker.tabId,
+        state: "completed",
+      });
+      expect(seen).toEqual([{ state: "completed", wakeKind: undefined }]);
+      expect(spy).toHaveBeenCalledWith(worker.associationId, "notice");
+    } finally {
+      spy.mockRestore();
+    }
+    const replacement = await world.main();
+    expect(replacement.conversationId).not.toBe(owner.main.conversationId);
+    expect(await delegationOf(world, worker.associationId)).toMatchObject({
+      wakeKind: "notice",
+      wokenAt: expect.any(String),
+    });
+    expect(await inbox(world, replacement)).toHaveLength(1);
+  });
+
   for (const kind of ["report", "notice"] as const) {
     test(`with a ${kind} writes close and kind, delivers, then stamps, announcing once`, async () => {
       const world = await create();

@@ -2185,8 +2185,10 @@ closed mailbox cannot make a real report look missing.
 
 A delegation the backend closes (`closeOnDecision`) records its wake kind in the
 same write when a main is open, chosen under the coordinator store lock so the
-main cannot close in between; with no main open the wake pass chooses and writes
-it as above. A wake is then two coordinator writes, close with kind and then
+main cannot close in between. Retained closed mains do not prevent this batching
+unless one still holds this worker's report. With no main open, or with a report
+waiting for closed-main repair, the wake pass chooses and writes the kind
+separately as above. Otherwise a wake is two coordinator writes, close with kind and then
 `wokenAt`, with the mail write between them and one change announcement after
 the last. A wake that stops short of `wokenAt` (it failed, or is held) announces
 the close once after its attempt.

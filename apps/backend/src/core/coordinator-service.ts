@@ -38,6 +38,7 @@ import {
 } from "./coordinator-status-wakes.js";
 import { agentMessagingEnabled } from "./coordinator-context-reads.js";
 import {
+  closingDelegationWakeKind,
   reconcileClosedConversations,
   reconcileMainMail,
 } from "./coordinator-closed-conversations.js";
@@ -458,7 +459,7 @@ export class CoordinatorService {
     // conversations still owe moves onto it, and so does the mail waiting in
     // a closed main's inbox. Reads never do this (`snapshot`); the sweep
     // repeats the closed-conversation half for every coordinator at once.
-    await reconcileMainMail(this.storage, result.workspace, result.main, opened);
+    await reconcileMainMail(this.storage, result.workspace, result.main, { closedOnly: opened });
     return { workspace: result.workspace, main: result.main };
   }
 
@@ -1222,45 +1223,13 @@ export class CoordinatorService {
       decision.state,
       new Date().toISOString(),
       decision.backgroundWorkTimeoutMs,
-      { wakeKind: (closing, owner) => this.closingWakeKind(closing, owner), announce: false },
+      {
+        wakeKind: (closing, owner) => closingDelegationWakeKind(this.storage, closing, owner),
+        announce: false,
+      },
     );
     if (closed) this.unannouncedCloses.set(closed.id, closed.projectId);
     this.backgroundWorkSince.delete(association.id);
-  }
-
-  /**
-   * The wake a delegation closing now owes, read as the wake pass would read
-   * it: a report when the worker's report is held in the open main's inbox,
-   * otherwise a notice if no closed main may still own mail. Undefined leaves
-   * the choice to the wake pass after the main takes over the mail.
-   *
-   * Runs under the coordinator store lock, so the main cannot close between
-   * this read and the close it is written with. A report the worker sends
-   * after the close is not held (nothing is waiting any more), so the answer
-   * cannot go stale except for a send already past its hold decision when
-   * the close commits, which the earlier separate write could also miss.
-   */
-  private async closingWakeKind(
-    association: CoordinatorWorkflowAssociation,
-    owner: CoordinatorWorkspace | null,
-  ): Promise<"report" | "notice" | undefined> {
-    const delegation = association.delegation;
-    const main = owner ? coordinatorMainConversation(owner) : undefined;
-    if (!owner || !main || !delegation) return undefined;
-    const held = await this.storage.hasDelegationHeldAgentMail(
-      association.id,
-      coordinatorRuntimeId(owner.id, main.id),
-      main.tabId,
-      association.resourceId,
-      delegation.workerTabId,
-    );
-    // A negative lookup is inconclusive while an earlier main may still own
-    // mail (for example after a failed replacement-main repair). Delivery
-    // reconciles that mail before durably selecting a notice.
-    if (held) return "report";
-    return owner.conversations.some((item) => item.role === "main" && item.closedAt)
-      ? undefined
-      : "notice";
   }
 
   /** Announce, once, a close whose wake did not announce it. */

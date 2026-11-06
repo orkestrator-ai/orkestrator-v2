@@ -19,7 +19,7 @@ import {
 import { COORDINATOR_CODEX_USER_SKILLS_DIR_ENV } from "@orkestrator/protocol/coordinator";
 import { existsSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, join, relative, sep } from "node:path";
+import { isAbsolute, join, normalize, relative, sep } from "node:path";
 
 import { configuredShellExclusions } from "./shell-exclusions.js";
 
@@ -544,8 +544,66 @@ export const CODEX_COORDINATOR_SHELL_EXCLUDE: readonly string[] = Object.freeze(
   ]),
 ]);
 
+/**
+ * Which of a coordinator profile's temporary-directory denials
+ * (`":tmpdir" = "deny"`, `":slash_tmp" = "deny"`) Codex can apply.
+ *
+ * Codex's Linux sandbox (bubblewrap; 0.166.0 and 0.167.0) turns each denied
+ * directory into `--perms 000 --tmpfs <path> --remount-ro <path>`, shallowest
+ * first and after every read grant is bound. Two cases break a coordinator:
+ *
+ * - **A denial inside another.** Codex does not skip a mask an earlier one
+ *   covers, so with `TMPDIR` inside `/tmp` it freezes `/tmp` and then cannot
+ *   create `TMPDIR`'s mount point: every sandboxed call fails with
+ *   `bwrap: Can't create file <TMPDIR>: Read-only file system`, the AGENTS.md
+ *   read at `thread/start` included, so no thread starts. A login that sets
+ *   `TMPDIR=/tmp/user/<uid>` (Debian's `libpam-tmpdir`) does this, as does
+ *   every Linux test process (`tests/private-tmpdir.ts`).
+ * - **A read grant inside a denial.** The mask is mounted over the grant's
+ *   bind, so a checkout (or runtime, attachment or skill root) under `/tmp`
+ *   or `TMPDIR` is unreadable, and `thread/start` fails with `Permission
+ *   denied` reading its AGENTS.md.
+ *
+ * Leaving such an entry out hides nothing on Linux: `":root" = "deny"` starts
+ * from an empty root, and `:minimal` there binds only system directories
+ * (`/usr`, `/etc`, `/lib`…), never `/tmp` or `TMPDIR`, so neither is visible
+ * unless granted. An entry Codex can apply stays, so a later `:minimal` that
+ * added one would still be refused. macOS Seatbelt has no mount order and is
+ * unchanged. Drop this once Codex skips covered masks and applies denials
+ * before the grants inside them.
+ *
+ * Codex resolves `:tmpdir` from the variable (absolute only, no symlink
+ * resolution) and `:slash_tmp` as the literal `/tmp`, and binds grants by the
+ * path given, so paths compare lexically.
+ */
+export function codexCoordinatorTmpDenials(options: {
+  tmpdir: string | undefined;
+  readRoots: readonly string[];
+  platform?: NodeJS.Platform;
+}): { tmpdir: boolean; slashTmp: boolean } {
+  if ((options.platform ?? process.platform) !== "linux") return { tmpdir: true, slashTmp: true };
+  const grants = options.readRoots.filter((root) => isAbsolute(root));
+  const slashTmp = !grants.some((root) => isLexicallyWithin(root, "/tmp"));
+  const tmpdir = options.tmpdir && isAbsolute(options.tmpdir) ? options.tmpdir : undefined;
+  if (!tmpdir) return { tmpdir: true, slashTmp };
+  const nested =
+    slashTmp && isLexicallyWithin(tmpdir, "/tmp") && !isLexicallyWithin("/tmp", tmpdir);
+  return {
+    tmpdir: !nested && !grants.some((root) => isLexicallyWithin(root, tmpdir)),
+    slashTmp,
+  };
+}
+
+/** `path` is `parent` or below it, comparing normalised absolute paths. */
+function isLexicallyWithin(path: string, parent: string): boolean {
+  const child = normalize(path).replace(/(.)\/+$/, "$1");
+  const root = normalize(parent).replace(/(.)\/+$/, "$1");
+  return child === root || child.startsWith(root === "/" ? "/" : `${root}/`);
+}
+
 export function codexAppServerConfigOverrides(
   env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
 ): Record<string, string> {
   const userExclusions = configuredShellExclusions(env);
   const childLimit = resolveCodexMaxConcurrentThreads(env[CODEX_MAX_CONCURRENT_THREADS_ENV]);
@@ -603,21 +661,33 @@ export function codexAppServerConfigOverrides(
     ) {
       throw new Error("Coordinator Codex permission profile configuration is invalid");
     }
+    // The user's own skills, which the coordinator lists and must be able to
+    // open (`codexCoordinatorSkillReadRoots`). Read only, like the rest.
+    const skillReadRoots = codexCoordinatorSkillReadRoots(env);
+    const grantedAttachmentRoot =
+      attachmentRoot && isAbsolute(attachmentRoot) ? attachmentRoot : undefined;
+    // `TMPDIR` is app-server's own: it inherits this environment.
+    const tmpDenials = codexCoordinatorTmpDenials({
+      tmpdir: env.TMPDIR,
+      readRoots: [
+        projectRoot,
+        readableRuntimeRoot,
+        ...(grantedAttachmentRoot ? [grantedAttachmentRoot] : []),
+        ...skillReadRoots,
+      ],
+      platform,
+    });
     // Permission profiles replace the legacy sandbox override and make read
     // access deny-by-default. The workspace root and the shipped Codex runtime
     // are the only non-platform paths visible to sandboxed commands.
     overrides.default_permissions = JSON.stringify(permissionProfile);
     overrides[`permissions.${permissionProfile}.filesystem`] =
-      `{ ":root" = "deny", ":minimal" = "read", ":tmpdir" = "deny", ` +
-      `":slash_tmp" = "deny", ${JSON.stringify(readableRuntimeRoot)} = "read", ` +
-      (attachmentRoot && isAbsolute(attachmentRoot)
-        ? `${JSON.stringify(attachmentRoot)} = "read", `
-        : "") +
-      // The user's own skills, which the coordinator lists and must be able
-      // to open (`codexCoordinatorSkillReadRoots`). Read only, like the rest.
-      codexCoordinatorSkillReadRoots(env)
-        .map((root) => `${JSON.stringify(root)} = "read", `)
-        .join("") +
+      `{ ":root" = "deny", ":minimal" = "read", ` +
+      (tmpDenials.tmpdir ? `":tmpdir" = "deny", ` : "") +
+      (tmpDenials.slashTmp ? `":slash_tmp" = "deny", ` : "") +
+      `${JSON.stringify(readableRuntimeRoot)} = "read", ` +
+      (grantedAttachmentRoot ? `${JSON.stringify(grantedAttachmentRoot)} = "read", ` : "") +
+      skillReadRoots.map((root) => `${JSON.stringify(root)} = "read", `).join("") +
       `":workspace_roots" = { "." = "read" } }`;
     overrides[`permissions.${permissionProfile}.network.enabled`] = "false";
     // The profile above stops commands; hosted web search runs on OpenAI's

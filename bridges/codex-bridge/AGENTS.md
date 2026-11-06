@@ -141,6 +141,15 @@ replay shows it as the card, never as a message the user typed. See
   or an ancestor, never a link in the checkout. Extra roots live in the child,
   so a new generation gets them again before it lists skills or starts a
   thread. Re-prove with `live-coordinator-skills.test.ts`.
+- On Linux, never give a coordinator profile a deny entry inside another deny
+  entry, or one around a read grant. Codex's bubblewrap cannot create the
+  nested mask's mount point, so every sandboxed call fails, AGENTS.md
+  loading included. It also mounts the mask over the grant, so the grant
+  becomes unreadable. `codexCoordinatorTmpDenials` leaves out the
+  `:tmpdir`/`:slash_tmp` denials that would; `":root" = "deny"` still
+  hides them. Re-prove on Linux with `live-contract.test.ts`,
+  `live-refused-calls.test.ts` and `live-coordinator-skills.test.ts` (no
+  credits).
 
 - Never let the stdout read loop await a render, an SSE write, or the browser —
   app-server's outbound queue is bounded, so that stalls **every** thread.

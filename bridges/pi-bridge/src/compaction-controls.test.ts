@@ -7,7 +7,7 @@
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,6 +19,9 @@ process.env.HOSTNAME = "127.0.0.1";
 process.env.PI_BRIDGE_TOKEN = "test-token";
 process.env.PI_BRIDGE_LIBRARY_ONLY = "1";
 delete process.env.PI_BRIDGE_STATE_DIR;
+const previousCwd = process.env.CWD;
+const projectDirectory = await mkdtemp(join(tmpdir(), "pi-compaction-project-"));
+process.env.CWD = projectDirectory;
 
 const { server, start, shutdown } = await import("./server.js");
 const { authToken: TOKEN } = await import("./config.js");
@@ -50,6 +53,9 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await shutdown();
+  if (previousCwd === undefined) delete process.env.CWD;
+  else process.env.CWD = previousCwd;
+  await rm(projectDirectory, { recursive: true, force: true });
 });
 
 function call(path: string, init: RequestInit = {}): Promise<Response> {
@@ -95,7 +101,11 @@ interface FakeEngine {
  * test sets a tiny compaction threshold without a large conversation.
  */
 async function withFakeEngine(
-  options: { clientSessionKey: string; settings: Record<string, unknown> },
+  options: {
+    clientSessionKey: string;
+    settings: Record<string, unknown>;
+    projectSettings?: Record<string, unknown>;
+  },
   body: (engine: FakeEngine) => Promise<void>,
 ): Promise<void> {
   const directory = await mkdtemp(join(tmpdir(), "pi-compaction-controls-"));
@@ -105,6 +115,13 @@ async function withFakeEngine(
   process.env.PI_SESSION_DIR = directory;
   const settingsFile = join(directory, "settings.json");
   await writeFile(settingsFile, JSON.stringify(options.settings));
+  if (options.projectSettings) {
+    await mkdir(join(projectDirectory, ".pi"), { recursive: true });
+    await writeFile(
+      join(projectDirectory, ".pi/settings.json"),
+      JSON.stringify(options.projectSettings),
+    );
+  }
   const calls: ModelCall[] = [];
   let holdSummaries = false;
   let state: SessionState | undefined;
@@ -185,6 +202,7 @@ async function withFakeEngine(
     else process.env.PI_AGENT_DIR = previousAgentDir;
     if (previousSessionDir === undefined) delete process.env.PI_SESSION_DIR;
     else process.env.PI_SESSION_DIR = previousSessionDir;
+    await rm(join(projectDirectory, ".pi"), { recursive: true, force: true });
     await rm(directory, { recursive: true, force: true });
   }
 }
@@ -314,6 +332,68 @@ describe("stopping a compaction", () => {
 const LOW_THRESHOLD = { compaction: { reserveTokens: 31_000, keepRecentTokens: 1 } };
 
 describe("auto-compaction toggle", () => {
+  for (const enabled of [true, false]) {
+    test(`attachment ignores untrusted project settings when the saved default is ${enabled}`, async () => {
+      await withFakeEngine(
+        {
+          clientSessionKey: `auto-compaction-trust-${enabled}`,
+          settings: { compaction: { enabled } },
+          projectSettings: { compaction: { enabled: !enabled } },
+        },
+        async ({ state, prompt }) => {
+          expect(state.policy?.projectResources).toBe(false);
+          expect((await readConfig(state)).parameterValues?.[AUTO_COMPACTION_PARAMETER_ID]).toBe(
+            enabled,
+          );
+          await prompt("attach with untrusted project settings");
+          expect(state.session!.autoCompactionEnabled).toBe(enabled);
+          const config = await readConfig(state);
+          expect(config.parameterValues?.[AUTO_COMPACTION_PARAMETER_ID]).toBe(
+            state.session!.autoCompactionEnabled,
+          );
+          expect(
+            config.models[0]?.parameters?.find(
+              (parameter) => parameter.id === AUTO_COMPACTION_PARAMETER_ID,
+            )?.defaultValue,
+          ).toBe(enabled);
+        },
+      );
+    });
+  }
+
+  test("resume publishes the saved default before attaching or prompting", async () => {
+    await withFakeEngine(
+      { clientSessionKey: "auto-compaction-resume", settings: MANUAL_ONLY },
+      async ({ state, prompt }) => {
+        await prompt("create a persisted conversation");
+        const sessionFile = state.sessionFile;
+        await closeSession(state);
+        sessions.delete(state.id);
+        const response = await post("/session/resume", { sessionId: sessionFile });
+        expect(response.status).toBe(201);
+        const resumed = sessions.get(((await response.json()) as { sessionId: string }).sessionId)!;
+        try {
+          expect(resumed.session).toBeNull();
+          expect(resumed.autoCompaction).toBeUndefined();
+          expect(resumed.composer.models.length).toBeGreaterThan(0);
+          expect((await readConfig(resumed)).parameterValues?.[AUTO_COMPACTION_PARAMETER_ID]).toBe(
+            false,
+          );
+          const status = await readStatus(resumed);
+          expect(
+            (status.composer as { parameterValues?: Record<string, unknown> }).parameterValues?.[
+              AUTO_COMPACTION_PARAMETER_ID
+            ],
+          ).toBe(false);
+          expect(resumed.session).toBeNull();
+        } finally {
+          await closeSession(resumed);
+          sessions.delete(resumed.id);
+        }
+      },
+    );
+  });
+
   test("every model offers the toggle, defaulting to Pi's own setting", async () => {
     await withFakeEngine(
       { clientSessionKey: "auto-compaction-default", settings: MANUAL_ONLY },

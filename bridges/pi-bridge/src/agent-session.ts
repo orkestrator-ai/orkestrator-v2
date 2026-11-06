@@ -601,7 +601,9 @@ async function createPiAgentSession(state: SessionState): Promise<AgentSession> 
     sessionManager: SessionManager;
     sessionStartEvent?: Parameters<typeof createAgentSessionFromServices>[0]["sessionStartEvent"];
   }) => {
-    const settingsManager = SettingsManager.create(cwd, runtimeAgentDir);
+    const settingsManager = SettingsManager.create(cwd, runtimeAgentDir, {
+      projectTrusted: piResourceLoaderPolicy(state, cwd).projectTrusted,
+    });
     // The session's auto-compaction toggle, applied in memory only: Pi's own
     // setter would rewrite the account-wide settings file.
     state.autoCompactionSetting = installAutoCompactionOverride(
@@ -1501,6 +1503,7 @@ export async function resumeSession(
     state.policyPending = !policy;
     state.sessionFile = resolved;
     applyComposerPatch(state, patch);
+    refreshAutoCompactionSetting(state);
     state.composer = await hydrateComposerForSession(
       state.composer,
       undefined,

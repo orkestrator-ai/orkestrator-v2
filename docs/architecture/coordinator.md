@@ -170,9 +170,10 @@ or is deleted. Below it a cleanup at the limit always frees a whole batch and
 nobody needs to act. `full` is every record in use, the state in which the
 store refuses. Below 1,800 records in total the answer is `ok` with no further
 reads; above it the clearable records are counted with cleanup's own rules,
-and the answer is reused for a minute while the store is unchanged. The Work
-panel shows a `CoordinatorWorkflowStoreBanner` at `near-limit` (warning) and
-`full` (alert), saying that deleting finished worker environments or letting
+and the answer is reused for a minute while the store is unchanged. The
+coordinator panel renders `CoordinatorWorkflowStoreBanner` through
+`CoordinatorWorkerPrompts` at `near-limit` (warning) and `full` (alert), saying
+that deleting finished worker environments or letting
 running work finish frees room. The field is additive: an older renderer ignores it, and a
 renderer reading an older backend gets no field and shows no banner.
 

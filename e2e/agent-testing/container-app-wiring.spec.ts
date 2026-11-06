@@ -535,6 +535,11 @@ test("Docker fixture coordinator view follows delegations and context across swi
         exact: true,
       }),
     ).toBeVisible({ timeout: 15_000 });
+    await expect(panel.getByRole("button", { name: "Pause", exact: true })).toBeVisible();
+    await expect(panel.getByRole("complementary", { name: "Work", exact: true })).toHaveCount(0);
+    await expect(panel.getByRole("button", { name: /^(Show|Hide) work$/i })).toHaveCount(0);
+    await expect(panel.locator("[data-coordinator-work]")).toHaveCount(0);
+    await expect(panel.getByText(/next wake/i)).toHaveCount(0);
     return panel;
   };
   // The coordinator view no longer lists its work, so the delegation count
@@ -558,7 +563,7 @@ test("Docker fixture coordinator view follows delegations and context across swi
     let panel = await openCoordinator(page);
     if (baseline === 0) await awaiting(0);
 
-    await test.step("a delegation opened while another environment is shown appears on return", async () => {
+    await test.step("a delegation survives an environment switch and the coordinator returns without a Work rail", async () => {
       await selectEnvironment(page, containerName);
       await expect(page.locator("#project-panel-coordinator")).toHaveCount(0);
       expect((await delegate(container.id, "container")).opened).toBe(true);
@@ -567,16 +572,16 @@ test("Docker fixture coordinator view follows delegations and context across swi
       await awaiting(baseline + 1);
     });
 
-    await test.step("a delegation opened while the document is hidden appears after return", async () => {
+    await test.step("a delegation survives a hidden document and the coordinator remains usable", async () => {
       await setDocumentHidden(page, true);
       expect((await delegate(local.id, "local")).opened).toBe(true);
       await page.waitForTimeout(6_000);
       await setDocumentHidden(page, false);
-      await expect(panel).toBeVisible();
+      panel = await openCoordinator(page);
       await awaiting(baseline + 2);
     });
 
-    await test.step("a reload shows both delegations", async () => {
+    await test.step("a reload retains both backend delegations and the coordinator controls", async () => {
       await reloadApp(page, testInfo);
       panel = await openCoordinator(page);
       await awaiting(baseline + 2);
@@ -604,7 +609,7 @@ test("Docker fixture coordinator view follows delegations and context across swi
       }
     });
 
-    await test.step("stopped workers' delegations close in both windows", async () => {
+    await test.step("stopped workers' backend delegations close and the second window returns to the coordinator", async () => {
       // The second window watches from an environment while the sweep runs.
       await selectEnvironment(second, localName);
       await invoke("stop_environment", { environmentId: local.id });

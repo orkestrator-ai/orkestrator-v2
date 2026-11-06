@@ -273,6 +273,9 @@ async function refreshCoordinator(assignedSnapshot: CoordinatorSnapshot, revisio
 }
 
 let workerPromptsForTest: HumanPromptEntry[] = [];
+const listHumanPrompts = mock(async (_ids: readonly string[]) => ({
+  prompts: workerPromptsForTest,
+}));
 mock.module("@/lib/backend", () => ({
   ...backendSnapshot,
   getLocalFileTree: mock(async () => []),
@@ -293,7 +296,7 @@ mock.module("@/lib/backend", () => ({
   selectCoordinatorConversation: select,
   createCoordinatorConversation: createConversation,
   closeCoordinatorConversation: closeConversation,
-  listHumanPrompts: async () => ({ prompts: workerPromptsForTest }),
+  listHumanPrompts,
   assignCoordinatorConversationAgent: assignAgent,
   getNativeAgentSyncCapabilities: async () => ({ projectionSyncVersions: [] }),
   ensureNativeAgentSession: async (
@@ -1958,12 +1961,95 @@ describe("CoordinatorPanel", () => {
 
     beforeEach(() => {
       workerPromptsForTest = [];
+      listHumanPrompts.mockClear();
       useEnvironmentStore.setState({ environments: [worker] });
       ensuredSnapshot = { ...snapshot, workflows: [running] };
     });
     afterEach(() => {
       workerPromptsForTest = [];
       useEnvironmentStore.setState({ environments: previousEnvironments });
+    });
+
+    test.each([
+      ["local", 1400],
+      ["local", 390],
+      ["realm", 1400],
+      ["realm", 390],
+    ] as const)(
+      "populated %s coordinator DOM at %ipx keeps prompts and controls without Work UI",
+      async (route, width) => {
+        const happyDOM = (window as unknown as { happyDOM: { setURL(url: string): void } })
+          .happyDOM;
+        const previousURL = window.location.href;
+        const previousWidth = window.innerWidth;
+        try {
+          happyDOM.setURL(
+            route === "realm"
+              ? "http://localhost/?realm=workspace&workspace=fixture"
+              : "http://localhost/",
+          );
+          Object.defineProperty(window, "innerWidth", { configurable: true, value: width });
+          ensuredSnapshot = {
+            ...snapshot,
+            workflowStore: "near-limit",
+            workflows: [
+              running,
+              ...(["build-pipeline", "multi-review", "graph-run"] as const).map((kind) => ({
+                ...running,
+                id: kind,
+                kind,
+                resourceId: kind,
+              })),
+            ],
+          };
+          workerPromptsForTest = [
+            {
+              id: "waiting",
+              environmentId: worker.id,
+              tabId: "worker-tab",
+              source: "agent-tool",
+              since: new Date().toISOString(),
+              prompt: { kind: "secret", wantsEnter: false, text: "Password:", key: "secret" },
+            },
+          ];
+          render(<CoordinatorPanel projectId="project-1" />);
+          await screen.findByTestId("native-agent");
+          await screen.findByRole("button", { name: "Open api-fix" });
+          expect(screen.getByRole("button", { name: /^Pause$/ })).toBeTruthy();
+          expect(screen.getByText("Coordinator work records are nearly full.")).toBeTruthy();
+          expect(screen.queryByRole("complementary", { name: /^Work$/ })).toBeNull();
+          expect(screen.queryByRole("button", { name: /^(Show|Hide) work$/i })).toBeNull();
+          expect(document.querySelector("[data-coordinator-work]")).toBeNull();
+          expect(screen.queryByText(/next wake/i)).toBeNull();
+          fireEvent.click(screen.getByRole("button", { name: "Open api-fix" }));
+          await waitFor(() => expect(useUIStore.getState().selectedEnvironmentId).toBe(worker.id));
+        } finally {
+          cleanup();
+          happyDOM.setURL(previousURL);
+          Object.defineProperty(window, "innerWidth", { configurable: true, value: previousWidth });
+        }
+      },
+    );
+
+    test("fetches only this coordinator's materialized local workers, deduplicating environments", async () => {
+      ensuredSnapshot = {
+        ...snapshot,
+        workflows: [
+          running,
+          { ...running, id: "duplicate" },
+          { ...running, id: "build", kind: "build-pipeline", resourceId: "build-env" },
+          { ...running, id: "review", kind: "multi-review", resourceId: "review-env" },
+          { ...running, id: "pending", resourceId: "pending-env", pending: true },
+          { ...running, id: "foreign", resourceId: "foreign-env", coordinatorId: "other" },
+          { ...running, id: "remote", resourceId: "remote-env", nodeId: "bk_leaf" },
+        ],
+      };
+      render(<CoordinatorPanel projectId="project-1" />);
+      await screen.findByTestId("native-agent");
+      await waitFor(() => expect(listHumanPrompts).toHaveBeenCalled());
+      expect(
+        listHumanPrompts.mock.calls.every(([ids]) => ids.length === 1 && ids[0] === worker.id),
+      ).toBe(true);
     });
 
     test("remote prompt Open targets its node, project, environment and tab and disconnect removes it", async () => {

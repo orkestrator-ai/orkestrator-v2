@@ -1,6 +1,7 @@
 import { emptyContainerLifecycle } from "@orkestrator/protocol/container-lifecycle";
 import { readStoredValue, seedStore } from "./storage-test-support.js";
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
+import * as childProcess from "node:child_process";
 import { existsSync, promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -460,6 +461,92 @@ describe("delete_environment host cleanup", () => {
           "records",
         ]);
         expect(await storage.getEnvironment("e1")).toBeNull();
+      },
+    );
+  });
+
+  test("Retry stays fenced after a confined helper is killed until its exit is delivered", async () => {
+    await withDeleteCommand(
+      async (storage) => {
+        await seedWorktree(storage);
+      },
+      async (_invokeDelete, storage, context) => {
+        const realSpawn = childProcess.spawn;
+        const realSetTimeout = globalThis.setTimeout;
+        // Fire the real stage deadline only after the removal helper starts.
+        // No wall-clock race with Git startup is needed to reach this boundary.
+        const deadlineMs = 123_456;
+        let expire = () => {};
+        const timerSpy = spyOn(globalThis, "setTimeout").mockImplementation(((
+          ...timerArgs: Parameters<typeof setTimeout>
+        ) => {
+          const [handler, ms] = timerArgs;
+          if (ms === deadlineMs)
+            expire = () => {
+              (handler as () => void)();
+            };
+          return realSetTimeout(...timerArgs);
+        }) as typeof setTimeout);
+        let releaseExit = () => {};
+        let sawExit!: () => void;
+        const exited = new Promise<void>((resolve) => {
+          sawExit = resolve;
+        });
+        let exitSignal: unknown;
+        const spawnSpy = spyOn(childProcess, "spawn").mockImplementation(((
+          ...args: Parameters<typeof childProcess.spawn>
+        ) => {
+          const child = realSpawn(...args);
+          const emit = child.emit.bind(child);
+          child.emit = ((...emitArgs: Parameters<typeof child.emit>) => {
+            const [event, ...eventArgs] = emitArgs;
+            if (event !== "exit") return emit(event, ...eventArgs);
+            exitSignal = eventArgs[1];
+            releaseExit = () => {
+              emit(event, ...eventArgs);
+            };
+            sawExit();
+            return true;
+          }) as typeof child.emit;
+          queueMicrotask(() => expire());
+          return child;
+        }) as typeof childProcess.spawn);
+        let settled = false;
+        const deleting = deleteEnvironmentTask("e1", context, {
+          stepDeadlinesMs: { worktree: deadlineMs },
+        })
+          .catch((error: unknown) => error)
+          .finally(() => {
+            settled = true;
+          });
+        try {
+          await exited;
+          await new Promise<void>((resolve) => setImmediate(resolve));
+          expect(exitSignal).toBe("SIGKILL");
+          expect(settled).toBe(false);
+          expect(context.runtime.environments.isDeleting("e1")).toBe(true);
+          await expect(deleteEnvironmentTask("e1", context)).rejects.toThrow(
+            "already being deleted",
+          );
+          releaseExit();
+          expect(((await deleting) as Error).message).toContain(
+            "Deletion stopped while removing the worktree",
+          );
+          expect(context.runtime.environments.isDeleting("e1")).toBe(false);
+          expect(await storage.getEnvironment("e1")).toMatchObject({
+            deletionStep: "worktree",
+            deletionError: expect.stringContaining("Deletion stopped while removing the worktree"),
+          });
+        } finally {
+          releaseExit();
+          await deleting;
+          spawnSpy.mockRestore();
+          timerSpy.mockRestore();
+        }
+        // Once exit is delivered, the same delete is admitted and completes.
+        await deleteEnvironmentTask("e1", context);
+        expect(await storage.getEnvironment("e1")).toBeNull();
+        expect(await environmentCleanupLedger(storage.getDataDir()).list()).toEqual([]);
       },
     );
   });

@@ -111,7 +111,7 @@ test("a row whose delete failed says why and offers a retry instead of spinning"
     <RemoteEnvironmentItem machine={machineView([row])} environment={row} />,
   );
   expect(screen.getByText("Delete failed: Terminal process trees are running")).toBeTruthy();
-  expect(container.querySelector(".animate-spin")).toBeNull();
+  expect(container.querySelector(".animate-spin") === null).toBe(true);
   fireEvent.click(screen.getByRole("button", { name: "Retry" }));
   expect(screen.getByRole("alertdialog")).toBeTruthy();
 });
@@ -128,7 +128,7 @@ test("a delete past two minutes says how long it has been running", () => {
 
   const fresh = environment("fresh", { deleting: true, deletingSince: new Date().toISOString() });
   render(<RemoteEnvironmentItem machine={machineView([fresh])} environment={fresh} />);
-  expect(screen.queryByText(/Still deleting/)).toBeNull();
+  expect(screen.queryByText(/Still deleting/) === null).toBe(true);
 });
 
 test("a slow delete says which step it is on, when its machine reports one this client knows", () => {
@@ -160,7 +160,7 @@ test("a slow delete says which step it is on, when its machine reports one this 
     deleteFailure: "Deletion failed. Retry on the owning machine.",
   });
   render(<RemoteEnvironmentItem machine={machineView([failed])} environment={failed} />);
-  expect(screen.queryByText(/Still deleting/)).toBeNull();
+  expect(screen.queryByText(/Still deleting/) === null).toBe(true);
 });
 
 test("another machine's row shows its unread agent mail and a failed delivery", () => {
@@ -231,7 +231,9 @@ test("a failed tombstoned remote home cannot be selected", async () => {
     />,
   );
   await waitFor(() => expect(portalStore.getState().loaded).toBe(true));
-  expect(screen.queryByRole("button", { name: /Home (working|needs attention)/ })).toBeNull();
+  expect(screen.queryByRole("button", { name: /Home (working|needs attention)/ }) === null).toBe(
+    true,
+  );
 });
 
 test("a quiet home shows nothing in its project header", async () => {

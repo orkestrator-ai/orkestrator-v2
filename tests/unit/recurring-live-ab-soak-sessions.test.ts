@@ -63,6 +63,9 @@ function sessionHarness(options: {
   const fake: FakeModelServer = {
     baseUrl: "http://127.0.0.1:1/v1",
     counts: () => ({ completions, models: 0, refused: 0 }),
+    workflow: () => ({}),
+    marker: () => null,
+    release: () => undefined,
     stop,
   };
   let sessions = 0;

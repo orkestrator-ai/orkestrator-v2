@@ -33,6 +33,17 @@ import {
   type WindowSummary,
 } from "./recurring-live-ab-summary";
 import {
+  BUSY_DEFAULTS,
+  busyFailed,
+  busyRuntime,
+  busySummaryLines,
+  measureBusy,
+  parseBusyClients,
+  type BusyOptions,
+  type BusyResult,
+} from "./recurring-live-ab-busy";
+import { playwrightBusyClients } from "./recurring-live-ab-busy-clients";
+import {
   FAKE_PI_MODEL_REF,
   startFakeModelServer,
   writeFakePiModels,
@@ -70,6 +81,14 @@ import {
  * environment gets a session of its own before it is deleted. No credential
  * or provider is involved.
  *
+ * With `--busy-rounds N` it runs the busy phase (`recurring-live-ab-busy.ts`)
+ * before any soak: `--busy-environments` local environments, real Pi
+ * sessions on the fake model, and for each `--busy-clients` count (0 to 2
+ * headless Playwright clients) N rounds of a file burst in every environment,
+ * a held turn with a queued prompt, a parked approval, agent mail, an outage
+ * or hidden client, a Multi Review to completion and a client resume, timed
+ * as each client saw it and checked for duplicate or lost dispatches.
+ *
  * Arms: `candidate` (defaults), `rollback`
  * (`ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK=all`,
  * `ORKESTRATOR_NATIVE_OBSERVATION_SHARING=0`) and `metrics-off`
@@ -99,7 +118,7 @@ const ARM_ENV: Record<Arm, Record<string, string>> = {
   "metrics-off": { ORKESTRATOR_RECURRING_METRICS: "0" },
 };
 
-export type Options = {
+export type Options = BusyOptions & {
   arms: Arm[];
   repeats: number;
   settleMs: number;
@@ -141,6 +160,7 @@ export function parseOptions(argv: string[]): Options {
     soakEnvironments: ["local"],
     soakCycleGapMs: 0,
     soakSessions: 0,
+    ...BUSY_DEFAULTS,
   };
   const value = (index: number, name: string) => {
     const next = argv[index + 1];
@@ -175,6 +195,13 @@ export function parseOptions(argv: string[]): Options {
       options.soakCycleGapMs = positive(value(index++, name), name);
     else if (name === "--soak-sessions")
       options.soakSessions = positive(value(index++, name), name);
+    else if (name === "--busy-rounds") options.busyRounds = positive(value(index++, name), name);
+    else if (name === "--busy-environments")
+      options.busyEnvironments = positive(value(index++, name), name);
+    else if (name === "--busy-clients")
+      options.busyClients = parseBusyClients(value(index++, name));
+    else if (name === "--busy-burst-files")
+      options.busyBurstFiles = positive(value(index++, name), name);
     else if (name === "--agent-platforms") {
       const platforms = value(index++, name);
       if (!/^[a-z]+(,[a-z]+)*$/.test(platforms))
@@ -190,6 +217,19 @@ export function parseOptions(argv: string[]): Options {
   if (!Number.isInteger(options.soakCycles)) throw new Error("--soak-cycles must be an integer");
   if (!Number.isInteger(options.soakSessions) || options.soakSessions > 8)
     throw new Error("--soak-sessions must be an integer from 0 to 8");
+  if (!Number.isInteger(options.busyRounds)) throw new Error("--busy-rounds must be an integer");
+  if (
+    !Number.isInteger(options.busyEnvironments) ||
+    options.busyEnvironments < 3 ||
+    options.busyEnvironments > 20
+  )
+    throw new Error("--busy-environments must be an integer from 3 to 20");
+  if (!Number.isInteger(options.busyBurstFiles) || options.busyBurstFiles < 1)
+    throw new Error("--busy-burst-files must be a positive integer");
+  if (options.busyRounds > 0 && !options.fixtureEnvironments.split(",").includes("local"))
+    throw new Error(
+      "--busy-rounds needs a local fixture environment (--fixture-environments local)",
+    );
   if (!/^[a-z0-9-]+$/.test(options.profilePrefix)) {
     throw new Error("--profile-prefix accepts lowercase letters, digits and dashes");
   }
@@ -207,6 +247,7 @@ export type Status = {
   processStartTimes?: { launcher?: number };
   status?: string;
   browserUrl?: string;
+  rendererUrl?: string;
   authFile?: string;
   logDir?: string;
   pids?: Partial<Record<"launcher" | "vite" | "electron" | "backend", number>>;
@@ -254,6 +295,20 @@ function gatewayFor(status: Status, signal?: AbortSignal) {
       } catch {
         return null;
       }
+    },
+    /** One registry command; throws on a transport or command error. */
+    async invoke(command: string, args: Record<string, unknown>): Promise<unknown> {
+      const response = await fetch(`${origin.origin}/__orkestrator/invoke`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body: JSON.stringify({ command, args }),
+        redirect: "error",
+        signal: signal
+          ? AbortSignal.any([signal, AbortSignal.timeout(60_000)])
+          : AbortSignal.timeout(60_000),
+      });
+      if (!response.ok) throw new Error(`${command} failed with HTTP ${response.status}`);
+      return ((await response.json()) as { result?: unknown }).result;
     },
   };
 }
@@ -439,7 +494,7 @@ const freshnessRuntime = {
 };
 
 export async function measureFreshness(
-  gateway: ReturnType<typeof gatewayFor>,
+  gateway: Pick<ReturnType<typeof gatewayFor>, "metrics">,
   cli: ReturnType<typeof cliRunner>,
   probes: number,
   signal?: AbortSignal,
@@ -605,7 +660,7 @@ function startedSessionId(result: CliResult): string | null {
 }
 
 export async function measureSoak(
-  gateway: ReturnType<typeof gatewayFor>,
+  gateway: Pick<ReturnType<typeof gatewayFor>, "metrics">,
   cli: AsyncCli,
   options: Pick<Options, "soakCycles" | "soakEnvironments" | "settleMs"> &
     Partial<Pick<Options, "soakCycleGapMs" | "soakSessions">> & {
@@ -805,6 +860,9 @@ type RunResult = {
   /** `Unhandled promise rejection (continuing)` guard lines in the profile logs. */
   guardLines: number | null;
   soak?: SoakResult;
+  busy?: BusyResult;
+  /** `recurringWork` rates over the busy phase, from its round-boundary samples. */
+  busyWindow?: WindowSummary | null;
   error?: string;
 };
 
@@ -870,6 +928,8 @@ const armRuntime = {
   asyncCliRunner,
   measureFreshness,
   measureSoak,
+  measureBusy,
+  busyClients: playwrightBusyClients,
   countGuardLines,
   now: () => performance.now(),
   sleep,
@@ -1043,6 +1103,28 @@ export async function runArm(
         p95Ms: percentile(entry.latenciesMs, 95),
       }));
     }
+    if (options.busyRounds > 0) {
+      checkedStatus();
+      log(`${profile}: busy phase, ${options.busyRounds} rounds per client count`);
+      if (!status.dataDir) throw new Error("The busy phase needs the profile's data directory");
+      const clients = runtime.busyClients(profile, status);
+      try {
+        result.busy = await runtime.measureBusy(
+          gateway,
+          runtime.asyncCliRunner(profile, cliConfig()),
+          { ...options, dataDir: status.dataDir },
+          signal,
+          {
+            ...busyRuntime,
+            openClients: clients.open,
+            processes: () => runtime.processSamples(checkedStatus().pids),
+          },
+        );
+        result.busyWindow = summarizeWindow(result.busy.windowSamples);
+      } finally {
+        await clients.close();
+      }
+    }
     if (options.soakCycles > 0) {
       checkedStatus();
       log(`${profile}: soak, ${options.soakCycles} cycles`);
@@ -1136,6 +1218,32 @@ function printSummary(results: RunResult[]): void {
         } | ${entry.timeouts} | ${entry.unusable} |`,
       );
     }
+  }
+  for (const run of results) {
+    if (!run.busy) continue;
+    lines.push(...busySummaryLines(`${run.arm} repeat ${run.repeat}`, run.busy));
+    const kinds = Object.entries(run.busyWindow?.kinds ?? {}).sort();
+    if (kinds.length > 0) {
+      lines.push(
+        "",
+        `| Busy window (${run.arm}) kind | Starts/min | Work units/min |`,
+        "| --- | --- | --- |",
+      );
+      for (const [kind, rates] of kinds) {
+        const units = Object.entries(rates.workUnitsPerMinute)
+          .map(([unit, count]) => `${unit} ${count}`)
+          .join(", ");
+        lines.push(`| ${kind} | ${rates.startedPerMinute} | ${units} |`);
+      }
+    }
+    const backend = run.busyWindow?.processes.backend;
+    if (backend)
+      lines.push(
+        "",
+        `Busy window backend: ${backend.cpuMsPerMinute} CPU ms/min, RSS median ${Math.round(
+          backend.rssKiBMedian / 1024,
+        )} MiB, max ${Math.round(backend.rssKiBMax / 1024)} MiB.`,
+      );
   }
   const soaks = results.filter((run) => run.soak);
   if (soaks.length > 0) {
@@ -1245,10 +1353,13 @@ function missingFootprints(soak: SoakResult): string[] {
   ].filter(Boolean);
 }
 
-function resultExitCode(results: Array<Pick<RunResult, "error" | "soak" | "guardLines">>): number {
+function resultExitCode(
+  results: Array<Pick<RunResult, "error" | "soak" | "guardLines" | "busy">>,
+): number {
   return results.some(
     (run) =>
       run.error ||
+      (run.busy && (busyFailed(run.busy) || run.guardLines !== 0)) ||
       (run.soak &&
         (missingFootprints(run.soak).length > 0 ||
           run.soak.failures.length > 0 ||

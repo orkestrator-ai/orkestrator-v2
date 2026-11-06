@@ -3,13 +3,14 @@
 ## Task analysis
 
 Analysed 2026-11-01 against `main` at `93b99bfba`. Acted on 2026-11-03 against
-`main` at `4d9ff8690`.
+`main` at `4d9ff8690`, and on 2026-11-06 against `main` at `c1724ab74` (task 1's
+macOS half, tasks 2 and 3, on the Mac `arktech-mini`).
 
 ### Tasks
 
-1. **A headless mode for agent-test Electron**: an agent run of `dev:test` on a Linux desktop puts a window on the user's live session. Status: open (implementation done 2026-11-03; real-display Electron and macOS/Windows qualification remain open).
-2. **Home terminal on a host without systemd OSC context**: qualify the repaired exact-line assertion outside beelink. Moved from 4741 (deleted 2026-11-06). Status: open.
-3. **Audit other terminal snapshot line comparisons**: check for the same OSC-sensitive assertion elsewhere. Moved from 4741 (deleted 2026-11-06). Status: open.
+1. **A headless mode for agent-test Electron**: an agent run of `dev:test` on a Linux desktop puts a window on the user's live session. Status: open (implementation done 2026-11-03; macOS qualified 2026-11-06; real-display Electron and Windows qualification remain open).
+2. **Home terminal on a host without systemd OSC context**: qualify the repaired exact-line assertion outside beelink. Moved from 4741 (deleted 2026-11-06). Status: done (2026-11-06, passed on macOS).
+3. **Audit other terminal snapshot line comparisons**: check for the same OSC-sensitive assertion elsewhere. Moved from 4741 (deleted 2026-11-06). Status: done (2026-11-06; every whole-line comparison already used visible text, so no spec changed).
 
 ### 1. A headless mode for agent-test Electron
 
@@ -193,6 +194,42 @@ this ticket, recorded as to-do 4223, since done: the archive now keeps this burs
 the spec requires it. Without a gap the marker must still be present, and a line printed
 after the burst must always be.
 
+### Task 1: saying so on macOS (2026-11-06)
+
+On this Mac `--headless` was accepted and the profile reached ready, but the
+launcher printed nothing about it: it spoke only when Electron actually went
+headless. A caller who asked for headless, or an agent relying on the
+no-terminal default, got a window with no word why. `electronHeadlessNotice`
+(`lifecycle.ts`) now also prints, on macOS and Windows, that Electron opens a
+window and which input (`--headless`, a variable, or running without a terminal)
+changes nothing there. It asks the same decision as Linux would, so the message
+cannot disagree with the Linux behaviour. A plain interactive run and
+`--no-headless` stay silent. The alternative, leaving it silent and documenting
+the no-op, was rejected because the ticket asks that the launcher say what it
+did. Unit tests cover both platforms; the live run is in Current state.
+
+### Task 2: which host and run (2026-11-06)
+
+The Mac `arktech-mini` is the other host: its login shell is `/bin/zsh`, it has
+no `/etc/profile.d`, and none of `/etc/profile`, `/etc/zprofile`, `/etc/zshrc` or
+the user's zsh startup files mention the systemd OSC context script. An
+interactive login zsh started under a pseudo-terminal emitted no OSC 3008
+sequence (only the count was read, not the output). Shell startup was not changed.
+The case ran against the task 1 profile, which was started with `--fixture`, so
+one disposable profile served both.
+
+### Task 3: no spec changed, the helper copies left as they are (2026-11-06)
+
+Every whole-line comparison of `get_terminal_output_snapshot` output already strips
+control sequences first, so the recommended repair had nothing to move and no owner
+needed a rerun. The raw-snapshot reads that remain are substring checks of a
+computed marker (`$((6*7))` and similar), which an OSC sequence on its own prompt
+or `PS0` line cannot split. The visible-text helper exists as eight near-copies that
+have drifted (some do not strip DCS strings or two-character escapes). Merging them
+would change files with no failing assertion, several of which need Docker or a
+real display to run, so it is recorded as [7340](7340-shared-terminal-visible-text-helper.md)
+rather than done here.
+
 ## Current state
 
 Durable behaviour is in
@@ -283,6 +320,50 @@ alone, so they are not load flakes. `AgentsMdApproval.spec.ts` and
 The two Multi Review layout assertions fail either way, with no change on this
 branch to anything they load. [4222](4222-browser-failures-left-after-headless-qualification.md) found the fixture at fault (host font metrics) and fixed it.
 
+### macOS, 2026-11-06
+
+On `arktech-mini` (macOS 27.2, zsh), branch based on `c1724ab74`, profile
+`t2181-mac-home` (`--fixture --no-agent-credentials --agent-platforms codex`,
+`ORKESTRATOR_HOST_REACHABILITY_CHECK=off`), started from an agent shell with no
+TTY on stdin or stdout. Nothing bound 34121 or 34122. The profile was stopped and
+reset afterwards.
+
+| Run | Launcher | Electron command line |
+| --- | --- | --- |
+| No TTY, `--headless`, before the notice | Ready; nothing said about headless | `electron apps/desktop/dist/electron/main.js`, no switches |
+| No TTY, `--headless` | Ready; `Electron opens a window: headless mode exists only on Linux, so --headless changes nothing on darwin.` | Same |
+| No TTY, no flag | Ready; `… so running without a terminal changes nothing on darwin.` | Same |
+
+### Home terminal on macOS, 2026-11-06 (task 2)
+
+`project Home retains background work and unread attention beneath the board`
+(`e2e/agent-testing/browser-gateway.spec.ts`) through
+`mise run test:logged -- --name t2181-home-terminal -- mise run test:agent:browser -- --grep "…"`
+against `t2181-mac-home`: passed (38.3 s). A second run with `--reporter=json`
+recorded 1 expected, 0 skipped, 0 unexpected, the case passing in 18.1 s. Passing
+means the background `printf` completed while Kanban was showing, its exact
+visible line was found in the snapshot, and the attention marker survived
+returning to Home and reloading. No terminal contents were recorded.
+
+### Terminal snapshot audit, 2026-11-06 (task 3)
+
+Every `get_terminal_output_snapshot` read in `e2e/`:
+
+| Owner | Comparison | State |
+| --- | --- | --- |
+| `browser-gateway.spec.ts`, Home case | Whole line (`line === marker`) | Already visible text (4741's repair) |
+| `client-outage.spec.ts`, backpressure | Whole lines (`lastLines`: `^\d+$` after `trimEnd`) | Already visible text |
+| `client-outage.spec.ts`, flood end, restart marker, in-page recovery | Substring of a computed marker | Raw, safe: not a line comparison |
+| `terminal-mobile-panes.spec.ts`, `stty size` | Whole line (`^(\d+) (\d+)\s*$`, multiline) | Already visible text |
+| `terminal-input-resume.spec.ts`, `terminal-input-resume-electron.spec.ts` | Prompt at end (`[%$#]\s*$`), substrings | Already visible text |
+| `container-root-terminal.spec.ts` | Prompt at end, marker regexes | Already visible text |
+| `container-claude-terminal-signal.spec.ts` | Whitespace-free screen, substrings | Already visible text |
+| `local-gateway-transport-electron.spec.ts`, `local-gateway-transport-cpu-page.ts` | Substrings | Already visible text |
+
+`idle-observation-live-support.ts` compares whole lines of an agent tool's output,
+not a terminal snapshot, so it is outside this audit. The backend scripts under
+`apps/backend/scripts/` read snapshots for measurement only and assert nothing.
+
 ## Needs verification
 
 - The Electron specs under a real display. This host has no Xvfb and they must not
@@ -290,10 +371,11 @@ branch to anything they load. [4222](4222-browser-failures-left-after-headless-q
   canvas spec's headless opt-in ran here. That spec is intermittent on this host
   (flake [4250](../../tests/flaky-tests/design-canvas-and-artifacts/4250-design-electron-reachability-dialog-race.md)),
   with and without this change. CI's native-menu job covers two of them under Xvfb.
-- macOS and Windows. The no-op there is covered by unit tests with an injected
-  platform and has not run on those systems.
+- Windows. The no-op there is covered by unit tests with an injected platform and
+  has not run on Windows. macOS ran on 2026-11-06 (see Current state).
 
 ## Related
 
 - [0048](../transcripts-and-observation/0048-recurring-work-qualification.md), where this was found.
+- [7340](7340-shared-terminal-visible-text-helper.md), found in task 3's audit.
 - 4741 and 4221 (both deleted 2026-11-06) and [4222](4222-browser-failures-left-after-headless-qualification.md), found while qualifying this. To-do 4223, also found here, is done.

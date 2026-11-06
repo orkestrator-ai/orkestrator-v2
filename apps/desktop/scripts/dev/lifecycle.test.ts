@@ -17,6 +17,7 @@ import { parseDevArguments } from "./arguments.js";
 import {
   assertElectronReadiness,
   compileElectronForDevelopment,
+  electronHeadlessNotice,
   electronLaunch,
   launcherIsInteractive,
   electronReadinessTimeoutMs,
@@ -106,17 +107,25 @@ describe("Electron readiness", () => {
   });
 
   test.each([
-    ["development", "linux", undefined, false, false],
-    ["development", "linux", undefined, true, false],
-    ["agent-test", "linux", undefined, false, true],
-    ["agent-test", "linux", undefined, true, false],
-    ["agent-test", "linux", true, true, true],
-    ["agent-test", "linux", false, false, false],
-    ["agent-test", "darwin", true, false, false],
-    ["agent-test", "win32", undefined, false, false],
+    ["development", "linux", undefined, false, false, null],
+    ["development", "linux", undefined, true, false, null],
+    ["agent-test", "linux", undefined, false, true, null],
+    ["agent-test", "linux", undefined, true, false, null],
+    ["agent-test", "linux", true, true, true, null],
+    ["agent-test", "linux", false, false, false, null],
+    ["agent-test", "darwin", true, true, false, "--headless"],
+    ["agent-test", "darwin", undefined, false, false, "running without a terminal"],
+    ["agent-test", "win32", true, true, false, "--headless"],
+    ["agent-test", "win32", undefined, false, false, "running without a terminal"],
+    ["agent-test", "darwin", undefined, true, false, null],
+    ["agent-test", "win32", undefined, true, false, null],
+    ["agent-test", "darwin", false, false, false, null],
+    ["agent-test", "win32", false, false, false, null],
+    ["development", "darwin", true, false, false, null],
+    ["development", "win32", true, false, false, null],
   ] as const)(
     "wires Electron spawn settings and keeps readiness during status persistence (%s on %s, requested=%s, interactive=%s)",
-    async (flavor, platform, requested, interactive, headless) => {
+    async (flavor, platform, requested, interactive, headless, windowNoticeCause) => {
       const root = await mkdtemp(path.join(os.tmpdir(), "ork-dev-ready-race-"));
       const roots = {
         developmentRoot: path.join(root, "dev"),
@@ -231,6 +240,16 @@ describe("Electron readiness", () => {
         expect(headlessNotices.length).toBe(headless ? 1 : 0);
         if (headless)
           expect(headlessNotices[0]!.includes("Pass --no-headless")).toBe(requested !== true);
+        const windowNotices = notice.mock.calls
+          .map((call) => String(call[0]))
+          .filter((line) => line.startsWith("Electron opens a window"));
+        expect(windowNotices).toEqual(
+          windowNoticeCause === null
+            ? []
+            : [
+                `Electron opens a window: headless mode exists only on Linux, so ${windowNoticeCause} changes nothing on ${platform}.`,
+              ],
+        );
         expect(electronArgs).toEqual([
           ...(headless ? HEADLESS_ELECTRON_SWITCHES : []),
           "apps/desktop/dist/electron/main.js",
@@ -345,6 +364,42 @@ describe("Electron headless mode", () => {
     expect(decide({ ...pushed, flavor: "development" }).headless).toBe(false);
     for (const platform of ["darwin", "win32"] as const) {
       expect(decide({ ...pushed, platform }).headless).toBe(false);
+    }
+  });
+
+  const notice = (overrides: Partial<Parameters<typeof resolveElectronHeadless>[0]> = {}) =>
+    electronHeadlessNotice({
+      flavor: "agent-test",
+      platform: "linux",
+      env: {},
+      interactive: true,
+      ...overrides,
+    });
+
+  test("the launcher says when Linux goes headless, and how to get a window", () => {
+    expect(notice({ interactive: false })).toBe(
+      "Electron is headless (no terminal); the app is at browserUrl and no window will open. Pass --no-headless for a real window.",
+    );
+    expect(notice({ requested: true })).toBe(
+      "Electron is headless (--headless); the app is at browserUrl and no window will open.",
+    );
+    expect(notice()).toBeNull();
+  });
+
+  test("macOS and Windows say that a headless request changes nothing", () => {
+    for (const platform of ["darwin", "win32"] as const) {
+      expect(notice({ platform, requested: true })).toBe(
+        `Electron opens a window: headless mode exists only on Linux, so --headless changes nothing on ${platform}.`,
+      );
+      expect(notice({ platform, interactive: false })).toBe(
+        `Electron opens a window: headless mode exists only on Linux, so running without a terminal changes nothing on ${platform}.`,
+      );
+      expect(notice({ platform, env: { ORKESTRATOR_AGENT_TEST_HEADLESS: "1" } })).toContain(
+        "ORKESTRATOR_AGENT_TEST_HEADLESS=1 changes nothing",
+      );
+      expect(notice({ platform })).toBeNull();
+      expect(notice({ platform, requested: false, interactive: false })).toBeNull();
+      expect(notice({ platform, requested: true, flavor: "development" })).toBeNull();
     }
   });
 });

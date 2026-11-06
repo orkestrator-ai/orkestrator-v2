@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { TranscriptScrollController } from "./transcript-scroll-controller";
+import { INNER_SEEK_EVENT, TranscriptScrollController } from "./transcript-scroll-controller";
 import { installControlledTimeout } from "../../../../../tests/helpers/controlled-timeout";
 
 const disposals: Array<() => void> = [];
@@ -306,6 +306,93 @@ describe("transcript reading ownership", () => {
     window.dispatchEvent(new PointerEvent("pointerup"));
   });
 
+  test("history restoration asks an open group for a member it virtualized away, then holds it", async () => {
+    const view = harness();
+    view.row.innerHTML =
+      '<div data-transcript-group-frame data-state="open"><div data-transcript-part-id="latest"></div>' +
+      '<div data-transcript-inner-viewport="true"><div data-virtuoso-scroller></div></div></div>';
+    const group = view.row.firstElementChild as HTMLElement;
+    group.getBoundingClientRect = () =>
+      new DOMRect(0, view.row.getBoundingClientRect().top + 10, 300, 300);
+    const frameHead = group.firstElementChild as HTMLElement;
+    frameHead.getBoundingClientRect = () =>
+      new DOMRect(0, group.getBoundingClientRect().top, 300, 30);
+    const innerViewport = group.lastElementChild as HTMLElement;
+    const innerScroller = innerViewport.firstElementChild as HTMLElement;
+    let innerTop = 4000;
+    Object.defineProperties(innerScroller, {
+      scrollHeight: { get: () => 6000 },
+      clientHeight: { get: () => 260 },
+      scrollTop: {
+        get: () => innerTop,
+        set: (value: number) => {
+          innerTop = Math.max(0, Math.min(6000 - 260, value));
+        },
+      },
+    });
+    // The member at local offset 1200 renders only once the inner list seeks it.
+    const seeks: string[] = [];
+    innerViewport.addEventListener(INNER_SEEK_EVENT, (event) => {
+      const partId = (event as CustomEvent<{ partId: string }>).detail.partId;
+      seeks.push(partId);
+      if (innerScroller.querySelector("[data-transcript-part-id]")) return;
+      innerTop = 1200;
+      const member = document.createElement("div");
+      member.dataset.transcriptPartId = partId;
+      member.getBoundingClientRect = () =>
+        new DOMRect(0, group.getBoundingClientRect().top + 40 + 1200 - innerTop, 300, 40);
+      innerScroller.appendChild(member);
+    });
+    view.controller.navigateTo(
+      {
+        kind: "row",
+        index: 5,
+        key: "k5",
+        partId: "latest",
+        offsetPx: 80,
+        inner: { partId: "call-1", screenOffsetPx: 150 },
+      },
+      "history",
+    );
+    await frames(12);
+    expect(seeks).toEqual(["call-1"]);
+    const member = innerScroller.querySelector<HTMLElement>('[data-transcript-part-id="call-1"]')!;
+    expect(member.getBoundingClientRect().top).toBe(150);
+  });
+
+  test("an inner member that never renders stops seeking and settles on the group", async () => {
+    const view = harness();
+    view.row.innerHTML =
+      '<div data-transcript-group-frame data-state="open"><div data-transcript-part-id="latest"></div>' +
+      '<div data-transcript-inner-viewport="true"><div data-virtuoso-scroller></div></div></div>';
+    const group = view.row.firstElementChild as HTMLElement;
+    group.getBoundingClientRect = () =>
+      new DOMRect(0, view.row.getBoundingClientRect().top + 10, 300, 300);
+    (group.firstElementChild as HTMLElement).getBoundingClientRect = () =>
+      new DOMRect(0, group.getBoundingClientRect().top, 300, 30);
+    const innerViewport = group.lastElementChild as HTMLElement;
+    let seeks = 0;
+    innerViewport.addEventListener(INNER_SEEK_EVENT, () => {
+      seeks += 1;
+    });
+    view.controller.navigateTo(
+      {
+        kind: "row",
+        index: 5,
+        key: "k5",
+        partId: "latest",
+        offsetPx: 80,
+        inner: { partId: "gone", screenOffsetPx: 150 },
+      },
+      "history",
+    );
+    await frames(40);
+    expect(seeks).toBeGreaterThan(0);
+    expect(seeks).toBeLessThanOrEqual(20);
+    expect(view.controller.currentOwner).toBeNull();
+    expect(group.getBoundingClientRect().top).toBe(80);
+  });
+
   test("history restoration holds the group when folding removes the captured member", async () => {
     const view = harness();
     view.row.innerHTML =
@@ -398,4 +485,20 @@ describe("transcript reading ownership", () => {
     expect(view.scroller.scrollTop).toBe(3000);
     expect(view.controller.diagnostics().writes).toBe(writes);
   });
+});
+
+test("reading input and scroller readiness publish even when the viewport mode is unchanged", () => {
+  const { controller, scroller } = harness();
+  controller.seed(false);
+  const listener = mock(() => {});
+  const unsubscribe = controller.subscribe(listener);
+  const before = controller.generation;
+  scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -50 }));
+  expect(controller.generation).toBeGreaterThan(before);
+  expect(listener).toHaveBeenCalledTimes(1);
+  expect(controller.getSnapshot().generation).toBe(controller.generation);
+  controller.attachScroller(null);
+  expect(controller.getSnapshot().hasScroller).toBe(false);
+  expect(listener).toHaveBeenCalledTimes(2);
+  unsubscribe();
 });

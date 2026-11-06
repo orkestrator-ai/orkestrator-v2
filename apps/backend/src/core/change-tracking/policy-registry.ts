@@ -64,6 +64,14 @@ export interface ChangeTrackingPolicy {
   // Restore.
   restoreEnabled: boolean;
   restoreTokenTtlMs: number;
+  /**
+   * The restore preview's destination preflight reads every planned path in
+   * turn, so its deadline is this floor or the per-path budget times the plan,
+   * whichever is larger, never past the ceiling.
+   */
+  restorePreflightDeadlineMs: number;
+  restorePreflightPerPathMs: number;
+  restorePreflightMaxDeadlineMs: number;
 }
 
 export const CHANGE_TRACKING_POLICY_V1: Readonly<ChangeTrackingPolicy> = Object.freeze({
@@ -105,6 +113,9 @@ export const CHANGE_TRACKING_POLICY_V1: Readonly<ChangeTrackingPolicy> = Object.
   idleOwnerGraceMs: 30_000,
   restoreEnabled: true,
   restoreTokenTtlMs: 5 * 60_000,
+  restorePreflightDeadlineMs: 10_000,
+  restorePreflightPerPathMs: 5,
+  restorePreflightMaxDeadlineMs: 5 * 60_000,
 });
 
 export class ChangeTrackingPolicyRegistry {

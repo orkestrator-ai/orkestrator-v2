@@ -51,7 +51,7 @@ import { ObjectStore } from "./object-store.js";
 import { ChangeTrackingPolicyRegistry, type ChangeTrackingPolicy } from "./policy-registry.js";
 import { ChangeProjectionService } from "./projection-service.js";
 import { ChangeResourcePublisher } from "./publisher.js";
-import { ChangeRestoreService } from "./restore.js";
+import { ChangeRestoreService, restorePreflightDeadlineMs } from "./restore.js";
 import { ChangeRetentionService, type RetentionReport } from "./retention.js";
 import {
   TurnBoundaryService,
@@ -236,6 +236,7 @@ export class ChangeTrackingService {
       registry: this.registry,
       enabled: () => policy().restoreEnabled,
       tokenTtlMs: () => policy().restoreTokenTtlMs,
+      preflightDeadlineMs: (paths) => restorePreflightDeadlineMs(paths, policy()),
       onApplied: (_worktreeId, environmentId) => {
         if (environmentId) options.requestEnvironmentRefresh?.(environmentId);
       },

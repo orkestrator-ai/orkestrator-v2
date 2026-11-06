@@ -438,6 +438,20 @@ Made 2026-11-06 while running task 3's container half on beelink.
   skipping on a launch error would also hide a real WebKit regression on a
   supported host. A `test:full` on this host needs that
   `PLAYWRIGHT_BROWSERS_PATH` for its WebKit cases to run.
+- **A19 (task 3). The branch validation's ACP transcript failure.** The
+  second `test:full` failed `ACP bridge > starts a new part when a chunk
+  follows a message trimmed to its notice`, the open flake 2410, which the
+  triage marked related only by import path. The cause is in the test: its
+  `GET /session` polls reset the bridge's transcript dirty counter, so a poll
+  between the fixture's two tool calls skipped the mid-turn trim and left the
+  trailing chunk in a row of its own. A forced 500 ms gap between the calls
+  reproduced it every time. Options: change the bridge so a row's boundary
+  does not depend on when reads happen; make the test wait without bounding.
+  **Chosen: the test waits on `/activity` and then reads once.** Why: the
+  bridge is correct in both orders (the tool call is a row boundary, and a
+  trimmed row takes the next chunk as a new part), and changing ACP row rules
+  is outside this ticket. Recorded as resolved in
+  [flake 2410](../../tests/flaky-tests/agent-bridges/2410-acp-trim-to-notice-single-part.md).
 
 ## Open questions
 

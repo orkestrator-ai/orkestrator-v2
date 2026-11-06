@@ -373,6 +373,55 @@ describe("environment cleanup steps", () => {
     expect(await environmentCleanupLedger(dataDir).get("e1")).toBeNull();
   });
 
+  test("a signalled step starts no command and stays pending", async () => {
+    const { context, dataDir, worktreeDir } = await cleanupContext();
+    const worktreePath = path.join(worktreeDir, "project-feature");
+    await fs.mkdir(worktreePath, { recursive: true });
+    const cleanup = entry({ worktreePath, pending: ["container", "worktree"], containerId: "c1" });
+    await environmentCleanupLedger(dataDir).record(cleanup);
+    const calls: string[][] = [];
+    const controller = new AbortController();
+    controller.abort();
+    for (const step of ["container", "worktree"] as const) {
+      expect(
+        await runEnvironmentCleanupStep(cleanup, step, context, {
+          containerOwnershipVerified: true,
+          run: async (command, args) => {
+            calls.push([command, ...args]);
+            return { stdout: "", stderr: "" };
+          },
+          signal: controller.signal,
+        }),
+      ).toBe(false);
+    }
+    expect(calls).toEqual([]);
+    expect(await fs.stat(worktreePath)).toBeTruthy();
+    expect(await environmentCleanupLedger(dataDir).get("e1")).toMatchObject({
+      pending: ["container", "worktree"],
+    });
+  });
+
+  test("a step's signal reaches every command it runs", async () => {
+    const { context, dataDir, worktreeDir } = await cleanupContext();
+    const worktreePath = path.join(worktreeDir, "project-feature");
+    await fs.mkdir(worktreePath, { recursive: true });
+    const cleanup = entry({ worktreePath, pending: ["worktree"] });
+    await environmentCleanupLedger(dataDir).record(cleanup);
+    const controller = new AbortController();
+    const signals: (AbortSignal | undefined)[] = [];
+    expect(
+      await runEnvironmentCleanupStep(cleanup, "worktree", context, {
+        run: async (_command, _args, options) => {
+          signals.push(options.signal);
+          return { stdout: "", stderr: "" };
+        },
+        signal: controller.signal,
+      }),
+    ).toBe(true);
+    expect(signals.length).toBeGreaterThan(0);
+    expect(signals.every((signal) => signal === controller.signal)).toBe(true);
+  });
+
   test("stops the worktree's fsmonitor daemon before removing it", async () => {
     const { context, dataDir, worktreeDir } = await cleanupContext();
     const { projectPath, base } = await project();
@@ -699,5 +748,104 @@ describe("storage volume cleanup", () => {
     expect(await runEnvironmentCleanupStep(foreign, "volumes", context, { run })).toBe(false);
     expect(calls).not.toContain("volume rm vol-foreign");
     expect((await ledger.get("e1"))?.pending).toEqual(["volumes"]);
+  });
+});
+
+describe("nested Docker cancellation", () => {
+  test.each([
+    "network-inspect",
+    "network-remove",
+    "retained-ownership",
+    "current-ownership",
+  ] as const)("aborting %s waits for its command and leaves the step pending", async (target) => {
+    const { context, dataDir } = await cleanupContext();
+    const network = target.startsWith("network");
+    const step = network ? "network" : "container";
+    const cleanup = entry({
+      pending: [step],
+      ...(target === "retained-ownership"
+        ? { retainedContainers: ["retained-cancel-fixture"] }
+        : {}),
+      ...(target === "current-ownership" ? { containerId: "current-cancel-fixture" } : {}),
+    });
+    await environmentCleanupLedger(dataDir).record(cleanup);
+    const controller = new AbortController();
+    const calls: string[][] = [];
+    let active = false;
+    const pidFile = path.join(dataDir, "cancelled-command.pid");
+    let reached!: () => void;
+    const started = new Promise<void>((resolve) => {
+      reached = resolve;
+    });
+    const run: CleanupCommandRunner = async (command, args, options) => {
+      calls.push([command, ...args]);
+      expect(options.signal).toBe(controller.signal);
+      expect(options.waitForTermination).toBe(true);
+      const isTarget =
+        target === "network-inspect"
+          ? args[1] === "inspect"
+          : target === "network-remove"
+            ? args[1] === "rm"
+            : args[0] === "inspect";
+      if (isTarget) {
+        active = true;
+        const running = runCommand(
+          process.execPath,
+          [
+            "-e",
+            `require("node:fs").writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); setInterval(() => {}, 1000);`,
+          ],
+          options,
+        );
+        reached();
+        try {
+          return await running;
+        } finally {
+          active = false;
+        }
+      }
+      return {
+        stdout:
+          JSON.stringify({
+            app: "orkestrator-v2",
+            "orkestrator-owner": dockerOwnerNamespace(dataDir),
+            "environment-id": "e1",
+            "orkestrator-resource-role": "network",
+          }) + "\t0",
+        stderr: "",
+      };
+    };
+    let settled = false;
+    const pending = runEnvironmentCleanupStep(cleanup, step, context, {
+      run,
+      signal: controller.signal,
+    }).finally(() => {
+      settled = true;
+    });
+    try {
+      await started;
+      const deadline = Date.now() + 5_000;
+      while (
+        !(await fs.stat(pidFile).then(
+          () => true,
+          () => false,
+        ))
+      ) {
+        if (Date.now() > deadline) throw new Error("command did not start");
+        await Bun.sleep(10);
+      }
+      const pid = Number(await fs.readFile(pidFile, "utf8"));
+      expect(active).toBe(true);
+      expect(settled).toBe(false);
+      controller.abort();
+      expect(await pending).toBe(false);
+      expect(active).toBe(false);
+      expect(() => process.kill(pid, 0)).toThrow();
+      expect(calls).toHaveLength(target === "network-remove" ? 2 : 1);
+      expect(await environmentCleanupLedger(dataDir).get("e1")).toMatchObject({ pending: [step] });
+    } finally {
+      controller.abort();
+      await pending;
+    }
   });
 });

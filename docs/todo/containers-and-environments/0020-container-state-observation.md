@@ -611,14 +611,14 @@ None; see "Open questions answered" above.
 ## Related
 
 - [0199-idle-observation-spec-sidebar-probe.md](../transcripts-and-observation/0199-idle-observation-spec-sidebar-probe.md)
-  and [0200-dev-test-reused-profile-bind-mount.md](../cross-cutting/0200-dev-test-reused-profile-bind-mount.md)
+  and `0200-dev-test-reused-profile-bind-mount.md`
   (found during the 2026-10-26 qualification).
 
 - [0049-native-agent-idle-observation.md](../transcripts-and-observation/0049-native-agent-idle-observation.md) (idle
   observation of bridge sessions),
   [0048-recurring-work-qualification.md](../transcripts-and-observation/0048-recurring-work-qualification.md)
   (container fetch failure-ladder tuning, app-level fetch qualification),
-  [0051-client-reconnect-and-freshness.md](../transcripts-and-observation/0051-client-reconnect-and-freshness.md)
+  `0051-client-reconnect-and-freshness.md`
   (`WorktreeSnapshotState.remote` is rendered on the Files panel's Changes tab;
   its real-browser check is still owed),
   [0022-container-resource-budgets-and-performance.md](0022-container-resource-budgets-and-performance.md)

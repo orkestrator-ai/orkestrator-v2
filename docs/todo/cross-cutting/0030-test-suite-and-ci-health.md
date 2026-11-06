@@ -779,11 +779,9 @@ Decisions made on 2026-10-31 for tasks 2 to 5 and the register.
   [0006](../../tests/flaky-tests/aggregate-validation-runs/0006-2026-09-08-coordinator-action-validation.md),
   [0182](../../tests/flaky-tests/agent-bridges/0182-cursor-auth-readiness-aggregate-timeout.md)
   (resolved 2026-10-31); created 2026-10-31: 1530 to 1535.
-- Todos from this file's triage: [1170](1170-electron-native-focus-checks-fail-alone.md),
-  [1171](1171-agent-launch-native-branch-suggestion.md),
+- Todos from this file's triage: 1170 and 1171 (deleted 2026-11-06),
   [1172](../agent-engines/1172-opencode-start-error-before-stderr.md),
-  [1173](../agent-engines/1173-cursor-status-account-lookup-unbounded.md),
-  [1174](../coordinator-and-multi-review/1174-cursor-coordinator-skill-tests-read-checkout.md).
+  1173 and 1174 (deleted 2026-11-06).
 - [0145-claude-linux-sandbox-apparmor-nested-userns.md](../agent-engines/0145-claude-linux-sandbox-apparmor-nested-userns.md):
   the product side of the CI sandbox failure.
 - [Testing guide, "Agent CLIs on `PATH`"](../../development/testing-guide.md#agent-clis-on-path):

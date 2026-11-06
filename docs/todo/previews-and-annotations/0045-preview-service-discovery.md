@@ -19,10 +19,13 @@ spec or dev-test fixture set an `entryPort` yet. Task 1 was acted on that day.
    all five checks pass on macOS in
    `e2e/agent-testing/service-preview-seeded-electron.spec.ts`; the restart
    check found a timing gap, fixed in
-   [3230](3230-restart-inside-verification-window.md). See **Assumptions and
+   3230. See **Assumptions and
    decisions**, D10–D14.
 2. **`orkestrator environment exec` as a managed root**: the open question,
    whether detached exec workers should count as ownership roots. Status: open.
+3. **Fast-restart recheck on Linux through `ss`**: the seeded preview spec's
+   checks 3 and 6 pass on a Linux host without `lsof`. Moved from to-do 3230
+   (deleted 2026-11-06). Status: open.
 
 Code items 1 to 5 and the host-level qualification are done and on `main`
 (`22b16597`, #1258).
@@ -117,6 +120,39 @@ terminal and bridge roots safe against pid reuse.
     - Cons: depends on a state file the backend does not own live; a reused
       pid with a matching environment could misattribute; needs a mapping from
       operation to environment.
+
+### 3. Fast-restart recheck on Linux through `ss`
+
+**Problem.** A dev server restarted inside the 5 s verification window is now
+rechecked by its listener pids and gets a new generation. Task 1's in-app run
+was on macOS, where the lookup uses `lsof`; on a Linux host without `lsof` it
+goes through `ss -H -ltnp`, which has not run live.
+
+**Context.** Moved from to-do 3230 (deleted 2026-11-06). The recheck is in
+`apps/backend/src/core/preview-service-registry.ts` (`listenerPids`,
+`samePids`) and `preview-listener-ownership.ts` (the `ss` path); deterministic
+coverage is `preview-verification-window.test.ts`. The window and its gaps are
+in [`browser-previews.md`](../../architecture/browser-previews.md).
+
+**Investigation.** Steps:
+
+1. On a Linux desktop host without `lsof`, run
+   `e2e/agent-testing/service-preview-seeded-electron.spec.ts` on a throwaway
+   profile, so the recheck goes through `ss`.
+2. Check that checks 3 and 6 pass, and that the generation changes on a restart
+   inside 5 s.
+3. Repeat once with `lsof` installed, to cover both lookup paths.
+4. Record the result in 0042's evidence log.
+
+**Decisions.**
+
+- **How to get a host without `lsof`?**
+  - **A Linux host where `lsof` is not installed (recommended).**
+    - Pros: the real fallback, chosen the way production chooses it.
+    - Cons: may need a fresh VM.
+  - **Hide `lsof` from the profile's `PATH`.**
+    - Pros: any Linux host.
+    - Cons: a test arrangement, not a real host.
 
 Preview services used to be generated only for containerized environments.
 Local worktree and backend-host services had to be registered by hand and were
@@ -264,7 +300,7 @@ environments", §"Diagnostics" and §"Framework configuration".
      polls and renders the new process in its visible heading. The document
      identity stays unchanged. The endpoint generation advances, and an
      attachment issued at the old generation is specifically refused on renewal.
-     Until [3230](3230-restart-inside-verification-window.md) this held only
+     Until 3230 this held only
      once the registry's 5 s verification window had passed; the check now
      restarts with no wait. See D12.
   4. A plain click on a `localhost` link in an agent reply opens the system
@@ -333,7 +369,7 @@ record. **Chosen:** pid and start time, in memory per backend epoch. Pros: a
 restart or pid reuse changes the key and revokes old attachments; nothing
 durable to go stale. Cons: an attribution was reused for the existing 5-second
 verification window, as container bindings are; since
-[3230](3230-restart-inside-verification-window.md) a new connection inside the
+3230 a new connection inside the
 window also compares the listener's pids.
 
 **D4. Linux without `lsof`: fall back to `ss`.** The Debian image used for
@@ -411,7 +447,7 @@ body dataset. The test requires the new marker, unchanged document identity,
 unchanged tab URL, a newer generation and specifically `access-expired` or
 `generation-changed` on old-attachment renewal. Unrelated errors fail.
 Check 6 separately restarts within five seconds and requires a newer
-generation, the guard for [3230](3230-restart-inside-verification-window.md),
+generation, the guard for 3230,
 which also removed the restart wait from check 3.
 The fixture closes each health response so polling opens new connections
 and exercises tunnel revalidation rather than indefinitely reusing a socket.
@@ -445,7 +481,7 @@ therefore the ownership root are the ones **Run** created.
 
 ## Related
 
-- [3230-restart-inside-verification-window.md](3230-restart-inside-verification-window.md)
+- `3230-restart-inside-verification-window.md` (deleted 2026-11-06)
   (a restart inside the 5 s verification window kept the old generation; fixed).
 - [0042-service-preview-rollout.md](0042-service-preview-rollout.md) (transports,
   qualification and legacy route).

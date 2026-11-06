@@ -4,12 +4,16 @@
 
 Analysed 2026-10-27 against `main` at `863b5782`. Re-checked 2026-10-31
 against `main` at `931e5541`: tasks 1–3 still hold in code; tasks 4 and 5
-were acted on that day.
+were acted on that day. Re-checked 2026-11-06 against `main` at `e6c3da89`:
+every task is done. The file is kept, not deleted, because `AGENTS.md` names
+it as the layout to copy for new to-dos; delete it once that line names
+another file. Probe networks that leaked again since are
+[3320](3320-leaked-probe-networks-block-docker-fixtures-on-beelink.md).
 
 ### Tasks
 
-1. **Find the leaking run**: identify which test or harness boots a real backend whose boot probe is killed mid-check. Status: done in code (2026-10-28, [0730](0730-cli-tests-leak-probe-networks.md)): `cli.test.ts`'s development backend and every `test:cli:scenarios` backend, leaking on a graceful SIGTERM, not only a kill. Confirmed live on Linux on 2026-10-31 (0730 task 1): neither harness probes now, and a SIGTERM'd probing backend leaves nothing.
-2. **Suite-level cleanup by owner label**: the leaking suite removes its probe networks in `afterAll`. Status: done another way (2026-10-28): both harnesses skip the boot check and a SIGTERM'd backend now removes its own probe network ([0730](0730-cli-tests-leak-probe-networks.md) tasks 2 and 3). No `afterAll` backstop was added; see Assumptions and decisions.
+1. **Find the leaking run**: identify which test or harness boots a real backend whose boot probe is killed mid-check. Status: done in code (2026-10-28, 0730): `cli.test.ts`'s development backend and every `test:cli:scenarios` backend, leaking on a graceful SIGTERM, not only a kill. Confirmed live on Linux on 2026-10-31 (0730 task 1): neither harness probes now, and a SIGTERM'd probing backend leaves nothing.
+2. **Suite-level cleanup by owner label**: the leaking suite removes its probe networks in `afterAll`. Status: done another way (2026-10-28): both harnesses skip the boot check and a SIGTERM'd backend now removes its own probe network (0730 tasks 2 and 3). No `afterAll` backstop was added; see Assumptions and decisions.
 3. **Owner reaper also removes networks**: `reapStaleProbes` removes the owner's unattached probe networks, not only containers. Status: done (2026-10-28).
 4. **Qualification: no new probe networks after a full run**: a full `mise run test` plus the live Docker suites leaves nothing new. Status: done (2026-10-31, beelink, Linux Engine 29.9.2); see Assumptions and decisions.
 5. **Owner-agnostic sweep (open question)**: whether a sweep should offer to remove old unattached probe networks whatever their owner. Status: done (2026-10-31): `disk:report` counts them and `--fix probe-networks` removes the unattached ones older than a day. Running it on omarchy-hp is the user's call.
@@ -115,7 +119,7 @@ Inside `bun test`, the children of `apps/backend/tests/standalone.test.ts` inher
 ## Assumptions and decisions
 
 Made 2026-10-28 while implementing this file together with
-[0730](0730-cli-tests-leak-probe-networks.md).
+0730.
 
 ### Task 1: confirming the source
 
@@ -173,7 +177,7 @@ Made 2026-10-28 while implementing this file together with
 
 ### Task 1: live attribution on Linux (2026-10-31)
 
-- **Done** through [0730](0730-cli-tests-leak-probe-networks.md) task 1 on
+- **Done** through 0730 task 1 on
   beelink (Linux, Docker Engine 29.9.2). Neither harness creates a probe
   network now. A backend that does probe and is SIGTERM'd, whether straight
   after `ready` or while its network exists, leaves nothing. A SIGKILL does
@@ -315,7 +319,7 @@ Seen on omarchy-hp while qualifying todo 0058 (retired on 2026-10-29).
 ### Code
 
 Items 1 to 3 are done (2026-10-28); see the Tasks list and
-[0730](0730-cli-tests-leak-probe-networks.md).
+0730.
 
 1. Find which test leaks them. Three more appeared at 00:58:00–08 UTC while
    a plain `mise run test` (no live Docker suites enabled) was killed by a
@@ -359,7 +363,7 @@ Done 2026-10-31 on beelink (see Assumptions and decisions, task 4).
 
 - [0023-environment-and-disk-cleanup.md](0023-environment-and-disk-cleanup.md) (test leaks)
 - [0061-container-qualification-follow-ups.md](0061-container-qualification-follow-ups.md) (harness leaks)
-- [0730-cli-tests-leak-probe-networks.md](0730-cli-tests-leak-probe-networks.md): the graceful-shutdown leak and the two CLI harness sources
+- `0730-cli-tests-leak-probe-networks.md` (deleted 2026-11-06): the graceful-shutdown leak and the two CLI harness sources
 
 ## Replaces
 

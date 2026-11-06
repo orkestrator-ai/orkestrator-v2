@@ -1344,9 +1344,23 @@ as the `dev:test` launcher a real-stack spec restarts, gets
 when the runner exits, and only a command line, never an environment, keeps it
 (0830). Linux limits a Unix socket path to 108 bytes and Chromium puts its
 `SingletonSocket` in `TMPDIR`, so a test that launches full Chrome under a
-temporary directory of its own keeps that directory's names short. For a leak hunt like 0247's, set
-`ORKESTRATOR_TEST_KEEP_PRIVATE_TMPDIR=1` so each private directory is kept
-for inspection.
+temporary directory of its own keeps that directory's names short. For a leak
+hunt, set `ORKESTRATOR_TEST_KEEP_PRIVATE_TMPDIR=1` so each private directory
+is kept for inspection.
+
+A test removes a temporary directory it made itself, after whatever holds the
+directory open has finished, and awaits the removal so the process cannot exit
+first. Classes that keep writing after their owner returns expose a `settled()`
+that only waits (for example `TerminalHistory`, `McpManagementService`,
+`SharedScanQueue` and `DiffStatsTracking`); await it, or the fixture's `stop()`, before the removal.
+`tests/temp-sweep.ts` is the fallback for prefixes that cannot be removed at
+source: it removes a PID-owned directory only when that PID is dead and the
+directory is past its age limit. Some entries in a shared temporary directory
+are not leaks: `orkestrator-test-run.*` (failure logs, kept 7 days by
+`scripts/test-all.ts`), `orkestrator-test-scheduler-v1-<uid>`,
+`orkestrator-test-timings.*`, `orkestrator-mcp-locks-<uid>`, and other tools'
+own caches. The 2026-10-26 to 2026-10-29 leak hunt that set these rules is
+to-do 0247 in git history.
 
 The runner also keeps Bun timing profiles in a private temporary directory
 keyed by the Git common directory and worktree path. Bun updates these files after each aggregate

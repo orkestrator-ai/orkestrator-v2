@@ -349,7 +349,7 @@ own filtering.
 
 No reference emitter ships, and the thread view does not show hints. Both, and
 a live desktop capture, are in
-[0950-source-hint-producer-plugin.md](0950-source-hint-producer-plugin.md),
+`0950-source-hint-producer-plugin.md`,
 because the README rule is not to add new items to an existing file.
 
 ### Tasks 2, 3, 5, 6 and 7: statuses rechecked, nothing built
@@ -504,7 +504,7 @@ roots (task 2) and a live desktop run (task 4). Tasks 1 and 3 were done on
    or form state cannot be reproduced.
 3. Development source hints: done (task 4). The documented emitter, the thread
    view list and the live captures are done in
-   [0950](0950-source-hint-producer-plugin.md).
+   0950.
 4. Open shadow roots and same-origin iframes. Open shadow roots are done
    (task 5); the follow-ups are in
    [2580](2580-shadow-root-annotation-follow-ups.md). Same-origin iframes

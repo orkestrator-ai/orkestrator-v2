@@ -188,8 +188,8 @@ launcher's child. The four failures:
 | `cli-ui.spec.ts`, `a CLI-initialized project…` | Flake [0901](../../tests/flaky-tests/web-ui/0901-cli-ui-fixture-project-hydration.md): a blank page after a second navigation. | Fixed; 10 of 10 across both cases that share the helper |
 | `terminal-input-resume.spec.ts`, `a lost terminal write…` | The host has no `vim`. | Fixed 2026-11-04; see [4222](4222-browser-failures-left-after-headless-qualification.md) |
 
-`project Home retains…` ([4741](4741-project-home-terminal-check-vs-shell-osc-context.md))
-and the design canvas cases ([4221](4221-design-canvas-spec-reachability-dialog.md))
+`project Home retains…` (4741)
+and the design canvas cases (4221)
 passed. So did `capped file tree…`, in 71 s; flake
 [2930](../../tests/flaky-tests/previews-annotations-and-gateway/2930-capped-file-tree-exceeds-test-budget.md)
 stays open, since one pass does not settle it. The suite was not rerun in full after
@@ -250,4 +250,4 @@ branch to anything they load. [4222](4222-browser-failures-left-after-headless-q
 ## Related
 
 - [0048](../transcripts-and-observation/0048-recurring-work-qualification.md), where this was found.
-- [4741](4741-project-home-terminal-check-vs-shell-osc-context.md), [4221](4221-design-canvas-spec-reachability-dialog.md) and [4222](4222-browser-failures-left-after-headless-qualification.md), found while qualifying this. To-do 4223, also found here, is done.
+- 4741 and 4221 (both deleted 2026-11-06) and [4222](4222-browser-failures-left-after-headless-qualification.md), found while qualifying this. To-do 4223, also found here, is done.

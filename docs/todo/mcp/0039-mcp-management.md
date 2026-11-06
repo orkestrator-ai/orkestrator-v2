@@ -28,11 +28,13 @@ against `main` at `931e5541` (pins: Claude 2.1.314, Codex 0.166.0, Grok
 5. **Pi user-scope failure and rerun**: find out whether a user-scope Pi rebuild offers the tool, then rerun Pi. Status: open.
 6. **Corrected live probes and completion matrix**: rerun busy-turn, negative, Claude warm SSE, OpenCode in-place reload, Codex `applied` and OpenCode rename checks under the corrected harness. Status: open.
 7. **Inactive environment, full mode and process-wide variant**: rerun the Claude inactive spec with model checks, and add a two-session Codex or OpenCode variant. Status: open.
-8. **Real-browser UI matrix remainder**: conflict recovery and secret replacement at desktop and narrow widths; a healthy plus failing Claude server with reconnect and reload. Status: done (2026-10-31, credential-free spec; reconnect on a running CLI unexercised, follow-up [1163](1163-claude-probe-reconnect-inventory.md)).
+8. **Real-browser UI matrix remainder**: conflict recovery and secret replacement at desktop and narrow widths; a healthy plus failing Claude server with reconnect and reload. Status: done (2026-10-31, credential-free spec; reconnect on a running CLI unexercised, follow-up 1163, deleted 2026-11-06; its live check is task 13).
 9. **Containers and remote**: container catalogue through the Docker suite and a remote-browser check. Status: partly done (container behaviour superseded by 0040).
 10. **Release decision on the all-on default**: keep or narrow the rollout once the matrix is filled. Status: blocked (on tasks 4 to 7).
 11. **OpenCode user-file apply and sign-in follow-ups**: whether to offer an explicit idle-gated restart for user files (open question), and whether `mcp.auth.authenticate` could be driven from the panel (needs verification). Status: open (decision only; recommendation recorded 2026-10-31).
 12. **Agent-account homes**: when a running Claude account session sees an editor write, a UI note that account-home servers are overwritten, and stale-server reporting for account-only servers. Status: done (2026-10-31; a live account session with a real login is unrun).
+13. **Claude MCP reconnect on a running CLI**: with a real Claude login, a reconnect on a warm CLI and on a probe after the CLI exits gives the right list and layers, and survives a reload. Moved from to-do 1163 (deleted 2026-11-06). Status: open (needs a Claude login).
+14. **Claude MCP rows read `unknown` after a refused CLI exits**: on a real browser, rows left `connecting` by a CLI that exited show `unknown` and still offer reconnect. Moved from to-do 1240 (deleted 2026-11-06). Status: open (credential-free).
 
 ### 1. Replaced Claude server processes linger (code item 8)
 
@@ -227,7 +229,7 @@ against `main` at `931e5541` (pins: Claude 2.1.314, Codex 0.166.0, Grok
 - **Conflict recovery, 1440 and 390 px: pass.** Edit a `.mcp.json` server, open the review, change the file from outside, save: refused, file unchanged; "Reload latest and review again" keeps the edit and the second save keeps both the edit and the outside entry; the same after a page reload.
 - **Secret replacement, 1440 and 390 px: pass.** A user-scope server in the profile's own `~/.claude.json` shows only "Value saved"; replace, review and save write the new value (compared in memory, never printed); neither old nor new value appears in the page's HTML in the list, editor, review, after saving, on reopening or after a reload.
 - **Healthy and failing Claude server, reconnect, reload (desktop): pass.** Without credentials the Claude CLI still connects and reports its MCP servers before the turn fails "Not logged in", so no model is called. The projection read `mcpui-ok` connected and `mcpui-late` failed ("1 down"); after creating the missing script, a click on the failed row reconnected it and "down" cleared; after a hard reload the panel matched the backend projection (counts, statuses, tool counts).
-- **Caveat and follow-up.** The refused turn's CLI exits, so the reconnect ran through the bridge's stand-in probe CLI, not a running session. That path replaced the session's whole list with the probe's: the injected `orkestrator` row vanished ("Tools 23 · 3 servers" to "Tools 2 · 2 servers") and the layers changed from `user` to `project`. Recorded as [1163-claude-probe-reconnect-inventory.md](1163-claude-probe-reconnect-inventory.md), fixed there on 2026-11-01; reconnect on a running CLI needs a turn the provider accepts. That run passed only because the host was loaded enough for a read to reach the refused CLI before it exited; 1163 made it deterministic.
+- **Caveat and follow-up.** The refused turn's CLI exits, so the reconnect ran through the bridge's stand-in probe CLI, not a running session. That path replaced the session's whole list with the probe's: the injected `orkestrator` row vanished ("Tools 23 · 3 servers" to "Tools 2 · 2 servers") and the layers changed from `user` to `project`. Recorded as `1163-claude-probe-reconnect-inventory.md`, fixed there on 2026-11-01; reconnect on a running CLI needs a turn the provider accepts. That run passed only because the host was loaded enough for a read to reach the refused CLI before it exited; 1163 made it deterministic.
 - **Defect fixed on the way.** A `dev:test` profile started from an Orkestrator agent shell inherits `NODE_ENV=production`, so its backend looked for packaged bridges and every Claude tab failed ("claude bridge directory not found"). `createBackendProcessEnvironment` (`apps/desktop/electron/backend-process.ts`) now drops an inherited `NODE_ENV=production` for development and agent-test profiles only, with a test in `apps/desktop/tests/backend-process.test.ts`.
 - The host's "Docker containers can't reach Orkestrator" notice covers the dialog footer at 390 px; it comes from this host's firewall, not the MCP UI.
 
@@ -322,6 +324,79 @@ against `main` at `931e5541` (pins: Claude 2.1.314, Codex 0.166.0, Grok
 - **UI note.** While an added Claude account exists, the `claude:user` and `claude:local` sources carry the note "Added Claude accounts use their own copy of these servers. Orkestrator replaces each copy with this file's servers when you save here and before it starts Claude on an account, so servers added inside an account's own configuration are overwritten, and Orkestrator sessions do not use them." It shows in the source header above its servers (no renderer change).
 - **Evidence.** A new `account` scenario in `session-manager-prompt-mcp-sync.live-probe.ts`, run by `mise run verify:claude:mcp-live` on the real CLI without credentials: the CLI never loads a host-only SSE server (it does not read the host file), the copy-only `extra` runs and is stale from launch, a host add loads and a host removal unloads in the running CLI. Unit tests: `mcp-config-account.test.ts`, `session-manager-prompt-mcp-sync.test.ts`, `service-claude-accounts.test.ts`, `agent-accounts-active.test.ts`, `McpStatusAndStates.test.tsx`. Documented in `docs/architecture/agent-accounts.md`.
 - **Not proven.** No session on a real signed-in account ran; the backend-to-bridge handoff is unit-tested. A host-file edit made outside the editor reaches an account's copy only at the next bridge launch or editor save (reported stale and refused meanwhile). Bridges launched before this change report nothing for account-only servers until they relaunch.
+
+### 13. Claude MCP reconnect on a running CLI
+
+**Problem.** A probe reconnect now takes its list from the probe and keeps the
+`orkestrator` row, and a running CLI's report replaces the merged list. The
+credential-free `mcpui-both` check cannot keep a CLI warm, so reconnect on a
+running CLI has not been exercised (task 8).
+
+**Context.** Moved from to-do 1163 (deleted 2026-11-06). `applyProbeMcpStatus`
+and `session.mcpServerLayers` are in
+`bridges/claude-bridge/src/services/session-manager-catalog.ts`; the layers come
+from `getMcpRuntimeConfig` (`mcp-config.ts`). The credential-free check and its
+hold-open hook are in `e2e/agent-testing/mcp-ui-matrix.spec.ts`.
+
+**Investigation.** Steps:
+
+1. Open a `dev:test --fixture` profile with a real Claude login. Give the
+   environment a `.mcp.json` with one healthy and one failing server.
+2. Send a turn the provider accepts, so the CLI stays warm. Fix the failing
+   server and reconnect its row.
+3. Check that the whole list comes from the live control, that the
+   `orkestrator` row is kept, and that the layers read `project` and
+   `orkestrator`.
+4. Let the CLI exit (evict it or restart the bridge), run a probe reconnect,
+   then send another turn. Check that the running CLI's report replaces the
+   merged list, and that the list is still right after a reload.
+
+**Decisions.**
+
+- **Run it with task 6 or alone?**
+  - **With task 6's corrected live probes on the same Claude login (recommended).**
+    - Pros: one profile and one billed session.
+    - Cons: waits for task 6.
+  - **Alone.**
+    - Pros: smaller run.
+    - Cons: a second billed setup.
+
+### 14. Claude MCP rows read `unknown` after a refused CLI exits
+
+**Problem.** When a Claude CLI exits before any status read reaches it, the
+bridge now serves its retained `connecting` rows as `unknown`, on the session,
+probe and closed-transport paths. Only unit tests prove it; the browser run
+that found the frozen rows has not been repeated.
+
+**Context.** Moved from to-do 1240 (deleted 2026-11-06). The change is
+`inventoryWithoutCli` in
+`bridges/claude-bridge/src/services/session-manager-catalog.ts`, tested in
+`session-manager-catalog-transport.test.ts`. It was seen on a
+`--no-agent-credentials` profile at host load about 4: the CLI stopped the
+fixture server about 100 ms after starting it.
+
+**Investigation.** Steps:
+
+1. On a quiet host, open a
+   `dev:test --fixture --no-agent-credentials --agent-platforms claude`
+   profile.
+2. Run `mcp-ui-matrix.spec.ts` (`ORKESTRATOR_AGENT_TEST_MCP_UI=1`) with its
+   `UserPromptSubmit` hold-open hook removed, or by hand: `.mcp.json` servers
+   and one turn that ends "Not logged in".
+3. After the CLI exits, check that every live-panel row, `orkestrator`
+   included, reads `unknown` and not `connecting`.
+4. Open a row and check that reconnect is still offered and runs through the
+   probe.
+
+**Decisions.**
+
+- **Make it a permanent spec case?**
+  - **Add a no-hold variant to `mcp-ui-matrix.spec.ts` when this runs (recommended).**
+    - Pros: the run repeats on every MCP change; needs no credentials.
+    - Cons: depends on the CLI exiting before a read, which is timing-bound.
+  - **Run it once by hand.**
+    - Pros: no spec to maintain.
+    - Cons: a regression would go unseen.
 
 The MCP server editor ([`mcp-management.md`](../../architecture/mcp-management.md))
 reads and writes each agent platform's own MCP files and reports saved state,

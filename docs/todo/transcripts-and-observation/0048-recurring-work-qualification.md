@@ -26,7 +26,7 @@ evidence from Linux that day; see [Long soak](#long-soak-2026-11-06-linux).
 8. **iOS hidden pause and resume**: the read coordinator across backgrounding and screen lock in the `apps/ios` wrapper. Status: open.
 9. **Real host suspend and resume**: `HostSuspendDetector` against a real sleep. Status: open.
 10. **Long soak and cache gauges**: 50 or more cycles over an hour or more with agent sessions open, and gauges for caches the footprint cannot see. Status: done (2026-11-06: cache gauges in recurring diagnostics, a 60-cycle local soak over more than an hour with fake-model Pi sessions open, and a fix for the one unbounded growth it found, decisions 24 to 28; container lifecycle, a browser reader and three projection maps without eviction moved to [7100](7100-long-soak-follow-ups.md)).
-11. **Multi-client, restarts and an older backend**: two clients with one disconnected, backend and bridge restarts at durable transition boundaries, an older backend. Status: open.
+11. **Multi-client, restarts and an older backend**: two clients with one disconnected, backend and bridge restarts at durable transition boundaries, an older backend. Status: done (2026-11-06: all qualified on Linux with a fake model, `multi-client-restarts-live.spec.ts`, against v2.21.0 for the older backend; two defects fixed, decisions T11.1 and T11.2; what needs a decision is in [7120](7120-multi-client-restart-follow-ups.md)).
 12. **Measured candidates**: 12 cadence and limit candidates to decide from live data. Status: blocked (on tasks 1, 5 and 10); the feature-planning row read is done, and the container fetch failure ladder is decided (keep 5 to 30 min, decision 11).
 13. **Remove the rollback drivers**: `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` and its whole-store drivers, `WorkflowDueScheduler`, and `ORKESTRATOR_NATIVE_OBSERVATION_SHARING`, updating the catalogue. Status: blocked (on tasks 1, 5 and 10).
 14. **Metrics switch decision**: keep `ORKESTRATOR_RECURRING_METRICS` as a permanent kill switch. Status: done (one stale comment left).
@@ -309,6 +309,23 @@ closed.
   - **Add a test-only crash hook at each boundary.**
     - Pros: exact boundaries.
     - Cons: new backend surface that must never ship enabled.
+
+**Outcome (2026-11-06).** Done on Linux without a billed turn or a backend
+hook: the recommended option with a fake model as the boundary control. The
+profile's real Claude CLI talks to a loopback Anthropic endpoint
+(`e2e/agent-testing/fake-anthropic-model.ts`) that parks any prompt marked
+`[hold:<id>]`, so "a dispatch journaled, the provider working" is held for as
+long as a restart takes, and every call is counted.
+`e2e/agent-testing/multi-client-restarts-live.spec.ts` drives two headless
+clients through a disconnect, a queued prompt, a backend crash and a graceful
+restart with a turn held and a prompt queued, a bridge `SIGKILL` mid-turn and
+idle, and today's renderer against v2.21.0, the oldest supported release in
+the register. Results are in
+[Multi-client, restarts and an older backend](#multi-client-restarts-and-an-older-backend-2026-11-06-linux).
+Two defects were fixed (decisions T11.1 and T11.2). The bearer-client concern
+above did not arise: each client signs in again with a fresh `dev:login` link
+after a restart. Follow-ups needing a decision are in
+[7120](7120-multi-client-restart-follow-ups.md).
 
 ### 12. Measured candidates
 
@@ -1003,6 +1020,79 @@ Not covered: containers (the daemon had no free address pool, decision 27;
 [7100](7100-long-soak-follow-ups.md) task 2), a browser reader (7100 task
 4), and providers other than Pi.
 
+### Multi-client, restarts and an older backend (2026-11-06, Linux)
+
+Host: Linux (Arch, kernel 7.1.8), Bun 1.4.4, a `dev:test` build of this
+branch on a credential-free profile
+(`--fixture --no-agent-credentials --agent-platforms claude --headless`,
+`ORKESTRATOR_HOST_REACHABILITY_CHECK=off`), headless Chromium clients, and the
+profile's managed Claude CLI 2.1.314 sent to the fake model through the
+profile's isolated `CLAUDE_CONFIG_DIR`. One full run of
+`multi-client-restarts-live.spec.ts` with 10 rounds passed all six cases.
+Times are wall-clock in the test process, from the action to the client
+showing the result.
+
+| Scenario | Measure | Result | Budget (p95) |
+| --- | --- | --- | --- |
+| Two clients, connected client A (10 rounds) | turn completion visible | p50 175 ms, p95 375 ms | ≤ 3 s |
+| | activity indicator working / idle | p95 2.3 s / 2.7 s | ≤ 4 s |
+| | diff badge after a save (watched local) | p50 452 ms, p95 514 ms | ≤ 2 s |
+| Two clients, client B cut off 4 to 5 s by the outage link | answer, idle and badge after the link returns | p50 6.3 s, p95 13.1 s | none; reconnect ladder ([7120](7120-multi-client-restart-follow-ups.md) task 2) |
+| Queued prompt (10 rounds) | dispatched after the running turn ends | p50 1.36 s, p95 1.81 s | ≤ 3 s |
+| | shown on both clients | p95 1.92 s | ≤ 3 s |
+| Backend crash / graceful restart, turn held, prompt queued | restart to `ready` | 3.1 s / 3.1 s | none |
+| | both clients after sign-in: rows and settled state | ≤ 14 ms after the tab opened | none |
+| | interrupted prompt sent again / queued prompt delivered | 0 / exactly once, after the next turn | at most once |
+| | follow-up turn on the same conversation | 817 ms / 827 ms | ≤ 3 s |
+| Bridge `SIGKILL` mid-turn | both clients settled | 107 ms / 113 ms | ≤ 4 s |
+| | follow-up on the same conversation | 877 ms | ≤ 3 s |
+| Bridge `SIGKILL` idle | next prompt shown on both clients | 826 ms / 831 ms | ≤ 3 s |
+| Older backend v2.21.0, today's renderer, two clients | turn completion A / B | 269 ms / 2.07 s | ≤ 3 s |
+| | activity idle A / B; diff badge A / B | 2.06 s / 2.07 s; 427 ms / 429 ms | ≤ 4 s; ≤ 2 s |
+
+- **Two clients, one disconnected.** B sits behind the outage link from
+  `client-outage-support.ts` in `reset` mode. Before its link returned B had
+  seen neither the answer nor the badge; after it, each client showed the
+  prompt and the answer once, and the model saw the prompt once. B's
+  convergence time is its reconnect rung, not backend work (task 2 of 7120).
+- **Backend restarts.** A backend crash ends the whole `dev:test` profile and
+  the local bridge with it (the parent-bound wrapper), so the held call is
+  aborted and the turn settles as failed with "Claude restarted before this
+  turn finished"; nothing re-sends the prompt. The first public
+  `session.transcript` read after the restart was `current`, 50 rows,
+  `complete: false` (an older-page cursor). An earlier attempt read a
+  restarted bridge's empty preview as `complete: true`; fixed (T11.1). The
+  queued prompt is held while the interrupted turn reads as failed and goes
+  out after the user's next turn ends: delivered once, but after a prompt
+  typed later (7120 task 1).
+- **Bridge restarts.** The first run left the killed bridge's Claude CLI
+  running as an orphan, still waiting on the parked model call; fixed (T11.2).
+  After the fix the held call is aborted and no Claude process of the profile
+  outlives its bridge; the backend logs `bridge.orphans-reaped` for each kill.
+  The next prompt resumes the same conversation (its call carries every
+  earlier prompt).
+- **Older backend.** v2.21.0 was built from its tag in this worktree
+  (`git archive v2.21.0`, `bun install --frozen-lockfile --ignore-scripts`,
+  `bun run --cwd bridges/claude-bridge build` in the archived checkout) and started with
+  `--data-dir`, `HOME` and `CLAUDE_CONFIG_DIR` of its own under `output/`,
+  `--port <free> --control-port 0`, `ORKESTRATOR_CONTROL_MCP_PORT=0` and
+  `--renderer-dev-server-url` set to the profile's current renderer, so the
+  browser ran today's renderer against it. It was given the profile's Claude
+  2.1.314 (it pins 2.1.296). v2.21.0 has no
+  `ORKESTRATOR_HOST_REACHABILITY_CHECK` switch: its first start ran the boot
+  probe (its network create failed, the probe container was ephemeral and
+  nothing of it remained), so later starts set `DOCKER_HOST` to an absent
+  socket. Today's renderer worked: sidebar, turn, legacy diff badge, no page
+  errors; twelve newer commands answered 500 and their fallbacks held. It
+  shows a misleading "has been updated" notice (7120 task 4). Today's CLI ran
+  project, environment and session commands against it over `--url`; its
+  `--data-dir` connection is refused on Linux (7120 task 3).
+- **Harness notes.** The fake key is not a Claude login, so the app's "Claude
+  Code Is Not Logged In" notice opens and the spec dismisses it; a 30 s
+  default click timeout once let a reopening notice outlast the wait, so
+  clicks are bounded at 5 s. The renderer URL changes on every profile
+  restart, so the older-backend case runs first.
+
 ## Outstanding work
 
 ### Qualification
@@ -1055,8 +1145,10 @@ credentials or a platform CI lacks are batched in
   [Long soak](#long-soak-2026-11-06-linux)). Still owed, in
   [7100](7100-long-soak-follow-ups.md): the same soak with containers, and
   one with a browser reader.
-- Two clients with one disconnected; backend and bridge restarts at durable
-  transition boundaries; an older backend.
+- ~~Two clients with one disconnected; backend and bridge restarts at durable
+  transition boundaries; an older backend~~. Done 2026-11-06 on Linux (see
+  [Multi-client, restarts and an older backend](#multi-client-restarts-and-an-older-backend-2026-11-06-linux));
+  follow-ups in [7120](7120-multi-client-restart-follow-ups.md).
 - ~~Real-browser QA of the Files panel, the coordinator view, validation
   output and hidden-document reconcile~~. Done 2026-11-01
   (`container-files-wiring.spec.ts` and `container-app-wiring.spec.ts`; see
@@ -1619,11 +1711,97 @@ Recorded 2026-11-01 by the worker that closed task 4's remaining cases.
     "a stop that gives up while the launcher is still exiting waits for it,
     then resets").
 
+### Task 11 (2026-11-06)
+
+Recorded by the worker that ran task 11. Numbered T11.n so they do not collide
+with other tasks' decisions.
+
+- **T11.1 Public transcript `complete` on a restart preview (bug, fixed).**
+  The first `session.transcript` read after a backend restart answered
+  `messages: []`, `freshness: "cached"`, `truncated: true` and
+  `complete: true` for a conversation with three rows: a restarted Claude
+  bridge's first preview holds no rows and no history cursor, and the action
+  derived `complete` from the missing cursor alone. Options: report
+  `complete` only when the view's own `historyComplete` says so; or hide the
+  preview and wait for the hydrated view. Chosen: the former
+  (`actions-transcript.ts`). Why: the contract says `complete` means no older
+  history exists, and the view already states that; waiting would hold a read
+  open on a bridge. Pros: one condition; a cached empty page now reads as
+  incomplete. Cons: a reader that treated `complete` as "nothing more to
+  fetch" re-reads once. Test: `public-api-launch.test.ts` ("a restart preview
+  with no rows and no cursor is not complete", which fails without the fix).
+- **T11.2 Agent CLIs outliving a bridge that died (bug, fixed).** A bridge
+  killed or crashed mid-turn left its Claude CLI running, still on the turn
+  the user was told had stopped: against a real provider it would finish (and
+  bill) that turn and write into the conversation the next bridge resumes.
+  `terminateProcessTree` finds descendants by parent pid, which only works
+  while the bridge is alive, and the exit handler only logged. Options: reap
+  the dead bridge's process group on an exit nobody asked for; make each
+  bridge bind its CLI to its own lifetime; or both. Chosen: the group reap,
+  for every local bridge kind (`reapProcessGroup` in `process-tree.ts`,
+  `reapAfterUnrequestedExit` in `local-server-runtime.ts`, called from the
+  bridge exit handler in `commands-servers.ts`). Why: the backend spawns each
+  bridge `detached`, so the group is its own to signal (AGENTS.md), and one
+  place covers all five bridges and OpenCode. SIGTERM, 2 s, then SIGKILL; an
+  empty group answers ESRCH, and Linux does not reuse a pid that still names
+  a live group. It is off when a test substitutes `spawn`, so a fake child's
+  pid is never signalled as a group. New essential event
+  `bridge.orphans-reaped` (`warn`, `error` if one survived). Pros: no bridge
+  change, works for a bridge of any age. Cons: a CLI that leaves the group
+  (none does today) is not reached. Tests: `process-tree.test.ts` (unit cases
+  and a real SIGKILLed detached leader whose child is stopped),
+  `local-server-runtime.test.ts`, `log-essential.test.ts`; live, the bridge
+  case now sees the held call aborted.
+- **T11.3 Fake model rather than real providers.** Options: a loopback
+  Anthropic endpoint behind the real Claude CLI; the bridges' in-process fake
+  engines (Pi, Cursor); real providers. Chosen: the loopback endpoint. Why:
+  the ticket forbids billed turns, and the in-process engines need a test
+  host rather than a `dev:test` profile, while the CLI path keeps the real
+  bridge, CLI, journal and resume. Cons: Claude only; Codex and OpenCode
+  restarts stay with 0049 and the cold-restart spec.
+- **T11.4 Older backend from source.** Options: build v2.21.0 from its tag in
+  this worktree; install the published npm package; record it as not run.
+  Chosen: the tag, under `output/` (git-ignored), with its own data and home
+  and Docker unreachable. Why: no external download beyond the frozen
+  lockfile's packages, and the tag is the release. Cons: it ran the current
+  Claude CLI rather than its pinned one; the launcher is not committed (7120
+  task 5).
+- **T11.5 What counts as a durable boundary here.** Local bridges die with
+  their backend, so "restart mid-dispatch" for a local environment is always
+  "turn interrupted": the boundaries qualified are the dispatch accepted with
+  the provider working (held call), the prompt queued durably, and the result
+  arriving after the restart (the follow-up and the queued prompt). Review
+  added a separate result-accepted case for both backend crash and bridge
+  restart: wait for the answer and settled turn, restart, recover the answer
+  after opening and reloading, continue with the earlier prompt in context,
+  and require exactly one original provider dispatch. This qualifies recovery
+  of an already settled result; it does not inject a crash between accepting
+  a provider result and publishing the settled turn.
+  A container bridge outlives a backend restart and is not covered here; it
+  belongs with the Docker runs in 0031.
+- **T11.6 Review coverage.** The restart cases now await held-call abortion
+  before continuing and assert the earlier prompt is present in the next
+  provider request's context. Context stays in memory and is not written to
+  evidence. The command integration tests inject a reaper to check the actual
+  exit callback and verify replacement-start termination bypasses it. The
+  public transcript regression pages to the start of an incomplete window
+  without a history cursor and requires every page to remain incomplete.
+  Targeted validation on credential-free profile `q48-fix-fe80`: both backend
+  held-turn restart cases passed; the bridge case initially failed because
+  it killed the bridge after rendering an answer without waiting for idle.
+  After adding the idle-state barrier, the bridge case and both new
+  result-accepted cases passed (3/3). The profile was stopped and reset.
+  Focused command-exit and public transcript tests passed (18/18), as did
+  fake-model tests (9/9), the documentation task-surface guard and Playwright
+  spec loading. Earlier review-wide failures remain separately recorded.
+
 ## Related
 
 - [7100-long-soak-follow-ups.md](7100-long-soak-follow-ups.md): what task 10's
   long soak left (containers, a browser reader, three projection maps
   without eviction).
+- [7120-multi-client-restart-follow-ups.md](7120-multi-client-restart-follow-ups.md):
+  what task 11's run left for a decision.
 - [0049-native-agent-idle-observation.md](0049-native-agent-idle-observation.md),
   retired `0051-client-reconnect-and-freshness.md` (deleted 2026-11-06;
   remaining checks are tasks 16–20 here) and

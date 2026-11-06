@@ -1319,6 +1319,7 @@ async function startLocalServerAttempt(
   forwardBridgeOutput(child, `${kind}:${environmentId}`);
   child.once("exit", (code, signal) => {
     localServers.reportBridgeExit(key, child, code, signal);
+    void localServers.reapAfterUnrequestedExit(key, child);
     // An unhealthy child may exit after its replacement has already claimed the
     // key. Only the process that still owns the entry may remove it.
     if (!localServers.releaseOwnership(key, child)) return;

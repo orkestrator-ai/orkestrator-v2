@@ -86,3 +86,55 @@ describe("reportBridgeExit", () => {
     ]);
   });
 });
+
+describe("reapAfterUnrequestedExit", () => {
+  const recordingRuntime = (result: "empty" | "stopped" | "survived") => {
+    const reaped: Array<number | undefined> = [];
+    const servers = new LocalServerRuntime({
+      terminateProcessTree: async () => true,
+      reapProcessGroup: async (pgid) => {
+        reaped.push(pgid);
+        return result;
+      },
+    });
+    return { servers, reaped };
+  };
+  const reaps = () => logs.records().filter((record) => record.event === "bridge.orphans-reaped");
+
+  test("a bridge that died on its own has its group reaped, and the reap is logged", async () => {
+    const { servers, reaped } = recordingRuntime("stopped");
+    await servers.reapAfterUnrequestedExit(KEY, fakeChild(201));
+    expect(reaped).toEqual([201]);
+    expect(reaps()).toMatchObject([
+      { level: "warn", fields: { key: KEY, pid: 201, result: "stopped" } },
+    ]);
+  });
+
+  test("an empty group is reaped quietly, and a survivor is an error", async () => {
+    const quiet = recordingRuntime("empty");
+    await quiet.servers.reapAfterUnrequestedExit(KEY, fakeChild(202));
+    expect(quiet.reaped).toEqual([202]);
+    expect(reaps()).toEqual([]);
+    const stuck = recordingRuntime("survived");
+    await stuck.servers.reapAfterUnrequestedExit(KEY, fakeChild(203));
+    expect(reaps()).toMatchObject([{ level: "error", fields: { result: "survived" } }]);
+  });
+
+  test("a stop the backend asked for is left to terminate", async () => {
+    const { servers, reaped } = recordingRuntime("stopped");
+    const child = fakeChild(204);
+    servers.adoptProcess(KEY, child);
+    await servers.terminate(KEY, child, "stop requested");
+    await servers.reapAfterUnrequestedExit(KEY, child);
+    expect(reaped).toEqual([]);
+  });
+
+  test("a failing reaper never rejects", async () => {
+    const servers = new LocalServerRuntime({
+      reapProcessGroup: async () => {
+        throw new Error("ps failed");
+      },
+    });
+    await expect(servers.reapAfterUnrequestedExit(KEY, fakeChild(205))).resolves.toBeUndefined();
+  });
+});

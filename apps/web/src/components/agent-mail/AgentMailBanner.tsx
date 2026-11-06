@@ -34,10 +34,13 @@ export function AgentMailBanner({
   environmentId,
   tabId,
   agentAvailable = true,
+  deliveryHeldReason,
 }: {
   environmentId: string;
   tabId: string;
   agentAvailable?: boolean;
+  /** This recipient can be read, but delivery waits for this hold to clear. */
+  deliveryHeldReason?: string;
 }) {
   const mailboxId = `${environmentId}\0${tabId}`;
   const entry = useAgentMailStore((state) => state.summary.get(mailboxId));
@@ -169,6 +172,7 @@ export function AgentMailBanner({
       paused.placementReason === AGENT_MAIL_HOURLY_LIMIT_REASON
         ? "Delivery paused: hourly limit · resumes on its own"
         : "Delivery paused: loop budget";
+  else if (deliveryHeldReason) text = `Delivery waiting: ${deliveryHeldReason}`;
   else if (pending?.placementReason === "retrying")
     text = "Delivery was refused · retrying automatically";
   else if (pending?.placementReason === "verifying")
@@ -194,6 +198,8 @@ export function AgentMailBanner({
     text = `${blockedCount} message${blockedCount === 1 ? "" : "s"} in inbox · ${refusalOf(inInbox[0]!)}`;
   else
     text = `${entry.pendingInjectCount} message${entry.pendingInjectCount === 1 ? "" : "s"} waiting · delivers when this agent is idle`;
+
+  if (deliveryHeldReason && (failed || paused)) text += ` · ${deliveryHeldReason}`;
 
   const tone: FloatingNoticeTone = failed
     ? "error"
@@ -221,6 +227,7 @@ export function AgentMailBanner({
             size="sm"
             variant="secondary"
             className={FLOATING_NOTICE_ACTION}
+            disabled={deliveryHeldReason !== undefined}
             onClick={() => void retry(failed.id)}
           >
             <RotateCcw className="size-3" />
@@ -241,12 +248,13 @@ export function AgentMailBanner({
           size="sm"
           variant="secondary"
           className={FLOATING_NOTICE_ACTION}
+          disabled={deliveryHeldReason !== undefined}
           onClick={() => void retry(paused.id)}
         >
           Resume
         </Button>
       )}
-      {(pending || releasable.length > 0) && (
+      {!deliveryHeldReason && (pending || releasable.length > 0) && (
         <Button
           size="sm"
           variant="secondary"

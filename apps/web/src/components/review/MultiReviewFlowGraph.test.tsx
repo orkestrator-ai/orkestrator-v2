@@ -1150,7 +1150,7 @@ describe("zoom and pan", () => {
       expect(viewport().scrollLeft).toBe(maxScroll);
 
       fireEvent.click(screen.getByTestId("multi-review-fullscreen"));
-      expect(document.querySelector("[data-flow-fullscreen]")).toBeNull();
+      expect(document.querySelector("[data-flow-fullscreen]") === null).toBe(true);
       expect(viewport().scrollLeft).toBe(maxScroll);
     } finally {
       window.matchMedia = matchMedia;

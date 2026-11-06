@@ -12,3 +12,18 @@
 - **Isolated rerun:** `mise run test:logged -- --name object-write-alone -- bun --cwd=apps/backend test ./src/core/change-tracking/object-store-write-path.test.ts --parallel=1 --only-failures` passed, exit 0, 3.3 s.
 
 Preparation had also reported this timeout. No implementation or assertion changed. The post-timeout ENOENT is consistent with cleanup racing outstanding work; the cause of the initial timeout is unestablished. Keep the assertions and investigate recurrence.
+
+## Recurrence 2026-11-06 — coordinator Work panel removal
+
+`mise run test:logged -- --name address-default-suite -- mise run test`
+failed on this unchanged backend test at 5013.31 ms (5,000 ms deadline)
+with four backend workers. Backend totals: 16,356 pass, 126 skip, three failures and two errors;
+web: 12,990 pass, zero failures. The same run also caught two new test type
+errors, corrected in `5f5cb11b1`. Evidence:
+`/tmp/orkestrator-test-run.srVdfm/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+
+The owning file passed unchanged with
+`mise run test:logged -- --name address-object-store-isolated -- bun test --cwd apps/backend ./src/core/change-tracking/object-store-write-path.test.ts --parallel=1 --only-failures`
+(exit 0, 6.6 s). No assertion, skip, or timeout was changed. The coordinator
+renderer removal does not edit this backend path; initial timeout cause remains
+unconfirmed. A fresh aggregate run follows the test type fix.

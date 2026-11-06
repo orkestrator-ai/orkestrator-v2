@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   parseProcessTable,
+  reapProcessGroup,
   terminateProcessTree,
   type ProcessTreeRuntime,
   type ProcessTreeSignal,
@@ -177,4 +178,100 @@ describe("process-tree termination", () => {
       await rm(directory, { recursive: true, force: true });
     }
   });
+});
+
+describe("process-group reaping after the leader exited", () => {
+  function groupSignaller(options: { members: number; leaveOn?: ProcessTreeSignal }) {
+    let members = options.members;
+    const signals: Array<ProcessTreeSignal | 0> = [];
+    const signalGroup = (_pgid: number, signal: ProcessTreeSignal | 0) => {
+      signals.push(signal);
+      if (members === 0) return false;
+      if (signal !== 0 && signal === options.leaveOn) members = 0;
+      return true;
+    };
+    let clock = 0;
+    return {
+      signals,
+      options: {
+        graceMs: 1_000,
+        killWaitMs: 500,
+        signalGroup,
+        now: () => clock,
+        sleep: async (ms: number) => {
+          clock += ms;
+        },
+      },
+    };
+  }
+
+  test("an empty group answers empty after one signal", async () => {
+    const { signals, options } = groupSignaller({ members: 0 });
+    await expect(reapProcessGroup(4242, options)).resolves.toBe("empty");
+    expect(signals).toEqual(["SIGTERM"]);
+  });
+
+  test("members that leave on SIGTERM are never killed", async () => {
+    const { signals, options } = groupSignaller({ members: 1, leaveOn: "SIGTERM" });
+    await expect(reapProcessGroup(4242, options)).resolves.toBe("stopped");
+    expect(signals).not.toContain("SIGKILL");
+  });
+
+  test("members that outlast the grace are killed, and a survivor is reported", async () => {
+    const killed = groupSignaller({ members: 1, leaveOn: "SIGKILL" });
+    await expect(reapProcessGroup(4242, killed.options)).resolves.toBe("stopped");
+    expect(killed.signals[0]).toBe("SIGTERM");
+    expect(killed.signals).toContain("SIGKILL");
+    const stuck = groupSignaller({ members: 1 });
+    await expect(reapProcessGroup(4242, stuck.options)).resolves.toBe("survived");
+  });
+
+  test("never signals a missing pid or the init and session groups", async () => {
+    for (const pgid of [undefined, 0, 1]) {
+      const { signals, options } = groupSignaller({ members: 1 });
+      await expect(reapProcessGroup(pgid, options)).resolves.toBe("empty");
+      expect(signals).toEqual([]);
+    }
+  });
+
+  test.skipIf(process.platform === "win32")(
+    "a real orphan left by a SIGKILLed detached leader is stopped",
+    async () => {
+      // The leader starts a child that ignores stdin EOF, as an agent CLI with
+      // a request in flight does, then is killed the way a crashed bridge is.
+      const leader = spawn("/bin/sh", ["-c", "sleep 30 & echo $!; wait"], {
+        detached: true,
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      const orphan = Number(
+        await new Promise<string>((resolve) =>
+          leader.stdout.once("data", (data) => resolve(String(data))),
+        ),
+      );
+      const alive = (pid: number) => {
+        try {
+          process.kill(pid, 0);
+          return true;
+        } catch {
+          return false;
+        }
+      };
+      try {
+        const exited = new Promise((resolve) => leader.once("exit", resolve));
+        leader.kill("SIGKILL");
+        await exited;
+        expect(alive(orphan)).toBe(true);
+        await expect(
+          reapProcessGroup(leader.pid, { graceMs: 2_000, killWaitMs: 1_000 }),
+        ).resolves.toBe("stopped");
+        expect(alive(orphan)).toBe(false);
+        await expect(
+          reapProcessGroup(leader.pid, { graceMs: 2_000, killWaitMs: 1_000 }),
+        ).resolves.toBe("empty");
+      } finally {
+        // Only this test's own child, by the pid it reported.
+        if (alive(orphan)) process.kill(orphan, "SIGKILL");
+      }
+    },
+  );
 });

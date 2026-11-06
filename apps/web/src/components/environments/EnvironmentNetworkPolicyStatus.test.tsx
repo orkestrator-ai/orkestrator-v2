@@ -189,7 +189,7 @@ describe("environment network policy status", () => {
     render(<EnvironmentNetworkPolicyStatus environmentId="env-net" />);
     await screen.findByText(/Name checks require network policy 3/);
     expect(screen.getByText(/network policy 2 override is removed/)).toBeTruthy();
-    expect(screen.queryByText(/image predates name checks/)).toBeNull();
+    expect(screen.queryByText(/image predates name checks/) === null).toBe(true);
     cleanup();
     // An older image's gateway reports no such field: addresses only.
     install({

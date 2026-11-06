@@ -391,6 +391,9 @@ describe("dev:test bridge builds", () => {
       seeded: [],
       failed: [],
     });
+    const prefetch = spyOn(profileIo, "prefetchAgentToolchains").mockResolvedValue({
+      downloaded: [],
+    });
     const credentials = spyOn(profileIo, "seedAgentTestProviderCredentials").mockResolvedValue([]);
     const log = spyOn(console, "log").mockImplementation(() => {});
     // Root runs preload Happy DOM; package runs use Bun's native fetch already.
@@ -399,7 +402,11 @@ describe("dev:test bridge builds", () => {
       Symbol.for("orkestrator.tests.native-web-platform"),
     ) as { fetch: typeof fetch } | undefined;
     const fetchRuntime = nativePlatform?.fetch ?? globalThis.fetch;
-    const request = spyOn(globalThis, "fetch").mockImplementation(fetchRuntime);
+    const request = spyOn(globalThis, "fetch").mockImplementation(((input, init) => {
+      if (!String(input).startsWith("http://127.0.0.1:"))
+        throw new Error("Outbound fetch forbidden in lifecycle test");
+      return fetchRuntime(input, init);
+    }) as typeof fetch);
     const signals = new Map(
       (["SIGINT", "SIGTERM"] as const).map((signal) => [signal, process.listeners(signal)]),
     );
@@ -476,6 +483,7 @@ describe("dev:test bridge builds", () => {
       preparation.mockRestore();
       cache.mockRestore();
       toolchains.mockRestore();
+      prefetch.mockRestore();
       credentials.mockRestore();
       log.mockRestore();
       request.mockRestore();
@@ -511,7 +519,13 @@ describe("dev:test bridge builds", () => {
       failed: [],
     });
     // Keeps the start off the host's own provider logins.
+    const prefetch = spyOn(profileIo, "prefetchAgentToolchains").mockResolvedValue({
+      downloaded: [],
+    });
     const credentials = spyOn(profileIo, "seedAgentTestProviderCredentials").mockResolvedValue([]);
+    const request = spyOn(globalThis, "fetch").mockImplementation((async () => {
+      throw new Error("Outbound fetch forbidden in lifecycle test");
+    }) as unknown as typeof fetch);
     try {
       await expect(
         startDevelopment(args, "agent-test", {
@@ -543,8 +557,10 @@ describe("dev:test bridge builds", () => {
       expect(status.status).toBe("failed");
       expect(status.error).toContain("bridge-build.log");
     } finally {
+      request.mockRestore();
       cache.mockRestore();
       toolchains.mockRestore();
+      prefetch.mockRestore();
       credentials.mockRestore();
     }
   });

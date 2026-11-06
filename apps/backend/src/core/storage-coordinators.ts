@@ -860,6 +860,47 @@ export class CoordinatorsRepository {
   }
 
   /**
+   * The committed revision of the coordinator store, read without loading it.
+   * Every write moves it, so an unchanged revision means a value read at it is
+   * still current. Null while the store has never been written.
+   */
+  coordinatorStoreRevision(): number | null {
+    return this.context.database.storeRevision(
+      this.context.storeForFile(this.files.coordinatorsFile())!,
+    );
+  }
+
+  /**
+   * The open delegations and the store revision they are at, for a caller that
+   * re-checks one delegation later and only needs to read again once the store
+   * has changed ({@link coordinatorStoreRevision}). The revision is taken
+   * before the read, so a write landing between them reads as a change.
+   */
+  async readOpenCoordinatorDelegations(): Promise<{
+    revision: number | null;
+    open: CoordinatorWorkflowAssociation[];
+  }> {
+    const revision = this.coordinatorStoreRevision();
+    return { revision, open: await this.listOpenCoordinatorDelegations() };
+  }
+
+  /**
+   * Every delegation that still owes its coordinator a wake: open, or closed
+   * and not yet woken. One read for both, as mail moves and orphaned holds
+   * need the two together.
+   */
+  async listOwedCoordinatorDelegationIds(): Promise<Set<string>> {
+    return new Set(
+      (await this.loadCoordinatorStore()).workflows
+        .filter(
+          ({ delegation }) =>
+            delegation !== undefined && (delegation.state === "running" || !delegation.wokenAt),
+        )
+        .map((association) => association.id),
+    );
+  }
+
+  /**
    * Every delegation whose worker has finished but whose wake was not delivered.
    *
    * The close and the wake are two writes, so a crash between them is possible.
@@ -989,11 +1030,36 @@ export class CoordinatorsRepository {
     state: "completed" | "failed" | "stopped",
     at = new Date().toISOString(),
     backgroundWorkTimeoutMs?: number,
+    options: {
+      /**
+       * Chooses the wake this close owes, recorded in the same write so the
+       * wake pass need not write it separately. Called under the store lock
+       * with the record and its coordinator as they are being closed, so no
+       * close of that coordinator's main can land between the choice and the
+       * write. Undefined leaves the choice to the wake pass.
+       */
+      wakeKind?: (
+        association: CoordinatorWorkflowAssociation,
+        owner: CoordinatorWorkspace | null,
+      ) => Promise<"report" | "notice" | undefined>;
+      /**
+       * False leaves the change unannounced, for a caller whose wake's final
+       * write announces it (`CoordinatorService`).
+       */
+      announce?: boolean;
+    } = {},
   ): Promise<CoordinatorWorkflowAssociation | null> {
     return this.enqueueCoordinatorMutation(async () => {
       const store = await this.loadCoordinatorStore();
       const association = store.workflows.find((item) => item.id === associationId);
       if (!association?.delegation || association.delegation.state !== "running") return null;
+      const owner =
+        Object.values(store.workspaces).find(
+          (workspace) => workspace.id === association.coordinatorId,
+        ) ?? null;
+      const wakeKind = options.wakeKind
+        ? await options.wakeKind(association, owner).catch(() => undefined)
+        : undefined;
       association.delegation = {
         ...association.delegation,
         state,
@@ -1001,18 +1067,27 @@ export class CoordinatorsRepository {
         ...(state === "completed" && backgroundWorkTimeoutMs !== undefined
           ? { backgroundWorkTimeoutMs }
           : {}),
+        ...(wakeKind ? { wakeKind } : {}),
       };
       store.revision += 1;
       await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
-      this.context.changes.announce("coordinator", association.projectId, association.projectId);
+      if (options.announce !== false) {
+        this.context.changes.announce("coordinator", association.projectId, association.projectId);
+      }
       return association;
     });
+  }
+
+  /** Announce a coordinator change whose write was not announced (`announce: false`). */
+  announceCoordinatorChange(projectId: string): void {
+    this.context.changes.announce("coordinator", projectId, projectId);
   }
 
   /**
    * Persist what kind of wake this delegation owns before performing the
    * separate mail-store write. A retry can then distinguish an already-released
-   * report from a genuinely silent worker.
+   * report from a genuinely silent worker. Not announced: the kind is the
+   * backend's bookkeeping, and the wake's final write announces the wake.
    */
   async prepareCoordinatorDelegationWake(
     associationId: string,
@@ -1026,7 +1101,6 @@ export class CoordinatorsRepository {
       association.delegation = { ...association.delegation, wakeKind };
       store.revision += 1;
       await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
-      this.context.changes.announce("coordinator", association.projectId, association.projectId);
       return association;
     });
   }
@@ -1477,7 +1551,11 @@ export type CoordinatorsStorage = Pick<
   | "openCoordinatorDelegation"
   | "listOpenCoordinatorDelegations"
   | "listUnwokenCoordinatorDelegations"
+  | "coordinatorStoreRevision"
+  | "readOpenCoordinatorDelegations"
+  | "listOwedCoordinatorDelegationIds"
   | "closeCoordinatorDelegation"
+  | "announceCoordinatorChange"
   | "releaseCoordinatorNodeWorkflows"
   | "listCoordinatorNodeReleaseNoticesOwed"
   | "markCoordinatorNodeReleaseNotified"

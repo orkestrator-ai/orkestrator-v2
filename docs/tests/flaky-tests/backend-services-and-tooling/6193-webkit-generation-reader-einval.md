@@ -54,7 +54,6 @@ under the macOS temporary root recorded above. The isolated sidebar evidence
 is `orkestrator-test-run.QkzK4Z/merge-sidebar-rerun.log.gz`. No test assertion,
 implementation, timeout or skip was changed.
 
-
 ## Launch override review recurrence — 2026-11-05
 
 Preparation at `2c3a5e7e7a1d8d37d6c95486ac5ee3f2b0cdda73` repeated the same
@@ -79,3 +78,23 @@ mise run test:logged -- --name recorded-webkit -- bun test ./tests/unit/playwrig
 Passing output was deleted by the logged runner; no per-test totals were
 retained. This is another observation of the existing flake, not a root-cause
 fix. No assertions, skips, timing budgets, or WebKit implementation changed.
+
+## Coordinator transcript review recurrence — 2026-11-06
+
+At commit `decf86b98`, `mise run test:logged -- --name review-default-tests -- mise run test`
+ran the root group with one worker alongside five workspace and two bridge
+slots; a five-worker component-browser suite was also active. The same concurrent reader failed with EINVAL at line 651 in 177.14 ms.
+The root group finished with 3,638 passed, 10 failed and two errors across
+185 files in 821.36 s. Its other failures are not attributed to this case.
+Evidence: `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.JSZUOY/root-and-agent-support-tests.log.gz`.
+
+The unchanged complete owner passed alone with exit 0 in 2.2 s:
+
+```sh
+mise run test:logged -- --name review-webkit-owner -- bun test tests/unit/playwright-webkit-host-libs.test.ts --parallel=1 --only-failures
+```
+
+Passing output was deleted by the logged runner, so individual passing case
+counts were not retained. This branch changes neither this owner nor its
+implementation. No assertion, timeout or skip changed. The isolated pass
+establishes intermittence; it does not establish the underlying cause.

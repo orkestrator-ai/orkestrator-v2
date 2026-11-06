@@ -150,9 +150,69 @@ function snapshot(version: string, latestVersion: string | null) {
   };
 }
 
-function routed(command: string, nodeId: string): unknown {
+// In the fleet, Laptop is already current and the rest are one release behind.
+// An update request starts a job that the fixture leaves downloading.
+const FLEET_VERSIONS: Record<string, string> = { bk_laptop: "2.26.0" };
+const fleetJobs: Record<string, unknown> = {};
+const FLEET_IMPACT: Record<string, { workingAgents: number; terminals: number }> = {
+  bk_self: { workingAgents: 1, terminals: 2 },
+  bk_build: { workingAgents: 3, terminals: 0 },
+  bk_rack: { workingAgents: 0, terminals: 0 },
+};
+
+function maintenance(nodeId: string) {
+  const job = fleetJobs[nodeId] ?? null;
+  return {
+    ...snapshot(fleetMode ? (FLEET_VERSIONS[nodeId] ?? "2.25.0") : "2.25.0", "2.26.0"),
+    revision: job ? 3 : 2,
+    job,
+  };
+}
+
+function requestUpdate(nodeId: string, args: Record<string, unknown> | undefined) {
+  const at = new Date().toISOString();
+  const version = typeof args?.version === "string" ? args.version : null;
+  fleetJobs[nodeId] = {
+    id: `job-${nodeId}`,
+    state: "downloading",
+    fromVersion: maintenance(nodeId).version,
+    requestedVersion: version,
+    targetVersion: version,
+    drain: args?.drain ?? "now",
+    idleDeadline: null,
+    progressPercent: 40,
+    restartAt: null,
+    error: null,
+    requestedAt: at,
+    updatedAt: at,
+    completedAt: null,
+  };
+  const requested = JSON.parse(localStorage.getItem("machines-fixture-updates") ?? "[]");
+  localStorage.setItem(
+    "machines-fixture-updates",
+    JSON.stringify([...requested, { nodeId, ...args }]),
+  );
+  return { job: fleetJobs[nodeId], snapshot: maintenance(nodeId) };
+}
+
+function restartImpact(nodeId: string) {
+  const impact = FLEET_IMPACT[nodeId] ?? { workingAgents: 0, terminals: 0 };
+  return {
+    ...impact,
+    waitingAgents: 0,
+    activePipelines: 0,
+    containerTerminals: 0,
+    hostServers: 0,
+    measuredAt: new Date().toISOString(),
+  };
+}
+
+function routed(command: string, nodeId: string, args?: Record<string, unknown>): unknown {
   if (command === "get_system_usage") return usageSample(nodeId);
-  if (command === "get_host_maintenance") return snapshot("2.25.0", "2.26.0");
+  if (command === "get_host_maintenance" || command === "request_host_update_check")
+    return maintenance(nodeId);
+  if (command === "request_host_update") return requestUpdate(nodeId, args);
+  if (command === "get_host_restart_impact") return restartImpact(nodeId);
   if (command === "get_backend_profile") {
     return { revision: 2, displayName: deskNode.displayName, colorToken: "teal", updatedAt: "t" };
   }
@@ -252,7 +312,10 @@ function installMachinesFixture() {
           case "get_backend_profile":
             return { revision: 1, displayName: "Studio", colorToken: "violet", updatedAt: "t" };
           case "get_host_maintenance":
+          case "request_host_update_check":
             return snapshot("2.26.0", "2.26.0");
+          case "get_host_restart_impact":
+            return restartImpact("bk_self");
           case "list_machine_agent_accounts":
             return {
               machines: [
@@ -286,7 +349,11 @@ function installMachinesFixture() {
           case "invoke_on_node":
             return {
               outcome: "ok",
-              result: routed(String(args?.command), String(args?.nodeId)),
+              result: routed(
+                String(args?.command),
+                String(args?.nodeId),
+                args?.args as Record<string, unknown> | undefined,
+              ),
             };
           case "add_node":
             localStorage.setItem("machines-fixture-add-node", JSON.stringify(args));

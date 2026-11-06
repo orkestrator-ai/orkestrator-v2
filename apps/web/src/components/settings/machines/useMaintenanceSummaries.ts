@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   HOST_MAINTENANCE_EVENT,
+  isActiveHostUpdateJob,
   type HostMaintenanceSnapshot,
 } from "@orkestrator/protocol/host-maintenance";
+import { useMachineBulkUpdateStore } from "@/stores/machineBulkUpdateStore";
 import { portalListen } from "@/lib/portal/portal-transport";
 import { machineMaintenanceClient } from "./machine-access";
 import type { MachineEntry } from "./machine-list";
@@ -10,6 +12,8 @@ import { mergeMaintenanceSnapshot } from "./useMachineMaintenance";
 
 /** How often the list reads every machine's maintenance again while it is shown. */
 const SUMMARY_REFRESH_MS = 5 * 60_000;
+/** How often a machine with an update in progress is read again. */
+const UPDATING_REFRESH_MS = 3_000;
 
 export interface MaintenanceSummary {
   snapshot: HostMaintenanceSnapshot | null;
@@ -32,7 +36,20 @@ function keep(
  * follows its events, and the updates dialog reports what it reads.
  */
 export function useMaintenanceSummaries(entries: MachineEntry[]) {
-  const [summaries, setSummaries] = useState<Record<string, MaintenanceSummary>>({});
+  const [localSummaries, setSummaries] = useState<Record<string, MaintenanceSummary>>({});
+  const bulkSnapshots = useMachineBulkUpdateStore((state) => state.snapshots);
+  // A detached request publishes here even after the page that started it
+  // unmounts. A new page immediately sees it and starts polling active jobs.
+  const summaries = useMemo(() => {
+    const merged = { ...localSummaries };
+    for (const [key, snapshot] of Object.entries(bulkSnapshots)) {
+      const local = merged[key]?.snapshot;
+      if (!local || snapshot.revision > local.revision) {
+        merged[key] = keep(merged[key], snapshot);
+      }
+    }
+    return merged;
+  }, [localSummaries, bulkSnapshots]);
   const reachable = entries.filter((entry) => entry.maintenance);
   const signature = reachable
     .map((entry) => `${entry.key}|${entry.nodeId}`)
@@ -77,6 +94,40 @@ export function useMaintenanceSummaries(entries: MachineEntry[]) {
       clearInterval(timer);
     };
   }, [record, signature]);
+
+  // A machine updating reports its progress only when read, so it is read
+  // often until its job settles. The command node's own events cover it.
+  const updating = reachable
+    .filter(
+      (entry) =>
+        entry.role !== "self" &&
+        (isActiveHostUpdateJob(summaries[entry.key]?.snapshot?.job ?? null) ||
+          summaries[entry.key]?.snapshot?.checkRequest),
+    )
+    .map((entry) => entry.key)
+    .sort()
+    .join(",");
+  useEffect(() => {
+    if (!updating) return;
+    const keys = new Set(updating.split(","));
+    let cancelled = false;
+    const timer = setInterval(() => {
+      for (const entry of targets.current) {
+        if (!keys.has(entry.key)) continue;
+        machineMaintenanceClient(entry)
+          ?.getHostMaintenance()
+          .then(
+            (snapshot) => !cancelled && record(entry.key, snapshot),
+            // A restarting machine does not answer for a while; the next read tries again.
+            () => undefined,
+          );
+      }
+    }, UPDATING_REFRESH_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [record, updating]);
 
   // The command node's own events reach this client.
   const selfKey = reachable.find((entry) => entry.role === "self")?.key ?? null;

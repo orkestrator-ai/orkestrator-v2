@@ -180,7 +180,7 @@ browser previews, so they get the fix too.
 
 ### Task 1: surviving network churn in the headless check
 
-The spec fetches scripts and styles with `route.fetch()`, and retries its navigation with a new single-use login link, rather than relying on a quiet host. Its `/proc` assertions run first and are not retried. That keeps the proof independent of other builds' Docker work, which failed the previous version every time when reproduced. Only this spec changed: applying it across the suite changes what those journeys exercise, so that choice was left to [4222](4222-browser-failures-left-after-headless-qualification.md) task 3, which has since applied it to the whole browser suite through `e2e/agent-testing/browser-test.ts`. Retries for the whole browser config were not used, since they would also pass real intermittent failures.
+The spec fetches scripts and styles with `route.fetch()`, and retries its navigation with a new single-use login link, rather than relying on a quiet host. Its `/proc` assertions run first and are not retried. That keeps the proof independent of other builds' Docker work, which failed the previous version every time when reproduced. Only this spec changed: applying it across the suite changes what those journeys exercise, so that choice was left to 4222 (done; deleted 2026-11-06) task 3, which has since applied it to the whole browser suite through `e2e/agent-testing/browser-test.ts`. Retries for the whole browser config were not used, since they would also pass real intermittent failures.
 
 ### Task 1: the runner's test budget
 
@@ -269,7 +269,7 @@ launcher's child. The four failures:
 | `headless-profile.spec.ts` | Its last check did not find the `DEV ·` label with `getByText`; it now checks for the project in the sidebar. | Fixed; passed alone against a `--headless` profile |
 | `web-annotations-gateway.spec.ts`, `a desktop capture…` | The reachability modal, on a page the spec's own helper creates. | Fixed; passed alone against a `--headless` profile |
 | `cli-ui.spec.ts`, `a CLI-initialized project…` | Flake [0901](../../tests/flaky-tests/web-ui/0901-cli-ui-fixture-project-hydration.md): a blank page after a second navigation. | Fixed; 10 of 10 across both cases that share the helper |
-| `terminal-input-resume.spec.ts`, `a lost terminal write…` | The host has no `vim`. | Fixed 2026-11-04; see [4222](4222-browser-failures-left-after-headless-qualification.md) |
+| `terminal-input-resume.spec.ts`, `a lost terminal write…` | The host has no `vim`. | Fixed 2026-11-04; see to-do 4222 (done; deleted 2026-11-06) |
 
 `project Home retains…` (4741)
 and the design canvas cases (4221)
@@ -288,7 +288,7 @@ last two were 47 passed, 94 skipped and 3 failed. All three causes are now found
 | --- | --- | --- | --- |
 | `local environment move…`, `persisted diff baselines…` | A client disconnect in `gateway-proxy.ts` destroyed a keep-alive socket already serving another request, which then answered 502 (flake [0901](../../tests/flaky-tests/web-ui/0901-cli-ui-fixture-project-hydration.md)) | Guard on `proxyRequest.destroyed`, with a regression test | Reload rounds with 502s: 3 of 40 before, 0 of 155 after. Both cases passed 3 of 3 |
 | `real browser gateway exercises…` | The burst overran the archive's 256-record queue (flake [2401](../../tests/flaky-tests/previews-annotations-and-gateway/2401-browser-smoke-terminal-history-marker.md), to-do 4223, since done) | The spec checks what the archive promises, and a later line | Passed 3 of 3 |
-| `a lost terminal write…` | The host has no `vim` ([4222](4222-browser-failures-left-after-headless-qualification.md)) | Falls back to `nvim` | Passed 6 of 6 |
+| `a lost terminal write…` | The host has no `vim` (to-do 4222, done and deleted 2026-11-06) | Falls back to `nvim` | Passed 6 of 6 |
 
 These were focused runs. The whole isolated suite is run by the next review preparation
 and was not rerun here. `headless-profile.spec.ts` skipped in them because that run did
@@ -303,8 +303,8 @@ budget; the run before it hit the budget and was stopped. Reading each saved tra
 | --- | --- | --- | --- |
 | `a headless profile's Electron…` | Host network churn aborted its module loads (flake [2340](../../tests/flaky-tests/aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md)); its `/proc` checks had already passed | Modules fetched outside Chromium; a retried navigation with a new login link | Under bridge churn: previous spec 0 of 3, repaired spec 3 of 3 in 8 s |
 | `capped file tree…` | A 5 s assertion ended while the page took 17 s to handle a response (flake [2930](../../tests/flaky-tests/previews-annotations-and-gateway/2930-capped-file-tree-exceeds-test-budget.md)) | 240 s test budget, 30 s tree assertions | 3 of 3 at 81–84 s |
-| `a lost terminal write…` | Expected `before-X` as one run of text, which `nvim` need not draw ([4222](4222-browser-failures-left-after-headless-qualification.md)) | Checks `X` after `before-`; the saved buffer stays the precise check | 5 of 5 |
-| `design-canvas.spec.ts:16`, `graph-designer.spec.ts:239`, `graph-run-view.spec.ts:48` | Host network churn, with 82, 119 and 133 aborted requests in their traces (2340) | None here: nothing is wrong with these cases. A run now prints which failed cases have this error. Handled across the suite since by [4222](4222-browser-failures-left-after-headless-qualification.md) task 3 (`e2e/agent-testing/browser-test.ts`) | Not rerun |
+| `a lost terminal write…` | Expected `before-X` as one run of text, which `nvim` need not draw (to-do 4222, done and deleted 2026-11-06) | Checks `X` after `before-`; the saved buffer stays the precise check | 5 of 5 |
+| `design-canvas.spec.ts:16`, `graph-designer.spec.ts:239`, `graph-run-view.spec.ts:48` | Host network churn, with 82, 119 and 133 aborted requests in their traces (2340) | None here: nothing is wrong with these cases. A run now prints which failed cases have this error. Handled across the suite since by 4222 (done; deleted 2026-11-06) task 3 (`e2e/agent-testing/browser-test.ts`) | Not rerun |
 
 The runner's test budget went from 15 to 25 minutes, because a run cut off at the limit
 reports nothing for the cases it never reached. These were focused runs; the whole
@@ -318,7 +318,7 @@ alone, so they are not load flakes. `AgentsMdApproval.spec.ts` and
 `SettingsMachineRouting.spec.ts` fail only with the agent shell's inherited
 `NODE_ENV=production` and pass with it unset, which `mise run test:browser` now does.
 The two Multi Review layout assertions fail either way, with no change on this
-branch to anything they load. [4222](4222-browser-failures-left-after-headless-qualification.md) found the fixture at fault (host font metrics) and fixed it.
+branch to anything they load. To-do 4222 (done; deleted 2026-11-06) found the fixture at fault (host font metrics) and fixed it.
 
 ### macOS, 2026-11-06
 
@@ -378,4 +378,4 @@ not a terminal snapshot, so it is outside this audit. The backend scripts under
 
 - [0048](../transcripts-and-observation/0048-recurring-work-qualification.md), where this was found.
 - [7340](7340-shared-terminal-visible-text-helper.md), found in task 3's audit.
-- 4741 and 4221 (both deleted 2026-11-06) and [4222](4222-browser-failures-left-after-headless-qualification.md), found while qualifying this. To-do 4223, also found here, is done.
+- 4741 and 4221 (both deleted 2026-11-06) and 4222 (done; deleted 2026-11-06), found while qualifying this. To-do 4223, also found here, is done.

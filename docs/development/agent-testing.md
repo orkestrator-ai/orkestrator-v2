@@ -120,12 +120,28 @@ Playwright (`route.fetch()`), which no interface change aborts, and keeps them
 in memory for that context, because routing turns Chromium's HTTP cache off and
 refetching every module on each reload made reloaded pages miss their
 assertions on a loaded host. Navigations, commands and event streams still go
-through Chromium. A spec that opens a
-second context calls `fetchModulesOutsideChromium(context)` on it.
-`browser-gateway.spec.ts` and `client-outage.spec.ts` keep Chromium's own path
-for module loads, because the browser's network path is what they test.
-`browser-test.test.ts` fails when a new spec in `playwright.browser.config.ts`
-uses neither, or creates a context it does not route.
+through Chromium; a `goto` or `reload` that Chromium aborted with
+`net::ERR_NETWORK_CHANGED` gets up to three attempts in all (two retries). A
+one-shot login navigation mints a fresh link after a network abort. A spec that
+opens a second context calls `fetchModulesOutsideChromium(context)` on it.
+`client-outage.spec.ts` keeps Chromium's own path for module loads, because the
+browser's network path through outages is what it tests. In
+`browser-gateway.spec.ts` one case, "the gateway serves the renderer's modules
+to Chromium's own network stack", sets `modulesThroughChromium` and loads the
+app through Chromium, loading again when its modules were lost only to network
+changes, up to four loads in all. Its explicit timeout covers setup, all four
+loads (including navigation retries), and final classification. Under very heavy
+churn all four loads can still lose, and its error then says so.
+`browser-test.test.ts` fails when a new spec in
+`playwright.browser.config.ts` uses neither, creates a context it does not
+route, or another case opts out.
+
+`mise run test:browser` (the component and public-site suites) needs only
+loopback, so on Linux both suites run through `scripts/loopback-network.ts` in a
+private user and network namespace with only loopback raised, where no host
+interface change can reach Chromium. A host that cannot create the namespace
+(no unprivileged user namespaces, or no `ip`) runs them on the host network and
+prints why; `ORKESTRATOR_E2E_HOST_NETWORK=1` does that on purpose.
 
 Both full browser tasks (`test:agent:browser` and its isolated variant) build
 the packaged CLI first (`build:cli:test`, which sets no build commit and so

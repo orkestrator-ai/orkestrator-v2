@@ -1,3 +1,4 @@
+import { PI_FAKE_MODEL_REF } from "./idle-observation-fake-pi";
 /**
  * Pure helpers for `idle-observation-live.spec.ts`, kept apart so they are
  * unit-tested without a profile or a browser.
@@ -6,6 +7,7 @@
 export const IDLE_OBSERVATION_CASES = [
   "missed-final",
   "bridge-restart",
+  "async-question",
   "approval",
   "subagents",
   "background",
@@ -209,6 +211,31 @@ export function freshToolResults(
   return results;
 }
 
+/**
+ * `toolName:toolState` of every tool call on fresh non-user rows, in order,
+ * and `subagent:toolState` for every sub-agent card (Codex renders a child as
+ * a `subagent` part, not a tool call): content-free evidence of what a
+ * command still running at the end of its turn looks like afterwards, and of
+ * whether a child was left running (todo 0049 tasks 3 and 8).
+ */
+export function freshToolStates(
+  messages: readonly { id: string; role: string; parts?: unknown }[],
+  previous: ReadonlySet<string>,
+): string[] {
+  const states: string[] = [];
+  for (const message of messages) {
+    if (message.role === "user" || previous.has(message.id) || !Array.isArray(message.parts)) {
+      continue;
+    }
+    for (const part of message.parts as Array<Record<string, unknown>>) {
+      if (part?.type === "subagent") states.push(`subagent:${String(part.toolState ?? "?")}`);
+      if (part?.type !== "tool-invocation") continue;
+      states.push(`${String(part.toolName ?? "?")}:${String(part.toolState ?? "?")}`);
+    }
+  }
+  return states;
+}
+
 /** An echoed command/argument is not the line the shell was asked to emit. */
 export function shellOutputContainsMarker(output: string | undefined, marker: string): boolean {
   return output?.split(/\r?\n/).some((line) => line.trim() === marker) ?? false;
@@ -260,4 +287,22 @@ export function requireRecoveredBackoff(backoffMs: number | null): number {
   if (backoffMs === null)
     throw new Error("observation stream did not recover backoff after the turn");
   return backoffMs;
+}
+
+/** Fake Pi runs must never select a billed provider from an environment override. */
+export function idleObservationModel(
+  platform: string,
+  fake: boolean,
+  override?: string,
+): string | undefined {
+  return fake && platform === "pi" ? PI_FAKE_MODEL_REF : override;
+}
+
+export function asyncQuestionPrompt(title: string, word: string): string {
+  return (
+    `Use your request_user_input_async tool to ask me one question, "${title}", ` +
+    "with the options IDLEQA_ALPHA and IDLEQA_BETA. Do not wait for my answer: " +
+    `right after asking, reply with exactly ${word} and nothing else. ` +
+    "After I answer, reply with exactly CODEWORD_CHOSEN=<selected option> and nothing else, replacing <selected option> with my selected option."
+  );
 }

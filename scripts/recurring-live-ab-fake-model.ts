@@ -1,3 +1,8 @@
+import {
+  piCompletionChunk,
+  piProviderConfig,
+  profilePiAgentDirectory,
+} from "./pi-fake-model-shared";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
@@ -212,17 +217,6 @@ export function scriptOf(
   return script;
 }
 
-function chunk(id: string, delta: Record<string, unknown>, finish: string | null, usage?: object) {
-  return `data: ${JSON.stringify({
-    id,
-    object: "chat.completion.chunk",
-    created: Math.floor(Date.now() / 1000),
-    model: FAKE_PI_MODEL,
-    choices: [{ index: 0, delta, finish_reason: finish }],
-    ...(usage ? { usage } : {}),
-  })}\n\n`;
-}
-
 type Script = ReturnType<typeof scriptOf>;
 
 /**
@@ -373,11 +367,16 @@ export function startFakeModelServer(
         });
       }
       const body = toolCall
-        ? chunk(id, { role: "assistant", tool_calls: [{ index: 0, ...toolCall }] }, null) +
-          chunk(id, {}, "tool_calls", usage) +
+        ? piCompletionChunk(
+            FAKE_PI_MODEL,
+            id,
+            { role: "assistant", tool_calls: [{ index: 0, ...toolCall }] },
+            null,
+          ) +
+          piCompletionChunk(FAKE_PI_MODEL, id, {}, "tool_calls", usage) +
           "data: [DONE]\n\n"
-        : chunk(id, { role: "assistant", content: REPLY }, null) +
-          chunk(id, {}, "stop", usage) +
+        : piCompletionChunk(FAKE_PI_MODEL, id, { role: "assistant", content: REPLY }, null) +
+          piCompletionChunk(FAKE_PI_MODEL, id, {}, "stop", usage) +
           "data: [DONE]\n\n";
       return new Reply(body, {
         headers: { "content-type": "text/event-stream", "cache-control": "no-cache" },
@@ -418,44 +417,17 @@ export function startFakeModelServer(
 
 /** The `models.json` that adds the fake provider; its key is a literal placeholder. */
 export function fakePiModelsConfig(baseUrl: string) {
-  return {
-    providers: {
-      [FAKE_PI_PROVIDER]: {
-        name: "Soak fake",
-        baseUrl,
-        api: "openai-completions",
-        apiKey: "soak-fake-no-provider",
-        compat: {
-          supportsStore: false,
-          supportsDeveloperRole: false,
-          supportsReasoningEffort: false,
-          supportsUsageInStreaming: true,
-          maxTokensField: "max_tokens",
-        },
-        models: [
-          {
-            id: FAKE_PI_MODEL,
-            name: "Soak 1",
-            reasoning: false,
-            input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 32_000,
-            maxTokens: 256,
-          },
-        ],
-      },
-    },
-  };
+  return piProviderConfig({
+    provider: FAKE_PI_PROVIDER,
+    providerName: "Soak fake",
+    baseUrl,
+    apiKey: "soak-fake-no-provider",
+    model: FAKE_PI_MODEL,
+    modelName: "Soak 1",
+  });
 }
 
-/**
- * The Pi agent directory of a profile's backend: agent-test backends run with
- * `HOME=<dataDir>/agent-credentials/home` (`apps/desktop/electron/backend-process.ts`),
- * and a local Pi bridge uses Pi's default `~/.pi/agent` under that HOME.
- */
-export function profilePiAgentDirectory(dataDir: string): string {
-  return path.join(dataDir, "agent-credentials", "home", ".pi", "agent");
-}
+export { profilePiAgentDirectory } from "./pi-fake-model-shared";
 
 /**
  * Writes the fake provider into the profile's own Pi `models.json`. Refuses

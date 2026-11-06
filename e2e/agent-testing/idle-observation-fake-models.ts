@@ -12,6 +12,8 @@ import path from "node:path";
 import { createInterface } from "node:readline";
 import { snapshotFixtureFiles } from "./codex-fixture-files";
 import { installFakeClaudeApiFixture } from "./container-fake-claude-install";
+import { profilePiAgentDirectory } from "../../scripts/pi-fake-model-shared";
+import { piFakeModelsConfig } from "./idle-observation-fake-pi";
 
 export interface FakeModelHandle {
   /** Where the model listens, for the evidence record. */
@@ -43,6 +45,23 @@ async function stopFakeModels(handles: FakeModelHandle[]): Promise<void> {
 
 const FAKE_CLAUDE = path.join(import.meta.dirname, "idle-observation-fake-claude.ts");
 const FAKE_CODEX = path.join(import.meta.dirname, "idle-observation-fake-codex.ts");
+const FAKE_PI = path.join(import.meta.dirname, "idle-observation-fake-pi.ts");
+const FAKE_SCRIPTS = { claude: FAKE_CLAUDE, codex: FAKE_CODEX, pi: FAKE_PI } as const;
+export type FakeModelPlatform = keyof typeof FAKE_SCRIPTS;
+
+/**
+ * Where a profile's provider reads the setting that names its model:
+ * Claude and Codex homes under `agent-credentials`, and for Pi the default
+ * `~/.pi/agent` under the backend's isolated HOME (`<dataDir>/agent-credentials/home`,
+ * the directory to-do 0048's soak writes).
+ */
+export function fakeModelSettingsFile(platform: FakeModelPlatform, dataDir: string): string {
+  if (platform === "pi") {
+    return path.join(profilePiAgentDirectory(dataDir), "models.json");
+  }
+  const home = path.join(dataDir, "agent-credentials", platform);
+  return path.join(home, platform === "claude" ? "settings.json" : "config.toml");
+}
 /** The port `installFakeClaudeApiFixture` serves on inside a container. */
 const CONTAINER_FAKE_PORT = 47_123;
 
@@ -106,17 +125,25 @@ function stopChild(child: ChildProcess): Promise<void> {
  * the environment's bridge starts its CLI, so the first process reads it.
  */
 export async function startLocalFakeModel(
-  platform: "claude" | "codex",
+  platform: FakeModelPlatform,
   dataDir: string,
   options: Parameters<typeof startModel>[1] = {},
 ): Promise<FakeModelHandle> {
-  const home = path.join(dataDir, "agent-credentials", platform);
-  mkdirSync(home, { recursive: true });
-  const file = path.join(home, platform === "claude" ? "settings.json" : "config.toml");
+  const file = fakeModelSettingsFile(platform, dataDir);
+  mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   const restore = snapshotFixtureFiles([file]);
-  const model = await startModel(platform === "claude" ? FAKE_CLAUDE : FAKE_CODEX, options);
+  const model = await startModel(FAKE_SCRIPTS[platform], options);
   try {
-    if (platform === "claude") {
+    if (platform === "pi") {
+      // Adds one provider; any the profile already has are kept.
+      const earlier = existsSync(file)
+        ? (JSON.parse(readFileSync(file, "utf8")) as { providers?: Record<string, unknown> })
+        : {};
+      const providers = { ...earlier.providers, ...piFakeModelsConfig(model.origin).providers };
+      writeFileSync(file, `${JSON.stringify({ ...earlier, providers }, null, 2)}\n`, {
+        mode: 0o600,
+      });
+    } else if (platform === "claude") {
       const earlier = existsSync(file)
         ? (JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>)
         : {};

@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
+  CODEWORD_REPLY_PREFIX,
+  NO_SUBAGENT_REPLY,
   finalReply,
   requestState,
   responseContent,
@@ -16,6 +18,12 @@ const background =
   "Start this shell command as a background task and do not wait for it: sleep 20; echo IDLEQA-BGOUT-2 Right after starting it, reply with exactly IDLEQA-BG-3 and nothing else. Do not run any other command.";
 const waitFor =
   "Run this shell command and wait for it: sleep 8\nThen reply with exactly IDLEQA-RECONNECT-4 and nothing else.";
+const approval =
+  "Run this exact shell command once: printf idleqa > idleqa-approval-5.txt\nThen reply with exactly IDLEQA-APPROVED-6 and nothing else.";
+const subagents =
+  "Use your sub-agent or task delegation tool to start exactly one sub-agent. Give it this task: reply with the text child-7. Run it in the background if your tool supports that. Wait for the sub-agent to finish, then reply with exactly IDLEQA-SUB-8 and nothing else. If you have no sub-agent tool, reply with exactly NO-SUBAGENT-TOOL.";
+const question =
+  'Use your request_user_input_async tool to ask me one question, "Which codeword should I use?", with the options IDLEQA_ALPHA and IDLEQA_BETA. Do not wait for my answer: right after asking, reply with exactly IDLEQA-ASKED-9 and nothing else.';
 
 describe("scripted fake Claude model", () => {
   test("answers each spec prompt the way a compliant model would", () => {
@@ -46,6 +54,66 @@ describe("scripted fake Claude model", () => {
       text: "Noted.",
     });
     expect(finalReply("Generate a title")).toBe("Done.");
+  });
+
+  test("scripts the approval, sub-agent and async-question cases", () => {
+    expect(scriptedStep(approval, false)).toEqual({
+      kind: "shell",
+      command: "printf idleqa > idleqa-approval-5.txt",
+      background: false,
+    });
+    expect(scriptedStep(approval, true)).toEqual({ kind: "text", text: "IDLEQA-APPROVED-6" });
+    // The child gets a prompt of its own, which the same script answers.
+    const child = scriptedStep(subagents, false);
+    expect(child).toEqual({
+      kind: "subagent",
+      task: "Reply with exactly child-7 and nothing else. Do not use any tools.",
+    });
+    expect(scriptedStep((child as { task: string }).task, false)).toEqual({
+      kind: "text",
+      text: "child-7",
+    });
+    // The parent's reply is its own word, never the fallback named after it.
+    expect(scriptedStep(subagents, true)).toEqual({ kind: "text", text: "IDLEQA-SUB-8" });
+    expect(scriptedStep(question, false)).toEqual({
+      kind: "question",
+      title: "Which codeword should I use?",
+      options: ["IDLEQA_ALPHA", "IDLEQA_BETA"],
+    });
+    expect(scriptedStep(question, true)).toEqual({ kind: "text", text: "IDLEQA-ASKED-9" });
+    // The web card's answer (`serializeAsyncQuestionAnswers`) names the choice.
+    expect(
+      scriptedStep(
+        "Answers to your questions:\n\n- Which codeword should I use?: IDLEQA_BETA",
+        false,
+      ),
+    ).toEqual({ kind: "text", text: `${CODEWORD_REPLY_PREFIX}IDLEQA_BETA` });
+  });
+
+  test("delegates to whichever agent tool the CLI offers, else says it has none", () => {
+    const messages = [{ role: "user", content: subagents }];
+    expect(responseContent({ messages, tools: [{ name: "Agent" }] }, 3)).toEqual([
+      {
+        type: "tool_use",
+        id: "toolu_idleqa_3",
+        name: "Agent",
+        input: {
+          description: "Child reply",
+          prompt: "Reply with exactly child-7 and nothing else. Do not use any tools.",
+          subagent_type: "general-purpose",
+        },
+      },
+    ]);
+    expect(responseContent({ messages, tools: [{ name: "Task" }] }, 4)[0]).toMatchObject({
+      name: "Task",
+    });
+    expect(responseContent({ messages, tools: [{ name: "Bash" }] }, 5)).toEqual([
+      { type: "text", text: NO_SUBAGENT_REPLY },
+    ]);
+    // Claude has no async question: the script replies in text.
+    expect(
+      responseContent({ messages: [{ role: "user", content: question }], tools: [] }, 6),
+    ).toEqual([{ type: "text", text: "IDLEQA-ASKED-9" }]);
   });
 
   test("reads the prompt past tool results and system reminders", () => {

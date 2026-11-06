@@ -47,7 +47,13 @@ it within 6 s. It did not leak, and the spec failed at a known flake. With the
 probe off it failed in cleanup instead
 ([1131](../../tests/flaky-tests/design-canvas-and-artifacts/1131-design-electron-graceful-quit-deadline.md)),
 so this run does not show that the probe causes the spec's failures. The other
-specs need a display and were not run.
+specs need a display and were not run. Failed or timed-out network creation
+also remains unruled out: Docker can create the network despite a client
+command failure, while `createProbeNetwork` clears the tracked network and
+returns null when the service is not closed. Cleanup then lacks the network
+handle, so later normal shutdown need not remove it. These reruns did not
+exercise that path, and it is not established as the cause of the historical
+clusters.
 
 **Decisions.**
 
@@ -90,6 +96,15 @@ a temporary data directory are deleted with it.
   - **Do nothing.**
     - Pros: no new surface.
     - Cons: the next leak is as untraceable as this one.
+
+## Assumptions and decisions
+
+### Task 1: retain the failed-create leak candidate (review correction, 2026-11-06)
+
+Chose to carry the failed or timed-out network-create path from 7041 into this
+follow-up. The historical source is unproven; disabling the probe avoids its
+network creation in disposable backends, but does not repair that cleanup path
+for backends that still run the probe.
 
 ## Related
 

@@ -39,7 +39,7 @@ Done 2026-11-06: `agent-testing.md` now has a section, "Container profiles on an
 
 **Problem.** The host held 29 unattached reach-probe networks, created in clusters on 2026-10-31 (15:51–17:45 UTC), 2026-11-01 (03:40–04:33 UTC) and 2026-11-02 (04:57–05:50 UTC). 0241 task 4 recorded no new probe networks after a full run on 2026-10-31.
 
-**Context.** [0241](0241-leaked-reach-probe-networks.md) found and fixed the earlier sources, and `mise run disk:report --fix probe-networks` removes unattached probe networks older than a day. Removing them is the user's call; this work did not. A backend removes its own probe network when the check ends and when it gets SIGTERM or SIGINT (`ContainerHostReachabilityService.dispose`). Only a backend that dies without its shutdown (SIGKILL, or a killed process group) while a check holds the network leaks it. The check holds it for about 6 s on beelink, whose ufw drops Docker traffic, so each probe waits out its 5 s connect timeout. Each disposable data directory is a new owner that no reaper revisits.
+**Context.** [0241](0241-leaked-reach-probe-networks.md) found and fixed the earlier sources, and `mise run disk:report --fix probe-networks` removes unattached probe networks older than a day. Removing them is the user's call; this work did not. A backend removes its own probe network when the check ends and when it gets SIGTERM or SIGINT (`ContainerHostReachabilityService.dispose`). A backend that dies without its shutdown (SIGKILL, or a killed process group) while a check holds the network can leak it. Failed or timed-out network creation is another unruled-out path: Docker may create the network despite the client command failing, after which `createProbeNetwork` clears `probeNetwork` and returns null when the service is not closed. The caller then has no network to remove, and later normal shutdown may leave it behind. Neither path is proven to have caused the historical clusters. The check holds it for about 6 s on beelink, whose ufw drops Docker traffic, so each probe waits out its 5 s connect timeout. Each disposable data directory is a new owner that no reaper revisits.
 
 **Investigation.** Not traced to one teardown. What the evidence shows:
 
@@ -58,6 +58,7 @@ Done 2026-11-06: `agent-testing.md` now has a section, "Container profiles on an
     - Run from the repository root it created one, which was destroyed.
     - `apps/backend/tests/standalone.test.ts` created three, 1–2 s apart, and all were destroyed. Its one failure was unrelated: `cursor-bridge` was not built in this worktree.
   - None of the reruns left a probe network behind.
+- **Still unruled out.** A failed or timed-out Docker network-create command may leave a daemon-side network even when the backend later shuts down normally. The successful create/destroy pairs in these reruns do not exercise that failure path. Follow-up [7470](7470-electron-spec-backends-run-the-boot-probe.md) retains it as a candidate, without attributing the historical clusters to it.
 - **Not rerun.** The Electron specs other than the design journey need a display, which this host may not use (headless only, no Xvfb), so the specs of the 2026-10-31 and 2026-11-01 builds could not be repeated here. Their timing at the time (backends stopped while host load stalled Docker commands) cannot be recreated either.
 
 **Decisions.**
@@ -102,6 +103,11 @@ Done 2026-11-06: `agent-testing.md` now has a section, "Container profiles on an
 
 - **Chose:** record the evidence and open [7470](7470-electron-spec-backends-run-the-boot-probe.md), rather than change the Electron specs here.
 - **Why:** the brief asks for a fix only once the source is found. The source is likely but not reproduced, and turning the probe off across the Electron specs touches about sixteen spec files and what they cover (the probe's dialog is part of the startup the specs see). 7470 sets out that choice with its options.
+
+### Task 2: retain failed network creation as a candidate (review correction, 2026-11-06)
+
+- **Chose:** qualify the shutdown claim and carry failed or timed-out network creation into 7470.
+- **Why:** a daemon-side create can outlive a failed client command and escape the recorded cleanup handle. The reruns did not reproduce this path, so it remains a candidate rather than an explanation of the historical clusters.
 
 ## Related
 

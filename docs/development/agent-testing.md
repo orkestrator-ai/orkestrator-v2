@@ -634,8 +634,9 @@ check routes; without it, exhaustion stays a hard failure. The fixture's
 environment network then shows a `172.16.24x.y/29` subnet. With the
 host-reachability check on, the profile's probe network is created on a /29 in
 the same way and removed again when the check ends. `dev:stop` and `dev:reset`
-need no shim: they remove the profile's own networks by owner label. Never put
-the shim on the PATH of anything but a disposable profile.
+need no shim. `dev:stop` stops the tracked processes; `dev:reset` removes the
+profile's own networks by owner label. Never put the shim on the PATH of
+anything but a disposable profile.
 
 ## Automated checks
 

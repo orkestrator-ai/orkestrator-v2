@@ -225,3 +225,21 @@ timeout, skip or implementation changed.
 - **Result:** 2 of 4 failed on the branch and 1 of 4 failed on the base commit, each with `lastOutcome` `unresolved` rather than `converged`. So it reproduces alone, without an aggregate suite, on code without the branch's change. Four runs each are too few to compare the two rates.
 - **Disposition:** stays open; no assertion, timeout, skip or implementation changed.
 
+## Legacy host-mount coverage review — 2026-11-06
+
+- **Commit:** `5279014f9`, following reviewed commit `8686a380c`.
+- **Aggregate command:** `ORKESTRATOR_E2E_PORT=51670 ORKESTRATOR_PUBLIC_E2E_PORT=51671 mise run test:logged -- --name browser -- mise run test:browser`.
+  Chromium used nine workers while the default suite also ran. Results were
+  1,516 passed, 135 skipped and three failed in 19.5 minutes.
+- **Failure:** mobile `scrollbar departure after find stays put when streaming reapplies highlights`
+  expected `converged` but received `unresolved` at line 371 after the 5,000 ms
+  polling deadline. The two other failures were in `TabLaunchOverride.spec.ts`.
+- **Complete unchanged owner:** `ORKESTRATOR_E2E_PORT=51670 mise run test:logged -- --name review-streaming-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/StreamingTranscript.spec.ts --workers=1 --output output/playwright/review-streaming-owner`
+  passed with exit 0 in 81.9 seconds. The logged runner removed passing output;
+  isolated case counts are not inferred.
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.GC5d6F/browser.log.gz`;
+  original failure trace and context remain under
+  `output/playwright/test-results/StreamingTranscript-scroll-bd9d1-eaming-reapplies-highlights-mobile-chromium/`.
+- **Disposition:** recurrence of the open aggregate-convergence case. The cause
+  remains unconfirmed. No transcript source, assertion, timeout or skip changed.
+

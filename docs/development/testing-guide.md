@@ -986,6 +986,157 @@ env -u DISPLAY -u WAYLAND_DISPLAY ORKESTRATOR_HOST_REACHABILITY_CHECK=off \
   --agent-platforms pi --busy-rounds 3 --out output/benchmarks/recurring-busy.json
 ```
 
+##### Before and after across commits
+
+`--checkout DIR` runs the profile from another checkout: its launcher,
+`dev:status`, `dev:stop`, `dev:reset` and CLI all run there, while the
+sampling, freshness probes and summary stay this checkout's. Put a detached
+worktree of the older commit under the git-ignored `output/benchmarks/`, run
+`bun install --frozen-lockfile` in it (and in its `bridges/claude-bridge`),
+and give each side a `--label`. mise is trusted for that checkout in the
+child processes only (`MISE_TRUSTED_CONFIG_PATHS`). Remove the worktree with
+`git worktree remove` when done: a checkout left under `output/` is collected
+by a bare `bun test` path filter.
+
+`--window hidden|visible|launcher-default` decides the Electron window.
+`hidden` (the default) passes `--headless`; a launcher older than that flag
+(before #1738, 2026-11-04) rejects it and always shows its window, so compare
+such a commit with `--window launcher-default` on its side and
+`--window visible` (`--no-headless`) on the newer side. Then the renderer is
+a visible client on both sides, which matters because a hidden window's
+renderer polls less.
+
+A backend older than its `AGENT_TEST_SAFE_ENV_NAMES` entry (2026-11-01, after `0bd214ee`) for
+`ORKESTRATOR_HOST_REACHABILITY_CHECK` drops the switch and runs the boot
+probe, which creates Docker networks. Add that one entry to the scratch
+checkout's `apps/desktop/electron/backend-process.ts` and record it with the
+results. 1202 task 1 used this for `0bd214ee` against `main`:
+
+```bash
+git worktree add --detach output/benchmarks/task1-checkouts/base-0bd214ee 0bd214ee
+mise exec -- bun scripts/recurring-live-ab.ts --arms candidate --repeats 1 \
+  --fixture-environments local --agent-platforms codex \
+  --checkout "$PWD/output/benchmarks/task1-checkouts/base-0bd214ee" --label base \
+  --window launcher-default --profile-prefix t1-base --out output/benchmarks/task1/idle-base-1.json
+```
+
+Counters are named by what they count on the commit that ran: a store that
+was still a file on an older commit is charged as `storage-stat` there and as
+`storage-read` once it moved into SQLite, so compare work units only where
+both sides define them the same way.
+
+Comparison columns keep the experiment arm beside the label and commit. Reusing
+one label for different commits is rejected. Missing, reset, partial or
+unmeasured rates display as unavailable (`—`), rather than zero.
+
+#### Mail into a real claude-tmux tab
+
+`scripts/tmux-mail-inject-live.ts` delivers agent mail to a real claude-tmux
+tab on a running, credential-free profile and counts what each delivery
+costs (BG-15 in to-do 1202). It serves a loopback Anthropic Messages endpoint
+(`e2e/agent-testing/fake-anthropic-model.ts`), points the profile's own
+isolated Claude directory (`<dataDir>/agent-credentials/claude`, never a real
+home) at it with a fixture token and marks the CLI's first-run screens as
+seen there, so the real Claude CLI runs in tmux with no login and no billed
+turn. It opens a claude-tmux tab on the fixture's local environment, turns
+mail injection on for it, primes the queue and draft stores with one queued
+prompt and one saved-then-cleared draft, reads the `mail-injection` counters
+over a quiet window, then sends messages one at a time and checks each is
+typed once and reaches the model once. Last it checks that mail is held while
+a draft is saved and delivered once the draft is gone. It stops the tab and
+restores the two Claude files on the way out. Start a fresh profile for each
+pass: what earlier passes left in the stores changes the counts. Missing or
+invalid counters, counter resets and an idle window with no observed drain pass
+fail the run and produce an error artifact. SIGINT/SIGTERM unwind the run,
+stop its owned tab, restore the files and close the fake server before exiting.
+
+The isolated-directory fallback applies to profiles without a host Claude
+credential grant. Credentialed profiles retain the existing host tmux environment
+and login, unless an added account selects a directory. This avoids changing the
+CLI's Keychain namespace without supplying a token. Such profiles retain the
+prior mismatch with the backend's isolated transcript directory; use the
+credential-free profile above for this benchmark. The benchmark now rejects missing
+credential-grant metadata, any host credential grant, and an active added Claude
+account before configuring or launching anything. It checks the profile's own
+account registry (SQLite or the older JSON layout), without probing host logins.
+A failed installation rolls back both files before propagating the error; rollback
+failures are included in the error artifact.
+
+```bash
+mise run dev:test --profile bg15 --fixture --fixture-environments local \
+  --no-agent-credentials --agent-platforms claude --headless
+mise exec -- bun scripts/tmux-mail-inject-live.ts --profile bg15 --deliveries 5 \
+  --out output/benchmarks/bg15.json
+mise run dev:stop --profile bg15 && mise run dev:reset --profile bg15
+```
+
+`--checkout DIR` runs `dev:status` in the checkout that started the profile.
+Before 2026-11-06 a claude-tmux tab in an agent-test profile with no added
+Claude account ran the CLI with the host tmux server's environment, which
+reads the host's `~/.claude`; on an older commit, cherry-pick that fix
+(`tmuxLocalClaudeConfigDirectory` in `commands-servers.ts`) into the scratch
+checkout before running this.
+
+#### Environment activity RPC counts (WEB-3)
+
+`scripts/web3-activity-rpc-live.ts` measures a running credential-free profile
+from a gateway browser at 1440 × 1000. It installs loopback Claude settings in
+the profile, opens a native Claude tab on its sole local fixture environment,
+and sends two held turns. For each idle → working → idle cycle it waits for
+the browser's actual environment projection, lets boundary requests settle
+for 3 seconds, then reads the gateway's cumulative per-command counters.
+It saves command deltas and model-call counts only. Missing or reset counters
+fail the run. The browser closes and Claude settings are restored on exit;
+the caller must stop/reset the profile to stop its native session.
+
+```bash
+ORKESTRATOR_HOST_REACHABILITY_CHECK=off mise run dev:test --profile web3 \
+  --fixture --fixture-environments local --no-agent-credentials \
+  --agent-platforms claude --no-headless
+# In another shell, from the checkout containing the measurement script:
+mise run test:logged -- --name web3-live -- bun scripts/web3-activity-rpc-live.ts \
+  --profile web3 --checkout /absolute/path/to/profile-checkout \
+  --out output/benchmarks/web3.json
+# Run lifecycle commands from the checkout that owns the profile:
+mise run dev:stop --profile web3 && mise run dev:reset --profile web3
+```
+
+Repeat with fresh profiles at each pinned commit. Older launchers without
+`--no-headless` omit that flag; keep the window visibility alike. The
+measurement uses a native tab, so it does not need the later tmux-directory
+isolation fix on the before side. Compare `list_prompt_queues` and
+`list_multi_review_workflows` separately from other requests: snapshot,
+unread-state and transcript requests share the transition windows, and
+their timing-dependent totals are not WEB-3's refetch cost. The two list
+hydrators are all that remain at the 1202 baseline commit; the original
+report's third list had already been removed there.
+
+#### Image and layer sizes
+
+`scripts/docker-image-layers.ts` measures an image on whatever Docker the host
+has (1202 task 14, DK-7 to DK-9). `report` prints the uncompressed size, each
+layer with the instruction that made it, and `du -sxk` of each `--du` path in
+a throwaway `--network none` container; `changed` sums the layers of a probe
+image that the base image does not hold, which is what a client holding the
+base would pull. Build each side from a detached worktree under the
+git-ignored `output/benchmarks/` with a tag of its own, and remove the tags
+and worktrees when done:
+
+```bash
+git worktree add --detach output/benchmarks/img-before <commit>
+(cd output/benchmarks/img-before && \
+  docker build $(bun scripts/docker-image-build-args.ts) \
+  -t orkestrator-v2:img-before -f docker/Dockerfile .)
+mise exec -- bun scripts/docker-image-layers.ts report orkestrator-v2:img-before \
+  --du /home/node/.npm --du /usr/local/share/mise/installs/bun
+# Re-pull probe: append a line to every bridges/*/src/index.ts in the worktree,
+# rebuild as orkestrator-v2:img-before-probe with the same build arguments, then
+mise exec -- bun scripts/docker-image-layers.ts changed \
+  orkestrator-v2:img-before orkestrator-v2:img-before-probe
+docker image rm orkestrator-v2:img-before orkestrator-v2:img-before-probe
+git worktree remove --force output/benchmarks/img-before
+```
+
 For transcript, projection and storage cost, use the
 [efficiency harness](efficiency-harness.md) (`mise run efficiency:baseline`).
 

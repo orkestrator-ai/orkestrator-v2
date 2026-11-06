@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { fakePid } from "@orkestrator/protocol/testing/fake-pids";
 import { spawn, type ChildProcess } from "node:child_process";
+import { PassThrough } from "node:stream";
 import { EventEmitter } from "node:events";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
@@ -126,6 +127,76 @@ describe("live benchmark lifecycle", () => {
       ["dev:stop", "--profile", result.profile],
       ["dev:reset", "--profile", result.profile],
     ]);
+  });
+
+  test("checkout runs forward the checkout to launch, status, both CLI runners and cleanup", async () => {
+    const h = harness();
+    const status = spyOn(h.runtime, "readStatus");
+    const mise = spyOn(h.runtime, "mise");
+    const cli = mock(() => () => undefined) as never;
+    const asyncCli = mock(() => async () => ({ status: 0, stdout: "{}" })) as never;
+    h.runtime.cliRunner = cli;
+    h.runtime.asyncCliRunner = asyncCli;
+    h.runtime.measureFreshness = mock(async () => []);
+    h.runtime.measureSoak = mock(async () => ({})) as never;
+    const checkout = "/work/base";
+    const result = await runArm(
+      { ...options(), checkout, freshnessProbes: 1, soakCycles: 1 },
+      "candidate",
+      1,
+      "/stub",
+      undefined,
+      "checkout",
+      h.runtime,
+    );
+    expect(result.error).toBeUndefined();
+    expect(h.runtime.startProfile).toHaveBeenCalledWith(
+      result.profile,
+      expect.objectContaining({ checkout }),
+      "/stub",
+      expect.any(Object),
+    );
+    expect(status.mock.calls.every((args) => args[1] === checkout)).toBe(true);
+    expect(mise.mock.calls.every((args) => args[1] === checkout)).toBe(true);
+    expect(cli).toHaveBeenCalledWith(result.profile, expect.any(String), checkout);
+    expect(asyncCli).toHaveBeenCalledWith(result.profile, expect.any(String), checkout);
+  });
+
+  test("launcher, mise and both CLI processes use checkout cwd and process-scoped mise trust", async () => {
+    const checkout = temporary();
+    const child = Object.assign(new EventEmitter(), {
+      pid: fakePid(7),
+      stdout: new PassThrough(),
+      kill: () => true,
+    });
+    const spawned = spyOn(__testing.commandProcesses, "spawn").mockReturnValue(child as never);
+    const synced = spyOn(__testing.commandProcesses, "spawnSync").mockReturnValue({
+      status: 0,
+      stdout: "{}",
+    } as never);
+    try {
+      __testing.armRuntime.startProfile("checkout", { ...options(), checkout }, checkout, {});
+      __testing.armRuntime.mise(["dev:status"], checkout);
+      __testing.armRuntime.cliRunner("checkout", "/config", checkout)(["environment", "list"]);
+      const cli = __testing.armRuntime.asyncCliRunner(
+        "checkout",
+        "/config",
+        checkout,
+      )(["environment", "list"]);
+      child.emit("close", 0);
+      await cli;
+      expect(spawned).toHaveBeenCalledTimes(2);
+      expect(synced).toHaveBeenCalledTimes(2);
+      for (const call of [...spawned.mock.calls, ...synced.mock.calls]) {
+        expect(call[2]).toMatchObject({
+          cwd: checkout,
+          env: { MISE_TRUSTED_CONFIG_PATHS: checkout },
+        });
+      }
+    } finally {
+      spawned.mockRestore();
+      synced.mockRestore();
+    }
   });
 
   test("concurrent invocations with the same prefix own distinct names and cleanup", async () => {
@@ -405,7 +476,7 @@ describe("live benchmark lifecycle", () => {
     const result = await runArm(options(), "candidate", 1, "/stub", undefined, "live", h.runtime);
     expect(result.error).toContain("Owned profile stop failed");
     expect(mise).toHaveBeenCalledTimes(1);
-    expect(mise).toHaveBeenCalledWith(["dev:stop", "--profile", result.profile]);
+    expect(mise).toHaveBeenCalledWith(["dev:stop", "--profile", result.profile], undefined);
   });
 
   test("probe results include unusable counts and percentiles", async () => {
@@ -582,7 +653,8 @@ test.each(["SIGTERM", "SIGINT"] as const)(
     writeFileSync(
       script,
       `
-    import { EventEmitter } from "node:events";
+    import { PassThrough } from "node:stream";
+import { EventEmitter } from "node:events";
     import { appendFileSync } from "node:fs";
     import { __testing, parseOptions, runArm, withTerminationSignals } from ${JSON.stringify(path.resolve(import.meta.dir, "../../scripts/recurring-live-ab.ts"))};
     const record = (event) => appendFileSync(${JSON.stringify(events)}, event + "\\n");
@@ -666,7 +738,8 @@ test.each(["SIGTERM", "SIGINT"] as const)(
     writeFileSync(
       script,
       `
-      import { EventEmitter } from "node:events";
+      import { PassThrough } from "node:stream";
+import { EventEmitter } from "node:events";
       import { appendFileSync } from "node:fs";
       import { __testing, measureSoak, parseOptions, runArm, withTerminationSignals } from ${JSON.stringify(path.resolve(import.meta.dir, "../../scripts/recurring-live-ab.ts"))};
       const record = (event) => appendFileSync(${JSON.stringify(events)}, event + "\\n");

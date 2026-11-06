@@ -1511,11 +1511,25 @@ export { deleteEnvironment, deleteEnvironmentTask } from "./environment-delete.j
  * account's. tmux cannot import the account modules without a cycle, so the
  * backend passes this to `BackendRuntime` as `tmux.localClaudeConfigDirectory`
  * (`index.ts`, `tests/command-fixtures.ts`).
+ *
+ * An agent-test profile with no added account exports its own isolated
+ * directory, the backend's `CLAUDE_CONFIG_DIR`. Its sessions run on the host's
+ * shared tmux server, whose environment is whoever started it first, so
+ * without the export the CLI would read the host's `~/.claude` while the
+ * backend looks for the transcript in the profile's directory
+ * (`localClaudeHome`).
+ * Profiles explicitly granted host Claude credentials keep the host tmux
+ * environment: changing their config directory would also change the CLI's
+ * Keychain namespace without supplying the bridge's host-token injection.
  */
 export async function tmuxLocalClaudeConfigDirectory(
   context: CommandContext,
+  env: NodeJS.ProcessEnv = process.env,
 ): Promise<string | undefined> {
-  return (await activeAgentAccountShellEnvironment(context)).CLAUDE_CONFIG_DIR;
+  const active = (await activeAgentAccountShellEnvironment(context)).CLAUDE_CONFIG_DIR;
+  if (active || context.runtimeFlavor !== "agent-test" || context.credentialSources?.has("claude"))
+    return active;
+  return env.CLAUDE_CONFIG_DIR?.trim() || undefined;
 }
 
 /**

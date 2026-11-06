@@ -28,6 +28,12 @@ export const RUNTIME_LOG_AREAS = defineLogAreas({
         essential: true,
         fields: { origin: "label", ...ESSENTIAL_ERROR_FIELDS },
       },
+      "child.reaped":
+        "A macOS child whose exit Bun lost was reaped after its command settled, so it no longer waits as a zombie.",
+      "child.reap-abandoned":
+        "A child whose exit Bun lost was left unreaped: `reason` says whether it was never seen as a zombie (`not-a-zombie`), too many were pending (`capacity`), or `waitpid` failed.",
+      "child.reap-unavailable":
+        "waitpid could not be loaded, so children whose exit Bun lost stay zombies until this process exits.",
       ...THROTTLE_LOG_EVENTS,
     },
   },

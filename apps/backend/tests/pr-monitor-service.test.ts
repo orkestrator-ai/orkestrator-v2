@@ -501,6 +501,28 @@ describe("PrMonitorService", () => {
     expect(harness.removalEvents()).toEqual([{ environmentId: "env-1", removed: true }]);
   });
 
+  test.each(["interactive", "completion"] as const)(
+    "merge-pending skips rollups even on a %s wake",
+    async (wake) => {
+      const harness = createHarness();
+      harness.setDetect(async () => detection());
+      try {
+        harness.service.requestMode(openPr(), "merge-pending");
+        await harness.fireNext();
+        harness.clock.value += 1_000;
+        harness.service.requestCheck("env-1", wake);
+        await harness.fireNext();
+        expect(harness.calls.detectOptions).toEqual([
+          { includeCheckSummary: false, fresh: true },
+          { includeCheckSummary: false, fresh: true },
+        ]);
+        expect(harness.service.snapshot()[0]?.mode).toBe("merge-pending");
+      } finally {
+        harness.service.shutdown();
+      }
+    },
+  );
+
   test("throttles CI rollups, fetches on first discovery, and skips merge-pending", async () => {
     const harness = createHarness();
     harness.setDetect(async (_target, options) =>

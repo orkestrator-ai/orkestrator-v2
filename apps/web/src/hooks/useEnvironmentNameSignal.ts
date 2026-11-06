@@ -1,7 +1,17 @@
+import { useMemo } from "react";
 import { useEnvironmentDisplayActivity } from "./useEnvironmentDisplayActivity";
 import { environmentNameSignal, type EnvironmentNameSignal } from "@/lib/environment-name-signal";
-import { localEnvironmentPrMergeState, shimmerRequiresChecks } from "@/lib/pr-merge-readiness";
-import type { PrMergeState, ReadyToMergeEnvironment } from "@/lib/pr-merge-readiness";
+import {
+  describeAutoMergeHold,
+  localEnvironmentPrMergeReadiness,
+  localEnvironmentPrMergeState,
+  shimmerRequiresChecks,
+} from "@/lib/pr-merge-readiness";
+import type {
+  AutoMergeHold,
+  PrMergeState,
+  ReadyToMergeEnvironment,
+} from "@/lib/pr-merge-readiness";
 import { useEnvironmentStore } from "@/stores";
 import { useConfigStore } from "@/stores/configStore";
 import { usePrMonitorStore } from "@/stores/prMonitorStore";
@@ -34,6 +44,32 @@ export function useEnvironmentPrMergeState(
         )
       : null,
   );
+}
+
+/**
+ * What auto-merge would wait for on this machine's environment, by the rule
+ * it merges on, or null when it would merge now. Both selectors resolve to a
+ * primitive or a stored object, so a re-render follows only a real change.
+ */
+export function useAutoMergeHold(
+  environmentId: string,
+  environment: ReadyToMergeEnvironment | null | undefined,
+): AutoMergeHold | null {
+  const requireChecks = useShimmerRequiresChecks();
+  const reason = usePrMonitorStore((state) => {
+    if (!environment) return null;
+    const readiness = localEnvironmentPrMergeReadiness(
+      environment,
+      state.states.get(environmentId) ?? null,
+      state.syncStatus,
+      requireChecks,
+    );
+    return readiness.ready ? null : readiness.reason;
+  });
+  const checkSummary = usePrMonitorStore(
+    (state) => state.states.get(environmentId)?.checkSummary ?? null,
+  );
+  return useMemo(() => describeAutoMergeHold(reason, checkSummary), [reason, checkSummary]);
 }
 
 /**

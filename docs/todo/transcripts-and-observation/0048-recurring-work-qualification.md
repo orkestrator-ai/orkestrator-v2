@@ -1,5 +1,9 @@
 # Recurring work qualification
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
 Checked against `main` at `00a0cb82` (2026-10-25); tasks 3 and 4 rechecked
 against `main` at `93b99bfba` (2026-11-01). Live evidence from macOS on
 2026-10-22 and 2026-10-25, and from Linux on 2026-11-01; see
@@ -7,10 +11,6 @@ against `main` at `93b99bfba` (2026-11-01). Live evidence from macOS on
 [Live soak](#live-soak-2026-10-25-macos),
 [Container fetch policy and app wiring](#container-fetch-policy-and-app-wiring-2026-11-01-linux)
 and [its follow-up](#container-app-wiring-follow-up-2026-11-01-linux).
-
-## Task analysis
-
-Analysed 2026-10-27 against `main` at `863b5782`.
 
 ### Tasks
 
@@ -32,6 +32,9 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 16. **Client reconnect over a real two-machine link drop**: a client on another machine notices a silent tailnet drop, backs off with spread retries and recovers terminals exactly. Moved from to-do 0051 (deleted 2026-11-06). Status: open (needs two machines).
 17. **View PR stale marker with a real PR**: a failed PR read shows the stale marker and last-check tooltip, which clear on the next good read. Moved from to-do 0051 (deleted 2026-11-06). Status: open (needs GitHub credentials).
 18. **Reconnect timing in a real background tab**: a hidden tab's retries under timer throttling, and an immediate retry when it becomes visible. Moved from to-do 0051 (deleted 2026-11-06). Status: open.
+19. **Changes-tab remote freshness**: qualify `WorktreeSnapshotState.remote` and the stale-base warning through the real browser. Carried from 0020's pointer to retired 0051. Status: open.
+20. **Other event-stream readers**: assess silent-drop detection and retry spread beyond the browser gateway and Electron client. Moved from 0051's unverified scope note (deleted 2026-11-06). Status: open.
+21. **Retired to-do pointers in source comments**: repoint four comments in a code-allowed follow-up; this retirement ticket changes documentation only. Status: open.
 
 ### 1. Busy live profile
 
@@ -396,22 +399,27 @@ task 11 and the two-machine runs of 0052 (0031).
    Tailscale Serve.
 2. On B, open 3 tabs with terminals, once over HTTP/SSE and once over the
    terminal WebSocket.
-3. Drop the tailnet link for 45 s or more (`tailscale down` on B, or a firewall
-   drop on A), then restore it.
-4. Check that the banner appears (about 64 s for a silent drop), reads pause,
-   retries are spread rather than in lock-step, and terminals come back with
-   the main stream with exact recovery.
+3. Silently drop only the test connection's packets with a scoped firewall
+   rule. Keep the drop active until the banner and at least two retry attempts
+   per tab are observed. Allow up to 180 s: the silence watchdog takes 60 s
+   and the banner adds about 4 s, so restoring at 45 s cannot qualify this path.
+   If the observations are absent at 180 s, remove the rule for cleanup and
+   record a failed qualification; do not count an early restoration as a pass.
+4. Before restoring, confirm reads pause and retry times differ across tabs.
+   Then restore connectivity and check terminals recover exactly with the main
+   stream. Separately repeat with an immediate socket/interface error, such as
+   `tailscale down` on B; record its detection/retry timing independently.
 
 **Decisions.**
 
 - **How to drop the link?**
-  - **`tailscale down` on the client machine (recommended).**
+  - **A scoped firewall rule that drops test packets (recommended).**
+    - Pros: exercises silence through the watchdog and retry observations.
+    - Cons: requires host access and guaranteed removal on failure.
+  - **`tailscale down` on the client machine.**
     - Pros: the real interface goes away, as when a laptop leaves the network.
     - Cons: an error rather than silence on some OSes, so it may not test the
       silent case.
-  - **A firewall rule on the backend host that drops packets.**
-    - Pros: a true silent drop.
-    - Cons: a host firewall change that must be undone.
 
 ### 17. View PR stale marker with a real PR
 
@@ -471,6 +479,74 @@ other workflows.
   - **Safari.**
     - Pros: the strictest throttling.
     - Cons: manual.
+
+### 19. Changes-tab remote freshness
+
+**Problem.** 0020 still owed a real-browser check of the remote snapshot state;
+retiring 0051 did not supply that result.
+
+**Context.** The Files panel's Changes tab renders `WorktreeSnapshotState.remote`,
+including "Base may be behind remote". This is separate from task 17's PR marker.
+
+**Investigation.** On an isolated `dev:test --fixture` profile, prepare an
+environment with a known fetched base and advance its disposable remote from a
+second fixture checkout. Open Changes, exercise refresh and a safely injected
+remote-read failure, and compare the warning/freshness state with the backend
+snapshot. Switch away while the backend updates, return, and reload; verify the
+same state rehydrates. Restore remote reads, refresh, and confirm the warning
+clears after bringing the fixture base current. Record expected/observed states,
+commit and viewports without repository contents, then stop/reset the profile.
+
+**Decisions.** Add a dedicated browser check here (recommended): keeps snapshot
+freshness separate from PR freshness, but needs fixture Git setup. Treating task
+17 as coverage is cheaper but exercises a different state source.
+
+### 20. Other event-stream readers
+
+**Problem.** Retired 0051 said its silent-drop and lock-step reconnect fixes
+were applied only to the browser gateway and Electron client; other readers
+were not assessed.
+
+**Context.** That scope limit remains unverified. A successful task 16 run
+does not establish every stream consumer has a silence watchdog and retry jitter.
+
+**Investigation.** Inventory event-stream readers and reconnect owners outside
+those two clients. For each, record its silence detection, bounded backoff and
+retry spread, or the evidence that another layer owns those guarantees. Exercise
+silent-drop and immediate-error paths in isolated fixtures. Create code-allowed
+follow-ups for missing guarantees; close only with a per-reader disposition.
+
+**Decisions.** Inventory before changing readers (recommended): identifies real
+gaps without assuming identical transports, but requires tracing ownership.
+Applying the same patch everywhere is quicker but may duplicate existing logic.
+
+### 21. Retired to-do pointers in source comments
+
+**Problem.** Four source comments point to files retired on 2026-11-06.
+
+**Context.** The retirement ticket is docs-only, so the source edits are tracked
+here for the next code-allowed change. This records the review's requested
+follow-up rather than silently dropping the references.
+
+**Investigation.** Replace these exact pointers, then search source for the
+retired paths and run the checks required for the files changed:
+
+1. `e2e/agent-testing/client-outage.spec.ts:35`: deleted
+   `0051-client-reconnect-and-freshness.md` →
+   `docs/development/agent-testing.md#live-client-outage` and this file's tasks 16–20.
+2. `e2e/agent-testing/connection-outage-electron.spec.ts:21`: the same 0051
+   replacement.
+3. `apps/backend/src/core/preview-verification-window.test.ts:11`: deleted
+   `3230-restart-inside-verification-window.md` →
+   `docs/todo/previews-and-annotations/0045-preview-service-discovery.md` task 3.
+4. `apps/desktop/electron/native-dialogs.ts:19`: deleted
+   `0880-desktop-main-thread-held-by-modal-dialog.md` →
+   `docs/todo/cross-cutting/0741-backend-responsiveness-under-load.md` task 7.
+
+**Decisions.** Record a concrete code-allowed follow-up (recommended): respects
+the ticket's boundary and preserves every destination, but the comments stay
+stale until that work lands. Editing source now fixes navigation immediately but
+breaks the docs-only constraint.
 
 #852 changed how often the app collects and reads facts: shared worktree
 snapshots, a container fetch policy, lifecycle-aware PR monitoring, the client
@@ -1096,6 +1172,13 @@ Both questions were answered on 2026-10-25; see "Assumptions and decisions".
 
 ## Assumptions and decisions
 
+### Tasks 16 and 19–21: review repair (2026-11-06)
+
+Keep the omitted qualifications explicitly open; no live results are inferred
+from their migration. Task 16 now requires silence through watchdog expiry and
+retry observations. Task 21 preserves the docs-only boundary by naming all four
+source-comment replacements as follow-up work.
+
 Recorded 2026-10-25 by the worker that implemented this file's code items.
 
 1. **Rollback driver retirement.** Options: retire now on about three weeks
@@ -1364,7 +1447,8 @@ Recorded 2026-11-01 by the worker that closed task 4's remaining cases.
 ## Related
 
 - [0049-native-agent-idle-observation.md](0049-native-agent-idle-observation.md),
-  `0051-client-reconnect-and-freshness.md` and
+  retired `0051-client-reconnect-and-freshness.md` (deleted 2026-11-06;
+  remaining checks are tasks 16–20 here) and
   [0052-remote-client-bandwidth.md](0052-remote-client-bandwidth.md): the client and
   observation halves of #852.
 - [0020-container-state-observation.md](../containers-and-environments/0020-container-state-observation.md): B18, the

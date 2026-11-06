@@ -35,18 +35,29 @@ spends the 60 s mail cooldown.
 hanging SSH command (`project-git-fetched-fast-forward.integration.test.ts`,
 slow tier). Steps:
 
-1. On a disposable `dev:test` profile with a real provider coordinator, pick a
-   project whose checkout is clean and behind an `origin/main` that is already
-   fetched.
-2. Make the remote slow: a `GIT_SSH_COMMAND` that sleeps more than 3 s before
-   running `ssh`, set for that profile's backend only.
+1. On a disposable `dev:test --fixture` profile with a real provider coordinator,
+   prepare two independent fixture projects. On the mail project's coordinator,
+   start a bounded read-only turn while its checkout is current, before making
+   it behind: starting that turn must not consume the fast-forward under test.
+   Then advance each disposable remote and fetch its configured base branch's
+   upstream without merging. Each checkout must now be clean and behind that
+   fetched upstream. Record each starting `HEAD` and upstream commit. Use one
+   for typed send and one for mail; do not reuse the advanced typed checkout.
+2. Make the fixture remote slow: a `GIT_SSH_COMMAND` that sleeps 15 s before
+   running `ssh`, set for that profile's backend only. Keep the delay active
+   through both scenarios: it exceeds the typed path's 3 s fetch bound and the
+   mail path's 5 s wait. Confirm each fetch actually times out.
 3. Type a message to the main coordinator. Check for
    `checkout.message-check outcome=fast-forwarded fetch=timed-out` in the
    backend log, a new `HEAD` reflog entry, and that the header no longer says
    "N commits behind".
-4. Send it mail while a turn runs. Check for
-   `checkout.mail-follow outcome=fast-forwarded-fetched`, and that the held
-   mail, redelivered when the turn ends, is not answered `cooldown`.
+4. On the second project's coordinator, send mail while the already-started
+   turn still runs. Confirm the checkout is still behind its recorded fetched
+   upstream and the mail is held. Let the turn end with the remote delay still
+   active. Check for `checkout.mail-follow outcome=fast-forwarded-fetched`, a
+   new `HEAD` reflog entry at that upstream, and that the redelivered mail is
+   not answered `cooldown`.
+5. Remove the profile-only SSH delay, then stop and reset the disposable profile.
 
 **Decisions.**
 
@@ -57,6 +68,15 @@ slow tier). Steps:
   - **Wait for GitHub SSH to be slow again.**
     - Pros: the real failure.
     - Cons: cannot be scheduled.
+
+## Assumptions and decisions
+
+### Task 1: independent checkout state and fetch deadlines (2026-11-06)
+
+Use two fixture projects instead of resetting an advanced checkout: each scenario
+starts behind without discarding work. A 15 s delay exceeds both deadlines; the
+run must observe the timeout and merge independently. This repairs the procedure,
+not its still-open live qualification.
 
 ## Related
 

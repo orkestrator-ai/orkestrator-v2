@@ -497,11 +497,25 @@ describe("C20 staged portable inputs", () => {
           imageId: resolved.imageId,
           runtimeGeneration: 1,
         });
-        // Every bind source is inside this environment's staged revision.
+        // Every input bind source is inside this environment's staged revision.
         const mounts = JSON.parse(
           await docker(["inspect", "-f", "{{json .Mounts}}", containerId]),
         ) as Array<{ Type: string; Source: string; Destination: string; RW: boolean }>;
-        const binds = mounts.filter((mount) => mount.Type === "bind");
+        // The one other bind is the project's Git mirror: a full-network runtime
+        // that clones a remote gets it read-only, and it holds only what that
+        // remote serves (container-lifecycle.md#project-git-mirror). Its source
+        // is the project's mirror mount, never a provider's home.
+        const { CONTAINER_GIT_MIRROR_MOUNT, GIT_MIRRORS_DIR } =
+          await import("../src/core/project-git-mirror");
+        const mirrorBinds = mounts.filter(
+          (mount) => mount.Type === "bind" && mount.Destination === CONTAINER_GIT_MIRROR_MOUNT,
+        );
+        expect(mirrorBinds.map(({ Source, RW }) => ({ Source, RW }))).toEqual([
+          { Source: path.join(dataDir, GIT_MIRRORS_DIR, "project-1", "mount"), RW: false },
+        ]);
+        const binds = mounts.filter(
+          (mount) => mount.Type === "bind" && mount.Destination !== CONTAINER_GIT_MIRROR_MOUNT,
+        );
         expect(binds.length).toBeGreaterThan(0);
         for (const bind of binds) {
           expect(bind.Source.startsWith(path.join(dataDir, "portable-inputs"))).toBe(true);
@@ -546,7 +560,7 @@ describe("C20 staged portable inputs", () => {
           containerId,
           "sh",
           "-c",
-          `grep -rl ${SENTINEL} /claude-config /codex-home /pi-config /home/node /tmp /run 2>/dev/null | head -5; true`,
+          `grep -rl ${SENTINEL} /claude-config /codex-home /pi-config ${CONTAINER_GIT_MIRROR_MOUNT} /home/node /tmp /run 2>/dev/null | head -5; true`,
         ]);
         expect(sentinelScan).toBe("");
         expect(

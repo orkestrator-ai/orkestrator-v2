@@ -974,6 +974,19 @@ describe("removal", () => {
     expect(existsSync(stray)).toBe(true);
   });
 
+  test("a sweep with no settling age takes a mirror changed in the current millisecond", async () => {
+    const orphan = path.join(dataDir, "git-mirrors", "project-gone");
+    await fs.mkdir(path.join(orphan, "mount"), { recursive: true });
+    // Half a millisecond into the clock's current millisecond, as a change
+    // just made reads on a filesystem with sub-millisecond timestamps.
+    const changedAtMs = 1_700_000_000_000;
+    await fs.utimes(orphan, (changedAtMs + 0.5) / 1000, (changedAtMs + 0.5) / 1000);
+    expect((await fs.lstat(orphan)).mtimeMs).toBeGreaterThan(changedAtMs);
+
+    expect(await sweepOrphanedProjectGitMirrors(dataDir, new Set(), 0, () => changedAtMs)).toBe(1);
+    expect(existsSync(orphan)).toBe(false);
+  });
+
   test("the sweep's owner set comes from a store that exists, or not at all", async () => {
     await expect(storage.loadProjectIdsForCleanup()).rejects.toThrow("cleanup refused");
     await storage.addProject({

@@ -107,17 +107,25 @@ describe("Electron readiness", () => {
   });
 
   test.each([
-    ["development", "linux", undefined, false, false],
-    ["development", "linux", undefined, true, false],
-    ["agent-test", "linux", undefined, false, true],
-    ["agent-test", "linux", undefined, true, false],
-    ["agent-test", "linux", true, true, true],
-    ["agent-test", "linux", false, false, false],
-    ["agent-test", "darwin", true, false, false],
-    ["agent-test", "win32", undefined, false, false],
+    ["development", "linux", undefined, false, false, null],
+    ["development", "linux", undefined, true, false, null],
+    ["agent-test", "linux", undefined, false, true, null],
+    ["agent-test", "linux", undefined, true, false, null],
+    ["agent-test", "linux", true, true, true, null],
+    ["agent-test", "linux", false, false, false, null],
+    ["agent-test", "darwin", true, true, false, "--headless"],
+    ["agent-test", "darwin", undefined, false, false, "running without a terminal"],
+    ["agent-test", "win32", true, true, false, "--headless"],
+    ["agent-test", "win32", undefined, false, false, "running without a terminal"],
+    ["agent-test", "darwin", undefined, true, false, null],
+    ["agent-test", "win32", undefined, true, false, null],
+    ["agent-test", "darwin", false, false, false, null],
+    ["agent-test", "win32", false, false, false, null],
+    ["development", "darwin", true, false, false, null],
+    ["development", "win32", true, false, false, null],
   ] as const)(
     "wires Electron spawn settings and keeps readiness during status persistence (%s on %s, requested=%s, interactive=%s)",
-    async (flavor, platform, requested, interactive, headless) => {
+    async (flavor, platform, requested, interactive, headless, windowNoticeCause) => {
       const root = await mkdtemp(path.join(os.tmpdir(), "ork-dev-ready-race-"));
       const roots = {
         developmentRoot: path.join(root, "dev"),
@@ -232,6 +240,16 @@ describe("Electron readiness", () => {
         expect(headlessNotices.length).toBe(headless ? 1 : 0);
         if (headless)
           expect(headlessNotices[0]!.includes("Pass --no-headless")).toBe(requested !== true);
+        const windowNotices = notice.mock.calls
+          .map((call) => String(call[0]))
+          .filter((line) => line.startsWith("Electron opens a window"));
+        expect(windowNotices).toEqual(
+          windowNoticeCause === null
+            ? []
+            : [
+                `Electron opens a window: headless mode exists only on Linux, so ${windowNoticeCause} changes nothing on ${platform}.`,
+              ],
+        );
         expect(electronArgs).toEqual([
           ...(headless ? HEADLESS_ELECTRON_SWITCHES : []),
           "apps/desktop/dist/electron/main.js",

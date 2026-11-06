@@ -21,6 +21,7 @@ import {
 } from "@orkestrator/protocol/node/transcript-budget";
 import { nextPartOrdinal, toolResultImagePartId } from "@orkestrator/protocol/transcript-part-ids";
 import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
+import { rememberHistoryMessage } from "./history-target.js";
 import { noteCommandOutput } from "./commands.js";
 import { MAX_TOOL_TITLE_BYTES } from "./config.js";
 import { renderToolCall, type RenderedToolCall } from "./tool-rendering.js";
@@ -145,11 +146,15 @@ export function applySessionEvent(state: SessionState, event: unknown): void {
     case "message_end":
       // The assistant message is final. A later delta belongs to a new one.
       state.openTextParts.clear();
-      if (turnFramesWelcome(state)) applyResponseOutcome(state, event.message);
+      if (!turnFramesWelcome(state)) break;
+      applyResponseOutcome(state, event.message);
+      rememberResponseMessage(state, event.message);
+      rememberPromptMessage(state, event.message);
       break;
     case "tool_execution_start":
       if (!turnFramesWelcome(state)) break;
       applyToolExecution(state, event, "pending");
+      rememberResponseMessage(state, state.pendingHistoryResponse);
       break;
     case "tool_execution_update":
       if (!turnFramesWelcome(state)) break;
@@ -242,6 +247,7 @@ export function applySessionEvent(state: SessionState, event: unknown): void {
 function applyResponseBoundary(state: SessionState, value: unknown): void {
   if (!isObject(value) || value.role !== "assistant") return;
   state.currentAssistantMessageId = undefined;
+  state.pendingHistoryResponse = undefined;
   state.openTextParts.clear();
 }
 
@@ -282,6 +288,7 @@ function applySteerDelivery(state: SessionState, value: unknown): void {
     createdAt: messageCreatedAt(value.timestamp),
   };
   state.messages.push(message);
+  rememberHistoryMessage(state, messageId, value);
   chargeTranscript(state, Buffer.byteLength(JSON.stringify(message)));
   rowChanged(state, message);
 }
@@ -686,6 +693,22 @@ function applyResponseOutcome(state: SessionState, message: unknown): void {
           MAX_TOOL_TITLE_BYTES,
         )
       : undefined;
+}
+
+/** Remember a response even when its tool-only row is created after message_end. */
+function rememberResponseMessage(state: SessionState, message: unknown): void {
+  if (!isObject(message) || message.role !== "assistant") return;
+  state.pendingHistoryResponse = message;
+  const rowId = state.currentAssistantMessageId;
+  if (rowId) rememberHistoryMessage(state, rowId, message);
+}
+
+/** Only a user frame Pi actually emitted may bind the pending HTTP row. */
+function rememberPromptMessage(state: SessionState, message: unknown): void {
+  if (!isObject(message) || message.role !== "user") return;
+  const rowId = state.pendingHistoryPromptId;
+  state.pendingHistoryPromptId = undefined;
+  if (rowId) rememberHistoryMessage(state, rowId, message);
 }
 
 /**

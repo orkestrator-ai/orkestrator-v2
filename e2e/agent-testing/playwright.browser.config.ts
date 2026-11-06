@@ -74,6 +74,7 @@ export default defineConfig({
     "mcp-ui-matrix.spec.ts",
     "rich-transcripts-live.spec.ts",
     "idle-observation-live.spec.ts",
+    "session-history-live.spec.ts",
     "client-outage.spec.ts",
   ],
   fullyParallel: false,

@@ -59,3 +59,27 @@ Passing output was removed by the runner; no isolated case counts are inferred.
 The branch changes storage maintenance and mail dispatch, not the firewall
 scripts or this test. No assertion, timeout or skip was changed. The isolated
 pass confirms another intermittent failure; its cause remains unestablished.
+
+### Recurrence: 2026-11-06, automatic account switching branch
+
+Observed in the default aggregate on top of `ea8b13f5a`:
+
+```sh
+mise run test
+```
+
+This time `bootFixture` returned exit code 1 after 1,390 ms rather than a null
+exit at the deadline, so the fixture failed rather than ran out of time. The root
+group finished in 280.3 s; its other failures were unrelated
+(`disposable-docker-daemon.test.ts` fails alone too, and the `dom-absence-scan`
+and `test-suite-ownership` findings name files on `main`).
+
+The unchanged owning file then passed alone, 10 pass and 0 fail:
+
+```sh
+bun test ./tests/unit/firewall-egress-filter.test.ts
+```
+
+The branch changes agent-account switching and its Settings views, not the
+firewall scripts or this test. No assertion, timeout or skip was changed. The
+fixture's stderr was not kept, so why it exited 1 is unestablished.

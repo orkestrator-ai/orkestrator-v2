@@ -5,7 +5,8 @@
  * directories, drives the CLI's own sign-in and decides which account launches
  * use. This view lists what it is told, starts and polls a sign-in, and asks
  * for a switch. A switch takes effect as each agent next starts work while
- * idle, so nothing running is interrupted.
+ * idle, so nothing running is interrupted. Entries of one login are shown once
+ * (`groupAgentAccountLogins`).
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertCircle, Check, Loader2, Plus, RefreshCw } from "lucide-react";
@@ -16,6 +17,7 @@ import { Input } from "@/components/ui/input";
 import { AccountQuotaList } from "@/components/layout/AgentInfoButton.panels";
 import { AgentAccountLoginPanel } from "@/components/settings/AgentAccountLoginPanel";
 import { AutoSwitchBadge } from "@/components/settings/AutoSwitchBadge";
+import { AutoSwitchKeptNote } from "@/components/settings/AutoSwitchKeptNote";
 import { CoordinatorAccountSwitchGrant } from "@/components/settings/CoordinatorAccountSwitchGrant";
 import { useAccountMachine } from "@/components/settings/account-machine";
 import { StalePlanUsageNote } from "@/components/settings/PlanUsageSection";
@@ -33,11 +35,14 @@ import {
   setAgentAccountAutoSwitchIncluded,
   startAgentAccountLogin,
 } from "@/lib/backend";
-import type {
-  AgentAccountLoginProgress,
-  AgentAccountPlatform,
-  AgentAccountsSnapshot,
-  AgentAccountSummary,
+import {
+  agentAccountLoginOf,
+  groupAgentAccountLogins,
+  type AgentAccountLogin,
+  type AgentAccountLoginProgress,
+  type AgentAccountPlatform,
+  type AgentAccountsSnapshot,
+  type AgentAccountSummary,
 } from "@orkestrator/protocol/agent-accounts";
 import type { AgentAccountAutoSwitchState } from "@orkestrator/protocol/agent-account-auto-switch";
 import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
@@ -68,15 +73,32 @@ function sortAccounts(accounts: AgentAccountSummary[]): AgentAccountSummary[] {
   );
 }
 
+/**
+ * Of one login's readings, the one to show: a fresh one before a stale one, and
+ * the newest of either. Its entries share one allowance, so the freshest wins.
+ */
+export function freshestUsage(snapshots: readonly PlanUsageSnapshot[]): PlanUsageSnapshot | null {
+  const rank = (snapshot: PlanUsageSnapshot) =>
+    snapshot.status !== "ok" ? 2 : snapshot.stale ? 1 : 0;
+  return (
+    [...snapshots].sort(
+      (left, right) =>
+        rank(left) - rank(right) || Date.parse(right.fetchedAt) - Date.parse(left.fetchedAt),
+    )[0] ?? null
+  );
+}
+
 function AccountUsage({
   platform,
-  accountId,
+  accountIds,
   reloadToken,
 }: {
   platform: AgentAccountPlatform;
-  accountId: string;
+  /** Every entry of one login. */
+  accountIds: readonly string[];
   reloadToken: string;
 }) {
+  const idsKey = accountIds.join(",");
   const [snapshot, setSnapshot] = useState<PlanUsageSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   // A credential can change while the general settings pane is visible. A
@@ -89,20 +111,30 @@ function AccountUsage({
     const forced = reloadToken !== seenReloadTokenRef.current;
     seenReloadTokenRef.current = reloadToken;
     const load = async () => {
-      try {
-        const next = await getAgentAccountUsage(platform, accountId, { force: forced }, machine);
-        if (!current) return;
+      const results = await Promise.allSettled(
+        idsKey
+          .split(",")
+          .map((accountId) =>
+            getAgentAccountUsage(platform, accountId, { force: forced }, machine),
+          ),
+      );
+      if (!current) return;
+      const next = freshestUsage(
+        results.flatMap((result) => (result.status === "fulfilled" ? [result.value] : [])),
+      );
+      if (next) {
         setSnapshot(next);
         setError(null);
-      } catch (cause) {
-        if (current) setError(messageOf(cause));
+      } else {
+        const failed = results.find((result) => result.status === "rejected");
+        setError(messageOf(failed?.status === "rejected" ? failed.reason : "No usage reading"));
       }
     };
     void load();
     return () => {
       current = false;
     };
-  }, [platform, accountId, reloadToken, machine]);
+  }, [platform, idsKey, reloadToken, machine]);
 
   if (error) return <p className="text-xs text-destructive">{error}</p>;
   if (!snapshot) {
@@ -133,22 +165,26 @@ function AccountUsage({
 function AutoSwitchControls({
   platformLabel,
   state,
-  accounts,
+  logins,
   busy,
   machineName,
   onChange,
 }: {
   platformLabel: string;
   state: AgentAccountAutoSwitchState;
-  accounts: AgentAccountSummary[];
+  logins: AgentAccountLogin[];
   busy: boolean;
   machineName: string | null;
   onChange: (enabled: boolean) => void;
 }) {
-  const pinned = accounts.find((account) => account.id === state.pinnedAccountId);
-  const moved = state.lastSwitch
-    ? accounts.find((account) => account.id === state.lastSwitch?.toAccountId)
-    : undefined;
+  const pinned = agentAccountLoginOf(logins, state.pinnedAccountId)?.account;
+  const moved = agentAccountLoginOf(logins, state.lastSwitch?.toAccountId)?.account;
+  // A stay is news until a later switch; the store also drops it on that switch.
+  const kept =
+    state.lastKept &&
+    (!state.lastSwitch || Date.parse(state.lastKept.at) > Date.parse(state.lastSwitch.at))
+      ? state.lastKept
+      : undefined;
   return (
     <div className="mt-4 rounded-lg border border-zinc-800 bg-zinc-950/60 p-3">
       <div className="flex items-start gap-2">
@@ -181,6 +217,10 @@ function AutoSwitchControls({
                 5-hour limit resets, so accounts are used up in the order their weeks end.
               </p>
               <p>
+                When a limit stops work, it reads every account afresh before choosing, and an
+                account under 100% counts as having room.
+              </p>
+              <p>
                 Applies to {platformLabel} on every machine this one controls. Fable and other model
                 limits never move it. Switching by hand pins that account and turns this off until
                 you tick it again.
@@ -188,8 +228,11 @@ function AutoSwitchControls({
             </InfoHint>
             <AutoSwitchBadge state={state} pinnedLabel={pinned?.label} />
           </div>
-          {state.mode === "automatic" && moved ? (
+          {state.mode === "automatic" && moved && !kept ? (
             <p className="text-xs text-muted-foreground">Last moved to {moved.label}.</p>
+          ) : null}
+          {state.mode === "automatic" && kept ? (
+            <AutoSwitchKeptNote kept={kept} logins={logins} />
           ) : null}
         </div>
       </div>
@@ -239,7 +282,7 @@ function PrivateEntriesNotice({
 }
 
 function AccountRow({
-  account,
+  login,
   busy,
   usageReloadToken,
   autoSwitchIncluded,
@@ -248,7 +291,7 @@ function AccountRow({
   onRemove,
   onAutoSwitchIncluded,
 }: {
-  account: AgentAccountSummary;
+  login: AgentAccountLogin;
   busy: boolean;
   usageReloadToken: string;
   /** Absent from a machine that predates automatic switching. */
@@ -258,6 +301,7 @@ function AccountRow({
   onRename: (label: string) => Promise<void>;
   onRemove: () => void;
 }) {
+  const { account } = login;
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(account.label);
   const [confirmingRemove, setConfirmingRemove] = useState(false);
@@ -309,6 +353,19 @@ function AccountRow({
             </p>
           )}
           {identity ? <p className="mt-0.5 text-xs text-muted-foreground">{identity}</p> : null}
+          {login.alsoHostLogin ? (
+            <p className="mt-0.5 flex items-center gap-1 text-xs text-muted-foreground">
+              Also the host login
+              <InfoHint label="About the host login">
+                <p>
+                  The host login is whatever{" "}
+                  {account.platform === "claude" ? "~/.claude" : "~/.codex"} is signed in to on this
+                  machine. It is signed in to this same account, so the two are shown once and share
+                  one allowance. Usage shows whichever was read most recently.
+                </p>
+              </InfoHint>
+            </p>
+          ) : null}
           {autoSwitchIncluded !== undefined && account.signedIn ? (
             <label className="mt-1.5 flex items-center gap-1.5 text-xs text-muted-foreground">
               <Checkbox
@@ -369,7 +426,7 @@ function AccountRow({
       {account.signedIn ? (
         <AccountUsage
           platform={account.platform}
-          accountId={account.id}
+          accountIds={login.entryIds}
           reloadToken={usageReloadToken}
         />
       ) : null}
@@ -494,8 +551,8 @@ export function AgentAccountsSection({
     await refreshLogin();
   };
 
-  const accounts = sortAccounts(
-    snapshot?.accounts.filter((account) => account.platform === platform) ?? [],
+  const logins = groupAgentAccountLogins(
+    sortAccounts(snapshot?.accounts.filter((account) => account.platform === platform) ?? []),
   );
   const otherLoginPending = login.state === "pending" && !loginHere;
   const autoSwitch = snapshot?.autoSwitch?.[platform];
@@ -562,7 +619,7 @@ export function AgentAccountsSection({
         <AutoSwitchControls
           platformLabel={platformLabel}
           state={autoSwitch}
-          accounts={accounts}
+          logins={logins}
           busy={busy}
           machineName={machineName}
           onChange={(enabled) =>
@@ -590,35 +647,38 @@ export function AgentAccountsSection({
 
       {snapshot ? (
         <ul className="mt-4 space-y-2">
-          {accounts.map((account) => (
-            <AccountRow
-              key={account.id}
-              account={account}
-              busy={busy}
-              usageReloadToken={`${reloadToken}:${usageReloadToken}`}
-              {...(autoSwitch
-                ? { autoSwitchIncluded: autoSwitch.includedAccountIds.includes(account.id) }
-                : {})}
-              onAutoSwitchIncluded={(included) =>
-                void run(() =>
-                  setAgentAccountAutoSwitchIncluded(
-                    platform,
-                    account.id,
-                    account.identity.email,
-                    included,
-                    machine,
-                  ),
-                )
-              }
-              onUse={() =>
-                void run(() => setActiveAgentAccount(platform, account.id, machine), true)
-              }
-              onRename={(label) =>
-                run(() => renameAgentAccount(platform, account.id, label, machine))
-              }
-              onRemove={() => void run(() => removeAgentAccount(platform, account.id, machine))}
-            />
-          ))}
+          {logins.map((login) => {
+            const { account } = login;
+            return (
+              <AccountRow
+                key={account.id}
+                login={login}
+                busy={busy}
+                usageReloadToken={`${reloadToken}:${usageReloadToken}`}
+                {...(autoSwitch
+                  ? { autoSwitchIncluded: autoSwitch.includedAccountIds.includes(account.id) }
+                  : {})}
+                onAutoSwitchIncluded={(included) =>
+                  void run(() =>
+                    setAgentAccountAutoSwitchIncluded(
+                      platform,
+                      account.id,
+                      account.identity.email,
+                      included,
+                      machine,
+                    ),
+                  )
+                }
+                onUse={() =>
+                  void run(() => setActiveAgentAccount(platform, account.id, machine), true)
+                }
+                onRename={(label) =>
+                  run(() => renameAgentAccount(platform, account.id, label, machine))
+                }
+                onRemove={() => void run(() => removeAgentAccount(platform, account.id, machine))}
+              />
+            );
+          })}
         </ul>
       ) : !error ? (
         <p className="mt-4 flex items-center gap-2 text-xs text-muted-foreground">

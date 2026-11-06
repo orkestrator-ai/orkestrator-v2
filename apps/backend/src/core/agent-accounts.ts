@@ -10,6 +10,7 @@ import {
   type AgentAccountAutoSwitchState,
   type AgentAccountAutoSwitchStates,
   type AutoSwitchReason,
+  type AgentAccountAutoSwitchLastKept,
 } from "@orkestrator/protocol/agent-account-auto-switch";
 import {
   AGENT_ACCOUNT_PLATFORMS,
@@ -218,6 +219,7 @@ function autoSwitchState(
       )
       .map((account) => account.id),
     ...(stored?.lastSwitch ? { lastSwitch: stored.lastSwitch } : {}),
+    ...(stored?.lastKept ? { lastKept: stored.lastKept } : {}),
   };
 }
 
@@ -267,6 +269,13 @@ export async function applyAutomaticAccountSwitch(
   const changed = await switchActiveAccount(context, platform, accountId, { automatic });
   if (changed) announceAccountsChanged(context, platform);
   return changed;
+}
+
+function withoutLastKept(store: AgentAccountStore, platform: AgentAccountPlatform) {
+  const machine = store.autoSwitch?.[platform];
+  if (!machine?.lastKept) return store;
+  const { lastKept: _kept, ...rest } = machine;
+  return { ...store, autoSwitch: { ...store.autoSwitch, [platform]: rest } };
 }
 
 async function switchActiveAccount(
@@ -329,6 +338,8 @@ async function switchActiveAccount(
           pinned = options.pin === true && machine?.pin?.accountId !== accountId;
           return { store: options.pin ? withAutoSwitch : store, result: undefined };
         }
+        // Whatever kept the machine on the old account no longer describes it.
+        const moved = withoutLastKept(withAutoSwitch, platform);
         const active = { ...store.active };
         if (accountId === DEFAULT_AGENT_ACCOUNT_ID) {
           delete active[platform];
@@ -338,7 +349,7 @@ async function switchActiveAccount(
           }
           active[platform] = accountId;
         }
-        return { store: { ...withAutoSwitch, active }, result: current };
+        return { store: { ...moved, active }, result: current };
       },
     );
     if (pinned) return true;
@@ -388,6 +399,21 @@ export async function setAgentAccountAutoSwitch(
   });
   announceAccountsChanged(context, platform);
   return listAgentAccounts(context);
+}
+
+/**
+ * A limit stopped work and automatic switching found no account with room.
+ * Kept until the active account next changes, so Settings can say why.
+ */
+export async function recordAgentAccountAutoSwitchKept(
+  context: CommandContext,
+  platform: AgentAccountPlatform,
+  kept: AgentAccountAutoSwitchLastKept,
+): Promise<void> {
+  await mutateMachineAutoSwitch(context, platform, (machine) => {
+    machine.lastKept = kept;
+  });
+  announceAccountsChanged(context, platform);
 }
 
 /** The tick came back: end this machine's pin, leaving its own ticks alone. */

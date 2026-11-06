@@ -73,6 +73,7 @@ import {
   autoSwitchSettings,
   listAgentAccounts,
   readAgentAccountUsage,
+  recordAgentAccountAutoSwitchKept,
   renewAgentAccountLogin,
 } from "./agent-accounts.js";
 import { AgentAccountAutoSwitcher } from "./agent-accounts-auto-switch.js";
@@ -956,6 +957,7 @@ export class OrkestratorBackend {
           ...(quietProjectId ? { quietProjectId } : {}),
         });
       },
+      noteKept: (platform, kept) => recordAgentAccountAutoSwitchKept(context, platform, kept),
       onLimitStop: (report) => this.usageLimitNotices.noteStop(report),
     });
     context.accountAutoSwitch = this.accountAutoSwitch;

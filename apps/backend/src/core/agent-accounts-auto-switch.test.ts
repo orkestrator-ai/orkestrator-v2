@@ -810,7 +810,8 @@ describe("a limit error mid-turn", () => {
     expect([first, second]).toEqual(["resend", "resend"]);
     expect(h.switchAccount).toHaveBeenCalledTimes(1);
     expect(h.notices).toHaveLength(1);
-    expect(h.reads.filter((read) => read.force)).toHaveLength(1);
+    // The stopped account's confirmation and one probe of the other, shared by both.
+    expect(h.reads.filter((read) => read.force).map((read) => read.accountId)).toEqual(["a", "b"]);
   });
 
   test("a bridge held by another turn makes the resend wait, boundedly", async () => {

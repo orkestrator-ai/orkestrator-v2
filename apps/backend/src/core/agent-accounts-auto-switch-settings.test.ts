@@ -8,6 +8,7 @@ import { parseInheritedGlobalSettings } from "@orkestrator/protocol/controller-s
 import {
   applyAutomaticAccountSwitch,
   listAgentAccounts,
+  recordAgentAccountAutoSwitchKept,
   resumeAgentAccountAutoSwitch,
   setActiveAgentAccount,
   setAgentAccountAutoSwitch,
@@ -208,6 +209,29 @@ describe("the feature's own switch", () => {
     expect(emitted).toEqual([
       { event: AGENT_ACCOUNTS_CHANGED_EVENT, payload: { platform: "codex" } },
     ]);
+  });
+
+  test("keeps why a limit stop found nowhere to go until the active account changes", async () => {
+    await setAgentAccountAutoSwitch(context, "codex", { enabled: true });
+    const kept = {
+      fromAccountId: A,
+      at: "2026-11-06T04:07:56.000Z",
+      blocked: [{ accountId: B, blocker: "weekly" as const, usedPercent: 98 }],
+    };
+    emitted = [];
+    await recordAgentAccountAutoSwitchKept(context, "codex", kept);
+    expect(emitted).toEqual([
+      { event: AGENT_ACCOUNTS_CHANGED_EVENT, payload: { platform: "codex" } },
+    ]);
+    const reopened = new StorageService(path.join(root, "data"));
+    await reopened.init();
+    context = { ...context, storage: reopened } as CommandContext;
+    expect((await state()).lastKept).toEqual(kept);
+    await applyAutomaticAccountSwitch(context, "codex", B, {
+      expectedActive: A,
+      reason: "five-hour",
+    });
+    expect((await state()).lastKept).toBeUndefined();
   });
 
   test("gives way to a pin or another active account, changing nothing", async () => {

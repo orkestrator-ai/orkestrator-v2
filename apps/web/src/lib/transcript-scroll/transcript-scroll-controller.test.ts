@@ -486,3 +486,19 @@ describe("transcript reading ownership", () => {
     expect(view.controller.diagnostics().writes).toBe(writes);
   });
 });
+
+test("reading input and scroller readiness publish even when the viewport mode is unchanged", () => {
+  const { controller, scroller } = harness();
+  controller.seed(false);
+  const listener = mock(() => {});
+  const unsubscribe = controller.subscribe(listener);
+  const before = controller.generation;
+  scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -50 }));
+  expect(controller.generation).toBeGreaterThan(before);
+  expect(listener).toHaveBeenCalledTimes(1);
+  expect(controller.getSnapshot().generation).toBe(controller.generation);
+  controller.attachScroller(null);
+  expect(controller.getSnapshot().hasScroller).toBe(false);
+  expect(listener).toHaveBeenCalledTimes(2);
+  unsubscribe();
+});

@@ -231,6 +231,9 @@ interface Operation {
 }
 
 export interface ScrollViewState {
+  /** Async readers retire work on every reader input or newer navigation. */
+  generation: number;
+  hasScroller: boolean;
   /**
    * At the true end, or kept there by following or a latest journey that has
    * reached it (UI affordances: the return-to-latest button). Growth reaches
@@ -464,6 +467,8 @@ export class TranscriptScrollController {
     const target = this.op?.target;
     const following = followAllowed(this.state);
     return {
+      generation: this.state.generation,
+      hasScroller: this.scroller !== null,
       // A follower is pinned to the end on every resize delivery, and a
       // latest journey that has reached it is converging there. Between a
       // commit and that pin (a scroll event reading the new height first, or
@@ -483,6 +488,8 @@ export class TranscriptScrollController {
     const next = this.computeSnapshot();
     const previous = this.snapshot;
     if (
+      next.generation === previous.generation &&
+      next.hasScroller === previous.hasScroller &&
       next.isAtBottom === previous.isAtBottom &&
       next.followAllowed === previous.followAllowed &&
       next.mode === previous.mode &&
@@ -532,6 +539,7 @@ export class TranscriptScrollController {
     this.detachScroller?.();
     this.detachScroller = null;
     this.scroller = element;
+    this.publish();
     if (this.op) {
       this.counters.scrollerRetirements += 1;
       this.dispatch({ type: "user-navigation" }, "cancelled");

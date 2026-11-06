@@ -744,6 +744,12 @@ async function restartCodexBridge(invoke: Invoke, environmentId: string) {
 
 async function openApp(page: Page, status: Status, fixture: Project, environmentName: string) {
   await page.goto(status.browserUrl!);
+  await page.evaluate(async () => {
+    const { disableAutoLoadEarlier } = await import(
+      /* @vite-ignore */ String("/src/components/native-agent/useAutoLoadEarlier.ts")
+    );
+    disableAutoLoadEarlier();
+  });
   const expand = page.getByRole("button", { name: `Expand project ${fixture.name}` });
   const entry = page.getByText(environmentName, { exact: true }).first();
   await expect(expand.or(entry)).toBeVisible({ timeout: 60_000 });
@@ -804,9 +810,10 @@ test.describe("live transcript paging", () => {
     const environments: Environment[] = [];
     // The loopback is in place before the environment's Codex bridge starts.
     const loopback = CODEX_LOOPBACK ? await startLoopbackModel() : undefined;
-    const restoreCodexConfig = loopback ? pointCodexAt(status, loopback.baseUrl) : undefined;
+    let restoreCodexConfig: (() => void) | undefined;
     note("native-provider", loopback ? "pinned Codex, loopback model" : "real provider");
     try {
+      restoreCodexConfig = loopback ? pointCodexAt(status, loopback.baseUrl) : undefined;
       const environment = await createEnvironment(invoke, fixture, "paging-native");
       environments.push(environment);
       const trail = new Trail(NATIVE_STOPS);
@@ -1021,12 +1028,12 @@ test.describe("live transcript paging", () => {
           await wheelUp(page, list);
           await page.waitForTimeout(300);
           await expect(loading).toHaveCount(0, { timeout: 60_000 });
-          // The tab opens with a history page and pages on near the top by
-          // itself (`useAutoLoadEarlier`), so a short history may never offer
-          // the button. Every page it does offer must keep the reader's place.
+          // Automatic paging is disabled by openApp so this assertion always
+          // exercises the explicit button and measures a real page transition.
           if (!(await control.isVisible())) break;
           clicks.push(await loadEarlierOnce(page, list, trail, `${label}-${click + 1}`));
         }
+        expect(clicks.length, `${label}: native paging must run`).toBeGreaterThan(0);
         note(`${label}-clicks`, clicks.length);
         for (const measured of clicks) {
           expectPlaceHeld(measured, label);
@@ -1060,6 +1067,19 @@ test.describe("live transcript paging", () => {
         const anchorStop = before?.stop;
         expect(anchorStop, "restart: no trail stop is on screen").toBeDefined();
 
+        const renderedKeys = () =>
+          list.evaluate((element) =>
+            Array.from(element.querySelectorAll<HTMLElement>("[data-chat-message-index]")).map(
+              (row) => row.dataset.chatMessageKey ?? "",
+            ),
+          );
+        const keysBefore = await renderedKeys();
+        const previews = path.join(process.cwd(), "output", "visual-previews");
+        await fs.mkdir(previews, { recursive: true });
+        await list
+          .locator("[data-transcript-group-frame]")
+          .first()
+          .screenshot({ path: path.join(previews, "restart-review-before-tools.png") });
         await restartCodexBridge(invoke, environment.id);
         // The backend sees the replay once the new bridge answers.
         let replayed: Awaited<ReturnType<typeof wholeTranscript>> | undefined;
@@ -1072,8 +1092,7 @@ test.describe("live transcript paging", () => {
             { timeout: 60_000, intervals: [1_000] },
           )
           .toBe(true)
-          .then(() => true)
-          .catch(() => false);
+          .then(() => true);
         replayed ??= await wholeTranscript();
         const idsAfter = rowIds(replayed.rows);
         const order = trail.verifyOrder(replayed.rows, "native-after-restart");
@@ -1081,22 +1100,22 @@ test.describe("live transcript paging", () => {
         const callsAfter = toolCallIds(replayed.rows);
         const stopsByRow = (rows: Row[]) => rows.map((row) => trail.stopsRead(row).join());
 
-        // The mounted tab adopts the renamed rows: wait for its keys to move.
-        const renderedKeys = () =>
-          list.evaluate((element) =>
-            Array.from(element.querySelectorAll<HTMLElement>("[data-chat-message-index]")).map(
-              (row) => row.dataset.chatMessageKey ?? "",
-            ),
-          );
-        const keysOnScreen = (await renderedKeys()).join();
-        const tabRekeyed = await expect
-          .poll(async () => (await renderedKeys()).join() !== keysOnScreen, {
-            timeout: 30_000,
-            intervals: [500],
-          })
-          .toBe(true)
-          .then(() => true)
-          .catch(() => false);
+        // All mounted rows must come from the new replay, not merely differ
+        // because the reader scrolled within a stale pre-restart projection.
+        await expect
+          .poll(
+            async () => {
+              const keys = await renderedKeys();
+              return (
+                keys.length > 0 &&
+                keys.every((key) => idsAfter.includes(key)) &&
+                keys.some((key) => !keysBefore.includes(key))
+              );
+            },
+            { timeout: 30_000, intervals: [500] },
+          )
+          .toBe(true);
+        const tabRekeyed = true;
         // Let any follow-up poll land before measuring.
         await page.waitForTimeout(3_000);
         const anchor = await rowPosition(list, trail, anchorStop!);
@@ -1138,6 +1157,10 @@ test.describe("live transcript paging", () => {
           "restart: the replay moved a stop to another row",
         ).toEqual(stopsByRow(whole.rows));
         expectPlaceHeld(held, "native-after-restart");
+        await list
+          .locator("[data-transcript-group-frame]")
+          .first()
+          .screenshot({ path: path.join(previews, "restart-review-after-tools.png") });
         expect(renderedAfter.distinctKeys, "restart: a row key is rendered twice").toBe(
           renderedAfter.rows,
         );
@@ -1161,8 +1184,11 @@ test.describe("live transcript paging", () => {
       await verifyBrowserPaging("native-after-reload");
     } finally {
       await removeEnvironments(invoke, environments);
-      restoreCodexConfig?.();
-      loopback?.child.kill();
+      try {
+        restoreCodexConfig?.();
+      } finally {
+        loopback?.child.kill();
+      }
     }
   });
 

@@ -39,9 +39,19 @@ const replayedPage = [prompt("msg-r-0"), stop("msg-r-1", "call-1"), stop("msg-r-
 type Props = { messages: NativeMessage[]; loading: boolean; canLoadEarlier: boolean };
 
 function setup(anchor: SemanticAnchor | null, options: { wantsFollow?: boolean } = {}) {
+  const listeners = new Set<() => void>();
   const controller: { -readonly [K in keyof ReaderPlaceSource]: ReaderPlaceSource[K] } = {
     wantsFollow: options.wantsFollow ?? false,
     readingAnchor: anchor,
+    generation: 0,
+    active: true,
+    hasScroller: true,
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
   };
   const scrollToIndex = mock((_index: number, _anchor?: unknown, _owner?: string) => true);
   // A page settles once the test has committed what it brought, as the tab's does.
@@ -66,7 +76,11 @@ function setup(anchor: SemanticAnchor | null, options: { wantsFollow?: boolean }
       }),
     { initialProps: { messages: [...live, ...liveTail], loading: false, canLoadEarlier: true } },
   );
-  return { controller, hook, land, loadEarlier, scrollToIndex };
+  const notify = () =>
+    act(() => {
+      for (const listener of listeners) listener();
+    });
+  return { controller, hook, land, loadEarlier, scrollToIndex, notify };
 }
 
 /** Lets settled page promises report back. */
@@ -291,7 +305,7 @@ describe("useRestorePlaceAfterHistoryDrop", () => {
     expect(hook.result.current).toBe(false);
   });
 
-  test("a call restored once is not chased again when it drops a second time", () => {
+  test("a later independent drop restores the same call again", () => {
     const { hook, loadEarlier, scrollToIndex } = setup(readerOnCall1);
     hook.rerender({ messages: replayedTail, loading: false, canLoadEarlier: true });
     hook.rerender({
@@ -301,7 +315,91 @@ describe("useRestorePlaceAfterHistoryDrop", () => {
     });
     expect(scrollToIndex).toHaveBeenCalledTimes(1);
     hook.rerender({ messages: replayedTail, loading: false, canLoadEarlier: true });
-    expect(loadEarlier).toHaveBeenCalledTimes(1);
+    expect(loadEarlier).toHaveBeenCalledTimes(2);
+    expect(hook.result.current).toBe(true);
+    hook.rerender({
+      messages: [...replayedPage, ...replayedTail],
+      loading: false,
+      canLoadEarlier: false,
+    });
+    expect(scrollToIndex).toHaveBeenCalledTimes(2);
     expect(hook.result.current).toBe(false);
+  });
+
+  test.each(["scroll", "find", "message-link"])("%s supersedes a pending restoration", async () => {
+    const { hook, controller, land, loadEarlier, scrollToIndex, notify } = setup(readerOnCall1);
+    hook.rerender({ messages: replayedTail, loading: false, canLoadEarlier: true });
+    controller.generation += 1;
+    notify();
+    expect(hook.result.current).toBe(false);
+    await land();
+    hook.rerender({
+      messages: [...replayedPage, ...replayedTail],
+      loading: false,
+      canLoadEarlier: true,
+    });
+    expect(scrollToIndex).not.toHaveBeenCalled();
+    expect(loadEarlier).toHaveBeenCalledTimes(1);
+  });
+
+  test("reader input clears an empty-page retry before the timer fires", async () => {
+    const timer = installControlledTimeout(HISTORY_DROP_RESTORE_RETRY_MS);
+    try {
+      const { hook, controller, land, loadEarlier, notify } = setup(readerOnCall1);
+      hook.rerender({ messages: replayedTail, loading: false, canLoadEarlier: true });
+      await land();
+      controller.generation += 1;
+      notify();
+      expect(hook.result.current).toBe(false);
+      expect(timer.pendingCount()).toBe(0);
+      act(() => timer.advance());
+      expect(loadEarlier).toHaveBeenCalledTimes(1);
+    } finally {
+      timer.restore();
+    }
+  });
+
+  test("a coalesced row keeping its display id can lose the anchored source part", () => {
+    const { hook, scrollToIndex } = setup(readerOnCall1);
+    const grouped = {
+      ...stop("coalesced", "call-1"),
+      parts: [...stop("a", "call-1").parts, ...stop("b", "call-2").parts],
+    };
+    hook.rerender({ messages: [grouped, ...liveTail], loading: false, canLoadEarlier: true });
+    hook.rerender({
+      messages: [{ ...grouped, parts: stop("b", "call-2").parts }, ...liveTail],
+      loading: false,
+      canLoadEarlier: true,
+    });
+    expect(hook.result.current).toBe(true);
+    hook.rerender({ messages: [grouped, ...liveTail], loading: false, canLoadEarlier: false });
+    expect(scrollToIndex).toHaveBeenCalledWith(
+      0,
+      { partId: "call-1", rowKey: "coalesced", offset: 228 },
+      "history",
+    );
+  });
+
+  test("recovered history waits for activation and an accepted navigation", () => {
+    const { hook, controller, scrollToIndex } = setup(readerOnCall1);
+    hook.rerender({ messages: replayedTail, loading: false, canLoadEarlier: true });
+    controller.active = false;
+    const messages = [...replayedPage, ...replayedTail];
+    hook.rerender({ messages, loading: false, canLoadEarlier: false });
+    expect(hook.result.current).toBe(true);
+    expect(scrollToIndex).not.toHaveBeenCalled();
+    controller.active = true;
+    scrollToIndex.mockReturnValueOnce(false);
+    hook.rerender({ messages, loading: false, canLoadEarlier: false });
+    expect(hook.result.current).toBe(true);
+    hook.rerender({ messages, loading: false, canLoadEarlier: false });
+    expect(hook.result.current).toBe(true);
+    // A ready viewport publishes a new snapshot and retries the rejected move.
+    controller.hasScroller = false;
+    hook.rerender({ messages, loading: false, canLoadEarlier: false });
+    controller.hasScroller = true;
+    hook.rerender({ messages, loading: false, canLoadEarlier: false });
+    expect(hook.result.current).toBe(false);
+    expect(scrollToIndex).toHaveBeenCalledTimes(2);
   });
 });

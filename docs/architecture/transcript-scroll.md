@@ -183,8 +183,12 @@ element's top relative to the viewport.
   pages history back until that part (a call id, which a Codex replay keeps)
   reappears, and scrolls to it at its old offset. It gives up after 8 pages
   that bring rows but not the part, 12 empty pages retried 750 ms apart, when
-  history runs out, or when the reader starts following; automatic paging
-  stands aside meanwhile. Covered live by `transcript-paging-live.spec.ts`'s
+  history runs out, or when newer reader input/navigation supersedes its
+  captured controller generation. Source-part loss is checked even if the
+  coalesced display head keeps its id. Each independent drop can restore the
+  same call again. Recovered history waits for an active, mounted viewport
+  and an accepted navigation; ordinary held-page restoration and automatic
+  paging stand aside meanwhile. Covered live by `transcript-paging-live.spec.ts`'s
   Codex bridge-restart step.
 
 ## Activation and persistence

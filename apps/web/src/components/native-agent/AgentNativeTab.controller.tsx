@@ -1168,7 +1168,6 @@ export function SharedNativeAgentController({
   // Load earlier messages keeps the reader on the row they were reading.
   const loadingEarlier = earlierRequest?.sessionKey === sessionKey;
   const loadEarlierPlace = useHeldTranscriptPlace(sessionKey);
-  useRestoreHeldPlace(loadEarlierPlace, messages, scrollToIndex, loadingEarlier);
   const loadEarlierAutomatically = useCallback(
     async (scroller: HTMLElement | null) => {
       // An opening page must leave live follow armed. History restoration
@@ -1206,6 +1205,13 @@ export function SharedNativeAgentController({
     loadEarlier: loadEarlierToRestorePlace,
     scrollToIndex,
   });
+  useRestoreHeldPlace(
+    loadEarlierPlace,
+    messages,
+    scrollToIndex,
+    loadingEarlier,
+    restoringDroppedPlace,
+  );
   // Opens with a history page above the live window, and pages on as the
   // reader nears the top, without the button.
   const autoLoadEarlierSentinel = useAutoLoadEarlier({

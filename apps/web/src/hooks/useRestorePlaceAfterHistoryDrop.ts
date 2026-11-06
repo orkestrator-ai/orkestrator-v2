@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { NavigationOwner } from "@/lib/transcript-scroll/scroll-intent";
 import type { SemanticAnchor } from "@/lib/transcript-scroll/transcript-scroll-controller";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
@@ -19,6 +19,10 @@ export const HISTORY_DROP_RESTORE_MAX_EMPTY_PAGES = 12;
 /** The parts of the transcript's scroll controller this reads. */
 export interface ReaderPlaceSource {
   readonly wantsFollow: boolean;
+  readonly generation: number;
+  readonly active: boolean;
+  readonly hasScroller: boolean;
+  subscribe: (listener: () => void) => () => void;
   /** The reader's place as of their last settled scroll; null while following. */
   readonly readingAnchor: SemanticAnchor | null;
 }
@@ -37,7 +41,7 @@ export interface RestorePlaceAfterHistoryDropInput {
     index: number,
     anchor?: TranscriptScrollAnchor,
     owner?: NavigationOwner,
-  ) => unknown;
+  ) => boolean;
 }
 
 interface Restoration {
@@ -45,11 +49,17 @@ interface Restoration {
   /** The source part (a tool call id, or a source part id) the reader was on. */
   target: string;
   anchor: SemanticAnchor;
+  generation: number;
   /** Pages that moved the transcript's head, and pages that did not. */
   pages: number;
   emptyPages: number;
-  /** The head when the last page was requested; undefined before the first. */
+  /** The source head when the last page was requested; undefined before the first. */
   lastRequest?: { headId: string | undefined; settled: boolean; counted: boolean };
+}
+
+/** Display ids may survive prefix trimming inside a coalesced row. */
+function sourceHead(messages?: readonly NativeMessage[]): string | undefined {
+  return messages?.[0]?.earliestSourceMessageId ?? messages?.[0]?.id;
 }
 
 /**
@@ -84,8 +94,11 @@ export function useRestorePlaceAfterHistoryDrop({
     null,
   );
   const restorationRef = useRef<Restoration | null>(null);
-  /** The last part restored: a part that drops again is not chased twice. */
-  const restoredRef = useRef<string | undefined>(undefined);
+  const view = useSyncExternalStore(
+    controller.subscribe,
+    () =>
+      `${controller.generation}:${controller.active}:${controller.hasScroller}:${controller.wantsFollow}`,
+  );
   const [restoring, setRestoring] = useState<Restoration | null>(null);
   /** Bumped as each page settles, so the next step runs whatever order React renders in. */
   const [settledPages, setSettledPages] = useState(0);
@@ -103,43 +116,54 @@ export function useRestorePlaceAfterHistoryDrop({
     previousRef.current = { sessionKey, messages };
     const restoration = restorationRef.current;
     if (restoration) {
-      if (restoration.sessionKey !== sessionKey) {
+      if (
+        restoration.sessionKey !== sessionKey ||
+        controller.wantsFollow ||
+        restoration.generation !== controller.generation
+      ) {
         finish();
         return;
       }
       const found = sourceIndexOf(messages).part.get(restoration.target);
       if (found === undefined) return;
-      finish();
-      restoredRef.current = restoration.target;
-      // A reader who chose to follow the latest message meanwhile keeps that.
-      if (controller.wantsFollow) return;
-      scrollToIndex(
-        found,
-        { ...toScrollAnchor(restoration.anchor), rowKey: messages[found]!.id },
-        "history",
-      );
+      // The semantic anchor survives an inactive/unmounted viewport. Only a
+      // navigation accepted by the controller consumes it.
+      if (!controller.active || !controller.hasScroller) return;
+      if (
+        scrollToIndex(
+          found,
+          { ...toScrollAnchor(restoration.anchor), rowKey: messages[found]!.id },
+          "history",
+        )
+      )
+        finish();
       return;
     }
     if (
       !previous ||
       previous.sessionKey !== sessionKey ||
       previous.messages === messages ||
-      // History only drops from the front: an unchanged head dropped nothing.
-      previous.messages[0]?.id === messages[0]?.id ||
       controller.wantsFollow
     ) {
       return;
     }
     const anchor = controller.readingAnchor;
     const target = anchor?.inner?.partId ?? anchor?.partId;
-    if (!anchor || !target || target === restoredRef.current) return;
+    if (!anchor || !target) return;
     if (!sourceIndexOf(previous.messages).part.has(target)) return;
     if (sourceIndexOf(messages).part.has(target)) return;
     // The drop is observed in the scroll controller and the committed rows, both
     // outside render; the state mirrors it for the paging effect and caller.
     // oxlint-disable-next-line react/set-state-in-effect
-    track({ sessionKey, target, anchor, pages: 0, emptyPages: 0 });
-  }, [controller, messages, scrollToIndex, sessionKey]);
+    track({
+      sessionKey,
+      target,
+      anchor,
+      generation: controller.generation,
+      pages: 0,
+      emptyPages: 0,
+    });
+  }, [controller, messages, scrollToIndex, sessionKey, view]);
 
   // One page at a time, until the part is back or there is nothing left to page.
   // The head is read from the last commit rather than depended on, so a poll
@@ -147,9 +171,11 @@ export function useRestorePlaceAfterHistoryDrop({
   useEffect(() => {
     const restoration = restorationRef.current;
     if (!restoring || restoration !== restoring || loading) return;
+    // Found history waits for activation, even if there are no earlier pages.
+    if (sourceIndexOf(previousRef.current?.messages ?? []).part.has(restoration.target)) return;
     const last = restoration.lastRequest;
     if (last && !last.settled) return;
-    const empty = last !== undefined && last.headId === previousRef.current?.messages[0]?.id;
+    const empty = last !== undefined && last.headId === sourceHead(previousRef.current?.messages);
     if (last && !last.counted) {
       last.counted = true;
       if (empty) restoration.emptyPages += 1;
@@ -165,8 +191,14 @@ export function useRestorePlaceAfterHistoryDrop({
       return;
     }
     const request = () => {
+      if (
+        restorationRef.current !== restoration ||
+        controller.wantsFollow ||
+        controller.generation !== restoration.generation
+      )
+        return;
       const page = {
-        headId: previousRef.current?.messages[0]?.id,
+        headId: sourceHead(previousRef.current?.messages),
         settled: false,
         counted: false,
       };
@@ -186,7 +218,7 @@ export function useRestorePlaceAfterHistoryDrop({
     }
     const timer = setTimeout(request, HISTORY_DROP_RESTORE_RETRY_MS);
     return () => clearTimeout(timer);
-  }, [canLoadEarlier, loadEarlier, loading, restoring, sessionKey, settledPages]);
+  }, [canLoadEarlier, controller, loadEarlier, loading, restoring, sessionKey, settledPages, view]);
 
   return restoring !== null;
 }

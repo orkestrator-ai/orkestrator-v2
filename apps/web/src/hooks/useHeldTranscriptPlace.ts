@@ -215,8 +215,10 @@ export function useRestoreHeldPlace(
     owner?: NavigationOwner,
   ) => unknown,
   loading?: boolean,
+  superseded = false,
 ): void {
   useLayoutEffect(() => {
+    if (superseded) place.release();
     const index = place.resolve(messages);
     if (index !== undefined) {
       if (place.scrollAnchor) scrollToIndex(index, place.scrollAnchor, "history");
@@ -225,5 +227,5 @@ export function useRestoreHeldPlace(
     // Resolve the final committed page first. Failed, empty, or superseded
     // requests must stop pre-commit capture even when the head never changed.
     if (loading === false) place.release();
-  }, [loading, messages, place, scrollToIndex]);
+  }, [loading, messages, place, scrollToIndex, superseded]);
 }

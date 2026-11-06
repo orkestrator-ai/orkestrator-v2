@@ -66,7 +66,6 @@ export function toolGroupEntryKey(part: NativeMessagePart, index: number): strin
   return id ? `id:${id}` : `pos:${index}:${part.type}`;
 }
 
-/** The ceiling in pixels, for the virtualized body that needs an explicit height. */
 /**
  * The entry a transcript anchor names, by the same id the entry renders as
  * its `data-transcript-part-id`; -1 when the group does not hold it.
@@ -80,6 +79,7 @@ export function toolGroupEntryIndex(entries: readonly NativeMessagePart[], partI
   );
 }
 
+/** The ceiling in pixels, for the virtualized body that needs an explicit height. */
 function useBodyMaxHeightPx(): number {
   const read = () => {
     if (typeof window === "undefined") return 448;

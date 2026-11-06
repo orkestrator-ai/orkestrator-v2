@@ -1674,7 +1674,18 @@ row therefore has the same stage words, buckets and expiry (from the run's
 environment on that node. A remote run its node reports `not-found` is
 unavailable under Finished, like a deleted local record. Successful empty local reads mark deleted builds, reviews and graph runs as unavailable under Finished, using association creation for bounded retention; failed reads never prove deletion. Review and graph rows also retain finished work while the environment PR is open. Review Open restores a closed main tab after authoritative layout hydration.
 
-**Waiting prompts.** `HumanPromptBanner` above the conversation shows the
+Conversation-specific mail, startup failures, provider notices and the agent's
+own waiting prompts use an independent `FloatingNoticeLayer` anchored inside
+that conversation pane. Each pane measures its own transcript gutter; a hidden
+mobile pane therefore also hides its notices and their live regions. Panel-wide
+notices (pause, action errors, workflow capacity and worker prompts) use the area
+stack, which is collapsible and makes no assumption about a shared transcript
+column across splits. Stacks and cards scroll within the measured pane height,
+and pills stay within the pane width. Collapsed status and alert notices retain
+live summaries; opening a card returns announcements to its full content.
+
+**Waiting prompts.** `HumanPromptBanner`, floating at the top right of the
+conversation area with the coordinator's other notices, shows the
 prompts of this coordinator's workers, with an **Open** that goes to the waiting
 tab. Local workers are read from this backend. Workers on another node, while a
 request to them is open, are read with `list_human_prompts` through that node's

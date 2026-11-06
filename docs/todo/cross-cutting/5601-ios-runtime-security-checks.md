@@ -11,7 +11,7 @@ Analysed 2026-11-05 against `main` at `69a3b4ca5`.
 3. **Check Keychain behaviour on a device**: lock, restart, backup and reinstall. Status: open.
 4. **Check Password AutoFill on the token field**: whether iOS offers to save the gateway token. Status: open.
 5. **Inspect a signed release build**: entitlements and debugging flags of what actually ships. Status: open.
-6. **Check the privacy cover on a device**: whether the cover from [5602](5602-ios-session-and-privacy-hardening.md) task 2 reaches the system snapshot on hardware. Status: open.
+6. **Check the privacy cover on a device**: whether the cover from 5602 task 2 reaches the system snapshot on hardware. Status: open.
 
 ### 1. Run the suite through Xcode's own scheme
 
@@ -50,7 +50,7 @@ The task-specific simulator was created with `xcrun simctl create` using `com.ap
 
 **Context.** The sign-in is `RemoteWebView.Coordinator.loginCookie`, and the navigation and bridge rules are `navigationDisposition` and `isTrustedBridgeOrigin` in `apps/ios/OrkestratorMobile/Views/RemoteWebView.swift`. [Todo 0042](../previews-and-annotations/0042-service-preview-rollout.md) task 3 needs the iOS service-preview handoff on the same hardware.
 
-**Investigation.** Seen with a throwaway probe on the iOS 18.2 simulator on 2026-11-05: a CSP-sandboxed main frame reports an empty origin (the bridge refuses it now that its crash is fixed); subframes are refused; a cross-origin iframe setting `top.location` gets a `SecurityError`, with or without `sandbox`; `window.open` without a gesture never reaches the app. A main-frame `location.href` to another origin with no gesture does reach the navigation policy, which opens it in Safari; only script at the gateway's own origin can do that. A committed test pins, on all three runtimes, that the session cookie keeps `HttpOnly`, `Secure` and `SameSite=Strict` in `WKHTTPCookieStore` under both names and stays out of `document.cookie`. Not seen: the cookie actually being sent on real requests, a real legacy preview opened at the top level, or a real preview iframe. The real `check()` refusing a redirect was seen on the simulator against a local server, over HTTP. The logout from [5602](5602-ios-session-and-privacy-hardening.md) task 1 was seen only against a fake gateway on loopback, over HTTP: the request carried the cookie and the redirect was not followed. A real gateway revoking the session over TLS was not seen.
+**Investigation.** Seen with a throwaway probe on the iOS 18.2 simulator on 2026-11-05: a CSP-sandboxed main frame reports an empty origin (the bridge refuses it now that its crash is fixed); subframes are refused; a cross-origin iframe setting `top.location` gets a `SecurityError`, with or without `sandbox`; `window.open` without a gesture never reaches the app. A main-frame `location.href` to another origin with no gesture does reach the navigation policy, which opens it in Safari; only script at the gateway's own origin can do that. A committed test pins, on all three runtimes, that the session cookie keeps `HttpOnly`, `Secure` and `SameSite=Strict` in `WKHTTPCookieStore` under both names and stays out of `document.cookie`. Not seen: the cookie actually being sent on real requests, a real legacy preview opened at the top level, or a real preview iframe. The real `check()` refusing a redirect was seen on the simulator against a local server, over HTTP. The logout from 5602 task 1 was seen only against a fake gateway on loopback, over HTTP: the request carried the cookie and the redirect was not followed. A real gateway revoking the session over TLS was not seen.
 
 **Decisions.**
 
@@ -68,13 +68,13 @@ The task-specific simulator was created with `xcrun simctl create` using `com.ap
 
 **Context.** `apps/ios/OrkestratorMobile/Security/KeychainCredentialStore.swift:44`. The editor's security note and `apps/ios/README.md` both repeat the promise.
 
-**Investigation.** The accessibility class and the absence of `kSecAttrSynchronizable` were read from the code on 2026-11-05. The item also outlives an uninstall, which is ordinary iOS behaviour and is not mentioned to users. [5602](5602-ios-session-and-privacy-hardening.md) task 3 is built and tested with a failing credential store, using the real `errSecInteractionNotAllowed` error value. A real read while locked has not been seen, nor whether iOS ever starts this model while locked (prewarming, for example). A launch while locked should show the unread-list message, refuse a save, and bring the list back on returning to the app unlocked.
+**Investigation.** The accessibility class and the absence of `kSecAttrSynchronizable` were read from the code on 2026-11-05. The item also outlives an uninstall, which is ordinary iOS behaviour and is not mentioned to users. 5602 task 3 is built and tested with a failing credential store, using the real `errSecInteractionNotAllowed` error value. A real read while locked has not been seen, nor whether iOS ever starts this model while locked (prewarming, for example). A launch while locked should show the unread-list message, refuse a save, and bring the list back on returning to the app unlocked.
 
 **Decisions.**
 
 - **How to check?**
   - **On a device: launch while locked, restart, restore an encrypted backup to confirm the vault does not return, and reinstall to see what remains (recommended).**
-    - Pros: tests the promises as written; also tests [5602](5602-ios-session-and-privacy-hardening.md) task 3.
+    - Pros: tests the promises as written; also tests 5602 task 3.
     - Cons: needs a spare device, because a restore is destructive.
   - **Rely on Apple's documentation of the accessibility class.**
     - Pros: no hardware.
@@ -155,7 +155,7 @@ After the passing run, restored the original mapping with `xcrun simctl runtime 
 
 Task 1 is complete: the project's own hosted test scheme passed all 66 tests. The earlier stand-in runs also passed on three simulator runtimes. Nothing has run on a physical device or from a signed release build; tasks 2–6 remain open.
 
-The iOS 26.5 runtime that task 1 installed was no longer on that Mac on 2026-11-05 (`xcrun simctl runtime list` showed only 17.5, 18.2 and 26.2), so `mise run test:ios` again stops before running any test. [5602](5602-ios-session-and-privacy-hardening.md) records the overrides its run used instead.
+The iOS 26.5 runtime that task 1 installed was no longer on that Mac on 2026-11-05 (`xcrun simctl runtime list` showed only 17.5, 18.2 and 26.2), so `mise run test:ios` again stops before running any test. 5602 records the overrides its run used instead.
 
 ## Constraints and rationale
 
@@ -165,7 +165,7 @@ The iOS 26.5 runtime that task 1 installed was no longer on that Mac on 2026-11-
 ## Related
 
 - [5600-ios-bridge-user-consent.md](5600-ios-bridge-user-consent.md)
-- [5602-ios-session-and-privacy-hardening.md](5602-ios-session-and-privacy-hardening.md)
+- `5602-ios-session-and-privacy-hardening.md` (deleted 2026-11-06)
 - [2960-host-prefixed-gateway-cookie.md](2960-host-prefixed-gateway-cookie.md)
 - [Todo 0042](../previews-and-annotations/0042-service-preview-rollout.md), task 3
 

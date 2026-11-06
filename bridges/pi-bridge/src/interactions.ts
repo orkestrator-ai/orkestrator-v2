@@ -38,6 +38,11 @@ import {
 } from "./mcp.js";
 import { schedulePersist } from "./persistence.js";
 import {
+  PI_READ_BOUNDARY_REFUSAL,
+  piCoordinatorReadBoundary,
+  piReadToolRefused,
+} from "./read-boundary.js";
+import {
   isObject,
   nonBlank,
   turnCancellationRequested,
@@ -89,6 +94,14 @@ export async function requestToolApproval(
       reason:
         "This review session is read-only. Read the supplied package; commands, edits, and extension tools are disabled.",
     };
+  }
+  // A coordinator's reads stop at the data directory, whatever its approval
+  // policy: the launcher names it in this process's environment.
+  if (READ_ONLY_TOOLS.has(toolName)) {
+    const boundary = piCoordinatorReadBoundary(workingDirectory);
+    if (boundary && piReadToolRefused(boundary, toolName, input, workingDirectory)) {
+      return { block: true, reason: PI_READ_BOUNDARY_REFUSAL };
+    }
   }
   // A cancel recorded before the run's abort landed — including one that
   // arrived during startup and is only now being applied — is not consent to

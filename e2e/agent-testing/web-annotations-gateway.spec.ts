@@ -3,10 +3,11 @@
  * `dev:test` profile (run by `mise run test:agent:browser:isolated`).
  *
  * Browser clients cannot capture (native capture is desktop-only and is
- * covered by `web-annotations-electron.spec.ts`), so these tests build a
- * synthetic capture from the fixture page as rendered by real Chromium and
- * exercise what every client shares: two-client batch reservation races,
- * request bounds, queue holds, cancellation, and reload rehydration.
+ * covered by `web-annotations-electron.spec.ts`), so these tests replay
+ * recorded desktop captures, using page identity and staged screenshot data
+ * from the current run. They exercise what every client shares: two-client
+ * batch reservation races, request bounds, queue holds, cancellation, and
+ * reload rehydration.
  *
  * The live implement and discuss tests are opt-in
  * (`ORKESTRATOR_AGENT_TEST_LIVE_ANNOTATIONS=1`) and require a profile started
@@ -52,6 +53,7 @@ import {
   startFixtureServer,
   type FixtureServer,
 } from "./web-annotations-support";
+import { recordedNativeCapture } from "./web-annotations-native-captures";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 const profile = process.env.ORKESTRATOR_AGENT_TEST_PROFILE ?? "codex-qa";
@@ -106,9 +108,11 @@ async function client(browser: Browser, status: Status): Promise<{ page: Page; i
 }
 
 /**
- * A capture built from the element as real Chromium renders it. Synthetic by
- * construction (a browser client has no trusted capture), but its geometry,
- * text, and page identity come from the served fixture.
+ * A capture of `selector` as the desktop app records it. A browser client has
+ * no trusted capture, so the target, evidence and redaction are a real
+ * Electron capture of the same element (`web-annotations-native-captures.json`,
+ * which the Electron spec checks against a fresh capture on every run). The
+ * page identity and the staged image are this run's.
  */
 async function captureFrom(
   page: Page,
@@ -117,21 +121,11 @@ async function captureFrom(
   selector: string,
   image: StagedImage | null = null,
 ): Promise<WebAnnotationCaptureInput> {
+  const recorded = recordedNativeCapture(route, selector);
   await page.setViewportSize(FIXTURE_VIEWPORT);
   await page.goto(`${fixture.url}${route}`);
-  const element = await page
-    .locator(selector)
-    .first()
-    .evaluate((node) => {
-      const rect = node.getBoundingClientRect();
-      return {
-        rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
-        text: (node.textContent ?? "").trim().slice(0, 300),
-        tagName: node.tagName.toLowerCase(),
-        testId: node.getAttribute("data-testid"),
-        title: document.title,
-      };
-    });
+  // The recording must describe an element this page still renders.
+  await expect(page.locator(selector).first()).toBeVisible();
   return {
     producer: "desktop-native",
     capturedAt: new Date().toISOString(),
@@ -140,54 +134,22 @@ async function captureFrom(
       service: { kind: "port", port: fixture.port },
       route,
       displayUrl: `${fixture.url}${route}`,
-      title: element.title,
+      title: await page.title(),
       requiresNavigation: false,
     },
-    target: {
-      kind: "element",
-      label: `${element.tagName} “${element.text.slice(0, 60)}”`,
-      anchor: {
-        ...(element.testId
-          ? { stableId: { kind: "test-id" as const, value: element.testId } }
-          : {}),
-        semantic: {
-          tagName: element.tagName,
-          role: null,
-          name: element.text.slice(0, 100) || null,
-        },
-        text: { exact: element.text.slice(0, 200), prefix: "", suffix: "" },
-        ancestors: [],
-        cssPath: selector,
-        scope: { kind: "document" },
-      },
-      rect: element.rect,
-    },
+    target: recorded.target,
     geometry: {
-      viewport: FIXTURE_VIEWPORT,
-      scroll: { x: 0, y: 0 },
-      zoomFactor: 1,
+      ...recorded.geometry,
+      // The staged image is this browser's screenshot, taken at DPR 1.
       devicePixelRatio: 1,
       image: image
         ? { width: image.width, height: image.height, scale: image.scale, reduced: false }
         : null,
     },
-    evidence: {
-      text: element.text.slice(0, 4_000),
-      attributes: element.testId ? { "data-testid": element.testId } : {},
-      styles: {},
-      hierarchy: [],
-      html: `<${element.tagName}>${element.text.slice(0, 200)}</${element.tagName}>`,
-    },
+    evidence: recorded.evidence,
     assetIds: image ? [image.assetId] : [],
-    redaction: {
-      attributesRemoved: 0,
-      valuesMasked: 0,
-      urlParametersRemoved: 0,
-      sensitiveRegionsMasked: 0,
-      manualRegions: 0,
-      imageExcluded: false,
-    },
-  } as WebAnnotationCaptureInput;
+    redaction: recorded.redaction,
+  };
 }
 
 interface Setup {

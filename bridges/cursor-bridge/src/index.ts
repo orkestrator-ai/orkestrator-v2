@@ -7,6 +7,9 @@
  * bridge serves, so the backend, the store and the renderer cannot tell which
  * engine is behind a Cursor session.
  */
+// First, before any module reads the environment: what the bridge launcher
+// recorded for the agents this bridge spawns (bridge-launch-environment.ts).
+import "@orkestrator/protocol/node/bridge-launch-environment";
 export * from "./config.js";
 export * from "./state.js";
 export * from "./credentials.js";

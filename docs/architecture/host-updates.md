@@ -256,7 +256,9 @@ directory's backend and takes free ports unless told otherwise; see
 [Default gateway port](remote-gateway.md#default-gateway-port),
 [0244-second-backend-on-one-host.md](../todo/cross-cutting/0244-second-backend-on-one-host.md)
 and
-[0996-second-backend-takes-default-gateway-port.md](../todo/cross-cutting/0996-second-backend-takes-default-gateway-port.md).
+[7370-tailscale-serve-second-backend-live.md](../todo/cross-cutting/7370-tailscale-serve-second-backend-live.md).
+Both rules were qualified with two services in a disposable systemd container
+on 2026-11-06 (the records are in those files).
 
 `service status` reports:
 - the unit, and whether it is running

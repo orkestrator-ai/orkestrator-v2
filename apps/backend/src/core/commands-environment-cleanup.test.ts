@@ -1,5 +1,7 @@
+import { emptyContainerLifecycle } from "@orkestrator/protocol/container-lifecycle";
 import { readStoredValue, seedStore } from "./storage-test-support.js";
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
+import * as childProcess from "node:child_process";
 import { existsSync, promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -23,6 +25,7 @@ import type { PtyProcess } from "./pty.js";
 import { runCommand } from "./shell.js";
 import { dockerOwnerNamespace } from "./docker-ownership.js";
 import { BackendRuntime } from "./backend-runtime.js";
+import { deleteEnvironmentTask } from "./environment-delete.js";
 
 import { projectHomeMailAttachmentDir } from "./mail-attachments.js";
 import { transcriptMediaPins, TRANSCRIPT_MEDIA_PINS_DIRECTORY } from "./transcript-media-pins.js";
@@ -432,6 +435,403 @@ describe("delete_environment host cleanup", () => {
       },
     );
   });
+
+  test("records the step it is on as it reaches each one", async () => {
+    await withDeleteCommand(
+      async (storage) => {
+        await seedWorktree(storage);
+      },
+      async (invokeDelete, storage) => {
+        const steps: unknown[] = [];
+        const update = storage.updateEnvironment.bind(storage);
+        spyOn(storage, "updateEnvironment").mockImplementation(
+          async (environmentId, updates, shouldUpdate) => {
+            if ("deletionStep" in updates) steps.push(updates.deletionStep);
+            return update(environmentId, updates, shouldUpdate);
+          },
+        );
+        await invokeDelete();
+        // No container, so no container step.
+        expect(steps).toEqual([
+          "stopping-work",
+          "terminals",
+          "workspace-files",
+          "local-servers",
+          "worktree",
+          "records",
+        ]);
+        expect(await storage.getEnvironment("e1")).toBeNull();
+      },
+    );
+  });
+
+  test("Retry stays fenced after a confined helper is killed until its exit is delivered", async () => {
+    await withDeleteCommand(
+      async (storage) => {
+        await seedWorktree(storage);
+      },
+      async (_invokeDelete, storage, context) => {
+        const realSpawn = childProcess.spawn;
+        const realSetTimeout = globalThis.setTimeout;
+        // Fire the real stage deadline only after the removal helper starts.
+        // No wall-clock race with Git startup is needed to reach this boundary.
+        const deadlineMs = 123_456;
+        let expire = () => {};
+        const timerSpy = spyOn(globalThis, "setTimeout").mockImplementation(((
+          ...timerArgs: Parameters<typeof setTimeout>
+        ) => {
+          const [handler, ms] = timerArgs;
+          if (ms === deadlineMs)
+            expire = () => {
+              (handler as () => void)();
+            };
+          return realSetTimeout(...timerArgs);
+        }) as typeof setTimeout);
+        let releaseExit = () => {};
+        let sawExit!: () => void;
+        const exited = new Promise<void>((resolve) => {
+          sawExit = resolve;
+        });
+        let exitSignal: unknown;
+        const spawnSpy = spyOn(childProcess, "spawn").mockImplementation(((
+          ...args: Parameters<typeof childProcess.spawn>
+        ) => {
+          const child = realSpawn(...args);
+          const emit = child.emit.bind(child);
+          child.emit = ((...emitArgs: Parameters<typeof child.emit>) => {
+            const [event, ...eventArgs] = emitArgs;
+            if (event !== "exit") return emit(event, ...eventArgs);
+            exitSignal = eventArgs[1];
+            releaseExit = () => {
+              emit(event, ...eventArgs);
+            };
+            sawExit();
+            return true;
+          }) as typeof child.emit;
+          queueMicrotask(() => expire());
+          return child;
+        }) as typeof childProcess.spawn);
+        let settled = false;
+        const deleting = deleteEnvironmentTask("e1", context, {
+          stepDeadlinesMs: { worktree: deadlineMs },
+        })
+          .catch((error: unknown) => error)
+          .finally(() => {
+            settled = true;
+          });
+        try {
+          await exited;
+          await new Promise<void>((resolve) => setImmediate(resolve));
+          expect(exitSignal).toBe("SIGKILL");
+          expect(settled).toBe(false);
+          expect(context.runtime.environments.isDeleting("e1")).toBe(true);
+          await expect(deleteEnvironmentTask("e1", context)).rejects.toThrow(
+            "already being deleted",
+          );
+          releaseExit();
+          expect(((await deleting) as Error).message).toContain(
+            "Deletion stopped while removing the worktree",
+          );
+          expect(context.runtime.environments.isDeleting("e1")).toBe(false);
+          expect(await storage.getEnvironment("e1")).toMatchObject({
+            deletionStep: "worktree",
+            deletionError: expect.stringContaining("Deletion stopped while removing the worktree"),
+          });
+        } finally {
+          releaseExit();
+          await deleting;
+          spawnSpy.mockRestore();
+          timerSpy.mockRestore();
+        }
+        // Once exit is delivered, the same delete is admitted and completes.
+        await deleteEnvironmentTask("e1", context);
+        expect(await storage.getEnvironment("e1")).toBeNull();
+        expect(await environmentCleanupLedger(storage.getDataDir()).list()).toEqual([]);
+      },
+    );
+  });
+
+  test("a hung worktree removal is stopped at its deadline, says why, and a retry finishes it", async () => {
+    if (process.platform === "win32") return;
+    let worktreePath = "";
+    await withDeleteCommand(
+      async (storage) => {
+        worktreePath = await seedWorktree(storage);
+      },
+      async (_invokeDelete, storage, context) => {
+        // The worktree step's first command is `git fsmonitor--daemon stop`.
+        // A git that never returns stands in for a child that hangs.
+        const bin = path.join(storage.getDataDir(), "hanging-bin");
+        const pidFile = path.join(storage.getDataDir(), "hanging-git.pid");
+        await fs.mkdir(bin);
+        await fs.writeFile(
+          path.join(bin, "git"),
+          `#!/bin/sh\nsleep 30 &\necho $$ > '${pidFile}'\nwait\n`,
+          { mode: 0o755 },
+        );
+        const originalPath = process.env.PATH;
+        process.env.PATH = `${bin}${path.delimiter}${originalPath ?? ""}`;
+        // Exercise real capture cancellation, holding only its exit evidence.
+        // Sending SIGKILL must not release the delete guard at either boundary.
+        const realSpawn = Bun.spawn;
+        const realKill = process.kill;
+        let childPid = 0;
+        let leaderHeld = true;
+        let groupHeld = true;
+        let sawKill!: () => void;
+        const killed = new Promise<void>((resolve) => {
+          sawKill = resolve;
+        });
+        let sawExit!: () => void;
+        const exited = new Promise<void>((resolve) => {
+          sawExit = resolve;
+        });
+        let releaseLeader!: () => void;
+        const leaderGate = new Promise<void>((resolve) => {
+          releaseLeader = resolve;
+        });
+        const spawnSpy = spyOn(Bun, "spawn").mockImplementation(((
+          ...args: Parameters<typeof Bun.spawn>
+        ) => {
+          const child = realSpawn(...args);
+          const argv = args[0] as string[];
+          if (!argv.includes("fsmonitor--daemon") || !argv.includes(worktreePath)) return child;
+          childPid = child.pid;
+          const confirmed = child.exited.then(async (code) => {
+            sawExit();
+            await leaderGate;
+            return code;
+          });
+          return new Proxy(child, {
+            get(target, key) {
+              if (key === "exited") return confirmed;
+              if (leaderHeld && (key === "exitCode" || key === "signalCode")) return null;
+              const value = Reflect.get(target, key);
+              return typeof value === "function" ? value.bind(target) : value;
+            },
+          });
+        }) as typeof Bun.spawn);
+        const killSpy = spyOn(process, "kill").mockImplementation((pid, signal) => {
+          if (pid === -childPid && signal === "SIGKILL" && groupHeld) {
+            // Simulate a descendant slow to stop: kill the actual leader now,
+            // but keep its real sleep descendant alive until the test releases it.
+            try {
+              realKill(childPid, "SIGKILL");
+            } catch {
+              /* Leader already exited. */
+            }
+            sawKill();
+            return true;
+          }
+          return realKill(pid, signal);
+        });
+        const releaseGroup = () => {
+          if (!groupHeld || !childPid) return;
+          groupHeld = false;
+          try {
+            realKill(-childPid, "SIGKILL");
+          } catch {
+            /* Group already gone. */
+          }
+        };
+        const startedAt = Date.now();
+        let settled = false;
+        const deleting = deleteEnvironmentTask("e1", context, {
+          stepDeadlinesMs: { worktree: 300 },
+        })
+          .then(
+            () => undefined,
+            (caught: unknown) => caught,
+          )
+          .finally(() => {
+            settled = true;
+          });
+        let error: unknown;
+        try {
+          await killed;
+          await exited;
+          expect(settled).toBe(false);
+          expect(context.runtime.environments.isDeleting("e1")).toBe(true);
+          await expect(deleteEnvironmentTask("e1", context)).rejects.toThrow(
+            "already being deleted",
+          );
+          leaderHeld = false;
+          releaseLeader();
+          await Bun.sleep(30);
+          expect(settled).toBe(false);
+          await expect(deleteEnvironmentTask("e1", context)).rejects.toThrow(
+            "already being deleted",
+          );
+          releaseGroup();
+          error = await deleting;
+        } finally {
+          leaderHeld = false;
+          releaseGroup();
+          releaseLeader();
+          await deleting;
+          spawnSpy.mockRestore();
+          killSpy.mockRestore();
+          process.env.PATH = originalPath;
+        }
+        // Stopped at the deadline, well before the command's own 5 s timeout,
+        // and the child is gone by the time the delete reports it.
+        expect(Date.now() - startedAt).toBeLessThan(4_000);
+        expect((error as Error).message).toBe(
+          "Deletion stopped while removing the worktree: it took longer than 1 min. Retry to continue.",
+        );
+        const pid = Number((await fs.readFile(pidFile, "utf8")).trim());
+        expect(() => process.kill(pid, 0)).toThrow();
+        expect(await exists(worktreePath)).toBe(true);
+        expect(await storage.getEnvironment("e1")).toMatchObject({
+          lifecycleOperation: "deleting",
+          deletionStep: "worktree",
+          deletionError: (error as Error).message,
+        });
+        expect(await environmentCleanupLedger(storage.getDataDir()).get("e1")).toMatchObject({
+          pending: ["worktree", "state-dirs"],
+          lastError: "worktree: deletion deadline passed",
+        });
+
+        // The delete settled, so a retry is admitted, and finishes it.
+        await deleteEnvironmentTask("e1", context);
+        expect(await storage.getEnvironment("e1")).toBeNull();
+        expect(await exists(worktreePath)).toBe(false);
+        expect(await environmentCleanupLedger(storage.getDataDir()).list()).toEqual([]);
+      },
+    );
+  });
+
+  test.each(["drain", "container", "volumes", "network", "success", "no-container-work"] as const)(
+    "container stage deadline covers %s through the delete command",
+    async (blocked) => {
+      if (process.platform === "win32") return;
+      await withDeleteCommand(
+        async (storage) => {
+          const lifecycle = emptyContainerLifecycle();
+          if (blocked !== "no-container-work")
+            lifecycle.storage.volumes = [{ name: "owned-volume", role: "workspace" }];
+          await storage.addEnvironment(
+            environment({
+              // With volumes alone, ownsContainerWork must still enter the stage.
+              containerId: ["drain", "container", "success"].includes(blocked)
+                ? "owned-runtime"
+                : null,
+              environmentType:
+                blocked === "volumes" || blocked === "no-container-work"
+                  ? "local"
+                  : "containerized",
+              status: "running",
+              containerLifecycle: lifecycle,
+            }),
+          );
+        },
+        async (_invokeDelete, storage, context) => {
+          const bin = path.join(storage.getDataDir(), "docker-fixture-bin");
+          const callsFile = path.join(storage.getDataDir(), "docker-calls.jsonl");
+          const pidFile = path.join(storage.getDataDir(), "docker-pid");
+          await fs.mkdir(bin);
+          const owner = dockerOwnerNamespace(storage.getDataDir());
+          await fs.writeFile(
+            path.join(bin, "docker"),
+            `#!${process.execPath}
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+if (args[0] === "exec" && !args.includes("/usr/local/bin/orkestrator-drain.sh")) { console.log("[]"); process.exit(0); }
+const stage = args[0] === "exec" ? "drain" : args[0] === "rm" ? "container" : args[0] === "volume" ? "volumes" : args[0] === "network" ? "network" : "probe";
+fs.appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ stage, args }) + "\\n");
+if (stage === ${JSON.stringify(blocked)}) {
+  fs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
+  setInterval(() => {}, 1000);
+} else if (args[0] === "inspect") console.log(${JSON.stringify(owner)} + "\\trunning\\torkestrator-v2\\towned-runtime");
+else if (args[0] === "exec") console.log("ORKESTRATOR_DRAIN signalled=0 remaining=0");
+else if (args[1] === "inspect") console.log(JSON.stringify({ app: "orkestrator-v2", "orkestrator-owner": ${JSON.stringify(owner)}, "environment-id": "e1", "orkestrator-resource-role": "network" }) + (stage === "network" ? "\\t0" : ""));
+`,
+            { mode: 0o755 },
+          );
+          const originalPath = process.env.PATH;
+          process.env.PATH = `${bin}${path.delimiter}${originalPath ?? ""}`;
+          const deadlineMs = 1_234_567;
+          const realTimeout = globalThis.setTimeout;
+          let expire: (() => void) | undefined;
+          // Drive the actual stage timer only once the intended child is live.
+          // Other timers (capture, polling, background services) stay real.
+          const timerSpy = spyOn(globalThis, "setTimeout").mockImplementation(((
+            callback: () => void,
+            delay?: number,
+            ...args: unknown[]
+          ) => {
+            if (delay === deadlineMs) expire = callback;
+            return realTimeout(callback, delay, ...args);
+          }) as typeof setTimeout);
+          let settled = false;
+          const deleting = deleteEnvironmentTask("e1", context, {
+            stepDeadlinesMs: { container: deadlineMs },
+          })
+            .then(
+              () => null,
+              (caught: unknown) => caught,
+            )
+            .finally(() => {
+              settled = true;
+            });
+          try {
+            if (blocked !== "success" && blocked !== "no-container-work") {
+              const startupDeadline = Date.now() + 10_000;
+              while (!(await exists(pidFile))) {
+                if (settled || Date.now() > startupDeadline)
+                  throw new Error("Docker fixture did not reach the intended stage");
+                await Bun.sleep(10);
+              }
+              expect(expire).toBeFunction();
+              expire!();
+            }
+            const error = await deleting;
+            const calls = (await fs.readFile(callsFile, "utf8").catch(() => ""))
+              .trim()
+              .split("\n")
+              .filter(Boolean)
+              .map((line) => JSON.parse(line) as { stage: string; args: string[] });
+            if (blocked === "success" || blocked === "no-container-work") {
+              expect(error).toBeNull();
+              expect(await storage.getEnvironment("e1")).toBeNull();
+              expect(calls.map((call) => call.stage)).toEqual(
+                blocked === "success"
+                  ? [
+                      "probe",
+                      "drain",
+                      "container",
+                      "probe",
+                      "volumes",
+                      "volumes",
+                      "network",
+                      "network",
+                    ]
+                  : [],
+              );
+            } else {
+              expect((error as Error).name).toBe("EnvironmentDeletionDeadlineError");
+              expect(calls.at(-1)?.stage).toBe(blocked);
+              const pid = Number(await fs.readFile(pidFile, "utf8"));
+              expect(() => process.kill(pid, 0)).toThrow();
+              expect(await storage.getEnvironment("e1")).toMatchObject({
+                deletionStep: "container",
+                deletionError: (error as Error).message,
+              });
+              const pending = (await environmentCleanupLedger(storage.getDataDir()).get("e1"))
+                ?.pending;
+              expect(pending).toContain(blocked === "drain" ? "container" : blocked);
+            }
+          } finally {
+            if (!settled) expire?.();
+            await deleting;
+            timerSpy.mockRestore();
+            process.env.PATH = originalPath;
+          }
+        },
+      );
+    },
+    20_000,
+  );
 
   test("stops watching and scanning the worktree before it removes it", async () => {
     let worktreePath = "";

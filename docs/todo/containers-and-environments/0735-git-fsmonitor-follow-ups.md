@@ -16,7 +16,10 @@ against `main` at `cd7bbe3e5`. No commit between the two touched
 graphs merge (`3fa7d1733`, #1436) moved the code-rewind `status` reads into
 `workspace-code-rewind.ts` and added two new ones (task 3). Tasks 1–3 were
 done on the 0735 follow-up branch; see
-[Assumptions and decisions](#assumptions-and-decisions).
+[Assumptions and decisions](#assumptions-and-decisions). Rechecked 2026-11-06
+against `main` at `c1724ab74` on arktech-mini, which runs v2.36.5-beta: tasks
+5 and 7 are done and task 6 has its internal APFS figures; only Windows work
+(tasks 4 and 6) is left.
 
 ### Tasks
 
@@ -24,9 +27,9 @@ done on the 0735 follow-up branch; see
 2. **User-level fsmonitor on Orkestrator's own reads (open question)**: whether to override a `core.fsmonitor` the user set in their own git config. Status: done (decided: no override; the timeout fallback stays the only bypass).
 3. **Fallback for other git calls**: which further worktree reads, if any, retry without the daemon after a timeout. Status: done (every remaining working-tree `status` read, including the new graph ones, plus checkout confirmation fingerprint reads).
 4. **Qualification: Windows process cleanup**: the fingerprint probe's bounded `taskkill /t /f` branch. Status: open (needs a Windows host or CI iteration; see the 2026-10-30 note under task 4).
-5. **Qualification: arktech-mini after upgrade**: old worktrees lose the setting, their daemons exit, git calls are fast again. Status: open (needs arktech-mini on v2.34.2-beta or later).
-6. **Qualification: per-call latency on other hosts**: internal APFS, Linux and Windows, with and without fsmonitor. Status: open (Linux measured; APFS and Windows left).
-7. **Qualification: recovery from a real hung daemon**: capture timings if one recurs. Status: open (opportunistic).
+5. **Qualification: arktech-mini after upgrade**: old worktrees lose the setting, their daemons exit, git calls are fast again. Status: done (2026-11-06 on v2.36.5-beta: no `core.fsmonitor=true` in any of 16 environment worktrees, no daemon running, `git status` 19 ms).
+6. **Qualification: per-call latency on other hosts**: internal APFS, Linux and Windows, with and without fsmonitor. Status: open (Linux and internal APFS measured: no cookie penalty, and no win over 100 ms per call; Windows left).
+7. **Qualification: recovery from a real hung daemon**: capture timings if one recurs. Status: done (closed with task 5, as its decision says: no hang recurred).
 
 ### 1. Daemons already orphaned
 
@@ -119,7 +122,31 @@ Either way, a daemon is an orphan when its `GIT_DIR` (or socket directory) no lo
 
 **Context.** Migration runs from diff stats (`removeLegacyWorktreeFsmonitor`, `git-fsmonitor.ts:60-76`, called at `commands-files.ts:978`). It needs a backend on v2.34.2-beta or later (`git tag --contains cddc3e004`).
 
-**Investigation.** None possible here; arktech-mini is macOS.
+**Investigation.** None possible on the Linux host. 2026-11-06 on arktech-mini
+(Apple M5 Pro, macOS 27.2, Git 2.56.0, `/Applications/OrkestratorV2.app` at
+2.36.5-beta, backend up since 03:24 that day, host up 14.5 h), read-only:
+
+- **Settings.** No `core.fsmonitor=true` in the `config.worktree` of any of the
+  16 environment worktrees (12 under `~/orkestrator-v2/workspaces` on the
+  internal disk, 4 under `/Volumes/Lexar/workspaces` on the external USB APFS
+  volume), nor in any of the 13 `config.worktree` files under this
+  repository's `.git/worktrees`. Every one keeps `core.untrackedCache=true`.
+  Neither `~/.gitconfig` nor this repository's shared config sets
+  `core.fsmonitor`.
+- **A worktree older versions wrote.** `clarity-sound-studio-20261015-…` on the
+  external volume was created on 2026-10-15. Its `config.worktree` was last
+  written on 2026-10-28 at 17:04 GMT, after `v2.34.2-beta` was tagged (16:26),
+  and has no fsmonitor key: what the migration's unset leaves. Two others
+  created on 2026-10-18 and 2026-10-24 carry `core.fsmonitor = false`, written
+  at 10:38 that day, before `cddc3e004` was committed (14:14); the migration
+  touches only `true`, so it left them alone, as designed.
+- **Daemons.** No `git fsmonitor--daemon` process was running before this work
+  or after it. The pre-upgrade count cannot be taken any more: the host has
+  rebooted since the 700 were counted, and a reboot clears them (task 1).
+- **Latency.** `git status --porcelain` in this environment worktree (internal
+  disk, 9,394 tracked files, `GIT_OPTIONAL_LOCKS=0`, 20 calls): p50 19 ms, p90
+  29 ms, against about 1.1 s before #1386. The other worktrees were not timed,
+  because the run was limited to this worktree and throwaway repositories.
 
 **Decisions.**
 
@@ -137,7 +164,29 @@ Either way, a daemon is an orphan when its `GIT_DIR` (or socket directory) no lo
 
 **Context.** If a large repository shows a real win, an opt-in setting could be revisited (see "Constraints and rationale").
 
-**Investigation.** Linux, this host (git 2.56.0, btrfs, this repository's worktree, 6,903 tracked files, `core.untrackedCache=true`), 20 `git status --porcelain` calls each: 10–12 ms per call with `-c core.fsmonitor=false`, 8 ms with a running daemon. There is no cookie penalty on Linux, and no meaningful win at this size. Internal APFS and Windows are not measured.
+**Investigation.** Linux, this host (git 2.56.0, btrfs, this repository's worktree, 6,903 tracked files, `core.untrackedCache=true`), 20 `git status --porcelain` calls each: 10–12 ms per call with `-c core.fsmonitor=false`, 8 ms with a running daemon. There is no cookie penalty on Linux, and no meaningful win at this size.
+
+Internal APFS, 2026-11-06 on arktech-mini (Apple M5 Pro, macOS 27.2, Git
+2.56.0, load average 25–29 from other work): throwaway repositories under
+`$TMPDIR` with `core.untrackedCache=true` and `core.fsmonitor=true`, 20 calls
+per form after three warm-up calls, two rounds, p50:
+
+| Repository | `-c core.fsmonitor=false` | Running daemon |
+| --- | --- | --- |
+| Clone of this repository, 9,394 files | 16–17 ms | 11–12 ms |
+| Linked worktree of that clone, fsmonitor in `config.worktree` | 16–17 ms | 12–13 ms |
+| Synthetic, 100,000 files | 72–74 ms | 20–27 ms |
+
+`GIT_TRACE2_PERF` put the daemon query, cookie included, at 2–9 ms. A third
+round with 103 daemons running at once gave the same figures. So on the
+internal disk there is no cookie penalty, and the win, about 50 ms per call at
+100,000 files, is under the 100 ms threshold. The first attempt alternated the
+two forms call by call and showed the daemon no faster, even at 100,000
+files: a status with
+fsmonitor off rewrites the index without the daemon's token, so the next
+daemon call rescans. The table is from separate blocks. The external USB
+volume and `/private/tmp`, where the 1.1 s was seen, were not retested (only
+`$TMPDIR` and this worktree were in scope). Windows is not measured.
 
 **Decisions.**
 
@@ -155,7 +204,8 @@ Either way, a daemon is an orphan when its `GIT_DIR` (or socket directory) no lo
 
 **Context.** Hangs were seen on arktech-mini before #1386. With fsmonitor no longer enabled by Orkestrator, a hang now needs a user-enabled daemon.
 
-**Investigation.** None; no hang has been reported since #1386.
+**Investigation.** None; no hang has been reported since #1386. 2026-11-06:
+none on arktech-mini either, where no daemon was running at all (task 5).
 
 **Decisions.**
 
@@ -193,6 +243,11 @@ Either way, a daemon is an orphan when its `GIT_DIR` (or socket directory) no lo
   (2026-10-28), and one pre-#1386 daemon is still running there, PID 1252400,
   watching a leaked CLI scenario worktree (task 1). It was left running on
   2026-10-30: it was not started by this work.
+- On macOS (arktech-mini, Git 2.56.0, internal disk, 2026-11-06) a daemon
+  exits by itself within 4 s when its worktree is removed, deleted or moved, or
+  its `.git` is deleted. The macOS orphan check in git-scan-caches.md now reads
+  the daemon's first open directory, because `lsof` shows only the socket's
+  relative name there too.
 
 ### Automated coverage
 
@@ -242,6 +297,8 @@ root `bunfig.toml` excludes backend discovery. For focused backend tests, use
 `mise run test:logged`. On 2026-10-28 `git-fsmonitor.test.ts` passed on this
 Linux host with one skip ("stops a running daemon"). On 2026-10-30 it passed
 there with 23 tests and no skip, and no daemon started by the run survived it.
+On 2026-11-06 it passed on arktech-mini (macOS) with 25 tests and no skip, and
+no daemon was left afterwards.
 
 ## Outstanding work
 
@@ -257,17 +314,15 @@ there with 23 tests and no skip, and no daemon started by the run survived it.
 - [ ] **Windows process cleanup** (task 4). Qualify the fingerprint probe's
   bounded `taskkill /t /f` branch on Windows; blocking-hook process-group
   regressions currently run on POSIX hosts.
-- [ ] **arktech-mini after upgrade** (task 5). With the new backend on the
-  real data directory, confirm that existing environment worktrees lose
-  `core.fsmonitor` from `config.worktree` after their first diff-stats pass,
-  that their daemons exit, and that a git call in one is back to about 0.1 s.
-  Count `git fsmonitor--daemon` processes before and after.
+- [x] **arktech-mini after upgrade** (task 5). Done 2026-11-06 on
+  v2.36.5-beta: no `core.fsmonitor=true` left, no daemons, `git status` 19 ms.
 - [ ] **Other hosts** (task 6). Measure per-call git latency with and without
-  fsmonitor on an internal APFS volume, Linux and Windows. If a large
-  repository shows a real win, revisit an opt-in setting. Linux done on
-  2026-10-28: 8 ms with the daemon, 10–12 ms without.
-- [ ] **A real hung daemon** (task 7). The fallback has not been seen
-  recovering from one. Capture timings if it recurs.
+  fsmonitor on Windows. Linux done on 2026-10-28 (8 ms with the daemon,
+  10–12 ms without); internal APFS done on 2026-11-06 (11–13 ms with, 16–17 ms
+  without at 9,394 files; 20–27 ms with, 72–74 ms without at 100,000).
+- [x] **A real hung daemon** (task 7). Closed with task 5: no hang recurred.
+  If one does, record the read, the first timeout and the fallback duration in
+  git-scan-caches.md.
 
 ## Constraints and rationale
 
@@ -279,8 +334,11 @@ there with 23 tests and no skip, and no daemon started by the run survived it.
 
 ## Needs verification
 
-- The 1.1 s penalty was measured on one host only. Task 6; on Linux there is
-  no such penalty.
+- The 1.1 s penalty was seen only on arktech-mini's external USB APFS volume
+  and in `/private/tmp`, with about 700 daemons running. Linux and the same
+  host's internal disk (`$TMPDIR`, 103 daemons) show none. Whether the external
+  volume or `/private/tmp` still does is not known; retest it there with the
+  task 6 method only if fsmonitor is reconsidered.
 
 ## Assumptions and decisions
 
@@ -361,10 +419,71 @@ stands, but it cannot be developed or proved from a Linux host, and a CI job
 pushed without a Windows run would only show up red on the pull request. The
 investigation note under task 4 records what a Windows variant has to change.
 
-### Tasks 5–7: left open
+### Tasks 5–7: left open on 2026-10-30
 
-They need arktech-mini, an internal APFS volume, Windows, or a real hung
-daemon. Nothing here could produce that evidence.
+They needed arktech-mini, an internal APFS volume, Windows, or a real hung
+daemon. The Linux host could not produce that evidence. Tasks 5–7 were taken
+up on 2026-11-06; see below.
+
+### Task 5: passed from read-only evidence (2026-11-06)
+
+Added 2026-11-06 by the worker that acted on tasks 5 and 6, on `main` at
+`c1724ab74`, on arktech-mini.
+
+Took the recommended pass criterion, in the form the constraints allowed. The
+ticket forbade running against the real data directory or other checkouts, and
+the host had already been upgraded and rebooted, so there was no "before" to
+capture and no upgrade to perform. What was checked instead, read-only: every
+environment worktree's `config.worktree` (by explicit path, with `git config
+-f`), the daemon count, and `git status` in this worktree. All three pass. The
+one pre-fix worktree that still exists shows the migration's result, and the
+two with a hand-written `false` show that it leaves other values alone. Only
+one worktree was timed rather than three, because the others belong to other
+environments.
+
+### Task 6: internal APFS measured; Windows still open (2026-11-06)
+
+Took the recommended method (20 calls each form, recorded in
+git-scan-caches.md) on throwaway repositories under `$TMPDIR`, and added a
+100,000-file repository (the alternative option) because a synthetic one costs
+seconds to generate. The daemon is faster on the internal disk, but by at most
+about 50 ms per call, under the 100 ms threshold, so fsmonitor stays off and
+no opt-in setting is proposed. The figures also show that the 1.1 s wait was
+not an APFS property: git-scan-caches.md no longer says it was. The external
+volume and `/private/tmp` were not retested, because the ticket limited
+throwaway repositories to `$TMPDIR` and this worktree; that is recorded under
+Needs verification rather than as a new to-do, since it matters only if
+fsmonitor is reconsidered. Task 6 stays open for Windows, with task 4: neither
+can be done on this host, and splitting them into a new file would only move
+the same two Windows items.
+
+### Task 7: closed with task 5 (2026-11-06)
+
+Took the recommended option: no hang recurred, and the arktech-mini
+qualification is done, so the task is closed. The unit tests already exercise
+the fallback with real Git.
+
+### Task 1 follow-up: the macOS orphan check was wrong (2026-11-06)
+
+git-scan-caches.md's macOS form (`lsof -a -U -p <pid>` naming
+`<git-dir>/fsmonitor--daemon.ipc`) had never been run on a Mac. On
+arktech-mini `lsof` shows only the relative name `fsmonitor--daemon.ipc`, the
+daemon's working directory is the home directory, and its environment has no
+`GIT_DIR`. The daemon does hold its worktree open as its first directory
+descriptor (then each parent, for FSEvents), so the doc now reads that; the
+command was run against 101 throwaway daemons. On the same disk every daemon
+exited by itself when its worktree was removed, deleted, moved, or deleted
+straight after starting, so the doc no longer says a daemon outlives its
+worktree in general. This is documentation only: no code reads these paths, so
+there was no code defect to fix with a test.
+
+### Measurement hygiene (2026-11-06)
+
+Every repository was created under a `mktemp -d` directory in `$TMPDIR`,
+and git config was set only in those repositories. Each daemon the run started
+was stopped with `git -c core.fsmonitor=false -C <repo> fsmonitor--daemon
+stop`, a process listing then showed none, and the directory was removed by its
+exact path.
 
 ## Related
 

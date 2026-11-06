@@ -201,6 +201,28 @@ describe("environment-net projections", () => {
     if (result.kind === "settled") expect(result.projection?.counters.changedFiles).toBe(1);
   });
 
+  test("a manual refresh asks the scan owner for an explicit refresh, not a plain rescan", async () => {
+    const { h, target, key } = setup();
+    const calls: string[] = [];
+    const options = (
+      h.service as unknown as {
+        options: {
+          requestEnvironmentRefresh?: (id: string) => void;
+          requestExplicitEnvironmentRefresh?: (id: string) => void;
+        };
+      }
+    ).options;
+    options.requestEnvironmentRefresh = (id) => calls.push(`plain ${id}`);
+    options.requestExplicitEnvironmentRefresh = (id) => {
+      calls.push(`explicit ${id}`);
+      const now = new Date().toISOString();
+      setTimeout(() => h.service.onDiffScanEvent(scanned(target, [], { startedAt: now, at: now })));
+    };
+    const result = await h.service.refresh({ resourceKey: key });
+    expect(result.kind).toBe("settled");
+    expect(calls).toEqual([`explicit ${target.environmentId}`]);
+  });
+
   test("V09: equal scans of one physical worktree share work", async () => {
     const queue = new SharedScanQueue<number>();
     let executed = 0;

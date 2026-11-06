@@ -1,6 +1,9 @@
 // Claude Bridge Server
 // Wraps the Claude Agent SDK and exposes HTTP/SSE endpoints for Orkestrator AI
 
+// First, before any module reads the environment: what the bridge launcher
+// recorded for the agents this bridge spawns (bridge-launch-environment.ts).
+import "@orkestrator/protocol/node/bridge-launch-environment";
 import { BRIDGE_LOG_POLICY_ROUTE } from "@orkestrator/protocol/log-policy";
 import {
   applyBridgeLogPolicy,
@@ -37,6 +40,7 @@ import {
   bridgeCredentialFromToken,
   loadBridgeCredential,
 } from "@orkestrator/protocol/node/bridge-credential";
+import { admitFetchBridgeRequest } from "@orkestrator/protocol/node/bridge-authority";
 
 const log = createLogger("bridge.claude");
 
@@ -158,6 +162,13 @@ app.use("*", async (c, next) => {
     ) {
       return c.json({ error: "Unauthorized" }, 401);
     }
+    // What changes an agent's authority also needs the backend's signature,
+    // which a token caught in flight does not carry (bridge-authority.ts).
+    const admission = await admitFetchBridgeRequest(bridgeCredential.authority, c.req.raw);
+    if ("refusal" in admission) {
+      return c.json(admission.refusal.body, admission.refusal.status);
+    }
+    if (admission.request) c.req.raw = admission.request;
   }
   await next();
 });

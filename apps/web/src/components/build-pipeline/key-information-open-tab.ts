@@ -1,4 +1,3 @@
-import { createUniqueTabId } from "@/components/terminal/TerminalContainer.helpers";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { KeyInformationTabData, TabInfo } from "@/types/paneLayout";
 
@@ -41,7 +40,8 @@ export function openKeyInformationTab(options: {
   options.addTab(
     options.activePaneId,
     {
-      id: createUniqueTabId("key-information"),
+      // All clients opening the same logical view must merge as one tab.
+      id: `key-information:${JSON.stringify([environmentId, target.pipelineId, target.view ?? "information"])}`,
       type: "key-information",
       keyInformationTabData: {
         environmentId,

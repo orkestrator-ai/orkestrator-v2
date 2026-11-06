@@ -63,6 +63,8 @@ without a running profile. No provider turns are enabled. Linux Electron runs
 headless. On Linux hosts with exhausted automatic Docker pools, its scoped Docker
 shim tries otherwise-unrouted /29 networks in 172.16.240.0/22 only for labelled
 fixture networks. Docker refuses overlaps atomically; other errors propagate.
+Every other Docker call is `exec`ed straight to the real CLI, so a follower or
+exec session the backend stops is stopped itself rather than orphaned.
 The Docker scheduler profile allows ten minutes between reporter lines because
 the annotation cleanup case intentionally waits for a 100-tick, three-second
 backend garbage-collection pass (its own test deadline is nine minutes).
@@ -97,9 +99,9 @@ isolated browser run on Linux: it reads `/proc` for the profile's Electron tree 
 display variables, the headless switches on the launcher's child) and loads the app.
 
 Electron specs launch their own Electron rather than the profile's, so the
-profile's headless setting does not apply to them. The design canvas and service
-preview Electron specs support `ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1`
-on Linux; the packaged-app specs are always headless on Linux. See
+profile's headless setting does not apply to them. The design canvas, service
+preview and web annotation Electron specs support
+`ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1` on Linux; the packaged-app specs are always headless on Linux. See
 [Electron specs and their display](#electron-specs-and-their-display) and
 [Packaged-app Electron spec](#packaged-app-electron-spec).
 
@@ -120,12 +122,28 @@ Playwright (`route.fetch()`), which no interface change aborts, and keeps them
 in memory for that context, because routing turns Chromium's HTTP cache off and
 refetching every module on each reload made reloaded pages miss their
 assertions on a loaded host. Navigations, commands and event streams still go
-through Chromium. A spec that opens a
-second context calls `fetchModulesOutsideChromium(context)` on it.
-`browser-gateway.spec.ts` and `client-outage.spec.ts` keep Chromium's own path
-for module loads, because the browser's network path is what they test.
-`browser-test.test.ts` fails when a new spec in `playwright.browser.config.ts`
-uses neither, or creates a context it does not route.
+through Chromium; a `goto` or `reload` that Chromium aborted with
+`net::ERR_NETWORK_CHANGED` gets up to three attempts in all (two retries). A
+one-shot login navigation mints a fresh link after a network abort. A spec that
+opens a second context calls `fetchModulesOutsideChromium(context)` on it.
+`client-outage.spec.ts` keeps Chromium's own path for module loads, because the
+browser's network path through outages is what it tests. In
+`browser-gateway.spec.ts` one case, "the gateway serves the renderer's modules
+to Chromium's own network stack", sets `modulesThroughChromium` and loads the
+app through Chromium, loading again when its modules were lost only to network
+changes, up to four loads in all. Its explicit timeout covers setup, all four
+loads (including navigation retries), and final classification. Under very heavy
+churn all four loads can still lose, and its error then says so.
+`browser-test.test.ts` fails when a new spec in
+`playwright.browser.config.ts` uses neither, creates a context it does not
+route, or another case opts out.
+
+`mise run test:browser` (the component and public-site suites) needs only
+loopback, so on Linux both suites run through `scripts/loopback-network.ts` in a
+private user and network namespace with only loopback raised, where no host
+interface change can reach Chromium. A host that cannot create the namespace
+(no unprivileged user namespaces, or no `ip`) runs them on the host network and
+prints why; `ORKESTRATOR_E2E_HOST_NETWORK=1` does that on purpose.
 
 Both full browser tasks (`test:agent:browser` and its isolated variant) build
 the packaged CLI first (`build:cli:test`, which sets no build commit and so
@@ -531,7 +549,10 @@ to `tee` who wants the window passes `--no-headless`. `--headless-electron`
 still works as another spelling of `--headless`.
 
 `mise run dev` never goes headless and rejects these flags. On macOS and Windows
-they are accepted and change nothing, because Ozone does not exist there.
+they are accepted and change nothing, because Ozone does not exist there. When
+anything above would have made Linux headless (the flag, a variable, or no
+terminal), the launcher says that Electron opens a window and which input it
+ignored, so an agent's run there does open a window on the desktop.
 
 Do not use a headless profile for native-window, menu or clipboard QA:
 `capturePage` hangs in this mode. The switch has to be on Electron's command
@@ -767,7 +788,8 @@ profile. Run one provider at a time (flake 0420). Each provider writes
 The live idle-observation spec (`e2e/agent-testing/idle-observation-live.spec.ts`)
 has its own opt-in, `ORKESTRATOR_AGENT_TEST_LIVE_IDLE_OBSERVATION=1`. For each
 provider in `ORKESTRATOR_AGENT_TEST_IDLE_PLATFORMS` (default all six) it runs
-one native tab through a missed final event, a parked approval, a sub-agent, a
+one native tab through a missed final event, a bridge restart while the idle
+group is backed off (local Claude and Codex), a parked approval, a sub-agent, a
 background shell, a cut event stream with the browser offline, a hidden
 document, a turn that completes with no renderer connected, and an idle wait
 past the 10 min idle detach. Each case must settle with no stuck Stop button
@@ -776,7 +798,11 @@ the page (an `EventSource` and `document.visibilityState` wrapper), not in the
 product. `ORKESTRATOR_AGENT_TEST_IDLE_CASES` narrows the cases,
 `ORKESTRATOR_AGENT_TEST_IDLE_DETACH_WAIT_MS` shortens the idle wait for a
 cadence-only check, and `ORKESTRATOR_AGENT_TEST_IDLE_MODELS` takes
-`<platform>=<model>` pairs. Providers run in parallel with `--workers=4
+`<platform>=<model>` pairs. `ORKESTRATOR_AGENT_TEST_IDLE_FAKE_MODELS=1` runs
+Claude and Codex against scripted loopback models instead, with no login and
+nothing billed (the profile setup is in the spec's header), and
+`ORKESTRATOR_AGENT_TEST_IDLE_ENVIRONMENT=container` runs Claude in a new
+container environment from the profile's development image. Providers run in parallel with `--workers=4
 --fully-parallel`; run one provider alone to measure a lost announcement,
 because another environment's announcement also recovers a view (stamp gap).
 Each provider writes
@@ -994,14 +1020,51 @@ spec report a launch timeout. The Wayland rendering case in
 run under that command. The packaged-app specs are always headless on Linux (see
 [Packaged-app Electron spec](#packaged-app-electron-spec)).
 
-`design-canvas-electron.spec.ts` is the one spec in that config that can run
-without a display. It reads `ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1` on Linux
-and launches its Electron with the same switches and no display variables:
+`design-canvas-electron.spec.ts` and `web-annotations-electron.spec.ts` can run
+with no display at all (`HEADLESS_CAPABLE_ELECTRON_SPECS` in
+`electron-launch-switches.ts`; the preflight admits a run with no display only
+when it is limited to those). Each reads
+`ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1` on Linux and launches its Electron
+with the same switches and no display variables:
 
 ```bash
-ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1 bunx playwright test \
-  --config e2e/agent-testing/playwright.electron-headless.config.ts
+env -u DISPLAY -u WAYLAND_DISPLAY ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1 \
+  bunx playwright test --config e2e/agent-testing/playwright.electron-headless.config.ts \
+  web-annotations-electron.spec.ts --workers=1
 ```
+
+On a host where other work creates and removes Docker networks, the
+Vite-served renderer of these specs loses its modules to
+[2340](../tests/flaky-tests/aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md).
+The local cases of the annotation spec pass inside a loopback-only network
+namespace, nested so Electron runs under your own uid rather than as namespace
+root:
+
+```bash
+env -u DISPLAY -u WAYLAND_DISPLAY ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1 \
+  unshare -rn sh -c "ip link set lo up && exec unshare --user --map-user=$(id -u) \
+  --map-group=$(id -g) mise run test:logged -- --name annotations-electron -- \
+  bunx playwright test --config e2e/agent-testing/playwright.electron-headless.config.ts \
+  web-annotations-electron.spec.ts --workers=1"
+```
+
+The double quotes matter: `$(id -u)` must expand in your shell, before the
+outer `unshare` maps you to root.
+
+Its container cases (`ORKESTRATOR_AGENT_TEST_ELECTRON_CONTAINER=1`) cannot use
+the namespace, because container ports are published in the host's. Run them
+in the host namespace: the spec's launcher reloads a startup that lost its
+modules to `ERR_NETWORK_CHANGED` (`waitForRendererStart`, to-do
+[7062](../todo/cross-cutting/7062-electron-specs-recover-network-changed-startup.md)),
+which is enough for those two cases but not for the whole spec, whose later
+lazy loads can still be aborted. When automatic Docker pools are exhausted,
+put `apps/desktop/scripts/dev/docker-qualification-bin` first on `PATH`, as the
+isolated Docker runner does.
+The spec's `desktop captures of the gateway spec's targets match the recording it
+replays` case checks `web-annotations-native-captures.json`, the desktop
+captures the gateway spec replays. After an intended change to what a capture
+records, rerun it with `ORKESTRATOR_AGENT_TEST_UPDATE_NATIVE_CAPTURES=1` and
+review the file's diff.
 
 Its Vite-served renderer is exposed to
 [2340](../tests/flaky-tests/aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md)
@@ -1112,6 +1175,20 @@ live tail for gaps, duplicates and order without reading model prose.
   the top, which is the only position it can take. Each click records a
   content-free `-layout` annotation (part ids, stops, boxes, scroll range)
   so a drift can be attributed without reading transcript text.
+  A Codex case then restarts the environment's bridge under the mounted tab
+  (the first replay after live streaming renames every row): the backend must
+  page every row once with the same call ids, stops in the same rows, and the
+  tab must render no row or stop twice and keep the reader's place.
+- **Codex without a login.** `ORKESTRATOR_AGENT_TEST_PAGING_CODEX_LOOPBACK=1`
+  runs only the native case, on the profile's pinned Codex, with the
+  profile's own Codex `config.toml` pointed at
+  `e2e/agent-testing/transcript-paging-codex-model.ts` (a loopback stand-in
+  for the Responses WebSocket that walks the trail; restored afterwards). It
+  costs nothing and takes about a minute. Start the profile with `CODEX_HOME`
+  set to a throwaway directory whose `auth.json` holds a made-up
+  `OPENAI_API_KEY` (`{"auth_mode":"apikey","OPENAI_API_KEY":"sk-loopback"}`),
+  so no real login is copied in:
+  `CODEX_HOME=<that dir> mise run dev:test --profile <name> --fixture --headless --credential-source codex --agent-platforms codex`.
 - **Multi Review** (a Claude Haiku and a Codex GPT-6-Luna reviewer, 130 stops).
   The trail protocol is in an `AGENTS.md` that is part of the change. Codex
   loads it as instructions; a Claude reviewer runs read-only without project

@@ -332,6 +332,7 @@ function installDesignLaunchFixture() {
 
 function DesignLaunchFixture() {
   useEffect(() => {
+    usePaneLayoutStore.getState().initialize(null, "design-fixture");
     useEnvironmentStore.setState({
       environments: [
         {

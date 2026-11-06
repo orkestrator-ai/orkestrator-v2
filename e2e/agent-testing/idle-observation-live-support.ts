@@ -5,6 +5,7 @@
 
 export const IDLE_OBSERVATION_CASES = [
   "missed-final",
+  "bridge-restart",
   "approval",
   "subagents",
   "background",
@@ -211,4 +212,52 @@ export function freshToolResults(
 /** An echoed command/argument is not the line the shell was asked to emit. */
 export function shellOutputContainsMarker(output: string | undefined, marker: string): boolean {
   return output?.split(/\r?\n/).some((line) => line.trim() === marker) ?? false;
+}
+
+export interface BackgroundTaskEvidence {
+  id: string;
+  status: string;
+  outputFile?: string;
+}
+
+/**
+ * Output files of background tasks that started after `previous` and have
+ * completed (todo 0049 task 2). Claude never puts a backgrounded command's
+ * stdout into a tool result: the call's result only says the command moved to
+ * the background, and the task notification carries the output as a file
+ * (`outputFile`), which the renderer shows as a link on the task card. A
+ * completed task's file is the output the provider really emits.
+ */
+export function completedTaskOutputFiles(
+  tasks: readonly BackgroundTaskEvidence[] | undefined,
+  previous: ReadonlySet<string>,
+): string[] {
+  return (tasks ?? [])
+    .filter((task) => !previous.has(task.id) && task.status === "completed")
+    .flatMap((task) => (task.outputFile ? [task.outputFile] : []));
+}
+
+/**
+ * Which evidence proved a background command's output reached the view:
+ * a fresh tool result, else a completed task's output file, else none.
+ * Content-free: callers record the kind, never the text.
+ */
+export function backgroundOutputEvidence(
+  toolResultHasMarker: boolean,
+  outputFiles: readonly string[],
+  readOutputFile: (file: string) => string | undefined,
+  marker: string,
+): "tool-result" | "output-file" | "none" {
+  if (toolResultHasMarker) return "tool-result";
+  for (const file of outputFiles) {
+    if (shellOutputContainsMarker(readOutputFile(file), marker)) return "output-file";
+  }
+  return "none";
+}
+
+/** Fallback polling can finish a turn even when the observation stream never recovers. */
+export function requireRecoveredBackoff(backoffMs: number | null): number {
+  if (backoffMs === null)
+    throw new Error("observation stream did not recover backoff after the turn");
+  return backoffMs;
 }

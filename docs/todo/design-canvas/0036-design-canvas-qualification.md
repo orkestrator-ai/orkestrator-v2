@@ -12,7 +12,10 @@ container export on Linux Docker Engine, the Linux client performance run and
 flakes 0208 and 0174 against `93b99bfb` (2026-11-01, see
 [Qualification evidence (2026-11-01)](#qualification-evidence-2026-11-01));
 the packaged Linux `file://` renderer against `38d55ee1` (2026-11-02, see
-[Qualification evidence (2026-11-02)](#qualification-evidence-2026-11-02)).
+[Qualification evidence (2026-11-02)](#qualification-evidence-2026-11-02));
+the Linux retention run, the Linux performance rerun and the v1 renderer
+fallback's retirement against `b8033daf` (2026-11-06, see
+[Qualification evidence (2026-11-06)](#qualification-evidence-2026-11-06)).
 
 ## Task analysis
 
@@ -24,14 +27,14 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 2. **Container export on Linux Docker Engine**: the export protocol against a real Linux Engine. Status: done (2026-11-01): passed on Docker Engine 29.9.2 (Linux x64), both the backend file and the Docker fixture spec, and the backend file now runs in the Linux Engine CI workflow on amd64 and arm64.
 3. **Electron gaps**: native menu key equivalents, the OS Save dialog, the packaged `file://` renderer, and the unexplained Ctrl/⌘+0 failure. Status: open. The packaged renderer is done for Linux (2026-11-02): `design-canvas-packaged-electron.spec.ts` passed 3 of 3 against a `mise run package:linux:unpacked` build. Still open: the macOS menu-key pass, the Save dialog decision, the Ctrl/⌘+0 item and a run of the macOS bundle.
 4. **Human screen-reader pass**: VoiceOver and NVDA over the layer tree, frame list, inspector and status regions. Status: open.
-5. **Client performance on other hosts and Electron**: rerun the perf harness on Linux and a slower machine, and decide about Electron. Status: Linux done (2026-11-01, on a busy shared host, so host evidence only); its leak check found listener and frame growth at 64 frames, fixed under to-do 2140 (deleted 2026-11-06), with the rerun left as task 12. A slower machine and the Electron decision stay open: the 2026-11-01 host is not a slow laptop.
-6. **Old renderer with new backend, and the reverse**: the renderer half of mixed versions. Status: open (published desktop builds exist).
+5. **Client performance on other hosts and Electron**: rerun the perf harness on Linux and a slower machine, and decide about Electron. Status: Linux done (2026-11-01, on a busy shared host, so host evidence only); its leak check found listener and frame growth at 64 frames, fixed under to-do 2140 (deleted 2026-11-06), with the rerun left as task 12. Linux rerun done (2026-11-06): structural results unchanged; the 12-cycle leak verdict's `jsEventListeners` failures are a false reading, to-do 7440. A slower machine and the Electron decision stay open: beelink is not a slow laptop.
+6. **Old renderer with new backend, and the reverse**: the renderer half of mixed versions. Status: open. The v1 renderer fallback is retired (2026-11-06, decision 21); the run of a published v2.22.3 desktop build against this backend, and the reverse, is still open.
 7. **Interrupted migration on a real binary**: the record-written, legacy-not-moved window. Status: deferred (unreachable from outside the process; unit-covered).
 8. **Design browser flakes 0208 and 0174**: the import picker late in the suite, and the parallel canvas timeout. Status: done (2026-11-01): 0208 was a picker race, fixed in the product; 0174 was the journey's page loads spending its budget under parallel load, fixed in the test. Both are resolved in the registry, and a host cause that hits any browser suite on a Linux host with Docker churn is recorded as [2340](../../tests/flaky-tests/aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md).
 9. **Deferred optimisations**: thumbnails, capture cache, second render worker, warm context pool, storage redesign, plus the open question on whether thumbnails are wanted. Status: deferred.
 10. **Shared live-provider harness (open question)**: whether design joins a shared live harness. Status: done in practice (own specs with a shared support module).
 11. **Cross-environment transfer UI (open question)**: whether to build one. Status: open (question only).
-12. **Full 64-frame retention run after the bridge fix**: the `--frames 1,64 --cycles 100` harness converges on Linux and on the Apple M5 Max at current `main`. Moved from to-do 2140 (deleted 2026-11-06). Status: open.
+12. **Full 64-frame retention run after the bridge fix**: the `--frames 1,64 --cycles 100` harness converges on Linux and on the Apple M5 Max at current `main`. Moved from to-do 2140 (deleted 2026-11-06). Status: open. The Linux half is done (2026-11-06): all three runs converged at 1 and 64 frames, and window listeners and CDP frames stayed flat at 64 frames (see [Retention run on Linux](#retention-run-on-linux)). The Apple M5 Max half is still open.
 
 ### 1. Opening prompt without the tab mounted
 
@@ -192,6 +195,18 @@ No screen-reader automation (for example Guidepup) is a dependency, and Orca is 
 
 **Outcome (2026-11-01).** The run happened on beelink, not on the Ryzen laptop above: an Intel Core Ultra 9 285H with no Google Chrome, so the harness gained `--browser chromium` (Playwright's Chromium 156) and its `--rev` build was repaired. The host was shared with other builds throughout, so the figures are a busy host's, not reference numbers. See [Client performance on Linux](#client-performance-on-linux). The structural results matched the M5 Max; the 100-cycle leak check did not converge at 64 frames (window listeners and frames grew one for one), which is new to-do 2140. Still open: a slower machine, and the Electron question above (not decided here). On Linux, `_electron.launch` can now run without a display: Electron 45 starts on `--ozone-platform=headless --disable-gpu` (see decision 11).
 
+**Outcome (2026-11-06).** Rerun on beelink at `b8033daf` with the same
+parameters and Chromium 156, at load1 4.6–22 for runs 1 and 2 and 42–56
+for run 3 and the library (see
+[Client performance on Linux, rerun](#client-performance-on-linux-rerun)).
+The structural results matched again: no iframe replacement on any edit,
+one in-place render per HTML edit, live iframes capped at 8. The 12-cycle
+leak check reported `jsEventListeners` failures at every size; the counts
+alternate between two fixed values without growing, so this is the
+check's false reading, new to-do
+[7440](7440-design-perf-listener-count-two-states.md), not a client leak.
+Still open: a slower machine and the Electron decision.
+
 ### 6. Old renderer with new backend, and the reverse
 
 **Problem.** No run has paired an old renderer with the new backend, or the reverse. The desktop app can connect to a remote backend with either side newer (`docs/architecture/version-compatibility.md:45`, through `apps/desktop/electron/connection-manager.ts`), so users can hit both.
@@ -219,6 +234,26 @@ No screen-reader automation (for example Guidepup) is a dependency, and Orca is 
   - **Register it in `version-compatibility.md` as a renderer path with removal condition "met".**
     - Pros: documents it truthfully without code churn.
     - Cons: keeps dead code that the register itself says should go.
+
+**Outcome (2026-11-06).** The fallback is retired, as recommended (decision
+21). The renderer no longer maps a missing `design_capabilities` to a v1
+canvas: `getCapabilities` (`apps/web/src/lib/design-client.ts`) rejects with a
+typed `unsupported` failure, "This backend is too old for the design canvas",
+and does not cache it, so a retry after an upgrade recovers. Removed with it:
+the controller's `legacySync` and `runLegacy` (`design_changes`,
+`get_canvas_state` and `design_action` edits), the projection's `legacy`
+flag and the UI branches it drove (the inspector's structure notice, the
+layer tree's "bring into view" for culled frames, the disabled history and
+rename, the Delete confirmation), the `design_status` readiness branch and
+the `list_canvases` library page. `design_action` stays on the backend for
+MCP, canvas lifecycle and listing, and the renderer still uses it to create,
+list and export canvases. `version-compatibility.md` records the retirement.
+Tests: `design-controller.test.ts` ("a backend without design_capabilities
+gets a typed read error, not a v1 canvas") and `design-launch.test.ts` ("a
+backend without design_capabilities is refused, not read as v1") replace
+the two v1 tests; the dialog, canvas tab, library, inspector, layer tree and
+launch button tests now run against a v2 backend. The first decision above,
+running the published binaries, is unchanged and still open.
 
 ### 7. Interrupted migration on a real binary
 
@@ -361,7 +396,10 @@ now registers its listener in `open()` and is opened and closed in one effect
 **Investigation.** Steps:
 
 1. On the Linux host, run
-   `ORKESTRATOR_TEST_GROUP_TIMEOUT_MS=5400000 mise run test:logged -- --name retention-100 -- mise exec -- bun e2e/perf/design-canvas-perf.ts --frames 1,64 --cycles 100 --skip-library`.
+   `ORKESTRATOR_TEST_GROUP_TIMEOUT_MS=5400000 mise run test:logged -- --name retention-100 -- mise exec -- bun e2e/perf/design-canvas-perf.ts --frames 1,64 --cycles 100 --skip-library --rev HEAD --browser chromium`.
+   beelink has no Google Chrome, so it needs `--browser chromium`; `--rev HEAD`
+   keeps uncommitted web edits out of the measurement. On the M5 Max, drop
+   `--browser chromium`.
 2. Keep the final JSON report under `output/benchmarks/design-canvas/`.
 3. Check that all three runs report `converged true`, with `windowListeners`
    and `cdpFrames` settled at 64 frames and at most 8 iframes.
@@ -377,6 +415,17 @@ now registers its listener in `open()` and is opened and closed in one effect
   - **The Apple M5 Max only.**
     - Pros: a quiet machine.
     - Cons: the growth was never measured there at 64 frames.
+
+**Outcome (2026-11-06, Linux).** Done on beelink at `b8033daf`. The first
+attempt converged at both sizes in run 1 and then lost run 2 to a canvas
+page that rendered no frame in 60 s, with no diagnostic; the harness now
+names failed request codes when that happens (decision 23). The second
+attempt passed all three runs in 42.9 minutes. At 64 frames window
+listeners held at 32 and CDP frames at 9 (eight iframes and the page) from
+the first cycle to the hundredth in every run, against 34 → 61 and 10 → 37
+on 2026-11-01, so the frame bridge growth is gone. See
+[Retention run on Linux](#retention-run-on-linux). Step 4, the M5 Max run,
+is still open.
 
 The design canvas ([`design-canvas.md`](../../architecture/design-canvas.md)) is
 complete in code: recoverable operations, safe export, history, incremental
@@ -449,9 +498,11 @@ nobody builds them speculatively.
   (`planLiveFrames` in `apps/web/src/components/design/design-visibility.ts`,
   tested in `design-viewport.test.ts`); `scripts/benchmark-design.ts`
   measures the backend side. It ran on an Apple M5 Max (2026-10-22) and on a
-  busy Linux x64 host with Chromium (2026-11-01).
-- Mixed-version fallback and migration are unit-tested
-  (`design-controller.test.ts`, `records.test.ts`). On 2026-10-25
+  busy Linux x64 host with Chromium (2026-11-01, rerun 2026-11-06, with a
+  100-cycle retention run that converged at 64 frames).
+- Migration is unit-tested (`records.test.ts`). The renderer's v1 fallback
+  for backends without `design_capabilities` was retired on 2026-11-06 (task
+  6); such a backend now gets a typed failure (`design-controller.test.ts`). On 2026-10-25
   `scripts/qualify-design-mixed-versions.ts` ran the published backend
   `orkestrator@2.22.3` and this checkout's backend over one data directory
   (see [Mixed versions](#mixed-versions)). No run used an old renderer.
@@ -541,8 +592,11 @@ files; see [0031-live-provider-and-platform-qualification.md](../cross-cutting/0
   2026-10-25: only this Apple M5 Max host was available, and the harness
   (`e2e/perf/design-canvas-perf.ts`) drives headless Chrome, not an Electron
   window. On 2026-11-01 it ran on a busy Linux x64 host with Playwright's
-  Chromium (see [Client performance on Linux](#client-performance-on-linux)).
-  Still open: a slower machine and the Electron renderer.
+  Chromium (see [Client performance on Linux](#client-performance-on-linux)),
+  and on 2026-11-06 again, with the 64-frame retention run converging (see
+  [Qualification evidence (2026-11-06)](#qualification-evidence-2026-11-06)).
+  Still open: a slower machine, the Electron renderer, the M5 Max retention
+  run and [7440](7440-design-perf-listener-count-two-states.md).
 - **Mixed versions and migration on real binaries.** The backend half is
   done on 2026-10-25 with the published `orkestrator@2.22.3` (the oldest
   Stable release on npm, inside the support window) and this checkout's
@@ -556,7 +610,9 @@ files; see [0031-live-provider-and-platform-qualification.md](../cross-cutting/0
   release) worked. Still open:
   - an old renderer against the new backend, and the reverse. The npm package
     ships no renderer, so this needs an old desktop app build; the hosted web
-    client always follows `main`.
+    client always follows `main`. The renderer's own v1 fallback is retired
+    (2026-11-06, task 6), so a current renderer needs a backend that serves
+    `design_capabilities`, which every release from v2.21.0 does.
   - an interrupted migration on a real binary. The window (record written,
     legacy file not yet moved) is not reachable from outside the process; it
     stays covered by "an interrupted migration (record written, legacy not
@@ -1398,6 +1454,125 @@ Focused only: `packaged-electron-app.test.ts`, `bridge-builds-setup.test.ts`,
 `e2e/agent-testing` and `tests`; and oxlint and `bun fmt --check` on the
 changed files. All passed.
 
+## Qualification evidence (2026-11-06)
+
+Tasks 12 and 5 on beelink (Linux 7.1.8, Arch-based, Intel Core Ultra 9
+285H, 16 logical CPUs, 62 GiB, Bun 1.4.4), Playwright's Chromium
+156.0.8078.4 headless (no Google Chrome on this host), a production React
+build of the committed web code (`--rev HEAD`, no dirty paths in the
+measurement), 1440×900. The host was shared with other builds; the harness
+records load1 at each phase and it is given per run. No timing here is a
+reference figure. Reports are under `output/benchmarks/design-canvas/`,
+numbers only.
+
+### Retention run on Linux
+
+`ORKESTRATOR_TEST_GROUP_TIMEOUT_MS=5400000 mise run test:logged -- --name
+retention-100 -- mise exec -- bun e2e/perf/design-canvas-perf.ts --frames
+1,64 --cycles 100 --skip-library --rev HEAD --browser chromium`.
+
+- **First attempt** (`60a21ff1`, 03:46–04:03 UTC, load1 67–89 at the
+  start). Run 1 converged at both sizes (64 frames: pan dropped 18.6% of
+  frames, acknowledgment p95 301 ms, at that load). Run 2 failed before
+  measuring: its first canvas page rendered no frame within 60 s, and the
+  harness wrote no report. The design renderer's `capacity` notices
+  (15 queued, 1 running) in the log are the validation queue after seeding
+  65 frames; run 1 logged the same ones and passed. Nothing recorded why the
+  page did not render, so the cause is unknown; the harness now names failed
+  request codes when it happens (decision 23).
+- **Second attempt** (`b8033daf`, 04:05–04:48 UTC, 42.9 min, load1 falling
+  from 38 to 3; report `2026-11-06T04-05-14-034Z.json`). Passed. All six
+  series converged with no failure.
+
+| Per run, 100 cycles | 1 frame (3 runs) | 64 frames (3 runs) |
+| --- | --- | --- |
+| Window listeners, cycle 0 → 100 | 25 → 25 | 32 → 32 |
+| Document listeners | 4 → 4 | 42 → 42 |
+| CDP frames | 2 → 2 | 9 → 9 (run 3 started at 10) |
+| Live iframes, max after the first cycle | 1 | 8 |
+| DOM nodes, cycle 1 → 100 | 1048 → 1048 | 1481 → 1481 |
+| `jsEventListeners`, cycle 1 → 100 | 258 → 258 | 354 → 354 (run 1: 439 → 354) |
+| Post-GC heap MiB, cycle 0 → 100 | 11.8 → 12.8 | 13.7–14.0 → 14.6–14.8 |
+
+- **What it shows.** On 2026-11-01 the same check at 64 frames grew window
+  listeners 34 → 61 and CDP frames 10 → 37 one for one. Here both stayed
+  flat for 100 cycles in all three runs, so the frame bridge growth fixed
+  under to-do 2140 is gone. The heap rose about 1 MiB over the first cycles
+  and held there, within the check's 10% slack. `jsEventListeners`
+  alternated between two fixed values at each size (258 or 283, 354 or 439)
+  without growing; that is [7440](7440-design-perf-listener-count-two-states.md).
+- **Not covered.** The Apple M5 Max half of task 12.
+
+### Client performance on Linux, rerun
+
+`mise exec -- bun e2e/perf/design-canvas-perf.ts --runs 3 --samples 20
+--moves 3 --html-samples 5 --cycles 12 --skip-library --rev HEAD --browser
+chromium`, then `--skip-canvas --library-samples 5 --rev HEAD --browser
+chromium`, each through `test:logged`: the 2026-10-22 parameters in two
+invocations, as on 2026-11-01. Both passed (974 s and 265 s). Reports
+`2026-11-06T04-48-37-098Z.json` (canvas) and `2026-11-06T05-04-52-444Z.json`
+(library).
+
+- **Host load.** Canvas runs 1 and 2 (04:48–04:58 UTC): load1 4.6–22.
+  Run 3 (04:58–05:04): other builds started and load1 climbed from 42 to 56.
+  Library (05:05–05:09): load1 48–56. On 2026-11-01 the same phases ran at
+  load1 0.8–12, up to 79 and 58–77.
+
+| Metric | 1 frame | 16 frames | 64 frames |
+| --- | --- | --- | --- |
+| Pointer move → preview painted, p50/p95 ms (360 samples) | 13.4/29.94 | 17.3/33.44 | 16.55/33.6 |
+| Pointer up → acknowledgment painted, p50/p95 ms (120 samples) | 27.3/89.41 | 61.15/130.94 | 58.3/174.47 |
+| Longest acknowledgment ms (runs 1/2/3) | 41/54/148 | 74/88/239 | 101/104/547 |
+| Pan frame interval p50/p95 ms; dropped frames (pooled) | 16.7/16.8; 0.2% | 16.7/16.8; 0.7% | 16.7/16.8; 4.3% |
+| Live iframes at fit all / 100% / panned away / max while panning | 1/1/0/1 | 8/8/2/8 | 8/8/6/8 |
+| Mounted layer rows at fit all / 100% / panned | 7/7/7 | 16/16/22 | 37/37/37 |
+| Iframe replacements per geometry edit (120 edits) | 0 | 0 | 0 |
+| Iframe replacements / in-frame re-renders per HTML edit | 0/1 | 0/1 | 0/1 |
+| Post-GC JS heap MiB at 100% / after 12 leak cycles | 10.61/12.44 | 11.77/13.54 | 13.0/14.53 |
+| DOM nodes at 100% | 488 | 728 | 965 |
+
+| Library | 1 canvas | 50 canvases | 256 canvases |
+| --- | --- | --- | --- |
+| **Saved designs** press → first page painted, p50/p95 ms (15 samples) | 103/165.1 | 152.5/230.71 | 116.3/286.21 |
+| `design_library` call p50/p95 ms | 3.37/13.8 | 3.55/11.64 | 1.88/6.92 |
+
+- **What the numbers mean.**
+  - The structural results match 2026-11-01 and the M5 Max exactly:
+    geometry edits never replaced or re-rendered an iframe, an HTML edit
+    re-rendered its frame once in place, culling held live iframes at 8,
+    and layer rows stayed bounded.
+  - DOM nodes are 73 higher at every size than on 2026-11-01 (415/655/892
+    then), and the heap at 100% 0.2–0.3 MiB higher, from UI added since.
+  - Load showed in run 3 again. At load1 52–56 the 64-frame pan dropped
+    10.8% of frames (p95 33.3 ms), against 0.4% in runs 1 and 2, and the
+    longest acknowledgment was 547 ms against about 100 ms.
+  - In runs 1 and 2 alone no more than 0.4% of 64-frame pan frames
+    dropped.
+  - The library was measured at load1 48–56 (58–77 on 2026-11-01). The
+    first page took 103–153 ms p50 against 88–125 ms then, and the first
+    page is still 50 rows, so 256 canvases cost about what 50 do. All 256
+    canvases loaded in 917 ms p50 (879 ms then).
+- **Leak check** (12 cycles × 3 runs). The verdict was "not converged" at
+  every size: one run at 1 frame, two at 16 and one at 64. Every failure
+  was `jsEventListeners` alone, a second fixed value seen only in the
+  second half of a run, while window and document listeners, CDP frames,
+  iframes and nodes were flat and every run ended where it began. The
+  100-cycle run above shows the same two values without growth. This is a
+  false failure of the check, recorded as
+  [7440](7440-design-perf-listener-count-two-states.md); no client
+  regression.
+- **Decision.** Unchanged: nothing here argues for a client optimisation,
+  and [Deferred until measured](#deferred-until-measured) stays deferred.
+  Not covered: a slower machine and the Electron renderer (task 5's second
+  decision is still not taken).
+
+### Repository checks (2026-11-06)
+
+Focused only, as this stage requires: `bun check` of `apps/web`
+(passed) and of `e2e/tsconfig.json` (passed); the design and design-client
+web tests (`src/components/design`, `src/lib/design-client`, all passed);
+oxlint and `bun fmt --check` on the changed files (clean).
+
 ## Constraints and rationale
 
 - Runs use a unique isolated profile and only its fixture repository, with
@@ -1408,13 +1583,16 @@ changed files. All passed.
   correctness and explicit bounds, plus no unchanged HTML for geometry-only
   edits (met: about 1 KiB per catch-up at any size). A lower average with
   worse tail latency, memory pressure or starvation is not a win.
-- Capability fallback: the client asks `design_capabilities`; when an old
-  backend reports the command unsupported, `getCapabilities`
-  (`apps/web/src/lib/design-client.ts`) returns `null` and the client uses the
-  v1 legacy snapshot and action path. Missing support never shows a canvas as
-  empty or deleted, and old clients never receive an incompatible export
-  shape. Pinned by "a v1 backend falls back to legacy snapshots, never an
-  empty document" in `design-controller.test.ts`.
+- Capability check: the client asks `design_capabilities`, which every
+  backend in the support window serves. Until 2026-11-06 an unsupported
+  answer sent the client down a v1 snapshot and action path; that path is
+  retired (task 6), and `getCapabilities`
+  (`apps/web/src/lib/design-client.ts`) now rejects with a typed
+  `unsupported` failure. Missing support still never shows a canvas as empty
+  or deleted: the canvas shows the failure with **Retry now**. Pinned by "a
+  backend without design_capabilities gets a typed read error, not a v1
+  canvas" in `design-controller.test.ts`. Old clients never receive an
+  incompatible export shape.
 - Optimisation rollback restores full snapshots or fresh contexts without
   touching stored documents. Storage rollback is a separate explicit
   conversion; reverting a binary is not enough once records are migrated.
@@ -1671,6 +1849,47 @@ Made on 2026-11-02 while working task 3 (packaged renderer only).
       Cons: an Electron spec could no longer assert on that dialog without
       removing the handler (none does today).
 
+Made on 2026-11-06 while working tasks 12, 6 and 5.
+
+21. **Task 6: how much of the v1 path to retire.**
+    - Options: only the controller's `null`-capabilities sync and edit path,
+      as the task's recommendation names; every renderer branch that exists
+      only for a backend without `design_capabilities`.
+    - Chosen: every such branch: the controller path, the projection's
+      `legacy` flag and the UI it drove, the `design_status` readiness branch
+      and the `list_canvases` library page.
+    - Why: all of them are reached only through the same unsupported
+      answer, so keeping any of them leaves the dead code the register says
+      should go, and a `legacy` flag that can no longer become true.
+    - Pros: no unreachable branch is left, and the readiness view has one
+      protocol. Cons: a larger diff (19 files), and a pre-#844 source build
+      gets a failure everywhere instead of a reduced canvas.
+22. **Task 6: what a backend without `design_capabilities` sees.**
+    - Options: keep returning `null` and let callers decide; reject with a
+      typed `unsupported` failure; reject and cache the rejection like the
+      old `null`.
+    - Chosen: a typed failure, "This backend is too old for the design
+      canvas. Update it to continue.", not cached.
+    - Why: every caller already handles a rejected capability read (the
+      canvas shows it in its connection banner, readiness reports the
+      backend as failed, the launch dialog creates without a session link),
+      and not caching it lets **Retry now** recover once the backend is
+      upgraded.
+    - Pros: one type for capabilities everywhere; no stale answer after an
+      upgrade. Cons: each retry against an old backend costs one command.
+23. **Task 12: the lost page load in the first attempt.**
+    - Options: retry the page load in the harness; record the attempt and
+      rerun the whole command; diagnose first.
+    - Chosen: name failed request codes in the harness's error (no URLs),
+      then rerun the whole command.
+    - Why: a retry would hide a real stall in what the harness measures, and
+      the first attempt left nothing to tell a product stall from flake 2340
+      (Chromium aborting loads when Docker changes the host network). The
+      task asks for all three runs in one report.
+    - Pros: the next failure says which it was; the measurement is
+      unchanged. Cons: the first attempt's failure stays unclassified, and
+      a rerun costs another 43 minutes.
+
 ## Open questions
 
 - Should design join a shared live-provider harness (like
@@ -1686,7 +1905,10 @@ Made on 2026-11-02 while working task 3 (packaged renderer only).
 - [0038-design-agent-conversation-links.md](0038-design-agent-conversation-links.md).
 - `2140-design-frame-bridge-growth-under-culling.md` (deleted 2026-11-06):
   the window listener and frame growth the 2026-11-01 Linux leak check found
-  at 64 frames.
+  at 64 frames. Its Linux rerun converged on 2026-11-06 (task 12).
+- [7440-design-perf-listener-count-two-states.md](7440-design-perf-listener-count-two-states.md):
+  the 12-cycle leak check's false `jsEventListeners` failures, found on
+  2026-11-06.
 - [`design-canvas.md`](../../architecture/design-canvas.md) ("Operations" and
   "Client"): the operation recovery edges and accessibility fixes, moved there
   when todos 0037 and 0054 were retired on 2026-10-29.

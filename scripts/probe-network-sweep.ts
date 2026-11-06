@@ -2,7 +2,8 @@ import { DOCKER_LABEL_RESOURCE_ROLE } from "../apps/backend/src/core/constants";
 import { HOST_REACHABILITY_PROBE_ROLE } from "../apps/backend/src/core/container-host-reachability";
 
 /**
- * Host-reachability probe networks of any owner (todo 0241 task 5). Each
+ * Host-reachability probe networks of any owner (rules in
+ * docs/development/disk-usage.md; the live run is todo 0241 task 1). Each
  * backend's own reaper only removes its own owner's leftovers, so a probe
  * network leaked by a one-off data directory (a test backend killed
  * mid-check) is never revisited and holds one of the daemon's address pools.

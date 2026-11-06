@@ -7,7 +7,7 @@ used by Orkestrator. These integrations do not share one upgrade mechanism:
 
 | Agent | SDK integration | CLI integration | Current pins |
 | --- | --- | --- | --- |
-| Claude | `@anthropic-ai/claude-agent-sdk` drives native sessions; `@anthropic-ai/sdk` supplies message content types | The Agent SDK is pointed at Orkestrator's separately managed `claude` executable | Agent SDK `0.3.314`, Anthropic SDK `1.3.0`, CLI `2.1.314` (npm `latest`, verified 2026-10-30) |
+| Claude | `@anthropic-ai/claude-agent-sdk` drives native sessions; `@anthropic-ai/sdk` supplies message content types | The Agent SDK is pointed at Orkestrator's separately managed `claude` executable | Agent SDK `0.3.319`, Anthropic SDK `1.6.0`, CLI `2.1.319` (npm `latest`, verified 2026-11-06) |
 | Codex | No runtime `@openai/codex-sdk` dependency. The bridge speaks JSON-RPC to `codex app-server` using generated types | The pinned `codex` executable is the app-server and is also used by isolated `codex exec` helpers | CLI and generated protocol `0.166.0` |
 | OpenCode | `@opencode-ai/sdk/v2/client` is used only by the backend (native chat and build pipelines) | The pinned `opencode` executable runs `opencode serve` | SDK and CLI `1.19.5` |
 | Cursor | `cursor-bridge` drives `@cursor/sdk` in process | No CLI; Cursor is SDK-only | SDK `1.2.0` (npm `latest`, verified 2026-10-31) |
@@ -740,6 +740,20 @@ typecheck and the full bridge suite. The only SDK union change was a new
 a container on 2.1.314 on 2026-11-06 (0018 task 5): still refreshes in the
 last five minutes, still exits 1 on the API's error, but the CLI now sends
 the unknown model to the API instead of refusing it itself.
+
+Last verified 2026-11-06 at Agent SDK 0.3.319 (`claudeCodeVersion` 2.1.319)
+with CLI 2.1.319 on Linux: the compatibility test including the `canUseTool`
+proof, `verify:claude:mcp-live` against both the SDK's CLI and the managed
+binary, `verify:claude:plugin-mcp-live`, `verify:claude:first-turn-live`,
+`verify:accounts:resend-live`, the vendored build, the typecheck and the full
+bridge suite. The union changes were a new `system` subtype,
+`session_writes_lost` (a health notice), and two `SDKStartupFailureReason`
+members, `initialize_not_first` and `config_file_invalid`, now mapped in
+`claudeStartupFailureMessage`. A startup failure now also carries the CLI's own
+`errors` text after the guidance (`withStartupFailureDetail`), because
+`config_file_invalid` and `worktree_resume_refused` put the specifics there.
+Not rerun at 2.1.319: the macOS sandbox live test, the Linux sandbox probe,
+the billed coordinator-skills probe and `claude-host-login-refresh.ts`.
 
 The compatibility test's deterministic CLI fixture does not authenticate or
 spend credits, but it is not a full real-CLI smoke test. Before release, start a

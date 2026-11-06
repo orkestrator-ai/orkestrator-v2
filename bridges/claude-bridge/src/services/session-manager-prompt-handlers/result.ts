@@ -71,10 +71,30 @@ export function claudeStartupFailureMessage(reason: SDKStartupFailureReason): st
       return "Anthropic refused your organization's required Claude settings for this sign-in. Sign in to Claude again; if that does not help, ask an administrator to allow Claude Code for this account.";
     case "sandbox_required_unavailable":
       return "Claude requires a working command sandbox, and it cannot run here (for example, bubblewrap is missing or the platform is unsupported). Make the sandbox available or have the requirement changed, then retry.";
+    case "initialize_not_first":
+      return "Claude Code did not receive its start-up handshake first. Something between Orkestrator and Claude Code (such as a wrapper script for the claude executable) changed its input; remove the wrapper or restart the agent.";
+    case "config_file_invalid":
+      return "A Claude Code configuration file is not valid JSON, and Claude will not start until it is repaired. The provider error names the file; fix or restore it, then retry.";
   }
 }
 
 const MAX_USAGE_LIMIT_ERROR_CHARS = 500;
+const MAX_STARTUP_FAILURE_DETAIL_CHARS = 500;
+
+/**
+ * The guidance for a startup reason, followed by the CLI's own `errors` text.
+ * Several reasons put the specifics there (`config_file_invalid` names the
+ * file, `worktree_resume_refused` says whether a re-run continues without the
+ * worktree), so the guidance alone would point the user at text they never see.
+ */
+export function withStartupFailureDetail(
+  guidance: string,
+  errors: readonly string[] | undefined,
+): string {
+  const detail = errors?.filter(Boolean).join("\n").trim();
+  if (!detail) return guidance;
+  return `${guidance}\n\n${detail.slice(0, MAX_STARTUP_FAILURE_DETAIL_CHARS)}`;
+}
 
 /** How the CLI ends a turn that a graceful interrupt stopped. */
 const STOPPED_TERMINAL_REASONS: ReadonlySet<string> = new Set([
@@ -292,7 +312,10 @@ export async function handleResultMessage(turn: TurnState, message: SDKMessage):
   } else {
     log.error("query.failed", { subtype: resultMsg.subtype, sessionId, isError: resultIsError });
     const startupFailure = resultMsg.startup_failure_reason
-      ? claudeStartupFailureMessage(resultMsg.startup_failure_reason)
+      ? withStartupFailureDetail(
+          claudeStartupFailureMessage(resultMsg.startup_failure_reason),
+          resultMsg.errors,
+        )
       : undefined;
     // A refused turn's words are only in `result` ("You've hit your limit ·
     // resets 3pm"), and the turn's error is how the backend learns of the limit.

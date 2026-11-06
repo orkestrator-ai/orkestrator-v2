@@ -151,6 +151,10 @@ export const SYSTEM_SUBTYPE_DISPOSITIONS: Record<SdkSystemSubtype, SystemSubtype
   notification: "notice",
   files_persisted: "notice",
   elicitation_complete: "notice",
+  // Disk full or quota used up as the CLI exits: results already received
+  // stand, but a resume may miss transcript lines. The health panel is where a
+  // host-level storage fault belongs; the SDK documents it as safe to ignore.
+  session_writes_lost: "notice",
 };
 
 /** `system` subtypes the CLI emits on the SDK stream that the public union does not name. */

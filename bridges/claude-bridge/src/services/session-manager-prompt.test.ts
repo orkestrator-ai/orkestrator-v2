@@ -13,7 +13,7 @@ import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { claudeStartupFailureMessage } from "./session-manager-prompt.js";
+import { claudeStartupFailureMessage, withStartupFailureDetail } from "./session-manager-prompt.js";
 import { readSessionActivityObservation } from "../routes/session-activity.js";
 import { holdSdkPromptOpen } from "./session-manager-persistence.js";
 import {
@@ -68,6 +68,22 @@ describe("Claude startup failure diagnostics", () => {
     expect(claudeStartupFailureMessage("sandbox_required_unavailable")).toContain(
       "command sandbox",
     );
+    expect(claudeStartupFailureMessage("initialize_not_first")).toContain("wrapper script");
+    // A retry alone cannot help: the CLI refuses every start until the file is repaired.
+    const invalidConfig = claudeStartupFailureMessage("config_file_invalid");
+    expect(invalidConfig).toContain("not valid JSON");
+    expect(invalidConfig).toContain("fix or restore");
+  });
+
+  test("keeps the CLI's own detail after the guidance, bounded", () => {
+    const guidance = claudeStartupFailureMessage("config_file_invalid");
+    expect(withStartupFailureDetail(guidance, undefined)).toBe(guidance);
+    expect(withStartupFailureDetail(guidance, ["", "  "])).toBe(guidance);
+    expect(withStartupFailureDetail(guidance, ["/home/u/.claude.json: Unexpected token"])).toBe(
+      `${guidance}\n\n/home/u/.claude.json: Unexpected token`,
+    );
+    const long = withStartupFailureDetail(guidance, ["x".repeat(2_000)]);
+    expect(long.length).toBe(guidance.length + 2 + 500);
   });
 
   test("separates a retryable org-config outage from a refusal that needs sign-in", () => {
@@ -95,8 +111,9 @@ describe("Claude startup failure diagnostics", () => {
     });
     call.finish();
     const guidance = claudeStartupFailureMessage("cli_version_too_old");
-    await expect(prompt).rejects.toThrow(guidance);
-    expect(session.messages.some((message) => message.content === guidance)).toBe(true);
+    const expected = `${guidance}\n\nCLI version unsupported`;
+    await expect(prompt).rejects.toThrow(expected);
+    expect(session.messages.some((message) => message.content === expected)).toBe(true);
   });
 });
 

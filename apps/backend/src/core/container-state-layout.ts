@@ -33,7 +33,7 @@ export interface ProviderStateEntry {
  * (docs/development/upgrade-agents.md, "Re-trace preserved provider state").
  */
 export const PROVIDER_STATE_TRACED_VERSIONS: Record<AgentPlatform, string> = {
-  claude: "2.1.314",
+  claude: "2.1.319",
   codex: "0.166.0",
   opencode: "1.19.5",
   pi: "1.4.0",

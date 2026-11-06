@@ -17,7 +17,7 @@ import { ChangeEvidenceRecorder } from "@orkestrator/protocol/node/change-tracki
 import { ChangeEvidenceSpool } from "@orkestrator/protocol/node/change-tracking/evidence-spool";
 import { environmentChangeResourceKey } from "@orkestrator/protocol/change-resources";
 import type { DiffStatsTarget } from "../diff-stats-service.js";
-import { ChangeLedger, type MeasurementFileRecord } from "./change-ledger.js";
+import { ChangeLedger, type EvidenceRow, type MeasurementFileRecord } from "./change-ledger.js";
 import { LedgerRetirement } from "./ledger-retirement.js";
 import { openChangeLedgerDatabase } from "./ledger-schema.js";
 import { MEASUREMENTS_KEPT_PER_OWNER } from "./measurement-service.js";
@@ -170,10 +170,29 @@ function planner() {
 const PARTIAL_INDEXES = ["change_tool_windows_open_only", "change_evidence_provider_turn_frames"];
 
 /** Plan lines that read a large table end to end, or all of one owner kind's rows. */
-function walks(plan: readonly string[]): string[] {
+function walks(sql: string, plan: readonly string[]): string[] {
+  // SQLite reports a table alias instead of its physical name. Keep every
+  // protected alias, including aliases inside subqueries.
+  const protectedNames = new Set(LARGE_TABLES);
+  const keywords = new Set([
+    "where",
+    "set",
+    "join",
+    "on",
+    "order",
+    "group",
+    "limit",
+    "using",
+    "indexed",
+    "not",
+  ]);
+  for (const match of sql.matchAll(/\b(?:FROM|JOIN|UPDATE|INTO)\s+(\w+)(?=\s+(?:AS\s+)?(\w+))/gi)) {
+    if (LARGE_TABLES.includes(match[1]!) && !keywords.has(match[2]!.toLowerCase()))
+      protectedNames.add(match[2]!);
+  }
   return plan.filter((detail) => {
     const scan = /^SCAN (\w+)(?: USING (?:COVERING )?INDEX (\w+))?/.exec(detail);
-    if (scan && LARGE_TABLES.includes(scan[1]!) && !PARTIAL_INDEXES.includes(scan[2] ?? ""))
+    if (scan && protectedNames.has(scan[1]!) && !PARTIAL_INDEXES.includes(scan[2] ?? ""))
       return true;
     // A seek on the owner kind alone reads every row of that kind.
     return /USING (COVERING )?INDEX change_evidence_owner \(owner_kind=\?\)$/.test(detail);
@@ -181,6 +200,34 @@ function walks(plan: readonly string[]): string[] {
 }
 
 describe("ledger statements at scale", () => {
+  test.each(["change_selections", "change_selections s", "change_selections AS s"])(
+    "detects full scans of %s but permits indexed seeks",
+    (table) => {
+      const plans = planner();
+      try {
+        const name = table === "change_selections" ? table : "s";
+        const scan = `SELECT * FROM ${table} NOT INDEXED`;
+        expect(walks(scan, plans.plan(scan))).toHaveLength(1);
+        const seek = `SELECT * FROM ${table} WHERE ${name}.selection_key = ?`;
+        expect(walks(seek, plans.plan(seek))).toEqual([]);
+      } finally {
+        plans.close();
+      }
+    },
+  );
+
+  test.each([
+    "SELECT s.* FROM change_bindings JOIN change_selections s NOT INDEXED ON s.selection_key = change_bindings.id",
+    "SELECT * FROM change_bindings WHERE EXISTS (SELECT 1 FROM change_selections s NOT INDEXED)",
+  ])("detects aliased scans in joins and subqueries: %s", (sql) => {
+    const plans = planner();
+    try {
+      expect(walks(sql, plans.plan(sql))).toHaveLength(1);
+    } finally {
+      plans.close();
+    }
+  });
+
   test("publications, pulls, retention passes and purges never walk a large table", async () => {
     const h = setup();
     h.service.rememberConversation("env-1", "codex", CONVERSATION, "tab");
@@ -198,7 +245,10 @@ describe("ledger statements at scale", () => {
     try {
       const found = statements
         .filter((sql) => /^\s*(SELECT|UPDATE|DELETE|INSERT|WITH)/i.test(sql))
-        .map((sql) => ({ sql: sql.replace(/\s+/g, " ").trim(), walks: walks(plans.plan(sql)) }))
+        .map((sql) => ({
+          sql: sql.replace(/\s+/g, " ").trim(),
+          walks: walks(sql, plans.plan(sql)),
+        }))
         .filter((entry) => entry.walks.length > 0);
       expect(found).toEqual([]);
     } finally {
@@ -355,5 +405,240 @@ describe("provider turn diffs past the window", () => {
     expect(batch.done).toBe(true);
     expect(batch.rows).toBeGreaterThan(0);
     expect(owners()).toEqual([continued]);
+  });
+});
+
+/** Synthetic revisions keep page and deletion budgets independent of ingestion. */
+function evidence(h: Harness, owner: string, revision: number, seq = revision): void {
+  const row: EvidenceRow = {
+    evidence_id: `evidence-${owner}`,
+    revision,
+    owner_kind: "provider-turn",
+    owner_id: owner,
+    evidence_key: `key-${owner}`,
+    revision_key: `${owner}-${revision}`,
+    replaces_revision_key: null,
+    kind: "patch",
+    claim: "provider-reported",
+    evidence_json: JSON.stringify({ evidence: { body: { id: `body-${owner}` } } }),
+    selected: 1,
+    frame_key: `frame-${owner}-${revision}`,
+    ingested_seq: seq,
+  };
+  h.service.ledger.insertEvidence(row);
+}
+
+function evidenceCount(h: Harness, owner: string): number {
+  return (
+    h
+      .database()
+      .db.query("SELECT COUNT(*) AS n FROM change_evidence WHERE owner_id = ?")
+      .get(owner) as { n: number }
+  ).n;
+}
+
+function expire(h: Harness, seq: number): void {
+  h.service.ledger.transaction(() =>
+    h.service.ledger.setMeta("retention:expired-seq", String(seq)),
+  );
+}
+
+function finishEvidenceWalk(h: Harness, budget: number, after = 0): number {
+  let removed = 0;
+  for (let pass = 0; pass < 100; pass++) {
+    const batch = h.service.retention.purges.retireExpiredProviderTurns(
+      new Date().toISOString(),
+      after,
+      budget,
+    );
+    expect(batch.rows).toBeLessThanOrEqual(budget);
+    expect(batch.next).toBeGreaterThanOrEqual(after);
+    removed += batch.rows;
+    if (batch.done) return removed;
+    after = batch.next;
+  }
+  throw new Error("evidence walk did not finish");
+}
+
+describe("provider evidence walk boundaries", () => {
+  test("crosses the 256-row page past a held owner and eventually cleans it after release", async () => {
+    const h = setup();
+    await scan(h, 1, 0);
+    const ledger = h.service.ledger;
+    const template = h.service.projections.selectedMeasurement(
+      environmentChangeResourceKey("env-1"),
+    )!;
+    ledger.transaction(() => {
+      ledger.insertMeasurement(
+        { ...template, measurementId: "held-measurement" },
+        { kind: "provider-turn", id: "held" },
+        [fileRecord("protected")],
+        ledger.nextSequence(),
+      );
+      for (let i = 1; i <= 260; i++) evidence(h, "held", i);
+      for (let i = 1; i <= 20; i++) evidence(h, `later-${i}`, 1, 260 + i);
+    });
+    expire(h, 280);
+    const release = ledger.pinMeasurement("held-measurement");
+    try {
+      const first = h.service.retention.purges.retireExpiredProviderTurns(
+        new Date().toISOString(),
+        0,
+        32,
+      );
+      expect(first).toEqual({ rows: 0, done: false, next: 256 });
+      expect(finishEvidenceWalk(h, 32, first.next)).toBe(20);
+      expect(evidenceCount(h, "held")).toBe(260);
+      expect(ledger.measurement("held-measurement")).not.toBeNull();
+      expect(
+        ledger.db
+          .query("SELECT path_id FROM change_measurement_files WHERE measurement_id = ?")
+          .all("held-measurement"),
+      ).toEqual([{ path_id: "protected" }]);
+      expect(ledger.db.query("SELECT DISTINCT owner_id FROM change_evidence").all()).toEqual([
+        { owner_id: "held" },
+      ]);
+    } finally {
+      release();
+    }
+    expect(finishEvidenceWalk(h, 17)).toBe(262);
+    expect(evidenceCount(h, "held")).toBe(0);
+    expect(ledger.measurement("held-measurement")).toBeNull();
+  });
+
+  test("resumes an owner whose evidence exceeds the deletion budget", () => {
+    const h = setup();
+    h.service.ledger.transaction(() => {
+      for (let i = 1; i <= 600; i++) evidence(h, "bulk", i);
+      evidence(h, "later", 1, 601);
+    });
+    expire(h, 601);
+    const first = h.service.retention.purges.retireExpiredProviderTurns(
+      new Date().toISOString(),
+      0,
+      17,
+    );
+    expect(first).toEqual({ rows: 17, done: false, next: 0 });
+    expect(evidenceCount(h, "bulk")).toBe(583);
+    expect(finishEvidenceWalk(h, 17, first.next)).toBe(584);
+    expect(evidenceCount(h, "bulk")).toBe(0);
+    expect(evidenceCount(h, "later")).toBe(0);
+  });
+
+  test("a new revision between batches protects the remaining owner while later expired turns go", () => {
+    const h = setup();
+    h.service.ledger.transaction(() => {
+      for (let i = 1; i <= 40; i++) evidence(h, "continued", i);
+      evidence(h, "later", 1, 41);
+    });
+    expire(h, 41);
+    const first = h.service.retention.purges.retireExpiredProviderTurns(
+      new Date().toISOString(),
+      0,
+      10,
+    );
+    expect(first).toEqual({ rows: 10, done: false, next: 0 });
+    evidence(h, "continued", 41, 42);
+    expect(finishEvidenceWalk(h, 10, first.next)).toBe(1);
+    expect(evidenceCount(h, "continued")).toBe(31);
+    expect(evidenceCount(h, "later")).toBe(0);
+    expect(h.service.retention.purges.evidenceBodiesPage(0).ids).toEqual(
+      Array(31).fill("body-continued"),
+    );
+    expire(h, 42);
+    expect(finishEvidenceWalk(h, 10)).toBe(31);
+    expect(evidenceCount(h, "continued")).toBe(0);
+  });
+
+  test("a reader pin admitted between batches protects the remaining files and evidence", async () => {
+    const h = setup();
+    await scan(h, 1, 0);
+    const ledger = h.service.ledger;
+    const template = h.service.projections.selectedMeasurement(
+      environmentChangeResourceKey("env-1"),
+    )!;
+    ledger.transaction(() => {
+      ledger.insertMeasurement(
+        { ...template, measurementId: "reading" },
+        { kind: "provider-turn", id: "reader" },
+        Array.from({ length: 40 }, (_, i) => fileRecord(`p-${i}`)),
+        ledger.nextSequence(),
+      );
+      evidence(h, "reader", 1);
+      evidence(h, "later", 1, 2);
+    });
+    expire(h, 2);
+    const first = h.service.retention.purges.retireExpiredProviderTurns(
+      new Date().toISOString(),
+      0,
+      10,
+    );
+    expect(first).toEqual({ rows: 10, done: false, next: 0 });
+    const files = () =>
+      ledger.db
+        .query(
+          "SELECT path_id FROM change_measurement_files WHERE measurement_id = ? ORDER BY path_id",
+        )
+        .all("reading");
+    const protectedFiles = files();
+    expect(protectedFiles).toHaveLength(30);
+    const release = ledger.pinMeasurement("reading");
+    try {
+      expect(finishEvidenceWalk(h, 10, first.next)).toBe(1);
+      expect(files()).toEqual(protectedFiles);
+      expect(ledger.measurement("reading")).not.toBeNull();
+      expect(evidenceCount(h, "reader")).toBe(1);
+      expect(evidenceCount(h, "later")).toBe(0);
+    } finally {
+      release();
+    }
+    expect(finishEvidenceWalk(h, 10)).toBe(32);
+    expect(files()).toEqual([]);
+    expect(ledger.measurement("reading")).toBeNull();
+    expect(evidenceCount(h, "reader")).toBe(0);
+  });
+
+  test("a pass with no expired evidence reads only the first frontier row", () => {
+    const h = setup();
+    h.service.ledger.transaction(() => {
+      for (let i = 1; i <= 600; i++) evidence(h, `fresh-${i}`, 1, i);
+    });
+    expire(h, 0);
+    const db = h.database().db;
+    const original = db.query.bind(db);
+    let rowsRead = 0;
+    const restores: Array<() => void> = [];
+    const query = spyOn(db, "query").mockImplementation(((sql: string) => {
+      const statement = original(sql);
+      if (/SELECT .* FROM change_evidence WHERE rowid >/.test(sql.replace(/\s+/g, " "))) {
+        const get = statement.get.bind(statement);
+        const all = statement.all.bind(statement);
+        const getSpy = spyOn(statement, "get").mockImplementation((...args) => {
+          const row = get(...args);
+          if (row) rowsRead++;
+          return row;
+        });
+        const allSpy = spyOn(statement, "all").mockImplementation((...args) => {
+          const rows = all(...args);
+          rowsRead += rows.length;
+          return rows;
+        });
+        restores.push(() => {
+          getSpy.mockRestore();
+          allSpy.mockRestore();
+        });
+      }
+      return statement;
+    }) as typeof db.query);
+    try {
+      expect(
+        h.service.retention.purges.retireExpiredProviderTurns(new Date().toISOString(), 0, 256),
+      ).toEqual({ rows: 0, done: true, next: 0 });
+      expect(rowsRead).toBe(1);
+    } finally {
+      query.mockRestore();
+      for (const restore of restores) restore();
+    }
+    expect(evidenceCount(h, "fresh-600")).toBe(1);
   });
 });

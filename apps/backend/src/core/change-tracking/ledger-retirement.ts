@@ -637,6 +637,14 @@ export class LedgerRetirement {
     return this.ledger.transaction(() => {
       const budget: Budget = { left: rows };
       const expired = this.expiredSequence();
+      // A quiet pass reads just the frontier row, rather than materializing
+      // a whole page of evidence that is still inside the window.
+      const first = this.db
+        .query(
+          "SELECT ingested_seq AS seq FROM change_evidence WHERE rowid > ? ORDER BY rowid LIMIT 1",
+        )
+        .get(afterRowid) as { seq: number } | null;
+      if (!first || first.seq > expired) return { rows: 0, done: true, next: afterRowid };
       const held = this.heldOwners(nowIso);
       const page = this.db
         .query(

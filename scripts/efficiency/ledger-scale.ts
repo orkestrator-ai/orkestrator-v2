@@ -1315,12 +1315,19 @@ async function main(): Promise<void> {
         ).toSorted((left, right) => Buffer.compare(Buffer.from(left), Buffer.from(right)));
         const timings: Record<string, number> = {};
         const time = async (label: string, work: () => unknown) => {
-          probe.take();
-          const started = performance.now();
-          await work();
-          timings[`${label}Ms`] = Math.round(performance.now() - started);
-          await sleep(5);
-          timings[`${label}StallMs`] = probe.take().maxStallMs;
+          // Independent samples: consuming a submeasurement must not reset the
+          // enclosing phase's stall totals.
+          const measurementProbe = new StallProbe();
+          measurementProbe.start();
+          try {
+            const started = performance.now();
+            await work();
+            timings[`${label}Ms`] = Math.round(performance.now() - started);
+            await sleep(5);
+            timings[`${label}StallMs`] = measurementProbe.take().maxStallMs;
+          } finally {
+            measurementProbe.stop();
+          }
         };
         const manifest = {
           v: 1,
@@ -1369,14 +1376,6 @@ async function main(): Promise<void> {
         return { turns, reads, retentionPasses: passes };
       });
 
-    // Plans on a connection of their own, so nothing is left open on the service's.
-    const planner = new Database(ledgerFile, { readonly: true });
-    try {
-      report.slowPlans = slowPlans(planner);
-    } finally {
-      planner.close();
-    }
-
     if (ONLY.has("window")) {
       service.shutdown();
       service = openService({ archivedBodyRetentionDays: WINDOW_DAYS });
@@ -1407,6 +1406,14 @@ async function main(): Promise<void> {
           fileBytesAfter: statSync(path.join(dataDir, CHANGE_LEDGER_DATABASE_FILE)).size,
         };
       });
+    }
+
+    // Plans on a connection of their own, so nothing is left open on the service's.
+    const planner = new Database(ledgerFile, { readonly: true });
+    try {
+      report.slowPlans = slowPlans(planner);
+    } finally {
+      planner.close();
     }
 
     console.log("\nstatements that scan a large table or took 10 ms or more:");

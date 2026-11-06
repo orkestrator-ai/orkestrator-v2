@@ -9,6 +9,8 @@ Analysed 2026-11-05 against `main` at `69a3b4ca5`. Carried from the E13 efficien
 1. **The resume-fallback note in a real Pi and Cursor session**: a resumable conversation whose resume fails shows the note. From part `0720` task 3. Status: open (needs live evidence).
 2. **Vendor CLIs without the dropped debug variables**: no supported provider needs `DEBUG`, `RUST_LOG` or `DEBUG_CLAUDE_AGENT_SDK` in normal use. From part `0830` task 1, "Needs verification". Status: open (needs live evidence).
 3. **The Schedules notice with two real backends on one data directory**: the second backend, and a backend that loses the lease, show the notice in Settings → Schedules. From part `0720` task 1. Status: open (needs live evidence).
+4. **Failed native and terminal turns ring "Agent stopped with an error"**: a failed turn on each native provider, a bridge crash, a backend restart mid-turn, and real provider errors in `claude-tmux` and container Claude CLI tabs. Moved from to-dos 0940, 1060 and 1200 (deleted 2026-11-06). Status: open (needs live evidence).
+5. **Workflow end bells: Multi Review, graph runs and build pipelines**: a failure rings `agent_failed`, a cancel or pause rings nothing, and a success rings `agent_finished`. Moved from to-dos 1060 and 1201 (deleted 2026-11-06). Status: open (needs live evidence).
 
 ### 1. The resume-fallback note in a real Pi and Cursor session
 
@@ -63,6 +65,100 @@ Analysed 2026-11-05 against `main` at `69a3b4ca5`. Carried from the E13 efficien
   - **Accept the layer tests.**
     - Pros: no extra work.
     - Cons: the announce-to-reread path through the real event stream stays unobserved.
+
+### 4. Failed native and terminal turns ring "Agent stopped with an error"
+
+**Problem.** A turn that failed used to ring "The agent completed its work".
+Now a failure rings `agent_failed` ("Agent stopped with an error"), a stop the
+user asked for rings nothing, and a success still rings `agent_finished`. Every
+path is proved against stubbed bridges, fake tmux and hand-written hook files,
+never against a real provider error.
+
+**Context.** Moved from to-dos 0940, 1060 (its terminal half) and 1200, all
+deleted 2026-11-06. The reason is `agent_failed` in
+`apps/backend/src/core/models.ts`, with the toast copy in
+`environmentUnreadToast.tsx`. Native bridges report `turnFailed` on their
+no-touch activity reads (`packages/protocol/src/session-activity-batch.ts`); an
+unwatched turn that ends while the backend is down is recovered after a restart
+(`native-agent-unwatched-turn-end.test.ts`), and a stop inside
+`RUNTIME_STOP_REQUEST_WINDOW_MS` rings nothing
+(`native-agent-failed-turn-attention.test.ts`). `claude-tmux` reads Claude's
+StopFailure hook (`tmux-hooks.ts`, `tmux-poll.ts`). A container Claude CLI tab
+signals `failed` through `orkestrator-state-signal` on images with
+`claude-state-signal=3`; that path already passes in CI on linux-x64 and
+linux-arm64 (`container-live-qualification.yml`, "Live Claude terminal failed
+turn").
+
+**Investigation.** Steps, each in a disposable `dev:test` profile:
+
+1. Run one failing turn per native provider, for example a refused login on
+   Codex, Claude, Cursor, Grok, Pi and OpenCode. Check for the "Agent stopped
+   with an error" toast, and that a stopped turn rings nothing and a good turn
+   rings "completed".
+2. Start a turn and kill its bridge mid-turn; check for `agent_failed`.
+3. Start a turn and restart the profile's backend mid-turn, once with the
+   bridge surviving and once with it gone; check for `agent_failed`. A stop
+   the user asked for must ring nothing.
+4. In a real `claude-tmux` tab, cause an API error (a refused key or a rate
+   limit). Check for the toast and that the tab stops showing working.
+5. In a container Claude CLI tab on an image built from current `main`, cause
+   a real provider error. Check that the sidebar leaves `working` and the toast
+   appears, then that a following good turn rings `agent_waiting`.
+
+**Decisions.**
+
+- **How to fail a turn on demand?**
+  - **A refused login: a made-up key in the profile's own provider home (recommended).**
+    - Pros: free, repeatable and the same on every provider.
+    - Cons: one failure kind only; a rate limit may take a different path.
+  - **Wait for a real rate limit.**
+    - Pros: the commonest real failure.
+    - Cons: cannot be scheduled.
+
+### 5. Workflow end bells: Multi Review, graph runs and build pipelines
+
+**Problem.** Multi Review, graph runs and build pipelines used to ring
+`agent_finished` however they ended. Each now passes its outcome to the bell.
+The tests use the real services and storage with stub providers and
+hand-written records, not a running workflow.
+
+**Context.** Moved from to-dos 1060 (its workflow half) and 1201, both deleted
+2026-11-06. The outcome type is `AgentActivityCompletionOutcome` in
+`apps/backend/src/core/models.ts`, set by `workflowCompletionOutcome`
+(`multi-review-service.ts`), `graphRunCompletionOutcome`
+(`graph-run-attention.ts`) and `buildPipelineCompletionOutcome`
+(`build-pipeline-activity.ts`). For a pipeline, a cancel is a `failed` with
+`BUILD_CANCELLED_ERROR` and rings nothing, requested and supervisor pauses ring
+nothing, a stall is not an end, and a pipeline that stalls and then ends rings
+once.
+
+**Investigation.** Steps, each in a disposable `dev:test` profile:
+
+1. Run a Multi Review that fails and one that is cancelled. Check that the
+   failure rings "Agent stopped with an error" and the cancel rings nothing.
+2. Do the same with a graph run: one that fails, one cancelled or paused.
+3. Run a build pipeline to completion (rings "completed"), one that fails
+   (rings "Agent stopped with an error"), and cancel and pause one each
+   (neither rings).
+4. If one can be produced, watch a pipeline that stalls and then ends, and
+   check that it rings once.
+
+Two known limits stay as they are and need no run: a failed auto PR launch
+still rings `agent_finished`, because the review and Fix did complete and only
+the coordinator's wake reports it (changing it needs a fix-identity check); and
+a supervisor pause (an unchanged Fix that needs a decision) rings nothing,
+although nobody asked for it. Whether it should ring `agent_waiting` is still
+an open question.
+
+**Decisions.**
+
+- **One profile or three?**
+  - **One profile with a live provider for all three workflows (recommended).**
+    - Pros: one setup; the same toast to watch.
+    - Cons: a long billed session.
+  - **Stub providers in the profile.**
+    - Pros: free.
+    - Cons: that is what the tests already do.
 
 ## Open questions
 

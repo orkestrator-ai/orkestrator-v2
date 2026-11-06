@@ -270,7 +270,7 @@ None here. The poll-quantisation fix is
 - Task 5: the harness on omarchy-hp at HEAD and with an image at
   `1aabf049`'s parent, results in `container-qualification.md`. It first
   needs the 29 leaked probe networks removed
-  ([0241](0241-leaked-reach-probe-networks.md) task 5); with 0870 merged,
+  ([0241](0241-leaked-reach-probe-networks.md) task 1); with 0870 merged,
   run it once at the commit before 0870 and once after.
 
 ## Assumptions and decisions

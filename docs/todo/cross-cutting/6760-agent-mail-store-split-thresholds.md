@@ -50,7 +50,7 @@ Analysed 2026-11-05 against `main` at `cbe0f9a5b`. From efficiency report part `
     - Cons: a migration and every pending-inject reader changes, for no measured gain, because the whole-store load and serialise stay.
 - **What to build once it is justified?**
   - **Row writes: each writer changes only its mailbox row and the inject entries it touches, under the existing lease (recommended).**
-    - Pros: removes the cost the measurement found, as `updateStoreRow` did for the prompt queue ([5100](5100-prompt-queue-row-writes.md)); pending injects as their own collection falls out of it.
+    - Pros: removes the cost the measurement found, as `updateStoreRow` did for the prompt queue (5100 (retired; see git history)); pending injects as their own collection falls out of it.
     - Cons: every one of the 24 load-and-save sites changes; cross-mailbox writers (`claimAgentMailWorkerStart`, `moveClosedCoordinatorMail`, budget resets) still need a multi-row write; idempotency and counterparts rows must stay consistent with the mailbox row in one transaction.
   - **Pending injects as their own collection only, as the report proposed.**
     - Pros: a smaller migration.

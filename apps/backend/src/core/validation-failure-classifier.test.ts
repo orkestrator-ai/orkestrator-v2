@@ -375,6 +375,151 @@ describe("paths named outside a test and its helpers", () => {
       reasons: ["no-changed-dependency"],
     });
   });
+
+  for (const location of ["test", "helper", "production"] as const) {
+    test(`a preserved legal comment in a ${location} is not path evidence`, () => {
+      const file =
+        location === "test"
+          ? "apps/backend/tests/container-readiness.test.ts"
+          : location === "helper"
+            ? "apps/backend/src/core/readiness-test-support.ts"
+            : "apps/backend/src/core/container-readiness.ts";
+      const literal =
+        location === "production" ? "apps/web/src/hooks/native-agent-live-head.ts" : "apps/web";
+      const root = tree({
+        "apps/backend/tests/container-readiness.test.ts": [
+          ...(location === "test" ? [] : [`import "../src/core/${path.basename(file)}";`]),
+          'test("a pending shell probe is clipped to the remaining overall deadline", () => {});',
+        ].join("\n"),
+        [file]: [
+          `/*! "${literal}" */`,
+          "export const value = 1;",
+          ...(location === "test"
+            ? [
+                'test("a pending shell probe is clipped to the remaining overall deadline", () => {});',
+              ]
+            : []),
+        ].join("\n"),
+      });
+      expect(
+        failures(classify(root, { output: OUTPUT, changedFiles: CHANGED_4520 }))[0],
+      ).toMatchObject({
+        verdict: "unrelated",
+        reasons: ["no-changed-dependency"],
+      });
+    });
+  }
+
+  for (const expression of [
+    '"apps/web"',
+    "'/* \"apps/web\" */'",
+    "'// \"apps/web\"'",
+    "`apps/web`",
+    "`apps/web/**/${name}`",
+    "`apps/web/**/${`${name}`}`",
+    "`apps/web/**/${({ name }).name}`",
+    '`apps/web/**/${"/* text */"}`',
+  ]) {
+    test(`real path text survives comment removal in ${expression}`, () => {
+      const root = tree({
+        "apps/backend/tests/container-readiness.test.ts": [
+          '/*! "unrelated/legal/path" */',
+          `const directory = ${expression};`,
+          'const markers = "/* not a comment */ // nor is this";',
+          'const escaped = "\\\"/* still a string */\\\"";',
+          'test("a pending shell probe is clipped to the remaining overall deadline", () => {});',
+        ].join("\n"),
+      });
+      expect(
+        failures(classify(root, { output: OUTPUT, changedFiles: CHANGED_4520 }))[0],
+      ).toMatchObject({
+        verdict: "related",
+        reasons: ["references-changed-path"],
+        changedPath: "apps/web",
+      });
+    });
+  }
+
+  test("legal comments inside template expressions cannot become path evidence", () => {
+    const root = tree({
+      "apps/backend/tests/container-readiness.test.ts": [
+        'const description = `text ${(() => { /*! "apps/web" */ return name; })()}`;',
+        'test("a pending shell probe is clipped to the remaining overall deadline", () => {});',
+      ].join("\n"),
+    });
+    expect(
+      failures(classify(root, { output: OUTPUT, changedFiles: CHANGED_4520 }))[0]!.verdict,
+    ).toBe("unrelated");
+  });
+
+  test("unsupported Flow syntax in a Jest test leaves path analysis unavailable", () => {
+    const root = fixture({
+      "tests/example.test.js": [
+        '// "apps/web"',
+        "opaque type ID = string;",
+        'test("works", () => {});',
+      ].join("\n"),
+    });
+    const result = classify(root, {
+      output: "FAIL tests/example.test.js\n  ● works\nTests: 1 failed, 1 total",
+      changedFiles: ["apps/web/src/hooks/head.ts"],
+    });
+    expect(failures(result)[0]).toMatchObject({
+      runner: "jest",
+      verdict: "undetermined",
+      reasons: ["dependency-graph-incomplete"],
+    });
+    expect(failures(result)[0]!.changedPath).toBeUndefined();
+  });
+
+  test("ambiguous regexp tokens cannot expose comment-like path text", () => {
+    const root = tree({
+      "apps/backend/tests/container-readiness.test.ts": [
+        '/*! "apps/web" */',
+        "const pattern = /[/*]/;",
+        'test("a pending shell probe is clipped to the remaining overall deadline", () => {});',
+      ].join("\n"),
+    });
+    expect(
+      failures(classify(root, { output: OUTPUT, changedFiles: CHANGED_4520 }))[0],
+    ).toMatchObject({
+      verdict: "undetermined",
+      reasons: ["dependency-graph-incomplete"],
+    });
+  });
+
+  for (const [basename, verdict] of [
+    ["agent-test-cursor-credential.ts", "related"],
+    ["agent-contest-cursor-credential.ts", "unrelated"],
+    ["agent-fixture-support.ts", "related"],
+  ]) {
+    test(`helper basename heuristic classifies ${basename} as ${verdict}`, () => {
+      const root = tree({
+        "apps/backend/src/core/container-readiness.ts": `import "./${basename}";\nexport const meta = 1;`,
+        [`apps/backend/src/core/${basename}`]: 'export const directory = "apps/web";',
+      });
+      expect(
+        failures(classify(root, { output: OUTPUT, changedFiles: CHANGED_4520 }))[0],
+      ).toMatchObject({
+        verdict,
+        reasons: [verdict === "related" ? "references-changed-path" : "no-changed-dependency"],
+      });
+    });
+  }
+
+  test("a helper reached through a production module is the test's own helper", () => {
+    const root = tree({
+      "apps/backend/src/core/container-readiness.ts": 'import "../../tests/readiness-support";',
+      "apps/backend/tests/readiness-support.ts": 'export const directory = "apps/web";',
+    });
+    expect(
+      failures(classify(root, { output: OUTPUT, changedFiles: CHANGED_4520 }))[0],
+    ).toMatchObject({
+      verdict: "related",
+      reasons: ["references-changed-path"],
+      changedPath: "apps/web",
+    });
+  });
 });
 
 describe("playwright output", () => {

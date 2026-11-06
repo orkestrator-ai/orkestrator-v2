@@ -700,9 +700,73 @@ export function classifyValidationFailures(input: ValidationFailureClassifierInp
     }
   }
 
-  /** The file's code without comments; the raw text when it cannot be parsed. */
-  function codeOf(relative: string, text: string): string {
-    if (!CODE_FILE.test(relative) || !BunRuntime?.Transpiler) return text;
+  /**
+   * Bun drops ordinary comments but preserves legal block comments. Walk its
+   * JavaScript output to remove those too, keeping quoted and template text.
+   * A slash outside those tokens can be division or a regexp: refuse that
+   * ambiguous analysis rather than interpreting regexp contents as comments.
+   */
+  function withoutComments(code: string): string | null {
+    if (!code.includes("/*") && !code.includes("//")) return code;
+    const output: string[] = [];
+    let next = 0;
+    function quoted(quote: string): boolean {
+      output.push(code[next++]!);
+      while (next < code.length) {
+        const character = code[next++]!;
+        output.push(character);
+        if (character === "\\") {
+          if (next >= code.length) return false;
+          output.push(code[next++]!);
+        } else if (character === quote) {
+          return true;
+        } else if (quote === "`" && character === "$" && code[next] === "{") {
+          output.push(code[next++]!);
+          if (!expression(true)) return false;
+        }
+      }
+      return false;
+    }
+    function expression(template: boolean): boolean {
+      let braces = 0;
+      while (next < code.length) {
+        const character = code[next]!;
+        if (character === '"' || character === "'" || character === "`") {
+          if (!quoted(character)) return false;
+          continue;
+        }
+        if (character === "/") {
+          if (code[next + 1] === "*") {
+            const end = code.indexOf("*/", next + 2);
+            if (end < 0) return false;
+            output.push(" ");
+            next = end + 2;
+            continue;
+          }
+          if (code[next + 1] === "/") {
+            const end = code.indexOf("\n", next + 2);
+            next = end < 0 ? code.length : end;
+            output.push("\n");
+            continue;
+          }
+          return false;
+        }
+        output.push(character);
+        next += 1;
+        if (character === "{") braces += 1;
+        if (character === "}") {
+          if (template && braces === 0) return true;
+          braces -= 1;
+        }
+      }
+      return !template;
+    }
+    return expression(false) ? output.join("") : null;
+  }
+
+  /** Null means path evidence is unavailable, never a raw-source fallback. */
+  function codeOf(relative: string, text: string): string | null {
+    if (!CODE_FILE.test(relative) || !BunRuntime?.Transpiler) return null;
     const loader = /\.[cm]?ts$/.test(relative) ? "ts" : "tsx";
     try {
       let transpiler = transpilers.get(loader);
@@ -710,13 +774,14 @@ export function classifyValidationFailures(input: ValidationFailureClassifierInp
         transpiler = new BunRuntime.Transpiler({ loader });
         transpilers.set(loader, transpiler);
       }
-      return transpiler.transformSync(text);
+      return withoutComments(transpiler.transformSync(text));
     } catch {
-      return text;
+      return null;
     }
   }
 
   const referenceCache = new Map<string, string | null>();
+  const unavailableReferences = new Set<string>();
   function referenceIn(file: string, helper: boolean): string | null {
     const cacheKey = `${helper ? "helper" : "module"}:${file}`;
     if (referenceCache.has(cacheKey)) return referenceCache.get(cacheKey)!;
@@ -729,6 +794,11 @@ export function classifyValidationFailures(input: ValidationFailureClassifierInp
       // Most files name no changed path at all, so only those that might are
       // parsed to drop their comments.
       const code = candidates.length > 0 ? codeOf(file, text) : "";
+      if (code === null) {
+        unavailableReferences.add(file);
+        referenceCache.set(cacheKey, null);
+        return null;
+      }
       for (const [, token] of candidates) {
         if (token.pattern.test(code)) {
           found = token.path;
@@ -968,6 +1038,7 @@ export function classifyValidationFailures(input: ValidationFailureClassifierInp
           changedPath ??= globalChanges[0];
         } else if (
           closure.incomplete ||
+          closure.files.some((file) => unavailableReferences.has(file)) ||
           input.changedFiles.some((file) => !CODE_FILE.test(file) && !/^docs\/.*\.md$/.test(file))
         ) {
           reasons.push("dependency-graph-incomplete");

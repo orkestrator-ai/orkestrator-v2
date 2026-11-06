@@ -33,7 +33,7 @@ describe("sessionRuntimeHealthBody", () => {
 
   test("a session before its first query carries no MCP revision, only the marker", () => {
     expect(sessionRuntimeHealthBody(session())).toEqual({
-      summary: {},
+      summary: { state: "detached" },
       notices: [],
       mcpConfigReporting: MCP_CONFIG_REPORTING_VERSION,
     });
@@ -41,7 +41,7 @@ describe("sessionRuntimeHealthBody", () => {
 
   test("carries the MCP revision beside the shared shape, with or without health", () => {
     expect(sessionRuntimeHealthBody(session({ mcpConfigRevision: revision }))).toEqual({
-      summary: {},
+      summary: { state: "detached" },
       notices: [],
       mcpConfigReporting: MCP_CONFIG_REPORTING_VERSION,
       mcpConfig: revision,
@@ -50,7 +50,10 @@ describe("sessionRuntimeHealthBody", () => {
     health.recordUnknown("future-event");
     const body = sessionRuntimeHealthBody(session({ mcpConfigRevision: revision, health }));
     expect(body.mcpConfig).toEqual(revision);
-    expect(body.summary).toEqual({ drift: { unknownEvents: 1, unknownKinds: ["future-event"] } });
+    expect(body.summary).toEqual({
+      state: "detached",
+      drift: { unknownEvents: 1, unknownKinds: ["future-event"] },
+    });
   });
 
   test("serves a copy, so a caller cannot mutate the recorded revision", () => {
@@ -58,5 +61,33 @@ describe("sessionRuntimeHealthBody", () => {
     const body = sessionRuntimeHealthBody(state) as { mcpConfig: typeof revision };
     body.mcpConfig.sources.user = "sha256:other";
     expect(state.mcpConfigRevision?.sources.user).toBe("sha256:user");
+  });
+
+  /*
+   * 0049 task 10: the full idle-detach wait observes `detached` before the
+   * follow-up turn and `attached` after it through this no-touch read.
+   */
+  test("reports whether the session's Claude CLI is open, as attached or detached", () => {
+    const runtime = (state: string, aborted = false) =>
+      ({
+        state,
+        abortController: { signal: { aborted } },
+      }) as unknown as NonNullable<SessionState["claudeRuntime"]>;
+    const stateOf = (claudeRuntime?: SessionState["claudeRuntime"]) =>
+      (sessionRuntimeHealthBody(session({ claudeRuntime })).summary as { state?: string }).state;
+    expect(stateOf(runtime("open"))).toBe("attached");
+    // Released by the idle window, ended, or being killed: no open CLI.
+    expect(stateOf(undefined)).toBe("detached");
+    expect(stateOf(runtime("draining"))).toBe("detached");
+    expect(stateOf(runtime("ended"))).toBe("detached");
+    expect(stateOf(runtime("open", true))).toBe("detached");
+    const health = new RuntimeHealthRecorder();
+    expect(
+      (
+        sessionRuntimeHealthBody(session({ claudeRuntime: runtime("open"), health })).summary as {
+          state?: string;
+        }
+      ).state,
+    ).toBe("attached");
   });
 });

@@ -756,7 +756,8 @@ profile. Run one provider at a time (flake 0420). Each provider writes
 The live idle-observation spec (`e2e/agent-testing/idle-observation-live.spec.ts`)
 has its own opt-in, `ORKESTRATOR_AGENT_TEST_LIVE_IDLE_OBSERVATION=1`. For each
 provider in `ORKESTRATOR_AGENT_TEST_IDLE_PLATFORMS` (default all six) it runs
-one native tab through a missed final event, a parked approval, a sub-agent, a
+one native tab through a missed final event, a bridge restart while the idle
+group is backed off (local Claude and Codex), a parked approval, a sub-agent, a
 background shell, a cut event stream with the browser offline, a hidden
 document, a turn that completes with no renderer connected, and an idle wait
 past the 10 min idle detach. Each case must settle with no stuck Stop button
@@ -765,7 +766,11 @@ the page (an `EventSource` and `document.visibilityState` wrapper), not in the
 product. `ORKESTRATOR_AGENT_TEST_IDLE_CASES` narrows the cases,
 `ORKESTRATOR_AGENT_TEST_IDLE_DETACH_WAIT_MS` shortens the idle wait for a
 cadence-only check, and `ORKESTRATOR_AGENT_TEST_IDLE_MODELS` takes
-`<platform>=<model>` pairs. Providers run in parallel with `--workers=4
+`<platform>=<model>` pairs. `ORKESTRATOR_AGENT_TEST_IDLE_FAKE_MODELS=1` runs
+Claude and Codex against scripted loopback models instead, with no login and
+nothing billed (the profile setup is in the spec's header), and
+`ORKESTRATOR_AGENT_TEST_IDLE_ENVIRONMENT=container` runs Claude in a new
+container environment from the profile's development image. Providers run in parallel with `--workers=4
 --fully-parallel`; run one provider alone to measure a lost announcement,
 because another environment's announcement also recovers a view (stamp gap).
 Each provider writes

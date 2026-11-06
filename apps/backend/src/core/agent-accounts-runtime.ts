@@ -109,6 +109,8 @@ export class AgentAccountsRuntime {
    */
   private login: AgentAccountLogin | undefined;
   private readonly usage = new Map<string, AgentAccountCachedUsage>();
+  /** Changes to selection or switching preferences invalidate pending decisions. */
+  selectionRevision = 0;
   private readonly usageGenerations = new Map<string, number>();
   /**
    * What each container was last handed, as a digest of the access-only text,

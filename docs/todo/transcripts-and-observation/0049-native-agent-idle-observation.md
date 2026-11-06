@@ -5,18 +5,18 @@ below was taken at `9b3f53a2`, before the 2026-10-23 code changes.
 
 ## Task analysis
 
-Analysed 2026-10-27 against `main` at `863b5782`. Task 4 rechecked 2026-11-03 against `main` at `7b48c23f`: nothing between those commits changed the idle observation path, so its problem still held. Tasks 1, 2, 9 and 10 worked 2026-11-06 against `main` at `c1724ab74`, live with loopback fake models (see "Live check (2026-11-06, loopback models)").
+Analysed 2026-10-27 against `main` at `863b5782`. Task 4 rechecked 2026-11-03 against `main` at `7b48c23f`: nothing between those commits changed the idle observation path, so its problem still held. Tasks 1, 2, 9 and 10 worked 2026-11-06 against `main` at `c1724ab74`, live with loopback fake models (see "Live check (2026-11-06, loopback models)"). Tasks 3, 4, 5, 7 (Pi) and 8 worked 2026-11-06 against `main` at `ee2cc8423`, also live with loopback fake models only (see "Second live check (2026-11-06, loopback models)").
 
 ### Tasks
 
 1. **Bridge restart while backed off**: Claude and Codex; the next turn must be seen within the 3 s completion budget. Status: done (2026-11-06, both providers, loopback models).
 2. **Claude background-task output**: the background case still fails its fresh tool-result assertion. Status: done (2026-11-06: a spec expectation; the output is in the finished task's output file, which the case now reads).
-3. **Codex live async question and background shell**: neither has been exercised live. Status: open.
-4. **Codex short idle gaps**: 27 reads a minute against Claude's 12; find what still invalidates an idle Codex view. Status: partly done (every invalidation is tagged and counted; a fake idle Codex minute emits none; the live per-cause count is still owed).
-5. **Remaining Claude and Codex cases at the new cadence**: approval, sub-agents, reconnect, hidden and no-renderer. Status: open.
-6. **OpenCode hint rerun (code item 5)**: confirm idle OpenCode falls to 12 reads a minute, or attribute the remaining hints. Status: partly done (two hint sources fixed in code).
-7. **Grok and Pi rerun**: both were skipped as signed out on 2026-10-21. Status: blocked (on current host logins).
-8. **Unexercised cases**: Codex sub-agents, and background shells on Codex, Cursor and OpenCode. Status: open (depends on the model choosing the tool).
+3. **Codex live async question and background shell**: neither has been exercised live. Status: done (2026-11-06, loopback model: the async question reached a backed-off view in 13 ms and its answer settled; the backgrounded command's card stays "running..." for good, moved to [7520](7520-codex-backgrounded-command-stays-running.md)).
+4. **Codex short idle gaps**: 27 reads a minute against Claude's 12; find what still invalidates an idle Codex view. Status: done (2026-11-06, loopback models: the live per-cause counts are Claude none and Codex `discovery-renewal` 6 in 300 s; naming the section and stopping it moved to [7530](7530-codex-idle-discovery-renewals.md)).
+5. **Remaining Claude and Codex cases at the new cadence**: approval, sub-agents, reconnect, hidden and no-renderer. Status: done (2026-11-06, both providers, loopback models; all passed).
+6. **OpenCode hint rerun (code item 5)**: confirm idle OpenCode falls to 12 reads a minute, or attribute the remaining hints. Status: partly done (two hint sources fixed in code); open: no loopback model is wired into OpenCode, and this host has no OpenCode login to use instead.
+7. **Grok and Pi rerun**: both were skipped as signed out on 2026-10-21. Status: partly done (Pi ran 2026-11-06 on a loopback model: every case settled, and the full detach wait found an open idle tab keeps Pi attached, moved to [7540](7540-pi-idle-view-keeps-session-attached.md)); Grok blocked (needs a Grok login; no loopback model reaches it).
+8. **Unexercised cases**: Codex sub-agents, and background shells on Codex, Cursor and OpenCode. Status: partly done (2026-11-06, loopback model: Codex sub-agents passed and Codex's background shell ran, see task 3); Cursor and OpenCode open (no loopback model reaches either).
 9. **Container environment**: no-renderer completion in a container, and an older bridge image staying at the baseline cadence on both sides. Status: partly done (2026-11-06: a current-image container's stream is live and its idle group backs off; turns after the first are blocked on this host by [7080](../containers-and-environments/7080-linux-host-firewall-blocks-profile-signals.md); no older image exists here).
 10. **Full detach wait**: observe `detached` before and `attached` after through no-touch runtime discovery. Status: done for Claude (2026-11-06); Codex open in [7380](7380-codex-idle-detach-observation.md).
 
@@ -146,6 +146,30 @@ recorded `not-exercised`.
     - Pros: less noise in records.
     - Cons: misses a future Codex release that does background commands.
 
+**Outcome (2026-11-06, loopback model).** Done as recommended, with Codex's
+real async question rather than its blocking one. Pinned Codex 0.166.0
+offers `request_user_input_async` (namespace `functions`) to an Orkestrator
+session; it returns `{"accepted":true}` at once, and the question becomes an
+`agentMessage` with `delivery: "async"`, which the bridge renders as an
+`async-question` part and counts in `contentRevision`. The new
+`async-question` case (Codex only) waits 35 s until the view and its group
+have backed off (the group skipped 6 sweeps; the largest read gap 10.0 s),
+dispatches the question from outside the view, then answers it from the
+card ("Codex has a question", option `IDLEQA_BETA`, Send answer). The
+backend first read the question with the session already idle; the card
+showed 13 ms after that read, the reply 16 ms and the sidebar 19 ms behind
+backend truth. The answer came back as a new turn settled 10 ms (sidebar
+13 ms) behind, and the card said "Your answer was sent to Codex."; a
+`native-agent-async-question` frame named the environment. While asked, the
+backend's invalidations were `projection-read` 3, `discovery-renewal` 2 and
+`record-dispatch` 1. The background shell ran for real: the scripted model
+started `sleep 20; echo <marker>` through `exec_command` with a 1 s yield, so
+it was still running when the turn ended. Codex has no background-task
+surface, so the case is recorded `not-exercised` as recommended, but it
+found a defect: the command's card stayed `pending` ("running...") after the
+command had exited, because Codex sends no event for it once the turn is
+over ([7520](7520-codex-backgrounded-command-stays-running.md)).
+
 ### 4. Codex short idle gaps
 
 **Problem.** An idle Codex view made 27 reads a minute on 2026-10-23 against Claude's 12, with gaps under 12 s. Something still invalidates it, which costs reads on every idle Codex tab.
@@ -210,10 +234,30 @@ read that no backend invalidation causes. The fake cannot tell these apart.
 The next live idle run will: the per-cause counts name the source, and a
 total far below the read count points at the renderer instead.
 
-**Still owed.** One live idle run on a disposable profile (Claude and Codex,
-`ORKESTRATOR_AGENT_TEST_IDLE_CASES=detach`), with its `idle invalidations by
-cause` notes recorded here. It was not run in this change because it needs
-billed provider turns.
+**Live per-cause count (2026-11-06, loopback models).** The idle (`detach`)
+case ran for 300 s on each provider, after the approval, sub-agent,
+background, reconnect, hidden and no-renderer cases on the same session
+(cadence only: the shortened wait is `not-exercised` for detachment).
+
+| Idle 300 s | Claude | Codex |
+| --- | --- | --- |
+| Reads a minute (coordinated reads) | 8.0 | 13.3 |
+| Largest gap | 15.0 s | 15.0 s |
+| Gaps `<250ms` / `250ms-2s` / `2-6s` / `6-12s` / `>=12s` | 15 / 1 / 1 / 1 / 17 | 26 / 6 / 11 / 6 / 10 |
+| Requests (`live_update` / `discovery_update`) | 24 / 17 | 45 / 19 |
+| Backend group reads / skipped sweeps | 69 / 81 | 62 / 88 |
+| Invalidations by cause | none | `discovery-renewal` 6 |
+
+So the backend's content and transition paths add nothing to either idle
+view (no `content-revision`, no `transition`), and both groups back off
+behind their streams. The whole Codex surplus is six discovery renewals whose
+value changed, each resetting the view's backoff to its 3 s step. A probe of
+the four discovery sections on a fresh idle Codex session (plain, background,
+sub-agent and async-question histories, seven 31 s renewals each) saw no
+change, so which section moves is still unknown; that and the fix are
+[7530](7530-codex-idle-discovery-renewals.md). The 2026-10-23 figure (27 a
+minute) was taken on a real model and a busier session; this run's lower
+figure is one loopback sample.
 
 ### 5. Remaining Claude and Codex cases at the new cadence
 
@@ -233,6 +277,25 @@ billed provider turns.
     - Pros: sooner.
     - Cons: every sidebar check is blind; the run has to be repeated.
 
+**Outcome (2026-11-06, loopback models).** Done: every case ran for Claude and
+Codex, one provider at a time, at the new cadence. The fakes now script the
+two cases that needed a real model: approval (one exact command, which each
+CLI parks under its `ask` mode, Claude `default` and Codex `untrusted`) and
+sub-agents (Claude's `Agent` tool; Codex's `spawn_agent` then `wait_agent`).
+All passed; single samples, not p95 estimates.
+
+| Case (budget) | Claude | Codex |
+| --- | --- | --- |
+| Approval (card 2 s) | card 6 ms, page 5 ms, sidebar 813 ms after approving | card 48 ms, page 5 ms, sidebar 1,543 ms |
+| Sub-agents (completion 3 s) | `Agent` tool, 2 background tasks, none left running; page 282 ms | one `subagent` card, `success`; page 19 ms |
+| Reconnect (offline through completion) | 53 ms after online, sidebar 54 ms | 138 ms, sidebar 170 ms |
+| Hidden | 0 reads while hidden, 105 ms after visible | 0 reads, 189 ms |
+| No renderer | aggregate idle 4 ms after the projection, second client 6.1 s, one exact prompt | 6 ms, 9.3 s, one exact prompt |
+
+The second client's rehydration took 6.1 s and 9.3 s, against 3.1 to 3.9 s
+on 2026-10-21. The case has no budget for it (a fresh sign-in and page load
+on a headless profile), so it is recorded, not judged.
+
 ### 6. OpenCode hint rerun (code item 5)
 
 **Problem.** Idle OpenCode views read 27.9 times a minute on 2026-10-21. Two hint sources were fixed in code, but the rerun that would confirm 12 a minute has not happened.
@@ -250,6 +313,16 @@ billed provider turns.
   - **Also suppress hydration announcements for an idle view.**
     - Pros: likely removes most of the remainder.
     - Cons: risks hiding an incomplete transcript's completion, which hydration exists to announce.
+
+**Still open (2026-11-06).** Not run. The rerun needs a model behind
+OpenCode, and this change uses loopback models only: the scripted fakes
+stand in for Anthropic's Messages API (Claude), OpenAI's Responses WebSocket
+(Codex) and an OpenAI chat-completions provider in Pi's `models.json` (Pi).
+Pointing OpenCode at one would mean a custom provider in the profile's
+OpenCode configuration, served through an AI SDK provider package that
+OpenCode loads at run time; no harness for that exists, and building one
+was out of this change's scope. The task-4 cause tags are in place, so the
+rerun will attribute whatever it finds.
 
 ### 7. Grok and Pi rerun
 
@@ -269,6 +342,34 @@ billed provider turns.
     - Pros: no unqualified backoff on by default.
     - Cons: gives up a saving the other four providers show is safe; the backend still sweeps every 2 s, so the 15 s staleness bound already holds.
 
+**Outcome (2026-11-06, loopback model).** Pi ran; Grok did not. Pi got a
+scripted loopback model as a provider of its own in the profile's Pi
+`models.json` (`idle-observation-fake-pi.ts`, model `idleqa-fake/idleqa-1`;
+D21), so no login and no host `~/.pi` was involved, and the session reported
+`signed-in`. Every case ran (run `idleqa-0049-r2-pi`); single samples.
+
+- `missed-final` passed: page 13.6 s behind backend truth with every frame
+  naming the environment dropped, inside the 17.5 s lost-announcement bound
+  and over the 3 s budget, as D7 accepts; sidebar 8 ms. The backend read the
+  group on all 17 sweeps (no skips: Pi has no observation stream, D6).
+- `approval` passed under an environment policy of approvals `ask` (Pi has
+  no ask composer mode): card 9 ms, page 6 ms, sidebar 1,598 ms.
+- `reconnect` 127 ms after online; `hidden` 0 reads while hidden and 111 ms
+  after visible; `no-renderer` aggregate idle 6 ms after the projection,
+  second client 6.2 s, one exact prompt.
+- `subagents` and `background` `not-exercised`: Pi has no sub-agent or
+  background tool, so it replied, and ran the command in the foreground (its
+  output in the tool result).
+- `detach` failed. Over the full 630 s wait the view read 7.4 times a minute
+  (largest gap 15.0 s, no invalidation), but Pi's no-touch runtime read said
+  `attached` before and after: an open, idle Pi tab keeps its session
+  attached, because the MCP discovery renewal (`GET /session/:id/mcp`) is
+  among the routes that refresh the Pi bridge's idle clock
+  ([7540](7540-pi-idle-view-keeps-session-attached.md)).
+
+Grok stays blocked: it needs a Grok login, which this change may not use, and
+no loopback model reaches it.
+
 ### 8. Unexercised cases
 
 **Problem.** Codex sub-agents and background shells on Codex, Cursor and OpenCode have never produced evidence, because the models chose not to use the tool.
@@ -286,6 +387,16 @@ billed provider turns.
   - **Pin a model per provider known to use the tool (`ORKESTRATOR_AGENT_TEST_IDLE_MODELS`) and retry.**
     - Pros: may produce evidence.
     - Cons: more runs, and the result still depends on the model.
+
+**Outcome (2026-11-06, loopback models).** With scripted models the tool
+choice is no longer the model's, so the Codex half is done: sub-agents passed
+(task 5) and the background shell really backgrounded its command (task 3,
+which found [7520](7520-codex-backgrounded-command-stays-running.md)). The
+scripted Codex call had to name the tool's namespace: `spawn_agent` and
+`wait_agent` live in `collaboration`, and Codex answers a bare name with
+"unsupported call". Cursor and OpenCode stay open. Cursor's SDK talks to
+Cursor's own service, which has no loopback stand-in; OpenCode has no fake
+provider wired in (task 6).
 
 ### 9. Container environment
 
@@ -331,7 +442,9 @@ checkout:
 
 No image older than #1182 exists on this host (the oldest is 2026-10-29), so
 the older-image half ran only as the deterministic tests already listed under
-code item 1. Left: no-renderer completion in a container on a host whose
+code item 1. Not rerun on 2026-11-06 (second run): the host firewall still
+drops the isolated profile's agent-tools port (7080), which the ticket
+forbids changing, and there is still no pre-#1182 image. Left: no-renderer completion in a container on a host whose
 firewall admits the profile's agent-tools port, and one run against a pre-#1182
 image if one can be kept.
 
@@ -600,21 +713,20 @@ open qualification cases from the 2026-10-21 run.
 The live run of 2026-10-21 is recorded below. What it left open, plus what the
 2026-10-23 code changes need:
 
-- Claude and Codex, after the 2026-10-23 live check below: Codex's background
-  shell (never backgrounded), a live async question on Codex, the remaining
-  cases (approval, sub-agents,
-  reconnect, hidden, no-renderer) at the new cadence, and Codex's idle gaps
-  under 12 s (27 reads a minute against Claude's 12: something still
-  invalidates an idle Codex view, the same symptom as OpenCode in code item
-  5).
-- Grok and Pi: re-run `e2e/agent-testing/idle-observation-live.spec.ts`
-  once their host logins are current. Both were signed out (expired host
-  logins) and were skipped.
-- Cases the models did not exercise: Codex sub-agents (no sub-agent tool call;
-  the separate live sub-agent card run is in
-  [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md)),
-  and background shells on Codex, Cursor and OpenCode (each ran the command in
-  the foreground). Cursor's approval case ran under an `approvals: "ask"`
+- Claude and Codex: every case has now run at the new cadence with loopback
+  models (2026-11-06, tasks 3 to 5). Left from them: Codex's backgrounded
+  command card (7520) and the discovery renewals that wake an idle Codex
+  view (7530). These are loopback-model runs; a real model's own choices
+  (and a real provider's latency) are not part of them.
+- Grok: re-run `e2e/agent-testing/idle-observation-live.spec.ts` once a Grok
+  login is available; no loopback model reaches Grok. Pi ran on a loopback
+  model on 2026-11-06 (task 7).
+- Cases the models did not exercise: Codex sub-agents and the Codex
+  background shell ran with scripted tool calls on 2026-11-06 (task 8; the
+  separate live sub-agent card run is in
+  [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md)).
+  Background shells on Cursor and OpenCode are still unexercised (each ran the
+  command in the foreground on 2026-10-21; neither has a loopback model). Cursor's approval case ran under an `approvals: "ask"`
   policy and still ran the command without asking, which is the documented
   Cursor mapping (it reports `ask` as the auto-approval it runs).
 - Completion with no renderer was observed for a local environment only; the
@@ -693,6 +805,68 @@ Evidence: `output/agent-testing/idleqa-0049-*/idle-observation-live/<platform>.j
 in the worktree that ran it. The profile was stopped and reset, every
 environment the runs created was deleted, and the development image built for
 the container run was removed.
+
+## Second live check (2026-11-06, loopback models)
+
+Tasks 3, 4, 5, 7 (Pi) and 8 on beelink (Arch Linux, kernel 7.1.8, no
+display), at `ee2cc8423` plus this change. **Every run here is a
+loopback-model run:** no login and no billed turn. The pinned Claude CLI,
+Codex 0.166.0 and Pi 1.4.0 talked to scripted local models that answer the
+spec's own prompts and run its commands for real
+(`idle-observation-fake-claude.ts`, `-codex.ts`, `-pi.ts`). The fakes now
+also script the approval command, sub-agents (Claude `Agent`; Codex
+`spawn_agent` and `wait_agent` in the `collaboration` namespace, with
+multi-agent v2 mail) and Codex's async question. Disposable profile
+`idleqa-0049-r2`, headless, with the Docker address-pool shim on `PATH`, a
+made-up Codex API key from a throwaway `CODEX_HOME`, and
+`ORKESTRATOR_HOST_REACHABILITY_CHECK=off`; no Docker container was created:
+
+```bash
+env -u DISPLAY -u WAYLAND_DISPLAY ORKESTRATOR_HOST_REACHABILITY_CHECK=off \
+  CODEX_HOME=<throwaway dir with an API-key auth.json> \
+  ORKESTRATOR_QUALIFICATION_DOCKER="$(command -v docker)" \
+  PATH="$PWD/apps/desktop/scripts/dev/docker-qualification-bin:$PATH" \
+  mise run dev:test --profile idleqa-0049-r2 --fixture --credential-source codex \
+  --agent-platforms claude,codex,pi --headless
+# Claude and Codex (runs idleqa-0049-r2-claude, idleqa-0049-r2-codex):
+ORKESTRATOR_AGENT_TEST_PROFILE=idleqa-0049-r2 ORKESTRATOR_AGENT_TEST_RUN_ID=<run> \
+  ORKESTRATOR_AGENT_TEST_LIVE_IDLE_OBSERVATION=1 ORKESTRATOR_AGENT_TEST_IDLE_FAKE_MODELS=1 \
+  ORKESTRATOR_AGENT_TEST_IDLE_PLATFORMS=<claude|codex> \
+  ORKESTRATOR_AGENT_TEST_IDLE_CASES=approval,subagents,async-question,background,reconnect,hidden,no-renderer,detach \
+  ORKESTRATOR_AGENT_TEST_IDLE_DETACH_WAIT_MS=300000 \
+  bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts \
+  e2e/agent-testing/idle-observation-live.spec.ts --workers=1 --reporter=line
+# Pi (run idleqa-0049-r2-pi): the same with ORKESTRATOR_AGENT_TEST_IDLE_PLATFORMS=pi,
+# every case and the default 630 s detach wait.
+```
+
+One provider at a time, on a profile with no other environment. Claude 6.6
+min, exit 0; Codex 7.4 min, exit 0; Pi 13.9 min, exit 1 (its `detach` case).
+Single samples, not p95 estimates.
+
+| Case | Claude | Codex | Pi |
+| --- | --- | --- | --- |
+| Warm-up (UI / sidebar lag) | 5 / 1,882 ms | 15 / 977 ms | 272 / 1,127 ms |
+| `missed-final` | not run (passed 2026-11-06, first run) | not run (passed 2026-11-06, first run) | passed: page 13.6 s (inside the 17.5 s bound, D7), sidebar 8 ms |
+| `async-question` (task 3) | skipped (no async question) | passed: card 13 ms, reply 16 ms, answer settled 10 ms | skipped |
+| `approval` | passed: card 6 ms | passed: card 48 ms | passed (policy `ask`): card 9 ms |
+| `subagents` | passed: `Agent`, none left running | passed: one `subagent` card, `success` | not exercised (no tool) |
+| `background` | passed: indicator 4 ms, evidence `output-file` | not exercised: card stays `bash:pending` after the command ended (7520) | not exercised (foreground) |
+| `reconnect` | passed: 53 ms after online | passed: 138 ms | passed: 127 ms |
+| `hidden` | passed: 0 reads hidden, 105 ms | passed: 0 reads, 189 ms | passed: 0 reads, 111 ms |
+| `no-renderer` | passed: aggregate 4 ms, second client 6.1 s | passed: 6 ms, 9.3 s | passed: 6 ms, 6.2 s |
+| `detach` | cadence only (300 s): 8.0 reads a minute, 0 invalidations | cadence only (300 s): 13.3 reads a minute, `discovery-renewal` 6 (7530) | failed: still `attached` after 630 s (7540); 7.4 reads a minute, 0 invalidations |
+
+Harness changes on the way: the Codex fake first called `spawn_agent` without
+its namespace (Codex answered "unsupported call"), and then, not reading
+multi-agent mail, re-spawned children in a loop until the turn timed out; it
+now names the namespace, reads `NEW_TASK` and `FINAL_ANSWER` agent messages,
+and caps spawns at two per connection. The spec's sub-agent case now also
+counts Codex's `subagent` cards, which carry no tool name.
+
+Evidence: `output/agent-testing/idleqa-0049-r2-*/idle-observation-live/<platform>.json`
+in the worktree that ran it. Every environment the runs and probes created
+was deleted, and the profile was stopped and reset afterwards.
 
 ## Live check (2026-10-23)
 
@@ -1079,6 +1253,42 @@ changes, and turning the agent MCP off would test a configuration users do not
 run. Pros: no host change. Cons: no-renderer completion in a container is still
 unobserved.
 
+**D19. Task 3: which Codex question to exercise.** Options: the blocking
+`request_user_input` (a question card that parks the turn, already covered by
+`paused-interactions-live.spec.ts`), or the async `request_user_input_async`.
+Chosen: the async one. Why: it is the only question whose count is in
+`contentRevision` (the item this task asks about), and pinned Codex offers it
+to Orkestrator sessions. Pros: tests the real async path end to end, answer
+included. Cons: the question arrives during a turn, so the turn's own
+transitions also wake the view; the revision component alone stays covered
+by `app-server-runtime-lifecycle.test.ts`.
+
+**D20. Tasks 5 and 8: scripting approvals and sub-agents.** Options: keep
+them for a real model (the header's earlier advice), or script them in the
+fakes. Chosen: script them. Why: the cases measure the bridge, backend and
+page, which are real; only the decision to call the tool is scripted. Pros:
+no case is `not-exercised` for model choice; free and repeatable. Cons: the
+fakes now encode Codex's multi-agent mail format (`NEW_TASK`/`FINAL_ANSWER`
+agent messages) and tool namespaces, which a Codex release can change; the
+fake caps sub-agent spawns at two per connection so a script mistake cannot
+fork children without end (one did before the cap, during development).
+
+**D21. Task 7: how Pi gets a model.** Options: copy a host Pi login (blocked:
+the ticket forbids touching `~/.pi`), or add a loopback provider to the
+profile's own Pi `models.json`, as to-do 0048's soak does. Chosen: the
+loopback provider (`idle-observation-fake-pi.ts`, provider `idleqa-fake`),
+scripted like the other two fakes. Pros: no login; the real Pi bridge and SDK
+run every case. Cons: Pi has no sub-agent, background or question tool, so
+those cases stay `not-exercised` or `skipped` whatever the model does.
+
+**D22. Defects found by this run: fix or record.** Options: fix the stuck
+Codex command card and the idle Codex renewals here, or record them.
+Chosen: record both (7520, 7530). Why: neither is a regression in the
+observation paths this file qualifies, the first needs a rendering decision
+for a state Codex never reports, and the second's source is not yet named.
+Pros: this change stays a qualification run; each follow-up has its evidence
+and options. Cons: both costs remain until then.
+
 **Assumptions.**
 
 - Task 9: the only server a Claude join requires is the injected Orkestrator
@@ -1111,6 +1321,11 @@ unobserved.
   the Codex half of task 10.
 - [7080](../containers-and-environments/7080-linux-host-firewall-blocks-profile-signals.md):
   the host firewall that blocks task 9's later container turns on beelink.
+- [7520-codex-backgrounded-command-stays-running.md](7520-codex-backgrounded-command-stays-running.md):
+  found by task 3; a Codex command left running at the end of its turn reads
+  "running..." for good.
+- [7530-codex-idle-discovery-renewals.md](7530-codex-idle-discovery-renewals.md):
+  found by task 4; the discovery renewals that wake an idle Codex view.
 - [5040-revision-token-spec-background-output.md](5040-revision-token-spec-background-output.md):
   another spec that expects a background command's output on its launching
   row; task 2 found that Claude puts it only in the task's output file.

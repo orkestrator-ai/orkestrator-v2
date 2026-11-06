@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Loader2, Play } from "lucide-react";
+import { BellRing, Loader2, Play } from "lucide-react";
 import { toast } from "sonner";
 import {
   normalizeNotificationSoundSettings,
@@ -9,10 +9,20 @@ import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import * as backend from "@/lib/backend";
 import { playNotificationSound, type NotificationSoundKind } from "@/lib/notification-sounds";
+import {
+  desktopNotificationPermission,
+  requestDesktopNotificationPermission,
+  type DesktopNotificationPermission,
+} from "@/lib/question-desktop-notification";
 import { useConfigStore } from "@/stores/configStore";
 import { isWindowMachine, useAccountMachine } from "./account-machine";
 import { useSettingsConfig } from "./settings-config";
-import { SETTINGS_CARD_CLASS, SettingsPageLayout, SettingsRow } from "./SettingsPageLayout";
+import {
+  SETTINGS_CARD_CLASS,
+  SettingsPageLayout,
+  SettingsRow,
+  SettingsSectionHeader,
+} from "./SettingsPageLayout";
 import { cn } from "@/lib/utils";
 
 export function SoundsSettings() {
@@ -27,6 +37,10 @@ export function SoundsSettings() {
   // The optimistic value while a save is in flight; otherwise the stored config wins.
   const [pendingSettings, setSettings] = useState<NotificationSoundSettings>(savedSettings);
   const [saving, setSaving] = useState(false);
+  // This device's own grant: the setting syncs, the browser permission does not.
+  const [permission, setPermission] = useState<DesktopNotificationPermission>(() =>
+    desktopNotificationPermission(),
+  );
   const settings = saving ? pendingSettings : savedSettings;
   const settingsRef = useRef(settings);
   const saveGenerationRef = useRef(0);
@@ -77,6 +91,22 @@ export function SoundsSettings() {
     saveQueueRef.current = queuedSave;
   };
 
+  const allowNotifications = async () => {
+    const result = await requestDesktopNotificationPermission();
+    setPermission(result);
+    if (result === "denied") {
+      toast.error("Desktop notifications are blocked", {
+        description: "Allow notifications for this site in the browser's settings.",
+      });
+    }
+  };
+
+  const updateQuestionNotification = (questionDesktopNotification: boolean) => {
+    updateSettings({ questionDesktopNotification });
+    // Turning it on is the gesture a browser needs before it will ask.
+    if (questionDesktopNotification && permission === "default") void allowNotifications();
+  };
+
   const preview = async (kind: NotificationSoundKind) => {
     const played = await playNotificationSound(kind);
     if (!played) {
@@ -89,7 +119,7 @@ export function SoundsSettings() {
   return (
     <SettingsPageLayout
       title="Sounds"
-      description="Play distinct cues for work that finishes in the background. Existing notifications are not replayed when Orkestrator starts or reconnects."
+      description="Play distinct cues for work that finishes in the background, and alert you when an agent needs your answer. Existing notifications are not replayed when Orkestrator starts or reconnects."
     >
       <div className={cn(SETTINGS_CARD_CLASS, "divide-y divide-zinc-800")}>
         <SoundRow
@@ -98,6 +128,13 @@ export function SoundsSettings() {
           enabled={settings.agentStopped}
           onEnabledChange={(agentStopped) => updateSettings({ agentStopped })}
           onPreview={() => void preview("agent-stopped")}
+        />
+        <SoundRow
+          label="Agent question"
+          description="Play a different, more urgent cue when an agent asks a question or stops for your approval, unless you are looking at that environment."
+          enabled={settings.agentQuestion}
+          onEnabledChange={(agentQuestion) => updateSettings({ agentQuestion })}
+          onPreview={() => void preview("agent-question")}
         />
         <SoundRow
           label="Pull request merged"
@@ -115,6 +152,40 @@ export function SoundsSettings() {
         />
       </div>
 
+      <section aria-labelledby="desktop-notifications-heading" className="space-y-3">
+        <SettingsSectionHeader
+          headingId="desktop-notifications-heading"
+          title="Desktop notifications"
+          icon={<BellRing className="h-4 w-4 text-muted-foreground" aria-hidden="true" />}
+        >
+          Questions block an agent until you answer, so they can also raise a notification outside
+          Orkestrator. Clicking it opens the environment.
+        </SettingsSectionHeader>
+        <div className={SETTINGS_CARD_CLASS}>
+          <SettingsRow
+            label="Agent questions"
+            description={
+              <>
+                Show a desktop notification when an agent asks a question or waits for your
+                approval, unless that environment is on screen and this window has focus.
+                <NotificationPermissionNote permission={permission} />
+              </>
+            }
+          >
+            {settings.questionDesktopNotification && permission === "default" ? (
+              <Button variant="outline" size="sm" onClick={() => void allowNotifications()}>
+                Allow notifications
+              </Button>
+            ) : null}
+            <Switch
+              checked={settings.questionDesktopNotification}
+              onCheckedChange={updateQuestionNotification}
+              aria-label="Agent questions desktop notification"
+            />
+          </SettingsRow>
+        </div>
+      </section>
+
       <div className="flex h-5 items-center gap-2 text-xs text-muted-foreground" aria-live="polite">
         {saving && (
           <>
@@ -125,6 +196,17 @@ export function SoundsSettings() {
       </div>
     </SettingsPageLayout>
   );
+}
+
+function NotificationPermissionNote({ permission }: { permission: DesktopNotificationPermission }) {
+  if (permission === "granted") return null;
+  const note =
+    permission === "unsupported"
+      ? "This browser cannot show desktop notifications."
+      : permission === "denied"
+        ? "This browser has blocked notifications for Orkestrator; allow them in its site settings."
+        : "This browser has not been allowed to show notifications yet.";
+  return <span className="mt-1 block text-amber-400/90">{note}</span>;
 }
 
 function SoundRow({

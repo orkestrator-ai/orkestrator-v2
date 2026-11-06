@@ -81,56 +81,67 @@ function FullRender({ content }: { content: string }) {
   );
 }
 
-test("a live streaming render matches a full render at every update", () => {
-  setHighlightBackend(null);
-  const live = render(
-    <MessageMarkdown content="" richPartId="part-1" live components={RICH_COMPONENTS} />,
-  );
-  const full = render(
-    <MessageMarkdown content="" richPartId="part-1" components={RICH_COMPONENTS} />,
-  );
-  // The fence is open, then closed, part-way through; the table is partial.
-  for (let length = 1; length <= ANSWER.length; length += 3) {
-    const content = ANSWER.slice(0, length);
-    live.rerender(
-      <MessageMarkdown content={content} richPartId="part-1" live components={RICH_COMPONENTS} />,
+// This case is synchronous, CPU-bound work with nothing to wait for: about a
+// hundred streamed prefixes, each rendered three times (live, non-live and a
+// fresh uncached reference), roughly 300 complete Markdown passes. Alone it
+// takes about three seconds, so Bun's five-second default leaves too little
+// headroom for a host running the aggregate (case 6194); budget the work.
+const STREAMING_EQUIVALENCE_BUDGET_MS = 30_000;
+
+test(
+  "a live streaming render matches a full render at every update",
+  () => {
+    setHighlightBackend(null);
+    const live = render(
+      <MessageMarkdown content="" richPartId="part-1" live components={RICH_COMPONENTS} />,
     );
-    full.rerender(
+    const full = render(
+      <MessageMarkdown content="" richPartId="part-1" components={RICH_COMPONENTS} />,
+    );
+    // The fence is open, then closed, part-way through; the table is partial.
+    for (let length = 1; length <= ANSWER.length; length += 3) {
+      const content = ANSWER.slice(0, length);
+      live.rerender(
+        <MessageMarkdown content={content} richPartId="part-1" live components={RICH_COMPONENTS} />,
+      );
+      full.rerender(
+        <MessageMarkdown
+          content={content}
+          richPartId="part-1"
+          live={false}
+          components={RICH_COMPONENTS}
+        />,
+      );
+      // Live chrome (a streaming fence's state) is the only allowed difference,
+      // so compare the same `live` flag through one pass over the whole text.
+      const fresh = render(<FullRender content={content} />);
+      // `MessageMarkdown`'s own wrapper is the one element the reference lacks.
+      expect(semanticChildren(live.container.firstElementChild!)).toBe(
+        semanticChildren(fresh.container),
+      );
+      fresh.unmount();
+    }
+    // The final, non-live render is the full parse.
+    live.rerender(
       <MessageMarkdown
-        content={content}
+        content={ANSWER}
         richPartId="part-1"
         live={false}
         components={RICH_COMPONENTS}
       />,
     );
-    // Live chrome (a streaming fence's state) is the only allowed difference,
-    // so compare the same `live` flag through one pass over the whole text.
-    const fresh = render(<FullRender content={content} />);
-    // `MessageMarkdown`'s own wrapper is the one element the reference lacks.
-    expect(semanticChildren(live.container.firstElementChild!)).toBe(
-      semanticChildren(fresh.container),
+    full.rerender(
+      <MessageMarkdown
+        content={ANSWER}
+        richPartId="part-1"
+        live={false}
+        components={RICH_COMPONENTS}
+      />,
     );
-    fresh.unmount();
-  }
-  // The final, non-live render is the full parse.
-  live.rerender(
-    <MessageMarkdown
-      content={ANSWER}
-      richPartId="part-1"
-      live={false}
-      components={RICH_COMPONENTS}
-    />,
-  );
-  full.rerender(
-    <MessageMarkdown
-      content={ANSWER}
-      richPartId="part-1"
-      live={false}
-      components={RICH_COMPONENTS}
-    />,
-  );
-  expect(semanticHtml(live.container)).toBe(semanticHtml(full.container));
-});
+    expect(semanticHtml(live.container)).toBe(semanticHtml(full.container));
+  },
+  STREAMING_EQUIVALENCE_BUDGET_MS,
+);
 
 /** A paragraph that counts its renders and mounts, by its first words. */
 function countingParagraphs() {

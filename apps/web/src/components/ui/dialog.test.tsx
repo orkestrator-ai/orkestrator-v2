@@ -329,6 +329,10 @@ describe("DialogContent width", () => {
       if (!source.endsWith(".tsx") || source.endsWith(".test.tsx")) continue;
       if (source.startsWith(path.join("components", "ui"))) continue;
       const text = readFileSync(path.join(sourceRoot, source), "utf8");
+      // Only a file naming a dialog content element and holding a max-w- class
+      // can offend; parsing and walking every renderer file instead took two
+      // seconds alone and past the five-second deadline under load (case 1604).
+      if (!text.includes("DialogContent") || !text.includes("max-w-")) continue;
       for (const opening of dialogWidthOverrides(text)) {
         offenders.push(`${source}: ${opening}`);
       }

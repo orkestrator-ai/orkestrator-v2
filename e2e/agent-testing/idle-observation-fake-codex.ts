@@ -14,36 +14,64 @@
  * an `additional_tools` input item, and continues later requests with
  * `previous_response_id`, so the tools are remembered per connection.
  *
+ * Beyond commands (todo 0049 tasks 3, 5 and 8): an async question is one
+ * `request_user_input_async` call, which returns at once, so the turn goes on
+ * to its reply; a sub-agent is a `spawn_agent` call (no parent history) and,
+ * once it returns, one `wait_agent` call before the reply; and a background
+ * command runs through `exec_command` with a 1 s yield, so it is still running
+ * when the turn ends. A call's name is remembered by its id per connection to
+ * tell those outputs apart.
+ *
  * Nothing is logged, except with `IDLEQA_FAKE_CODEX_SHAPES=1`: then each
  * request's key names, item types and tool names (never content) go to
- * stderr, which is how the shapes above were found.
+ * stderr, which is how the shapes above were found. `IDLEQA_FAKE_CODEX_SHAPES=schemas`
+ * prints Codex's own tool definitions and their namespace layout instead
+ * (still no request content), which is how the multi-agent tools were found.
  */
-import { scriptedStep, type ScriptedStep } from "./idle-observation-fake-claude";
+import { NO_SUBAGENT_REPLY, scriptedStep, type ScriptedStep } from "./idle-observation-fake-claude";
 
-type ContentPart = { type?: string; text?: string };
-type Tool = { type?: string; name?: string; tools?: Tool[] };
+type ContentPart = { type?: string; text?: string; encrypted_content?: string };
+type Tool = { type?: string; name?: string; tools?: Tool[]; namespace?: string };
 type InputItem = {
   type?: string;
   role?: string;
   content?: string | ContentPart[];
   tools?: Tool[];
+  call_id?: string;
 };
 type CreateFrame = { type?: string; generate?: boolean; input?: InputItem[]; tools?: Tool[] };
 
-/** Text of a Responses input message. */
+/**
+ * Text of a Responses input message. A multi-agent message's task travels as
+ * `encrypted_content`, which a local app-server leaves as plain text.
+ */
 function itemText(item: InputItem): string {
   if (typeof item.content === "string") return item.content;
   return (item.content ?? [])
-    .filter((part) => typeof part.text === "string")
-    .map((part) => part.text)
+    .map((part) => part.text ?? part.encrypted_content)
+    .filter((text): text is string => typeof text === "string")
     .join("\n");
 }
 
 /**
- * The spec prompt this request answers, and whether it returns a command's
- * output. Codex also sends its own context as user messages (environment,
- * instructions); those never match the script, so the latest user message
- * the script recognises wins, else `remembered` (an incremental request that
+ * Multi-agent v2 mail between threads: a child's task arrives as a
+ * `NEW_TASK` agent message, and a child's answer reaches its parent as a
+ * `FINAL_ANSWER` one. The kind, and the payload after its header.
+ */
+function agentMail(item: InputItem): { kind: string; payload: string } | null {
+  if (item.type !== "agent_message") return null;
+  const text = itemText(item);
+  const kind = /^Message Type: (\w+)/m.exec(text)?.[1];
+  if (!kind) return null;
+  return { kind, payload: text.replace(/^[\s\S]*?^Payload:\n?/m, "").trim() };
+}
+
+/**
+ * The spec prompt this request answers, and whether it returns a tool's
+ * outcome: a call's output, or a sub-agent's final answer. Codex also sends
+ * its own context as user messages (environment, instructions); those never
+ * match the script, so the latest user message (or a child's task) the
+ * script recognises wins, else `remembered` (an incremental request that
  * carries only the tool output).
  */
 export function codexRequestState(
@@ -51,12 +79,19 @@ export function codexRequestState(
   remembered: string,
 ): { prompt: string; afterTool: boolean } {
   const last = input.at(-1);
-  const afterTool = typeof last?.type === "string" && last.type.endsWith("_output");
+  const afterTool =
+    (typeof last?.type === "string" && last.type.endsWith("_output")) ||
+    (last !== undefined && agentMail(last)?.kind === "FINAL_ANSWER");
   for (let index = input.length - 1; index >= 0; index -= 1) {
     const item = input[index]!;
-    if (item.role !== "user") continue;
-    const text = itemText(item).trim();
-    if (/reply with exactly|uppercase form of this text|shell command/i.test(text)) {
+    const mail = agentMail(item);
+    if (item.role !== "user" && mail?.kind !== "NEW_TASK") continue;
+    const text = mail ? mail.payload : itemText(item).trim();
+    if (
+      /reply with exactly|uppercase form of this text|shell command|^Answers to your questions:/im.test(
+        text,
+      )
+    ) {
       return { prompt: text, afterTool };
     }
   }
@@ -66,11 +101,17 @@ export function codexRequestState(
 /**
  * Every tool the request offers. Codex 0.166 sends them as an
  * `additional_tools` input item, grouped in namespaces (`functions` holds the
- * code-mode `exec`); a request may also carry a top-level `tools` list.
+ * code-mode `exec` and the question tools, `collaboration` the sub-agent
+ * tools); a request may also carry a top-level `tools` list. Each tool keeps
+ * its namespace, which a call outside `functions` must name.
  */
 export function offeredTools(frame: CreateFrame): Tool[] {
-  const flatten = (tools: readonly Tool[] = []): Tool[] =>
-    tools.flatMap((tool) => (tool.type === "namespace" ? flatten(tool.tools) : [tool]));
+  const flatten = (tools: readonly Tool[] = [], namespace?: string): Tool[] =>
+    tools.flatMap((tool) =>
+      tool.type === "namespace"
+        ? flatten(tool.tools, tool.name)
+        : [namespace ? { ...tool, namespace } : tool],
+    );
   return [
     ...flatten(frame.tools),
     ...(frame.input ?? [])
@@ -79,14 +120,68 @@ export function offeredTools(frame: CreateFrame): Tool[] {
   ];
 }
 
-/** One output item for a step, using whichever command tool the request offers. */
+function functionCall(
+  name: string,
+  args: unknown,
+  id: number,
+  tools: readonly Tool[],
+): Record<string, unknown> {
+  // Codex answers "unsupported call" to a tool outside `functions` named bare.
+  const namespace = tools.find((tool) => tool.name === name)?.namespace;
+  return {
+    type: "function_call",
+    id: `fc_idleqa_${id}`,
+    call_id: `call_idleqa_${id}`,
+    name,
+    ...(namespace && namespace !== "functions" ? { namespace } : {}),
+    arguments: JSON.stringify(args),
+    status: "completed",
+  };
+}
+
+/**
+ * The step after a tool's output: a spawned sub-agent is waited for once,
+ * every other output ends the turn with the reply.
+ */
+export function codexFollowUp(
+  prompt: string,
+  finishedTool: string | undefined,
+): ScriptedStep | "wait" {
+  if (finishedTool === "spawn_agent") return "wait";
+  return scriptedStep(prompt, true);
+}
+
+/** One output item for a step, using whichever tool the request offers for it. */
 export function codexOutputItem(
-  step: ScriptedStep,
+  step: ScriptedStep | "wait",
   tools: readonly Tool[],
   id: number,
 ): Record<string, unknown> {
+  const offers = (name: string) => tools.some((tool) => tool.name === name);
+  if (step === "wait") return functionCall("wait_agent", { timeout_ms: 30_000 }, id, tools);
+  if (step.kind === "question" && offers("request_user_input_async")) {
+    return functionCall(
+      "request_user_input_async",
+      { questions: [{ title: step.title, options: step.options }] },
+      id,
+      tools,
+    );
+  }
+  if (step.kind === "subagent") {
+    if (!offers("spawn_agent"))
+      return codexOutputItem({ kind: "text", text: NO_SUBAGENT_REPLY }, tools, id);
+    return functionCall(
+      "spawn_agent",
+      { task_name: `idleqa_child_${id}`, message: step.task, fork_turns: "none" },
+      id,
+      tools,
+    );
+  }
   if (step.kind === "shell") {
-    const args = { cmd: step.command };
+    // A background command yields after 1 s, so it outlives the turn.
+    const args = step.background
+      ? { cmd: step.command, yield_time_ms: 1_000 }
+      : { cmd: step.command };
     if (tools.some((tool) => tool.type === "custom" && tool.name === "exec")) {
       return {
         type: "custom_tool_call",
@@ -97,16 +192,7 @@ export function codexOutputItem(
         status: "completed",
       };
     }
-    if (tools.some((tool) => tool.name === "exec_command")) {
-      return {
-        type: "function_call",
-        id: `fc_idleqa_${id}`,
-        call_id: `call_idleqa_${id}`,
-        name: "exec_command",
-        arguments: JSON.stringify(args),
-        status: "completed",
-      };
-    }
+    if (offers("exec_command")) return functionCall("exec_command", args, id, tools);
   }
   const text = step.kind === "text" ? step.text : "Done.";
   return {
@@ -118,15 +204,20 @@ export function codexOutputItem(
   };
 }
 
-function serve(): void {
+export function startCodexFakeModel(onCalls?: (calls: ReadonlyMap<string, string>) => void) {
   let sampled = 0;
-  const server = Bun.serve<{ prompt: string; tools: Tool[] }>({
+  const server = Bun.serve<{
+    prompt: string;
+    tools: Tool[];
+    calls: Map<string, string>;
+    spawned: number;
+  }>({
     hostname: "127.0.0.1",
     port: 0,
     fetch(request, bun) {
       if (
         request.headers.get("upgrade")?.toLowerCase() === "websocket" &&
-        bun.upgrade(request, { data: { prompt: "", tools: [] } })
+        bun.upgrade(request, { data: { prompt: "", tools: [], calls: new Map(), spawned: 0 } })
       ) {
         return undefined;
       }
@@ -151,6 +242,21 @@ function serve(): void {
             }),
           );
         }
+        if (process.env.IDLEQA_FAKE_CODEX_SHAPES === "schemas") {
+          for (const tool of offeredTools(frame)) console.error(JSON.stringify(tool));
+          const layout = (tools: readonly Tool[] = []): unknown[] =>
+            tools.map((tool) =>
+              tool.type === "namespace" ? { [tool.name ?? "?"]: layout(tool.tools) } : tool.name,
+            );
+          console.error(
+            JSON.stringify({
+              layout: [
+                ...layout(frame.tools),
+                ...(frame.input ?? []).flatMap((item) => layout(item.tools)),
+              ],
+            }),
+          );
+        }
         if (frame.type !== "response.create") return;
         // A request continuing an earlier response (`previous_response_id`)
         // does not repeat the tools; the connection's first request offered them.
@@ -163,11 +269,23 @@ function serve(): void {
           sampled += 1;
           const state = codexRequestState(frame.input ?? [], socket.data.prompt);
           socket.data.prompt = state.prompt;
-          const item = codexOutputItem(
-            scriptedStep(state.prompt, state.afterTool),
-            socket.data.tools,
-            sampled,
-          );
+          const finished = frame.input?.at(-1)?.call_id;
+          let step = state.afterTool
+            ? codexFollowUp(state.prompt, finished ? socket.data.calls.get(finished) : undefined)
+            : scriptedStep(state.prompt, false);
+          // A script mistake must never fork children without end.
+          if (step !== "wait" && step.kind === "subagent" && ++socket.data.spawned > 2) {
+            step = { kind: "text", text: NO_SUBAGENT_REPLY };
+          }
+          const item = codexOutputItem(step, socket.data.tools, sampled);
+          if (typeof item.call_id === "string" && typeof item.name === "string") {
+            socket.data.calls.set(item.call_id, item.name);
+            // Bounded: only the latest calls are ever looked up.
+            if (socket.data.calls.size > 64) {
+              socket.data.calls.delete(socket.data.calls.keys().next().value!);
+            }
+          }
+          onCalls?.(socket.data.calls);
           send({ type: "response.output_item.done", output_index: 0, item });
         }
         send({
@@ -177,7 +295,10 @@ function serve(): void {
       },
     },
   });
-  console.log(`http://127.0.0.1:${server.port}/v1`);
+  return server;
 }
 
-if ((import.meta as { main?: boolean }).main) serve();
+if ((import.meta as { main?: boolean }).main) {
+  const server = startCodexFakeModel();
+  console.log(`http://127.0.0.1:${server.port}/v1`);
+}

@@ -1103,9 +1103,15 @@ export class PrMonitorService {
       let failure: PrDetectionFailure | null = null;
       const startedAt = this.options.monotonicNow();
       try {
+        // A woken check reads the rollup whatever its throttle says. Only a
+        // reading with a rollup publishes `headSha`, which auto-merge needs,
+        // so the refresh that turning auto-merge on requests (and the one
+        // after a Resolve turn) must carry one, or the merge waits for the
+        // next throttled read up to a minute later.
         const includeCheckSummary =
           entry.mode !== "merge-pending" &&
-          (entry.lastCheckSummaryAt === null ||
+          (wake !== null ||
+            entry.lastCheckSummaryAt === null ||
             startedAt - entry.lastCheckSummaryAt >= PR_CHECK_SUMMARY_REFRESH_INTERVAL_MS);
         const fresh = wake !== null || policy === "merge-pending" || policy === "create-pending";
         detection = await this.metrics.observe("pr-detection", () =>

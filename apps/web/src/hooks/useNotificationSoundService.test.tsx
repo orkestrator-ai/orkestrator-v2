@@ -1,4 +1,4 @@
-import { act, cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import {
   COORDINATOR_WAKE_ATTENTION_EVENT,
@@ -14,7 +14,7 @@ import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { useUIStore } from "@/stores/uiStore";
 import type { Environment } from "@/types";
 
-const playConfiguredNotificationSound = mock(async () => true);
+const playConfiguredNotificationSound = mock(async (_kind: string) => true);
 const primeNotificationSounds = mock(async () => true);
 
 mock.module("@/lib/notification-sounds", () => ({
@@ -25,6 +25,32 @@ mock.module("@/lib/notification-sounds", () => ({
 }));
 
 const { useNotificationSoundService } = await import("./useNotificationSoundService");
+const { __testing: desktopNotifications } = await import("@/lib/question-desktop-notification");
+
+interface ShownNotification {
+  title: string;
+  options: NotificationOptions;
+  listeners: Map<string, () => void>;
+  closed: boolean;
+}
+const shownNotifications: ShownNotification[] = [];
+class FakeNotification {
+  static permission: NotificationPermission = "granted";
+  static requestPermission = async () => FakeNotification.permission;
+  private readonly shown: ShownNotification;
+  constructor(title: string, options: NotificationOptions = {}) {
+    this.shown = { title, options, listeners: new Map(), closed: false };
+    shownNotifications.push(this.shown);
+  }
+  addEventListener(event: string, listener: () => void) {
+    this.shown.listeners.set(event, listener);
+  }
+  close() {
+    this.shown.closed = true;
+  }
+}
+const notificationDescriptor = Object.getOwnPropertyDescriptor(window, "Notification");
+const hasFocusDescriptor = Object.getOwnPropertyDescriptor(document, "hasFocus");
 
 function environment(id: string, hasUnreadWork: boolean): Environment {
   return {
@@ -46,11 +72,28 @@ beforeEach(() => {
   useEnvironmentStore.setState({ environments: [] });
   useUIStore.setState({ selectedEnvironmentId: null });
   useConfigStore.getState().updateGlobalConfig({
-    notificationSounds: { agentStopped: true, prMerged: true, coordinatorReport: true },
+    notificationSounds: {
+      agentStopped: true,
+      prMerged: true,
+      coordinatorReport: true,
+      agentQuestion: true,
+      questionDesktopNotification: true,
+    },
   });
 });
 
+beforeEach(() => {
+  shownNotifications.length = 0;
+  desktopNotifications.reset();
+  FakeNotification.permission = "granted";
+  Object.defineProperty(window, "Notification", { configurable: true, value: FakeNotification });
+});
+
 afterEach(() => {
+  if (notificationDescriptor) Object.defineProperty(window, "Notification", notificationDescriptor);
+  else delete (window as unknown as { Notification?: unknown }).Notification;
+  if (hasFocusDescriptor) Object.defineProperty(document, "hasFocus", hasFocusDescriptor);
+  else delete (document as unknown as { hasFocus?: unknown }).hasFocus;
   cleanup();
   resetClientStateCapabilitiesForTests();
   listenMock.mockImplementation(() => Promise.resolve(() => {}));
@@ -222,6 +265,134 @@ describe("from the backend's attention events", () => {
     expect(playConfiguredNotificationSound).not.toHaveBeenCalled();
   });
 
+  describe("when an agent needs input", () => {
+    const question = (environmentId: string, attentionId: string, reason = "agent_question") => ({
+      ...attention(environmentId, attentionId),
+      reason,
+    });
+    const focus = (focused: boolean) =>
+      Object.defineProperty(document, "hasFocus", { configurable: true, value: () => focused });
+
+    test("plays the question cue, not the stop cue, and shows one notification", async () => {
+      useEnvironmentStore.setState({ environments: [environment("worker", true)] });
+      await mounted();
+      deliver(question("worker", "q1"));
+      await act(async () => {});
+      deliver(question("worker", "q1"));
+      await act(async () => {});
+      expect(playConfiguredNotificationSound).toHaveBeenCalledTimes(1);
+      expect(playConfiguredNotificationSound).toHaveBeenCalledWith("agent-question");
+      expect(shownNotifications).toHaveLength(1);
+      expect(shownNotifications[0]).toMatchObject({
+        title: "Agent asked a question",
+        options: { tag: "orkestrator-question:worker", silent: true },
+      });
+      expect(shownNotifications[0]!.options.body).toContain("worker");
+    });
+
+    test("allows OS sound when app playback fails", async () => {
+      playConfiguredNotificationSound.mockResolvedValue(false);
+      await mounted();
+      deliver(question("worker", "failed-audio"));
+      await waitFor(() => expect(shownNotifications).toHaveLength(1));
+      expect(shownNotifications[0]!.options.silent).toBe(false);
+    });
+
+    test("treats an agent waiting on approval the same way", async () => {
+      await mounted();
+      deliver(question("worker", "w1", "agent_waiting"));
+      await act(async () => {});
+      expect(playConfiguredNotificationSound).toHaveBeenCalledWith("agent-question");
+      expect(shownNotifications[0]?.title).toBe("Agent needs your input");
+    });
+
+    test("stays quiet only while that environment is on screen in a focused window", async () => {
+      useUIStore.setState({ selectedEnvironmentId: "worker" });
+      focus(true);
+      await mounted();
+      deliver(question("worker", "q1"));
+      await act(async () => {});
+      expect(playConfiguredNotificationSound).not.toHaveBeenCalled();
+      expect(shownNotifications).toHaveLength(0);
+
+      focus(false);
+      deliver(question("worker", "q2"));
+      await act(async () => {});
+      expect(playConfiguredNotificationSound).toHaveBeenCalledWith("agent-question");
+      expect(shownNotifications).toHaveLength(1);
+    });
+
+    test("is not swallowed by a stop cue that just played", async () => {
+      await mounted();
+      deliver(attention("one", "a1"));
+      deliver(question("two", "q1"));
+      await act(async () => {});
+      deliver(question("three", "q2"));
+      await act(async () => {});
+      expect(playConfiguredNotificationSound.mock.calls.map((call) => call[0])).toEqual([
+        "agent-stopped",
+        "agent-question",
+      ]);
+      // Each environment still gets its own notification.
+      await act(async () => {});
+      expect(shownNotifications.map((shown) => shown.options.tag)).toEqual([
+        "orkestrator-question:two",
+        "orkestrator-question:three",
+      ]);
+    });
+
+    test("follows each setting on its own", async () => {
+      useConfigStore.getState().updateGlobalConfig({
+        notificationSounds: {
+          agentStopped: true,
+          prMerged: true,
+          coordinatorReport: true,
+          agentQuestion: false,
+          questionDesktopNotification: true,
+        },
+      });
+      await mounted();
+      deliver(question("worker", "q1"));
+      await act(async () => {});
+      expect(playConfiguredNotificationSound).not.toHaveBeenCalled();
+      // With no app cue, the operating system may sound its own.
+      expect(shownNotifications[0]?.options.silent).toBe(false);
+
+      useConfigStore.getState().updateGlobalConfig({
+        notificationSounds: {
+          agentStopped: true,
+          prMerged: true,
+          coordinatorReport: true,
+          agentQuestion: true,
+          questionDesktopNotification: false,
+        },
+      });
+      deliver(question("worker", "q2"));
+      await act(async () => {});
+      expect(playConfiguredNotificationSound).toHaveBeenCalledWith("agent-question");
+      expect(shownNotifications).toHaveLength(1);
+    });
+
+    test("shows nothing without the browser's permission", async () => {
+      FakeNotification.permission = "default";
+      await mounted();
+      deliver(question("worker", "q1"));
+      await act(async () => {});
+      expect(shownNotifications).toHaveLength(0);
+      expect(playConfiguredNotificationSound).toHaveBeenCalledWith("agent-question");
+    });
+
+    test("clicking the notification opens the environment", async () => {
+      await mounted();
+      deliver(question("worker", "q1"));
+      await act(async () => {});
+      act(() => shownNotifications[0]!.listeners.get("click")!());
+      expect(useUIStore.getState().selectedEnvironmentId).toBe("worker");
+      expect(useUIStore.getState().selectedProjectId).toBe("project-1");
+      expect(shownNotifications[0]!.closed).toBe(true);
+    });
+  });
+
   test("stops listening on unmount", async () => {
     const view = await mounted();
     view.unmount();
@@ -251,6 +422,29 @@ describe("useNotificationSoundService", () => {
       });
     });
     expect(playConfiguredNotificationSound).toHaveBeenCalledTimes(1);
+  });
+
+  test("a question edge from an older backend plays the question cue and notifies", async () => {
+    useEnvironmentStore.setState({
+      environments: [environment("finished", false), environment("asking", false)],
+    });
+    renderHook(() => useNotificationSoundService());
+    act(() => {
+      useEnvironmentStore.setState({
+        environments: [
+          environment("finished", true),
+          { ...environment("asking", true), unreadReason: "agent_question" },
+        ],
+      });
+    });
+    expect(playConfiguredNotificationSound.mock.calls.map((call) => call[0])).toEqual([
+      "agent-stopped",
+      "agent-question",
+    ]);
+    await act(async () => {});
+    expect(shownNotifications.map((shown) => shown.options.tag)).toEqual([
+      "orkestrator-question:asking",
+    ]);
   });
 
   test("baselines a newly hydrated unread environment without replaying it", () => {
@@ -318,7 +512,13 @@ describe("useNotificationSoundService", () => {
 
   test("does not register priming work when every cue is disabled", () => {
     useConfigStore.getState().updateGlobalConfig({
-      notificationSounds: { agentStopped: false, prMerged: false, coordinatorReport: false },
+      notificationSounds: {
+        agentStopped: false,
+        prMerged: false,
+        coordinatorReport: false,
+        agentQuestion: false,
+        questionDesktopNotification: true,
+      },
     });
     renderHook(() => useNotificationSoundService());
 
@@ -361,6 +561,8 @@ test.each([false, true])(
         agentStopped,
         coordinatorReport: !agentStopped,
         prMerged: false,
+        agentQuestion: false,
+        questionDesktopNotification: false,
       },
     });
     renderHook(() => useNotificationSoundService());

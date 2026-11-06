@@ -17,6 +17,11 @@
  *   stream, the bridge process is stopped and started again, then a turn is
  *   dispatched from outside the view. The group must be read again and the
  *   turn seen within the completion budget (todo 0049 task 1).
+ * - `async-question`: Codex only. Once the view and its backend group have
+ *   backed off, a turn dispatched from outside the view asks a question with
+ *   `request_user_input_async`, which returns at once, and ends. The card must
+ *   show within the completion budget, and its answer, sent from the card, must
+ *   come back as a settled turn (todo 0049 task 3).
  * - `approval`: in the provider's "ask" approval mode a shell command parks
  *   an approval. The card must appear within the 2 s budget, survive a hidden
  *   period, and approving it must let the turn finish and settle.
@@ -53,8 +58,11 @@
  *     mise run dev:test --profile idleqa --fixture --credential-source codex \
  *     --agent-platforms claude,codex --headless
  *
- * The models answer the spec's own prompts only; the `approval` and
- * `subagents` cases need a real model.
+ * The models answer the spec's own prompts only, the way a compliant model
+ * would: each case, sub-agents and approvals included, gets the tool call it
+ * asks for. Pi runs the same way against `idle-observation-fake-pi.ts`, added
+ * to the profile's own Pi `models.json` (todo 0049 task 7); Pi needs no
+ * credential source.
  *
  * `ORKESTRATOR_AGENT_TEST_IDLE_ENVIRONMENT=container` runs Claude in a new
  * container environment (todo 0049 task 9) instead of a local one, from the
@@ -76,6 +84,8 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
+import { CODEWORD_REPLY_PREFIX } from "./idle-observation-fake-claude";
+import { idleObservationModel, asyncQuestionPrompt } from "./idle-observation-live-support";
 import {
   installContainerFakeClaude,
   readContainerFile,
@@ -89,6 +99,7 @@ import {
   completedTaskOutputFiles,
   failedCases,
   freshToolResults,
+  freshToolStates,
   gapHistogram,
   invalidationCauseDelta,
   readCadence,
@@ -471,8 +482,8 @@ test.describe("live idle observation", () => {
       expect(status.status, `profile "${profile}" is not running`).toBe("ready");
 
       test.skip(
-        FAKE_MODELS && platform !== "claude" && platform !== "codex",
-        "the loopback models stand in for Claude and Codex only",
+        FAKE_MODELS && platform !== "claude" && platform !== "codex" && platform !== "pi",
+        "the loopback models stand in for Claude, Codex and Pi only",
       );
       test.skip(
         IN_CONTAINER && platform !== "claude",
@@ -527,7 +538,10 @@ test.describe("live idle observation", () => {
         expect(fixture, `the ${profile} fixture project is missing`).toBeTruthy();
         if (FAKE_MODELS && !IN_CONTAINER) {
           expect(status.dataDir, "dev:status names no data directory").toBeTruthy();
-          const fake = await startLocalFakeModel(platform as "claude" | "codex", status.dataDir!);
+          const fake = await startLocalFakeModel(
+            platform as "claude" | "codex" | "pi",
+            status.dataDir!,
+          );
           fakeModels.push(fake);
           summary.fakeModelOrigin = fake.origin;
           progress("loopback model started");
@@ -556,7 +570,8 @@ test.describe("live idle observation", () => {
             messageLimit: 200,
           });
 
-        const model = MODELS.get(platform);
+        // A Pi session names its model; the fake is a provider of its own.
+        const model = idleObservationModel(platform, FAKE_MODELS, MODELS.get(platform));
         if (model) summary.model = model;
         /** Start the current environment with one native tab and its session. */
         const prepareEnvironment = async () => {
@@ -1227,6 +1242,90 @@ test.describe("live idle observation", () => {
           );
         });
 
+        await runCase("async-question", async (record) => {
+          if (platform !== "codex") {
+            record.status = "skipped";
+            record.notes.push("only Codex has an async question (request_user_input_async)");
+            return;
+          }
+          // Back off first, as missed-final does, so the question meets a quiet view.
+          const idleStart = Date.now();
+          const sweepsBefore = await sweepCounters();
+          await sleep(35_000);
+          const sweepsIdle = await sweepCounters();
+          record.timings.backendGroupSkips = sweepsIdle.skipped - sweepsBefore.skipped;
+          record.timings.idleMaxGapMs = readCadence(
+            client.readTimes,
+            idleStart,
+            Date.now(),
+          ).maxGapMs;
+          const title = "Which codeword should I use?";
+          const choice = "IDLEQA_BETA";
+          const word = `IDLEQA-ASKED-${nonce()}`;
+          const before = await messageIds();
+          const asked = (current: Projection | null) =>
+            (current?.messages ?? []).some(
+              (message) =>
+                !before.has(message.id) &&
+                Array.isArray(message.parts) &&
+                (message.parts as Array<{ type?: unknown }>).some(
+                  (part) => part.type === "async-question",
+                ),
+            );
+          const card = () => page().getByRole("group", { name: title, exact: true });
+          let askedAt: number | null = null;
+          let askedWhileIdle = false;
+          let cardShownAt: number | null = null;
+          const dispatchedAt = Date.now();
+          await sendFromBackend(asyncQuestionPrompt(title, word));
+          const settled = await watchSettle(before, word, {
+            uiBoundMs: COMPLETION_BUDGET_MS,
+            onRead: async (current) => {
+              if (askedAt === null && asked(current)) {
+                askedAt = Date.now();
+                askedWhileIdle = current?.turn.phase === "idle";
+              }
+              if (cardShownAt === null && (await card().count()) > 0) cardShownAt = Date.now();
+            },
+          });
+          record.timings.turnMs = settled.backendIdleAt - dispatchedAt;
+          if (askedAt === null) {
+            record.status = "not-exercised";
+            record.notes.push("the turn ended without an async question");
+            return;
+          }
+          record.notes.push(`question first read while ${askedWhileIdle ? "idle" : "running"}`);
+          await expect(card()).toBeVisible({ timeout: LOST_ANNOUNCEMENT_BOUND_MS });
+          cardShownAt ??= Date.now();
+          expectWithin(
+            record,
+            "cardLagMs",
+            Math.max(0, cardShownAt - askedAt),
+            COMPLETION_BUDGET_MS + 1_000,
+          );
+          noteBudget(record, "cardLagMs", record.timings.cardLagMs ?? null, COMPLETION_BUDGET_MS);
+          expectWithin(record, "uiLagMs", settled.uiLagMs, COMPLETION_BUDGET_MS + 1_000);
+          expectWithin(record, "sidebarLagMs", settled.sidebarLagMs, SIDEBAR_BOUND_MS);
+          const sweepsAsked = await sweepCounters();
+          record.notes.push(
+            `invalidations by cause while asked: ${JSON.stringify(
+              invalidationCauseDelta(sweepsIdle.invalidations, sweepsAsked.invalidations, platform),
+            )}`,
+          );
+          // Answer from the card, as a user would; the answer is a new prompt.
+          const answerBefore = await messageIds();
+          await card().getByRole("button", { name: choice, exact: true }).click();
+          await page().getByRole("button", { name: "Send answer", exact: true }).click();
+          const answered = await watchSettle(answerBefore, `${CODEWORD_REPLY_PREFIX}${choice}`, {
+            uiBoundMs: COMPLETION_BUDGET_MS,
+          });
+          expectWithin(record, "answerUiLagMs", answered.uiLagMs, COMPLETION_BUDGET_MS + 1_000);
+          expectWithin(record, "answerSidebarLagMs", answered.sidebarLagMs, SIDEBAR_BOUND_MS);
+          await expect(page().getByText("Your answer was sent to Codex.")).toBeVisible({
+            timeout: COMPLETION_BUDGET_MS + 1_000,
+          });
+        });
+
         await runCase("approval", async (record) => {
           // A provider without an "ask" composer mode asks only under the
           // execution policy, which a session takes when it is created: run
@@ -1372,8 +1471,12 @@ test.describe("live idle observation", () => {
           const current = await projection();
           const fresh = (current?.messages ?? []).filter((message) => !before.has(message.id));
           const tools = toolNames(fresh);
+          const cards = freshToolStates(fresh, before).filter((state) =>
+            state.startsWith("subagent:"),
+          );
           record.notes.push(
-            `tools: ${tools.join(", ") || "none"}; background tasks seen: ${maxTasks}`,
+            `tools: ${tools.join(", ") || "none"}; background tasks seen: ${maxTasks}; ` +
+              `sub-agent cards: ${cards.join(", ") || "none"}`,
           );
           if (!settled) {
             record.status = "not-exercised";
@@ -1390,9 +1493,13 @@ test.describe("live idle observation", () => {
           );
           expect(leftRunning, "no sub-agent left running after the parent settled").toEqual([]);
           expect(current?.completionBlockedByBackgroundTasks ?? false).toBe(false);
+          expect(cards, "no sub-agent card still reads as running").not.toContain(
+            "subagent:pending",
+          );
           if (
             !tools.some((name) => /task|agent|spawn|delegate|sub/i.test(name)) &&
-            maxTasks === 0
+            maxTasks === 0 &&
+            cards.length === 0
           ) {
             record.status = "not-exercised";
             record.notes.push("no sub-agent tool call or task was observed");
@@ -1406,6 +1513,7 @@ test.describe("live idle observation", () => {
           const tasksBefore = new Set(
             ((await projection())?.backgroundTasks ?? []).map((task) => task.id),
           );
+          const sentAt = Date.now();
           await sendFromComposer(
             [
               `Start this shell command as a background task and do not wait for it: sleep 20; echo ${marker}`,
@@ -1443,6 +1551,9 @@ test.describe("live idle observation", () => {
           if (!sawRunningTask) {
             record.status = "not-exercised";
             record.notes.push("no running background task appeared in the projection");
+            record.notes.push(
+              `tool calls when the turn settled: ${freshToolStates((await projection())?.messages ?? [], before).join(", ") || "none"}`,
+            );
           } else {
             expectWithin(
               record,
@@ -1496,6 +1607,18 @@ test.describe("live idle observation", () => {
               evidence,
               "the exercised background task's output reached a tool result or its task output file",
             ).not.toBe("none");
+          } else {
+            // No task surface (Codex): read what the transcript shows once the
+            // 20 s command has surely ended, with no further turn.
+            const endedBy = sentAt + 30_000 - Date.now();
+            if (endedBy > 0) await sleep(endedBy);
+            record.notes.push(
+              `tool calls after the command ended: ${freshToolStates((await projection())?.messages ?? [], before).join(", ") || "none"}`,
+            );
+            record.notes.push(
+              `late output in a tool result: ${await freshToolOutputContains(before, marker)}`,
+            );
+            await expect(stopButton()).toHaveCount(0);
           }
         });
 

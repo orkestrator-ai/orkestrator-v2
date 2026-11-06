@@ -2198,13 +2198,24 @@ describe("ActionBar editor and run commands", () => {
       ),
     );
 
+    // An accepted launch holds off a double press for TAB_LAUNCH_CLAIM_MIN_MS;
+    // this one is a later press. Without the reset the outcome depended on
+    // whether that window had elapsed: inside it the press was refused before
+    // reaching the backend, so the throwing launch never ran (case 5701).
+    resetTabLaunches();
     requestPaneTabActivationMock.mockClear();
     fireEvent.contextMenu(screen.getByRole("button", { name: "Run commands" }));
     fireEvent.click(screen.getByRole("button", { name: "Create run script" }));
     await waitFor(() =>
       expect(screen.getByRole("alert").textContent).toContain("could not be created"),
     );
-    expect(requestPaneTabActivationMock).not.toHaveBeenCalled();
+    expect(launchNativeAgentJobMock).toHaveBeenCalledTimes(2);
+    const placeholderTabId = (launchNativeAgentJobMock.mock.calls[1]![0] as { tabId: string })
+      .tabId;
+    // Focus moves to the placeholder on the press; the thrown launch names no
+    // tab of its own to activate and withdraws the placeholder.
+    expect(requestPaneTabActivationMock.mock.calls).toEqual([["env-1", placeholderTabId]]);
+    expect(useTabLaunchStore.getState().launches.size).toBe(0);
   });
 
   test("opens script configuration on long press without also running commands", async () => {

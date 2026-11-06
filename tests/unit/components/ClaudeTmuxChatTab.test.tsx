@@ -892,6 +892,7 @@ describe("ClaudeTmuxChatTab", () => {
     });
 
     const callsBeforeSwitch = virtuosoScrollToIndexMock.mock.calls.length;
+    const scrollToCallsBeforeSwitch = virtuosoScrollToMock.mock.calls.length;
     act(() => {
       useUIStore.setState({ selectedEnvironmentId: "env-2" });
     });
@@ -913,10 +914,16 @@ describe("ClaudeTmuxChatTab", () => {
       />,
     );
 
+    // The index jump is immediate; the scroll into the footer follows on the
+    // controller's next animation frame, which a loaded host can deliver after
+    // the first check passes. Wait for both writes of this reactivation.
     await waitFor(() => {
       expect(virtuosoScrollToIndexMock.mock.calls.length).toBeGreaterThan(callsBeforeSwitch);
+      expect(virtuosoScrollToMock.mock.calls.length).toBeGreaterThan(scrollToCallsBeforeSwitch);
+      expect(virtuosoScrollToMock.mock.calls.at(-1)).toEqual([
+        { top: 10_000_000, behavior: "auto" },
+      ]);
     });
-    expect(virtuosoScrollToMock.mock.calls.at(-1)).toEqual([{ top: 10_000_000, behavior: "auto" }]);
   });
 
   test("starts once with tabId+envId and clears the tab initialPrompt after the backend sends it", async () => {

@@ -33,10 +33,13 @@ import {
   recordExtensionLoadDiagnostics,
   refreshSessionCommands,
   resumeSession,
+  SessionBusyError,
   sessionManagerFor,
+  setSessionTitle,
   setAgentSessionTestHooks,
   type AgentSessionTestHooks,
 } from "./agent-session.js";
+import { HistoryTargetError } from "./history-target.js";
 import { commandBindingRevision } from "@orkestrator/protocol/agent-command-catalogue";
 import { CommandChangeJournal } from "@orkestrator/protocol/node/command-change-journal";
 import { setCommandChangeProbeForTests } from "./command-changes.js";
@@ -146,6 +149,17 @@ function model(provider: string, id: string): Model<Api> {
     contextWindow: 200_000,
     maxTokens: 8_000,
   } as Model<Api>;
+}
+
+/** A user message entry of Pi's session tree, as `SessionManager.getBranch` returns it. */
+function userEntry(id: string) {
+  return {
+    type: "message",
+    id,
+    parentId: null,
+    timestamp: "2026-08-25T00:00:00.000Z",
+    message: { role: "user", content: `prompt ${id}`, timestamp: 0 },
+  };
 }
 
 interface FakeSessionControl {
@@ -968,8 +982,9 @@ describe("Pi SDK lifecycle", () => {
           branchedAt = entryId;
           return forkedFile;
         },
+        getBranch: () => [userEntry("first-user"), userEntry("newest-user")],
+        getLeafId: () => "newest-user",
       },
-      getUserMessagesForForking: () => [{ entryId: "first-user" }, { entryId: "newest-user" }],
     });
     installTestHooks({ createAgentSession: async () => fake.session });
     const state = newSessionState();
@@ -991,10 +1006,41 @@ describe("Pi SDK lifecycle", () => {
     expect(explicit).toBe(forked);
   });
 
+  test("refuses a fork at a message it cannot place instead of forking at the newest prompt", async () => {
+    let branchedAt: string | undefined;
+    const fake = fakeSession({
+      sessionManager: {
+        createBranchedSession: (entryId: string) => {
+          branchedAt = entryId;
+          return join(sessionDirectory, "never.jsonl");
+        },
+        getBranch: () => [userEntry("first-user"), userEntry("newest-user")],
+        getLeafId: () => "newest-user",
+      },
+    });
+    installTestHooks({ createAgentSession: async () => fake.session });
+    const state = newSessionState();
+
+    await expect(forkSession(state, "a-row-from-another-session")).rejects.toBeInstanceOf(
+      HistoryTargetError,
+    );
+    expect(branchedAt).toBeUndefined();
+  });
+
+  test("refuses to rewind a running session as busy", async () => {
+    const state = newSessionState();
+    state.status = "running";
+    await expect(navigateSessionHistory(state, "any")).rejects.toBeInstanceOf(SessionBusyError);
+  });
+
   test("switches the active branch using the selected transcript message", async () => {
     let navigatedTo = "";
     const fake = fakeSession({
-      getUserMessagesForForking: () => [{ entryId: "older-entry" }, { entryId: "newer-entry" }],
+      sessionManager: {
+        getBranch: () => [userEntry("older-entry"), userEntry("newer-entry")],
+        getLeafId: () => "newer-entry",
+        getEntryCount: () => 2,
+      },
       navigateTree: async (entryId: string, options: { summarize: boolean }) => {
         navigatedTo = entryId;
         expect(options).toEqual({ summarize: false });
@@ -1020,6 +1066,7 @@ describe("Pi SDK lifecycle", () => {
       },
     ];
 
+    state.historyEntries = new Map([["newer-message", "newer-entry"]]);
     expect(state.transcriptEpoch).toBeUndefined();
     await navigateSessionHistory(state, "newer-message");
 
@@ -1028,6 +1075,60 @@ describe("Pi SDK lifecycle", () => {
     // Another branch starts at index 0 again, so every earlier position
     // (history cursors, `startIndex`) must belong to a different epoch.
     expect(state.transcriptEpoch).toBe(1);
+  });
+
+  test("rewind rehydrates the chosen branch and survives a title append and detach/reopen", async () => {
+    const manager = SessionManager.create(workingDirectory, sessionDirectory);
+    const ids: string[] = [];
+    for (const text of ["first", "second", "third"]) {
+      ids.push(manager.appendMessage({ role: "user", content: text, timestamp: 0 }));
+      manager.appendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: `reply ${text}` }],
+        api: "openai-completions",
+        provider: "test",
+        model: "model",
+        stopReason: "stop",
+        timestamp: 0,
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+      } as never);
+    }
+    const fake = fakeSession({
+      sessionManager: manager,
+      sessionFile: manager.getSessionFile(),
+      navigateTree: async (id: string) => {
+        const entry = manager.getEntry(id)!;
+        // Pi navigates to a prompt's parent (before the selected prompt).
+        manager.branch(entry.parentId!);
+        return { cancelled: false, aborted: false };
+      },
+      setSessionName: (title: string) => manager.appendSessionInfo(title),
+    });
+    installTestHooks({ createAgentSession: async () => fake.session });
+    const state = newSessionState();
+    await navigateSessionHistory(state, ids[1]!);
+    expect(state.messages.map((row) => row.content)).toEqual(["first", "reply first"]);
+    expect(state.historyLeaf?.entryId).toBe(manager.getLeafId());
+    expect(
+      sessionManagerFor(state)
+        .getBranch()
+        .filter((e) => e.type === "message"),
+    ).toHaveLength(2);
+    await setSessionTitle(state, "Rewound conversation");
+    await detachSession(state);
+    const reopened = sessionManagerFor(state);
+    expect(reopened.getSessionName()).toBe("Rewound conversation");
+    expect(reopened.getBranch().filter((e) => e.type === "message")).toHaveLength(2);
+    // Adopt the same file through the production hydration path as a restart would.
+    const resumed = await resumeSession(state.sessionFile!);
+    expect(resumed.messages.map((row) => row.content)).toEqual(["first", "reply first"]);
   });
 
   test("updates live model and thinking selections to what the session accepts", async () => {

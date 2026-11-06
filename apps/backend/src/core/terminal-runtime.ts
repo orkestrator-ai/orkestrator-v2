@@ -15,6 +15,7 @@ import {
   trimOrphanedLowSurrogate,
 } from "./commands-terminal.js";
 import { TerminalHistory, type TerminalHistoryOptions } from "./terminal-history.js";
+import type { ContainerTerminalShell } from "./container-terminal-shell.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("terminal");
@@ -77,6 +78,13 @@ export type TerminalRuntimeOptions = {
    * SIGKILL would cause.
    */
   survivesTermination?: (environmentId: string) => boolean;
+  /**
+   * Ends a container terminal's in-container shell once its PTY goes away
+   * (`closeContainerTerminalShell`). Docker-backed, so the backend injects it
+   * outside unit tests; without it a closed container terminal only loses its
+   * host `docker exec` client.
+   */
+  closeContainerShell?: (shell: ContainerTerminalShell, signal: AbortSignal) => Promise<void>;
 };
 
 /**
@@ -111,12 +119,18 @@ export class TerminalRuntime {
    * agent sessions. An account cannot be removed while one of these uses it.
    */
   private readonly accountHomes = new Map<string, string>();
+  /** The in-container shell each live container PTY started, by session id. */
+  private readonly containerShells = new Map<string, ContainerTerminalShell>();
+  /** In-flight shell closes; `shutdown` aborts them. */
+  private readonly containerShellCloses = new Set<AbortController>();
   private readonly outputRetentionMs: number;
   private readonly survivesTermination: ((environmentId: string) => boolean) | undefined;
+  private readonly closeContainerShellOption: TerminalRuntimeOptions["closeContainerShell"];
 
   constructor(options: TerminalRuntimeOptions = {}) {
     this.outputRetentionMs = options.outputRetentionMs ?? TERMINAL_OUTPUT_RETENTION_MS;
     this.survivesTermination = options.survivesTermination;
+    this.closeContainerShellOption = options.closeContainerShell;
     this.history = new TerminalHistory(options.history);
   }
 
@@ -173,6 +187,37 @@ export class TerminalRuntime {
 
   registerProcess(id: string, process: PtyProcess): void {
     this.processes.set(id, process);
+  }
+
+  /**
+   * Records the in-container shell a container PTY just started. Whenever that
+   * PTY goes away, closed or exited, the shell and the processes carrying its
+   * token are ended in the container too, because Docker keeps an exec
+   * running after its client is gone.
+   */
+  recordContainerShell(id: string, shell: ContainerTerminalShell): void {
+    this.containerShells.set(id, shell);
+  }
+
+  /** The shell recorded for a live container PTY; for tests and diagnostics. */
+  containerShell(id: string): ContainerTerminalShell | undefined {
+    return this.containerShells.get(id);
+  }
+
+  private closeContainerShell(id: string): void {
+    const shell = this.containerShells.get(id);
+    if (!shell) return;
+    this.containerShells.delete(id);
+    const close = this.closeContainerShellOption;
+    if (!close) return;
+    const controller = new AbortController();
+    this.containerShellCloses.add(controller);
+    void Promise.resolve()
+      .then(() => close(shell, controller.signal))
+      .catch((error) => {
+        log.debug("container-shell.close-failed", { error: formatLogError(error) });
+      })
+      .finally(() => this.containerShellCloses.delete(controller));
   }
 
   // Output buffers
@@ -466,6 +511,7 @@ export class TerminalRuntime {
     this.activityCompletions.delete(id);
     if (options.explicit) this.cancelTrackedCompletions(id);
     this.processes.delete(id);
+    this.closeContainerShell(id);
     for (const key of Array.from(this.accountHomes.keys())) {
       if (key.startsWith(`${id}:`)) this.accountHomes.delete(key);
     }
@@ -804,6 +850,8 @@ export class TerminalRuntime {
       for (const timer of state.retryTimers) clearTimeout(timer);
     }
     this.activityCompletionStates.clear();
+    for (const controller of this.containerShellCloses) controller.abort();
+    this.containerShellCloses.clear();
     this.history.shutdown();
   }
 }

@@ -5,8 +5,14 @@
  * badge on its own (an agent finished, failed, is waiting or asked a
  * question, or a terminal-hosted agent finished). A client marking an
  * environment unread is not attention and raises nothing. Clients use it for
- * presentation only (the "agent stopped" sound); the environment snapshot
- * stays authoritative for the badge itself.
+ * presentation only (the "agent stopped" and "agent question" sounds, the
+ * question desktop notification); the environment snapshot stays
+ * authoritative for the badge itself.
+ *
+ * One exception to "one per badge edge": a badge already lit for a reason that
+ * needs no input (the agent finished or failed) raises again when an agent
+ * then asks a question or waits on the user, because that is the event the
+ * user must not miss. A badge already showing a question does not raise again.
  *
  * Each event has a unique `attentionId`, so a client that receives it twice
  * (a replayed stream, a reconnect) acts on it once. Events raised while a
@@ -25,6 +31,21 @@ export const ENVIRONMENT_ATTENTION_REASONS = [
 ] as const;
 
 export type EnvironmentAttentionReason = (typeof ENVIRONMENT_ATTENTION_REASONS)[number];
+
+/**
+ * Reasons that mean an agent is blocked on the user: it asked a question, or it
+ * stopped on an approval, a plan or a prompt it cannot continue past alone.
+ */
+export const INPUT_NEEDED_ATTENTION_REASONS = [
+  "agent_waiting",
+  "agent_question",
+] as const satisfies readonly EnvironmentAttentionReason[];
+
+export function isInputNeededAttentionReason(
+  value: unknown,
+): value is (typeof INPUT_NEEDED_ATTENTION_REASONS)[number] {
+  return (INPUT_NEEDED_ATTENTION_REASONS as readonly unknown[]).includes(value);
+}
 
 export interface EnvironmentAttentionEvent {
   attentionId: string;

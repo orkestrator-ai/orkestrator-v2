@@ -1,7 +1,7 @@
 # OpenCode agent-tool background reconcile still pending after 150 ms
 
 - **ID:** 0320
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-17
 - **File:** `apps/backend/src/core/commands-agent-tools.test.ts`.
 - **Test:** `OpenCode agent-tool configuration > reconciles in the background and memoizes a healthy generation`.
@@ -119,3 +119,10 @@ The unchanged owner passed alone three times in a row (2.0 s each) with `mise ru
 `mise run test` on the gateway login branch (based on `4e3caa079`, default worker grants, an iOS simulator build running at the same time) repeated the count mismatch at commands-agent-tools.test.ts:195 (expected 0, received 1; 224.80 ms). Backend 14,097 pass / 1 fail (this case); web 11,797, protocol 4,496, desktop 1,672, CLI 465, toolchain 126, web-public 41, root 3,529 and every bridge passed with no failures. The branch does not touch the owner or its implementation. Artifact: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.IsbJvf/`.
 
 The unchanged owner passed alone three times in a row (2.2 to 2.5 s) with `mise run test:logged -- --name opencode-agent-tools-N -- bun --cwd=apps/backend test src/core/commands-agent-tools.test.ts --only-failures --parallel=1`. Status remains open.
+
+### Resolution — 2026-11-06
+
+- **Root cause:** the test slept a fixed 150 ms and then expected the background reconcile, whose fixture response is delayed 75 ms, to have finished. On a loaded host the response, the reconcile or the timer ran late. `schedule()` registers the cleanup that drops the in-flight entry (`task.finally`) before it chains the returned outcome (`task.then`), so the outcome promise settles only after the entry is gone. That promise is the completion signal the test should await.
+- **Reproduced:** yes. With the fixture response delayed to 400 ms, the unchanged test failed with configuration count 1, not 0, as in the aggregate.
+- **Fix:** `commands-agent-tools.test.ts` now awaits the outcome, then asserts zero configurations, one outcome and one request. The memoized second `schedule()` also awaits its returned promise instead of a 25 ms sleep, and it now also asserts that no reconcile was started. No assertion was removed and no product code changed.
+- **Verification:** with the 400 ms delay (temporary), the fixed test passed. `mise run test:logged -- --name n0320-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/commands-agent-tools.test.ts --rerun-each=20` passed 420 tests with 0 failures.

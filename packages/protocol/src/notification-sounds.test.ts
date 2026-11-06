@@ -19,6 +19,8 @@ describe("notification sound settings", () => {
       agentStopped: false,
       prMerged: false,
       coordinatorReport: true,
+      agentQuestion: true,
+      questionDesktopNotification: true,
     });
     expect(normalizeNotificationSoundSettings({ coordinatorReport: false }).coordinatorReport).toBe(
       false,
@@ -30,6 +32,24 @@ describe("notification sound settings", () => {
       agentStopped: false,
       prMerged: true,
       coordinatorReport: true,
+      agentQuestion: true,
+      questionDesktopNotification: true,
     });
+  });
+
+  test("a config written before the question alerts gets them on, and keeps an opt-out", () => {
+    const earlier = { agentStopped: true, prMerged: true, coordinatorReport: false };
+    expect(normalizeNotificationSoundSettings(earlier)).toMatchObject({
+      coordinatorReport: false,
+      agentQuestion: true,
+      questionDesktopNotification: true,
+    });
+    expect(
+      normalizeNotificationSoundSettings({
+        agentQuestion: false,
+        questionDesktopNotification: false,
+      }),
+    ).toMatchObject({ agentQuestion: false, questionDesktopNotification: false });
+    expect(normalizeNotificationSoundSettings({ agentQuestion: "no" }).agentQuestion).toBe(true);
   });
 });

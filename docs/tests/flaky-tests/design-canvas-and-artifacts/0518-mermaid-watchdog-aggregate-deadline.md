@@ -1,7 +1,7 @@
 # Mermaid watchdog wall-clock deadline under aggregate load
 
 - **ID:** 0518
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-21
 - **Test:** `mermaid rendering > the external watchdog ends a blocked render within the deadline and the browser is gone`
 - **File:** `apps/backend/src/core/transcript-artifacts/mermaid-render.test.ts:191`
@@ -16,3 +16,8 @@
 ## Design-agent links refresh through d6ed0717d — 2026-10-24
 
 The combined merge repeated a failure in this owner during `mise run test:logged -- --name merge-tests -- mise run test` (workspace/root/bridge/protocol reservations 4/1/2/1, other worktrees active). The complete unchanged owner passed with one worker in 24.5 s: `mise run test:logged -- --name design-links-owner-mermaid -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/transcript-artifacts/mermaid-render.test.ts --parallel=1 --only-failures`. See [0772](../aggregate-validation-runs/0772-design-agent-links-main-refresh-validation.md) for the exact failing cases, durations, counts, parents and artifacts. No assertion, deadline or skip changed; shared-host contention remains a hypothesis.
+
+### Resolution — 2026-11-06
+
+- **Stale:** fixed by `a80a3c4d1` (2026-10-25 20:00 UTC, `test: stabilize aggregate validation and Mermaid boundaries (#1278)`). That commit removed the wall-clock upper bound from the watchdog test (`elapsed < RENDER_DEADLINE_MS + 4_000`). The test now proves the external deadline by the `render_timeout` result, the lower bound, a verified worker exit, and the browser and worker processes being gone. Separately, the boundary test now renders its size-limit and edge-limit diagrams through a runner with a 30 s render budget, so the 250-edge diagram no longer races the 5 s production deadline. Every recorded observation predates that commit and measured the removed bound (`< 5000` / `< 9000`) or the old boundary budget.
+- **Verification:** `mise run test:logged -- --name n0512-mermaid -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/transcript-artifacts/mermaid-render.test.ts --rerun-each=2` passed 28 tests with 0 failures, at a load average of about 24. No change in this round.

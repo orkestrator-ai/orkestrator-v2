@@ -1426,8 +1426,9 @@ export function parseExternalSessionToken(value: string): string | null {
     return null;
   }
   if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) return null;
-  // A 32-byte digest leaves two spare bits in its last character, so four
-  // spellings decode to the same bytes. Accept only the one we issued.
+  // A 32-byte digest leaves two unused bits in its last base64url character, so
+  // four spellings decode to the same bytes. Only the one this bridge issued is
+  // a valid token: an edited token must never resume a session.
   if (supplied.toString("base64url") !== signature) return null;
   let decoded: Buffer;
   try {

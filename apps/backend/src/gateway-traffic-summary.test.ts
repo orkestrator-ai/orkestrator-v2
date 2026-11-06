@@ -126,6 +126,10 @@ describe("GatewayTrafficSummary", () => {
         peakRequests: 160,
         peakConnections: 0,
         openSockets: 7,
+        closedByPeer: 0,
+        closedByServer: 0,
+        closedOnError: 0,
+        singleRequestSockets: 0,
         sources: "100.64.0.7=150,100.64.0.9=10",
         routes: "invoke=150,events=10",
         clients: "chrome=160",
@@ -233,5 +237,33 @@ describe("GatewayTrafficSummary", () => {
     const sources = reports[0]!.sources.split(",");
     expect(sources).toHaveLength(8);
     expect(sources[0]).toBe("other=40");
+  });
+
+  test("a burst line says how its sockets closed and how many carried one request", () => {
+    const { summary, reports, advance } = harness();
+    const churned = Array.from({ length: 120 }, () => ({ remoteAddress: "100.64.0.7" }));
+    const reused = { remoteAddress: "100.64.0.8" };
+    for (const socket of churned) {
+      summary.noteConnection("browser");
+      summary.noteRequest({ socket, headers: {} } as unknown as IncomingMessage, "invoke");
+    }
+    summary.noteConnection("browser");
+    for (let i = 0; i < 5; i += 1) {
+      summary.noteRequest({ socket: reused, headers: {} } as unknown as IncomingMessage, "invoke");
+    }
+    churned.slice(0, 100).forEach((socket) => summary.noteSocketClosed(socket, "peer"));
+    churned.slice(100).forEach((socket) => summary.noteSocketClosed(socket, "error"));
+    summary.noteSocketClosed(reused, "server");
+
+    for (let window = 0; window < 6; window += 1) advance(1_000);
+
+    expect(reports).toHaveLength(1);
+    expect(reports[0]).toMatchObject({
+      connections: 121,
+      closedByPeer: 100,
+      closedByServer: 1,
+      closedOnError: 20,
+      singleRequestSockets: 120,
+    });
   });
 });

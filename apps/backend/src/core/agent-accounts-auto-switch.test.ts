@@ -1,5 +1,8 @@
 import { describe, expect, mock, spyOn, test } from "bun:test";
-import type { AgentAccountAutoSwitchMode } from "@orkestrator/protocol/agent-account-auto-switch";
+import type {
+  AgentAccountAutoSwitchLastKept,
+  AgentAccountAutoSwitchMode,
+} from "@orkestrator/protocol/agent-account-auto-switch";
 import type {
   AgentAccountPlatform,
   AgentAccountsSnapshot,
@@ -73,6 +76,7 @@ function harness(options: {
   const reads: Array<{ accountId: string; force: boolean }> = [];
   const notices: AutoSwitchNotice[] = [];
   const reports: UsageLimitStopReport[] = [];
+  const kept: AgentAccountAutoSwitchLastKept[] = [];
   const summaries = Object.keys(options.accounts).map((id): AgentAccountSummary => ({
     id,
     platform: "claude",
@@ -129,6 +133,9 @@ function harness(options: {
     notify: (notice) => {
       notices.push(notice);
     },
+    noteKept: (_platform, note) => {
+      kept.push(note);
+    },
     onLimitStop: (report) => {
       reports.push(report);
     },
@@ -150,6 +157,7 @@ function harness(options: {
     reads,
     notices,
     reports,
+    kept,
     switchAccount,
     stop,
     advance: (ms: number) => {
@@ -781,6 +789,40 @@ describe("a limit error mid-turn", () => {
     });
   });
 
+  test("two stopped tabs share a move onto a fresh 99% login with a fresh twin", async () => {
+    const h = harness({
+      active: "out",
+      session: {
+        platform: "claude",
+        source: "account",
+        running: true,
+        account: {
+          id: "out",
+          platform: "claude",
+          label: "out",
+          isDefault: false,
+          isActive: false,
+          signedIn: true,
+          identity: { email: "out@example.com" },
+        },
+      },
+      emails: { moved: "shared@example.com", twin: "shared@example.com" },
+      accounts: {
+        out: usage({ used: 100, resetsInHours: 72 }),
+        moved: usage({ used: 99, resetsInHours: 30 }),
+        twin: usage({ used: 99, resetsInHours: 30 }),
+      },
+    });
+    const verdicts = await Promise.all([
+      h.stop({ requestId: "first-tab", environmentId: "env-1" }),
+      h.stop({ requestId: "second-tab", environmentId: "env-2" }),
+    ]);
+    expect(verdicts).toEqual(["resend", "resend"]);
+    expect(h.state.active).toBe("moved");
+    expect(h.switchAccount).toHaveBeenCalledTimes(1);
+    expect(h.kept).toEqual([]);
+  });
+
   test("a second tab stopped by the same limit shares the move and its confirmation", async () => {
     const h = harness({
       active: "a",
@@ -810,7 +852,8 @@ describe("a limit error mid-turn", () => {
     expect([first, second]).toEqual(["resend", "resend"]);
     expect(h.switchAccount).toHaveBeenCalledTimes(1);
     expect(h.notices).toHaveLength(1);
-    expect(h.reads.filter((read) => read.force)).toHaveLength(1);
+    // The stopped account's confirmation and one probe of the other, shared by both.
+    expect(h.reads.filter((read) => read.force).map((read) => read.accountId)).toEqual(["a", "b"]);
   });
 
   test("a bridge held by another turn makes the resend wait, boundedly", async () => {
@@ -1202,5 +1245,38 @@ test("expired and identity-mismatched reset proofs are omitted from stop reports
       error: LIMIT_ERROR,
     });
     expect(h.reports.at(-1)?.resetsAt).toBeUndefined();
+  }
+});
+
+describe("coordinator no-room explanations", () => {
+  for (const active of ["limited", "elsewhere"]) {
+    test(`records the limited login when active is ${active}`, async () => {
+      const h = harness({
+        active,
+        emails: { twin: "limited@example.com" },
+        accounts: {
+          limited: usage({ used: 20, resetsInHours: 30 }),
+          twin: usage({ used: 20, resetsInHours: 30 }),
+          elsewhere: usage({ used: 100, resetsInHours: 80 }),
+        },
+      });
+      expect(
+        await h.switcher.moveOffLimitedAccount("claude", (entry) => entry.id === "limited"),
+      ).toEqual({ moved: false, reason: "no-account-with-headroom" });
+      expect(h.kept).toEqual([
+        {
+          fromAccountId: "limited",
+          at: new Date(NOW).toISOString(),
+          blocked:
+            active === "limited"
+              ? [
+                  { accountId: "twin", blocker: "same-login" },
+                  { accountId: "elsewhere", blocker: "weekly", usedPercent: 100 },
+                ]
+              : [{ accountId: "twin", blocker: "same-login" }],
+        },
+      ]);
+      expect(h.switchAccount).not.toHaveBeenCalled();
+    });
   }
 });

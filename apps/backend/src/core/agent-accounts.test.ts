@@ -9,6 +9,7 @@ import type { ChildProcess } from "node:child_process";
 import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
 import {
   AGENT_ACCOUNTS_CHANGED_EVENT,
+  groupAgentAccountLogins,
   MAX_AGENT_ACCOUNTS_PER_PLATFORM,
 } from "@orkestrator/protocol/agent-accounts";
 
@@ -953,6 +954,33 @@ describe("agent accounts", () => {
       });
     }
   }
+
+  test("removing an inactive saved twin keeps the active host login and its credentials", async () => {
+    const { accountId } = await addCodexAccount("shared@example.com", "shared");
+    // Grant only this test's temporary host home; no real host credential is read.
+    context.credentialSources = new Set(["codex"]);
+    const hostAuth = codexAuth("shared@example.com", "shared");
+    await fs.writeFile(path.join(process.env.CODEX_HOME!, "auth.json"), hostAuth);
+    const before = await listAgentAccounts(context);
+    const grouped = groupAgentAccountLogins(
+      before.accounts.filter((entry) => entry.platform === "codex"),
+    );
+    expect(grouped).toHaveLength(1);
+    expect(grouped[0]).toMatchObject({
+      isActive: true,
+      account: { id: accountId, isActive: false },
+    });
+    const removed = await removeAgentAccount(context, "codex", accountId!);
+    expect(removed.active.codex).toBe("default");
+    expect(removed.accounts.filter((entry) => entry.platform === "codex")).toEqual([
+      expect.objectContaining({ id: "default", isActive: true, signedIn: true }),
+    ]);
+    expect(await fs.readFile(path.join(process.env.CODEX_HOME!, "auth.json"), "utf8")).toBe(
+      hostAuth,
+    );
+    reloadBackend();
+    expect((await listAgentAccounts(context)).active.codex).toBe("default");
+  });
 
   test("switching changes the launch environment and removal requires switching away", async () => {
     const { accountId } = await addCodexAccount("second@example.com", "acct-2");

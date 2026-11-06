@@ -1,7 +1,7 @@
 # Pi: repeat cancels of an accepted run
 
 - **ID:** 1002
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-26
 - **Test:** `concurrent cancels for one claim > repeat cancels of an accepted run share one abort`
 - **File:** `bridges/pi-bridge/src/prompt-cancel-preflight.test.ts`
@@ -37,3 +37,27 @@ The complete owner passed alone (exit 0, 1.2 s; counts suppressed):
 `mise run test:logged -- --name address-pi-cancel -- bun test --cwd bridges/pi-bridge ./src/prompt-cancel-preflight.test.ts --preload ../../tests/setup-node.ts --preload ./src/testing/test-isolation.ts --parallel=1 --only-failures`.
 Aggregate evidence: `/tmp/orkestrator-test-run.ooy5qK/bridges.log.gz`.
 The timing hypothesis remains unconfirmed.
+
+### Resolution — 2026-11-06
+
+**Root cause (test).** The case was not the preflight hypothesis above. The
+test sent `/cancel` and `/abort` without awaiting them, waited only until the
+fake session's `abort()` had been called once, and then released the abort.
+That proves the *first* request reached the run's cancel handle, not the
+second. On a loaded host the second HTTP request could reach `handleCancel`
+after the released abort had settled the run, find no cancel handle and no
+claim, and answer 200 `{ cancelled: false }` — the observed second-body failure.
+
+**Fix.** `bridges/pi-bridge/src/prompt-cancel-preflight.test.ts` wraps the
+accepted run's `state.cancelTurn` with a call counter and waits until both
+requests have called it (and the abort has started) before releasing the
+abort. The product's sharing of one abort is unchanged and still asserted
+(`aborts === 1`, both bodies `{ cancelled: true }`).
+
+**Verification.**
+
+- Reproduced before the fix: delaying the second request by 50 ms gave the
+  exact failure (`"cancelled": false`,
+  `mise run test:logged -- --name br-1002-repro -- bun test --cwd bridges/pi-bridge --preload ../../tests/setup-node.ts --preload ./src/testing/test-isolation.ts ./src/prompt-cancel-preflight.test.ts -t "repeat cancels of an accepted"`, exit 1).
+- With the fix and the same 50 ms delay: passed (exit 0). Delay removed afterwards.
+- `mise run test:logged -- --name br-1002-stress -- bun test --cwd bridges/pi-bridge --preload ../../tests/setup-node.ts --preload ./src/testing/test-isolation.ts ./src/prompt-cancel-preflight.test.ts --rerun-each=20` passed (exit 0).

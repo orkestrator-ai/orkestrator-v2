@@ -5,7 +5,15 @@
  * the walk, while a renewed fence still keeps its object.
  */
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, unlinkSync, utimesSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  unlinkSync,
+  utimesSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Manifest } from "./capture.js";
@@ -216,13 +224,53 @@ describe("the store's byte count", () => {
 
 describe("a sweep's lock", () => {
   test("a capture's write finishes while a long sweep is still walking", async () => {
+    // The sweep is held mid-walk, after its first removal released the lock,
+    // until the put has finished. This used to rely on 1,500 old blobs making
+    // the walk outlast the put, and creating and ageing them alone took most of
+    // the 5 s deadline on a loaded host (case 5822). A sweep that held the lock
+    // across its walk would block the put here; the bound below then lets it
+    // finish first, so the order assertion fails instead of the test hanging.
     const store = openStore();
-    await oldBlobs(store, 1500);
+    const blobs = await oldBlobs(store, 2 * 64);
+    const prefixes = new Set(blobs.map((id) => id.slice(0, 2)));
+    expect(prefixes.size).toBeGreaterThan(1);
+    const locked = store as unknown as {
+      exclusive: (work: () => Promise<unknown>) => Promise<unknown>;
+    };
+    const exclusive = locked.exclusive.bind(store);
+    let midWalk!: () => void;
+    const reachedMidWalk = new Promise<void>((resolve) => (midWalk = resolve));
+    let resume!: () => void;
+    const resumed = new Promise<void>((resolve) => (resume = resolve));
+    let first = true;
+    locked.exclusive = (work) => {
+      const held = exclusive(work);
+      if (!first) return held;
+      first = false;
+      return held.then(async (value) => {
+        midWalk();
+        await resumed;
+        return value;
+      });
+    };
     const order: string[] = [];
-    const sweeping = store.sweep(new Set(), GRACE_MS).then(() => order.push("sweep"));
-    await store.put("blob", encode("written during the sweep\n")).then(() => order.push("put"));
-    await sweeping;
+    const sweeping = store.sweep(new Set(), GRACE_MS).then((swept) => {
+      order.push("sweep");
+      return swept;
+    });
+    await reachedMidWalk;
+    const put = store.put("blob", encode("written during the sweep\n")).then(() => {
+      order.push("put");
+    });
+    await Promise.race([put, Bun.sleep(10_000)]);
+    // Still walking: the put finished while most old blobs were not yet removed.
+    const remaining = blobs.filter((id) => existsSync(objectFile(store, id))).length;
+    resume();
+    const swept = await sweeping;
+    await put;
     expect(order).toEqual(["put", "sweep"]);
+    expect(remaining).toBeGreaterThan(blobs.length / 2);
+    expect(swept.removed).toBe(blobs.length);
   });
 
   test("a fence renewed after the walk saw it old keeps the object", async () => {

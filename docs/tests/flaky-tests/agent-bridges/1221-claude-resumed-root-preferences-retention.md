@@ -140,3 +140,35 @@ polling for any mark. The assertion is unchanged.
 from `bridges/claude-bridge`): 30 of 30 passed. The complete owning file passed.
 `--rerun-each` cannot be used for this case, because the persisted session from
 the first run means `query()` is not invoked again.
+
+### Resolution — 2026-11-06
+
+**Root cause (test).** The session queues three turn-in-flight mark writes
+without awaiting them (`syncTurnInFlightMark`): *set* when the prompt starts,
+*clear* when it settles, *set* again when the warm CLI's resumed root takes the
+foreground. The writes are serialized per session. The test polled until the
+file showed any `turnInFlight`, so on a slow host the loop could stop on the
+*first* set while the clear was still queued, and the following read then saw
+the clear (`undefined`). The 62–110 ms failure durations match: the loop exited
+at once rather than running out its 1 s budget. Traced by instrumenting the
+writes (set, clear, set).
+
+**Fix.** `bridges/claude-bridge/src/services/session-manager-runtime-idle.test.ts`
+replaces the poll with `await settleSessionPreferenceWritesForTesting()` (the
+existing preference-queue drain), then reads once. The harness
+`bridges/claude-bridge/src/services/session-manager-test-harness.ts` now
+re-exports that function. No assertion changed.
+
+**Verification.**
+
+- Reproduced before the fix: a temporary 100 ms delay on every mark write plus
+  a 120 ms pause between the poll's last read and the assertion produced the
+  exact failure (`Received: undefined`,
+  `mise run test:logged -- --name br-1221-repro -- bun test --cwd bridges/claude-bridge --preload ../../tests/setup-node.ts ./src/services/session-manager-runtime-idle.test.ts -t "signal death after the prompt settled"`, exit 1).
+- With the fix and the same injected write delay: passed (exit 0). Delay removed afterwards.
+- Complete owner three times (`br-1221-owner1..3`, exit 0), and twelve fresh
+  processes under three extra CPU-bound loops
+  (`mise run test:logged -- --name br-1221-loop -- bash -c 'cd bridges/claude-bridge && for i in $(seq 1 12); do bun test --preload ../../tests/setup-node.ts ./src/services/session-manager-runtime-idle.test.ts …; done'`, exit 0).
+  The file is not `--rerun-each` safe (its persisted-session fixture fails on
+  a second run in one process, before and after this change), so repetitions
+  use fresh processes.

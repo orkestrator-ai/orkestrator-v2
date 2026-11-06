@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { fakePid } from "@orkestrator/protocol/testing/fake-pids";
 import { spawn, type ChildProcess } from "node:child_process";
+import { PassThrough } from "node:stream";
 import { EventEmitter } from "node:events";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
@@ -43,7 +45,7 @@ function harness(overrides: Partial<typeof __testing.armRuntime> = {}) {
   let now = 0;
   let status: Status = { status: "missing" };
   const child = Object.assign(new EventEmitter(), {
-    pid: 123_456,
+    pid: fakePid(123_456),
     kill: mock(() => {
       child.emit("exit", 143);
       return true;
@@ -79,7 +81,7 @@ function harness(overrides: Partial<typeof __testing.armRuntime> = {}) {
       }
       return { status: 0 };
     }) as typeof __testing.armRuntime.mise,
-    gatewayFor: () => ({ metrics: mock(async () => metrics(now)) }),
+    gatewayFor: () => ({ metrics: mock(async () => metrics(now)), invoke: async () => null }),
     processSamples: () => ({ backend: { cpuMs: now, rssKiB: 10 } }),
     countGuardLines: mock(() => 2),
     ...overrides,
@@ -127,6 +129,76 @@ describe("live benchmark lifecycle", () => {
     ]);
   });
 
+  test("checkout runs forward the checkout to launch, status, both CLI runners and cleanup", async () => {
+    const h = harness();
+    const status = spyOn(h.runtime, "readStatus");
+    const mise = spyOn(h.runtime, "mise");
+    const cli = mock(() => () => undefined) as never;
+    const asyncCli = mock(() => async () => ({ status: 0, stdout: "{}" })) as never;
+    h.runtime.cliRunner = cli;
+    h.runtime.asyncCliRunner = asyncCli;
+    h.runtime.measureFreshness = mock(async () => []);
+    h.runtime.measureSoak = mock(async () => ({})) as never;
+    const checkout = "/work/base";
+    const result = await runArm(
+      { ...options(), checkout, freshnessProbes: 1, soakCycles: 1 },
+      "candidate",
+      1,
+      "/stub",
+      undefined,
+      "checkout",
+      h.runtime,
+    );
+    expect(result.error).toBeUndefined();
+    expect(h.runtime.startProfile).toHaveBeenCalledWith(
+      result.profile,
+      expect.objectContaining({ checkout }),
+      "/stub",
+      expect.any(Object),
+    );
+    expect(status.mock.calls.every((args) => args[1] === checkout)).toBe(true);
+    expect(mise.mock.calls.every((args) => args[1] === checkout)).toBe(true);
+    expect(cli).toHaveBeenCalledWith(result.profile, expect.any(String), checkout);
+    expect(asyncCli).toHaveBeenCalledWith(result.profile, expect.any(String), checkout);
+  });
+
+  test("launcher, mise and both CLI processes use checkout cwd and process-scoped mise trust", async () => {
+    const checkout = temporary();
+    const child = Object.assign(new EventEmitter(), {
+      pid: fakePid(7),
+      stdout: new PassThrough(),
+      kill: () => true,
+    });
+    const spawned = spyOn(__testing.commandProcesses, "spawn").mockReturnValue(child as never);
+    const synced = spyOn(__testing.commandProcesses, "spawnSync").mockReturnValue({
+      status: 0,
+      stdout: "{}",
+    } as never);
+    try {
+      __testing.armRuntime.startProfile("checkout", { ...options(), checkout }, checkout, {});
+      __testing.armRuntime.mise(["dev:status"], checkout);
+      __testing.armRuntime.cliRunner("checkout", "/config", checkout)(["environment", "list"]);
+      const cli = __testing.armRuntime.asyncCliRunner(
+        "checkout",
+        "/config",
+        checkout,
+      )(["environment", "list"]);
+      child.emit("close", 0);
+      await cli;
+      expect(spawned).toHaveBeenCalledTimes(2);
+      expect(synced).toHaveBeenCalledTimes(2);
+      for (const call of [...spawned.mock.calls, ...synced.mock.calls]) {
+        expect(call[2]).toMatchObject({
+          cwd: checkout,
+          env: { MISE_TRUSTED_CONFIG_PATHS: checkout },
+        });
+      }
+    } finally {
+      spawned.mockRestore();
+      synced.mockRestore();
+    }
+  });
+
   test("concurrent invocations with the same prefix own distinct names and cleanup", async () => {
     const left = harness();
     const right = harness();
@@ -142,7 +214,7 @@ describe("live benchmark lifecycle", () => {
   test("metrics-off keeps process sampling and skips freshness probes", async () => {
     const probe = mock(async () => []);
     const h = harness({
-      gatewayFor: () => ({ metrics: async () => null }),
+      gatewayFor: () => ({ metrics: async () => null, invoke: async () => null }),
       measureFreshness: probe,
     });
     const result = await runArm(
@@ -404,7 +476,7 @@ describe("live benchmark lifecycle", () => {
     const result = await runArm(options(), "candidate", 1, "/stub", undefined, "live", h.runtime);
     expect(result.error).toContain("Owned profile stop failed");
     expect(mise).toHaveBeenCalledTimes(1);
-    expect(mise).toHaveBeenCalledWith(["dev:stop", "--profile", result.profile]);
+    expect(mise).toHaveBeenCalledWith(["dev:stop", "--profile", result.profile], undefined);
   });
 
   test("probe results include unusable counts and percentiles", async () => {
@@ -581,16 +653,23 @@ test.each(["SIGTERM", "SIGINT"] as const)(
     writeFileSync(
       script,
       `
-    import { EventEmitter } from "node:events";
+    import { PassThrough } from "node:stream";
+import { EventEmitter } from "node:events";
     import { appendFileSync } from "node:fs";
     import { __testing, parseOptions, runArm, withTerminationSignals } from ${JSON.stringify(path.resolve(import.meta.dir, "../../scripts/recurring-live-ab.ts"))};
     const record = (event) => appendFileSync(${JSON.stringify(events)}, event + "\\n");
     let status = { status: "missing" };
-    const child = Object.assign(new EventEmitter(), { pid: 123456, kill: () => true });
+    const child = Object.assign(new EventEmitter(), { pid: ${fakePid(123456)}, kill: () => true });
     const runtime = { ...__testing.armRuntime,
       readStatus: () => status,
       startProfile: () => { status = { status: "ready", startedAt: "owned", processStartTimes: { launcher: 100 }, pids: { launcher: child.pid }, live: { launcher: true } }; return child; },
-      gatewayFor: () => ({ metrics: async () => { record("sampling"); return null; } }),
+      gatewayFor: () => ({
+        metrics: async () => {
+          record("sampling");
+          return null;
+        },
+        invoke: async () => null,
+      }),
       processSamples: () => ({}),
       mise: (args) => { record(args[0]); if (args[0] === "dev:stop") setTimeout(() => { record("launcher-exited"); child.emit("exit", 0); }, 30); return { status: 0 }; },
     };
@@ -659,16 +738,20 @@ test.each(["SIGTERM", "SIGINT"] as const)(
     writeFileSync(
       script,
       `
-      import { EventEmitter } from "node:events";
+      import { PassThrough } from "node:stream";
+import { EventEmitter } from "node:events";
       import { appendFileSync } from "node:fs";
       import { __testing, measureSoak, parseOptions, runArm, withTerminationSignals } from ${JSON.stringify(path.resolve(import.meta.dir, "../../scripts/recurring-live-ab.ts"))};
       const record = (event) => appendFileSync(${JSON.stringify(events)}, event + "\\n");
       let status = { status: "missing" };
-      const child = Object.assign(new EventEmitter(), { pid: 123456, kill: () => true });
+      const child = Object.assign(new EventEmitter(), { pid: ${fakePid(123456)}, kill: () => true });
       const runtime = { ...__testing.armRuntime,
         readStatus: () => status,
         startProfile: () => { status = { status: "ready", startedAt: "owned", processStartTimes: { launcher: 100 }, pids: { launcher: child.pid }, live: { launcher: true } }; return child; },
-        gatewayFor: () => ({ metrics: async () => ({ recurringWork: {} }) }),
+        gatewayFor: () => ({
+          metrics: async () => ({ recurringWork: {} }),
+          invoke: async () => null,
+        }),
         processSamples: () => ({}),
         measureSoak: (gateway, cli, options, rss, signal) => measureSoak(gateway, cli, options, rss, signal, { ...__testing.soakRuntime, sleep: async () => {} }),
         mise: (args) => { record(args[0]); if (args[0] === "dev:stop") setTimeout(() => { record("launcher-exited"); child.emit("exit", 0); }, 30); return { status: 0 }; },

@@ -1,7 +1,7 @@
 # Object-store compressed-byte batch aggregate timeout
 
 - **ID:** 6042
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-11-05
 - **Test:** `a batch > flushes at the compressed byte bound below the object-count bound`
 - **File:** `apps/backend/src/core/change-tracking/object-store-write-path.test.ts`
@@ -27,3 +27,10 @@ The owning file passed unchanged with
 (exit 0, 6.6 s). No assertion, skip, or timeout was changed. The coordinator
 renderer removal does not edit this backend path; initial timeout cause remains
 unconfirmed. A fresh aggregate run follows the test type fix.
+
+### Resolution — 2026-11-06
+
+- **Root cause:** the test reached the production byte bound (`BATCH_MAX_BYTES`, 64 MiB) with four 16 MiB `randomBytes` inputs, so it generated, hashed, deflated (off-loop, four zlib slots) and wrote 64 MiB of incompressible data. That is seconds of CPU and I/O on an idle host and more than 5 s on a loaded one. The late ENOENT was the still-running `put` writing into the temporary root that `afterEach` had already removed after the timeout.
+- **Reproduced:** yes, in isolation while other agents loaded the host (load average about 21): `bun test src/core/change-tracking/object-store-write-path.test.ts` failed this test at 5019.73 ms and again at 5020.25 ms.
+- **Fix:** `ObjectStoreOptions.batchMaxBytes` (product code, `apps/backend/src/core/change-tracking/object-store.ts`) sets the bound a batch flushes at; it defaults to `BATCH_MAX_BYTES`, so production is unchanged. The test sets 1 MiB and uses four 256 KiB inputs. Each input is still above `OFF_LOOP_ZLIB_BYTES`, so the off-loop compression path is still covered, and the test asserts both relationships. Every original assertion is kept: nothing syncs at three objects, four objects flush, the temporaries are gone, and the tail waits for close.
+- **Verification (load average about 29):** `mise run test:logged -- --name objstore-one -- bun test --cwd apps/backend src/core/change-tracking/object-store-write-path.test.ts src/core/change-tracking/object-store.test.ts` PASS (6.6 s); `mise run test:logged -- --name objstore-stress -- bun test --cwd apps/backend src/core/change-tracking/object-store-write-path.test.ts --rerun-each=20 --parallel=2` PASS (102.8 s, exit 0).

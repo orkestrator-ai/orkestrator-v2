@@ -535,9 +535,15 @@ describe("PreviewPartitionRetention", () => {
       delayMs: 5,
       intervalMs: 5,
     });
-    await Bun.sleep(40);
+    // Each run is serialized behind the previous one and lists partitions
+    // first, so a loaded host can fit fewer than the nominal eight runs into
+    // a fixed 40 ms. Wait for the recurring run itself, with a bounded deadline.
+    const deadline = Date.now() + 3_000;
+    while (list.mock.calls.length < 2 && Date.now() < deadline) await Bun.sleep(5);
     const runs = list.mock.calls.length;
     expect(runs).toBeGreaterThanOrEqual(2);
+    // No await separates the count above from the close, and every run
+    // re-checks `closed` before listing, so any later call is a real leak.
     scheduled.closed = true;
     await Bun.sleep(30);
     expect(list.mock.calls.length).toBe(runs);

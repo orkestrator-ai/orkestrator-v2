@@ -27,6 +27,7 @@ import {
   AppServerUnavailableError,
   classifyDispatchFailure,
 } from "./errors.js";
+import { UNMAPPED_PID, fakePid } from "@orkestrator/protocol/testing/fake-pids";
 import { FakeReadable, FakeWritable } from "./testing/fake-app-server.js";
 import type { EngineState } from "../engine/types.js";
 import type { InboundNotification, InboundServerRequest } from "./envelope-validation.js";
@@ -130,11 +131,12 @@ afterEach(() => {
 });
 
 /**
- * Above every platform's `pid_max`, so `process.kill` on it is guaranteed to
- * fail rather than reach a real process group. Tests that let the supervisor
- * run its termination path must never hand it a plausible PID.
+ * Tests that let the supervisor run its termination path must never hand it a
+ * plausible PID: it signals the child's whole group. `UNMAPPED_PID` and every
+ * `fakePid` lie above any platform's `pid_max`, so the signal can only fail.
  */
-const UNMAPPED_PID = 2_147_483_646;
+/** A fake child's pid. */
+const FAKE_CHILD_PID = fakePid(0);
 /** chmod-based permission tests are meaningless as root. */
 const RUNNING_AS_ROOT = process.getuid?.() === 0;
 
@@ -233,7 +235,7 @@ function harness(
       const behaviour = options.behaviours?.[spawnIndex] ?? {};
       spawnIndex += 1;
       spawnEnvironments.push({ ...spawnOptions.env });
-      const child = new FakeChild(behaviour.pid ?? 1000 + spawnIndex, behaviour);
+      const child = new FakeChild(behaviour.pid ?? fakePid(1_000 + spawnIndex), behaviour);
       children.push(child);
       return child;
     }) as unknown as AppServerSupervisorOptions["spawnProcess"],
@@ -363,7 +365,7 @@ describe("startup", () => {
         configOverrides: { "features.goals": "true" },
         spawnProcess: ((command: string, args: string[], spawnOptions: Record<string, unknown>) => {
           spawnCalls.push({ command, args, options: spawnOptions });
-          return new FakeChild(4242);
+          return new FakeChild(FAKE_CHILD_PID);
         }) as unknown as AppServerSupervisorOptions["spawnProcess"],
       },
     });
@@ -396,7 +398,7 @@ describe("startup", () => {
           spawnOptions: Record<string, unknown>,
         ) => {
           spawnCalls.push({ args, options: spawnOptions });
-          return new FakeChild(4242);
+          return new FakeChild(FAKE_CHILD_PID);
         }) as unknown as AppServerSupervisorOptions["spawnProcess"],
       },
     });
@@ -503,7 +505,7 @@ describe("startup", () => {
         supervisor: {
           codexHome,
           pidFileEnabled: true,
-          isProcessAlive: (pid) => pid === 4242,
+          isProcessAlive: (pid) => pid === FAKE_CHILD_PID,
           matchesPidFileProcess: async () => matches,
           signalPidFileProcess: (pid) => signalled.push(pid),
         },
@@ -520,7 +522,7 @@ describe("startup", () => {
       writeFileSync(
         pidFilePath,
         JSON.stringify({
-          pid: 4242,
+          pid: FAKE_CHILD_PID,
           bridgePid: 3131,
           cwd: "/tmp/workspace",
           startedAt: new Date().toISOString(),
@@ -538,7 +540,7 @@ describe("startup", () => {
     const second = make(true);
     writeRecord();
     await second.supervisor.ensureReady();
-    expect(signalled).toEqual([4242]);
+    expect(signalled).toEqual([FAKE_CHILD_PID]);
   });
 
   test("does not take over or erase a pidfile owned by another live bridge", async () => {
@@ -559,7 +561,7 @@ describe("startup", () => {
     ).pidFilePath();
     mkdirSync(dirname(pidFilePath), { recursive: true });
     const record = JSON.stringify({
-      pid: 4242,
+      pid: FAKE_CHILD_PID,
       bridgePid: 3131,
       cwd: "/tmp/workspace",
       startedAt: new Date().toISOString(),
@@ -662,7 +664,7 @@ describe("startup", () => {
     writeFileSync(
       pidFilePath,
       JSON.stringify({
-        pid: 4242,
+        pid: FAKE_CHILD_PID,
         bridgePid: 3131,
         cwd: "/tmp/workspace",
         startedAt: "2026-07-25T12:00:00.000Z",
@@ -1133,7 +1135,7 @@ describe("pidfile ownership acquisition", () => {
         bridgePid: 3131,
         cwd: "/tmp/workspace",
         acquiredAt: new Date().toISOString(),
-        pid: 4242,
+        pid: FAKE_CHILD_PID,
         startedAt: new Date().toISOString(),
         instanceId: "stale-instance",
       });
@@ -1177,7 +1179,7 @@ describe("pidfile ownership acquisition", () => {
       bridgePid: 3131,
       cwd: "/tmp/workspace",
       acquiredAt: new Date().toISOString(),
-      pid: 4242,
+      pid: FAKE_CHILD_PID,
       startedAt: new Date().toISOString(),
       instanceId: "foreign-instance",
     });
@@ -1238,7 +1240,7 @@ describe("pidfile ownership acquisition", () => {
     writeFileSync(pidFilePath, "{not json", "utf8");
 
     await expect(
-      internals(h.supervisor).updateOwnedPidFile(4242, "instance", Date.now()),
+      internals(h.supervisor).updateOwnedPidFile(FAKE_CHILD_PID, "instance", Date.now()),
     ).rejects.toThrow(/not a valid ownership record/);
     expect(internals(h.supervisor).pidOwnershipHeld).toBe(false);
     h.children[0]!.exit(0);
@@ -1264,7 +1266,7 @@ describe("pidfile ownership acquisition", () => {
     writeFileSync(pidFilePath, replacement, "utf8");
 
     await expect(
-      internals(h.supervisor).updateOwnedPidFile(4242, "instance", Date.now()),
+      internals(h.supervisor).updateOwnedPidFile(FAKE_CHILD_PID, "instance", Date.now()),
     ).rejects.toThrow(/ownership changed before child publication/);
     expect(internals(h.supervisor).pidOwnershipHeld).toBe(false);
     // The replacement owner's record is left exactly as it was.
@@ -1305,7 +1307,7 @@ describe("pidfile ownership acquisition", () => {
     hijackOnNextClockRead = true;
 
     await expect(
-      internals(h.supervisor).updateOwnedPidFile(4242, "instance", Date.now()),
+      internals(h.supervisor).updateOwnedPidFile(FAKE_CHILD_PID, "instance", Date.now()),
     ).rejects.toThrow(/ownership changed before child publication/);
     expect(JSON.parse(readFileSync(pidFilePath, "utf8")).ownerToken).toBe("late-replacement");
     h.children[0]!.exit(0);
@@ -1363,7 +1365,7 @@ describe("reclaimStalePidFile", () => {
     const codexHome = temporaryCodexHome("supervisor-current-format-");
     const signalled: number[] = [];
     const h = makeHarness(codexHome, {
-      isProcessAlive: (pid) => pid === 4242,
+      isProcessAlive: (pid) => pid === FAKE_CHILD_PID,
       matchesPidFileProcess: async () => true,
       signalPidFileProcess: (pid) => signalled.push(pid),
     });
@@ -1375,13 +1377,13 @@ describe("reclaimStalePidFile", () => {
       bridgePid: 3131,
       cwd: "/tmp/workspace",
       acquiredAt: new Date().toISOString(),
-      pid: 4242,
+      pid: FAKE_CHILD_PID,
       startedAt: new Date().toISOString(),
       instanceId: "stale-instance",
     });
 
     await expect(internals(h.supervisor).reclaimStalePidFile()).resolves.toBe(true);
-    expect(signalled).toEqual([4242]);
+    expect(signalled).toEqual([FAKE_CHILD_PID]);
     expect(existsSync(pidFilePath)).toBe(false);
   });
 
@@ -1445,30 +1447,30 @@ describe("reclaimStalePidFile", () => {
     const signalled: number[] = [];
     const legacyRecord = {
       // The shape written by the release before instance tokens existed.
-      pid: 4242,
+      pid: FAKE_CHILD_PID,
       bridgePid: 3131,
       cwd: "/tmp/workspace",
       startedAt: new Date().toISOString(),
     };
 
     const matching = makeHarness(codexHome, {
-      isProcessAlive: (pid) => pid === 4242,
+      isProcessAlive: (pid) => pid === FAKE_CHILD_PID,
       matchesLegacyAppServerProcess: async () => true,
       signalPidFileProcess: (pid) => signalled.push(pid),
     });
     writePidRecord(internals(matching.supervisor).pidFilePath(), legacyRecord);
     await expect(internals(matching.supervisor).reclaimStalePidFile()).resolves.toBe(true);
-    expect(signalled).toEqual([4242]);
+    expect(signalled).toEqual([FAKE_CHILD_PID]);
 
     const notMatching = makeHarness(codexHome, {
-      isProcessAlive: (pid) => pid === 4242,
+      isProcessAlive: (pid) => pid === FAKE_CHILD_PID,
       matchesLegacyAppServerProcess: async () => false,
       signalPidFileProcess: (pid) => signalled.push(pid),
     });
     writePidRecord(internals(notMatching.supervisor).pidFilePath(), legacyRecord);
     await expect(internals(notMatching.supervisor).reclaimStalePidFile()).resolves.toBe(true);
     // Still only the first reap: an unidentifiable PID is never signalled.
-    expect(signalled).toEqual([4242]);
+    expect(signalled).toEqual([FAKE_CHILD_PID]);
   });
 
   test("does not evict a pre-token record whose bridge is still running", async () => {
@@ -1479,7 +1481,7 @@ describe("reclaimStalePidFile", () => {
     });
     const pidFilePath = internals(h.supervisor).pidFilePath();
     const record = writePidRecord(pidFilePath, {
-      pid: 4242,
+      pid: FAKE_CHILD_PID,
       bridgePid: 3131,
       cwd: "/tmp/workspace",
       startedAt: new Date().toISOString(),
@@ -1622,7 +1624,7 @@ describe("matchesAppServerInstance", () => {
   test("darwin accepts a process carrying the instance token", async () => {
     const calls: string[][] = [];
     await expect(
-      __testing.matchesAppServerInstance(4242, instanceId, startedAt, "/opt/codex", {
+      __testing.matchesAppServerInstance(FAKE_CHILD_PID, instanceId, startedAt, "/opt/codex", {
         platform: "darwin",
         runPs: async (args) => {
           calls.push(args);
@@ -1638,7 +1640,7 @@ describe("matchesAppServerInstance", () => {
   test("darwin refuses a sibling app-server with an identical command line", async () => {
     const calls: string[][] = [];
     await expect(
-      __testing.matchesAppServerInstance(4242, instanceId, startedAt, "/opt/codex", {
+      __testing.matchesAppServerInstance(FAKE_CHILD_PID, instanceId, startedAt, "/opt/codex", {
         platform: "darwin",
         runPs: async (args) => {
           calls.push(args);
@@ -1653,7 +1655,7 @@ describe("matchesAppServerInstance", () => {
 
   test("darwin refuses a start time it cannot parse", async () => {
     await expect(
-      __testing.matchesAppServerInstance(4242, instanceId, startedAt, "/opt/codex", {
+      __testing.matchesAppServerInstance(FAKE_CHILD_PID, instanceId, startedAt, "/opt/codex", {
         platform: "darwin",
         runPs: async (args) =>
           args.includes("-Eww")
@@ -1665,17 +1667,23 @@ describe("matchesAppServerInstance", () => {
 
   test("darwin refuses a start time outside the window", async () => {
     await expect(
-      __testing.matchesAppServerInstance(4242, instanceId, startedAt - 60_000, "/opt/codex", {
-        platform: "darwin",
-        runPs: async (args) =>
-          args.includes("-Eww") ? `/opt/codex app-server --stdio ${token}\n` : cLocaleLstart,
-      }),
+      __testing.matchesAppServerInstance(
+        FAKE_CHILD_PID,
+        instanceId,
+        startedAt - 60_000,
+        "/opt/codex",
+        {
+          platform: "darwin",
+          runPs: async (args) =>
+            args.includes("-Eww") ? `/opt/codex app-server --stdio ${token}\n` : cLocaleLstart,
+        },
+      ),
     ).resolves.toBe(false);
   });
 
   test("darwin refuses to signal when ps fails", async () => {
     await expect(
-      __testing.matchesAppServerInstance(4242, instanceId, startedAt, "/opt/codex", {
+      __testing.matchesAppServerInstance(FAKE_CHILD_PID, instanceId, startedAt, "/opt/codex", {
         platform: "darwin",
         runPs: async () => {
           throw new Error("ps: no such process");
@@ -1698,7 +1706,7 @@ describe("matchesAppServerInstance", () => {
 
     await expect(
       __testing.matchesAppServerInstance(
-        4242,
+        FAKE_CHILD_PID,
         instanceId,
         startedAt,
         "/opt/codex",
@@ -1707,7 +1715,7 @@ describe("matchesAppServerInstance", () => {
     ).resolves.toBe(true);
     await expect(
       __testing.matchesAppServerInstance(
-        4242,
+        FAKE_CHILD_PID,
         instanceId,
         startedAt,
         "/opt/codex",
@@ -1718,7 +1726,7 @@ describe("matchesAppServerInstance", () => {
 
   test("refuses to signal on platforms without an identity check", async () => {
     await expect(
-      __testing.matchesAppServerInstance(4242, instanceId, startedAt, "/opt/codex", {
+      __testing.matchesAppServerInstance(FAKE_CHILD_PID, instanceId, startedAt, "/opt/codex", {
         platform: "win32",
       }),
     ).resolves.toBe(false);
@@ -1745,7 +1753,7 @@ describe("matchesLegacyAppServerProcess", () => {
 
     await expect(
       __testing.matchesLegacyAppServerProcess(
-        4242,
+        FAKE_CHILD_PID,
         "/opt/codex",
         "/work/env-a",
         probe("/work/env-a"),
@@ -1754,7 +1762,7 @@ describe("matchesLegacyAppServerProcess", () => {
     // A sibling environment's orphan is someone else's to reap.
     await expect(
       __testing.matchesLegacyAppServerProcess(
-        4242,
+        FAKE_CHILD_PID,
         "/opt/codex",
         "/work/env-a",
         probe("/work/env-b"),
@@ -1764,7 +1772,7 @@ describe("matchesLegacyAppServerProcess", () => {
 
   test("linux tolerates an unreadable cwd but not a different command", async () => {
     await expect(
-      __testing.matchesLegacyAppServerProcess(4242, "/opt/codex", "/work/env-a", {
+      __testing.matchesLegacyAppServerProcess(FAKE_CHILD_PID, "/opt/codex", "/work/env-a", {
         platform: "linux",
         readProcFile: async () =>
           Buffer.from(["/opt/codex", "app-server", "--stdio", ""].join("\0")),
@@ -1775,7 +1783,7 @@ describe("matchesLegacyAppServerProcess", () => {
     ).resolves.toBe(true);
 
     await expect(
-      __testing.matchesLegacyAppServerProcess(4242, "/opt/codex", "/work/env-a", {
+      __testing.matchesLegacyAppServerProcess(FAKE_CHILD_PID, "/opt/codex", "/work/env-a", {
         platform: "linux",
         readProcFile: async () => Buffer.from(["/usr/bin/node", "server.js", ""].join("\0")),
         readProcLink: async () => "/work/env-a",
@@ -1785,13 +1793,13 @@ describe("matchesLegacyAppServerProcess", () => {
 
   test("darwin matches on the command line alone", async () => {
     await expect(
-      __testing.matchesLegacyAppServerProcess(4242, "/opt/codex", "/work", {
+      __testing.matchesLegacyAppServerProcess(FAKE_CHILD_PID, "/opt/codex", "/work", {
         platform: "darwin",
         runPs: async () => "/opt/codex app-server --stdio\n",
       }),
     ).resolves.toBe(true);
     await expect(
-      __testing.matchesLegacyAppServerProcess(4242, "/opt/codex", "/work", {
+      __testing.matchesLegacyAppServerProcess(FAKE_CHILD_PID, "/opt/codex", "/work", {
         platform: "darwin",
         runPs: async () => "/usr/bin/vim notes.txt\n",
       }),
@@ -1800,7 +1808,7 @@ describe("matchesLegacyAppServerProcess", () => {
 
   test("refuses on platforms it cannot inspect", async () => {
     await expect(
-      __testing.matchesLegacyAppServerProcess(4242, "/opt/codex", "/work", {
+      __testing.matchesLegacyAppServerProcess(FAKE_CHILD_PID, "/opt/codex", "/work", {
         platform: "win32",
       }),
     ).resolves.toBe(false);

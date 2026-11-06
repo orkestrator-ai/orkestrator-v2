@@ -323,3 +323,33 @@ The timeout remains undetermined; it is not excused as an environmental cause.
   under the same temporary root.
 - **Disposition:** open recurrence; cause unconfirmed. Neither this owner nor
   its implementation changed in the branch. No assertion, timeout or skip changed.
+
+## Investigation — 2026-11-06
+
+A mechanism that produces exactly this signature is confirmed; that it is
+what happened in the aggregates is not.
+
+`startDevelopment` reserves the renderer and gateway ports with
+`reserveLoopbackPorts(2)` (`apps/desktop/scripts/dev/profile-io.ts`), which
+binds port 0 on `127.0.0.1` and closes the socket again, then spends the
+profile, Electron-compile and bridge-build steps before the Vite stand-in
+binds the renderer port. Anything else on the host that takes that port in the
+gap, including the ephemeral local port of an outbound loopback connection,
+makes the stand-in's `Bun.serve` fail and exit. The launcher does not watch
+the Vite child while it waits: `waitForUrl(rendererUrl)`
+(`apps/desktop/scripts/dev/lifecycle.ts`) keeps polling for 45 s, so the test
+hits its 15 s budget.
+
+Probe: a temporary copy of the test whose `reserveLoopbackPorts` returned a
+port held by a TCP listener that drops every connection timed out at
+15,002.43 ms, the recorded signature. Without the probe, 40 repeats of the
+case under six CPU burners all passed (0.75 s each), so CPU load alone does
+not trigger it.
+
+Possible fixes, not applied: (1) race `waitForUrl` against the Vite child's
+exit so a lost port fails at once with Vite's own error, which also stops a
+real `dev:test` launcher hanging 45 s; (2) on such an early exit, reserve new
+ports and respawn Vite before the profile's ports are published; (3) in the
+test only, stub `waitForUrl` and keep the stand-in off the network, which
+gives up coverage of real renderer readiness. (1) alone turns the hang into a
+fast, explained failure; (2) is what removes the flake.

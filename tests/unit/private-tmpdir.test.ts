@@ -201,15 +201,24 @@ describe("enterPrivateTestTmpdir", () => {
       `
       writeFileSync(join(tmpdir(), "profile"), "");
       const { spawn } = require("node:child_process");
+      // The browser announces itself once it runs. \`spawn\` can return while
+      // the child is still in exec, when /proc/<pid>/cmdline is not yet its own
+      // argv, and teardown's scan then missed it on a loaded runner (3120).
+      const ready = join(tmpdir(), "browser-ready");
       const browser = spawn(process.execPath,
-        ["--eval", "setInterval(() => {}, 1000)", "--user-data-dir=" + tmpdir() + "/profile"],
-        { stdio: "ignore", detached: true });
+        ["--eval", "require('node:fs').writeFileSync(process.env.ORK_TEST_BROWSER_READY, ''); setInterval(() => {}, 1000)",
+          "--user-data-dir=" + tmpdir() + "/profile"],
+        { stdio: "ignore", detached: true, env: { ...process.env, ORK_TEST_BROWSER_READY: ready } });
       browser.unref();
       out.browserPid = browser.pid;
+      const deadline = Date.now() + 10_000;
+      while (!existsSync(ready) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 10));
+      out.browserReady = existsSync(ready);
     `,
     );
     roots.push(result.inside);
     try {
+      expect(result.browserReady).toBe(true);
       expect(result.after).toBe(root);
       expect(result.removed).toBe(false);
       expect(existsSync(path.join(result.inside, "profile"))).toBe(true);

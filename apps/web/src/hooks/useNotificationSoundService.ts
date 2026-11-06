@@ -4,6 +4,8 @@ import {
   ENVIRONMENT_ATTENTION_EVENT,
   isCoordinatorWakeAttentionEvent,
   isEnvironmentAttentionEvent,
+  isInputNeededAttentionReason,
+  type EnvironmentAttentionReason,
 } from "@orkestrator/protocol/environment-attention";
 import { normalizeNotificationSoundSettings } from "@orkestrator/protocol/notification-sounds";
 import { BoundedKeySet } from "@/lib/bounded-hydration";
@@ -21,7 +23,9 @@ import { useVisibleEnvironmentId } from "./useVisibleEnvironmentId";
 import {
   playConfiguredNotificationSound,
   primeNotificationSounds,
+  type NotificationSoundKind,
 } from "@/lib/notification-sounds";
+import { showQuestionDesktopNotification } from "@/lib/question-desktop-notification";
 
 /** Attention ids remembered so a re-delivered event never sounds twice. */
 export const ATTENTION_DEDUPE_LIMIT = 256;
@@ -38,6 +42,68 @@ function coordinatorOnScreen(projectId: string): boolean {
     selectedProjectId === projectId &&
     coordinatorConversationTab(conversation, selectedProjectId, projectBoardTab) !== null
   );
+}
+
+interface LastCue {
+  at: number;
+  kind: NotificationSoundKind | null;
+  playback?: Promise<boolean>;
+}
+
+/**
+ * Reserves the cue slot. A question is never swallowed by another kind of cue
+ * that just played; every other cue coalesces with whatever came first.
+ */
+function claimCue(last: { current: LastCue }, kind: NotificationSoundKind): boolean {
+  const now = Date.now();
+  const coalesced =
+    now - last.current.at < ATTENTION_COALESCE_MS &&
+    (kind !== "agent-question" || last.current.kind === "agent-question");
+  if (coalesced) return false;
+  last.current = { at: now, kind };
+  return true;
+}
+
+/** The user is looking at this window right now, not just has it open. */
+function windowFocused(): boolean {
+  if (typeof document === "undefined") return false;
+  return document.visibilityState === "visible" && document.hasFocus();
+}
+
+function soundSettings() {
+  return normalizeNotificationSoundSettings(
+    useConfigStore.getState().config.global.notificationSounds,
+  );
+}
+
+/**
+ * Alerts that an agent is blocked on the user: the "agent question" cue and a
+ * desktop notification, each behind its own setting. Unlike the "agent
+ * stopped" cue this ignores which environment is selected unless the window
+ * also has focus: a question left unanswered in a background window is the
+ * one event the user asked never to miss.
+ */
+function alertInputNeeded(
+  input: { environmentId: string; projectId: string; reason: EnvironmentAttentionReason },
+  visibleEnvironmentId: string | null,
+  lastCue: { current: LastCue },
+): void {
+  if (input.environmentId === visibleEnvironmentId && windowFocused()) return;
+  const settings = soundSettings();
+  let playback = Promise.resolve(false);
+  if (settings.agentQuestion) {
+    if (claimCue(lastCue, "agent-question")) {
+      lastCue.current.playback = playConfiguredNotificationSound("agent-question").catch(
+        () => false,
+      );
+    }
+    playback = lastCue.current.playback ?? playback;
+  }
+  if (settings.questionDesktopNotification) {
+    void playback.then((played) => {
+      showQuestionDesktopNotification({ ...input, silent: played });
+    });
+  }
 }
 
 /**
@@ -59,6 +125,10 @@ function coordinatorOnScreen(projectId: string): boolean {
  * Plays the "coordinator report" cue from `coordinator-wake-attention` on the
  * same terms: once per wake, quiet while that coordinator's page is on screen in
  * a visible window. A backend that predates the event simply never sends it.
+ *
+ * An attention event whose reason means the agent needs input (a question, an
+ * approval, a plan) gets the "agent question" cue and a desktop notification
+ * instead; see {@link alertInputNeeded}.
  */
 export function useNotificationSoundService(): void {
   const environments = useEnvironmentStore((state) => state.environments);
@@ -74,8 +144,15 @@ export function useNotificationSoundService(): void {
     (state) =>
       normalizeNotificationSoundSettings(state.config.global.notificationSounds).coordinatorReport,
   );
+  const agentQuestionSoundEnabled = useConfigStore(
+    (state) =>
+      normalizeNotificationSoundSettings(state.config.global.notificationSounds).agentQuestion,
+  );
   // Shared, so a worker's stop and the wake it causes in one moment are one cue.
-  const lastCueAtRef = useRef(Number.NEGATIVE_INFINITY);
+  const lastCueRef = useRef<LastCue>({
+    at: Number.NEGATIVE_INFINITY,
+    kind: null,
+  });
   const previousUnreadRef = useRef<Map<string, boolean> | null>(null);
   const visibleEnvironmentRef = useRef(selectedEnvironmentId);
   useEffect(() => {
@@ -116,18 +193,19 @@ export function useNotificationSoundService(): void {
     void listen<unknown>(ENVIRONMENT_ATTENTION_EVENT, (event) => {
       // The payload crosses a process boundary; validate rather than trust.
       if (!isEnvironmentAttentionEvent(event.payload)) return;
-      const { attentionId, environmentId } = event.payload;
+      const { attentionId, environmentId, projectId, reason } = event.payload;
       if (!seen.add(attentionId)) return;
-      if (environmentId === visibleEnvironmentRef.current) return;
-      if (
-        !normalizeNotificationSoundSettings(
-          useConfigStore.getState().config.global.notificationSounds,
-        ).agentStopped
-      )
+      if (isInputNeededAttentionReason(reason)) {
+        alertInputNeeded(
+          { environmentId, projectId, reason },
+          visibleEnvironmentRef.current,
+          lastCueRef,
+        );
         return;
-      const now = Date.now();
-      if (now - lastCueAtRef.current < ATTENTION_COALESCE_MS) return;
-      lastCueAtRef.current = now;
+      }
+      if (environmentId === visibleEnvironmentRef.current) return;
+      if (!soundSettings().agentStopped) return;
+      if (!claimCue(lastCueRef, "agent-stopped")) return;
       void playConfiguredNotificationSound("agent-stopped");
     })
       .then((unlisten) => {
@@ -149,15 +227,8 @@ export function useNotificationSoundService(): void {
       if (!isCoordinatorWakeAttentionEvent(event.payload)) return;
       const { attentionId, projectId } = event.payload;
       if (!seen.add(attentionId) || coordinatorOnScreen(projectId)) return;
-      if (
-        !normalizeNotificationSoundSettings(
-          useConfigStore.getState().config.global.notificationSounds,
-        ).coordinatorReport
-      )
-        return;
-      const now = Date.now();
-      if (now - lastCueAtRef.current < ATTENTION_COALESCE_MS) return;
-      lastCueAtRef.current = now;
+      if (!soundSettings().coordinatorReport) return;
+      if (!claimCue(lastCueRef, "coordinator-report")) return;
       void playConfiguredNotificationSound("coordinator-report");
     })
       .then((unlisten) => {
@@ -179,24 +250,40 @@ export function useNotificationSoundService(): void {
     previousUnreadRef.current = nextUnread;
     if (!previousUnread || eventDriven) return;
 
-    for (const [environmentId, unread] of nextUnread) {
+    let stoppedCue = false;
+    for (const environment of environments) {
+      const environmentId = environment.id;
       // A newly discovered environment belongs to snapshot hydration, not a
       // renderer-observed edge. The selected environment can optimistically
       // clear this bit before an authoritative snapshot restores it, so its
       // raw badge edge is not a semantic background completion.
       if (
-        environmentId !== selectedEnvironmentId &&
-        unread &&
-        previousUnread.get(environmentId) === false
-      ) {
+        environmentId === selectedEnvironmentId ||
+        nextUnread.get(environmentId) !== true ||
+        previousUnread.get(environmentId) !== false
+      )
+        continue;
+      const reason = environment.unreadReason;
+      if (isInputNeededAttentionReason(reason)) {
+        alertInputNeeded(
+          { environmentId, projectId: environment.projectId, reason },
+          selectedEnvironmentId,
+          lastCueRef,
+        );
+      } else if (!stoppedCue) {
+        stoppedCue = true;
         void playConfiguredNotificationSound("agent-stopped");
-        break;
       }
     }
   }, [environments, eventDriven, selectedEnvironmentId]);
 
   useEffect(() => {
-    if (!agentStoppedSoundEnabled && !prMergedSoundEnabled && !coordinatorReportSoundEnabled)
+    if (
+      !agentStoppedSoundEnabled &&
+      !prMergedSoundEnabled &&
+      !coordinatorReportSoundEnabled &&
+      !agentQuestionSoundEnabled
+    )
       return;
     let priming = false;
     let disposed = false;
@@ -217,5 +304,10 @@ export function useNotificationSoundService(): void {
       window.removeEventListener("pointerdown", prime);
       window.removeEventListener("keydown", prime);
     };
-  }, [agentStoppedSoundEnabled, prMergedSoundEnabled, coordinatorReportSoundEnabled]);
+  }, [
+    agentStoppedSoundEnabled,
+    prMergedSoundEnabled,
+    coordinatorReportSoundEnabled,
+    agentQuestionSoundEnabled,
+  ]);
 }

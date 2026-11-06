@@ -1,9 +1,10 @@
 import { useState, type ReactNode } from "react";
-import { Loader2 } from "lucide-react";
+import { CircleAlert, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { defaultPrTargetBranch } from "@orkestrator/protocol/git-workflow-prompts";
 import { AutoMergeIcon } from "@/components/icons/AutoMergeIcon";
 import { useAutoMergeToggle } from "@/components/layout/useAutoMergeToggle";
+import { useAutoMergeHold } from "@/hooks/useEnvironmentNameSignal";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -30,6 +31,11 @@ import { useConfigStore, useEnvironmentStore } from "@/stores";
  * Everything is durable backend state, so closing the panel or switching
  * environments does not stop it; the button reads the environment record and
  * shows whether integration is already armed.
+ *
+ * Auto-merge waits silently by design, so the button says what it is waiting
+ * for (`useAutoMergeHold`, the rule it merges on): the tooltip always, and a
+ * warning icon plus a note in the dialog when the wait will not end without
+ * someone acting, such as a failed check while checks are required.
  */
 export function PipelineIntegrateButton({ environmentId }: { environmentId: string }) {
   const environment = useEnvironmentStore((state) => state.getEnvironmentById(environmentId));
@@ -37,6 +43,7 @@ export function PipelineIntegrateButton({ environmentId }: { environmentId: stri
     environment ? state.config.repositories[environment.projectId]?.prBaseBranch : undefined,
   );
   const autoMerge = useAutoMergeToggle(environment ?? null);
+  const hold = useAutoMergeHold(environmentId, environment);
   const [open, setOpen] = useState(false);
 
   const prOpen = !!environment?.prUrl && environment.prState === "open";
@@ -56,7 +63,12 @@ export function PipelineIntegrateButton({ environmentId }: { environmentId: stri
   const integrate = async (cleanupAfterMerge: boolean) => {
     setOpen(false);
     const on = await autoMerge.set(true, cleanupAfterMerge);
-    if (on) {
+    if (on && hold && !hold.transient) {
+      toast.warning(cleanupAfterMerge ? "Integrating, then cleaning up" : "Integrating", {
+        description: `Waiting: ${hold.message}`,
+        id: `integrate-${environmentId}`,
+      });
+    } else if (on) {
       toast.success(cleanupAfterMerge ? "Integrating, then cleaning up" : "Integrating", {
         description: cleanupAfterMerge
           ? "Merges when ready and resolves conflicts, then deletes this environment."
@@ -72,14 +84,25 @@ export function PipelineIntegrateButton({ environmentId }: { environmentId: stri
   };
 
   const label = autoMerge.enabled ? "Integrating" : "Integrate";
-  const tooltip: ReactNode =
-    disabledReason ??
-    environment?.autoMergeError ??
-    (autoMerge.enabled
-      ? autoMerge.cleanup
-        ? "Auto-merge & Cleanup is on: merges when ready, then deletes this environment"
-        : "Auto-merge is on: merges when ready, resolving conflicts as needed"
-      : "Merge when ready, resolving conflicts as needed");
+  const activeHold = disabledReason === null ? hold : null;
+  const needsAttention =
+    autoMerge.enabled && !environment?.autoMergeError && activeHold?.transient === false;
+  const summary = autoMerge.enabled
+    ? autoMerge.cleanup
+      ? "Auto-merge & Cleanup is on: merges when ready, then deletes this environment"
+      : "Auto-merge is on: merges when ready, resolving conflicts as needed"
+    : "Merge when ready, resolving conflicts as needed";
+  const tooltip: ReactNode = disabledReason ?? environment?.autoMergeError ?? (
+    <>
+      <p>{summary}</p>
+      {activeHold ? (
+        <p className="text-xs text-muted-foreground">
+          {autoMerge.enabled ? "Waiting: " : "Not ready yet: "}
+          {activeHold.message}
+        </p>
+      ) : null}
+    </>
+  );
 
   return (
     <>
@@ -96,12 +119,20 @@ export function PipelineIntegrateButton({ environmentId }: { environmentId: stri
                 autoMerge.enabled && "ring-1 ring-green-300/60",
               )}
               aria-label={label}
+              aria-description={needsAttention ? `Waiting: ${activeHold?.message}` : undefined}
               aria-haspopup="dialog"
               disabled={disabledReason !== null || autoMerge.saving}
               onClick={() => setOpen(true)}
             >
               {autoMerge.saving ? <Loader2 className="size-4 animate-spin" /> : <AutoMergeIcon />}
               <span>{label}</span>
+              {needsAttention ? (
+                <CircleAlert
+                  aria-hidden="true"
+                  data-integrate-hold="attention"
+                  className="size-3.5 text-amber-200"
+                />
+              ) : null}
             </Button>
           </span>
         </TooltipTrigger>
@@ -139,6 +170,15 @@ export function PipelineIntegrateButton({ environmentId }: { environmentId: stri
                 Turn Off
               </Button>
             </div>
+          ) : null}
+          {activeHold && !activeHold.transient ? (
+            <p
+              role="note"
+              className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-300"
+            >
+              {autoMerge.enabled ? "Auto-merge is waiting: " : "Auto-merge will wait: "}
+              {activeHold.message}
+            </p>
           ) : null}
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>

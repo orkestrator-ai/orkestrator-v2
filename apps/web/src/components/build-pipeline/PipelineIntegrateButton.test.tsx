@@ -2,7 +2,9 @@ import { act, cleanup, fireEvent, render, screen, within } from "@testing-librar
 import { afterEach, beforeEach, describe, expect, type Mock, spyOn, test } from "bun:test";
 import { toast } from "sonner";
 import { invoke } from "@/lib/native/backend";
+import type { PrMonitorEnvironmentState } from "@orkestrator/protocol/pr-monitor";
 import { useEnvironmentStore } from "@/stores";
+import { usePrMonitorStore } from "@/stores/prMonitorStore";
 import type { Environment } from "@/types";
 import { PipelineIntegrateButton } from "./PipelineIntegrateButton";
 import { PipelineKeyInformationButton } from "./PipelineKeyInformation";
@@ -62,7 +64,28 @@ afterEach(() => {
   invokeMock.mockReset();
   invokeMock.mockImplementation(() => Promise.resolve());
   useEnvironmentStore.getState().setEnvironments([]);
+  usePrMonitorStore.setState({ states: new Map(), syncStatus: "idle" });
 });
+
+/** A current monitor reading for env-1's pull request. */
+function monitorReading(overrides: Partial<PrMonitorEnvironmentState> = {}) {
+  const state: PrMonitorEnvironmentState = {
+    environmentId: "env-1",
+    mode: "normal",
+    checkInProgress: false,
+    consecutiveErrors: 0,
+    lastCheckAt: "2026-11-06T10:00:00.000Z",
+    lastSuccessfulCheckAt: "2026-11-06T10:00:00.000Z",
+    prUrl: "https://github.com/acme/repo/pull/7",
+    prState: "open",
+    hasMergeConflicts: false,
+    checkSummary: { passed: 2, total: 2, pending: 0 },
+    viewerCanMerge: true,
+    mergeability: "clean",
+    ...overrides,
+  };
+  usePrMonitorStore.setState({ states: new Map([["env-1", state]]), syncStatus: "current" });
+}
 
 describe("PipelineIntegrateButton", () => {
   test("confirms before turning on auto-merge, offering Auto-merge, Auto-merge & Cleanup and Cancel", async () => {
@@ -163,6 +186,68 @@ describe("PipelineIntegrateButton", () => {
     const dialog = await openConfirmation();
     expect(within(dialog).getByRole("button", { name: "Auto-merge" })).toBeTruthy();
     expect(within(dialog).queryByRole("button", { name: "Auto-merge & Cleanup" }) === null).toBe(
+      true,
+    );
+  });
+});
+
+describe("PipelineIntegrateButton waiting states", () => {
+  test("a ready pull request gets no waiting note", async () => {
+    useEnvironmentStore.getState().setEnvironments([environment({ prMergeability: "clean" })]);
+    monitorReading();
+    render(<PipelineIntegrateButton environmentId="env-1" />);
+    const dialog = await openConfirmation();
+    expect(within(dialog).queryByRole("note") === null).toBe(true);
+  });
+
+  test("failed checks that hold auto-merge back are named before and after turning it on", async () => {
+    answerAutoMerge();
+    useEnvironmentStore.getState().setEnvironments([environment({ prMergeability: "unstable" })]);
+    monitorReading({
+      mergeability: "unstable",
+      checkSummary: { passed: 18, total: 20, pending: 0 },
+    });
+    const warning = spyOn(toast, "warning");
+    const success = spyOn(toast, "success");
+    try {
+      render(<PipelineIntegrateButton environmentId="env-1" />);
+      const dialog = await openConfirmation();
+      expect(within(dialog).getByRole("note").textContent).toContain(
+        "Auto-merge will wait: 2 checks failed, ",
+      );
+
+      await act(async () => {
+        fireEvent.click(within(dialog).getByRole("button", { name: "Auto-merge & Cleanup" }));
+      });
+
+      expect(success).not.toHaveBeenCalled();
+      expect(warning).toHaveBeenCalledTimes(1);
+      expect(String(warning.mock.calls[0]?.[1]?.description)).toContain(
+        "Waiting: 2 checks failed, ",
+      );
+      const button = integrateButton();
+      expect(button.getAttribute("aria-description")).toContain("2 checks failed");
+      expect(button.querySelector('[data-integrate-hold="attention"]')).not.toBeNull();
+    } finally {
+      warning.mockRestore();
+      success.mockRestore();
+    }
+  });
+
+  test("running checks are a wait that needs nobody, so no warning is shown", async () => {
+    answerAutoMerge();
+    useEnvironmentStore.getState().setEnvironments([environment({ prMergeability: "unstable" })]);
+    monitorReading({
+      mergeability: "unstable",
+      checkSummary: { passed: 18, total: 20, pending: 2 },
+    });
+    render(<PipelineIntegrateButton environmentId="env-1" />);
+    const dialog = await openConfirmation();
+    expect(within(dialog).queryByRole("note") === null).toBe(true);
+    await act(async () => {
+      fireEvent.click(within(dialog).getByRole("button", { name: "Auto-merge" }));
+    });
+    expect(integrateButton().querySelector('[data-integrate-hold="attention"]') === null).toBe(
       true,
     );
   });

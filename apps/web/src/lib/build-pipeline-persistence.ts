@@ -51,6 +51,36 @@ function setBoundedGeneration(
   }
 }
 
+/**
+ * Pipelines whose last point read found no usable record: deleted, or failing
+ * validation in this client. Pane-layout restore skips them, so a Build or
+ * key-information tab left pointing at a finished pipeline is not fetched
+ * again on every layout change. A change event for the id still reads it,
+ * and any read that finds a record clears the marker. Bounded like the
+ * hydration markers.
+ */
+const unavailablePipelines = new Set<string>();
+
+function markPipelineUnavailable(pipelineId: string): void {
+  unavailablePipelines.delete(pipelineId);
+  unavailablePipelines.add(pipelineId);
+  while (unavailablePipelines.size > MAX_PIPELINE_HYDRATION_MARKERS) {
+    const oldest = unavailablePipelines.values().next().value;
+    if (oldest === undefined) break;
+    unavailablePipelines.delete(oldest);
+  }
+}
+
+/** Whether the last point read of `pipelineId` found no usable record. */
+export function isBuildPipelineKnownUnavailable(pipelineId: string): boolean {
+  return unavailablePipelines.has(pipelineId);
+}
+
+/** Test seam: forget every unavailable marker. */
+export function resetBuildPipelineUnavailableMarkersForTests(): void {
+  unavailablePipelines.clear();
+}
+
 function toSnapshot(persisted: PersistedBuildPipeline<BuildPipeline>): BuildPipeline | null {
   // Older remote backends cannot run the storage migration. Backfill only the
   // historical field here; strict pipeline validation still rejects bad reports.
@@ -363,6 +393,7 @@ async function hydrateBuildPipelineOnce(
           options.prioritySessionKey,
         );
   if (loaded && "unchanged" in loaded && loaded.unchanged) {
+    unavailablePipelines.delete(pipelineId);
     return useBuildPipelineStore.getState().pipelines.get(pipelineId) ?? null;
   }
   let persisted: PersistedBuildPipeline<BuildPipeline> | null;
@@ -413,6 +444,7 @@ async function hydrateBuildPipelineOnce(
       generation,
       MAX_PIPELINE_HYDRATION_MARKERS,
     );
+    markPipelineUnavailable(pipelineId);
     return null;
   }
   const snapshot = toSnapshot(persisted);
@@ -423,9 +455,11 @@ async function hydrateBuildPipelineOnce(
       generation,
       MAX_PIPELINE_HYDRATION_MARKERS,
     );
+    markPipelineUnavailable(pipelineId);
     return null;
   }
   const local = useBuildPipelineStore.getState().pipelines.get(pipelineId);
+  unavailablePipelines.delete(pipelineId);
   if (local && local.backendRevision > snapshot.backendRevision) return local;
   useBuildPipelineStore.getState().replacePipeline(snapshot);
   return snapshot;
@@ -479,6 +513,7 @@ async function restoreBuildPipelinesForProject(
     const merged = withLocalTranscripts(entry, local);
     const snapshot = merged ? toSnapshot(merged) : null;
     if (!snapshot) continue;
+    unavailablePipelines.delete(snapshot.id);
     if (!local || local.backendRevision <= snapshot.backendRevision) {
       useBuildPipelineStore.getState().replacePipeline(snapshot);
       restored.push(snapshot);

@@ -15,11 +15,15 @@ const realBackendSnapshot = { ...realBackend };
 
 const listMultiReviewWorkflowsMock = mock(async (_environmentId: string): Promise<unknown[]> => []);
 const getMultiReviewWorkflowMock = mock(async (_workflowId: string): Promise<unknown> => null);
+const getMultiReviewWorkflowConditionalMock = mock(
+  async (_workflowId: string, _knownRevision?: number): Promise<unknown> => null,
+);
 
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
   listMultiReviewWorkflows: listMultiReviewWorkflowsMock,
   getMultiReviewWorkflow: getMultiReviewWorkflowMock,
+  getMultiReviewWorkflowConditional: getMultiReviewWorkflowConditionalMock,
 }));
 
 afterAll(() => {
@@ -30,6 +34,8 @@ const {
   findActiveMultiReviewWorkflow,
   hydrateMultiReviewWorkflow,
   hydrateMultiReviewWorkflowsForEnvironment,
+  isMultiReviewWorkflowKnownUnavailable,
+  resetMultiReviewPersistenceForTests,
 } = await import("./multi-review-persistence");
 const { useMultiReviewStore } = await import("@/stores/multiReviewStore");
 
@@ -132,7 +138,10 @@ beforeEach(() => {
   listMultiReviewWorkflowsMock.mockImplementation(async () => []);
   getMultiReviewWorkflowMock.mockReset();
   getMultiReviewWorkflowMock.mockImplementation(async () => null);
+  getMultiReviewWorkflowConditionalMock.mockReset();
+  getMultiReviewWorkflowConditionalMock.mockImplementation(async () => null);
   useMultiReviewStore.setState({ workflows: new Map() });
+  resetMultiReviewPersistenceForTests();
 });
 
 describe("findActiveMultiReviewWorkflow", () => {
@@ -279,5 +288,56 @@ describe("findActiveMultiReviewWorkflow", () => {
       phase: "reviewing",
       backendRevision: 12,
     });
+  });
+});
+
+describe("hydrateMultiReviewWorkflow", () => {
+  test("reads a held workflow conditionally and keeps it when unchanged", async () => {
+    const held = entry("wf-held", "reviewing", 4);
+    getMultiReviewWorkflowMock.mockResolvedValue(held);
+    await hydrateMultiReviewWorkflow("wf-held");
+    getMultiReviewWorkflowConditionalMock.mockResolvedValue({ unchanged: true, revision: 4 });
+
+    const result = await hydrateMultiReviewWorkflow("wf-held");
+
+    expect(getMultiReviewWorkflowConditionalMock).toHaveBeenCalledWith("wf-held", 4);
+    expect(getMultiReviewWorkflowMock).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ id: "wf-held", backendRevision: 4 });
+  });
+
+  test("a burst of change events costs one read in flight and one shared follow-up", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    getMultiReviewWorkflowMock.mockImplementation(async () => {
+      await gate;
+      return entry("wf-burst", "reviewing", 2);
+    });
+
+    const reads = Array.from({ length: 6 }, () => hydrateMultiReviewWorkflow("wf-burst"));
+    release();
+    await Promise.all(reads);
+
+    // The first read, then one follow-up (now conditional, the record being held).
+    expect(getMultiReviewWorkflowMock).toHaveBeenCalledTimes(1);
+    expect(getMultiReviewWorkflowConditionalMock).toHaveBeenCalledTimes(1);
+  });
+
+  test("remembers a workflow the backend no longer has until a read finds it", async () => {
+    expect(await hydrateMultiReviewWorkflow("wf-gone")).toBeNull();
+    expect(isMultiReviewWorkflowKnownUnavailable("wf-gone")).toBe(true);
+
+    getMultiReviewWorkflowMock.mockResolvedValue(entry("wf-gone", "reviewing", 1));
+    await hydrateMultiReviewWorkflow("wf-gone");
+    expect(isMultiReviewWorkflowKnownUnavailable("wf-gone")).toBe(false);
+  });
+
+  test("an environment listing clears the marker of a workflow it returns", async () => {
+    await hydrateMultiReviewWorkflow("wf-listed");
+    expect(isMultiReviewWorkflowKnownUnavailable("wf-listed")).toBe(true);
+    listMultiReviewWorkflowsMock.mockImplementation(async () => [
+      entry("wf-listed", "reviewing", 1),
+    ]);
+    await hydrateMultiReviewWorkflowsForEnvironment(ENVIRONMENT_ID);
+    expect(isMultiReviewWorkflowKnownUnavailable("wf-listed")).toBe(false);
   });
 });

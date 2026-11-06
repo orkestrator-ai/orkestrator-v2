@@ -15,6 +15,7 @@ import {
   nextQueryCall,
   materializePersistedSession,
   readSessionPreferences,
+  settleSessionPreferenceWritesForTesting,
   PERSISTED_SDK_ID,
   pendingCalls,
   queryControlOverrides,
@@ -36,7 +37,6 @@ import {
 } from "./session-manager-runtime-idle.js";
 import { admitPrompt, applyPromptPlanMode } from "./session-manager-prompt-admission.js";
 import { assertClaudeRuntimeStaticAccepts } from "./session-manager-runtime.js";
-import { settleSessionPreferenceWritesForTesting } from "./session-preferences.js";
 
 // The session's CLI stays open after a turn that leaves nothing owed, so the
 // next prompt is written into it, and releases itself once it has been idle
@@ -628,10 +628,11 @@ describe("a root turn the warm CLI starts on its own", () => {
       expect(session).toMatchObject({ status: "error", interruption: "restart" });
       expect(session.error).toContain("SIGKILL");
       expect(session.abortController).toBeUndefined();
-      // The mark is written at every edge through one serialized queue: set
-      // for the prompt, cleared when it settled, set again for the resumed
-      // root. Polling for any mark could stop on the prompt's stale one and
-      // then read the clear, so drain the queue before checking retention.
+      // The mark is written without waiting, and this session queued three
+      // writes: set by the prompt, cleared when it settled, set again by the
+      // resumed root. Polling for "a mark on disk" can stop on the first one
+      // while the clear is still queued, then read the clear (1221). Wait for
+      // the whole queue so the read sees the last write.
       await settleSessionPreferenceWritesForTesting();
       expect((await readSessionPreferences(PERSISTED_SDK_ID))?.turnInFlight).toBeDefined();
     });

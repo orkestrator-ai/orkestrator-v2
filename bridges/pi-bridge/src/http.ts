@@ -118,6 +118,7 @@ import {
 import { refreshRuntimeCatalog } from "./runtime.js";
 import { TimeoutError, withTimeout } from "./timeout.js";
 import { closeSessionRetaining } from "./session-close.js";
+import { HistoryTargetError } from "./history-target.js";
 import { boundTranscript, boundTranscriptForRead, chargeTranscript } from "./transcript.js";
 import {
   applyComposerPatch,
@@ -301,6 +302,9 @@ export async function route(
       return json(response, 403, error.refusal());
     }
     if (error instanceof SessionBusyError) return json(response, 409, { error: error.message });
+    if (error instanceof HistoryTargetError) {
+      return json(response, 409, { error: error.message });
+    }
     // `kind` separates a missing provider login from a bad bridge token, which
     // is also a 401; the backend shows the former's message as written.
     if (error instanceof CredentialError) {
@@ -1672,6 +1676,7 @@ async function handleAdmittedPrompt(
   const messageStart = state.messages.length;
   const uncheckedBeforePrompt = state.uncheckedTranscriptBytes;
   appendUserMessage(state, displayPrompt, images, files);
+  state.pendingHistoryPromptId = state.messages.at(-1)!.id;
   state.status = "running";
   state.error = undefined;
   state.promptSequence += 1;
@@ -1716,6 +1721,7 @@ async function handleAdmittedPrompt(
     // turn back rather than leaving the session wedged as running or showing
     // a user message for work the agent never accepted.
     state.messages.splice(messageStart);
+    state.pendingHistoryPromptId = undefined;
     state.uncheckedTranscriptBytes = uncheckedBeforePrompt;
     state.status = "error";
     state.error = errorText(error);

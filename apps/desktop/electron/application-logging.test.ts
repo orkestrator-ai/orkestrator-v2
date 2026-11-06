@@ -1065,6 +1065,17 @@ describe("production application log pruning", () => {
 });
 
 describe("application logging shutdown", () => {
+  /**
+   * The re-issued quit is its own `setTimeout(0)`, scheduled only once the hold
+   * settles. When a loaded host stalls the event loop past a test's fixed sleep,
+   * that sleep's timer is already due and runs before the quit timer that the
+   * same wake-up schedules, so wait for the quit itself, with a bound.
+   */
+  async function waitForQuits(app: { quitCount: number }, count: number): Promise<void> {
+    const deadline = Date.now() + 3_000;
+    while (app.quitCount < count && Date.now() < deadline) await Bun.sleep(1);
+  }
+
   function fakeApp(): {
     host: ApplicationLoggingQuitHost;
     emit: () => void;
@@ -1117,7 +1128,7 @@ describe("application logging shutdown", () => {
     expect(app.quitCount).toBe(0);
 
     stopped.resolve();
-    await Bun.sleep(5);
+    await waitForQuits(app, 1);
     expect(app.quitCount).toBe(1);
 
     // The re-entrant will-quit that our own `app.quit()` triggers must fall
@@ -1140,7 +1151,7 @@ describe("application logging shutdown", () => {
 
     registerApplicationLoggingShutdown(app.host, logging, 10);
     app.emit();
-    await Bun.sleep(60);
+    await waitForQuits(app, 1);
     expect(app.quitCount).toBe(1);
   });
 
@@ -1157,7 +1168,7 @@ describe("application logging shutdown", () => {
 
     registerApplicationLoggingShutdown(app.host, logging, 5_000);
     app.emit();
-    await Bun.sleep(10);
+    await waitForQuits(app, 1);
     expect(app.quitCount).toBe(1);
   });
 
@@ -1224,7 +1235,7 @@ describe("application logging shutdown", () => {
     expect(order).toEqual([]);
 
     backend.resolve();
-    await Bun.sleep(5);
+    await waitForQuits(app, 1);
     expect(order).toEqual(["backend-stopped", "log-closed"]);
     expect(app.quitCount).toBe(1);
   });

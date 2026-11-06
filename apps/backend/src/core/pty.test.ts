@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { fakePid } from "@orkestrator/protocol/testing/fake-pids";
 import { isPtyPlatformSupported, spawnPty } from "./pty.js";
 
 type FakePtyHarness = {
@@ -33,7 +34,8 @@ function spawnFakePty(options: Parameters<typeof spawnPty>[2]): {
   ) => {
     onTerminalData = spawnOptions.terminal?.data;
     return {
-      pid: 42,
+      // `terminate()` reaches the real process-tree kill; never a plausible pid.
+      pid: fakePid(42),
       terminal: fakeTerminal,
       exited,
       kill: mock(() => undefined),

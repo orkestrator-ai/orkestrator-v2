@@ -22,6 +22,19 @@
  *   `unknown`), the row must still offer reconnect, and the reconnect runs
  *   through the probe and changes only its own row, before and after a reload.
  *
+ * - Reconnect on a running Claude CLI (docs/todo/mcp/0039-mcp-management.md,
+ *   task 13), only with `ORKESTRATOR_AGENT_TEST_MCP_FAKE_MODEL=1`: the
+ *   profile's own Claude settings point at the scripted loopback model in
+ *   `mcp-fake-model.ts` (no login, no provider turn), so a turn succeeds and
+ *   the CLI stays warm for the bridge's idle window (a profile with the
+ *   default `CLAUDE_BRIDGE_RUNTIME_IDLE_MS`, not the 0 the case above
+ *   needs). A failed row's reconnect then goes through the live control,
+ *   without a probe CLI; once the bridge has released the idle CLI (the case
+ *   waits up to `ORKESTRATOR_AGENT_TEST_MCP_CLI_EXIT_WAIT_MS`, 12 minutes by
+ *   default, for the 10-minute window) a reconnect goes through the probe
+ *   and changes only its row, and the next turn's CLI report replaces the
+ *   merged list, before and after a reload.
+ *
  * Both editor flows run at a desktop and a 390-pixel viewport. The live-panel
  * cases start Claude's CLI with a turn, so they run only on a profile that
  * authorizes no Claude credentials (`--no-agent-credentials`): the CLI
@@ -53,6 +66,7 @@ import type { NativeAgentMcpServer } from "@orkestrator/protocol/native-agent";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import { loadAppWithDevRetry } from "./dev-startup-retry";
 import { writableSourcePath } from "./mcp-apply-live-safety";
+import { startMcpFakeModel, type McpFakeModelHandle } from "./mcp-fake-model-wiring";
 import { dismissSidebarTooltip } from "./sidebar-tooltip";
 
 type Status = {
@@ -75,6 +89,12 @@ const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 const profile = process.env.ORKESTRATOR_AGENT_TEST_PROFILE ?? "codex-qa";
 const runId = process.env.ORKESTRATOR_AGENT_TEST_RUN_ID ?? profile;
 const OPT_IN = process.env.ORKESTRATOR_AGENT_TEST_MCP_UI === "1";
+/** The scripted loopback model for task 13's warm-CLI case (no login, no provider). */
+const FAKE_MODEL = process.env.ORKESTRATOR_AGENT_TEST_MCP_FAKE_MODEL === "1";
+/** How long task 13's case waits for the bridge to release the idle CLI (default window 10 min). */
+const CLI_EXIT_WAIT_MS = Number(
+  process.env.ORKESTRATOR_AGENT_TEST_MCP_CLI_EXIT_WAIT_MS ?? "720000",
+);
 const DESKTOP = { width: 1440, height: 1000 };
 const VIEWPORTS = [
   { label: "desktop", size: DESKTOP },
@@ -981,6 +1001,290 @@ test.describe("MCP settings and live panel UI matrix (claude)", () => {
       rmSync(holdFile, { force: true });
       await invoke("stop_environment", { environmentId: environment.id }).catch(() => undefined);
       await invoke("delete_environment", { environmentId: environment.id }).catch(() => undefined);
+    }
+  });
+
+  test("live panel: reconnect on a running CLI, then through the probe after it exits (fake model)", async ({
+    page,
+  }, testInfo) => {
+    test.setTimeout(600_000 + CLI_EXIT_WAIT_MS);
+    page.setDefaultTimeout(15_000);
+    test.skip(
+      !FAKE_MODEL,
+      "needs a warm CLI, so a turn that succeeds: set ORKESTRATOR_AGENT_TEST_MCP_FAKE_MODEL=1",
+    );
+    const sources = profileCredentialSources(status);
+    // The fake model must be the only model the CLI can reach.
+    test.skip(
+      sources === null || sources.includes("claude"),
+      "points Claude at a fake model: needs a profile without a Claude credential",
+    );
+    await page.setViewportSize(DESKTOP);
+    const record = (type: string, description: string) =>
+      testInfo.annotations.push({ type, description });
+    // Before the environment exists, so its bridge's first CLI reads it.
+    const fake: McpFakeModelHandle = await startMcpFakeModel("claude", status.dataDir!);
+    record("fake-model", `scripted loopback model at ${fake.origin}; no provider turn, no login`);
+    let invoke: Invoke | undefined;
+    let environmentId: string | undefined;
+    let lateScript: string | undefined;
+    try {
+      invoke = await signIn(page, testInfo, status);
+      const call = invoke;
+      const project = (await call<Project[]>("get_projects")).find(
+        (candidate) => candidate.localPath === status.testProject,
+      );
+      expect(project, "the fixture project is missing").toBeTruthy();
+      const mcp = mcpCommands(call);
+      const { environment, worktree, identity } = await claudeEnvironment(
+        call,
+        project!,
+        "mcpui-warm",
+      );
+      environmentId = environment.id;
+      const probeLog = path.join(runDir, `warm-${environment.id.slice(0, 8)}.jsonl`);
+      // Missing until the reconnect step, so node exits at once.
+      lateScript = path.join(runDir, `warm-late-${environment.id.slice(0, 8)}.mjs`);
+      rmSync(lateScript, { force: true });
+      const shot = (name: string) =>
+        page.screenshot({ path: path.join(runDir, `warm-${name}.png`) });
+      const logged = (event: string, name: string) =>
+        existsSync(probeLog)
+          ? readFileSync(probeLog, "utf8")
+              .split("\n")
+              .filter((line) => line.includes(`"event":"${event}"`) && line.includes(`"${name}"`))
+              .length
+          : 0;
+      const starts = (name: string) => logged("start", name);
+      const exits = (name: string) => logged("exit", name);
+      const target = await mcp.target(environment.id);
+      const projectSource = await mcp.source(target.targetId, "project");
+      expect(
+        writableSourcePath(projectSource, {
+          flavor: status.flavor,
+          dataDir: status.dataDir!,
+          worktree,
+        })?.startsWith(worktree),
+        "the project file is outside the worktree",
+      ).toBe(true);
+      await mcp.add(
+        target.targetId,
+        "project",
+        stdio("mcpui-ok", PROBE_SERVER, ["--log", probeLog]),
+      );
+      await mcp.add(
+        target.targetId,
+        "project",
+        stdio("mcpui-late", lateScript, ["--log", probeLog]),
+      );
+      expect(
+        existsSync(path.join(worktree, ".claude", "settings.json")),
+        "the worktree has a Claude settings file (a hold-open hook is not wanted here)",
+      ).toBe(false);
+
+      const { projection, liveServers, statusOf, inExpandedPanel, clickInPanel, mcpPanel } =
+        liveSession(page, call, identity);
+      /** The whole list, as the session reports it: two project rows and the injected one. */
+      const expectSessionInventory = async (where: string, late: string, includeOk = true) => {
+        const servers = await liveServers();
+        record(`inventory-${where}`, describeServers(servers));
+        expect(
+          Object.fromEntries(servers.map((server) => [server.id, [server.scope, server.status]])),
+          `${where}: the session's list`,
+        ).toEqual({
+          ...(includeOk ? { "mcpui-ok": ["project", "connected"] } : {}),
+          "mcpui-late": ["project", late],
+          orkestrator: ["orkestrator", "connected"],
+        });
+        expect(
+          servers.find((server) => server.id === "orkestrator")?.toolCount ?? 0,
+          `${where}: Orkestrator's own tools`,
+        ).toBeGreaterThan(0);
+        return servers;
+      };
+      const panelMatchesBackend = async (panel: Locator) => {
+        const backend = await liveServers();
+        await inExpandedPanel(panel, async () => {
+          for (const server of backend) {
+            await expect(panelRow(panel, server.name)).toContainText(
+              server.status === "connected" ? String(server.toolCount ?? "—") : server.status,
+              { timeout: 3_000 },
+            );
+          }
+        });
+      };
+      const replyTurn = async (word: string) => {
+        const before = Date.now();
+        const dispatched = await call<{ outcome: string; error?: string }>(
+          "dispatch_native_agent_intent",
+          {
+            ...identity,
+            prompt: `Reply with exactly ${word}. Do not use any tools.`,
+            requestId: randomUUID(),
+          },
+        );
+        expect(dispatched.outcome, dispatched.error).toBe("accepted");
+        await expect
+          .poll(async () => (await projection())?.turn.phase, { timeout: 120_000 })
+          .toMatch(/^(idle|error)$/);
+        const after = await projection();
+        record("turn", `${word}: ${after?.turn.phase} after ${Date.now() - before} ms`);
+        expect(after?.turn.error, "the fake model's turn failed").toBeFalsy();
+      };
+
+      await loadAppWithDevRetry(page, testInfo, () => page.goto(status.browserUrl!));
+      await openEnvironment(page, project!.name, environment.name);
+      await expect.poll(async () => (await projection()) !== null, { timeout: 120_000 }).toBe(true);
+
+      await test.step("a turn the model answers leaves the CLI warm, one server up and one down", async () => {
+        await replyTurn("READY");
+        await expect.poll(() => statusOf("mcpui-ok"), { timeout: 60_000 }).toBe("connected");
+        await expect.poll(() => statusOf("mcpui-late"), { timeout: 60_000 }).toBe("failed");
+        await expectSessionInventory("warm", "failed");
+        const panel = await mcpPanel();
+        await expect(panel).toContainText("1 down");
+        await shot("before-reconnect");
+      });
+
+      await test.step("reconnect on the running CLI goes through the live control", async () => {
+        copyFileSync(PROBE_SERVER, lateScript!);
+        const okStarts = starts("mcpui-ok");
+        const lateStarts = starts("mcpui-late");
+        const panel = page.getByLabel("MCP servers", { exact: true });
+        const answered = page.waitForResponse(
+          (response) => isMcpAction("mcpui-late", "reconnect")(response.request()),
+          { timeout: 60_000 },
+        );
+        await clickInPanel(panel, panel.getByRole("button", { name: /^mcpui-late/ }).first());
+        const response = await answered;
+        record("warm-reconnect", `${response.status()}`);
+        expect(response.ok(), "the reconnect request failed").toBe(true);
+        await expect.poll(() => statusOf("mcpui-late"), { timeout: 60_000 }).toBe("connected");
+        // A probe CLI would start every server again; the live control starts only its own.
+        expect(starts("mcpui-late"), "the late server never started").toBeGreaterThan(lateStarts);
+        expect(starts("mcpui-ok"), "a probe CLI ran instead of the live control").toBe(okStarts);
+        await expectSessionInventory("after-warm-reconnect", "connected");
+        // The panel's live refresh after an action is to-do 7221 (the task 8
+        // case above stays red for it). Record it here; the claim of this case
+        // is the session's list, and the panel must match it after a reload.
+        const caughtUp = await expect(panel)
+          .not.toContainText("down", { timeout: 30_000 })
+          .then(
+            () => true,
+            () => false,
+          );
+        record(
+          "panel-after-warm-reconnect",
+          caughtUp ? "matched the backend" : "still showed the row down after 30 s (7221)",
+        );
+        await shot("after-warm-reconnect");
+        await loadAppWithDevRetry(page, testInfo, () => page.reload());
+        await openEnvironment(page, project!.name, environment.name);
+        const reloaded = await mcpPanel();
+        await expect(reloaded).not.toContainText("down");
+        await panelMatchesBackend(reloaded);
+        await expectSessionInventory("after-warm-reconnect-reload", "connected");
+        await shot("after-warm-reconnect-reload");
+      });
+
+      await test.step("after the CLI exits, a reconnect runs through the probe", async () => {
+        // The bridge releases the idle CLI after its idle window; the probe
+        // server logs its own exit when the CLI closes its stdin. A bridge
+        // restart would also end the CLI, but drops the session's list too.
+        const started = Date.now();
+        let lastProgress = started;
+        await expect
+          .poll(
+            () => {
+              // The real idle window exceeds test:logged's silence budget. Keep
+              // this bounded poll observable without a separate timer to dispose.
+              const now = Date.now();
+              if (now - lastProgress >= 30_000) {
+                console.log(
+                  `[mcp-ui] waiting for idle CLI release: ${Math.round((now - started) / 1000)}s`,
+                );
+                lastProgress = now;
+              }
+              return exits("mcpui-ok");
+            },
+            {
+              timeout: CLI_EXIT_WAIT_MS,
+              intervals: [5_000],
+              message: "the bridge never released the idle CLI",
+            },
+          )
+          .toBeGreaterThan(0);
+        record("cli-exit", `after ${Math.round((Date.now() - started) / 1000)} s idle`);
+        const before = await liveServers();
+        record("after-exit", describeServers(before));
+        // Save only while no CLI is running. The probe must merge only its
+        // reconnect target, retaining the now-removed row until a real CLI report.
+        await mcp.remove(target.targetId, "project", "mcpui-ok");
+        const saved = await mcp.source(target.targetId, "project");
+        expect(
+          readFileSync(
+            writableSourcePath(saved, {
+              flavor: status.flavor,
+              dataDir: status.dataDir!,
+              worktree,
+            })!,
+            "utf8",
+          ),
+        ).not.toContain('"mcpui-ok"');
+        await expectSessionInventory("retained-after-save", "connected");
+        const okStarts = starts("mcpui-ok");
+        const lateStarts = starts("mcpui-late");
+        const result = await call<unknown>("perform_native_agent_mcp_action", {
+          ...identity,
+          serverId: "mcpui-late",
+          action: "reconnect",
+        });
+        record("probe-reconnect", JSON.stringify(result ?? null).slice(0, 300));
+        expect((await projection())?.turn.phase, "the reconnect ran a turn").toMatch(
+          /^(idle|error)$/,
+        );
+        expect(starts("mcpui-late"), "the probe did not start the server").toBeGreaterThan(
+          lateStarts,
+        );
+        record(
+          "probe-starts",
+          `ok ${starts("mcpui-ok") - okStarts}, late ${starts("mcpui-late") - lateStarts}`,
+        );
+        await expect.poll(() => statusOf("mcpui-late"), { timeout: 60_000 }).toBe("connected");
+        const after = await liveServers();
+        record("after-probe-reconnect", describeServers(after));
+        const others = (servers: NativeAgentMcpServer[]) =>
+          servers.filter((server) => server.id !== "mcpui-late");
+        expect(others(after), "a probe reconnect changed another row").toEqual(others(before));
+        expect(
+          after.find((server) => server.id === "orkestrator"),
+          "the probe dropped Orkestrator's own row",
+        ).toBeTruthy();
+      });
+
+      await test.step("the next turn's CLI report replaces the merged list, also after a reload", async () => {
+        const okStarts = starts("mcpui-ok");
+        await replyTurn("AGAIN");
+        expect(starts("mcpui-ok"), "the new CLI started the removed server").toBe(okStarts);
+        await expect.poll(() => statusOf("mcpui-late"), { timeout: 60_000 }).toBe("connected");
+        await expectSessionInventory("after-next-turn", "connected", false);
+        await loadAppWithDevRetry(page, testInfo, () => page.reload());
+        await openEnvironment(page, project!.name, environment.name);
+        const panel = await mcpPanel();
+        await expect(panel).not.toContainText("down");
+        await expect(panel).toContainText("2 servers");
+        await expect(panelRow(panel, "mcpui-ok")).toHaveCount(0);
+        await panelMatchesBackend(panel);
+        await expectSessionInventory("after-reload", "connected", false);
+        await shot("after-reload");
+      });
+    } finally {
+      if (invoke && environmentId) {
+        await invoke("stop_environment", { environmentId }).catch(() => undefined);
+        await invoke("delete_environment", { environmentId }).catch(() => undefined);
+      }
+      if (lateScript) rmSync(lateScript, { force: true });
+      await fake.stop();
     }
   });
 });

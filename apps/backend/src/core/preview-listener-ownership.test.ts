@@ -416,20 +416,23 @@ describe.skipIf(!realHost)("LoopbackListenerOwnership on this host", () => {
   test.each(["127.0.0.1", "::"])(
     "attributes a real %s listener and refuses another environment",
     async (host) => {
-      const port = await freePort();
       // A shell (the "terminal") starting a server, as a dev server runs in one.
+      // The server takes its own port and reports it: probing a port on
+      // 127.0.0.1 and binding it here afterwards left a gap another worker could
+      // fill, and the probe never checked `::` (flake 1410).
       child = spawn(
         "/bin/sh",
         [
           "-c",
-          `"${process.execPath}" -e 'require("node:net").createServer().listen({port:${port},host:"${host}",ipv6Only:false}, () => console.log("ready"))'`,
+          `"${process.execPath}" -e 'require("node:net").createServer().listen({port:0,host:"${host}",ipv6Only:false}, function () { console.log(this.address().port) })'`,
         ],
         { detached: true, stdio: ["ignore", "pipe", "inherit"] },
       );
-      await new Promise<void>((resolve, reject) => {
-        child!.stdout!.once("data", () => resolve());
+      const port = await new Promise<number>((resolve, reject) => {
+        child!.stdout!.once("data", (data) => resolve(Number(String(data).trim())));
         child!.once("exit", (code) => reject(new Error(`listener exited ${code}`)));
       });
+      expect(port).toBeGreaterThan(0);
       // Prove the IPv6 wildcard really accepts the chosen IPv4 preview address.
       const connection = createConnection({ host: "127.0.0.1", port });
       await new Promise<void>((resolve, reject) => {

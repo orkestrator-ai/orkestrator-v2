@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { captureLogs, type LogCapture } from "@orkestrator/protocol/testing/log-capture";
 import {
-  createBrowserGatewayApi,
-  installBrowserGatewayApi,
+  createBrowserGatewayApi as createUntrackedBrowserGatewayApi,
+  disposeBrowserGatewayApi,
+  installBrowserGatewayApi as installUntrackedBrowserGatewayApi,
   TERMINAL_TRANSPORT_STORAGE_KEY,
 } from "./web-gateway";
 import { TERMINAL_HTTP_INPUT_MAX_BUFFER_BYTES } from "@orkestrator/protocol/terminal-input-batcher";
@@ -23,6 +24,31 @@ import { installControlledTimeout } from "../../../../../tests/helpers/controlle
 /** Every warning, as the old console spies counted them. */
 function gatewayWarnings(logs: LogCapture) {
   return logs.records().filter(({ level }) => level === "warn");
+}
+
+/**
+ * Every gateway a test made, disposed after it. A gateway owns real timers and
+ * window listeners (the cookie-session probe retries for ever with backoff), and
+ * each of them calls whatever `globalThis.fetch` is installed when it fires. A
+ * leftover one therefore lands requests in a later test's fetch mock, where
+ * they count as that test's attempts.
+ */
+const createdGateways = new Set<object>();
+
+function createBrowserGatewayApi(
+  ...args: Parameters<typeof createUntrackedBrowserGatewayApi>
+): ReturnType<typeof createUntrackedBrowserGatewayApi> {
+  const api = createUntrackedBrowserGatewayApi(...args);
+  createdGateways.add(api);
+  return api;
+}
+
+function installBrowserGatewayApi(
+  ...args: Parameters<typeof installUntrackedBrowserGatewayApi>
+): void {
+  installUntrackedBrowserGatewayApi(...args);
+  const installed = (args[0] ?? window).orkestrator;
+  if (installed) createdGateways.add(installed);
 }
 
 const originalFetch = globalThis.fetch;
@@ -237,6 +263,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  for (const api of createdGateways) disposeBrowserGatewayApi(api);
+  createdGateways.clear();
   clearDirectGatewayTransport();
   globalThis.fetch = originalFetch;
   globalThis.EventSource = originalEventSource;

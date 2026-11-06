@@ -1,7 +1,7 @@
 # SSE readiness probe shutdown race
 
 - **ID:** 3008
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-11-03 during main merge validation.
 
 Owner: `apps/backend/src/gateway-result-channels.test.ts`.
@@ -80,3 +80,10 @@ no implementation or assertion was changed. The aggregate remains non-green.
   `git diff --name-only origin/main...HEAD`. Known open flake recurrence;
   the cause remains unconfirmed. No implementation, assertion or timeout changed.
   The repaired ownership guard passed; the aggregate remains non-green.
+
+### Resolution — 2026-11-06
+
+- **Root cause (product script):** `main()` in `apps/backend/scripts/sse-route-probe.ts` wrote the readiness line to stdout before it registered its `SIGINT`/`SIGTERM` listeners. The test sends `SIGTERM` as soon as it reads that line. If the child was descheduled between the `write` and `process.once(...)`, the signal arrived while no listener was registered. The default disposition then killed it with exit 143 instead of the graceful `server.stop()` and exit 0. The hypothesis in this case was correct.
+- **Reproduced:** yes. A temporary `await Bun.sleep(200)` between the readiness write and the listener registration failed the test with `Expected: 0, Received: 143` (1340.57 ms), the aggregate symptom.
+- **Fix:** register both listeners (as the `stopRequested` promise) before writing the readiness line, then await it. No test change.
+- **Verification:** with the same 200 ms gap moved after the write (that is, after the listeners exist), `mise run test:logged -- --name sse-fixed-gap -- bun test --cwd apps/backend src/gateway-result-channels.test.ts -t "sse-route-probe" --rerun-each=5` PASS (13.1 s). Gap removed: `mise run test:logged -- --name sse-stress -- bun test --cwd apps/backend src/gateway-result-channels.test.ts --rerun-each=20 --parallel=2` PASS (227.7 s, exit 0, host load average 25–40).

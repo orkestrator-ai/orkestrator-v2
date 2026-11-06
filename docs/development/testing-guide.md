@@ -404,6 +404,13 @@ says whether one is armed, and `restore()` reports any it drops. The
 - Do not swap a sleep for an async query that waits the same wall time, and
   never change a production debounce or retry constant to make a test cheaper.
 
+The `sleep-before-negative-assertion` source guard
+(`tests/unit/source-guards.test.ts`) refuses a new fixed sleep followed by a
+negative or exact-count assertion, and its siblings refuse released ports,
+real subprocesses without a time budget and small fake pids. Existing offenders
+sit in a baseline that only shrinks; see
+[linting.md](linting.md#source-guards).
+
 ### Agent CLIs on `PATH`
 
 Default and slow-tier tests must not reach the network or a provider login. A
@@ -745,6 +752,14 @@ port, or other shared fixture. Use `--parallel=2` for a small independent set.
 The aggregate runner owns larger worker allocations; do not copy its maximum
 into every command running alongside it.
 
+A test that needs a port binds port 0 in the component under test and reads the
+bound port back, or keeps its own probe server bound until the port's owner
+takes over. Binding port 0, closing the server and handing the number on lets
+another process take the port first; where a component cannot bind port 0
+itself, retry on `EADDRINUSE` with `retryOnAddressInUse`
+(`@orkestrator/protocol/testing/ports`). The `released-port-rebind` source
+guard refuses new instances ([linting.md](linting.md#source-guards)).
+
 `--parallel` isolates test files. A test that passes only after a sibling file
 has installed a mock or global is not self-contained and should be fixed. Do not
 reach for `--no-isolate` to preserve that accidental dependency.
@@ -922,6 +937,206 @@ mise exec -- bun scripts/recurring-live-ab.ts --arms candidate --repeats 1 \
   --out output/benchmarks/recurring-long-soak.json
 ```
 
+`--busy-rounds N` adds the busy profile (todo
+[0048](../todo/transcripts-and-observation/0048-recurring-work-qualification.md)
+task 1, `scripts/recurring-live-ab-busy.ts`), after the window and before any
+soak. It needs a local fixture environment and the Pi toolchain, and no
+credential, login or provider: every turn goes to the fake model.
+
+- Setup: `--busy-environments` (default 10) local environments, the
+  fixture's included. One, `busy-ask`, is created with an `ask` execution
+  policy (a registry setting, so through the gateway); a Pi session is opened
+  in it and in `busy-1`, and `busy-2` gets a committed fixture file for a
+  review to read.
+- Rounds: for every count in `--busy-clients` (default `0,1,2`; headless
+  Playwright clients from `scripts/recurring-live-ab-busy-clients.ts`, each
+  signed in with its own `dev:login` link and showing `busy-ask`'s Pi tab),
+  N rounds of: `--busy-burst-files` (default 200) files written into every
+  environment at once and removed; a turn in `busy-1` held at the model
+  (`[hold:<id>]`) with a prompt queued behind it (`session prompt
+  --enqueue`); a `bash` call the model asks for in `busy-ask` (`[tool:<id>]`),
+  which Pi parks as an approval, and agent mail to that tab; with two
+  clients the second one's link cut (the outage link of
+  `client-outage-support.ts`), with one its document hidden; the approval
+  answered through the public action, the held turn released and the queued
+  prompt sent; a Multi Review on `busy-2` with every slot on the fake model
+  (it runs `git rev-parse HEAD` through Pi's `bash` for its validation plan,
+  then submits fixed finding-free results) followed to `ready`; and the cut
+  or hidden client restored.
+- Measures: each row of the latency budgets the round reaches, from the
+  moment its cause is known (the fake model's arrival times, or the command's
+  return) to what each connected client's page showed, plus backend rows
+  (the approval in `session.interactions`, the queued prompt reaching the
+  model, a Multi Review phase change after its corresponding result submission) and
+  the resumed client's convergence. Workflow timings are backend upper bounds
+  from submission (before acceptance); workflow client-visible latency remains
+  unmeasured. Every scripted result must have exactly one submission and its
+  expected consuming phase. Failed rounds stop their sessions before reuse;
+  an uncertain stop aborts the phase. Obligations: each held turn and queued
+  prompt reaches the model exactly once, the approval is answered and its
+  turn finishes, and every review reaches `ready`. `recurringWork` and
+  process totals are sampled at every round boundary for the arm comparison.
+- A busy phase fails the run (exit 1) on a failed step, a wait that ran out,
+  a duplicated dispatch or a guard line.
+
+```bash
+env -u DISPLAY -u WAYLAND_DISPLAY ORKESTRATOR_HOST_REACHABILITY_CHECK=off \
+  mise exec -- bun scripts/recurring-live-ab.ts --arms candidate,rollback --repeats 1 \
+  --window-ms 60000 --freshness-probes 0 --fixture-environments local \
+  --agent-platforms pi --busy-rounds 3 --out output/benchmarks/recurring-busy.json
+```
+
+##### Before and after across commits
+
+`--checkout DIR` runs the profile from another checkout: its launcher,
+`dev:status`, `dev:stop`, `dev:reset` and CLI all run there, while the
+sampling, freshness probes and summary stay this checkout's. Put a detached
+worktree of the older commit under the git-ignored `output/benchmarks/`, run
+`bun install --frozen-lockfile` in it (and in its `bridges/claude-bridge`),
+and give each side a `--label`. mise is trusted for that checkout in the
+child processes only (`MISE_TRUSTED_CONFIG_PATHS`). Remove the worktree with
+`git worktree remove` when done: a checkout left under `output/` is collected
+by a bare `bun test` path filter.
+
+`--window hidden|visible|launcher-default` decides the Electron window.
+`hidden` (the default) passes `--headless`; a launcher older than that flag
+(before #1738, 2026-11-04) rejects it and always shows its window, so compare
+such a commit with `--window launcher-default` on its side and
+`--window visible` (`--no-headless`) on the newer side. Then the renderer is
+a visible client on both sides, which matters because a hidden window's
+renderer polls less.
+
+A backend older than its `AGENT_TEST_SAFE_ENV_NAMES` entry (2026-11-01, after `0bd214ee`) for
+`ORKESTRATOR_HOST_REACHABILITY_CHECK` drops the switch and runs the boot
+probe, which creates Docker networks. Add that one entry to the scratch
+checkout's `apps/desktop/electron/backend-process.ts` and record it with the
+results. 1202 task 1 used this for `0bd214ee` against `main`:
+
+```bash
+git worktree add --detach output/benchmarks/task1-checkouts/base-0bd214ee 0bd214ee
+mise exec -- bun scripts/recurring-live-ab.ts --arms candidate --repeats 1 \
+  --fixture-environments local --agent-platforms codex \
+  --checkout "$PWD/output/benchmarks/task1-checkouts/base-0bd214ee" --label base \
+  --window launcher-default --profile-prefix t1-base --out output/benchmarks/task1/idle-base-1.json
+```
+
+Counters are named by what they count on the commit that ran: a store that
+was still a file on an older commit is charged as `storage-stat` there and as
+`storage-read` once it moved into SQLite, so compare work units only where
+both sides define them the same way.
+
+Comparison columns keep the experiment arm beside the label and commit. Reusing
+one label for different commits is rejected. Missing, reset, partial or
+unmeasured rates display as unavailable (`—`), rather than zero.
+
+#### Mail into a real claude-tmux tab
+
+`scripts/tmux-mail-inject-live.ts` delivers agent mail to a real claude-tmux
+tab on a running, credential-free profile and counts what each delivery
+costs (BG-15 in to-do 1202). It serves a loopback Anthropic Messages endpoint
+(`e2e/agent-testing/fake-anthropic-model.ts`), points the profile's own
+isolated Claude directory (`<dataDir>/agent-credentials/claude`, never a real
+home) at it with a fixture token and marks the CLI's first-run screens as
+seen there, so the real Claude CLI runs in tmux with no login and no billed
+turn. It opens a claude-tmux tab on the fixture's local environment, turns
+mail injection on for it, primes the queue and draft stores with one queued
+prompt and one saved-then-cleared draft, reads the `mail-injection` counters
+over a quiet window, then sends messages one at a time and checks each is
+typed once and reaches the model once. Last it checks that mail is held while
+a draft is saved and delivered once the draft is gone. It stops the tab and
+restores the two Claude files on the way out. Start a fresh profile for each
+pass: what earlier passes left in the stores changes the counts. Missing or
+invalid counters, counter resets and an idle window with no observed drain pass
+fail the run and produce an error artifact. SIGINT/SIGTERM unwind the run,
+stop its owned tab, restore the files and close the fake server before exiting.
+
+The isolated-directory fallback applies to profiles without a host Claude
+credential grant. Credentialed profiles retain the existing host tmux environment
+and login, unless an added account selects a directory. This avoids changing the
+CLI's Keychain namespace without supplying a token. Such profiles retain the
+prior mismatch with the backend's isolated transcript directory; use the
+credential-free profile above for this benchmark. The benchmark now rejects missing
+credential-grant metadata, any host credential grant, and an active added Claude
+account before configuring or launching anything. It checks the profile's own
+account registry (SQLite or the older JSON layout), without probing host logins.
+A failed installation rolls back both files before propagating the error; rollback
+failures are included in the error artifact.
+
+```bash
+mise run dev:test --profile bg15 --fixture --fixture-environments local \
+  --no-agent-credentials --agent-platforms claude --headless
+mise exec -- bun scripts/tmux-mail-inject-live.ts --profile bg15 --deliveries 5 \
+  --out output/benchmarks/bg15.json
+mise run dev:stop --profile bg15 && mise run dev:reset --profile bg15
+```
+
+`--checkout DIR` runs `dev:status` in the checkout that started the profile.
+Before 2026-11-06 a claude-tmux tab in an agent-test profile with no added
+Claude account ran the CLI with the host tmux server's environment, which
+reads the host's `~/.claude`; on an older commit, cherry-pick that fix
+(`tmuxLocalClaudeConfigDirectory` in `commands-servers.ts`) into the scratch
+checkout before running this.
+
+#### Environment activity RPC counts (WEB-3)
+
+`scripts/web3-activity-rpc-live.ts` measures a running credential-free profile
+from a gateway browser at 1440 × 1000. It installs loopback Claude settings in
+the profile, opens a native Claude tab on its sole local fixture environment,
+and sends two held turns. For each idle → working → idle cycle it waits for
+the browser's actual environment projection, lets boundary requests settle
+for 3 seconds, then reads the gateway's cumulative per-command counters.
+It saves command deltas and model-call counts only. Missing or reset counters
+fail the run. The browser closes and Claude settings are restored on exit;
+the caller must stop/reset the profile to stop its native session.
+
+```bash
+ORKESTRATOR_HOST_REACHABILITY_CHECK=off mise run dev:test --profile web3 \
+  --fixture --fixture-environments local --no-agent-credentials \
+  --agent-platforms claude --no-headless
+# In another shell, from the checkout containing the measurement script:
+mise run test:logged -- --name web3-live -- bun scripts/web3-activity-rpc-live.ts \
+  --profile web3 --checkout /absolute/path/to/profile-checkout \
+  --out output/benchmarks/web3.json
+# Run lifecycle commands from the checkout that owns the profile:
+mise run dev:stop --profile web3 && mise run dev:reset --profile web3
+```
+
+Repeat with fresh profiles at each pinned commit. Older launchers without
+`--no-headless` omit that flag; keep the window visibility alike. The
+measurement uses a native tab, so it does not need the later tmux-directory
+isolation fix on the before side. Compare `list_prompt_queues` and
+`list_multi_review_workflows` separately from other requests: snapshot,
+unread-state and transcript requests share the transition windows, and
+their timing-dependent totals are not WEB-3's refetch cost. The two list
+hydrators are all that remain at the 1202 baseline commit; the original
+report's third list had already been removed there.
+
+#### Image and layer sizes
+
+`scripts/docker-image-layers.ts` measures an image on whatever Docker the host
+has (1202 task 14, DK-7 to DK-9). `report` prints the uncompressed size, each
+layer with the instruction that made it, and `du -sxk` of each `--du` path in
+a throwaway `--network none` container; `changed` sums the layers of a probe
+image that the base image does not hold, which is what a client holding the
+base would pull. Build each side from a detached worktree under the
+git-ignored `output/benchmarks/` with a tag of its own, and remove the tags
+and worktrees when done:
+
+```bash
+git worktree add --detach output/benchmarks/img-before <commit>
+(cd output/benchmarks/img-before && \
+  docker build $(bun scripts/docker-image-build-args.ts) \
+  -t orkestrator-v2:img-before -f docker/Dockerfile .)
+mise exec -- bun scripts/docker-image-layers.ts report orkestrator-v2:img-before \
+  --du /home/node/.npm --du /usr/local/share/mise/installs/bun
+# Re-pull probe: append a line to every bridges/*/src/index.ts in the worktree,
+# rebuild as orkestrator-v2:img-before-probe with the same build arguments, then
+mise exec -- bun scripts/docker-image-layers.ts changed \
+  orkestrator-v2:img-before orkestrator-v2:img-before-probe
+docker image rm orkestrator-v2:img-before orkestrator-v2:img-before-probe
+git worktree remove --force output/benchmarks/img-before
+```
+
 For transcript, projection and storage cost, use the
 [efficiency harness](efficiency-harness.md) (`mise run efficiency:baseline`).
 
@@ -1073,6 +1288,11 @@ run by hand:
   spawn time. Signal a process group (`kill(-pid)`) only when you started that
   child detached, so it leads its own group. Otherwise the group is the
   caller's.
+- Give a fake child process a pid no live process can have: `fakePid(n)` from
+  `@orkestrator/protocol/testing/fake-pids`, above any `pid_max`. Code under
+  test that signals the child's process group would otherwise reach a real
+  group on the host. The `small-fake-pid` source guard refuses new small ones
+  ([linting.md](linting.md#source-guards)).
 - Never select processes by name, pattern, or port. This rules out `pkill`,
   `killall`, `fuser -k`, `kill $(lsof -t -i :PORT)`, and `ps | grep` loops on
   the host. Production listens on fixed ports such as the remote gateway and
@@ -1540,9 +1760,16 @@ group's own `0000-index.md` table tracks its cases. Search the group indexes
 first; open only the matching case file.
 Record the exact test and file, original command and worker configuration,
 failure message and duration, suite counts, isolated rerun command and result,
-observation date, and an evidence-backed hypothesis. Do not skip, loosen, or
-delete a test to hide an intermittent failure. When fixed, retain the case-file
-history and mark the index row resolved with stress or parallel verification.
+observation date, the observing branch's base commit
+(`git merge-base HEAD origin/main`), and an evidence-backed hypothesis. Run
+`mise run flaky:recurrence -- <case-id> --base <that commit> --registry-ref origin/main`
+before calling a failure a recurrence: a base that predates the case's fix is
+not one. Before a flake sweep, run `mise run flaky:stale` and close the cases
+that are already fixed first. Do not skip, loosen, or delete a test to hide an
+intermittent failure. When fixed, retain the case-file history and mark the
+case resolved in the same change, with the Resolution section the registry's
+[Recording a case](../tests/flaky-tests/0000-index.md#recording-a-case) rules
+describe.
 
 Aggregate runs remove ambient bridge debug flags before spawning their groups:
 `ORKESTRATOR_BRIDGE_DEBUG`, `CLAUDE_BRIDGE_DEBUG`, `CODEX_BRIDGE_DEBUG`,
@@ -1550,6 +1777,52 @@ Aggregate runs remove ambient bridge debug flags before spawning their groups:
 a development profile's diagnostics from changing authoritative test inputs.
 If a focused reproduction needs one of those flags, set it explicitly on that
 focused command and record it with the result.
+
+### Reproduce before fixing
+
+A fix for a flake is only as good as the evidence that it addresses the
+failure that was recorded. A stress run that passes says little when the
+unchanged code would have passed it too. Work in this order:
+
+1. **Make it fail on demand.** Recreate the condition the hypothesis names,
+   against the unchanged code, until the recorded failure appears:
+   - a race between two events: inject a delay (a temporary `await Bun.sleep`
+     or a deferred promise) on the side that has to lose;
+   - a port or resource collision: hold the port or resource from another
+     process or a test fixture while the test runs;
+   - a deadline that only load breaks: starve the test of CPU with the
+     contention runner. On Linux it pins K busy loops (default 6) and the
+     command to one core (default the last), leaving the rest of the host
+     alone, and stops only the burners it started:
+
+     ```bash
+     mise run test:logged -- --name repro -- \
+       bun scripts/test-under-contention.ts --burners 6 -- \
+       bun test path/to/owner.test.ts --rerun-each=5
+     ```
+
+     `mise run test:contention -- [--core N] [--burners K] [--duration S] -- <command>`
+     is the same runner. It propagates the command's exit status and prints
+     one summary line (core, burners, elapsed, exit). Without `taskset`
+     (macOS) the burners run unpinned and it says the condition is weaker.
+2. **Show the fix passes under the same condition.** Rerun the same
+   reproduction (the same delay, held port or contention command) with the fix
+   in place.
+3. **Stress it.** Run the owner repeatedly with `--rerun-each=N`, under
+   contention when load was the trigger. `--rerun-each` reruns the file's tests
+   in one process, so a file that is not rerun-safe (module-level state, a
+   fixture created once, a server bound at import) can fail for that reason
+   alone. For such a file, loop fresh processes instead:
+
+   ```bash
+   mise run test:logged -- --name stress -- bash -c \
+     'for i in $(seq 20); do bun test path/to/owner.test.ts || exit 1; done'
+   ```
+
+Record the result in the case's Resolution section as
+`Reproduced: yes — <how>` or `Reproduced: no — <why>`, with the stress command
+and its result. A fix that only raises a timeout without a reproduction is
+weaker evidence; say so rather than presenting it as proven.
 
 ## Verification by change type
 

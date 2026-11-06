@@ -1,4 +1,5 @@
 import { describe, expect, mock, spyOn, test } from "bun:test";
+import { fakePid } from "@orkestrator/protocol/testing/fake-pids";
 
 import { createCommandFixtures } from "./command-fixtures";
 
@@ -2622,10 +2623,10 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
     const environment = createEnvironment({
       id: "env-status-behind-stop",
       localCodexPort: 40124,
-      codexBridgePid: 50124,
+      codexBridgePid: fakePid(50124),
     });
     const { context } = createContext(environment);
-    const child = createFakeChild(50124);
+    const child = createFakeChild(fakePid(50124));
     context.runtime.localServers.adoptProcess(`codex:${environment.id}`, child);
     const terminationStarted = createDeferred();
     const releaseTermination = createDeferred();
@@ -2667,12 +2668,12 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
     const environment = createEnvironment({
       id: "env-cross-kind-status-order",
       localCodexPort: 40125,
-      codexBridgePid: 50125,
+      codexBridgePid: fakePid(50125),
       localClaudePort: 40126,
       claudeBridgePid: 50126,
     });
     const { context } = createContext(environment);
-    const child = createFakeChild(50125);
+    const child = createFakeChild(fakePid(50125));
     context.runtime.localServers.adoptProcess(`codex:${environment.id}`, child);
     const terminationStarted = createDeferred();
     const releaseTermination = createDeferred();
@@ -2784,21 +2785,21 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
     const environment = createEnvironment({
       id: "env-all-local-server-handlers",
       localOpencodePort: 40101,
-      opencodePid: 94001,
+      opencodePid: fakePid(94001),
       localClaudePort: 40102,
-      claudeBridgePid: 94002,
+      claudeBridgePid: fakePid(94002),
       localCodexPort: 40103,
-      codexBridgePid: 94003,
+      codexBridgePid: fakePid(94003),
       localPiPort: 40104,
-      piBridgePid: 94004,
+      piBridgePid: fakePid(94004),
     });
     const { context } = createContext(environment);
     const commands = createCommandRegistry();
     const children = {
-      opencode: createFakeChild(94001),
-      claude: createFakeChild(94002),
-      codex: createFakeChild(94003),
-      pi: createFakeChild(94004),
+      opencode: createFakeChild(fakePid(94001)),
+      claude: createFakeChild(fakePid(94002)),
+      codex: createFakeChild(fakePid(94003)),
+      pi: createFakeChild(fakePid(94004)),
     };
     for (const [kind, child] of Object.entries(children)) {
       context.runtime.localServers.adoptProcess(`${kind}:${environment.id}`, child);
@@ -2819,10 +2820,10 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
         commands.get("get_local_pi_server_status")?.({ environmentId: environment.id }, context),
       ]),
     ).resolves.toEqual([
-      { running: true, port: 40101, pid: 94001 },
-      { running: true, port: 40102, pid: 94002 },
-      { running: true, port: 40103, pid: 94003 },
-      { running: true, port: 40104, pid: 94004 },
+      { running: true, port: 40101, pid: fakePid(94001) },
+      { running: true, port: 40102, pid: fakePid(94002) },
+      { running: true, port: 40103, pid: fakePid(94003) },
+      { running: true, port: 40104, pid: fakePid(94004) },
     ]);
 
     await expect(

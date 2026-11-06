@@ -44,12 +44,21 @@ export function spawnCommand(
  *
  * An asynchronous list's stdin is /dev/null in a non-interactive shell, so the
  * pipe is kept on fd 3 for the watcher.
+ *
+ * The trap is installed before the command starts. The command can run, and
+ * print, before this shell reaches its next line, so a signal sent as soon as
+ * the command is seen used to kill the wrapper by default and orphan the
+ * command (flake case 4471). A signal that arrives before `c` is known is
+ * remembered and delivered once it is.
  */
 export const PARENT_BOUND_SCRIPT = [
+  "c=",
+  "stop=",
+  'trap \'stop=1; [ -z "$c" ] || kill "$c" 2>/dev/null\' HUP INT TERM',
   "exec 3<&0",
   '"$@" </dev/null 3<&- &',
   "c=$!",
-  "trap 'kill \"$c\" 2>/dev/null' HUP INT TERM",
+  '[ -z "$stop" ] || kill "$c" 2>/dev/null',
   '( while read -r _; do :; done; kill "$c" 2>/dev/null ) <&3 &',
   "w=$!",
   "exec 3<&-",

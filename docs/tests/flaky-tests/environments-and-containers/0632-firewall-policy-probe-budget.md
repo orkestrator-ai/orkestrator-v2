@@ -1,7 +1,7 @@
 # `container firewall policy > policy 3 allowlist <entry> chooses blocked HTTPS probe example.net`
 
 - **ID:** 0632
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-20
 - **Original command:** `mise run test` (as `mise run test:logged -- --name final-suite`)
 - **Worker configuration:** root and agent-support group, alongside the workspace, bridges and codex-protocol groups
@@ -133,3 +133,43 @@ typechecking, and the flake-index contract check passed.
 `mise run test:logged -- --name repository-tests -- mise run test` on `74841142b` repeated `the root entrypoint runs the firewall itself and records the outcome per mode`: `exitCode` was `null` at the five-second deadline (5005.35 ms). The complete unchanged owner passed alone in 51.5 s: `mise run test:logged -- --name codex-auth-firewall-owner -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1 --only-failures`. Root and workspace groups used one and four reserved worker slots respectively, alongside two bridge slots and one protocol slot. The generic shell-test deadline remains the observed boundary; no new cause is established. Aggregate evidence and results are in [0995](../aggregate-validation-runs/0995-agent-accounts-sign-in-0003-qualification.md).
 
 On 2026-11-02, the shared-logger bridge migration saw `policy 2 allowlist example.org,example.com chooses blocked HTTPS probe example.net`, and alone two other cases, exceed the 5 s timeout at load average 55. With `--timeout=60000` the owner passed (34 pass, 0 fail), so these were timing. The change touches nothing under `docker/`.
+
+### Resolution — 2026-11-06
+
+- **Root cause:** a budget mismatch, not a race in the firewall scripts. Every
+  failing case runs a real firewall script (`init-firewall.sh`,
+  `update-firewall.sh` or `network-policy-entrypoint.sh`) against bash stubs
+  through `Bun.spawnSync`, so one run forks well over a hundred short
+  processes. That costs 0.3–1 s on an idle Linux host and 1–3 s on an idle
+  macOS host (the owners took 13–48 s alone there), and exceeds Bun's generic
+  five-second test deadline when an aggregate saturates a macOS host, where
+  fork/exec scales worst. At the deadline Bun kills the still-running
+  `spawnSync` child ("killed 1 dangling process"), which is why every
+  recurrence reports `exitCode` `null` rather than a script failure. The 0632
+  and 0983 notes that the owner also fails alone at load average 15–35 fit
+  the same cause. The fixtures stub `dig`, `curl` and `getent`, so no real
+  DNS is involved.
+- **Fix:** `tests/unit/firewall-test-support.ts` defines
+  `SHELL_FIXTURE_TEST_TIMEOUT_MS` (30 s, the same budget the command fixtures
+  use for real subprocess work), and `firewall-policy.test.ts`,
+  `firewall-refresh.test.ts` and `firewall-egress-filter.test.ts` apply it with
+  `setDefaultTimeout`, which Bun scopes to the file. No assertion changed.
+  The same review fixed a second, latent race in the name-check boot fixture
+  (`firewall-egress-filter.test.ts`): it cut the daemon readiness loop to
+  three 0.1 s tries for the ready stub as well, so a `perl` start slower than
+  0.3 s failed with exit 1 ("the name-check daemon did not start"). Only the
+  never-ready case now shortens the loop. The ready case keeps the real loop,
+  which returns as soon as the stub writes its file.
+- **Reproduction:** `bun test tests/unit/firewall-egress-filter.test.ts
+  --timeout 250` on the unchanged file gives the recorded signature exactly:
+  `Expected: 0, Received: null`, "killed 1 dangling process". A 0.5 s delay
+  added to the ready stub's `perl` start fails the unchanged boot case with
+  exit 1, and passes once the fix is in. The five-second aggregate deadline
+  itself was not reproduced on this Linux host, where the slowest case takes
+  1 s.
+- **Verification:** `mise run test:logged -- --name env-firewall-stress -- bun
+  test tests/unit/firewall-egress-filter.test.ts tests/unit/firewall-policy.test.ts
+  tests/unit/firewall-refresh.test.ts --parallel=3 --rerun-each=10`: PASS
+  (630 test runs, 167.6 s) on the shared host at load average 24–33 while
+  other agents' suites were running. One plain pass of the three files: 63
+  pass, 0 fail.

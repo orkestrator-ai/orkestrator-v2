@@ -1,7 +1,7 @@
 # Mermaid watchdog elapsed time under aggregate load
 
 - **ID:** 0512
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-21
 - **Test:** `mermaid rendering > the external watchdog ends a blocked render within the deadline and the browser is gone`
 - **Owner:** `apps/backend/src/core/transcript-artifacts/mermaid-render.test.ts:191`
@@ -159,3 +159,8 @@ Recurred after rebasing onto main `eda21487` (8347.60 ms aggregate); the unchang
 - **Evidence:** `orkestrator-test-run.JKSeJM/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and `orkestrator-test-run.JPh9BC/storage-review-suite.log.gz` under the host temporary directory after aggregate finalization.
 - **Aggregate result:** exit 1 after 996.8 seconds. Backend: 11,597 passed, 89 skipped, one failed across 689 files (940.58 seconds). Every other workspace package, root/agent-support, bridge suite and protocol regeneration passed.
 - **Assessment:** recurrence confirmed by the complete unchanged owner's isolated pass. No Mermaid implementation, assertion, timeout or skip changed. The storage regression tests and `mise run check`, including the agent-testing e2e typecheck, passed separately.
+
+### Resolution — 2026-11-06
+
+- **Stale:** fixed by `a80a3c4d1` (2026-10-25 20:00 UTC, `test: stabilize aggregate validation and Mermaid boundaries (#1278)`). That commit removed the wall-clock upper bound from the watchdog test (`elapsed < RENDER_DEADLINE_MS + 4_000`). The test now proves the external deadline by the `render_timeout` result, the lower bound, a verified worker exit, and the browser and worker processes being gone. Separately, the boundary test now renders its size-limit and edge-limit diagrams through a runner with a 30 s render budget, so the 250-edge diagram no longer races the 5 s production deadline. Every recorded observation predates that commit and measured the removed bound (`< 5000` / `< 9000`) or the old boundary budget.
+- **Verification:** `mise run test:logged -- --name n0512-mermaid -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/transcript-artifacts/mermaid-render.test.ts --rerun-each=2` passed 28 tests with 0 failures, at a load average of about 24. No change in this round.

@@ -45,6 +45,18 @@ fed by the tab's projection (`AgentInfoButton.tsx`).
   `unknown` row `connected`, saw the panel update in all 4 of its runs that
   day.
 
+More evidence, 2026-11-06 (0039 task 13, fake-model run
+`mcp0039-fake-t13`, profile `mcp0039-fake`): the same stale panel after a
+reconnect on a **running** CLI, which goes through the live control and
+starts no probe (the probe log shows only the reconnected server starting).
+The projection read `mcpui-late` `connected` with the whole list unchanged,
+and the open panel still read "1 down" with the row failed 30 s later; after
+a hard reload it matched the backend. So the cause is not specific to the
+probe path: it is between the backend's answer to the action and the open
+panel. Task 13's case records this (annotation
+`panel-after-warm-reconnect`) instead of asserting it, and the task 8 case
+stays red for it.
+
 Not yet known: whether the renderer refetches the projection after the
 action, whether its read is answered from a sync revision that the
 invalidation does not move, and whether a reload shows `connected` (the test
@@ -69,4 +81,6 @@ probe's answer does not advance.
 
 ## Related
 
-- [0039-mcp-management.md](0039-mcp-management.md) tasks 8, 13 and 14.
+- [0039-mcp-management.md](0039-mcp-management.md) tasks 8, 13 and 14
+  (task 13's case in `mcp-ui-matrix.spec.ts` records the stale panel; make
+  it assert the live refresh once this is fixed).

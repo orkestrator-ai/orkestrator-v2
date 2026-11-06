@@ -16,10 +16,14 @@ test("only the tab whose launch overrode the default is marked", async ({ page }
   );
   // In the tab it belongs to: the word sits between that tab's title and close button.
   await expect(
-    page.getByRole("button", { name: /Fix the parser.*requested/ }).first(),
+    page.getByRole("tab", { name: /Fix the parser/ }).getByTestId("tab-launch-override"),
   ).toBeVisible();
-  await expect(page.getByRole("button", { name: /Run the checks.*requested/ })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: /My own tab.*requested/ })).toHaveCount(0);
+  await expect(
+    page.getByRole("tab", { name: /Run the checks/ }).getByTestId("tab-launch-override"),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("tab", { name: /My own tab/ }).getByTestId("tab-launch-override"),
+  ).toHaveCount(0);
 });
 
 test("the whole strip makes one coordinator read", async ({ page }) => {

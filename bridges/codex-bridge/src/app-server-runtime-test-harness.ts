@@ -25,6 +25,7 @@ import { tmpdir } from "node:os";
 
 import { join } from "node:path";
 
+import { fakePid } from "@orkestrator/protocol/testing/fake-pids";
 import { AppServerRuntime, type RuntimeSseEvent } from "./app-server-runtime.js";
 
 import type { WatchRolloutFile } from "./sessions/refused-cell-tail.js";
@@ -328,7 +329,8 @@ export async function harness(
         : {}),
       spawnProcess: (() => {
         index += 1;
-        const child = new ScriptedChild(2000 + index, merged);
+        // The real supervisor's stop path signals `-pid`; a fake pid can never name a real group.
+        const child = new ScriptedChild(fakePid(index), merged);
         children.push(child);
         return child;
       }) as unknown as AppServerSupervisorOptions["spawnProcess"],

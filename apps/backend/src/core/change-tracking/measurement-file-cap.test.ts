@@ -464,6 +464,11 @@ describe("snapshot measurements past the cap", () => {
     expect(preview.files[0]!.action).toBe("write");
   });
 
+  // This case is about the production cap itself, so it writes and captures
+  // 2,050 files in one turn: about 1 s on an idle host, and past Bun's 5 s
+  // default when the aggregate suite loads the host (case 5360). It is slow
+  // there, not stalled, so its deadline follows its workload. A timeout also
+  // let afterEach close the database under the still-running turn.
   test("restore plans at the real cap stay complete and cost no blob reads", async () => {
     const h = harness();
     const count = CHANGE_TRACKING_POLICY_V1.measurementFileRowCap + 50;
@@ -484,7 +489,7 @@ describe("snapshot measurements past the cap", () => {
     // The manifests are read through their own path; no file body is inflated for counts.
     expect(reads.mock.calls.length).toBeLessThan(10);
     reads.mockRestore();
-  });
+  }, 30_000);
 
   test("a diff of a capped measurement ends at its rows and says it is partial", async () => {
     const h = harness(2);

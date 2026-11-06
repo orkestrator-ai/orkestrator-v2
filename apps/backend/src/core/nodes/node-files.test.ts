@@ -8,6 +8,7 @@ import { NodeFileTransfer } from "./node-file-transfer.js";
 import { NodeFiles, parseEnv, seedFilesDir, type NodeFileScope } from "./node-files.js";
 
 import * as shell from "../shell.js";
+import { installControlledTimeout } from "../../../../../tests/helpers/controlled-timeout.js";
 
 const dirs: string[] = [];
 afterEach(async () => {
@@ -409,18 +410,32 @@ describe("node file authorization and atomic dotenv regressions", () => {
 });
 
 test("abandoned uploads expire and remove worktree temporary files", async () => {
-  const a = await node("expiry", {}, [], 10);
-  const { uploadId } = await a.files.beginWrite({
-    scope: { projectId: "p1" },
-    path: "partial",
-    size: 3,
-    sha256: "0".repeat(64),
-    overwrite: false,
-  });
-  await a.files.appendWrite(uploadId, Buffer.from("a").toString("base64"));
-  await new Promise((resolve) => setTimeout(resolve, 30));
-  expect(
-    (await readdir(a.checkout)).some((entry) => entry.startsWith(".orkestrator-upload-")),
-  ).toBe(false);
-  await expect(a.files.commitWrite(uploadId)).rejects.toThrow("not open");
+  // The expiry is advanced by hand: a real 10 ms timer could fire during the
+  // append, and its removal could finish after any fixed wait on a loaded host.
+  const ttlMs = 123_457;
+  const a = await node("expiry", {}, [], ttlMs);
+  const expiry = installControlledTimeout(ttlMs, { label: "upload expiry" });
+  try {
+    const { uploadId } = await a.files.beginWrite({
+      scope: { projectId: "p1" },
+      path: "partial",
+      size: 3,
+      sha256: "0".repeat(64),
+      overwrite: false,
+    });
+    await a.files.appendWrite(uploadId, Buffer.from("a").toString("base64"));
+    const hasTemporary = async () =>
+      (await readdir(a.checkout)).some((entry) => entry.startsWith(".orkestrator-upload-"));
+    expect(await hasTemporary()).toBe(true);
+    expect(expiry.advance()).toBe(1);
+    // The expired upload is closed at once; its file goes on the thread pool.
+    await expect(a.files.commitWrite(uploadId)).rejects.toThrow("not open");
+    const deadline = Date.now() + 5_000;
+    while ((await hasTemporary()) && Date.now() < deadline)
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(await hasTemporary()).toBe(false);
+    expiry.assertDrained();
+  } finally {
+    expiry.restore();
+  }
 });

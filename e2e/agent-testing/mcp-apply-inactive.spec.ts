@@ -36,6 +36,14 @@
  *
  * `ORKESTRATOR_AGENT_TEST_MODEL` pins both tabs' Claude model (the profile's
  * default otherwise), e.g. when the account is rate limited on the default.
+ *
+ * `ORKESTRATOR_AGENT_TEST_MCP_FAKE_MODEL=1` points the profile's own Claude
+ * settings at the scripted loopback model in `mcp-fake-model.ts` instead, for
+ * a profile with no Claude credential (todo 0039 task 7): the real CLI,
+ * bridge, backend and fixture servers run, the model is fake and no login is
+ * used. The fake calls a requested tool whenever it is offered, so model
+ * checks there prove what the runtime offered and the server answered, not
+ * what a real model would do.
  */
 import { expect, test, type Page } from "./browser-test";
 import { spawnSync } from "node:child_process";
@@ -53,6 +61,8 @@ import type {
 } from "@orkestrator/protocol/mcp-management";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import { watchEventStream } from "./event-stream-outage";
+import { FIXTURE_SERVER } from "./mcp-apply-inactive-support";
+import { startMcpFakeModel, type McpFakeModelHandle } from "./mcp-fake-model-wiring";
 import { dismissSidebarTooltip } from "./sidebar-tooltip";
 
 type Status = {
@@ -88,6 +98,8 @@ const DESKTOP_VIEWPORT = { width: 1440, height: 1200 };
 const MODEL_CHECKS = process.env.ORKESTRATOR_AGENT_TEST_MCP_APPLY_ONLY !== "1";
 /** Optional Claude model for both tabs; the profile's default otherwise. */
 const LAUNCH_MODEL = process.env.ORKESTRATOR_AGENT_TEST_MODEL?.trim() || undefined;
+/** Run every turn against the scripted loopback model (no provider, no login). */
+const FAKE_MODEL = process.env.ORKESTRATOR_AGENT_TEST_MCP_FAKE_MODEL === "1";
 
 /** Mirrors `NEWER_RUN_REASON` in apps/backend/src/core/mcp-management/evidence.ts. */
 const NEWER_RUN_REASON =
@@ -95,47 +107,6 @@ const NEWER_RUN_REASON =
 const APPLIED_REASON = "The session's latest message started with the saved configuration.";
 /** The evidence poll re-reads a runtime at most every 10 s; wait past two polls. */
 const EVIDENCE_SETTLE_MS = 25_000;
-
-/**
- * A harmless stdio MCP server: one tool, `probe_<name>`, that answers
- * `pong <name> v<version> <nonce>` and appends `call <name> <version>` to the
- * marker file. Plain ESM so the runner's own `node` executes it.
- */
-const FIXTURE_SERVER = `import { appendFileSync } from "node:fs";
-import { createInterface } from "node:readline";
-const [name, version, nonce, marker] = process.argv.slice(2);
-appendFileSync(marker, \`start \${name} \${version} \${process.pid}\\n\`);
-const send = (message) => process.stdout.write(JSON.stringify(message) + "\\n");
-createInterface({ input: process.stdin })
-  .on("line", (line) => {
-    let message;
-    try { message = JSON.parse(line); } catch { return; }
-    if (message.id === undefined) return;
-    const reply = (result) => send({ jsonrpc: "2.0", id: message.id, result });
-    switch (message.method) {
-      case "initialize":
-        return reply({
-          protocolVersion: message.params?.protocolVersion ?? "2025-06-18",
-          capabilities: { tools: {} },
-          serverInfo: { name: \`mcpq-\${name}\`, version },
-        });
-      case "tools/list":
-        return reply({ tools: [{
-          name: \`probe_\${name}\`,
-          description: \`Answers with a fixed token from the \${name} fixture.\`,
-          inputSchema: { type: "object", properties: {} },
-        }] });
-      case "tools/call":
-        appendFileSync(marker, \`call \${name} \${version}\\n\`);
-        return reply({ content: [{ type: "text", text: \`pong \${name} v\${version} \${nonce}\` }] });
-      case "ping":
-        return reply({});
-      default:
-        return send({ jsonrpc: "2.0", id: message.id, error: { code: -32601, message: "Method not found" } });
-    }
-  })
-  .on("close", () => process.exit(0));
-`;
 
 function profileStatus(): Status {
   const command = spawnSync("mise", ["run", "dev:status", "--profile", profile, "--json"], {
@@ -173,12 +144,37 @@ async function authenticatedInvoke(page: Page, status: Status): Promise<Invoke> 
   };
 }
 
+/**
+ * A profile without a login for an enabled platform (a fake-model run) opens
+ * its "not logged in" notice whenever the check finishes, which can be after
+ * the sidebar is first used; close it whenever it covers the page.
+ */
+async function closeLoginNotices(page: Page) {
+  const notices = ["Continue Without Claude", "Continue Without Codex"].map((name) =>
+    page.getByRole("button", { name, exact: true }),
+  );
+  await page.addLocatorHandler(
+    notices[0]!.or(notices[1]!).first(),
+    async () => {
+      for (const notice of notices) {
+        if (await notice.isVisible()) await notice.click({ timeout: 2_000 }).catch(() => undefined);
+      }
+    },
+    { noWaitAfter: true },
+  );
+}
+
 function sidebarNavigator(page: Page, projectName: string) {
   return async (name: string) => {
     const expand = page.getByRole("button", { name: `Expand project ${projectName}` });
     const entry = page.getByText(name, { exact: true }).first();
     await expect(expand.or(entry).first()).toBeVisible({ timeout: 30_000 });
-    for (const label of ["Continue Without Docker", "Continue Without GitHub CLI"]) {
+    // A fake-model profile has no Claude login, so its notice opens too.
+    for (const label of [
+      "Continue Without Claude",
+      "Continue Without Docker",
+      "Continue Without GitHub CLI",
+    ]) {
       const continueButton = page.getByRole("button", { name: label, exact: true });
       if (await continueButton.isVisible()) await continueButton.click();
     }
@@ -209,6 +205,7 @@ test.describe("live MCP apply in an inactive environment (claude)", () => {
     test.setTimeout(1_500_000);
     page.setDefaultTimeout(15_000);
     await page.setViewportSize(DESKTOP_VIEWPORT);
+    await closeLoginNotices(page);
 
     const status = profileStatus();
     expect(status.profile, "dev:status answered for a different profile").toBe(profile);
@@ -245,7 +242,16 @@ test.describe("live MCP apply in an inactive environment (claude)", () => {
 
     const environments: Environment[] = [];
     let userEntryCleanup: (() => Promise<void>) | undefined;
+    let fake: McpFakeModelHandle | undefined;
     try {
+      if (FAKE_MODEL) {
+        // Before any environment exists, so every bridge's first CLI reads it.
+        fake = await startMcpFakeModel("claude", status.dataDir!);
+        testInfo.annotations.push({
+          type: "fake-model",
+          description: `scripted loopback model at ${fake.origin}; no provider turn, no login`,
+        });
+      }
       for (const name of ["mcpq-a", "mcpq-b"]) {
         environments.push(
           await invoke<Environment>("create_environment", {
@@ -911,6 +917,7 @@ test.describe("live MCP apply in an inactive environment (claude)", () => {
         await invoke("stop_environment", { environmentId: created.id }).catch(() => undefined);
         await invoke("delete_environment", { environmentId: created.id }).catch(() => undefined);
       }
+      await fake?.stop();
     }
   });
 });

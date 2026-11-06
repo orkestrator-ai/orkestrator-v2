@@ -1,7 +1,7 @@
 # terminal link routing: shifted clicks fail in the aggregate suite
 
 - **ID:** 2412
-- **Status:** open
+- **Status:** resolved
 - **Tests:** `terminal plain URL addon link routing > routes shifted Control-clicks to an internal browser request`, `... routes shifted Command-clicks ...`, and the same two under `terminal OSC 8 constructor option link routing`
 - **File:** `apps/web/src/lib/terminal-links.test.ts`
 
@@ -61,3 +61,20 @@ The separate Claude terminal owner still failed its three assertions alone
 (23 pass, 3 fail). No test, assertion or timeout was changed.
 
 Aggregate evidence: `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.GuWhdd/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+
+### Resolution — 2026-11-06 (stale; fixed by #1614)
+
+**Root cause.** This was never intermittent, and the reruns above used the wrong
+file. The four failing tests (`terminal plain URL addon link routing > routes
+shifted %s-clicks to an internal browser request` and the OSC 8 variants) live
+in `apps/web/src/stores/terminalPortalStore.test.ts`, not in
+`apps/web/src/lib/terminal-links.test.ts`, so every "passed alone" rerun ran a
+different file. #1578 (5f14a41cd) limited preview-tab routing to loopback URLs,
+while those tests still clicked `https://example.com/internal?q=1`, so they
+failed deterministically. Commit 168d6fc0f (#1614, 2026-11-02 20:00 UTC), an
+ancestor of this branch, switched them to `http://localhost:5173/internal?q=1`.
+All four recurrences predate that commit.
+
+**Verification.** `mise run test:logged -- --name web-2412-real-owner -- bun --cwd=apps/web test src/stores/terminalPortalStore.test.ts --rerun-each=5`
+passed (exit 0). No code change was needed. The File column of the index now
+names the real owner.

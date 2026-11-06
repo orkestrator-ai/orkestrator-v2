@@ -191,14 +191,24 @@ describe("OpenCode agent-tool configuration", () => {
     expect(agentTools().configurationCount()).toBe(1);
     expect(agentTools().outcomeCount()).toBe(0);
 
-    await new Promise((resolve) => setTimeout(resolve, 150));
+    // The outcome settles after the reconcile has retired its in-flight entry
+    // (that cleanup is chained first), so awaiting it is the completion signal;
+    // a fixed sleep raced the 75 ms response on a loaded host.
+    expect(await outcome).toBe("connected");
     expect(agentTools().configurationCount()).toBe(0);
     expect(agentTools().outcomeCount()).toBe(1);
     expect(server.requests).toHaveLength(1);
-    expect(await outcome).toBe("connected");
 
-    agentTools().schedule("test", server.port, "o".repeat(43), connection, "/workspace");
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    // Memoized: no reconcile starts, and the outcome is answered without I/O.
+    const memoized = agentTools().schedule(
+      "test",
+      server.port,
+      "o".repeat(43),
+      connection,
+      "/workspace",
+    );
+    expect(agentTools().configurationCount()).toBe(0);
+    expect(await memoized).toBe("connected");
     expect(server.requests).toHaveLength(1);
     expect(agentTools().state("test")).toBe("connected");
   });

@@ -1,7 +1,7 @@
 # Preview transport attachment release under aggregate load
 
 - **ID:** 0790
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-24
 - **Test:** `PreviewTransportManager (desktop tunnel end to end) > hiding does not close the listener; the last release retires it and frees the attachment`
 - **File:** `apps/desktop/tests/preview-transport-manager.test.ts`
@@ -48,3 +48,24 @@ Final aggregate counts: desktop 1,580 pass / 16 skip / 2 fail; backend
 13,138 pass / 97 skip / 3 fail; web 11,230 pass / 10 skip / 7 fail; root
 3,418 pass / 3 fail. Bridges and Codex protocol verification passed.
 The aggregate exited 1 after 1,152.1 seconds; no watchdog or output limit fired.
+
+### Resolution — 2026-11-06
+
+**Root cause.** A fixed `Bun.sleep(120)` raced asynchronous teardown.
+`retire()` removes the service from `stats()` at once, then awaits
+`closeGroup()` and only then invokes `release_preview_attachment`. On a loaded
+host the 120 ms ran out between those steps, which is exactly the recorded
+state (services 0, invoke list holding only `create_preview_attachment`).
+
+**Reproduced.** A temporary copy of the unchanged test with the wait cut to
+51 ms (just past the 50 ms retirement lease) failed 1 of 20 with the exact
+recorded message (`Expected to contain: "release_preview_attachment"`,
+received `[ "create_preview_attachment" ]`).
+
+**Fix.** `apps/desktop/tests/preview-transport-manager.test.ts` polls (5 ms
+steps, 3 s bound) until the release has been invoked and the access registry
+reports no attachments, then keeps every original assertion. The earlier
+80 ms wait after hiding one tab stays: it is a negative check that the
+listener is not retired while another tab holds it.
+
+**Verification.** `NODE_ENV=test mise run test:logged -- --name ptm-fix-rerun -- bun test --cwd apps/desktop --preload ../../tests/setup-node.ts ./tests/preview-transport-manager.test.ts -t "buffered ingress metrics|hiding does not close" --rerun-each=20`: PASS (40 of 40).

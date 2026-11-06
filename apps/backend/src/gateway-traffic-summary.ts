@@ -30,6 +30,14 @@ export type GatewayTrafficSummaryFields = {
   peakRequests: number;
   peakConnections: number;
   openSockets: number;
+  /** Sockets the client ended first (it sent FIN before the gateway did). */
+  closedByPeer: number;
+  /** Sockets the gateway ended first: keep-alive timeout, `connection: close`, shutdown. */
+  closedByServer: number;
+  /** Sockets that ended on an error (a reset, a write after the peer went away). */
+  closedOnError: number;
+  /** Closed sockets that carried exactly one request: churn rather than reuse. */
+  singleRequestSockets: number;
   sources: string;
   routes: string;
   clients: string;
@@ -42,6 +50,10 @@ type Counts = Map<string, number>;
 type Tally = {
   requests: number;
   connections: number;
+  closedByPeer: number;
+  closedByServer: number;
+  closedOnError: number;
+  singleRequestSockets: number;
   sources: Counts;
   routes: Counts;
   clients: Counts;
@@ -70,6 +82,10 @@ function emptyTally(): Tally {
   return {
     requests: 0,
     connections: 0,
+    closedByPeer: 0,
+    closedByServer: 0,
+    closedOnError: 0,
+    singleRequestSockets: 0,
     sources: new Map(),
     routes: new Map(),
     clients: new Map(),
@@ -121,6 +137,9 @@ export function gatewayTrafficSource(request: IncomingMessage): string {
   return isIP(last) ? last.replace(/^::ffff:/, "") : "invalid";
 }
 
+/** How a gateway socket ended, as `GatewayLifecycle` observed it. */
+export type GatewaySocketClose = "peer" | "server" | "error";
+
 /** A fixed client family from the user agent; never the user agent itself. */
 export function gatewayTrafficClient(userAgent: string | undefined): string {
   if (!userAgent) return "none";
@@ -151,6 +170,8 @@ export class GatewayTrafficSummary {
   private burst: Burst | null = null;
   private lastReportAt = Number.NEGATIVE_INFINITY;
   private cancelTicks: (() => void) | null = null;
+  /** Requests per open socket; weak so a socket never outlives its close here. */
+  private readonly socketRequests = new WeakMap<object, number>();
 
   constructor(options: GatewayTrafficSummaryOptions = {}) {
     this.now = options.now ?? Date.now;
@@ -170,11 +191,27 @@ export class GatewayTrafficSummary {
   noteRequest(request: IncomingMessage, route: string): void {
     this.advance();
     this.window.requests += 1;
+    const socket = request.socket as object | undefined;
+    if (socket) this.socketRequests.set(socket, (this.socketRequests.get(socket) ?? 0) + 1);
     increment(this.window.sources, gatewayTrafficSource(request));
     increment(this.window.routes, route);
     const userAgent = request.headers["user-agent"];
     increment(this.window.clients, gatewayTrafficClient(userAgent));
     this.checkWindow();
+  }
+
+  /**
+   * One socket closed. Counted in the window it closed in, so a burst line
+   * says whether its connections were ended by the clients, by the gateway or
+   * by errors, and how many carried a single request.
+   */
+  noteSocketClosed(socket: object, how: GatewaySocketClose): void {
+    this.advance();
+    if (how === "peer") this.window.closedByPeer += 1;
+    else if (how === "server") this.window.closedByServer += 1;
+    else this.window.closedOnError += 1;
+    if (this.socketRequests.get(socket) === 1) this.window.singleRequestSockets += 1;
+    this.socketRequests.delete(socket);
   }
 
   /** `command` must already be a registered, metric-safe name. */
@@ -232,6 +269,10 @@ export class GatewayTrafficSummary {
     if (!burst) return;
     burst.requests += tally.requests;
     burst.connections += tally.connections;
+    burst.closedByPeer += tally.closedByPeer;
+    burst.closedByServer += tally.closedByServer;
+    burst.closedOnError += tally.closedOnError;
+    burst.singleRequestSockets += tally.singleRequestSockets;
     merge(burst.sources, tally.sources);
     merge(burst.routes, tally.routes);
     merge(burst.clients, tally.clients);
@@ -282,6 +323,10 @@ export class GatewayTrafficSummary {
       peakRequests: burst.peakRequests,
       peakConnections: burst.peakConnections,
       openSockets: this.openSockets(),
+      closedByPeer: burst.closedByPeer,
+      closedByServer: burst.closedByServer,
+      closedOnError: burst.closedOnError,
+      singleRequestSockets: burst.singleRequestSockets,
       sources: formatTop(burst.sources),
       routes: formatTop(burst.routes),
       clients: formatTop(burst.clients),

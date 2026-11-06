@@ -1,7 +1,7 @@
 # Abandoned upload expiry cleanup races a fixed wait
 
 - **ID:** 0821
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-25
 - **Test:** `abandoned uploads expire and remove worktree temporary files`
 - **File:** `apps/backend/src/core/nodes/node-files.test.ts:343`
@@ -104,3 +104,11 @@ passed the complete unchanged owner (exit 0, 0.4 s). No expiry implementation
 or assertion changed; the fixed wait remains a suspected contention race.
 The preparation triage marks this related by its transitive import of the
 changed Docker log vocabulary, so this pass alone does not establish causality.
+
+### Resolution — 2026-11-06
+
+- **Root cause (test):** the test gave a real 10 ms upload expiry a fixed 30 ms sleep, then asserted that the `.orkestrator-upload-` file was gone. The expiry's `abortWrite` removes the upload from the map synchronously, but removes the file with `fs.rm` on the thread pool. Under aggregate load that removal finished more than 20 ms after the timer, so the assertion saw the file. A 10 ms real timer could also fire while `appendWrite` was still appending.
+- **Reproduced:** yes. A temporary `spyOn(fs.promises, "rm")` adding 40 ms failed the unchanged test with `Expected: false, Received: true` at the same assertion (43.09 ms).
+- **Fix:** the test uses a distinctive TTL (123,457 ms) captured with `installControlledTimeout` (`tests/helpers/controlled-timeout.ts`). It asserts that the temporary file exists after the append, advances exactly one expiry, and asserts that `commitWrite` rejects with `not open`. It then polls, with a 5 s bound, until the temporary file is gone, asserts that it is gone, and checks that the controlled timer was drained. The assertions are now stricter, not weaker.
+- **Verification:** with the 40 ms `rm` delay still in place, an equivalent polling version passed `--rerun-each=5`. Final version: `mise run test:logged -- --name node-files-stress -- bun test --cwd apps/backend src/core/nodes/node-files.test.ts --rerun-each=20 --parallel=2` PASS (4.3 s, exit 0).
+- **Observation, not fixed:** if the expiry fires while an `appendWrite` is in flight, `fs.appendFile` recreates the temporary file that `abortWrite` just removed, and nothing removes it again. This is unlikely with the production 15-minute TTL, but it can leave a temporary upload file in a worktree.

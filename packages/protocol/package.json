@@ -44,6 +44,8 @@
     "./testing/log-capture": "./src/testing/log-capture.ts",
     "./testing/lost-exit": "./src/testing/lost-exit.ts",
     "./testing/untracked-child": "./src/testing/untracked-child.ts",
+    "./testing/fake-pids": "./src/testing/fake-pids.ts",
+    "./testing/ports": "./src/testing/ports.ts",
     "./testing/bridge-diagnostic-lines": "./src/testing/bridge-diagnostic-lines.ts",
     "./node/repository-instructions": "./src/node/repository-instructions.ts",
     "./node/bug-report-facts": "./src/node/bug-report-facts.ts",

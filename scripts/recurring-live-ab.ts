@@ -33,6 +33,17 @@ import {
   type WindowSummary,
 } from "./recurring-live-ab-summary";
 import {
+  BUSY_DEFAULTS,
+  busyFailed,
+  busyRuntime,
+  busySummaryLines,
+  measureBusy,
+  parseBusyClients,
+  type BusyOptions,
+  type BusyResult,
+} from "./recurring-live-ab-busy";
+import { playwrightBusyClients } from "./recurring-live-ab-busy-clients";
+import {
   FAKE_PI_MODEL_REF,
   startFakeModelServer,
   writeFakePiModels,
@@ -70,6 +81,14 @@ import {
  * environment gets a session of its own before it is deleted. No credential
  * or provider is involved.
  *
+ * With `--busy-rounds N` it runs the busy phase (`recurring-live-ab-busy.ts`)
+ * before any soak: `--busy-environments` local environments, real Pi
+ * sessions on the fake model, and for each `--busy-clients` count (0 to 2
+ * headless Playwright clients) N rounds of a file burst in every environment,
+ * a held turn with a queued prompt, a parked approval, agent mail, an outage
+ * or hidden client, a Multi Review to completion and a client resume, timed
+ * as each client saw it and checked for duplicate or lost dispatches.
+ *
  * Arms: `candidate` (defaults), `rollback`
  * (`ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK=all`,
  * `ORKESTRATOR_NATIVE_OBSERVATION_SHARING=0`) and `metrics-off`
@@ -99,7 +118,7 @@ const ARM_ENV: Record<Arm, Record<string, string>> = {
   "metrics-off": { ORKESTRATOR_RECURRING_METRICS: "0" },
 };
 
-export type Options = {
+export type Options = BusyOptions & {
   arms: Arm[];
   repeats: number;
   settleMs: number;
@@ -122,6 +141,20 @@ export type Options = {
    * Unset keeps the profile default (every platform, some downloaded at start).
    */
   agentPlatforms?: string;
+  /**
+   * Another checkout (absolute path) whose launcher, lifecycle scripts and CLI
+   * run the profile: a worktree at an older commit gives the "before" side of
+   * a before-and-after pair. Unset runs this checkout.
+   */
+  checkout?: string;
+  /** A name for the checkout, recorded in the artifact (`base`, `after`). */
+  label?: string;
+  /**
+   * The Electron window: `hidden` passes `--headless`, `visible` passes
+   * `--no-headless`, `launcher-default` passes neither, for a checkout whose
+   * launcher predates both flags (it shows the window).
+   */
+  window: "hidden" | "visible" | "launcher-default";
 };
 
 export function parseOptions(argv: string[]): Options {
@@ -141,6 +174,8 @@ export function parseOptions(argv: string[]): Options {
     soakEnvironments: ["local"],
     soakCycleGapMs: 0,
     soakSessions: 0,
+    window: "hidden",
+    ...BUSY_DEFAULTS,
   };
   const value = (index: number, name: string) => {
     const next = argv[index + 1];
@@ -175,11 +210,32 @@ export function parseOptions(argv: string[]): Options {
       options.soakCycleGapMs = positive(value(index++, name), name);
     else if (name === "--soak-sessions")
       options.soakSessions = positive(value(index++, name), name);
+    else if (name === "--busy-rounds") options.busyRounds = positive(value(index++, name), name);
+    else if (name === "--busy-environments")
+      options.busyEnvironments = positive(value(index++, name), name);
+    else if (name === "--busy-clients")
+      options.busyClients = parseBusyClients(value(index++, name));
+    else if (name === "--busy-burst-files")
+      options.busyBurstFiles = positive(value(index++, name), name);
     else if (name === "--agent-platforms") {
       const platforms = value(index++, name);
       if (!/^[a-z]+(,[a-z]+)*$/.test(platforms))
         throw new Error("--agent-platforms takes a comma list of platform names");
       options.agentPlatforms = platforms;
+    } else if (name === "--checkout") {
+      const checkout = value(index++, name);
+      if (!path.isAbsolute(checkout)) throw new Error("--checkout takes an absolute path");
+      options.checkout = checkout;
+    } else if (name === "--label") {
+      const label = value(index++, name);
+      if (!/^[a-z0-9-]{1,24}$/.test(label))
+        throw new Error("--label accepts up to 24 lowercase letters, digits and dashes");
+      options.label = label;
+    } else if (name === "--window") {
+      const window = value(index++, name);
+      if (window !== "hidden" && window !== "visible" && window !== "launcher-default")
+        throw new Error("--window accepts hidden, visible or launcher-default");
+      options.window = window;
     } else if (name === "--soak-environments") {
       const kinds = value(index++, name).split(",").filter(Boolean);
       if (kinds.length === 0 || kinds.some((kind) => kind !== "local" && kind !== "container"))
@@ -190,6 +246,19 @@ export function parseOptions(argv: string[]): Options {
   if (!Number.isInteger(options.soakCycles)) throw new Error("--soak-cycles must be an integer");
   if (!Number.isInteger(options.soakSessions) || options.soakSessions > 8)
     throw new Error("--soak-sessions must be an integer from 0 to 8");
+  if (!Number.isInteger(options.busyRounds)) throw new Error("--busy-rounds must be an integer");
+  if (
+    !Number.isInteger(options.busyEnvironments) ||
+    options.busyEnvironments < 3 ||
+    options.busyEnvironments > 20
+  )
+    throw new Error("--busy-environments must be an integer from 3 to 20");
+  if (!Number.isInteger(options.busyBurstFiles) || options.busyBurstFiles < 1)
+    throw new Error("--busy-burst-files must be a positive integer");
+  if (options.busyRounds > 0 && !options.fixtureEnvironments.split(",").includes("local"))
+    throw new Error(
+      "--busy-rounds needs a local fixture environment (--fixture-environments local)",
+    );
   if (!/^[a-z0-9-]+$/.test(options.profilePrefix)) {
     throw new Error("--profile-prefix accepts lowercase letters, digits and dashes");
   }
@@ -207,22 +276,38 @@ export type Status = {
   processStartTimes?: { launcher?: number };
   status?: string;
   browserUrl?: string;
+  rendererUrl?: string;
   authFile?: string;
   logDir?: string;
   pids?: Partial<Record<"launcher" | "vite" | "electron" | "backend", number>>;
   live?: { launcher?: boolean };
 };
 
-function mise(args: string[], env: NodeJS.ProcessEnv = process.env) {
-  return spawnSync("mise", ["run", ...args], {
+/**
+ * The environment for a process run in `checkout`. mise reads a checkout's
+ * `mise.toml` only once trusted; trusting it for this process alone leaves
+ * mise's own trust list untouched.
+ */
+export function checkoutEnv(
+  checkout: string | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  return checkout ? { ...env, MISE_TRUSTED_CONFIG_PATHS: checkout } : env;
+}
+
+const commandProcesses = { spawn, spawnSync };
+
+function mise(args: string[], checkout?: string) {
+  return commandProcesses.spawnSync("mise", ["run", ...args], {
     encoding: "utf8",
-    env,
+    env: checkoutEnv(checkout),
+    ...(checkout ? { cwd: checkout } : {}),
     maxBuffer: 16 * 1024 * 1024,
   });
 }
 
-function readStatus(profile: string): Status | null {
-  const result = mise(["dev:status", "--profile", profile, "--json"]);
+function readStatus(profile: string, checkout?: string): Status | null {
+  const result = mise(["dev:status", "--profile", profile, "--json"], checkout);
   try {
     return JSON.parse(result.stdout) as Status;
   } catch {
@@ -254,6 +339,20 @@ function gatewayFor(status: Status, signal?: AbortSignal) {
       } catch {
         return null;
       }
+    },
+    /** One registry command; throws on a transport or command error. */
+    async invoke(command: string, args: Record<string, unknown>): Promise<unknown> {
+      const response = await fetch(`${origin.origin}/__orkestrator/invoke`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body: JSON.stringify({ command, args }),
+        redirect: "error",
+        signal: signal
+          ? AbortSignal.any([signal, AbortSignal.timeout(60_000)])
+          : AbortSignal.timeout(60_000),
+      });
+      if (!response.ok) throw new Error(`${command} failed with HTTP ${response.status}`);
+      return ((await response.json()) as { result?: unknown }).result;
     },
   };
 }
@@ -303,28 +402,34 @@ type FixtureEnvironment = {
 };
 
 /** `configDir` is the run's CLI config directory, which `runArm` owns and removes. */
-function cliRunner(profile: string, configDir: string) {
+function cliRunner(profile: string, configDir: string, checkout?: string) {
   return (args: string[]) =>
-    spawnSync("bun", ["packages/cli/bin/orkestrator.js", "--profile", profile, ...args], {
-      encoding: "utf8",
-      env: { ...process.env, ORKESTRATOR_CLI_CONFIG_DIR: configDir },
-      maxBuffer: 16 * 1024 * 1024,
-    });
+    commandProcesses.spawnSync(
+      "bun",
+      ["packages/cli/bin/orkestrator.js", "--profile", profile, ...args],
+      {
+        encoding: "utf8",
+        env: { ...checkoutEnv(checkout), ORKESTRATOR_CLI_CONFIG_DIR: configDir },
+        ...(checkout ? { cwd: checkout } : {}),
+        maxBuffer: 16 * 1024 * 1024,
+      },
+    );
 }
 
 type CliResult = { status: number | null; stdout: string };
 type AsyncCli = (args: string[], signal?: AbortSignal) => Promise<CliResult>;
 
 /** Wait for the CLI to exit before profile cleanup, escalating a stuck cancellation. */
-function asyncCliRunner(profile: string, configDir: string): AsyncCli {
+function asyncCliRunner(profile: string, configDir: string, checkout?: string): AsyncCli {
   return (args, signal) => {
     signal?.throwIfAborted();
     return new Promise((resolve, reject) => {
-      const child = spawn(
+      const child = commandProcesses.spawn(
         "bun",
         ["packages/cli/bin/orkestrator.js", "--profile", profile, ...args],
         {
-          env: { ...process.env, ORKESTRATOR_CLI_CONFIG_DIR: configDir },
+          env: { ...checkoutEnv(checkout), ORKESTRATOR_CLI_CONFIG_DIR: configDir },
+          ...(checkout ? { cwd: checkout } : {}),
           stdio: ["ignore", "pipe", "ignore"],
         },
       );
@@ -439,7 +544,7 @@ const freshnessRuntime = {
 };
 
 export async function measureFreshness(
-  gateway: ReturnType<typeof gatewayFor>,
+  gateway: Pick<ReturnType<typeof gatewayFor>, "metrics">,
   cli: ReturnType<typeof cliRunner>,
   probes: number,
   signal?: AbortSignal,
@@ -605,7 +710,7 @@ function startedSessionId(result: CliResult): string | null {
 }
 
 export async function measureSoak(
-  gateway: ReturnType<typeof gatewayFor>,
+  gateway: Pick<ReturnType<typeof gatewayFor>, "metrics">,
   cli: AsyncCli,
   options: Pick<Options, "soakCycles" | "soakEnvironments" | "settleMs"> &
     Partial<Pick<Options, "soakCycleGapMs" | "soakSessions">> & {
@@ -805,6 +910,9 @@ type RunResult = {
   /** `Unhandled promise rejection (continuing)` guard lines in the profile logs. */
   guardLines: number | null;
   soak?: SoakResult;
+  busy?: BusyResult;
+  /** `recurringWork` rates over the busy phase, from its round-boundary samples. */
+  busyWindow?: WindowSummary | null;
   error?: string;
 };
 
@@ -835,8 +943,13 @@ export function profileArguments(profile: string, options: Options): string[] {
     "--fixture-environments",
     options.fixtureEnvironments,
     "--no-agent-credentials",
-    // Never open a window on the host's desktop; the gateway serves the app.
-    "--headless",
+    // By default never open a window on the host's desktop; the gateway
+    // serves the app.
+    ...(options.window === "hidden"
+      ? ["--headless"]
+      : options.window === "visible"
+        ? ["--no-headless"]
+        : []),
     ...(options.agentPlatforms ? ["--agent-platforms", options.agentPlatforms] : []),
   ];
 }
@@ -851,8 +964,9 @@ function startProfile(
   try {
     // Spawn the launcher directly so its manifest PID is the child we own,
     // rather than a descendant of an opaque mise wrapper.
-    return spawn("bun", profileArguments(profile, options), {
-      env,
+    return commandProcesses.spawn("bun", profileArguments(profile, options), {
+      env: checkoutEnv(options.checkout, env),
+      ...(options.checkout ? { cwd: options.checkout } : {}),
       stdio: ["ignore", output, output],
     });
   } finally {
@@ -870,6 +984,8 @@ const armRuntime = {
   asyncCliRunner,
   measureFreshness,
   measureSoak,
+  measureBusy,
+  busyClients: playwrightBusyClients,
   countGuardLines,
   now: () => performance.now(),
   sleep,
@@ -932,7 +1048,7 @@ export async function runArm(
     );
   };
   const checkedStatus = () => {
-    const current = runtime.readStatus(profile);
+    const current = runtime.readStatus(profile, options.checkout);
     if (!owned(current))
       throw new Error("Profile launcher ownership changed or could not be verified");
     owner ??= current;
@@ -943,11 +1059,11 @@ export async function runArm(
       // Cleanup is deliberately not cancelled. Re-read identity before each
       // destructive command; a reused or replaced manifest is never ours.
       try {
-        const current = runtime.readStatus(profile);
+        const current = runtime.readStatus(profile, options.checkout);
         if (owned(current)) {
           owner ??= current;
           log(`${profile}: stopping`);
-          if (runtime.mise(["dev:stop", "--profile", profile]).status !== 0) {
+          if (runtime.mise(["dev:stop", "--profile", profile], options.checkout).status !== 0) {
             // Stop may report failure for an already stopped profile, and
             // gives up after a few seconds while the launcher is still
             // shutting down, before it records `stopped`. Wait for our own
@@ -965,7 +1081,7 @@ export async function runArm(
         if (!exited) throw new Error("Owned launcher did not exit after stopping");
         if (owner && !options.keepProfiles) {
           checkedStatus();
-          if (runtime.mise(["dev:reset", "--profile", profile]).status !== 0)
+          if (runtime.mise(["dev:reset", "--profile", profile], options.checkout).status !== 0)
             throw new Error("Owned profile reset failed");
         }
       } catch (error) {
@@ -977,7 +1093,7 @@ export async function runArm(
   };
   try {
     signal?.throwIfAborted();
-    const existing = runtime.readStatus(profile);
+    const existing = runtime.readStatus(profile, options.checkout);
     if (!existing || existing.status !== "missing")
       throw new Error("Refusing to reuse an existing or unreadable profile");
     log(`${profile}: starting`);
@@ -994,7 +1110,7 @@ export async function runArm(
       signal?.throwIfAborted();
       if (spawnError) throw spawnError;
       if (exited) throw new Error("dev:test exited before the profile was ready");
-      const current = runtime.readStatus(profile);
+      const current = runtime.readStatus(profile, options.checkout);
       if (current && current.status !== "missing") {
         if (!owned(current)) throw new Error("Profile launcher ownership could not be verified");
         owner ??= current;
@@ -1033,7 +1149,7 @@ export async function runArm(
       log(`${profile}: freshness probes`);
       const freshness = await runtime.measureFreshness(
         gateway,
-        runtime.cliRunner(profile, cliConfig()),
+        runtime.cliRunner(profile, cliConfig(), options.checkout),
         options.freshnessProbes,
         signal,
       );
@@ -1043,12 +1159,34 @@ export async function runArm(
         p95Ms: percentile(entry.latenciesMs, 95),
       }));
     }
+    if (options.busyRounds > 0) {
+      checkedStatus();
+      log(`${profile}: busy phase, ${options.busyRounds} rounds per client count`);
+      if (!status.dataDir) throw new Error("The busy phase needs the profile's data directory");
+      const clients = runtime.busyClients(profile, status, logDir);
+      try {
+        result.busy = await runtime.measureBusy(
+          gateway,
+          runtime.asyncCliRunner(profile, cliConfig()),
+          { ...options, dataDir: status.dataDir },
+          signal,
+          {
+            ...busyRuntime,
+            openClients: clients.open,
+            processes: () => runtime.processSamples(checkedStatus().pids),
+          },
+        );
+        result.busyWindow = summarizeWindow(result.busy.windowSamples);
+      } finally {
+        await clients.close();
+      }
+    }
     if (options.soakCycles > 0) {
       checkedStatus();
       log(`${profile}: soak, ${options.soakCycles} cycles`);
       result.soak = await runtime.measureSoak(
         gateway,
-        runtime.asyncCliRunner(profile, cliConfig()),
+        runtime.asyncCliRunner(profile, cliConfig(), options.checkout),
         { ...options, ...(status.dataDir ? { dataDir: status.dataDir } : {}) },
         () => runtime.processSamples(checkedStatus().pids).backend?.rssKiB ?? null,
         signal,
@@ -1137,6 +1275,32 @@ function printSummary(results: RunResult[]): void {
       );
     }
   }
+  for (const run of results) {
+    if (!run.busy) continue;
+    lines.push(...busySummaryLines(`${run.arm} repeat ${run.repeat}`, run.busy));
+    const kinds = Object.entries(run.busyWindow?.kinds ?? {}).sort();
+    if (kinds.length > 0) {
+      lines.push(
+        "",
+        `| Busy window (${run.arm}) kind | Starts/min | Work units/min |`,
+        "| --- | --- | --- |",
+      );
+      for (const [kind, rates] of kinds) {
+        const units = Object.entries(rates.workUnitsPerMinute)
+          .map(([unit, count]) => `${unit} ${count}`)
+          .join(", ");
+        lines.push(`| ${kind} | ${rates.startedPerMinute} | ${units} |`);
+      }
+    }
+    const backend = run.busyWindow?.processes.backend;
+    if (backend)
+      lines.push(
+        "",
+        `Busy window backend: ${backend.cpuMsPerMinute} CPU ms/min, RSS median ${Math.round(
+          backend.rssKiBMedian / 1024,
+        )} MiB, max ${Math.round(backend.rssKiBMax / 1024)} MiB.`,
+      );
+  }
   const soaks = results.filter((run) => run.soak);
   if (soaks.length > 0) {
     lines.push(
@@ -1208,6 +1372,7 @@ async function main(signal: AbortSignal): Promise<number> {
   mkdirSync(logDir, { recursive: true });
   const commit = spawnSync("git", ["rev-parse", "--short", "HEAD"], {
     encoding: "utf8",
+    ...(options.checkout ? { cwd: options.checkout } : {}),
   }).stdout.trim();
   const results: RunResult[] = [];
   const invocation = randomUUID();
@@ -1220,6 +1385,7 @@ async function main(signal: AbortSignal): Promise<number> {
         `${JSON.stringify(
           {
             commit,
+            ...(options.label ? { label: options.label } : {}),
             platform: process.platform,
             arch: process.arch,
             options: { ...options, out: undefined },
@@ -1245,10 +1411,13 @@ function missingFootprints(soak: SoakResult): string[] {
   ].filter(Boolean);
 }
 
-function resultExitCode(results: Array<Pick<RunResult, "error" | "soak" | "guardLines">>): number {
+function resultExitCode(
+  results: Array<Pick<RunResult, "error" | "soak" | "guardLines" | "busy">>,
+): number {
   return results.some(
     (run) =>
       run.error ||
+      (run.busy && (busyFailed(run.busy) || run.guardLines !== 0)) ||
       (run.soak &&
         (missingFootprints(run.soak).length > 0 ||
           run.soak.failures.length > 0 ||
@@ -1260,6 +1429,7 @@ function resultExitCode(results: Array<Pick<RunResult, "error" | "soak" | "guard
 }
 
 export const __testing = {
+  commandProcesses,
   armRuntime,
   freshnessRuntime,
   soakRuntime,

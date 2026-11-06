@@ -61,10 +61,20 @@ export function registerReviewWorkflowCommands(
     ),
   );
 
-  register("get_multi_review_workflow", ({ workflowId }, { storage }) =>
-    storage
-      .getMultiReviewWorkflow(asNonBlankString(workflowId, "workflowId"))
-      .then((record) => (record ? stripWorkflowRendererSecrets(record) : null)),
+  /*
+   * `knownRevision` makes the read conditional, as `get_build_pipeline` is: a
+   * client already holding the record at that revision gets `unchanged`
+   * instead of the whole record again. Every open window re-reads on each
+   * change event, so the full answer would otherwise go out once per window.
+   */
+  register("get_multi_review_workflow", ({ workflowId, knownRevision }, { storage }) =>
+    storage.getMultiReviewWorkflow(asNonBlankString(workflowId, "workflowId")).then((record) => {
+      if (!record) return null;
+      if (Number.isSafeInteger(knownRevision) && knownRevision === record.revision) {
+        return { unchanged: true, revision: record.revision };
+      }
+      return stripWorkflowRendererSecrets(record);
+    }),
   );
   register("list_multi_review_workflows", (args, { storage }) =>
     conditionalManifestSnapshot(args, storage, "multi-review", () =>

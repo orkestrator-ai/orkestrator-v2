@@ -1,6 +1,6 @@
 # Session titles and history
 
-Checked against `main` at `931e55417` (2026-10-31).
+Checked against `main` at `ee2cc8423` (2026-11-06).
 
 Every session should have a sensible title that the backend owns. Fork, rewind
 and branch navigation should be offered wherever the vendor supports them,
@@ -8,9 +8,9 @@ through the shared session-action bus.
 
 ## Task analysis
 
-Analysed 2026-10-31 against main at `931e55417`, with Claude CLI 2.1.314 and Agent SDK 0.3.314, Codex 0.166.0 and `@cursor/sdk` 1.2.0.
+Analysed 2026-11-06 against main at `ee2cc8423`, with Codex 0.166.0 and the Pi SDK (`@earendil-works/pi-coding-agent`) 1.4.0. The 2026-10-31 analysis (at `931e55417`, with Claude CLI 2.1.314, Agent SDK 0.3.314 and `@cursor/sdk` 1.2.0) still holds for tasks 1 to 5 and 7.
 
-The previous analysis was written against `863b5782`, before #1337 landed, so it listed tasks 1 to 5 as open while the rest of this file said they were done. This analysis replaces it. Each task below says what was already there, what the recheck found and what changed.
+This pass ran task 6 for Codex and Pi end to end on loopback models (the real Codex app-server and the real Pi SDK against a scripted local model API, no login, no billed turn). It found three Pi bridge defects, fixed here with regression tests, and one product gap, filed as [7520](7520-message-rewind-and-branch-switch-have-no-client-surface.md). Cursor's half of task 6 needs a login and stays open.
 
 ### Tasks
 
@@ -18,9 +18,9 @@ The previous analysis was written against `863b5782`, before #1337 landed, so it
 2. **External Codex rewinds**: adopt `thread/reverted` and trim the served transcript. Status: done (#1337; rechecked at 0.166.0).
 3. **Codex archive**: explicit removal from the resume list, as a shared action. Status: done (#1337 for Codex; Cursor added on 2026-10-31).
 4. **Cursor archived agents**: out of the resume list by default, reachable by a toggle. Status: done (2026-10-31; supersedes the hide-only decision 8).
-5. **Claude history decisions**: subagent rehydration and message-level rewind. Status: open (rehydration done; message rewind awaits the user's decision).
-6. **Fork and rewind live qualification**: Codex, Pi and Cursor fork/rewind plus reload. Status: open (needs signed-in runs).
-7. **Title live qualification**: generated, fallback and failed-push titles on every platform. Status: open (offline half done; the signed-in run remains).
+5. **Claude history decisions**: subagent rehydration and message-level rewind. Status: open (rehydration done; message rewind waits on the user's decision).
+6. **Fork and rewind live qualification**: Codex, Pi and Cursor fork/rewind plus reload. Status: open (Codex and Pi done 2026-11-06 on loopback models; Cursor needs a login).
+7. **Title live qualification**: generated, fallback and failed-push titles on every platform. Status: open (offline half done; needs a signed-in title run that measures real cost and latency).
 
 ### 1. Backend-owned title generation
 
@@ -159,21 +159,56 @@ That removes two of the risks, but the staged state is still needed in every rea
 
 ### 6. Fork and rewind live qualification
 
-**Problem.** Fork, rewind and branch navigation are unproven on the real stack for Codex, Pi and Cursor.
+**Problem.** Fork, rewind and branch navigation were unproven on the real
+stack for Codex, Pi and Cursor.
 
-**Context.** Belongs with the batched runs in 0031. Needs billed turns.
+**Context.** Belongs with the batched runs in 0031. A signed-in run would
+bill turns, so Codex and Pi were run instead with the real engine against a
+loopback model: what is being qualified is the bridges, the backend and the
+vendor's own session store, and a scripted model exercises all of them.
+Cursor's SDK has no model endpoint to point elsewhere, so its half needs a
+login.
 
-**Investigation.** Unchanged. Offline coverage is listed under Qualification below. Not run on 2026-10-31.
+**Investigation.** Done for Codex and Pi on 2026-11-06; see
+[Qualification (2026-11-06, loopback models)](#qualification-2026-11-06-loopback-models).
+Codex passed every step on the first run. Pi failed three ways, all in the
+bridge, all fixed:
+
+- A fork at a response kept the wrong turns. Live Pi rows carry ids the bridge
+  mints, so a response id resolved to no Pi entry and the fork silently fell
+  back to "before the newest prompt": forking at the first of three responses
+  produced a fork holding turns 1 and 2.
+- A rewind showed the dropped turns again. Pi moves its leaf in memory only,
+  and the bridge re-rendered from the session file, whose leaf is always the
+  newest entry. The same cause made a bridge restart before the next prompt
+  resume Pi on the dropped turns while showing the rewound transcript.
+- Prompt ids were matched by position against Pi's
+  `getUserMessagesForForking`, which lists every branch in the file, so after
+  one rewind the positions pointed at the abandoned branch.
+
+Branch switching works with a real Pi entry id, but no client can learn one
+(live rows carry bridge ids, and a rewind drops the old rows), and the
+renderer offers neither message rewind nor branch switching on any platform.
+That is [7520](7520-message-rewind-and-branch-switch-have-no-client-surface.md).
+
+Cursor: not run (needs a login).
 
 **Decisions.**
 
-- **How to run it?**
-  - **Isolated `dev:test` profile with `--fixture`, one pass per provider, then reload and compare the next provider transcript read (recommended).**
-    - Pros: matches the agent-testing procedure; reload proves rehydration.
-    - Cons: needs live logins for three providers.
-  - **Add a permanent browser spec with fake bridges first.**
-    - Pros: regression guard.
-    - Cons: does not prove the vendor agrees, which is the point of the run.
+- **How to run it without a login?**
+  - **Isolated `dev:test` profile with `--fixture`, the profile's real Codex
+    and Pi pointed at a scripted loopback model, driven through the gateway,
+    with a bridge restart as the reload (chosen).**
+    - Pros: the real engines write their real session stores; the model's
+      record of the markers each call carried proves what the vendor now
+      considers the conversation; no billed turn; repeatable as an opt-in spec.
+    - Cons: says nothing about a real model's behaviour (not the point of
+      this task); Cursor cannot be run this way.
+  - **A signed-in run per provider.**
+    - Pros: real accounts.
+    - Cons: billed turns, and a login the task rules out.
+- **Cursor**: left open until a signed-in batch in 0031 (recommended), since
+  its SDK cannot be pointed at a loopback model.
 
 ### 7. Title live qualification
 
@@ -213,9 +248,16 @@ That removes two of the risks, but the staged state is still needed in every rea
     (`bridges/cursor-bridge/src/agent-session.ts`). The resume list pages with
     `nextCursor` and keeps tool failures in replay. Agents the SDK reports
     `archived` are listed only on request.
-  - Pi: `navigateSessionHistory` → `navigateTree`. Fork uses
-    `runtime.fork(entryId, { position: "before" })` and hands the selected
-    message back as a composer draft (`bridges/pi-bridge/src/agent-session.ts`).
+  - Pi: `navigateSessionHistory` → `navigateTree`; fork uses `runtime.fork`.
+    `history-target.ts` turns the picked row into a cut: before a prompt
+    (Pi hands the prompt back as a draft), or at a response kept with its
+    tool results. A live response row is found by the Pi message it was built
+    from; a rewound leaf is persisted (`historyLeaf`) and re-applied on every
+    reopen until a prompt is appended under it. Rules in
+    `bridges/pi-bridge/AGENTS.md`, "Fork, rewind and branch targets".
+  - No client offers message rewind or branch switching yet; the backend
+    command and bridges do
+    ([7520](7520-message-rewind-and-branch-switch-have-no-client-surface.md)).
   - Claude: fork at a message with `forkSession(upToMessageId)`
     (`session-manager-persistence.ts`). Only `rewindFiles` is offered, not
     message rewind (decision 6). A resumed session shows its subagents' steps
@@ -267,8 +309,10 @@ Only one decision is left. Tasks 1 to 4 are done.
 
 ### Qualification
 
-Tasks 6 and 7 need signed-in runs. Pinned-provider and browser qualification is
-recorded below; authenticated end-to-end product QA is listed separately.
+Task 6 is done for Codex and Pi on loopback models and needs a signed-in run
+for Cursor. Task 7 needs a signed-in title run measuring real cost. Pinned
+provider and browser qualification is recorded below; authenticated
+end-to-end product QA is listed separately.
 
 ## Constraints and rationale
 
@@ -345,13 +389,70 @@ version on this machine, so without those variables the live tests skip.
 - `e2e/NativeResumeSession.spec.ts` checks the archived toggle, ordering, width
   and restore-then-resume in Chromium at phone and desktop sizes.
 
-### Remaining authenticated product QA
+## Qualification (2026-11-06, loopback models)
+
+**Every run below is a loopback-model run**: the profile's real Codex
+app-server (0.166.0) and the real Pi SDK (1.4.0) against a scripted local
+model API (`e2e/agent-testing/session-history-loopback-model.ts`, a Responses
+WebSocket for Codex and chat completions for Pi). No login, no billed turn, no
+host provider directory touched: Codex got a throwaway `CODEX_HOME` holding a
+made-up key, Pi a `models.json` in the profile's own HOME.
+
+Profile (isolated, `dev:test`):
+
+```bash
+ORKESTRATOR_HOST_REACHABILITY_CHECK=off \
+CODEX_HOME=<worktree>/output/qualification-session-history/codex-home \
+  mise run dev:test --profile session-history-qa --fixture --headless \
+  --credential-source codex --agent-platforms codex,pi
+```
+
+Run (2026-11-06 19:23 UTC, worktree at `ee2cc8423` plus this change, on a
+profile restarted after the last bridge edit):
+
+```bash
+ORKESTRATOR_AGENT_TEST_PROFILE=session-history-qa \
+ORKESTRATOR_AGENT_TEST_RUN_ID=session-history-final-2 \
+ORKESTRATOR_AGENT_TEST_LIVE_SESSION_HISTORY=1 \
+  mise run test:logged -- --name session-history-live -- \
+  bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts \
+  session-history-live.spec.ts --workers=1
+```
+
+Outcome: 2 passed, 0 failed (19 s; an earlier full run at 19:18 UTC also
+passed, 42 s). Per platform, three turns (markers
+HX1–HX3), then, with the renderer's own boundary ids:
+
+| Step | Codex | Pi |
+| --- | --- | --- |
+| Fork at the first response: transcript, then the model's context on the next prompt | HX1 only; `[HX1, HX4]` | HX1 only; `[HX1, HX4]` |
+| Fork at the third prompt | HX1–HX2; `[HX1, HX2, HX5]` | HX1–HX2; `[HX1, HX2, HX5]` |
+| Source unchanged by both forks | yes | yes |
+| Rewind to before the second prompt, bridge restart, next prompt | HX1 only, still after the restart; `[HX1, HX6]` | HX1 only, still after the restart; `[HX1, HX6]` |
+| Switch back to the branch ending at HX3 | n/a (Codex reverts) | restored; `[HX1, HX2, HX3, HX7]`. A live row id from before the rewind is refused (409); the entry id was read from Pi's session file |
+| Reload (new bridge process): every session's next transcript read, then a prompt on the source | all three sessions identical; context continues what is shown | all three sessions identical; context continues what is shown |
+
+Before the fixes the same spec failed on Pi at the response fork (run
+`session-history-pi-1`: the fork held HX1–HX2), then, with the fork fixed, at
+the rewind (run `session-history-pi-2`: all three turns still shown). Codex
+passed at the first attempt (`session-history-codex-2`).
+
+Regression tests (offline, real Pi `SessionManager`): `history-target.test.ts`
+(live response rows resolve to their entry, tool results kept, prompts matched
+on the active branch and from the newest, unknown mid-turn rows refused, and
+the rewound leaf restored on reopen until something is appended),
+`agent-session.test.ts` (no fallback fork, busy rewind refused),
+`http.test.ts` (409 for an unplaceable fork or rewind) and
+`persistence.test.ts` (`historyLeaf` survives a restart).
+
+## Remaining authenticated product QA
 
 The checks above qualify actual pinned binaries and SDK filesystem contracts
 without external model calls. They do not claim a real-account browser run
 across all six platforms, Cursor's own archive UI, resuming a restored agent on
 a real Cursor login, a newly spawned Claude subagent across a full app restart,
-or production title cost/latency. Those
+Cursor fork and rewind, a real model's behaviour after a fork or rewind, or
+production title cost/latency. Those
 remain in [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md).
 
 ## Assumptions and decisions
@@ -486,6 +587,44 @@ measurement in the task's Investigation.
 Not built on this branch. Decision 6's premise was confirmed by probe, and the
 work is a new state machine that would make this branch too large to review.
 
+### 2026-11-06 (task 6, Codex and Pi on loopback models)
+
+#### Task 6: resolve a live Pi row by its message object
+
+Chose to remember, per live response row, the Pi message object it was built
+from, and to find the entry whose `message` is that object. Pi appends the
+entry after its listeners run and keeps the same object, so the match is
+exact. Rejected: matching rows to entries by position (status rows,
+retries and trimmed fronts all shift positions) and renaming rows to entry
+ids once Pi appends them (a row would change id after it was published, which
+breaks row identity). A response row whose message is no longer known
+resolves only when it ends its turn; mid-turn it is refused rather than
+guessed.
+
+#### Task 6: refuse, never fall back
+
+A fork or rewind whose id names nothing on the active branch now answers 409.
+The old fallback to "before the newest prompt" is what produced a fork with
+the wrong turns and no error. A fork with no id keeps its old meaning.
+
+#### Task 6: persist the rewound leaf in the bridge
+
+Chose a `historyLeaf` record (entry id and Pi's entry count) in the bridge's
+`state.json`, re-applied on every reopen and dropped once the count moves.
+Rejected: appending a marker entry to Pi's file to persist the leaf (writes
+into the vendor's store something Pi's own CLI would show), and accepting
+Pi's behaviour (a restart would silently resume on dropped turns while the
+bridge shows the rewound transcript). Pi's own CLI does the same on reopen;
+a Pi terminal tab opened on the session still starts at the newest entry.
+
+#### Task 6: file the missing client surface separately
+
+Message rewind and branch switching are not offered by the renderer on any
+platform, and Pi branch ids are not discoverable. Building that UI is a
+product decision and its own change, so it is
+[7520](7520-message-rewind-and-branch-switch-have-no-client-surface.md), not
+part of this qualification.
+
 ## Related
 
 - [0002-session-lifecycle-consistency.md](0002-session-lifecycle-consistency.md) and
@@ -496,6 +635,8 @@ work is a new state machine that would make this branch too large to review.
   2.x only).
 - [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md)
   for the provider runs.
+- [7520-message-rewind-and-branch-switch-have-no-client-surface.md](7520-message-rewind-and-branch-switch-have-no-client-surface.md)
+  (found by task 6).
 - [0038-design-agent-conversation-links.md](../design-canvas/0038-design-agent-conversation-links.md)
   was waiting on the archive work here; it can now add an archived state.
 - [0081-annotation-fence-in-session-titles.md](0081-annotation-fence-in-session-titles.md)

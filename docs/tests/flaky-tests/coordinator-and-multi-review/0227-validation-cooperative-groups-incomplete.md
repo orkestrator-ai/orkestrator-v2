@@ -1,7 +1,7 @@
 # Review validation: cooperative parallel groups finished "incomplete" under load (`apps/backend/src/core/review-validation-worker.test.ts`)
 
 - **ID:** 0227
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-15
 - **Test:** `cooperative parallel groups do not multiply queue or execution deadlines`
 - **Owning file:** `apps/backend/src/core/review-validation-worker.test.ts:1162`
@@ -110,3 +110,35 @@ remains failed.
 - **Assessment:** recurrence of the known intermittent deadline failure.
   Host contention remains a hypothesis; this run does not establish a root
   cause. No failing-test assertion, deadline or skip was changed.
+
+### Resolution — 2026-11-06
+
+- **Root cause:** the test's timing margins were too small for what a loaded
+  host adds inside the measured windows. Each of two groups queued and then ran
+  for 650 ms against 1 s queue and execution deadlines, leaving 350 ms of
+  headroom. Inside the queue window the test spawned a Bun status probe
+  (`control(..., "status")`) before releasing the blocker, and the admission
+  added its 100 ms poll and the admitted group's synchronous Git snapshot checks.
+  A slow probe alone pushed the queue wait past 1 s, so the admission or the
+  worker stopped the command and it ended `incomplete`; slightly smaller delays
+  produced `queuedMs` of 1012 to 1017 ms against `toBeLessThan(1000)`.
+- **Reproduced:** yes. A temporary extra 400 ms before the release gave the exact
+  symptom (`incomplete` at the `passed` assertion, queue assertions passing).
+  Under contention the unchanged test failed 4 of 5 runs, once `incomplete` and
+  three times with `queuedMs` of 1012 to 1017 ms. "Contention" below means the owning test pinned to one core (`taskset -c 11`) beside 8 busy loops pinned to the same core, so the rest of the shared host was unaffected.
+- **Fix (test only):** `apps/backend/src/core/review-validation-worker.test.ts`.
+  Groups now queue for 2.2 s and run for 2.2 s against 4 s deadlines. That still
+  tells the two behaviours apart (summed per group, 2 x 2.2 s > 4 s), and leaves
+  1.8 s of headroom. The blocker is released at a fixed point 2.2 s after
+  enqueue, however long the status probes took. The probe waits on the worker's
+  persisted `worker slots` reason before asserting it, instead of a fixed
+  sleep. Every assertion is unchanged apart from the named deadline constant. The
+  test budget is 30 s. The file also gains `setDefaultTimeout(30_000)` (see
+  0302/0745).
+- **Verification:**
+  - `mise run test:logged -- --name coord-0227-fix-load1 -- taskset -c 11 bun --cwd=apps/backend test ./src/core/review-validation-worker.test.ts -t "cooperative parallel groups do not multiply" --rerun-each=5`
+    under contention: 5/5 pass, where the original failed 4/5.
+  - `coord-rvw-stress` (this test plus 0302 and 0745, `--rerun-each=5`, under
+    contention): pass.
+  - Complete owner alone (`mise run test:logged -- --name coord-rvw-file2 -- bun --cwd=apps/backend test ./src/core/review-validation-worker.test.ts`):
+    66/66 pass, 58.4 s.

@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import { fakePid } from "@orkestrator/protocol/testing/fake-pids";
 import { AppServerEngine } from "./app-server-engine.js";
 import type { AppServerSupervisorOptions } from "../app-server/process-supervisor.js";
 import { FakeReadable, FakeWritable } from "../app-server/testing/fake-app-server.js";
@@ -171,7 +172,8 @@ export function harness(
       refreshEnvironment: async () => undefined,
       spawnProcess: (() => {
         index += 1;
-        const child = new ScriptedChild(1000 + index, merged);
+        // The real supervisor's stop path signals `-pid`; a fake pid can never name a real group.
+        const child = new ScriptedChild(fakePid(index), merged);
         children.push(child);
         return child;
       }) as unknown as AppServerSupervisorOptions["spawnProcess"],

@@ -42,6 +42,16 @@
  * provider home should not appear; one that does is skipped with that reason.
  * Codex project trust is granted only in an isolated `CODEX_HOME`.
  *
+ * Fake-model mode (`ORKESTRATOR_AGENT_TEST_MCP_FAKE_MODEL=1`, Claude, Codex and
+ * Pi only, local environments only) points the profile's own provider
+ * configuration at the scripted loopback model in `mcp-fake-model.ts` before
+ * the environment starts: the real CLI, app-server or SDK, bridge, backend
+ * and MCP servers run, and only the model is fake. It calls a probed tool
+ * whenever the runtime offers it, so a fake-model run qualifies what the
+ * runtime offered and the server logged, never a real model's behaviour. Its
+ * summary says so (`fakeModel`), and a missing login is not a skip there:
+ * no login is used at all.
+ *
  * Each platform writes `output/agent-testing/<run>/mcp-apply-live/<platform>.json`
  * with every outcome. A platform whose login is missing is skipped with the
  * reason; every other problem is collected and fails the test at the end, so
@@ -79,6 +89,11 @@ import {
 } from "./mcp-apply-live-support";
 
 import { grantCodexProjectTrust, writeRefusal } from "./mcp-apply-live-safety";
+import {
+  isFakeModelPlatform,
+  startMcpFakeModel,
+  type McpFakeModelHandle,
+} from "./mcp-fake-model-wiring";
 
 type Platform = "claude" | "codex" | "opencode" | "cursor" | "grok" | "pi";
 type Status = {
@@ -144,6 +159,8 @@ const runId = process.env.ORKESTRATOR_AGENT_TEST_RUN_ID ?? profile;
 /** Run the same real-provider busy-turn matrix against private container sources. */
 const CONTAINER = process.env.ORKESTRATOR_AGENT_TEST_MCP_CONTAINER === "1";
 const LIVE = process.env.ORKESTRATOR_AGENT_TEST_LIVE_MCP === "1";
+/** Run every turn against the scripted loopback model instead of a provider. */
+const FAKE_MODEL = process.env.ORKESTRATOR_AGENT_TEST_MCP_FAKE_MODEL === "1";
 const LABELS: Record<Platform, string> = {
   claude: "Claude",
   codex: "Codex",
@@ -309,6 +326,8 @@ interface PlatformSummary {
   verdict: "passed" | "failed" | "skipped";
   reason?: string;
   model?: string;
+  /** Set on a fake-model run: no provider, no login, a scripted model. */
+  fakeModel?: { origin: string; files: string[]; note: string };
   capabilities?: unknown;
   sources?: Array<
     Pick<
@@ -360,6 +379,7 @@ test.describe("live MCP apply", () => {
       const started = Date.now();
       const scratch = mkdtempSync(path.join(os.tmpdir(), `mcpq-${platform}-`));
       const sseServers: ChildProcess[] = [];
+      let fake: McpFakeModelHandle | null = null;
       let invoke: Invoke | null = null;
       let environment: Environment | null = null;
       const skip = (reason: string): never => {
@@ -376,6 +396,17 @@ test.describe("live MCP apply", () => {
           "agent-test",
         );
         const dataDir = status.dataDir!;
+        if (FAKE_MODEL) {
+          if (CONTAINER) skip("fake-model mode runs local environments only");
+          if (!isFakeModelPlatform(platform)) skip(`no fake model for ${label}`);
+          // Before the environment exists, so its bridge's first process reads it.
+          fake = await startMcpFakeModel(platform as "claude" | "codex" | "pi", dataDir);
+          summary.fakeModel = {
+            origin: fake.origin,
+            files: fake.files,
+            note: "fake-model run: scripted loopback model, no provider turn and no login",
+          };
+        }
         invoke = await signIn(page, status);
         const call = invoke;
         const config = await call<{ global?: { enabledAgentPlatforms?: string[] } }>(
@@ -438,7 +469,7 @@ test.describe("live MCP apply", () => {
             : writeRefusal(source, boundary);
 
         const tabs = ["A", "B"].map((name) => `mcpq-${platform}-${name.toLowerCase()}`);
-        const model = MODELS.get(platform);
+        const model = fake?.model ?? MODELS.get(platform);
         if (model) summary.model = model;
         const layout = await call<{ revision?: number } | null>("get_pane_layout", {
           environmentId,
@@ -502,7 +533,9 @@ test.describe("live MCP apply", () => {
             });
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
-            if (signedOut(message)) skip(`${label} is not signed in: ${message.slice(0, 300)}`);
+            if (!fake && signedOut(message)) {
+              skip(`${label} is not signed in: ${message.slice(0, 300)}`);
+            }
             throw error;
           }
         }
@@ -510,7 +543,12 @@ test.describe("live MCP apply", () => {
           "get_native_agent_auth_status",
           identity(tabs[0]!),
         ).catch(() => null);
-        if (auth?.state && /signed-out|unauthenticated|authentication-required/.test(auth.state)) {
+        // A fake model needs no login, so its signed-out state is expected.
+        if (
+          !fake &&
+          auth?.state &&
+          /signed-out|unauthenticated|authentication-required/.test(auth.state)
+        ) {
           skip(`${label} is not signed in (${auth.state})`);
         }
 
@@ -634,7 +672,7 @@ test.describe("live MCP apply", () => {
         );
         for (const [index, outcome] of warm.entries()) {
           if (outcome.result?.error) {
-            if (signedOut(outcome.result.error)) {
+            if (!fake && signedOut(outcome.result.error)) {
               skip(`${label} is not signed in: ${outcome.result.error.slice(0, 300)}`);
             }
             throw new Error(`${label} tab ${index} could not start: ${outcome.result.error}`);
@@ -955,14 +993,15 @@ test.describe("live MCP apply", () => {
           const settled = await settleOperation(result.operation.operationId);
           record.operation.settled = operationRuntimes(settled);
           if (options.keepWarm) {
+            // Never restart here: the warm CLI is what this step qualifies. Its
+            // outcome is judged after the probe turn below (evidence rule 5:
+            // the bridge learns the server is stale at that turn's sync).
             const warmRuntime = settled.apply.runtimes.find((runtime) =>
               runtime.label.endsWith(` · ${probes[0]!.tab}`),
             );
-            // A live SSE client cannot unload this entry. Require the warm
-            // runtime's restart-required outcome, but judge before any restart.
-            if (warmRuntime?.state !== "restart-required") {
+            if (warmRuntime?.state === "applied") {
               summary.failures.push(
-                `${scope.scope} ${name}: warm runtime did not report restart-required`,
+                `${scope.scope} ${name}: warm runtime claimed applied before any turn`,
               );
             }
           } else if (
@@ -1010,6 +1049,18 @@ test.describe("live MCP apply", () => {
             }
           }
           record.operation.afterEvidence = await evidence(result.operation.operationId);
+          if (options.keepWarm) {
+            // A live SSE client cannot unload this entry: after the turn that
+            // found it still loaded, the warm runtime must say restart-required.
+            const warmRuntime = record.operation.afterEvidence.find((runtime) =>
+              runtime.label.endsWith(` · ${probes[0]!.tab}`),
+            );
+            if (warmRuntime?.state !== "restart-required") {
+              summary.failures.push(
+                `${scope.scope} ${name}: warm runtime did not report restart-required after its turn`,
+              );
+            }
+          }
           if (platform === "codex") {
             // The real model turn above must both reach the changed tool and
             // advance that thread's scheduler evidence from pending to applied.
@@ -1282,6 +1333,7 @@ test.describe("live MCP apply", () => {
           );
         }
         rmSync(scratch, { recursive: true, force: true });
+        await fake?.stop();
       }
     });
   }

@@ -18,9 +18,11 @@ import { CommandFailedError, runCommand } from "./shell.js";
  * cannot serve: a model name no catalogue knows. The CLI refreshes a login in
  * its last five minutes before any API request, through its own code: a lock
  * on the config directory, a re-read that adopts a token another process
- * already saved, and a compare-and-swap save. The request then fails before
- * any inference, so it costs no usage. Checked against Claude Code 2.1.296 in
- * a container with a fake login; see container-network-and-credential-isolation.md.
+ * already saved, and a compare-and-swap save. The API then refuses the model
+ * before any inference, so it costs no usage (since 2.1.314 the CLI sends the
+ * unknown model rather than refusing it itself). Checked against Claude Code
+ * 2.1.314 in a container with a fake login; see
+ * container-network-and-credential-isolation.md, task 5.
  *
  * Settings, hooks, MCP servers, tools and session persistence are all off, so
  * nothing of the user's runs and no transcript is written. The CLI does create

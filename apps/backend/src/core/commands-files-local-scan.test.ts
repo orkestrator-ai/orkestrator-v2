@@ -1,10 +1,17 @@
-import { describe, expect, spyOn, test } from "bun:test";
+import { describe, expect, setDefaultTimeout, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { getContainerGitStatusDetailed, getLocalGitStatusDetailed } from "./commands-files.js";
 import { localGitScanCacheStats } from "./local-git-scan-caches.js";
 import { observeCommandInvocations, runCommand } from "./shell.js";
+
+// Every case drives real `git` (and, for the container scan, a real `bash`
+// status script of about fifteen processes) against a temporary repository.
+// The exclude-repair case runs two repository inits and seven scans, 1.3 s on
+// an idle Linux host; a saturated macOS aggregate pushed it past Bun's generic
+// five seconds (flake case 6603), where Bun kills the running `git`.
+setDefaultTimeout(30_000);
 
 test("scanning a stat-dirty but content-clean linked worktree leaves its index untouched", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "ork-local-scan-index-"));

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { fakePid } from "@orkestrator/protocol/testing/fake-pids";
 
 import { BackendRuntime } from "./backend-runtime.js";
 import type { CommandContext } from "./commands-context.js";
@@ -23,17 +24,17 @@ describe("preview terminal process roots", () => {
       rows: 24,
     });
     terminals.rememberSession("invalid", local);
-    terminals.registerProcess("local", fakePty(100));
-    terminals.registerProcess("container", fakePty(200));
+    terminals.registerProcess("local", fakePty(fakePid(100)));
+    terminals.registerProcess("container", fakePty(fakePid(200)));
     terminals.registerProcess("invalid", fakePty(1));
-    terminals.registerProcess("unknown", fakePty(300));
-    expect(terminals.localProcessRoots()).toEqual([{ environmentId: "a", pid: 100 }]);
+    terminals.registerProcess("unknown", fakePty(fakePid(300)));
+    expect(terminals.localProcessRoots()).toEqual([{ environmentId: "a", pid: fakePid(100) }]);
     terminals.cleanupSession("local");
     expect(terminals.localProcessRoots()).toEqual([]);
     expect(terminals.sessionConfig("local")?.kind).toBe("local");
     terminals.rememberSession("local", local);
-    terminals.registerProcess("local", fakePty(400));
-    expect(terminals.localProcessRoots()).toEqual([{ environmentId: "a", pid: 400 }]);
+    terminals.registerProcess("local", fakePty(fakePid(400)));
+    expect(terminals.localProcessRoots()).toEqual([{ environmentId: "a", pid: fakePid(400) }]);
     terminals.cleanupSession("local", { explicit: true });
     expect(terminals.localProcessRoots()).toEqual([]);
     for (const id of terminals.processIds()) terminals.cleanupSession(id);

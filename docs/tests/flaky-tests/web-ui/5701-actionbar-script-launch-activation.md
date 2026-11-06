@@ -1,7 +1,7 @@
 # ActionBar script launch activation assertion
 
 - **ID:** 5701
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-11-05
 - **Test:** `ActionBar editor and run commands > activates an unknown script launch but skips activation when launch throws`
 - **File:** `apps/web/src/components/layout/ActionBar.test.tsx:2205`
@@ -43,3 +43,31 @@ passed the complete unchanged owner in 10.2 s, exit 0. Neither the original
 conflicts nor the resolution edits touch ActionBar source or tests. No
 assertion, timeout or skip was changed. Cause remains unresolved; this is a
 recurrence of the existing flake, not a green aggregate result.
+
+### Resolution — 2026-11-06
+
+**Root cause.** The test passed only while its second press landed inside the
+double-press window. `claimTabLaunch` holds an accepted or `unknown` launch's
+claim for `TAB_LAUNCH_CLAIM_MIN_MS` (600 ms, added in #1755 after this test
+was written). A second "Create run script" inside that window was refused
+before reaching the backend, so the rejecting `launchNativeAgentJob` mock never
+ran and nothing was activated. When the aggregate delayed the second press past
+600 ms (the failures ran 419–2004 ms), the launch really ran. `beginTabLaunch`
+then focused its placeholder at press time, as designed ("focus moves when the
+user presses"), and the expectation of zero activations failed.
+
+**Reproduction.** Inserting a 700 ms wait before the second press reproduced
+the exact failure (expected 0 calls, received 1).
+
+**Fix.** `apps/web/src/components/layout/ActionBar.test.tsx`: like the
+neighbouring Push test, the case calls `resetTabLaunches()` before the second,
+later press, so the throwing launch always runs. It now asserts what a thrown
+launch does: two backend calls, exactly one activation (the second press's own
+placeholder, by the `tabId` sent to the backend), no activation of any landed
+tab, the error alert, and no launch left in `useTabLaunchStore`.
+
+**Verification.** With the 700 ms wait inserted, the fixed case passed. Then
+`mise run test:logged -- --name web-actionbar-owner -- bun --cwd=apps/web test src/components/layout/ActionBar.test.tsx`
+passed (exit 0, 41.5 s), and
+`mise run test:logged -- --name web-actionbar-script-stress -- bun --cwd=apps/web test src/components/layout/ActionBar.test.tsx -t "script launch" --rerun-each=20`
+passed (exit 0). Case 4312 is the same test.

@@ -233,3 +233,127 @@ test("auto-merge turned on while mergeability is checking launches one Resolve p
     service.shutdown();
   }
 });
+
+test.each(["interactive", "completion"] as const)(
+  "%s wake merges a ready PR inside the rollup throttle window",
+  async (wake) => {
+    let clock = Date.now() - 10_000;
+    const iso = () => new Date(clock).toISOString();
+    const prUrl = "https://github.com/o/r/pull/1";
+    let environment: Environment = {
+      ...createEnvironment("project"),
+      id: "env",
+      environmentType: "local",
+      worktreePath: "/tmp/feature",
+      status: "running",
+      setupPhase: "ready",
+      prUrl,
+      prState: "open",
+      hasMergeConflicts: wake === "completion",
+      prMergeability: wake === "completion" ? "dirty" : "clean",
+    };
+    const listeners = new Set<(event: PrMonitorEvent) => void>();
+    const timers: Array<() => void> = [];
+    const summaries: boolean[] = [];
+    let merges = 0;
+    let mergeArgs: Record<string, unknown> = {};
+    const service = new PrMonitorService({
+      now: iso,
+      monotonicNow: () => clock,
+      random: () => 0,
+      schedule: (callback) => {
+        timers.push(callback);
+        return callback;
+      },
+      cancel: () => undefined,
+      emit: (_name, event) => {
+        for (const listener of listeners) listener(event as PrMonitorEvent);
+      },
+      effects: {
+        detect: async (_target, options) => {
+          summaries.push(options?.includeCheckSummary === true);
+          return {
+            url: prUrl,
+            state: "open",
+            hasMergeConflicts: environment.hasMergeConflicts ?? false,
+            mergeability: environment.prMergeability ?? "clean",
+            headSha: (summaries.length === 1 ? "a" : "b").repeat(40),
+            checkSummary: options?.includeCheckSummary ? { passed: 2, total: 2, pending: 0 } : null,
+            checkSummaryStatus: options?.includeCheckSummary ? "succeeded" : "skipped",
+            viewerCanMerge: true,
+          };
+        },
+        persistPr: async () => undefined,
+        clearPr: async () => undefined,
+        findTaskForEnvironment: async () => null,
+        moveTaskToReview: async () => undefined,
+        addTaskComment: async () => undefined,
+        updateTaskPrMetadata: async () => undefined,
+      },
+    });
+    const controller = new PrAutoMergeController({
+      storage: {
+        getEnvironment: async () => environment,
+        loadEnvironments: async () => [environment],
+        loadConfig: async () => ({ global: {} }) as never,
+        getRepositoryConfig: async () => ({}) as never,
+        updateEnvironment: async () => environment,
+      },
+      invoke: async <T>(command: string, args: Record<string, unknown> = {}) => {
+        if (command === "merge_environment_pr") {
+          merges++;
+          mergeArgs = args;
+        }
+        return {} as T;
+      },
+      subscribe: (listener) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+      monitorState: () => service.revisionedSnapshot().entries[0] ?? null,
+      schedule: () => 1,
+      cancel: () => undefined,
+    });
+    const settle = async () => {
+      for (let i = 0; i < 60; i++) await Promise.resolve();
+    };
+    try {
+      controller.start();
+      service.sync([environmentToPrMonitorTarget(environment)]);
+      timers.shift()!();
+      await settle();
+      expect(summaries).toEqual([true]);
+      expect(merges).toBe(0);
+      expect(service.revisionedSnapshot().entries[0]?.headSha).toBe("a".repeat(40));
+      clock += 20_000;
+      // The completion path models Resolve finishing with a new, conflict-free head.
+      // Both wakes must refresh a recent rollup before authorizing a merge.
+      environment = {
+        ...environment,
+        hasMergeConflicts: false,
+        prMergeability: "clean",
+        autoMerge: true,
+        autoMergeCleanup: true,
+        autoMergePrUrl: prUrl,
+        autoMergeEnabledAt: iso(),
+      };
+      clock += 5;
+      service.sync([environmentToPrMonitorTarget(environment)]);
+      service.requestCheck("env", wake);
+      timers.pop()!();
+      await settle();
+      // The refresh read the rollup even though the last one is under a minute
+      // old, so it carries the head the merge is pinned to.
+      expect(summaries).toEqual([true, true]);
+      expect(merges).toBe(1);
+      expect(mergeArgs).toMatchObject({
+        cleanupAfterMerge: true,
+        expectedHeadSha: "b".repeat(40),
+        expectedPrUrl: prUrl,
+      });
+    } finally {
+      controller.dispose();
+      service.shutdown();
+    }
+  },
+);

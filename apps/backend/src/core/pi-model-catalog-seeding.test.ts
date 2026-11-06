@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { fakePid } from "@orkestrator/protocol/testing/fake-pids";
 import { promises as fs } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
@@ -50,7 +51,7 @@ function createFakeChild(): FakeChild {
   const emitter = new EventEmitter() as unknown as FakeChild;
   const stream = () => Object.assign(new EventEmitter(), { resume: () => undefined });
   Object.assign(emitter, {
-    pid: 424_242,
+    pid: fakePid(424_242),
     exitCode: null,
     signalCode: null,
     killed: false,

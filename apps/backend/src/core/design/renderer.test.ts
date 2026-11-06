@@ -966,7 +966,10 @@ describe("DesignRenderer with real Chromium", () => {
         child.kill("SIGKILL");
         await exited;
         // Chromium ends once its launcher's pipe closes; nothing removes the profile.
-        await waitFor(() => !processAlive(browserPid!), 10_000);
+        // Its shutdown (renderer and GPU children, profile flush) is not bounded
+        // by anything under test, and on a heavily loaded host it can outlast
+        // 10 s, so poll within the test's own cold-start budget instead.
+        await waitFor(() => !processAlive(browserPid!), 60_000);
         expect(existsSync(record.profile)).toBe(true);
 
         const removed = await new DesignProfileLedger(ledgerDir).sweep(0);

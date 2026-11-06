@@ -44,6 +44,17 @@ did before accounts existed: `CLAUDE_CONFIG_DIR` and `CODEX_HOME` stay unset.
 Ids are lowercase UUIDs because they name a directory. A platform holds at
 most 16 added accounts (`MAX_AGENT_ACCOUNTS_PER_PLATFORM`).
 
+Adding an account refuses a login already listed, the host login included. The
+host login can still become a duplicate afterwards, because it is whatever the host
+directory is signed in to: signing the host in to an added account's login (with
+`/login` in a terminal, say) leaves two entries for one allowance. Both stay in the
+registry, and automatic switching treats them as one login. The views show them once
+(`groupAgentAccountLogins` in `@orkestrator/protocol/agent-accounts`): signed-in
+entries with one email become a single row named by the added entry, marked
+"Also the host login", that switches to the added entry and shows whichever of
+their usage readings is freshest. A signed-out entry stays its own row so it can be
+signed in again or removed.
+
 The registry is `agent-accounts.json` (`agent-accounts-store.ts`): accounts,
 the active id per platform and a per-platform `loginGeneration`. It is kept
 out of `config.json` because the renderer writes the whole global config back
@@ -839,8 +850,9 @@ to the millisecond; two rules keep small differences from moving the machine:
   goes to one. A used-up entry's twins have no room either: when a fresh reading
   puts any entry at or past 98%, or a limit error is confirmed on one, the whole
   login is out. An idle twin of a stale reading past 98% with its reset ahead is out
-  too, but a stale reading of a twin never moves the active entry
-  ([below](#stale-and-unknown-readings)). When the active entry is signed out or its
+  too, unless the idle twin's own reading is fresher: an older reading of one
+  allowance never overrules a newer one. A stale reading of a twin never moves the
+  active entry ([below](#stale-and-unknown-readings)). When the active entry is signed out or its
   tick is off, a twin that is signed in and included is a real way off it, so
   `signed-out` and `not-included` can move to one. An account's own tick goes by
   email (`isAutoSwitchAccountIncluded`), so twins share a tick today and the
@@ -897,6 +909,8 @@ Four things can move it:
   last move, is not itself a resend, is seen within five minutes of the move, and a
   fresh reading of the account left confirms one of those limits. A turn sent after
   the move ran on the new account, so whatever stopped it, it stays stopped.
+  Where to go is decided on fresh readings and a lower bar; see
+  [After a refusal](#after-a-refusal).
 - **A tick changing**, here or from the command node.
 
 With every included account out, nothing moves: work stops at the limit and
@@ -904,6 +918,41 @@ nothing resumes by itself, including when an account later resets, though the ma
 still moves to the account that resets so the next prompt runs. Grok, Pi, OpenCode and
 Cursor have no accounts and are never involved. An isolated container
 keeps its own login, so a stop inside one is not this machine's to act on.
+
+### After a refusal
+
+Once a limit has refused a turn, the machine has already lost work, so choosing
+where to go differs from the between-turns check in two ways
+(`handleLimitStop`, and `moveOffLimitedAccount` for a coordinator's own stop):
+
+- **Every candidate is read afresh.** The between-turns check serves cached
+  readings, and an idle Claude account's is usually hours old because its token has
+  lapsed. Here each included, signed-in account is read forced, and for each login
+  no entry could read freshly, Claude Code renews one entry's sign-in (trying the
+  next twin if that fails) and it is read again (`readings(…, "probe")`). The
+  renewal ignores the 30-minute backoff but runs at most once per account every
+  two minutes (`URGENT_LOGIN_RENEWAL_SPACING_MS`), and a fresh reading taken by one
+  stop serves the others for two minutes, since several turns stop together. Every
+  fresh read is saved as that account's last known usage, so Settings shows the
+  same numbers the decision used.
+- **Under 100% is room.** The 98% threshold exists to move before a limit runs
+  out; after a refusal, a little allowance beats none until the reset. A *fresh*
+  reading below 100% on both limits is somewhere to go
+  (`rankAutoSwitchAccounts(…, "after-refusal")`, `AFTER_REFUSAL_ROOM_PERCENT`). A
+  stale reading at 98% or more with its reset ahead still keeps an account out,
+  because only a fresh reading is trusted that close to the end. The next
+  between-turns check uses the 98% rule again, so it moves on as soon as anything
+  better has room.
+
+On 2026-11-06 a coordinator stopped on its 5-hour limit and stayed stopped for 80
+minutes. The other login's freshest reading said 98% weekly, and an idle twin of it
+had last been read 15 hours earlier. Under these rules it would have moved.
+
+When nothing has room, the machine records why (`lastKept` on the platform's
+auto-switch state, cleared when the active account next changes): the account the
+limit stopped, and for each other included, signed-in account the limit that kept
+it out, the reading, and whether that reading was stale (`explainNoRoom`). Settings
+shows it under the main tick until a later switch.
 
 ### Stale and unknown readings
 
@@ -913,8 +962,9 @@ moves the machine and never confirms a limit error. A limit error whose reading 
 stale waits (`wait`) up to 10 minutes for one that is not, for example through a
 429's wait, and then stays stopped.
 
-For choosing where to go, an idle Claude account's reading is usually stale,
-because its token has lapsed. Neither limit falls before its reset, so a stale
+For choosing where to go between turns, an idle Claude account's reading is usually
+stale, because its token has lapsed (a limit stop reads afresh; see
+[After a refusal](#after-a-refusal)). Neither limit falls before its reset, so a stale
 reading of either at or past 98% with its reset still ahead keeps that account out
 until the reset. A weekly reading with no reset to go on says too little to rule the
 account out, and it ranks last. A 5-hour window with no reset cannot outlast its own

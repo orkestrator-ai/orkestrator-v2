@@ -1,18 +1,17 @@
-# The legacy URL tab Back case fails every headless Electron run
+# Legacy URL tab Back regression: synthetic re-attach lost its environment identity
 
 ## Task analysis
 
-Analysed 2026-11-06 against `main` at `e6c3da899`. Found while running the
-complete service preview Electron owner for to-do 0042 task 11.
+Analysed 2026-11-06 against `main` at `ee2cc84234aa2d1d0fe064811e0a7975da629520`.
+Found while running the complete service preview Electron owner for to-do 0042
+task 11; resolved during task 10 review fixes.
 
 ### Tasks
 
-1. **Find whether it is headless-only or broken on `main`**: run the case on a
-   disposable display, and headless with a trace. Status: open.
-2. **Fix the case or the product, by what task 1 finds**. Status: open
-   (depends on 1).
+1. **Identify the failed Back case**: inspect the stale re-attach and its identity. Status: done.
+2. **Fix the case or the product, by what task 1 finds**. Status: done.
 
-### 1. Find whether it is headless-only or broken on `main`
+### 1. Identify the failed Back case
 
 **Problem.** `a legacy URL tab keeps a link and Back through routine
 re-attaches` (`e2e/agent-testing/service-preview-electron.spec.ts:2102`) fails
@@ -35,17 +34,20 @@ same message (`Expected: "http://localhost:44475/"`, `Received:
 does not touch preview navigation. Run without it
 (`--grep-invert "keeps a link and Back through routine"`), the other 21 cases
 passed twice in a row (42 of 42). It was not run on a display: beelink has no
-disposable one, and runs must not use the signed-in desktop. Not recorded as a
+disposable one, and runs must not use the signed-in desktop. On 2026-11-06 it also
+failed 2 of 2 complete-owner runs on macOS 27.2 arm64 with hidden windows (no
+shell attached), at `ee2cc8423` with and without to-do 0042's task 10 cases,
+at the same check (now `:2335`) with the same message; the other 23 cases
+passed with it left out (0042 evidence log, 2026-11-06). So it is not
+Linux-only; a run with a shown window is still missing. Not recorded as a
 flake, because it has never passed here.
 
 **Decisions.**
 
 - **How to find out?**
-  - **One run under Xvfb or on macOS, then a headless run with the trace kept
-    (recommended).**
-    - Pros: tells a headless-only Chromium difference from a product
-      regression in one pass; the trace shows the navigation order.
-    - Cons: needs a host with a disposable display.
+  - **Inspect the request and validate the corrected case on macOS hidden windows (recommended).**
+    - Pros: establishes the concrete request-identity mismatch and validates it.
+    - Cons: does not provide a Linux headless or shown-window qualification.
   - **Read the trace of a headless run only.**
     - Pros: runs here.
     - Cons: cannot say whether a real window behaves differently.
@@ -55,21 +57,55 @@ flake, because it has never passed here.
 **Problem.** Until it passes, the cases after it in the owner do not run in a
 complete headless run.
 
-**Context.** Depends on task 1.
+**Context.** Depends on task 1. The real renderer already sends the environment identity.
 
-**Investigation.** None yet.
+**Investigation.** The test's synthetic `api.attach` omitted `environmentId`,
+although the real `BrowserTab` supplies it. `BrowserPreviewManager.attachUrl`
+treats a different environment identity (including null) as a new view and
+replaces it, deliberately discarding the old history. This was an identity
+change, not a bounds-only stale re-attach. Keeping `s().environmentId` in that
+request makes the existing Back and link assertions pass without changing the
+product or weakening their expectations. The filtered cross-client and Back
+owner run `svc0042-review-fixed` passed 2/2 in 29.5 s on macOS hidden windows.
 
 **Decisions.**
 
-- **If it is headless-only, what then?**
-  - **Make the case wait for the state it needs rather than skip it headless
-    (recommended).**
-    - Pros: keeps the check on every platform.
-    - Cons: only possible if the difference is timing, not behaviour.
+- **How to preserve the intended race?**
+  - **Keep the renderer's environment identity in the synthetic attach (recommended).**
+    - Pros: exercises the intended stale-URL race on the same view and history;
+      keeps all original assertions and platform coverage.
+    - Cons: the synthetic request must track the renderer's identity contract.
   - **Skip it headless.**
     - Pros: unblocks the owner at once.
     - Cons: loses the check on Linux CI's headless path; repository rules
       prefer fixing to skipping.
+
+## Assumptions and decisions
+
+### Task 1: classify the failure by the request identity
+
+The recorded failure and current request/manager code explain the replaced view.
+No checkout, worktree or test against `origin/main` was needed. The historical
+headless observations above remain evidence of the old test, not proof of a
+headless-only product defect.
+
+### Task 2: preserve the environment on a stale re-attach
+
+Added the same environment identity the renderer sends. Changing the manager
+would weaken its intended identity boundary; skipping the case would remove
+coverage. All history, navigation trace and address assertions stay in place.
+
+## Current state
+
+The corrected case passed in the two-case targeted Electron run and in the
+complete Electron rerun (`svc0042-review-electron`), where the changed owner
+passed 24/24. All five Back rounds traced `/`, and the ordered stale Back/link
+checks passed. The full suite remains red in other specs; to-do 0042 records
+those failures and their evidence.
+
+## Needs verification
+
+Linux headless and shown-window qualification were not performed during this fix.
 
 ## Related
 

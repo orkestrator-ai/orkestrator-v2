@@ -36,3 +36,7 @@ The long fixture exceeded 120 seconds (120,789.83 ms) in the aggregate; the comp
 ## MCP overlay review validation — 2026-10-23
 
 `mise run test:logged -- --name repository-tests -- mise run test` exceeded this owner's existing 120-second deadline at 120475.64 ms, followed by a missing `Details 58` assertion from the timed-out work. Web reported 8836 passed, ten skipped, one failed and one error. The complete unchanged three-case owner passed with `mise run test:logged -- --name transcript-owner -- bun test --cwd apps/web ./src/components/chat/rich-transcript.long-fixture.test.tsx --parallel=1 --only-failures` (exit 0, 9.0 s). No assertion, timeout or skip changed. Evidence: host temporary directory `orkestrator-test-run.ZHucAO/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; outer `orkestrator-test-run.MYw34M/repository-tests.log.gz`. Contention remains a hypothesis; the aggregate remains failed.
+
+### Investigation — 2026-11-06
+
+- Profiled at load average 21-25: one run took 44 s. The 400 `scroll()` acts accounted for 29.2 s (about 73 ms each, React rendering two windowed transcripts), the 201 `settle()` waits for 7.5 s and the clicks for the rest. The work is CPU-bound with no race, so the 120 s budget is breached once the host is 3-4x more contended than in this run. Options for a fix: move the case to the slow tier, or reduce the cycle count. The second weakens the "stays at its bound for every later cycle" check, so neither was applied here. Status stays open.

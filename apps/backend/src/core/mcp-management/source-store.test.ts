@@ -184,20 +184,37 @@ describe("McpSourceStore", () => {
       lockDir: path.join(root, "locks"),
     });
     // Hold the lock from a second store instance (same process = live pid).
-    let release!: () => void;
-    const held = other.withLock(file, () => new Promise<void>((resolve) => (release = resolve)));
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    const lockFile = readdirSync(path.join(root, "locks"))[0]!;
-    expect(lockFile.endsWith(".lock")).toBe(true);
+    // Wait for the holder to be inside its lock, not a fixed delay: under load
+    // the lock file was not yet written after 20 ms (0932).
+    let release: (() => void) | undefined;
+    let entered!: () => void;
+    const holding = new Promise<void>((resolve) => (entered = resolve));
+    const held = other.withLock(
+      file,
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+          entered();
+        }),
+    );
+    let waiting: Promise<void> | undefined;
+    let lockFile: string;
     let acquired = false;
-    const waiting = store.withLock(file, async () => {
-      acquired = true;
-    });
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    expect(acquired).toBe(false);
-    release();
-    await held;
-    await waiting;
+    try {
+      await Promise.race([holding, held]);
+      lockFile = readdirSync(path.join(root, "locks"))[0]!;
+      expect(lockFile.endsWith(".lock")).toBe(true);
+      waiting = store.withLock(file, async () => {
+        acquired = true;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(acquired).toBe(false);
+    } finally {
+      // Never leave the holder or the waiter running into the next test's cleanup.
+      release?.();
+      await held;
+      await waiting;
+    }
     expect(acquired).toBe(true);
 
     // A lock whose pid no longer exists is stale.

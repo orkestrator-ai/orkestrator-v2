@@ -1,7 +1,7 @@
 # Stopped cooperative validation command loses its partial output in the aggregate
 
 - **ID:** 0260
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-16
 - **Test:** `stopping a running cooperative command preserves incomplete evidence`
 - **Owning file:** `apps/backend/src/core/review-validation-worker.test.ts:544`
@@ -30,3 +30,16 @@
 - **Complete unchanged owner:** `mise run test:logged -- --name merge-review-worker-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/review-validation-worker.test.ts --parallel=1 --only-failures` passed, exit 0 in 35.3 s, after the aggregate finished.
 - **Evidence:** `/tmp/orkestrator-test-run.67KJPk/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; outer logged command `/tmp/orkestrator-test-run.urQT6W/merge-tests.log.gz`.
 - **Assessment:** recurrence of the recorded intermittent missing-output failure, confirmed by the complete unchanged owner's isolated pass. The stop racing the fixture's first stdout write remains an unconfirmed hypothesis. No implementation, assertion, timeout or skip changed.
+
+### Resolution — 2026-11-06
+
+- **Stale; fixed by `beb1ec4c8` (#1365, 2026-10-28).** The hypothesis was right:
+  the stop raced the fixture's first stdout write. That commit made the test wait
+  until the worker records captured output (`lastOutputAt`) before it sends
+  `stop-command`, so the partial-artifact assertion always has output to keep.
+  The last recorded recurrence (2026-10-25) predates the fix, and none has been
+  recorded since.
+- **Verification (2026-11-06):** the whole owner passed under one-core contention
+  (`coord-rvw-file-load`, `taskset -c 11` beside 6 pinned busy loops; this case
+  passed, and two unrelated cases timed out only under that artificial load) and
+  alone (`coord-rvw-file2`, 66/66).

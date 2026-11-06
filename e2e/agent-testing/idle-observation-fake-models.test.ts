@@ -1,4 +1,5 @@
-import { expect, test } from "bun:test";
+import { fakePid } from "@orkestrator/protocol/testing/fake-pids";
+import { expect, test, setDefaultTimeout } from "bun:test";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { type ChildProcess, type spawn } from "node:child_process";
@@ -7,15 +8,18 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import {
   type FakeModelHandle,
+  fakeModelSettingsFile,
   startLocalFakeModel,
   startModel,
   withFakeModelCleanup,
 } from "./idle-observation-fake-models";
 
+setDefaultTimeout(30_000);
+
 function fakeChild(mode: "ready" | "silent" | "exit" | "error") {
   const child = Object.assign(new EventEmitter(), {
     stdout: new PassThrough(),
-    pid: mode === "error" ? undefined : 123,
+    pid: mode === "error" ? undefined : fakePid(1),
     exitCode: null as number | null,
     signalCode: null as string | null,
     killed: false,
@@ -82,3 +86,29 @@ for (const stage of ["create_environment", "openClient"]) {
     }
   });
 }
+
+test("Pi's fake is added to the profile's own models.json and removed again", async () => {
+  const directory = mkdtempSync(path.join(tmpdir(), "idle-fake-pi-"));
+  const file = fakeModelSettingsFile("pi", directory);
+  // Under the backend's isolated HOME, never a real ~/.pi.
+  expect(file).toBe(
+    path.join(directory, "agent-credentials", "home", ".pi", "agent", "models.json"),
+  );
+  mkdirSync(path.dirname(file), { recursive: true });
+  const original = '{"providers":{"kept":{"baseUrl":"http://kept"}}}\n';
+  writeFileSync(file, original);
+  const { child, spawnModel } = fakeChild("ready");
+  try {
+    const handle = await startLocalFakeModel("pi", directory, { spawnModel });
+    const written = JSON.parse(readFileSync(file, "utf8")) as {
+      providers: Record<string, { baseUrl: string }>;
+    };
+    expect(Object.keys(written.providers).sort()).toEqual(["idleqa-fake", "kept"]);
+    expect(written.providers["idleqa-fake"]!.baseUrl).toBe("http://127.0.0.1:1234");
+    await handle.stop();
+    expect(child.killed).toBe(true);
+    expect(readFileSync(file, "utf8")).toBe(original);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});

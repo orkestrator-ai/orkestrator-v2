@@ -1,7 +1,7 @@
 # Claude resumed-root preference retention during aggregate validation
 
 - **ID:** 1221
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-28
 - **Test:** `a root turn the warm CLI starts on its own > signal death after the prompt settled retains a restart interruption`
 - **File:** `bridges/claude-bridge/src/services/session-manager-runtime-idle.test.ts:591`
@@ -115,3 +115,28 @@ Original evidence remains in
 and `orkestrator-test-run.gIhwSP` compressed group logs below the host temporary
 directory. The isolated pass establishes intermittence, not a cause or a fix.
 The case remains open; no implementation, assertion, deadline or skip changed.
+
+## Root cause and fix — 2026-11-06
+
+**Cause.** The test waited for the persisted mark by polling until
+`readSessionPreferences(...).turnInFlight` was present, then read it once more.
+`syncTurnInFlightMark` writes the mark at every edge through one serialized
+preference queue, and this test produces three writes in order. A temporary
+trace on `updateSessionPreferences` printed `set` (the prompt starts),
+`clear` (the prompt settles) and `set` (the resumed root runs). When the
+queue lagged, the poll stopped on the prompt's stale `set`, and the next read
+landed after the `clear` but before the resumed root's `set`, so the assertion
+saw `undefined`. That is why every failure took only 40–110 ms rather than the
+poll's one-second budget. Bridge behavior is correct: the final state on disk
+retains the mark.
+
+**Fix.** The test drains the queue with the existing
+`settleSessionPreferenceWritesForTesting()` before its single read, instead of
+polling for any mark. The assertion is unchanged.
+
+**Verification.** 30 separate processes ran the single case
+(`bun --no-env-file test src/services/session-manager-runtime-idle.test.ts
+--preload ../../tests/setup-node.ts -t "signal death after the prompt settled"`
+from `bridges/claude-bridge`): 30 of 30 passed. The complete owning file passed.
+`--rerun-each` cannot be used for this case, because the persisted session from
+the first run means `query()` is not invoked again.

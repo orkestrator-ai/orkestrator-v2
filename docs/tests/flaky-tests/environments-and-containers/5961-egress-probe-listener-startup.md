@@ -1,9 +1,9 @@
 # Egress probe listener startup in the default aggregate
 
 - **ID:** 5961
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-11-05
-- **Test:** `probe listeners serve only the fixed response, even from a directory containing files`
+- **Test:** `probe listeners serve only the fixed response, even from a directory containing files`; the same file's `cleanup after failed container create/start removes only successfully created resources` timed out alongside it
 - **File:** `tests/unit/egress-gateway-qualification.test.ts:23`
 - **Original command:** `mise run test:logged -- --name address-default-suite -- mise run test`, following commit `22506b26d`.
 - **Worker configuration:** default concurrent aggregate; root group granted one worker, workspace five slots, bridges two slots, protocol lockfile one slot. Root output reports Bun 1.4.4 with `1x PARALLEL`.
@@ -51,3 +51,35 @@ Original evidence remains in
 and `orkestrator-test-run.gIhwSP` compressed group logs below the host temporary
 directory. The isolated pass establishes intermittence, not a cause or a fix.
 The case remains open; no implementation, assertion, deadline or skip changed.
+
+## Root cause and fix — 2026-11-06
+
+**Cause.** `scripts/egress-probe-server.py` subclassed `HTTPServer`, whose
+`server_bind` names the server with `socket.getfqdn(host)`. On this host that
+is a real PTR query to the system resolver even for `127.0.0.1` (it answers
+`1.0.0.127.in-addr.arpa`), made once per listener before the ports file is
+written. While the resolver is slow, the listener publishes nothing: the
+fixed-response test polls for about 2 s and sees zero ports, and
+`qualify-egress-gateway.sh` polls for 5 s, so the two cleanup cases exceed Bun's
+5 s test deadline and leave the hung listener behind ("killed 1 dangling
+process"). The same file's same-timestamp case, which runs `python3 -c` but
+stops before the listener starts, kept passing. Python startup itself is not
+the cause: 40 concurrent listener starts at load average 38 on 18 cores
+published their ports in 97–340 ms.
+
+**Reproduction.** A `sitecustomize.py` on `PYTHONPATH` that delays
+`socket.getfqdn` by 1.5 s reproduced the fixed-response failure (zero ports,
+2,218 ms) with the unchanged script. Delaying it by 2.6 s reproduced all three
+recorded failures, both cleanup cases at 5,002 ms with
+`killed 1 dangling process`, which is the aggregate signature.
+
+**Fix.** `ProbeServer.server_bind` binds through `socketserver.TCPServer` and
+records the bind address as `server_name`; the fixed-response handler never
+reads it. A new test, `probe listeners publish their ports without consulting
+the resolver`, makes `getfqdn` and `gethostbyaddr` raise. It failed against the
+old script (`exited 1`, 135 ms) and passes with the fix. The polling helper now
+stops early when the listener exits and reports its exit state and stderr.
+No assertion or deadline was loosened.
+
+**Verification.** `bun test tests/unit/egress-gateway-qualification.test.ts`:
+5 pass, 0 fail, both normally and with the 2.6 s delayed resolver in place.

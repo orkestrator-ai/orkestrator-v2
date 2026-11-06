@@ -20,10 +20,8 @@ const request = (url: string) =>
 
 const script = join(root, "scripts/qualify-egress-gateway.sh");
 
-test("probe listeners serve only the fixed response, even from a directory containing files", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "ork-egress-listener-"));
-  writeFileSync(join(dir, "sentinel"), "private sentinel");
-  const child = Bun.spawn({
+const startProbeServer = (dir: string, env: Record<string, string | undefined> = process.env) =>
+  Bun.spawn({
     cmd: [
       "python3",
       join(root, "scripts/egress-probe-server.py"),
@@ -33,19 +31,34 @@ test("probe listeners serve only the fixed response, even from a directory conta
       join(dir, "ports"),
     ],
     cwd: dir,
+    env,
     stdout: "ignore",
     stderr: "pipe",
   });
-  try {
-    let ports: string[] = [];
-    for (let attempt = 0; attempt < 100; attempt++) {
-      try {
-        ports = readFileSync(join(dir, "ports"), "utf8").trim().split(" ");
-        break;
-      } catch {
-        await Bun.sleep(20);
-      }
+
+/** The two published ports, or a failure naming whether the listener died. */
+async function publishedPorts(dir: string, child: ReturnType<typeof startProbeServer>) {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    try {
+      return readFileSync(join(dir, "ports"), "utf8").trim().split(" ");
+    } catch {
+      if (child.exitCode !== null) break;
+      await Bun.sleep(20);
     }
+  }
+  const state = child.exitCode === null ? "still running" : `exited ${child.exitCode}`;
+  child.kill();
+  await child.exited;
+  const stderr = (await new Response(child.stderr).text()).slice(-2000);
+  throw new Error(`probe listener published no ports (${state}): ${stderr}`);
+}
+
+test("probe listeners serve only the fixed response, even from a directory containing files", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ork-egress-listener-"));
+  writeFileSync(join(dir, "sentinel"), "private sentinel");
+  const child = startProbeServer(dir);
+  try {
+    const ports = await publishedPorts(dir, child);
     expect(ports).toHaveLength(2);
     expect(ports[0]).not.toBe(ports[1]);
     for (const port of ports) {
@@ -56,6 +69,35 @@ test("probe listeners serve only the fixed response, even from a directory conta
         expect(response.status).toBe(404);
         expect(response.body).not.toContain("private sentinel");
       }
+    }
+  } finally {
+    child.kill();
+    await child.exited;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// HTTPServer.server_bind names the server with a reverse-DNS query; a slow
+// resolver held both listeners (and the qualification script waiting on them)
+// past their deadlines. A resolver that refuses outright must not matter.
+test("probe listeners publish their ports without consulting the resolver", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ork-egress-resolver-"));
+  const site = join(dir, "site");
+  mkdirSync(site);
+  writeFileSync(
+    join(site, "sitecustomize.py"),
+    "import socket\n" +
+      "def refuse(*_args, **_kwargs):\n" +
+      "    raise OSError('resolver consulted')\n" +
+      "socket.getfqdn = refuse\n" +
+      "socket.gethostbyaddr = refuse\n",
+  );
+  const child = startProbeServer(dir, { ...process.env, PYTHONPATH: site });
+  try {
+    const ports = await publishedPorts(dir, child);
+    expect(ports).toHaveLength(2);
+    for (const port of ports) {
+      expect((await request(`http://127.0.0.1:${port}/probe`)).body).toBe("egress-probe\n");
     }
   } finally {
     child.kill();

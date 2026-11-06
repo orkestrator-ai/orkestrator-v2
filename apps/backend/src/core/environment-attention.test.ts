@@ -51,6 +51,45 @@ describe("environment attention events", () => {
     });
   });
 
+  test("a question raises attention even while the badge is lit for finished work, once", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const events: EnvironmentAttentionEvent[] = [];
+      storage.addEnvironmentAttentionListener((event) => events.push(event));
+      const environment = await storage.addEnvironment(createEnvironment("project-1"));
+      const at = () => new Date().toISOString();
+
+      await storage.recordEnvironmentSessionCompletion(environment.id, at());
+      // Finished work is unread; an agent now asks a question.
+      await storage.recordEnvironmentAgentAttention(environment.id, ["question-1"], at());
+      // A second question while one is already shown is not raised again.
+      await storage.recordEnvironmentAgentAttention(environment.id, ["question-2"], at());
+      await storage.recordEnvironmentSessionCompletion(environment.id, at(), "agent_waiting");
+      expect(events.map((event) => event.reason)).toEqual(["agent_finished", "agent_question"]);
+
+      // A failure badge, then a session parks on an approval.
+      await storage.setEnvironmentUnread(environment.id, false);
+      await storage.recordEnvironmentSessionCompletion(environment.id, at(), "agent_failed");
+      await storage.recordEnvironmentSessionCompletion(environment.id, at(), "agent_waiting");
+      // Finishing after the question does not raise: the badge was already lit.
+      await storage.recordEnvironmentSessionCompletion(environment.id, at());
+      expect(events.map((event) => event.reason)).toEqual([
+        "agent_finished",
+        "agent_question",
+        "agent_failed",
+        "agent_waiting",
+      ]);
+      // Setup approval is not a client attention reason at all.
+      await storage.setEnvironmentUnread(environment.id, false);
+      await storage.recordEnvironmentAgentAttention(
+        environment.id,
+        ["setup-1"],
+        at(),
+        "setup_approval",
+      );
+      expect(events).toHaveLength(4);
+    });
+  });
+
   test("an activity aggregate ending its work raises attention once", async () => {
     await withTemporaryStorage(async (storage) => {
       const events: EnvironmentAttentionEvent[] = [];
@@ -71,6 +110,21 @@ describe("environment attention events", () => {
         "native-agent",
       );
       expect(events.map((event) => event.reason)).toEqual(["agent_finished"]);
+
+      // Lit for finished work, the aggregate then parks waiting on the user.
+      await storage.setEnvironmentAgentActivity(
+        environment.id,
+        "working",
+        new Date(start + 2_000).toISOString(),
+        "native-agent",
+      );
+      await storage.setEnvironmentAgentActivity(
+        environment.id,
+        "waiting",
+        new Date(start + 3_000).toISOString(),
+        "native-agent",
+      );
+      expect(events.map((event) => event.reason)).toEqual(["agent_finished", "agent_waiting"]);
     });
   });
 

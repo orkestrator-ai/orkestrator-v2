@@ -1,7 +1,8 @@
 import { normalizeNotificationSoundSettings } from "@orkestrator/protocol/notification-sounds";
 import { useConfigStore } from "@/stores/configStore";
 
-export type NotificationSoundKind = "agent-stopped" | "pr-merged" | "coordinator-report";
+export type NotificationSoundKind =
+  "agent-stopped" | "pr-merged" | "coordinator-report" | "agent-question";
 
 let audioContext: AudioContext | null = null;
 
@@ -41,6 +42,21 @@ const CHIMES: Record<NotificationSoundKind, readonly Note[]> = {
     { frequency: 587.33, offset: 0, duration: 0.14, volume: 0.11 },
     { frequency: 783.99, offset: 0.14, duration: 0.2, volume: 0.12 },
   ],
+  // Two quick high pings, then a leap up a fifth: a question that wants an
+  // answer. Higher, faster and longer than every other cue so it is not
+  // mistaken for work coming to rest.
+  "agent-question": [
+    { frequency: 987.77, offset: 0, duration: 0.09, volume: 0.12 },
+    { frequency: 987.77, offset: 0.11, duration: 0.09, volume: 0.12 },
+    { frequency: 1479.98, offset: 0.24, duration: 0.32, volume: 0.13 },
+  ],
+};
+
+const WAVEFORMS: Record<NotificationSoundKind, OscillatorType> = {
+  "agent-stopped": "sine",
+  "pr-merged": "triangle",
+  "coordinator-report": "triangle",
+  "agent-question": "square",
 };
 
 /**
@@ -61,7 +77,7 @@ export async function playNotificationSound(kind: NotificationSoundKind): Promis
       const gain = context.createGain();
       const noteStart = start + note.offset;
       const noteEnd = noteStart + note.duration;
-      oscillator.type = kind === "agent-stopped" ? "sine" : "triangle";
+      oscillator.type = WAVEFORMS[kind];
       oscillator.frequency.setValueAtTime(note.frequency, noteStart);
       gain.gain.setValueAtTime(0.0001, noteStart);
       gain.gain.exponentialRampToValueAtTime(note.volume, noteStart + 0.015);
@@ -81,8 +97,16 @@ export function isNotificationSoundEnabled(kind: NotificationSoundKind): boolean
   const settings = normalizeNotificationSoundSettings(
     useConfigStore.getState().config.global.notificationSounds,
   );
-  if (kind === "agent-stopped") return settings.agentStopped;
-  return kind === "pr-merged" ? settings.prMerged : settings.coordinatorReport;
+  switch (kind) {
+    case "agent-stopped":
+      return settings.agentStopped;
+    case "pr-merged":
+      return settings.prMerged;
+    case "coordinator-report":
+      return settings.coordinatorReport;
+    case "agent-question":
+      return settings.agentQuestion;
+  }
 }
 
 export async function playConfiguredNotificationSound(

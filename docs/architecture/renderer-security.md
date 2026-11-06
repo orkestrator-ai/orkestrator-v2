@@ -90,6 +90,8 @@ loads. Only the renderer's own main frame gets anything, and only:
 
 - `clipboard-sanitized-write`, for `navigator.clipboard.writeText`
 - `fullscreen`, for the `<video controls>` button
+- `notifications`, for the desktop notification raised when an agent asks a
+  question (the user's setting decides whether one is shown)
 
 Clipboard reads and images go through IPC. A refused permission fails silently in
 the page, so the first refusal of each kind on a session logs

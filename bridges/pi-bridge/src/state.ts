@@ -451,15 +451,14 @@ export interface SessionState {
    * from the transcript simply fails the lookup.
    */
   toolCallRows?: Map<string, string>;
-  /**
-   * The Pi message each live response row was built from, by row id.
-   *
-   * A live row's id is minted here, not Pi's entry id: Pi appends the entry
-   * only after its listeners have seen `message_end`, and the entry holds this
-   * same message object. A fork or rewind at a live row finds its entry by
-   * that identity. Runtime-only and bounded; cleared with the rendered history.
-   */
-  responseMessages?: Map<string, object>;
+  /** Transient identities awaiting Pi's append; converted to stable ids next frame. */
+  historyMessages?: Map<string, object>;
+  /** Bounded live row -> Pi entry ids; persisted across detach and bridge restart. */
+  historyEntries?: Map<string, string>;
+  /** The HTTP prompt awaiting its first Pi user frame (local-only prompts have none). */
+  pendingHistoryPromptId?: string;
+  /** Completed response waiting for its tool-only row to be created. */
+  pendingHistoryResponse?: object;
   /**
    * The leaf a rewind or branch switch chose, with Pi's entry count then.
    *
@@ -586,6 +585,7 @@ export interface SessionState {
 }
 
 export interface PersistedSession {
+  historyEntries?: Array<[string, string]>;
   readOnly?: boolean;
   id: string;
   historyLeaf?: { entryId: string | null; entries: number };

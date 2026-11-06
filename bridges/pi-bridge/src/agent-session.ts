@@ -98,6 +98,7 @@ import {
   HistoryTargetError,
   lastUserTarget,
   readContentText,
+  captureHistoryEntries,
   rememberHistoryLeaf,
   resolveHistoryTarget,
   restoreHistoryLeaf,
@@ -761,6 +762,7 @@ function publishAttachedSession(state: SessionState, session: AgentSession): Age
   // release it: a listener left attached to a disposed session keeps the whole
   // object graph — messages, tools, extension runner — alive.
   state.unsubscribe = session.subscribe((event) => {
+    captureHistoryEntries(state, session.sessionManager);
     applySessionEvent(state, event);
     abortCancelledCompactionOnStart(state, event, session);
     // Every call that ran was already measured in the `tool_result` hook,
@@ -1196,6 +1198,10 @@ export async function detachSession(state: SessionState): Promise<void> {
   const session = state.session;
   const runtime = state.runtime;
   const unsubscribe = state.unsubscribe;
+  if (session) captureHistoryEntries(state, session.sessionManager);
+  state.pendingHistoryPromptId = undefined;
+  state.pendingHistoryResponse = undefined;
+  state.historyMessages?.clear();
   state.session = null;
   state.runtime = undefined;
   state.unsubscribe = undefined;
@@ -1647,7 +1653,10 @@ export function resetRenderedHistory(state: SessionState): void {
   state.toolInputs.clear();
   state.pendingCommandChanges?.clear();
   state.toolCallRows?.clear();
-  state.responseMessages?.clear();
+  state.historyMessages?.clear();
+  state.historyEntries?.clear();
+  state.pendingHistoryPromptId = undefined;
+  state.pendingHistoryResponse = undefined;
   state.currentAssistantMessageId = undefined;
   state.turnOpenedAssistantRow = undefined;
   state.uncheckedTranscriptBytes = 0;

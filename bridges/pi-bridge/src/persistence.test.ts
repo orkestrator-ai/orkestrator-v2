@@ -15,7 +15,12 @@ import {
   publishCommandCatalogue,
   resolveCommandSelection,
 } from "./commands.js";
-import type { AgentSession } from "@earendil-works/pi-coding-agent";
+import { SessionManager, type AgentSession } from "@earendil-works/pi-coding-agent";
+import {
+  captureHistoryEntries,
+  rememberHistoryMessage,
+  resolveHistoryTarget,
+} from "./history-target.js";
 import { MAX_STATE_FILE_BYTES } from "./config.js";
 import { clientSessionKeys, sessions, type PersistedState } from "./state.js";
 import { testApprovalDeadline } from "./testing/approval-fixtures.js";
@@ -43,6 +48,82 @@ async function writeState(state: unknown): Promise<void> {
 async function readState(): Promise<PersistedState> {
   return JSON.parse(await readFile(join(directory, "state.json"), "utf8")) as PersistedState;
 }
+
+test("intermediate response mappings survive detach and bridge persistence restore", async () => {
+  const manager = SessionManager.create("/workspace", directory);
+  manager.appendMessage({ role: "user", content: "first", timestamp: 0 });
+  const response = (text: string) => ({
+    role: "assistant",
+    content: [{ type: "text", text }],
+    api: "openai-completions",
+    provider: "test",
+    model: "model",
+    stopReason: "stop",
+    timestamp: 0,
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+  });
+  const state = newSessionState();
+  const intermediate = response("intermediate");
+  rememberHistoryMessage(state, "live-intermediate", intermediate);
+  const id = manager.appendMessage(intermediate as never);
+  manager.appendMessage(response("final") as never);
+  captureHistoryEntries(state, manager);
+  state.sessionFile = manager.getSessionFile();
+  state.messages = [
+    {
+      id: "live-intermediate",
+      role: "assistant",
+      content: "intermediate",
+      parts: [],
+      createdAt: new Date().toISOString(),
+    },
+  ];
+  sessions.set(state.id, state);
+  await persistBarrier();
+  sessions.clear();
+  await loadPersistedState();
+  const restored = sessions.get(state.id)!;
+  const reopened = {
+    sessionManager: SessionManager.open(state.sessionFile!, directory, "/workspace"),
+  } as unknown as AgentSession;
+  expect(restored.historyMessages).toBeUndefined();
+  expect(resolveHistoryTarget(restored, reopened, "live-intermediate")).toEqual({
+    entryId: id,
+    position: "at",
+  });
+});
+
+test("malformed and oversized restored history maps are bounded", async () => {
+  await writeState({
+    version: 1,
+    provider: "pi",
+    sessions: [
+      {
+        id: "bounded",
+        messages: [],
+        historyEntries: [
+          ...Array.from({ length: 1100 }, (_, i) => [`row-${i}`, `entry-${i}`]),
+          ["bad", 7],
+          ["", "entry"],
+          ["x".repeat(257), "entry"],
+        ],
+      },
+    ],
+  });
+  await loadPersistedState();
+  const entries = sessions.get("bounded")!.historyEntries!;
+  expect(entries.size).toBeLessThanOrEqual(1024);
+  expect(entries.has("row-0")).toBe(false);
+  expect(entries.has("bad")).toBe(false);
+  expect(entries.get("row-1099")).toBe("entry-1099");
+});
 
 describe("the whole-file bound", () => {
   /** A session whose transcript alone is a meaningful share of the cap. */

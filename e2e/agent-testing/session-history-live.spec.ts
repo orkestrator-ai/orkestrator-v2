@@ -40,6 +40,7 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { createInterface } from "node:readline";
+import { createHistoryEnvironment, cleanupHistoryEnvironment } from "./session-history-environment";
 import { snapshotFixtureFiles } from "./codex-fixture-files";
 import { DEFAULT_NATIVE_AGENT_LIVE_WINDOW } from "@orkestrator/protocol/native-agent";
 
@@ -244,19 +245,6 @@ function piEntryAcknowledging(status: Status, since: number, marker: string): st
   return found[0]!;
 }
 
-async function createEnvironment(invoke: Invoke, fixture: Project, name: string) {
-  const environment = await invoke<Environment>("create_environment", {
-    projectId: fixture.id,
-    name: `${name}-${Date.now()}`,
-    environmentType: "local",
-    networkAccessMode: "restricted",
-  });
-  await invoke("start_environment", { environmentId: environment.id });
-  const started = await invoke<Environment>("get_environment", { environmentId: environment.id });
-  expect(started.worktreePath).toBeTruthy();
-  return started;
-}
-
 function rowText(row: Row): string {
   if (typeof row.content === "string" && row.content) return row.content;
   const texts: string[] = [];
@@ -369,7 +357,11 @@ test.describe("fork and rewind on loopback models", () => {
             ? pointCodexAt(status, `${loopback.origin}/v1`)
             : pointPiAt(status, `${loopback.origin}/v1`),
         );
-        environment = await createEnvironment(invoke, fixture!, `history-${platform}`);
+        environment = await createHistoryEnvironment<Environment>(
+          invoke,
+          fixture!.id,
+          `history-${platform}`,
+        );
         const environmentId = environment.id;
         const model = platform === "pi" ? `${PI_PROVIDER}/${PI_MODEL}` : undefined;
         const tab = (name: string) => ({
@@ -587,12 +579,7 @@ test.describe("fork and rewind on loopback models", () => {
         note("reload", { before, after, call: reloadedCall.markers });
       } finally {
         if (environment) {
-          await invoke("stop_environment", { environmentId: environment.id }).catch(
-            () => undefined,
-          );
-          await invoke("delete_environment", { environmentId: environment.id }).catch(
-            () => undefined,
-          );
+          await cleanupHistoryEnvironment(invoke, environment.id);
         }
         for (const restore of restores.reverse()) restore();
         loopback.child.kill();

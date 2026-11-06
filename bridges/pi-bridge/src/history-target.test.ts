@@ -5,12 +5,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SessionManager, type AgentSession } from "@earendil-works/pi-coding-agent";
 import {
+  captureHistoryEntries,
   lastUserTarget,
   rememberHistoryLeaf,
   resolveHistoryTarget,
   restoreHistoryLeaf,
 } from "./history-target.js";
 import { newSessionState } from "./session-factory.js";
+import { detachSession } from "./agent-session.js";
 import type { SessionState } from "./state.js";
 import { applySessionEvent } from "./translate.js";
 
@@ -20,9 +22,11 @@ import { applySessionEvent } from "./translate.js";
  * to its real `SessionManager` only after its listeners saw `message_end`.
  */
 class LiveConversation {
-  readonly manager = SessionManager.inMemory("/workspace");
+  constructor(readonly manager = SessionManager.inMemory("/workspace")) {}
   readonly state: SessionState = newSessionState();
-  readonly session = { sessionManager: this.manager } as unknown as AgentSession;
+  get session(): AgentSession {
+    return { sessionManager: this.manager } as unknown as AgentSession;
+  }
   /** Entry id by marker, for the assertions. */
   readonly entries = new Map<string, string>();
   /** Row id by marker. */
@@ -40,17 +44,19 @@ class LiveConversation {
     });
     this.rows.set(marker, id);
     this.state.status = "running";
-    this.entries.set(
-      marker,
-      this.manager.appendMessage({ role: "user", content: marker, timestamp: Date.now() }),
-    );
+    const message = { role: "user", content: marker, timestamp: Date.now() };
+    this.state.pendingHistoryPromptId = id;
+    applySessionEvent(this.state, { type: "message_start", message });
+    applySessionEvent(this.state, { type: "message_end", message });
+    this.entries.set(marker, this.manager.appendMessage(message as never));
+    captureHistoryEntries(this.state, this.manager);
   }
 
-  respond(marker: string, options: { toolCall?: string } = {}): void {
+  respond(marker: string, options: { toolCall?: string; toolOnly?: boolean } = {}): void {
     const message = {
       role: "assistant",
       content: [
-        { type: "text", text: `Acknowledged ${marker}.` },
+        ...(options.toolOnly ? [] : [{ type: "text", text: `Acknowledged ${marker}.` }]),
         ...(options.toolCall
           ? [{ type: "toolCall", id: options.toolCall, name: "bash", arguments: { command: "ls" } }]
           : []),
@@ -70,14 +76,24 @@ class LiveConversation {
       timestamp: Date.now(),
     };
     applySessionEvent(this.state, { type: "message_start", message });
-    applySessionEvent(this.state, {
-      type: "message_update",
-      assistantMessageEvent: { type: "text_delta", delta: `Acknowledged ${marker}.` },
-    });
+    if (!options.toolOnly)
+      applySessionEvent(this.state, {
+        type: "message_update",
+        assistantMessageEvent: { type: "text_delta", delta: `Acknowledged ${marker}.` },
+      });
     applySessionEvent(this.state, { type: "message_end", message });
     // Pi persists after its listeners, holding the very object they saw.
     this.entries.set(marker, this.manager.appendMessage(message as never));
+    if (options.toolCall) {
+      applySessionEvent(this.state, {
+        type: "tool_execution_start",
+        toolCallId: options.toolCall,
+        toolName: "bash",
+        args: { command: "ls" },
+      });
+    }
     this.rows.set(marker, this.state.messages.at(-1)!.id);
+    captureHistoryEntries(this.state, this.manager);
     if (options.toolCall) {
       this.entries.set(
         `${marker}:result`,
@@ -206,7 +222,7 @@ describe("resolving a fork or rewind target", () => {
     });
   });
 
-  test("a response whose Pi message is unknown resolves only at the end of its turn", () => {
+  test("unknown response mappings are refused instead of inferring a cut from nearby rows", () => {
     const live = new LiveConversation();
     live.prompt("HX1");
     live.respond("HX1:call", { toolCall: "call-1" });
@@ -214,21 +230,63 @@ describe("resolving a fork or rewind target", () => {
     live.prompt("HX2");
     live.respond("HX2:reply");
     live.settle();
-    // As after the bound evicted them: nothing remembers which message a row was.
-    live.state.responseMessages?.clear();
+    live.state.historyMessages?.clear();
+    live.state.historyEntries?.clear();
+    for (const marker of ["HX1:call", "HX1:reply", "HX2:reply"]) {
+      expect(live.resolve(marker)).toBeUndefined();
+    }
+  });
 
-    // The end of a turn is exactly the cut before the next prompt.
-    expect(live.resolve("HX1:reply")).toEqual({
-      entryId: live.entries.get("HX2")!,
-      position: "before",
+  for (const local of ["/steer local", "/compact", "cancelled before send"]) {
+    test(`local-only row ${local} cannot shift an earlier prompt or response`, () => {
+      const live = new LiveConversation();
+      live.prompt("HX1");
+      live.respond("HX1:reply");
+      live.prompt("HX2");
+      live.respond("HX2:reply");
+      live.settle();
+      live.state.messages.push({
+        id: "local",
+        role: "user",
+        content: local,
+        parts: [],
+        createdAt: new Date().toISOString(),
+      });
+      expect(live.resolve("HX2")).toEqual({ entryId: live.entries.get("HX2"), position: "before" });
+      expect(live.resolve("HX2:reply")).toEqual({
+        entryId: live.entries.get("HX2:reply"),
+        position: "at",
+      });
+      expect(resolveHistoryTarget(live.state, live.session, "local")).toBeUndefined();
+      live.state.historyEntries?.delete(live.rows.get("HX2:reply")!);
+      expect(live.resolve("HX2:reply")).toBeUndefined();
     });
-    // The newest response ends at the leaf.
-    expect(live.resolve("HX2:reply")).toEqual({
-      entryId: live.entries.get("HX2:reply")!,
+  }
+
+  test("a tool-only response resolves after its result and before the final text response", () => {
+    const live = new LiveConversation();
+    live.prompt("HX1");
+    live.respond("HX1:tool", { toolCall: "call-only", toolOnly: true });
+    live.respond("HX1:final");
+    live.settle();
+    const target = live.resolve("HX1:tool");
+    expect(target).toEqual({ entryId: live.entries.get("HX1:tool:result"), position: "at" });
+    live.manager.branch(target!.entryId);
+    expect(live.manager.getBranch().at(-1)?.id).toBe(live.entries.get("HX1:tool:result"));
+  });
+
+  test("stable response ids survive replacement with newly parsed entry objects", () => {
+    const live = new LiveConversation();
+    live.prompt("HX1");
+    live.respond("HX1:tool", { toolCall: "call-1", toolOnly: true });
+    live.respond("HX1:final");
+    live.settle();
+    const branch = JSON.parse(JSON.stringify(live.manager.getBranch()));
+    const reopened = { sessionManager: { getBranch: () => branch } } as unknown as AgentSession;
+    expect(resolveHistoryTarget(live.state, reopened, live.rows.get("HX1:tool")!)).toEqual({
+      entryId: live.entries.get("HX1:tool:result"),
       position: "at",
     });
-    // Mid-turn there is no exact cut, so it is refused rather than guessed.
-    expect(live.resolve("HX1:call")).toBeUndefined();
   });
 
   test("an id that names nothing in the session resolves to nothing", () => {
@@ -280,6 +338,38 @@ describe("the leaf a rewind chose", () => {
     }
     return { manager, file: manager.getSessionFile()!, ids };
   }
+
+  test("detach captures intermediate response ids before a real JSONL reopen", async () => {
+    const live = new LiveConversation(SessionManager.create("/workspace", directory));
+    live.prompt("HX1");
+    live.respond("HX1:tool", { toolCall: "call-1", toolOnly: true });
+    live.respond("HX1:final");
+    live.settle();
+    // Model the interval just after message_end: only transient identities remain.
+    live.state.historyEntries?.clear();
+    for (const marker of ["HX1:tool", "HX1:final"]) {
+      const entry = live.manager.getEntry(live.entries.get(marker)!);
+      if (entry?.type === "message")
+        live.state.historyMessages!.set(live.rows.get(marker)!, entry.message);
+    }
+    live.state.session = {
+      sessionManager: live.manager,
+      dispose: () => {},
+    } as unknown as AgentSession;
+    await detachSession(live.state);
+    expect(live.state.historyMessages?.size).toBe(0);
+    const manager = SessionManager.open(live.manager.getSessionFile()!, directory, "/workspace");
+    const session = { sessionManager: manager } as unknown as AgentSession;
+    const target = resolveHistoryTarget(live.state, session, live.rows.get("HX1:tool")!);
+    expect(target).toEqual({ entryId: live.entries.get("HX1:tool:result"), position: "at" });
+    manager.branch(target!.entryId);
+    expect(
+      manager
+        .getBranch()
+        .filter((entry) => entry.type === "message")
+        .map((entry) => entry.message.role),
+    ).toEqual(["user", "assistant", "toolResult"]);
+  });
 
   test("a reopened file returns to the rewound leaf, which Pi keeps only in memory", () => {
     // Before this, a rewind rendered from the reopened file showed all three

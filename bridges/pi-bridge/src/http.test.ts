@@ -52,6 +52,7 @@ const { sessions, clientSessionKeys, piRunId } = await import("./state.js");
 const { loadPersistedState, setPersistWriteGateForTests, settlePersistenceForTests } =
   await import("./persistence.js");
 const { applySessionEvent } = await import("./translate.js");
+const { resolveHistoryTarget } = await import("./history-target.js");
 const { nativeFetch } = await import("./testing/native-fetch.js");
 const { buildCommandCatalogue, publishCommandCatalogue } = await import("./commands.js");
 const { setCommandPreviewReaderForTests } = await import("./command-preview.js");
@@ -161,6 +162,7 @@ function resetTestDependencies(): void {
 function fakeAgentSession(overrides: Record<string, unknown> = {}): AgentSession {
   const session = {
     sessionId: "pi-session-test",
+    sessionManager: SessionManager.inMemory("/workspace"),
     sessionFile: "/tmp/pi-session-test.jsonl",
     promptTemplates: [],
     subscribe: () => () => undefined,
@@ -1608,6 +1610,50 @@ describe("successful lifecycle routes", () => {
       await state.session?.dispose();
       sessions.delete(state.id);
       resetTestDependencies();
+    }
+  });
+
+  test("delivered HTTP prompts keep exact targets after a local-only exchange", async () => {
+    const state = seedSession();
+    const manager = SessionManager.inMemory("/workspace");
+    const ids: string[] = [];
+    const session = fakeAgentSession({
+      sessionManager: manager,
+      prompt: (text: string, options: { preflightResult?: (disposition: string) => void }) => {
+        options.preflightResult?.("started");
+        const message = { role: "user", content: text, timestamp: Date.now() };
+        applySessionEvent(state, { type: "message_start", message });
+        applySessionEvent(state, { type: "message_end", message });
+        ids.push(manager.appendMessage(message as never));
+        return Promise.resolve();
+      },
+    });
+    state.session = session;
+    try {
+      for (const prompt of ["first", "second"]) {
+        const response = await call(`/session/${state.id}/prompt`, {
+          method: "POST",
+          body: JSON.stringify({ prompt }),
+        });
+        expect(response.status).toBe(202);
+        await waitFor(() => state.status === "idle");
+      }
+      const second = state.messages.find((row) => row.role === "user" && row.content === "second")!;
+      const local = await call(`/session/${state.id}/prompt`, {
+        method: "POST",
+        body: JSON.stringify({ prompt: "/steer local-only" }),
+      });
+      expect(local.status).toBe(200);
+      expect(resolveHistoryTarget(state, session, second.id)).toEqual({
+        entryId: ids[1],
+        position: "before",
+      });
+      const localRow = state.messages.find(
+        (row) => row.role === "user" && row.content === "/steer local-only",
+      )!;
+      expect(resolveHistoryTarget(state, session, localRow.id)).toBeUndefined();
+    } finally {
+      sessions.delete(state.id);
     }
   });
 

@@ -30,21 +30,42 @@ const UNRENDERED_ENTRY_TYPES = new Set([
   "context_edit",
 ]);
 
+/** Bound both persisted ids and the transient messages awaiting Pi's append. */
+export const MAX_HISTORY_TARGETS = 1_024;
+
+/** Remember a row's message only until Pi appends it after message_end. */
+export function rememberHistoryMessage(state: SessionState, rowId: string, message: object): void {
+  const pending = (state.historyMessages ??= new Map());
+  pending.set(rowId, message);
+  while (pending.size > MAX_HISTORY_TARGETS) pending.delete(pending.keys().next().value!);
+}
+
 /**
- * The Pi entry a transcript message names, and which side of it to cut.
- *
- * A live row's id is minted by this bridge, not by Pi: Pi appends the entry
- * only after its listeners have seen `message_end`. So an id is resolved, in
- * order, as a Pi entry id (a replayed row, or a branch entry), as a prompt row
- * (matched to the active branch's user entries from the newest, so a trimmed
- * transcript front cannot shift it), or as a response row through the Pi
- * message it was built from (`responseMessages`), which is the very object
- * Pi's entry holds. A response row whose message is no longer known resolves
- * only when it ends its turn, as the cut before the next prompt.
- *
- * Only the active branch counts: Pi's own `getUserMessagesForForking` lists
- * every branch in the file, so after one rewind its positions no longer match
- * the transcript's.
+ * Convert transient message identities to durable Pi entry ids. Called at the
+ * next SDK frame, before detach/persistence, and on target lookup. No ordinal
+ * matching: local exchanges and never-sent prompts have no Pi entry at all.
+ */
+export function captureHistoryEntries(state: SessionState, manager: SessionManager): void {
+  const pending = state.historyMessages;
+  if (!pending?.size) return;
+  const byMessage = new Map<object, string>();
+  for (const entry of manager.getBranch()) {
+    if (entry.type === "message") byMessage.set(entry.message, entry.id);
+  }
+  const ids = (state.historyEntries ??= new Map());
+  for (const [rowId, message] of Array.from(pending)) {
+    const entryId = byMessage.get(message);
+    if (!entryId) continue;
+    ids.set(rowId, entryId);
+    pending.delete(rowId);
+  }
+  while (ids.size > MAX_HISTORY_TARGETS) ids.delete(ids.keys().next().value!);
+}
+
+/**
+ * Resolve only a stable Pi id on the active branch. A replayed row already
+ * uses that id; a live row keeps its published id and has a separate mapping.
+ * Unknown/evicted mappings are refused rather than guessing a destructive cut.
  */
 export function resolveHistoryTarget(
   state: SessionState,
@@ -53,54 +74,15 @@ export function resolveHistoryTarget(
 ): HistoryTarget | undefined {
   const requested = messageId.trim();
   if (!requested) return undefined;
+  captureHistoryEntries(state, session.sessionManager);
   const branch = session.sessionManager.getBranch();
-  const named = branch.find((entry) => entry.id === requested);
-  if (named) return targetForEntry(branch, named);
-
-  const index = state.messages.findIndex((message) => message.id === requested);
-  const row = state.messages[index];
-  if (!row) return undefined;
-  if (row.role === "user") return promptTarget(state, branch, index);
-
-  const message = state.responseMessages?.get(requested);
-  const built = message
-    ? branch.find((entry) => entry.type === "message" && entry.message === message)
-    : undefined;
-  if (built) return targetForEntry(branch, built);
-
-  // Only the end of a turn has an exact cut without the row's own entry.
-  const rest = state.messages.slice(index + 1);
-  const next = rest.findIndex((candidate) => candidate.role === "user");
-  if (rest.slice(0, next < 0 ? undefined : next).some((later) => later.role === "assistant")) {
-    return undefined;
-  }
-  if (next < 0) {
-    const leaf = session.sessionManager.getLeafId();
-    return leaf ? { entryId: leaf, position: "at" } : undefined;
-  }
-  return promptTarget(state, branch, index + 1 + next);
+  const entryId = state.historyEntries?.get(requested) ?? requested;
+  const entry = branch.find((candidate) => candidate.id === entryId);
+  return entry ? targetForEntry(branch, entry) : undefined;
 }
 
 function isUserEntry(entry: SessionEntry): boolean {
-  return (
-    entry.type === "message" &&
-    entry.message.role === "user" &&
-    readContentText(entry.message.content).length > 0
-  );
-}
-
-/** The user entry for the prompt row at `rowIndex`, counted from the newest. */
-function promptTarget(
-  state: SessionState,
-  branch: SessionEntry[],
-  rowIndex: number,
-): HistoryTarget | undefined {
-  const fromNewest = state.messages
-    .slice(rowIndex + 1)
-    .filter((message) => message.role === "user").length;
-  const prompts = branch.filter(isUserEntry);
-  const entry = prompts[prompts.length - 1 - fromNewest];
-  return entry ? { entryId: entry.id, position: "before" } : undefined;
+  return entry.type === "message" && entry.message.role === "user";
 }
 
 /**

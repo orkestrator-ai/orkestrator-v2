@@ -88,11 +88,13 @@ a cut in Pi's tree. Three rules hold it to what the reader picked:
 
 - **A live row id is not a Pi entry id.** Pi appends an entry only after its
   listeners have seen `message_end`, so a live row gets a bridge id. The
-  response row remembers the Pi message it was built from
-  (`responseMessages`), and the entry Pi appends holds that same object. A
-  replayed row's id is the entry id. A prompt row is matched to the active
-  branch's user entries from the newest, never to Pi's
-  `getUserMessagesForForking`, which lists every branch in the file.
+  row remembers its emitted Pi message until the next frame can resolve its
+  stable entry id (`historyEntries`, persisted in `state.json`). Capture these
+  ids before detach and persistence too. Tool-only responses bind once their
+  tool row is created. HTTP prompts bind only to a user frame Pi emitted;
+  local exchanges and cancelled-before-send rows have no mapping. Never infer
+  a target from row counts or from the next prompt: refuse unknown mappings.
+  Replayed rows already use Pi entry ids.
 - **A prompt is cut before itself; a response is kept with its tool results.**
   A row that resolves to nothing is refused with 409; a fork never falls back
   to the newest prompt (that forked the wrong turns, 2026-11-06).

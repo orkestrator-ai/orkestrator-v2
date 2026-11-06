@@ -35,6 +35,7 @@ import {
   resumeSession,
   SessionBusyError,
   sessionManagerFor,
+  setSessionTitle,
   setAgentSessionTestHooks,
   type AgentSessionTestHooks,
 } from "./agent-session.js";
@@ -1065,6 +1066,7 @@ describe("Pi SDK lifecycle", () => {
       },
     ];
 
+    state.historyEntries = new Map([["newer-message", "newer-entry"]]);
     expect(state.transcriptEpoch).toBeUndefined();
     await navigateSessionHistory(state, "newer-message");
 
@@ -1073,6 +1075,60 @@ describe("Pi SDK lifecycle", () => {
     // Another branch starts at index 0 again, so every earlier position
     // (history cursors, `startIndex`) must belong to a different epoch.
     expect(state.transcriptEpoch).toBe(1);
+  });
+
+  test("rewind rehydrates the chosen branch and survives a title append and detach/reopen", async () => {
+    const manager = SessionManager.create(workingDirectory, sessionDirectory);
+    const ids: string[] = [];
+    for (const text of ["first", "second", "third"]) {
+      ids.push(manager.appendMessage({ role: "user", content: text, timestamp: 0 }));
+      manager.appendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: `reply ${text}` }],
+        api: "openai-completions",
+        provider: "test",
+        model: "model",
+        stopReason: "stop",
+        timestamp: 0,
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+      } as never);
+    }
+    const fake = fakeSession({
+      sessionManager: manager,
+      sessionFile: manager.getSessionFile(),
+      navigateTree: async (id: string) => {
+        const entry = manager.getEntry(id)!;
+        // Pi navigates to a prompt's parent (before the selected prompt).
+        manager.branch(entry.parentId!);
+        return { cancelled: false, aborted: false };
+      },
+      setSessionName: (title: string) => manager.appendSessionInfo(title),
+    });
+    installTestHooks({ createAgentSession: async () => fake.session });
+    const state = newSessionState();
+    await navigateSessionHistory(state, ids[1]!);
+    expect(state.messages.map((row) => row.content)).toEqual(["first", "reply first"]);
+    expect(state.historyLeaf?.entryId).toBe(manager.getLeafId());
+    expect(
+      sessionManagerFor(state)
+        .getBranch()
+        .filter((e) => e.type === "message"),
+    ).toHaveLength(2);
+    await setSessionTitle(state, "Rewound conversation");
+    await detachSession(state);
+    const reopened = sessionManagerFor(state);
+    expect(reopened.getSessionName()).toBe("Rewound conversation");
+    expect(reopened.getBranch().filter((e) => e.type === "message")).toHaveLength(2);
+    // Adopt the same file through the production hydration path as a restart would.
+    const resumed = await resumeSession(state.sessionFile!);
+    expect(resumed.messages.map((row) => row.content)).toEqual(["first", "reply first"]);
   });
 
   test("updates live model and thinking selections to what the session accepts", async () => {

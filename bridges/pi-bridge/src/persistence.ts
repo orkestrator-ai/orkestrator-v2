@@ -13,6 +13,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { isNativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import { MAX_STATE_FILE_BYTES, stateFilePath } from "./config.js";
+import { captureHistoryEntries, MAX_HISTORY_TARGETS } from "./history-target.js";
 import { emptyComposer } from "./models.js";
 import { readTodos } from "./tool-rendering.js";
 import {
@@ -213,7 +214,9 @@ async function persistNow(write: PersistWriteForTests = { barrier: false }): Pro
 }
 
 function toPersisted(state: SessionState): PersistedSession {
+  if (state.session) captureHistoryEntries(state, state.session.sessionManager);
   return {
+    ...(state.historyEntries?.size ? { historyEntries: Array.from(state.historyEntries) } : {}),
     id: state.id,
     ...(state.policy ? { policy: state.policy } : {}),
     ...(state.readOnly ? { readOnly: true } : {}),
@@ -302,6 +305,21 @@ function restoreSession(entry: unknown): SessionState | undefined {
   const state = newSessionState(
     nonBlank(entry.clientSessionKey) ? entry.clientSessionKey : undefined,
   );
+  if (Array.isArray(entry.historyEntries)) {
+    state.historyEntries = new Map();
+    for (const pair of entry.historyEntries.slice(-MAX_HISTORY_TARGETS)) {
+      if (
+        Array.isArray(pair) &&
+        pair.length === 2 &&
+        nonBlank(pair[0]) &&
+        pair[0].length <= 256 &&
+        nonBlank(pair[1]) &&
+        pair[1].length <= 256
+      ) {
+        state.historyEntries.set(pair[0], pair[1]);
+      }
+    }
+  }
   state.readOnly = entry.readOnly === true;
   state.id = entry.id;
   if (isNativeAgentExecutionPolicy(entry.policy)) state.policy = entry.policy;

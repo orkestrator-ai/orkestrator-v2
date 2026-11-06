@@ -1676,6 +1676,7 @@ async function handleAdmittedPrompt(
   const messageStart = state.messages.length;
   const uncheckedBeforePrompt = state.uncheckedTranscriptBytes;
   appendUserMessage(state, displayPrompt, images, files);
+  state.pendingHistoryPromptId = state.messages.at(-1)!.id;
   state.status = "running";
   state.error = undefined;
   state.promptSequence += 1;
@@ -1720,6 +1721,7 @@ async function handleAdmittedPrompt(
     // turn back rather than leaving the session wedged as running or showing
     // a user message for work the agent never accepted.
     state.messages.splice(messageStart);
+    state.pendingHistoryPromptId = undefined;
     state.uncheckedTranscriptBytes = uncheckedBeforePrompt;
     state.status = "error";
     state.error = errorText(error);

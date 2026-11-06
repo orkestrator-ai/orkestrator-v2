@@ -105,3 +105,93 @@ test("deleting an environment releases its sessions' projection caches, and only
     },
   );
 });
+
+for (const mode of ["legacy", "sync-v1", "transcript", "state"] as const) {
+  for (const inFlight of [false, true]) {
+    test(`deletion releases a first ${mode} read (${inFlight ? "in flight" : "settled"})`, async () => {
+      let release!: () => void;
+      let entered!: () => void;
+      const started = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const snapshot = async () => {
+        entered();
+        if (inFlight) await gate;
+        return {
+          status: "idle" as const,
+          messages: [
+            {
+              id: "late-row",
+              role: "assistant" as const,
+              content: "late response",
+              parts: [{ type: "text", content: "late response" }],
+              createdAt: "2026-11-06T00:00:00Z",
+            },
+          ],
+        };
+      };
+      const stub = createProviderStub("codex", { interactiveSnapshot: snapshot });
+      const gauges = () =>
+        recurringWorkDiagnostics().caches.find((cache) => cache.name === "native-projection")!
+          .gauges;
+      await withService(
+        { prefix: "orkestrator-native-forget-first-", provider: async () => stub.provider },
+        async ({ service, storage }) => {
+          await service.ensureSession(identity);
+          const read = () =>
+            mode === "transcript"
+              ? service.getTranscriptUpdate({
+                  ...identity,
+                  viewVersion: 1,
+                  liveWindow: { messages: 40, targetBytes: 512 * 1024 },
+                  forceSnapshot: true,
+                })
+              : mode === "state"
+                ? service.getSessionStateUpdate({
+                    ...identity,
+                    viewVersion: 1,
+                    forceSnapshot: true,
+                  })
+                : service.getProjection({
+                    ...identity,
+                    ...(mode === "sync-v1" ? { representation: "sync-v1" as const } : {}),
+                  });
+          const pending = read();
+          try {
+            await started;
+            if (!inFlight) await pending;
+            if (mode === "transcript" || mode === "state") expect(gauges().projections).toBe(0);
+            await storage.deleteNativeAgentSessionsByEnvironment(identity.environmentId);
+            service.forgetEnvironmentProjections(identity.environmentId);
+            if (inFlight) expect(gauges().projectionEpochs).toBeGreaterThan(0);
+          } finally {
+            release();
+            await pending;
+          }
+          expect(
+            service.cachedProjectionSnapshot(
+              identity.environmentId,
+              identity.agent,
+              identity.logicalSessionKey,
+            ),
+          ).toBeNull();
+          expect(gauges()).toMatchObject({
+            projections: 0,
+            projectionRefreshes: 0,
+            projectionSync: 0,
+            projectionRevisions: 0,
+            projectionEpochs: 0,
+            progressiveReads: 0,
+            progressiveReadEpochs: 0,
+            progressiveTranscripts: 0,
+            progressiveStates: 0,
+            projectedMessages: 0,
+          });
+        },
+      );
+    });
+  }
+}

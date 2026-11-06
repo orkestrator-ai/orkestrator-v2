@@ -18,7 +18,8 @@ import { dismissStartupDialogs } from "./electron-startup-dialogs";
 
 /**
  * The desktop half of client freshness
- * (docs/todo/transcripts-and-observation/0051-client-reconnect-and-freshness.md):
+ * (docs/development/agent-testing.md#live-client-outage, and tasks 16 to 20 of
+ * docs/todo/transcripts-and-observation/0048-recurring-work-qualification.md):
  * a window whose active connection is a remote backend has no gateway stream of
  * its own in the renderer, so its outage signal is Electron's connection list.
  * The remote is a real second backend behind a test-owned link, restarted for

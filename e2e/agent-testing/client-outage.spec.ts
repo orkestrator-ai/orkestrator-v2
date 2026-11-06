@@ -32,7 +32,9 @@ import {
  * Client reconnect and freshness under a real outage, against a real backend:
  * a dropped link (several tabs and terminals on each transport), a stopped and
  * restarted backend, and terminal recovery under real TCP backpressure. See
- * docs/todo/transcripts-and-observation/0051-client-reconnect-and-freshness.md.
+ * docs/development/agent-testing.md#live-client-outage; what is still owed is
+ * tasks 16 to 20 of
+ * docs/todo/transcripts-and-observation/0048-recurring-work-qualification.md.
  *
  * The link is a proxy inside this test (`client-outage-support.ts`), so the
  * machine's network is untouched, and one tab per listener attributes every

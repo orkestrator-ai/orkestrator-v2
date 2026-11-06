@@ -298,3 +298,10 @@ mise run test:logged -- --name bridge-build-triage -- bun test ./apps/desktop/sc
 
 No desktop implementation, timeout or assertion changed. The cause remains
 unconfirmed. A fresh aggregate rerun is recorded separately by this repair stage.
+
+The fresh `mise run test` rerun finished after 574.9 s (exit 1). It repeated
+the desktop deadline at 15006.81 ms (1870 pass, 14 skip, 1 fail); bridges and
+protocol passed, and root reported the two repository guard failures. Evidence:
+`/tmp/orkestrator-test-run.RZrNux/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+and `/tmp/orkestrator-test-run.xej5WW/repaired-full-test.log.gz`.
+The timeout remains undetermined; it is not excused as an environmental cause.

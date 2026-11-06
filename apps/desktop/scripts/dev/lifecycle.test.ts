@@ -17,6 +17,7 @@ import { parseDevArguments } from "./arguments.js";
 import {
   assertElectronReadiness,
   compileElectronForDevelopment,
+  electronHeadlessNotice,
   electronLaunch,
   launcherIsInteractive,
   electronReadinessTimeoutMs,
@@ -345,6 +346,42 @@ describe("Electron headless mode", () => {
     expect(decide({ ...pushed, flavor: "development" }).headless).toBe(false);
     for (const platform of ["darwin", "win32"] as const) {
       expect(decide({ ...pushed, platform }).headless).toBe(false);
+    }
+  });
+
+  const notice = (overrides: Partial<Parameters<typeof resolveElectronHeadless>[0]> = {}) =>
+    electronHeadlessNotice({
+      flavor: "agent-test",
+      platform: "linux",
+      env: {},
+      interactive: true,
+      ...overrides,
+    });
+
+  test("the launcher says when Linux goes headless, and how to get a window", () => {
+    expect(notice({ interactive: false })).toBe(
+      "Electron is headless (no terminal); the app is at browserUrl and no window will open. Pass --no-headless for a real window.",
+    );
+    expect(notice({ requested: true })).toBe(
+      "Electron is headless (--headless); the app is at browserUrl and no window will open.",
+    );
+    expect(notice()).toBeNull();
+  });
+
+  test("macOS and Windows say that a headless request changes nothing", () => {
+    for (const platform of ["darwin", "win32"] as const) {
+      expect(notice({ platform, requested: true })).toBe(
+        `Electron opens a window: headless mode exists only on Linux, so --headless changes nothing on ${platform}.`,
+      );
+      expect(notice({ platform, interactive: false })).toBe(
+        `Electron opens a window: headless mode exists only on Linux, so running without a terminal changes nothing on ${platform}.`,
+      );
+      expect(notice({ platform, env: { ORKESTRATOR_AGENT_TEST_HEADLESS: "1" } })).toContain(
+        "ORKESTRATOR_AGENT_TEST_HEADLESS=1 changes nothing",
+      );
+      expect(notice({ platform })).toBeNull();
+      expect(notice({ platform, requested: false, interactive: false })).toBeNull();
+      expect(notice({ platform, requested: true, flavor: "development" })).toBeNull();
     }
   });
 });

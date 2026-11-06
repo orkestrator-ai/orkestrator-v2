@@ -539,6 +539,19 @@ export interface SessionState {
   /** True while Pi is compacting; the tab shows it as still working. */
   compacting: boolean;
   /**
+   * The compaction the compact route is running, so a cancel can stop it.
+   * Runtime-only (see `compaction-controls.ts`).
+   */
+  manualCompaction?: import("./compaction-controls.js").ManualCompaction;
+  /**
+   * The session's own auto-compaction choice, from the composer toggle.
+   * Absent means Pi's setting applies. Persisted; never written to Pi's
+   * account-wide `settings.json`.
+   */
+  autoCompaction?: boolean;
+  /** Pi's own `compaction.enabled`, as last read. Runtime-only. */
+  autoCompactionSetting?: boolean;
+  /**
    * The retry row of the compaction in flight, if its summary request has
    * failed and Pi is retrying it. Settled by `compaction_end`. Runtime-only.
    */
@@ -580,6 +593,8 @@ export interface PersistedSession {
   promptJournalComplete?: true;
   steerJournal?: SteerJournalEntry[];
   composer?: NativeAgentComposerState;
+  /** The session's auto-compaction choice; absent when it follows Pi's setting. */
+  autoCompaction?: boolean;
   usage?: PersistedUsage;
   /** Public descriptors only; restored as `stale` until the next attach. */
   commands?: NativeAgentSlashCommand[];
@@ -702,7 +717,10 @@ export function promptClaimReleased(state: SessionState): Promise<void> {
  * terminal error) while something can still reach Pi.
  */
 export function publicTurnStatus(state: SessionState): SessionState["status"] {
-  return state.promptClaim !== undefined ? "running" : state.status;
+  // A compaction is work the user can stop, so it reports as running: that is
+  // what puts a Stop control in front of a manual compaction, which owns no
+  // prompt claim and would otherwise read as idle while it rewrote history.
+  return state.promptClaim !== undefined || state.compacting ? "running" : state.status;
 }
 
 /** Whether cancellation was requested for exactly this claim. */

@@ -97,3 +97,41 @@ intermittence, not a cause or a repair. No assertion, timeout or skip changed.
   under the same temporary root.
 - **Disposition:** open recurrence; cause unconfirmed. Neither this owner nor
   its implementation changed in the branch. No assertion, timeout or skip changed.
+
+## Bridge authority review repairs — 2026-11-06
+
+At `451fccdf1`, `mise run test:logged -- --name repair-default -- mise run test`
+reported `activity sweep bridge ownership > readiness timeout reaps the child
+and removes copied credentials (ignores TERM: %s)` failing after 135.78 ms:
+cleanup's process-group signal at line 111 returned `EPERM`. The root group
+used one Bun worker. The outer run ended at its 30-minute deadline after an
+approximately 23-minute host-lease wait, so final aggregate totals are unknown.
+
+The complete unchanged owner passed alone (exit 0, 1.1 s):
+
+```sh
+mise run test:logged -- --name isolate-activity-bridge -- bun test ./tests/unit/activity-sweep-bridge.test.ts --parallel=1 --only-failures
+```
+
+Evidence: host temporary artifacts `orkestrator-test-run.HNKlxf/root-and-agent-support-tests.log`
+and `orkestrator-test-run.Iu6GYp/repair-default.log.gz`. This confirms
+intermittence; the cause remains unconfirmed. No assertion, timeout or skip
+changed.
+
+## Environment-deletion follow-up review recurrence — 2026-11-06
+
+Preparation at `228561646` ran `mise run test:logged -- --name
+review-default-tests -- mise run test`, with four isolated backend workers.
+Both `diff-baseline.test.ts` cases listed above timed out near 5 s
+(5,020.67 ms for the first); late Git failures were also reported between tests.
+The workspace group ended at its no-progress watchdog, so its complete totals
+are unavailable. Original evidence remains in
+`.orkestrator/review-artifacts/review-validation-dd80c812-46c6-4f02-b538-897dbf04bdfd/validation-04.stderr.txt`.
+
+At repair commit `b32cfe416`, the unchanged complete owner passed alone:
+`mise run test:logged -- --name recorded-baseline-alone -- bun test --cwd
+apps/backend ./src/core/diff-baseline.test.ts --parallel=1 --only-failures`
+(exit 0, 13.3 s). Passing raw output was deleted; totals are not inferred.
+The repair changes deletion-command termination waiting, not baseline selection
+or the Git fixture. This establishes intermittence, not an environmental cause
+or a fix for the incomplete aggregate. No assertions, skips or timeouts changed.

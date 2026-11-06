@@ -100,6 +100,8 @@ type RunCommandOptions = {
   signal?: AbortSignal;
   /** Wait for same-group descendants and capture their late output. Defaults to leader exit. */
   waitForDescendants?: boolean;
+  /** On failure, keep ownership until leader exit and no live same-group descendants. */
+  waitForTermination?: boolean;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   /** Optional stdin payload. When omitted, stdin is closed immediately. */
@@ -468,6 +470,7 @@ function executeCommandBytes(
     let limitTimer: ReturnType<typeof setInterval> | undefined;
     let stopExitWatch = () => {};
     let commandExit: CommandExit | undefined;
+    let pendingFailure: Error | undefined;
 
     /** Ends the command's capture and returns what it wrote. Runs exactly once. */
     const finishCapture = (): ExecBufferResult | undefined => {
@@ -492,10 +495,35 @@ function executeCommandBytes(
         releaseCaptureFds();
       }
     };
-    const fail = (error: Error) => {
-      if (settled) return;
+    const rejectFailure = (error: Error) => {
       const output = finishCapture();
       if (output) reject(Object.assign(error, { ...output, killed: timedOut }));
+    };
+    // Sending a signal is not exit confirmation. Keep the lost-exit watcher
+    // and group monitoring alive, even after the deadline, until both agree.
+    // Unknown inspection stays fenced; no fallback timer admits another delete.
+    const awaitTermination = (delayMs: number) => {
+      clearTimeout(groupTimer);
+      if (settled) return;
+      if ((commandExit || exitReported(child)) && !commandGroupAlive(child)) {
+        rejectFailure(pendingFailure!);
+        return;
+      }
+      groupTimer = setTimeout(
+        awaitTermination,
+        delayMs,
+        Math.min(delayMs * 2, COMMAND_GROUP_POLL_MAX_MS),
+      );
+    };
+    const fail = (error: Error) => {
+      if (settled || pendingFailure) return;
+      if (options.waitForTermination && child.pid !== undefined) {
+        pendingFailure = error;
+        signalCommand(child, "SIGKILL");
+        clearTimeout(timeoutTimer);
+        clearInterval(limitTimer);
+        awaitTermination(COMMAND_GROUP_POLL_MS);
+      } else rejectFailure(error);
     };
     const abort = () => {
       timedOut = true;
@@ -529,10 +557,10 @@ function executeCommandBytes(
       }
     };
     limitTimer = setInterval(() => {
-      if (!settled && !timedOut) failIfOverLimit();
+      if (!settled && !timedOut && !pendingFailure) failIfOverLimit();
     }, COMMAND_OUTPUT_CHECK_MS);
     const settleOnExit = () => {
-      if (settled || timedOut || failIfOverLimit()) return;
+      if (settled || timedOut || pendingFailure || failIfOverLimit()) return;
       if (commandExit?.code !== 0 || commandExit.signal !== null) {
         fail(
           Object.assign(new Error(`Command failed: ${[command, ...args].join(" ")}`), {
@@ -548,7 +576,7 @@ function executeCommandBytes(
     // Default capture is a snapshot at leader exit. Helpers may outlive it;
     // callers needing their late output explicitly opt into group waiting.
     const awaitGroupExit = (delayMs: number) => {
-      if (settled || timedOut) return;
+      if (settled || timedOut || pendingFailure) return;
       if (commandGroupAlive(child)) {
         groupTimer = setTimeout(
           awaitGroupExit,
@@ -563,14 +591,15 @@ function executeCommandBytes(
       if (commandExit) return;
       commandExit = exit;
       stopExitWatch();
-      if (options.waitForDescendants) awaitGroupExit(COMMAND_GROUP_POLL_MS);
+      if (pendingFailure) awaitTermination(COMMAND_GROUP_POLL_MS);
+      else if (options.waitForDescendants) awaitGroupExit(COMMAND_GROUP_POLL_MS);
       else settleOnExit();
     };
     void child.exited.then(onCommandExit, (error) =>
       fail(error instanceof Error ? error : new Error(String(error))),
     );
     stopExitWatch = watchForLostExit(child.pid, (exit) => {
-      if (!settled && !timedOut) onCommandExit(exit);
+      if (!settled) onCommandExit(exit);
     });
     if (timeoutMs > 0) {
       timeoutTimer = setTimeout(() => {

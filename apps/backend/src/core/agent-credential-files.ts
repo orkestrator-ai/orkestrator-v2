@@ -85,7 +85,8 @@ export const OPENCODE_CREDENTIAL_PLUGIN_PATH = `/home/node/.config/opencode/plug
  * With `refuse-tools`, a Linux server that could not be hardened refuses tools
  * rather than let them read the password out of `/proc`. A container pins the
  * binary, so that should never fire. A host's OpenCode may be any build and the
- * host promises no boundary here (to-do 4980 task 3), so it just logs.
+ * host promises no boundary here (docs/architecture/agent-approvals.md), so it
+ * just logs.
  */
 export function buildOpenCodeCredentialPluginSource(onUnhardened: "refuse-tools" | "log"): string {
   return `const PR_SET_DUMPABLE = 4;

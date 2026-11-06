@@ -8,7 +8,12 @@
  * parity requirement that makes rollback safe.
  */
 import { readFile } from "node:fs/promises";
-import type { FileUpdateChange, McpToolCallItem, PatchApplyStatus } from "../codex-item-types.js";
+import type {
+  CommandExecutionItem,
+  FileUpdateChange,
+  McpToolCallItem,
+  PatchApplyStatus,
+} from "../codex-item-types.js";
 import { normalizeTranscriptToolArgs } from "../subagent-transcript.js";
 import { mapTodoArgs, summarizeTodoList } from "../todo-helpers.js";
 import type { EngineItem } from "../engine/types.js";
@@ -223,6 +228,33 @@ export function mcpToolCallParts(item: McpToolCallItem): NormalizedPart[] {
   ];
 }
 
+/**
+ * A command's part. Synchronous and exported so a history reload renders a
+ * command a code-mode cell ran through exactly this code (`history/rollout.ts`).
+ */
+export function commandExecutionParts(item: CommandExecutionItem): NormalizedPart[] {
+  const output = capCommandOutput(item.aggregated_output);
+  const failed = item.status === "failed";
+  return [
+    {
+      type: "tool-invocation",
+      toolUseId: item.id,
+      content: item.command,
+      toolName: "bash",
+      toolArgs: { command: item.command },
+      toolState:
+        item.status === "failed" ? "failure" : item.status === "completed" ? "success" : "pending",
+      toolTitle: item.command,
+      // A failed command used to duplicate the same potentially 256 KiB
+      // string into both fields. The renderer already gives `toolError` its
+      // error treatment, so keep the payload exactly once.
+      toolOutput: failed ? undefined : output || undefined,
+      toolError: failed ? output || "Command failed" : undefined,
+      ...finishedDuration(item),
+    },
+  ];
+}
+
 export async function itemToParts(
   item: EngineItem,
   cwd: string,
@@ -249,32 +281,8 @@ export async function itemToParts(
       return [{ type: "text", content: agentMessageDisplayText(item) }];
     case "reasoning":
       return hasVisibleText(item.text) ? [{ type: "thinking", content: item.text }] : [];
-    case "command_execution": {
-      const output = capCommandOutput(item.aggregated_output);
-      const failed = item.status === "failed";
-      return [
-        {
-          type: "tool-invocation",
-          toolUseId: item.id,
-          content: item.command,
-          toolName: "bash",
-          toolArgs: { command: item.command },
-          toolState:
-            item.status === "failed"
-              ? "failure"
-              : item.status === "completed"
-                ? "success"
-                : "pending",
-          toolTitle: item.command,
-          // A failed command used to duplicate the same potentially 256 KiB
-          // string into both fields. The renderer already gives `toolError` its
-          // error treatment, so keep the payload exactly once.
-          toolOutput: failed ? undefined : output || undefined,
-          toolError: failed ? output || "Command failed" : undefined,
-          ...finishedDuration(item),
-        },
-      ];
-    }
+    case "command_execution":
+      return commandExecutionParts(item);
     case "file_change":
       return item.changes.map((change, index) => ({
         type: "tool-invocation" as const,

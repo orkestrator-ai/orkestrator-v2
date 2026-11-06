@@ -1892,7 +1892,8 @@ read it (`container-bridge-credential.ts`). The rules for bridges are in
 | Where | What it holds | Who reads it |
 | --- | --- | --- |
 | `/run/orkestrator-bridge/<kind>-token`, 0600 in a 0700 root directory | The token | The backend, with a root exec |
-| The bridge's environment | `<TOKEN_ENV>_SHA256`, removed from `process.env` at start | Anything, harmlessly |
+| `/run/orkestrator-bridge/<kind>-authority`, beside it (`bridge-launch=1`) | The private half of the bridge's authority key | The backend, in the same root exec |
+| The bridge's environment | `<TOKEN_ENV>_SHA256` and, with `bridge-launch=1`, `<TOKEN_ENV>_AUTHORITY_KEY`, both removed from `process.env` at start | Anything, harmlessly |
 | The bridge's memory | The token, briefly, on each request | Nobody: the bridge is non-dumpable, so `/proc/<pid>/{environ,mem,fd}` belong to root and a same-uid ptrace is refused |
 
 - **Nothing reaches `docker exec` argv.** The root file is written on stdin. What
@@ -1901,11 +1902,20 @@ read it (`container-bridge-credential.ts`). The rules for bridges are in
   deletes first (`launchContainerScript`). `docker exec -d` has no stdin of its
   own, hence the separate exec.
 - **The bridge entrypoint bypasses checkout Bun configuration.** The bridge
-  runs from root-owned `/opt` with `bun --config=/dev/null`. Its working directory
-  stays `/workspace`. This does not prevent SDK resource loading: when project
-  resources are enabled, Pi discovers project extensions and executes them in
-  the bridge process. Such code can observe later presented credentials; see
-  to-do 4980 task 2.
+  runs from root-owned `/opt` with `bun --config=/dev/null`. On a
+  `bridge-launch=1` image the root-owned `orkestrator-bridge-launch` starts it
+  under `env -i` from the backend's own exec, so nothing in the `node` login
+  shell (a profile, the runtime snapshot, `BUN_OPTIONS`) runs inside it; the
+  bridge hands the start script's environment to the agents it spawns
+  ([agent-approvals.md](agent-approvals.md#fixed-launch-bridge-launch1)). This
+  does not prevent SDK resource loading: when project resources are enabled,
+  Pi discovers project extensions and executes them in the bridge process.
+  Such code can observe later presented credentials; see to-do
+  [7251](../todo/containers-and-environments/7251-pi-project-extensions-in-the-bridge-process.md).
+- **What changes an agent's authority is signed.** On a `bridge-launch=1` image
+  every mutating request except close, the activity batch and the log policy
+  carries the backend's Ed25519 signature, so a token caught in flight answers
+  nothing ([agent-approvals.md](agent-approvals.md#signed-authority)).
 - **Root never reads a `node`-writable path.** `readContainerBridgeToken` reads the
   root file as root, and only then the old `/tmp` file as `node`, because `node` can
   make that a symlink to anything.
@@ -1926,16 +1936,20 @@ read it (`container-bridge-credential.ts`). The rules for bridges are in
   a policy, the backend replaces the bridge and resumes
   (`replaceBridgeForWiderPolicy` in `native-agent-service.ts`), and refuses while
   a turn is running in that environment. `readOnly` stays a per-turn intent;
-  that is safe only because the backend alone holds the bridge token. A separate
-  uid for the bridge was not built: the token is already out of the agent's
-  reach, and what the shared uid still allows is in to-do 4980.
+  that is safe only because the backend alone holds the bridge token and, on a
+  `bridge-launch=1` image, signs the turn. A separate uid for the bridge was not
+  built: the token is already out of the agent's reach, and what the shared uid
+  still allows is in [agent-approvals.md](agent-approvals.md).
 
 What the agent's uid can still do is in
-[to-do 4980](../todo/containers-and-environments/4980-agent-uid-process-control.md):
-kill the bridge and listen on its port, or plant code for the next start through
-its login shell or runtime environment. OpenCode has no bridge and takes the plain
-password, in `opencode-token` in the same directory; a plugin inside the server keeps
-it from the agent (`buildOpenCodeCredentialPluginSource` in
+[agent-approvals.md](agent-approvals.md#what-the-agents-uid-can-still-do):
+replace the bridge with one it runs
+([7250](../todo/containers-and-environments/7250-bridge-replaced-by-an-agent-process.md)),
+and on an older image catch the token on the bridge's port or plant code for the
+next start. OpenCode has no bridge and takes the plain password, in
+`opencode-token` in the same directory
+([7252](../todo/containers-and-environments/7252-opencode-server-loads-agent-writable-code.md));
+a plugin inside the server keeps it from the agent (`buildOpenCodeCredentialPluginSource` in
 `agent-credential-files.ts`). In a container, a server the plugin could not harden
 refuses tools; on a host it only logs, because a host's OpenCode can be any build.
 A host server gets the plugin through `OPENCODE_CONFIG_DIR`

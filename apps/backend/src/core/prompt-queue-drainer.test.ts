@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -176,6 +176,76 @@ describe("PromptQueueDrainer", () => {
         expect(read.args).not.toHaveProperty("livenessMaxAgeMs");
     } finally {
       await context.dispose();
+    }
+  });
+
+  test("a dispatch after an idle presence skips the repeated reads but still probes afresh (BG-15)", async () => {
+    const context = await harness();
+    const reads = {
+      environment: spyOn(context.storage, "getEnvironment"),
+      queue: spyOn(context.storage, "getPromptQueue"),
+      draft: spyOn(context.storage, "getComposeDraft"),
+    };
+    const counts = () => ({
+      environment: reads.environment.mock.calls.length,
+      queue: reads.queue.mock.calls.length,
+      draft: reads.draft.mock.calls.length,
+      fresh: context.calls.filter(
+        (call) => call.command === "claude_tmux_status" && !("livenessMaxAgeMs" in call.args),
+      ).length,
+    });
+    const target = { environmentId: ENVIRONMENT_ID, tabId: TAB_ID };
+    try {
+      const presence = await context.drainer.mailInjectPresence(target);
+      expect(presence).toBe("idle");
+      expect(
+        await context.drainer.dispatchMailInject({ ...target, text: "mail", presence }),
+      ).toEqual({ outcome: "accepted" });
+      // Presence 3, after the probe 3, inside the queue boundary 1 draft.
+      expect(counts()).toEqual({ environment: 2, queue: 2, draft: 3, fresh: 1 });
+
+      for (const spy of Object.values(reads)) spy.mockClear();
+      context.calls.length = 0;
+      // Without a presence, the gate reads before the probe as well.
+      expect(await context.drainer.dispatchMailInject({ ...target, text: "mail" })).toEqual({
+        outcome: "accepted",
+      });
+      expect(counts()).toEqual({ environment: 2, queue: 2, draft: 3, fresh: 1 });
+    } finally {
+      for (const spy of Object.values(reads)) spy.mockRestore();
+      await context.dispose();
+    }
+  });
+
+  test("a dispatch after an idle presence still holds for what changed since", async () => {
+    const target = { environmentId: ENVIRONMENT_ID, tabId: TAB_ID };
+    const deleting = await harness();
+    try {
+      const presence = await deleting.drainer.mailInjectPresence(target);
+      // Deletion requested between the presence read and the dispatch.
+      await deleting.storage.updateEnvironment(ENVIRONMENT_ID, {
+        deletionRequestedAt: new Date().toISOString(),
+      });
+      expect(
+        await deleting.drainer.dispatchMailInject({ ...target, text: "mail", presence }),
+      ).toEqual({ outcome: "held", reason: "environment-unready" });
+      expect(deleting.submits()).toHaveLength(0);
+    } finally {
+      await deleting.dispose();
+    }
+
+    const queued = await harness();
+    try {
+      const presence = await queued.drainer.mailInjectPresence(target);
+      // A user prompt queued while the probe runs.
+      queued.onStatus = () =>
+        enqueue(queued.storage, [{ id: "user", text: "User work", attachments: [] }]);
+      expect(
+        await queued.drainer.dispatchMailInject({ ...target, text: "mail", presence }),
+      ).toEqual({ outcome: "held", reason: "queue" });
+      expect(queued.submits()).toHaveLength(0);
+    } finally {
+      await queued.dispose();
     }
   });
 

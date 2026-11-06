@@ -93,17 +93,19 @@ export const BUSY_ROWS = {
   "approved-turn-visible": {
     budgetMs: 3_000,
     side: "client",
-    label: "Turn completion visible after the approval",
+    label: "Turn completion visible after the approval (reply row in the open tab)",
   },
   "queued-dispatch": {
     budgetMs: 3_000,
     side: "backend",
     label: "Queued prompt dispatched after the turn ends",
   },
+  // The marker can already read idle in the gap before the queued turn
+  // starts, so this is the activity row, not a turn-completion measure.
   "queued-turn-visible": {
-    budgetMs: 3_000,
+    budgetMs: 4_000,
     side: "client",
-    label: "Queued turn completion visible",
+    label: "Background indicator idle after the queued turn",
   },
   "workflow-progress": {
     budgetMs: 3_000,
@@ -149,6 +151,8 @@ export interface BusyClient {
   badges(): Promise<Record<string, number | null>>;
   /** Whether the open tab shows the "Approve command" card with its Approve button. */
   approvalVisible(): Promise<boolean>;
+  /** Rendered transcript rows of the open tab that hold the fake model's reply. */
+  replyCount(): Promise<number>;
   /** Messages the open tab's agent-mail chip counts (0 when it shows none). */
   mailCount(): Promise<number>;
   setHidden(hidden: boolean): Promise<void>;
@@ -798,6 +802,7 @@ export async function measureBusy(
 
           // 5. Answer the approval, release the held turn, let the queue go.
           const pending = interaction as { id: string; revision: number } | null;
+          const repliesBefore = await Promise.all(clients.map((client) => client.replyCount()));
           if (!pending) fail("approval", "no pending approval was listed");
           else {
             const answered = await publicAction(
@@ -825,7 +830,8 @@ export async function measureBusy(
               await allClients(
                 "approved-turn-visible",
                 answerAt,
-                async (client) => (await client.markerState(askEnvironment.name)) === "idle",
+                async (client) =>
+                  (await client.replyCount()) > (repliesBefore[clients.indexOf(client)] ?? 0),
               );
             }
           }

@@ -39,7 +39,9 @@ export const FAKE_PI_PROVIDER = "soak-fake";
 export const FAKE_PI_MODEL = "soak-1";
 /** `provider/modelId`, as the CLI's `--model` takes a Pi model. */
 export const FAKE_PI_MODEL_REF = `${FAKE_PI_PROVIDER}/${FAKE_PI_MODEL}`;
-const REPLY = "Soak reply.";
+/** The text of every reply that is not a tool call. */
+export const FAKE_REPLY = "Soak reply.";
+const REPLY = FAKE_REPLY;
 /** A request body larger than this is refused; Pi's soak prompts are tiny. */
 const MAX_REQUEST_BYTES = 4 * 1024 * 1024;
 

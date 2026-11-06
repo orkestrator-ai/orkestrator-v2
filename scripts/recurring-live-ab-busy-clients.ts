@@ -3,6 +3,7 @@ import path from "node:path";
 import type { Browser, BrowserContext, Page } from "playwright";
 import { startOutageLink, type OutageLink } from "../e2e/agent-testing/client-outage-support";
 import type { BusyClient, BusyClientFactory } from "./recurring-live-ab-busy";
+import { FAKE_REPLY } from "./recurring-live-ab-fake-model";
 
 /**
  * Headless Chromium clients for the busy phase (`recurring-live-ab-busy.ts`).
@@ -65,6 +66,14 @@ function badgesIn(): Record<string, number | null> {
     badges[name] = match ? Number(match[1]!.replaceAll(",", "")) : null;
   }
   return badges;
+}
+
+/** Rendered transcript rows holding the fake model's reply (runs in the page). */
+function replyCountIn(reply: string): number {
+  let count = 0;
+  for (const row of Array.from(document.querySelectorAll("[data-chat-message-index]")))
+    if ((row.textContent ?? "").includes(reply)) count += 1;
+  return count;
 }
 
 /** The open tab's agent-mail chip count (runs in the page). */
@@ -226,6 +235,7 @@ function pageClient(
           .first()
           .isVisible(),
       ),
+    replyCount: () => read(0, () => page.evaluate(replyCountIn, FAKE_REPLY)),
     mailCount: () => read(0, () => page.evaluate(mailCountIn)),
     setHidden: async (hidden) => {
       await page.evaluate(setHiddenIn, hidden);

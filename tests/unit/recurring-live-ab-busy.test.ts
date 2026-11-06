@@ -58,6 +58,7 @@ function busyHarness(scenario: Scenario = {}) {
   let commits = 0;
   let reads = 0;
   let reviewLaunches = 0;
+  let replies = 0;
   const linkCalls: boolean[] = [];
   const hiddenCalls: boolean[] = [];
   const closed: string[] = [];
@@ -219,6 +220,7 @@ function busyHarness(scenario: Scenario = {}) {
         record.requests += 1;
         record.toolResults += 1;
         record.lastAt = now;
+        replies += 1;
         return { ok: true, result: { result: "applied" } };
       }
       if (action === "review.get") return { ok: true, result: { phase: reviewPhase() } };
@@ -241,6 +243,7 @@ function busyHarness(scenario: Scenario = {}) {
     },
     badges: async () => Object.fromEntries(environmentNames().map((name) => [name, burst || null])),
     approvalVisible: async () => Boolean(approval && !approval.answered),
+    replyCount: async () => replies,
     mailCount: async () => mails,
     setHidden: async (hidden) => {
       hiddenCalls.push(hidden);

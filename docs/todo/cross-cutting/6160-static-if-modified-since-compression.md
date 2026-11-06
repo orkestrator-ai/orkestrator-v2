@@ -31,5 +31,5 @@ Analysed 2026-11-05 against `main` at `0194a0675`.
 
 ## Related
 
-- [Closing check of E24](../../reports/efficiency-logging-database/0000-index.md#closing-check-of-e24-gateway-static-and-preview), where this was left.
+- [Closing check of E24](../../reports/2026-11-06-efficiency-logging-database-outcome.md#closing-check-of-e24-gateway-static-and-preview), where this was left.
 - [1202 task 11](1202-efficiency-review-follow-ups.md).

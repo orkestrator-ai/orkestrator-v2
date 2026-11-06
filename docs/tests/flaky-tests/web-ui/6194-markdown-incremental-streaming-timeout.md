@@ -13,3 +13,21 @@
 - **Invocation correction:** an initial isolated run inherited production-mode React and failed all four tests with `React.act is not a function`; its evidence is `/tmp/orkestrator-test-run.E3hNeN/streaming-isolated.log.gz`. Clearing inherited `NODE_ENV` matches the aggregate runner's sanitization and fixes that invocation.
 
 The unchanged owner passes alone. Concurrent load may contribute to the timeout, but the underlying cause is unconfirmed. No Markdown behavior or timeout was changed. This branch changes terminal archive code, which the renderer test does not exercise.
+
+## Coordinator unavailable-platform review — 2026-11-06
+
+The live streaming/full-render equivalence case exceeded the 5 s budget at 5859.50 ms.
+
+The default aggregate used two web workers. Web totals: 13,051 passed, 10 skipped, five failed and one error across 13,066 cases in 860 files (874.91 s). Original command: `mise run test:logged -- --name review-default-tests -- mise run test`.
+
+The unchanged complete owner passed alone, exit 0, in 4.7 s:
+
+```sh
+mise run test:logged -- --name review-markdown-stream-owner -- bun --cwd=apps/web test src/components/chat/MessageMarkdown.incremental.test.tsx --parallel=1 --only-failures
+```
+
+Evidence: `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.Mv0c3i/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`. Passing
+output was deleted by the logged runner, so individual rerun counts were not
+retained. This establishes intermittence, not its cause. No assertion, timeout
+or implementation was changed to hide the failure; the broad check remains
+non-green.

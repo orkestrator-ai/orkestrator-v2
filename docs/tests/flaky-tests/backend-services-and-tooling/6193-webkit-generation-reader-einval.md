@@ -58,11 +58,10 @@ implementation, timeout or skip was changed.
 
 At commit `decf86b98`, `mise run test:logged -- --name review-default-tests -- mise run test`
 ran the root group with one worker alongside five workspace and two bridge
-slots; a nine-worker component-browser suite was also active. The same concurrent reader failed with EINVAL at line 651 in 177.14 ms.
+slots; a five-worker component-browser suite was also active. The same concurrent reader failed with EINVAL at line 651 in 177.14 ms.
 The root group finished with 3,638 passed, 10 failed and two errors across
 185 files in 821.36 s. Its other failures are not attributed to this case.
-Evidence: `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.JSZUOY/root-and-agent-support-tests.log`
-(compressed when the aggregate finishes).
+Evidence: `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.JSZUOY/root-and-agent-support-tests.log.gz`.
 
 The unchanged complete owner passed alone with exit 0 in 2.2 s:
 

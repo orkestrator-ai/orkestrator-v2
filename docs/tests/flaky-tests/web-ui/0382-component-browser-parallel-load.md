@@ -393,3 +393,60 @@ mobile-only compose layout remained. Neither owner, assertion, timeout nor skip
 was changed. Navigation or reload exceeded the 30-second deadline in each of the three
 cases; the passing owner rerun establishes intermittence for them, without establishing a cause. The broad command's other 15 failures and
 its absolute deadline remain unresolved, not classified by this observation.
+
+## Coordinator unavailable-platform review — 2026-11-06
+
+The repeat used a free fixture port, resolving the original HTTP 403 ownership
+failure without stopping another checkout. It ran five browser workers, named
+nine failures, and hit the 1800000 ms group deadline after starting 708/1596
+cases. Complete broad-suite pass totals were not available.
+
+Original command:
+
+```sh
+ORKESTRATOR_E2E_PORT=61386 mise run test:logged -- --name browser -- mise run test:browser
+```
+
+Named failures were both AgentUsage compact-usage cases; the unrendered-frame
+layer-tree case; Claude background-limit settings reload; both mobile Meta+I
+composer cases; Markdown diagram arrow entry; attachment reload; and pipeline
+review-pass rehydration. Broad evidence: `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.8yBzhf/browser.log.gz`.
+
+Complete owners were rerun individually with one worker and separate output
+paths, preserving the broad-run traces:
+
+| Owner | Result | Duration |
+| --- | --- | --- |
+| e2e/AgentUsage.spec.ts | passed | 31.6 s |
+| e2e/DesignCanvasAccessibility.spec.ts | passed | 179.2 s |
+| e2e/GlobalSettings.spec.ts | passed | 53.9 s |
+| e2e/KeyboardShortcuts.spec.ts | passed | 301.1 s |
+| e2e/MarkdownEditorDiagram.spec.ts | passed | 59.2 s |
+| e2e/NativeAttachments.spec.ts | passed | 28.5 s |
+| e2e/PipelineFlow.spec.ts | 84 passed, 1 skipped, 1 failed | 337.3 s |
+
+Exact rerun commands:
+
+```sh
+ORKESTRATOR_E2E_PORT=61386 mise run test:logged -- --name review-agent-usage-browser-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/AgentUsage.spec.ts --workers=1 --output output/agent-testing/review-address-owners/usage
+ORKESTRATOR_E2E_PORT=61386 mise run test:logged -- --name review-design-browser-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/DesignCanvasAccessibility.spec.ts --workers=1 --output output/agent-testing/review-address-owners/design
+ORKESTRATOR_E2E_PORT=61386 mise run test:logged -- --name review-settings-browser-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/GlobalSettings.spec.ts --workers=1 --output output/agent-testing/review-address-owners/settings
+ORKESTRATOR_E2E_PORT=61386 mise run test:logged -- --name review-shortcuts-browser-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/KeyboardShortcuts.spec.ts --workers=1 --output output/agent-testing/review-address-owners/shortcuts
+ORKESTRATOR_E2E_PORT=61386 mise run test:logged -- --name review-diagram-browser-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/MarkdownEditorDiagram.spec.ts --workers=1 --output output/agent-testing/review-address-owners/diagram
+ORKESTRATOR_E2E_PORT=61386 mise run test:logged -- --name review-attachments-browser-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/NativeAttachments.spec.ts --workers=1 --output output/agent-testing/review-address-owners/attachments
+ORKESTRATOR_E2E_PORT=61386 mise run test:logged -- --name review-pipeline-browser-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/PipelineFlow.spec.ts --workers=1 --output output/agent-testing/review-address-owners/pipeline
+```
+
+The PipelineFlow owner retained a different desktop failure, `completion in
+fullscreen lands in the overlay and then the panel`: the Notes node was not
+on screen after exiting fullscreen (line 1134). Its evidence is
+`/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.yAfPM6/review-pipeline-browser-owner.log.gz`.
+The original rehydration case was not among its failures. The owner remains
+non-green, and the fullscreen failure is not classified as a flake or excused
+as environmental.
+
+Passing output was deleted by the logged runner; per-case passing counts for
+those six owners were not retained. Existing cases 0749, 1249, 1902, 2392 and
+1121 retain their focused history. No assertions, timeouts, skips or product
+implementation were changed to hide these failures. Broad validation remains
+incomplete and non-green.

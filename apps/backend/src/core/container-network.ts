@@ -450,11 +450,11 @@ export async function environmentNetworkPolicy(
   // policy visibly in force until a rebuild removes the mount. Conservatively
   // require that rebuild for every allowlist revision, including global edits;
   // the shared project mirror must remain intact for other environments.
-  result.domains = domainsState(
-    result.configured,
-    result.effective,
-    facts.liveUpdates && !facts.hasGitMirror,
-  );
+  const state = domainsState(result.configured, result.effective, facts.liveUpdates);
+  result.domains =
+    facts.hasGitMirror && result.configured.mode === "restricted" && state !== "applied"
+      ? "rebuild-required"
+      : state;
   return result;
 }
 

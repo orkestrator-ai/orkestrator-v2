@@ -309,6 +309,7 @@ function allowlistDocker(options: {
   tarPath: string;
   running?: boolean;
   mirror?: boolean;
+  statusUnavailable?: boolean;
   policy?: 2 | 3;
   before: string;
   after: string;
@@ -326,6 +327,7 @@ case "$1" in
     case "$*" in
       *--set-domains*) : > '${options.marker}' ;;
       *firewall.json*)
+        ${options.statusUnavailable ? "exit 1" : ":"}
         if [ -e '${options.marker}' ]; then rev=${options.after}; else rev=${options.before}; fi
         printf '{"mode":"restricted","state":"applied","domainsRevision":"%s"}\\n' "$rev" ;;
     esac ;;
@@ -374,6 +376,27 @@ describe("allowlist edits in place", () => {
       );
     },
   );
+
+  test("a mirror still requires rebuild when the previous firewall status is unreadable", async () => {
+    const { context, dir } = await allowlistContext(["other.example"]);
+    const tarPath = await manifestTar({ "network-policy": 3, "network-refresh": 1 });
+    await withDockerScript(
+      allowlistDocker({
+        tarPath,
+        mirror: true,
+        statusUnavailable: true,
+        before: allowedDomainsRevision(["git.example.com"]),
+        after: allowedDomainsRevision(["other.example"]),
+        marker: path.join(dir, "applied"),
+      }),
+      async (log) => {
+        const result = await applyEnvironmentAllowedDomains("env-lifecycle", context);
+        expect(result.kind).toBe("rebuild-required");
+        expect(result.policy.effective).toBeNull();
+        expect(await log.read()).not.toContain("--set-domains");
+      },
+    );
+  });
 
   test("the configured list is the environment's or the global one plus required hosts", () => {
     const config = {

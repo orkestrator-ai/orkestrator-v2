@@ -1,6 +1,7 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render } from "@testing-library/react";
 import type { BuildPipeline } from "@/stores/buildPipelineStore";
+import { TranscriptScrollController } from "@/lib/transcript-scroll/transcript-scroll-controller";
 import * as realHooks from "@/hooks";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useClaudeTmuxStore } from "@/stores/claudeTmuxStore";
@@ -12,12 +13,14 @@ const realBackendSnapshot = { ...realBackend };
 /** Whether the hook reports the transcript as pinned to its tail. */
 let isAtBottom = true;
 const scrollToBottomMock = mock(() => {});
+const controller = new TranscriptScrollController({ current: null }, { initialActive: false });
 const useVirtuosoScrollStateMock = mock((options: any = {}) => ({
   isAtBottom,
   isAtBottomRef: { current: isAtBottom },
   scrollToBottom: scrollToBottomMock,
   virtuosoRef: { current: null },
   scrollProps: {
+    controller,
     followOutput: () => false,
     atBottomStateChange: () => {},
     atBottomThreshold: 50,

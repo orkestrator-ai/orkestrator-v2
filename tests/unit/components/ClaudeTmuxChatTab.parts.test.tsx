@@ -1032,9 +1032,9 @@ describe("ClaudeTmuxChatTab", () => {
     // Container/worktree props must be forwarded so clipboard paste targets
     // the right environment.
     expect(terminal.getAttribute("data-container-id")).toBe("container-1");
-    // Pinned: useScrollLock's isActive/mountTrigger flip on the interactive
-    // toggle causes one extra render on top of the initial mount.
-    expect(interactiveTerminalRenderMock).toHaveBeenCalledTimes(2);
+    // The interactive toggle publishes scroller readiness as well as the
+    // isActive/mountTrigger change, on top of the initial mount.
+    expect(interactiveTerminalRenderMock).toHaveBeenCalledTimes(3);
 
     fireEvent.click(screen.getByRole("button", { name: /native/i }));
 

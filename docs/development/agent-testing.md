@@ -1082,6 +1082,20 @@ live tail for gaps, duplicates and order without reading model prose.
   the top, which is the only position it can take. Each click records a
   content-free `-layout` annotation (part ids, stops, boxes, scroll range)
   so a drift can be attributed without reading transcript text.
+  A Codex case then restarts the environment's bridge under the mounted tab
+  (the first replay after live streaming renames every row): the backend must
+  page every row once with the same call ids, stops in the same rows, and the
+  tab must render no row or stop twice and keep the reader's place.
+- **Codex without a login.** `ORKESTRATOR_AGENT_TEST_PAGING_CODEX_LOOPBACK=1`
+  runs only the native case, on the profile's pinned Codex, with the
+  profile's own Codex `config.toml` pointed at
+  `e2e/agent-testing/transcript-paging-codex-model.ts` (a loopback stand-in
+  for the Responses WebSocket that walks the trail; restored afterwards). It
+  costs nothing and takes about a minute. Start the profile with `CODEX_HOME`
+  set to a throwaway directory whose `auth.json` holds a made-up
+  `OPENAI_API_KEY` (`{"auth_mode":"apikey","OPENAI_API_KEY":"sk-loopback"}`),
+  so no real login is copied in:
+  `CODEX_HOME=<that dir> mise run dev:test --profile <name> --fixture --headless --credential-source codex --agent-platforms codex`.
 - **Multi Review** (a Claude Haiku and a Codex GPT-6-Luna reviewer, 130 stops).
   The trail protocol is in an `AGENTS.md` that is part of the change. Codex
   loads it as instructions; a Claude reviewer runs read-only without project

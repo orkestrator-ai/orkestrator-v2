@@ -1,4 +1,8 @@
 import { assertExecutionPolicyNotWidened } from "@orkestrator/protocol/execution-policy-narrowing";
+import {
+  admitNodeBridgeRequest,
+  takeAdmittedBody,
+} from "@orkestrator/protocol/node/bridge-authority";
 import { BRIDGE_LOG_POLICY_ROUTE } from "@orkestrator/protocol/log-policy";
 import { applyBridgeLogPolicy } from "@orkestrator/protocol/node/bridge-log-policy";
 import { isValidMcpFormContent } from "@orkestrator/protocol/mcp-elicitation-form";
@@ -139,6 +143,10 @@ export async function route(
     return json(response, 200, { ok: true, provider, version: "1.0.0" });
   }
   if (!authenticated(request)) return json(response, 401, { error: "Unauthorized" });
+  // What changes an agent's authority also needs the backend's signature,
+  // which a token caught in flight does not carry (bridge-authority.ts).
+  const refused = await admitNodeBridgeRequest(bridgeCredential.authority, request, MAX_BODY_BYTES);
+  if (refused) return json(response, refused.status, refused.body);
   if (url.pathname === "/global/auth-check" && request.method === "GET") {
     return json(response, 200, { ok: true });
   }
@@ -1191,12 +1199,17 @@ function storeAgentMcp(state: SessionState, value: unknown): void {
 
 export async function readJson(request: IncomingMessage): Promise<JsonObject> {
   const chunks: Buffer[] = [];
-  let bytes = 0;
-  for await (const chunk of request) {
-    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    bytes += buffer.length;
-    if (bytes > MAX_BODY_BYTES) throw new HttpError(413, "Request body is too large");
-    chunks.push(buffer);
+  const admitted = takeAdmittedBody(request);
+  if (admitted) {
+    chunks.push(admitted);
+  } else {
+    let bytes = 0;
+    for await (const chunk of request) {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      bytes += buffer.length;
+      if (bytes > MAX_BODY_BYTES) throw new HttpError(413, "Request body is too large");
+      chunks.push(buffer);
+    }
   }
   let parsed: unknown;
   try {

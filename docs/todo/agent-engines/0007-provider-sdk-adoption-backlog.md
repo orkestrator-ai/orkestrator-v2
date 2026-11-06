@@ -12,7 +12,9 @@ against the upgraded pins (see "Recheck at the 2026-10-30 upgrade" under
 Assumptions and decisions). Task 4 rechecked 2026-11-02 against `main` at
 `38d55ee14` (Claude Agent SDK `0.3.314`) before its provenance half was built.
 Task 8 rechecked 2026-11-03 against `main` at `7b48c23fb` (Pi `1.4.0`, Codex
-`0.166.0`, OpenCode `1.19.5`) before its instructions half was built.
+`0.166.0`, OpenCode `1.19.5`) before its instructions half was built, and
+again 2026-11-06 against `main` at `c1724ab74` (Pi still `1.4.0`) before its
+abort and auto-compaction toggle were built.
 
 The "Decided out" list is product decisions, not tasks; only where the current
 pins undercut one of them is it raised below (task 1).
@@ -26,7 +28,7 @@ pins undercut one of them is it raised below (task 1).
 5. **MCP Apps widgets**: Claude `readMcpResource` / `_meta.ui` and the Codex equivalent. Status: deferred (decision recorded: until a user-visible MCP server needs it).
 6. **Other unused Claude and Codex surfaces**: Claude `additionalDirectories` / `agents` / `skills`; Codex `config/*` writes, `command/exec`, `fs/*`, `feedback/upload`, `gitDiffToRemote`, dynamic tools, config requirements. Status: deferred (decision recorded: kept as candidates).
 7. **Cursor `askQuestion`**: no typed tool-call variant or answer path. Status: blocked (upstream Cursor SDK; still at `1.2.0`).
-8. **Pi compaction controls**: custom instructions, `abortCompaction`, auto-compaction toggle. Status: done for custom instructions (2026-11-03: `/compact <instructions>` behind `actions.compactInstructions`, on for Claude and Pi); open for abort and the auto-compaction toggle.
+8. **Pi compaction controls**: custom instructions, `abortCompaction`, auto-compaction toggle. Status: done (custom instructions 2026-11-03: `/compact <instructions>` behind `actions.compactInstructions`, on for Claude and Pi; 2026-11-06: Stop ends a Pi compaction through the cancel routes, and an Auto-compact composer toggle per session that never writes Pi's settings file). Live check on a signed-in Pi in [7280](7280-pi-compaction-controls-live-check.md).
 9. **Second ACP agent**: Gemini CLI or Claude-over-ACP through `AcpProviderConfig`. Status: deferred (decision recorded: until a user asks for a specific agent).
 10. **Grok MCP elicitation**: `mcp-form` and `mcp-url` cards over `_x.ai/mcp/elicit`. Status: done (2026-10-31; proved signed in on 1.0.67 through the bridge).
 11. **Grok `costUsdTicks` qualification**: two billed Grok turns to establish the tick unit. Status: open (Grok documents 10¹⁰ ticks per USD for `grok sessions`; whether the ACP field is the same quantity, per turn or cumulative, still needs billed turns).
@@ -182,11 +184,11 @@ Rechecked at `1.2.0` (2026-10-30): `askQuestion` is still only in `ToolName`, th
 
 ### 8. Pi compaction controls
 
-**Problem.** Pi users cannot pass compaction instructions, abort a compaction or toggle auto-compaction. Instructions were built 2026-11-03; abort and the toggle remain.
+**Problem.** Pi users cannot pass compaction instructions, abort a compaction or toggle auto-compaction. Instructions were built 2026-11-03; abort and the toggle were built 2026-11-06 (see "Task 8: abort and auto-compaction toggle built" under Assumptions and decisions).
 
 **Context.** Shared layer has no compaction-parameter surface yet; optional instructions need a shared field and a capability bit so the UI accepts them only for providers that can honour them.
 
-**Investigation.** The bridge calls `session.compact()` with no arguments (`bridges/pi-bridge/src/http.ts:911`). Pi `1.4.0` exposes `compact(customInstructions?)`, `abortCompaction()` and `setAutoCompactionEnabled()` / `autoCompactionEnabled` (`bridges/pi-bridge/node_modules/@earendil-works/pi-coding-agent/dist/core/agent-session.d.ts:726,730,771-773`). Rechecked 2026-10-30: the original recommendation's premise that Codex can also honour instructions is wrong at the current pins. Codex `0.164.0`'s `ThreadCompactStartParams` is `{ threadId }` only (`bridges/codex-bridge/src/app-server/generated/typescript/v2/ThreadCompactStartParams.ts`), and OpenCode `1.19.4`'s `session.summarize` body is `{ providerID, modelID, auto? }` (`apps/backend/node_modules/@opencode-ai/sdk/dist/v2/gen/types.gen.d.ts:8643`). Claude can honour them (its compact route sends the CLI's own `/compact`, `bridges/claude-bridge/src/routes/session.ts:1198`), and Grok may (the ACP bridge runs Grok's own `/compact` as a selected command, `bridges/acp-bridge/src/acp-http.ts:583-589`; whether that command takes input is unchecked). The shared `/compact` row also explicitly refuses arguments today (`rejectsArguments` in `packages/protocol/src/agent-slash-commands.ts:156-164`), so the change spans the protocol, the command dispatch, every provider's compact path and the web submission path. Rechecked at the 2026-10-30 pins: Codex `0.166.0`'s `ThreadCompactStartParams` is still `{ threadId }`, and OpenCode `1.19.5`'s `summarize` body is unchanged. Cursor `1.2.0` adds `agent.summarize()` (no instructions), now adopted by the bridge. Rechecked 2026-11-03 at `7b48c23fb`: Pi `1.4.0` still has `compact(customInstructions?)`, Codex `0.166.0`'s `ThreadCompactStartParams` is still `{ threadId }`, OpenCode is still `1.19.5`, and nothing had been built. On Claude a live catalogue normally lists the SDK's own `/compact`, which wins the collision and already takes instructions as a provider command; the action path (and its missing instructions) matters when that row is absent.
+**Investigation.** The bridge calls `session.compact()` with no arguments (`bridges/pi-bridge/src/http.ts:911`). Pi `1.4.0` exposes `compact(customInstructions?)`, `abortCompaction()` and `setAutoCompactionEnabled()` / `autoCompactionEnabled` (`bridges/pi-bridge/node_modules/@earendil-works/pi-coding-agent/dist/core/agent-session.d.ts:726,730,771-773`). Rechecked 2026-10-30: the original recommendation's premise that Codex can also honour instructions is wrong at the current pins. Codex `0.164.0`'s `ThreadCompactStartParams` is `{ threadId }` only (`bridges/codex-bridge/src/app-server/generated/typescript/v2/ThreadCompactStartParams.ts`), and OpenCode `1.19.4`'s `session.summarize` body is `{ providerID, modelID, auto? }` (`apps/backend/node_modules/@opencode-ai/sdk/dist/v2/gen/types.gen.d.ts:8643`). Claude can honour them (its compact route sends the CLI's own `/compact`, `bridges/claude-bridge/src/routes/session.ts:1198`), and Grok may (the ACP bridge runs Grok's own `/compact` as a selected command, `bridges/acp-bridge/src/acp-http.ts:583-589`; whether that command takes input is unchecked). The shared `/compact` row also explicitly refuses arguments today (`rejectsArguments` in `packages/protocol/src/agent-slash-commands.ts:156-164`), so the change spans the protocol, the command dispatch, every provider's compact path and the web submission path. Rechecked at the 2026-10-30 pins: Codex `0.166.0`'s `ThreadCompactStartParams` is still `{ threadId }`, and OpenCode `1.19.5`'s `summarize` body is unchanged. Cursor `1.2.0` adds `agent.summarize()` (no instructions), now adopted by the bridge. Rechecked 2026-11-03 at `7b48c23fb`: Pi `1.4.0` still has `compact(customInstructions?)`, Codex `0.166.0`'s `ThreadCompactStartParams` is still `{ threadId }`, OpenCode is still `1.19.5`, and nothing had been built. On Claude a live catalogue normally lists the SDK's own `/compact`, which wins the collision and already takes instructions as a provider command; the action path (and its missing instructions) matters when that row is absent. Rechecked 2026-11-06 at `c1724ab74` (Pi `1.4.0`): a turn's own compaction (Pi's preflight check and the one after `agent_end`) runs inside the prompt's run, so the existing cancel, which calls `AgentSession.abort()`, already aborts it; the gap was the manual compaction from `/session/:id/compact`, which holds no prompt claim, so `/cancel` answered `cancelled: false` and the bridge reported the session `idle` (no Stop) while it ran. `compact()` calls `this.abort()` before it creates `_compactionAbortController`, so an `abortCompaction()` in that window reaches nothing. `setAutoCompactionEnabled()` calls `SettingsManager.setCompactionEnabled()`, which writes `compaction.enabled` into the global `settings.json` (`dist/core/settings-manager.js:635-641`); `getCompactionSettings()` and the `autoCompactionEnabled` getter both read `getCompactionEnabled()`, and the manager's `save()` recomputes its merged settings, dropping any `applyOverrides()` patch.
 
 **Decisions.**
 
@@ -205,6 +207,24 @@ Rechecked at `1.2.0` (2026-10-30): `askQuestion` is still only in `ToolName`, th
   - **Advertise the capability per bridge through the command catalogue, so the row refuses arguments on an older bridge.**
     - Pros: refuses before anything runs.
     - Cons: needs a new catalogue field threaded through every `withSessionActionSlashCommands` caller; the window it protects is a container that predates the backend upgrade.
+
+- **How does a user stop a manual compaction?** (decided 2026-11-06)
+  - **Through the existing Stop: the bridge reports `running` with `activity: "compacting"` while it compacts, and the cancel routes call `abortCompaction()` when no prompt claim owns the session (recommended).**
+    - Pros: no new route, action or capability bit; the backend's stop ladder, an older backend and the renderer's Stop already work; matches how Claude reports its compaction.
+    - Cons: a compaction now reads as a running turn with no `turnId`, so a steer status read answers `unknown` during it.
+  - **A new `abort-compaction` session action with a capability bit.**
+    - Pros: explicit, and leaves the status contract unchanged.
+    - Cons: protocol, backend, renderer and capability changes for a case Stop already expresses; the tab would still show the session idle with no control.
+- **Where does the auto-compaction toggle live?** (decided 2026-11-06)
+  - **A session-scoped `autoCompaction` toggle parameter on every Pi model, applied by overriding the session's settings manager in memory and kept in the bridge's state file (recommended).**
+    - Pros: the shared composer already renders toggle parameters and the backend already validates, stores and forwards them, so no renderer or protocol change; never touches the user's Pi settings or other sessions.
+    - Cons: a model parameter for a session setting, so the backend has to keep it across a model switch (one line); the override assigns an SDK method on the instance, pinned by a test against the real SDK.
+  - **Call Pi's `setAutoCompactionEnabled()`.**
+    - Pros: Pi's own API, no override.
+    - Cons: writes the account-wide `settings.json`, changing every Pi session and terminal tab on the host.
+  - **`SettingsManager.applyOverrides()`.**
+    - Pros: a public API meant for overrides.
+    - Cons: the manager's own `save()` (a persisted model or thinking default, an extension's setting) silently drops it.
 
 ### 9. Second ACP agent
 
@@ -482,6 +502,51 @@ open, as recommended).
   publishes `none` and the newer composer refuses the text.
 - Tests use fake providers and bridges only; no billed turn was run.
 
+### Task 8: abort and auto-compaction toggle built
+
+Recorded 2026-11-06 against `main` at `c1724ab74` (Pi `1.4.0`) by the worker
+that built the rest of task 8.
+
+- **Stopping a compaction.** Chose the existing Stop (Decisions above). The
+  Pi bridge reports `running` and `activity: "compacting"` from `/status` and
+  `/session/:id` while `state.compacting`, and the backend's progressive state
+  read now maps that `activity` for Pi as it does for Claude. With no prompt
+  claim, `/cancel`, `/abort` and `/hard-abort` call `abortCompaction()` on the
+  manual compaction the compact route is running, and the session listener
+  aborts again on `compaction_start` for a cancel that landed inside
+  `compact()`'s own `abort()`. The cancel answers `cancelled: true` once the
+  compact route settles having stopped it, `cancelled: false` if Pi finished
+  first, and 202 pending past the acknowledgement bound. The compact route
+  answers 409 `{ error, cancelled: true }`; the backend shows that error alone,
+  so the composer says the compaction was stopped and keeps the draft.
+- **Auto-compaction toggle.** Chose the session toggle parameter (Decisions
+  above). Every Pi model carries `autoCompaction` (label "Auto-compact",
+  `scope: "session"`, default Pi's own `compaction.enabled`), added when the
+  composer is published so a catalogue rehydration cannot drop it. A config,
+  create, resume or prompt body's `parameterValues.autoCompaction` sets the
+  session's choice; the session's `SettingsManager.getCompactionEnabled` is
+  replaced on the instance with a live read of that choice, so it holds
+  across the manager's `save()` and needs no re-attach. The choice is
+  persisted in the bridge's `state.json`; Pi's `settings.json` is never
+  written for it. The backend keeps `autoCompaction` across a model switch
+  for Pi, as it already keeps Claude's session-default parameters.
+- **Compatibility.** An older Pi bridge publishes no toggle and still reports
+  `idle` during a manual compaction, which is the behaviour before this
+  change. A newer bridge behind an older backend shows Stop for a compaction
+  (the older backend just shows no compacting label) and the toggle (the
+  older backend already handles toggle parameters generically). No
+  version-compatibility entry was needed.
+- **Visual.** The renderer is unchanged; the toggle is the shared composer's
+  existing toggle-parameter button ("Auto-compact: On/Off"). It was shown with
+  a standalone mock, not a live Pi tab (see 7280).
+- **Tests.** `bridges/pi-bridge/src/compaction-controls.test.ts` runs the real
+  Pi SDK over pi-ai's faux model (the fake engine's model): Stop ends a
+  compaction whose summary request never answers, a cancel inside
+  `compact()`'s own `abort()` stops it before any summary request, the toggle
+  off prevents threshold compaction across three turns and on brings it back,
+  Pi's `compaction` settings are unchanged, and the override holds across the
+  settings manager's `save()`. No login and no billed turn.
+
 ### Task 10: built after a live probe
 
 A signed-in probe on 2026-10-31 answered the open question (Grok forwards
@@ -644,9 +709,6 @@ Unadopted today. Each line says what blocks it or what decision it needs.
   - `SendOptions.local.force` and `SDKAgentInfo.archived` are tracked in
     [0005-mid-turn-steer-and-interrupt.md](0005-mid-turn-steer-and-interrupt.md) and
     [0006-session-titles-and-history.md](0006-session-titles-and-history.md).
-- Pi (`bridges/pi-bridge`): the rest of the compaction controls
-  (`abortCompaction`, an auto-compaction toggle). Custom instructions were
-  built 2026-11-03 behind `actions.compactInstructions` (task 8).
 - ACP (`bridges/acp-bridge`):
   - A second ACP agent (Gemini CLI, Claude-over-ACP). The launcher now builds
     an `AcpProviderConfig` record (`acp-provider-config.ts`; the Grok record is
@@ -727,6 +789,9 @@ in a throwaway Orkestrator profile (never the real data directory, never ports
   still present (checked 2026-10-30 in `bridges/claude-bridge/node_modules`).
   The Grok `1.0.67` `costUsdTicks` behaviour has not been checked live; the
   steps are under "Qualification".
+- Pi's compaction Stop and Auto-compact toggle (task 8) are proved on the real
+  SDK with the faux model only; a signed-in Pi tab has not run them
+  ([7280](7280-pi-compaction-controls-live-check.md)).
 - The MCP provenance line (task 4) is covered by bridge, backend, protocol and
   card tests with synthetic payloads; nobody has yet seen it on a card raised by
   a real Claude CLI for an `mcp__*` tool under the `ask` policy, nor which

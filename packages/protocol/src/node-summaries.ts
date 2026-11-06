@@ -101,6 +101,8 @@ export interface NodeEnvironmentSummary {
   deleteFailure?: string;
   /** When the running delete started, so a slow one can say how long it has taken. */
   deletingSince?: string;
+  /** Which step the running delete is on; absent on older machines and once it fails. */
+  deletingStep?: EnvironmentDeletionStep;
   /**
    * `deleting` is left over from a merge cleanup that failed, and a new delete
    * retries it, so the row stays selectable for a bulk delete. Absent
@@ -335,6 +337,58 @@ export function environmentDeletionFailure(raw: {
   return null;
 }
 
+/**
+ * The steps a delete goes through, in order. The backend records the one it is
+ * on (`deletionStep`) so a slow delete can say what it is waiting for.
+ */
+export const ENVIRONMENT_DELETION_STEPS = [
+  "stopping-work",
+  "terminals",
+  "workspace-files",
+  "container",
+  "local-servers",
+  "worktree",
+  "records",
+] as const;
+
+export type EnvironmentDeletionStep = (typeof ENVIRONMENT_DELETION_STEPS)[number];
+
+const ENVIRONMENT_DELETION_STEP_LABELS: Record<EnvironmentDeletionStep, string> = {
+  "stopping-work": "stopping agents and workers",
+  terminals: "closing terminals",
+  "workspace-files": "removing workspace files",
+  container: "removing the container",
+  "local-servers": "stopping local servers",
+  worktree: "removing the worktree",
+  records: "removing its records",
+};
+
+export function isEnvironmentDeletionStep(value: unknown): value is EnvironmentDeletionStep {
+  return (
+    typeof value === "string" && (ENVIRONMENT_DELETION_STEPS as readonly string[]).includes(value)
+  );
+}
+
+/** What the step is doing, as a lowercase phrase ("removing the worktree"). */
+export function environmentDeletionStepLabel(step: EnvironmentDeletionStep): string {
+  return ENVIRONMENT_DELETION_STEP_LABELS[step];
+}
+
+/**
+ * The step a running delete is on, or null when no delete is running, it has
+ * failed, or the record names no step it knows (an older or newer backend).
+ */
+export function environmentDeletionStep(raw: {
+  lifecycleOperation?: unknown;
+  deletionRequestedAt?: unknown;
+  deletionError?: unknown;
+  cleanupAfterMergeError?: unknown;
+  deletionStep?: unknown;
+}): EnvironmentDeletionStep | null {
+  if (!environmentHasDeletionTombstone(raw) || environmentDeletionFailure(raw)) return null;
+  return isEnvironmentDeletionStep(raw.deletionStep) ? raw.deletionStep : null;
+}
+
 export function toNodeEnvironmentSummary(
   nodeId: BackendId,
   raw: Record<string, unknown>,
@@ -343,6 +397,7 @@ export function toNodeEnvironmentSummary(
   if (typeof raw.id !== "string" || !raw.id || typeof raw.projectId !== "string") return null;
   const ref = environmentRef(nodeId, raw.id);
   const deleteFailure = environmentDeletionFailure(raw);
+  const deletingStep = environmentDeletionStep(raw);
   const worktree = pathName(raw.worktreePath);
   return {
     ref,
@@ -376,6 +431,7 @@ export function toNodeEnvironmentSummary(
     raw.lifecycleOperationStartedAt
       ? { deletingSince: raw.lifecycleOperationStartedAt.slice(0, MAX_TIMESTAMP) }
       : {}),
+    ...(deletingStep ? { deletingStep } : {}),
     ...(typeof raw.cleanupAfterMergeError === "string" && raw.cleanupAfterMergeError.length > 0
       ? { deletionRetryable: true as const }
       : {}),

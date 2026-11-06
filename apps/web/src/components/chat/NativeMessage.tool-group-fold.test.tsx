@@ -9,6 +9,7 @@ import { TerminalProvider } from "@/contexts";
 import type { NativeMessagePart } from "@/lib/chat/native-message-types";
 import { VirtuosoMockContext } from "react-virtuoso";
 import { NativeMessage } from "./NativeMessage";
+import { toolGroupEntryIndex } from "./NativeMessage.tool-group";
 
 afterEach(() => {
   document.getSelection()?.removeAllRanges();
@@ -390,6 +391,18 @@ describe("folded tool group", () => {
     // The frame keeps standing in for the calls the inner viewport scrolls.
     const head = container.querySelector(":scope [data-transcript-part-id]");
     expect(head?.closest("[data-transcript-inner-viewport]") === null).toBe(true);
+  });
+
+  test("a transcript seek names the open group's entry by the member's source part id", () => {
+    const calls = [shell(0, "git status"), shell(1, "git log"), shell(2, "git show")];
+    const prose = { type: "text", content: "note", sourcePartId: "text-1" } as NativeMessagePart;
+    const ids = calls.map((call) => (call.type === "tool-invocation" ? call.toolUseId! : ""));
+    expect(toolGroupEntryIndex([...calls, prose], ids[2]!)).toBe(2);
+    expect(toolGroupEntryIndex([...calls, prose], "text-1")).toBe(3);
+    // A call without a provider id is named by its source part id.
+    const unnamed = shell(3, "ls", { toolUseId: undefined, sourcePartId: "part-9" });
+    expect(toolGroupEntryIndex([unnamed], "part-9")).toBe(0);
+    expect(toolGroupEntryIndex(calls, "elsewhere")).toBe(-1);
   });
 
   test("a short group's body has a hard height ceiling", () => {

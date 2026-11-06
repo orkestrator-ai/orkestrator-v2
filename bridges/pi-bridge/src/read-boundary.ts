@@ -1,3 +1,5 @@
+import { homedir } from "node:os";
+import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { COORDINATOR_PROTECTED_DATA_DIR_ENV } from "@orkestrator/protocol/coordinator";
 import {
@@ -78,5 +80,23 @@ export function piReadToolRefused(
   const path = piPath(named);
   // A path Pi itself could not decode is refused rather than guessed at.
   if (path === undefined) return true;
-  return readBoundaryRefuses(boundary, path, cwd, { traversal: SEARCHES.has(toolName) });
+  if (readBoundaryRefuses(boundary, path, cwd, { traversal: SEARCHES.has(toolName) })) {
+    return true;
+  }
+  if (toolName !== "read") return false;
+
+  // Pi 1.4's resolveReadPathAsync tries these spellings after resolveToCwd.
+  // Check all candidates, even if the literal file exists: a later fallback
+  // must not gain access to a protected target. Search tools have no fallback.
+  const expanded =
+    path === "~" ? homedir() : path.startsWith("~/") ? resolve(homedir(), path.slice(2)) : path;
+  const resolved = resolve(cwd, expanded);
+  const nfd = resolved.normalize("NFD");
+  return [
+    resolved,
+    resolved.replace(/ (AM|PM)\./gi, "\u202f$1."),
+    nfd,
+    resolved.replace(/'/g, "\u2019"),
+    nfd.replace(/'/g, "\u2019"),
+  ].some((candidate) => readBoundaryRefuses(boundary, candidate, cwd));
 }

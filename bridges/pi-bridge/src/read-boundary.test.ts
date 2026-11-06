@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { createReadTool } from "@earendil-works/pi-coding-agent";
 import { COORDINATOR_PROTECTED_DATA_DIR_ENV } from "@orkestrator/protocol/coordinator";
 import type { ReadBoundary } from "@orkestrator/protocol/node/coordinator-read-boundary";
 import {
@@ -85,6 +86,40 @@ describe("Pi's coordinator read boundary", () => {
     // Listing an ancestor shows names, not contents.
     expect(refused("ls", { path: root })).toBe(false);
   });
+
+  for (const [label, requested, alternate] of [
+    ["curly quote", "innocent'.txt", "innocent’.txt"],
+    ["NFD", "café.txt", "cafe\u0301.txt"],
+    ["NFD and curly quote", "café'.txt", "cafe\u0301’.txt"],
+    ["AM/PM narrow space", "capture 10 PM.txt", "capture 10\u202fPM.txt"],
+  ]) {
+    test(`blocks the real SDK's ${label} fallback at the approval gate`, async () => {
+      const secret = "FIXTURE-PI-PROTECTED-CONTENT";
+      const target = join(dataDir, `${label!.replaceAll("/", "-")}.txt`);
+      writeFileSync(target, secret);
+      symlinkSync(target, join(checkout, alternate!));
+      const input = { path: join(checkout, requested!) };
+      const tool = createReadTool(checkout);
+      // Control: the pinned SDK really selects the alternate and reads its target.
+      const unguarded = await tool.execute("control", input);
+      expect(JSON.stringify(unguarded)).toContain(secret);
+      process.env[COORDINATOR_PROTECTED_DATA_DIR_ENV] = dataDir;
+      const approval = await requestToolApproval(newSessionState(), "fallback", "read", input);
+      expect(approval).toEqual({ block: true, reason: PI_READ_BOUNDARY_REFUSAL });
+      const guarded = approval.block ? approval : await tool.execute("guarded", input);
+      expect(JSON.stringify(guarded)).not.toContain(secret);
+      expect(refused("read", { path: requested })).toBe(true);
+
+      // An ordinary fallback inside the checkout still works.
+      const safeName = `safe-${alternate}`;
+      writeFileSync(join(checkout, safeName), "checkout content");
+      const safeInput = { path: join(checkout, `safe-${requested}`) };
+      expect(await requestToolApproval(newSessionState(), "safe", "read", safeInput)).toEqual({
+        block: false,
+      });
+      expect(JSON.stringify(await tool.execute("safe", safeInput))).toContain("checkout content");
+    });
+  }
 
   test("judges only Pi's reading tools", () => {
     expect(refused("bash", { command: `cat ${dataDir}/control-mcp.json` })).toBe(false);

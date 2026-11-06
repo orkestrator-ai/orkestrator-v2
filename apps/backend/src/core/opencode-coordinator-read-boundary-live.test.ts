@@ -284,12 +284,17 @@ describe("OpenCode coordinator read boundary", () => {
         { tool: "grep", args: { pattern: "CREDENTIAL", path: join(fixture.cwd, "linked-dir") } },
         // Searches from the checkout itself do not follow links.
         { tool: "grep", args: { pattern: "CREDENTIAL" } },
+        { tool: "glob", args: { pattern: "**/control-mcp.json" } },
       ]);
       for (const outcome of outcomes.slice(0, 3)) {
         expect(outcome.status).toBe("error");
         expect(outcome.output).toContain("data directory");
       }
       for (const outcome of outcomes) expect(outcome.output).not.toContain(SECRET);
+      const glob = outcomes[4]!;
+      expect(glob.tool).toBe("glob");
+      expect(glob.status).toBe("completed");
+      expect(glob.output).not.toContain("linked-dir/control-mcp.json");
     },
     90_000,
   );

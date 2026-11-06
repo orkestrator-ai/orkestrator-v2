@@ -521,12 +521,14 @@ function hideableHarness(initialTop: number) {
   } as unknown as typeof ResizeObserver;
   let top = initialTop;
   let shown = true;
+  let width = 800;
+  let rowTop = 4000;
   const height = 5000;
   const scroller = document.createElement("div");
   Object.defineProperties(scroller, {
     scrollHeight: { get: () => (shown ? height : 0) },
     clientHeight: { get: () => (shown ? 600 : 0) },
-    clientWidth: { get: () => (shown ? 800 : 0) },
+    clientWidth: { get: () => (shown ? width : 0) },
     scrollTop: {
       get: () => (shown ? top : 0),
       set: (value: number) => {
@@ -534,6 +536,11 @@ function hideableHarness(initialTop: number) {
       },
     },
   });
+  scroller.getBoundingClientRect = () => ({ top: 0, bottom: 600, height: 600 }) as DOMRect;
+  scroller.innerHTML = '<div data-chat-message-index="5" data-chat-message-key="k5"></div>';
+  const row = scroller.firstElementChild as HTMLElement;
+  row.getBoundingClientRect = () =>
+    ({ top: rowTop - top, bottom: rowTop - top + 200, height: 200 }) as DOMRect;
   document.body.appendChild(scroller);
   const controller = new TranscriptScrollController({
     current: {
@@ -556,6 +563,9 @@ function hideableHarness(initialTop: number) {
     scroller,
     deliverResize,
     deliverScroll,
+    changeHeightAbove(delta: number) {
+      rowTop += delta;
+    },
     /** A reader's own wheel movement to `value`. */
     readTo(value: number) {
       scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 }));
@@ -567,17 +577,66 @@ function hideableHarness(initialTop: number) {
       deliverResize();
     },
     /** Show again; the engine either keeps the offset or clamps it and fires `scroll`. */
-    show(clampTo?: number) {
+    show(clampTo?: number, options: { width?: number; scroll?: boolean } = {}) {
       shown = true;
+      width = options.width ?? width;
       if (clampTo !== undefined && clampTo < top) {
         top = clampTo;
-        deliverScroll();
+        if (options.scroll !== false) deliverScroll();
       }
     },
   };
 }
 
 describe("an offset across a hide", () => {
+  for (const following of [false, true]) {
+    test(`hidden scroll events preserve ${following ? "follow intent" : "the reading offset"}`, () => {
+      controlledFrames();
+      const view = hideableHarness(4400);
+      if (!following) view.readTo(3800);
+      const snapshot = view.controller.getSnapshot();
+      view.hide();
+      view.deliverScroll(); // A hidden box reports zero for every scroll metric.
+      view.deliverScroll();
+      expect(view.scroller.scrollTop).toBe(0);
+      expect(view.controller.diagnostics().writes).toBe(0);
+      expect(view.controller.wantsFollow).toBe(following);
+      expect(view.controller.getSnapshot().isAtBottom).toBe(snapshot.isAtBottom);
+      view.show(3334);
+      view.deliverResize();
+      expect(view.scroller.scrollTop).toBe(following ? 4400 : 3800);
+      expect(view.controller.diagnostics().writes).toBe(1);
+      expect(view.controller.wantsFollow).toBe(following);
+    });
+  }
+
+  test("showing at a new width restores the offset before reflow navigation", () => {
+    const frame = controlledFrames();
+    const view = hideableHarness(4400);
+    view.controller.navigateTo({ kind: "row", index: 5, key: "k5", offsetPx: 80 }, "find");
+    for (let index = 0; index < 5; index += 1) frame();
+    expect(view.controller.currentOwner).toBeNull();
+    expect(view.scroller.scrollTop).toBe(3920);
+    view.deliverScroll(); // Observe the navigation write before hiding.
+    const anchor = view.controller.readingAnchor;
+    expect(anchor).toMatchObject({ rowKey: "k5", offsetPx: 80 });
+    const before = view.controller.diagnostics();
+    view.hide();
+    view.changeHeightAbove(150);
+    // No scroll event: both the clamp restore and width handling run in resize.
+    view.show(3334, { width: 600, scroll: false });
+    view.deliverResize();
+    expect(view.scroller.scrollTop).toBe(3920);
+    expect(view.controller.diagnostics().writes).toBe(before.writes + 1);
+    expect(view.controller.currentOwner).toBe("reflow");
+    expect(view.controller.readingAnchor).toEqual(anchor);
+    for (let index = 0; index < 5; index += 1) frame();
+    expect(view.scroller.scrollTop).toBe(4070);
+    expect(view.controller.currentOwner).toBeNull();
+    expect(view.controller.diagnostics().operationsStarted).toBe(before.operationsStarted + 1);
+    expect(view.controller.wantsFollow).toBe(false);
+  });
+
   test("a reader the engine clamped on show is put back before activation's frame", () => {
     const view = hideableHarness(4400);
     view.readTo(3800);
@@ -625,15 +684,19 @@ describe("an offset across a hide", () => {
     expect(view.controller.wantsFollow).toBe(true);
   });
 
-  test("a navigation started after the show is not undone", () => {
+  test("navigation to earlier content after the show survives the resize", () => {
+    controlledFrames();
     const view = hideableHarness(4400);
     view.readTo(3800);
     view.hide();
     view.show();
-    expect(view.controller.navigateToLatest()).toBe(true);
-    view.scroller.scrollTop = 4400; // The index navigation's write.
+    expect(
+      view.controller.navigateTo({ kind: "row", index: 5, key: "k5", offsetPx: 2000 }, "find"),
+    ).toBe(true);
+    view.scroller.scrollTop = 2000; // The index navigation's write, below the saved 3800.
     view.deliverResize();
-    expect(view.scroller.scrollTop).toBe(4400);
-    expect(view.controller.currentOwner).toBe("latest");
+    expect(view.scroller.scrollTop).toBe(2000);
+    expect(view.controller.diagnostics().writes).toBe(0);
+    expect(view.controller.currentOwner).toBe("find");
   });
 });

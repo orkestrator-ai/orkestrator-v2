@@ -15,8 +15,6 @@ A batch file combines several reports as numbered parts and takes the rating of 
 | Rank | File | Criticality | Finished | Covers | Why this rating |
 | --- | --- | --- | --- | --- | --- |
 | 1 | [0160-e10-conditional-reads-and-deltas.md](0160-e10-conditional-reads-and-deltas.md) | Low | No | **E10, Conditional reads and deltas.**<br>`0160`: TX-1: A transcript delta can only be built from the newest cached view<br>`0180`: TX-5: Session-state reads have no conditional path from the bridge<br>`0190`: TX-6: Bridge transcript windows are always sent whole | From `0160`: The report rates it High, but the maintainer gated it on a baseline, so it stays Low until that measurement arrives. |
-| 2 | [0560-st-9-agent-mail-store-remainder.md](0560-st-9-agent-mail-store-remainder.md) | Low | No | ST-9 (rest): Agent mail: pending injects and mailbox lists still sit on the whole store | The read cost the finding described has gone, and the rest needs a stored-format change only a measurement could justify. |
-| 3 | [0693-dk-10-second-claude-binary.md](0693-dk-10-second-claude-binary.md) | Low | No | DK-10: The image ships two Claude Code native binaries | It is an optional image-size saving that waits on a maintainer decision. |
 
 ## Parallel running
 
@@ -51,8 +49,6 @@ When one of these becomes ready, it joins the lane shown.
 
 | File | Why it waits | Lane |
 | --- | --- | --- |
-| [`0693`](0693-dk-10-second-claude-binary.md) | Waits on a maintainer decision | Containers |
-| [`0560`](0560-st-9-agent-mail-store-remainder.md) | Needs a measurement to justify a stored-format change | Storage |
 
 `0390` (GW-7, WebSocket compression) left this table on 2026-11-05: its file is deleted and the work waits in [0052](../../todo/transcripts-and-observation/0052-remote-client-bandwidth.md) task 8, which starts only when the terminal WebSocket becomes the remote terminal transport; see [the closing check of E-0390](#closing-check-of-e-0390-websocket-compression).
 
@@ -139,7 +135,7 @@ When one of these becomes ready, it joins the lane shown.
 | ST-6 | Done | Off-loop zlib from 16 KiB and `FileHandle.sync()` per object before its rename, in `ObjectBatch` (#1761); evidence-body follow-up 4761, done and deleted 2026-11-05. |
 | ST-7 | Done | One-row reads, `storage-projects.ts:654`, `storage-native.ts:424`, `storage-prompt-queue-store.ts:127`, `storage-drafts.ts:160`, `:731`, `storage-sessions.ts:262` (12289fc56); 1202 assigns the lease-held native mutations to TX-4. |
 | ST-8 | Done | `updateStoreRow` carries the cache forward, `storage-database.ts:830-838` (12289fc56). |
-| ST-9 | Partly done | Frozen read model and single serialisation, `storage-agent-mail-store.ts:364`, `:431-436` (6953e8df7); pending-inject collection and body-free list remain, see 0560. |
+| ST-9 | Done | Frozen read model and single serialisation, `storage-agent-mail-store.ts:367`, `:429-443` (6953e8df7). The rest, pending injects as their own collection and a body-free list, was measured and not built: at the largest known real store (1.2 MB) a write costs about 10 ms CPU and the list about 1 ms. Thresholds and what to build then are [6760](../../todo/cross-cutting/6760-agent-mail-store-split-thresholds.md); see the [E-0560 closing check](#closing-check-of-e-0560-agent-mail-store). |
 | ST-10 | Done | Compose drafts (`storage-drafts.ts`, 381b26f90), environments (#1736), sessions and projects (`updateStoreRow` in `storage-drafts.ts`, `storage-sessions.ts`, `storage-projects.ts`) write one row; numbers in [1202](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md) task 2, live sizes and rates in [5101](../../todo/cross-cutting/5101-store-size-and-write-rate-live.md). |
 | ST-11 | Done | `store_rows_position` index, `storage-database.ts:361-365` (381b26f90). |
 | ST-12 | No action | Maintainer decided 2026-11-01 to leave pragmas unchanged unless fsync cost still shows (1202 task 2); still as described, `storage-database.ts:291-293`, `:1309`. |
@@ -176,7 +172,7 @@ When one of these becomes ready, it joins the lane shown.
 | DK-7 | Done | Order and split SDK layers, `docker/Dockerfile:40-65`, `:421-423` (fd679c0e2). |
 | DK-8 | Done | `mise link`, `docker/Dockerfile:399` (fd679c0e2). |
 | DK-9 | Done | `npm cache clean --force`, `docker/Dockerfile:218`, `:247`, `:321` (fd679c0e2). |
-| DK-10 | Open | Left for a maintainer, 1202 task 14; pins at `docker/Dockerfile:207`, `bridges/claude-bridge/package.json:16`; see 0693. |
+| DK-10 | Open | Waits on a maintainer decision, now [todo 6780](../../todo/containers-and-environments/6780-second-claude-binary-in-the-image.md). Pins unchanged on 2026-11-05 (`docker/Dockerfile:207`, `bridges/claude-bridge/package.json:16`); both binaries still byte-identical; the container bridge never runs the SDK's copy. See the closing note for 0693 below. |
 | DK-11 | Done | One `apt-get update`, `docker/Dockerfile:82`; `util-linux` in that layer, `:111` (fd679c0e2). |
 | DK-12 | Done | `move_clone_into_workspace`, `docker/workspace-setup.sh:406`, `:500` (2525fc05c). |
 | DK-13 | Done | Per-project bare mirror bound read-only, `git clone --no-tags --reference-if-able <mirror> --dissociate`, `clone_from_git_mirror` in `docker/workspace-setup.sh:435` (26ff5925b, seeded from the host checkout by 0e8958f57); restricted containers that cannot reach the remote get no mount (`restrictedContainerReachesGitRemote`, E25). The mirror's credential is [6741](../../todo/containers-and-environments/6741-git-mirror-access.md); see the closing check of E25 below. |
@@ -415,6 +411,16 @@ The outcome of every task in the E22 batch file, checked back against the code o
 | 0670 | 1. Reuse settled blocks while streaming | Done | The cited single whole-source `Markdown` element is gone: a live render goes through `IncrementalMarkdownCache.render` (`lib/chat/rich-markdown/incremental-parse.ts`), so only the tail renders per update. Tests: `every streamed prefix` for 16 fixtures, `a long streamed answer renders each completed segment once`, `a finished block keeps the same element while text arrives after it` (`incremental-parse.test.tsx`); `a live streaming render matches a full render at every update`, `finished blocks do not render again while the message streams` (`MessageMarkdown.incremental.test.tsx`). |
 | 0670 | Constraint: the final, non-live render always parses in full | Done | The non-live branch of `MessageMarkdown.tsx` renders the whole source and resets the cache. Test: `the final render updates the streamed blocks in place, without remounting`. |
 | 0670 | Needs verification: the real cost, with a Profiler run | Done | Playwright Chromium, React development build, `<Profiler>` around a rich `MessageMarkdown` streamed 100 characters per update, median over the last quarter of three runs, full render against the live path: 5 KB 4.8 → 1.3 ms; 10 KB 9.2 → 2.2 ms; 20 KB 18.2 → 3.9 ms; 30 KB 27.1 → 5.5 ms (wall 35.9 → 11.0 ms at 30 KB). The throwaway fixture was not committed. |
+
+## Closing check of E-0560 (Agent mail store)
+
+`0560-st-9-agent-mail-store-remainder.md` was checked back against the code on 2026-11-05 and deleted. Base commit `cbe0f9a5b`; its last version, ending with its outcome table, is the commit before the one that deleted it. Measurements used `apps/backend/scripts/agent-mail-store-size-bench.ts` on synthetic stores in the system temporary directory (600 mailboxes, 1.8 KB bodies) on Linux, Intel Core Ultra 9 285H, Bun 1.4.4, at load 46 to 57, five runs of 20 iterations; no backend, profile or provider turn. CPU milliseconds per call; ST-9 in the table above summarises this.
+
+| Part | Outcome | Numbers | Left over |
+| --- | --- | --- | --- |
+| Task 1: pending injects as their own collection | Still true; not built | Send 9.6–14.4 ms at a 1.85 MB store, 25–33 at 7.9 MB, 67–79 at 28.9 MB. A backoff reset, which changes only pending-inject entries, costs the same (4.1–8.3, 17–20, 44–53): the cost is the whole-store load and serialisation, which the report's option leaves in place. | [6760](../../todo/cross-cutting/6760-agent-mail-store-split-thresholds.md) task 2: revisit past 8 MB or mail-write stalls over 50 ms, then row writes |
+| Task 2: mailbox list without bodies | Still true; not built | List 0.8–1.7 ms at every size; 4–19 ms wall after a write; 5–50 ms after a restart. Read model 3.0–3.1 times the serialised store (5.4 MB to 91 MB); bodies 58–71% of the bytes. | [6760](../../todo/cross-cutting/6760-agent-mail-store-split-thresholds.md) task 3: revisit past 8 MB, then bodies in their own rows |
+| Needs verification: real sizes and write rates | Moved to a to-do | `mail-presence` is charged `storage-read` bytes only on a fetch from SQLite: 0 after an in-process write, the whole store after another connection's, so it cannot show list cost on a real host. | [6760](../../todo/cross-cutting/6760-agent-mail-store-split-thresholds.md) task 1 |
 
 ## Closing check of E26 (Local desktop transport)
 
@@ -676,6 +682,18 @@ Checked back on 2026-11-05 on branch `renderer-store-report-cf7c05d19868-r1`, ba
 | 0640 reverted (2 runs) | 0 | 170 | 5.41 to 5.77 ms | 11.2 to 13.5 ms |
 
 Store writes were 0 idle and 160 per window streaming (both tabs) in every variant. Neither revert changes the commit count, and the per-commit differences are within noise. A Bun micro-benchmark of `setProjection` with 128 sessions held: 8.86 to 9.34 µs per write before 0640, 3.97 to 4.17 µs after. For 0510, 1202 task 3 already measured the merge at at most 0.3 ms per update before the fix and 0.03 to 0.06 ms after. Production React and a real bridge's cadence were not measured. The question was whether the work shows in a profile, and at this scale it does not.
+
+## Closing note for 0693 (DK-10, second Claude binary)
+
+`0693-dk-10-second-claude-binary.md` was checked back against the code on 2026-11-05, based on `main` at `cbe0f9a5b`, and deleted; its last version is in the commit before the one that deleted it. Its one task is a maintainer decision, so it moved to [todo 6780](../../todo/containers-and-environments/6780-second-claude-binary-in-the-image.md), which holds the facts, the options and the recommendation. The Dockerfile is unchanged.
+
+| Item | Outcome | Evidence or to-do |
+| --- | --- | --- |
+| Pins | Unchanged since `a2bba9d8` | `CLAUDE_CLI_VERSION=2.1.314` (`docker/Dockerfile:207`), `@anthropic-ai/claude-agent-sdk` `0.3.314` (`bridges/claude-bridge/package.json:16`). The SDK layer `COPY` moved from `:423` to `:425` with the root-ownership change. |
+| Needs verification: still byte-identical at these pins | Yes, on both architectures | Registry tarballs, integrity checked (the SDK's also against `bun.lock`). amd64: 298,229,464 bytes each, SHA-256 `4487042b4c4f5d88d4568f68ae98aae0b1ffae58864cf57fb868641bc5f84594`. arm64: 297,067,016 bytes each, SHA-256 `a66c0a8f5d0c87a439953d797985192bbcbaefbce2e0d7b2eaa8df30ef0f3ef2`. A local amd64 image at the same pins shows the same two files and hash; its claude-bridge SDK layer is 303 MB and its Claude Code npm layer 301 MB. |
+| Found by the check | The container bridge never runs the SDK's copy | Every production SDK call passes `pathToClaudeCodeExecutable` from `CLAUDE_CLI_PATH` (`claudeExecutableOptions`, `session-manager-core.ts:169-173`), and the container bridge, started by `docker exec`, inherits the image's `ENV CLAUDE_CLI_PATH` (`docker/Dockerfile:219`). |
+| Task 1: maintainer decision | Moved to a to-do | 6780 task 1. It keeps 0693's two options (symlink while identical; keep both) and adds dropping the SDK's platform binary in the builder, which it recommends: the saving holds after the pins diverge and DK-7's layer order is untouched. |
+| Constraints: separate release trains, DK-7 layer order | Hold | No pin or layer changed; 6780 carries both constraints for whichever option is built. |
 
 ## Closing check of E-0390 (WebSocket compression)
 

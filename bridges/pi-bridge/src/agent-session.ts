@@ -724,21 +724,41 @@ export async function bindSessionExtensions(
   }
 }
 
-/** Extensions Pi could not load at all, as one notice each. */
+/**
+ * Extensions Pi could not load at all, and packages it could not install, as
+ * one notice each.
+ *
+ * Since Pi 1.5.0 a configured package that fails to install no longer stops
+ * the session starting: it is reported only in `warnings`, so without this its
+ * extensions would vanish without a trace.
+ */
 export function recordExtensionLoadDiagnostics(
   state: SessionState,
   result: LoadExtensionsResult | undefined,
 ): void {
   for (const failure of result?.errors ?? []) {
-    const extension = failure.path.split(/[\\/]/).pop() ?? "extension";
     state.health.recordNotice({
-      message: `Pi extension ${extension} failed to load`,
+      message: `Pi extension ${extensionLabel(failure.path)} failed to load`,
       method: "extension/load",
       severity: "error",
       source: "provider",
       ...(failure.error ? { detail: failure.error } : {}),
     });
   }
+  for (const warning of result?.warnings ?? []) {
+    state.health.recordNotice({
+      message: `Pi package ${extensionLabel(warning.path)} could not be installed; its extensions are unavailable`,
+      method: "extension/install",
+      severity: "warning",
+      source: "provider",
+      ...(warning.warning ? { detail: warning.warning } : {}),
+    });
+  }
+}
+
+/** The last path segment of an extension path or package source. */
+function extensionLabel(pathOrSource: string): string {
+  return pathOrSource.split(/[\\/]/).pop() || "extension";
 }
 
 function publishAttachedSession(state: SessionState, session: AgentSession): AgentSession {

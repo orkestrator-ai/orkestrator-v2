@@ -1328,6 +1328,27 @@ describe("extension binding", () => {
     expect(notices[1]?.occurrences?.[0]?.detail).toBeUndefined();
   });
 
+  test("a package Pi could not install is a warning, not a silent loss", () => {
+    const state = newSessionState();
+    recordExtensionLoadDiagnostics(state, {
+      extensions: [],
+      errors: [],
+      warnings: [
+        {
+          path: "npm:@someone/pi-tools",
+          warning: 'failed to install (E404). Run "pi remove npm:@someone/pi-tools" to remove it.',
+        },
+      ],
+      runtime: undefined,
+    } as unknown as LoadExtensionsResult);
+
+    const notices = state.health.listNotices();
+    expect(notices.map((notice) => [notice.message, notice.severity])).toEqual([
+      ["Pi package pi-tools could not be installed; its extensions are unavailable", "warning"],
+    ]);
+    expect(notices[0]?.occurrences?.[0]?.detail).toContain("pi remove");
+  });
+
   test("no extension trouble means no notices at all", () => {
     const state = newSessionState();
     recordExtensionLoadDiagnostics(state, {

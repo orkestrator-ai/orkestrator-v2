@@ -355,16 +355,26 @@ const CHATGPT_BACKEND_PROVIDER = "openai-codex";
 const CHATGPT_LOGIN_PROVIDERS: ReadonlySet<string> = new Set(["openai", CHATGPT_BACKEND_PROVIDER]);
 
 /**
+ * Pi's own default for both ChatGPT login providers, from
+ * `defaultModelPerProvider` in `dist/core/model-resolver.js`, which Pi does not
+ * export. A Pi terminal tab opens on it, so a native tab does too whenever the
+ * backend catalogue lists it. `models.test.ts` reads the shipped table and
+ * fails when a Pi bump moves it.
+ */
+export const PI_CHATGPT_DEFAULT_MODEL = "gpt-6.1-sol";
+
+/**
  * The models a ChatGPT subscription login on `providerId` should start on,
  * best first, or none when the provider is not signed in that way.
  *
  * Under `openai`, a ChatGPT login lists the whole OpenAI catalogue, starting
- * with `gpt-4`, and the ChatGPT backend refuses many of those ("not supported
- * when using Codex with a ChatGPT account"). Pi's own fallback table names
- * `openai/gpt-5.5`, which it refuses too, and the table is not exported. The
+ * with `chat-latest` (`gpt-4` before 1.5.0), and the ChatGPT backend refuses
+ * many of those ("not supported when using Codex with a ChatGPT account"). The
  * backend's catalogue is the one list Pi ships of what such a login runs, so
- * the candidates are its ids under `providerId`. It is ordered by id, which
- * puts the newest family last, so the candidates run newest first.
+ * the candidates are its ids under `providerId`: Pi's own default first
+ * ({@link PI_CHATGPT_DEFAULT_MODEL}), then the rest newest first. The list is
+ * ordered by id, which puts the newest family last; newest alone would have
+ * moved a 1.5.0 tab onto `gpt-6.1-terra` while Pi itself stayed on Sol.
  */
 export function chatGptLoginModelIds(
   runtime: Pick<ModelRuntime, "getModels" | "isUsingSubscription">,
@@ -373,10 +383,14 @@ export function chatGptLoginModelIds(
   if (!CHATGPT_LOGIN_PROVIDERS.has(providerId) || !runtime.isUsingSubscription(providerId)) {
     return [];
   }
-  return runtime
+  const backendIds = runtime
     .getModels(CHATGPT_BACKEND_PROVIDER)
-    .map((model) => composeModelId(providerId, model.id))
+    .map((model) => model.id)
     .reverse();
+  const ordered = backendIds.includes(PI_CHATGPT_DEFAULT_MODEL)
+    ? [PI_CHATGPT_DEFAULT_MODEL, ...backendIds.filter((id) => id !== PI_CHATGPT_DEFAULT_MODEL)]
+    : backendIds;
+  return ordered.map((id) => composeModelId(providerId, id));
 }
 
 /**

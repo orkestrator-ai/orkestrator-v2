@@ -12,7 +12,7 @@ used by Orkestrator. These integrations do not share one upgrade mechanism:
 | OpenCode | `@opencode-ai/sdk/v2/client` is used only by the backend (native chat and build pipelines) | The pinned `opencode` executable runs `opencode serve` | SDK and CLI `1.19.5` |
 | Cursor | `cursor-bridge` drives `@cursor/sdk` in process | No CLI; Cursor is SDK-only | SDK `1.3.1` (npm `latest`, verified 2026-11-06) |
 | Grok | The ACP bridge spawns the CLI and speaks ACP over its stdio; `@agentclientprotocol/sdk` supplies the protocol types | The pinned `grok` executable runs `grok … agent stdio` | CLI `1.0.70` (stable channel; verified 2026-10-30), ACP SDK `2.1.0` |
-| Pi | `@earendil-works/pi-coding-agent` drives sessions in process; `@earendil-works/pi-ai` and `@earendil-works/pi-agent-core` supply types (upstream removed `@earendil-works/pi-server` in 1.2.0) | The pinned `pi` bundle is the same program published a second way, and is what a Pi terminal tab runs | SDK and CLI `1.4.0` |
+| Pi | `@earendil-works/pi-coding-agent` drives sessions in process; `@earendil-works/pi-ai` and `@earendil-works/pi-agent-core` supply types (upstream removed `@earendil-works/pi-server` in 1.2.0) | The pinned `pi` bundle is the same program published a second way, and is what a Pi terminal tab runs | SDK and CLI `1.5.0` |
 
 All versions are exact pins. Do not change them to ranges or `latest`.
 Verified against upstream stable releases on 2026-10-13.
@@ -1340,8 +1340,10 @@ published two ways:
   vendored: no published SDK file had imported it since `0.85.1`, and Pi
   `1.2.0` removed the experimental server stack and stopped publishing it.
   Check on each bump that every `@earendil-works/*` package an SDK file
-  imports (`pi-tui`, `pi-mcp`, `pi-codemode` as of `1.4.0`, and
-  `pi-telemetry` through `pi-ai`) is a declared dependency of the package that
+  imports (`pi-tui`, `pi-mcp`, `pi-codemode` as of `1.4.0`,
+  `pi-telemetry` through `pi-ai`, and `pi-schema` through `pi-ai` and
+  `pi-agent-core` since `1.5.0`, which replaced their TypeBox dependency) is a
+  declared dependency of the package that
   imports it, which is what the vendor step follows — the `0.85.0` failure
   mode was an undeclared import.
 - `packages/toolchain/src/manifest.ts` — `PINNED_TOOLCHAIN_VERSIONS.pi`
@@ -1420,6 +1422,19 @@ Dockerfile pins the same archive digests the manifest does.
    catalogue stops starting on `openai/gpt-4`, stops covering the backend's
    ids, or the pick moves off `gpt-6.1-sol`; a moved pick is fine only if
    Pi's own `defaultModelPerProvider["openai-codex"]` moved with it.
+   At 1.5.0 the newest backend model became `gpt-6.1-terra` while Pi's own
+   default for both ChatGPT providers stayed `gpt-6.1-sol`, so
+   `chatGptLoginModelIds` now puts `PI_CHATGPT_DEFAULT_MODEL` first, and
+   `models.test.ts` reads Pi's (unexported) `defaultModelPerProvider` table
+   from `dist/core/model-resolver.js` and fails when a bump moves it. The
+   `openai` catalogue now starts on `chat-latest` rather than `gpt-4`.
+
+   1.5.0 also stopped a package that fails to install from failing the
+   session: it is reported in `LoadExtensionsResult.warnings` instead, which
+   `recordExtensionLoadDiagnostics` turns into a warning notice. A resumed
+   session now runs in the working directory it recorded, not the caller's;
+   the bridge's worktree and container paths are stable, so nothing moved.
+
 7. Re-verify the three SDK behaviours the bridge depends on, in
    `dist/core/agent-session.js`, rather than trusting the version in a comment:
 

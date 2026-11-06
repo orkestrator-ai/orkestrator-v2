@@ -8,7 +8,7 @@ export const PINNED_TOOLCHAIN_VERSIONS = {
   codex: "0.167.0",
   grok: "1.0.70",
   opencode: "1.19.5",
-  pi: "1.4.0",
+  pi: "1.5.0",
 } as const;
 
 /**
@@ -583,18 +583,18 @@ export const PINNED_TOOLCHAIN_ARTIFACTS: readonly ToolchainArtifact[] = [
       // verified as one digest rather than reduced to a file allowlist.
       bundleRoot: "pi/",
       bundleIntegrity: {
-        fileCount: 210,
-        totalSize: 7_362_755,
-        sha256: "8390783a7e1486f056a1dc473d43683336f1b81626ab00b51fabf98e195916ae",
+        fileCount: 207,
+        totalSize: 7_528_005,
+        sha256: "648ac010614fceea78e761989fa0265204349c014b5b206c47abe1cbb72ddb6f",
       },
-      size: 31_098_931,
-      sha256: "79d9979d76a2a5adb7c28e27e9b44629928ccd0dc9fbb6ae7217860bd5e8be5d",
+      size: 48_027_930,
+      sha256: "a9bf0d82d58d2a7d337f4ae4171b5fc9ebffe42509527a831364c4b65adf2cdf",
       allowedHosts: GITHUB_RELEASE_HOSTS,
     },
     executable: {
       fileName: "pi",
-      size: 77_151_074,
-      sha256: "b4d93b78e542ca8d1792242cf6c1a875ef4e6fb644141fb4cf67ec7c81ef9b14",
+      size: 102_864_866,
+      sha256: "9fa16dd5c093aaa74a17ccd8c10e337addcbe08e6f21797ef6de8006017addd8",
       repairInvalidMacSignature: true,
     },
   },
@@ -612,18 +612,18 @@ export const PINNED_TOOLCHAIN_ARTIFACTS: readonly ToolchainArtifact[] = [
       // verified as one digest rather than reduced to a file allowlist.
       bundleRoot: "pi/",
       bundleIntegrity: {
-        fileCount: 210,
-        totalSize: 7_333_515,
-        sha256: "c4af61868d7cc22df475c17b35433d3a4ecc553a4183b869602a120d80673f7f",
+        fileCount: 207,
+        totalSize: 7_498_765,
+        sha256: "977f7ea9a655d53e6ad7f7b6f1fd9d7f5cc102e1698dbae06de4248fae76095d",
       },
-      size: 33_558_360,
-      sha256: "1bdefc9e1074c1de458ea9f2e43e6013ce49cd05326009b3de144037036585e2",
+      size: 50_541_720,
+      sha256: "f41b26cd9a1754abe259e05a421fb33b00936779cb0783c893a6389d1bd2ee0d",
       allowedHosts: GITHUB_RELEASE_HOSTS,
     },
     executable: {
       fileName: "pi",
-      size: 82_772_048,
-      sha256: "b8e0bd3c24cd8f91a6cf37aa7cecbc3a931702cbffd0f709b26d5a79daeaa48a",
+      size: 111_767_008,
+      sha256: "b36706f3ed105a7d027b749bbcf59a6b70ad6aa87ccb08a9091578c854201e15",
       repairInvalidMacSignature: true,
     },
   },
@@ -641,18 +641,18 @@ export const PINNED_TOOLCHAIN_ARTIFACTS: readonly ToolchainArtifact[] = [
       // verified as one digest rather than reduced to a file allowlist.
       bundleRoot: "pi/",
       bundleIntegrity: {
-        fileCount: 210,
-        totalSize: 7_377_971,
-        sha256: "8180603c37f66e67aacb554e3a0063ff2c99f8f53592386b9aec9a7465eb9347",
+        fileCount: 207,
+        totalSize: 7_543_221,
+        sha256: "22674434c0a2084ab84913ad8ee9ae07d494ed13d6f6fcba7aa74fdbf3107a16",
       },
-      size: 42_745_801,
-      sha256: "fa5829c7ef83ffeaebba015715c8306220f89b2aa8a00154efbba98dd5440156",
+      size: 58_742_522,
+      sha256: "5d5711b48600756473682e86360b026b11abf7591e5d112eb411d4da2c100d9a",
       allowedHosts: GITHUB_RELEASE_HOSTS,
     },
     executable: {
       fileName: "pi",
-      size: 107_260_048,
-      sha256: "26507c6bbf0beef1c5ef109dea333ddb73c058f9f75fed1de13f4186d73e919e",
+      size: 122_801_144,
+      sha256: "c02415a4187997ad2bd5d3dfc841d54aa17c229bb12f598fe012de9ad6d1b2de",
     },
   },
   {
@@ -669,18 +669,18 @@ export const PINNED_TOOLCHAIN_ARTIFACTS: readonly ToolchainArtifact[] = [
       // verified as one digest rather than reduced to a file allowlist.
       bundleRoot: "pi/",
       bundleIntegrity: {
-        fileCount: 210,
-        totalSize: 7_328_739,
-        sha256: "1c96ce5e0a7a4d61b3015cb62cfdd09d04e25289c056b33787659c3d41dcc9a8",
+        fileCount: 207,
+        totalSize: 7_493_989,
+        sha256: "bdd56986b4ec1e371a0e75bd9f369ae6080675ee0ff9f2e4400bf02de681a99a",
       },
-      size: 42_645_744,
-      sha256: "f2e4e4329603223d03260cdb8bd5033dbdc1f73ba58ab8939db2e56546e115d2",
+      size: 58_876_253,
+      sha256: "df870ba0e344cb7b3358d8d8f19397b8b8d225a8669784736ad68a5c2169d53b",
       allowedHosts: GITHUB_RELEASE_HOSTS,
     },
     executable: {
       fileName: "pi",
-      size: 107_231_360,
-      sha256: "0d7611d0b86d38ec8f65dda8e8bee9c5e907c7bae381e9cfff9161b21e8087d0",
+      size: 122_726_576,
+      sha256: "61a84400938da652ed69aac9c1ad2ca23af3c9bd8cc2f46ce571ed84ae6a35e5",
     },
   },
   ghArtifact(

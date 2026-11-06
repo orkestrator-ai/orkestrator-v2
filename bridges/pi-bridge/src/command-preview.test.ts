@@ -150,13 +150,14 @@ describe("resource-only command read (SDK pin)", () => {
         noExtensions: true,
       });
       expect((loader as unknown as { packageManager?: unknown }).packageManager).toBeDefined();
-      return loader.reload().then(
-        () => "resolved",
-        (error: unknown) => (error instanceof Error ? error.message : String(error)),
-      );
+      await loader.reload();
+      return loader.getExtensions().warnings ?? [];
     });
     expect(installs.length).toBe(1);
-    expect(result).toBe("install attempted");
+    // Since Pi 1.5.0 a failed install no longer rejects `reload()`; it is
+    // reported as a warning, which is what `recordExtensionLoadDiagnostics`
+    // turns into a health notice on attach.
+    expect(result.map((warning) => warning.warning).join("\n")).toContain("install attempted");
   });
 
   test("follows the session's resource policy", async () => {

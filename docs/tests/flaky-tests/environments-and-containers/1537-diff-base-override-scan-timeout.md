@@ -164,6 +164,8 @@ The same hogs on macOS, counting stalled children (the worktree's real test with
 | Files, no exit watchdog | 175 | 0 | 9 stalled children, all zombies with no exit event |
 | **Files and watchdog**, final `4543e8b33` | 175 | **0** | **0** unsettled after 2.5 s; 8 lost exits settled at the watchdog's first check, 1 s |
 
+Re-measured on 2026-11-06 with a probe that cannot mistake a delay for a loss (an unreaped zombie for 5 s, read through `waitid(WNOWAIT)`): 150 runs, 0 lost exits, and 3 exits delivered 22 to 30 ms after the child became a zombie. The watchdog's single `ps` look counted 10 in 150 runs, so the watchdog settlements above may be early reads of exits Bun was about to report. See [to-do 4260, task 2](../../../todo/cross-cutting/4260-bun-loses-child-process-events.md#outcome-2026-11-06).
+
 Not reproduced, about 700,000 children in total, on Linux and macOS with
 `node:child_process` and the same spawn options: plain spawn loops, same-tick
 batches, long children overlapping short ones (including real `git clone`),

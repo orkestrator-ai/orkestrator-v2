@@ -72,9 +72,15 @@ export function collectStartupConsole(source: ConsoleSource): {
   let lines: string[] = [];
   const listener = (message: { text(): string }) => {
     const text = message.text();
-    if (text.includes(NETWORK_CHANGED) || text.includes(MODULE_IMPORT_FAILED)) {
+    const signature = text.includes(MODULE_IMPORT_FAILED)
+      ? MODULE_IMPORT_FAILED
+      : text.includes(NETWORK_CHANGED)
+        ? NETWORK_CHANGED
+        : null;
+    // A module fan-out can emit hundreds of aborts after the import rejection.
+    // Keep one of each signature so the abort burst cannot evict that rejection.
+    if (signature && !lines.some((line) => line.includes(signature))) {
       lines.push(text.slice(0, 300));
-      if (lines.length > 200) lines = lines.slice(-200);
     }
   };
   source.on("console", listener);

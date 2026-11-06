@@ -158,6 +158,9 @@ describe("collectStartupConsole", () => {
     emit(`${MODULE_IMPORT_FAILED}: http://127.0.0.1:1/src/renderer-entry.tsx`);
     expect(console.drain()).toHaveLength(2);
     expect(console.drain()).toEqual([]);
+    emit(IMPORT_FAILED);
+    for (let index = 0; index < 300; index += 1) emit(ABORTED);
+    expect(isNetworkChangedStartupFailure(console.drain())).toBe(true);
     console.dispose();
     emit(ABORTED);
     expect(console.drain()).toEqual([]);

@@ -11,7 +11,7 @@ review validation of to-do 0042 task 11.
 1. **Use the startup recovery in the other Electron specs**: every spec that
    waits for a development window's first title. Status: open.
 2. **Measure it under forced network churn**: show a real reload recovering a
-   startup. Status: open (depends on 1).
+   startup. Status: open (depends on 1); shared recovery helper qualified below.
 
 ### 1. Use the startup recovery in the other Electron specs
 
@@ -90,6 +90,56 @@ build's Chromium loads too.
   - **Labelled Docker network churn on a quiet host.**
     - Pros: the exact recorded trigger.
     - Cons: needs a host with no other builds running.
+
+## Current state
+
+The 2026-11-06 review coverage gap for the shared helper is addressed by
+`e2e/agent-testing/electron-startup-recovery.integration.test.ts`. Its child
+runs Chromium and a disposable HTTP module fixture inside `unshare --user
+--map-root-user --net`, checks that its network namespace differs from the
+parent's before changing any interface, and creates/removes private bridges
+while a dynamic-import fan-out is loading. It requires a real Playwright
+`requestfailed` event with `net::ERR_NETWORK_CHANGED`, the failure screen,
+and exactly one successful reload through the real BrowserContext collector
+and page adapter. It does not inject console signatures or bypass requests.
+
+This exposed a collector defect: hundreds of abort messages could evict the
+import-rejection message from the 200-line buffer. The collector now keeps one
+bounded sample of each required signature until drained; the unit regression
+emits an import rejection followed by 300 aborts. The live qualification passes
+with this repair. Earlier attempts with one pending module did not reproduce
+an abort; a fan-out does. The fixture declares UTF-8 so its failure heading
+matches the renderer's curly apostrophe.
+
+Run this opt-in Linux qualification (requires `unshare`, `ip`, enabled user
+namespaces and Playwright Chromium):
+
+```bash
+mise run test:logged -- --name startup-live -- bun test ./e2e/agent-testing/electron-startup-recovery.integration.test.ts --parallel=1
+```
+
+This qualifies browser event collection and reload integration with a small
+module fixture, not the complete Electron application or the other launchers.
+The round's recorded Electron command could not start: its validation-05 stderr
+says `Executable not found in $PATH: "xvfb-run"`. That infrastructure limitation
+remains; successful preparation checks were not repeated.
+
+## Assumptions and decisions
+
+### Task 2: isolated, opt-in browser qualification
+
+Use a disposable Linux network namespace and real Chromium module requests.
+This exercises the shared Playwright adapters without host-wide Docker churn.
+Keep it opt-in because it requires Linux user/network namespaces; the default
+suite retains the deterministic unit coverage. The broader task remains open
+until task 1's other launchers are migrated and qualified.
+
+### Task 2: preserve both failure signals under a burst
+
+Retain one bounded sample per signature rather than a FIFO of repeated aborts.
+The live import fan-out demonstrated that a FIFO could lose the import rejection
+and refuse a valid recovery. Per-drain reset and the existing per-load reset
+continue to prevent old failures from licensing a later reload.
 
 ## Related
 

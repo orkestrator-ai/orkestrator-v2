@@ -419,6 +419,39 @@ exit 0
     });
   });
 
+  for (const networkPolicy of ["", "3"]) {
+    test(`a staged revision with unreadable mounts uses network policy ${networkPolicy || "absent"}`, async () => {
+      const context = reviewContext([
+        lifecycleEnvironment({ id: "staged", name: "Staged", containerId: "staged-container" }),
+      ]);
+      await withDockerScript(
+        `#!/bin/sh
+case "$1" in
+  inspect) printf 'rev-2\\t${networkPolicy}\\tnot json\\n' ;;
+esac
+exit 0
+`,
+        async () => {
+          const preview = await previewDockerCleanup(context);
+          expect(preview.legacyRuntimes).toEqual(
+            networkPolicy
+              ? []
+              : [
+                  {
+                    environmentId: "staged",
+                    environmentName: "Staged",
+                    containerId: "staged-container",
+                    exposures: ["shared-bridge"],
+                    busy: false,
+                  },
+                ],
+          );
+          expect(preview.legacyRuntimesUnchecked).toBe(0);
+        },
+      );
+    });
+  }
+
   test("the inputs section reads the same evidence, and Docker's silence is unknown", async () => {
     const environments = [
       lifecycleEnvironment({ id: "a", containerId: "legacy-container" }),

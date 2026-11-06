@@ -1325,7 +1325,7 @@ A wildcard bind does not prove that on macOS. BSD socket rules let
 `0.0.0.0:<port>` succeed beside another process's `127.0.0.1:<port>`
 listener, and the kernel then gives every loopback connection to the more
 specific bind: host agents sent their bearer token to the other process and
-got 401 (todo 7220, seen with a second `dev:test` backend that had taken the
+got 401 (todo 7220, closed 2026-11-06; seen with a second `dev:test` backend that had taken the
 saved port). `listenAgentTools` therefore:
 
 - After a wildcard bind, also binds `127.0.0.1:<port>` with the same handler
@@ -1349,6 +1349,11 @@ gets one listener. Tests: `agent-tools-listen.test.ts` (both rule sets, and
 the real kernel of whichever OS runs it; it also passed in a Linux container)
 and `agent-tools-loopback-port.test.ts` (the saved-port clash through
 `AgentToolsServer`).
+
+Platform coverage: macOS and Linux were checked by those tests against the
+real kernel (Linux in a container). Windows was not checked; the backend
+refuses to start on `win32`, so the non-Linux branch is what would apply if
+that ever changed, and its bind rules would need measuring first.
 
 ### Who may connect
 

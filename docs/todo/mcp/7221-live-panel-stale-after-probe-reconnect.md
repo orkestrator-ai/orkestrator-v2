@@ -36,7 +36,7 @@ fed by the tab's projection (`AgentInfoButton.tsx`).
 --headless`), host load 10 to 13:
 
 - With this branch's spec: failed twice (once at an earlier step because of
-  [7220](../cross-cutting/7220-agent-tools-port-shadowed-by-loopback-listener.md),
+  7220 (closed 2026-11-06; see [Port selection and the loopback address](../../architecture/container-lifecycle.md#port-selection-and-the-loopback-address-agent-tools-listents)),
   once here after a reset).
 - With the spec at `HEAD` (`git show HEAD:e2e/agent-testing/mcp-ui-matrix.spec.ts`),
   `-g "healthy one"`, on its own: failed here the same way. So it is not

@@ -37,6 +37,7 @@ import {
 } from "node:fs/promises";
 import path from "node:path";
 import { withoutUrlCredentials } from "@orkestrator/protocol/git-remote-url";
+import { allowlistEntryDomain, parseAllowlistEntry } from "@orkestrator/protocol/network-allowlist";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import type { CommandContext } from "./commands-context.js";
 import { runRemoteGit } from "./git-noninteractive-env.js";
@@ -245,6 +246,60 @@ export async function gitMirrorContainerArguments(
     });
     return [];
   }
+}
+
+/**
+ * The host and port a container's clone of `gitUrl` connects to. Follows
+ * `convert_ssh_to_https` in `docker/workspace-setup.sh`, which turns an SSH
+ * remote into HTTPS on the same host before cloning. Null for anything else.
+ */
+export function containerCloneEndpoint(gitUrl: string): { host: string; port: number } | null {
+  const url = gitUrl.trim();
+  let converted: string;
+  if (/^https?:\/\//.test(url)) converted = url;
+  else if (url.startsWith("git@")) {
+    const afterAt = url.slice("git@".length);
+    const separator = afterAt.indexOf(":");
+    if (separator <= 0) return null;
+    converted = `https://${afterAt.slice(0, separator)}/${afterAt.slice(separator + 1)}`;
+  } else if (url.startsWith("ssh://")) {
+    converted = `https://${url.slice("ssh://".length).replace(/^git@/, "")}`;
+  } else return null;
+  try {
+    const parsed = new URL(converted);
+    const port = parsed.port ? Number(parsed.port) : parsed.protocol === "http:" ? 80 : 443;
+    return parsed.hostname ? { host: parsed.hostname.toLowerCase(), port } : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether a restricted container could fetch `gitUrl` itself. The mirror holds
+ * what the remote serves, so a container that cannot reach the remote must not
+ * read it through the mount instead. GitHub's published ranges are always open
+ * on TCP 443; any other host needs an allowlist entry for the clone's port
+ * (`docker/firewall-domains.sh`), or for the host alone under a policy before 3,
+ * which opens every port of an allowed address.
+ */
+export function restrictedContainerReachesGitRemote(
+  gitUrl: string,
+  allowedEntries: readonly string[],
+  policyVersion: number,
+): boolean {
+  const endpoint = containerCloneEndpoint(gitUrl);
+  if (!endpoint) return false;
+  if (endpoint.host === "github.com" && endpoint.port === 443) return true;
+  return allowedEntries.some((value) => {
+    if (policyVersion < 3) return allowlistEntryDomain(value).toLowerCase() === endpoint.host;
+    const entry = parseAllowlistEntry(value);
+    return (
+      entry !== null &&
+      entry.protocol === "tcp" &&
+      entry.domain.toLowerCase() === endpoint.host &&
+      entry.port === endpoint.port
+    );
+  });
 }
 
 /** Starts a refresh in the background. Never rejects and never delays a launch. */

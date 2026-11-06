@@ -760,6 +760,21 @@ and the environment's inputs section says to rebuild (`unreadableOnRootless`,
   per directory unit, 20,000 entries and 512 MiB per revision. A skipped entry
   is counted by reason (`symlink`, `too-large`, `aggregate-budget`, …); names
   never leave the backend.
+- Writing: on Linux a file staged byte for byte is reflinked from the
+  descriptor that was checked (`FileCloner`, through `/proc/self/fd`), where
+  the data directory's filesystem can (btrfs, XFS, bcachefs). A reflink shares
+  the source's blocks until either side writes, so the revision stays an
+  independent copy: a write to it never reaches the host file or another
+  environment's revision, unlike a hard link. Its size is checked after the
+  clone, against the same bounds. A login restricted after staging is cloned
+  and then rewritten in place, which copy-on-write keeps local. A filtered or
+  guarded file (Claude's settings and `.claude.json`, the credential-guarded
+  skill and extension trees) is read and written as before, since cloning after
+  the read could stage bytes nobody checked. Anywhere else (another platform,
+  ext4, tmpfs, a source on another filesystem) the run copies, and after one
+  failed clone from a source device it copies the rest from that device. On a 300 MiB plugin fixture on
+  btrfs a revision took 162 ms and no new disk, against about 550 ms and 300 MiB
+  copied ([measurements](../reports/efficiency-logging-database/0000-index.md#closing-check-of-e25-container-start)).
 - Publication: a revision is written as `.<rev>.partial` and renamed into
   place, mode `0700`/`0600`. Binds use `--mount`, which fails on a missing
   source instead of creating a host directory. The container carries
@@ -1635,7 +1650,7 @@ need it once cloned.
 
 - **The clone.** The setup script checks the mirror cheaply (the directory exists,
   its refs can be read, the tip's tree is present), then runs `git clone --no-tags
-  --reference <mirror> --dissociate <url>`. The remote is contacted for its refs
+  --reference-if-able <mirror> --dissociate <url>`. The remote is contacted for its refs
   and for anything the mirror lacks, so `origin` is still the project's remote and
   a stale mirror costs only the difference. `--dissociate` copies what the clone
   needs and drops the link, so the result is self-contained. `--dissociate` walks
@@ -1646,12 +1661,17 @@ need it once cloned.
   `git/git`) and fetched it back from the remote on demand. A blobless clone also
   pays for history reads one lazy fetch at a time; see
   [the measurements](../todo/cross-cutting/1202-efficiency-review-follow-ups.md#15-container-data-transfer).
-- **`--reference`, not `--reference-if-able`.** A mirror removed between the check
-  and the clone then fails and falls back to the blobless clone, rather than
-  downloading the full history without saying so.
+- **`--reference-if-able`, checked again afterwards.** A mirror removed between
+  the check and the clone does not fail the clone: Git clones from the remote
+  alone, with the full history. The script then checks the mirror again and, if
+  it has gone, reports `vanished` instead of `used`, so that download is logged
+  (`git-mirror.clone-fallback`) rather than passing as a mirror clone. A mirror
+  that disappears part-way through `--dissociate` still fails the clone
+  (`clone-failed`) and falls back as below.
 - **Fallback.** Anything else leaves the ordinary clone (blobless, then full) to
   run as it always did, after one line saying why, with one fixed reason word:
-  `missing`, `empty`, `corrupt`, `clone-failed` or `not-self-contained`. The line
+  `missing`, `empty`, `corrupt`, `clone-failed` or `not-self-contained`
+  (`vanished` keeps the clone it already made and does not fall back). The line
   goes to the setup output, and `prepareContainerWorkspace`'s caller logs it
   (`git-mirror.clone-fallback`, `git-mirror.clone-used`). The first environment of
   a project normally reports `missing`. The last three mark the mirror suspect, so
@@ -1693,6 +1713,23 @@ need it once cloned.
   that reach it, compaction keeps old packs until new ones exist, and a build is a
   rename. Three fetch failures in a row (a lock left by a crash, say) rebuild the
   mirror rather than update it.
+- **Restricted containers.** A restricted container gets the mount only when its
+  firewall would let it reach the remote itself (`restrictedContainerReachesGitRemote`):
+  the host its clone connects to after `convert_ssh_to_https`, on GitHub's
+  always-open TCP 443 or an allowlist entry for that host and port (any port
+  under a network policy before 3). Otherwise it is withheld
+  (`git-mirror.mount-withheld`, reason `remote-unreachable`) and the clone goes to
+  the remote as before, so the mirror never hands it what its firewall would not.
+  A runtime that already mounts the mirror requires a rebuild when an allowlist
+  revision (including inherited global changes) blocks its original clone remote.
+  Other edits apply live on capable images, including unrelated domain removals
+  for GitHub projects. The runtime's `GIT_URL` supplies the original remote; a
+  missing or unrecognised URL conservatively requires rebuilding. When remote
+  access would be revoked, the status and apply routes report `rebuild-required`
+  and retain the previous firewall policy until then: changing the firewall
+  alone cannot revoke a bind mount. Other environments'
+  shared mirror is never removed to revoke one reader. Rebuilt runtimes that
+  reuse their checkout have no mirror mount and can apply later edits live.
 - **Credentials.** A refresh runs on the host through `runRemoteGit` and
   `gitHubGitCredentials`, the path project clones use. The URL and any credential
   are passed per transfer, and no `remote` section exists, so the config holds
@@ -1705,7 +1742,11 @@ need it once cloned.
   allows the foreign owner because everything uses an explicit `--git-dir`. Every
   environment of a project can read every branch of it through the mount, whatever
   credential that environment holds; a branch deleted on the remote leaves at the
-  next refresh, and its objects at a later compaction.
+  next refresh, and its objects at a later compaction. Because the mirror is
+  fetched with the backend's credential, a container given none (the default
+  container GitHub credential) can read a private repository's branches this way;
+  [6741](../todo/containers-and-environments/6741-git-mirror-access.md) holds the
+  fix, a mirror per kind of access fetched with what its readers hold.
 - **`-v`, not `--mount`.** Docker refuses to start a container whose `--mount`
   source is gone. With `-v` it recreates the source, so a stopped environment
   survives its mirror being removed by any route. If the project parent was

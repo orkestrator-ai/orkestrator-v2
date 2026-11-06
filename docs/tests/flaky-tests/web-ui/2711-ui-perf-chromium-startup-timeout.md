@@ -191,3 +191,24 @@ The rerun exited 0 in 4.2 s. Aggregate evidence is
 `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.GQY0uW/root-and-agent-support-tests.log.gz`.
 This is another aggregate-only timeout observation; the cause remains unproven.
 No timeout, assertion or skip changed.
+
+## Coordinator transcript review recurrence — 2026-11-06
+
+At commit `decf86b98`, `mise run test:logged -- --name review-default-tests -- mise run test`
+ran the root group with one worker alongside five workspace and two bridge
+slots; a nine-worker component-browser suite was also active. The in-page deadlines startup hook exceeded 5 s at 5003.64 ms.
+The root group finished with 3,638 passed, 10 failed and two errors across
+185 files in 821.36 s. Its other failures are not attributed to this case.
+Evidence: `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.JSZUOY/root-and-agent-support-tests.log`
+(compressed when the aggregate finishes).
+
+The unchanged complete owner passed alone with exit 0 in 18.3 s:
+
+```sh
+mise run test:logged -- --name review-ui-perf-owner -- bun test tests/unit/multi-environment-ui-perf.integration.test.ts --parallel=1 --only-failures
+```
+
+Passing output was deleted by the logged runner, so individual passing case
+counts were not retained. This branch changes neither this owner nor its
+implementation. No assertion, timeout or skip changed. The isolated pass
+establishes intermittence; it does not establish the underlying cause.

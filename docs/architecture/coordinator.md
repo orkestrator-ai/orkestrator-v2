@@ -1674,7 +1674,8 @@ row therefore has the same stage words, buckets and expiry (from the run's
 environment on that node. A remote run its node reports `not-found` is
 unavailable under Finished, like a deleted local record. Successful empty local reads mark deleted builds, reviews and graph runs as unavailable under Finished, using association creation for bounded retention; failed reads never prove deletion. Review and graph rows also retain finished work while the environment PR is open. Review Open restores a closed main tab after authoritative layout hydration.
 
-**Waiting prompts.** `HumanPromptBanner` above the conversation shows the
+**Waiting prompts.** `HumanPromptBanner`, floating at the top right of the
+conversation area with the coordinator's other notices, shows the
 prompts of this coordinator's workers, with an **Open** that goes to the waiting
 tab. Local workers are read from this backend. Workers on another node, while a
 request to them is open, are read with `list_human_prompts` through that node's

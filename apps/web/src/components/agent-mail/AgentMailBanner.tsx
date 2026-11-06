@@ -1,12 +1,16 @@
 import { useEffect, useState } from "react";
-import { RotateCcw } from "lucide-react";
+import { Inbox, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import {
+  FLOATING_NOTICE_ACTION,
+  FloatingNotice,
+  type FloatingNoticeTone,
+} from "@/components/ui/floating-notice";
 import * as backend from "@/lib/backend";
 import { useAgentMailStore } from "@/stores/agentMailStore";
 import { agentMailSenderLabel } from "@/lib/chat/client-only-messages";
 import { deliverNowNotice, formatAgentMailTime, openAgentMailForTab } from "./agent-mail-ui";
-import { AgentMailCard, type AgentMailCardTone } from "./AgentMailCard";
 import {
   AGENT_MAIL_HOURLY_LIMIT_REASON,
   agentMailAwaitingAgent,
@@ -191,7 +195,7 @@ export function AgentMailBanner({
   else
     text = `${entry.pendingInjectCount} message${entry.pendingInjectCount === 1 ? "" : "s"} waiting · delivers when this agent is idle`;
 
-  const tone: AgentMailCardTone = failed
+  const tone: FloatingNoticeTone = failed
     ? "error"
     : paused || awaitingAgent.length > 0 || undeliverable
       ? "warning"
@@ -209,29 +213,14 @@ export function AgentMailBanner({
     releasable[0] ??
     inInbox[0];
 
-  return (
-    <AgentMailCard
-      tone={tone}
-      count={count}
-      text={text}
-      newest={
-        newest
-          ? {
-              sender: agentMailSenderLabel(newest.from),
-              time: formatAgentMailTime(newest.createdAt),
-              subject: newest.subject,
-            }
-          : undefined
-      }
-      actionError={actionError}
-      onDismiss={() => setDismissedRevision(entry.revision)}
-    >
+  const actions = (
+    <>
       {failed && (
         <>
           <Button
             size="sm"
             variant="secondary"
-            className={ACTION}
+            className={FLOATING_NOTICE_ACTION}
             onClick={() => void retry(failed.id)}
           >
             <RotateCcw className="size-3" />
@@ -240,7 +229,7 @@ export function AgentMailBanner({
           <Button
             size="sm"
             variant="ghost"
-            className={ACTION}
+            className={FLOATING_NOTICE_ACTION}
             onClick={() => void discard(failed.id)}
           >
             Discard
@@ -251,28 +240,64 @@ export function AgentMailBanner({
         <Button
           size="sm"
           variant="secondary"
-          className={ACTION}
+          className={FLOATING_NOTICE_ACTION}
           onClick={() => void retry(paused.id)}
         >
           Resume
         </Button>
       )}
       {(pending || releasable.length > 0) && (
-        <Button size="sm" variant="secondary" className={ACTION} onClick={() => void deliver()}>
+        <Button
+          size="sm"
+          variant="secondary"
+          className={FLOATING_NOTICE_ACTION}
+          onClick={() => void deliver()}
+        >
           Deliver now
         </Button>
       )}
       <Button
         size="sm"
         variant="ghost"
-        className={ACTION}
+        className={FLOATING_NOTICE_ACTION}
         onClick={() => openAgentMailForTab(environmentId, tabId)}
       >
         View
       </Button>
-    </AgentMailCard>
+    </>
+  );
+  const sender = newest ? agentMailSenderLabel(newest.from) : undefined;
+  const time = newest ? formatAgentMailTime(newest.createdAt) : "";
+
+  return (
+    <FloatingNotice
+      tone={tone}
+      label="Agent mail"
+      summary={text}
+      icon={Inbox}
+      pill={count}
+      onDismiss={() => setDismissedRevision(entry.revision)}
+      dismissLabel="Dismiss agent mail notice"
+      actions={actions}
+    >
+      {/* Wraps rather than truncates: the reason is what the person acts on. */}
+      <p>{text}</p>
+      {newest && (
+        <div className="mt-2 border-t border-border pt-2">
+          <p className="truncate text-muted-foreground">
+            {sender}
+            {time ? ` · ${time}` : ""}
+          </p>
+          {newest.subject && (
+            <p className="mt-0.5 line-clamp-2 text-foreground/90">{newest.subject}</p>
+          )}
+        </div>
+      )}
+      {actionError && (
+        <p role="alert" className="mt-2 line-clamp-3 text-failure" title={actionError}>
+          {actionError}
+        </p>
+      )}
+    </FloatingNotice>
   );
 }
-
-/** The card's buttons: smaller than the default so the card stays compact. */
-const ACTION = "h-7 px-2.5 text-xs";

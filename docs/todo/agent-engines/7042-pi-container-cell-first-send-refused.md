@@ -14,7 +14,7 @@ Analysed 2026-11-06 against `main` at `295abd298`.
 
 **Context.** The cell swaps `/opt/pi-bridge/dist/index.js` in the fixture container for the fake-engine bundle. It then saves a one-tab layout, reloads, and sends from a new tab, so the first send creates the Pi session through the backend's production `start_pi_server` launch. The Pi setup-failure case runs earlier in the same worker. It starts the fake through `start_pi_server`, then stops it and restores the real entry. A refused send keeps its draft and shows the reason through `submissionError` or `sendError` (`apps/web/src/components/native-agent/AgentNativeTab.controller.tsx`, `AgentNativeTab.tsx`). Before dispatch, the reason can be a lock or persistence failure. After dispatch, it is a rejected `dispatchNativeAgentIntent`.
 
-**Investigation.** The run's profile was reset by the isolated runner before its backend, bridge and Electron logs were read. The Playwright error context holds only the composer's state, so the refusal's text is unknown. The spec's send step now records the visible alert text and the projection's turn phase and error as a `send-refused` annotation. It then resends once, but only when the projection shows no user message with that prompt, so nothing can run twice. The third run passed without the annotation.
+**Investigation.** The run's profile was reset by the isolated runner before its backend, bridge and Electron logs were read. The Playwright error context holds only the composer's state, so the refusal's text is unknown. The original spec's send step recorded the visible alert text and the projection's turn phase and error as a `send-refused` annotation. It then resent once, only when the projection showed no user message with that prompt. The third run passed without the annotation. The review fix removes that resend: a refused first send now fails the case after recording the annotation, so even a transient refusal cannot silently pass qualification.
 
 **Decisions.**
 
@@ -25,6 +25,12 @@ Analysed 2026-11-06 against `main` at `295abd298`.
   - **Make the isolated runner keep the profile's log directory after a failed browser run.**
     - Pros: every failure's logs survive.
     - Cons: changes shared harness behaviour, and each log directory must be checked for secrets before it is kept.
+
+## Assumptions and decisions
+
+### Task 1: fail qualification on the first refusal
+
+The review fix keeps the refusal annotation and rethrows the original assertion instead of resending. Retrying was convenient for collecting a full run but could conceal a pre-dispatch regression. Strict failure preserves the signal; diagnosis of the historical refusal remains open until it recurs with evidence.
 
 ## Needs verification
 

@@ -17,6 +17,7 @@ import os from "node:os";
 import path from "node:path";
 import * as fs from "node:fs/promises";
 import * as profileIo from "./profile-io.js";
+import * as toolchainManager from "@orkestrator/toolchain/manager";
 import { parseAgentTestArguments } from "./arguments.js";
 
 import {
@@ -1542,6 +1543,61 @@ describe("development profile lifecycle primitives", () => {
       "Downloaded managed toolchains before Electron: grok@1.0.3, cursor@2.0.0",
     ]);
   });
+
+  test.each(["downloaded", "seeded", "failed"] as const)(
+    "startup uses the real prefetch helper when toolchains are %s",
+    async (outcome) => {
+      const { profile } = await toolchainFixture(["grok"]);
+      const logs: string[] = [];
+      const warnings: string[] = [];
+      const ensure = spyOn(toolchainManager, "ensurePinnedToolchains").mockImplementation(
+        async (options) => {
+          expect(options.dataDir).toBe(profile.dataDir);
+          expect(options.artifacts?.map((artifact) => artifact.name)).toEqual(["grok"]);
+          if (outcome === "failed") throw new Error(`download failed in ${profile.dataDir}`);
+          return { rootDir: "", binDir: "", executables: {} as never };
+        },
+      );
+      const network = spyOn(globalThis, "fetch").mockImplementation((async () => {
+        throw new Error("Outbound fetch forbidden in startup test");
+      }) as unknown as typeof fetch);
+      try {
+        await seedAgentTestProfileState(profile, "agent-test", {
+          seedModelCatalogCaches: async () => [],
+          seedProviderCredentials: async () => [],
+          seedAgentToolchains: async () => ({
+            seeded: outcome === "seeded" ? ["grok@1.0.3"] : [],
+            failed: [],
+          }),
+          log: (message) => logs.push(message),
+          warn: (message) => warnings.push(message),
+        });
+        expect(ensure).toHaveBeenCalledTimes(outcome === "seeded" ? 0 : 1);
+        expect(network).not.toHaveBeenCalled();
+        if (outcome === "failed") {
+          expect(warnings).toEqual([
+            "Could not download managed toolchains before Electron: download failed in <profile>",
+          ]);
+          expect(logs).toContain("Electron will download managed toolchains for: grok");
+        } else {
+          expect(warnings).toEqual([]);
+          expect(
+            logs.some((message) =>
+              message.startsWith(
+                outcome === "seeded"
+                  ? "Seeded toolchains"
+                  : "Downloaded managed toolchains before Electron",
+              ),
+            ),
+          ).toBe(true);
+          expect(logs.some((message) => message.startsWith("Electron will download"))).toBe(false);
+        }
+      } finally {
+        ensure.mockRestore();
+        network.mockRestore();
+      }
+    },
+  );
 
   test("prefetches only the named platforms through the manager, without the profile path in errors", async () => {
     const { profile, artifacts } = await toolchainFixture(["pi", "grok"]);

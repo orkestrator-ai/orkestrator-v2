@@ -242,11 +242,10 @@ async function sendPrompt(
   await expect
     .poll(sent, { timeout: 30_000 })
     .toBe(true)
-    .catch(async () => {
+    .catch(async (error: unknown) => {
       // The composer kept the draft and the session holds no such message, so
-      // the send was refused before dispatch: nothing ran and resending cannot
-      // run it twice. Record why, so a refusal is evidence rather than a retry
-      // that hides it, then resend once as a user would.
+      // first send was refused. Keep diagnostics, but fail this qualification
+      // rather than allowing a retry to conceal a dispatch regression.
       const shown = await page
         .getByRole("alert")
         .allTextContents()
@@ -261,11 +260,7 @@ async function sendPrompt(
           error: current?.turn.error,
         }),
       });
-      await expect(composer).toBeEditable({ timeout: 30_000 });
-      await composer.press("Enter");
-      await expect
-        .poll(sent, { timeout: 30_000, message: `${label} refused the prompt twice` })
-        .toBe(true);
+      throw error;
     });
   return previous;
 }
@@ -318,18 +313,22 @@ function expectContainerPolicy(policy: Record<string, unknown> | undefined, appr
   });
 }
 
-async function openCell(
-  page: Page,
-  testInfo: TestInfo,
-  platform: Platform,
-  afterInstall?: (containerId: string) => Promise<void>,
-): Promise<{ environment: Environment; containerId: string; cleanup: () => Promise<void> }> {
+async function requireCellPlatform(platform: Platform): Promise<void> {
   test.skip(process.env.ORKESTRATOR_AGENT_TEST_DOCKER !== "1", "Docker fixture profile required");
   const enabled = await enabledPlatforms();
   test.skip(
     Array.isArray(enabled) && !enabled.includes(platform),
     `${PLATFORMS[platform].label} is not enabled in this profile (dev:test --agent-platforms)`,
   );
+}
+
+async function openCell(
+  page: Page,
+  testInfo: TestInfo,
+  platform: Platform,
+  afterInstall?: (containerId: string) => Promise<void>,
+): Promise<{ environment: Environment; containerId: string; cleanup: () => Promise<void> }> {
+  await requireCellPlatform(platform);
   const environment = await fixtureEnvironment(containerName);
   const containerId = environment.containerId;
   if (!containerId) throw new Error(`${containerName} has no container`);
@@ -384,6 +383,7 @@ for (const platform of ["cursor", "pi"] as const) {
     page,
   }, testInfo) => {
     test.setTimeout(4 * 60_000);
+    await requireCellPlatform(platform);
     let original = "";
     for (let attempt = 0; attempt < 2; attempt++) {
       await expect(

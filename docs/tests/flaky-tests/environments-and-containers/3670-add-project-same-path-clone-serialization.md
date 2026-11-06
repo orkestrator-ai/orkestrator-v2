@@ -1,7 +1,7 @@
 # add_project same-path clone serialization rejected the first clone
 
 - **ID:** 3670
-- **Status:** open
+- **Status:** resolved
 - **Observed:** 2026-11-03
 - **Test:** `create_project_from_scratch > add_project serializes two clones of the same missing local path`
 - **File:** `apps/backend/src/core/commands-project-creation.test.ts`
@@ -45,3 +45,25 @@ order the assertions do not expect. The branch's change to
 `addExistingProject` (a synchronous refusal of URLs starting with `-`) does not
 apply to either URL in this test. No assertion, timeout or product code was
 changed for this record.
+
+## Root cause and fix (2026-11-06)
+
+`second` was created before the lock holder was released, but no handler was
+attached to it until after `await expect(first).resolves`. Once `first`
+releases the path lease, the waiting `second` runs the duplicate-path guard
+and rejects; under load that can happen before the test reaches
+`expect(second).rejects`. Bun then fails the running test with the unhandled
+rejection, reported at the `first` assertion, which is why the message names
+the *second* request's path. The URL test in the same file already guarded
+against this ("observe it now so that is not unhandled").
+
+The fix attaches that observer to `second` as soon as it is created in this
+test, in `serializes two requests for the same canonical path` (case 9845) and
+in `serializes two requests whose paths differ only in case`. The assertions
+are unchanged in strength: a `second` that resolved would yield `undefined`
+and fail the message match.
+
+Not reproduced locally: on beelink at load average 0.8, eight concurrent copies
+of the unchanged file failed 0 of 8, and two rounds with the fix failed 0 of 16.
+The fix rests on the mechanism and on the matching `main` CI failure, not on a
+stress result.

@@ -27,6 +27,7 @@ import {
   COORDINATOR_VALIDATION_RULE,
   COORDINATOR_WORKER_PROMPT_FORMAT_RULE,
   coordinatorIdFromRuntimeId,
+  coordinatorRuntimeId,
 } from "@orkestrator/protocol/coordinator";
 import { isPipelineWorkerTabId } from "@orkestrator/protocol/pipeline-worker-mail";
 import {
@@ -450,10 +451,27 @@ async function ownConversationMailbox(
     JsonRecord | undefined;
   return own && typeof own.tabId === "string"
     ? {
-        environmentId: `coordinator:${scope.coordinatorId}:${scope.conversationId}`,
+        environmentId: coordinatorRuntimeId(scope.coordinatorId, scope.conversationId),
         tabId: own.tabId,
       }
     : null;
+}
+
+/**
+ * Refuse a mailbox other than this conversation's own: the one rule behind
+ * reading a page, reading a message and acknowledging one. The conversation is
+ * found whether or not it has closed, as its mailbox outlives it.
+ */
+async function assertOwnMailbox(
+  invoke: ControlMcpInvoker,
+  scope: CoordinatorControlScope,
+  input: { environmentId: string; tabId: string },
+  verb: "read" | "acknowledge",
+): Promise<void> {
+  const own = await ownConversationMailbox(invoke, scope);
+  if (!own || input.environmentId !== own.environmentId || input.tabId !== own.tabId) {
+    throw new Error(`Coordinator credential may only ${verb} its own mailbox`);
+  }
 }
 
 /** The same as `tryOpenCoordinatorDelegation`, for a worker on another node. */
@@ -2455,28 +2473,7 @@ export async function createControlMcp(
           annotations: readAnnotations(),
         },
         async (input) => {
-          if (coordinatorScope) {
-            const ownEnvironmentId = `coordinator:${coordinatorScope.coordinatorId}:${coordinatorScope.conversationId}`;
-            const workspace = await invoke<unknown>("get_project_coordinator", {
-              projectId: coordinatorScope.projectId,
-            });
-            const conversations =
-              isRecord(workspace) &&
-              isRecord(workspace.workspace) &&
-              Array.isArray(workspace.workspace.conversations)
-                ? workspace.workspace.conversations
-                : [];
-            const own = conversations.find(
-              (item) => isRecord(item) && item.id === coordinatorScope.conversationId,
-            );
-            if (
-              input.environmentId !== ownEnvironmentId ||
-              !isRecord(own) ||
-              input.tabId !== own.tabId
-            ) {
-              throw new Error("Coordinator credential may only read its own mailbox");
-            }
-          }
+          if (coordinatorScope) await assertOwnMailbox(invoke, coordinatorScope, input, "read");
           const page = await invoke<unknown>("get_agent_mail_mailbox", input);
           if (!isRecord(page)) throw new Error("Mailbox returned no result");
           const guidance = pollGuard?.(
@@ -2502,26 +2499,7 @@ export async function createControlMcp(
           annotations: readAnnotations(),
         },
         async (input) => {
-          const ownEnvironmentId = `coordinator:${coordinatorScope.coordinatorId}:${coordinatorScope.conversationId}`;
-          const workspace = await invoke<unknown>("get_project_coordinator", {
-            projectId: coordinatorScope.projectId,
-          });
-          const conversations =
-            isRecord(workspace) &&
-            isRecord(workspace.workspace) &&
-            Array.isArray(workspace.workspace.conversations)
-              ? workspace.workspace.conversations
-              : [];
-          const own = conversations.find(
-            (item) => isRecord(item) && item.id === coordinatorScope.conversationId,
-          );
-          if (
-            input.environmentId !== ownEnvironmentId ||
-            !isRecord(own) ||
-            input.tabId !== own.tabId
-          ) {
-            throw new Error("Coordinator credential may only read its own mailbox");
-          }
+          await assertOwnMailbox(invoke, coordinatorScope, input, "read");
           const message = await invoke<unknown>("get_agent_mail_message", input);
           if (!isRecord(message)) throw new Error("Mailbox message was not found");
           return toolResult({ message });
@@ -2541,7 +2519,10 @@ export async function createControlMcp(
         async ({ messageId }) => {
           const status = await invoke<unknown>("get_agent_mail_status", { messageId });
           if (!isRecord(status)) throw new Error("Message status was not found");
-          const ownRuntime = `coordinator:${coordinatorScope.coordinatorId}:${coordinatorScope.conversationId}`;
+          const ownRuntime = coordinatorRuntimeId(
+            coordinatorScope.coordinatorId,
+            coordinatorScope.conversationId,
+          );
           const from = isRecord(status.from) ? status.from : null;
           const allowedBySender = from?.projectId === coordinatorScope.projectId;
           const destination =
@@ -2589,26 +2570,7 @@ export async function createControlMcp(
         },
         async (input) => {
           if (coordinatorScope) {
-            const ownEnvironmentId = `coordinator:${coordinatorScope.coordinatorId}:${coordinatorScope.conversationId}`;
-            const workspace = await invoke<unknown>("get_project_coordinator", {
-              projectId: coordinatorScope.projectId,
-            });
-            const conversations =
-              isRecord(workspace) &&
-              isRecord(workspace.workspace) &&
-              Array.isArray(workspace.workspace.conversations)
-                ? workspace.workspace.conversations
-                : [];
-            const own = conversations.find(
-              (item) => isRecord(item) && item.id === coordinatorScope.conversationId,
-            );
-            if (
-              input.environmentId !== ownEnvironmentId ||
-              !isRecord(own) ||
-              input.tabId !== own.tabId
-            ) {
-              throw new Error("Coordinator credential may only acknowledge its own mailbox");
-            }
+            await assertOwnMailbox(invoke, coordinatorScope, input, "acknowledge");
           }
           const result = await invoke<unknown>("ack_agent_mail", input);
           if (!isRecord(result)) throw new Error("Message acknowledgement returned no result");

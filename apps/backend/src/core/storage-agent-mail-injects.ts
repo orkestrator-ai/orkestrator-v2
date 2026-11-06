@@ -132,14 +132,19 @@ export class AgentMailInjects {
     coordinatorTabId: string,
     workerEnvironmentId: string,
     workerTabId: string,
+    { includeClosedMailbox = false }: { includeClosedMailbox?: boolean } = {},
   ): Promise<boolean> {
     const store = await this.store.snapshot();
     const mailbox = store.mailboxes[agentMailboxId(coordinatorEnvironmentId, coordinatorTabId)];
     return Boolean(
       mailbox?.messages.some(
         (message) =>
-          message.placement === "inject-held" &&
-          message.placementReason === COORDINATOR_DELEGATION_HOLD_REASON &&
+          ((message.placement === "inject-held" &&
+            message.placementReason === COORDINATOR_DELEGATION_HOLD_REASON) ||
+            (includeClosedMailbox &&
+              mailbox.tombstonedAt &&
+              message.placement === "undeliverable" &&
+              message.placementReason === "tab-closed")) &&
           (message.coordinatorDelegationId === associationId ||
             message.coordinatorDelegationId === undefined) &&
           (message.from.kind === "tab" || message.from.kind === "node") &&

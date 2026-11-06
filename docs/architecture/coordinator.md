@@ -170,18 +170,18 @@ or is deleted. Below it a cleanup at the limit always frees a whole batch and
 nobody needs to act. `full` is every record in use, the state in which the
 store refuses. Below 1,800 records in total the answer is `ok` with no further
 reads; above it the clearable records are counted with cleanup's own rules,
-and the answer is reused for a minute while the store is unchanged. The Work
-area shows a `CoordinatorWorkflowStoreBanner` at `near-limit` (warning) and
-`full` (alert), saying that deleting finished worker environments or letting
-running work finish frees room, and that clearing rows from the Work panel
-only hides them. The field is additive: an older renderer ignores it, and a
+and the answer is reused for a minute while the store is unchanged. The
+coordinator panel renders `CoordinatorWorkflowStoreBanner` through
+`CoordinatorWorkerPrompts` at `near-limit` (warning) and `full` (alert), saying
+that deleting finished worker environments or letting
+running work finish frees room. The field is additive: an older renderer ignores it, and a
 renderer reading an older backend gets no field and shows no banner.
 
 What removal changes for the user:
 
 - `list_workflows` and `snapshot.workflows` no longer list that old, finished
-  history. The panel's waiting workers and worker prompts come only from
-  records that are kept.
+  history. The coordinator's waiting workers and the worker prompts banner
+  come only from records that are kept.
 - An old finished review whose record was removed has no owner left, so it
   opens without asking for adoption first, and addressing it records a fresh
   association for the conversation that addresses it. `adopt_workflow` on a removed record reports it was not
@@ -663,6 +663,21 @@ waits for the next main, so finished work from long-closed conversations cannot
 wake a fresh coordinator after a restart. See
 [Who hears a notice](#who-hears-a-notice). With no main open, the toolbar action
 reads **Start coordinator**.
+
+Reading a coordinator (`CoordinatorService.get`, so `get_project_coordinator`,
+the panel's view and every coordinator `read_messages`) repairs nothing and
+writes nothing. The work and mail closed conversations leave behind move to the
+main at three points instead (`coordinator-closed-conversations.ts`): when a main
+opens, when a conversation closes, and on the 60-second `coordinator-repair`
+sweep. Every path that opens a main goes through `ensureMainConversation`: mail,
+wakes and notices directly, and a new coordinator in `ensure` and
+`createConversation` with no main open through its `opened` form, which keeps
+the new main unassigned and leaves open side conversations their own work. The
+sweep syncs mailboxes and reads the owed delegations once for every coordinator,
+not once each, and re-reads the open delegations only after the store has
+changed (`coordinator-open-delegations.ts`). A main that appears any other way
+(a legacy record given a role on read, a restored store) takes the mail over on
+that sweep, up to a minute later.
 
 An open main that has never run has no agent until its first prompt, so it can
 neither read mail nor be woken for it. Mail from an agent in its own project, or
@@ -1543,136 +1558,23 @@ The panel's Git actions and conversation actions keep separate busy flags
 and conversations per project: a fetch does not disable New side agent, and
 closing a conversation does not disable Refresh.
 
-## Work panel
+## Workers' waiting prompts
 
-The **Work** panel on the right of the Coordinator panel lists everything this
-coordinator started, what stage each piece is at, and what needs the user,
-without opening environments. It replaced the toolbar's "Waiting on N workers"
-chip, which counted only the selected conversation's open delegations and kept
-its detail in a tooltip.
+The coordinator panel has no list of its work. A **Work** side panel listed
+every worker, build, Multi Review, graph run and followed pull request with
+Open, Stop and Clear actions; it was removed on 2026-11-05 because it did not
+earn its space, and the conversation now takes the full width. The coordinator
+itself still sees its work through `list_workflows` and its wakes, and the user
+through mail tiles, the workers' prompts banner below, and each environment.
 
-**Scope.** Every `snapshot.workflows` association whose `coordinatorId` is this
-workspace's, from every conversation in the project and every node, except
-reservations (`pending`) and kinds the panel does not show (`feature-plan`, and
-any kind this client does not know). One row per worker environment (however
-many delegations name it), build pipeline, Multi Review, graph run and followed
-pull request.
-
-**Rows.** Each row shows its name, the machine when it is on another node
-("on Studio"), its stage in words ("Build · Verify", "Review · 3 reviewers",
-"PR open · checks pending", "Failed: API error") and an **Open** button. Build
-rows add the acceptance criteria passed out of the total ("9/12 criteria"),
-read from the linked ticket's criteria checks (`source: { type: "kanban" }`,
-which Verify records); when the project's tickets are not loaded the
-pipeline's own newest Verify results (`pipelineCriteriaView`) give the same
-count. Open goes to the worker's delegated tab, the build tab
-(`scheduleBuildPipelineTabActivation`), the review's own Multi Review tab, the
-graph run (`requestGraphRunView`) or the pull request (`openPullRequestUrl`);
-work on another node carries the delegated tab, pipeline, review or run identity
-through `openMachineWorkspace` and the validated realm selection message. The
-node activates that surface after its layout hydrates. A row with nothing to
-open (a deleted worker, a PR not yet opened) has a disabled button whose title
-and accessible name say why.
-
-A worker row also says what was asked, on what and since when: one line of the
-request (`delegation.request.summary`, the newest request's), then the agent,
-the model, "requested" when the coordinator overrode the saved default, and the
-age ("12m", or "3h ago" once finished). Build rows show the pipeline's agent and
-every row with a known time shows its age. Each delegation keeps its request on
-the record because a transcript read per row would cost a read each and be
-unavailable for an offline node. The coordinator store is rewritten whole, so
-`normalizeCoordinatorDelegationRequest` bounds it where it is stored: 140
-characters of summary on one line, 120 for a model or reasoning id. It is a
-display line, not the prompt, and never reaches `list_workflows`. Launches, jobs,
-prompts, messages, forks, goals and slash commands all record one; only launches
-and jobs know a model. A launch that took its default has no model until startup
-resolves it, so the row shows the agent alone rather than guess. A record from
-before the field has none of this and renders as it did; an older release that
-reads a newer record ignores the field.
-
-**Stop.** A worker row with a running turn it has not already stopped offers
-**Stop**, one click with no confirmation, like the tab's own Stop button. It calls
-`stop_coordinator_worker_turn` for each such tab, with `stoppedBy: "user"`, on this
-machine or through the worker's node (see
-[Stopping a worker's turn](#stopping-a-workers-turn)). The environment and its
-conversation stay, and the coordinator is still woken once. Each click is a new
-request, so a retry stops whatever is running then. A tab found idle answers with
-a toast; a failure shows as the panel's error. Stop is not offered while
-coordination is paused or no conversation is open, because the command requires a
-ready coordinator. Answer and Address stay in their own views:
-[4940](../todo/coordinator-and-multi-review/4940-work-row-answer-and-address.md).
-
-**Order.** Sections in this order, each headed in words so status never
-depends on colour: **Needs you** (a worker whose delegation has a waiting
-episode, a worker, build or review environment with a question, approval or input
-waiting in `HumanPromptBanner`'s data, a paused or failed build, a paused or
-failed review, a graph run waiting on a person, paused or failed), **Running**,
-then **Finished**; newest first within each. Remote build and review waiting
-summaries count as Needs you without consulting local environment IDs. A ready
-review with findings needs a decision; a clean report is finished, unless its
-automatic PR launch is pending (Running) or failed (Needs you). A remote worker
-with a prompt the banner holds (below) counts as Needs you too, by its
-node-qualified key.
-
-**Finished work** stays listed for 24 hours after it finishes, or while its
-pull request is open, whichever is later; then it drops off. A build's finish
-time is its last session's completion (or the delivery decision or authoritative
-`cancelledAt` transition), a review's
-its last update, a graph run's `finishedAt`, a worker's last delegation
-completion or outcome, a PR's merge or close as last recorded. A failed build,
-review or run is listed under Needs you but expires by the same rule. The panel
-re-evaluates expiry every minute.
-
-**Followed PRs after their worker is gone.** A row reads a live reading of its
-URL first, then what the follow recorded: its `merged:` or `closed:` status
-notice (`pullRequestStateFromNotice`), then the final reading
-`captureFinalPullRequest` kept at deletion, which it now also keeps on a follow
-that already ended on that URL. A follow that ended with neither, or whose last
-reading was `open`, is Finished as "PR · no longer followed": nothing watches
-it any more, so the panel claims no outcome. A live follow with a URL and no
-reading is still Running as "PR · status unavailable".
-
-**Folding and clearing.** Each section folds from its heading; the choice is
-`collapsedWorkBuckets` in the persisted `uiStore`, so it holds per device across
-projects and reloads, and every section starts unfolded. **Clear** on the
-Finished heading (`hide_coordinator_work`) sets `workHiddenAt` on the records
-behind those rows and answers with a fresh snapshot. It hides rows and removes
-nothing: retention, replay, mail routing and status wakes never read the field.
-A row is hidden only while it is finished, has no open pull request and every
-record behind it is marked, so work that resumes, a later request naming the
-same worker, or a PR that reopens lists it again. Clear skips finished rows
-whose pull request is open, which is what keeps them listed in the first place.
-Right-clicking one of the rows Clear would take offers **Clear** for that row
-alone; every other row has no such menu.
-An older node answers "Unknown backend command", shown as the panel's error.
-
-**Freshness.** Nothing here is persisted and nothing reads the coordinator's
-conversation, so rows move while the coordinator is idle. The sources are the
-stores the app already keeps current from backend snapshots and resource
-events: the coordinator snapshot (whose delegation waiting episodes announce a
-`coordinator` change, as do a follow ending, a final PR reading being kept and
-a clear), environments, build pipelines and Multi Reviews
-(hydrated app-wide; missing records are retried on resource changes, resync and safety checks), the PR monitor, the
-project's tickets, and the command node's summaries of other machines. Graph
-runs are read on demand (`graph_run_get`) when the panel mounts, when a
-`graph-run` change names one, and on resync and safety checks. A build,
-Multi Review or graph run on another node is read through that node's link
-(`invokeOnNode`) with the same reads its own views use (`get_build_pipeline`,
-`get_multi_review_workflow`, `graph_run_get`), again whenever the node's
-summaries refresh and on resync and safety checks, including after a failure
-that can be retried. A failed read keeps the last reading. A successful null build or review read
-clears the cached snapshot and marks it unavailable under Finished, with bounded
-retention even after a remount. Followed PR rows are keyed by their URL once
-known; live status and checks are used only when the reading names that URL.
-Remote summaries omit PR URLs, so historical follows use their own final record
-rather than an unverified environment reading. `graph_run_get` is
-listed by name in `isNodeReadCommand` (`packages/protocol/src/command-nodes.ts`)
-because its verb comes last: a routed read is never recorded as an
-outcome-unknown write and does not refresh the node's summaries. A remote graph
-row therefore has the same stage words, buckets and expiry (from the run's
-`finishedAt`) as a local one, names its machine, and opens the run's
-environment on that node. A remote run its node reports `not-found` is
-unavailable under Finished, like a deleted local record. Successful empty local reads mark deleted builds, reviews and graph runs as unavailable under Finished, using association creation for bounded retention; failed reads never prove deletion. Review and graph rows also retain finished work while the environment PR is open. Review Open restores a closed main tab after authoritative layout hydration.
+What the panel used stays in the backend, unchanged, for the coordinator and
+for an older renderer still running against this backend: `hide_coordinator_work`
+and `workHiddenAt`, `stop_coordinator_worker_turn` with `stoppedBy: "user"`, and
+the delegation request summary (`normalizeCoordinatorDelegationRequest`). No
+renderer in this release calls the first two. A device that had folded a
+section of the panel kept that choice as `collapsedWorkBuckets` in the persisted
+`uiStore`; the store now drops the field when it loads, and the next write
+leaves it out.
 
 Conversation-specific mail, startup failures, provider notices and the agent's
 own waiting prompts use an independent `FloatingNoticeLayer` anchored inside
@@ -1684,10 +1586,10 @@ column across splits. Stacks and cards scroll within the measured pane height,
 and pills stay within the pane width. Collapsed status and alert notices retain
 live summaries; opening a card returns announcements to its full content.
 
-**Waiting prompts.** `HumanPromptBanner`, floating at the top right of the
-conversation area with the coordinator's other notices, shows the
-prompts of this coordinator's workers, with an **Open** that goes to the waiting
-tab. Local workers are read from this backend. Workers on another node, while a
+`HumanPromptBanner`, floating at the top right of the conversation area with the
+coordinator's other notices (`CoordinatorWorkerPrompts`), shows the prompts of
+this coordinator's workers, with an **Open** that goes to the waiting tab. Local
+workers are read from this backend. Workers on another node, while a
 request to them is open, are read with `list_human_prompts` through that node's
 link (`useRemoteHumanPrompts`), on the node's `human-prompt` hint, on its resync,
 whenever its summaries refresh, and on resync and safety checks.
@@ -1695,7 +1597,7 @@ whenever its summaries refresh, and on resync and safety checks.
 The link and code do cross nodes, checked against what node summaries omit.
 Summaries carry no prompts because every client receives them and the command
 node keeps them as last-known state; this read does neither, since the answer
-lives only in the panel's React state and `invoke_on_node` logs no arguments or
+lives only in the banner's React state and `invoke_on_node` logs no arguments or
 results. It widens nothing: `list_human_prompts` is not in
 `NODE_EXCLUDED_COMMANDS` or `isWorkspaceExcludedCommand`, a window opened on that
 node already shows the same banner, and `get_native_agent_projection` crosses the
@@ -1711,27 +1613,11 @@ the coordinator: `noteWorkerHumanPrompt` is local. Two real nodes have not
 exercised this:
 [4942](../todo/coordinator-and-multi-review/4942-c7-live-checks.md).
 
-**Next wake.** Below 1280px, where the panel is folded to its strip, a line under
-the conversation says what the next wake waits for ("Next wake when api-fix
-finishes", "… or 2 others finish"), while the focused conversation is idle and
-coordination is not paused. Wide screens already show this in the panel. It sits
-below the conversation group rather than directly under the last message, because
-a transcript row would be per conversation while delegations are per coordinator.
-
-**Layout.** At 1280px and wider the panel is open by default beside the
-conversation. Narrower, it is a strip with the running and needs-you counts;
-clicking it opens the list over the conversation, and Escape or the hide
-button returns to the strip with focus on it. The user's choice holds until the
-window crosses the threshold. The strip, hide button and every Open button are
-ordinary buttons with accessible names, so the panel works by keyboard. The
-panel root carries `data-open-delegations` (every open delegation of this
-coordinator) for end-to-end checks.
-
 ### Mail tiles and the report cue
 
 A workflow notice about a worker (an `agent-tab` or `environment` resource) gets
 an **Open** beside its Open conversation button, through the same
-`openCoordinatorWorkTarget` as a Work row. `notice.resource.nodeId` names the node
+`openCoordinatorWorkTarget` as the prompts banner. `notice.resource.nodeId` names the node
 of a worker elsewhere; it is additive, and a notice without it means this machine.
 `workerTabTarget` resolves the worker against this client's own stores, so a
 deleted environment, one being deleted, a node that is not connected, or an older
@@ -1807,7 +1693,7 @@ and the mailbox poll guard.
 the workers still being waited on, filtered before the 200-row cap, so it answers
 "what am I waiting on?" without polling `list_environments` and `list_agents`.
 `coordinatorDelegationBucket` (`packages/protocol/src/coordinator.ts`) is the one
-definition of a delegation's bucket, shared with the [Work panel](#work-panel).
+definition of a delegation's bucket.
 
 The poll guard (`apps/backend/src/core/control-mcp-poll-guard.ts`) covers
 `read_messages`, `get_message_status`, `list_environments`, `list_agents`,
@@ -2179,6 +2065,16 @@ that queue. Wake-kind selection shares the project queue with close: it checks
 the main is open, looks up held reports, and persists the kind together, so a
 closed mailbox cannot make a real report look missing.
 
+A delegation the backend closes (`closeOnDecision`) records its wake kind in the
+same write when a main is open, chosen under the coordinator store lock so the
+main cannot close in between. Retained closed mains do not prevent this batching
+unless one still holds this worker's report. With no main open, or with a report
+waiting for closed-main repair, the wake pass chooses and writes the kind
+separately as above. Otherwise a wake is two coordinator writes, close with kind and then
+`wokenAt`, with the mail write between them and one change announcement after
+the last. A wake that stops short of `wokenAt` (it failed, or is held) announces
+the close once after its attempt.
+
 A wake that fails 10 passes across at least 10 minutes is given up on. Passes also
 run on turn ends, so the time bound stops a short fault retiring every wake owed.
 The selection of retirement (`wakeRetirement`, including the attempt count and
@@ -2481,9 +2377,11 @@ is asked, then the turn end settles the delegation as any other: the
 coordinator is woken once, with the worker's held report if it sent one, or
 with a notice that says it stopped the turn itself ("… stopped because you
 stopped its turn with stop_worker_turn, before it sent a report") and the
-worker's last message. A stop from the Work panel records `stopRequestedBy: "user"`
-as well, and the notice says "the user stopped its turn from the Work panel"
-instead; the tool's schema is strict, so a coordinator cannot claim that. On this node a stop the agent confirms settles the
+worker's last message. A stop sent with `stoppedBy: "user"` (from the removed
+Work panel; no renderer in this release sends one) records
+`stopRequestedBy: "user"` as well,
+and the notice says "the user stopped its turn from the Work panel" instead;
+the tool's schema is strict, so a coordinator cannot claim that. On this node a stop the agent confirms settles the
 delegation at once rather than on the next edge or sweep, so the tab takes a
 `send_prompt_to_tab` straight away, in that turn or the next; an unconfirmed
 one settles on the turn end. For a worker on another node, after any stop
@@ -3105,8 +3003,8 @@ per-field `source`; a step's stored instructions are reported as
 `instructionsBytes`, not echoed. A reviewer's lens is reported in every
 `selection` as `{ label, instructionBytes }`.
 
-A Work row marks an override ("requested"), and so does the worker's tab. Both
-read the same fact, `delegation.request.source`, by one rule
+A local worker's tab marks an override ("requested"). It reads
+`delegation.request.source` by one rule
 (`coordinatorTabLaunchRequest`, `@orkestrator/protocol/coordinator-launch-overrides`):
 the newest of that tab's requests that states a source. Only a launch states one,
 so mail sent to the worker afterwards does not clear the marker, and a tab the
@@ -3125,8 +3023,7 @@ removed takes its marker with it.
 
 A worker on another node has no marker on its tab. Its delegation is kept on the
 command node, while its tab renders in that node's realm and reads that node's
-backend, which holds no such record. The command node's Work row still says
-"requested". The gap is
+backend, which holds no such record. The gap is
 [6580](../todo/coordinator-and-multi-review/6580-launch-override-marker-on-another-node.md).
 
 ## Complete application actions
@@ -3682,15 +3579,11 @@ guarantee, not by one end-to-end scenario replayed per platform:
   environment PR fields: `coordinator-pr-status.test.ts`; follows, Resolve
   tabs, review handoff: `coordinator-status-wakes-pr.test.ts`; a remote
   worker's Resolve tab and follow: `coordinator-pr-remote.test.ts`)
-- the Work panel: row kinds, scope, stages, ordering, the criteria count and
-  finished-work expiry (`apps/web/src/lib/coordinator-work-items.test.ts`);
-  Open navigation (`coordinator-work-navigation.test.ts`); the wide panel,
-  narrow strip and keyboard use (`CoordinatorWorkPanel.test.tsx`); every
-  conversation's work and a waiting episode moving a row to Needs you without
-  a coordinator turn (`CoordinatorPanel.test.tsx`); remote build and graph run
-  reads, retries, missing records and the expiry clock
-  (`useCoordinatorWorkItems.test.tsx`); `graph_run_get` as a routed read
-  (`packages/protocol/src/command-nodes.test.ts`)
+- the workers' prompts banner, local and remote, and Open from it
+  (`CoordinatorPanel.test.tsx`, `CoordinatorPanel.render-cost.test.tsx`);
+  `workerTabTarget` (`apps/web/src/lib/coordinator-work-items.test.ts`); Open
+  navigation (`coordinator-work-navigation.test.ts`); `graph_run_get` as a
+  routed read (`packages/protocol/src/command-nodes.test.ts`)
 - `create_pr` and `resolve_conflicts` admission, preconditions and follows:
   `coordinator-surface-actions.test.ts`
 - `restart_build_pipeline_step`: step resolution, kept rounds, selection and

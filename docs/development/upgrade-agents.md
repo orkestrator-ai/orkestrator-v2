@@ -1149,14 +1149,27 @@ the pinned binary's parser over the production argument shape.
    loopback tests pass with it on, so the bridge does not turn it off. Every
    other `features.*` the bridge depends on kept its 0.166.0 stage and default.
 
-   On Linux, `live-contract.test.ts`'s "coordinator research MCP survives a
-   thread-scoped Orkestrator replacement" and two cases in
-   `live-refused-calls.test.ts` fail on 0.166.0 and 0.167.0 alike: Codex's
-   bubblewrap filesystem helper cannot bind the test's `/tmp/ork-test-tmp-*`
-   path (`Can't create file …: Read-only file system`), and a refused shell
-   write reads `Read-only file system` where macOS says `Operation not
-   permitted`. They pass on macOS, where they were last qualified; see
-   [1031](../todo/agent-engines/1031-provider-upgrade-2026-11-06.md) task 9.
+   On Linux, Codex's bubblewrap sandbox (0.166.0 and 0.167.0) masks each
+   denied directory with a read-only tmpfs, shallowest first and after the
+   read grants. So a coordinator's `":tmpdir" = "deny"` inside its
+   `":slash_tmp" = "deny"` (any `TMPDIR` under `/tmp`, such as
+   `/tmp/user/<uid>` or a test process's `/tmp/ork-test-tmp-*`) fails every
+   sandboxed call with `bwrap: Can't create file <TMPDIR>: Read-only file
+   system`, AGENTS.md loading at `thread/start` included. A checkout under a
+   denied directory is also unreadable (`Permission denied`). The bridge
+   leaves out exactly the Linux denials that would do either
+   (`codexCoordinatorTmpDenials`); `":root" = "deny"` still hides both
+   directories, because Linux's `:minimal` binds only system directories.
+   After a Codex bump, re-check that `:minimal` list
+   (`LINUX_PLATFORM_DEFAULT_READ_ROOTS` in `linux-sandbox/src/bwrap.rs`) and
+   run `live-contract.test.ts`, `live-refused-calls.test.ts` and
+   `live-coordinator-skills.test.ts` on Linux (no credits); the last also
+   proves a file beside the grants stays unreadable. Their coordinator
+   fixtures launch Codex as the backend does, with the canonical executable's
+   directory as the readable runtime root: on Linux, Codex re-executes
+   itself inside bubblewrap for every command. The refused-write assertions
+   expect each platform's own errno text: `Read-only file system` (EROFS)
+   on Linux, `Operation not permitted` (EPERM) on macOS.
 
    Codex 0.153.3 defaults new durable threads to paginated history and eagerly
    writes their rollout header, but `thread/read(includeTurns=true)` returns

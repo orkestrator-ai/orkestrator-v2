@@ -36,7 +36,7 @@ export function PipelineNeedsALook({ followUps }: { followUps: readonly Pipeline
           type="button"
           aria-expanded={expanded}
           aria-controls={expanded ? bodyId : undefined}
-          className="flex w-full items-center gap-2 rounded-lg px-4 py-3 text-left transition-colors hover:bg-amber-500/5 focus-visible:ring-2 focus-visible:ring-amber-500/50 focus-visible:outline-none"
+          className="focus-hairline flex w-full items-center gap-2 rounded-lg px-4 py-3 text-left transition-colors hover:bg-amber-500/5"
           onClick={() => setExpanded((value) => !value)}
         >
           <CircleAlert aria-hidden className="size-4 shrink-0" />

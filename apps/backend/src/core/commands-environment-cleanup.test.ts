@@ -663,13 +663,42 @@ else if (args[1] === "inspect") console.log(JSON.stringify({ app: "orkestrator-v
           );
           const originalPath = process.env.PATH;
           process.env.PATH = `${bin}${path.delimiter}${originalPath ?? ""}`;
-          try {
-            const error = await deleteEnvironmentTask("e1", context, {
-              stepDeadlinesMs: { container: 1_000 },
-            }).then(
+          const deadlineMs = 1_234_567;
+          const realTimeout = globalThis.setTimeout;
+          let expire: (() => void) | undefined;
+          // Drive the actual stage timer only once the intended child is live.
+          // Other timers (capture, polling, background services) stay real.
+          const timerSpy = spyOn(globalThis, "setTimeout").mockImplementation(((
+            callback: () => void,
+            delay?: number,
+            ...args: unknown[]
+          ) => {
+            if (delay === deadlineMs) expire = callback;
+            return realTimeout(callback, delay, ...args);
+          }) as typeof setTimeout);
+          let settled = false;
+          const deleting = deleteEnvironmentTask("e1", context, {
+            stepDeadlinesMs: { container: deadlineMs },
+          })
+            .then(
               () => null,
               (caught: unknown) => caught,
-            );
+            )
+            .finally(() => {
+              settled = true;
+            });
+          try {
+            if (blocked !== "success" && blocked !== "no-container-work") {
+              const startupDeadline = Date.now() + 10_000;
+              while (!(await exists(pidFile))) {
+                if (settled || Date.now() > startupDeadline)
+                  throw new Error("Docker fixture did not reach the intended stage");
+                await Bun.sleep(10);
+              }
+              expect(expire).toBeFunction();
+              expire!();
+            }
+            const error = await deleting;
             const calls = (await fs.readFile(callsFile, "utf8").catch(() => ""))
               .trim()
               .split("\n")
@@ -706,12 +735,15 @@ else if (args[1] === "inspect") console.log(JSON.stringify({ app: "orkestrator-v
               expect(pending).toContain(blocked === "drain" ? "container" : blocked);
             }
           } finally {
+            if (!settled) expire?.();
+            await deleting;
+            timerSpy.mockRestore();
             process.env.PATH = originalPath;
           }
         },
       );
     },
-    10_000,
+    20_000,
   );
 
   test("stops watching and scanning the worktree before it removes it", async () => {

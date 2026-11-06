@@ -6,7 +6,7 @@
 - **Branch:** `todo-0160-codex-saved-rules-94d86804329e` at `0d325203a`,
   based on `origin/main` `863b57821`. The branch changes
   `bridges/codex-bridge` (approvals and their tests),
-  `apps/backend/src/core/http-bridge-interactions.ts` and its test, one e2e
+  `apps/backend/src/core/http-bridge/interactions.ts` and its test, one e2e
   comment and docs. None of the files below imports the changed code.
 - **Command:** `mise run test` (logs `orkestrator-test-run.dNockB` below the
   host temporary directory). The Codex protocol lockfile passed; the

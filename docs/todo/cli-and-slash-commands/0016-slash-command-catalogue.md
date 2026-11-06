@@ -120,7 +120,7 @@ qualified live on Claude, Pi and Grok. The only item left is blocked upstream
   30 s, 256 keys, 16 MiB, 4 concurrent provider reads and 5 s to 5 min retry
   backoff. Keys come from `commandCatalogueKey`.
 - **No legacy surface.** `HttpBridgeCatalogAdapter.commandCatalogue`
-  (`apps/backend/src/core/http-bridge-catalog.ts`) reads only the session
+  (`apps/backend/src/core/http-bridge/catalog.ts`) reads only the session
   route. Without a session it makes no request and answers `missing`. A 404
   (a bridge older than the 2.21.0 contract: before #599, or a pre-2.21 Pi,
   Cursor or Grok bridge that does not hold the session) throws with

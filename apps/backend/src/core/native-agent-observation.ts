@@ -150,7 +150,7 @@ export const NATIVE_AGENT_OBSERVATION_CAPABILITIES: Readonly<
     backgroundChildren: "working-while-live-readiness-split",
     generationIdentity: "bridge-connection",
     noTouchActivity: true,
-    // `GET /event/subscribe?observe=1` (http-bridge-observation-stream.ts).
+    // `GET /event/subscribe?observe=1` (http-bridge/observation-stream.ts).
     idleBackoffWakeup: "provider-event-stream",
     // Background task output changes an idle view without a transition; the
     // activity read's content revision lets the backend announce it, and the
@@ -168,7 +168,7 @@ export const NATIVE_AGENT_OBSERVATION_CAPABILITIES: Readonly<
     backgroundChildren: "async-attention-only",
     generationIdentity: "bridge-connection",
     noTouchActivity: true,
-    // `GET /event/subscribe?observe=1` (http-bridge-observation-stream.ts).
+    // `GET /event/subscribe?observe=1` (http-bridge/observation-stream.ts).
     idleBackoffWakeup: "provider-event-stream",
     // Async questions and late command changes surface on an idle thread
     // without a transition; announced from the activity read's content

@@ -5,7 +5,7 @@
 - **Date observed:** 2026-10-27
 - **Branch:** `todo-0161-codex-default-mode-question-2cf150514fc2`, based on
   `origin/main` `863b57821`. Outside `bridges/codex-bridge` and docs the
-  branch changes only comments in `apps/backend/src/core/http-bridge-interactions.ts`
+  branch changes only comments in `apps/backend/src/core/http-bridge/interactions.ts`
   and the test `native-agent-service-projection-lifecycle.test.ts`; every
   owner below, and everything it imports, is byte-identical to the base.
 - **Command:** `mise run test` (logs `orkestrator-test-run.TBDb6d` below the

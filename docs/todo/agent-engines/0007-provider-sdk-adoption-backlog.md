@@ -108,7 +108,7 @@ Rechecked 2026-11-02 at SDK `0.3.314`: all three symbols are still there, and
 started reading `mcpServer.name` in
 `bridges/claude-bridge/src/services/session-manager-parked-interactions.ts`
 and forwarding it as `mcpServer` (it makes an MCP request rule-eligible), and
-the backend mapper (`apps/backend/src/core/http-bridge-interactions.ts`) put it
+the backend mapper (`apps/backend/src/core/http-bridge/interactions.ts`) put it
 into the card's body text as `MCP server: <name>`. So the name already reached
 the card as one line of prose, but `source` (where the server's definition came
 from, which the SDK says is what trust should key on) was dropped, and nothing

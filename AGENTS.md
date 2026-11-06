@@ -13,7 +13,7 @@ Code loads them automatically when it reads a file there, other agents may not.
 
 | Area | Read first |
 | --- | --- |
-| Any bridge, or backend code that calls bridge routes (`http-bridge-provider*`, `bridge-session-close.ts`, the activity sweep) | [`bridges/AGENTS.md`](bridges/AGENTS.md) |
+| Any bridge, or backend code that calls bridge routes (`http-bridge/provider*`, `bridge-session-close.ts`, the activity sweep) | [`bridges/AGENTS.md`](bridges/AGENTS.md) |
 | `bridges/claude-bridge/`, the coordinator shell allowlist | [`bridges/claude-bridge/AGENTS.md`](bridges/claude-bridge/AGENTS.md) |
 | `bridges/codex-bridge/` | [`bridges/codex-bridge/AGENTS.md`](bridges/codex-bridge/AGENTS.md) |
 | `bridges/pi-bridge/` | [`bridges/pi-bridge/AGENTS.md`](bridges/pi-bridge/AGENTS.md) |

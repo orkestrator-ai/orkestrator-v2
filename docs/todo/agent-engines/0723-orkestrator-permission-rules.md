@@ -356,7 +356,7 @@ cannot list or revoke.
 were done on Codex 0.166.0. The bridge never sends an amendment
 (`bridges/codex-bridge/src/app-server/approvals.ts`). The backend labels a
 host-only card "Approve network access" and drops amendments from an older
-bridge (`apps/backend/src/core/http-bridge-interactions.ts`). The payload is
+bridge (`apps/backend/src/core/http-bridge/interactions.ts`). The payload is
 proved through the bridge's engine in a container
 (`mise run verify:codex:network-approval`), the mapping by a unit test, and a
 real command card by `e2e/agent-testing/codex-saved-rules-live.spec.ts`.

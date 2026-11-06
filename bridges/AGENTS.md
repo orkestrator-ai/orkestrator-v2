@@ -1,7 +1,7 @@
 # Bridge instructions
 
 These rules apply to every bridge under `bridges/` and to the backend code that
-calls them (`apps/backend/src/core/http-bridge-provider*.ts`,
+calls them (`apps/backend/src/core/http-bridge/provider*.ts`,
 `bridge-session-close.ts`, the activity sweep). The root
 [`AGENTS.md`](../AGENTS.md) still applies; each bridge directory adds its own
 `AGENTS.md` for engine-specific rules.

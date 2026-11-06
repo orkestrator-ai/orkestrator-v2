@@ -81,7 +81,7 @@ for the restart mark (`BRIDGE_INSTANCE_ID`,
   preference lock" after 5 s (`:363`) on every attempt.
 - The throw reaches `app.onError`, which answers 500
   (`bridges/claude-bridge/src/index.ts:41-45`); the backend parks 500 as
-  `AmbiguousPromptDispatchError` (`apps/backend/src/core/http-bridge-provider.ts:375-379`).
+  `AmbiguousPromptDispatchError` (`apps/backend/src/core/http-bridge/provider.ts:375-379`).
   The prompt never reaches the CLI: the claim write in `claimPromptDispatch`
   (`session-manager-lifecycle.ts:383`) fails before anything is written. So
   nothing runs twice and nothing is lost; the session is simply unusable.

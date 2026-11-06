@@ -19,7 +19,7 @@ import type {
   ProviderCommandCatalogue,
   ProviderStatus,
 } from "./agent-provider-contract.js";
-import { HttpBridgeCatalogAdapter } from "./http-bridge-catalog.js";
+import { HttpBridgeCatalogAdapter } from "./http-bridge/catalog.js";
 import {
   COMMAND_CATALOGUE_MAX_BYTES,
   COMMAND_CATALOGUE_MAX_CONCURRENT_READS,

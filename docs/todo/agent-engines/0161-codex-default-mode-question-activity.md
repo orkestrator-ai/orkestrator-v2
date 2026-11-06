@@ -25,7 +25,7 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 **Context.** Default-mode questions are enabled by `codexRequestUserInputConfig` (`bridges/codex-bridge/src/codex-config.ts:129-134`; off only for the `pipeline` policy). The constraint is that a non-blocking request must not park a build pipeline on a running turn.
 
 **Investigation.** This is already fixed in the backend, in the same change that created this file (`b52267c2`, #1273).
-- `mapCodexInteraction` treats every parked `question` RPC as blocking: `const isBlocking = kind === "question" || request?.isBlocking !== false;` (`apps/backend/src/core/http-bridge-interactions.ts:773-777`). The comment says why: "A parked requestUserInput RPC needs an answer even when Codex's Default mode reports isBlocking:false". MCP forms and URLs keep the wire value.
+- `mapCodexInteraction` treats every parked `question` RPC as blocking: `const isBlocking = kind === "question" || request?.isBlocking !== false;` (`apps/backend/src/core/http-bridge/interactions.ts:773-777`). The comment says why: "A parked requestUserInput RPC needs an answer even when Codex's Default mode reports isBlocking:false". MCP forms and URLs keep the wire value.
 - The test "a Default-mode Codex RPC question publishes waiting and resumes after an answer" (`apps/backend/src/core/native-agent-service-projection-lifecycle.test.ts:33`) feeds an `isBlocking: false` question through the real bridge's `describeInteraction`. It asserts `turn.phase` `blocked` and `blocking: true`, from authoritative reads alone.
 - The bridge still records the wire hint (`bridges/codex-bridge/src/app-server/interactions.ts:38-45`, `:152-154`). Its comment also says a parked question RPC publishes waiting.
 - The constraint still holds: transcript async questions (non-RPC) take another path and do not block. The pipeline policy does not enable Default-mode questions.
@@ -120,7 +120,7 @@ not hold the session's activity at `waiting`.
   same empty answer Codex's TUI sends.
 - **The backend already read every question as blocking.** The second commit
   of #1273 (`b52267c2`, after this file was written) made
-  `mapCodexInteraction` (`apps/backend/src/core/http-bridge-interactions.ts`)
+  `mapCodexInteraction` (`apps/backend/src/core/http-bridge/interactions.ts`)
   publish `blocking: true` for any Codex question, and the bridge's
   `getActivity` reports `waiting` for any parked interaction. That rule stays
   for bridges that still pass the wire's `false` through.

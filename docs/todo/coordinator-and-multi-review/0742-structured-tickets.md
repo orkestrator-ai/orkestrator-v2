@@ -121,7 +121,7 @@ of the new schema (arrays of objects with an `enum`).
 **Context.** The schema has no `maxItems` because several providers reject it
 (`packages/protocol/src/build-pipeline.ts:491-492`). It is handed to the
 provider through `outputSchema`
-(`apps/backend/src/core/http-bridge-prompt-body.ts:33`), which the Claude,
+(`apps/backend/src/core/http-bridge/prompt-body.ts:33`), which the Claude,
 Codex, Cursor, Pi and ACP bridges read.
 
 **Investigation.** Not run. A rejection would show as a failed Verify turn or a

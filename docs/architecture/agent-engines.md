@@ -541,7 +541,7 @@ picker and the run on the same model:
 The bridge's `POST /session/:id/config` replaces the whole session config: a
 field left out resets (mode to Build, fast tier off). The backend therefore
 reads the current config and restates every field a control update leaves
-alone (`updateCodexSessionConfig` in `http-bridge-codex-config.ts`). A model
+alone (`updateCodexSessionConfig` in `http-bridge/codex-config.ts`). A model
 change without an effort drops the old model's effort, so Codex applies the
 new model's default.
 

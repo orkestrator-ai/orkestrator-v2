@@ -26,7 +26,7 @@ and [Event-stream reader inventory](#event-stream-reader-inventory-2026-11-06).
 4. **Container app wiring and real-browser QA**: Files panel on a container, merge from the UI, inactive switch, two windows, hidden document, reload, missed final invalidation, coordinator view, validation output. Status: done (2026-11-01: every case checked in a real browser on Linux, decisions 19 to 23; GitHub's own merge behaviour stays with task 5 and real-model validation plans with 0049; a build-tab selection bug found and fixed, decision 23).
 5. **Live GitHub**: terminal discovery cadence, replacement and reopen, admission delay under real `gh` latency, rate-limit cooldown. Status: open.
 6. **Live providers**: delegated to 0049. Status: open (tracked in 0049).
-7. **macOS watcher paths**: packaged Electron app, plus the burst-overflow and failure-to-polling paths. Status: done (2026-11-06: real FSEvents bursts up to 50,000 files and a lost watch helper, in `scripts/worktree-watcher-live.ts`, in a browser on `dev:test` and in the packaged app, `watcher-packaged-electron.spec.ts`; every burst converged, every failure fell back to polling and re-attached).
+7. **macOS watcher paths**: packaged Electron app, plus the burst-overflow and failure-to-polling paths. Status: done (2026-11-06: real FSEvents bursts up to 50,000 files and a lost watch helper, in `scripts/worktree-watcher-live.ts` (two runs), in a browser on `dev:test` and in the packaged app, `watcher-packaged-electron.spec.ts`; every burst converged, every failure fell back to polling and re-attached).
 8. **iOS hidden pause and resume**: the read coordinator across backgrounding and screen lock in the `apps/ios` wrapper. Status: open.
 9. **Real host suspend and resume**: `HostSuspendDetector` against a real sleep. Status: open.
 10. **Long soak and cache gauges**: 50 or more cycles over an hour or more with agent sessions open, and gauges for caches the footprint cannot see. Status: done (2026-11-06: cache gauges in recurring diagnostics, a 60-cycle local soak over more than an hour with fake-model Pi sessions open, and a fix for the one unbounded growth it found, decisions 24 to 28; container lifecycle, a browser reader and three projection maps without eviction moved to [7100](7100-long-soak-follow-ups.md)).
@@ -1197,21 +1197,27 @@ Times are wall-clock from the write (or the click) to what the probe saw;
 the watched-badge budget runs from when the save settles, 400 ms later, so
 its bound from the write is 2.4 s (decision M1).
 
-**Watcher alone** (`bun scripts/worktree-watcher-live.ts`, the backend's
-`startWorktreeWatcher` and helper program, real FSEvents):
+**Watcher alone** (`bun scripts/worktree-watcher-live.ts --bursts
+1000,5000,20000,50000`, the backend's `startWorktreeWatcher` and helper
+program, real FSEvents). Two runs that day, the second under more host load
+(its writes were up to four times slower):
 
-| Case | Result |
-| --- | --- |
-| 20 single saves, write to hint | p50 464 ms, p95 465 ms (400 ms of it is the settle) |
-| Burst 1,000 / 5,000 files | 1 hint each, no overflow; last hint 413 / 247 ms after the last write |
-| Burst 20,000 / 50,000 files | 3 / 5 hints, 1 / 4 of them overflow (no paths); last hint 500 / 323 ms after the last write |
-| `git add` and commit of every burst file (21.8 s) | 1 metadata hint, 454 ms after it ended |
-| Helper killed | every watch errored within 3 ms (`EWATCHHOST`); a new watcher spawned a new helper, qualified in 24 ms, saw a save in 457 ms |
-| Watched root removed, then recreated | no error, 1 hint; the old watch still reported the recreated path (first hint 459 ms) |
-| Missing root | not watched, `ENOENT` |
+| Case | Run 1 | Run 2 |
+| --- | --- | --- |
+| 20 single saves, write to hint (400 ms of it the settle) | p50 464 ms, p95 465 ms | p50 454 ms, p95 460 ms |
+| Burst 1,000 files: hints, overflow, last hint after the last write | 1, 0, 413 ms | 1, 0, 389 ms |
+| Burst 5,000 files | 1, 0, 247 ms | 2, 0, 273 ms |
+| Burst 20,000 files | 3, 1, 500 ms | 5, 0, 386 ms |
+| Burst 50,000 files | 5, 4, 323 ms | 17, 0, 186 ms |
+| `git add` and commit of every burst file | 1 metadata hint, 454 ms after it ended (21.8 s) | 1, 411 ms (150.7 s) |
+| Helper killed | every watch errored within 3 ms (`EWATCHHOST`); a new watcher's new helper qualified in 24 ms and saw a save in 457 ms | 14 ms; 26 ms; 455 ms |
+| Watched root removed, then recreated | no error, 1 hint; the old watch still reported the recreated path (first hint 459 ms) | the same, 454 ms |
+| Missing root | not watched, `ENOENT` | the same |
 
-Every burst's last hint came after its last write (`finalCovered`), so no
-final change was lost to coalescing or overflow.
+Overflow (a hint without paths after too many events) appeared only when the
+writes were fast enough; either way every burst's last hint came after its
+last write (`finalCovered`), so no final change was lost to coalescing or
+overflow.
 
 **In a browser** (`change-to-visible-latency.spec.ts`, full run, then a second
 run of the container case):

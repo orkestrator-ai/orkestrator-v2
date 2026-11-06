@@ -1156,7 +1156,7 @@ the pinned binary's parser over the production argument shape.
    path (`Can't create file …: Read-only file system`), and a refused shell
    write reads `Read-only file system` where macOS says `Operation not
    permitted`. They pass on macOS, where they were last qualified; see
-   [1030](../todo/agent-engines/1030-provider-upgrade-2026-11-06.md) task 9.
+   [1031](../todo/agent-engines/1031-provider-upgrade-2026-11-06.md) task 9.
 
    Codex 0.153.3 defaults new durable threads to paginated history and eagerly
    writes their rollout header, but `thread/read(includeTurns=true)` returns

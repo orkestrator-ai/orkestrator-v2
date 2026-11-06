@@ -38,7 +38,7 @@ export const PROVIDER_STATE_TRACED_VERSIONS: Record<AgentPlatform, string> = {
   opencode: "1.19.5",
   pi: "1.5.0",
   cursor: "1.3.1",
-  grok: "1.0.70",
+  grok: "1.0.77",
 };
 
 /** Codex runtime databases on persistent storage (`CODEX_SQLITE_HOME`). */

@@ -11,11 +11,11 @@ used by Orkestrator. These integrations do not share one upgrade mechanism:
 | Codex | No runtime `@openai/codex-sdk` dependency. The bridge speaks JSON-RPC to `codex app-server` using generated types | The pinned `codex` executable is the app-server and is also used by isolated `codex exec` helpers | CLI and generated protocol `0.167.0` |
 | OpenCode | `@opencode-ai/sdk/v2/client` is used only by the backend (native chat and build pipelines) | The pinned `opencode` executable runs `opencode serve` | SDK and CLI `1.19.5` |
 | Cursor | `cursor-bridge` drives `@cursor/sdk` in process | No CLI; Cursor is SDK-only | SDK `1.3.1` (npm `latest`, verified 2026-11-06) |
-| Grok | The ACP bridge spawns the CLI and speaks ACP over its stdio; `@agentclientprotocol/sdk` supplies the protocol types | The pinned `grok` executable runs `grok … agent stdio` | CLI `1.0.70` (stable channel; verified 2026-10-30), ACP SDK `2.1.0` |
+| Grok | The ACP bridge spawns the CLI and speaks ACP over its stdio; `@agentclientprotocol/sdk` supplies the protocol types | The pinned `grok` executable runs `grok … agent stdio` | CLI `1.0.77` (stable channel; verified 2026-11-06), ACP SDK `2.4.0` |
 | Pi | `@earendil-works/pi-coding-agent` drives sessions in process; `@earendil-works/pi-ai` and `@earendil-works/pi-agent-core` supply types (upstream removed `@earendil-works/pi-server` in 1.2.0) | The pinned `pi` bundle is the same program published a second way, and is what a Pi terminal tab runs | SDK and CLI `1.5.0` |
 
 All versions are exact pins. Do not change them to ranges or `latest`.
-Verified against upstream stable releases on 2026-10-13.
+Verified against upstream stable releases on 2026-11-06.
 
 ## What is enforced, and what is not
 
@@ -1679,7 +1679,7 @@ nothing in CI can check. See
 `docs/architecture/agent-engines.md` for the bridge architecture.
 
 The bridge does pin the protocol's own package,
-`@agentclientprotocol/sdk` in `bridges/acp-bridge/package.json` (`2.1.0`). It
+`@agentclientprotocol/sdk` in `bridges/acp-bridge/package.json` (`2.4.0`). It
 supplies the wire types and `PROTOCOL_VERSION`, not a client: every request is
 still hand-written over the bridge's own JSON-RPC loop.
 `tests/unit/version-drift.test.ts` lists it as Grok's SDK pin with
@@ -1711,6 +1711,14 @@ and `promptCapabilities` are unchanged). It added `RequestError.sessionNotFound`
 `./experimental/mcp-http` and `./experimental/mcp-server`, and an optional peer
 `@modelcontextprotocol/server` that only those entries import.
 
+2.1.0 → 2.4.0 (schema 1.28 → 1.29.1) changed only doc comments in the stable
+v1 types; all fourteen types the bridge imports are identical and
+`PROTOCOL_VERSION` is still `1`. `Cost.currency` may now be a non-money unit
+such as `"credits"`, which `parseUsdCost` already ignores. The unstable surface
+gained `session/archive`, `auth/status`, `session/set_title` and
+`session/status`, none of which Grok 1.0.77 advertises, and dropped JSON-RPC
+batch types the bridge never used.
+
 The bridge launches Grok with `--always-approve agent stdio`. Grok 1.0.52 still
 asks over ACP for every edit, command, fetch and MCP call (MCP calls arrive as
 its `use_tool` wrapper), and the bridge answers them itself under the
@@ -1731,11 +1739,14 @@ still accepts the flags:
 grok --help | rg -- '--always-approve'
 
 # It must start and wait for JSON-RPC rather than exiting on an argv error.
-# Hold stdin open: at EOF it exits 0 at once, which proves nothing. Exit 124
-# (killed by the timeout, still alive) is the passing result.
+# Hold stdin open for longer than the timeout: at EOF it exits 0 at once, which
+# proves nothing (1.0.77 exits about 0.1 s after EOF, 1.0.70 took about 2 s, so
+# a `sleep 4` feeding a `timeout 6` now reports exit 0 on a healthy binary).
+# Exit 124 (killed by the timeout, still alive) is the passing result; a bogus
+# flag exits 2.
 # macOS has no `timeout`. Without one, hold stdin open on a FIFO, start grok
 # in the background, and check its own pid is still alive after a few seconds.
-(sleep 4 | timeout 6 grok --always-approve agent stdio; echo "exit $?")
+(sleep 10 | timeout 6 grok --always-approve agent stdio; echo "exit $?")
 
 # Then prove the handshake and a real `session/new` with the bridge's own params
 # (typed `headers` array, `additionalDirectories: []`). 1.0.44, 1.0.46 and
@@ -1756,7 +1767,7 @@ confirm the flag is still a global option and still covers both tools:
 
 ```bash
 grok --help | rg -- '--disable-web-search'
-(sleep 4 | timeout 6 grok --disable-web-search agent --no-leader stdio; echo "exit $?")
+(sleep 10 | timeout 6 grok --disable-web-search agent --no-leader stdio; echo "exit $?")
 ```
 
 Run these against the pinned version, not whatever is on `PATH` — compare
@@ -1868,6 +1879,16 @@ experiments and the updater.
   (`-32602 session not found`) instead of accepting it, but it still answers
   `queued` on an idle session. It cannot be pinned to a run, so a steer racing
   the end of a turn would land in the next one; `actions.steer` stays off.
+
+At 1.0.77 the signed-out checks (2026-11-06) found the same: the
+`initialize` answer is byte-identical to 1.0.70 apart from the agent's id,
+instance, version and working directory, every flag and `x.ai/*` name the
+bridge uses is still present, and `--disable-web-search` is still the only
+switch for search and fetch. `PromptResponse._meta` also carries a
+`cancelTrigger` beside `cancellationCategory` (binary strings; unverified
+signed in). Session writeback to code.grok.com (`GROK_STORAGE_MODE`,
+`features.writeback`) is documented in 1.0.77; whether remote settings turn it
+on for an ACP child is unverified (0007, Grok candidates).
 
 ### How to upgrade Grok
 

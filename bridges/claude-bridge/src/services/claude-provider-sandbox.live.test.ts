@@ -124,6 +124,19 @@ function observation(report: SandboxReport, name: string): SandboxObservation {
       expect(write.approvals, name).toEqual([]);
     }
 
+    // An asking policy may escape, but only with a visible approval. The
+    // command has not written while parked; acceptance permits it and denial
+    // prevents it. This also distinguishes a real escape from a sandboxed write.
+    for (const action of ["accept", "decline"] as const) {
+      const name = `write-outside-escape-ask-${action}`;
+      const escape = observation(report, name);
+      expect(escape.approvals, name).toEqual([{ kind: "command-approval", toolName: "Bash" }]);
+      expect(escape.writesBeforeApproval, name).toEqual([false]);
+      expect(escape.wrote, name).toBe(action === "accept");
+      expect(escape.toolResult!.isError, name).toBe(action === "decline");
+      expect(escape.unlistedHits, name).toBe(0);
+    }
+
     // A request to an unlisted host never arrives, whether it connects
     // directly (Seatbelt's network rule) or through the sandbox proxy
     // (`strictAllowlist`), and no approval card is raised for it.

@@ -29,7 +29,7 @@ export interface SandboxScenario {
   dangerouslyDisableSandbox?: boolean;
   /** The file the command tries to create, and in which scratch directory. */
   writes?: { in: "workspace" | "outside"; name: string };
-  /** Approve each tool approval the turn raises (an `ask` policy's Bash card). */
+  /** Approve each tool approval the turn raises; otherwise decline it. */
   approve?: boolean;
 }
 
@@ -43,6 +43,8 @@ export interface SandboxObservation {
   unlistedHits: number;
   /** Every tool approval the bridge raised during the turn. */
   approvals: Array<{ kind: string; toolName?: string }>;
+  /** File existence while each approval is still pending, before answering it. */
+  writesBeforeApproval: boolean[];
   questions: number;
   activity: string;
   modelCalls: number;
@@ -144,6 +146,23 @@ export const SCENARIOS: SandboxScenario[] = [
     command: ({ outside }) => writeTo(outside, "write-outside-escape"),
     dangerouslyDisableSandbox: true,
     writes: { in: "outside", name: "write-outside-escape" },
+  },
+  {
+    // `ask` permits an escape only after a visible Bash approval is accepted.
+    name: "write-outside-escape-ask-accept",
+    policy: providerSandbox("ask"),
+    command: ({ outside }) => writeTo(outside, "write-outside-escape-ask-accept"),
+    dangerouslyDisableSandbox: true,
+    writes: { in: "outside", name: "write-outside-escape-ask-accept" },
+    approve: true,
+  },
+  {
+    // Declining the same escape must leave the outside file absent.
+    name: "write-outside-escape-ask-decline",
+    policy: providerSandbox("ask"),
+    command: ({ outside }) => writeTo(outside, "write-outside-escape-ask-decline"),
+    dangerouslyDisableSandbox: true,
+    writes: { in: "outside", name: "write-outside-escape-ask-decline" },
   },
   {
     name: "network-direct",
@@ -381,6 +400,8 @@ async function main(): Promise<void> {
         throw new Error(`${scenario.name}: prompt answered ${prompt.status}`);
       }
       const approvals = new Map<string, { kind: string; toolName?: string }>();
+      const writesBeforeApproval: boolean[] = [];
+      const directory = scenario.writes?.in === "workspace" ? workspace : outside;
       const questions = new Set<string>();
       const deadline = Date.now() + TURN_TIMEOUT_MS;
       let activity = "unknown";
@@ -394,9 +415,15 @@ async function main(): Promise<void> {
             kind: String(interaction.kind),
             ...(typeof interaction.toolName === "string" ? { toolName: interaction.toolName } : {}),
           });
-          await call("POST", `/session/${id}/interactions/${interaction.id}`, {
+          if (scenario.writes) {
+            writesBeforeApproval.push(existsSync(join(directory, scenario.writes.name)));
+          }
+          const answered = await call("POST", `/session/${id}/interactions/${interaction.id}`, {
             action: scenario.approve ? "accept" : "decline",
           });
+          if (answered.status !== 200) {
+            throw new Error(`${scenario.name}: approval answer returned ${answered.status}`);
+          }
         }
         const pendingQuestions = await call("GET", `/session/${id}/questions`);
         for (const question of pendingQuestions.body?.questions ?? []) questions.add(question.id);
@@ -406,13 +433,13 @@ async function main(): Promise<void> {
       }
       // A late request (a retry after the result) still lands in the count.
       await sleep(500);
-      const directory = scenario.writes?.in === "workspace" ? workspace : outside;
       observations.push({
         name: scenario.name,
         toolResult: results.get(scenario.name) ?? null,
         wrote: scenario.writes ? existsSync(join(directory, scenario.writes.name)) : null,
         unlistedHits: unlistedHits.get(scenario.name) ?? 0,
         approvals: Array.from(approvals.values()),
+        writesBeforeApproval,
         questions: questions.size,
         activity,
         modelCalls: modelCalls.get(scenario.name) ?? 0,

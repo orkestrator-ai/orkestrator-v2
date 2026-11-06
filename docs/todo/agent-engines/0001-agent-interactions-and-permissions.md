@@ -240,6 +240,8 @@ macOS half done on 2026-11-06 on this Mac (Darwin 27.2.0, arm64), against pinned
 | --- | --- | --- | --- |
 | `write-outside` | provider sandbox, auto-approve, restricted | `printf > outside/…` failed: `operation not permitted`; no file | none |
 | `write-outside-escape` | same, with `dangerouslyDisableSandbox: true` | failed the same way; no file | none |
+| `write-outside-escape-ask-accept` | provider sandbox, ask, restricted, escape requested | no file before answering; accepting allowed the outside write | Bash |
+| `write-outside-escape-ask-decline` | same | no file before answering; declining returned a tool error and no file was written | Bash |
 | `network-direct` (and `-escape`) | same | `curl` to the loopback server: `Couldn't connect` (Seatbelt); 0 requests arrived | none |
 | `network-proxy` (and `-escape`) | same | `curl --noproxy ''` through the sandbox proxy: 403, `host is not on the allow list`; 0 requests arrived | none |
 | `network-proxy-ask` | provider sandbox, ask, restricted | the Bash card approved; the request refused as above; 0 arrived | the Bash card only |
@@ -248,7 +250,7 @@ macOS half done on 2026-11-06 on this Mac (Darwin 27.2.0, arm64), against pinned
 | `control-direct-full`, `control-proxy-full` | provider sandbox, auto-approve, full | reached the server, directly and through the proxy | none |
 | `control-proxy-full-ask` | provider sandbox, ask, full | reached the server after a second card | Bash, then `SandboxNetworkAccess` |
 
-The controls are what make the refusals mean something. The same commands work unsandboxed, and a sandboxed command can still write its workspace. With `strictAllowlist` off, the same proxied request is granted unseen under auto-approve, or raises a `SandboxNetworkAccess` card under `ask`, which is the behaviour the option exists to prevent. No defect was found, so no bridge code changed. The run takes about 17 s. It is opt-in: `mise run verify:claude:sandbox-live`, and the slow tier (`*.live.test.ts`). It skips on every platform but macOS. `docs/development/upgrade-agents.md` now runs it on a Claude bump.
+The controls are what make the refusals mean something. The same commands work unsandboxed, and a sandboxed command can still write its workspace. With `strictAllowlist` off, the same proxied request is granted unseen under auto-approve, or raises a `SandboxNetworkAccess` card under `ask`, which is the behaviour the option exists to prevent. No defect was found, so no production bridge code changed. The review follow-up added accepted and declined ask-policy escape turns, proving the write waits for approval. The expanded 14-turn check passed on 2026-11-06 in 23.1 s. It is opt-in: `mise run verify:claude:sandbox-live`, and the slow tier (`*.live.test.ts`). It skips on every platform but macOS. `docs/development/upgrade-agents.md` now runs it on a Claude bump.
 
 Still open: the Linux (bubblewrap) half. It needs a Linux host whose bubblewrap can nest the CLI's user namespace (see "Claude's sandbox on Linux" in `docs/architecture/coordinator.md`). The probe should carry over: lift the platform gate when `claudeLinuxSandboxStatus()` reports the sandbox available, and loosen the refusal-text assertions, which quote Seatbelt and may read differently under bubblewrap.
 
@@ -1088,6 +1090,16 @@ Task 9. Chose to run the real bridge's routes in a probe process (as the MCP syn
 ### Task 9: route one request through the sandbox proxy
 
 Task 9. Chose to send the unlisted request both directly and with `curl --noproxy ''`. The sandbox's `NO_PROXY` covers loopback, so a plain loopback request never reaches the proxy, where `strictAllowlist` is decided. A public domain would reach the proxy without the flag, but the ticket prefers a loopback server, and a public host makes the run depend on the network. The `networkAccess: "full"` controls show that the proxied request is reached, or asked about, once `strictAllowlist` is off. That makes the refusal evidence of the option, not of a broken route.
+
+### Task 9: cover both answers to an ask-policy escape (2026-11-06)
+
+Chose two separate outside-write turns with `dangerouslyDisableSandbox: true`,
+one accepted and one declined through the real bridge interactions route.
+Both assert that the file is absent before the approval is answered. This
+closes the review's ask-policy coverage gap and proves both actual escape
+after acceptance and no write after denial; checking the card alone would
+not establish either outcome. The existing auto-approve cases still prove
+that unattended requests cannot escape.
 
 ### Task 9: the CLI under test is the SDK's bundled binary
 

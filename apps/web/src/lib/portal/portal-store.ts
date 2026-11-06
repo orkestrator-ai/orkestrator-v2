@@ -31,6 +31,7 @@ import {
 } from "@orkestrator/protocol/backend-profile";
 import {
   NODE_SUMMARY_CHANGED_EVENT,
+  NODE_OUTCOMES_CHANGED_EVENT,
   type NodeSummariesResult,
   type NodeSummary,
   type SelfNodeSummary,
@@ -233,6 +234,146 @@ export async function listNodeOutcomes(nodeId: string): Promise<NodeOutcomeRecor
   const value = await portalInvoke<NodeOutcomeRecord[]>("list_node_outcomes", { nodeId });
   return Array.isArray(value) ? value : [];
 }
+
+/** How long outcome and node summary changes are gathered before lists are read again. */
+export const NODE_OUTCOMES_REFRESH_DEBOUNCE_MS = 250;
+
+type NodeOutcomesEntry = {
+  listeners: Set<(outcomes: NodeOutcomeRecord[]) => void>;
+  value: NodeOutcomeRecord[] | null;
+  reading: Promise<void> | null;
+  dirty: boolean;
+  timer: ReturnType<typeof setTimeout> | null;
+};
+
+/**
+ * One window's view of the outcome-unknown records, shared by every notice
+ * that shows them. Each sidebar machine section used to read its own list on
+ * every `node-summary-changed` for any node, so N sections cost N reads per
+ * event. Here one subscription serves them all: a change re-reads only the
+ * node it names, after a short debounce, with one read in flight per node.
+ */
+export class NodeOutcomesStore {
+  private readonly entries = new Map<string, NodeOutcomesEntry>();
+  private unlisteners: Array<() => void> = [];
+  private listening = false;
+  private listeningGeneration = 0;
+
+  constructor(
+    private readonly read: (nodeId: string) => Promise<NodeOutcomeRecord[]> = listNodeOutcomes,
+    private readonly listenTo: typeof portalListen = portalListen,
+  ) {}
+
+  /** Calls `listener` with the node's records now (when held) and on every change. */
+  subscribe(nodeId: string, listener: (outcomes: NodeOutcomeRecord[]) => void): () => void {
+    let entry = this.entries.get(nodeId);
+    if (!entry) {
+      entry = { listeners: new Set(), value: null, reading: null, dirty: false, timer: null };
+      this.entries.set(nodeId, entry);
+    }
+    const fresh = entry.listeners.size === 0;
+    entry.listeners.add(listener);
+    this.startListening();
+    if (entry.value) listener(entry.value);
+    // A node nobody watched may have changed unobserved; read it once.
+    if (fresh) void this.refresh(nodeId);
+    let active = true;
+    return () => {
+      if (!active) return;
+      active = false;
+      const current = this.entries.get(nodeId);
+      if (!current) return;
+      current.listeners.delete(listener);
+      if (current.listeners.size > 0) return;
+      if (current.timer) clearTimeout(current.timer);
+      current.timer = null;
+      if (!current.reading) this.entries.delete(nodeId);
+      if (![...this.entries.values()].some((other) => other.listeners.size > 0)) {
+        this.stopListening();
+      }
+    };
+  }
+
+  /** Re-reads one node's records now, sharing a read already in flight. */
+  refresh(nodeId: string): Promise<void> {
+    const entry = this.entries.get(nodeId);
+    if (!entry || entry.listeners.size === 0) return Promise.resolve();
+    if (entry.reading) {
+      entry.dirty = true;
+      return entry.reading;
+    }
+    const run = this.read(nodeId)
+      .then((outcomes) => {
+        entry.value = outcomes;
+        for (const listener of Array.from(entry.listeners)) listener(outcomes);
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        entry.reading = null;
+        if (entry.listeners.size === 0) {
+          if (this.entries.get(nodeId) === entry) this.entries.delete(nodeId);
+          return;
+        }
+        if (entry.dirty) {
+          entry.dirty = false;
+          void this.refresh(nodeId);
+        }
+      });
+    entry.reading = run;
+    return run;
+  }
+
+  /** Re-reads every watched node. */
+  refreshAll(): void {
+    for (const nodeId of Array.from(this.entries.keys())) this.scheduleRefresh(nodeId);
+  }
+
+  private scheduleRefresh(nodeId: string): void {
+    const entry = this.entries.get(nodeId);
+    if (!entry || entry.listeners.size === 0 || entry.timer) return;
+    entry.timer = setTimeout(() => {
+      entry.timer = null;
+      void this.refresh(nodeId);
+    }, NODE_OUTCOMES_REFRESH_DEBOUNCE_MS);
+  }
+
+  private startListening(): void {
+    if (this.listening) return;
+    this.listening = true;
+    const generation = ++this.listeningGeneration;
+    const attach = (event: string, handler: (payload: unknown) => void) => {
+      void this.listenTo<unknown>(event, ({ payload }) => {
+        if (this.listening && generation === this.listeningGeneration) handler(payload);
+      })
+        .then((stop) => {
+          if (this.listening && generation === this.listeningGeneration)
+            this.unlisteners.push(stop);
+          else stop();
+        })
+        .catch(() => undefined);
+    };
+    const refreshChangedNode = (payload: unknown) => {
+      const nodeId = (payload as { nodeId?: unknown } | null)?.nodeId;
+      if (typeof nodeId === "string") this.scheduleRefresh(nodeId);
+      else this.refreshAll();
+    };
+    attach(NODE_SUMMARY_CHANGED_EVENT, refreshChangedNode);
+    attach(NODE_OUTCOMES_CHANGED_EVENT, refreshChangedNode);
+    // Records written while the stream was down arrive with no event.
+    attach(NATIVE_EVENT_STREAM_CONNECTED_EVENT, () => this.refreshAll());
+  }
+
+  private stopListening(): void {
+    if (!this.listening) return;
+    this.listening = false;
+    this.listeningGeneration += 1;
+    for (const stop of this.unlisteners) stop();
+    this.unlisteners = [];
+  }
+}
+
+/** One per window, like {@link portalStore}. */
+export const nodeOutcomesStore = new NodeOutcomesStore();
 
 export async function dismissNodeOutcome(outcomeId: string): Promise<void> {
   await portalInvoke("dismiss_node_outcome", { outcomeId });

@@ -332,6 +332,34 @@ export async function getMultiReviewWorkflow<T = unknown>(
   });
 }
 
+/**
+ * `unchanged` when the record is still at `knownRevision`, otherwise the
+ * record. A backend that predates the conditional read ignores the revision
+ * and always answers with the record.
+ */
+export async function getMultiReviewWorkflowConditional<T = unknown>(
+  workflowId: string,
+  knownRevision?: number,
+): Promise<{ unchanged: true; revision: number } | PersistedWorkflowRecord<T> | null> {
+  const response = await invoke<unknown>("get_multi_review_workflow", {
+    workflowId,
+    ...(knownRevision === undefined ? {} : { knownRevision }),
+  });
+  if (response === null || response === undefined) return null;
+  if (
+    isRecord(response) &&
+    response.unchanged === true &&
+    Number.isSafeInteger(response.revision) &&
+    (response.revision as number) >= 0
+  ) {
+    return response as { unchanged: true; revision: number };
+  }
+  if (!isRecord(response) || "unchanged" in response || typeof response.id !== "string") {
+    throw new Error("Invalid get_multi_review_workflow response");
+  }
+  return response as unknown as PersistedWorkflowRecord<T>;
+}
+
 export async function listMultiReviewWorkflows<T = unknown>(
   environmentId: string,
 ): Promise<Array<PersistedWorkflowRecord<T>>> {

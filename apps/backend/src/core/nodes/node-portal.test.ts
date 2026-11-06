@@ -2,7 +2,10 @@ import { describe, expect, spyOn, test } from "bun:test";
 
 import type { NodeRoute } from "@orkestrator/protocol/command-nodes";
 import type { RouteId } from "@orkestrator/protocol/federation";
-import { NODE_SUMMARY_CHANGED_EVENT } from "@orkestrator/protocol/node-summaries";
+import {
+  NODE_OUTCOMES_CHANGED_EVENT,
+  NODE_SUMMARY_CHANGED_EVENT,
+} from "@orkestrator/protocol/node-summaries";
 
 import { ClientGrantService } from "./client-grants.js";
 import { settle, TestNodeNetwork, type TestNode } from "./node-network-test-support.js";
@@ -296,8 +299,14 @@ describe("PT-02/PT-05 node-qualified routing", () => {
     expect(result).toMatchObject({ outcome: "unknown", requestKey: "req-1" });
     expect(calls).toBe(1);
     const recorded = command.portal.outcomes.list("bk_leaf");
+    expect(command.events.filter(({ event }) => event === NODE_OUTCOMES_CHANGED_EVENT)).toEqual([
+      { event: NODE_OUTCOMES_CHANGED_EVENT, payload: { nodeId: "bk_leaf" } },
+    ]);
     expect(recorded.map((entry) => entry.command)).toEqual(["start_environment_background"]);
     expect(await command.portal.outcomes.dismiss(recorded[0]!.outcomeId)).toBe(true);
+    expect(
+      command.events.filter(({ event }) => event === NODE_OUTCOMES_CHANGED_EVENT),
+    ).toHaveLength(2);
   });
 });
 

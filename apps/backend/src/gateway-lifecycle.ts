@@ -248,7 +248,27 @@ export class GatewayLifecycle {
     server.on("connection", (socket) => {
       this.ctx.traffic.noteConnection(listenerKind);
       this.ctx.sockets.add(socket);
-      socket.once("close", () => this.ctx.sockets.delete(socket));
+      // Who ended the connection: a FIN from the client arrives as `end`
+      // while this side is still writable; anything else is the gateway's
+      // own close (keep-alive timeout, `connection: close`, shutdown).
+      // Prepended so they run before the HTTP server's own handlers, which
+      // end the socket on `end`. Bun reports a reset only as `error`, never
+      // as `close(hadError)`, so the error flag is kept separately.
+      let peerEndedFirst = false;
+      let failed = false;
+      socket.prependOnceListener("end", () => {
+        if (!socket.writableEnded) peerEndedFirst = true;
+      });
+      socket.prependListener("error", () => {
+        failed = true;
+      });
+      socket.once("close", (hadError: boolean) => {
+        this.ctx.sockets.delete(socket);
+        this.ctx.traffic.noteSocketClosed(
+          socket,
+          hadError || failed ? "error" : peerEndedFirst ? "peer" : "server",
+        );
+      });
     });
     server.on("upgrade", (request, socket, head) => {
       try {

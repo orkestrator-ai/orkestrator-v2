@@ -360,7 +360,13 @@ connect: connection reset by peer`. To name the sender, the gateway counts new
 connections and requests per second (`apps/backend/src/gateway-traffic-summary.ts`).
 When a second holds 100 or more of either, it writes one `[gateway]
 traffic.burst` warning per burst, at most one every 30 s, with the top sources,
-route classes, client families, listeners and invoke command names. The source
+route classes, client families, listeners and invoke command names. It also
+counts how the burst's sockets closed: `closedByPeer` (the client sent FIN
+first), `closedByServer` (the gateway ended it: keep-alive timeout,
+`connection: close`, shutdown), `closedOnError` (a reset or failed write), and
+`singleRequestSockets`, the closed sockets that carried one request. A burst
+with many new connections and many single-request sockets is churn; the close
+counts say which side causes it. The source
 is `X-Forwarded-For`, which Serve sets to the sending device's tailnet address,
 believed only on a loopback connection and only as an IP literal; map it to a
 device with `tailscale status`. Connections the kernel reset never reach the

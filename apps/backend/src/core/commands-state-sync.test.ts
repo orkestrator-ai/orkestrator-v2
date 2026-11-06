@@ -4347,6 +4347,19 @@ describe("multi review commands", () => {
       expect(rendererWorkflow).not.toHaveProperty("controllerLease");
       expect(rendererWorkflow.snapshot).not.toHaveProperty("controllerFence");
       expect(rendererWorkflow.snapshot).toMatchObject({ id: "workflow-1", phase: "reviewing" });
+      const revision = (rendererWorkflow as unknown as { revision: number }).revision;
+      expect(
+        await invoke("get_multi_review_workflow", {
+          workflowId: "workflow-1",
+          knownRevision: revision,
+        }),
+      ).toEqual({ unchanged: true, revision });
+      const stale = (await invoke("get_multi_review_workflow", {
+        workflowId: "workflow-1",
+        knownRevision: revision - 1,
+      })) as Record<string, unknown>;
+      expect(stale).not.toHaveProperty("unchanged");
+      expect(stale).not.toHaveProperty("controllerLease");
       const listed = (await invoke("list_multi_review_workflows", {
         environmentId: "e1",
       })) as Array<Record<string, unknown>>;

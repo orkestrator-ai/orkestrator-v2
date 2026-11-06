@@ -1,5 +1,11 @@
-import { hydrateBuildPipeline } from "@/lib/build-pipeline-persistence";
-import { hydrateMultiReviewWorkflow } from "@/lib/multi-review-persistence";
+import {
+  hydrateBuildPipeline,
+  isBuildPipelineKnownUnavailable,
+} from "@/lib/build-pipeline-persistence";
+import {
+  hydrateMultiReviewWorkflow,
+  isMultiReviewWorkflowKnownUnavailable,
+} from "@/lib/multi-review-persistence";
 import {
   preserveClientPaneSelection,
   preserveRendererLocalPaneFields,
@@ -533,29 +539,51 @@ function collectMultiReviewIds(root: unknown): Set<string> {
   return ids;
 }
 
+/** Most dependency reads one layout refresh runs at once. */
+export const PANE_DEPENDENCY_READ_CONCURRENCY = 4;
+
 /**
  * Loads any build pipeline or Multi Review a snapshot references but this
  * client has never seen, so `reconcilePersistedLayout` does not drop the tab
- * that carries it. Already-present records are not refetched.
+ * that carries it. Already-present records are not refetched, and neither are
+ * records a point read already found missing: a tab left pointing at a deleted
+ * pipeline or review would otherwise cost one read per window on every layout
+ * change. A change event for such a record still reads it. The reads run a
+ * few at a time rather than all at once, so a layout with many tabs does not
+ * open one connection per tab.
  */
 export async function hydratePaneLayoutDependencies(root: unknown): Promise<void> {
   const { pipelineIds } = collectPaneDependencyIds(root);
   const multiReviewIds = collectMultiReviewIds(root);
-  const missingPipelineIds = [...pipelineIds].filter(
-    (pipelineId) => !useBuildPipelineStore.getState().pipelines.has(pipelineId),
-  );
-  const missingMultiReviewIds = [...multiReviewIds].filter(
-    (workflowId) => !useMultiReviewStore.getState().workflows.has(workflowId),
-  );
-  if (missingPipelineIds.length === 0 && missingMultiReviewIds.length === 0) return;
-  await Promise.all([
-    ...missingPipelineIds.map((pipelineId) =>
-      hydrateBuildPipeline(pipelineId).then(() => undefined),
+  const reads: Array<() => Promise<unknown>> = [
+    ...[...pipelineIds]
+      .filter(
+        (pipelineId) =>
+          !useBuildPipelineStore.getState().pipelines.has(pipelineId) &&
+          !isBuildPipelineKnownUnavailable(pipelineId),
+      )
+      .map((pipelineId) => () => hydrateBuildPipeline(pipelineId)),
+    ...[...multiReviewIds]
+      .filter(
+        (workflowId) =>
+          !useMultiReviewStore.getState().workflows.has(workflowId) &&
+          !isMultiReviewWorkflowKnownUnavailable(workflowId),
+      )
+      .map((workflowId) => () => hydrateMultiReviewWorkflow(workflowId)),
+  ];
+  if (reads.length === 0) return;
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < reads.length) {
+      const read = reads[next++]!;
+      await read();
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(PANE_DEPENDENCY_READ_CONCURRENCY, reads.length) }, () =>
+      worker(),
     ),
-    ...missingMultiReviewIds.map((workflowId) =>
-      hydrateMultiReviewWorkflow(workflowId).then(() => undefined),
-    ),
-  ]);
+  );
 }
 
 /**

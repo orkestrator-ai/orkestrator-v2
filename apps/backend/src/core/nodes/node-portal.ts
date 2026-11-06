@@ -3,7 +3,10 @@ import { randomUUID } from "node:crypto";
 import { parseBackendProfile } from "@orkestrator/protocol/backend-profile";
 import type { NodeView } from "@orkestrator/protocol/command-nodes";
 import { isBackendId, type BackendId } from "@orkestrator/protocol/federation";
-import type { NodeSummariesResult } from "@orkestrator/protocol/node-summaries";
+import {
+  NODE_OUTCOMES_CHANGED_EVENT,
+  type NodeSummariesResult,
+} from "@orkestrator/protocol/node-summaries";
 
 import { ClientGrantService, MAX_GRANT_TTL_MS, type ClientGrant } from "./client-grants.js";
 import { NodeEventRelay } from "./node-event-relay.js";
@@ -105,7 +108,9 @@ export class NodePortal {
       ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
       ...(options.now ? { now: options.now } : {}),
     });
-    this.outcomes = new NodeOutcomeLedger(options.outcomes);
+    this.outcomes = new NodeOutcomeLedger(options.outcomes, (nodeId) => {
+      options.emit(NODE_OUTCOMES_CHANGED_EVENT, { nodeId });
+    });
     this.grants = new ClientGrantService(options.now);
     options.nodes.onControllerDetached((controllerId) => {
       this.grants.revokeController(controllerId);

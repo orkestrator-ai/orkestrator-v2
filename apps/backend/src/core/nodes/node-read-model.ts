@@ -89,6 +89,14 @@ export const NODE_SUMMARY_EVENT_PREFIXES = [
 
 const SUMMARY_READ_CONCURRENCY = 4;
 const REFRESH_DEBOUNCE_MS = 250;
+/**
+ * Least time between two `node-summary-changed` events for one node. Every
+ * client re-reads its summaries on each one, so a busy node (a pipeline
+ * checkpointing, activity timestamps moving) is announced at most this often;
+ * the last change in a window is always announced at its end.
+ */
+export const NODE_SUMMARY_CHANGE_MIN_INTERVAL_MS = 1_000;
+const NODE_SUMMARY_CHANGE_BATCH_MS = 50;
 /** Last-resort re-read of every connected node's summaries. */
 export const SUMMARY_RECONCILE_MS = 60_000;
 const PERSIST_DEBOUNCE_MS = 5_000;
@@ -144,6 +152,8 @@ export class NodeReadModel {
   private persistTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly changed = new Set<BackendId>();
   private changeTimer: ReturnType<typeof setTimeout> | null = null;
+  private changeTimerDueAt: number | null = null;
+  private readonly lastChangeEmittedAt = new Map<BackendId, number>();
   private reconcileJobs: BackendActivityJobs | null = null;
   private started = false;
   private readonly listeners = new Set<
@@ -168,6 +178,8 @@ export class NodeReadModel {
       reconcileMs?: number;
       /** Test seam for the per-node environment refresh debounce (250 ms). */
       refreshDebounceMs?: number;
+      /** Test seam for {@link NODE_SUMMARY_CHANGE_MIN_INTERVAL_MS}. */
+      changeMinIntervalMs?: number;
     },
   ) {}
 
@@ -221,6 +233,7 @@ export class NodeReadModel {
     }
     if (this.changeTimer) clearTimeout(this.changeTimer);
     this.changeTimer = null;
+    this.changeTimerDueAt = null;
   }
 
   /** Other consumers (coordinator mail, outbox collection) of the same streams. */
@@ -535,12 +548,16 @@ export class NodeReadModel {
       projectIds,
     );
     if (this.states.get(nodeId) !== state || state.epoch !== epoch) return;
+    const before = summaryFingerprint(state);
     for (const [projectId, result] of updates) {
       if (!result) continue;
       state.environmentsByProject.set(projectId, result.environments);
       state.truncated ||= result.truncated;
     }
-    this.noteChanged(nodeId);
+    // A node's own change events often leave its summary as it was (a
+    // pipeline checkpoint, a mail count elsewhere); clients re-read on every
+    // announcement, so only a summary that changed is announced.
+    if (summaryFingerprint(state) !== before) this.noteChanged(nodeId);
   }
 
   /** Re-read one node's summaries; coalesces concurrent requests. */
@@ -657,19 +674,51 @@ export class NodeReadModel {
 
   private noteChanged(nodeId: BackendId): void {
     this.changed.add(nodeId);
-    if (this.changeTimer) return;
+    const now = (this.options.now ?? Date.now)();
+    const last = this.lastChangeEmittedAt.get(nodeId);
+    const eligibleAt =
+      last === undefined
+        ? now
+        : last + (this.options.changeMinIntervalMs ?? NODE_SUMMARY_CHANGE_MIN_INTERVAL_MS);
+    const dueAt = Math.max(now + NODE_SUMMARY_CHANGE_BATCH_MS, eligibleAt);
+    if (this.changeTimerDueAt === null || dueAt < this.changeTimerDueAt) {
+      if (this.changeTimer) clearTimeout(this.changeTimer);
+      this.scheduleChangeFlush(dueAt - now);
+    }
+  }
+
+  private scheduleChangeFlush(delayMs: number): void {
+    this.changeTimerDueAt = (this.options.now ?? Date.now)() + delayMs;
     this.changeTimer = setTimeout(() => {
       this.changeTimer = null;
-      const nodeIds = [...this.changed];
-      this.changed.clear();
-      for (const id of nodeIds) {
-        this.options.emit(NODE_SUMMARY_CHANGED_EVENT, {
-          nodeId: id,
-          epoch: this.states.get(id)?.epoch ?? 0,
-        });
-      }
-    }, 50);
+      this.changeTimerDueAt = null;
+      this.flushChanged();
+    }, delayMs);
     this.changeTimer.unref?.();
+  }
+
+  /** Announces changed nodes, holding back any announced within the minimum interval. */
+  private flushChanged(): void {
+    const interval = this.options.changeMinIntervalMs ?? NODE_SUMMARY_CHANGE_MIN_INTERVAL_MS;
+    const now = (this.options.now ?? Date.now)();
+    let nextDueMs: number | null = null;
+    for (const id of Array.from(this.changed)) {
+      const last = this.lastChangeEmittedAt.get(id);
+      if (last !== undefined && now - last < interval) {
+        const due = last + interval - now;
+        nextDueMs = nextDueMs === null ? due : Math.min(nextDueMs, due);
+        continue;
+      }
+      this.changed.delete(id);
+      this.lastChangeEmittedAt.set(id, now);
+      this.options.emit(NODE_SUMMARY_CHANGED_EVENT, {
+        nodeId: id,
+        epoch: this.states.get(id)?.epoch ?? 0,
+      });
+      // A forgotten node's last announcement needs no throttle record.
+      if (!this.states.has(id) && id !== this.self.id) this.lastChangeEmittedAt.delete(id);
+    }
+    if (nextDueMs !== null) this.scheduleChangeFlush(Math.max(1, nextDueMs));
   }
 
   private schedulePersist(): void {

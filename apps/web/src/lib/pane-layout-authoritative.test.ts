@@ -19,9 +19,19 @@ afterAll(() => {
 
 const hydrateBuildPipeline = mock(async (_id: string) => null as unknown);
 const hydrateMultiReviewWorkflow = mock(async (_id: string) => undefined);
+const unavailablePipelines = new Set<string>();
+const unavailableWorkflows = new Set<string>();
+const isBuildPipelineKnownUnavailable = (id: string) => unavailablePipelines.has(id);
+const isMultiReviewWorkflowKnownUnavailable = (id: string) => unavailableWorkflows.has(id);
 
-mock.module("@/lib/build-pipeline-persistence", () => ({ hydrateBuildPipeline }));
-mock.module("@/lib/multi-review-persistence", () => ({ hydrateMultiReviewWorkflow }));
+mock.module("@/lib/build-pipeline-persistence", () => ({
+  hydrateBuildPipeline,
+  isBuildPipelineKnownUnavailable,
+}));
+mock.module("@/lib/multi-review-persistence", () => ({
+  hydrateMultiReviewWorkflow,
+  isMultiReviewWorkflowKnownUnavailable,
+}));
 
 const {
   armBuildPipelineTabActivation,
@@ -119,6 +129,8 @@ beforeEach(() => {
   localStorage.clear();
   hydrateBuildPipeline.mockClear();
   hydrateMultiReviewWorkflow.mockClear();
+  unavailablePipelines.clear();
+  unavailableWorkflows.clear();
   useEnvironmentStore.setState({ environments: [environment()] });
   useBuildPipelineStore.setState({
     pipelines: new Map(),
@@ -245,6 +257,48 @@ describe("collectPaneDependencyIds", () => {
 });
 
 describe("hydratePaneLayoutDependencies", () => {
+  test("does not re-read a pipeline or review a point read already found missing", async () => {
+    const root = leaf("default", [
+      { id: "build", type: "claude-build", buildTabData: { pipelineId: "gone-pipeline" } },
+      { id: "review", type: "multi-review", multiReviewTabData: { workflowId: "gone-review" } },
+      { id: "live", type: "claude-build", buildTabData: { pipelineId: "live-pipeline" } },
+    ]);
+    unavailablePipelines.add("gone-pipeline");
+    unavailableWorkflows.add("gone-review");
+
+    await hydratePaneLayoutDependencies(root);
+
+    expect(hydrateBuildPipeline.mock.calls.map(([id]) => id)).toEqual(["live-pipeline"]);
+    expect(hydrateMultiReviewWorkflow).not.toHaveBeenCalled();
+  });
+
+  test("runs at most four dependency reads at once", async () => {
+    const root = leaf(
+      "default",
+      Array.from({ length: 10 }, (_, index) => ({
+        id: `build-${index}`,
+        type: "claude-build",
+        buildTabData: { pipelineId: `pipeline-${index}` },
+      })),
+    );
+    let inFlight = 0;
+    let peak = 0;
+    hydrateBuildPipeline.mockImplementation(async () => {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      inFlight -= 1;
+      return null;
+    });
+    try {
+      await hydratePaneLayoutDependencies(root);
+    } finally {
+      hydrateBuildPipeline.mockImplementation(async () => null);
+    }
+    expect(hydrateBuildPipeline).toHaveBeenCalledTimes(10);
+    expect(peak).toBe(4);
+  });
+
   test("hydrates a persisted pipeline pass before reconciliation, including on reload", async () => {
     const root = leaf("default", [
       {

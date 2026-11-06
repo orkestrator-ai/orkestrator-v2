@@ -2,11 +2,9 @@ import { useCallback, useEffect, useState } from "react";
 import { AlertTriangle, X } from "lucide-react";
 import {
   dismissNodeOutcome,
-  listNodeOutcomes,
+  nodeOutcomesStore,
   type NodeOutcomeRecord,
 } from "@/lib/portal/portal-store";
-import { portalListen } from "@/lib/portal/portal-transport";
-import { NODE_SUMMARY_CHANGED_EVENT } from "@orkestrator/protocol/node-summaries";
 import { useFederation } from "./FederationProvider";
 
 type NodeOutcome = NodeOutcomeRecord;
@@ -29,28 +27,16 @@ export function UnknownOutcomesNotice({ connectionId }: { connectionId: string }
   const [outcomes, setOutcomes] = useState<NodeOutcome[]>([]);
   const outcomesRevision = useFederation().portalState.outcomesRevision;
   const refresh = useCallback(() => {
-    void listNodeOutcomes(connectionId)
-      .then(setOutcomes)
-      .catch(() => undefined);
+    void nodeOutcomesStore.refresh(connectionId);
   }, [connectionId]);
 
   useEffect(() => {
     if (outcomesRevision > 0) refresh();
   }, [outcomesRevision, refresh]);
 
-  useEffect(() => {
-    refresh();
-    let stop: (() => void) | null = null;
-    let active = true;
-    void portalListen(NODE_SUMMARY_CHANGED_EVENT, refresh).then((unlisten) => {
-      if (active) stop = unlisten;
-      else unlisten();
-    });
-    return () => {
-      active = false;
-      stop?.();
-    };
-  }, [refresh]);
+  // One shared subscription per window: it re-reads this machine's records only
+  // when a change names it, however many notices are mounted.
+  useEffect(() => nodeOutcomesStore.subscribe(connectionId, setOutcomes), [connectionId]);
 
   if (outcomes.length === 0) return null;
   return (

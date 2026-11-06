@@ -16,7 +16,8 @@
  *   the user and the project file opens the project row, the one loaded.
  * - A Claude session whose CLI exits before any status read reaches it
  *   (docs/todo/mcp/0039, task 14): no hold-open hook, and one stdio server held
- *   `connecting` by a hold file until after the exit. Every row, `orkestrator`
+ *   `connecting` by a hold file until after the exit, with the first-turn MCP
+ *   startup wait disabled in this fixture. Every row, `orkestrator`
  *   included, must read something other than `connecting` (the held one
  *   `unknown`), the row must still offer reconnect, and the reconnect runs
  *   through the probe and changes only its own row, before and after a reload.
@@ -30,7 +31,8 @@
  * profile's isolated `~/.claude.json`. Opt-in, so a credentialed default run
  * never starts it:
  *
- *   mise run dev:test --profile mcp-ui --fixture --no-agent-credentials --agent-platforms claude
+ *   CLAUDE_BRIDGE_RUNTIME_IDLE_MS=0 CLAUDE_CODE_MCP_STARTUP_WAIT_MS=0 \
+ *     mise run dev:test --profile mcp-ui --fixture --no-agent-credentials --agent-platforms claude
  *   ORKESTRATOR_AGENT_TEST_PROFILE=mcp-ui ORKESTRATOR_AGENT_TEST_MCP_UI=1 \
  *     mise run test:agent:browser -- e2e/agent-testing/mcp-ui-matrix.spec.ts
  */
@@ -859,11 +861,19 @@ test.describe("MCP settings and live panel UI matrix (claude)", () => {
         "project",
         stdio(SLOW_SERVER, PROBE_SERVER, ["--log", probeLog, "--hold-file", holdFile]),
       );
-      // No hold-open hook: the CLI must exit before any status read reaches it.
+      // No hold-open hook. Request non-blocking first-turn MCP startup; the
+      // zero-idle profile documented above also drains the runtime at turn
+      // end, so this case exercises the exited-CLI inventory fallback.
+      // https://code.claude.com/docs/en/agent-sdk/mcp#connection-timing
       expect(
         existsSync(path.join(worktree, ".claude", "settings.json")),
         "the worktree has a Claude settings file that could hold the CLI open",
       ).toBe(false);
+      mkdirSync(path.join(worktree, ".claude"), { recursive: true });
+      writeFileSync(
+        path.join(worktree, ".claude", "settings.json"),
+        `${JSON.stringify({ env: { CLAUDE_CODE_MCP_STARTUP_WAIT_MS: "0" } })}\n`,
+      );
 
       await loadAppWithDevRetry(page, testInfo, () => page.goto(status.browserUrl!));
       await openEnvironment(page, project!.name, environment.name);

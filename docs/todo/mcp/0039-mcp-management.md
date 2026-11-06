@@ -175,16 +175,19 @@ option, first half.
   never offered it, so an `applied` outcome was false), `offered-not-connected`
   (listed but not connected; the status is the detail),
   `offered-not-called` (listed and connected, and no tool row of the turn
-  names it: the model did not look), `called-not-reached` (a tool row names it
-  but the server logged no call), `still-offered` (a probe that must fail,
+  names it after a successful turn: the model did not look),
+  `called-not-reached` (a tool row names it but the server logged no call), `still-offered` (a probe that must fail,
   and the session still lists the server), `no-inventory` (the session
-  reported none) and `reached` (the server logged the call; the failure is in
-  the reply or tag). The record keeps only probe-server rows of the inventory,
+  reported none), `turn-failed` (the turn failed before a server call was
+  observed, so model non-use cannot be inferred) and `reached` (the server
+  logged the call; the failure is in the reply or tag). The record keeps only probe-server rows of the inventory,
   plus a count of the other servers, so a missing name is not mistaken for a
   missing list.
 - The Pi bridge serves that inventory (`GET /session/:id/mcp`, from the MCP
   client it owns), so the 2026-10-22 user-scope failures would now read
-  `not-offered` or `offered-not-called` instead of only "unavailable".
+  `not-offered`, `offered-not-called` or `turn-failed` instead of only
+  "unavailable". A logged server call remains `reached` even if the turn later
+  fails.
 - Checked: unit tests (all of `mcp-apply-live-support.test.ts` pass), the
   agent-testing typecheck, lint and format. The spec itself was not run: every
   probe needs a model turn.
@@ -207,7 +210,9 @@ turns):
 - Then read each failed user-scope probe's `diagnosis` in
   `output/agent-testing/<run>/mcp-apply-live/pi.json`: `not-offered` after an
   `applied` outcome is a Pi bridge bug to fix; `offered-not-called` is the
-  model, and qualifies the scope only if a repeat passes.
+  model after a successful turn, and qualifies the scope only if a repeat
+  passes. `turn-failed` needs a successful rerun before attributing non-use
+  to the model.
 
 ### 6. Corrected live probes and completion matrix
 
@@ -1371,6 +1376,76 @@ inventory, so the existing substitution rule (item 12) still applies.
 
 The Pi rerun needs a real Pi login and billed turns, which this work was not
 allowed to use. What it needs is recorded under task 5.
+
+#### Tasks 5 and 14: review corrections (2026-11-06)
+
+Task 5 now passes the turn error into `diagnoseProbe`. Chose a distinct
+`turn-failed` classification before interpreting inventory, while keeping a
+logged server call authoritative as `reached`. Keeping inventory-only
+classification would preserve the old labels, but could blame the model for a
+dispatch, provider or no-progress failure. Unit cases cover each error kind,
+missing inventory, negative expectations and a reached server followed by an
+error. Error text is not copied into the diagnosis.
+
+Task 14's hold-file server now reads and buffers at most 1 MiB while deferring
+responses. Keeping stdin paused avoided a fixture buffer, but could not
+observe EOF and left the polling process alive when its client closed. Direct
+process tests cover silence while held, the buffered response after release,
+and exit on EOF both with and without buffered input. These tests live in
+`mcp-probe-server.integration.test.ts` and use only their own child handles for
+cleanup.
+
+The first review run with EOF handling read `failed` rather than `unknown`:
+Claude waited out its 30 s MCP connection deadline before refusing the turn.
+The task 14 fixture now sets `CLAUDE_CODE_MCP_STARTUP_WAIT_MS=0` in its own
+project settings, as documented in
+[the SDK connection timing guide](https://code.claude.com/docs/en/agent-sdk/mcp#connection-timing).
+The disposable profile also sets the existing
+`CLAUDE_BRIDGE_RUNTIME_IDLE_MS=0` control, because the default keeps the CLI
+warm for ten minutes. The profile supplies the startup-wait variable too,
+so the SDK sees it at process launch. No hold-open hook or credentials are
+added, and the `unknown` assertion is retained. Keeping the defaults would
+test a warm runtime and a failed connection rather than the exited-CLI
+pending-connection fallback this case owns.
+
+
+Review validation on this worktree (all through `test:logged` where applicable):
+
+- Helper and process tests: `bun test
+  e2e/agent-testing/mcp-apply-live-support.test.ts
+  e2e/agent-testing/mcp-probe-server.integration.test.ts --parallel=1` passed.
+- `bun check -p e2e/agent-testing/tsconfig.json`, focused `bun fmt --check`
+  and focused oxlint passed for the changed harness files.
+- Task 14: **1 passed, 0 skipped**, 79.7 s, at 1440×1000 against the real
+  isolated profile `mcp0039-review-fix`. The profile used
+  `CLAUDE_BRIDGE_RUNTIME_IDLE_MS=0 CLAUDE_CODE_MCP_STARTUP_WAIT_MS=0`,
+  `--fixture --headless --no-agent-credentials --agent-platforms claude`.
+  The exact test invocation was
+  `ORKESTRATOR_AGENT_TEST_PROFILE=mcp0039-review-fix
+  ORKESTRATOR_AGENT_TEST_RUN_ID=mcp0039-review-fix
+  ORKESTRATOR_AGENT_TEST_MCP_UI=1 mise run test:logged -- --name
+  mcp-findings-task14 -- mise run test:agent:browser --
+  e2e/agent-testing/mcp-ui-matrix.spec.ts --grep 'rows left connecting'
+  --workers=1`. Its JSON report is
+  `output/agent-testing/mcp0039-review-fix/browser/results.json`; annotations
+  record `mcpui-slow:unknown`, reconnect 200, then `mcpui-slow:connected`,
+  with `orkestrator:connected` unchanged. Reload assertions also passed.
+- Two earlier attempts with the default warm-runtime lifetime failed the
+  `unknown` assertion and then exceeded the trace sanitizer's 64 MiB limit.
+  Their separate compressed logs remain under
+  `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.1R2MIZ/`
+  and `orkestrator-test-run.ChH1WS/`, and browser reports are copied to
+  `output/agent-testing/mcp0039-review-fix-attempt1/` and `-attempt2/`.
+  The same command passed after the profile lifetime correction; assertions
+  and sanitizer limits were not loosened. The profile was stopped and reset.
+- The preparation run of `mise run test:agent:browser:isolated` remains
+  unresolved: three assertions in unchanged gateway, CLI UI and terminal
+  resume specs, followed by the 1500 s runner timeout. The original review
+  package's triage marks the command `unattributed: true` and supplies no
+  unrelated verdict. No path in those reported failures is changed here;
+  their relation to the ticket cannot be established from the diagnostics.
+  This broad failure is left for the verifier, without claiming it passed
+  or excusing it as environmental. Original package and logs are preserved.
 
 #### Task 11: decisions taken, no code
 

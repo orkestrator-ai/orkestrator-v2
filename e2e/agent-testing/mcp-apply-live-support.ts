@@ -190,9 +190,12 @@ export interface ProbeInventoryRow {
  * the turn (docs/todo/mcp/0039, task 5). A probe that should reach a server
  * and logs no call has two very different causes: the runtime never offered
  * the server (an `applied` outcome would then be false), or it did and the
- * model did not call it. Only the inventory tells them apart.
+ * model did not call it. The inventory distinguishes those causes only if
+ * the turn succeeded; a failed turn cannot establish model non-use.
  *
  * - `no-inventory`: the session reported none, so the cause stays open.
+ * - `turn-failed`: the turn failed without reaching the server; inventory
+ *   cannot establish whether the model had an opportunity to call it.
  * - `not-offered`: the inventory does not list the server.
  * - `offered-not-connected`: listed, but not connected (status in `detail`).
  * - `offered-not-called`: listed and connected, and no tool row of the turn
@@ -204,6 +207,7 @@ export interface ProbeInventoryRow {
  */
 export type ProbeDiagnosis =
   | "no-inventory"
+  | "turn-failed"
   | "not-offered"
   | "offered-not-connected"
   | "offered-not-called"
@@ -217,8 +221,10 @@ export function diagnoseProbe(input: {
   verdict: Pick<ProbeVerdict, "reached">;
   toolRows?: readonly string[];
   inventory?: readonly ProbeInventoryRow[];
+  turnError?: string;
 }): { diagnosis: ProbeDiagnosis; detail?: string } {
   if (input.verdict.reached) return { diagnosis: "reached" };
+  if (input.turnError) return { diagnosis: "turn-failed" };
   if (input.inventory === undefined) return { diagnosis: "no-inventory" };
   const row = input.inventory.find((candidate) => candidate.name === input.server);
   if (!input.expect.reach) {

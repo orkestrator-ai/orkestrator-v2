@@ -696,7 +696,14 @@ test.describe("live MCP apply", () => {
           if (inventory) verdict = judge(inventory);
           const diagnosis = verdict.passed
             ? undefined
-            : diagnoseProbe({ server, expect: expectation, verdict, toolRows: rows, inventory });
+            : diagnoseProbe({
+                server,
+                expect: expectation,
+                verdict,
+                toolRows: rows,
+                inventory,
+                turnError: outcome.error,
+              });
           console.log(
             `[mcp-qualification] ${platform}: probe ${verdict.passed ? "passed" : "failed"}`,
           );

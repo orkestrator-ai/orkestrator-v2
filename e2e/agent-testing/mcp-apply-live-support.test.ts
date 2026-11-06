@@ -256,6 +256,45 @@ describe("mcp apply live support", () => {
       });
     });
 
+    test("a failed turn cannot establish model non-use from connected inventory", () => {
+      for (const turnError of ["dispatch failed", "provider failed", "no-progress timeout"]) {
+        expect(
+          diagnoseProbe({
+            server: "mqu0_alpha",
+            expect: reach,
+            verdict: missed,
+            toolRows: [],
+            inventory: [connected],
+            turnError,
+          }),
+        ).toEqual({ diagnosis: "turn-failed" });
+      }
+    });
+
+    test("turn failure takes precedence over missing inventory and negative expectations", () => {
+      for (const expectation of [reach, { reach: false } as const]) {
+        expect(
+          diagnoseProbe({
+            server: "mqu0_alpha",
+            expect: expectation,
+            verdict: missed,
+            turnError: "provider failed",
+          }),
+        ).toEqual({ diagnosis: "turn-failed" });
+      }
+    });
+
+    test("server reachability remains authoritative when the turn later fails", () => {
+      expect(
+        diagnoseProbe({
+          server: "mqu0_alpha",
+          expect: reach,
+          verdict: { reached: true },
+          turnError: "provider failed after the call",
+        }),
+      ).toEqual({ diagnosis: "reached" });
+    });
+
     test("tells a server the runtime never offered from one the model did not call", () => {
       // The Pi user-scope failure of 2026-10-22: no call, no tool row.
       expect(

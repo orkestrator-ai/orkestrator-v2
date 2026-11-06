@@ -10,6 +10,7 @@ import {
   expect,
   isModuleLoad,
   moduleStatusFailure,
+  retryNavigationsOnNetworkChange,
   test,
   type Page,
   type Request as PageRequest,
@@ -576,6 +577,8 @@ test.describe(() => {
   test("the gateway serves the renderer's modules to Chromium's own network stack", async ({
     page,
   }) => {
+    // Navigations are not what this case checks; retry them as every other case does.
+    retryNavigationsOnNetworkChange(page);
     const status = await profileStatus();
     expect(status.status).toBe("ready");
     const invoke = await authenticatedInvoke(page, status);

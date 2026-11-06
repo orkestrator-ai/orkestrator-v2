@@ -1,4 +1,4 @@
-import { test as base, type BrowserContext, type Request } from "@playwright/test";
+import { test as base, type BrowserContext, type Page, type Request } from "@playwright/test";
 
 export * from "@playwright/test";
 
@@ -9,7 +9,8 @@ export * from "@playwright/test";
  * few seconds (flake 2340). A page that loses a module renders partly or not at
  * all, and the next assertion fails for a reason that has nothing to do with
  * the case. So every page in the default context fetches its scripts and
- * styles outside Chromium's network stack. Navigations, commands and event
+ * styles outside Chromium's network stack, and a `goto` or `reload` that
+ * Chromium aborted that way is tried again. Navigations, commands and event
  * streams still go through the browser.
  *
  * `client-outage.spec.ts` keeps `@playwright/test` on purpose: it is about the
@@ -107,12 +108,41 @@ export function decodedBodyHeaders(headers: Record<string, string>): Record<stri
   return rest;
 }
 
+/** Whether a navigation failed only because Chromium saw a host interface change. */
+export function isNetworkChangedNavigation(error: unknown): boolean {
+  return error instanceof Error && error.message.includes(NETWORK_CHANGED);
+}
+
+/**
+ * Makes a page's `goto` and `reload` try again when Chromium aborted the
+ * document itself for a host network change. A navigation cannot go through
+ * `route.fetch()` like a module: it carries the login redirect and its cookie.
+ * Both methods are GETs the case asked for, so repeating one is what the case
+ * meant; any other failure, and the last attempt's, still throws.
+ */
+export function retryNavigationsOnNetworkChange(page: Page, attempts = 3): void {
+  for (const method of ["goto", "reload"] as const) {
+    const navigate = page[method].bind(page) as (...args: unknown[]) => Promise<unknown>;
+    (page as unknown as Record<string, unknown>)[method] = async (...args: unknown[]) => {
+      for (let attempt = 1; ; attempt += 1) {
+        try {
+          return await navigate(...args);
+        } catch (error) {
+          if (attempt >= attempts || !isNetworkChangedNavigation(error)) throw error;
+        }
+      }
+    };
+  }
+}
+
 /**
  * Routes a context's loopback scripts and styles through Playwright's own
- * fetch, which no host network change aborts. The default context already has
- * this; call it for every context a case creates for a second client.
+ * fetch, which no host network change aborts, and retries its pages'
+ * navigations that one aborted. The default context already has this; call it
+ * for every context a case creates for a second client.
  */
 export async function fetchModulesOutsideChromium(context: BrowserContext): Promise<void> {
+  context.on("page", (page) => retryNavigationsOnNetworkChange(page));
   const cache = new ModuleCache();
   await context.route(LOOPBACK_URL, async (route) => {
     const request = route.request();

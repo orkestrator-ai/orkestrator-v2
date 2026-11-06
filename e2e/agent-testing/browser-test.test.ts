@@ -1,5 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
-import type { BrowserContext, Route } from "@playwright/test";
+import type { BrowserContext, Page, Route } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { parseSync, visitorKeys, type Node } from "oxc-parser";
@@ -11,7 +11,9 @@ import {
   directLoadOutcome,
   fetchModulesOutsideChromium,
   isModuleLoad,
+  isNetworkChangedNavigation,
   moduleStatusFailure,
+  retryNavigationsOnNetworkChange,
 } from "./browser-test";
 
 const directory = import.meta.dirname;
@@ -266,6 +268,7 @@ describe("the browser suite's shared test", () => {
 async function moduleHandler() {
   let handler: ((route: Route) => Promise<void>) | undefined;
   const context = {
+    on: mock((_event: string, _listener: unknown) => context),
     route: mock(async (pattern: RegExp, callback: (route: Route) => Promise<void>) => {
       expect(pattern).toBe(LOOPBACK_URL);
       handler = callback;
@@ -371,5 +374,71 @@ describe("installed module route handler", () => {
     await retry.dispatch(handler);
     expect(retry.route.fetch).toHaveBeenCalledTimes(1);
     expect(retry.route.fulfill).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("navigations Chromium aborted for a network change", () => {
+  const networkChanged = () => new Error(`page.goto: ${NETWORK_CHANGED} at http://127.0.0.1:1/`);
+
+  function fakePage(outcomes: (Error | string)[]) {
+    const calls: unknown[][] = [];
+    const next = async (...args: unknown[]) => {
+      calls.push(args);
+      const outcome = outcomes.shift();
+      if (outcome instanceof Error) throw outcome;
+      return outcome;
+    };
+    const page = { goto: next, reload: next };
+    retryNavigationsOnNetworkChange(page as unknown as Page);
+    return { page, calls };
+  }
+
+  test("are tried again with the same arguments until one lands", async () => {
+    const { page, calls } = fakePage([networkChanged(), networkChanged(), "response"]);
+    expect(await page.goto("http://127.0.0.1:1/", { waitUntil: "load" })).toBe("response");
+    expect(calls).toEqual(Array(3).fill(["http://127.0.0.1:1/", { waitUntil: "load" }]));
+  });
+
+  test("covers reload too", async () => {
+    const { page, calls } = fakePage([networkChanged(), "reloaded"]);
+    expect(await page.reload()).toBe("reloaded");
+    expect(calls).toHaveLength(2);
+  });
+
+  test("give up after the last attempt with Chromium's own error", async () => {
+    const { page, calls } = fakePage([networkChanged(), networkChanged(), networkChanged()]);
+    await expect(page.goto("http://127.0.0.1:1/")).rejects.toThrow(NETWORK_CHANGED);
+    expect(calls).toHaveLength(3);
+  });
+
+  test("never retry any other failure", async () => {
+    const { page, calls } = fakePage([new Error("page.goto: net::ERR_CONNECTION_REFUSED")]);
+    await expect(page.goto("http://127.0.0.1:1/")).rejects.toThrow("ERR_CONNECTION_REFUSED");
+    expect(calls).toHaveLength(1);
+    expect(isNetworkChangedNavigation("net::ERR_NETWORK_CHANGED")).toBe(false);
+  });
+
+  test("apply to every page a routed context opens", async () => {
+    const listeners: ((page: Page) => void)[] = [];
+    const context = {
+      on: (event: string, listener: (page: Page) => void) => {
+        expect(event).toBe("page");
+        listeners.push(listener);
+      },
+      route: async () => {},
+    };
+    await fetchModulesOutsideChromium(context as unknown as BrowserContext);
+    expect(listeners).toHaveLength(1);
+    const outcomes: (Error | string)[] = [networkChanged(), "response"];
+    const page = {
+      goto: async () => {
+        const outcome = outcomes.shift();
+        if (outcome instanceof Error) throw outcome;
+        return outcome;
+      },
+      reload: async () => "reloaded",
+    };
+    listeners[0]!(page as unknown as Page);
+    expect(await page.goto()).toBe("response");
   });
 });

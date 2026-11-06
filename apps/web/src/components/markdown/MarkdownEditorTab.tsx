@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AlertTriangle, FileText } from "lucide-react";
+import { FileText } from "lucide-react";
 import { useConfigStore, useFileDirtyStore } from "@/stores";
 import { DEFAULT_TERMINAL_APPEARANCE } from "@/constants/terminal";
 import type { SaveFile } from "@/hooks/useFileSave";
@@ -9,6 +9,7 @@ import {
 } from "@/components/terminal/RenderedRawFileShell";
 import { TiptapMarkdownEditor, type TiptapMarkdownEditorHandle } from "./TiptapMarkdownEditor";
 import { assessMarkdownForRichEditing } from "./tiptap-extensions";
+import { FloatingNotice } from "@/components/ui/floating-notice";
 
 interface MarkdownEditorTabProps {
   tabId: string;
@@ -109,10 +110,13 @@ export function MarkdownEditorTab({
       onSave={onSave}
       notice={
         parseError && mode === "raw" ? (
-          <div className="flex shrink-0 items-center gap-2 border-b border-amber-500/30 bg-amber-500/10 px-4 py-2 text-xs text-amber-200">
-            <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-            <span>Rendered mode is unavailable for this file: {parseError}</span>
-          </div>
+          <FloatingNotice
+            tone="warning"
+            label="Raw mode only"
+            summary="Rendered mode is unavailable for this file."
+          >
+            Rendered mode is unavailable for this file: {parseError}
+          </FloatingNotice>
         ) : null
       }
     >

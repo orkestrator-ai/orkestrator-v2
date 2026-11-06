@@ -462,7 +462,10 @@ inline, so `performSessionMcpAction` takes only the acted-on row from its
 answer. The other rows stay as the session last reported them, the row keeps
 the layer the session loaded it from, and a name the session never listed is
 not added. A live control's answer still replaces the whole list. The next read
-from a running CLI replaces it too.
+from a running CLI replaces it too. A row the session last saw as `connecting`
+is served as `unknown` while no CLI can answer (on the session, probe and
+closed-transport paths, `inventoryWithoutCli` in `session-manager-catalog.ts`),
+because a CLI that exited before its first status read never reports again.
 
 **Claude's live layers.** The bridge passes configured servers inline, so the
 CLI reports them as `dynamic`, whichever file they came from.

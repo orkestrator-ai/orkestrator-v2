@@ -19,7 +19,12 @@ type Box = { x: number; y: number; width: number; height: number };
 
 test("a reviewer offers Restart in… and Skip, and a moved worktree is shown", async ({ page }) => {
   await page.goto("/multi-review-flow?phase=reviewing&reviewers=3&worktreeChanged=1");
-  await expect(page.getByTestId("multi-review-worktree-changed")).toContainText("worktree changed");
+  // A phone shows the notice as a pill until it is opened.
+  const changed = page.getByTestId("multi-review-worktree-changed");
+  const changedPill = page.getByRole("button", { name: /^Review may be out of date:/ });
+  await expect(changed.or(changedPill)).toBeVisible();
+  if (await changedPill.isVisible()) await changedPill.click();
+  await expect(changed).toContainText("worktree changed");
   const running = pipeline(page).getByRole("tab", { name: /^Reviewer 2/ });
   await running.click({ button: "right" });
   await expect(page.getByRole("menuitem", { name: "Restart in…" })).toBeVisible();

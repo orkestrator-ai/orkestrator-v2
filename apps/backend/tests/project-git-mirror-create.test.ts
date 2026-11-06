@@ -4,6 +4,7 @@
  * closed lifecycle tracker keeps the background refresh off the network.
  */
 import { afterEach, expect, test } from "bun:test";
+import { configureLogger, resetLogger } from "@orkestrator/protocol/logger";
 import { spawnSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -33,6 +34,8 @@ async function createCommand(options: {
   capabilities: Record<string, number>;
   gitUrl?: string;
   identity?: Partial<CreateContainerIdentity>;
+  /** Restricted, with this allowlist; full when absent. */
+  allowedDomains?: string[];
 }): Promise<{ create: string; dataDir: string }> {
   const dir = await tempDir("ork-git-mirror-create-");
   cleanup.push(dir);
@@ -57,7 +60,11 @@ async function createCommand(options: {
   spawnSync("tar", ["--format=ustar", "-cf", tarball, "-C", dir, "image-manifest.json"], {
     env: { ...process.env, COPYFILE_DISABLE: "1" },
   });
-  const environment = lifecycleEnvironment({ networkAccessMode: "full" });
+  const environment = lifecycleEnvironment(
+    options.allowedDomains
+      ? { networkAccessMode: "restricted", allowedDomains: options.allowedDomains }
+      : { networkAccessMode: "full" },
+  );
   const { context } = memoryLifecycleContext([environment], dir);
   Object.assign(context, {
     runtimeFlavor: "agent-test",
@@ -84,6 +91,7 @@ case "$1" in
   context) printf 'unix:///var/run/docker.sock\\n' ;;
   info) printf '{"OSType":"linux","OperatingSystem":"Debian","Architecture":"x86_64","ServerVersion":"29.7.2","SecurityOptions":[]}\\n' ;;
   create) printf 'created-container\\n' ;;
+  network) [ "$2" = inspect ] && { echo "network not found" >&2; exit 1; }; exit 0 ;;
   cp) cat '${tarball}' ;;
 esac
 exit 0
@@ -136,4 +144,70 @@ test("a project whose stored URL is not a remote gets neither", async () => {
   });
 
   expect(create).not.toContain("orkestrator-git-mirror");
+});
+
+test("a restricted container gets the mirror of a GitHub remote, which its firewall always opens", async () => {
+  const { create } = await createCommand({
+    capabilities: { "git-mirror": 1 },
+    gitUrl: "git@github.com:acme/repo.git",
+    allowedDomains: ["registry.npmjs.org"],
+  });
+
+  expect(create).toContain("NETWORK_MODE=restricted");
+  expect(create).toContain("-e ORKESTRATOR_GIT_MIRROR=/orkestrator-git-mirror/mirror.git");
+});
+
+test("a restricted container that cannot reach the remote does not read it through the mirror", async () => {
+  const { create } = await createCommand({
+    capabilities: { "git-mirror": 1 },
+    gitUrl: "https://git.example.com/acme/repo.git",
+    allowedDomains: ["registry.npmjs.org", "example.com"],
+  });
+
+  expect(create).toContain("NETWORK_MODE=restricted");
+  expect(create).not.toContain("orkestrator-git-mirror");
+  expect(create).not.toContain("ORKESTRATOR_GIT_MIRROR");
+});
+
+test("a restricted container whose allowlist names the remote's host gets the mirror", async () => {
+  const { create } = await createCommand({
+    capabilities: { "git-mirror": 1 },
+    gitUrl: "git@git.example.com:acme/repo.git",
+    allowedDomains: ["git.example.com"],
+  });
+
+  expect(create).toContain("-e ORKESTRATOR_GIT_MIRROR=/orkestrator-git-mirror/mirror.git");
+});
+
+// Before policy 3, an allowlisted address is open on every TCP port.
+test.each([1, 2, 3])("mirror mount respects policy %i port semantics", async (policy) => {
+  const { create } = await createCommand({
+    capabilities: { "git-mirror": 1, "network-policy": policy },
+    gitUrl: "https://git.example.com:8443/acme/repo.git",
+    allowedDomains: ["git.example.com"],
+  });
+  expect(create.includes("ORKESTRATOR_GIT_MIRROR=")).toBe(policy < 3);
+});
+
+test("withheld logging only describes a runtime eligible to clone", async () => {
+  const events: string[] = [];
+  configureLogger({
+    level: "info",
+    sink: ({ record }) => {
+      if (record) events.push(record.event);
+    },
+  });
+  try {
+    const options = {
+      capabilities: { "git-mirror": 1 },
+      gitUrl: "https://git.example.com/repo.git",
+      allowedDomains: ["other.example"],
+    };
+    await createCommand({ ...options, identity: { reusesWorkspace: true } });
+    expect(events).not.toContain("git-mirror.mount-withheld");
+    await createCommand(options);
+    expect(events.filter((event) => event === "git-mirror.mount-withheld")).toHaveLength(1);
+  } finally {
+    resetLogger();
+  }
 });

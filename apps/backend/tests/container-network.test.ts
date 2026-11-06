@@ -10,6 +10,7 @@ import {
   containerNetworkPolicy,
   ensureEnvironmentNetwork,
   environmentNetworkName,
+  environmentNetworkPolicy,
   ingressPorts,
   parseFirewallStatus,
   removeEnvironmentNetwork,
@@ -307,6 +308,10 @@ esac
 function allowlistDocker(options: {
   tarPath: string;
   running?: boolean;
+  runningMarker?: string;
+  mirror?: boolean;
+  gitUrl?: string;
+  statusUnavailable?: boolean;
   policy?: 2 | 3;
   before: string;
   after: string;
@@ -316,7 +321,8 @@ function allowlistDocker(options: {
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 case "$1" in
   network) printf '172.30.0.0/16\\t172.30.0.1\\n' ;;
-  inspect) printf '${options.policy ?? 2}\\t${IMAGE_ID}\\t${options.running === false ? "false" : "true"}\\n' ;;
+  inspect) ${options.runningMarker ? `if [ -e '${options.runningMarker}' ]; then running=true; else running=false; fi` : `running=${options.running === false ? "false" : "true"}`}
+    printf '${options.policy ?? 2}\\t${IMAGE_ID}\\t%s\\t${options.mirror ? "mirror" : ""}\\nGIT_URL=${options.gitUrl ?? "https://git.example.com/project.git"}\\n' "$running" ;;
   create) printf 'probe-container\\n' ;;
   cp) cat '${options.tarPath}' ;;
   rm) exit 0 ;;
@@ -324,6 +330,7 @@ case "$1" in
     case "$*" in
       *--set-domains*) : > '${options.marker}' ;;
       *firewall.json*)
+        ${options.statusUnavailable ? "exit 1" : ":"}
         if [ -e '${options.marker}' ]; then rev=${options.after}; else rev=${options.before}; fi
         printf '{"mode":"restricted","state":"applied","domainsRevision":"%s"}\\n' "$rev" ;;
     esac ;;
@@ -333,6 +340,156 @@ exit 0
 }
 
 describe("allowlist edits in place", () => {
+  for (const policy of [2, 3] as const) {
+    for (const gitUrl of ["https://github.com/org/repo.git", "https://git.example.com/repo.git"]) {
+      test(`policy ${policy} mirrored ${gitUrl} applies unrelated domain removal live and after start`, async () => {
+        const initial = ["git.example.com", "other.example"];
+        const saved = ["git.example.com"];
+        const { context, dir } = await allowlistContext(initial);
+        const tarPath = await manifestTar({ "network-policy": policy, "network-refresh": 1 });
+        const marker = path.join(dir, "applied");
+        const runningMarker = path.join(dir, "running");
+        await fs.writeFile(runningMarker, "");
+        await withDockerScript(
+          allowlistDocker({
+            tarPath,
+            policy,
+            mirror: true,
+            gitUrl,
+            runningMarker,
+            before: allowedDomainsRevision(initial),
+            after: allowedDomainsRevision(saved),
+            marker,
+          }),
+          async (log) => {
+            expect((await environmentNetworkPolicy("env-lifecycle", context)).domains).toBe(
+              "applied",
+            );
+            await context.storage.updateEnvironment("env-lifecycle", { allowedDomains: saved });
+            expect((await environmentNetworkPolicy("env-lifecycle", context)).domains).toBe(
+              "pending",
+            );
+            expect((await applyEnvironmentAllowedDomains("env-lifecycle", context)).kind).toBe(
+              "applied",
+            );
+            expect(await log.read()).toContain("--set-domains git.example.com");
+            expect((await environmentNetworkPolicy("env-lifecycle", context)).domains).toBe(
+              "applied",
+            );
+
+            // Save while stopped, then use the same apply entry point as container start.
+            await fs.rm(marker);
+            await context.storage.updateEnvironment("env-lifecycle", { allowedDomains: initial });
+            await fs.rm(runningMarker);
+            await context.storage.updateEnvironment("env-lifecycle", { allowedDomains: saved });
+            expect((await applyEnvironmentAllowedDomains("env-lifecycle", context)).kind).toBe(
+              "not-running",
+            );
+            expect(await fs.exists(marker)).toBe(false);
+            await fs.writeFile(runningMarker, "");
+            const restarted = await applyEnvironmentAllowedDomains("env-lifecycle", context);
+            expect(restarted.kind).toBe("applied");
+            expect(restarted.policy.effective?.domainsRevision).toBe(allowedDomainsRevision(saved));
+            expect((await environmentNetworkPolicy("env-lifecycle", context)).domains).toBe(
+              "applied",
+            );
+          },
+        );
+      });
+    }
+  }
+
+  test.each([
+    "",
+    "file:///old/project",
+    "https://unknown.example/repo.git",
+    "https://git.example.com:8443/repo.git",
+  ])(
+    "a mirror with an unverifiable or blocked original remote %s requires rebuild",
+    async (gitUrl) => {
+      const { context, dir } = await allowlistContext(["git.example.com"]);
+      const tarPath = await manifestTar({ "network-policy": 3, "network-refresh": 1 });
+      await withDockerScript(
+        allowlistDocker({
+          tarPath,
+          policy: 3,
+          mirror: true,
+          gitUrl,
+          before: allowedDomainsRevision(["other.example"]),
+          after: allowedDomainsRevision(["git.example.com"]),
+          marker: path.join(dir, "applied"),
+        }),
+        async (log) => {
+          expect((await applyEnvironmentAllowedDomains("env-lifecycle", context)).kind).toBe(
+            "rebuild-required",
+          );
+          expect(await log.read()).not.toContain("--set-domains");
+        },
+      );
+    },
+  );
+
+  test.each([2, 3] as const)(
+    "policy %i mirror mount requires rebuild after remote revocation",
+    async (policy) => {
+      const { context, dir } = await allowlistContext(["git.example.com", "other.example"]);
+      const tarPath = await manifestTar({ "network-policy": policy, "network-refresh": 1 });
+      await withDockerScript(
+        allowlistDocker({
+          tarPath,
+          policy,
+          mirror: true,
+          before: allowedDomainsRevision(["git.example.com", "other.example"]),
+          after: allowedDomainsRevision(["other.example"]),
+          marker: path.join(dir, "applied"),
+        }),
+        async (log) => {
+          expect((await environmentNetworkPolicy("env-lifecycle", context)).domains).toBe(
+            "applied",
+          );
+          // Same save/apply sequence as update_environment_allowed_domains.
+          await context.storage.updateEnvironment("env-lifecycle", {
+            allowedDomains: ["other.example"],
+          });
+          const result = await applyEnvironmentAllowedDomains("env-lifecycle", context);
+          expect(result.kind).toBe("rebuild-required");
+          expect(result.policy.domains).toBe("rebuild-required");
+          expect(result.policy.effective?.domainsRevision).toBe(
+            allowedDomainsRevision(["git.example.com", "other.example"]),
+          );
+          const calls = await log.read();
+          expect(calls).not.toContain("--set-domains");
+
+          // A later snapshot still reports the required rebuild after a missed event.
+          expect((await environmentNetworkPolicy("env-lifecycle", context)).domains).toBe(
+            "rebuild-required",
+          );
+        },
+      );
+    },
+  );
+
+  test("a mirror still requires rebuild when the previous firewall status is unreadable", async () => {
+    const { context, dir } = await allowlistContext(["other.example"]);
+    const tarPath = await manifestTar({ "network-policy": 3, "network-refresh": 1 });
+    await withDockerScript(
+      allowlistDocker({
+        tarPath,
+        mirror: true,
+        statusUnavailable: true,
+        before: allowedDomainsRevision(["git.example.com"]),
+        after: allowedDomainsRevision(["other.example"]),
+        marker: path.join(dir, "applied"),
+      }),
+      async (log) => {
+        const result = await applyEnvironmentAllowedDomains("env-lifecycle", context);
+        expect(result.kind).toBe("rebuild-required");
+        expect(result.policy.effective).toBeNull();
+        expect(await log.read()).not.toContain("--set-domains");
+      },
+    );
+  });
+
   test("the configured list is the environment's or the global one plus required hosts", () => {
     const config = {
       global: { allowedDomains: ["global.example"], enabledAgentPlatforms: ["pi"] },

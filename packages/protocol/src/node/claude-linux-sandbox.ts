@@ -95,6 +95,8 @@ export interface ClaudeLinuxSandboxProbeDependencies {
   run?: (command: string, args: readonly string[]) => ClaudeLinuxSandboxProbeResult;
   /** Whether AppArmor is enabled and Ubuntu's bwrap profile is installed. */
   appArmorBwrapProfile?: () => boolean;
+  /** Whether this process runs inside a container (Docker or Podman). */
+  inContainer?: () => boolean;
 }
 
 /** Whether `name` is an executable file in one of `PATH`'s directories. */
@@ -135,6 +137,14 @@ function appArmorBwrapProfileInstalled(): boolean {
   }
 }
 
+/**
+ * Docker always creates `/.dockerenv` and Podman `/run/.containerenv`; the
+ * Claude bridge detects its executor the same way (`detectCaptureExecutor`).
+ */
+function runningInContainer(): boolean {
+  return existsSync("/.dockerenv") || existsSync("/run/.containerenv");
+}
+
 /** The first line of a probe's error output, bounded for a reason string. */
 function probeDetail(stderr: string): string {
   const line =
@@ -154,13 +164,21 @@ export function probeClaudeLinuxSandbox(
   const onPath = dependencies.onPath ?? ((name: string) => executableOnPath(name));
   const run = dependencies.run ?? runProbeCommand;
   const appArmorBwrapProfile = dependencies.appArmorBwrapProfile ?? appArmorBwrapProfileInstalled;
+  const inContainer = dependencies.inContainer ?? runningInContainer;
 
   const missing = CLAUDE_LINUX_SANDBOX_PROGRAMS.filter((name) => !onPath(name));
   if (missing.length > 0) {
     return {
       available: false,
       failure: "missing-programs",
-      reason: `${UNAVAILABLE}: the Claude CLI's Linux sandbox needs bubblewrap and socat on PATH, and ${missing.join(" and ")} ${missing.length === 1 ? "is" : "are"} missing. Install the bubblewrap and socat packages.`,
+      // In a container, installing them is not enough: bubblewrap also needs a
+      // user namespace, which Orkestrator's containers (and most others) are
+      // not given (todo 0190 task 3).
+      reason: `${UNAVAILABLE}: the Claude CLI's Linux sandbox needs bubblewrap and socat on PATH, and ${missing.join(" and ")} ${missing.length === 1 ? "is" : "are"} missing. ${
+        inContainer()
+          ? "This is a container, so installing them would not be enough: bubblewrap also needs user namespaces, which containers are normally not given."
+          : "Install the bubblewrap and socat packages."
+      }`,
     };
   }
   if (!onPath("unshare")) {

@@ -1233,11 +1233,18 @@ The boundary is shown, not silent:
   consolidation step's inspector show it as a warning note. A restarted
   reviewer or step starts without it.
 
+Inside a container the probe's `missing-programs` reason does not advise
+installing bubblewrap and socat: containers are normally not given user
+namespaces either (Orkestrator's containers refuse `unshare --user`), so the
+programs alone would not make the sandbox work.
+
 Proved by the bridge's session-manager and route tests with an injected probe
 answer, and by the `read-only-*` cases of
 `conformance-coordinator-sandbox-live.test.ts`, which hide `bwrap` and
 `socat` from `PATH` and run the pinned CLI against a scripted endpoint; the
 case that pins the CLI's own refusal of a required sandbox runs only on Linux.
+A full Claude Multi Review in a container was run on Linux Engine with a fake
+Messages API (todo 0190 task 3).
 Not yet run: a real Multi Review in a container environment and on stock
 Ubuntu
 ([0190](../todo/agent-engines/0190-claude-read-only-turns-without-working-sandbox.md)).

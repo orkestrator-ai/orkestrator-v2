@@ -2706,17 +2706,26 @@ describe("ACP bridge", () => {
       headers,
       body: JSON.stringify({ prompt: "TRIMTOTEXT: empty the message, then speak" }),
     });
-    const session = await waitFor(
+    // Wait on `/activity`, which never bounds the transcript. A session read
+    // bounds it and resets the dirty counter, so a poll landing between the
+    // two tool calls left the write path under its check interval: the
+    // message kept both calls, the chunk opened a row of its own after them,
+    // and that row was all the final bound left (case 2410).
+    await waitFor(
       async () =>
-        nativeFetch(`${base}/session/${created.id}`, { headers }).then((response) =>
+        nativeFetch(`${base}/session/${created.id}/activity`, { headers }).then((response) =>
           response.json(),
-        ) as Promise<{
-          status: string;
-          error?: string;
-          messages: Array<{ role: string; content: string; parts: Array<Record<string, unknown>> }>;
-        }>,
-      (value) => value.status === "idle",
+        ) as Promise<{ activity: string }>,
+      (value) => value.activity === "idle",
     );
+    const session = (await nativeFetch(`${base}/session/${created.id}`, { headers }).then(
+      (response) => response.json(),
+    )) as {
+      status: string;
+      error?: string;
+      messages: Array<{ role: string; content: string; parts: Array<Record<string, unknown>> }>;
+    };
+    expect(session.status).toBe("idle");
 
     // The lowered budget evicts whole messages before it trims parts, so the
     // prompt itself is gone and the assistant message is all that is left.

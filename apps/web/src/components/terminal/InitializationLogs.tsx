@@ -4,6 +4,7 @@ import { getContainerLogs } from "@/lib/backend";
 import { Loader2, Terminal as TerminalIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { FloatingNotice, FloatingNoticeLayer } from "@/components/ui/floating-notice";
 
 const log = createLogger("terminal");
 
@@ -113,15 +114,20 @@ function ContainerInitializationLogs({
         <span className="text-sm font-medium">Initializing Container</span>
       </div>
 
-      {isStale && !error && (
-        <div
-          role="status"
-          aria-live="polite"
-          className="border-b border-amber-500/40 bg-amber-500/10 px-4 py-2 text-xs text-amber-600 dark:text-amber-300"
-        >
-          Container logs stopped refreshing. The output below may be out of date.
-        </div>
-      )}
+      {/* Floats at the top right of the log, below the header. */}
+      <FloatingNoticeLayer>
+        {isStale && !error && (
+          <FloatingNotice
+            tone="warning"
+            label="Logs not refreshing"
+            summary="Container logs stopped refreshing."
+            role="status"
+            aria-live="polite"
+          >
+            Container logs stopped refreshing. The output below may be out of date.
+          </FloatingNotice>
+        )}
+      </FloatingNoticeLayer>
 
       {/* Log content */}
       <div className="flex-1 overflow-auto p-4 font-mono text-xs">

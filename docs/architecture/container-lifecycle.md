@@ -705,8 +705,7 @@ credentials outside extension bundles and supply required secrets explicitly
 through the environment's credential configuration. No secret-file opt-in is
 provided by staging. Older extension trees retain their existing policy.
 A linked entry is skipped, like any link below a home entry, with one
-exception (input spec version 5, todo
-[2170](../todo/containers-and-environments/2170-shared-and-linked-skills-in-containers.md)):
+exception (input spec version 5):
 a top-level entry of a skill root (Claude's, Codex's, Grok's and Pi's `skills`, and
 `~/.agents/skills`) that links to a skill. It is staged as a real directory
 when its resolved target is a directory holding a regular `SKILL.md`, strictly
@@ -761,6 +760,21 @@ and the environment's inputs section says to rebuild (`unreadableOnRootless`,
   per directory unit, 20,000 entries and 512 MiB per revision. A skipped entry
   is counted by reason (`symlink`, `too-large`, `aggregate-budget`, …); names
   never leave the backend.
+- Writing: on Linux a file staged byte for byte is reflinked from the
+  descriptor that was checked (`FileCloner`, through `/proc/self/fd`), where
+  the data directory's filesystem can (btrfs, XFS, bcachefs). A reflink shares
+  the source's blocks until either side writes, so the revision stays an
+  independent copy: a write to it never reaches the host file or another
+  environment's revision, unlike a hard link. Its size is checked after the
+  clone, against the same bounds. A login restricted after staging is cloned
+  and then rewritten in place, which copy-on-write keeps local. A filtered or
+  guarded file (Claude's settings and `.claude.json`, the credential-guarded
+  skill and extension trees) is read and written as before, since cloning after
+  the read could stage bytes nobody checked. Anywhere else (another platform,
+  ext4, tmpfs, a source on another filesystem) the run copies, and after one
+  failed clone from a source device it copies the rest from that device. On a 300 MiB plugin fixture on
+  btrfs a revision took 162 ms and no new disk, against about 550 ms and 300 MiB
+  copied ([measurements](../reports/2026-11-06-efficiency-logging-database-outcome.md#closing-check-of-e25-container-start)).
 - Publication: a revision is written as `.<rev>.partial` and renamed into
   place, mode `0700`/`0600`. Binds use `--mount`, which fails on a missing
   source instead of creating a host directory. The container carries
@@ -1248,10 +1262,10 @@ Container agents reach the backend's agent tools server (workflow results,
 mail, tickets) at `http://host.docker.internal:<port>/mcp`. A host firewall
 that drops Docker traffic (ufw's default policy on many Linux desktops) makes
 those calls hang: a review stage used to idle until its result poll gave up.
-The server answers any non-POST with 405 before authenticating, so a
-credential-free GET that gets *any* HTTP status proves the path; a timeout,
-refusal or unresolved name proves it broken. Three checks share one probe
-script and parser:
+For an admitted peer (see [Who may connect](#who-may-connect)), the server
+answers any non-POST with 405 before authenticating, so a credential-free GET
+that gets *any* HTTP status proves the path; a timeout, refusal or unresolved
+name proves it broken. Three checks share one probe script and parser:
 
 | When | From | Effect |
 | --- | --- | --- |
@@ -1298,6 +1312,77 @@ network pane shows "Agent tools unavailable" for a container environment
 while the verdict is `blocked` (`EnvironmentAgentToolsStatus`). Existing
 gateway runtimes snapshot their host address at gateway boot and need a
 rebuild after host loopback is enabled.
+
+### Who may connect
+
+The server listens on every host interface (`0.0.0.0`), because the host-side
+address `host.docker.internal` reaches differs per daemon and per environment
+network. Before anything is routed it decides on the peer address
+(`agent-tools-peer-filter.ts`):
+
+- **Admitted:** loopback (`127.0.0.0/8`, `::1`, mapped forms). On native rootful
+  Linux Engine only, also any address inside an IPv4 subnet of the daemon's
+  default `bridge` network or of a network labelled `orkestrator-owner=<this data directory's owner>`
+  (environment networks and the reachability probe's network).
+- **Refused:** everything else, including the LAN and a tailnet. The
+  connection is closed with no bytes written: no 405, 404 or 401, so an
+  outside peer cannot tell a route from a closed port. A peer the current
+  list already refuses is closed on accept, before its request is read.
+
+Non-Linux hosts use loopback-only admission without consulting Docker. On
+Linux, each subnet refresh first reads `docker info`'s `OSType` and
+`OperatingSystem`, and `SecurityOptions`. Docker Desktop and rootless daemons
+use loopback only: VM and RootlessKit namespace ranges may overlap host LAN/VPN
+addresses and cannot identify container peers on the host. Missing or malformed
+security options on a non-Desktop daemon revoke subnet permissions. Changing
+from rootful Engine to Desktop or rootless therefore clears any previous list.
+A rootless peer arriving outside loopback stays refused; record its actual
+identity before adding any explicit topology-specific permission (todo 6820).
+
+The native Engine subnet list is read with `docker network ls --filter
+label=orkestrator-owner=<owner>` and one `docker network inspect` per network
+(at most 256 networks and 512 subnets). It follows network creation and
+removal: `ensureEnvironmentNetwork`, `removeEnvironmentNetwork`, the probe
+network's create and removal, the stale-probe reap and reviewed cleanup
+report each change (`docker-network-changes.ts`), which marks the list stale
+and reloads it at once. A request that arrives while a reload is running
+waits for the entire refresh chain, including changes reported during a read.
+Every non-loopback peer, including cached members, reloads the list once 15 s
+have elapsed since the last read completed unless a change was reported, so a labelled network another process created
+is admitted on its first call after that, and an outside peer costs at most
+one Docker read per 15 s. A failed read revokes cached permissions until a
+successful retry; retries remain rate-limited from completion, so slow reads
+do not immediately expire. A network removed between listing and inspection
+is omitted; other inspect failures invalidate the whole snapshot and log a
+classified warning, as do list failures. Superseded reads cannot admit
+a peer. HTTP parser errors close silently, and automatic Expect responses
+are sent only after admission. The first
+read happens on the first non-loopback peer, so a backend whose containers
+arrive on loopback never reads Docker for this. Refusals are logged
+(`[docker.reachability] peers.refused`) at most once a minute with a count.
+
+The peer address a container's call arrives from, by topology:
+
+| Topology | Peer seen by the server | Admitted by | Evidence |
+| --- | --- | --- | --- |
+| Docker Desktop (macOS) | `127.0.0.1`, for the default bridge, an environment network and an unowned network alike | Loopback | Run 2026-11-05 on Docker Desktop 4.98.0 (Engine 29.9.2, arm64) with `apps/backend/scripts/agent-tools-peer-evidence.ts` |
+| Linux Engine | The container's own address on its network (no NAT for traffic to a host address) | The network's subnet | Not run; [todo 6820](../todo/containers-and-environments/6820-agent-tools-peer-gate-linux-evidence.md) |
+| Rootless (RootlessKit host loopback `10.0.2.2`) | Expected `127.0.0.1`: the port driver connects from the host's loopback | Loopback | Not run; [todo 6820](../todo/containers-and-environments/6820-agent-tools-peer-gate-linux-evidence.md) |
+
+On Docker Desktop no VM subnet grants admission. This means every container
+on the daemon, owned or not, and every local process can still reach the port, as before; the token remains
+the boundary there. What changed is that the host's LAN and tailnet addresses
+no longer answer. A 2026-11-06 rerun with loopback-only Desktop admission
+confirmed all three container sources still received 405 as `127.0.0.1`, the
+environment probe and both host-check probes were reachable/405, and LAN and
+tailnet calls closed without bytes. The permitted subnet list stayed empty
+before and after removal, with zero leftover resources. The captured result
+is `output/agent-testing/s0170-address/desktop-peer-evidence.json` (local,
+git-ignored); it does not establish native Linux or rootless behavior.
+
+The C22 live qualification case passes its scene's owner
+to the filter, because its server's data directory differs from the one that
+owns its environment network.
 
 ## Resource budgets and usage (`container-resources.ts`)
 
@@ -1509,7 +1594,10 @@ so the pinned CLI never replaces itself in the container. `ClaudeStatePollManage
 Version 2 hooks call `orkestrator-state-signal working|waiting`, which serializes
 writers with a bounded file lock and atomically replaces `/tmp/.claude-state-snapshot`
 with `state revision completions`. The counters survive lost POSTs, including a
-whole working-to-waiting turn between reads. The legacy state file is still
+whole working-to-waiting turn between reads. A writer that cannot take the
+lock within one second skips its write and still exits 0, so a hook never holds
+up Claude; `ORKESTRATOR_STATE_LOCK_WAIT` (whole seconds) overrides the wait,
+and only tests set it. The legacy state file is still
 written for older backends. Reads are bounded to 256 bytes. Version 1 images
 keep the one-second poll because their state cannot expose a missed whole turn.
 
@@ -1636,7 +1724,7 @@ need it once cloned.
 
 - **The clone.** The setup script checks the mirror cheaply (the directory exists,
   its refs can be read, the tip's tree is present), then runs `git clone --no-tags
-  --reference <mirror> --dissociate <url>`. The remote is contacted for its refs
+  --reference-if-able <mirror> --dissociate <url>`. The remote is contacted for its refs
   and for anything the mirror lacks, so `origin` is still the project's remote and
   a stale mirror costs only the difference. `--dissociate` copies what the clone
   needs and drops the link, so the result is self-contained. `--dissociate` walks
@@ -1647,12 +1735,17 @@ need it once cloned.
   `git/git`) and fetched it back from the remote on demand. A blobless clone also
   pays for history reads one lazy fetch at a time; see
   [the measurements](../todo/cross-cutting/1202-efficiency-review-follow-ups.md#15-container-data-transfer).
-- **`--reference`, not `--reference-if-able`.** A mirror removed between the check
-  and the clone then fails and falls back to the blobless clone, rather than
-  downloading the full history without saying so.
+- **`--reference-if-able`, checked again afterwards.** A mirror removed between
+  the check and the clone does not fail the clone: Git clones from the remote
+  alone, with the full history. The script then checks the mirror again and, if
+  it has gone, reports `vanished` instead of `used`, so that download is logged
+  (`git-mirror.clone-fallback`) rather than passing as a mirror clone. A mirror
+  that disappears part-way through `--dissociate` still fails the clone
+  (`clone-failed`) and falls back as below.
 - **Fallback.** Anything else leaves the ordinary clone (blobless, then full) to
   run as it always did, after one line saying why, with one fixed reason word:
-  `missing`, `empty`, `corrupt`, `clone-failed` or `not-self-contained`. The line
+  `missing`, `empty`, `corrupt`, `clone-failed` or `not-self-contained`
+  (`vanished` keeps the clone it already made and does not fall back). The line
   goes to the setup output, and `prepareContainerWorkspace`'s caller logs it
   (`git-mirror.clone-fallback`, `git-mirror.clone-used`). The first environment of
   a project normally reports `missing`. The last three mark the mirror suspect, so
@@ -1694,6 +1787,23 @@ need it once cloned.
   that reach it, compaction keeps old packs until new ones exist, and a build is a
   rename. Three fetch failures in a row (a lock left by a crash, say) rebuild the
   mirror rather than update it.
+- **Restricted containers.** A restricted container gets the mount only when its
+  firewall would let it reach the remote itself (`restrictedContainerReachesGitRemote`):
+  the host its clone connects to after `convert_ssh_to_https`, on GitHub's
+  always-open TCP 443 or an allowlist entry for that host and port (any port
+  under a network policy before 3). Otherwise it is withheld
+  (`git-mirror.mount-withheld`, reason `remote-unreachable`) and the clone goes to
+  the remote as before, so the mirror never hands it what its firewall would not.
+  A runtime that already mounts the mirror requires a rebuild when an allowlist
+  revision (including inherited global changes) blocks its original clone remote.
+  Other edits apply live on capable images, including unrelated domain removals
+  for GitHub projects. The runtime's `GIT_URL` supplies the original remote; a
+  missing or unrecognised URL conservatively requires rebuilding. When remote
+  access would be revoked, the status and apply routes report `rebuild-required`
+  and retain the previous firewall policy until then: changing the firewall
+  alone cannot revoke a bind mount. Other environments'
+  shared mirror is never removed to revoke one reader. Rebuilt runtimes that
+  reuse their checkout have no mirror mount and can apply later edits live.
 - **Credentials.** A refresh runs on the host through `runRemoteGit` and
   `gitHubGitCredentials`, the path project clones use. The URL and any credential
   are passed per transfer, and no `remote` section exists, so the config holds
@@ -1706,7 +1816,11 @@ need it once cloned.
   allows the foreign owner because everything uses an explicit `--git-dir`. Every
   environment of a project can read every branch of it through the mount, whatever
   credential that environment holds; a branch deleted on the remote leaves at the
-  next refresh, and its objects at a later compaction.
+  next refresh, and its objects at a later compaction. Because the mirror is
+  fetched with the backend's credential, a container given none (the default
+  container GitHub credential) can read a private repository's branches this way;
+  [6741](../todo/containers-and-environments/6741-git-mirror-access.md) holds the
+  fix, a mirror per kind of access fetched with what its readers hold.
 - **`-v`, not `--mount`.** Docker refuses to start a container whose `--mount`
   source is gone. With `-v` it recreates the source, so a stopped environment
   survives its mirror being removed by any route. If the project parent was
@@ -1800,13 +1914,30 @@ read it (`container-bridge-credential.ts`). The rules for bridges are in
   image ids are resolved by inspecting the running container. An unreadable image
   manifest refuses fresh startup rather than silently selecting weaker storage;
   retry after Docker can read the image. Healthy existing bridges reuse their token.
+- **A live session's execution policy only narrows.** Every bridge refuses a
+  request that would widen a live conversation's policy with 403
+  `policy-widening-refused` (`packages/protocol/src/execution-policy-narrowing.ts`).
+  A session restored from disk keeps its saved policy under an in-memory
+  `policyPending` marker: the next policy a request sends replaces it, and the
+  marker clears once a request sets one or a prompt starts. When the user widens
+  a policy, the backend replaces the bridge and resumes
+  (`replaceBridgeForWiderPolicy` in `native-agent-service.ts`), and refuses while
+  a turn is running in that environment. `readOnly` stays a per-turn intent;
+  that is safe only because the backend alone holds the bridge token. A separate
+  uid for the bridge was not built: the token is already out of the agent's
+  reach, and what the shared uid still allows is in to-do 4980.
 
 What the agent's uid can still do is in
 [to-do 4980](../todo/containers-and-environments/4980-agent-uid-process-control.md):
 kill the bridge and listen on its port, or plant code for the next start through
 its login shell or runtime environment. OpenCode has no bridge and takes the plain
 password, in `opencode-token` in the same directory; a plugin inside the server keeps
-it from the agent ([4981](../todo/containers-and-environments/4981-opencode-password-readable-by-agent.md)).
+it from the agent (`buildOpenCodeCredentialPluginSource` in
+`agent-credential-files.ts`). In a container, a server the plugin could not harden
+refuses tools; on a host it only logs, because a host's OpenCode can be any build.
+A host server gets the plugin through `OPENCODE_CONFIG_DIR`
+(`opencode-host-credential.ts`), and a server whose user set that variable runs
+without it (`credential-plugin.skipped`).
 Qualified by `apps/backend/tests/bridge-credential-docker.test.ts`.
 
 ## Container worktree signal (`container-worktree-signal=1`)

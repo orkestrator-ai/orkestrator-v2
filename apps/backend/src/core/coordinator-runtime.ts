@@ -5,7 +5,11 @@ import {
   type CoordinatorConversation,
   type CoordinatorWorkspace,
 } from "@orkestrator/protocol/coordinator";
-import { normalizeAgentPlatforms, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import {
+  AGENT_PLATFORM_LABELS,
+  normalizeAgentPlatforms,
+  type AgentPlatform,
+} from "@orkestrator/protocol/agent-platforms";
 import type { Environment, Project } from "./models.js";
 import type { StorageService } from "./storage.js";
 import { coordinatorProviderAllowed } from "./coordinator-providers.js";
@@ -36,6 +40,25 @@ export type CoordinatorRuntimeResolution =
       conversation: CoordinatorConversation & { agent: AgentPlatform };
       project: Project;
     };
+
+/**
+ * Whether a conversation's platform may run right now: turned on, and within
+ * the coordinator safety level. Read fresh, so changing either setting affects
+ * the next answer, and shared so that holding a read and refusing a runtime
+ * cannot disagree.
+ */
+export async function coordinatorPlatformAllowed(
+  storage: Pick<StorageService, "loadConfig">,
+  agent: AgentPlatform,
+): Promise<boolean> {
+  const config = await storage.loadConfig().catch(() => null);
+  return coordinatorProviderAllowed(agent, {
+    tierSetting: config?.global.coordinatorProviderTiers,
+    ...(config
+      ? { enabledPlatforms: normalizeAgentPlatforms(config.global.enabledAgentPlatforms) }
+      : {}),
+  });
+}
 
 /**
  * Resolve the common durable authority behind a coordinator runtime id.
@@ -77,15 +100,7 @@ export async function resolveCoordinatorRuntime(
   if (!conversation.agent) {
     return { status: "unavailable", coordinatorId, reason: "unassigned" };
   }
-  const config = await storage.loadConfig().catch(() => null);
-  if (
-    !coordinatorProviderAllowed(conversation.agent, {
-      tierSetting: config?.global.coordinatorProviderTiers,
-      ...(config
-        ? { enabledPlatforms: normalizeAgentPlatforms(config.global.enabledAgentPlatforms) }
-        : {}),
-    })
-  ) {
+  if (!(await coordinatorPlatformAllowed(storage, conversation.agent))) {
     return { status: "unavailable", coordinatorId, reason: "unsupported-agent" };
   }
 
@@ -126,9 +141,12 @@ export async function openCoordinatorConversation(
  * Why an open conversation may be read but not run, or null when it may run.
  * The transcript and state reads answer from saved data while this is set, and
  * must never resolve a provider, which is what would start a bridge.
+ *
+ * Only a conversation that is otherwise runnable and has a platform pays for
+ * the settings read; one that is paused or failed already has its answer.
  */
 export async function heldCoordinatorConversation(
-  storage: Pick<StorageService, "coordinators">,
+  storage: Pick<StorageService, "coordinators" | "loadConfig">,
   runtimeId: string,
 ): Promise<{
   workspace: CoordinatorWorkspace;
@@ -136,14 +154,22 @@ export async function heldCoordinatorConversation(
   message: string;
 } | null> {
   const open = await openCoordinatorConversation(storage, runtimeId);
-  if (!open || coordinatorConversationRunnable(open.workspace, open.conversation)) return null;
-  const message =
-    open.workspace.lifecycleState === "paused"
-      ? "The Coordinator is paused; showing saved history"
-      : open.workspace.lifecycleState === "error"
-        ? "The Coordinator could not start; showing saved history"
-        : "This conversation could not start; showing saved history";
-  return { ...open, message };
+  if (!open) return null;
+  if (!coordinatorConversationRunnable(open.workspace, open.conversation)) {
+    const message =
+      open.workspace.lifecycleState === "paused"
+        ? "The Coordinator is paused; showing saved history"
+        : open.workspace.lifecycleState === "error"
+          ? "The Coordinator could not start; showing saved history"
+          : "This conversation could not start; showing saved history";
+    return { ...open, message };
+  }
+  const agent = open.conversation.agent;
+  if (!agent || (await coordinatorPlatformAllowed(storage, agent))) return null;
+  return {
+    ...open,
+    message: `${AGENT_PLATFORM_LABELS[agent]} is unavailable for Coordinator; showing saved history`,
+  };
 }
 
 export function coordinatorRuntimeUnavailableMessage(

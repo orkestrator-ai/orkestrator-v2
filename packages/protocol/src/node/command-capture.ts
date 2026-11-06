@@ -7,6 +7,7 @@ import path from "node:path";
 import { inspect } from "node:util";
 import { formatLogError } from "../logger.js";
 import { classifyCommandFailure } from "./command-failure-reason.js";
+import { reapAfterLostExit } from "./lost-exit-reaper.js";
 import {
   bunRuntime,
   groupHasLiveMember,
@@ -382,6 +383,12 @@ function closeStdin(stdin: BunFileSink): void {
   }
 }
 
+/** Whether the runtime has seen the child exit, and so has reaped it. */
+function exitReported(child: CapturedChild): boolean {
+  const { code, signal } = child.current();
+  return code !== null || signal !== null;
+}
+
 /** Signal only the group created for this command, never PIDs from a ps snapshot. */
 function signalCommand(child: CapturedChild, signal: NodeJS.Signals): void {
   // No process started. Negating an absent pid must never reach `process.kill`.
@@ -470,6 +477,9 @@ function executeCommandBytes(
       clearInterval(limitTimer);
       stopExitWatch();
       options.signal?.removeEventListener("abort", abort);
+      // Settled without the runtime seeing the exit: a lost exit, or a child just
+      // killed. On macOS the first stays a zombie unless something reaps it.
+      if (!exitReported(child)) reapAfterLostExit(child.pid, () => exitReported(child));
       try {
         return {
           stdout: readCaptureFile(stdoutFd, outputLimit),

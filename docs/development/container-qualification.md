@@ -68,7 +68,7 @@ ignores `apps/backend/tests/**`, so a repository-root path matches no file.
 | Volume copy metadata | `container-live-data-contracts.test.ts` | Production `copy-volume` between real Docker volumes with a read-only source; compare raw `user.*` file/directory attributes and `security.capability` bytes before and after. Missing xattr or setcap support fails qualification. |
 | Registry | `scripts/measure-registry-image.sh [--transfer <platform>] [--dind <platform>] [--json <file>] <image-ref>` | Compressed manifest and layer bytes, blob transfer time, cold pull |
 | Upgrade and rollback | `bun scripts/qualify-backend-upgrade-rollback.ts [--old-ref <ref>] [--floor-ref <ref>] [--main-ref <ref>] [--report <file>]` | Backend upgrade over an older release's data and containers; the floor's refusal of a newer directory |
-| Real stack, terminal Claude | The Docker profile above started with `--credential-source claude`, then `ORKESTRATOR_AGENT_TEST_PROFILE=<p> ORKESTRATOR_AGENT_TEST_LIVE_CLAUDE_TERMINAL=1 mise run test:agent:docker` | A real `claude` turn in a **Claude CLI** tab, foreground and background: the Claude state signal's working and waiting latency against the activity and completion budgets, no missed ring (`container-claude-terminal-signal.spec.ts`) |
+| Real stack, terminal Claude | The Docker profile above started with `--credential-source claude`, then `ORKESTRATOR_AGENT_TEST_PROFILE=<p> ORKESTRATOR_AGENT_TEST_LIVE_CLAUDE_TERMINAL=1 mise run test:agent:docker`. With no login and no billed turn: start the profile with `--no-agent-credentials --agent-platforms claude` and set `ORKESTRATOR_AGENT_TEST_FAKE_CLAUDE_API=1` instead, which points the image's `claude` at a fixture Messages API on the container's loopback (`container-fake-claude-api.ts`) | A real `claude` turn in a **Claude CLI** tab, foreground and background: the Claude state signal's working and waiting latency against the activity and completion budgets, no missed ring (`container-claude-terminal-signal.spec.ts`). The containers must reach the profile's agent tools port: a Linux host firewall that drops it fails the spec at its first check, naming the port ([7080](../todo/containers-and-environments/7080-linux-host-firewall-blocks-profile-signals.md)) |
 | Linux Engine, CI | `.github/workflows/container-live-qualification.yml` (weekly, on demand, and on pull requests that change the suites, the signal scripts or the benchmark harness) | Every live suite on `ubuntu-24.04` and `ubuntu-24.04-arm`, both container change-signal live tests, the design export test (`export-container.test.ts`), the exec-cost script, then the benchmarks (C28); the numbers are uploaded as `container-benchmarks-<platform>` |
 | Egress gateway prototype | `scripts/qualify-egress-gateway.sh [image]` | The 2026-10-22 prototype of the gateway topology; the backend's own gateway is covered by the live firewall, network, readiness and replacement suites above |
 
@@ -121,6 +121,128 @@ Live tests start runtimes through `tests/container-live-start.ts`
 (`startRuntime`): Docker refuses a runtime whose egress gateway is not
 running, so a bare `docker start` of a restricted runtime fails on a gateway
 image.
+
+## Egress name checks on rootful Linux Engine (2026-11-06)
+
+To-do [6101](../todo/containers-and-environments/6101-egress-name-checks-platform-coverage.md)
+task 1 and [0018](../todo/containers-and-environments/0018-container-network-and-credential-isolation.md)
+task 1: the gateway's name checks (`egress-filter=1`) and the gateway suites
+on rootful Linux Engine, x64.
+
+- **Host:** beelink (Arch Linux, kernel 7.1.8, x86_64, cgroup v2), host Docker
+  Engine 29.9.2 rootful. Its `daemon.json` names the upstream resolver by
+  address (`"dns": ["172.17.0.1"]`). The host daemon was not restarted,
+  reconfigured or pruned, and the host firewall was not touched.
+- **Image:** `orkestrator-q6101:e6c3da899`, built here from `main` at
+  `e6c3da899` with the capability arguments (`egress-filter=1`,
+  `egress-gateway=1`, `network-policy=3`) and the label `orkestrator-q6101=1`.
+  BuildKit served every layer from cache. The manifest records
+  `sourceRevision` `e6c3da89905f`, and the image's
+  `orkestrator-egress-filter`, `init-firewall.sh` and
+  `orkestrator-egress-gateway` match the checkout byte for byte (SHA-256).
+  Older image, read only: `ghcr.io/orkestrator-ai/orkestrator-v2:2.34.4-beta`
+  (`egress-gateway=1`, no `egress-filter`).
+- **The host daemon had no address range left.** All 31 default pools are
+  held: by 29 leaked `reach-probe` networks
+  ([0241](../todo/containers-and-environments/0241-leaked-reach-probe-networks.md)),
+  `docker0` and another environment's network. The first M12 run there failed
+  5 of 5 in `ensureEnvironmentNetwork` with `resource-exhausted`. Those
+  networks were left alone. Two workarounds were used instead:
+  - **Disposable daemon for the suites.** `docker:29-dind` (Engine 29.9.3,
+    same kernel, rootful) in a privileged container labelled
+    `orkestrator-q6101=1`, with its own data volume, a private socket
+    directory, `bip` `10.213.0.1/24`, pool `10.214.0.0/16` split into /24s,
+    `live-restore` off, and a supervisor loop that starts `dockerd` again
+    when it exits. Images were streamed in with `docker save | docker load`
+    (same image id). Its containers' upstream is the host's `172.17.0.1`.
+    This is the 2026-10-31 recipe; [4730](../todo/containers-and-environments/4730-disposable-docker-daemon-for-live-suites.md)
+    task 1 would make it a repository command.
+  - **Host daemon for the five ticket cases.** A scratch script created a
+    restricted and a full runtime through `createDockerContainer` after
+    pre-creating each environment network with its exact name and labels
+    on an explicit subnet (`172.16.250.0/28`, `172.16.250.16/28`), which
+    `ensureEnvironmentNetwork` adopts, as the 2026-11-05 omarchy-hp run did.
+- **The five cases, by hand, on the host's own Engine 29.9.2** (outputs
+  abbreviated):
+  1. Allowed name: `curl https://registry.npmjs.org/` → `200`.
+  2. Foreign SNI on that address (`--resolve tenant.<run>.invalid:443:104.16.5.34`)
+     → `tlsv1 alert access denied`, curl 35.
+  3. `c2VjcmV0.exfil.<run>.invalid`: `REFUSED`, `ANSWER: 0`, `EDE: 18
+     (Prohibited)` over UDP, over TCP and sent to `192.0.2.53`; `getent`
+     exit 2.
+  4. Supervisor and worker killed with `SIGKILL` (no filter process left):
+     the allowed address gave curl 7 and DNS `no servers could be reached`.
+     After `update-firewall.sh --refresh`, `200` again.
+  5. Full mode: the runtime owns its own namespace, has no filter process
+     and no `/etc/orkestrator/egress-filter`, `registry.npmjs.org` answers
+     `200`, a reserved name gets Docker's `NXDOMAIN` (no `REFUSED`, no EDE),
+     and the foreign SNI reaches the origin, which answers `handshake
+     failure` itself rather than the gateway's `access denied`.
+
+  The gateway's protected `resolv.conf` read `nameserver 127.0.0.11` and
+  `# ExtServers: [172.17.0.1]`, so on this host Docker names its upstream by
+  address and the daemon queries it from inside the namespace: the
+  addressed-upstream path of 6101 task 3, on a real daemon rather than a
+  fixture. The same script on the disposable daemon passed identically with
+  `# ExtServers: [host(172.17.0.1)]`.
+- **Suites on the disposable daemon** (`DOCKER_HOST` set to it,
+  `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`, JUnit reports kept):
+  - `container-live-egress-filter.test.ts` with the older image: **5 pass, 0
+    fail**, twice (47 s, 52 s). All five cases ran: name checks with edits and
+    the dead-daemon case (19 s), addressed upstreams with forged replies and
+    failover (10 s), full mode (1 s), the rollback switch (9 s) and the older
+    image (7 s).
+  - `container-live-egress-conditions.test.ts` with
+    `ORKESTRATOR_LIVE_IPV6_NETWORK=1` and a restart command for the
+    disposable daemon only: **3 pass** (46 s) after the two test fixes below.
+    The daemon-restart case restarted `dockerd` twice (the supervisor logged
+    both).
+  - `container-live-firewall.test.ts`, the policy 3 tuple case only: **1
+    pass** (12 s) after the fix below; the unfixed copy from `e6c3da899`
+    failed at `:555` as in CI. C23 was not run: it opens connections to
+    `example.com`, which is not on the default allowlist, and traffic here
+    was kept to fixtures and default-allowlist hosts.
+  - `container-live-network.test.ts`: C24 (both) and C26 pass. C22 fails at
+    `reachability.check("manual")` with `blocked`: the backend's service
+    port is on the outer host, which a nested daemon's containers cannot
+    reach as their host.
+  - `container-live-readiness.test.ts`: 6 of 9 on the first run. C09
+    "restart during launch" and C10 failed because their bind-mounted origin
+    repository lives in the test's temporary directory, which the nested
+    daemon resolves inside its own container. Rerun with `TMPDIR` on a
+    directory mounted into the dind container at the same path: **8 of 9**.
+    C22 fails as in the network suite.
+- **Defects found and fixed (test-only, not Linux-only).** On every
+  `egress-filter=1` image two live cases sent a bare word (`probe`, `first`)
+  as their first TCP write. The name checks hold a printable first write
+  with no newline, since it could still become an HTTP request line, and
+  refuse it after 30 s, so those probes never reached their echo peer:
+  - The policy 3 tuple case in `container-live-firewall.test.ts` (`:555`,
+    expected 0, received 1).
+  - The DNS-rotation case in `container-live-egress-conditions.test.ts`. It
+    also called `node` on the gateway's fixed root PATH, which lacks
+    `/usr/local/bin` ([6103](../todo/containers-and-environments/6103-live-suite-failures-seen-during-s0100.md)
+    task 2). With only the PATH fixed it failed at its first probe (`:464`).
+
+  Both now send whole lines, and the resolver runs as `/usr/local/bin/node`.
+  CI run 42128741746 (S-0100's PR head `46998097`, Engine 28.0.4,
+  `ubuntu-24.04` and `ubuntu-24.04-arm`) failed both cases in the same way on
+  both runners. Its other relevant steps passed: M12 4 pass (the older-image
+  case skipped, as the workflow supplies none), network 4/4 and readiness
+  9/9. The product behaviour behind them is recorded in
+  [7000](../todo/containers-and-environments/7000-name-checks-hold-newline-less-first-writes.md).
+- **Not run:** arm64 on a self-managed host (only CI's hosted arm64 runner
+  above), rootless Docker (6101 task 2), C23 (see above), and C22 behind a
+  real host daemon on this machine (its pools are full). No provider turns,
+  credentials or app profile were used.
+
+Created and removed: the image tag `orkestrator-q6101:e6c3da899`, the pulled
+`docker:29-dind` image, the container `q6101-dind` and volume
+`q6101-dind-data` (label `orkestrator-q6101=1`) with every image, container,
+network and volume inside them, the private socket directory, and the two
+pre-created host networks with each run's owner-labelled runtimes, gateways
+and fixtures, which `afterAll` removed and listed again as empty. Afterwards
+nothing labelled `orkestrator-q6101=1` remained on the host daemon.
 
 ## Remaining validation blockers repaired (2026-11-05)
 

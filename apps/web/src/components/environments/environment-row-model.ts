@@ -8,7 +8,7 @@
  * and a new fact must be supplied by both or the code does not compile.
  * `environment-row-model.parity.test.ts` checks the two adapters agree.
  */
-import type { AgentActivity } from "@orkestrator/protocol/node-summaries";
+import { NODE_DELETE_FAILURE, type AgentActivity } from "@orkestrator/protocol/node-summaries";
 import type { PrState } from "@orkestrator/protocol/pr-monitor";
 import type { EnvironmentTooltipMachine } from "./EnvironmentTooltipBody";
 import { environmentNameSignal, type EnvironmentNameSignal } from "@/lib/environment-name-signal";
@@ -32,6 +32,12 @@ export interface EnvironmentRowFacts {
   environmentType: string | undefined;
   status: string;
   deleting: boolean;
+  /** Availability fence retained after a delete fails; independent of progress. */
+  deletionPending?: boolean;
+  /** Why its last delete failed. The row stops spinning and offers a retry. */
+  deleteFailure: string | null;
+  /** When the running delete started, if known. */
+  deletingSince: string | null;
   /** `deleting` is left over from a failed merge cleanup: a bulk delete can retry it. */
   deletionRetryable: boolean;
   /** A build pipeline names this environment: the row carries the pipe. */
@@ -78,6 +84,8 @@ export interface EnvironmentRowModel {
   dimmed: boolean;
   /** A spinner replaces the marker. */
   spinner: "deleting" | "transition" | null;
+  /** Shown under the name when its last delete failed. */
+  deleteFailureText: string | null;
   /** Multi-select can take it: not a delete in flight. */
   selectable: boolean;
   /** What the row's button announces after its name, e.g. "Working". */
@@ -141,7 +149,13 @@ export function environmentRowModel(facts: EnvironmentRowFacts): EnvironmentRowM
     nameSignal,
     dimmed: facts.deleting || isStopping,
     spinner: facts.deleting ? "deleting" : isTransitioning || facts.busy ? "transition" : null,
-    selectable: !facts.deleting || facts.deletionRetryable,
+    deleteFailureText:
+      !facts.deleting && facts.deleteFailure
+        ? facts.deleteFailure === NODE_DELETE_FAILURE
+          ? facts.deleteFailure
+          : `Delete failed: ${facts.deleteFailure}`
+        : null,
+    selectable: !(facts.deletionPending ?? facts.deleting) || facts.deletionRetryable,
     activityText,
     accessibleLabel: machine ? `${displayName}, on ${machine.name}, ${activityText}` : undefined,
     markerMachine: machine
@@ -164,8 +178,18 @@ export function environmentRowModel(facts: EnvironmentRowFacts): EnvironmentRowM
       : null,
     menu: {
       settingsDisabled: !facts.writable,
-      forkLocalDisabled: blocked || isCreating || facts.deleting || !facts.localCheckoutAvailable,
-      forkContainerDisabled: blocked || isCreating || facts.deleting || !facts.dockerAvailable,
+      forkLocalDisabled:
+        blocked ||
+        isCreating ||
+        facts.deletionPending === true ||
+        facts.deleting ||
+        !facts.localCheckoutAvailable,
+      forkContainerDisabled:
+        blocked ||
+        isCreating ||
+        facts.deletionPending === true ||
+        facts.deleting ||
+        !facts.dockerAvailable,
       powerDisabled: blocked || isTransitioning || !facts.dockerAvailable,
       restartDisabled: blocked || isTransitioning || !facts.dockerAvailable || !facts.running,
       // A deletion that failed keeps its marker; deleting again retries it.

@@ -71,6 +71,27 @@ async function projectFor(
 }
 
 describe("fork_environment", () => {
+  test.each(["deletionError", "cleanupAfterMergeError"] as const)(
+    "rejects local and container forks of a failed %s tombstone",
+    async (field) => {
+      const source = createEnvironment({
+        id: "env-source",
+        deletionRequestedAt: "2026-11-05T12:00:00Z",
+        [field]: "failed",
+      });
+      const { context } = createContext(source);
+      const fork = createCommandRegistry().get("fork_environment")!;
+      for (const environmentType of ["local", "containerized"]) {
+        await expect(fork({ environmentId: source.id, environmentType }, context)).rejects.toThrow(
+          "Cannot fork an environment while deletion is pending",
+        );
+      }
+      expect(
+        (await context.storage.getEnvironmentsByProject(source.projectId)).map((env) => env.id),
+      ).toEqual([source.id]);
+    },
+  );
+
   test("rejects a missing source environment", async () => {
     const { context } = createContext([]);
     const commands = createCommandRegistry();

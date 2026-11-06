@@ -80,5 +80,5 @@ This check also found that **the container bridge never runs the SDK's copy**. E
 
 - [1202 efficiency follow-ups](../cross-cutting/1202-efficiency-review-follow-ups.md), task 14
 - [0022 container resource budgets](0022-container-resource-budgets-and-performance.md)
-- [Efficiency, logging and database index](../../reports/efficiency-logging-database/0000-index.md), closing note for 0693
+- [Efficiency, logging and database outcome](../../reports/2026-11-06-efficiency-logging-database-outcome.md#closing-note-for-0693-dk-10-second-claude-binary), closing note for 0693
 - [`upgrade-agents.md`](../../development/upgrade-agents.md)

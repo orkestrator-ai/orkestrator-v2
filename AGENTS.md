@@ -556,8 +556,12 @@ session surface. When touching the session catalogue
   `SYSTEM_SUBTYPE_DISPOSITIONS` (`src/types/index.ts`) are `Record`s over the
   SDK's own unions, so an SDK bump that adds a message type or `system`
   subtype fails the typecheck until someone decides whether it is handled,
-  kept as a health notice, or ignored as inventory. Content blocks the parser
-  has no branch for are counted as `block:<type>` drift.
+  kept as a health notice, or ignored as inventory. `system` subtypes the CLI
+  emits but the SDK's union does not name (`session_title_changed`,
+  `vcs_state_changed`, …) get their fate in
+  `INTERNAL_SYSTEM_SUBTYPE_DISPOSITIONS`; any other unnamed subtype is
+  counted as `system:<subtype>` drift. Content blocks the parser has no
+  branch for are counted as `block:<type>` drift.
 - **The native tab never sees SSE.** The backend polls `GET /session/:id` and
   the transcript routes; `session.updated` frames only reach the legacy web
   client. Turn-scoped state the tab must show (activity, thinking estimate,
@@ -1543,7 +1547,8 @@ to a PATH lookup only outside agent-test profiles; inside one, a missing agent
 fails with `<Agent> is not installed in this agent-test profile's toolchain`.
 Cursor and Grok resolve only through the managed toolchain everywhere.
 Anything the host cannot seed is downloaded at
-startup, which needs network access; an agent-test profile that cannot prepare
+startup by the launcher, before Electron, with Bun's `fetch`. Chromium's
+download aborts whenever Docker changes an interface. This needs network access; an agent-test profile that cannot prepare
 its toolchains logs the reason and exits rather than waiting on a retry dialog.
 
 If startup reports `failed`, inspect the manifest and files below its `logDir`.

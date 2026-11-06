@@ -12,6 +12,7 @@ import type {
 } from "@orkestrator/protocol/backend-diagnostics";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { openCaptureFile, readCaptureFile } from "@orkestrator/protocol/node/command-capture";
+import { reapAfterLostExit } from "@orkestrator/protocol/node/lost-exit-reaper";
 import { watchForLostExit } from "@orkestrator/protocol/node/shell-process-state";
 import { HEALTH_SUMMARY_STORE } from "./health-summary-layout.js";
 
@@ -346,6 +347,9 @@ export function copyDatabaseInChildProcess(
       stopExitWatch();
       process.removeListener("exit", kill);
       child.stdin?.destroy();
+      // A lost exit leaves the supervisor a zombie on macOS unless it is reaped.
+      const exitReported = () => child.exitCode !== null || child.signalCode !== null;
+      if (!exitReported()) reapAfterLostExit(child.pid, exitReported);
       return true;
     };
     const onExit = (code: number | null, signal: NodeJS.Signals | null) => {

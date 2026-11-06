@@ -8,6 +8,8 @@ import type {
   MailboxPresence,
 } from "@orkestrator/protocol/agent-mail";
 import { useAgentMailStore } from "@/stores/agentMailStore";
+import { FloatingNoticeLayer } from "@/components/ui/floating-notice";
+import { formatAgentMailTime } from "./agent-mail-ui";
 import { AgentMailBanner } from "./AgentMailBanner";
 
 import * as backend from "@/lib/backend/agent-mail";
@@ -111,6 +113,127 @@ describe("AgentMailBanner", () => {
   beforeEach(() => {
     cleanup();
     useAgentMailStore.setState(useAgentMailStore.getInitialState());
+  });
+
+  test.each(["pending-inject", "stored", "inject_failed"] as const)(
+    "a platform hold explains %s mail and prevents delivery until released",
+    (placement) => {
+      install(placement, { policy: placement === "stored" ? "off" : "idle" });
+      const view = render(
+        <AgentMailBanner
+          environmentId="env-1"
+          tabId="tab-1"
+          deliveryHeldReason="Codex is turned off. Turn it on to send."
+        />,
+      );
+      if (placement !== "inject_failed")
+        expect(
+          screen.getByText("Delivery waiting: Codex is turned off. Turn it on to send."),
+        ).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Deliver now" }) === null).toBe(true);
+      if (placement === "inject_failed")
+        expect((screen.getByRole("button", { name: "Retry" }) as HTMLButtonElement).disabled).toBe(
+          true,
+        );
+      expect(screen.getByRole("button", { name: "View" })).toBeTruthy();
+      view.rerender(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
+      expect(screen.queryByText(/Delivery waiting: Codex/) === null).toBe(true);
+      expect(
+        screen.getByRole("button", {
+          name: placement === "inject_failed" ? "Retry" : "Deliver now",
+        }),
+      ).toBeTruthy();
+    },
+  );
+
+  test("a platform hold disables budget Resume until released and keeps the reason visible", async () => {
+    install("inject-held", { placementReason: "loop-budget-exhausted" });
+    const retry = spyOn(backend, "retryAgentMailInject").mockResolvedValue({
+      ...message("pending-inject"),
+      body: "hello",
+    });
+    const view = render(
+      <AgentMailBanner
+        environmentId="env-1"
+        tabId="tab-1"
+        deliveryHeldReason="Codex is turned off. Turn it on to send."
+      />,
+    );
+    expect(
+      screen.getByText("Delivery paused: loop budget · Codex is turned off. Turn it on to send."),
+    ).toBeTruthy();
+    const resume = screen.getByRole("button", { name: "Resume" }) as HTMLButtonElement;
+    expect(resume.disabled).toBe(true);
+    fireEvent.click(resume);
+    expect(retry).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "Deliver now" }) === null).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "View" }));
+    expect(useAgentMailStore.getState().panel).toEqual({ focus: mailboxId });
+
+    view.rerender(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
+    expect(screen.getByText("Delivery paused: loop budget")).toBeTruthy();
+    expect((screen.getByRole("button", { name: "Resume" }) as HTMLButtonElement).disabled).toBe(
+      false,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Resume" }));
+    await waitFor(() =>
+      expect(retry).toHaveBeenCalledWith("env-1", "tab-1", "message-inject-held"),
+    );
+  });
+
+  test.each([
+    ["stored", undefined, "bg-primary"],
+    ["inject_failed", undefined, "bg-failure"],
+    ["inject-held", "loop-budget-exhausted", "bg-yellow-300"],
+  ] as const)("uses the expected tone for %s", (placement, placementReason, color) => {
+    install(placement, { placementReason });
+    render(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
+    expect(
+      screen.getByRole("region", { name: "Agent mail" }).querySelector(`.${color}`),
+    ).toBeTruthy();
+  });
+
+  test("shows the inbox count in a collapsed pill and newest sender, time and subject in the card", () => {
+    install("stored");
+    const mailbox = useAgentMailStore.getState().mailboxes.get(mailboxId)!;
+    mailbox.messages = [
+      {
+        ...message("stored"),
+        id: "newest",
+        subject: "Newest subject",
+        createdAt: "2026-11-06T10:00:00.000Z",
+        from: { kind: "user" },
+      },
+      { ...message("stored"), id: "oldest", subject: "Old subject" },
+    ];
+    const original = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = class {
+      observe() {}
+      disconnect() {}
+      unobserve() {}
+    } as unknown as typeof ResizeObserver;
+    try {
+      // The zero-layout happy-dom anchor is measured as an overlay; fold it explicitly.
+      render(
+        <FloatingNoticeLayer>
+          <AgentMailBanner environmentId="env-1" tabId="tab-1" />
+        </FloatingNoticeLayer>,
+      );
+      expect(screen.getByText("Newest subject")).toBeTruthy();
+      expect(
+        screen.getByText(`You · ${formatAgentMailTime(mailbox.messages[0]!.createdAt)}`),
+      ).toBeTruthy();
+      expect(screen.queryByText("Old subject") === null).toBe(true);
+      fireEvent.click(screen.getByRole("button", { name: "Minimize Agent mail" }));
+      const pill = screen.getByRole("button", {
+        name: "Agent mail: 2 messages in inbox · pull only",
+      });
+      expect(pill.textContent).toBe("2");
+      fireEvent.click(pill);
+      expect(screen.getByText("Newest subject")).toBeTruthy();
+    } finally {
+      globalThis.ResizeObserver = original;
+    }
   });
 
   test("surfaces pull-only pending delivery in the recipient tab", () => {

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { WorktreeRemovalReads } from "./worktree-removal-reads.js";
 import type { RecurringPriorityClass } from "@orkestrator/protocol/recurring-work";
 import {
   DIFF_STATS_CHANGED_EVENT,
@@ -451,6 +452,7 @@ export class DiffStatsService {
   private readonly watcherRetry: RetryPolicy;
   private readonly tree: WorktreeTreeSnapshots;
   private readonly adhoc: AdhocWorktreeReads;
+  private readonly removalReads = new WorktreeRemovalReads();
   private readonly containerTreeMaxAgeMs: number;
 
   constructor(options: DiffStatsServiceOptions) {
@@ -545,6 +547,11 @@ export class DiffStatsService {
     });
   }
 
+  /** Reconciliation may pause an unfinished removal without aborting other targets. */
+  canTrack(target: DiffStatsTarget): boolean {
+    return this.removalReads.canTrack(target);
+  }
+
   /**
    * Begins tracking an environment, or retargets one already tracked.
    *
@@ -553,6 +560,7 @@ export class DiffStatsService {
    * target invalidates the cached counts: they described a different comparison.
    */
   track(target: DiffStatsTarget): void {
+    this.removalReads.track(target);
     const existing = this.entries.get(target.environmentId);
     if (existing) {
       const retargeted = !isSameTarget(existing.target, target);
@@ -684,6 +692,22 @@ export class DiffStatsService {
     this.notify({ kind: "paused", target: entry.target, at: this.options.now() });
   }
 
+  /** Close admission across aliases before draining even invalidated ad hoc readers. */
+  async pauseForRemoval(environmentId: string, lookup: WorktreeLookup): Promise<void> {
+    const drained = this.removalReads.close(lookup);
+    this.pause(environmentId);
+    const key = this.removalReads.key(lookup);
+    for (const entry of this.entries.values()) {
+      if (this.removalReads.key(entry.target) === key) this.pause(entry.target.environmentId);
+    }
+    await drained;
+  }
+
+  /** Cleanup, including its durable ledger, has finished; a replacement may register. */
+  completeRemoval(lookup: WorktreeLookup): void {
+    this.removalReads.complete(lookup);
+  }
+
   /** Every environment the service holds state for, paused or not. */
   trackedIds(): string[] {
     return [...this.entries.keys()];
@@ -763,6 +787,10 @@ export class DiffStatsService {
    * A failed scan rejects; the last good list is retained for later reads.
    */
   async readFileList(request: FileListReadRequest): Promise<FileListReadResult> {
+    return this.removalReads.run(request.lookup, () => this.readFileListNow(request));
+  }
+
+  private async readFileListNow(request: FileListReadRequest): Promise<FileListReadResult> {
     const entry = this.findEntry(request.lookup);
     if (
       !entry ||
@@ -777,6 +805,10 @@ export class DiffStatsService {
 
   /** The workspace tree; see {@link WorktreeTreeSnapshots}. */
   async readTree(request: TreeReadRequest): Promise<TreeReadResultWithView> {
+    return this.removalReads.run(request.lookup, () => this.readTreeNow(request));
+  }
+
+  private async readTreeNow(request: TreeReadRequest): Promise<TreeReadResultWithView> {
     const entry = this.findEntry(request.lookup);
     const environmentId = entry?.target.environmentId;
     if (!entry || !entry.active || !environmentId || !this.tree.has(environmentId)) {
@@ -883,6 +915,29 @@ export class DiffStatsService {
       tree: this.tree.status(),
       adhocPending: this.adhoc.pending,
       adhocTrees: this.adhoc.treeCacheStatus(),
+    };
+  }
+
+  /**
+   * {@link status} flattened into cache gauges for recurring diagnostics
+   * (`worktree-snapshots`): tracked entries, tree lineages and their retained
+   * bodies, and ad hoc reads. Counts and sizes only.
+   */
+  cacheGauges(): Record<string, number> {
+    const status = this.status();
+    return {
+      entries: status.entries,
+      active: status.active,
+      watched: status.watched,
+      inFlight: status.inFlight,
+      retryTimers: status.retryTimers,
+      treeTargets: status.tree.entries,
+      treeBodies: status.tree.bodies,
+      treeBytes: status.tree.bytes,
+      treeInFlight: status.tree.inFlight,
+      adhocPending: status.adhocPending,
+      adhocTrees: status.adhocTrees.entries,
+      adhocTreeBytes: status.adhocTrees.bytes,
     };
   }
 
@@ -1474,6 +1529,7 @@ export class DiffStatsService {
   }
 
   private async readAdhocFileList(request: FileListReadRequest): Promise<FileListReadResult> {
+    this.removalReads.assertReadable(request.lookup);
     const kind = request.lookup.worktreePath ? "local" : "container";
     const result = await this.adhoc.readFileList({
       kind,
@@ -1487,6 +1543,7 @@ export class DiffStatsService {
   }
 
   private async readAdhocTree(request: TreeReadRequest): Promise<TreeReadResultWithView> {
+    this.removalReads.assertReadable(request.lookup);
     const kind = request.lookup.worktreePath ? "local" : "container";
     return this.adhoc.readTree({
       kind,

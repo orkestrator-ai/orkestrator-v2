@@ -27,6 +27,7 @@ import {
 import { goalApprovalWarning } from "@/lib/chat/goal-presentation";
 import { useHumanPrompts, useUserCommands } from "@/hooks/useUserCommands";
 import { HumanPromptBanner } from "@/components/chat/HumanPromptBanner";
+import { useInFloatingNoticeLayer } from "@/components/ui/floating-notice";
 import { withUserCommandRows } from "@/lib/chat/user-command-rows";
 import { withPermissionRuleRows } from "@/lib/chat/permission-rule-rows";
 import { usePermissionRuleSession } from "@/hooks/usePermissionRuleSession";
@@ -345,7 +346,6 @@ export function SharedNativeAgentController({
   beforeSend,
   composerPlaceholder,
   composerHint,
-  connectionEnabled = true,
   sendingHeldReason,
 }: AgentNativeTabProps) {
   const isReadOnlyCoordinator = executionPolicy === "coordinator-read-only";
@@ -599,8 +599,7 @@ export function SharedNativeAgentController({
     defaultFastMode: configuredFastMode,
     defaultParameterValues: configuredParameterValues,
     isActive,
-    enabled:
-      connectionEnabled && !setupPending && !draft.submissionPending && !awaitingResumeChoice,
+    enabled: !setupPending && !draft.submissionPending && !awaitingResumeChoice,
     sendingHeld,
   });
   const isDispatching = runtimeIsDispatching || draft.submissionPending === true;
@@ -1059,6 +1058,7 @@ export function SharedNativeAgentController({
    */
   const promptEnvironments = useMemo(() => [data.environmentId], [data.environmentId]);
   const environmentPrompts = useHumanPrompts(promptEnvironments);
+  const floatingNotices = useInFloatingNoticeLayer();
   const agentPrompts = useMemo(
     () =>
       environmentPrompts.filter(
@@ -1508,7 +1508,11 @@ export function SharedNativeAgentController({
     queueEditPending || isSubmitting || (phase !== "idle" && phase !== "error");
   const isRunning = phase === "running";
   const isProviderTurnActive =
-    phase === "running" || phase === "recovering" || phase === "cancelling";
+    phase === "running" ||
+    phase === "recovering" ||
+    phase === "cancelling" ||
+    // Held panes withhold interactions, but blocked work must still offer Stop.
+    (sendingHeld && phase === "blocked");
   const isTurnActive = isDispatching || isProviderTurnActive;
   const turnActivity = phase === "running" ? projection?.turn.activity : undefined;
   /*
@@ -3828,7 +3832,8 @@ export function SharedNativeAgentController({
       virtuosoRef={virtuosoRef}
       highlightedMessageId={highlightedMessageId}
       blockingCards={[
-        ...(agentPrompts.length > 0
+        // In a pane with a notice layer the prompts float with its other notices.
+        ...(agentPrompts.length > 0 && !floatingNotices
           ? [<HumanPromptBanner key="human-prompts" prompts={agentPrompts} />]
           : []),
         ...pinnedInteractions.map((interaction) => (
@@ -4432,6 +4437,9 @@ export function SharedNativeAgentController({
                   turnActive={isTurnActive}
                 />
                 <div className="min-h-0 flex-1">{chatShell}</div>
+                {floatingNotices && agentPrompts.length > 0 ? (
+                  <HumanPromptBanner prompts={agentPrompts} />
+                ) : null}
               </div>
               {openSubork && openSuborkView ? (
                 <SuborkTranscriptDialog

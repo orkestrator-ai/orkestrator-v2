@@ -119,6 +119,8 @@ export interface Environment {
   cleanupAfterMergeRequestedAt?: string;
   /** Last backend cleanup failure, retained so recovery UI can rehydrate. */
   cleanupAfterMergeError?: string;
+  /** Why the last delete failed; the tombstone stays and deleting again retries. */
+  deletionError?: string;
   /** Sanitized failure from the most recent backend-owned lifecycle operation. */
   lifecycleError?: string | null;
   name: string;

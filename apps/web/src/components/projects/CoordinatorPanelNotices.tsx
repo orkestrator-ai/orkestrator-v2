@@ -1,13 +1,12 @@
 import type { ReactNode } from "react";
 import {
-  AlertCircle,
   Copy,
   Database,
   LockKeyhole,
   RotateCcw,
   Settings2,
   ShieldAlert,
-  X,
+  type LucideIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 import type {
@@ -16,6 +15,11 @@ import type {
   ProjectGitStatus,
 } from "@orkestrator/protocol/coordinator";
 import { Button } from "@/components/ui/button";
+import {
+  FLOATING_NOTICE_ACTION,
+  FloatingNotice,
+  type FloatingNoticeTone,
+} from "@/components/ui/floating-notice";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -168,34 +172,44 @@ export function CoordinatorIsolationBadge({
 }
 
 /**
- * A notice above the conversation. Paused, startup and provider states are
- * banners rather than replacements, so the transcript stays readable.
+ * A notice over the conversation, floating at the top right of the
+ * coordinator area. Paused, startup and provider states are notices rather
+ * than replacements, so the transcript stays readable.
  */
 export function CoordinatorBanner({
   tone,
+  label,
+  summary,
   icon,
   children,
   action,
+  onDismiss,
+  dismissLabel,
 }: {
-  tone: "info" | "warning" | "error";
-  icon?: ReactNode;
+  tone: FloatingNoticeTone;
+  /** A few words naming the notice: its heading, and what its pill says. */
+  label: string;
+  /** Plain-text gist for the pill's accessible name; the label when absent. */
+  summary?: string;
+  icon?: LucideIcon;
   children: ReactNode;
   action?: ReactNode;
+  onDismiss?: () => void;
+  dismissLabel?: string;
 }) {
   return (
-    <div
+    <FloatingNotice
+      tone={tone}
+      label={label}
+      summary={summary ?? label}
       role={tone === "error" ? "alert" : "status"}
-      className={cn(
-        "flex shrink-0 flex-wrap items-center gap-2 border-b px-3 py-2 text-sm",
-        tone === "error" && "border-destructive/40 bg-destructive/10 text-red-200",
-        tone === "warning" && "border-amber-500/30 bg-amber-500/10 text-amber-200",
-        tone === "info" && "border-border/70 bg-elevated text-foreground",
-      )}
+      actions={action}
+      {...(icon ? { icon } : {})}
+      {...(onDismiss ? { onDismiss } : {})}
+      {...(dismissLabel ? { dismissLabel } : {})}
     >
-      {icon ?? <AlertCircle className="size-4 shrink-0" aria-hidden="true" />}
-      <div className="min-w-0 flex-1">{children}</div>
-      {action}
-    </div>
+      {children}
+    </FloatingNotice>
   );
 }
 
@@ -203,8 +217,6 @@ export function CoordinatorBanner({
  * Says when the workflow store every project's coordinator shares is close to
  * refusing new work, or refusing it, and what frees room. Nothing from a
  * backend that predates `workflowStore`, which says nothing about the store.
- * Clearing finished rows in the Work panel only hides them, so it is not
- * offered as a way out.
  */
 export function CoordinatorWorkflowStoreBanner({
   state,
@@ -216,7 +228,8 @@ export function CoordinatorWorkflowStoreBanner({
   return (
     <CoordinatorBanner
       tone={full ? "error" : "warning"}
-      icon={<Database className="size-4 shrink-0" aria-hidden="true" />}
+      label={full ? "Work records full" : "Work records nearly full"}
+      icon={Database}
     >
       <span data-coordinator-workflow-store={state}>
         <span className="font-medium">
@@ -224,12 +237,12 @@ export function CoordinatorWorkflowStoreBanner({
             ? "Coordinator work records are full."
             : "Coordinator work records are nearly full."}
         </span>{" "}
-        <span className={full ? "text-red-200/80" : "text-amber-200/80"}>
+        <span className="text-muted-foreground">
           {full
             ? "New launches are refused, and messages to workers will not wake the coordinator, until room frees up."
             : "The records every project's coordinator shares will soon refuse new launches."}{" "}
           Delete finished worker environments, or let running work finish; finished work older than
-          a day is then cleared automatically. Clearing rows from the Work panel only hides them.
+          a day is then cleared automatically.
         </span>
       </span>
     </CoordinatorBanner>
@@ -256,18 +269,10 @@ export function CoordinatorActionAlert({
   return (
     <CoordinatorBanner
       tone="error"
-      action={
-        <Button
-          size="icon"
-          variant="ghost"
-          className="size-7"
-          aria-label="Dismiss error"
-          title="Dismiss"
-          onClick={onDismiss}
-        >
-          <X className="size-3.5" />
-        </Button>
-      }
+      label="Action failed"
+      summary={message}
+      onDismiss={onDismiss}
+      dismissLabel="Dismiss error"
     >
       <span className="block max-h-28 overflow-auto break-words whitespace-pre-wrap">
         {message}
@@ -293,18 +298,33 @@ export function CoordinatorStartupFailure({
   return (
     <CoordinatorBanner
       tone="error"
+      label="Could not start"
+      summary={`${title} could not start.`}
       action={
-        <div className="flex shrink-0 flex-wrap items-center gap-1.5">
-          <Button size="sm" variant="outline" disabled={busy} onClick={onRetry}>
-            <RotateCcw className="size-3.5" />
+        <>
+          <Button
+            size="sm"
+            variant="secondary"
+            className={FLOATING_NOTICE_ACTION}
+            disabled={busy}
+            onClick={onRetry}
+          >
+            <RotateCcw className="size-3" />
             Retry
           </Button>
-          <Button size="sm" variant="outline" disabled={busy} onClick={onClose}>
+          <Button
+            size="sm"
+            variant="ghost"
+            className={FLOATING_NOTICE_ACTION}
+            disabled={busy}
+            onClick={onClose}
+          >
             Close conversation
           </Button>
           <Button
             size="sm"
             variant="ghost"
+            className={FLOATING_NOTICE_ACTION}
             onClick={() => {
               void writeText(error).then(
                 () => toast.success("Error copied"),
@@ -312,14 +332,14 @@ export function CoordinatorStartupFailure({
               );
             }}
           >
-            <Copy className="size-3.5" />
+            <Copy className="size-3" />
             Copy error
           </Button>
-        </div>
+        </>
       }
     >
       <span className="font-medium">{title} could not start.</span>{" "}
-      <span className="break-words text-red-200/80">{error}</span>
+      <span className="break-words text-muted-foreground">{error}</span>
     </CoordinatorBanner>
   );
 }

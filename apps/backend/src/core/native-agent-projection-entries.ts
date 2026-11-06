@@ -194,6 +194,11 @@ export class ProjectedMessageCache {
     return this.entries.size;
   }
 
+  /** Sessions with at least one reusable row, for cache gauges. */
+  get sessionCount(): number {
+    return this.sessions.size;
+  }
+
   get bytes(): number {
     return this.totalBytes;
   }

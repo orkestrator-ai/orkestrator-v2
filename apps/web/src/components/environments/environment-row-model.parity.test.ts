@@ -16,7 +16,10 @@ import type { BackendId } from "@orkestrator/protocol/federation";
 import { isPrReadingConfirmedByMonitor } from "@orkestrator/protocol/pr-merge-readiness";
 import type { PrMonitorEnvironmentState } from "@orkestrator/protocol/pr-monitor";
 import { projectKey, projectRef } from "@orkestrator/protocol/federation";
-import { toNodeEnvironmentSummary } from "@orkestrator/protocol/node-summaries";
+import {
+  environmentHasDeletionTombstone,
+  toNodeEnvironmentSummary,
+} from "@orkestrator/protocol/node-summaries";
 import type { MachineView } from "@/lib/federation/aggregate";
 import { isLocalDeletionRetryable } from "@/lib/federation/selected-environments";
 import { localEnvironmentPrMergeState } from "@/lib/pr-merge-readiness";
@@ -108,8 +111,7 @@ const machine: MachineView = {
 };
 
 function localRow(environment: Environment, markers: Markers): Row {
-  const deleting =
-    environment.lifecycleOperation === "deleting" || Boolean(environment.deletionRequestedAt);
+  const deleting = environmentHasDeletionTombstone(environment);
   const dockerAvailable = markers.dockerAvailable ?? true;
   return row(
     localEnvironmentRowFacts(environment, {
@@ -154,14 +156,19 @@ function nodeRow(environment: Environment, markers: Markers): Row {
   return row(nodeEnvironmentRowFacts(machine, summary, { busy: false, writable: true }, true));
 }
 
-/** Everything but the machine lines, which differ by design ("This window"). */
+/** Machine lines and failure detail differ by design: remote errors are content-free. */
 function comparable({ facts, model }: Row) {
   const { machine, ...otherFacts } = facts;
   const { markerMachine, cardMachine, ...otherModel } = model;
   return {
-    facts: { ...otherFacts, machine: machine && { name: machine.name } },
+    facts: {
+      ...otherFacts,
+      deleteFailure: Boolean(facts.deleteFailure),
+      machine: machine && { name: machine.name },
+    },
     model: {
       ...otherModel,
+      deleteFailureText: Boolean(model.deleteFailureText),
       markerMachine: markerMachine && { name: markerMachine.name },
       cardMachine: cardMachine && { name: cardMachine.name },
     },
@@ -183,6 +190,15 @@ const cases: Array<[string, Partial<Environment>, Markers]> = [
   [
     "a failed deletion kept for retry",
     { deletionRequestedAt: "2026-10-21T09:00:00Z", cleanupAfterMergeError: "failed" },
+    {},
+  ],
+  [
+    "a failed deletion with its own reason",
+    {
+      lifecycleOperation: "deleting",
+      deletionRequestedAt: "2026-10-21T09:00:00Z",
+      deletionError: "Terminal process trees are still running",
+    },
     {},
   ],
   [
@@ -258,12 +274,21 @@ test("multi-select takes a failed cleanup but not a delete in flight, on either 
   } as Environment;
   const failedInRecovery = { ...failed, lifecycleOperation: "deleting" } as Environment;
   const inFlight = { ...base, lifecycleOperation: "deleting" } as Environment;
+  const failedDelete = {
+    ...inFlight,
+    deletionRequestedAt: "2026-10-21T09:00:00Z",
+    deletionError: "failed",
+  } as Environment;
   for (const environment of [failed, failedInRecovery]) {
     expect(localRow(environment, {}).model.selectable).toBe(true);
     expect(nodeRow(environment, {}).model.selectable).toBe(true);
   }
   expect(localRow(inFlight, {}).model.selectable).toBe(false);
   expect(nodeRow(inFlight, {}).model.selectable).toBe(false);
+  // A stopped progress spinner does not lift the selection fence. Only the
+  // explicit merge-cleanup retry flag permits bulk selection of a tombstone.
+  expect(localRow(failedDelete, {}).model.selectable).toBe(false);
+  expect(nodeRow(failedDelete, {}).model.selectable).toBe(false);
   expect(localRow(base, {}).model.selectable).toBe(true);
   expect(nodeRow(base, {}).model.selectable).toBe(true);
 });
@@ -340,3 +365,22 @@ test("a machine's Docker availability gates another machine's container actions;
     expect(model.isRunning).toBe(true);
   }
 });
+
+test.each(["deletionError", "cleanupAfterMergeError"] as const)(
+  "failed %s tombstones retain Retry without enabling either Fork action",
+  (field) => {
+    const environment = { ...base, deletionRequestedAt: "2026-11-05T12:00:00Z", [field]: "failed" };
+    for (const value of [localRow(environment, {}), nodeRow(environment, {})]) {
+      expect(value.facts.deletionPending).toBe(true);
+      expect(value.model.deleteFailureText).toBe(
+        value.facts.machine?.isThisWindow === false
+          ? "Deletion failed. Retry on the owning machine."
+          : "Delete failed: failed",
+      );
+      expect(value.model.spinner).toBeNull();
+      expect(value.model.menu.deleteDisabled).toBe(false);
+      expect(value.model.menu.forkLocalDisabled).toBe(true);
+      expect(value.model.menu.forkContainerDisabled).toBe(true);
+    }
+  },
+);

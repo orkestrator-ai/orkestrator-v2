@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { dockerOwnerNamespace } from "./docker-ownership.js";
 import { runCommand } from "./shell.js";
+import { reportDockerNetworkChange } from "./docker-network-changes.js";
 import { networkOwnerContainer } from "./container-network-owner.js";
 import type { CommandContext } from "./commands-context.js";
 import type { EnvironmentNetworkPolicy } from "@orkestrator/protocol/container-recovery";
@@ -16,6 +17,7 @@ import {
   DOCKER_LABEL_RESOURCE_ROLE,
 } from "./constants.js";
 import { imageCapabilities } from "./docker-image.js";
+import { restrictedContainerReachesGitRemote } from "./project-git-mirror.js";
 import { CONTAINER_ROOT_USER_ARGS } from "./container-scripts.js";
 import type { AppConfig, Environment } from "./models.js";
 
@@ -113,7 +115,11 @@ export async function ensureEnvironmentNetwork(
   const labels = expectedLabels(owner, environmentId);
   const existing = await inspectNetwork(name);
   if (existing.kind === "present") {
-    if (labelsMatch(existing.labels, labels)) return name;
+    if (labelsMatch(existing.labels, labels)) {
+      // An adopted network may predate this process's peer list.
+      reportDockerNetworkChange();
+      return name;
+    }
     throw new ContainerLifecycleError(
       "needs-attention",
       "A Docker network with this environment's name exists but is not labelled as its own. It was left untouched.",
@@ -142,7 +148,10 @@ export async function ensureEnvironmentNetwork(
     // An ambiguous create (timeout, a racing attempt) is resolved by exact
     // identity rather than reported as failure.
     const after = await inspectNetwork(name);
-    if (after.kind === "present" && labelsMatch(after.labels, labels)) return name;
+    if (after.kind === "present" && labelsMatch(after.labels, labels)) {
+      reportDockerNetworkChange();
+      return name;
+    }
     const message = error instanceof Error ? error.message : String(error);
     throw new ContainerLifecycleError(
       /address pools|could not find an available|non-overlapping/i.test(message)
@@ -153,6 +162,8 @@ export async function ensureEnvironmentNetwork(
         : "Docker could not create the environment's network. Nothing else was changed.",
     );
   }
+  // The agent-tools server admits peers by this backend's network subnets.
+  reportDockerNetworkChange();
   return name;
 }
 
@@ -174,6 +185,7 @@ export async function removeEnvironmentNetwork(
   if (probe.containers > 0) return "in-use";
   try {
     await runCommand("docker", ["network", "rm", name], { timeoutMs: 30_000 });
+    reportDockerNetworkChange();
     return "removed";
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -353,6 +365,8 @@ interface ContainerNetworkFacts {
   policyVersion: NetworkPolicyVersion;
   liveUpdates: boolean;
   running: boolean;
+  hasGitMirror: boolean;
+  gitUrl: string;
 }
 
 async function containerNetworkFacts(
@@ -365,17 +379,20 @@ async function containerNetworkFacts(
       [
         "inspect",
         "-f",
-        `{{ index .Config.Labels "${DOCKER_LABEL_NETWORK_POLICY}" }}\t{{ .Image }}\t{{ .State.Running }}`,
+        `{{ index .Config.Labels "${DOCKER_LABEL_NETWORK_POLICY}" }}\t{{ .Image }}\t{{ .State.Running }}\t{{range .Mounts}}{{if eq .Destination "/orkestrator-git-mirror"}}mirror{{end}}{{end}}\n{{range .Config.Env}}{{if eq (index (split . "=") 0) "GIT_URL"}}{{println .}}{{end}}{{end}}`,
         containerId,
       ],
       { timeoutMs: 10_000 },
     );
-    const [policy = "", imageId = "", running = ""] = stdout.trim().split("\t");
+    const [summary = "", ...env] = stdout.split("\n");
+    const [policy = "", imageId = "", running = "", mirror = ""] = summary.trim().split("\t");
     const capabilities = await imageCapabilities(imageId || undefined, context).catch(() => null);
     return {
       policyVersion: policy === "3" ? 3 : policy === "2" ? 2 : 1,
       liveUpdates: (capabilities?.["network-refresh"] ?? 0) >= 1,
       running: running === "true",
+      hasGitMirror: mirror === "mirror",
+      gitUrl: env.find((value) => value.startsWith("GIT_URL="))?.slice("GIT_URL=".length) ?? "",
     };
   } catch {
     return null;
@@ -444,7 +461,22 @@ export async function environmentNetworkPolicy(
   } catch {
     result.effective = null;
   }
-  result.domains = domainsState(result.configured, result.effective, facts.liveUpdates);
+  // A firewall update cannot revoke a shared mirror bind. Only require a
+  // rebuild when the saved policy would block its remote. Use the runtime's
+  // original clone URL, so later project edits cannot change this decision.
+  // Missing or unrecognised URLs fail closed through the reachability check.
+  const state = domainsState(result.configured, result.effective, facts.liveUpdates);
+  result.domains =
+    facts.hasGitMirror &&
+    result.configured.mode === "restricted" &&
+    state !== "applied" &&
+    !restrictedContainerReachesGitRemote(
+      facts.gitUrl,
+      containerAllowedDomains(environment, config, facts.policyVersion),
+      facts.policyVersion,
+    )
+      ? "rebuild-required"
+      : state;
   return result;
 }
 

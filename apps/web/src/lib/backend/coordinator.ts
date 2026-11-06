@@ -12,6 +12,11 @@ import {
   type CoordinatorActivitySnapshot,
   type CoordinatorCheckoutTurn,
 } from "@orkestrator/protocol/coordinator-activity";
+import {
+  COORDINATOR_LAUNCH_OVERRIDES_COMMAND,
+  parseCoordinatorLaunchOverrides,
+  type CoordinatorLaunchOverridesSnapshot,
+} from "@orkestrator/protocol/coordinator-launch-overrides";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { ViewRevisionStamp } from "@orkestrator/protocol/view-sync";
 import { invoke } from "@/lib/native/backend";
@@ -54,6 +59,10 @@ export const getProjectCoordinatorView = (
 export const listCoordinatorActivity = (): Promise<CoordinatorActivitySnapshot> =>
   invoke<unknown>(COORDINATOR_ACTIVITY_COMMAND).then(parseCoordinatorActivitySnapshot);
 
+/** Worker tabs whose launch overrode the default. Older backends answer "Unknown backend command". */
+export const listCoordinatorLaunchOverrides = (): Promise<CoordinatorLaunchOverridesSnapshot> =>
+  invoke<unknown>(COORDINATOR_LAUNCH_OVERRIDES_COMMAND).then(parseCoordinatorLaunchOverrides);
+
 /** The turn holding this project's checkout. Older backends answer "Unknown backend command". */
 export const getCoordinatorCheckoutTurn = (
   projectId: string,
@@ -95,22 +104,6 @@ export const closeCoordinatorConversation = (
   conversationId: string,
 ): Promise<CoordinatorSnapshot> =>
   invoke("close_coordinator_conversation", { projectId, conversationId });
-
-/**
- * The coordinator's `stop_worker_turn`, from the Work panel: one tab's running
- * turn, on this machine or `nodeId`. `requestId` is the at-most-once key.
- */
-export const stopCoordinatorWorkerTurn = (
-  scope: { projectId: string; coordinatorId: string; conversationId: string },
-  input: { requestId: string; environmentId: string; tabId: string; nodeId?: string },
-): Promise<{ stopped?: boolean }> =>
-  invoke("stop_coordinator_worker_turn", { scope, input: { ...input, stoppedBy: "user" } });
-
-/** Hide finished rows from the Work panel. Older backends answer "Unknown backend command". */
-export const hideCoordinatorWork = (
-  projectId: string,
-  associationIds: readonly string[],
-): Promise<CoordinatorSnapshot> => invoke("hide_coordinator_work", { projectId, associationIds });
 
 export const pauseProjectCoordinator = (projectId: string): Promise<CoordinatorSnapshot> =>
   invoke("pause_project_coordinator", { projectId });

@@ -344,3 +344,98 @@ export function soakLeaks(
     .map(([gauge, value]) => ({ gauge, baseline: baseline[gauge] ?? 0, final: value }))
     .sort((left, right) => left.gauge.localeCompare(right.gauge));
 }
+
+/**
+ * Cache gauges from one gateway metrics response, as `cache:<name>:<field>`
+ * (the `recurringWork.caches` block, todo 0048 task 10). Kept apart from
+ * {@link soakFootprint}: a cache may legitimately warm up during a soak, so it
+ * is judged by its trend ({@link cacheTrends}), not by returning to baseline.
+ * `null` when the response has no `caches` block (an older backend).
+ */
+export function soakCacheGauges(metrics: unknown): Record<string, number> | null {
+  if (!metrics || typeof metrics !== "object") return null;
+  const block = (metrics as Record<string, unknown>).recurringWork;
+  if (!block || typeof block !== "object") return null;
+  const caches = (block as Record<string, unknown>).caches;
+  if (!Array.isArray(caches)) return null;
+  const gauges: Record<string, number> = {};
+  for (const raw of caches) {
+    if (!raw || typeof raw !== "object") continue;
+    const entry = raw as Record<string, unknown>;
+    if (typeof entry.name !== "string" || !/^[a-z][a-z0-9-]{0,47}$/.test(entry.name)) continue;
+    const fields = entry.gauges;
+    if (!fields || typeof fields !== "object") continue;
+    if (typeof entry.sources === "number" && Number.isFinite(entry.sources)) {
+      gauges[`cache:${entry.name}:sources`] = entry.sources;
+    }
+    for (const [field, value] of Object.entries(fields as Record<string, unknown>)) {
+      if (!/^[a-z][A-Za-z0-9]{0,47}$/.test(field)) continue;
+      if (typeof value !== "number" || !Number.isFinite(value)) continue;
+      gauges[`cache:${entry.name}:${field}`] = value;
+    }
+  }
+  return gauges;
+}
+
+/** One soak trend sample: what the soak read after a cycle. */
+export type SoakTrendSample = {
+  cycle: number;
+  atMs: number;
+  backendRssKiB: number | null;
+  footprint: Record<string, number> | null;
+  caches: Record<string, number> | null;
+};
+
+export type GaugeTrend = {
+  gauge: string;
+  first: number;
+  last: number;
+  min: number;
+  max: number;
+  /** Highest value over the first third of the samples. */
+  earlyMax: number;
+  /** Lowest value over the last third of the samples. */
+  lateMin: number;
+  /**
+   * The floor of the last third sits above the peak of the first third and
+   * the middle third climbed too: still rising, not a warm-up that settled.
+   */
+  growing: boolean;
+};
+
+/**
+ * Per gauge, how it moved over a soak's samples. A gauge is `growing` when the
+ * lowest value of the last third of the samples is above the highest value of
+ * the first third and above the middle third's median: a cache that warms up
+ * and plateaus, or that tracks the environments a cycle opens and closes,
+ * reaches neither. Needs at least six samples; fewer give no trend. Absent
+ * readings are skipped, and a gauge missing from a reading counts as zero
+ * there once it has appeared, so a source that vanishes is not hidden.
+ */
+export function gaugeTrends(samples: ReadonlyArray<Record<string, number> | null>): GaugeTrend[] {
+  const read = samples.filter((entry): entry is Record<string, number> => entry !== null);
+  if (read.length < 6) return [];
+  const third = Math.floor(read.length / 3);
+  const names = new Set(read.flatMap((entry) => Object.keys(entry)));
+  const trends: GaugeTrend[] = [];
+  for (const gauge of Array.from(names).sort()) {
+    const values = read.map((entry) => entry[gauge] ?? 0);
+    const early = values.slice(0, third);
+    const middle = values.slice(third, values.length - third);
+    const late = values.slice(values.length - third);
+    const earlyMax = Math.max(...early);
+    const lateMin = Math.min(...late);
+    const middleMedian = percentile(middle, 50) ?? earlyMax;
+    trends.push({
+      gauge,
+      first: values[0]!,
+      last: values.at(-1)!,
+      min: Math.min(...values),
+      max: Math.max(...values),
+      earlyMax,
+      lateMin,
+      growing: lateMin > earlyMax && lateMin > middleMedian && middleMedian > earlyMax,
+    });
+  }
+  return trends;
+}

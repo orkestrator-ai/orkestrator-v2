@@ -68,7 +68,7 @@ What leaving out means depends on what a watch costs on the platform:
 | | Linux | macOS and other platforms |
 | --- | --- | --- |
 | A recursive watch | One inotify watch per directory, and Bun walks all of `node_modules` to place them | One FSEvents path, no per-directory cost |
-| An extra recursive watch | No measurable cost | Blocks the JS thread to start and close (below) |
+| An extra recursive watch | No measurable cost | Makes the shared FSEvents stream rebuild, which blocks whichever thread starts or closes a watch (below), so they run in a helper process (`watch-host.ts`) |
 | What runs | A non-recursive watch on the root and on each ancestor of a left-out subtree, and a recursive watch on every other child of those | One recursive root |
 | A left-out subtree | Not watched | Watched by the OS; its events are dropped on arrival, before they count towards a burst |
 | A new directory | The non-recursive watch sees it, and a watch is added | Covered by the root |
@@ -126,6 +126,13 @@ one watch:
 | 1 | 2 ms | 0 ms |
 | 5 | 2,882 ms (1,453 ms) | 1,075 ms |
 | 20 | 19,836 ms (4,424 ms) | 994 ms; 15,415 ms in another run |
+
+Those numbers are for watches held in the calling process. The backend's now run in
+a helper, so the wait no longer reaches its event loop
+([environment-deletion.md](environment-deletion.md#watches-and-the-event-loop)); the
+rebuild still costs the helper, which is why macOS keeps one watch. Because a start
+returns before the watch exists, a macOS watcher reports `qualified` only once the
+helper says it is established.
 
 Linux start and close for 20 watches took 6 ms and 0 ms. What is left is in
 [5060](../todo/cross-cutting/5060-worktree-watch-leftovers.md).
@@ -228,9 +235,9 @@ per-project git-tuning setting to hang it on, and an opt-in that is slow on the
 main host would be a trap. A user who wants it can still set it in their own
 git config; the fallbacks below keep that safe. Orkestrator does not override
 a `core.fsmonitor` the user set (for example in `~/.gitconfig`) on most of its
-own reads. `change-tracking/capture.ts`, diff stats (`getLocalGitStatusDetailed`)
-and the stop and migration calls pass `-c core.fsmonitor=false`
-unconditionally. Capture and diff stats also pass `-c core.hooksPath=/dev/null`
+own reads. `change-tracking/capture.ts`, diff stats (`getLocalGitStatusDetailed`),
+the review worktree probe (see below) and the stop and migration calls pass
+`-c core.fsmonitor=false` unconditionally. Capture and diff stats also pass `-c core.hooksPath=/dev/null`
 (`HARDENED_GIT_CONFIG` in `git-fsmonitor.ts`): they scan worktrees on the host, and a worktree's own
 config, which whatever runs in it can write, must not name a program for them
 to run (security report L9).
@@ -247,6 +254,39 @@ The daemon is not macOS-only. Git 2.56.0 on Linux reports
 starts, watches and stops there. On that Linux host it costs nothing per call
 (about 8 ms with a daemon, 10–12 ms without, in a 6,903-file worktree), so the
 cookie wait above is an APFS cost, not a cost of the daemon itself.
+
+## The review worktree probe
+
+`get_environment_uncommitted_paths` runs `REVIEW_WORKTREE_FINGERPRINT_SCRIPT`
+(`review-worktree-fingerprint.ts`) in the environment to read HEAD and the
+uncommitted paths: the build pipeline's guards, stage starts and review fan-out
+all use it. On 2026-11-05 on arktech-mini it piled up during a `bun install` in
+a worktree on the external volume: the disk stalled, every `git status` ran
+past the backend's 30 s command timeout, and the timeout killed only the
+script. Git runs in a process group of its own (so a hook it starts can be
+killed with it), so each killed probe orphaned a `git status` that kept walking
+the tree, and each retry added one more, about one every 32 s.
+
+The probe now:
+
+- **Stops itself first.** The backend passes `budget-ms` 5 s below its command
+  timeout; at the budget the script SIGKILLs every Git group it started and
+  reports `timeout`. A Git stuck in uninterruptible I/O still dies once its
+  current call returns, rather than finishing its walk.
+- **Runs one at a time per environment.** The command goes through a
+  `KeyedTrailingFlight` keyed by environment and probe kind: a request that
+  arrives while a probe runs waits for it and then shares one fresh probe with
+  every other request that arrived meanwhile. Joining the probe already in
+  flight would be cheaper, but could hand a guard a baseline taken before it
+  asked.
+- **Takes no optional locks and skips fsmonitor from the start.** It used to
+  try fsmonitor for 10 s and then rescan without it, which on a stalled disk
+  doubled the walk, and a worktree-configured fsmonitor hook is a program the
+  host must not run.
+
+The validation worker's drift check (`review-validation-worker.ts`) also runs
+with `GIT_OPTIONAL_LOCKS=0`, because it runs between validation commands such
+as installs.
 
 ## Worktrees created by older versions
 

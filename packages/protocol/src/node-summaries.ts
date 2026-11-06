@@ -49,6 +49,7 @@ const MAX_TEXT = 256;
 /** A directory name (the last path segment) is shown and matched, never the path. */
 const MAX_PATH_NAME = 128;
 const MAX_TIMESTAMP = 64;
+export const NODE_DELETE_FAILURE = "Deletion failed. Retry on the owning machine.";
 
 export type SummaryFreshness = "initializing" | "current" | "catching-up" | "stale" | "degraded";
 
@@ -94,7 +95,12 @@ export interface NodeEnvironmentSummary {
   worktreeName?: string;
   /** Owner clock; the search falls back to it when there is no activity time. */
   createdAt?: string;
+  /** A retained deletion tombstone; true during failure as well as execution. */
   deleting: boolean;
+  /** Fixed content-free reason; absent on older machines. Overrides row progress, not availability. */
+  deleteFailure?: string;
+  /** When the running delete started, so a slow one can say how long it has taken. */
+  deletingSince?: string;
   /**
    * `deleting` is left over from a merge cleanup that failed, and a new delete
    * retries it, so the row stays selectable for a bulk delete. Absent
@@ -300,6 +306,35 @@ function isMailCount(value: unknown): value is number {
   );
 }
 
+/** Whether a delete has been asked for and not finished, running or not. */
+export function environmentHasDeletionTombstone(raw: {
+  lifecycleOperation?: unknown;
+  deletionRequestedAt?: unknown;
+}): boolean {
+  return (
+    raw.lifecycleOperation === "deleting" ||
+    (typeof raw.deletionRequestedAt === "string" && raw.deletionRequestedAt.length > 0)
+  );
+}
+
+/**
+ * Why this environment's delete stopped, or null when none has failed. A failed
+ * delete keeps its tombstone for restart recovery, so the tombstone alone cannot
+ * say a delete is running: anything that shows progress must check this as well.
+ */
+export function environmentDeletionFailure(raw: {
+  lifecycleOperation?: unknown;
+  deletionRequestedAt?: unknown;
+  deletionError?: unknown;
+  cleanupAfterMergeError?: unknown;
+}): string | null {
+  if (!environmentHasDeletionTombstone(raw)) return null;
+  for (const value of [raw.deletionError, raw.cleanupAfterMergeError]) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return null;
+}
+
 export function toNodeEnvironmentSummary(
   nodeId: BackendId,
   raw: Record<string, unknown>,
@@ -307,6 +342,7 @@ export function toNodeEnvironmentSummary(
 ): NodeEnvironmentSummary | null {
   if (typeof raw.id !== "string" || !raw.id || typeof raw.projectId !== "string") return null;
   const ref = environmentRef(nodeId, raw.id);
+  const deleteFailure = environmentDeletionFailure(raw);
   const worktree = pathName(raw.worktreePath);
   return {
     ref,
@@ -331,9 +367,15 @@ export function toNodeEnvironmentSummary(
     ...(typeof raw.createdAt === "string" && raw.createdAt
       ? { createdAt: raw.createdAt.slice(0, MAX_TIMESTAMP) }
       : {}),
-    deleting:
-      raw.lifecycleOperation === "deleting" ||
-      (typeof raw.deletionRequestedAt === "string" && raw.deletionRequestedAt.length > 0),
+    // Availability stays fenced until the tombstone is removed, even on failure.
+    deleting: environmentHasDeletionTombstone(raw),
+    ...(deleteFailure ? { deleteFailure: NODE_DELETE_FAILURE } : {}),
+    ...(deleteFailure === null &&
+    environmentHasDeletionTombstone(raw) &&
+    typeof raw.lifecycleOperationStartedAt === "string" &&
+    raw.lifecycleOperationStartedAt
+      ? { deletingSince: raw.lifecycleOperationStartedAt.slice(0, MAX_TIMESTAMP) }
+      : {}),
     ...(typeof raw.cleanupAfterMergeError === "string" && raw.cleanupAfterMergeError.length > 0
       ? { deletionRetryable: true as const }
       : {}),

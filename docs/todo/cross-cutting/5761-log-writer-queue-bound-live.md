@@ -32,5 +32,5 @@ Analysed 2026-11-05 against `main` at `e1f4c875f`.
 ## Related
 
 - [1202 efficiency follow-ups](1202-efficiency-review-follow-ups.md), task 16 (DK-18).
-- [Closing check of E26](../../reports/efficiency-logging-database/0000-index.md#closing-check-of-e26-local-desktop-transport), which records the outcome of report part `0860`.
+- [Closing check of E26](../../reports/2026-11-06-efficiency-logging-database-outcome.md#closing-check-of-e26-local-desktop-transport), which records the outcome of report part `0860`.
 - [The file writer](../../architecture/logging.md#the-file-writer).

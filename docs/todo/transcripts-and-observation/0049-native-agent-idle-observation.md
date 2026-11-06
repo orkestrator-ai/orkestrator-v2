@@ -932,7 +932,7 @@ still unattributed (see task 4, "Still owed").
 
 - [0052-remote-client-bandwidth.md](0052-remote-client-bandwidth.md): client-side
   bandwidth and the data-saving preference.
-- [0051-client-reconnect-and-freshness.md](0051-client-reconnect-and-freshness.md):
+- `0051-client-reconnect-and-freshness.md` (deleted 2026-11-06):
   disconnect signals for the read coordinator.
 - [0048-recurring-work-qualification.md](0048-recurring-work-qualification.md): live
   evidence against the budgets and rollback-switch removal.

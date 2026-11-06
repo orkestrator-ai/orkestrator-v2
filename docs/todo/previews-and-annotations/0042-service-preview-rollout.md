@@ -237,7 +237,7 @@ their backend, where they appear in `get_preview_diagnostics`. HMR delivery
 is measured by `scripts/preview-latency-baseline.ts`, not the product.
 Thresholds remain blocked on task 1's two-machine baseline. Adding the
 counters exposed a reattach race, filed as
-[3270](3270-desktop-tunnel-double-reattach.md) and fixed on 2026-11-03.
+3270 and fixed on 2026-11-03.
 
 **Decisions.**
 
@@ -1642,7 +1642,7 @@ running.
   `--project firefox`: 6 passed.
 - `--project webkit`: every case failed at browser launch with the missing
   `libicu74`, `libxml2` and `libflite1` of
-  [2680](../cross-cutting/2680-playwright-webkit-missing-host-libraries.md).
+  2680.
   The private `PLAYWRIGHT_BROWSERS_PATH` workaround was not set up for this run.
 - The whole preview suite with the Next.js variable set, `bunx playwright
   test --config e2e/preview/playwright.preview.config.ts --project chromium
@@ -1668,7 +1668,7 @@ running.
   profile or Docker network was created.
 
 2026-11-04, seeded restart inside the verification window
-([3230](3230-restart-inside-verification-window.md)), branch
+(3230), branch
 `verification-restart-process-1dad5f1b3e75-r1` based on `96ee1eb3e`; macOS
 27.0 arm64, Bun 1.4.4. Disposable agent-test profile under a temporary root
 with `ORKESTRATOR_PREVIEW_TRANSPORT=1`, as the spec sets it; no other opt-in
@@ -1806,7 +1806,7 @@ separately.
   broken on `main` is unknown. It is deterministic here, so it is not recorded as a
   flake.
 - `mise run test` failed on one test of more than 32,000:
-  [4041](../../tests/flaky-tests/backend-services-and-tooling/4041-toolchain-full-check-stamp-same-instant.md),
+  [4041](../../tests/flaky-tests/backend-services-and-tooling/4041-toolchain-stamp-same-millisecond.md),
   in a package this change does not touch. Workspace counts: backend 14032, web
   11801, protocol 4498, desktop 1674, CLI 458, web-public 41, toolchain 123 pass
   with 1 fail; root and bridges groups passed. `mise run format:check`, `mise run
@@ -2131,7 +2131,7 @@ Recorded 2026-11-03 for task 6's metric additions, on branch
   when the reattach fails. Pros: matches backend work (one
   `create_preview_attachment` each); connections that join an attach in
   flight do not inflate it. Since
-  [3270](3270-desktop-tunnel-double-reattach.md) (2026-11-03), one revocation
+  3270 (2026-11-03), one revocation
   starts one reattach, so it counts once.
 - **D17. Where connect and first byte are measured (task 6).** Connect is
   `openPreviewTunnel` from the WebSocket connect to `OPEN_OK`

@@ -69,7 +69,7 @@ Measure in Chromium with a fixture transcript and a fake backend: no provider tu
 
 ## Related
 
-- [5580 native tab environment subscription](5580-agent-native-tab-environment-subscription.md), which removed the renders caused by unrelated environment writes
+- `5580-agent-native-tab-environment-subscription.md` (deleted 2026-11-06), which removed the renders caused by unrelated environment writes
 
 ## Replaces
 

@@ -14,9 +14,8 @@ A batch file combines several reports as numbered parts and takes the rating of 
 
 | Rank | File | Criticality | Finished | Covers | Why this rating |
 | --- | --- | --- | --- | --- | --- |
-| 1 | [0170-l15-agent-tools-bind-address.md](0170-l15-agent-tools-bind-address.md) | Medium | No | L15: agent-tools server on `0.0.0.0` | The server is token-protected, so the wider bind adds reach for a leaked token rather than a direct way in. |
-| 2 | [0020-m1-isolated-preview-default.md](0020-m1-isolated-preview-default.md) | Low | No | M1: legacy route retirement, and the two-machine run the default flip went ahead without | The sandbox header already closes the top-level path. The default is flipped; retirement waits on the support window in todo 0042. |
-| 3 | [0110-l18-dependency-advisories.md](0110-l18-dependency-advisories.md) | Low | No | L18: `undici`, `postcss-selector-parser`, Electron 45.x | The advisories are already accepted and blocked upstream in todo 0032. |
+| 1 | [0020-m1-isolated-preview-default.md](0020-m1-isolated-preview-default.md) | Low | No | M1: legacy route retirement, and the two-machine run the default flip went ahead without | The sandbox header already closes the top-level path. The default is flipped; retirement waits on the support window in todo 0042. |
+| 2 | [0110-l18-dependency-advisories.md](0110-l18-dependency-advisories.md) | Low | No | L18: `undici`, `postcss-selector-parser`, Electron 45.x | The advisories are already accepted and blocked upstream in todo 0032. |
 
 ## Parallel running
 
@@ -40,7 +39,6 @@ These still follow the lane and conflict rules above.
 
 | Batch | Name | Files | Lane and position | Finish first | Not at the same time as |
 | --- | --- | --- | --- | --- | --- |
-| S-0170 | [Agent-tools bind address](0170-l15-agent-tools-bind-address.md) | `0170` | Containers, 1 of 2 | None | None |
 
 ### Not ready to start
 
@@ -53,16 +51,18 @@ When one of these becomes ready, it joins the lane shown.
 
 ## Status of every finding
 
-40 done, 11 partly done, 2 open, 12 no action.
+41 done, 11 partly done, 1 open, 12 no action.
 
 Batch X1 (Coordinator trust boundary) is closed. It was analysed against `a2bba9d8`, built from `main` at `af2e566e5` and rebased onto `main` at `4f7ca8231`; its task-by-task outcome table ends the report in the parent of the commit that deleted it. What it could not prove or close is in to-do [6080](../../todo/coordinator-and-multi-review/6080-x1-coordinator-trust-boundary-follow-ups.md).
+
+Batch S-0170 (Agent-tools bind address) is closed. It was analysed against `a2bba9d8`, built from `main` at `0db245422` and rebased onto `main` at `31dce31cb`; its item-by-item outcome table ends the report in the parent of the commit that deleted it. What only a Linux host can prove is in to-do [6820](../../todo/containers-and-environments/6820-agent-tools-peer-gate-linux-evidence.md).
 
 | Finding | Disposition | Evidence |
 | --- | --- | --- |
 | H1 | Partly done | `apps/backend/src/gateway-sessions.ts:73-75`, `apps/backend/src/gateway-auth.ts:135-138` (commit `4f9cf3b32`); the leaked-session exposure is accepted in `docs/architecture/remote-gateway.md`, Security notes; the `__Host-` name remains in [todo 2960](../../todo/cross-cutting/2960-host-prefixed-gateway-cookie.md) |
 | H2 | Done | `apps/backend/src/core/container-scripts.ts:13-20`, `docker/container-zshrc.zsh:20-24` (commit `5fc5982aa`); cap removed from `egressEnforcement` (`apps/backend/src/core/egress-gateway.ts`); runtimes without a gateway keep the in-container firewall until rebuilt, and rootless gateway checks stay with [todo 0018](../../todo/containers-and-environments/0018-container-network-and-credential-isolation.md) task 2 |
 | H3 | Done | `apps/backend/src/core/container-project-seed-files.ts:66-110`; no project file in `bindIfExists` calls (`apps/backend/src/core/commands-containers.ts:503-559`); commit `1565c7c16` |
-| H4 | Partly done | `packages/protocol/src/node/bridge-credential.ts` (a bridge holds a verifier and is non-dumpable), `apps/backend/src/core/container-bridge-credential.ts` (root-only token), `apps/backend/src/core/native-agent-session-operations.ts` (a user's widening), `packages/protocol/src/execution-policy-narrowing.ts`; `apps/backend/src/core/agent-credential-files.ts` (OpenCode's credential plugin, [4981](../../todo/containers-and-environments/4981-opencode-password-readable-by-agent.md)); `apps/backend/tests/bridge-credential-docker.test.ts` on a real container. Remainder in [4980](../../todo/containers-and-environments/4980-agent-uid-process-control.md) and [4982](../../todo/containers-and-environments/4982-bridge-credential-live-evidence.md) |
+| H4 | Partly done | `packages/protocol/src/node/bridge-credential.ts` (a bridge holds a verifier and is non-dumpable), `apps/backend/src/core/container-bridge-credential.ts` (root-only token), `apps/backend/src/core/native-agent-session-operations.ts` (a user's widening), `packages/protocol/src/execution-policy-narrowing.ts`; `apps/backend/src/core/agent-credential-files.ts` (OpenCode's credential plugin, 4981); `apps/backend/tests/bridge-credential-docker.test.ts` on a real container. Remainder in [4980](../../todo/containers-and-environments/4980-agent-uid-process-control.md) and [4982](../../todo/containers-and-environments/4982-bridge-credential-live-evidence.md) |
 | H5 | Done | `packages/protocol/src/app-config-defaults.ts:51`, `apps/backend/src/core/github-credentials.ts:31`; [container credential](../../architecture/github-cli.md#container-credential). New installs share nothing; an upgraded install keeps its current sharing, with a scope warning, until the user changes it. Per-environment repo-scoped credentials were not built. |
 | M1 | Partly done | `apps/backend/src/gateway-proxy.ts:231`, `apps/backend/src/gateway-auth.ts:305` (commit `4f9cf3b32`); remainder in [0020-m1-isolated-preview-default.md](0020-m1-isolated-preview-default.md) |
 | M2 | Done | `apps/backend/src/core/preview-runtime.ts:238`, `apps/backend/src/gateway-handlers.ts:442-444`, `apps/backend/src/gateway-proxy.ts:234-235`, `apps/desktop/electron/remote-gateway-request-auth.ts:75`; commit `71fb369be` |
@@ -91,7 +91,7 @@ Batch X1 (Coordinator trust boundary) is closed. It was analysed against `a2bba9
 | L12 | Done | Descriptor ownership and permissions: `readDescriptor` and `descriptorTrustRefusal` in `packages/cli/src/client/targets.ts` (commit `b88623136`). Same-user pid reuse: `descriptorProcessRefusal` (same file) compares the pid's start time, read by `packages/cli/src/client/process-start.ts`, with the descriptor's `startedAt` before any token is read; `packages/cli/tests/client-descriptor-process.test.ts`. A real-Mac run of the `ps` path is [todo 6220](../../todo/cli-and-slash-commands/6220-descriptor-start-time-macos-live-run.md) |
 | L13 | Done | `apps/web/src/lib/chat/file-url.ts:68-73`; commit `5c760e3c8` |
 | L14 | Done | `apps/backend/src/preview-relay-supervisor.ts:24`, `:355-373`, `:381-382`; commit `6cdd8115e` |
-| L15 | Open | `apps/backend/src/core/index.ts:536`, `apps/backend/src/core/agent-tools.ts:977`; [0170-l15-agent-tools-bind-address.md](0170-l15-agent-tools-bind-address.md) |
+| L15 | Done | The wildcard bind stays; peers outside loopback and, on native Linux Engine only, this backend's Docker network subnets are closed before routing (Docker Desktop and non-Linux hosts admit loopback only), with no 405 or other answer: `apps/backend/src/core/agent-tools-peer-filter.ts`, `apps/backend/src/core/agent-tools.ts:1044`, `:1490`; the list follows network creation and removal through `apps/backend/src/core/docker-network-changes.ts`. Tests: `agent-tools-peer-filter.test.ts`, `agent-tools-peer-gate.test.ts`; live on Docker Desktop with `apps/backend/scripts/agent-tools-peer-evidence.ts` ([who may connect](../../architecture/container-lifecycle.md#who-may-connect)). Linux Engine, rootless and the C22 Linux run are in [todo 6820](../../todo/containers-and-environments/6820-agent-tools-peer-gate-linux-evidence.md) |
 | L16 | Done | Cursor and Pi policy fields closed by `2d4528dc5` and `a2bba9d80`. Claude coordinators: `bridges/claude-bridge/src/services/read-only-path-boundary.ts`; confirmation is stated not to be a human-approval boundary in [control-mcp.md](../../architecture/control-mcp.md#confirmation); self-reminders have `source: "self-reminder"`. Bubblewrap and the other providers are in [6080](../../todo/coordinator-and-multi-review/6080-x1-coordinator-trust-boundary-follow-ups.md) |
 | L17 | Done | Plaintext at 0600 recorded as an accepted risk in [storage.md](../../architecture/storage.md#provider-secrets-at-rest). The secrets live in `config.json` and its backups, not SQLite. Every start tightens those files (`apps/backend/src/core/storage-config.ts:326`) and every open tightens the database's companions (`apps/backend/src/core/storage-database.ts:280`); `apps/backend/src/core/storage-secrets-at-rest.test.ts`, `apps/backend/tests/container-data-directory-reach.test.ts`. No keychain or `safeStorage` path was built |
 | L18 | Open | `bun.lock:2389`, `:2117`, `:1583`; [0110-l18-dependency-advisories.md](0110-l18-dependency-advisories.md) |
@@ -113,7 +113,7 @@ Batch X1 (Coordinator trust boundary) is closed. It was analysed against `a2bba9
 | §8 Validation worker spot-checked | No action | Read for this split: commands come from the environment's own preparation agent and run in that environment with the agent's privileges, so no boundary is crossed (`apps/backend/src/core/review-validation-worker.ts:287`, `docs/architecture/review-preparation.md:5-10`); not a full audit |
 | §8 `tmux-hooks` `find` not reviewed | No action | Read for this split: the path is quoted and the other value is a number (`apps/backend/src/core/tmux-hooks.ts:966-968`, `apps/backend/src/core/tmux-shared.ts:299-301`, `:700`) |
 | §8 Pi's `grep` and `find` tools | No action | They live in the Pi SDK outside this repository, and the report asks for nothing |
-| §8 iOS app not reviewed | Partly done | Reviewed on 2026-11-05 against `69a3b4ca5`: `isTrustedBridgeOrigin` and `loginFormBody` (`apps/ios/OrkestratorMobile/Views/RemoteWebView.swift`), `GatewayRedirectBlocker` (`apps/ios/OrkestratorMobile/Networking/GatewayConnectionValidator.swift`), with tests in `apps/ios/OrkestratorMobileTests/OrkestratorMobileTests.swift`; remainder in [5600](../../todo/cross-cutting/5600-ios-bridge-user-consent.md), [5601](../../todo/cross-cutting/5601-ios-runtime-security-checks.md) (device and signed-build checks) and [5602](../../todo/cross-cutting/5602-ios-session-and-privacy-hardening.md) |
+| §8 iOS app not reviewed | Partly done | Reviewed on 2026-11-05 against `69a3b4ca5`: `isTrustedBridgeOrigin` and `loginFormBody` (`apps/ios/OrkestratorMobile/Views/RemoteWebView.swift`), `GatewayRedirectBlocker` (`apps/ios/OrkestratorMobile/Networking/GatewayConnectionValidator.swift`), with tests in `apps/ios/OrkestratorMobileTests/OrkestratorMobileTests.swift`; remainder in [5600](../../todo/cross-cutting/5600-ios-bridge-user-consent.md), [5601](../../todo/cross-cutting/5601-ios-runtime-security-checks.md) (device and signed-build checks) and 5602 |
 | §8 Dynamic testing | Partly done | H1, M1 and M2 in Chromium, Firefox and WebKit (`e2e/preview/gateway-browser-security.spec.ts`); H3 on Docker Desktop and rootless, and gateway reach on Docker Desktop and Linux Engine (`docs/development/container-qualification.md`); shipping Safari remains in [todo 5500](../../todo/previews-and-annotations/5500-shipping-safari-gateway-security-checks.md) |
 | §9 step 1 (H1 + M1) | Partly done | [Todo 2960](../../todo/cross-cutting/2960-host-prefixed-gateway-cookie.md), [0020-m1-isolated-preview-default.md](0020-m1-isolated-preview-default.md) |
 | §9 step 2 (H3) | Done | See H3 |
@@ -123,4 +123,4 @@ Batch X1 (Coordinator trust boundary) is closed. It was analysed against `a2bba9
 | §9 step 6 (M4, M5, L1) | Done | See M4, M5 and L1 |
 | §9 step 7 (M6, M7, L3, L4) | Done | See M6, M7, L3 and L4 |
 | §9 step 8 (H5, M8, M9) | Done | See H5, M8 and M9; what only a running install can answer is in [todo 5860](../../todo/containers-and-environments/5860-legacy-host-mounts-live-evidence.md) |
-| §9 step 9 (L18, remaining Low and Info) | Partly done | [0110-l18-dependency-advisories.md](0110-l18-dependency-advisories.md); L12 is done (see L12); I5 is partly done (see I5) |
+| §9 step 9 (L18, remaining Low and Info) | Partly done | [0110-l18-dependency-advisories.md](0110-l18-dependency-advisories.md); L12 and L15 are done (see L12 and L15); I5 is partly done (see I5) |

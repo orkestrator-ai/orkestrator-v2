@@ -54,7 +54,7 @@ runs the backend live image qualifications in `IMAGE_QUALIFICATION_TESTS`
 (`apps/desktop/scripts/dev/isolated-browser.ts`; today the M8 suite
 `claude-config-filter-docker.test.ts`, which stages a fake `~/.claude.json` and
 starts interactive Claude on it with no network and fake credentials; it fails
-rather than skips when the image is missing), then starts a credential-free local/container fixture with Codex, Grok and OpenCode,
+rather than skips when the image is missing), then starts a credential-free local/container fixture with Codex, Grok, OpenCode, Cursor and Pi,
 and runs the same `Docker fixture` selection as `test:agent:docker`. It stops and
 resets the profile afterwards. The worktree's shared development image is kept
 for other profiles; the shared-image-aware prune workflow owns its removal. The scheduler
@@ -307,11 +307,27 @@ mise run dev:stop --profile container-wiring-qa
 mise run dev:reset --profile container-wiring-qa
 ```
 
+### Cursor and Pi container cells
+
+`e2e/agent-testing/container-fake-engines.spec.ts` runs a Cursor and a Pi
+native tab in the fixture container with no credential and no provider call.
+For each case it swaps the image's bridge entry
+(`/opt/<platform>-bridge/dist/index.js`) for a bundle of the bridge's
+`src/testing/container-fake-engine-server.ts`: the real bridge over Cursor's
+fake SDK or Pi's faux model. The backend's production `start_<platform>_server`
+launch then runs it. The case checks the reported container policy, Cursor's
+SDK options, and that an off-allowlist URL is refused while GitHub answers.
+For Cursor the request comes from the bridge process (`FETCH <url>`); for Pi it
+comes from Pi's own `bash` tool (`BASH: <command>`). The Pi case also checks
+that an `ask` policy parks the call until its card is approved. Cleanup
+restores the real entry and stops the bridge. The profile needs Cursor and Pi
+in `--agent-platforms`; otherwise the cases skip.
+
 A restart with `--fixture` reuses the fixture the first start seeded: it keeps
 `test-project` and `origin.git`, reuses the `fixture-local` and
 `fixture-container` environments (starting any that are stopped) and creates
 only requested ones that do not exist yet
-([2180](../todo/cross-cutting/2180-fixture-restart-orphans-earlier-environments.md)).
+(2180).
 Fixture environment IDs are stored in `test-project/.git/orkestrator-fixture-environments.json`.
 If the repository must be recreated, the new generation records new IDs and later
 restarts reuse those replacements even when the backend gives them suffixed names.
@@ -463,7 +479,13 @@ agent picker.
 
 Startup seeds each toolchain from your host installation when it has the same
 pinned version, so the default normally costs a local copy rather than a
-download. Anything the host lacks is downloaded as usual, and a toolchain the
+download. The launcher downloads whatever the host lacks before it starts
+Electron, through the same manager and hash checks
+(`prefetchAgentToolchains`), and Electron only verifies and activates the
+result. The launcher uses Bun's `fetch`. Electron's download goes through
+Chromium, which aborts it with `net::ERR_NETWORK_CHANGED` whenever Docker adds
+or removes an interface, and an unattended profile quits on that failure.
+Electron still downloads anything the launcher could not, and a toolchain the
 profile already has is left alone. Narrow the set when a run does not need all
 five:
 
@@ -955,6 +977,66 @@ Its Vite-served renderer is exposed to
 [2340](../tests/flaky-tests/aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md)
 while other work starts or stops containers; the `file://` renderer is not.
 
+### Measuring Electron main's CPU
+
+Anything attached to a page over the DevTools protocol makes Electron main do
+that page's DevTools work. Playwright holds a session on every page with its
+network domain enabled, and a development window (`ELECTRON_DEV=1`) also opens
+a detached DevTools window (`window.ts`). Every load, response and stream chunk
+the page receives then becomes a DevTools event that main's `CrBrowserMain`
+receives (`blink.mojom.DevToolsSessionHost`) and its
+`Chrome_DevToolsHandlerThread` writes to the client. A page that gets its data
+over the network, such as a window on the direct local transport, pays this.
+One that gets it over IPC, as on the relay, hardly does. So the main-process
+CPU that `local-gateway-transport-electron.spec.ts` records is good for
+comparing runs of that spec, not for comparing the two transports. It closes the
+development DevTools windows before it measures, but it cannot detach
+Playwright.
+
+`local-gateway-transport-cpu-electron.spec.ts` measures main with no DevTools
+client. It starts Electron with only main's Node inspector (`--inspect=0`,
+which sees main's JavaScript and none of the pages). It then closes the
+development DevTools windows, drives the pages with `executeJavaScript`, and
+mounts the real terminal view in both windows. Each load verifies its marker
+in each xterm buffer after measuring delivery. A resource `PerformanceObserver`
+tracks activity beyond the browser timing buffer and requires three quiet
+seconds before sampling; direct terminal listeners wait for stream readiness
+before applying their initial snapshot. Recovery snapshots are fetched only
+for a new desync, and results record per-window desync counts. It is opt-in and writes
+`output/agent-testing/local-transport-counts/no-devtools.json`, three
+alternating runs per transport by default (`ORKESTRATOR_LOCAL_TRANSPORT_CPU_RUNS`,
+a positive integer from 1 to 10). Results identify the workload as
+`mounted-terminals`; the earlier 5760 figures used custom listeners without
+mounted terminal views. Failed startup stops Vite immediately, and profilers
+are stopped even when measured work fails:
+
+```bash
+ORKESTRATOR_LOCAL_TRANSPORT_CPU=1 bunx playwright test \
+  --config e2e/agent-testing/playwright.electron.config.ts \
+  local-gateway-transport-cpu-electron.spec.ts
+```
+
+`ORKESTRATOR_LOCAL_TRANSPORT_PROFILE=1` adds, in either spec, a V8 CPU profile
+of main (`.cpuprofile`) and a Chromium trace (`.perfetto-trace`) next to the
+counts. Electron 45 writes traces only as Perfetto protobuf. Read them with
+Perfetto's `trace_processor`, whose `thread_dur` gives each top-level task's
+own CPU time:
+
+```sql
+select p.name as process, t.name as thread, round(sum(s.thread_dur) / 1e6, 1) as cpu_ms
+from slice s
+join thread_track tt on s.track_id = tt.id
+join thread t using (utid)
+join process p using (upid)
+where s.depth = 0 and s.thread_dur is not null
+group by 1, 2 order by cpu_ms desc;
+```
+
+The profiled windows include the profilers' cost, so take figures from a run
+without it. Note the host's load average with the figures. Other worktrees'
+suites share the machine, and on a loaded host a page goes on loading modules
+for longer, so even an idle window costs main hundreds of milliseconds.
+
 ### Live transcript paging
 
 `e2e/agent-testing/transcript-paging-live.spec.ts` drives transcripts past the
@@ -1061,8 +1143,34 @@ CODEX_PROTOCOL_BINARY=<pinned codex> RUN_LIVE_CODEX_APP_SERVER=1 \
   bun test bridges/codex-bridge/src/app-server/live-circuit-breaker.test.ts --parallel=1
 ```
 
-The [recorded run](../todo/transcripts-and-observation/0051-client-reconnect-and-freshness.md#live-qualification-record-2026-10-31)
-is in 0051.
+#### Recorded run (2026-10-31)
+
+On `main` at `931e5541` plus the reconnect change, on a
+`--no-agent-credentials --agent-platforms codex` profile at load averages above
+40. The full record, with every table, is in to-do 0051 (deleted 2026-11-06;
+git history keeps it). The runs found four bugs, all fixed:
+
+- Same-origin streams retried in lock-step for the whole outage, because
+  Chromium owns the retry of an `EventSource` left CONNECTING: across 3 tabs
+  the first attempts landed within 3 ms of each other. After the fix the rungs
+  span up to 8.4 s and back off.
+- A silently dropped link was never noticed. It is now noticed after 63.6 s on
+  HTTP/SSE and on the WebSocket, and after 63.5 s on an Electron remote.
+- The terminal WebSocket announced a desync on every failed attempt. It now
+  announces one per drop.
+- A refused credential looked like an outage, so a lapsed session showed
+  "Reconnecting" for 52 s. It now reaches the login page 5.9 to 7.9 s after
+  the backend listens.
+
+Banners on a dropped link appeared after 4005 to 4009 ms, reads paused within
+100 ms, and quiet `unchanged` safety reads changed no indicator. Under
+backpressure, after 4,000,000 printed lines, both transports rendered an
+unbroken sequence equal to the snapshot. Over 40 quick restarts, the first
+reconnect landed after 1021 to 1981 ms, so the 4 s banner delay stays. The
+real Codex breaker cases passed in 39.6 s on 0.166.0. Still open: a real
+two-machine link drop, a real PR's stale marker and a background tab's timer
+throttling. These are tasks 16 to 18 of
+[0048](../todo/transcripts-and-observation/0048-recurring-work-qualification.md).
 
 ### Live cold restart
 
@@ -1127,6 +1235,59 @@ SIGKILL regression independently qualifies pre-acceptance same-request-id retry.
 The restarts leave the profile running under a detached launcher; stop it
 with `dev:stop` as usual. `dev:status` no longer reports `testProject` after a
 restart, so the spec falls back to the profile's seeded copy.
+
+### Multi-client, restarts and an older backend (fake model)
+
+`e2e/agent-testing/multi-client-restarts-live.spec.ts` qualifies two headless
+browser clients, backend and bridge restarts, and an older backend without a
+billed turn (todo 0048 task 11). The provider is the profile's real Claude CLI
+and bridge, sent to a loopback Anthropic endpoint
+(`e2e/agent-testing/fake-anthropic-model.ts`) by a `settings.json` the spec
+writes into the profile's own isolated `CLAUDE_CONFIG_DIR`. Every prompt is
+answered `Answer to: <prompt>`, every call is counted, and a prompt carrying
+`[hold:<id>]` is parked until the spec releases it, which pins a turn at "the
+provider is working" across a disconnect or a restart. The startup notice that
+Claude is not logged in is expected (the fixture key is not a login) and the
+spec dismisses it.
+
+```bash
+mise run dev:test --profile q48t11 --fixture --no-agent-credentials --agent-platforms claude --headless
+# In a second terminal:
+ORKESTRATOR_AGENT_TEST_PROFILE=q48t11 ORKESTRATOR_AGENT_TEST_LIVE_MULTI_CLIENT=1 \
+ORKESTRATOR_AGENT_TEST_FAKE_MODEL_PORT=43207 ORKESTRATOR_AGENT_TEST_MULTI_CLIENT_ROUNDS=10 \
+  mise run test:logged -- --name multi-client -- \
+  bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts \
+  multi-client-restarts-live.spec.ts --workers=1
+mise run dev:stop --profile q48t11
+mise run dev:reset --profile q48t11
+```
+
+A fixed `ORKESTRATOR_AGENT_TEST_FAKE_MODEL_PORT` lets the spec leave a running
+profile alone; a new endpoint makes it restart the profile once so no Claude
+process keeps an old one. `ORKESTRATOR_AGENT_TEST_MULTI_CLIENT_ROUNDS` repeats
+the two-client and queued cases for a p50/p95. Cases:
+
+- **Older backend** (first, and only when
+  `ORKESTRATOR_AGENT_TEST_OLDER_BACKEND_URL` and
+  `ORKESTRATOR_AGENT_TEST_OLDER_BACKEND_AUTH_FILE` name a running older
+  backend whose `--renderer-dev-server-url` is this profile's current
+  `rendererUrl`, and whose Claude config points at the same fake port): two
+  clients run today's renderer against it through a turn and a save.
+- **Two clients, one disconnected**: client B sits behind the outage link
+  (`client-outage-support.ts`) and is cut off while client A sends a held
+  turn, the turn completes and a file is saved; then B's link returns.
+- **Queued prompt**: a prompt queued behind a held turn through the backend's
+  queue, dispatched on the turn-end edge.
+- **Backend crash and graceful restart** with a held turn and a queued prompt:
+  the interrupted prompt is never sent again, the conversation continues, and
+  the queued prompt arrives exactly once.
+- **Bridge restart** mid-turn and idle: the Claude bridge is `SIGKILL`ed (found
+  as the profile backend's child by command), the held call must be aborted,
+  and the next prompt resumes the same conversation.
+
+Measurements land in `evidence-multi-client-*.json` beside the run, judged
+against the latency budgets in
+[recurring-work.md](../architecture/recurring-work.md#latency-budgets).
 
 ### Live requests of a running agent tab
 

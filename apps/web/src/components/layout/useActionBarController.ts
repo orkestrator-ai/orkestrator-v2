@@ -1,3 +1,4 @@
+import { environmentDeletionFailure } from "@orkestrator/protocol/node-summaries";
 import { useEnvironmentChangeProjection } from "@/hooks/useChangeProjection";
 import { environmentBrowserTarget } from "@/lib/preview-service-entry";
 import { ensurePreviewServiceSync, usePreviewServiceStore } from "@/stores/previewServiceStore";
@@ -353,9 +354,10 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     cleanupTarget &&
     (deletingEnvironmentId === cleanupTarget.environmentId ||
       (selectedEnvironmentId === cleanupTarget.environmentId &&
-        !selectedEnvironment?.cleanupAfterMergeError &&
-        (selectedEnvironment?.lifecycleOperation === "deleting" ||
-          selectedEnvironment?.deletionRequestedAt))),
+        selectedEnvironment &&
+        !environmentDeletionFailure(selectedEnvironment) &&
+        (selectedEnvironment.lifecycleOperation === "deleting" ||
+          selectedEnvironment.deletionRequestedAt))),
   );
   const isMerging = Boolean(
     selectedEnvironmentId &&
@@ -396,7 +398,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   const isPRFinished = isPRMerged || isPRClosed;
   const isSelectedEnvironmentDeleting = Boolean(
     selectedEnvironment &&
-    !selectedEnvironment.cleanupAfterMergeError &&
+    !environmentDeletionFailure(selectedEnvironment) &&
     (selectedEnvironment.lifecycleOperation === "deleting" ||
       selectedEnvironment.deletionRequestedAt),
   );

@@ -849,10 +849,8 @@ test("reconcile and wake-pass logs report scoped recovery", async () => {
       expect.arrayContaining([
         expect.objectContaining({
           event: "throttle.recovered",
-          fields: expect.objectContaining({
-            site: "mail.reconcile-failed",
-            scope: world.coordinatorId,
-          }),
+          // The sweep's mailbox sync is global: one site, not one per coordinator.
+          fields: expect.objectContaining({ site: "mail.reconcile-failed" }),
         }),
         expect.objectContaining({
           event: "throttle.recovered",

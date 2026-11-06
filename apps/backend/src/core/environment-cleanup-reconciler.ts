@@ -147,7 +147,14 @@ export async function reconcileEnvironmentCleanup(
           // The branch cannot be judged while a worktree may still have it
           // checked out.
           if (step === "branch" && !worktreeDone) continue;
-          const done = await runEnvironmentCleanupStep(current, step, context, options);
+          const done = await runEnvironmentCleanupStep(current, step, context, {
+            ...options,
+            beforeWorktreeRemoval: () =>
+              context.runtime.diffStats.pauseForRemoval(
+                current.environmentId,
+                current.worktreePath,
+              ),
+          });
           if (step === "worktree") worktreeDone = done;
         }
       });
@@ -160,6 +167,9 @@ export async function reconcileEnvironmentCleanup(
       });
     }
     const remaining = await ledger.get(entry.environmentId);
+    if (!remaining && entry.worktreePath) {
+      context.runtime.diffStats.service.completeRemoval({ worktreePath: entry.worktreePath });
+    }
     if (remaining && !isEnvironmentCleanupExhausted(remaining)) {
       const due = retryDueAt(remaining);
       nextDueAt = nextDueAt === null ? due : Math.min(nextDueAt, due);

@@ -66,3 +66,55 @@ ORKESTRATOR_E2E_PORT=61880 mise run test:logged -- --name keyboard-isolated -- b
 This rerun selected the failing case, not the complete owner file. No keyboard
 implementation, assertion, timeout or skip changed. The startup-delay hypothesis
 remains unproven.
+
+## Launch override review recurrence — 2026-11-05
+
+The required browser rerun on repair commit `c63d42e7a` repeated the missing
+editable textbox at line 318 in mobile Chromium. The command was
+`ORKESTRATOR_E2E_PORT=54487 mise run test:logged -- --name browser -- mise run test:browser`,
+with five Playwright workers on the shared host. Its output is retained at
+`/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.EQqosx/browser.log.gz`.
+The broad run was still active when this owner rerun finished; its eventual
+result is recorded separately in the Address Findings validation result.
+
+The complete unchanged mobile owner passed with one worker (exit 0,
+406.6 seconds):
+
+```sh
+ORKESTRATOR_E2E_PORT=54487 mise run test:logged -- --name browser-keyboard-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/KeyboardShortcuts.spec.ts --project=mobile-chromium --workers=1 --output=output/playwright/keyboard-address
+```
+
+Passing output was deleted by the bounded runner, so no per-test totals were
+retained. This owner reused the broad run's fixture server; it was a
+single-file rerun, not an idle-host qualification. No owner assertion, timeout,
+skip or fixture logic changed. The cause of the intermittent observation
+remains unestablished.
+
+
+### Broad rerun outcome
+
+The bounded runner stopped the broad command at its 1,800 s absolute deadline
+(exit 1), after the reporter started case 856 of 1,596. It named three failed
+cases but emitted no closing component totals; the public-site phase did not
+run. `summary.json` alongside the compressed log records `timeoutReason:
+"absolute"`. The broad check remains incomplete; passing this owner does not
+waive that timeout or establish a green browser suite.
+
+## Coordinator unavailable-platform review — 2026-11-06
+
+Both mobile Meta+I cases (assigned and fresh agent) lacked an editable composer at the 5 s assertion.
+The five-worker browser repeat named nine failures and hit the 1800000 ms
+group deadline after starting 708/1596 cases; complete pass totals are not
+available. The command was
+`ORKESTRATOR_E2E_PORT=61386 mise run test:logged -- --name browser -- mise run test:browser`.
+
+The unchanged complete owner passed alone, exit 0, in 301.1 s:
+
+```sh
+ORKESTRATOR_E2E_PORT=61386 mise run test:logged -- --name review-shortcuts-browser-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/KeyboardShortcuts.spec.ts --workers=1 --output output/agent-testing/review-address-owners/shortcuts
+```
+
+Evidence: `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.8yBzhf/browser.log.gz`.
+Passing output was deleted by the logged runner; individual passing counts
+were not retained. This establishes intermittence, not a cause or an overall
+browser pass. No assertion, timeout, skip or implementation was changed.

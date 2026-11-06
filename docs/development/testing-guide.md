@@ -1362,6 +1362,16 @@ are not leaks: `orkestrator-test-run.*` (failure logs, kept 7 days by
 own caches. The 2026-10-26 to 2026-10-29 leak hunt that set these rules is
 to-do 0247 in git history.
 
+The Windows process-marker qualification from retired to-do 0247 is explicitly
+deferred under the current [platform support scope](../../README.md#quick-start):
+Windows is unsupported and the backend refuses to start on `win32`. This is a
+scope disposition, not a Windows pass. If Windows support resumes, reopen the
+process-marker regressions and the real-Chromium escaped-browser ownership
+check on Windows before claiming cleanup qualification there. The Chromium
+check belongs to the transcript-artifacts area suite and requires Chromium to
+be available. Linux procps and macOS/Unix `ps` evidence do not establish Windows
+execution.
+
 The runner also keeps Bun timing profiles in a private temporary directory
 keyed by the Git common directory and worktree path. Bun updates these files after each aggregate
 run and uses them to schedule slow files earlier on future runs. The profiles

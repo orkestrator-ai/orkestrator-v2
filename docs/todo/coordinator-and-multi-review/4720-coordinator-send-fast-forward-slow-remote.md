@@ -36,17 +36,32 @@ hanging SSH command (`project-git-fetched-fast-forward.integration.test.ts`,
 slow tier). Steps:
 
 1. On a disposable `dev:test --fixture` profile with a real provider coordinator,
-   prepare two independent fixture projects. On the mail project's coordinator,
+   prepare two independent fixture projects. In each disposable coordinator
+   checkout that the backend fetches, save the original local `origin` URL and
+   install a separate executable SSH shim under that profile's scratch directory.
+   Each shim serves only its own saved local bare repository with
+   `exec git-upload-pack <saved-bare-repository-path>` (quote the actual path).
+   It records an invocation count, without arguments or repository contents, and
+   sleeps 15 s first only while its profile-scoped delay marker exists. Set
+   `git config core.sshCommand <absolute-shim-path>` and
+   `git config ssh.variant simple` in each checkout, then explicitly switch
+   their origins with `git remote set-url origin ssh://git@slow.invalid/repo.git`.
+   This forces Git through the shim instead of bypassing SSH for a filesystem
+   origin; no real SSH server or network connection is needed. With the delay
+   markers absent, fetch each origin successfully and confirm both invocation
+   counts increase, proving each shim serves the correct repository.
+   On the mail project's coordinator,
    start a bounded read-only turn while its checkout is current, before making
    it behind: starting that turn must not consume the fast-forward under test.
    Then advance each disposable remote and fetch its configured base branch's
    upstream without merging. Each checkout must now be clean and behind that
    fetched upstream. Record each starting `HEAD` and upstream commit. Use one
    for typed send and one for mail; do not reuse the advanced typed checkout.
-2. Make the fixture remote slow: a `GIT_SSH_COMMAND` that sleeps 15 s before
-   running `ssh`, set for that profile's backend only. Keep the delay active
-   through both scenarios: it exceeds the typed path's 3 s fetch bound and the
-   mail path's 5 s wait. Confirm each fetch actually times out.
+2. Create both profile-scoped delay markers. Keep them present through both
+   scenarios: 15 s exceeds the typed path's 3 s fetch bound and the mail path's
+   5 s wait. For each scenario below, confirm its shim's invocation count
+   increases and the fetch stays pending past the bound before the fallback
+   runs. A fast transport failure does not qualify the timeout path.
 3. Type a message to the main coordinator. Check for
    `checkout.message-check outcome=fast-forwarded fetch=timed-out` in the
    backend log, a new `HEAD` reflog entry, and that the header no longer says
@@ -57,14 +72,18 @@ slow tier). Steps:
    active. Check for `checkout.mail-follow outcome=fast-forwarded-fetched`, a
    new `HEAD` reflog entry at that upstream, and that the redelivered mail is
    not answered `cooldown`.
-5. Remove the profile-only SSH delay, then stop and reset the disposable profile.
+5. Remove both delay markers, let the owned delayed fetches settle, restore each
+   saved origin URL and unset the checkout-local `core.sshCommand` and
+   `ssh.variant` settings. Then stop and reset the disposable profile, including
+   its scratch shims. Do not change host SSH or global Git configuration.
 
 **Decisions.**
 
 - **How to make the remote slow?**
-  - **A sleeping `GIT_SSH_COMMAND` on the test profile only (recommended).**
-    - Pros: repeatable; touches no real remote or host SSH configuration.
-    - Cons: a delay before SSH starts is not quite a slow GitHub handshake.
+  - **SSH origins served by delayed, checkout-local shims (recommended).**
+    - Pros: repeatable; forces SSH transport while serving only disposable local
+      repositories; touches no host SSH or global Git configuration.
+    - Cons: simulates a slow handshake and needs a shim per fixture repository.
   - **Wait for GitHub SSH to be slow again.**
     - Pros: the real failure.
     - Cons: cannot be scheduled.
@@ -77,6 +96,16 @@ Use two fixture projects instead of resetting an advanced checkout: each scenari
 starts behind without discarding work. A 15 s delay exceeds both deadlines; the
 run must observe the timeout and merge independently. This repairs the procedure,
 not its still-open live qualification.
+
+### Task 1: force the SSH transport before delaying it (2026-11-06)
+
+Use explicit SSH origins and checkout-local `core.sshCommand` shims, matching
+the real-Git integration test's transport setup. A backend-only
+`GIT_SSH_COMMAND` would leave a filesystem origin unchanged and never run.
+The shims serve the saved local bare repositories, so the undelayed baseline
+must succeed before the delay markers are enabled. Invocation counts and a
+fetch pending past its bound are required evidence in both scenarios. The
+live coordinator run remains open.
 
 ## Related
 

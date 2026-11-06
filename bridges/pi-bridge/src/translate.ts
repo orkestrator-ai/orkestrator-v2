@@ -145,7 +145,9 @@ export function applySessionEvent(state: SessionState, event: unknown): void {
     case "message_end":
       // The assistant message is final. A later delta belongs to a new one.
       state.openTextParts.clear();
-      if (turnFramesWelcome(state)) applyResponseOutcome(state, event.message);
+      if (!turnFramesWelcome(state)) break;
+      applyResponseOutcome(state, event.message);
+      rememberResponseMessage(state, event.message);
       break;
     case "tool_execution_start":
       if (!turnFramesWelcome(state)) break;
@@ -686,6 +688,26 @@ function applyResponseOutcome(state: SessionState, message: unknown): void {
           MAX_TOOL_TITLE_BYTES,
         )
       : undefined;
+}
+
+/** Response rows whose Pi message is remembered; far beyond one transcript window. */
+const MAX_TRACKED_RESPONSE_MESSAGES = 1_024;
+
+/**
+ * Remember which Pi message the current response row was built from, so a
+ * fork or rewind at that row can find the entry Pi appends for it next
+ * (`resolveHistoryTarget`). A response that opened no row has nothing to name.
+ */
+function rememberResponseMessage(state: SessionState, message: unknown): void {
+  const rowId = state.currentAssistantMessageId;
+  if (!isObject(message) || message.role !== "assistant" || !rowId) return;
+  const rows = (state.responseMessages ??= new Map());
+  rows.delete(rowId);
+  if (rows.size >= MAX_TRACKED_RESPONSE_MESSAGES) {
+    const oldest = rows.keys().next();
+    if (!oldest.done) rows.delete(oldest.value);
+  }
+  rows.set(rowId, message);
 }
 
 /**

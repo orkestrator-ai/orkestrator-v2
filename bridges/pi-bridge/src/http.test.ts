@@ -1611,6 +1611,38 @@ describe("successful lifecycle routes", () => {
     }
   });
 
+  test("answers a fork at a message the session cannot place with 409, not a fallback", async () => {
+    const state = seedSession();
+    let branched = false;
+    state.session = fakeAgentSession({
+      sessionManager: {
+        createBranchedSession: () => {
+          branched = true;
+          return null;
+        },
+        getBranch: () => [],
+        getEntry: () => undefined,
+        getLeafId: () => null,
+      },
+    });
+    try {
+      const response = await call(`/session/${state.id}/fork`, {
+        method: "POST",
+        body: JSON.stringify({ upToMessageId: "not-in-this-session" }),
+      });
+      expect(response.status).toBe(409);
+      const rewind = await call(`/session/${state.id}/rewind-messages`, {
+        method: "POST",
+        body: JSON.stringify({ messageId: "not-in-this-session" }),
+      });
+      expect(rewind.status).toBe(409);
+      expect(branched).toBe(false);
+    } finally {
+      sessions.delete(state.id);
+      resetTestDependencies();
+    }
+  });
+
   test("forks through a new persisted Pi conversation", async () => {
     const directory = await mkdtemp(join(tmpdir(), "pi-bridge-http-fork-"));
     const forkedFile = join(directory, "forked.jsonl");
@@ -1630,7 +1662,19 @@ describe("successful lifecycle routes", () => {
     process.env.PI_BRIDGE_STATE_DIR = stateDir;
     const state = seedSession();
     state.session = fakeAgentSession({
-      sessionManager: { createBranchedSession: (entryId: string) => (entryId ? forkedFile : null) },
+      sessionManager: {
+        createBranchedSession: (entryId: string) => (entryId ? forkedFile : null),
+        getBranch: () => [
+          {
+            type: "message",
+            id: "entry-1",
+            parentId: null,
+            timestamp: "2026-08-25T00:00:00.000Z",
+            message: { role: "user", content: "hello", timestamp: 0 },
+          },
+        ],
+        getLeafId: () => "entry-1",
+      },
     });
     setAgentSessionTestHooks({ hydrateComposer: async (composer) => composer });
     try {

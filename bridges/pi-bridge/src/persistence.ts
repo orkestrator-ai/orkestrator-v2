@@ -221,6 +221,7 @@ function toPersisted(state: SessionState): PersistedSession {
     ...(state.sessionFile ? { sessionFile: state.sessionFile } : {}),
     ...(state.resumeFallbackFile ? { resumeFallbackFile: state.resumeFallbackFile } : {}),
     ...(state.piSessionId ? { piSessionId: state.piSessionId } : {}),
+    ...(state.historyLeaf ? { historyLeaf: state.historyLeaf } : {}),
     // A session that was mid-turn when the process died is not running now.
     // Recording it as `running` would have the next start report a turn that
     // nothing is executing.
@@ -308,6 +309,16 @@ function restoreSession(entry: unknown): SessionState | undefined {
   if (nonBlank(entry.sessionFile)) state.sessionFile = entry.sessionFile;
   if (nonBlank(entry.resumeFallbackFile)) state.resumeFallbackFile = entry.resumeFallbackFile;
   if (nonBlank(entry.piSessionId)) state.piSessionId = entry.piSessionId;
+  const leaf = entry.historyLeaf;
+  if (
+    isObject(leaf) &&
+    (leaf.entryId === null || nonBlank(leaf.entryId)) &&
+    typeof leaf.entries === "number" &&
+    Number.isSafeInteger(leaf.entries) &&
+    leaf.entries >= 0
+  ) {
+    state.historyLeaf = { entryId: leaf.entryId, entries: leaf.entries };
+  }
   state.status = entry.status === "error" ? "error" : "idle";
   if (nonBlank(entry.error)) state.error = entry.error;
   if (nonBlank(entry.title)) state.title = entry.title;

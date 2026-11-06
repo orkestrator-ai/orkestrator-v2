@@ -732,3 +732,40 @@ test("a preview's rows restore still marked as waiting for the attach", async ()
     attachPending: true,
   });
 });
+
+describe("a rewound Pi leaf", () => {
+  const restorable = (id: string) => ({
+    id,
+    messages: [],
+    revision: 0,
+    structured: [],
+    promptJournal: [],
+  });
+
+  test("survives a restart until something is appended under it", async () => {
+    const state = newSessionState("rewound");
+    state.sessionFile = "/sessions/rewound.jsonl";
+    state.historyLeaf = { entryId: "a1", entries: 6 };
+    sessions.set(state.id, state);
+    await persistBarrier();
+    sessions.clear();
+    clientSessionKeys.clear();
+
+    await loadPersistedState();
+    expect(sessions.get(state.id)?.historyLeaf).toEqual({ entryId: "a1", entries: 6 });
+  });
+
+  test("a rewind to before the first prompt keeps its null leaf; a malformed one is dropped", async () => {
+    await writeState({
+      version: 1,
+      provider: "pi",
+      sessions: [
+        { ...restorable("to-start"), historyLeaf: { entryId: null, entries: 2 } },
+        { ...restorable("malformed"), historyLeaf: { entryId: 7, entries: -1 } },
+      ],
+    });
+    await loadPersistedState();
+    expect(sessions.get("to-start")?.historyLeaf).toEqual({ entryId: null, entries: 2 });
+    expect(sessions.get("malformed")?.historyLeaf).toBeUndefined();
+  });
+});

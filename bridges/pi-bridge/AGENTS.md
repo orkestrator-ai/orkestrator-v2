@@ -81,6 +81,27 @@ response, which `finishTurn` fails) gets an error `status` line saying why
 (`appendTurnFailure`), on its last row or a new one when the turn produced
 none. A retried response that a later answer replaces adds nothing.
 
+## Fork, rewind and branch targets
+
+A fork or rewind names a transcript row, and `history-target.ts` turns it into
+a cut in Pi's tree. Three rules hold it to what the reader picked:
+
+- **A live row id is not a Pi entry id.** Pi appends an entry only after its
+  listeners have seen `message_end`, so a live row gets a bridge id. The
+  response row remembers the Pi message it was built from
+  (`responseMessages`), and the entry Pi appends holds that same object. A
+  replayed row's id is the entry id. A prompt row is matched to the active
+  branch's user entries from the newest, never to Pi's
+  `getUserMessagesForForking`, which lists every branch in the file.
+- **A prompt is cut before itself; a response is kept with its tool results.**
+  A row that resolves to nothing is refused with 409; a fork never falls back
+  to the newest prompt (that forked the wrong turns, 2026-11-06).
+- **Pi moves its leaf in memory only.** Reopening the file puts it back on the
+  newest entry, so a rewind or branch switch records the leaf it chose
+  (`historyLeaf`, persisted in `state.json`) and every reopen re-applies it
+  until something is appended under it. Render a rewound branch from that
+  leaf, never from the file's own.
+
 ## When touching the Pi bridge
 
 - The engine boundary is `src/translate.ts` and `src/tool-rendering.ts`. Every

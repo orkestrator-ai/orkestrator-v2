@@ -95,6 +95,14 @@ import {
 import { renderToolCall } from "./tool-rendering.js";
 import { newSessionState } from "./session-factory.js";
 import {
+  HistoryTargetError,
+  lastUserTarget,
+  readContentText,
+  rememberHistoryLeaf,
+  resolveHistoryTarget,
+  restoreHistoryLeaf,
+} from "./history-target.js";
+import {
   abortCancelledCompactionOnStart,
   installAutoCompactionOverride,
   parseAutoCompaction,
@@ -1131,6 +1139,7 @@ export function sessionManagerFor(state: SessionState): SessionManager {
       // Report lost context only when the bridge has evidence of prior activity.
       const hasHistory = (statSync(state.sessionFile, { throwIfNoEntry: false })?.size ?? 0) > 0;
       const manager = SessionManager.open(state.sessionFile, directory, workingDirectory);
+      restoreHistoryLeaf(state, manager);
       if (hasHistory) state.resumeFallbackFile = undefined;
       if (
         !hasHistory &&
@@ -1523,23 +1532,29 @@ export async function resumeSession(
 }
 
 /**
- * Fork a session at one of its user messages.
+ * Fork a session at one of its messages.
  *
  * Production forks go through `AgentSessionRuntime.fork`, preserving Pi's
- * extension hooks and returning the selected message as an editable draft.
+ * extension hooks. A prompt is cut before (Pi returns its text as an editable
+ * draft); a response is kept with its tool results (`resolveHistoryTarget`).
  * Dependency-injected legacy test sessions retain the low-level fallback.
  *
- * `messageId` is a Pi entry id. The renderer passes back the id it was given,
- * and a fork with no id branches at the newest user message, which is what
- * "fork from here" means on a session nobody scrolled.
+ * `messageId` is a transcript message id or a Pi entry id. A fork with no id
+ * branches at the newest user message, which is what "fork from here" means on
+ * a session nobody scrolled. An id that names no message on the active branch
+ * is refused: falling back to the newest message forked the wrong turns.
  */
 export async function forkSession(
   state: SessionState,
   messageId: string | undefined,
 ): Promise<SessionState & { forkDraft?: string }> {
   const session = await ensureSession(state);
-  const entryId = resolveUserEntryId(state, session, messageId) ?? lastUserEntryId(session);
-  if (!entryId) throw new Error("This session has no user message to fork from");
+  const target = messageId?.trim()
+    ? resolveHistoryTarget(state, session, messageId)
+    : lastUserTarget(session);
+  if (messageId?.trim() && !target) throw new HistoryTargetError();
+  if (!target) throw new Error("This session has no user message to fork from");
+  const entryId = target.entryId;
   if (!state.runtime) {
     // Dependency-injected test/legacy sessions do not own the replacement
     // runtime. Production attachments always do and take `runtime.fork` below.
@@ -1565,7 +1580,7 @@ export async function forkSession(
     forked.unsubscribe?.();
     forked.unsubscribe = undefined;
     forked.session = null;
-    const outcome = await runtime.fork(entryId, { position: "before" });
+    const outcome = await runtime.fork(entryId, { position: target.position });
     if (outcome.cancelled) throw new Error("Pi cancelled the session fork");
     await bindSessionExtensions(forked, runtime.session);
     publishAttachedSession(forked, runtime.session);
@@ -1587,13 +1602,20 @@ export async function navigateSessionHistory(
   state: SessionState,
   messageOrEntryId: string,
 ): Promise<void> {
-  if (state.status === "running" || state.dispatching) {
-    throw new Error("The Pi session is already running");
-  }
+  if (state.status === "running" || state.dispatching) throw new SessionBusyError();
   const session = await ensureSession(state);
-  const target = resolveUserEntryId(state, session, messageOrEntryId) ?? messageOrEntryId;
+  // A branch switch names an entry of another branch, which no row shows.
+  const target =
+    resolveHistoryTarget(state, session, messageOrEntryId)?.entryId ??
+    (session.sessionManager.getEntry(messageOrEntryId.trim())
+      ? messageOrEntryId.trim()
+      : undefined);
+  if (!target) throw new HistoryTargetError();
   const result = await session.navigateTree(target, { summarize: false });
   if (result.cancelled || result.aborted) throw new Error("Pi did not change the active branch");
+  // In memory only until a prompt appends under it; the render below and every
+  // later reopen of the file read it from here.
+  rememberHistoryLeaf(state, session.sessionManager);
   resetRenderedHistory(state);
   hydrateHistory(state);
   await overlayCommandChanges(state);
@@ -1604,22 +1626,6 @@ export async function setSessionTitle(state: SessionState, title: string): Promi
   session.setSessionName(title);
   state.title = title;
   state.revision += 1;
-}
-
-function resolveUserEntryId(
-  state: SessionState,
-  session: AgentSession,
-  messageId: string | undefined,
-): string | undefined {
-  const requested = messageId?.trim();
-  if (!requested) return undefined;
-  if (typeof session.getUserMessagesForForking !== "function") return requested;
-  const entries = session.getUserMessagesForForking();
-  if (entries.some((entry) => entry.entryId === requested)) return requested;
-  const messageIndex = state.messages
-    .filter((message) => message.role === "user")
-    .findIndex((message) => message.id === requested);
-  return messageIndex >= 0 ? entries[messageIndex]?.entryId : undefined;
 }
 
 /**
@@ -1641,14 +1647,10 @@ export function resetRenderedHistory(state: SessionState): void {
   state.toolInputs.clear();
   state.pendingCommandChanges?.clear();
   state.toolCallRows?.clear();
+  state.responseMessages?.clear();
   state.currentAssistantMessageId = undefined;
   state.turnOpenedAssistantRow = undefined;
   state.uncheckedTranscriptBytes = 0;
-}
-
-function lastUserEntryId(session: AgentSession): string | undefined {
-  const messages = session.getUserMessagesForForking();
-  return messages[messages.length - 1]?.entryId;
 }
 
 /**
@@ -1667,6 +1669,7 @@ function hydrateHistory(state: SessionState): void {
   } catch {
     return;
   }
+  restoreHistoryLeaf(state, manager);
   state.piSessionId = manager.getSessionId();
   const name = manager.getSessionName();
   if (name?.trim()) state.title = name.trim();
@@ -1873,18 +1876,6 @@ function applyHistoricToolResult(state: SessionState, message: ToolResultMessage
       return;
     }
   }
-}
-
-function readContentText(content: unknown): string {
-  if (nonBlank(content)) return content;
-  if (!Array.isArray(content)) return "";
-  const chunks: string[] = [];
-  for (const block of content) {
-    if (nonBlank(block)) chunks.push(block);
-    else if (isObject(block) && block.type === "text" && nonBlank(block.text))
-      chunks.push(block.text);
-  }
-  return chunks.join("\n");
 }
 
 function pushMessage(

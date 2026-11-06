@@ -118,6 +118,7 @@ import {
 import { refreshRuntimeCatalog } from "./runtime.js";
 import { TimeoutError, withTimeout } from "./timeout.js";
 import { closeSessionRetaining } from "./session-close.js";
+import { HistoryTargetError } from "./history-target.js";
 import { boundTranscript, boundTranscriptForRead, chargeTranscript } from "./transcript.js";
 import {
   applyComposerPatch,
@@ -301,6 +302,9 @@ export async function route(
       return json(response, 403, error.refusal());
     }
     if (error instanceof SessionBusyError) return json(response, 409, { error: error.message });
+    if (error instanceof HistoryTargetError) {
+      return json(response, 409, { error: error.message });
+    }
     // `kind` separates a missing provider login from a bad bridge token, which
     // is also a 401; the backend shows the former's message as written.
     if (error instanceof CredentialError) {

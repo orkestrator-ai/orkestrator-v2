@@ -33,10 +33,12 @@ import {
   recordExtensionLoadDiagnostics,
   refreshSessionCommands,
   resumeSession,
+  SessionBusyError,
   sessionManagerFor,
   setAgentSessionTestHooks,
   type AgentSessionTestHooks,
 } from "./agent-session.js";
+import { HistoryTargetError } from "./history-target.js";
 import { commandBindingRevision } from "@orkestrator/protocol/agent-command-catalogue";
 import { CommandChangeJournal } from "@orkestrator/protocol/node/command-change-journal";
 import { setCommandChangeProbeForTests } from "./command-changes.js";
@@ -146,6 +148,17 @@ function model(provider: string, id: string): Model<Api> {
     contextWindow: 200_000,
     maxTokens: 8_000,
   } as Model<Api>;
+}
+
+/** A user message entry of Pi's session tree, as `SessionManager.getBranch` returns it. */
+function userEntry(id: string) {
+  return {
+    type: "message",
+    id,
+    parentId: null,
+    timestamp: "2026-08-25T00:00:00.000Z",
+    message: { role: "user", content: `prompt ${id}`, timestamp: 0 },
+  };
 }
 
 interface FakeSessionControl {
@@ -968,8 +981,9 @@ describe("Pi SDK lifecycle", () => {
           branchedAt = entryId;
           return forkedFile;
         },
+        getBranch: () => [userEntry("first-user"), userEntry("newest-user")],
+        getLeafId: () => "newest-user",
       },
-      getUserMessagesForForking: () => [{ entryId: "first-user" }, { entryId: "newest-user" }],
     });
     installTestHooks({ createAgentSession: async () => fake.session });
     const state = newSessionState();
@@ -991,10 +1005,41 @@ describe("Pi SDK lifecycle", () => {
     expect(explicit).toBe(forked);
   });
 
+  test("refuses a fork at a message it cannot place instead of forking at the newest prompt", async () => {
+    let branchedAt: string | undefined;
+    const fake = fakeSession({
+      sessionManager: {
+        createBranchedSession: (entryId: string) => {
+          branchedAt = entryId;
+          return join(sessionDirectory, "never.jsonl");
+        },
+        getBranch: () => [userEntry("first-user"), userEntry("newest-user")],
+        getLeafId: () => "newest-user",
+      },
+    });
+    installTestHooks({ createAgentSession: async () => fake.session });
+    const state = newSessionState();
+
+    await expect(forkSession(state, "a-row-from-another-session")).rejects.toBeInstanceOf(
+      HistoryTargetError,
+    );
+    expect(branchedAt).toBeUndefined();
+  });
+
+  test("refuses to rewind a running session as busy", async () => {
+    const state = newSessionState();
+    state.status = "running";
+    await expect(navigateSessionHistory(state, "any")).rejects.toBeInstanceOf(SessionBusyError);
+  });
+
   test("switches the active branch using the selected transcript message", async () => {
     let navigatedTo = "";
     const fake = fakeSession({
-      getUserMessagesForForking: () => [{ entryId: "older-entry" }, { entryId: "newer-entry" }],
+      sessionManager: {
+        getBranch: () => [userEntry("older-entry"), userEntry("newer-entry")],
+        getLeafId: () => "newer-entry",
+        getEntryCount: () => 2,
+      },
       navigateTree: async (entryId: string, options: { summarize: boolean }) => {
         navigatedTo = entryId;
         expect(options).toEqual({ summarize: false });

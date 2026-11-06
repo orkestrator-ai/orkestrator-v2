@@ -452,6 +452,24 @@ export interface SessionState {
    */
   toolCallRows?: Map<string, string>;
   /**
+   * The Pi message each live response row was built from, by row id.
+   *
+   * A live row's id is minted here, not Pi's entry id: Pi appends the entry
+   * only after its listeners have seen `message_end`, and the entry holds this
+   * same message object. A fork or rewind at a live row finds its entry by
+   * that identity. Runtime-only and bounded; cleared with the rendered history.
+   */
+  responseMessages?: Map<string, object>;
+  /**
+   * The leaf a rewind or branch switch chose, with Pi's entry count then.
+   *
+   * Pi moves its leaf in memory only; reopening the session file puts it back
+   * at the newest entry. Until something is appended under the chosen leaf
+   * (which persists it), every reopen re-applies it (`restoreHistoryLeaf`).
+   * `entryId` is null for a rewind to before the first prompt.
+   */
+  historyLeaf?: { entryId: string | null; entries: number };
+  /**
    * The text and thinking blocks still being appended to, by kind.
    *
    * Pi interleaves reasoning with prose, so "the last part" is not a reliable
@@ -570,6 +588,7 @@ export interface SessionState {
 export interface PersistedSession {
   readOnly?: boolean;
   id: string;
+  historyLeaf?: { entryId: string | null; entries: number };
   policy?: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy;
   clientSessionKey?: string;
   sessionFile?: string;

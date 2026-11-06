@@ -22,6 +22,7 @@ function fixture(
   tags: string[],
   // Tags pushed before their release has uploaded any update files.
   unready: ReadonlySet<string> = new Set(),
+  requestFailure?: { path: string; error: Error },
 ) {
   const root = mkdtempSync(path.join(tmpdir(), "github-update-"));
   roots.push(root);
@@ -44,9 +45,10 @@ function fixture(
   updater.logger = null;
   const request = mock(async (options: RequestOptions) => {
     const url = String(options.path);
+    if (requestFailure && url.includes(requestFailure.path)) throw requestFailure.error;
     if (url.includes(".atom"))
       return `<feed xmlns="http://www.w3.org/2005/Atom">${tags.map((tag) => `<entry><title>${tag}</title><link href="https://github.com/orkestrator-ai/orkestrator-v2/releases/tag/${tag}"/><content>Notes &amp; details</content></entry>`).join("")}</feed>`;
-    if (url.endsWith("/latest")) return JSON.stringify({ tag_name: "v2.23.0" });
+    if (url.endsWith("/latest")) return JSON.stringify({ tag_name: tags.at(-1) });
     const match = /\/download\/(v[^/]+)\/(.+\.yml)/.exec(url);
     if (!match) throw new Error(`Unexpected request ${url}`);
     if (unready.has(match[1]!)) throw new HttpError(404, "No such feed");
@@ -167,4 +169,63 @@ test("only a missing channel file names an unready release", () => {
     null,
   );
   expect(unreadyReleaseTag("Cannot find")).toBe(null);
+});
+
+test("Stable falls back past missing files and offers the newest release once ready", async () => {
+  const unready = new Set(["v2.36.6"]);
+  const { updater, request } = fixture("latest", "2.36.4", ["v2.36.5", "v2.36.6"], unready);
+  expect((await updater.checkForUpdates())?.updateInfo.version).toBe("2.36.5");
+  expect(request.mock.calls.some(([options]) => String(options.path).endsWith("/latest"))).toBe(
+    true,
+  );
+  expect(
+    request.mock.calls.some(([options]) => String(options.path).includes("/download/v2.36.6/")),
+  ).toBe(true);
+  unready.clear();
+  const recovered = await updater.checkForUpdates();
+  expect(recovered?.updateInfo.version).toBe("2.36.6");
+  expect(recovered?.isUpdateAvailable).toBe(true);
+});
+
+test.each(["latest", "alpha"] as const)(
+  "%s retry cap reports the newest unready tag",
+  async (channel) => {
+    const tags = ["v2.36.5", "v2.36.6", "v2.36.7", "v2.36.8", "v2.36.9"];
+    const { updater, request } = fixture(channel, "2.36.4", tags, new Set(tags));
+    await expect(updater.checkForUpdates()).rejects.toThrow(/download\/v2\.36\.9\//);
+    const attemptedTags = new Set(
+      request.mock.calls.flatMap(([options]) => {
+        const match = /download\/(v[^/]+)\//.exec(String(options.path));
+        return match ? [match[1]] : [];
+      }),
+    );
+    expect(attemptedTags.size).toBe(4);
+    expect(attemptedTags.has("v2.36.5")).toBe(false);
+  },
+);
+
+test.each([new HttpError(503, "Unavailable"), new Error("ECONNRESET")])(
+  "artifact failures other than 404 propagate without falling back: %s",
+  async (error) => {
+    const { updater, request } = fixture("latest", "2.36.4", ["v2.36.5", "v2.36.6"], new Set(), {
+      path: "/download/v2.36.6/",
+      error,
+    });
+    await expect(updater.checkForUpdates()).rejects.toBe(error);
+    expect(
+      request.mock.calls.some(([options]) => String(options.path).includes("/download/v2.36.5/")),
+    ).toBe(false);
+    expect(
+      request.mock.calls.filter(([options]) => String(options.path).includes(".atom")),
+    ).toHaveLength(1);
+  },
+);
+
+test("a transient failure after skipping a release remains the reported failure", async () => {
+  const error = new HttpError(503, "Unavailable");
+  const { updater } = fixture("latest", "2.36.4", ["v2.36.5", "v2.36.6"], new Set(["v2.36.6"]), {
+    path: "/download/v2.36.5/",
+    error,
+  });
+  await expect(updater.checkForUpdates()).rejects.toBe(error);
 });

@@ -10,6 +10,11 @@ import type {
 } from "@orkestrator/protocol/host-maintenance";
 
 import * as backend from "@/lib/backend";
+import {
+  mockToastSuccess,
+  mockToastError,
+  resetSonnerMocks,
+} from "../../../../../tests/mocks/sonner";
 import { connectedHostClient } from "@/test/host-maintenance-client";
 import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 import { HostUpdatesPanel, describeRestartImpact } from "./HostUpdatesPanel";
@@ -268,3 +273,32 @@ test("hides the channel for a backend that does not report one", async () => {
   expect(await screen.findByText("2.21.1")).toBeTruthy();
   expectDomAbsent(screen.queryByRole("combobox", { name: "Update channel" }), "channel picker");
 });
+
+test.each([false, true])(
+  "Copy error restores full details (clipboard rejects: %s)",
+  async (rejects) => {
+    resetSonnerMocks();
+    const writeText = spyOn(navigator.clipboard, "writeText");
+    if (rejects) writeText.mockRejectedValue(new Error("Clipboard denied"));
+    else writeText.mockResolvedValue(undefined);
+    const checkError = "Error: net::ERR_CONNECTION_RESET\\nFull diagnostic details";
+    spyOn(backend, "getHostMaintenance").mockResolvedValue(
+      snapshot({
+        updater: { ...snapshot().updater, checkError },
+      }),
+    );
+    render(<UpdatesSettings />);
+    fireEvent.click(await screen.findByRole("button", { name: "Details" }));
+    fireEvent.click(screen.getByRole("button", { name: "Copy error" }));
+    await waitFor(() =>
+      expect(writeText).toHaveBeenCalledWith(
+        "Error: net::ERR_CONNECTION_RESET\nFull diagnostic details",
+      ),
+    );
+    await waitFor(() =>
+      expect(rejects ? mockToastError : mockToastSuccess).toHaveBeenCalledWith(
+        rejects ? "Failed to copy to clipboard" : "Error copied to clipboard",
+      ),
+    );
+  },
+);

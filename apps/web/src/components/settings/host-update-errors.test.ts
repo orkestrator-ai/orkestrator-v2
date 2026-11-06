@@ -41,3 +41,22 @@ test("an unknown error keeps its first line, bounded", () => {
 test("details restore escaped newlines", () => {
   expect(updateErrorDetails(MISSING_MAC_FILE)).toContain("latest-mac.yml\n\nPlease double check");
 });
+
+test.each([
+  ["HttpError: 503", "GitHub answered HTTP 503."],
+  ["HttpError: 429", "GitHub answered HTTP 429."],
+  ["Error: ECONNRESET", "Could not reach GitHub."],
+  ["HttpError: 404", "No published release was found on GitHub."],
+])("wrapped latest-version failure preserves its cause: %s", (cause, summary) => {
+  expect(
+    summarizeUpdateError(
+      `Unable to find latest version on GitHub (https://github.com/o/r/releases/latest), please ensure a production release exists: ${cause}`,
+    ),
+  ).toBe(summary);
+});
+
+test("a latest-version error without a known cause does not claim no release exists", () => {
+  expect(summarizeUpdateError("Unable to find latest version on GitHub: unexpected failure")).toBe(
+    "Unable to find latest version on GitHub: unexpected failure",
+  );
+});

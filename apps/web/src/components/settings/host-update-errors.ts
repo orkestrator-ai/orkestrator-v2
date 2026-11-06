@@ -30,11 +30,14 @@ export function summarizeUpdateError(error: string): string {
     const platform = platformOfChannelFile(missingFile[1]!);
     return `${missingFile[2]} has no ${platform ? `${platform} ` : ""}update files yet; it may still be publishing.`;
   }
-  if (/No published versions on GitHub|Unable to find latest version on GitHub/.test(text))
-    return "No published release was found on GitHub.";
   if (/net::ERR_|ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ECONNRESET|ETIMEDOUT/.test(text))
     return "Could not reach GitHub.";
   const status = text.match(/HttpError: (\d{3})\b/);
+  if (
+    /No published versions on GitHub/.test(text) ||
+    (/Unable to find latest version on GitHub/.test(text) && status?.[1] === "404")
+  )
+    return "No published release was found on GitHub.";
   if (status) return `GitHub answered HTTP ${status[1]}.`;
   return truncate(text.split("\n", 1)[0]!.trim());
 }

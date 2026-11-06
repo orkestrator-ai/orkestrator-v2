@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, mock, spyOn, test } from "bun:test";
-import { cleanup, render, waitFor } from "@testing-library/react";
+import { act, cleanup, render, waitFor } from "@testing-library/react";
 import {
   hostMaintenanceSnapshotFixture,
   hostUpdateJobFixture,
@@ -7,7 +7,14 @@ import {
 
 import { BUNDLED_APP_VERSION } from "@/lib/app-version";
 import * as backend from "@/lib/backend";
+import * as events from "@/lib/native/events";
 import {
+  HOST_MAINTENANCE_EVENT,
+  type HostMaintenanceSnapshot,
+} from "@orkestrator/protocol/host-maintenance";
+import { onGlobalSettingsRequest, takeMachineUpdatesRequest } from "@/lib/settings-navigation";
+import {
+  mockToastError,
   mockToastLoading,
   mockToastSuccess,
   mockToastWarning,
@@ -107,4 +114,49 @@ test("an old finished update stays quiet", async () => {
   await Bun.sleep(20);
   expect(mockToastSuccess).not.toHaveBeenCalled();
   expect(mockToastLoading).not.toHaveBeenCalled();
+});
+
+test("a failed update toast opens this machine's update settings from Details", async () => {
+  let publish: ((snapshot: HostMaintenanceSnapshot) => void) | undefined;
+  spyOn(events, "listen").mockImplementation(async (event, handler) => {
+    if (event === HOST_MAINTENANCE_EVENT) {
+      publish = (payload) => handler({ payload } as never);
+    }
+    return () => undefined;
+  });
+  spyOn(backend, "getHostMaintenance").mockResolvedValue(
+    hostMaintenanceSnapshotFixture({
+      job: hostUpdateJobFixture({ state: "downloading" }),
+    }),
+  );
+  render(<HostUpdateBanner />);
+  await waitFor(() => expect(mockToastLoading).toHaveBeenCalled());
+  expect(publish).toBeDefined();
+  act(() =>
+    publish!(
+      hostMaintenanceSnapshotFixture({
+        revision: 2,
+        job: hostUpdateJobFixture({ state: "failed", error: "HttpError: 503" }),
+      }),
+    ),
+  );
+  await waitFor(() => expect(mockToastError).toHaveBeenCalled());
+  const [title, options] = mockToastError.mock.calls.at(-1) as [
+    string,
+    { id: string; description: string; action: { label: string; onClick: () => void } },
+  ];
+  expect(title).toBe("The host update failed");
+  expect(options.id).toBe(HOST_UPDATE_TOAST_ID);
+  expect(options.description).toBe("The update failed: GitHub answered HTTP 503.");
+  expect(options.action.label).toBe("Details");
+  takeMachineUpdatesRequest();
+  const navigate = mock((_section: string) => undefined);
+  const unsubscribe = onGlobalSettingsRequest(navigate);
+  try {
+    options.action.onClick();
+    expect(navigate).toHaveBeenCalledWith("machines");
+    expect(takeMachineUpdatesRequest()).toBe(true);
+  } finally {
+    unsubscribe();
+  }
 });

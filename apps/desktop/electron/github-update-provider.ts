@@ -86,6 +86,7 @@ export function orderReleaseFeed(
  */
 export class VersionOrderedGitHubProvider extends GitHubProvider {
   private readonly skippedTags = new Set<string>();
+  private stableTag: string | null = null;
 
   constructor(
     options: CustomPublishOptions,
@@ -105,12 +106,34 @@ export class VersionOrderedGitHubProvider extends GitHubProvider {
     token?: CancellationToken,
   ): Promise<string | null> {
     const data = await super.httpRequest(url, headers, token);
-    return data && url.pathname.endsWith(".atom") ? orderReleaseFeed(data, this.skippedTags) : data;
+    if (data && url.pathname.endsWith(".atom")) {
+      const ordered = orderReleaseFeed(data, this.skippedTags);
+      this.stableTag =
+        parseXml(ordered)
+          .getElements("entry")
+          .map(
+            (entry) =>
+              entry
+                .element("link")
+                .attribute("href")
+                .match(/\/tag\/(v?[^/]+)$/)?.[1],
+          )
+          .find((tag) => tag && hostUpdateChannelOfVersion(tag) === "stable") ?? null;
+      return ordered;
+    }
+    // Upstream Stable selection reads /latest independently of the Atom feed.
+    // Retain its request failures, but select from the same ordered, filtered feed
+    // as prerelease checks so an unready Stable release can be passed over too.
+    if (data && url.pathname.endsWith("/releases/latest")) {
+      return JSON.stringify({ ...JSON.parse(data), tag_name: this.stableTag });
+    }
+    return data;
   }
 
   override async getLatestVersion(): ReturnType<GitHubProvider["getLatestVersion"]> {
     // Every check starts over, so a release is offered as soon as it is ready.
     this.skippedTags.clear();
+    this.stableTag = null;
     let firstUnready: unknown = null;
     for (;;) {
       try {
@@ -124,7 +147,8 @@ export class VersionOrderedGitHubProvider extends GitHubProvider {
           continue;
         }
         // Nothing older to fall back to: the unready release is the real answer.
-        if (firstUnready && !tag && /No published versions/.test(String(error))) throw firstUnready;
+        if (firstUnready && (tag || /No published versions/.test(String(error))))
+          throw firstUnready;
         throw error;
       }
     }

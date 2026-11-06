@@ -5,6 +5,7 @@
  */
 import { describe, expect, mock, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
+import { applyNativeAgentProjectionDelta } from "@orkestrator/protocol/native-agent";
 import type { ProviderTranscriptSnapshot } from "./native-agent-service.js";
 import { nativeAgentSessionStorageKey } from "./native-agent-service-shared.js";
 import {
@@ -98,9 +99,60 @@ describe("legacy commit fingerprint", () => {
         expect(unchanged).toBe(first);
 
         content = "second";
-        const changed = await service.getProjection(identity);
+        let changed: typeof first;
+        const hashed = await hashedCharacters(async () => {
+          changed = await service.getProjection(identity);
+        });
+        // The unchanged 4,000-character row enters the fingerprint by its
+        // memoized fingerprint, not by its JSON.
+        expect(hashed).toBeLessThan(4_000);
         expect(changed!.revision).toBeGreaterThan(first!.revision);
         expect((changed!.messages[0] as Row).content).toBe("second");
+      },
+    );
+  });
+});
+
+describe("sync-v1 token", () => {
+  test("keeps unchanged rows stable and changes the token when a row changes", async () => {
+    let content = "first";
+    const stub = createProviderStub("opencode", {
+      interactiveSnapshot: async () => ({
+        status: "idle",
+        messages: [row("m1", content, [{ type: "text", content }]), row("m2", "x".repeat(4_000))],
+      }),
+    });
+    await withService(
+      { prefix: "orkestrator-e11-sync-token-", provider: async () => stub.provider },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "opencode" as const,
+          logicalSessionKey: "env-env-1:sync-token",
+        };
+        await service.ensureSession(identity);
+        const read = (knownToken?: string) =>
+          service.getProjectionUpdate({ ...identity, syncVersion: 1, liveWindow, knownToken });
+        const first = await read();
+        if (first.status !== "snapshot") throw new Error("expected a sync snapshot");
+        expect(await read(first.token)).toEqual({
+          syncVersion: 1,
+          status: "unchanged",
+          token: first.token,
+        });
+
+        content = "second";
+        const changed = await read(first.token);
+        if (changed.status !== "delta") throw new Error("expected a sync delta");
+        expect(changed.token).not.toBe(first.token);
+        const projection = applyNativeAgentProjectionDelta(first.projection, changed.delta);
+        expect((projection!.messages[0] as Row).content).toBe("second");
+        expect((projection!.messages[1] as Row).content).toBe("x".repeat(4_000));
+        expect(await read(changed.token)).toEqual({
+          syncVersion: 1,
+          status: "unchanged",
+          token: changed.token,
+        });
       },
     );
   });

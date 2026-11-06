@@ -117,6 +117,29 @@ describe("row fingerprints", () => {
     expect(digest(rows.slice(1))).not.toBe(before);
     expect(digest([...rows.slice(1), rows[0]])).not.toBe(before);
   });
+
+  test("a digest with messages hashes a changed row once, not the window", () => {
+    const rows = Array.from({ length: 50 }, (_, index) => ({
+      id: `m${index}`,
+      content: "z".repeat(2_000),
+    }));
+    const projection = { title: "t", messages: rows };
+    const before = digestWithMessages("legacy-commit", projection);
+    const moved = { ...projection, messages: [...rows.slice(0, -1), { id: "m49", content: "z" }] };
+    let after = "";
+    const hashed = hashedCharacters(() => {
+      after = digestWithMessages("legacy-commit", moved);
+    });
+    expect(after).not.toBe(before);
+    // The moved row's JSON and the other fields, plus a short string per row.
+    expect(hashed).toBeLessThan(JSON.stringify(moved.messages.at(-1)).length + 30 * 51 + 64);
+    expect(digestWithMessages("legacy-commit", { ...projection, messages: [...rows] })).toBe(
+      before,
+    );
+    expect(
+      digestWithMessages("legacy-commit", { ...projection, messages: rows.slice(1) }),
+    ).not.toBe(before);
+  });
 });
 
 describe("encoded measures", () => {

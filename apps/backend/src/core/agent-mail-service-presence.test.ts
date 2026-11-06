@@ -236,4 +236,53 @@ describe("mail presence for environments that are not running", () => {
       await fs.rm(dataDir, { recursive: true, force: true });
     }
   });
+
+  test("a tmux delivery hands the presence it read to its dispatch, and none when it read none", async () => {
+    const { storage, dataDir } = await fixture();
+    try {
+      await replaceRecipientTab(storage, "claude-tmux");
+      const deliver = async (withPresence: boolean, requestId: string) => {
+        await storage.sendAgentMail(
+          { kind: "tab", environmentId: "sender", projectId: "project", tabId: "agent" },
+          { requestId, toEnvironmentId: "recipient", toTabId: "agent", body: requestId },
+        );
+        const dispatches: Array<Record<string, unknown>> = [];
+        const service = new AgentMailService(
+          storage,
+          {
+            reconcileMailInject: async () => "unknown",
+            sessionActivitySnapshot: () => "unknown",
+            dispatchMailInject: async (input) => ({
+              outcome: "accepted",
+              requestId: input.requestId,
+            }),
+          },
+          {
+            ...(withPresence ? { mailInjectPresence: async () => "idle" as const } : {}),
+            dispatchMailInject: async (input) => {
+              dispatches.push(input);
+              return { outcome: "accepted" };
+            },
+          },
+        );
+        try {
+          await service.init();
+          await service.drainInjects();
+        } finally {
+          await service.shutdown();
+        }
+        return dispatches;
+      };
+      // The dispatch skips the reads the presence gate has just made (BG-15).
+      const read = await deliver(true, "with-presence");
+      expect(read).toHaveLength(1);
+      expect(read[0]).toMatchObject({ presence: "idle" });
+      // No presence gate: the dispatch must make those reads itself.
+      const unread = await deliver(false, "without-presence");
+      expect(unread).toHaveLength(1);
+      expect(unread[0]).not.toHaveProperty("presence");
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
 });

@@ -35,7 +35,7 @@ Analysed 2026-11-04 against `main` at `e198fd4a7`.
 
 **Context.** Run on 2026-11-04 on beelink: Docker Engine 29.9.2, rootful, x64. The workflow `container-live-qualification.yml` runs the suite on amd64 and arm64 on pull requests that touch its paths; that run has not happened yet. Rootless Docker and Docker Desktop are not in it.
 
-**Investigation.** `prctl(PR_SET_DUMPABLE)` is kernel behaviour with no Docker dependency, and rootless root is still uid 0 in the container, so neither is expected to differ. That is reasoning, not evidence.
+**Investigation.** On 2026-11-06 the suite (then 16 cases, with the `bridge-launch=1` ones from to-do 4980) passed on Docker Desktop, Engine 29.9.2, linux/arm64: 15 passed, the older-image case skipped. That covers Desktop and arm64 on one host; rootless is still open. `prctl(PR_SET_DUMPABLE)` is kernel behaviour with no Docker dependency, and rootless root is still uid 0 in the container, so neither is expected to differ. That is reasoning, not evidence.
 
 **Decisions.**
 
@@ -50,4 +50,4 @@ Analysed 2026-11-04 against `main` at `e198fd4a7`.
 ## Related
 
 - `3930-bridge-credential-out-of-agent-uid.md` (deleted 2026-11-06)
-- [`4980-agent-uid-process-control.md`](4980-agent-uid-process-control.md)
+- `4980-agent-uid-process-control.md` (deleted 2026-11-06); its follow-ups are [7250](7250-bridge-replaced-by-an-agent-process.md), [7251](7251-pi-project-extensions-in-the-bridge-process.md) and [7252](7252-opencode-server-loads-agent-writable-code.md)

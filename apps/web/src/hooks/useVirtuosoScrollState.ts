@@ -260,6 +260,7 @@ export function useVirtuosoScrollState(
       new TranscriptScrollController(virtuosoRef, {
         initialWantsFollow: persisted?.wantsStick ?? true,
         initialActive: isActive,
+        initialReadingAnchor: persisted?.anchor,
       }),
   );
   const view = useSyncExternalStore(controller.subscribe, controller.getSnapshot);
@@ -311,6 +312,35 @@ export function useVirtuosoScrollState(
     });
   }, [controller, isActive, persistKey, scrollerEl]);
 
+  // An environment can unmount without an inactive render. Capture before
+  // passive cleanup detaches the scroller; semantic state must survive even
+  // when the virtualizer can no longer provide its optional pixel snapshot.
+  useLayoutEffect(
+    () => () => {
+      if (!persistKey || !scrollerEl) return;
+      const anchor = controller.wantsFollow
+        ? null
+        : (controller.captureAnchor() ?? controller.readingAnchor);
+      let snapshot: StateSnapshot = { ranges: [], scrollTop: scrollerEl.scrollTop };
+      let measured = false;
+      virtuosoRef.current?.getState((value) => {
+        if (isRestorableStateSnapshot(value)) {
+          snapshot = value;
+          measured = true;
+        }
+      });
+      setPersistedState(persistKey, {
+        version: PERSISTED_LAYOUT_VERSION,
+        snapshot,
+        wantsStick: controller.wantsFollow,
+        anchor,
+        widthPx: scrollerEl.clientWidth,
+        layout: measured ? currentLayoutKey() : "",
+      });
+    },
+    [controller, persistKey, scrollerEl],
+  );
+
   useEffect(() => () => controller.setActive(false), [controller]);
 
   // ------------------------------------------------------------ activation
@@ -341,7 +371,7 @@ export function useVirtuosoScrollState(
       activationFrameRef.current = requestAnimationFrame(() => {
         activationFrameRef.current = null;
         const pending = pendingActivationRef.current;
-        if (!pending || !controller.active) return;
+        if (!pending || !controller.active || controller.waitingForHistory) return;
         // Anything that moved the viewport since (the reader, an explicit
         // target) supersedes the activation decision.
         if (controller.generation !== pending.generation) {
@@ -433,7 +463,7 @@ export function useVirtuosoScrollState(
   useEffect(() => {
     if (!isActive || explicitTargetPending) return;
     if (pendingActivationRef.current) runPendingActivation();
-  }, [isActive, explicitTargetPending, scrollerEl, runPendingActivation]);
+  }, [isActive, explicitTargetPending, scrollerEl, runPendingActivation, view.waitingForHistory]);
 
   // -------------------------------------------------------------- commands
 

@@ -174,6 +174,24 @@ element's top relative to the viewport.
   cases). Checks of a held place therefore compare the list's position with
   the position that holds the row, limited to the scroll range, rather than
   the row's offset alone.
+- History can also drop from under a reader. A new history epoch (a bridge
+  restart), or a live tail that joins nothing the tab holds (the first Codex
+  replay after live streaming renames every row), makes the session hook fall
+  back to the bare live tail, because it cannot tell a replay from a rewritten
+  history. `useRestorePlaceAfterHistoryDrop` then notices that a commit took
+  the reader's source part from the front while they were not following,
+  pages history back until that part (a call id, which a Codex replay keeps)
+  reappears, and scrolls to it at its old offset. It gives up after 8 pages
+  that bring rows but not the part, 12 empty pages retried 750 ms apart, when
+  history runs out, or when newer reader input/navigation supersedes its
+  captured controller generation. Source-part loss is checked even if the
+  coalesced display head keeps its id. Each independent drop can restore the
+  same call again. Recovered history waits for an active, mounted viewport
+  and an accepted navigation; ordinary held-page restoration and automatic
+  paging stand aside meanwhile. A remounted controller inherits its persisted
+  semantic anchor, so a missing part in its first live tail is recoverable
+  too. Activation waits while that history recovery owns the place. Covered live by `transcript-paging-live.spec.ts`'s
+  Codex bridge-restart step.
 
 ## Activation and persistence
 
@@ -238,7 +256,11 @@ whose body never exceeds `min(28rem, 55dvh)`, expanded details included.
   Entries are memoized on the member object and keyed by call id.
 - Anchors for members inside an inner viewport are composite: the transcript
   holds the group frame, the inner viewport puts the member back at its
-  on-screen offset (absorbing a clamped transcript).
+  on-screen offset (absorbing a clamped transcript). A member the inner list
+  has virtualized away (a history page re-filled the group in front of it) is
+  asked for with `INNER_SEEK_EVENT` on the inner viewport, for up to 20
+  frames; the group scrolls its own list to that entry, and the member is
+  then held like a mounted one.
 
 ## Live arrivals
 

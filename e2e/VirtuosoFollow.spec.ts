@@ -33,7 +33,10 @@ test("live transcript follow releases on scroll-up and re-engages at bottom", as
   await expect.poll(() => distanceFromBottom(scroller)).toBeGreaterThan(50);
   await expect(atBottom).toHaveText("false");
 
-  await scroller.evaluate((element) => element.scrollTo({ top: element.scrollHeight }));
+  // Re-engaging follow requires reader input. A DOM-only scroll can arrive
+  // after the earlier wheel's input window expires on a busy host.
+  await scroller.hover();
+  await page.mouse.wheel(0, 100_000);
   await expect(atBottom).toHaveText("true");
   await expect.poll(() => distanceFromBottom(scroller)).toBeLessThanOrEqual(50);
   const stickyScrollTop = await scroller.evaluate((element) => element.scrollTop);
@@ -80,7 +83,10 @@ test("a small wheel release stays unfollowed through growth inside the bottom ba
     .toBe(releasedScrollTop);
   await expect(atBottom).toHaveText("false");
 
-  await scroller.evaluate((element) => element.scrollTo({ top: element.scrollHeight }));
+  // Re-engaging follow requires reader input. A DOM-only scroll can arrive
+  // after the earlier wheel's input window expires on a busy host.
+  await scroller.hover();
+  await page.mouse.wheel(0, 100_000);
   await expect(atBottom).toHaveText("true");
   await page.getByRole("button", { name: "Append message" }).click();
   await expect(decision).toHaveText("auto");

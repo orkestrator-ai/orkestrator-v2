@@ -1235,6 +1235,23 @@ describe("HTTP bridge provider", () => {
     expect((await read("idle")).turnActivity).toBeUndefined();
   });
 
+  test("the progressive Pi state read shows a compaction as running and compacting", async () => {
+    // Pi reports a manual compaction this way so the tab offers Stop for it.
+    const read = (status: string) =>
+      readHttpBridgeSessionState({
+        agent: "pi",
+        connection: piConnection,
+        sessionId: "session-1",
+        fetchImpl: Object.assign(async () => Response.json({ status, activity: "compacting" }), {
+          preconnect: fetch.preconnect,
+        }),
+      });
+    const running = await read("running");
+    expect(running.phase).toBe("running");
+    expect(running.turnActivity).toEqual({ compacting: true });
+    expect((await read("idle")).turnActivity).toBeUndefined();
+  });
+
   test("bounds Claude launch correlation metadata at the bridge boundary", async () => {
     const { provider } = httpProvider((url) => {
       if (url.endsWith("/messages")) return Response.json({ messages: [] });

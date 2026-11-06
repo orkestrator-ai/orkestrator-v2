@@ -127,7 +127,9 @@ function seedSession(): SessionState {
  */
 function controlledSession(options: { abortGate?: Promise<void> } = {}) {
   const runs: Deferred<void>[] = [];
-  const counts = { prompts: 0, aborts: 0, followUps: 0 };
+  const counts = { prompts: 0, aborts: 0, followUps: 0, compactionAborts: 0 };
+  // Pi rejects a compaction it was asked to abort ("Compaction cancelled").
+  const compactionAborts: Array<() => void> = [];
   const session = {
     sessionId: "pi-session-cancel",
     sessionFile: "/tmp/pi-session-cancel.jsonl",
@@ -153,6 +155,10 @@ function controlledSession(options: { abortGate?: Promise<void> } = {}) {
       target?.resolve();
     },
     compact: async () => undefined,
+    abortCompaction: () => {
+      counts.compactionAborts += 1;
+      for (const abort of compactionAborts.splice(0)) abort();
+    },
     clearQueue: () => ({ steering: [], followUp: [] }),
     setModel: async () => undefined,
     setThinkingLevel: () => undefined,
@@ -165,6 +171,12 @@ function controlledSession(options: { abortGate?: Promise<void> } = {}) {
     session: session as unknown as AgentSession,
     raw: session,
     counts,
+    /** A compaction that settles when the test releases it or Pi aborts it. */
+    heldCompaction: (gate: Promise<void>) =>
+      new Promise<void>((resolve, reject) => {
+        compactionAborts.push(() => reject(new Error("Compaction cancelled")));
+        void gate.then(resolve);
+      }),
     finishRun: (index = runs.length - 1) => runs[index]?.resolve(),
   };
 }
@@ -177,7 +189,10 @@ function resetHooks(): void {
  * A prompt request whose body the test finishes later, so the route is held
  * between admission (headers received) and `readJson`.
  */
-function heldPrompt(state: SessionState): {
+function heldPrompt(
+  state: SessionState,
+  action = "prompt",
+): {
   response: Promise<Response>;
   finish: (body: unknown) => void;
   abandon: () => void;
@@ -189,7 +204,7 @@ function heldPrompt(state: SessionState): {
       controller = streamController;
     },
   });
-  const response = nativeFetch(`${origin}/session/${state.id}/prompt`, {
+  const response = nativeFetch(`${origin}/session/${state.id}/${action}`, {
     method: "POST",
     headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
     body: stream,
@@ -650,14 +665,14 @@ describe("operations without a prompt claim", () => {
     }
   });
 
-  test("a cancel during compaction parks nothing against the next prompt", async () => {
+  test("a cancel during compaction stops it and parks nothing against the next prompt", async () => {
     const state = seedSession();
     const pi = controlledSession();
     const compactGate = deferred();
     let compactions = 0;
     pi.raw.compact = async () => {
       compactions += 1;
-      await compactGate.promise;
+      await pi.heldCompaction(compactGate.promise);
     };
     state.session = pi.session;
     setAgentSessionTestHooks({ hydrateComposer: async (composer) => composer });
@@ -666,13 +681,14 @@ describe("operations without a prompt claim", () => {
       await waitFor(() => compactions === 1);
       expect(state.promptClaim).toBeUndefined();
 
+      // The compaction is what stops; no turn is aborted and no claim exists
+      // for the intent to park against.
       const cancelled = await cancel(state);
       expect(cancelled.status).toBe(200);
-      expect(await cancelled.json()).toEqual({ cancelled: false });
+      expect(await cancelled.json()).toEqual({ cancelled: true });
+      expect(pi.counts.compactionAborts).toBe(1);
       expect(state.cancelRequestedClaim).toBeUndefined();
-
-      compactGate.resolve();
-      expect((await compaction).status).toBe(200);
+      expect((await compaction).status).toBe(409);
 
       const next = await post(`/session/${state.id}/prompt`, { prompt: "runs" });
       expect(next.status).toBe(202);
@@ -685,6 +701,126 @@ describe("operations without a prompt claim", () => {
       resetHooks();
     }
   });
+});
+
+describe("manual compaction cancellation boundaries", () => {
+  for (const boundary of ["body", "attach"] as const) {
+    test(`cancelling during the ${boundary} avoids invoking Pi compact`, async () => {
+      const state = seedSession();
+      const pi = controlledSession();
+      const attachGate = deferred();
+      let attaches = 0;
+      let compactions = 0;
+      pi.raw.compact = async () => {
+        compactions += 1;
+      };
+      setAgentSessionTestHooks({
+        hydrateComposer: async (composer) => composer,
+        createAgentSession: async () => {
+          attaches += 1;
+          if (boundary === "attach") await attachGate.promise;
+          return pi.session;
+        },
+      });
+      const held = boundary === "body" ? heldPrompt(state, "compact") : undefined;
+      const compaction = held?.response ?? post(`/session/${state.id}/compact`);
+      let cancellation: Promise<Response> | undefined;
+      try {
+        await waitFor(() =>
+          boundary === "body" ? state.manualCompaction !== undefined : attaches === 1,
+        );
+        expect(state.promptClaim).toBeUndefined();
+        cancellation = cancel(state);
+        await waitFor(() => state.manualCompaction?.cancelRequested === true);
+        expect(compactions).toBe(0);
+        if (boundary === "body") expect(attaches).toBe(0);
+        held?.finish({});
+        attachGate.resolve();
+        expect((await compaction).status).toBe(409);
+        expect(await (await cancellation).json()).toEqual({ cancelled: true });
+        expect(compactions).toBe(0);
+        expect(state.manualCompaction).toBeUndefined();
+        expect(state.compacting).toBe(false);
+        expect(state.dispatching).toBe(false);
+        const next = await post(`/session/${state.id}/prompt`, {
+          prompt: "runs after stopped compaction",
+        });
+        expect(next.status).toBe(202);
+        expect(pi.counts.prompts).toBe(1);
+        expect(pi.counts.aborts).toBe(0);
+      } finally {
+        held?.abandon();
+        attachGate.resolve();
+        await compaction;
+        await cancellation;
+        pi.finishRun();
+        sessions.delete(state.id);
+        resetHooks();
+      }
+    });
+  }
+
+  for (const timeout of [false, true]) {
+    test(
+      timeout
+        ? "an unsettled compaction answers 202 pending and stays busy"
+        : "successful completion after cancellation answers cancelled false",
+      async () => {
+        const state = seedSession();
+        const pi = controlledSession();
+        const compactGate = deferred();
+        let compactions = 0;
+        // A provider that ignores abort can finish successfully; the request
+        // for cancellation alone must never be reported as a completed stop.
+        pi.raw.compact = async () => {
+          compactions += 1;
+          await compactGate.promise;
+        };
+        state.session = pi.session;
+        setAgentSessionTestHooks({ hydrateComposer: async (composer) => composer });
+        setCancelAckTimeoutForTests(timeout ? 10 : 2_000);
+        const compaction = post(`/session/${state.id}/compact`);
+        let cancellation: Promise<Response> | undefined;
+        try {
+          await waitFor(() => compactions === 1);
+          cancellation = cancel(state);
+          await waitFor(() => state.manualCompaction?.cancelRequested === true);
+          expect(pi.counts.compactionAborts).toBe(1);
+          if (timeout) {
+            const pending = await cancellation;
+            expect(pending.status).toBe(202);
+            expect(await pending.json()).toEqual({ cancelled: false, pending: true });
+            expect(await readStatus(`/session/${state.id}/status`)).toBe("running");
+            expect(state.compacting).toBe(true);
+            expect(
+              (await post(`/session/${state.id}/prompt`, { prompt: "refused while compacting" }))
+                .status,
+            ).toBe(409);
+          }
+          compactGate.resolve();
+          const answer = await compaction;
+          expect(answer.status).toBe(200);
+          expect(await answer.json()).toEqual({ compacted: true });
+          if (!timeout) {
+            const finished = await cancellation;
+            expect(finished.status).toBe(200);
+            expect(await finished.json()).toEqual({ cancelled: false });
+          }
+          expect(state.manualCompaction).toBeUndefined();
+          expect(state.compacting).toBe(false);
+          expect(state.dispatching).toBe(false);
+          expect(await readStatus(`/session/${state.id}/status`)).toBe("idle");
+        } finally {
+          compactGate.resolve();
+          await compaction;
+          await cancellation;
+          setCancelAckTimeoutForTests();
+          sessions.delete(state.id);
+          resetHooks();
+        }
+      },
+    );
+  }
 });
 
 describe("a provider abort that hangs", () => {
@@ -931,7 +1067,7 @@ describe("the admission window before the prompt body is read", () => {
     let compactions = 0;
     pi.raw.compact = async () => {
       compactions += 1;
-      await compactGate.promise;
+      await pi.heldCompaction(compactGate.promise);
     };
     state.session = pi.session;
     setAgentSessionTestHooks({ hydrateComposer: async (composer) => composer });
@@ -941,11 +1077,10 @@ describe("the admission window before the prompt body is read", () => {
       const refused = await post(`/session/${state.id}/prompt`, { prompt: "while compacting" });
       expect(refused.status).toBe(409);
       expect(state.promptClaim).toBeUndefined();
-      expect(await (await cancel(state)).json()).toEqual({ cancelled: false });
+      // The owner is the compaction, so that is what the cancel stops.
+      expect(await (await cancel(state)).json()).toEqual({ cancelled: true });
       expect(state.cancelRequestedClaim).toBeUndefined();
-
-      compactGate.resolve();
-      expect((await compaction).status).toBe(200);
+      expect((await compaction).status).toBe(409);
       const next = await post(`/session/${state.id}/prompt`, { prompt: "runs" });
       expect(next.status).toBe(202);
       expect(pi.counts.prompts).toBe(1);

@@ -69,6 +69,14 @@ export type TerminalRuntimeOptions = {
   outputRetentionMs?: number;
   /** Durable terminal history; tests pass hooks and a smaller directory bound. */
   history?: TerminalHistoryOptions;
+  /**
+   * Agent-test profiles only (`agent-test-fixtures.ts`): an environment this
+   * answers true for keeps its terminal trees running through
+   * `terminateSessionsForEnvironment`, which reports them as survivors. It is
+   * how a real-browser spec stages the delete failure that a process outliving
+   * SIGKILL would cause.
+   */
+  survivesTermination?: (environmentId: string) => boolean;
 };
 
 /**
@@ -104,9 +112,11 @@ export class TerminalRuntime {
    */
   private readonly accountHomes = new Map<string, string>();
   private readonly outputRetentionMs: number;
+  private readonly survivesTermination: ((environmentId: string) => boolean) | undefined;
 
   constructor(options: TerminalRuntimeOptions = {}) {
     this.outputRetentionMs = options.outputRetentionMs ?? TERMINAL_OUTPUT_RETENTION_MS;
+    this.survivesTermination = options.survivesTermination;
     this.history = new TerminalHistory(options.history);
   }
 
@@ -530,6 +540,9 @@ export class TerminalRuntime {
   async terminateSessionsForEnvironment(environmentId: string): Promise<string[]> {
     const sessionIds = [...this.sessionIdsForEnvironment(environmentId)];
     const survivors: string[] = [];
+    if (this.survivesTermination?.(environmentId)) {
+      return sessionIds.filter((id) => this.processes.has(id));
+    }
     await Promise.all(
       sessionIds.map(async (id) => {
         const process = this.processes.get(id);

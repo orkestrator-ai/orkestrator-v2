@@ -47,3 +47,41 @@ browser suite was also running. Evidence is
 passed the complete unchanged owner with exit 0 in 9.0 s. Passing output was
 removed by the logged runner; no isolated counts are inferred. No assertion,
 deadline, skip or implementation changed. Cause unestablished.
+
+## Transcript restoration review — 2026-11-06
+
+The default reruns repeated the same case at 5,005.77 ms and 5,002.11 ms.
+Evidence is in `orkestrator-test-run.PCIx5Q` and `orkestrator-test-run.IKjOmZ`
+workspace logs under the host temporary directory (compressed on finalization).
+`mise run test:logged -- --name repair-local-scan-alone -- bun test --cwd apps/backend ./src/core/commands-files-local-scan.test.ts --parallel=1 --only-failures`
+passed the entire unchanged owner, exit 0, in 8.3 s. Passing output was deleted;
+no counts are inferred. The cause remains unestablished. No assertion, deadline,
+skip or implementation changed.
+
+## Storage/mail review recurrence — 2026-11-06
+
+The exact recorded command, `mise run test:logged -- --name review-default-tests -- mise run test`,
+recurred on the storage/mail branch (`023c7a2ce`, followed by the unchanged-test
+classification rename `ee92c4741`). The workspace reserved six slots; backend
+used four isolated workers alongside two web workers and the root group.
+The completed backend totals were 16,613 pass, 138 skip, 4 fail and 2 errors
+across 16,755 tests in 1,109 files (670.51 s execution). The full command
+finished with exit 1 in 1,499.6 s; workspace and root failed, while bridges
+and the protocol lockfile passed.
+
+Evidence: `workspace-web-backend-desktop-web-public-cli-protocol-toolchain` in
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.KcOGqn`;
+outer wrapper `orkestrator-test-run.uRCFAT` under the same temporary root.
+
+The exact `container status > repairs excludes after same-container replacement,
+deletion, rewrite and failed housekeeping` case hit 5,002.34 ms against its
+5,000 ms deadline, with one dangling fixture process cleaned up. The unchanged
+complete owner passed alone, exit 0 in 5.5 s:
+
+```sh
+mise run test:logged -- --name findings-container-excludes -- bun test --cwd apps/backend ./src/core/commands-files-local-scan.test.ts --parallel=1 --only-failures
+```
+
+Passing logs were removed; isolated case counts are not inferred. No Git scan
+implementation, assertion, deadline or skip changed. This establishes another
+intermittent observation, not its cause or a fix.

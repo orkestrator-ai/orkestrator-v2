@@ -53,7 +53,7 @@ function nonNegativeInteger(value: unknown): number | undefined {
  * The rollout writes a Rust `Duration` (`{secs, nanos}`); app-server reports
  * the same measurement as whole milliseconds, truncated.
  */
-function rolloutDurationMs(value: unknown): number | undefined {
+export function rolloutDurationMs(value: unknown): number | undefined {
   if (!isRecord(value)) return undefined;
   const secs = nonNegativeInteger(value.secs);
   const nanos = nonNegativeInteger(value.nanos);

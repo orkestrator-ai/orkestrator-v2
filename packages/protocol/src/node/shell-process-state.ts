@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { constants as osConstants } from "node:os";
 
@@ -125,12 +126,13 @@ function linuxGroupHasLiveMember(pgid: number): boolean {
 }
 
 function psGroupHasLiveMember(pgid: number): boolean {
-  // Unknown under Node, where nothing waits on a group, so it reads as yes.
-  const result = bunRuntime()?.spawnSync(
-    ["/bin/ps", "-A", "-o", "pgid=,stat="],
-    PROCESS_INSPECTION_OPTIONS,
-  );
-  if (!result?.success) return true;
+  const argv = ["-A", "-o", "pgid=,stat="];
+  const bun = bunRuntime();
+  const result = bun
+    ? bun.spawnSync(["/bin/ps", ...argv], PROCESS_INSPECTION_OPTIONS)
+    : spawnSync("/bin/ps", argv, PROCESS_INSPECTION_OPTIONS);
+  const succeeded = "success" in result ? result.success : result.status === 0 && !result.error;
+  if (!succeeded) return true;
   return result.stdout
     .toString()
     .split("\n")

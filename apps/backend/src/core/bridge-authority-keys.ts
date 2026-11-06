@@ -16,11 +16,20 @@ import {
  * Filled where a token is minted or read back: a host bridge's start, and a
  * container's root-only credential file. A bridge given no key has no entry,
  * and its requests go unsigned, which is what it expects. A host bridge's key
- * leaves with its token (`LocalServerRuntime`); the bound is a backstop, and it
- * evicts the key used least recently.
+ * is retained by `LocalServerRuntime` until its token leaves. Only recoverable
+ * container keys participate in the bounded least-recently-used cache.
  */
 const MAX_KEYS = 1_024;
 const keys = new Map<string, KeyObject>();
+// Entries are owned by live host runtimes, never evicted by container churn.
+const hostKeys = new Map<string, KeyObject>();
+
+export function retainHostBridgeAuthorityKey(token: string): void {
+  const key = keys.get(token);
+  if (!key) return;
+  hostKeys.set(token, key);
+  keys.delete(token);
+}
 
 export function rememberBridgeAuthorityKey(token: string, privateKey: string): void {
   if (!token || !isBridgeAuthorityKey(privateKey)) return;
@@ -36,11 +45,14 @@ export function rememberBridgeAuthorityKey(token: string, privateKey: string): v
 }
 
 export function forgetBridgeAuthorityKey(token: string | null | undefined): void {
-  if (token) keys.delete(token);
+  if (token) {
+    keys.delete(token);
+    hostKeys.delete(token);
+  }
 }
 
 export function hasBridgeAuthorityKey(token: string): boolean {
-  return keys.has(token);
+  return hostKeys.has(token) || keys.has(token);
 }
 
 /**
@@ -55,11 +67,13 @@ export function bridgeAuthorityHeaders(
   body: unknown,
 ): Record<string, string> {
   const verb = (method ?? "GET").toUpperCase();
-  const key = keys.get(token);
+  const key = hostKeys.get(token) ?? keys.get(token);
   if (!key || !bridgeRequestNeedsAuthority(verb, url)) return {};
-  // Most recently used last, so the bound evicts a key no live bridge is using.
-  keys.delete(token);
-  keys.set(token, key);
+  // Touch only recoverable cache entries; host keys keep their runtime lifetime.
+  if (keys.has(token)) {
+    keys.delete(token);
+    keys.set(token, key);
+  }
   if (body !== undefined && body !== null && typeof body !== "string") return {};
   return {
     [BRIDGE_AUTHORITY_HEADER]: signBridgeRequest(key, { method: verb, url, body: body ?? "" }),

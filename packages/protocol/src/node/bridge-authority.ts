@@ -37,8 +37,11 @@ export const BRIDGE_AUTHORITY_REFUSED_CODE = "authority-signature-required";
 export const BRIDGE_AUTHORITY_WINDOW_MS = 5 * 60_000;
 /** The nonces a verifier remembers; past it, older signatures are refused instead. */
 export const BRIDGE_AUTHORITY_MAX_NONCES = 8_192;
-/** The largest body a Fetch-based bridge buffers to check a signature. */
-export const BRIDGE_AUTHORITY_MAX_BODY_BYTES = 16 * 1024 * 1024;
+/**
+ * 32 MiB decoded attachments expand to about 43 MiB of base64. Keep a finite
+ * bound with room for prompt text and JSON metadata.
+ */
+export const BRIDGE_AUTHORITY_MAX_BODY_BYTES = 64 * 1024 * 1024;
 
 const SCHEME = "orkestrator-bridge-authority-v1";
 const KEY_PATTERN = /^[A-Za-z0-9_-]{40,200}$/;

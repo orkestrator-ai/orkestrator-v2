@@ -230,6 +230,37 @@ describe("bridge request admission", () => {
     expect(await admitFetchBridgeRequest(authority, new Request(url))).toEqual({});
   });
 
+  test("admits the backend's full 32 MiB decoded inline image allowance", async () => {
+    const keys = mintBridgeAuthorityKeyPair();
+    const authority = bridgeAuthorityFromPublicKey(keys.publicKey);
+    const url = "http://127.0.0.1:4097/session/s/prompt_async";
+    const data = Buffer.alloc(8 * 1024 * 1024).toString("base64");
+    const body = JSON.stringify({
+      prompt: "Inspect these screenshots",
+      attachments: Array.from({ length: 4 }, (_, index) => ({
+        type: "image",
+        filename: `${index}.png`,
+        dataUrl: `data:image/png;base64,${data}`,
+      })),
+    });
+    const admission = await admitFetchBridgeRequest(
+      authority,
+      new Request(url, {
+        method: "POST",
+        body,
+        headers: {
+          [BRIDGE_AUTHORITY_HEADER]: signBridgeRequest(keys.privateKey, {
+            method: "POST",
+            url,
+            body,
+          }),
+        },
+      }),
+    );
+    expect("refusal" in admission).toBe(false);
+    expect(await (admission as { request: Request }).request.text()).toBe(body);
+  });
+
   test("a Fetch bridge bounds the body it buffers to check", async () => {
     const keys = mintBridgeAuthorityKeyPair();
     const authority = bridgeAuthorityFromPublicKey(keys.publicKey);

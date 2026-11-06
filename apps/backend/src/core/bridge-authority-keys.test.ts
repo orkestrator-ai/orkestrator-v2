@@ -94,6 +94,31 @@ describe("bridge authority keys", () => {
     expect(hasBridgeAuthorityKey(second)).toBe(false);
   });
 
+  test("an idle host key survives container churn until its runtime releases it", () => {
+    const runtime = new LocalServerRuntime();
+    const keys = mintBridgeAuthorityKeyPair();
+    remember(TOKEN, keys.privateKey);
+    runtime.recordBridgeToken("pi", "env", TOKEN);
+    for (let index = 0; index < 2_048; index += 1) {
+      const token = `okb_churn-${index}`;
+      remember(token, keys.privateKey);
+      if (index % 2 === 0) forgetBridgeAuthorityKey(token);
+    }
+    const body = JSON.stringify({ decision: "approve" });
+    const url = "/session/s/approvals/r";
+    const headers = bridgeAuthorityHeaders(TOKEN, "POST", url, body);
+    expect(
+      bridgeAuthorityFromPublicKey(keys.publicKey).check({
+        method: "POST",
+        url,
+        body: Buffer.from(body),
+        header: headers[BRIDGE_AUTHORITY_HEADER],
+      }),
+    ).toEqual({ ok: true });
+    runtime.forgetBridgeToken("pi", "env");
+    expect(hasBridgeAuthorityKey(TOKEN)).toBe(false);
+  });
+
   test("signing touches a key, so the bound evicts the least recently used", () => {
     const keys = mintBridgeAuthorityKeyPair();
     remember(TOKEN, keys.privateKey);

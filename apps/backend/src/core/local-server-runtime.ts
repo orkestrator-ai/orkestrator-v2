@@ -6,7 +6,7 @@ import {
   OpenCodeAgentToolsReconciler,
   type OpenCodeAgentToolsTuning,
 } from "./opencode-agent-tools.js";
-import { forgetBridgeAuthorityKey } from "./bridge-authority-keys.js";
+import { forgetBridgeAuthorityKey, retainHostBridgeAuthorityKey } from "./bridge-authority-keys.js";
 import { OpenCodeHostStartGate } from "./opencode-host-start.js";
 import { CursorSdkLoginSlot } from "./cursor-sdk-login.js";
 import { GitHubCliLoginSlot } from "./github-cli-login.js";
@@ -345,6 +345,7 @@ export class LocalServerRuntime {
     const previous = this.bridgeTokens.get(kind)?.get(environmentId);
     if (previous !== token) forgetBridgeAuthorityKey(previous);
     this.bridgeTokens.get(kind)?.set(environmentId, token);
+    retainHostBridgeAuthorityKey(token);
   }
 
   forgetBridgeToken(kind: LocalServerKind, environmentId: string): void {

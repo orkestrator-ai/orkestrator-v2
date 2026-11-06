@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  diagnoseProbe,
   dispatchProbeTurn,
   hasRunningSleep,
   invokeCommand,
@@ -236,6 +237,83 @@ describe("mcp apply live support", () => {
         inventory: ["mqu0_beta"],
       }).passed,
     ).toBe(false);
+  });
+
+  describe("diagnoseProbe", () => {
+    const reach = { reach: true, tag: "v1" } as const;
+    const missed = { reached: false };
+    const connected = { name: "mqu0_alpha", status: "connected", toolCount: 1 };
+
+    test("a reached server needs no inventory", () => {
+      expect(
+        diagnoseProbe({ server: "mqu0_alpha", expect: reach, verdict: { reached: true } }),
+      ).toEqual({ diagnosis: "reached" });
+    });
+
+    test("without an inventory the cause stays open", () => {
+      expect(diagnoseProbe({ server: "mqu0_alpha", expect: reach, verdict: missed })).toEqual({
+        diagnosis: "no-inventory",
+      });
+    });
+
+    test("tells a server the runtime never offered from one the model did not call", () => {
+      // The Pi user-scope failure of 2026-10-22: no call, no tool row.
+      expect(
+        diagnoseProbe({
+          server: "mqu0_alpha",
+          expect: reach,
+          verdict: missed,
+          inventory: [{ name: "orkestrator", status: "connected" }],
+        }),
+      ).toEqual({ diagnosis: "not-offered" });
+      expect(
+        diagnoseProbe({
+          server: "mqu0_alpha",
+          expect: reach,
+          verdict: missed,
+          toolRows: ["tool:bash:completed"],
+          inventory: [connected],
+        }),
+      ).toEqual({ diagnosis: "offered-not-called" });
+    });
+
+    test("a listed server that is not connected names its status", () => {
+      expect(
+        diagnoseProbe({
+          server: "mqu0_alpha",
+          expect: reach,
+          verdict: missed,
+          inventory: [{ name: "mqu0_alpha", status: "failed" }],
+        }),
+      ).toEqual({ diagnosis: "offered-not-connected", detail: "failed" });
+    });
+
+    test("a tool row naming the server without a logged call was refused or failed", () => {
+      expect(
+        diagnoseProbe({
+          server: "mqu0_alpha",
+          expect: reach,
+          verdict: missed,
+          toolRows: ["tool:mcp__mqu0_alpha__probe:error"],
+          inventory: [connected],
+        }),
+      ).toEqual({ diagnosis: "called-not-reached" });
+    });
+
+    test("a probe that must fail reports whether the session still lists the server", () => {
+      const fail = { reach: false } as const;
+      expect(
+        diagnoseProbe({
+          server: "mqu0_alpha",
+          expect: fail,
+          verdict: missed,
+          inventory: [connected],
+        }),
+      ).toEqual({ diagnosis: "still-offered", detail: "connected" });
+      expect(
+        diagnoseProbe({ server: "mqu0_alpha", expect: fail, verdict: missed, inventory: [] }),
+      ).toEqual({ diagnosis: "not-offered" });
+    });
   });
 
   test("a beta substitution cannot qualify removal even if both names remain exposed", () => {

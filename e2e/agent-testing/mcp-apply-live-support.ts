@@ -178,6 +178,63 @@ export function judgeProbe(input: {
   };
 }
 
+/** One row of the session's live MCP inventory, as a failed probe records it. */
+export interface ProbeInventoryRow {
+  name: string;
+  status?: string;
+  toolCount?: number;
+}
+
+/**
+ * Why a failed probe failed, from the session's own MCP inventory read after
+ * the turn (docs/todo/mcp/0039, task 5). A probe that should reach a server
+ * and logs no call has two very different causes: the runtime never offered
+ * the server (an `applied` outcome would then be false), or it did and the
+ * model did not call it. Only the inventory tells them apart.
+ *
+ * - `no-inventory`: the session reported none, so the cause stays open.
+ * - `not-offered`: the inventory does not list the server.
+ * - `offered-not-connected`: listed, but not connected (status in `detail`).
+ * - `offered-not-called`: listed and connected, and no tool row of the turn
+ *   names it: the model did not try.
+ * - `called-not-reached`: a tool row names it, but the server logged no call.
+ * - `still-offered`: a probe that must fail, and the session still lists it.
+ * - `reached`: the server logged the call; the failure is in the reply, the
+ *   tag or the label (see the verdict's reason).
+ */
+export type ProbeDiagnosis =
+  | "no-inventory"
+  | "not-offered"
+  | "offered-not-connected"
+  | "offered-not-called"
+  | "called-not-reached"
+  | "still-offered"
+  | "reached";
+
+export function diagnoseProbe(input: {
+  server: string;
+  expect: ProbeExpectation;
+  verdict: Pick<ProbeVerdict, "reached">;
+  toolRows?: readonly string[];
+  inventory?: readonly ProbeInventoryRow[];
+}): { diagnosis: ProbeDiagnosis; detail?: string } {
+  if (input.verdict.reached) return { diagnosis: "reached" };
+  if (input.inventory === undefined) return { diagnosis: "no-inventory" };
+  const row = input.inventory.find((candidate) => candidate.name === input.server);
+  if (!input.expect.reach) {
+    return row
+      ? { diagnosis: "still-offered", ...(row.status ? { detail: row.status } : {}) }
+      : { diagnosis: "not-offered" };
+  }
+  if (!row) return { diagnosis: "not-offered" };
+  if (row.status !== undefined && row.status !== "connected") {
+    return { diagnosis: "offered-not-connected", detail: row.status };
+  }
+  return probeServersInToolRows(input.toolRows ?? []).includes(input.server)
+    ? { diagnosis: "called-not-reached" }
+    : { diagnosis: "offered-not-called" };
+}
+
 /** A pending foreground sleep with this run's unique marker, never an earlier tool row. */
 export function hasRunningSleep(messages: readonly { parts?: unknown }[], marker: string): boolean {
   return messages.some(

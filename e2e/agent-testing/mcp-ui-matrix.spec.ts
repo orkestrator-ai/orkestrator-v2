@@ -14,9 +14,15 @@
  *   must change only its own row: the injected `orkestrator` server stays, and
  *   project servers read `project` (docs/todo/mcp/1163). A name saved in both
  *   the user and the project file opens the project row, the one loaded.
+ * - A Claude session whose CLI exits before any status read reaches it
+ *   (docs/todo/mcp/0039, task 14): no hold-open hook, and one stdio server held
+ *   `connecting` by a hold file until after the exit. Every row, `orkestrator`
+ *   included, must read something other than `connecting` (the held one
+ *   `unknown`), the row must still offer reconnect, and the reconnect runs
+ *   through the probe and changes only its own row, before and after a reload.
  *
  * Both editor flows run at a desktop and a 390-pixel viewport. The live-panel
- * case starts Claude's CLI with a turn, so it runs only on a profile that
+ * cases start Claude's CLI with a turn, so they run only on a profile that
  * authorizes no Claude credentials (`--no-agent-credentials`): the CLI
  * connects its MCP servers, reports them, then ends the turn at its login check
  * without a model call. Every write goes to a file inside the profile: a
@@ -28,7 +34,7 @@
  *   ORKESTRATOR_AGENT_TEST_PROFILE=mcp-ui ORKESTRATOR_AGENT_TEST_MCP_UI=1 \
  *     mise run test:agent:browser -- e2e/agent-testing/mcp-ui-matrix.spec.ts
  */
-import { expect, test, type Locator, type Page, type TestInfo } from "./browser-test";
+import { expect, test, type Locator, type Page, type Request, type TestInfo } from "./browser-test";
 import { spawnSync } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -75,6 +81,8 @@ const VIEWPORTS = [
 const PROBE_SERVER = path.join(import.meta.dirname, "mcp-probe-server.mjs");
 const BOTH_LAYERS = "mcpui-both";
 const CLI_HOLD_SECONDS = 8;
+/** A server held `connecting` (by a hold file) until the refused CLI has exited. */
+const SLOW_SERVER = "mcpui-slow";
 
 function manifest<T>(task: string): T {
   const command = spawnSync("mise", ["run", task, "--profile", profile, "--json"], {
@@ -316,6 +324,56 @@ async function openSettings(page: Page, testInfo: TestInfo, projectName: string,
 /** One server row of the live MCP panel. */
 const panelRow = (panel: Locator, name: string) =>
   panel.locator("div.flex.flex-col").filter({ hasText: name }).first();
+
+/** A short, content-free description of an inventory for the report. */
+const describeServers = (servers: NativeAgentMcpServer[]) =>
+  servers.map((server) => `${server.id}:${server.status}:${server.scope}`).join(", ");
+
+/** Matches the panel's invoke request for one MCP action (any action when none is given). */
+function isMcpAction(serverId: string, action?: string) {
+  return (request: Request) => {
+    if (!request.url().endsWith("/__orkestrator/invoke")) return false;
+    const body = request.postDataJSON() as { command?: string; args?: Record<string, unknown> };
+    return (
+      body.command === "perform_native_agent_mcp_action" &&
+      body.args?.serverId === serverId &&
+      (action === undefined || body.args?.action === action)
+    );
+  };
+}
+
+/** The session's backend projection and its live MCP panel. */
+function liveSession(page: Page, invoke: Invoke, identity: Record<string, string>) {
+  const projection = () => invoke<Projection>("get_native_agent_projection", identity);
+  const liveServers = async () => (await projection())?.runtime?.mcp ?? [];
+  const statusOf = async (name: string) =>
+    (await liveServers()).find((server) => server.id === name)?.status;
+  // The section re-renders as the projection refreshes; retry the expand.
+  const expandPanel = async (panel: Locator) => {
+    const toggle = panel.getByRole("button", { name: /^Tools / });
+    await expect(async () => {
+      if ((await toggle.getAttribute("aria-expanded")) !== "true") {
+        await toggle.click({ timeout: 3_000 });
+      }
+      await expect(toggle).toHaveAttribute("aria-expanded", "true", { timeout: 2_000 });
+    }).toPass({ timeout: 30_000 });
+  };
+  // A refresh can collapse the list or detach a row at any point in `check`.
+  const inExpandedPanel = (panel: Locator, check: () => Promise<unknown>) =>
+    expect(async () => {
+      await expandPanel(panel);
+      await check();
+    }).toPass({ timeout: 45_000 });
+  const clickInPanel = (panel: Locator, button: Locator) =>
+    inExpandedPanel(panel, () => button.click({ timeout: 3_000 }));
+  const mcpPanel = async () => {
+    const panel = (await openAgentPanel(page)).getByLabel("MCP servers", { exact: true });
+    await expect(panel).toBeVisible({ timeout: 60_000 });
+    await inExpandedPanel(panel, () => panel.scrollIntoViewIfNeeded({ timeout: 3_000 }));
+    return panel;
+  };
+  return { projection, liveServers, statusOf, inExpandedPanel, clickInPanel, mcpPanel };
+}
 
 /** Fixture secrets: random, typed only into the field under test, never printed. */
 const secret = (tag: string) => `mcpui-${tag}-${randomBytes(9).toString("hex")}`;
@@ -609,16 +667,12 @@ test.describe("MCP settings and live panel UI matrix (claude)", () => {
         })}\n`,
       );
 
-      const projection = () => invoke<Projection>("get_native_agent_projection", identity);
-      const liveServers = async () => (await projection())?.runtime?.mcp ?? [];
-      const describe = (servers: NativeAgentMcpServer[]) =>
-        servers.map((server) => `${server.id}:${server.status}:${server.scope}`).join(", ");
-      const statusOf = async (name: string) =>
-        (await liveServers()).find((server) => server.id === name)?.status;
+      const { projection, liveServers, statusOf, inExpandedPanel, clickInPanel, mcpPanel } =
+        liveSession(page, invoke, identity);
       // Asserted at every step: the list describes the session, not a probe.
       const expectSessionInventory = async (where: string) => {
         const servers = await liveServers();
-        record(`inventory-${where}`, describe(servers));
+        record(`inventory-${where}`, describeServers(servers));
         expect(
           Object.fromEntries(servers.map((server) => [server.id, server.scope])),
           `${where}: a row or its layer changed`,
@@ -632,30 +686,6 @@ test.describe("MCP settings and live panel UI matrix (claude)", () => {
         expect(injected?.status, `${where}: Orkestrator's own server`).toBe("connected");
         expect(injected?.toolCount ?? 0, `${where}: Orkestrator's own tools`).toBeGreaterThan(0);
         return servers;
-      };
-      // The section re-renders as the projection refreshes; retry the expand.
-      const expandPanel = async (panel: Locator) => {
-        const toggle = panel.getByRole("button", { name: /^Tools / });
-        await expect(async () => {
-          if ((await toggle.getAttribute("aria-expanded")) !== "true") {
-            await toggle.click({ timeout: 3_000 });
-          }
-          await expect(toggle).toHaveAttribute("aria-expanded", "true", { timeout: 2_000 });
-        }).toPass({ timeout: 30_000 });
-      };
-      // A refresh can collapse the list or detach a row at any point in `check`.
-      const inExpandedPanel = (panel: Locator, check: () => Promise<unknown>) =>
-        expect(async () => {
-          await expandPanel(panel);
-          await check();
-        }).toPass({ timeout: 45_000 });
-      const clickInPanel = (panel: Locator, button: Locator) =>
-        inExpandedPanel(panel, () => button.click({ timeout: 3_000 }));
-      const mcpPanel = async () => {
-        const panel = (await openAgentPanel(page)).getByLabel("MCP servers", { exact: true });
-        await expect(panel).toBeVisible({ timeout: 60_000 });
-        await inExpandedPanel(panel, () => panel.scrollIntoViewIfNeeded({ timeout: 3_000 }));
-        return panel;
       };
 
       await loadAppWithDevRetry(page, testInfo, () => page.goto(status.browserUrl!));
@@ -693,21 +723,9 @@ test.describe("MCP settings and live panel UI matrix (claude)", () => {
           servers.filter((server) => server.id !== "mcpui-late");
         const before = await liveServers();
         const panel = page.getByLabel("MCP servers", { exact: true });
-        const reconnect = page.waitForRequest(
-          (request) => {
-            if (!request.url().endsWith("/__orkestrator/invoke")) return false;
-            const body = request.postDataJSON() as {
-              command?: string;
-              args?: Record<string, unknown>;
-            };
-            return (
-              body.command === "perform_native_agent_mcp_action" &&
-              body.args?.serverId === "mcpui-late" &&
-              body.args?.action === "reconnect"
-            );
-          },
-          { timeout: 60_000 },
-        );
+        const reconnect = page.waitForRequest(isMcpAction("mcpui-late", "reconnect"), {
+          timeout: 60_000,
+        });
         // A failed row's own click is its primary action: reconnect.
         await clickInPanel(panel, panel.getByRole("button", { name: /^mcpui-late/ }).first());
         await reconnect;
@@ -727,17 +745,7 @@ test.describe("MCP settings and live panel UI matrix (claude)", () => {
         const before = await liveServers();
         const panel = page.getByLabel("MCP servers", { exact: true });
         const answered = page.waitForResponse(
-          (response) => {
-            if (!response.url().endsWith("/__orkestrator/invoke")) return false;
-            const body = response.request().postDataJSON() as {
-              command?: string;
-              args?: Record<string, unknown>;
-            };
-            return (
-              body.command === "perform_native_agent_mcp_action" &&
-              body.args?.serverId === "orkestrator"
-            );
-          },
+          (response) => isMcpAction("orkestrator")(response.request()),
           { timeout: 60_000 },
         );
         await clickInPanel(panel, panel.getByRole("button", { name: /^orkestrator/ }).first());
@@ -792,6 +800,177 @@ test.describe("MCP settings and live panel UI matrix (claude)", () => {
       await invoke("delete_environment", { environmentId: environment.id }).catch(() => undefined);
       removeUserFileIfCreated(userFile, userBefore);
       rmSync(lateScript, { force: true });
+    }
+  });
+
+  test("live panel: rows left connecting by a refused CLI read unknown, and reconnect runs through the probe", async ({
+    page,
+  }, testInfo) => {
+    test.setTimeout(420_000);
+    page.setDefaultTimeout(15_000);
+    const sources = profileCredentialSources(status);
+    // The turn below must not be able to reach a model.
+    test.skip(
+      sources === null || sources.includes("claude"),
+      "starts Claude's CLI with a turn: needs a profile started with --no-agent-credentials",
+    );
+    await page.setViewportSize(DESKTOP);
+    const invoke = await signIn(page, testInfo, status);
+    const project = (await invoke<Project[]>("get_projects")).find(
+      (candidate) => candidate.localPath === status.testProject,
+    );
+    expect(project, "the fixture project is missing").toBeTruthy();
+    const mcp = mcpCommands(invoke);
+    const { environment, worktree, identity } = await claudeEnvironment(
+      invoke,
+      project!,
+      "mcpui-exit",
+    );
+    const probeLog = path.join(runDir, `exit-${environment.id.slice(0, 8)}.jsonl`);
+    const holdFile = path.join(runDir, `exit-${environment.id.slice(0, 8)}.hold`);
+    writeFileSync(holdFile, "");
+    const shot = (name: string) => page.screenshot({ path: path.join(runDir, `exit-${name}.png`) });
+    const record = (type: string, description: string) =>
+      testInfo.annotations.push({ type, description });
+    const { projection, liveServers, statusOf, inExpandedPanel, clickInPanel, mcpPanel } =
+      liveSession(page, invoke, identity);
+    const slowStarts = () =>
+      existsSync(probeLog)
+        ? readFileSync(probeLog, "utf8")
+            .split("\n")
+            .filter((line) => line.includes('"event":"start"') && line.includes(`"${SLOW_SERVER}"`))
+            .length
+        : 0;
+    try {
+      const target = await mcp.target(environment.id);
+      const projectSource = await mcp.source(target.targetId, "project");
+      const projectFile = writableSourcePath(projectSource, {
+        flavor: status.flavor,
+        dataDir: status.dataDir!,
+        worktree,
+      });
+      expect(projectFile?.startsWith(worktree), "the project file is outside the worktree").toBe(
+        true,
+      );
+      // It answers nothing while the hold file exists, so the CLI reports it
+      // `connecting` and exits before it can connect.
+      await mcp.add(
+        target.targetId,
+        "project",
+        stdio(SLOW_SERVER, PROBE_SERVER, ["--log", probeLog, "--hold-file", holdFile]),
+      );
+      // No hold-open hook: the CLI must exit before any status read reaches it.
+      expect(
+        existsSync(path.join(worktree, ".claude", "settings.json")),
+        "the worktree has a Claude settings file that could hold the CLI open",
+      ).toBe(false);
+
+      await loadAppWithDevRetry(page, testInfo, () => page.goto(status.browserUrl!));
+      await openEnvironment(page, project!.name, environment.name);
+      await expect.poll(async () => (await projection()) !== null, { timeout: 120_000 }).toBe(true);
+      expect(await liveServers(), "a live inventory before Claude's CLI ran").toEqual([]);
+
+      await test.step("the refused turn's CLI exits and no row reads connecting", async () => {
+        const started = Date.now();
+        const dispatched = await invoke<{ outcome: string; error?: string }>(
+          "dispatch_native_agent_intent",
+          { ...identity, prompt: "Reply with OK.", requestId: randomUUID() },
+        );
+        expect(dispatched.outcome, dispatched.error).toBe("accepted");
+        await expect
+          .poll(async () => (await projection())?.turn.phase, { timeout: 120_000 })
+          .toMatch(/^(idle|error)$/);
+        const after = await projection();
+        record(
+          "turn",
+          `${after?.turn.phase} after ${Date.now() - started} ms: ${after?.turn.error ?? ""}`,
+        );
+        await expect.poll(() => statusOf(SLOW_SERVER), { timeout: 60_000 }).toBe("unknown");
+        const servers = await liveServers();
+        record("inventory-after-exit", describeServers(servers));
+        expect(
+          servers.filter((server) => server.status === "connecting").map((server) => server.id),
+          "rows still claim a connection in progress with no CLI running",
+        ).toEqual([]);
+        expect(
+          servers.find((server) => server.id === "orkestrator"),
+          "Orkestrator's own server",
+        ).toBeTruthy();
+        expect(slowStarts(), "the CLI never started the slow server").toBeGreaterThan(0);
+
+        const panel = await mcpPanel();
+        await inExpandedPanel(panel, async () => {
+          for (const server of servers) {
+            await expect(panelRow(panel, server.name)).toContainText(
+              server.status === "connected" ? String(server.toolCount ?? "—") : server.status,
+              { timeout: 3_000 },
+            );
+          }
+          await expect(panel).not.toContainText("connecting", { timeout: 3_000 });
+        });
+        // An unknown row still offers reconnect as its own click.
+        await inExpandedPanel(panel, () =>
+          expect(
+            panel.getByRole("button", { name: new RegExp(`^${SLOW_SERVER}`) }),
+          ).toHaveAttribute("title", /unknown — click to reconnect/, { timeout: 3_000 }),
+        );
+        await shot("unknown");
+      });
+
+      await test.step("reconnect from the panel runs through the probe and changes only its row", async () => {
+        const before = await liveServers();
+        const startsBefore = slowStarts();
+        // The server answers from now on; no CLI is running to see it.
+        rmSync(holdFile, { force: true });
+        const others = (servers: NativeAgentMcpServer[]) =>
+          servers.filter((server) => server.id !== SLOW_SERVER);
+        const panel = page.getByLabel("MCP servers", { exact: true });
+        const answered = page.waitForResponse(
+          (response) => isMcpAction(SLOW_SERVER, "reconnect")(response.request()),
+          { timeout: 60_000 },
+        );
+        await clickInPanel(
+          panel,
+          panel.getByRole("button", { name: new RegExp(`^${SLOW_SERVER}`) }),
+        );
+        const response = await answered;
+        record("reconnect", `${response.status()}`);
+        expect(response.ok(), "the reconnect request failed").toBe(true);
+        // No turn ran, so no CLI was running: a new process means a probe.
+        expect((await projection())?.turn.phase).toMatch(/^(idle|error)$/);
+        expect(slowStarts(), "the probe did not start the server again").toBeGreaterThan(
+          startsBefore,
+        );
+        await expect.poll(() => statusOf(SLOW_SERVER), { timeout: 60_000 }).toBe("connected");
+        const after = await liveServers();
+        record("inventory-after-reconnect", describeServers(after));
+        expect(others(after), "a probe reconnect changed another row").toEqual(others(before));
+        await inExpandedPanel(panel, () =>
+          expect(panelRow(panel, SLOW_SERVER)).toContainText("1", { timeout: 3_000 }),
+        );
+        await shot("after-reconnect");
+      });
+
+      await test.step("after a reload the panel shows the backend's inventory", async () => {
+        const backend = await liveServers();
+        await loadAppWithDevRetry(page, testInfo, () => page.reload());
+        await openEnvironment(page, project!.name, environment.name);
+        const panel = await mcpPanel();
+        await inExpandedPanel(panel, async () => {
+          for (const server of backend) {
+            await expect(panelRow(panel, server.name)).toContainText(
+              server.status === "connected" ? String(server.toolCount ?? "—") : server.status,
+              { timeout: 3_000 },
+            );
+          }
+          await expect(panel).not.toContainText("connecting", { timeout: 3_000 });
+        });
+        await shot("after-reload");
+      });
+    } finally {
+      rmSync(holdFile, { force: true });
+      await invoke("stop_environment", { environmentId: environment.id }).catch(() => undefined);
+      await invoke("delete_environment", { environmentId: environment.id }).catch(() => undefined);
     }
   });
 });

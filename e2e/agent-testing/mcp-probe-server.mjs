@@ -12,8 +12,12 @@
  *
  *   node mcp-probe-server.mjs --label alpha --tag v1 --log /tmp/x.jsonl
  *   node mcp-probe-server.mjs --sse --port-file /tmp/port ...   (legacy SSE)
+ *
+ * `--hold-file PATH` (stdio only) leaves the client's messages unread while
+ * PATH exists, so the server stays `connecting` until the test removes it
+ * (`mcp-ui-matrix.spec.ts`).
  */
-import { appendFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 
@@ -155,6 +159,19 @@ if (options.sse) {
     }
   });
 } else {
+  // Until a `data` listener is attached, stdin stays paused and buffers.
+  const hold = options["hold-file"];
+  if (!hold || !existsSync(hold)) readStdio();
+  else {
+    const poll = setInterval(() => {
+      if (existsSync(hold)) return;
+      clearInterval(poll);
+      readStdio();
+    }, 100);
+  }
+}
+
+function readStdio() {
   let buffer = "";
   process.stdin.setEncoding("utf8");
   process.stdin.on("data", (chunk) => {

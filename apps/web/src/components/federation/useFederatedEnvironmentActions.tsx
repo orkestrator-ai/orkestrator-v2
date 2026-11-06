@@ -163,7 +163,7 @@ export function useFederatedEnvironmentActions(
           startFederatedEnvironment(portal, {
             backendId: ref.backendId,
             environmentId: fork.environmentId,
-          }),
+          });
         );
       });
     },

@@ -1006,7 +1006,12 @@ credential grant. Credentialed profiles retain the existing host tmux environmen
 and login, unless an added account selects a directory. This avoids changing the
 CLI's Keychain namespace without supplying a token. Such profiles retain the
 prior mismatch with the backend's isolated transcript directory; use the
-credential-free profile above for this benchmark.
+credential-free profile above for this benchmark. The benchmark now rejects missing
+credential-grant metadata, any host credential grant, and an active added Claude
+account before configuring or launching anything. It checks the profile's own
+account registry (SQLite or the older JSON layout), without probing host logins.
+A failed installation rolls back both files before propagating the error; rollback
+failures are included in the error artifact.
 
 ```bash
 mise run dev:test --profile bg15 --fixture --fixture-environments local \
@@ -1022,6 +1027,40 @@ Claude account ran the CLI with the host tmux server's environment, which
 reads the host's `~/.claude`; on an older commit, cherry-pick that fix
 (`tmuxLocalClaudeConfigDirectory` in `commands-servers.ts`) into the scratch
 checkout before running this.
+
+#### Environment activity RPC counts (WEB-3)
+
+`scripts/web3-activity-rpc-live.ts` measures a running credential-free profile
+from a gateway browser at 1440 × 1000. It installs loopback Claude settings in
+the profile, opens a native Claude tab on its sole local fixture environment,
+and sends two held turns. For each idle → working → idle cycle it waits for
+the browser's actual environment projection, lets boundary requests settle
+for 3 seconds, then reads the gateway's cumulative per-command counters.
+It saves command deltas and model-call counts only. Missing or reset counters
+fail the run. The browser closes and Claude settings are restored on exit;
+the caller must stop/reset the profile to stop its native session.
+
+```bash
+ORKESTRATOR_HOST_REACHABILITY_CHECK=off mise run dev:test --profile web3 \
+  --fixture --fixture-environments local --no-agent-credentials \
+  --agent-platforms claude --no-headless
+# In another shell, from the checkout containing the measurement script:
+mise run test:logged -- --name web3-live -- bun scripts/web3-activity-rpc-live.ts \
+  --profile web3 --checkout /absolute/path/to/profile-checkout \
+  --out output/benchmarks/web3.json
+# Run lifecycle commands from the checkout that owns the profile:
+mise run dev:stop --profile web3 && mise run dev:reset --profile web3
+```
+
+Repeat with fresh profiles at each pinned commit. Older launchers without
+`--no-headless` omit that flag; keep the window visibility alike. The
+measurement uses a native tab, so it does not need the later tmux-directory
+isolation fix on the before side. Compare `list_prompt_queues` and
+`list_multi_review_workflows` separately from other requests: snapshot,
+unread-state and transcript requests share the transition windows, and
+their timing-dependent totals are not WEB-3's refetch cost. The two list
+hydrators are all that remain at the 1202 baseline commit; the original
+report's third list had already been removed there.
 
 #### Image and layer sizes
 

@@ -1,3 +1,4 @@
+import { readStoredValue } from "../apps/backend/src/core/storage-test-support";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { randomUUID } from "node:crypto";
@@ -259,8 +260,50 @@ export function profileClaudeDirectory(dataDir: string, profile: string): string
   return path.join(resolved, "agent-credentials", "claude");
 }
 
+/** Fail closed before fixture writes or launching any provider process. */
+export function isolatedClaudeDirectory(dataDir: string, profile: string): string {
+  const directory = profileClaudeDirectory(dataDir, profile);
+  const manifest = JSON.parse(readFileSync(path.join(dataDir, "..", "profile.json"), "utf8")) as {
+    id?: string;
+    flavor?: string;
+    dataDir?: string;
+    credentialSources?: unknown;
+  };
+  if (
+    manifest.id !== profile ||
+    manifest.flavor !== "agent-test" ||
+    manifest.dataDir !== path.resolve(dataDir) ||
+    !Array.isArray(manifest.credentialSources) ||
+    manifest.credentialSources.length !== 0
+  )
+    throw new Error(
+      "Benchmark requires a credential-free dev:test profile (--no-agent-credentials)",
+    );
+  // Read only this profile's registry, never probe host credential directories.
+  // Older --checkout targets still keep this registry as JSON. Do not open
+  // a new database in those profiles just to inspect their account choice.
+  const legacy = path.join(dataDir, "agent-accounts.json");
+  const accounts = existsSync(path.join(dataDir, "orkestrator.sqlite"))
+    ? readStoredValue<{ active?: { claude?: unknown } }>(dataDir, "agent-accounts.json")
+    : existsSync(legacy)
+      ? (JSON.parse(readFileSync(legacy, "utf8")) as { active?: { claude?: unknown } })
+      : undefined;
+  if (
+    accounts !== undefined &&
+    accounts.active?.claude !== undefined &&
+    accounts.active.claude !== "default"
+  )
+    throw new Error("Benchmark refuses an active added Claude account");
+  return directory;
+}
+
 /** Saves and restores the files this run changes in the profile's Claude directory. */
-function claudeFixture(directory: string, origin: string, worktreePath: string) {
+function claudeFixture(
+  directory: string,
+  origin: string,
+  worktreePath: string,
+  write = writeFileSync,
+) {
   const settingsPath = path.join(directory, "settings.json");
   const statePath = path.join(directory, ".claude.json");
   const saved = new Map<string, string | null>();
@@ -277,55 +320,74 @@ function claudeFixture(directory: string, origin: string, worktreePath: string) 
   };
   for (const file of [settingsPath, statePath])
     saved.set(file, existsSync(file) ? readFileSync(file, "utf8") : null);
-  mkdirSync(directory, { recursive: true, mode: 0o700 });
-  const settings = readJson(settingsPath);
-  writeFileSync(
-    settingsPath,
-    `${JSON.stringify(
-      {
-        ...settings,
-        env: {
-          ...(settings.env as Record<string, string> | undefined),
-          ANTHROPIC_BASE_URL: origin,
-          // A bearer token, so the CLI asks no API-key approval question.
-          ANTHROPIC_AUTH_TOKEN: "fixture-only-not-a-key",
-          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
-          CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: "1",
-          DISABLE_AUTOUPDATER: "1",
-        },
-        skipDangerousModePermissionPrompt: true,
-      },
-      null,
-      2,
-    )}\n`,
-    { mode: 0o600 },
-  );
-  // The first-run screens a terminal CLI would otherwise stop at.
-  const state = readJson(statePath);
-  const projects = (state.projects as Record<string, Record<string, unknown>> | undefined) ?? {};
-  writeFileSync(
-    statePath,
-    `${JSON.stringify(
-      {
-        ...state,
-        hasCompletedOnboarding: true,
-        bypassPermissionsModeAccepted: true,
-        projects: {
-          ...projects,
-          [worktreePath]: { ...projects[worktreePath], hasTrustDialogAccepted: true },
-        },
-      },
-      null,
-      2,
-    )}\n`,
-    { mode: 0o600 },
-  );
-  return () => {
+  const restore = () => {
+    const failures: string[] = [];
     for (const [file, contents] of saved) {
-      if (contents === null) rmSync(file, { force: true });
-      else writeFileSync(file, contents, { mode: 0o600 });
+      try {
+        if (contents === null) rmSync(file, { force: true });
+        else write(file, contents, { mode: 0o600 });
+      } catch {
+        failures.push(path.basename(file));
+      }
     }
+    if (failures.length) throw new Error(`Fixture rollback failed: ${failures.join(", ")}`);
   };
+  try {
+    mkdirSync(directory, { recursive: true, mode: 0o700 });
+    const settings = readJson(settingsPath);
+    write(
+      settingsPath,
+      `${JSON.stringify(
+        {
+          ...settings,
+          env: {
+            ...(settings.env as Record<string, string> | undefined),
+            ANTHROPIC_BASE_URL: origin,
+            // A bearer token, so the CLI asks no API-key approval question.
+            ANTHROPIC_AUTH_TOKEN: "fixture-only-not-a-key",
+            CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+            CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: "1",
+            DISABLE_AUTOUPDATER: "1",
+          },
+          skipDangerousModePermissionPrompt: true,
+        },
+        null,
+        2,
+      )}\n`,
+      { mode: 0o600 },
+    );
+    // The first-run screens a terminal CLI would otherwise stop at.
+    const state = readJson(statePath);
+    const projects = (state.projects as Record<string, Record<string, unknown>> | undefined) ?? {};
+    write(
+      statePath,
+      `${JSON.stringify(
+        {
+          ...state,
+          hasCompletedOnboarding: true,
+          bypassPermissionsModeAccepted: true,
+          projects: {
+            ...projects,
+            [worktreePath]: { ...projects[worktreePath], hasTrustDialogAccepted: true },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      { mode: 0o600 },
+    );
+  } catch (error) {
+    try {
+      restore();
+    } catch (rollbackError) {
+      throw new Error(
+        `Fixture installation failed; ${rollbackError instanceof Error ? rollbackError.message : "rollback failed"}`,
+        { cause: error },
+      );
+    }
+    throw error;
+  }
+  return restore;
 }
 
 async function localEnvironment(gateway: Gateway): Promise<Environment> {
@@ -361,6 +423,7 @@ export async function runMailBenchmark(
 ): Promise<number> {
   const status = runtime.profileStatus(options);
   if (status.status !== "ready" || !status.dataDir) throw new Error("Profile is not ready");
+  const directory = isolatedClaudeDirectory(status.dataDir, options.profile);
   const gateway = runtime.gatewayFor(status, signal);
   const environment = await localEnvironment(gateway);
   const tabId = `bg15-${randomUUID().slice(0, 8)}`;
@@ -389,11 +452,7 @@ export async function runMailBenchmark(
     signal?.throwIfAborted();
     fake = await runtime.startFakeAnthropicModel();
     signal?.throwIfAborted();
-    restore = runtime.claudeFixture(
-      profileClaudeDirectory(status.dataDir, options.profile),
-      fake.origin,
-      environment.worktreePath!,
-    );
+    restore = runtime.claudeFixture(directory, fake.origin, environment.worktreePath!);
     log(`opening a claude-tmux tab on the local fixture environment`);
     const launchAt = Date.now();
     started = true; // An interrupted launch may already have reached the backend.

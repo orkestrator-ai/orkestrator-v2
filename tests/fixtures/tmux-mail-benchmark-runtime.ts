@@ -8,6 +8,15 @@ export function mailBenchmarkFixture(root: string, response?: () => Response) {
   const claudeDir = path.join(dataDir, "agent-credentials", "claude");
   mkdirSync(claudeDir, { recursive: true });
   writeFileSync(path.join(claudeDir, "settings.json"), '{"original":true}\n');
+  writeFileSync(
+    path.join(dataDir, "..", "profile.json"),
+    JSON.stringify({
+      id: "fixture",
+      flavor: "agent-test",
+      dataDir,
+      credentialSources: [],
+    }),
+  );
   const authFile = path.join(root, "auth.json");
   writeFileSync(authFile, JSON.stringify({ token: "fixture-only" }), { mode: 0o600 });
   const status = { status: "ready", dataDir, authFile, browserUrl: "http://127.0.0.1:1" };
@@ -30,6 +39,7 @@ export function mailBenchmarkFixture(root: string, response?: () => Response) {
       ): Promise<T> {
         if (!cleanup) signal?.throwIfAborted();
         if (command === "claude_tmux_stop") record(`stop:${args.tabId}:${cleanup}`);
+        if (command === "enqueue_prompt_queue_message") record("prompt-enqueued");
         if (command === "launch_terminal_job") record(`launch:${args.tabId}`);
         if (command === "save_compose_draft") draft = true;
         if (command === "delete_compose_draft") draft = false;
@@ -94,5 +104,5 @@ export function mailBenchmarkFixture(root: string, response?: () => Response) {
       signal?.throwIfAborted();
     },
   };
-  return { runtime, claudeDir, events, origin: () => origin };
+  return { runtime, dataDir, claudeDir, events, origin: () => origin };
 }

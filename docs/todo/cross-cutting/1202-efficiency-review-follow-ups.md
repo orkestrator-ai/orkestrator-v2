@@ -28,7 +28,7 @@ governs, marked "Decided".
 
 ### Tasks
 
-1. **Baseline and before-and-after numbers**: capture the report's measurements for the work already done and before each structural task. Status: open (macOS done 2026-11-06: ST-13 and BG-15's baselines, ST-13 live on `dev:test` profiles, BG-15 live on a real claude-tmux tab with a loopback fake model, the idle recurring work of `0bd214ee` against `main`, the change-tracking and diff-scan benchmarks, and DK-7 to DK-9's image sizes on linux/arm64 under Docker Desktop; open because what is left cannot be measured on an isolated macOS profile: `gh-spawn` per hour needs a real PR and `gh` login, a cold-cache launch needs root, WEB-3's per-transition RPC count needs a fake-model native turn on base that was not built, and the per-item counts of tasks 2 and 10, and BG-1, BG-2 and BG-8 with a tab open in a container, need a busier profile than an idle fixture; see the table in task 1).
+1. **Baseline and before-and-after numbers**: capture the report's measurements for the work already done and before each structural task. Status: open (macOS done 2026-11-06: ST-13 and BG-15's baselines, ST-13 live on `dev:test` profiles, BG-15 live on a real claude-tmux tab with a loopback fake model, the idle recurring work of `0bd214ee` against `main`, the change-tracking and diff-scan benchmarks, DK-7 to DK-9's image sizes on linux/arm64 under Docker Desktop, and WEB-3's per-transition RPC counts on a native loopback turn; open because what is left cannot be measured on an isolated macOS profile: `gh-spawn` per hour needs a real PR and `gh` login, a cold-cache launch needs root, the per-item counts of tasks 2 and 10, and BG-1, BG-2 and BG-8 with a tab open in a container, need a busier profile than an idle fixture; see the table in task 1).
 2. **Storage keyed reads and writes**: the lease-held native session mutations, one shared decoded snapshot, the agent mail remainder, keyed-array row writes and the position index (TX-4 rest, BG-5, ST-9 rest, ST-10, ST-11). Status: done 2026-11-05, with what is left in to-dos (ST-7, ST-8, BG-5, ST-11 and ST-10 done, TX-4's rest done 2026-11-04; ST-9's rest measured 2026-11-05 and not built, thresholds in [6760](6760-agent-mail-store-split-thresholds.md); the prompt-queue reads a steer made were 5100, done 2026-11-05; live store sizes and write rates are [5101](5101-store-size-and-write-rate-live.md)).
 3. **Renderer re-renders and refetches**: WEB-6, WEB-7, WEB-9 to WEB-14 and WEB-16 to WEB-19, plus WEB-2's narrower subscriptions. Status: done (2026-11-04; WEB-2, WEB-3, WEB-4, WEB-5, WEB-8, WEB-15 and GW-13 earlier; WEB-7 and WEB-17 on 2026-11-03; WEB-2's third fix, WEB-6, WEB-9, WEB-10 and WEB-11, then WEB-12 to WEB-14, WEB-16, WEB-18 and WEB-19 on 2026-11-04; a React Profiler run stays with task 1). E12 (WEB-2's third fix, WEB-6 and WEB-14) was checked back on 2026-11-05 and its batch file deleted: all three were built, and its two-tab Profiler run found no difference in commits; see the [closing check of E12](../../reports/2026-11-06-efficiency-logging-database-outcome.md#closing-check-of-e12-renderer-store).
 4. **Live agent view requests**: discovery out of the 500 ms round, a combined read, then bridge state ETags and transcript deltas (WEB-1, GW-1, GW-3, TX-5, TX-6). Status: open, waiting on the maintainer's choice of push or long-poll (decided 2026-11-01 to choose only if the numbers still justify it; the numbers are in task 4 and nothing else is left to build) (WEB-1 and GW-1 done 2026-11-04, a visible running tab from 3 requests per round to 1.04; GW-3 done 2026-11-05; TX-5 and TX-6 measured in E10 on a `dev:test` profile (2026-11-06, a real Claude bridge streaming against a loopback model, no billed turn) and with a fake bridge, and not built: on the real stack the bridge spends under 0.25 ms on a state read and about 1 ms on a transcript read; the figures and decisions are [6680](../transcripts-and-observation/6680-conditional-reads-and-deltas-measured.md), and the outcome is the [closing check of E10](../../reports/2026-11-06-efficiency-logging-database-outcome.md#closing-check-of-e10-conditional-reads-and-deltas)).
@@ -267,6 +267,49 @@ kept their digests across the probe rebuild here too. Not run on these
 images: `docker/tests/final-image-smoke.sh` and the Docker agent suite, so
 this is a size measurement, not an arm64 qualification (task 14).
 
+**Environment activity RPCs on macOS (WEB-3).** Measured 2026-11-06 on
+Mac17,16, 18 cores, darwin/arm64, using the composite pair without source
+patches: before `0bd214ee435f7d4fa90bcd46b93c0ce93e8cd32e`, after
+`ee2cc84234aa2d1d0fe064811e0a7975da629520`. Fresh profiles
+`web3-before-602438` and `web3-after-602438`, each with exactly one seeded
+local environment, `--fixture --fixture-environments local
+--no-agent-credentials --agent-platforms claude` and
+`ORKESTRATOR_HOST_REACHABILITY_CHECK=off`. Electron visible on both sides
+(base predates the window flag; after used `--no-headless`); the measured
+client was a headless Chromium gateway browser at 1440 × 1000.
+
+`scripts/web3-activity-rpc-live.ts` points only the profile's Claude directory
+at a loopback Anthropic endpoint, opens a real native Claude tab and sends
+two held turns. Each boundary waits for the browser's `agentActivityState`
+to become working or idle, then allows 3 seconds for boundary requests to
+settle before taking the gateway `/metrics` per-command counter delta. The
+quiet control window made no list RPCs. Each side recorded exactly two model
+calls; no real provider, credential grant or login was used.
+
+| RPCs in each boundary window, cycles 1 / 2 | Before `0bd214ee` | After `ee2cc8423` |
+| --- | --- | --- |
+| Idle → working, `list_prompt_queues` | 2 / 2 | 0 / 0 |
+| Idle → working, `list_multi_review_workflows` | 2 / 2 | 0 / 0 |
+| Working → idle, `list_prompt_queues` | 7 / 7 | 0 / 0 |
+| Working → idle, `list_multi_review_workflows` | 7 / 7 | 0 / 0 |
+
+These are observed window counts, not a claim that one transition always
+causes 14 RPCs: base also received 2 environment snapshot requests entering
+working and 6 returning idle. Its two App hydrators rerun on each replaced
+array, including repeated snapshots. After received 2 entering and 3–4
+returning, with no list refetches. The original report's third list no longer
+exists on either pinned commit. Total gateway command RPCs, including
+transcript polling and other unrelated work, were 53 / 41 entering and
+41 / 43 returning on base, versus 29 / 23 and 14 / 14 after; those totals
+are timing-dependent and cannot be attributed to WEB-3 alone.
+
+Artifacts: `output/benchmarks/web3-before.json` and `web3-after.json` (counts
+only). The first after attempt stopped before measurement because a delayed
+startup notice intercepted the sidebar click. The driver was fixed to wait
+for notices to clear, and the same logged command passed on a fresh profile.
+Both profiles were stopped/reset and the scratch worktrees removed. Reuse
+and cleanup commands are in [the testing guide](../../development/testing-guide.md#environment-activity-rpc-counts-web-3).
+
 **What else the report asked for, and where it stands.**
 
 | Measurement | Items | Status |
@@ -276,7 +319,7 @@ this is a size measurement, not an arm64 qualification (task 14).
 | `gh-spawn` per hour | BG-6, BG-13 (task 9) | Not measurable on an isolated profile: the fixture has no GitHub remote or PR, and the profile's `gh` configuration is isolated by design. It needs a real PR and a `gh` login, whose requests go to GitHub on the user's account. |
 | Live counts for BG-3, BG-9, BG-11, BG-12 (task 10) | | Not exercised by an idle fixture (no stopped environment with a mailbox, working native session, build pipeline or container Claude login); the unit counts in task 10 stand, and the live run belongs to 0048's busy profile. |
 | React Profiler, two tabs idle and streaming | WEB-2, WEB-5, WEB-7 | Answered 2026-11-05 by E12 (see Needs verification); production React not measured. |
-| Backend RPCs per environment activity transition | WEB-3 | Not run. It needs a browser client on the gateway, whose `/invoke` calls the gateway counts per command (the Electron window's IPC is not counted there), and a working-to-idle transition with no credentials. On base the only safe source of one is a native tab on a loopback model, because a claude-tmux tab there would use the host's Claude home (the isolation fix postdates it). Measurable on macOS; not built this round. |
+| Backend RPCs per environment activity transition | WEB-3 | Measured on macOS 2026-11-06 (above): one environment, two native loopback turns per side. `list_prompt_queues` plus `list_multi_review_workflows`: idle → working 4 → 0 RPCs; working → idle 14 → 0, identical in both cycles. Gateway browser client, pinned `0bd214ee` against `ee2cc8423`; counts include repeated snapshots within each transition window. |
 | Launch to ready, warm and cold page cache | DK-3 (task 13) | Warm measured 2026-11-03 (task 13). Cold not possible here: dropping the page cache on macOS needs `sudo purge`, and this session has no root. |
 | `docker history` and `du` in the image | DK-7 to DK-9 (task 14) | Measured 2026-11-02 on linux/amd64 (task 14) and 2026-11-06 on macOS, linux/arm64 under Docker Desktop (above): −15% on both, re-pull 883 → 24.2 MB on arm64. |
 | Gateway SSE and WebSocket bytes | GW-2, GW-6, GW-7 | Owned by [0052](../transcripts-and-observation/0052-remote-client-bandwidth.md). |
@@ -2875,7 +2918,7 @@ A hidden window's renderer polls less, so after ran with `--no-headless` too
 
 The ticket asked for every item measurable on macOS. What is left needs
 access an isolated profile does not have (a real PR and `gh` login, root for a
-cold page cache), a fake-model native turn on the base commit (WEB-3), or a
+cold page cache), or a
 busy profile with stores, mailboxes, sessions and
 pipelines in use, which 0048 already plans. Closing task 1 would drop those
 from view, so it stays open with them listed in its last table.
@@ -2915,3 +2958,31 @@ to guess when the counts disagree. Docker Desktop reports uncompressed sizes
 from its containerd store, the same basis as the Linux figures. No smoke or
 suite ran on these images, because the measurement needs neither and the
 ticket asked for numbers, not qualification.
+
+### Task 1: review repairs and WEB-3 baseline (2026-11-06)
+
+**Choice: reject unsafe benchmark routing.** The benchmark now requires a
+credential-free agent-test profile with matching profile/data paths and no
+active added Claude account, checking only the profile's own registry. Keeping
+credentialed profiles would preserve their host login, but their tmux config
+routing bypasses the loopback settings; rejecting them (recommended) preserves
+the no-billed-turn requirement without transporting credentials. Focused tests
+cover a Claude grant, missing grant metadata, SQLite and legacy JSON active
+accounts, and the credential-free success path.
+
+**Choice: transactional fixture installation.** Construct the restorer before
+either write and roll back inside setup's catch (recommended). Returning a
+restorer only after successful setup is simpler but cannot undo a failed second
+write. Restoration attempts both files and reports rollback failures in the
+artifact. Injected second-write failures verify original settings, fake-server
+cleanup and no launched tab; another case verifies a rollback failure is visible.
+
+**Choice: measure WEB-3 through the gateway browser.** A native loopback turn
+(recommended) works safely on the unpatched baseline and observes the real
+renderer's list hydration. A tmux turn would need the later directory fix;
+counting Electron IPC would miss the gateway command counters. The committed
+script records both per-command transition windows and a quiet control, with
+two cycles per pinned commit. It measures the two remaining list hydrators;
+it does not infer the original report's third list or attribute all RPC savings
+to WEB-3. Task 1 stays open for the separately listed measurements requiring
+additional access or a busy fixture.

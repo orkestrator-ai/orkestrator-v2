@@ -3,7 +3,13 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { runMailBenchmark, parseOptions, gatewayFor } from "../../scripts/tmux-mail-inject-live";
+import { seedStore } from "../../apps/backend/src/core/storage-test-support";
+import {
+  runMailBenchmark,
+  parseOptions,
+  gatewayFor,
+  __testing,
+} from "../../scripts/tmux-mail-inject-live";
 import { mailBenchmarkFixture } from "../fixtures/tmux-mail-benchmark-runtime";
 
 const roots: string[] = [];
@@ -173,4 +179,55 @@ test.each(["SIGINT", "SIGTERM"] as const)(
     }
   },
   15_000,
+);
+
+test.each(["host-grant", "active-account", "legacy-active-account", "missing-grants"])(
+  "rejects %s before configuration or dispatch",
+  async (mode) => {
+    const root = temporary();
+    const h = mailBenchmarkFixture(root);
+    const manifestPath = path.join(h.dataDir, "..", "profile.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    if (mode === "host-grant") manifest.credentialSources = ["claude"];
+    if (mode === "missing-grants") delete manifest.credentialSources;
+    writeFileSync(manifestPath, JSON.stringify(manifest));
+    if (mode === "active-account")
+      seedStore(h.dataDir, "agent-accounts.json", {
+        active: { claude: "added-account" },
+        accounts: [],
+      });
+    if (mode === "legacy-active-account")
+      writeFileSync(
+        path.join(h.dataDir, "agent-accounts.json"),
+        JSON.stringify({ active: { claude: "added-account" } }),
+      );
+    await expect(runMailBenchmark(options(root), undefined, h.runtime)).rejects.toThrow(
+      /credential-free|active added Claude/,
+    );
+    expect(h.events).toEqual([]);
+    restored(h.claudeDir);
+  },
+);
+
+test.each([false, true])(
+  "second fixture write fails and rolls back (rollback failure: %s)",
+  async (rollbackFails) => {
+    const root = temporary();
+    const h = mailBenchmarkFixture(root);
+    let writes = 0;
+    h.runtime.claudeFixture = (directory, origin, worktree) =>
+      __testing.mailRuntime.claudeFixture(directory, origin, worktree, (...args) => {
+        writes += 1;
+        if (writes === 2 || (rollbackFails && writes === 3))
+          throw new Error("injected write failure");
+        return writeFileSync(...args);
+      });
+    expect(await runMailBenchmark(options(root), undefined, h.runtime)).toBe(1);
+    expect(result(root).error).toMatch(
+      rollbackFails ? /Fixture rollback failed: settings.json/ : /injected write failure/,
+    );
+    if (!rollbackFails) restored(h.claudeDir);
+    expect(h.events).toEqual(["server-stopped"]);
+    await expect(fetch(h.origin())).rejects.toThrow();
+  },
 );

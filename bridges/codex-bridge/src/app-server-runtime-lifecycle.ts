@@ -45,11 +45,17 @@ import {
 import { RefusedCellTail, reportsRefusal, type RefusedCell } from "./sessions/refused-cell-tail.js";
 import { compareDispatchRecordsNewestFirst, DispatchJournal } from "./sessions/dispatch-journal.js";
 
-import { createTurnRenderState, releaseTurnRenderState } from "./messages/render-turn.js";
 import {
+  createTurnRenderState,
+  releaseTurnRenderState,
+  SUBAGENT_TRANSCRIPT_PROBE_INTERVAL_MS,
+} from "./messages/render-turn.js";
+import {
+  cancelSubagentProbe,
   openModelResponseRow,
   patchCommandChangePart,
   publishAssistantRows,
+  scheduleSubagentProbe,
 } from "./app-server-runtime-rows.js";
 import { UpdateCoalescer } from "./messages/coalescer.js";
 import { describeDiffBudget } from "./messages/diff-budget.js";
@@ -493,6 +499,7 @@ export class CodexRuntimeLifecycle {
     const state = this.ctx.threadState.get(threadId);
     if (!state) return;
     state.coalescer.stop();
+    cancelSubagentProbe(state);
     state.orderedEvents.length = 0;
     state.orderedEventBytes = 0;
     state.orderedReconcilePending = false;
@@ -2234,8 +2241,11 @@ export class CodexRuntimeLifecycle {
     if (!context || !state) return;
     const turn = context.activeTurn;
     if (!turn) return;
+    const probeIntervalMs =
+      this.ctx.options.subagentProbeIntervalMs ?? SUBAGENT_TRANSCRIPT_PROBE_INTERVAL_MS;
     await publishAssistantRows(context, state, turn, {
       cwd: context.cwd ?? this.ctx.options.cwd,
+      subagentProbeIntervalMs: probeIntervalMs,
       emit: (event) => this.ctx.options.emit(event),
       bumpMessageRevision: (target, revised) =>
         this.ctx.callbacks.bumpMessageRevision(target, revised),
@@ -2246,6 +2256,9 @@ export class CodexRuntimeLifecycle {
           if (session) void this.ctx.callbacks.persistSession(session);
         }
       },
+    });
+    scheduleSubagentProbe(state, turn, probeIntervalMs, () => {
+      if (this.ctx.threadState.get(threadId) === state) state.coalescer.schedule(this.ctx.now());
     });
   }
 

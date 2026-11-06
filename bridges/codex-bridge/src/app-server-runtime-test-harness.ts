@@ -286,6 +286,7 @@ export async function harness(
     orderedEventMaxCount?: number;
     orderedEventMaxBytes?: number;
     initialPromptRetryDelayMs?: number;
+    subagentProbeIntervalMs?: number;
     capacityRetry?: Partial<CapacityRetryPolicy>;
     capacityRetryRandom?: () => number;
     dispatchJournalMaxRecords?: number;
@@ -385,6 +386,9 @@ export async function harness(
       : {}),
     ...(options.initialPromptRetryDelayMs !== undefined
       ? { initialPromptRetryDelayMs: options.initialPromptRetryDelayMs }
+      : {}),
+    ...(options.subagentProbeIntervalMs !== undefined
+      ? { subagentProbeIntervalMs: options.subagentProbeIntervalMs }
       : {}),
     ...(options.capacityRetry ? { capacityRetry: options.capacityRetry } : {}),
     ...(options.capacityRetryRandom ? { capacityRetryRandom: options.capacityRetryRandom } : {}),

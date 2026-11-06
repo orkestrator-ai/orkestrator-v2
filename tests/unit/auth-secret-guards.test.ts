@@ -144,7 +144,7 @@ describe("auth-secret canary coverage", () => {
 
   test.each([
     // The bridge-answer parser for every HTTP bridge.
-    ["apps/backend/src/core/http-bridge-catalog.ts", "authStatus()"],
+    ["apps/backend/src/core/http-bridge/catalog.ts", "authStatus()"],
     // OpenCode answers from its SDK, not a bridge.
     ["apps/backend/src/core/opencode-capabilities.ts", "authStatus()"],
   ])("%s keeps a canary test beside it", (relative, marker) => {

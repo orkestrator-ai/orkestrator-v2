@@ -174,6 +174,24 @@ element's top relative to the viewport.
   cases). Checks of a held place therefore compare the list's position with
   the position that holds the row, limited to the scroll range, rather than
   the row's offset alone.
+- History can also drop from under a reader. A new history epoch (a bridge
+  restart), or a live tail that joins nothing the tab holds (the first Codex
+  replay after live streaming renames every row), makes the session hook fall
+  back to the bare live tail, because it cannot tell a replay from a rewritten
+  history. `useRestorePlaceAfterHistoryDrop` then notices that a commit took
+  the reader's source part from the front while they were not following,
+  pages history back until that part (a call id, which a Codex replay keeps)
+  reappears, and scrolls to it at its old offset. It gives up after 8 pages
+  that bring rows but not the part, 12 empty pages retried 750 ms apart, when
+  history runs out, or when newer reader input/navigation supersedes its
+  captured controller generation. Source-part loss is checked even if the
+  coalesced display head keeps its id. Each independent drop can restore the
+  same call again. Recovered history waits for an active, mounted viewport
+  and an accepted navigation; ordinary held-page restoration and automatic
+  paging stand aside meanwhile. A remounted controller inherits its persisted
+  semantic anchor, so a missing part in its first live tail is recoverable
+  too. Activation waits while that history recovery owns the place. Covered live by `transcript-paging-live.spec.ts`'s
+  Codex bridge-restart step.
 
 ## Activation and persistence
 
@@ -192,24 +210,37 @@ the spec chat.
 
 The two inspector transcripts were measured across a pane hide on 2026-11-05,
 in Playwright WebKit (build 2370) and Chromium, at phone and desktop widths
-(`e2e/InspectorTranscriptHide.spec.ts`). They do not lose their offset the way
-the plain overview scrollers did, so they do not use
-`useScrollOffsetAcrossHide`. A reader's first frame after the show was at the
-offset they left. Every case then settled on the newest message and left the
-overview's offset alone. The one difference between engines is a follower whose
-transcript has a review report in its footer: in WebKit they start up to about
-480 px short of the end, with "Scroll down" showing, and settle on the end within
-about 120 ms. The cause was not traced
-([5620](../todo/coordinator-and-multi-review/5620-pipeline-transcript-place-and-webkit-settling.md)).
+(`e2e/InspectorTranscriptHide.spec.ts`). Every case settled on the newest
+message and left the overview's offset alone. They do not use
+`useScrollOffsetAcrossHide`; the controller keeps their offset itself.
+
+WebKit puts a re-shown scroller's offset back during a layout that has not yet
+sized the contents of a container query container inside it, so the offset is
+clamped to a range short by that content, and `scroll` fires at the clamped
+offset before the frame's animation callbacks. In a pipeline transcript the
+container is the review report in the footer: a reader near the end, or a
+follower, came back 466 px (desktop) higher than they left
+([flake 6380](../tests/flaky-tests/web-ui/6380-inspector-transcript-hide-webkit-offset.md),
+[5620](../todo/coordinator-and-multi-review/5620-pipeline-transcript-place-and-webkit-settling.md)
+task 2). When the scroller is, or wraps, the container, that range would be 0,
+which fits the reset to the top [0860](../todo/coordinator-and-multi-review/0860-multi-review-inspector-webkit-divergences.md)
+found. So the controller keeps the offset it last observed while the scroller
+had a box; once a resize delivery has measured it at zero height, the first
+`scroll` or resize delivery after the show writes that offset back, upward
+only, since the clamp only lowers it and following growth raises it (Chromium
+keeps it, so nothing is written there). That `scroll` is the browser's, not the
+reader's: it does not release a follower. A navigation started since the show
+(activation) owns the viewport, so the old offset is not written over it.
 
 CI runs `InspectorTranscriptHide.spec.ts` in both Chromium and WebKit, in
-both viewport projects. It samples the reader's first visible animation frame
-with a probe armed before showing the pane, then checks latest-on-activation.
+both viewport projects. It records the reader's offset once it has held for 5
+animation frames (WebKit animates the wheel, and Virtuoso then corrects row
+estimates), samples the reader's first visible animation frame with a probe
+armed before showing the pane, then checks latest-on-activation.
 For both the follower and reader, it samples every animation frame for 750 ms
 after reaching the end, checking that the transcript stays at the end and the
 overview stays at its saved offset. This bounds the settling claim to that
-observation window; it does not qualify real Safari or explain the report's
-brief initial offset.
+observation window; it does not qualify real Safari.
 
 Persisted entries (bounded LRU, 200) hold the validated Virtuoso snapshot,
 follow intent, the semantic anchor, the scroller width and the layout the
@@ -238,7 +269,11 @@ whose body never exceeds `min(28rem, 55dvh)`, expanded details included.
   Entries are memoized on the member object and keyed by call id.
 - Anchors for members inside an inner viewport are composite: the transcript
   holds the group frame, the inner viewport puts the member back at its
-  on-screen offset (absorbing a clamped transcript).
+  on-screen offset (absorbing a clamped transcript). A member the inner list
+  has virtualized away (a history page re-filled the group in front of it) is
+  asked for with `INNER_SEEK_EVENT` on the inner viewport, for up to 20
+  frames; the group scrolls its own list to that entry, and the member is
+  then held like a mounted one.
 
 ## Live arrivals
 

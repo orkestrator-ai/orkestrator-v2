@@ -196,6 +196,24 @@ describe("createMainWindow", () => {
     expect(harness.firstWindow().loadFile).not.toHaveBeenCalled();
   });
 
+  test("leaves DevTools closed when told to, since it is a window of its own", async () => {
+    const harness = createHarness();
+
+    await createMainWindow({
+      BrowserWindowCtor: harness.FakeBrowserWindow as never,
+      menu: harness.menu,
+      writeClipboardText: harness.writeClipboardText,
+      dirname: "/app/apps/desktop/dist/electron",
+      isDev: true,
+      appPath: "/app",
+      devServerUrl: "http://127.0.0.1:5173",
+      openDevTools: false,
+    });
+
+    expect(harness.firstWindow().loadURL).toHaveBeenCalledWith("http://127.0.0.1:5173");
+    expect(harness.firstWindow().webContents.openDevTools).not.toHaveBeenCalled();
+  });
+
   test("uses the default dev server URL when none is configured", async () => {
     const harness = createHarness();
 

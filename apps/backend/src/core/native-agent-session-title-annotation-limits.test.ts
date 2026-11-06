@@ -23,7 +23,7 @@ import {
 } from "./native-agent-service-projection-test-support.js";
 
 import { codexConnection } from "./agent-provider-test-support.js";
-import { readHttpBridgeSummaryTranscript } from "./http-bridge-transcript-v2.js";
+import { readHttpBridgeSummaryTranscript } from "./http-bridge/transcript-v2.js";
 
 const liveWindow = { messages: 100, targetBytes: 512 * 1024 } as const;
 const request = "Compare these two excerpts";

@@ -2,23 +2,24 @@ import "./testing/unit-test-env.js";
 import { describe, expect, test } from "bun:test";
 import { externalSessionToken, parseExternalSessionToken } from "./acp-context.js";
 
-const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+const BASE64URL = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
-describe("provider-owned session tokens", () => {
-  test("only the issued spelling of the signature resumes a session", () => {
-    // The signature is a 32-byte digest, so its last base64url character carries
-    // four data bits and two unused ones: four characters decode to the same
-    // bytes. The signing key is random per bridge, so a fixed edit to that
-    // character used to leave the bytes unchanged in one run of sixteen.
-    for (const acpSessionId of ["external-session", "a", "session-2", "x".repeat(40)]) {
-      const token = externalSessionToken(acpSessionId);
-      expect(parseExternalSessionToken(token)).toBe(acpSessionId);
-      const last = ALPHABET.indexOf(token.at(-1)!);
-      const group = last - (last % 4);
-      for (const alias of ALPHABET.slice(group, group + 4)) {
-        if (alias === token.at(-1)) continue;
-        expect(parseExternalSessionToken(`${token.slice(0, -1)}${alias}`)).toBeNull();
-      }
+describe("external session tokens", () => {
+  test("round-trips the provider session id", () => {
+    expect(parseExternalSessionToken(externalSessionToken("provider-session"))).toBe(
+      "provider-session",
+    );
+  });
+
+  test("refuses every other spelling of the signature's last character", () => {
+    const token = externalSessionToken("provider-session");
+    const last = token.at(-1)!;
+    // The digest's last character carries two spare bits: three other
+    // characters decode to the same bytes, and the rest to different ones.
+    const others = [...BASE64URL].filter((character) => character !== last);
+    expect(others).toHaveLength(63);
+    for (const character of others) {
+      expect(parseExternalSessionToken(`${token.slice(0, -1)}${character}`)).toBeNull();
     }
   });
 });

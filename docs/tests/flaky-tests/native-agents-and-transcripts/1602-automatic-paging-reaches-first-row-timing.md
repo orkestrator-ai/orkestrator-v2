@@ -41,3 +41,23 @@ and `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.90xq9
 - **Failure:** mobile `native: history pages in without a click, opening with a page and paging near the top` (`e2e/TranscriptPaging.spec.ts:414`, assertion at `:441`) timed out after 30 seconds: expected one, received zero.
 - **Complete unchanged owner:** `ORKESTRATOR_E2E_PORT=54831 mise run test:logged -- --name review-paging-diagnostic -- bunx playwright test --config e2e/playwright.config.ts e2e/TranscriptPaging.spec.ts --project mobile-chromium --workers=1 --output output/playwright/review-paging-diagnostic` passed. Passing counts and duration were not retained by the logged wrapper.
 - **Assessment:** unchanged isolated passes confirm intermittent recurrence. The cause of this run is unconfirmed; no implementation, assertion, timeout or skip changed in these owners. The original aggregate remains failed.
+
+## Transcript restoration repair — 2026-11-06
+
+The two-owner browser command in case [0483](0483-transcript-paging-prepend-index-timing.md#transcript-restoration-repair--2026-11-06)
+repeated the desktop failure at line 441: `Reached stop 0.` remained absent
+until the 30 s poll expired (37 passed, three failed, two skipped, 80.8 s).
+Evidence is in `orkestrator-test-run.7sBWhR/repair-transcript-browser.log.gz`
+under the host temporary directory.
+
+The complete unchanged paging owner passed both viewport projects with one
+worker, exit 0, in 210.1 s:
+`ORKESTRATOR_E2E_PORT=14861 mise run test:logged -- --name repair-paging-alone -- bunx playwright test --config e2e/playwright.config.ts --output output/playwright/repair-paging-alone e2e/TranscriptPaging.spec.ts --workers=1`.
+No assertion, timeout, skip or automatic-paging implementation changed.
+
+The subsequent exact combined rerun after the follow-driver fix passed 39,
+failed the mobile automatic-paging case and skipped two in 75.4 s. The
+unchanged paging owner had already passed alone; no automatic-paging
+implementation or assertion was changed. Evidence:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.IBipuK/repair-transcript-browser.log.gz`.
+The combined run remains non-green and is reported as such.

@@ -74,6 +74,27 @@ Evidence: `/tmp/orkestrator-test-run.nqin2k/bridges.log.gz`; outer log
 `/tmp/orkestrator-test-run.o6OOCw/merge-tests.log.gz`. No bridge code, test,
 assertion or deadline changed. The cause remains unestablished.
 
+
+## Bridge authority review repairs — 2026-11-06
+
+At `451fccdf1`, `mise run test:logged -- --name repair-default -- mise run test`
+reported this unchanged case failing at line 638: persisted `turnInFlight` was
+undefined. The bridges group used two package slots and one Bun worker per
+bridge. Claude reported 1,872 passed, nine skipped and one failed across
+1,882 cases. The outer command later hit its 30-minute deadline after waiting
+about 23 minutes for the shared host lease.
+
+Evidence: `orkestrator-test-run.HNKlxf/bridges.log` and
+`orkestrator-test-run.Iu6GYp/repair-default.log.gz` under the host temporary
+directory. The complete unchanged owner passed alone (exit 0, 1.4 s):
+
+```sh
+mise run test:logged -- --name isolate-claude-idle -- bun test --cwd bridges/claude-bridge ./src/services/session-manager-runtime-idle.test.ts --parallel=1 --only-failures
+```
+
+The isolated pass confirms intermittence; the cause remains unconfirmed. Status
+stays open. No implementation, assertion, timeout or skip changed.
+
 ### Resolution — 2026-11-06
 
 **Root cause (test).** The session queues three turn-in-flight mark writes

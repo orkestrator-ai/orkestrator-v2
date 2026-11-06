@@ -1,4 +1,5 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,9 +7,11 @@ import { Hono } from "hono";
 import {
   buildRecoveredContextPrompt,
   type HistoricalAssistantSegmentState,
+  type ThreadRuntimeState,
   MAX_HELD_ASSISTANT_ROWS,
   MAX_TRACKED_ASSISTANT_ROWS,
 } from "./app-server-runtime-base.js";
+import { setTranscriptPathCacheLimitsForTesting } from "./history/rollout.js";
 import { MAX_DIFF_CACHE_ENTRIES } from "./messages/diff-budget.js";
 import { segmentNeedsRender } from "./app-server-runtime-rows.js";
 import {
@@ -20,7 +23,13 @@ import type { NormalizedMessage } from "./messages/types.js";
 import { TurnAccumulator } from "./sessions/turn-accumulator.js";
 import { registerCodexTranscriptRoutes } from "./transcript-routes.js";
 
-import { harness, threadPayload, type Harness } from "./app-server-runtime-test-harness.js";
+import {
+  codexHome,
+  harness,
+  threadPayload,
+  waitUntil,
+  type Harness,
+} from "./app-server-runtime-test-harness.js";
 
 const TURN_STARTED_MS = Date.parse("2026-10-14T10:00:00.000Z");
 
@@ -384,6 +393,164 @@ describe("sub-agent probes on frozen rows", () => {
     expect(segmentNeedsRender(turn, segment, historical, later)).toBe(true);
   });
 });
+
+describe("sub-agent probes while the parent is quiet", () => {
+  function writeRollout(threadId: string, records: unknown[]): void {
+    const sessions = join(codexHome, "sessions");
+    mkdirSync(sessions, { recursive: true });
+    writeFileSync(
+      join(sessions, `rollout-2026-11-06T05-00-00-${threadId}.jsonl`),
+      `${records.map((record) => JSON.stringify(record)).join("\n")}\n`,
+    );
+  }
+
+  const childCard = async (h: Harness, sessionId: string) =>
+    (await assistantRows(h, sessionId))
+      .flatMap((row) => row.parts)
+      .find((part) => part.type === "subagent" && part.subagentId === "child-1");
+
+  test("a child whose rollout appears after the last parent event still gets its card", async () => {
+    // A miss is otherwise cached for five seconds; the probe cadence is what is
+    // under test, not that cache.
+    setTranscriptPathCacheLimitsForTesting({ negativeTtlMs: 0 });
+    try {
+      const h = await harness({}, { subagentProbeIntervalMs: 20 });
+      const { sessionId } = h.runtime.createSession({ mode: "build" });
+      await h.runtime.prompt(sessionId, { prompt: "go", requestId: "req-1", attachments: [] });
+      writeRollout("thread-1", [
+        { type: "session_meta", payload: { id: "thread-1", cwd: "/tmp/ws" } },
+      ]);
+      notifyItem(h, "item/completed", {
+        id: "spawn-1",
+        type: "collabAgentToolCall",
+        tool: "spawnAgent",
+        receiverThreadIds: ["child-1"],
+        agentsStates: {},
+        status: "completed",
+      });
+      await h.drain();
+      // The last parent event came before the child's rollout could be read.
+      expect((await childCard(h, sessionId))?.subagentName).toBeUndefined();
+
+      writeRollout("child-1", [
+        {
+          type: "session_meta",
+          payload: { id: "child-1", cwd: "/tmp/ws", agent_nickname: "Ada", agent_role: "explorer" },
+        },
+        {
+          type: "response_item",
+          payload: {
+            type: "function_call",
+            name: "exec_command",
+            call_id: "call-exec-1",
+            arguments: JSON.stringify({ cmd: "echo lint" }),
+          },
+        },
+      ]);
+      // No further parent event: only the follow-up probe can fill the card in.
+      await waitUntil(
+        async () => (await childCard(h, sessionId))?.subagentName === "Ada",
+        "the quiet turn never re-probed the child's rollout",
+        5_000,
+      );
+      expect((await childCard(h, sessionId))?.subagentActions?.length).toBe(1);
+
+      h.child().notify("turn/completed", {
+        threadId: "thread-1",
+        turn: { id: "turn-1", status: "completed" },
+      });
+      await h.drain();
+      expect(probeTimer(h)).toBeUndefined();
+    } finally {
+      setTranscriptPathCacheLimitsForTesting();
+    }
+  });
+
+  async function turnWithPendingChild(subagentProbeIntervalMs = 60_000) {
+    const h = await harness({}, { subagentProbeIntervalMs });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, { prompt: "go", requestId: "req-1", attachments: [] });
+    notifyItem(h, "item/completed", {
+      id: "spawn-1",
+      type: "collabAgentToolCall",
+      tool: "spawnAgent",
+      receiverThreadIds: ["child-1"],
+      agentsStates: {},
+      status: "completed",
+    });
+    await h.drain();
+    expect((await childCard(h, sessionId))?.toolState).toBe("pending");
+    expect(probeTimer(h)).toBeDefined();
+    return { h, sessionId };
+  }
+
+  test("repeated publishes keep the existing probe timer", async () => {
+    const { h } = await turnWithPendingChild();
+    const timer = probeTimer(h);
+    for (let step = 1; step <= 3; step++) {
+      response(h, step);
+      await h.drain();
+      expect(probeTimer(h)).toBe(timer);
+    }
+  });
+
+  test("settling every child cancels the timer while the parent keeps running", async () => {
+    const { h, sessionId } = await turnWithPendingChild(20);
+    // Freeze the spawn row so cancellation must also account for historical cards.
+    response(h, 1);
+    notifyItem(h, "item/completed", {
+      id: "wait-1",
+      type: "collabAgentToolCall",
+      tool: "wait",
+      receiverThreadIds: ["child-1"],
+      agentsStates: { "child-1": { status: "completed" } },
+      status: "completed",
+    });
+    await h.drain();
+    await waitUntil(
+      async () => (await childCard(h, sessionId))?.toolState === "success",
+      "the child did not settle while the parent was running",
+    );
+    expect(h.runtime.getStatus(sessionId)).toMatchObject({ status: "running" });
+    expect(probeTimer(h)).toBeUndefined();
+  });
+
+  test("releasing a thread cancels its armed probe timer", async () => {
+    const { h } = await turnWithPendingChild();
+    const runtime = h.runtime as unknown as {
+      threadState: Map<string, ThreadRuntimeState>;
+      releaseThreadRuntimeState: (threadId: string) => void;
+    };
+    const state = runtime.threadState.get("thread-1")!;
+    const timer = state.subagentProbeTimer!;
+    const clear = spyOn(globalThis, "clearTimeout");
+    try {
+      runtime.releaseThreadRuntimeState("thread-1");
+      expect(clear.mock.calls.some(([cleared]) => cleared === timer)).toBe(true);
+    } finally {
+      clear.mockRestore();
+    }
+    // Keep the original state reference: deleting the map entry alone would
+    // conceal a leaked live timer.
+    expect(state.subagentProbeTimer).toBeUndefined();
+    expect(runtime.threadState.has("thread-1")).toBe(false);
+  });
+
+  test("a turn with no sub-agents arms no probe", async () => {
+    const { h } = await startTurn();
+    response(h, 1);
+    await h.drain();
+    expect(probeTimer(h)).toBeUndefined();
+  });
+});
+
+function probeTimer(h: Harness): unknown {
+  return (
+    h.runtime as unknown as {
+      threadState: Map<string, { subagentProbeTimer?: unknown }>;
+    }
+  ).threadState.get("thread-1")?.subagentProbeTimer;
+}
 
 describe("revised rows before the live window", () => {
   test("a late change to a row outside the window travels with the next snapshot", async () => {

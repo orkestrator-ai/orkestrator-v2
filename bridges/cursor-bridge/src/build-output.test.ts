@@ -47,9 +47,10 @@ describe.if(existsSync(distEntry))("the built bundle", () => {
     expect(bundle).toContain("@cursor/sdk");
     // An inlined SDK is orders of magnitude larger than this bridge's own code
     // and is the shape that carries the chunk-loading bug. Keep modest headroom
-    // for bridge growth and dependency-generated protocol strings.
+    // for bridge growth and dependency-generated protocol strings: the bridge
+    // reached 1.5 MiB on 2026-11-06, while the SDK's own build is over 20 MB.
     const { size } = await stat(distEntry);
-    expect(size).toBeLessThan(1.5 * 1024 * 1024);
+    expect(size).toBeLessThan(2 * 1024 * 1024);
   });
 
   test("vendors the SDK and the closure its flat build imports", async () => {

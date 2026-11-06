@@ -28,6 +28,7 @@ const LIVE_PATTERNS = ["**/*-live.test.ts", "**/*.live.test.ts", "**/*.integrati
  */
 export const SLOW_TESTS: Readonly<Record<string, readonly string[]>> = {
   ".": [
+    "e2e/agent-testing/mcp-probe-server.integration.test.ts",
     "tests/unit/design-qualification-processes.test.ts",
     "tests/unit/electron-spec-process-ownership.test.ts",
     "tests/unit/firewall-default-boot.test.ts",

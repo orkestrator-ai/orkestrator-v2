@@ -154,6 +154,9 @@ const DesignLibraryPerfFixture = lazy(async () => ({
   default: (await import("./DesignLibraryPerfFixture")).DesignLibraryPerfFixture,
 }));
 
+const TranscriptListRendersFixture = lazy(async () => ({
+  default: (await import("./TranscriptListRendersFixture")).TranscriptListRendersFixture,
+}));
 const TranscriptPagingFixture = lazy(async () => ({
   default: (await import("./TranscriptPagingFixture")).TranscriptPagingFixture,
 }));
@@ -332,6 +335,7 @@ function installDesignLaunchFixture() {
 
 function DesignLaunchFixture() {
   useEffect(() => {
+    usePaneLayoutStore.getState().initialize(null, "design-fixture");
     useEnvironmentStore.setState({
       environments: [
         {
@@ -2124,6 +2128,12 @@ function fixtureForPath() {
     return (
       <Suspense fallback={null}>
         <TranscriptPagingFixture />
+      </Suspense>
+    );
+  if (window.location.pathname === "/transcript-list-renders")
+    return (
+      <Suspense fallback={null}>
+        <TranscriptListRendersFixture />
       </Suspense>
     );
   if (window.location.pathname === "/rich-transcript-perf")

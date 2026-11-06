@@ -5,7 +5,7 @@
  * apps/backend/tests/container-live-egress-filter.test.ts.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { root } from "./firewall-test-support";
@@ -482,6 +482,122 @@ describe("socket-backed maintenance", () => {
       die 'wrong survivors' unless $connection_count == 1 && keys(%connections) == 2;
       maintain_connections('proxy', sub { die 'injected maintenance error'; });
       die 'error escaped or connection leaked' unless $connection_count == 0 && keys(%connections) == 0;
+      print 'ok';`),
+    ).toBe("ok");
+  });
+});
+
+describe("refusal counts", () => {
+  // Names that look like an exfiltration attempt: none of them, nor any part
+  // of one, may appear in what the daemon writes.
+  const SECRET = "c2VjcmV0LXRva2Vu";
+  const blockedTls = record(clientHello(`${SECRET}.attacker.invalid`)).toString("hex");
+  const allowedTls = record(clientHello("registry.npmjs.org")).toString("hex");
+  const blockedHttp = Buffer.from(
+    `GET / HTTP/1.1\r\nHost: ${SECRET}.http.invalid\r\n\r\n`,
+  ).toString("hex");
+
+  /** Counts every kind of refusal through the daemon's own paths, then writes them. */
+  const refusals = (counts: string, prelude = "") => `
+    $opt{names} = ${JSON.stringify(join(dir, "names"))};
+    $opt{resolv} = ${JSON.stringify(join(dir, "resolv-ip"))};
+    $opt{counts} = ${JSON.stringify(counts)};
+    load_names(); load_resolvers(); load_refusals();
+    ${prelude}
+    my @keep;
+    my $connection = sub {
+      my ($port, $bytes) = @_;
+      socketpair(my $client, my $peer, PF_UNIX, SOCK_STREAM, 0) or die $!;
+      socketpair(my $upstream, my $origin, PF_UNIX, SOCK_STREAM, 0) or die $!;
+      push @keep, $peer, $origin;
+      my $c = { kind => 'proxy', client => $client, upstream => $upstream, port => $port,
+        classified => 0, peek => pack('H*', $bytes), to_upstream => '', to_client => '',
+        created => time, first_byte => time };
+      $connections{fileno($client)} = $connections{fileno($upstream)} = $c;
+      $connection_count++;
+      decide($c, 0);
+      return $c;
+    };
+    # A foreign SNI, a foreign Host, and silence on 443 past its limit.
+    $connection->(443, '${blockedTls}');
+    $connection->(5432, '${blockedHttp}');
+    my $silent = $connection->(443, '');
+    $silent->{first_byte} = 0; $silent->{created} = time - 61; expire_connections();
+    # An allowed name is not a refusal.
+    my $allowed = $connection->(443, '${allowedTls}');
+    die 'allowed connection refused' unless $allowed->{classified};
+    # A refused query over UDP, then over TCP; an allowed one is forwarded.
+    socket($dns_udp, PF_INET, SOCK_DGRAM, 0) or die $!;
+    bind($dns_udp, pack_sockaddr_in(0, inet_aton('127.0.0.1'))) or die $!;
+    nonblocking($dns_udp);
+    socket(my $asker, PF_INET, SOCK_DGRAM, 0) or die $!;
+    for my $hex ('${query(`${SECRET}.dns.invalid`, { edns: true })}', '${query("registry.npmjs.org")}') {
+      send($asker, pack('H*', $hex), 0, getsockname($dns_udp)) or die $!;
+    }
+    select undef, undef, undef, 0.1;
+    { no warnings 'redefine'; local *main::dns_send = sub {}; dns_udp_query(); }
+    socketpair(my $tcp, my $reader, PF_UNIX, SOCK_STREAM, 0) or die $!;
+    push @keep, $reader;
+    my $message = pack('H*', '${query(`${SECRET}.tcp.invalid`)}');
+    dns_tcp_next({ kind => 'dns', client => $tcp, inbound => pack('n', length $message) . $message,
+      to_client => '', to_upstream => '', from_loopback => 0, deadline => time + 10 });
+    write_refusals();
+    print "$refused{connections} $refused{queries}";
+  `;
+
+  test("counts refused connections and queries, never allowed ones, and writes only the two numbers", () => {
+    const counts = join(dir, "counts-basic.json");
+    expect(runtimePerl(refusals(counts))).toBe("3 2");
+    const written = readFileSync(counts, "utf8");
+    expect(written).toBe('{"refusedConnections":3,"refusedQueries":2}\n');
+    for (const part of [SECRET, "attacker", "invalid", "dns", "http"]) {
+      expect(written).not.toContain(part);
+    }
+  });
+
+  test("a restarted worker carries the counts on, and ignores a file it did not write", () => {
+    const counts = join(dir, "counts-resume.json");
+    writeFileSync(counts, '{"refusedConnections":40,"refusedQueries":2}\n');
+    expect(runtimePerl(refusals(counts))).toBe("43 4");
+    expect(readFileSync(counts, "utf8")).toBe('{"refusedConnections":43,"refusedQueries":4}\n');
+    for (const content of [
+      '{"refusedConnections":40}\n',
+      '{"refusedConnections":-4,"refusedQueries":2}\n',
+      `{"refusedConnections":${"9".repeat(16)},"refusedQueries":2}\n`,
+      `{"refusedConnections":1,"refusedQueries":1,"name":"${SECRET}"}\n`,
+    ]) {
+      writeFileSync(counts, content);
+      expect(runtimePerl(refusals(counts))).toBe("3 2");
+    }
+  });
+
+  test("the firewall's own checks hold a quiet marker; one left behind stops muting", () => {
+    const counts = join(dir, "counts-quiet.json");
+    const quiet = join(dir, "quiet");
+    writeFileSync(quiet, "");
+    const prelude = `$opt{quiet} = ${JSON.stringify(quiet)};`;
+    expect(runtimePerl(refusals(counts, prelude))).toBe("0 0");
+    expect(readFileSync(counts, "utf8")).toBe('{"refusedConnections":0,"refusedQueries":0}\n');
+    const stale = new Date(Date.now() - 121_000);
+    utimesSync(quiet, stale, stale);
+    expect(runtimePerl(refusals(counts, prelude))).toBe("3 2");
+    rmSync(quiet);
+    expect(runtimePerl(refusals(counts, prelude))).toBe("6 4");
+  });
+
+  test("rewrites the file only when a count moved, and stops counting at its bound", () => {
+    const counts = join(dir, "counts-writes.json");
+    expect(
+      runtimePerl(`
+      $opt{counts} = ${JSON.stringify(counts)};
+      write_refusals();
+      unlink $opt{counts} or die $!;
+      write_refusals();
+      die 'rewrote an unchanged count' if -e $opt{counts};
+      count_refusal('queries'); write_refusals();
+      die 'missed a moved count' unless -e $opt{counts};
+      $refused{connections} = MAX_COUNT; count_refusal('connections');
+      die 'passed the bound' unless $refused{connections} == MAX_COUNT;
       print 'ok';`),
     ).toBe("ok");
   });

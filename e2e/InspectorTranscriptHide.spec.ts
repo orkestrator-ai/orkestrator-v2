@@ -33,6 +33,31 @@ async function scrollHalfway(scroller: Locator): Promise<number> {
   return offset;
 }
 
+/**
+ * The reader's settled offset: unchanged for `frames` consecutive animation
+ * frames. WebKit animates a wheel scroll, and Virtuoso then corrects for rows
+ * that measured shorter than estimated, so the offset can still be moving
+ * after the gap first passes a threshold (6380).
+ */
+async function settledOffset(scroller: Locator, frames = 5): Promise<number> {
+  const settled = await scroller.evaluate(async (element, required) => {
+    const nextFrame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    let last = element.scrollTop;
+    let unchanged = 0;
+    const started = performance.now();
+    while (performance.now() - started < 3000) {
+      await nextFrame();
+      const top = element.scrollTop;
+      unchanged = top === last ? unchanged + 1 : 0;
+      last = top;
+      if (unchanged >= required) return top;
+    }
+    return null;
+  }, frames);
+  expect(settled, "the transcript's offset never held still").not.toBeNull();
+  return settled!;
+}
+
 async function expectStableEnd(transcript: Locator, overview: Locator, overviewOffset: number) {
   // Wait for activation to reach latest, then observe every frame for 750 ms.
   // A single successful poll can miss a later resize or footer layout shift.
@@ -104,7 +129,8 @@ for (const view of VIEWS) {
     await page.mouse.wheel(0, -600);
     await expect.poll(bottomGap).toBeGreaterThan(100);
     overviewOffset = await scrollHalfway(overview);
-    const readerOffset = await transcript.evaluate((element) => element.scrollTop);
+    // Record where the reader settled, not where the wheel's movement was.
+    const readerOffset = await settledOffset(transcript);
     expect(readerOffset).toBeGreaterThan(100);
     await hidePane.click();
     await expect(transcript).toBeHidden();

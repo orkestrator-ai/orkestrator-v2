@@ -831,6 +831,10 @@ export class AgentMailService {
       }
       // Deliver now, while a turn may be running: offer the mail to that turn.
       let steerRequestId: string | undefined;
+      // What the tmux presence read answered, handed to its dispatch so the
+      // gate does not repeat those reads (to-do 1202 task 8, BG-15).
+      let tmuxPresenceRead:
+        Awaited<ReturnType<PromptQueueDrainer["mailInjectPresence"]>> | undefined;
       if (mailbox.kind === "native" && mailbox.agent) {
         const activity = this.nativeAgents.sessionActivitySnapshot(
           mailbox.environmentId,
@@ -909,12 +913,13 @@ export class AgentMailService {
           continue;
         }
       } else if (mailbox.kind === "tmux") {
-        const tmuxPresence = this.tmux.mailInjectPresence
+        tmuxPresenceRead = this.tmux.mailInjectPresence
           ? await this.tmux.mailInjectPresence({
               environmentId: mailbox.environmentId,
               tabId: mailbox.tabId,
             })
-          : "idle";
+          : undefined;
+        const tmuxPresence = tmuxPresenceRead ?? "idle";
         await this.recordPresence(mailbox.mailboxId, tmuxPresence);
         if (deferredUntil) {
           if (tmuxPresence !== "idle") {
@@ -1124,6 +1129,7 @@ export class AgentMailService {
                 environmentId: mailbox.environmentId,
                 tabId: mailbox.tabId,
                 text: carrier,
+                ...(tmuxPresenceRead ? { presence: tmuxPresenceRead } : {}),
               })
             : await this.nativeAgents.dispatchMailInject({
                 environmentId: mailbox.environmentId,

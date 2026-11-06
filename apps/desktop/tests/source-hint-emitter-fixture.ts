@@ -6,7 +6,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 export const EMITTER_DOC = path.resolve(
-  import.meta.dir,
+  import.meta.dirname,
   "../../../docs/development/source-hint-emitter.md",
 );
 

@@ -1,7 +1,7 @@
 # Tool-group overflow follows an appended call in the aggregate
 
 - **ID:** 0747
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-24
 - **Test:** `a waiting group that fits its cap follows appended calls as it starts overflowing`
 - **Owning file:** `e2e/ToolGroupFold.spec.ts:245` (mobile Chromium).
@@ -337,3 +337,28 @@ All 38 ToolGroupFold cases passed; both native branch-selection cases still fail
 - **Failure:** desktop `a waiting group that fits its cap follows appended calls as it starts overflowing` (now `e2e/ToolGroupFold.spec.ts:442`) failed its first attempt on a `toBe` comparison and passed on retry.
 - **Isolated rerun:** `ORKESTRATOR_E2E_PORT=1488 mise run test:logged -- --name ek-branch-stream-4 -- bunx playwright test --config e2e/playwright.config.ts e2e/StreamingTranscript.spec.ts:361 e2e/ToolGroupFold.spec.ts:442 --retries=0` passed, exit 0, in 4.3 s; the same pair also passed three earlier logged runs.
 - **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.KtcBbJ/browser.log.gz`. Cause remains unconfirmed.
+
+
+## Resolution — 2026-11-06
+
+- **Root cause:** a follow from the previous append was still live when the
+  reader scrolled to the top. Virtuoso delivers `atBottomStateChange` through
+  a 50 ms debounce, so the group's `following` state was still true, and it
+  keeps `scrollingInProgress` true for at least 150 ms after a follow's last
+  list refresh (up to 1.2 s). `INNER_FOLLOW` ignored the at-end flag Virtuoso
+  passes it, which is `isAtBottom || scrollingInProgress`, so an append inside
+  that window scrolled the reader back to the end. A per-frame probe of the
+  failing run showed the click 15 to 30 ms after the reader's scroll event,
+  and the same scroller then jumping to 704.
+- **Fix:** `apps/web/src/components/chat/NativeMessage.tool-group.tsx`.
+  `INNER_FOLLOW` honours Virtuoso's flag, and an upward scroll away from the
+  inner end while following calls the patched `cancelPendingNavigation` and
+  stops following at once, as `transcript-scroll-controller.ts` already does
+  for the transcript.
+- **Before:** `mise run test:logged -- --name tgf442-repro2 -- bunx playwright test --config e2e/playwright.config.ts e2e/ToolGroupFold.spec.ts:442 --repeat-each=40 --workers=5 --retries=0`
+  failed 4 of 80 (scrollTop 704 instead of 0 at `:471`) on the
+  `transcript-list-rerender` branch. With only the `INNER_FOLLOW` change,
+  80 repeats failed 2 of 160.
+- **After:** the same command with `--repeat-each=80` passed 160 of 160
+  (367.5 s), as did a 160-run diagnostic copy of the case. The complete owner
+  passed with one worker (`--workers=1 --retries=0`, 145.0 s).

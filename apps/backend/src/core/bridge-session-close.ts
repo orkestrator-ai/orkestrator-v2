@@ -1,4 +1,4 @@
-import type { HttpBridgeAgent } from "./http-bridge-catalog.js";
+import type { HttpBridgeAgent } from "./http-bridge/index.js";
 import { asRecord, nonEmptyString } from "./agent-provider-runtime.js";
 import { TAB_TEARDOWN_BRIDGE_UPGRADE_REQUIRED_MARKER } from "@orkestrator/protocol/tab-teardown";
 import { compatibilityPathUsage } from "./compatibility-path-usage.js";

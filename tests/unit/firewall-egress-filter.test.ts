@@ -144,13 +144,17 @@ function bootFixture(dir: string, daemon: "ready" | "never") {
   writeFileSync(
     filter,
     daemon === "ready"
-      ? 'for (my $i = 0; $i < @ARGV; $i++) { if ($ARGV[$i] eq "--ready") { open(my $f, ">", $ARGV[$i + 1]) or die; print {$f} "1\\n"; close $f; } }\n'
+      ? // The daemon starts under `env -i`: its arguments go to a fixed file.
+        `open(my $log, ">", ${JSON.stringify(join(dir, "daemon-args"))}) or die; print {$log} "@ARGV"; close $log;\n` +
+          'for (my $i = 0; $i < @ARGV; $i++) { if ($ARGV[$i] eq "--ready") { open(my $f, ">", $ARGV[$i + 1]) or die; print {$f} "1\\n"; close $f; } }\n'
       : "exit 1;\n",
   );
   gatewayPolicy(dir);
   const policy = join(dir, "policy");
   const bin = join(dir, "bin");
   mkdirSync(bin);
+  // Whether the daemon's quiet marker was held when a lookup or request ran.
+  const quietLog = `[ -e '${join(dir, "run-firewall", "egress-filter.quiet")}' ] && q=quiet || q=counted; printf '%s %s\\n' "$q" "$*" >> "$CALL_LOG"`;
   writeFileSync(join(policy, "network-mode"), "restricted\n");
   writeFileSync(join(policy, "allowed-domains"), "registry.npmjs.org,db.example.test:5432\n");
   writeFileSync(join(policy, "host-service-ports"), "41234\n");
@@ -168,6 +172,7 @@ function bootFixture(dir: string, daemon: "ready" | "never") {
     bin,
     "dig",
     [
+      quietLog,
       'case "$*" in',
       "  *orkestrator-dns-probe.invalid*) echo ';; ->>HEADER<<- opcode: QUERY, status: REFUSED, id: 1' ;;",
       "  *+short*) echo 192.0.2.10 ;;",
@@ -178,7 +183,7 @@ function bootFixture(dir: string, daemon: "ready" | "never") {
   writeStub(
     bin,
     "curl",
-    `case "$*" in *api.github.com/meta*) printf '{}\\n' ;; *orkestrator-sni-probe.invalid*) exit 35 ;; *example.com*) exit 22 ;; *) exit 0 ;; esac`,
+    `${quietLog}\ncase "$*" in *api.github.com/meta*) printf '{}\\n' ;; *orkestrator-sni-probe.invalid*) exit 35 ;; *example.com*) exit 22 ;; *) exit 0 ;; esac`,
   );
   writeStub(
     bin,
@@ -275,6 +280,38 @@ describe("init-firewall.sh with name checks", () => {
         // Never reported applied; the gateway entrypoint reports `failed`.
         expect(() => readFileSync(statusFile(dir), "utf8")).toThrow();
         expect(read("docker/orkestrator-egress-gateway.sh")).toContain('"state":"failed"');
+      });
+    },
+  );
+
+  test.skipIf(Boolean(NO_GNU_DATE))(
+    titleWithSkip(
+      "the daemon counts refusals beside the report, and the boot's own checks are not counted",
+      NO_GNU_DATE,
+    ),
+    () => {
+      withDir((dir) => {
+        const result = bootFixture(dir, "ready");
+        expect(result.exitCode).toBe(0);
+        const calls = readFileSync(join(dir, "calls"), "utf8").split("\n");
+        const status = join(dir, "run-firewall");
+        expect(readFileSync(join(dir, "daemon-args"), "utf8")).toContain(
+          `--counts ${status}/egress-refusals.json --quiet ${status}/egress-filter.quiet`,
+        );
+        // Every probe for a name off the list ran while the marker was held.
+        const probes = calls.filter((line) =>
+          /orkestrator-(?:dns|sni)-probe\.invalid|https:\/\/example\.com/.test(line),
+        );
+        expect(probes).toHaveLength(3);
+        for (const probe of probes) expect(probe).toStartWith("quiet ");
+        // Resolving the allowlist is not muted, and the marker is gone after.
+        expect(
+          calls.some((line) => line.startsWith("counted ") && line.includes("registry.npmjs.org")),
+        ).toBe(true);
+        expect(calls.filter((line) => line.includes("https://github.com/"))).toEqual([
+          expect.stringMatching(/^counted /),
+        ]);
+        expect(() => readFileSync(join(status, "egress-filter.quiet"))).toThrow();
       });
     },
   );

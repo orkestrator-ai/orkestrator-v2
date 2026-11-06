@@ -86,6 +86,12 @@ ORK_FILTER_DNS_PORT=31453
 ORK_FILTER_NAMES="$ORK_STATUS_DIR/egress-names"
 ORK_FILTER_READY="$ORK_STATUS_DIR/egress-filter.ready"
 ORK_FILTER_PID="$ORK_STATUS_DIR/egress-filter.pid"
+# Refused connections and queries since this boot (counts only, never a
+# name), which the backend reads beside the firewall report; and the marker
+# init-firewall.sh holds while its own checks ask for names off the list, so
+# they are not counted.
+ORK_FILTER_COUNTS="$ORK_STATUS_DIR/egress-refusals.json"
+ORK_FILTER_QUIET="$ORK_STATUS_DIR/egress-filter.quiet"
 
 # The name checks' state for this namespace: `enforced` when they run, `off`
 # for a gateway created with them switched off, `unavailable` for anything
@@ -173,7 +179,8 @@ ork_start_filter() {
         setsid env -i PATH="$PATH" /usr/bin/perl -- "$ORK_FILTER_BIN" --supervise \
             --names "$ORK_FILTER_NAMES" --resolv "$ORK_RESOLV_CONF" --mark "$ORK_FILTER_MARK" \
             --proxy-port "$ORK_FILTER_PROXY_PORT" --dns-port "$ORK_FILTER_DNS_PORT" \
-            --ready "$ORK_FILTER_READY" </dev/null >/dev/null 2>&1 8>&- 9>&- &
+            --ready "$ORK_FILTER_READY" --counts "$ORK_FILTER_COUNTS" --quiet "$ORK_FILTER_QUIET" \
+            </dev/null >/dev/null 2>&1 8>&- 9>&- &
         printf '%s\n' "$!" > "$ORK_FILTER_PID"
     )
     local attempt

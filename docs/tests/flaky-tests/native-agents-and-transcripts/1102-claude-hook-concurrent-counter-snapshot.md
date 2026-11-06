@@ -181,3 +181,17 @@ writer after release counts on from the persisted value. No assertion was
 loosened. Verified with
 `mise run test:logged -- --name hook-lock -- bun test --cwd apps/backend ./tests/claude-state-signal-integration.test.ts ./tests/tmux-poll-failed-turn.test.ts ./src/core/claude-state-signal.test.ts --parallel=2 --only-failures`
 (passed, 1.8 s).
+
+## To-do 6280 preparation recurrence, 2026-11-06
+
+Preparation at `25ae4c6ea` failed this test with `working 7 0` (1,168.07 ms) in
+`mise run test` (review-validation-2b207542-6914-4692-aa0f-a2beba88334a/validation-04.stdout.txt).
+That branch changes only `apps/web/`, `e2e/` and `docs/`. Unlike earlier
+recurrences, the owner also failed alone, twice:
+`mise run test:logged -- --name alone-claude-state-signal-2 -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/claude-state-signal-integration.test.ts --parallel=1 --only-failures`
+read `working 8 0` (6 of 7 passed), and the same command without `--preload`
+read `working 4 0`. The one-minute load average was 75 to 79 for both runs. Case
+[6600](../aggregate-validation-runs/6600-live-head-preparation-owners-vary-with-load.md)
+saw the same owner fail alone at load 67 and pass at 24 and 33. The run is
+[6624](../aggregate-validation-runs/6624-transcript-list-preparation-related-false-match.md).
+No assertion or script changed; the cause is still not established.

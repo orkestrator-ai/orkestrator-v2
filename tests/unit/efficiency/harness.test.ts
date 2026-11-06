@@ -427,6 +427,64 @@ describe("display-tail checkpoint age", () => {
 });
 
 describe("efficiency harness", () => {
+  const cursorModule = "apps/backend/src/core/http-bridge/transcript-v2.ts";
+  const legacyCursorModule = "apps/backend/src/core/http-bridge-transcript-v2.ts";
+
+  for (const layout of ["legacy", "current", "both"] as const) {
+    test(`cursor coverage retains positionedCursorBefore in the ${layout} layout`, async () => {
+      const root = await mkdtemp(path.join(tmpdir(), "efficiency-cursor-loader-"));
+      try {
+        await mkdir(path.join(root, "apps/backend/src/core/http-bridge"), { recursive: true });
+        for (const [source, relative] of [
+          ["current", cursorModule],
+          ["legacy", legacyCursorModule],
+        ]) {
+          if (layout !== "both" && source !== layout) continue;
+          await writeFile(
+            path.join(root, relative!),
+            `export const root = ${JSON.stringify(root)};
+             export const layout = ${JSON.stringify(source)};
+             export function positionedCursorBefore() { return () => "cursor"; }`,
+          );
+        }
+        const context = createContext(root);
+        for (const bridge of [
+          await context.load(cursorModule),
+          await context.loadOptional(cursorModule),
+        ]) {
+          expect(bridge).toMatchObject({
+            root,
+            layout: layout === "legacy" ? "legacy" : "current",
+          });
+          const cursorBefore = bridge?.positionedCursorBefore as () => () => string;
+          expect(cursorBefore()()).toBe("cursor");
+        }
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+  }
+
+  test("missing cursor modules stay optional and current import failures propagate", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "efficiency-cursor-loader-"));
+    try {
+      const context = createContext(root);
+      expect(await context.loadOptional(cursorModule)).toBeUndefined();
+      await expect(context.load(cursorModule)).rejects.toThrow();
+      await mkdir(path.join(root, "apps/backend/src/core/http-bridge"), { recursive: true });
+      await writeFile(path.join(root, legacyCursorModule), "export const legacy = true;");
+      await writeFile(
+        path.join(root, cursorModule),
+        'throw new Error("broken current cursor module");',
+      );
+      await expect(context.loadOptional(cursorModule)).rejects.toThrow(
+        "broken current cursor module",
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   const relocatedModules = [
     "progressive-transcript.ts",
     "transcript-window.ts",

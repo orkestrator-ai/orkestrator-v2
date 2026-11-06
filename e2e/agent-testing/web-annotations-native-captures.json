@@ -1,0 +1,458 @@
+{
+  "recordedOn": "linux-x64",
+  "captures": [
+    {
+      "route": "/pricing",
+      "selector": "[data-testid=\"plan-cta-starter\"]",
+      "target": {
+        "kind": "element",
+        "label": "button “Choose Starter”",
+        "anchor": {
+          "stableId": {
+            "kind": "test-id",
+            "value": "plan-cta-starter"
+          },
+          "semantic": {
+            "tagName": "button",
+            "role": "button",
+            "name": "Choose Starter"
+          },
+          "text": {
+            "exact": "Choose Starter",
+            "prefix": "$12 per seat / month 3 projects Community support 7-day history",
+            "suffix": ""
+          },
+          "ancestors": [
+            {
+              "tagName": "main",
+              "id": "app",
+              "role": "main",
+              "testId": null,
+              "name": null
+            },
+            {
+              "tagName": "section",
+              "id": null,
+              "role": "region",
+              "testId": null,
+              "name": "Pricing"
+            },
+            {
+              "tagName": "div",
+              "id": null,
+              "role": null,
+              "testId": "plan-grid",
+              "name": null
+            },
+            {
+              "tagName": "article",
+              "id": null,
+              "role": "article",
+              "testId": "plan-card-starter",
+              "name": "Starter plan"
+            }
+          ],
+          "cssPath": "main#app > section:nth-of-type(1) > div > article:nth-of-type(1) > button",
+          "scope": {
+            "kind": "document"
+          }
+        },
+        "rect": {
+          "x": 52,
+          "y": 398.05,
+          "width": 105.64,
+          "height": 21
+        }
+      },
+      "geometry": {
+        "viewport": {
+          "width": 1280,
+          "height": 800
+        },
+        "scroll": {
+          "x": 0,
+          "y": 0
+        },
+        "zoomFactor": 1,
+        "devicePixelRatio": 1
+      },
+      "evidence": {
+        "text": "Choose Starter",
+        "attributes": {
+          "type": "button",
+          "data-testid": "plan-cta-starter"
+        },
+        "styles": {
+          "color": "rgb(0, 0, 0)",
+          "background-color": "rgb(239, 239, 239)",
+          "font-family": "Arial",
+          "font-size": "13.3333px",
+          "font-weight": "400",
+          "line-height": "normal",
+          "letter-spacing": "normal",
+          "text-align": "center",
+          "text-decoration": "none",
+          "display": "inline-block",
+          "position": "static",
+          "z-index": "auto",
+          "box-sizing": "border-box",
+          "width": "105.641px",
+          "height": "21px",
+          "margin": "0px",
+          "padding": "1px 6px",
+          "border": "2px outset rgb(0, 0, 0)",
+          "border-radius": "0px",
+          "opacity": "1",
+          "visibility": "visible",
+          "overflow": "visible",
+          "flex": "0 1 auto",
+          "gap": "normal",
+          "grid-template-columns": "none",
+          "align-items": "normal",
+          "justify-content": "normal"
+        },
+        "hierarchy": [
+          {
+            "tagName": "main",
+            "id": "app",
+            "role": "main",
+            "testId": null,
+            "name": null
+          },
+          {
+            "tagName": "section",
+            "id": null,
+            "role": "region",
+            "testId": null,
+            "name": "Pricing"
+          },
+          {
+            "tagName": "div",
+            "id": null,
+            "role": null,
+            "testId": "plan-grid",
+            "name": null
+          },
+          {
+            "tagName": "article",
+            "id": null,
+            "role": "article",
+            "testId": "plan-card-starter",
+            "name": "Starter plan"
+          }
+        ],
+        "html": "<button type=\"button\" data-testid=\"plan-cta-starter\">Choose Starter</button>"
+      },
+      "redaction": {
+        "attributesRemoved": 0,
+        "valuesMasked": 0,
+        "urlParametersRemoved": 0,
+        "sensitiveRegionsMasked": 0,
+        "manualRegions": 0,
+        "imageExcluded": false
+      }
+    },
+    {
+      "route": "/pricing",
+      "selector": "[data-testid=\"plan-cta-team\"]",
+      "target": {
+        "kind": "element",
+        "label": "button “Choose Team”",
+        "anchor": {
+          "stableId": {
+            "kind": "test-id",
+            "value": "plan-cta-team"
+          },
+          "semantic": {
+            "tagName": "button",
+            "role": "button",
+            "name": "Choose Team"
+          },
+          "text": {
+            "exact": "Choose Team",
+            "prefix": "nth Unlimited projects Priority support 90-day history Audit log",
+            "suffix": ""
+          },
+          "ancestors": [
+            {
+              "tagName": "main",
+              "id": "app",
+              "role": "main",
+              "testId": null,
+              "name": null
+            },
+            {
+              "tagName": "section",
+              "id": null,
+              "role": "region",
+              "testId": null,
+              "name": "Pricing"
+            },
+            {
+              "tagName": "div",
+              "id": null,
+              "role": null,
+              "testId": "plan-grid",
+              "name": null
+            },
+            {
+              "tagName": "article",
+              "id": null,
+              "role": "article",
+              "testId": "plan-card-team",
+              "name": "Team plan"
+            }
+          ],
+          "cssPath": "main#app > section:nth-of-type(1) > div > article:nth-of-type(2) > button",
+          "scope": {
+            "kind": "document"
+          }
+        },
+        "rect": {
+          "x": 426,
+          "y": 418.34,
+          "width": 98,
+          "height": 21
+        }
+      },
+      "geometry": {
+        "viewport": {
+          "width": 1280,
+          "height": 800
+        },
+        "scroll": {
+          "x": 0,
+          "y": 0
+        },
+        "zoomFactor": 1,
+        "devicePixelRatio": 1
+      },
+      "evidence": {
+        "text": "Choose Team",
+        "attributes": {
+          "type": "button",
+          "data-testid": "plan-cta-team"
+        },
+        "styles": {
+          "color": "rgb(0, 0, 0)",
+          "background-color": "rgb(239, 239, 239)",
+          "font-family": "Arial",
+          "font-size": "13.3333px",
+          "font-weight": "400",
+          "line-height": "normal",
+          "letter-spacing": "normal",
+          "text-align": "center",
+          "text-decoration": "none",
+          "display": "inline-block",
+          "position": "static",
+          "z-index": "auto",
+          "box-sizing": "border-box",
+          "width": "98px",
+          "height": "21px",
+          "margin": "0px",
+          "padding": "1px 6px",
+          "border": "2px outset rgb(0, 0, 0)",
+          "border-radius": "0px",
+          "opacity": "1",
+          "visibility": "visible",
+          "overflow": "visible",
+          "flex": "0 1 auto",
+          "gap": "normal",
+          "grid-template-columns": "none",
+          "align-items": "normal",
+          "justify-content": "normal"
+        },
+        "hierarchy": [
+          {
+            "tagName": "main",
+            "id": "app",
+            "role": "main",
+            "testId": null,
+            "name": null
+          },
+          {
+            "tagName": "section",
+            "id": null,
+            "role": "region",
+            "testId": null,
+            "name": "Pricing"
+          },
+          {
+            "tagName": "div",
+            "id": null,
+            "role": null,
+            "testId": "plan-grid",
+            "name": null
+          },
+          {
+            "tagName": "article",
+            "id": null,
+            "role": "article",
+            "testId": "plan-card-team",
+            "name": "Team plan"
+          }
+        ],
+        "html": "<button type=\"button\" data-testid=\"plan-cta-team\">Choose Team</button>"
+      },
+      "redaction": {
+        "attributesRemoved": 0,
+        "valuesMasked": 0,
+        "urlParametersRemoved": 0,
+        "sensitiveRegionsMasked": 0,
+        "manualRegions": 0,
+        "imageExcluded": false
+      }
+    },
+    {
+      "route": "/pricing",
+      "selector": "[data-testid=\"plan-cta-enterprise\"]",
+      "target": {
+        "kind": "element",
+        "label": "button “Contact sales”",
+        "anchor": {
+          "stableId": {
+            "kind": "test-id",
+            "value": "plan-cta-enterprise"
+          },
+          "semantic": {
+            "tagName": "button",
+            "role": "button",
+            "name": "Contact sales"
+          },
+          "text": {
+            "exact": "Contact sales",
+            "prefix": "SSO Dedicated support Unlimited history Audit log Data residency",
+            "suffix": ""
+          },
+          "ancestors": [
+            {
+              "tagName": "main",
+              "id": "app",
+              "role": "main",
+              "testId": null,
+              "name": null
+            },
+            {
+              "tagName": "section",
+              "id": null,
+              "role": "region",
+              "testId": null,
+              "name": "Pricing"
+            },
+            {
+              "tagName": "div",
+              "id": null,
+              "role": null,
+              "testId": "plan-grid",
+              "name": null
+            },
+            {
+              "tagName": "article",
+              "id": null,
+              "role": "article",
+              "testId": "plan-card-enterprise",
+              "name": "Enterprise plan"
+            }
+          ],
+          "cssPath": "main#app > section:nth-of-type(1) > div > article:nth-of-type(3) > button",
+          "scope": {
+            "kind": "document"
+          }
+        },
+        "rect": {
+          "x": 800,
+          "y": 438.64,
+          "width": 96.75,
+          "height": 21
+        }
+      },
+      "geometry": {
+        "viewport": {
+          "width": 1280,
+          "height": 800
+        },
+        "scroll": {
+          "x": 0,
+          "y": 0
+        },
+        "zoomFactor": 1,
+        "devicePixelRatio": 1
+      },
+      "evidence": {
+        "text": "Contact sales",
+        "attributes": {
+          "type": "button",
+          "data-testid": "plan-cta-enterprise"
+        },
+        "styles": {
+          "color": "rgb(0, 0, 0)",
+          "background-color": "rgb(239, 239, 239)",
+          "font-family": "Arial",
+          "font-size": "13.3333px",
+          "font-weight": "400",
+          "line-height": "normal",
+          "letter-spacing": "normal",
+          "text-align": "center",
+          "text-decoration": "none",
+          "display": "inline-block",
+          "position": "static",
+          "z-index": "auto",
+          "box-sizing": "border-box",
+          "width": "96.75px",
+          "height": "21px",
+          "margin": "0px",
+          "padding": "1px 6px",
+          "border": "2px outset rgb(0, 0, 0)",
+          "border-radius": "0px",
+          "opacity": "1",
+          "visibility": "visible",
+          "overflow": "visible",
+          "flex": "0 1 auto",
+          "gap": "normal",
+          "grid-template-columns": "none",
+          "align-items": "normal",
+          "justify-content": "normal"
+        },
+        "hierarchy": [
+          {
+            "tagName": "main",
+            "id": "app",
+            "role": "main",
+            "testId": null,
+            "name": null
+          },
+          {
+            "tagName": "section",
+            "id": null,
+            "role": "region",
+            "testId": null,
+            "name": "Pricing"
+          },
+          {
+            "tagName": "div",
+            "id": null,
+            "role": null,
+            "testId": "plan-grid",
+            "name": null
+          },
+          {
+            "tagName": "article",
+            "id": null,
+            "role": "article",
+            "testId": "plan-card-enterprise",
+            "name": "Enterprise plan"
+          }
+        ],
+        "html": "<button type=\"button\" data-testid=\"plan-cta-enterprise\">Contact sales</button>"
+      },
+      "redaction": {
+        "attributesRemoved": 0,
+        "valuesMasked": 0,
+        "urlParametersRemoved": 0,
+        "sensitiveRegionsMasked": 0,
+        "manualRegions": 0,
+        "imageExcluded": false
+      }
+    }
+  ]
+}

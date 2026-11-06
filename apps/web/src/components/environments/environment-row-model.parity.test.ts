@@ -246,6 +246,30 @@ describe("an environment row looks the same on its own machine and through a com
     });
   }
 
+  test.each([
+    ["container", null, "container"],
+    ["worktree", null, "worktree"],
+    ["future-step", null, null],
+    ["container", "stopped", null],
+  ] as const)(
+    "deletion stage %s with failure %s has the same local and relayed facts",
+    (step, failure, expected) => {
+      const environment = {
+        ...base,
+        lifecycleOperation: "deleting",
+        deletionRequestedAt: "2026-10-21T09:00:00Z",
+        lifecycleOperationStartedAt: "2026-10-21T09:00:00Z",
+        deletionStep: step,
+        deletionError: failure,
+      } as Environment;
+      const local = localRow(environment, {});
+      const remote = nodeRow(environment, {});
+      expect(local.facts.deletingStep).toBe(expected);
+      expect(remote.facts.deletingStep).toBe(expected);
+      expect(comparable(remote)).toEqual(comparable(local));
+    },
+  );
+
   for (const [label, hasMergeConflicts, expected] of [
     ["a pull request ready to merge", false, "merge-ready"],
     ["a pull request with conflicts", true, "merge-conflicts"],

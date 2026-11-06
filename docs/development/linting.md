@@ -151,7 +151,9 @@ with its reason above it. Twelve are `react/set-state-in-effect` where the
 state change has to happen in the same effect as a side effect (a native
 cancel, a flush before unmount, a tab opened in the parent) or must follow a
 commit (the design canvas restores its saved view only after the first
-default-view commit has marked the visible frames live).
+default-view commit has marked the visible frames live, and a native tab
+starts restoring a reader's place only once a commit shows their part
+dropped, `useRestorePlaceAfterHistoryDrop`).
 
 The `jsx-a11y` plugin is not enabled. Its interaction rules reported 58
 findings that are real accessibility gaps, but fixing them means adding keyboard

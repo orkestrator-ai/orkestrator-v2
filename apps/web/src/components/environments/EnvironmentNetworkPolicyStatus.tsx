@@ -82,6 +82,34 @@ function DomainsState({
   );
 }
 
+const plural = (count: number, one: string, many: string) =>
+  `${count.toLocaleString()} ${count === 1 ? one : many}`;
+
+/**
+ * How many connections and DNS queries the name checks refused since the
+ * gateway started. Counts only: the gateway keeps no refused name, because
+ * one can carry the data an agent tried to send.
+ */
+function Refusals({
+  refusals,
+}: {
+  refusals: { connections: number; queries: number } | null | undefined;
+}) {
+  if (!refusals) return null;
+  const { connections, queries } = refusals;
+  if (connections === 0 && queries === 0) {
+    return <div>Since the gateway started, its name checks have refused nothing.</div>;
+  }
+  return (
+    <div>
+      Since the gateway started, its name checks have refused{" "}
+      {plural(connections, "connection", "connections")} and{" "}
+      {plural(queries, "DNS query", "DNS queries")}. It does not record which names, because one
+      could carry data an agent tried to send; the agent&apos;s own error names the host.
+    </div>
+  );
+}
+
 /**
  * Whether the gateway also checks names (TLS SNI, HTTP Host, DNS), and what
  * that still leaves open. Absent from a report means an image that predates
@@ -92,11 +120,14 @@ function NameChecks({ policy }: { policy: EnvironmentNetworkPolicy }) {
   if (!effective || effective.mode !== "restricted" || effective.state !== "applied") return null;
   if (effective.egressFilter === "enforced") {
     return (
-      <div>
-        Names are checked too: HTTPS and HTTP must ask for an allowed name, and DNS answers only
-        allowed names. A name hidden inside encrypted traffic, UDP, and other protocols are checked
-        by address only.
-      </div>
+      <>
+        <div>
+          Names are checked too: HTTPS and HTTP must ask for an allowed name, and DNS answers only
+          allowed names. A name hidden inside encrypted traffic, UDP, and other protocols are
+          checked by address only.
+        </div>
+        <Refusals refusals={effective.refusals} />
+      </>
     );
   }
   if (effective.egressFilter === "off") {

@@ -161,7 +161,6 @@ export function DesignCanvasTab({
   );
   const editable = projection?.snapshot === "current" || projection?.snapshot === "stale";
   const editableRef = useRef(editable);
-  const legacy = projection?.legacy ?? false;
 
   // Persist small view preferences only.
   useEffect(() => {
@@ -941,9 +940,7 @@ export function DesignCanvasTab({
         )
           return;
         event.preventDefault();
-        // Legacy canvases may not support undo: confirm there, delete directly otherwise.
-        if (current?.legacy) setDeleteFrame(target);
-        else submitDeleteFrame(target);
+        submitDeleteFrame(target);
       } else if (event.key === "!" || (event.shiftKey && event.code === "Digit1")) {
         event.preventDefault();
         fitAll();
@@ -1169,7 +1166,6 @@ export function DesignCanvasTab({
                   canvasId={canvasId}
                   frames={frames}
                   metas={metas}
-                  legacy={legacy}
                   getBridge={(frameId) => bridges.current.get(frameId)}
                   liveFrames={plan.live}
                   pendingFrames={pendingFrames}
@@ -1333,7 +1329,7 @@ export function DesignCanvasTab({
                       selected={selection?.frameId === frame.id ? selection : null}
                       pending={pendingFrames.has(frame.id)}
                       failure={failureForLane(projection?.intents ?? [], frame.id)}
-                      canRestorePrevious={!legacy}
+                      canRestorePrevious
                       focused={focusedFrame === frame.id}
                       frameSelected={selectedFrameId === frame.id}
                     />
@@ -1350,7 +1346,6 @@ export function DesignCanvasTab({
                 frame={selectedFrame}
                 meta={selectedMeta}
                 bridge={bridgeMap.get(selection.frameId)}
-                legacy={legacy}
                 status={{
                   pending: Boolean(selectionIntent && selectionIntent.phase !== "settled"),
                   failure:

@@ -185,6 +185,32 @@ describe("NativeChatShell", () => {
     expect(lastVirtualizedMessageListProps?.animateArrivals).toBe(true);
   });
 
+  test("keeps the list's inputs across a render that changes nothing they show", () => {
+    const props = shellProps();
+    const { rerender } = render(<NativeChatShell {...props} />);
+    const first = lastVirtualizedMessageListProps!;
+
+    rerender(<NativeChatShell {...props} isAtBottom={false} composer={<textarea />} />);
+
+    const second = lastVirtualizedMessageListProps!;
+    expect(second).not.toBe(first);
+    for (const input of ["computeItemKey", "renderMessage", "emptyState", "footer"]) {
+      expect(second[input], input).toBe(first[input]);
+    }
+  });
+
+  test("the footer shows a turn running on its own, with no clock or status label", () => {
+    const props = shellProps();
+    const { rerender } = render(<NativeChatShell {...props} />);
+    expect(screen.queryByText(/is thinking/) === null).toBe(true);
+
+    rerender(<NativeChatShell {...props} isLoading />);
+    expect(screen.getByText(/is thinking/)).toBeTruthy();
+
+    rerender(<NativeChatShell {...props} />);
+    expect(screen.queryByText(/is thinking/) === null).toBe(true);
+  });
+
   test("shows a desync warning while already at the bottom without another accessory", () => {
     render(<NativeChatShell {...shellProps()} desynced />);
 

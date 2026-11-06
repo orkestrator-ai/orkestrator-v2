@@ -5,7 +5,7 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync } from "node:f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { installFatalRejectionGuard } from "@orkestrator/protocol/fatal-rejections";
-import { HttpBridgeInteractionAdapter } from "../../apps/backend/src/core/http-bridge-interactions";
+import { HttpBridgeInteractionAdapter } from "../../apps/backend/src/core/http-bridge/interactions";
 
 installFatalRejectionGuard({ label: "[codex-elicitation-browser-fixture]" });
 const root = mkdtempSync(join(tmpdir(), "codex-elicitation-browser-"));

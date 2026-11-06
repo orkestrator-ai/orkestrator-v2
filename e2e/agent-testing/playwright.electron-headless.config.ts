@@ -1,5 +1,6 @@
 import { defineConfig } from "@playwright/test";
+import { HEADLESS_CAPABLE_ELECTRON_SPECS } from "./electron-launch-switches";
 import electron from "./playwright.electron.config";
 
-// Only this journey implements the explicit headless opt-in.
-export default defineConfig(electron, { testMatch: ["design-canvas-electron.spec.ts"] });
+// Only these specs implement the explicit headless opt-in everywhere they launch.
+export default defineConfig(electron, { testMatch: [...HEADLESS_CAPABLE_ELECTRON_SPECS] });

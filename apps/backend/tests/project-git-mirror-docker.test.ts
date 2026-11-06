@@ -155,7 +155,22 @@ test.skipIf(!enabled)(
     );
 
     // A write from inside fails, for root too: the kernel's read-only bind.
-    for (const user of ["node", "root"]) {
+    // The kernel checks file permissions before the mount's read-only flag, so
+    // `node` reaches that flag only when it owns the mirror: when the backend's
+    // host user is uid 1000. Otherwise (GitHub's runners, a rootless daemon) it
+    // is refused by permission first. Root bypasses permissions either way, so
+    // it always proves the bind itself is read-only.
+    const nodeOwnsMirror =
+      (await second.inContainer(
+        "sh",
+        "-c",
+        "test -O /orkestrator-git-mirror/mirror.git/config && echo owner || echo other",
+      )) === "owner";
+    const expectedWriteError = {
+      node: nodeOwnsMirror ? "Read-only file system" : "Permission denied",
+      root: "Read-only file system",
+    };
+    for (const user of ["node", "root"] as const) {
       const write = spawnSync(
         "docker",
         [
@@ -170,7 +185,7 @@ test.skipIf(!enabled)(
         { encoding: "utf8" },
       );
       expect(write.status).toBe(42);
-      expect(write.stderr).toContain("Read-only file system");
+      expect(write.stderr).toContain(expectedWriteError[user]);
     }
     const mounts = await docker([
       "inspect",

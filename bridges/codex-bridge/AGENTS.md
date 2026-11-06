@@ -69,7 +69,10 @@ and, tracked again, re-renders only the items that changed. The turn's end also 
 again every row let go while a card could still read as running. A publish
 tick renders only the rows that moved, and a row whose sub-agents have all
 finished (a failed spawn waits for none) is probed again only on new lifecycle
-evidence.
+evidence. A child's progress reaches only its own rollout, so while any card of
+a running turn is unsettled each publish arms one follow-up publish a probe
+interval later (`scheduleSubagentProbe`); never make a card's hydration wait on
+the next parent event, which may not come until the turn ends.
 
 A steer goes above every row whose items all followed it — the next response
 can open its row while `turn/steer` is in flight — and never freezes an empty
@@ -303,14 +306,17 @@ replay shows it as the card, never as a message the user typed. See
   `pipeline`) carry `features.default_mode_request_user_input = true`
   (`codexRequestUserInputConfig`) so the question parks as a card; a pipeline
   keeps the refusal, because nobody would answer it. Verified against 0.164.0
-  by `live-request-user-input.test.ts` (no credits).
+  and 0.166.0 by `live-request-user-input.test.ts` (no credits).
 - Never publish a parked question as non-blocking. Codex sends a Default-mode
   question with `isBlocking: false`, but its core awaits the answer with no
   timeout of its own (`is_blocking` only tells a client it may auto-resolve;
   the TUI sends an empty answer after two minutes). `describeInteraction`
   publishes every question `isBlocking: true` and uses the wire flag only for
   the deadline: `true` waits indefinitely, otherwise the bounded, pausable
-  one, whose expiry cancels with the same empty answer.
+  one (5 minutes, 24 h when paused), whose expiry cancels with the same empty
+  answer. `fake-question-deadline.test.ts` holds one past it on a manual clock
+  through the fake app-server's `question` script, which sends what 0.166.0
+  sends; keep that script in step on a Codex bump.
 - A pause (`POST …/approvals/:id/hold`, `…/interactions/:id/hold`) only moves the
   parked request's `InteractionDeadline` to its hold ceiling (24 h, or a
   question's `autoResolutionMs`); expiry still declines or cancels. A hold never

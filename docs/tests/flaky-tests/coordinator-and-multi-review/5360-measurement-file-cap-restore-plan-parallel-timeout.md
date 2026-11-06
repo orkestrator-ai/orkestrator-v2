@@ -103,6 +103,39 @@ under the same temporary root. The nine-worker component browser suite was
 also running. No isolated pass, new root cause or fix is claimed; no assertion,
 deadline, skip or implementation changed.
 
+## Transcript restoration review — 2026-11-06
+
+The first concurrent default rerun reported this case at 5,986.09 ms; the
+second reported 5,776.24 ms plus a between-test closed-database error. The
+branch changes no measurement implementation or owning test. Evidence:
+`orkestrator-test-run.PCIx5Q/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+and `orkestrator-test-run.IKjOmZ/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`, under the host temporary directory.
+
+`mise run test:logged -- --name repair-measurement-cap-alone -- bun test --cwd apps/backend ./src/core/change-tracking/measurement-file-cap.test.ts --parallel=1 --only-failures`
+still failed: 19 pass, one fail, one error, 12.33 s. The deadline was 5,512.50 ms,
+followed by outstanding work querying the closed database. Isolated evidence:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.eBdt0k/repair-measurement-cap-alone.log.gz`.
+No isolated pass, environmental cause or fix is claimed; the failure is left
+for verification. No assertion, deadline, skip or implementation changed.
+
+## Restore preflight deadline change — 2026-11-06
+
+On `restore-preflight-802618f96f69-r1` (to-do 4960 task 2, which makes the
+restore preview's preflight deadline grow with the plan in `restore.ts`), a
+focused run of four change-tracking files without the preload
+(`mise run test:logged -- --name restore-preflight -- bun --cwd=apps/backend test src/core/change-tracking/restore-preflight.test.ts src/core/change-tracking/measurement-file-cap.test.ts src/core/change-tracking/review-regressions.test.ts src/core/change-tracking/acceptance-storage.test.ts --parallel=2 --only-failures`)
+timed this case out at 5,661.69 ms (52 pass, one fail, one between-test
+error). The owning file alone
+(`mise run test:logged -- --name cap-alone -- bun --cwd=apps/backend test src/core/change-tracking/measurement-file-cap.test.ts --parallel=1 --only-failures`)
+timed it out again at 6,004.19 ms (19 pass). Host load average 51 to 55 on 18
+cores. Both stack traces end at `measurement-file-cap.test.ts:475`, the
+`turnMeasurement` call straight after the 2,050-file `runTurn`, so the time
+ran out in the turn's capture, before the test reaches the restore code this
+branch changed. For diagnosis only,
+`mise run test:logged -- --name cap-diag -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/change-tracking/measurement-file-cap.test.ts ./src/core/change-tracking/restore-preflight.test.ts --parallel=1 --timeout=30000 --only-failures`
+passed in 18.9 s. No isolated pass at the default deadline, so this stays
+unresolved; no assertion, deadline or skip changed.
+
 ### Resolution — 2026-11-06
 
 - **Root cause:** the case is deliberately about the production cap

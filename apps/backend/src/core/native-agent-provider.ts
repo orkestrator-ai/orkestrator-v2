@@ -5,8 +5,7 @@ import {
   type BridgeConnection,
   type NativeAgentRuntimeProvider,
 } from "./agent-provider-contract.js";
-import { HttpBridgeProvider } from "./http-bridge-provider.js";
-import type { HttpBridgeProviderDependencies } from "./http-bridge-transport.js";
+import { HttpBridgeProvider, type HttpBridgeProviderDependencies } from "./http-bridge/index.js";
 import type { AppConfig } from "./models.js";
 import type { OpenCodeCoordinatorResearch } from "./opencode-coordinator-research.js";
 import type { NativeAgentReadiness } from "@orkestrator/protocol/native-agent";

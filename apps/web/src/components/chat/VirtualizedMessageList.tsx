@@ -7,6 +7,7 @@ import {
 } from "./chat-find-context";
 import {
   Component,
+  memo,
   type ReactNode,
   type RefObject,
   useCallback,
@@ -130,6 +131,17 @@ interface VirtualizedMessageListProps<TMessage> {
     onCommentDone?: () => void;
   };
 }
+
+/**
+ * `react-virtuoso` republishes every prop into its store from a layout effect
+ * with no dependency list, which forces a nested update that renders the
+ * visible rows again. So a render must not reach `<Virtuoso>` at all unless a
+ * prop changed: every prop below has to keep its identity while nothing it
+ * shows changes, and a caller's inline `renderMessage` simply renders as before.
+ */
+const StableVirtuoso = memo(Virtuoso) as typeof Virtuoso;
+const VIRTUOSO_VIEWPORT_MARGIN = { top: 400, bottom: 200 };
+const VIRTUOSO_STYLE = { height: "100%" };
 
 const EMPTY_SEARCH_TEXT = () => "";
 const SEARCH_CONTENT_SELECTOR = "[data-agent-chat-search-content]";
@@ -904,6 +916,51 @@ export function VirtualizedMessageList<TMessage>({
   // Leaving the transcript ends its find session and its temporary reveals.
   useEffect(() => () => restoreRichFindReveals(findInstanceId), [findInstanceId]);
 
+  const virtuosoItemKey = useCallback(
+    (absolute: number, data: TMessage) => computeItemKey(absolute - firstItemIndex, data),
+    [computeItemKey, firstItemIndex],
+  );
+  // The match's row rather than the match: a new match list that leaves the
+  // current match on the same row changes nothing the rows show.
+  const currentFindIndex = chatFind.isOpen ? (chatFind.currentMatch?.itemIndex ?? null) : null;
+  const virtuosoItemContent = useCallback(
+    (absolute: number, data: TMessage) => {
+      const index = absolute - firstItemIndex;
+      const rowKey = computeItemKey(index, data);
+      return (
+        <TranscriptRow
+          rowKey={rowKey}
+          index={index}
+          tracker={tracker}
+          arrivals={arrivals}
+          isCurrentFindMessage={currentFindIndex === index}
+          isHighlighted={highlightedItemKey !== null && rowKey === highlightedItemKey}
+        >
+          {renderMessage(
+            index,
+            data,
+            resolvePreviousMessage
+              ? resolvePreviousMessage(messages, index)
+              : index > 0
+                ? (messages[index - 1] ?? null)
+                : null,
+          )}
+        </TranscriptRow>
+      );
+    },
+    [
+      arrivals,
+      computeItemKey,
+      currentFindIndex,
+      firstItemIndex,
+      highlightedItemKey,
+      messages,
+      renderMessage,
+      resolvePreviousMessage,
+      tracker,
+    ],
+  );
+
   return (
     <div ref={rootRef} className="relative min-h-0 flex-1">
       <PreCommitAnchor messages={messages} controller={controller} />
@@ -933,38 +990,13 @@ export function VirtualizedMessageList<TMessage>({
       ) : null}
       <StaticDocumentFindContext value={documentFind}>
         <LiveArrivalsContext value={animateArrivals}>
-          <Virtuoso
+          <StableVirtuoso
             ref={virtuosoRef}
             data={messages}
             context={context}
             firstItemIndex={firstItemIndex}
-            computeItemKey={(absolute, data) => computeItemKey(absolute - firstItemIndex, data)}
-            itemContent={(absolute, data) => {
-              const index = absolute - firstItemIndex;
-              const rowKey = computeItemKey(index, data);
-              return (
-                <TranscriptRow
-                  rowKey={rowKey}
-                  index={index}
-                  tracker={tracker}
-                  arrivals={arrivals}
-                  isCurrentFindMessage={
-                    chatFind.isOpen && chatFind.currentMatch?.itemIndex === index
-                  }
-                  isHighlighted={highlightedItemKey !== null && rowKey === highlightedItemKey}
-                >
-                  {renderMessage(
-                    index,
-                    data,
-                    resolvePreviousMessage
-                      ? resolvePreviousMessage(messages, index)
-                      : index > 0
-                        ? (messages[index - 1] ?? null)
-                        : null,
-                  )}
-                </TranscriptRow>
-              );
-            }}
+            computeItemKey={virtuosoItemKey}
+            itemContent={virtuosoItemContent}
             components={components}
             // Literal false whenever following may not run: Virtuoso's size and
             // viewport paths test `followOutput !== false`, so a function that
@@ -988,8 +1020,8 @@ export function VirtualizedMessageList<TMessage>({
             // below those outliers; it also bounds the cold-fill render count.
             // Measured and restored rows retain their real heights.
             defaultItemHeight={320}
-            increaseViewportBy={{ top: 400, bottom: 200 }}
-            style={{ height: "100%" }}
+            increaseViewportBy={VIRTUOSO_VIEWPORT_MARGIN}
+            style={VIRTUOSO_STYLE}
             className="py-4"
           />
         </LiveArrivalsContext>

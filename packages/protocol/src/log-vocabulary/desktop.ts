@@ -87,6 +87,7 @@ export const DESKTOP_LOG_AREAS = defineLogAreas({
     events: {
       "attention-failed": "A dialog could not ask for the user's attention.",
       closed: "A native dialog closed.",
+      "hidden-cancelled": "A hidden profile cancelled a dialog without opening native UI.",
       "open-failed": "A dialog could not open; it was answered as cancelled.",
       opening: "A native dialog is opening.",
       "preview-beforeunload-ignored": "A browser preview's beforeunload handler was ignored.",

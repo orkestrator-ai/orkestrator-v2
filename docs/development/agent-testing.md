@@ -63,6 +63,8 @@ without a running profile. No provider turns are enabled. Linux Electron runs
 headless. On Linux hosts with exhausted automatic Docker pools, its scoped Docker
 shim tries otherwise-unrouted /29 networks in 172.16.240.0/22 only for labelled
 fixture networks. Docker refuses overlaps atomically; other errors propagate.
+Every other Docker call is `exec`ed straight to the real CLI, so a follower or
+exec session the backend stops is stopped itself rather than orphaned.
 The Docker scheduler profile allows ten minutes between reporter lines because
 the annotation cleanup case intentionally waits for a 100-tick, three-second
 backend garbage-collection pass (its own test deadline is nine minutes).
@@ -78,8 +80,10 @@ sequentially.
 
 To work around a host-specific problem without hand-assembling a profile, pass
 `dev:test` profile flags through: `--credential-source <name>` (repeatable),
-`--agent-platforms <list>`, `--no-agent-credentials` and
-`--use-dev-worktree-folder`. A credential or platform flag replaces the
+`--agent-platforms <list>`, `--no-agent-credentials`,
+`--use-dev-worktree-folder` and `--agent-tools-port <n>` (see
+[Containers behind a host firewall](#containers-behind-a-host-firewall---agent-tools-port)).
+A credential or platform flag replaces the
 matching default, for example:
 
 ```bash
@@ -97,9 +101,9 @@ isolated browser run on Linux: it reads `/proc` for the profile's Electron tree 
 display variables, the headless switches on the launcher's child) and loads the app.
 
 Electron specs launch their own Electron rather than the profile's, so the
-profile's headless setting does not apply to them. The design canvas and service
-preview Electron specs support `ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1`
-on Linux; the packaged-app specs are always headless on Linux. See
+profile's headless setting does not apply to them. The design canvas, service
+preview and web annotation Electron specs support
+`ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1` on Linux; the packaged-app specs are always headless on Linux. See
 [Electron specs and their display](#electron-specs-and-their-display) and
 [Packaged-app Electron spec](#packaged-app-electron-spec).
 
@@ -120,12 +124,28 @@ Playwright (`route.fetch()`), which no interface change aborts, and keeps them
 in memory for that context, because routing turns Chromium's HTTP cache off and
 refetching every module on each reload made reloaded pages miss their
 assertions on a loaded host. Navigations, commands and event streams still go
-through Chromium. A spec that opens a
-second context calls `fetchModulesOutsideChromium(context)` on it.
-`browser-gateway.spec.ts` and `client-outage.spec.ts` keep Chromium's own path
-for module loads, because the browser's network path is what they test.
-`browser-test.test.ts` fails when a new spec in `playwright.browser.config.ts`
-uses neither, or creates a context it does not route.
+through Chromium; a `goto` or `reload` that Chromium aborted with
+`net::ERR_NETWORK_CHANGED` gets up to three attempts in all (two retries). A
+one-shot login navigation mints a fresh link after a network abort. A spec that
+opens a second context calls `fetchModulesOutsideChromium(context)` on it.
+`client-outage.spec.ts` keeps Chromium's own path for module loads, because the
+browser's network path through outages is what it tests. In
+`browser-gateway.spec.ts` one case, "the gateway serves the renderer's modules
+to Chromium's own network stack", sets `modulesThroughChromium` and loads the
+app through Chromium, loading again when its modules were lost only to network
+changes, up to four loads in all. Its explicit timeout covers setup, all four
+loads (including navigation retries), and final classification. Under very heavy
+churn all four loads can still lose, and its error then says so.
+`browser-test.test.ts` fails when a new spec in
+`playwright.browser.config.ts` uses neither, creates a context it does not
+route, or another case opts out.
+
+`mise run test:browser` (the component and public-site suites) needs only
+loopback, so on Linux both suites run through `scripts/loopback-network.ts` in a
+private user and network namespace with only loopback raised, where no host
+interface change can reach Chromium. A host that cannot create the namespace
+(no unprivileged user namespaces, or no `ip`) runs them on the host network and
+prints why; `ORKESTRATOR_E2E_HOST_NETWORK=1` does that on purpose.
 
 Both full browser tasks (`test:agent:browser` and its isolated variant) build
 the packaged CLI first (`build:cli:test`, which sets no build commit and so
@@ -504,14 +524,28 @@ place them in that folder instead; `mise run dev` always uses it.
 
 #### Headless Electron
 
-A profile's Electron inherits `DISPLAY` and `WAYLAND_DISPLAY`, which on a shared
-Linux host belong to whoever is signed in. Its window would open on their
-desktop, take focus and receive their keystrokes. `--headless` (`dev:test`
-only) starts it on Chromium's headless Ozone platform instead, with the GPU off,
-`--password-store=basic` (so `safeStorage` never reaches the signed-in user's
-keyring, and the desktop's remote connection tokens last only for the session)
-and neither display variable. No window opens, and the app is at `browserUrl`.
-The launcher prints when this mode is on and why.
+A profile's Electron opens its window on whatever desktop started it. On a
+shared Linux host `DISPLAY` and `WAYLAND_DISPLAY` belong to whoever is signed
+in, and on macOS there is only the signed-in desktop, so the window would open
+there, take focus and receive their keystrokes. `--headless` (`dev:test` only)
+keeps it off the desktop. No window opens, and the app is at `browserUrl`. The
+launcher prints when this mode is on and why.
+
+- **Linux** starts Electron on Chromium's headless Ozone platform, with the GPU
+  off, `--password-store=basic` (so `safeStorage` never reaches the signed-in
+  user's keyring, and the desktop's remote connection tokens last only for the
+  session) and neither display variable.
+- **macOS** has no Ozone, so Electron runs normally with
+  `ORKESTRATOR_AGENT_TEST_HIDDEN_WINDOWS=1`: the app takes the `accessory`
+  activation policy (no Dock icon, no menu bar, never the active app), every
+  window it constructs is hidden (`hidden-windows.ts`), and the development
+  DevTools window stays closed. The keychain is already mocked for every
+  agent-test profile on macOS. Only an agent-test profile honours the variable,
+  and the launcher sets or clears it itself. Native message and error dialogs
+  are answered as cancelled without opening UI or a host window. The
+  `desktop.dialog` `hidden-cancelled` event records the source and response,
+  never dialog text; uncaught exceptions still log their error.
+- **Windows** has neither, so the flags change nothing there.
 
 The first of these that applies decides:
 
@@ -530,12 +564,50 @@ it cannot be told apart from a person. Conversely, a person piping the launcher
 to `tee` who wants the window passes `--no-headless`. `--headless-electron`
 still works as another spelling of `--headless`.
 
-`mise run dev` never goes headless and rejects these flags. On macOS and Windows
-they are accepted and change nothing, because Ozone does not exist there.
+`mise run dev` never goes headless and rejects these flags. On Windows they are
+accepted and change nothing; when anything above would have made Linux headless
+(the flag, a variable, or no terminal), the launcher says that Electron opens a
+window and which input it ignored, so an agent's run there does open a window
+on the desktop.
 
 Do not use a headless profile for native-window, menu or clipboard QA:
-`capturePage` hangs in this mode. The switch has to be on Electron's command
+`capturePage` hangs in this mode on Linux, and on macOS the menu bar and the
+window are never shown. On Linux the switch has to be on Electron's command
 line, so the launcher adds it; Electron's main script cannot apply it.
+
+### Live macOS hidden-profile qualification
+
+Unit tests inject `darwin`; they do not establish macOS focus, Dock or sheet
+behavior. Run this on a Mac with a disposable `dev:test --fixture` profile,
+using the lifecycle, login and cleanup instructions above. Keep qualification
+open until all of the following have observed evidence:
+
+1. Launch from an unattended shell with no headless flag. Before launch, focus
+   another application. Observe startup through readiness: focus stays there,
+   no Dock icon flashes, and no chooser, progress, main or DevTools window
+   appears. Discover `browserUrl` using `dev:status --json`; verify `ready`
+   and all supervised processes live.
+2. Repeat with a fresh profile whose isolated toolchain requires bootstrap
+   (do not alter the installed toolchain). Observe both platform selection and
+   progress windows through bootstrap completion, with the same focus and
+   visibility checks. Record which bootstrap states actually ran.
+3. Run `mise run test:agent:browser` through `test:logged` with
+   `ORKESTRATOR_AGENT_TEST_PROFILE` set to that profile. This establishes
+   browser readiness and reload behavior while Electron remains hidden.
+4. In an instrumented disposable Electron test run, emit a synthetic main
+   process `uncaughtException`, request a renderer message box, and request a
+   remote-restart dialog. Test before a main window exists and with a hidden
+   parent. Verify no native UI, host window or focus change, the cancel
+   response, and a `hidden-cancelled` event for each source. Do not inject
+   exceptions into production or log dialog contents.
+5. Stop/reset the profile, then launch a fresh fixture with `--no-headless`
+   from the same unattended shell. Verify the ordinary window and Dock icon
+   appear. Stop/reset it afterwards.
+
+Record the commit, macOS/Electron versions, profile, exact commands, results
+and cleanup. A Linux pass or a mocked activation-policy call cannot close this
+qualification. Current task tracking is in
+[2181, task 4](../todo/cross-cutting/2181-dev-test-electron-opens-on-the-linux-desktop.md).
 
 None of this reaches the [Electron specs](#electron-specs-and-their-display),
 which launch their own Electron.
@@ -606,8 +678,87 @@ it is missing. Rebuild it explicitly without touching `orkestrator-v2:latest`:
 mise run docker:build:dev --profile container-qa
 ```
 
+### Containers behind a host firewall: `--agent-tools-port`
+
+A profile's containers reach its backend's agent tools server (signal rings,
+the Orkestrator Agent MCP) through the host-gateway alias. Each installation
+keeps its own agent tools port, and a new profile gets a random one, so on a
+Linux host whose input firewall drops traffic by default (ufw's
+`DEFAULT_INPUT_POLICY="DROP"`) an allowance for the installed app's port does
+not admit any profile. Rings then never arrive: recurring diagnostics show the
+signals `unconfirmed` and the containers stay on their fallback timers.
+
+`dev:test --agent-tools-port <n>` gives the profile an exact port instead:
+
+```bash
+mise run dev:test --profile container-qa --fixture --fixture-environments local,container \
+  --agent-tools-port 31500
+```
+
+- The port is recorded in the profile (`agentToolsPort` in `profile.json`), so
+  a restart without the flag keeps it; a later flag replaces it and
+  `dev:reset` forgets it.
+- A port something already listens on stops the start before anything is
+  launched or recorded. The profile never falls back to a random port, which
+  would quietly put it outside the firewall rule. Two live profiles therefore
+  need two ports.
+- 34121, 34122 and 45507 are refused (the installed app's gateway and control
+  ports, and the installed app's agent tools port on the Linux qualification
+  host), as is anything below 1024.
+- The flag belongs to `dev:test`; `mise run dev` rejects it.
+
+Use the range **31500–31509**: ten profiles, one firewall rule. It is below
+Linux's ephemeral range (32768–60999) and macOS's (49152–65535), so the OS
+never hands one of those ports to another socket.
+
+The one rule, admitting TCP from Docker's 172.16.0.0/12 pools (the default
+bridge, the default address pools and the qualification `/29` shim) to the
+range, is:
+
+```bash
+sudo ufw allow proto tcp from 172.16.0.0/12 to any port 31500:31509 comment 'Orkestrator agent-test agent tools'
+```
+
+Changing the host firewall is the host owner's decision; agents never run it.
+A profile whose environment network was allocated from a `192.168.0.0/16` pool
+needs that network's subnet admitted as well (`docker network inspect` shows
+it), as the installed app's own rule on such a host does. The rule is removed
+with the same arguments after `sudo ufw delete allow`. The agent tools server's
+own peer filter still refuses any peer outside loopback and the profile's own
+Docker networks, and every call needs a credential, so the rule widens the
+route, not who may use it.
+
 Never add the live Orkestrator source checkout as the project under test. Use the
 copied `testProject` only.
+
+#### Container profiles on an exhausted Docker address pool
+
+When Docker's automatic address pools are full, a manual container profile
+fails at startup with `ContainerLifecycleError:resource-exhausted: Docker has no
+free address range for another environment network`. Agents must not free other
+runs' networks to get past it. Start the profile with the same scoped Docker
+shim that `test:agent:docker:isolated` puts on PATH:
+
+```bash
+ORKESTRATOR_QUALIFICATION_DOCKER="$(command -v docker)" \
+PATH="$PWD/apps/desktop/scripts/dev/docker-qualification-bin:$PATH" \
+mise run dev:test --profile container-qa --fixture --fixture-environments local,container
+```
+
+Run it from the worktree root, and keep the same two variables on any later
+`dev:test` restart of that profile. The shim
+(`apps/desktop/scripts/dev/docker-qualification.ts`) changes only
+`docker network create` calls that carry an `orkestrator-owner=` label and no
+`--subnet`. When such a call fails because the pools are exhausted, it retries
+on otherwise-unrouted /29s in 172.16.240.0/22. Docker refuses an overlap
+atomically, and every other error is passed back unchanged. It needs `ip` to
+check routes; without it, exhaustion stays a hard failure. The fixture's
+environment network then shows a `172.16.24x.y/29` subnet. With the
+host-reachability check on, the profile's probe network is created on a /29 in
+the same way and removed again when the check ends. `dev:stop` and `dev:reset`
+need no shim. `dev:stop` stops the tracked processes; `dev:reset` removes the
+profile's own networks by owner label. Never put the shim on the PATH of
+anything but a disposable profile.
 
 ## Automated checks
 
@@ -630,7 +781,8 @@ mise run test:logged -- --name agent-browser -- mise run test:agent:browser
 
 mise run test:logged -- --name agent-electron -- mise run test:agent:electron
 
-# Against a profile started with --fixture-environments local,container:
+# Against a profile started with --fixture-environments local,container
+# (on an exhausted Docker pool, start it with the shim described above):
 ORKESTRATOR_AGENT_TEST_PROFILE=container-qa \
 mise run test:logged -- --name agent-docker -- mise run test:agent:docker
 
@@ -737,7 +889,8 @@ profile. Run one provider at a time (flake 0420). Each provider writes
 The live idle-observation spec (`e2e/agent-testing/idle-observation-live.spec.ts`)
 has its own opt-in, `ORKESTRATOR_AGENT_TEST_LIVE_IDLE_OBSERVATION=1`. For each
 provider in `ORKESTRATOR_AGENT_TEST_IDLE_PLATFORMS` (default all six) it runs
-one native tab through a missed final event, a parked approval, a sub-agent, a
+one native tab through a missed final event, a bridge restart while the idle
+group is backed off (local Claude and Codex), a parked approval, a sub-agent, a
 background shell, a cut event stream with the browser offline, a hidden
 document, a turn that completes with no renderer connected, and an idle wait
 past the 10 min idle detach. Each case must settle with no stuck Stop button
@@ -746,7 +899,11 @@ the page (an `EventSource` and `document.visibilityState` wrapper), not in the
 product. `ORKESTRATOR_AGENT_TEST_IDLE_CASES` narrows the cases,
 `ORKESTRATOR_AGENT_TEST_IDLE_DETACH_WAIT_MS` shortens the idle wait for a
 cadence-only check, and `ORKESTRATOR_AGENT_TEST_IDLE_MODELS` takes
-`<platform>=<model>` pairs. Providers run in parallel with `--workers=4
+`<platform>=<model>` pairs. `ORKESTRATOR_AGENT_TEST_IDLE_FAKE_MODELS=1` runs
+Claude and Codex against scripted loopback models instead, with no login and
+nothing billed (the profile setup is in the spec's header), and
+`ORKESTRATOR_AGENT_TEST_IDLE_ENVIRONMENT=container` runs Claude in a new
+container environment from the profile's development image. Providers run in parallel with `--workers=4
 --fully-parallel`; run one provider alone to measure a lost announcement,
 because another environment's announcement also recovers a view (stamp gap).
 Each provider writes
@@ -964,14 +1121,51 @@ spec report a launch timeout. The Wayland rendering case in
 run under that command. The packaged-app specs are always headless on Linux (see
 [Packaged-app Electron spec](#packaged-app-electron-spec)).
 
-`design-canvas-electron.spec.ts` is the one spec in that config that can run
-without a display. It reads `ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1` on Linux
-and launches its Electron with the same switches and no display variables:
+`design-canvas-electron.spec.ts` and `web-annotations-electron.spec.ts` can run
+with no display at all (`HEADLESS_CAPABLE_ELECTRON_SPECS` in
+`electron-launch-switches.ts`; the preflight admits a run with no display only
+when it is limited to those). Each reads
+`ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1` on Linux and launches its Electron
+with the same switches and no display variables:
 
 ```bash
-ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1 bunx playwright test \
-  --config e2e/agent-testing/playwright.electron-headless.config.ts
+env -u DISPLAY -u WAYLAND_DISPLAY ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1 \
+  bunx playwright test --config e2e/agent-testing/playwright.electron-headless.config.ts \
+  web-annotations-electron.spec.ts --workers=1
 ```
+
+On a host where other work creates and removes Docker networks, the
+Vite-served renderer of these specs loses its modules to
+[2340](../tests/flaky-tests/aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md).
+The local cases of the annotation spec pass inside a loopback-only network
+namespace, nested so Electron runs under your own uid rather than as namespace
+root:
+
+```bash
+env -u DISPLAY -u WAYLAND_DISPLAY ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1 \
+  unshare -rn sh -c "ip link set lo up && exec unshare --user --map-user=$(id -u) \
+  --map-group=$(id -g) mise run test:logged -- --name annotations-electron -- \
+  bunx playwright test --config e2e/agent-testing/playwright.electron-headless.config.ts \
+  web-annotations-electron.spec.ts --workers=1"
+```
+
+The double quotes matter: `$(id -u)` must expand in your shell, before the
+outer `unshare` maps you to root.
+
+Its container cases (`ORKESTRATOR_AGENT_TEST_ELECTRON_CONTAINER=1`) cannot use
+the namespace, because container ports are published in the host's. Run them
+in the host namespace: the spec's launcher reloads a startup that lost its
+modules to `ERR_NETWORK_CHANGED` (`waitForRendererStart`, to-do
+[7062](../todo/cross-cutting/7062-electron-specs-recover-network-changed-startup.md)),
+which is enough for those two cases but not for the whole spec, whose later
+lazy loads can still be aborted. When automatic Docker pools are exhausted,
+put `apps/desktop/scripts/dev/docker-qualification-bin` first on `PATH`, as the
+isolated Docker runner does.
+The spec's `desktop captures of the gateway spec's targets match the recording it
+replays` case checks `web-annotations-native-captures.json`, the desktop
+captures the gateway spec replays. After an intended change to what a capture
+records, rerun it with `ORKESTRATOR_AGENT_TEST_UPDATE_NATIVE_CAPTURES=1` and
+review the file's diff.
 
 Its Vite-served renderer is exposed to
 [2340](../tests/flaky-tests/aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md)
@@ -1082,6 +1276,20 @@ live tail for gaps, duplicates and order without reading model prose.
   the top, which is the only position it can take. Each click records a
   content-free `-layout` annotation (part ids, stops, boxes, scroll range)
   so a drift can be attributed without reading transcript text.
+  A Codex case then restarts the environment's bridge under the mounted tab
+  (the first replay after live streaming renames every row): the backend must
+  page every row once with the same call ids, stops in the same rows, and the
+  tab must render no row or stop twice and keep the reader's place.
+- **Codex without a login.** `ORKESTRATOR_AGENT_TEST_PAGING_CODEX_LOOPBACK=1`
+  runs only the native case, on the profile's pinned Codex, with the
+  profile's own Codex `config.toml` pointed at
+  `e2e/agent-testing/transcript-paging-codex-model.ts` (a loopback stand-in
+  for the Responses WebSocket that walks the trail; restored afterwards). It
+  costs nothing and takes about a minute. Start the profile with `CODEX_HOME`
+  set to a throwaway directory whose `auth.json` holds a made-up
+  `OPENAI_API_KEY` (`{"auth_mode":"apikey","OPENAI_API_KEY":"sk-loopback"}`),
+  so no real login is copied in:
+  `CODEX_HOME=<that dir> mise run dev:test --profile <name> --fixture --headless --credential-source codex --agent-platforms codex`.
 - **Multi Review** (a Claude Haiku and a Codex GPT-6-Luna reviewer, 130 stops).
   The trail protocol is in an `AGENTS.md` that is part of the change. Codex
   loads it as instructions; a Claude reviewer runs read-only without project
@@ -1575,6 +1783,11 @@ send an empty answer. Neither elapsed window can be shortened by an environment
 variable. The longer watchdog allows Bun to buffer output from the long test.
 This uses a loopback model and fake key; the browser qualification
 below additionally covers real-model behavior, card controls and reload.
+Recorded passes: Codex 0.164.0 on macOS arm64 (2026-10-27, 652.8 s) and Codex
+0.166.0 on Linux x64 (2026-11-06, 631.0 s, binary from
+`mise run download:codex` passed as `CODEX_PROTOCOL_BINARY`). The default
+suite's `fake-question-deadline.test.ts` covers the same held and expired
+cases in under a second, on a manual clock against the fake app-server.
 
 The launch-policy renderer regression is also exercised against a running
 container in `native-draft-attachments.spec.ts`. On a disposable Docker fixture

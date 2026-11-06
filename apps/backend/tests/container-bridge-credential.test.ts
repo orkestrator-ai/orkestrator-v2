@@ -1,9 +1,23 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import {
+  BRIDGE_AUTHORITY_HEADER,
+  bridgeAuthorityFromPublicKey,
+  mintBridgeAuthorityKeyPair,
+} from "@orkestrator/protocol/node/bridge-authority";
 import { bridgeTokenVerifier } from "@orkestrator/protocol/node/bridge-credential";
+import {
+  bridgeAuthorityHeaders,
+  forgetBridgeAuthorityKey,
+  hasBridgeAuthorityKey,
+} from "../src/core/bridge-authority-keys";
 import { compatibilityPathUsage } from "../src/core/compatibility-path-usage";
 import {
+  containerAuthorityKeyFile,
+  containerBridgeLauncherInput,
   containerBridgeLaunch,
   containerCredentialFile,
+  CONTAINER_BRIDGE_LAUNCHER,
+  CONTAINER_TOKEN_FILES,
   launchContainerScript,
   readContainerBridgeToken,
   removeContainerBridgeCredential,
@@ -88,6 +102,52 @@ describe("containerBridgeLaunch", () => {
     expect(launch.bun).toBe("bun");
   });
 
+  test.each([
+    ["claude", "CLAUDE_BRIDGE_TOKEN", 4097],
+    ["codex", "CODEX_BRIDGE_TOKEN", 4098],
+    ["cursor", "CURSOR_BRIDGE_TOKEN", 4099],
+    ["grok", "ACP_BRIDGE_TOKEN", 4100],
+    ["pi", "PI_BRIDGE_TOKEN", 4101],
+  ] as const)(
+    "%s on a launcher image is started by root's script, and its shell sees no credential",
+    (kind, tokenEnv, port) => {
+      const launch = containerBridgeLaunch(kind, "launcher", TOKEN);
+      const { rootCredential, launcher } = launch.launch;
+
+      // The node shell only removes an old file and records its environment.
+      expect(launch.script).toBe(`rm -f ${CONTAINER_TOKEN_FILES[kind]}`);
+      expect(launch.start(`/opt/${kind}-bridge/dist/index.js`, "/tmp/x.log")).toBe(
+        `env -0 > ${launcher!.snapshot}`,
+      );
+      expect(launcher!.snapshot).toMatch(
+        new RegExp(`^/tmp/\\.orkestrator-bridge-env-${kind}-[0-9a-f]{32}$`),
+      );
+      // Root keeps the token and the private key; the launcher gives the bridge
+      // the verifier, the public key and the port.
+      expect(rootCredential).toMatchObject({ kind, token: TOKEN });
+      expect(launcher!.kind).toBe(kind);
+      expect(launcher!.env).toEqual({
+        [`${tokenEnv}_SHA256`]: bridgeTokenVerifier(TOKEN),
+        [`${tokenEnv}_AUTHORITY_KEY`]: expect.stringMatching(/^[A-Za-z0-9_-]{40,}$/),
+        PORT: String(port),
+        HOSTNAME: "0.0.0.0",
+      });
+      // The two halves belong together.
+      const verifier = bridgeAuthorityFromPublicKey(launcher!.env[`${tokenEnv}_AUTHORITY_KEY`]);
+      expect(verifier.enforced).toBe(true);
+      expect(rootCredential!.authorityKey).toMatch(/^[A-Za-z0-9_-]{40,}$/);
+      expect(JSON.stringify(launcher!.env)).not.toContain(rootCredential!.authorityKey!);
+    },
+  );
+
+  test("the launcher's input is one checked NAME=VALUE per line", () => {
+    expect(containerBridgeLauncherInput({ PORT: "4097", A_KEY: "x=y" })).toBe(
+      "PORT=4097\nA_KEY=x=y\n",
+    );
+    expect(() => containerBridgeLauncherInput({ PORT: "1\nLD_PRELOAD=/tmp/x" })).toThrow();
+    expect(() => containerBridgeLauncherInput({ "bad name": "1" })).toThrow();
+  });
+
   test("mints a prefixed token when none is given", () => {
     expect(containerBridgeLaunch("pi", "verifier").token).toMatch(/^okb_[A-Za-z0-9_-]{43}$/);
   });
@@ -159,7 +219,90 @@ describe("launchContainerScript", () => {
   });
 });
 
+describe("launchContainerScript with the launcher", () => {
+  test("prepares as node, then starts through root's script with nothing secret in argv", async () => {
+    await withDocker({}, async (read) => {
+      const launch = containerBridgeLaunch("pi", "launcher", TOKEN);
+      const privateKey = launch.launch.rootCredential!.authorityKey!;
+      await launchContainerScript("container", `echo prepare\n${launch.start("", "")}`, {
+        ...launch.launch,
+        secrets: { ORKESTRATOR_AGENT_MCP_TOKEN: AGENT_TOOLS_TOKEN },
+      });
+
+      const { argv, stdin } = await read();
+      const all = argv.join("\n");
+      expect(all).not.toContain(TOKEN);
+      expect(all).not.toContain(privateKey);
+      expect(all).not.toContain(AGENT_TOOLS_TOKEN);
+      const [root, secrets, prepare, start] = argv;
+      // Root's file takes the token and the private key, on stdin.
+      expect(root).toContain("--user root");
+      expect(root).toContain(containerAuthorityKeyFile("pi"));
+      expect(stdin[0]).toBe(`${TOKEN}\n${privateKey}\n`);
+      expect(secrets).toContain("cat > /tmp/.orkestrator-start-");
+      // Preparation runs to completion, not detached, and never sees a verifier.
+      expect(prepare).toMatch(/^exec container bash -lc /);
+      expect(prepare).toContain(`env -0 > ${launch.launch.launcher!.snapshot}`);
+      expect(all).not.toContain(bridgeTokenVerifier(TOKEN));
+      // The bridge itself: no login shell, a fixed PATH, the backend's values on stdin.
+      expect(start!.trim()).toBe(
+        `exec -i --user node --workdir / --env PATH=/usr/sbin:/usr/bin:/sbin:/bin container ${CONTAINER_BRIDGE_LAUNCHER} pi ${launch.launch.launcher!.snapshot}`,
+      );
+      expect(stdin.at(-1)).toContain(`PI_BRIDGE_TOKEN_SHA256=${bridgeTokenVerifier(TOKEN)}\n`);
+      expect(stdin.at(-1)).toContain("PORT=4101\n");
+      expect(stdin.at(-1)).not.toContain(privateKey);
+      // The backend can now sign for that bridge.
+      expect(hasBridgeAuthorityKey(TOKEN)).toBe(true);
+      forgetBridgeAuthorityKey(TOKEN);
+    });
+  });
+
+  test("a failed launcher start removes the snapshot it would have handed over", async () => {
+    await withDocker({ FAKE_DOCKER_FAIL: CONTAINER_BRIDGE_LAUNCHER }, async (read) => {
+      const launch = containerBridgeLaunch("codex", "launcher", TOKEN);
+      await expect(
+        launchContainerScript("container", launch.start("", ""), launch.launch),
+      ).rejects.toThrow();
+      const { argv } = await read();
+      expect(argv.at(-1)).toContain(`rm -f ${launch.launch.launcher!.snapshot}`);
+      forgetBridgeAuthorityKey(TOKEN);
+    });
+  });
+});
+
 describe("readContainerBridgeToken", () => {
+  test("reads the authority key with the token, and signs with it", async () => {
+    const keys = mintBridgeAuthorityKeyPair();
+    await withDocker({ FAKE_ROOT_TOKEN: `${TOKEN}\n${keys.privateKey}` }, async () => {
+      expect(await readContainerBridgeToken("container", "claude")).toBe(TOKEN);
+    });
+    try {
+      expect(hasBridgeAuthorityKey(TOKEN)).toBe(true);
+      const url = "http://127.0.0.1:1/session/s/permissions/r";
+      const body = JSON.stringify({ allow: true });
+      const header = bridgeAuthorityHeaders(TOKEN, "POST", url, body)[BRIDGE_AUTHORITY_HEADER];
+      expect(
+        bridgeAuthorityFromPublicKey(keys.publicKey).check({
+          method: "POST",
+          url,
+          header,
+          body: Buffer.from(body),
+        }),
+      ).toEqual({ ok: true });
+      // Reads and close are not signed.
+      expect(bridgeAuthorityHeaders(TOKEN, "GET", url, undefined)).toEqual({});
+      expect(bridgeAuthorityHeaders(TOKEN, "POST", "http://h/session/s/close", "{}")).toEqual({});
+      // A token read back without a key, from a bridge an older image started, signs nothing.
+      await withDocker({ FAKE_ROOT_TOKEN: `${TOKEN}\n` }, async () => {
+        expect(await readContainerBridgeToken("container", "claude")).toBe(TOKEN);
+      });
+      expect(hasBridgeAuthorityKey(TOKEN)).toBe(false);
+      expect(bridgeAuthorityHeaders(TOKEN, "POST", url, body)).toEqual({});
+    } finally {
+      forgetBridgeAuthorityKey(TOKEN);
+    }
+  });
+
   test("prefers the root file, and root never touches the node-writable /tmp file", async () => {
     await withDocker({ FAKE_ROOT_TOKEN: `${TOKEN}\n` }, async (read) => {
       expect(await readContainerBridgeToken("container", "claude")).toBe(TOKEN);
@@ -227,7 +370,9 @@ test("removing a credential runs as root and names only that bridge's file", asy
 
     const { argv } = await read();
     expect(argv[0]).toContain("--user root");
-    expect(argv[0]!.trim()).toEndWith(`rm -f ${containerCredentialFile("grok")}`);
+    expect(argv[0]!.trim()).toEndWith(
+      `rm -f ${containerCredentialFile("grok")} ${containerAuthorityKeyFile("grok")}`,
+    );
   });
 });
 
@@ -312,7 +457,7 @@ test("token-file launch removes the stale root token before starting", async () 
 describe("startContainerOpenCodeServer", () => {
   /** A fake server that answers health only for the password the script was given. */
   async function withOpenCode(
-    mode: "verifier" | "token-file",
+    mode: "launcher" | "verifier" | "token-file",
     check: (started: { authToken: string }, log: string, argv: string) => void,
   ): Promise<void> {
     const port = await reserveFreePort();
@@ -356,26 +501,29 @@ exit 0
     }
   }
 
-  test("verifier mode keeps the password from everything but the server and root", async () => {
-    await withOpenCode("verifier", (started, log, argv) => {
-      expect(started.authToken).toMatch(/^okb_/);
-      expect(argv).not.toContain(started.authToken);
-      // Root's file, on stdin.
-      expect(argv).toContain("--user root");
-      expect(argv).toContain('mv "$credential_tmp" /run/orkestrator-bridge/opencode-token');
-      expect(log).toContain(`STDIN:${started.authToken}`);
-      // Not left where `node` reads it, and a stale one goes.
-      expect(argv).not.toContain("> /tmp/opencode-server-password");
-      expect(argv).toContain("rm -f /tmp/opencode-server-password");
-      // Handed to the server alone, with the plugin that takes it back in place.
-      expect(argv).toContain("export -n OPENCODE_SERVER_PASSWORD");
-      expect(argv).toContain(`> ${OPENCODE_CREDENTIAL_PLUGIN_PATH}`);
-      expect(argv).toContain(
-        `OPENCODE_SERVER_PASSWORD="$OPENCODE_SERVER_PASSWORD" setsid opencode serve`,
-      );
-      expect(argv).not.toContain("setsid sh -c");
-    });
-  });
+  test.each(["verifier", "launcher"] as const)(
+    "%s mode keeps the password from everything but the server and root",
+    async (mode) => {
+      await withOpenCode(mode, (started, log, argv) => {
+        expect(started.authToken).toMatch(/^okb_/);
+        expect(argv).not.toContain(started.authToken);
+        // Root's file, on stdin.
+        expect(argv).toContain("--user root");
+        expect(argv).toContain('mv "$credential_tmp" /run/orkestrator-bridge/opencode-token');
+        expect(log).toContain(`STDIN:${started.authToken}`);
+        // Not left where `node` reads it, and a stale one goes.
+        expect(argv).not.toContain("> /tmp/opencode-server-password");
+        expect(argv).toContain("rm -f /tmp/opencode-server-password");
+        // Handed to the server alone, with the plugin that takes it back in place.
+        expect(argv).toContain("export -n OPENCODE_SERVER_PASSWORD");
+        expect(argv).toContain(`> ${OPENCODE_CREDENTIAL_PLUGIN_PATH}`);
+        expect(argv).toContain(
+          `OPENCODE_SERVER_PASSWORD="$OPENCODE_SERVER_PASSWORD" setsid opencode serve`,
+        );
+        expect(argv).not.toContain("setsid sh -c");
+      });
+    },
+  );
 
   test("token-file mode keeps an older image's layout and clears a stale root file", async () => {
     await withOpenCode("token-file", (started, log, argv) => {

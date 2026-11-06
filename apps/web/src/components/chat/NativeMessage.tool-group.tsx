@@ -25,6 +25,7 @@ import {
 } from "./NativeMessage.shared";
 import { toolRowPreview } from "./NativeMessage.basic-parts";
 import { pureprependCount } from "@/lib/transcript-scroll/prepend";
+import { INNER_SEEK_EVENT } from "@/lib/transcript-scroll/transcript-scroll-controller";
 import { keepMountedOverscan, useRatchetedOverscan } from "@/lib/transcript-scroll/keep-mounted";
 import {
   LiveArrivalsContext,
@@ -53,7 +54,13 @@ export const TOOL_GROUP_BODY_MAX_HEIGHT = "min(28rem, 55dvh)";
 /** Bootstrap estimate for an unmeasured entry; measured sizes replace it. */
 const ENTRY_ESTIMATE_PX = 40;
 
-const INNER_FOLLOW = () => "auto" as const;
+/**
+ * Virtuoso passes its synchronous at-end flag (or a programmatic scroll still
+ * in progress). `atBottomStateChange`, and with it `following`, arrives 50 ms
+ * after the scroll, so an append inside that window would otherwise pull a
+ * reader who has just left the end back to it.
+ */
+const INNER_FOLLOW = (atEnd: boolean) => (atEnd ? ("auto" as const) : false);
 
 /** Within this of the inner end, the inner list counts as following its tail. */
 const INNER_END_TOLERANCE_PX = 2;
@@ -63,6 +70,19 @@ export function toolGroupEntryKey(part: NativeMessagePart, index: number): strin
   const id =
     part.type === "tool-invocation" ? (part.toolUseId ?? part.sourcePartId) : part.sourcePartId;
   return id ? `id:${id}` : `pos:${index}:${part.type}`;
+}
+
+/**
+ * The entry a transcript anchor names, by the same id the entry renders as
+ * its `data-transcript-part-id`; -1 when the group does not hold it.
+ */
+export function toolGroupEntryIndex(entries: readonly NativeMessagePart[], partId: string): number {
+  return entries.findIndex(
+    (entry) =>
+      (entry.type === "tool-invocation"
+        ? (entry.toolUseId ?? entry.sourcePartId)
+        : entry.sourcePartId) === partId,
+  );
 }
 
 /** The ceiling in pixels, for the virtualized body that needs an explicit height. */
@@ -251,10 +271,14 @@ function VirtualizedToolGroupBody({
     setTracked({ entries, base });
   }
   const baseRef = useRef(INNER_FIRST_ITEM_INDEX_BASE);
+  const entriesRef = useRef(entries);
   const innerScrollerRef = useRef<HTMLElement | null>(null);
   const [following, setFollowing] = useState(initialPlace.atEnd);
+  // `following` as of the latest event, for the scroll listener below.
+  const followingNow = useRef(initialPlace.atEnd);
   useLayoutEffect(() => {
     baseRef.current = base;
+    entriesRef.current = entries;
   });
   // A selection (or, failing that, focus) inside an entry keeps that entry
   // mounted while it stays near the window, with the transcript's own bound;
@@ -285,14 +309,56 @@ function VirtualizedToolGroupBody({
     };
     const onFocusIn = (event: FocusEvent) => setFocusedIndex(entryIndexOf(event.target));
     const onFocusOut = (event: FocusEvent) => setFocusedIndex(entryIndexOf(event.relatedTarget));
+    // A reader moving up away from the inner end releases following at once.
+    // Virtuoso keeps a follow's scroll "in progress" for at least 150 ms after
+    // its last list refresh, and reports leaving the end 50 ms late; until
+    // then an append or a retry would pull the reader back to the end. Its own
+    // corrections only move down or keep the end, so an upward move is the
+    // reader's.
+    let lastScrollTop: number | null = null;
+    const onScroll = (event: Event) => {
+      const element = innerScrollerRef.current;
+      if (!element || event.target !== element) return;
+      const movedUp = lastScrollTop !== null && element.scrollTop < lastScrollTop;
+      lastScrollTop = element.scrollTop;
+      if (
+        !followingNow.current ||
+        !movedUp ||
+        element.scrollHeight - element.clientHeight - element.scrollTop <= INNER_END_TOLERANCE_PX
+      ) {
+        return;
+      }
+      handle.current?.cancelPendingNavigation();
+      writePlace({ ...readPlace(), atEnd: false });
+      followingNow.current = false;
+      setFollowing(false);
+    };
     host.ownerDocument.addEventListener("selectionchange", onSelectionChange);
     host.addEventListener("focusin", onFocusIn);
     host.addEventListener("focusout", onFocusOut);
+    // Scroll does not bubble; capture sees the inner scroller's.
+    host.addEventListener("scroll", onScroll, true);
     return () => {
       host.ownerDocument.removeEventListener("selectionchange", onSelectionChange);
       host.removeEventListener("focusin", onFocusIn);
       host.removeEventListener("focusout", onFocusOut);
+      host.removeEventListener("scroll", onScroll, true);
     };
+  }, [readPlace, writePlace]);
+  // The transcript asks for a member this list virtualized away (a reader's
+  // held place inside the group); bring it in, and the transcript then holds
+  // it at its offset.
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host) return;
+    const onSeek = (event: Event) => {
+      const partId = (event as CustomEvent<{ partId?: string }>).detail?.partId;
+      const index = partId ? toolGroupEntryIndex(entriesRef.current, partId) : -1;
+      if (index < 0) return;
+      handle.current?.scrollToIndex({ index, align: "start" });
+    };
+    host.addEventListener(INNER_SEEK_EVENT, onSeek);
+    return () => host.removeEventListener(INNER_SEEK_EVENT, onSeek);
   }, []);
   // A selection outranks focus, as in the transcript.
   const protectedIndex = selectedIndex ?? focusedIndex;
@@ -358,6 +424,7 @@ function VirtualizedToolGroupBody({
             element.scrollHeight - element.clientHeight - element.scrollTop <=
               INNER_END_TOLERANCE_PX;
           writePlace({ ...readPlace(), atEnd });
+          followingNow.current = atEnd;
           setFollowing(atEnd);
         }}
         scrollerRef={(element) => {

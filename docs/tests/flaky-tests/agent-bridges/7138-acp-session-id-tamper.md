@@ -35,8 +35,9 @@ comparison, `parseExternalSessionToken` also requires the signature to be the
 canonical encoding of the digest (`supplied.toString("base64url") === signature`),
 matching the canonical check the encoded session id already had. New
 deterministic unit test `bridges/acp-bridge/src/acp-external-session-token.test.ts`
-issues tokens and asserts every alias of the last signature character is
-refused.
+checks a round trip and asserts all other 63 spellings of the last signature
+character are refused. Main CI also observed the original failure for the
+`acp-fixture` variant (run 42222311479, job 127907099873, 221.55 ms).
 
 **Verification.**
 

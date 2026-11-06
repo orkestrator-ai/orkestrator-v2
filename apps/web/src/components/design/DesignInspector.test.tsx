@@ -68,7 +68,6 @@ function props(overrides: Partial<DesignInspectorProps> = {}): DesignInspectorPr
     validity: "current" as SelectionValidity,
     frame,
     meta,
-    legacy: false,
     status: { pending: false },
     onApply,
     onReselect,
@@ -331,11 +330,10 @@ describe("DesignInspector", () => {
     expect(onApply).toHaveBeenCalledWith({ "--brand": "#123456" });
   });
 
-  test("shows bounded details, truncation, SVG, and legacy notices", () => {
+  test("shows bounded details, truncation and SVG notices", () => {
     render(
       <DesignInspector
         {...props({
-          legacy: true,
           selection: selection({
             element: element({ svg: true, attributesTruncated: true, textTruncated: true }),
           }),
@@ -343,7 +341,7 @@ describe("DesignInspector", () => {
       />,
     );
     expect(screen.getByText(/SVG element/)).toBeTruthy();
-    expect(screen.getByText(/does not track element structure/)).toBeTruthy();
+    expect(screen.queryByText(/does not track element structure/) === null).toBe(true);
     expect(screen.getByText("Text truncated")).toBeTruthy();
     expect(screen.getByText("Some attributes are not shown.")).toBeTruthy();
   });

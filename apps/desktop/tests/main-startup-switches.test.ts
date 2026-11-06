@@ -28,13 +28,18 @@ function electronValueImports(): string[] {
 }
 
 describe("main process startup switches", () => {
-  for (const [flavor, platform, switches] of [
-    ["agent-test", "darwin", ["use-mock-keychain"]],
-    ["agent-test", "linux", []],
-    ["development", "darwin", []],
-    ["production", "darwin", []],
+  // The last two columns: whether the launcher asked for hidden windows, and the
+  // activation policies main then set. Only an agent-test profile on macOS
+  // honours the request.
+  for (const [flavor, platform, switches, hidden, policies] of [
+    ["agent-test", "darwin", ["use-mock-keychain"], false, []],
+    ["agent-test", "darwin", ["use-mock-keychain"], true, ["accessory"]],
+    ["agent-test", "linux", [], false, []],
+    ["agent-test", "linux", [], true, []],
+    ["development", "darwin", [], true, []],
+    ["production", "darwin", [], false, []],
   ] as const) {
-    test(`${flavor} on ${platform} appends its switches during module loading`, () => {
+    test(`${flavor} on ${platform}${hidden ? " asked for hidden windows" : ""} appends its switches during module loading`, () => {
       // Isolate Electron's module mock and process.platform from other suites.
       // Stop at setPath, before logging, locks, backend processes or windows can
       // touch user state. Moving the switch wiring past this boundary must fail.
@@ -57,6 +62,7 @@ describe("main process startup switches", () => {
         }));
         Object.defineProperty(process, "platform", { value: ${JSON.stringify(platform)} });
         const calls = [];
+        const policies = [];
         let aboutPanel;
         const boundary = new Error("startup boundary");
         mock.module("electron", () => ({
@@ -67,6 +73,7 @@ describe("main process startup switches", () => {
             setName() {},
             setAboutPanelOptions(options) { aboutPanel = options; },
             setDesktopName() {},
+            setActivationPolicy(policy) { policies.push(policy); },
             commandLine: { appendSwitch(name) { calls.push(name); } },
             setPath() { throw boundary; },
             whenReady() { throw new Error("readiness reached before startup boundary"); },
@@ -85,16 +92,21 @@ describe("main process startup switches", () => {
             !installedSetter[Symbol.for("orkestrator.socketTypeOfServiceGuard")]) {
           throw new Error("socket guard was not installed before startup side effects");
         }
-        process.stdout.write(JSON.stringify({ calls, aboutPanel }));
+        process.stdout.write(JSON.stringify({ calls, policies, aboutPanel }));
       `;
+      const env = { ...process.env };
+      delete env.ORKESTRATOR_AGENT_TEST_HIDDEN_WINDOWS;
+      if (hidden) env.ORKESTRATOR_AGENT_TEST_HIDDEN_WINDOWS = "1";
       const output = execFileSync(process.execPath, ["--eval", source], {
         cwd: new URL("..", import.meta.url),
+        env,
         encoding: "utf8",
         timeout: 20_000,
         maxBuffer: 64 * 1024,
       });
       const result = JSON.parse(output);
       expect(result.calls).toEqual(switches);
+      expect(result.policies).toEqual(policies);
       // Set before ready, with the profile's title and the package version,
       // not Electron's own. main.ts runs from source here rather than from
       // the emitted bundle, so only the icon's unpackaged branch is checked;
@@ -107,4 +119,40 @@ describe("main process startup switches", () => {
       expect(result.aboutPanel.iconPath).toEndWith(path.join("electron", "resources", "icon.png"));
     });
   }
+});
+
+// These are composition-root guards: testing the individual factories cannot
+// catch main accidentally giving one the unwrapped Electron constructor.
+describe("main hidden-window wiring", () => {
+  const source = readFileSync(new URL("main.ts", electronDir), "utf8");
+
+  test("every window factory receives the wrapped constructor", () => {
+    const constructors = Array.from(
+      source.matchAll(/\bBrowserWindowCtor:\s*(\w+)/g),
+      (match) => match[1],
+    );
+    // Main, dialog host, toolchain progress, platform chooser and startup failure.
+    expect(constructors.length).toBeGreaterThanOrEqual(5);
+    expect(constructors.every((constructor) => constructor === "WindowCtor")).toBe(true);
+    expect(source).not.toMatch(/new\s+BrowserWindow\s*\(/);
+    expect(source).toContain(
+      "const WindowCtor = hiddenWindows ? hiddenWindowConstructor(BrowserWindow) : BrowserWindow;",
+    );
+  });
+
+  test("the main window disables DevTools when hidden", () => {
+    const mainOptions = source.match(/await createMainWindow\(\{([\s\S]*?)beforeLoad:/)?.[1];
+    expect(mainOptions).toBeDefined();
+    expect(mainOptions).toMatch(/BrowserWindowCtor: WindowCtor/);
+    expect(mainOptions).toMatch(/openDevTools: !hiddenWindows/);
+  });
+
+  test("native dialogs receive the same hidden-mode gate", () => {
+    const dialogOptions = source.match(
+      /createNativeDialogs<BrowserWindow>\(\{([\s\S]*?)\n\}\);/,
+    )?.[1];
+    expect(dialogOptions).toBeDefined();
+    expect(dialogOptions).toMatch(/\bhiddenWindows,/);
+    expect(dialogOptions).toMatch(/BrowserWindowCtor: WindowCtor/);
+  });
 });

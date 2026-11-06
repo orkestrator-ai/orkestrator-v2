@@ -13,7 +13,7 @@ import type {
   NativeAgentDefaultModelResolution,
 } from "@orkestrator/protocol/native-agent";
 import type { BridgeConnection } from "./agent-provider-contract.js";
-import { boundedJson, bridgeFetch } from "./http-bridge-transport.js";
+import { boundedJson, bridgeFetch } from "./http-bridge/index.js";
 
 /** One row of the Codex bridge's `/global/models` answer. */
 export interface CodexCatalogueModel {

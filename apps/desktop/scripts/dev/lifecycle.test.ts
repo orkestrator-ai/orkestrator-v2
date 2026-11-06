@@ -17,6 +17,7 @@ import { parseDevArguments } from "./arguments.js";
 import {
   assertElectronReadiness,
   compileElectronForDevelopment,
+  electronHeadlessNotice,
   electronLaunch,
   launcherIsInteractive,
   electronReadinessTimeoutMs,
@@ -106,17 +107,25 @@ describe("Electron readiness", () => {
   });
 
   test.each([
-    ["development", "linux", undefined, false, false],
-    ["development", "linux", undefined, true, false],
-    ["agent-test", "linux", undefined, false, true],
-    ["agent-test", "linux", undefined, true, false],
-    ["agent-test", "linux", true, true, true],
-    ["agent-test", "linux", false, false, false],
-    ["agent-test", "darwin", true, false, false],
-    ["agent-test", "win32", undefined, false, false],
+    ["development", "linux", undefined, false, "window", null],
+    ["development", "linux", undefined, true, "window", null],
+    ["agent-test", "linux", undefined, false, "ozone", null],
+    ["agent-test", "linux", undefined, true, "window", null],
+    ["agent-test", "linux", true, true, "ozone", null],
+    ["agent-test", "linux", false, false, "window", null],
+    ["agent-test", "darwin", true, true, "hidden", null],
+    ["agent-test", "darwin", undefined, false, "hidden", null],
+    ["agent-test", "win32", true, true, "window", "--headless"],
+    ["agent-test", "win32", undefined, false, "window", "running without a terminal"],
+    ["agent-test", "darwin", undefined, true, "window", null],
+    ["agent-test", "win32", undefined, true, "window", null],
+    ["agent-test", "darwin", false, false, "window", null],
+    ["agent-test", "win32", false, false, "window", null],
+    ["development", "darwin", true, false, "window", null],
+    ["development", "win32", true, false, "window", null],
   ] as const)(
     "wires Electron spawn settings and keeps readiness during status persistence (%s on %s, requested=%s, interactive=%s)",
-    async (flavor, platform, requested, interactive, headless) => {
+    async (flavor, platform, requested, interactive, mode, windowNoticeCause) => {
       const root = await mkdtemp(path.join(os.tmpdir(), "ork-dev-ready-race-"));
       const roots = {
         developmentRoot: path.join(root, "dev"),
@@ -157,6 +166,8 @@ describe("Electron readiness", () => {
         DISPLAY: ":test-display",
         WAYLAND_DISPLAY: "test-wayland",
         ELECTRON_RUN_AS_NODE: "1",
+        // Inherited from a shell, it must not hide a profile that keeps its window.
+        ORKESTRATOR_AGENT_TEST_HIDDEN_WINDOWS: "1",
       };
       const ambientHeadlessVariables = [
         "ORKESTRATOR_AGENT_TEST_HEADLESS",
@@ -225,21 +236,42 @@ describe("Electron readiness", () => {
             if (status.status === "ready") setImmediate(() => electron.emit("exit", 0, null));
           },
         });
-        const headlessNotices = notice.mock.calls
+        const offDesktopNotices = notice.mock.calls
           .map((call) => String(call[0]))
-          .filter((line) => line.startsWith("Electron is headless"));
-        expect(headlessNotices.length).toBe(headless ? 1 : 0);
-        if (headless)
-          expect(headlessNotices[0]!.includes("Pass --no-headless")).toBe(requested !== true);
+          .filter(
+            (line) =>
+              line.startsWith("Electron is headless") ||
+              line.startsWith("Electron's windows are hidden"),
+          );
+        expect(offDesktopNotices.length).toBe(mode === "window" ? 0 : 1);
+        if (mode !== "window") {
+          expect(offDesktopNotices[0]!.startsWith("Electron is headless")).toBe(mode === "ozone");
+          expect(offDesktopNotices[0]!.includes("Pass --no-headless")).toBe(requested !== true);
+        }
+        const windowNotices = notice.mock.calls
+          .map((call) => String(call[0]))
+          .filter((line) => line.startsWith("Electron opens a window"));
+        expect(windowNotices).toEqual(
+          windowNoticeCause === null
+            ? []
+            : [
+                `Electron opens a window: headless mode exists only on Linux and macOS, so ${windowNoticeCause} changes nothing on ${platform}.`,
+              ],
+        );
         expect(electronArgs).toEqual([
-          ...(headless ? HEADLESS_ELECTRON_SWITCHES : []),
+          ...(mode === "ozone" ? HEADLESS_ELECTRON_SWITCHES : []),
           "apps/desktop/dist/electron/main.js",
         ]);
         expect(electronOptions?.env).not.toBe(process.env);
         expect(electronOptions?.env?.ELECTRON_RUN_AS_NODE).toBeUndefined();
-        expect(electronOptions?.env?.DISPLAY).toBe(headless ? undefined : launchEnv.DISPLAY);
+        expect(electronOptions?.env?.DISPLAY).toBe(
+          mode === "ozone" ? undefined : launchEnv.DISPLAY,
+        );
         expect(electronOptions?.env?.WAYLAND_DISPLAY).toBe(
-          headless ? undefined : launchEnv.WAYLAND_DISPLAY,
+          mode === "ozone" ? undefined : launchEnv.WAYLAND_DISPLAY,
+        );
+        expect(electronOptions?.env?.ORKESTRATOR_AGENT_TEST_HIDDEN_WINDOWS).toBe(
+          mode === "hidden" ? "1" : undefined,
         );
         expect(electronOptions?.env?.ELECTRON_DEV).toBe("1");
         for (const [key, value] of Object.entries(launchEnv)) expect(process.env[key]).toBe(value);
@@ -336,16 +368,77 @@ describe("Electron headless mode", () => {
     ).toBe(false);
   });
 
-  test("never applies to mise run dev, or where Ozone does not exist", () => {
+  test("never applies to mise run dev, or on Windows", () => {
     const pushed = {
       requested: true,
       interactive: false,
       env: { ORKESTRATOR_AGENT_TEST_HEADLESS: "1" },
     };
     expect(decide({ ...pushed, flavor: "development" }).headless).toBe(false);
-    for (const platform of ["darwin", "win32"] as const) {
-      expect(decide({ ...pushed, platform }).headless).toBe(false);
+    expect(decide({ ...pushed, flavor: "development", platform: "darwin" }).headless).toBe(false);
+    expect(decide({ ...pushed, platform: "win32" }).headless).toBe(false);
+  });
+
+  test("macOS decides exactly as Linux does", () => {
+    for (const overrides of [
+      {},
+      { interactive: false },
+      { requested: true },
+      { requested: false, interactive: false },
+      { env: { ORKESTRATOR_AGENT_TEST_HEADLESS: "1" } },
+      { env: { ORKESTRATOR_AGENT_TEST_HEADLESS: "0" }, interactive: false },
+      { env: { ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON: "1" } },
+    ]) {
+      expect(decide({ ...overrides, platform: "darwin" })).toEqual(decide(overrides));
     }
+  });
+
+  const notice = (overrides: Partial<Parameters<typeof resolveElectronHeadless>[0]> = {}) =>
+    electronHeadlessNotice({
+      flavor: "agent-test",
+      platform: "linux",
+      env: {},
+      interactive: true,
+      ...overrides,
+    });
+
+  test("the launcher says when Linux goes headless, and how to get a window", () => {
+    expect(notice({ interactive: false })).toBe(
+      "Electron is headless (no terminal); the app is at browserUrl and no window will open. Pass --no-headless for a real window.",
+    );
+    expect(notice({ requested: true })).toBe(
+      "Electron is headless (--headless); the app is at browserUrl and no window will open.",
+    );
+    expect(notice()).toBeNull();
+  });
+
+  test("the launcher says when macOS hides its windows, and how to get one", () => {
+    const platform = "darwin";
+    expect(notice({ platform, interactive: false })).toBe(
+      "Electron's windows are hidden (no terminal); the app is at browserUrl, with no window or Dock icon. Pass --no-headless for a real window.",
+    );
+    expect(notice({ platform, requested: true })).toBe(
+      "Electron's windows are hidden (--headless); the app is at browserUrl, with no window or Dock icon.",
+    );
+    expect(notice({ platform })).toBeNull();
+    expect(notice({ platform, requested: false, interactive: false })).toBeNull();
+    expect(notice({ platform, requested: true, flavor: "development" })).toBeNull();
+  });
+
+  test("Windows says that a headless request changes nothing", () => {
+    const platform = "win32";
+    expect(notice({ platform, requested: true })).toBe(
+      "Electron opens a window: headless mode exists only on Linux and macOS, so --headless changes nothing on win32.",
+    );
+    expect(notice({ platform, interactive: false })).toBe(
+      "Electron opens a window: headless mode exists only on Linux and macOS, so running without a terminal changes nothing on win32.",
+    );
+    expect(notice({ platform, env: { ORKESTRATOR_AGENT_TEST_HEADLESS: "1" } })).toContain(
+      "ORKESTRATOR_AGENT_TEST_HEADLESS=1 changes nothing",
+    );
+    expect(notice({ platform })).toBeNull();
+    expect(notice({ platform, requested: false, interactive: false })).toBeNull();
+    expect(notice({ platform, requested: true, flavor: "development" })).toBeNull();
   });
 });
 
@@ -381,11 +474,33 @@ describe("Electron launch", () => {
     expect(env.DISPLAY).toBe(":0");
   });
 
-  test("headless changes nothing where Ozone does not exist", () => {
-    for (const platform of ["darwin", "win32"] as const) {
-      expect(electronLaunch(true, platform, env)).toEqual(electronLaunch(false, platform, env));
-      expect(electronLaunch(true, platform, env).env.DISPLAY).toBe(":0");
+  test("headless on macOS asks for hidden windows and keeps the environment otherwise", () => {
+    const launch = electronLaunch(true, "darwin", env);
+    expect(launch.switches).toEqual([]);
+    expect(launch.env).toEqual({
+      ...electronLaunch(false, "darwin", env).env,
+      ORKESTRATOR_AGENT_TEST_HIDDEN_WINDOWS: "1",
+    });
+  });
+
+  test("only the launcher's own decision hides windows", () => {
+    const inherited = { ...env, ORKESTRATOR_AGENT_TEST_HIDDEN_WINDOWS: "1" };
+    for (const platform of ["linux", "darwin", "win32"] as const) {
+      expect(
+        electronLaunch(false, platform, inherited).env.ORKESTRATOR_AGENT_TEST_HIDDEN_WINDOWS,
+      ).toBeUndefined();
     }
+    expect(
+      electronLaunch(true, "linux", inherited).env.ORKESTRATOR_AGENT_TEST_HIDDEN_WINDOWS,
+    ).toBeUndefined();
+    expect(
+      electronLaunch(true, "win32", inherited).env.ORKESTRATOR_AGENT_TEST_HIDDEN_WINDOWS,
+    ).toBeUndefined();
+  });
+
+  test("headless changes nothing on Windows", () => {
+    expect(electronLaunch(true, "win32", env)).toEqual(electronLaunch(false, "win32", env));
+    expect(electronLaunch(true, "win32", env).env.DISPLAY).toBe(":0");
   });
 });
 

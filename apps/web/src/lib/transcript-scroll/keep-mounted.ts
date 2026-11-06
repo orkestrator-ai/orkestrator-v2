@@ -62,13 +62,12 @@ export function useRatchetedOverscan(
     overscan: { top: number; bottom: number } | null;
   }>({ key: protectedKey, overscan });
   const next = ratchetOverscan(held.key === protectedKey ? held.overscan : null, overscan);
-  if (
-    held.key !== protectedKey ||
-    held.overscan?.top !== next?.top ||
-    held.overscan?.bottom !== next?.bottom
-  ) {
-    // Derived from the previous render's value; React re-renders before commit.
-    setHeld({ key: protectedKey, overscan: next });
-  }
-  return next;
+  const unchanged =
+    held.key === protectedKey &&
+    held.overscan?.top === next?.top &&
+    held.overscan?.bottom === next?.bottom;
+  // Derived from the previous render's value; React re-renders before commit.
+  if (!unchanged) setHeld({ key: protectedKey, overscan: next });
+  // The held object while the numbers stand: this goes to the list as a prop.
+  return unchanged ? held.overscan : next;
 }

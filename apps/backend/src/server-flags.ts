@@ -10,6 +10,7 @@
 
 /** Flags that consume the following argument (`--flag value`). */
 export const SERVER_VALUE_FLAGS: readonly string[] = Object.freeze([
+  "--agent-tools-port",
   "--allowed-origins",
   "--app-root",
   "--compression",

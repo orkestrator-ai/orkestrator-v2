@@ -86,7 +86,7 @@ const PROFILE_FLAGS = new Set([
   "--no-agent-credentials",
   "--use-dev-worktree-folder",
 ]);
-const PROFILE_OPTIONS = new Set(["--credential-source", "--agent-platforms"]);
+const PROFILE_OPTIONS = new Set(["--credential-source", "--agent-platforms", "--agent-tools-port"]);
 
 /**
  * The disposable profile's `dev:test` arguments: a credential-free Codex

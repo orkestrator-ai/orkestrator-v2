@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { TranscriptScrollController } from "./transcript-scroll-controller";
+import { INNER_SEEK_EVENT, TranscriptScrollController } from "./transcript-scroll-controller";
 import { installControlledTimeout } from "../../../../../tests/helpers/controlled-timeout";
 
 const disposals: Array<() => void> = [];
@@ -306,6 +306,93 @@ describe("transcript reading ownership", () => {
     window.dispatchEvent(new PointerEvent("pointerup"));
   });
 
+  test("history restoration asks an open group for a member it virtualized away, then holds it", async () => {
+    const view = harness();
+    view.row.innerHTML =
+      '<div data-transcript-group-frame data-state="open"><div data-transcript-part-id="latest"></div>' +
+      '<div data-transcript-inner-viewport="true"><div data-virtuoso-scroller></div></div></div>';
+    const group = view.row.firstElementChild as HTMLElement;
+    group.getBoundingClientRect = () =>
+      new DOMRect(0, view.row.getBoundingClientRect().top + 10, 300, 300);
+    const frameHead = group.firstElementChild as HTMLElement;
+    frameHead.getBoundingClientRect = () =>
+      new DOMRect(0, group.getBoundingClientRect().top, 300, 30);
+    const innerViewport = group.lastElementChild as HTMLElement;
+    const innerScroller = innerViewport.firstElementChild as HTMLElement;
+    let innerTop = 4000;
+    Object.defineProperties(innerScroller, {
+      scrollHeight: { get: () => 6000 },
+      clientHeight: { get: () => 260 },
+      scrollTop: {
+        get: () => innerTop,
+        set: (value: number) => {
+          innerTop = Math.max(0, Math.min(6000 - 260, value));
+        },
+      },
+    });
+    // The member at local offset 1200 renders only once the inner list seeks it.
+    const seeks: string[] = [];
+    innerViewport.addEventListener(INNER_SEEK_EVENT, (event) => {
+      const partId = (event as CustomEvent<{ partId: string }>).detail.partId;
+      seeks.push(partId);
+      if (innerScroller.querySelector("[data-transcript-part-id]")) return;
+      innerTop = 1200;
+      const member = document.createElement("div");
+      member.dataset.transcriptPartId = partId;
+      member.getBoundingClientRect = () =>
+        new DOMRect(0, group.getBoundingClientRect().top + 40 + 1200 - innerTop, 300, 40);
+      innerScroller.appendChild(member);
+    });
+    view.controller.navigateTo(
+      {
+        kind: "row",
+        index: 5,
+        key: "k5",
+        partId: "latest",
+        offsetPx: 80,
+        inner: { partId: "call-1", screenOffsetPx: 150 },
+      },
+      "history",
+    );
+    await frames(12);
+    expect(seeks).toEqual(["call-1"]);
+    const member = innerScroller.querySelector<HTMLElement>('[data-transcript-part-id="call-1"]')!;
+    expect(member.getBoundingClientRect().top).toBe(150);
+  });
+
+  test("an inner member that never renders stops seeking and settles on the group", async () => {
+    const view = harness();
+    view.row.innerHTML =
+      '<div data-transcript-group-frame data-state="open"><div data-transcript-part-id="latest"></div>' +
+      '<div data-transcript-inner-viewport="true"><div data-virtuoso-scroller></div></div></div>';
+    const group = view.row.firstElementChild as HTMLElement;
+    group.getBoundingClientRect = () =>
+      new DOMRect(0, view.row.getBoundingClientRect().top + 10, 300, 300);
+    (group.firstElementChild as HTMLElement).getBoundingClientRect = () =>
+      new DOMRect(0, group.getBoundingClientRect().top, 300, 30);
+    const innerViewport = group.lastElementChild as HTMLElement;
+    let seeks = 0;
+    innerViewport.addEventListener(INNER_SEEK_EVENT, () => {
+      seeks += 1;
+    });
+    view.controller.navigateTo(
+      {
+        kind: "row",
+        index: 5,
+        key: "k5",
+        partId: "latest",
+        offsetPx: 80,
+        inner: { partId: "gone", screenOffsetPx: 150 },
+      },
+      "history",
+    );
+    await frames(40);
+    expect(seeks).toBeGreaterThan(0);
+    expect(seeks).toBeLessThanOrEqual(20);
+    expect(view.controller.currentOwner).toBeNull();
+    expect(group.getBoundingClientRect().top).toBe(80);
+  });
+
   test("history restoration holds the group when folding removes the captured member", async () => {
     const view = harness();
     view.row.innerHTML =
@@ -397,5 +484,219 @@ describe("transcript reading ownership", () => {
     await frames();
     expect(view.scroller.scrollTop).toBe(3000);
     expect(view.controller.diagnostics().writes).toBe(writes);
+  });
+});
+
+test("reading input and scroller readiness publish even when the viewport mode is unchanged", () => {
+  const { controller, scroller } = harness();
+  controller.seed(false);
+  const listener = mock(() => {});
+  const unsubscribe = controller.subscribe(listener);
+  const before = controller.generation;
+  scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -50 }));
+  expect(controller.generation).toBeGreaterThan(before);
+  expect(listener).toHaveBeenCalledTimes(1);
+  expect(controller.getSnapshot().generation).toBe(controller.generation);
+  controller.attachScroller(null);
+  expect(controller.getSnapshot().hasScroller).toBe(false);
+  expect(listener).toHaveBeenCalledTimes(2);
+  unsubscribe();
+});
+
+/**
+ * A scroller whose pane can be hidden. `show(clampTo)` mimics WebKit, which
+ * puts a re-shown scroller's offset back during a layout that has not sized a
+ * container query container inside it yet, so the offset arrives clamped.
+ */
+function hideableHarness(initialTop: number) {
+  const original = globalThis.ResizeObserver;
+  let resize: ResizeObserverCallback | undefined;
+  globalThis.ResizeObserver = class {
+    constructor(callback: ResizeObserverCallback) {
+      resize = callback;
+    }
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  } as unknown as typeof ResizeObserver;
+  let top = initialTop;
+  let shown = true;
+  let width = 800;
+  let rowTop = 4000;
+  const height = 5000;
+  const scroller = document.createElement("div");
+  Object.defineProperties(scroller, {
+    scrollHeight: { get: () => (shown ? height : 0) },
+    clientHeight: { get: () => (shown ? 600 : 0) },
+    clientWidth: { get: () => (shown ? width : 0) },
+    scrollTop: {
+      get: () => (shown ? top : 0),
+      set: (value: number) => {
+        if (shown) top = Math.max(0, Math.min(height - 600, value));
+      },
+    },
+  });
+  scroller.getBoundingClientRect = () => ({ top: 0, bottom: 600, height: 600 }) as DOMRect;
+  scroller.innerHTML = '<div data-chat-message-index="5" data-chat-message-key="k5"></div>';
+  const row = scroller.firstElementChild as HTMLElement;
+  row.getBoundingClientRect = () =>
+    ({ top: rowTop - top, bottom: rowTop - top + 200, height: 200 }) as DOMRect;
+  document.body.appendChild(scroller);
+  const controller = new TranscriptScrollController({
+    current: {
+      scrollToIndex: mock(() => {}),
+      scrollTo: mock(() => {}),
+      cancelPendingNavigation: mock(() => {}),
+    },
+  });
+  controller.attachScroller(scroller);
+  disposals.push(() => {
+    controller.dispose();
+    scroller.remove();
+    globalThis.ResizeObserver = original;
+  });
+  const deliverResize = () =>
+    resize?.([{ target: scroller } as unknown as ResizeObserverEntry], {} as ResizeObserver);
+  const deliverScroll = () => scroller.dispatchEvent(new Event("scroll"));
+  return {
+    controller,
+    scroller,
+    deliverResize,
+    deliverScroll,
+    changeHeightAbove(delta: number) {
+      rowTop += delta;
+    },
+    /** A reader's own wheel movement to `value`. */
+    readTo(value: number) {
+      scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 }));
+      top = value;
+      deliverScroll();
+    },
+    hide() {
+      shown = false;
+      deliverResize();
+    },
+    /** Show again; the engine either keeps the offset or clamps it and fires `scroll`. */
+    show(clampTo?: number, options: { width?: number; scroll?: boolean } = {}) {
+      shown = true;
+      width = options.width ?? width;
+      if (clampTo !== undefined && clampTo < top) {
+        top = clampTo;
+        if (options.scroll !== false) deliverScroll();
+      }
+    },
+  };
+}
+
+describe("an offset across a hide", () => {
+  for (const following of [false, true]) {
+    test(`hidden scroll events preserve ${following ? "follow intent" : "the reading offset"}`, () => {
+      controlledFrames();
+      const view = hideableHarness(4400);
+      if (!following) view.readTo(3800);
+      const snapshot = view.controller.getSnapshot();
+      view.hide();
+      view.deliverScroll(); // A hidden box reports zero for every scroll metric.
+      view.deliverScroll();
+      expect(view.scroller.scrollTop).toBe(0);
+      expect(view.controller.diagnostics().writes).toBe(0);
+      expect(view.controller.wantsFollow).toBe(following);
+      expect(view.controller.getSnapshot().isAtBottom).toBe(snapshot.isAtBottom);
+      view.show(3334);
+      view.deliverResize();
+      expect(view.scroller.scrollTop).toBe(following ? 4400 : 3800);
+      expect(view.controller.diagnostics().writes).toBe(1);
+      expect(view.controller.wantsFollow).toBe(following);
+    });
+  }
+
+  test("showing at a new width restores the offset before reflow navigation", () => {
+    const frame = controlledFrames();
+    const view = hideableHarness(4400);
+    view.controller.navigateTo({ kind: "row", index: 5, key: "k5", offsetPx: 80 }, "find");
+    for (let index = 0; index < 5; index += 1) frame();
+    expect(view.controller.currentOwner).toBeNull();
+    expect(view.scroller.scrollTop).toBe(3920);
+    view.deliverScroll(); // Observe the navigation write before hiding.
+    const anchor = view.controller.readingAnchor;
+    expect(anchor).toMatchObject({ rowKey: "k5", offsetPx: 80 });
+    const before = view.controller.diagnostics();
+    view.hide();
+    view.changeHeightAbove(150);
+    // No scroll event: both the clamp restore and width handling run in resize.
+    view.show(3334, { width: 600, scroll: false });
+    view.deliverResize();
+    expect(view.scroller.scrollTop).toBe(3920);
+    expect(view.controller.diagnostics().writes).toBe(before.writes + 1);
+    expect(view.controller.currentOwner).toBe("reflow");
+    expect(view.controller.readingAnchor).toEqual(anchor);
+    for (let index = 0; index < 5; index += 1) frame();
+    expect(view.scroller.scrollTop).toBe(4070);
+    expect(view.controller.currentOwner).toBeNull();
+    expect(view.controller.diagnostics().operationsStarted).toBe(before.operationsStarted + 1);
+    expect(view.controller.wantsFollow).toBe(false);
+  });
+
+  test("a reader the engine clamped on show is put back before activation's frame", () => {
+    const view = hideableHarness(4400);
+    view.readTo(3800);
+    expect(view.controller.wantsFollow).toBe(false);
+    view.hide();
+    view.show(3334);
+    expect(view.scroller.scrollTop).toBe(3800);
+    expect(view.controller.diagnostics().writes).toBe(1);
+    // The write's own scroll event, then the resize delivery, change nothing.
+    view.deliverScroll();
+    view.deliverResize();
+    expect(view.scroller.scrollTop).toBe(3800);
+    expect(view.controller.diagnostics().writes).toBe(1);
+    expect(view.controller.wantsFollow).toBe(false);
+  });
+
+  test("a follower the engine left short of the end is put back and keeps following", () => {
+    const view = hideableHarness(4400);
+    view.hide();
+    // The clamped `scroll` is idle upward movement; it must not read as a departure.
+    view.show(3934);
+    expect(view.scroller.scrollTop).toBe(4400);
+    expect(view.controller.wantsFollow).toBe(true);
+    expect(view.controller.getSnapshot().isAtBottom).toBe(true);
+  });
+
+  test("an engine that keeps the offset gets no write", () => {
+    const view = hideableHarness(4400);
+    view.readTo(3800);
+    view.hide();
+    view.show();
+    view.deliverResize();
+    expect(view.scroller.scrollTop).toBe(3800);
+    expect(view.controller.diagnostics().writes).toBe(0);
+  });
+
+  test("following growth since the show is not undone", () => {
+    const view = hideableHarness(4000);
+    view.hide();
+    view.show();
+    view.scroller.scrollTop = 4400; // The virtualizer following growth.
+    view.deliverResize();
+    expect(view.scroller.scrollTop).toBe(4400);
+    expect(view.controller.diagnostics().writes).toBe(0);
+    expect(view.controller.wantsFollow).toBe(true);
+  });
+
+  test("navigation to earlier content after the show survives the resize", () => {
+    controlledFrames();
+    const view = hideableHarness(4400);
+    view.readTo(3800);
+    view.hide();
+    view.show();
+    expect(
+      view.controller.navigateTo({ kind: "row", index: 5, key: "k5", offsetPx: 2000 }, "find"),
+    ).toBe(true);
+    view.scroller.scrollTop = 2000; // The index navigation's write, below the saved 3800.
+    view.deliverResize();
+    expect(view.scroller.scrollTop).toBe(2000);
+    expect(view.controller.diagnostics().writes).toBe(0);
+    expect(view.controller.currentOwner).toBe("find");
   });
 });

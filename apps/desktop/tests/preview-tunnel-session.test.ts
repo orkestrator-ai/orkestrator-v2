@@ -34,6 +34,7 @@ import {
   PreviewTunnelConnector,
   PreviewTunnelMuxStream,
   PreviewTunnelSession,
+  PREVIEW_TUNNEL_SESSION_MISSED_PINGS,
 } from "../electron/preview-tunnel-session";
 import {
   startPreviewFixture,
@@ -402,6 +403,85 @@ test("a session-level error fails open streams before the socket finishes closin
   expect(previewErrorFromUnknown(await failed)?.category).toBe("access-expired");
   expect(session.canOpen).toBe(false);
   expect(session.size).toBe(0);
+});
+
+/** A session over a scripted WebSocket that pings every 20 ms and records the outcome. */
+async function heartbeatSession(answer: "pong" | "nothing") {
+  const ws = new EventEmitter() as EventEmitter & {
+    isOpen: boolean;
+    send: () => boolean;
+    start: () => void;
+    ping: () => void;
+    close: (code: number) => void;
+    terminate: () => void;
+  };
+  const events: string[] = [];
+  ws.isOpen = true;
+  ws.send = () => true;
+  ws.start = () => {};
+  ws.ping = () => {
+    events.push("ping");
+    if (answer === "pong") queueMicrotask(() => ws.emit("pong"));
+  };
+  let closeCode = 0;
+  // A dead peer never answers the close frame: only `terminate` ends the socket.
+  ws.close = (code) => {
+    events.push(`close ${code}`);
+    closeCode = code;
+  };
+  ws.terminate = () => {
+    events.push("terminate");
+    ws.isOpen = false;
+    ws.emit("close", closeCode);
+  };
+  const closedSessions: PreviewTunnelSession[] = [];
+  const session = new PreviewTunnelSession(ws as unknown as PreviewWebSocket, {
+    attachmentId: "att_test",
+    credential: "credential",
+    idleMs: 30_000,
+    pingIntervalMs: 20,
+    onClosed: (closed) => closedSessions.push(closed),
+  });
+  ws.emit(
+    "message",
+    Buffer.from(
+      JSON.stringify({
+        type: "ready",
+        serviceId: "service",
+        endpointGeneration: 1,
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      }),
+    ),
+    false,
+  );
+  await session.ready;
+  return { ws, session, events, closedSessions };
+}
+
+test("a session whose pings go unanswered is destroyed, failing its streams", async () => {
+  const { ws, session, events, closedSessions } = await heartbeatSession("nothing");
+  const opening = session.openStream(undefined, performance.now());
+  ws.emit("message", Buffer.from(JSON.stringify({ type: "open-ok", stream: 1 })), false);
+  const stream = await opening;
+  const failed = new Promise<Error>((resolve) => stream.once("error", resolve));
+  await until(() => closedSessions.length === 1, 1_000);
+  // One ping, then two that nothing answered; the third tick ends it.
+  expect(events.filter((event) => event === "ping").length).toBe(
+    PREVIEW_TUNNEL_SESSION_MISSED_PINGS,
+  );
+  expect(events.slice(-2)).toEqual([`close ${PREVIEW_TUNNEL_CLOSE.timeout}`, "terminate"]);
+  expect(previewErrorFromUnknown(await failed)?.category).toBe("backend-unavailable");
+  expect(session.canOpen).toBe(false);
+  expect(closedSessions[0]).toBe(session);
+});
+
+test("a session that answers its pings stays open", async () => {
+  const { session, events, closedSessions } = await heartbeatSession("pong");
+  await until(() => events.filter((event) => event === "ping").length >= 6, 1_000);
+  expect(closedSessions).toEqual([]);
+  expect(events.some((event) => event.startsWith("close") || event === "terminate")).toBe(false);
+  expect(session.canOpen).toBe(true);
+  session.close();
 });
 
 test("Node pull-mode reads replenish a fully buffered receive window", async () => {

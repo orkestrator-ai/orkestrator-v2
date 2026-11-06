@@ -19,6 +19,13 @@
  *                        form), record the client's answer in
  *                        `$CODEX_HOME/elicitation-answers.jsonl` and finish
  *                        the turn
+ *                        `question` to raise one Default-mode
+ *                        `item/tool/requestUserInput` per turn, sent the way
+ *                        Codex 0.166.0 sends it (`isBlocking: false`, no
+ *                        `autoResolutionMs`), record the answer in
+ *                        `$CODEX_HOME/question-answers.jsonl` and finish the
+ *                        turn. Like Codex itself it never resolves the
+ *                        question on its own.
  *   FAKE_CODEX_CONTROL_SOCKET  where the `subagents` script takes `finish`
  */
 import { createInterface } from "node:readline";
@@ -131,13 +138,17 @@ function threadObject(id, extra = {}) {
 
 let initialized = false;
 
-/** Elicitations the `elicitation` script raised, by request id, awaiting an answer. */
-const elicitations = new Map();
+/**
+ * Requests the `elicitation` and `question` scripts raised, by request id,
+ * awaiting an answer, with the file each answer is recorded in.
+ */
+const raised = new Map();
 let elicitationCounter = 0;
+let questionCounter = 0;
 
 function raiseElicitation(threadId, turn, prompt) {
   const id = `fake-elicitation-${++elicitationCounter}`;
-  elicitations.set(id, { threadId, turn });
+  raised.set(id, { threadId, turn, answers: "elicitation-answers.jsonl" });
   const url = /\burl\b/.test(prompt);
   send({
     jsonrpc: "2.0",
@@ -168,15 +179,45 @@ function raiseElicitation(threadId, turn, prompt) {
   });
 }
 
-/** The client answered an elicitation: record the answer and finish its turn. */
-function answerElicitation(message) {
-  const pending = elicitations.get(message.id);
+function raiseQuestion(threadId, turn) {
+  const id = `fake-question-${++questionCounter}`;
+  raised.set(id, { threadId, turn, answers: "question-answers.jsonl" });
+  send({
+    jsonrpc: "2.0",
+    id,
+    method: "item/tool/requestUserInput",
+    params: {
+      threadId,
+      turnId: turn.id,
+      itemId: `fake-question-item-${questionCounter}`,
+      questions: [
+        {
+          id: "codeword",
+          header: "Codeword",
+          question: "Which codeword should I use?",
+          isOther: false,
+          isSecret: false,
+          options: [
+            { label: "PROBE_ALPHA", description: "The first codeword" },
+            { label: "PROBE_BETA", description: "The second codeword" },
+          ],
+        },
+      ],
+      isBlocking: false,
+      autoResolutionMs: null,
+    },
+  });
+}
+
+/** The client answered a raised request: record the answer and finish its turn. */
+function answerRaised(message) {
+  const pending = raised.get(message.id);
   if (!pending) return;
-  elicitations.delete(message.id);
+  raised.delete(message.id);
   const codexHome = process.env.CODEX_HOME || "/tmp/codex-home";
   mkdirSync(codexHome, { recursive: true });
   appendFileSync(
-    join(codexHome, "elicitation-answers.jsonl"),
+    join(codexHome, pending.answers),
     `${JSON.stringify({ id: message.id, result: message.result ?? null, error: message.error ?? null })}\n`,
   );
   send({
@@ -320,6 +361,11 @@ const handlers = {
       return;
     }
 
+    if (process.env.FAKE_CODEX_SCRIPT === "question") {
+      raiseQuestion(threadId, turn);
+      return;
+    }
+
     if (process.env.FAKE_CODEX_SCRIPT === "auto-complete") {
       // Stream a delta, then the authoritative item, then finish — the same
       // ordering the real binary uses.
@@ -395,7 +441,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
   if (message.id === undefined) return;
   if (message.method === undefined) {
     // A response to a request this fake sent.
-    answerElicitation(message);
+    answerRaised(message);
     return;
   }
 

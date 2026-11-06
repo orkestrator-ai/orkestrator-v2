@@ -257,7 +257,10 @@ depends = ["playwright:install"]
 # An inherited NODE_ENV=production (an agent session the packaged app started)
 # serves React's production build, which the fixtures' retry paths fail under.
 env = { NODE_ENV = false }
-run = "bun check -p e2e/tsconfig.json && bunx playwright test --config e2e/playwright.config.ts && bunx playwright test --config e2e/public-site/playwright.config.ts"
+# Both suites need only loopback, so on Linux they run in a private network
+# namespace where other builds' Docker networks cannot abort Chromium's requests
+# (flake 2340). ORKESTRATOR_E2E_HOST_NETWORK=1 keeps them on the host network.
+run = "bun check -p e2e/tsconfig.json && bun scripts/loopback-network.ts -- bunx playwright test --config e2e/playwright.config.ts && bun scripts/loopback-network.ts -- bunx playwright test --config e2e/public-site/playwright.config.ts"
 
 [tasks."test:agent:browser"]
 description = "Run browser agent tests against an already-running profile (use test:agent:browser:isolated for one-shot validation)"
@@ -407,6 +410,10 @@ run = "bun test --cwd bridges/claude-bridge ./src/services/session-manager-promp
 description = "Prove what a parked Claude spare does and refuses, on the pinned CLI (real CLI, no credentials, no model)"
 run = "bun test --cwd bridges/claude-bridge ./src/services/claude-first-turn.live.test.ts --preload ../../tests/setup-node.ts --parallel=1"
 
+[tasks."verify:claude:sandbox-live"]
+description = "Prove the pinned Claude CLI enforces the provider sandbox the bridge sets: no write outside the workspace, no unlisted host, no card (macOS; real CLI, no credentials, scripted model)"
+run = "bun test --cwd bridges/claude-bridge ./src/services/claude-provider-sandbox.live.test.ts --preload ../../tests/setup-node.ts --parallel=1"
+
 [tasks."measure:claude:first-turn"]
 description = "Time a first Claude turn cold, on a spare and warm (real CLI, no credentials, no model)"
 run = "bun bridges/claude-bridge/src/services/claude-first-turn.live-probe.ts 5"
@@ -461,6 +468,11 @@ run = "docker build $(bun scripts/docker-image-build-args.ts) -t orkestrator-v2:
 description = "Build the development Docker image"
 raw_args = true
 run = "bun apps/desktop/scripts/dev-build-image.ts"
+
+[tasks."docker:disposable"]
+description = "Start, restart or stop a disposable rootless Docker daemon for the live container suites"
+raw_args = true
+run = "bun scripts/disposable-docker-daemon.ts"
 
 [tasks."package:mac"]
 description = "Build and install an unpacked macOS application"

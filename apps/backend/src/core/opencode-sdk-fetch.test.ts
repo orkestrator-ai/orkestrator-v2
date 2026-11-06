@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { openCodeSdkFetch } from "./http-bridge-transport.js";
+import { openCodeSdkFetch } from "./http-bridge/transport.js";
 import { createOpenCodeSdkClient } from "./opencode-sdk-client.js";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 

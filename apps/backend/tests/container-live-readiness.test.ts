@@ -1036,7 +1036,16 @@ describe("C22 live host-service reply", () => {
       const workflowResults = requestedPort
         ? new WorkflowResultService(path.join(scene.root, "agent-tools"))
         : undefined;
-      const server = new AgentToolsServer(storage, "0.0.0.0", workflowResults);
+      // Its peer filter follows the scene's networks, which the environment
+      // network and the probe network below belong to.
+      const { dockerPeerFilter } = await import("../src/core/agent-tools-peer-filter");
+      const server = new AgentToolsServer(
+        storage,
+        "0.0.0.0",
+        workflowResults,
+        undefined,
+        dockerPeerFilter(() => scene.owner),
+      );
       cleanups.push(async () => {
         await server.stop();
         workflowResults?.closeStorage();

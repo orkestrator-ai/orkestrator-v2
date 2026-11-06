@@ -15,6 +15,7 @@ import {
 import type { DockerTopology } from "@orkestrator/protocol/image-manifest";
 import { DOCKER_LABEL_OWNER, DOCKER_LABEL_RESOURCE_ROLE } from "./constants.js";
 import { runCommand } from "./shell.js";
+import { reportDockerNetworkChange } from "./docker-network-changes.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import {
   type CommandFailureFields,
@@ -967,6 +968,7 @@ export class ContainerHostReachabilityService {
         }).then(
           () => {
             if (this.probeNetwork === network.name) this.probeNetwork = null;
+            reportDockerNetworkChange();
           },
           (error: unknown) =>
             log.warn("probe-network.remove-failed", {
@@ -1283,6 +1285,8 @@ export class ContainerHostReachabilityService {
       return null;
     }
     if (this.closed) return { name, subnet: null };
+    // The agent-tools server must admit the probe containers' new subnet.
+    reportDockerNetworkChange();
     return { name, subnet: await this.networkSubnet(name) };
   }
 
@@ -1394,6 +1398,7 @@ export class ContainerHostReachabilityService {
           () => undefined,
         );
       }
+      if (names.length > 0) reportDockerNetworkChange();
     } catch {
       // Best effort, as above.
     }

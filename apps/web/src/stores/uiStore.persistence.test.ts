@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { createUIStore } from "./uiStore";
-import { desktopConnectionStorageKey } from "@/lib/desktop-storage-key";
+import { desktopConnectionStorageKey, windowStorageKey } from "@/lib/desktop-storage-key";
 import { writeRealmWorkspace } from "@/lib/portal/workspace-target-storage";
 import { portalStore } from "@/lib/portal/portal-store";
 
@@ -146,4 +146,23 @@ test("a dismissed coordinator first-run card stays dismissed for the window, in 
   expect(next.getState().coordinatorIntroDismissed).toBe(true);
   next.getState().selectProject("project-b");
   expect(next.getState().coordinatorIntroDismissed).toBe(true);
+});
+
+test("the removed Work panel's saved sections are ignored and dropped on the next write", () => {
+  localStorage.clear();
+  const key = windowStorageKey("ui-storage");
+  localStorage.setItem(
+    key,
+    JSON.stringify({
+      state: { sidebarWidth: 333, collapsedWorkBuckets: ["finished"] },
+      version: 0,
+    }),
+  );
+  const store = createUIStore();
+  expect(store.getState().sidebarWidth).toBe(333);
+  expect("collapsedWorkBuckets" in store.getState()).toBe(false);
+  store.getState().setZoomLevel(110);
+  const saved = JSON.parse(localStorage.getItem(key) ?? "null");
+  expect(saved.state.sidebarWidth).toBe(333);
+  expect("collapsedWorkBuckets" in saved.state).toBe(false);
 });

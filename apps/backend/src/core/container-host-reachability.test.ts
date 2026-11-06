@@ -21,6 +21,7 @@ import {
   hostNetworkAddresses,
   type ContainerHostReachabilityDependencies,
 } from "./container-host-reachability.js";
+import { subscribeDockerNetworkChanges } from "./docker-network-changes.js";
 import { CommandFailedError } from "./shell.js";
 
 // Captured from real probes (busybox 1.37 wget and the environment image's curl).
@@ -1257,6 +1258,25 @@ describe("shutdown and stale probe cleanup", () => {
     const { svc } = service({ runner });
     await svc.dispose();
     expect(runner.calls).toEqual([]);
+  });
+
+  test("probe creation, removal and stale reap each report a network change", async () => {
+    const runner = fakeRunner({ labelledNetworks: ["ork-owner-reach-old-net"] });
+    const { svc } = service({ runner });
+    const changes: string[][] = [];
+    const unsubscribe = subscribeDockerNetworkChanges(() => {
+      changes.push(runner.calls.at(-1)!);
+    });
+    try {
+      await svc.check("boot");
+      expect(changes).toHaveLength(3);
+      expect(changes[0]).toEqual(["docker", "network", "rm", "ork-owner-reach-old-net"]);
+      expect(changes[1]!.slice(0, 3)).toEqual(["docker", "network", "create"]);
+      expect(changes[2]).toEqual(["docker", "network", "rm", PROBE_NETWORK]);
+    } finally {
+      unsubscribe();
+      await svc.dispose();
+    }
   });
 
   test("the reaper removes this owner's unattached probe networks, one per call", async () => {

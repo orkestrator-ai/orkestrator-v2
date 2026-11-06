@@ -54,7 +54,7 @@ runs the backend live image qualifications in `IMAGE_QUALIFICATION_TESTS`
 (`apps/desktop/scripts/dev/isolated-browser.ts`; today the M8 suite
 `claude-config-filter-docker.test.ts`, which stages a fake `~/.claude.json` and
 starts interactive Claude on it with no network and fake credentials; it fails
-rather than skips when the image is missing), then starts a credential-free local/container fixture with Codex, Grok and OpenCode,
+rather than skips when the image is missing), then starts a credential-free local/container fixture with Codex, Grok, OpenCode, Cursor and Pi,
 and runs the same `Docker fixture` selection as `test:agent:docker`. It stops and
 resets the profile afterwards. The worktree's shared development image is kept
 for other profiles; the shared-image-aware prune workflow owns its removal. The scheduler
@@ -307,6 +307,22 @@ mise run dev:stop --profile container-wiring-qa
 mise run dev:reset --profile container-wiring-qa
 ```
 
+### Cursor and Pi container cells
+
+`e2e/agent-testing/container-fake-engines.spec.ts` runs a Cursor and a Pi
+native tab in the fixture container with no credential and no provider call.
+For each case it swaps the image's bridge entry
+(`/opt/<platform>-bridge/dist/index.js`) for a bundle of the bridge's
+`src/testing/container-fake-engine-server.ts`: the real bridge over Cursor's
+fake SDK or Pi's faux model. The backend's production `start_<platform>_server`
+launch then runs it. The case checks the reported container policy, Cursor's
+SDK options, and that an off-allowlist URL is refused while GitHub answers.
+For Cursor the request comes from the bridge process (`FETCH <url>`); for Pi it
+comes from Pi's own `bash` tool (`BASH: <command>`). The Pi case also checks
+that an `ask` policy parks the call until its card is approved. Cleanup
+restores the real entry and stops the bridge. The profile needs Cursor and Pi
+in `--agent-platforms`; otherwise the cases skip.
+
 A restart with `--fixture` reuses the fixture the first start seeded: it keeps
 `test-project` and `origin.git`, reuses the `fixture-local` and
 `fixture-container` environments (starting any that are stopped) and creates
@@ -463,7 +479,13 @@ agent picker.
 
 Startup seeds each toolchain from your host installation when it has the same
 pinned version, so the default normally costs a local copy rather than a
-download. Anything the host lacks is downloaded as usual, and a toolchain the
+download. The launcher downloads whatever the host lacks before it starts
+Electron, through the same manager and hash checks
+(`prefetchAgentToolchains`), and Electron only verifies and activates the
+result. The launcher uses Bun's `fetch`. Electron's download goes through
+Chromium, which aborts it with `net::ERR_NETWORK_CHANGED` whenever Docker adds
+or removes an interface, and an unattended profile quits on that failure.
+Electron still downloads anything the launcher could not, and a toolchain the
 profile already has is left alone. Narrow the set when a run does not need all
 five:
 

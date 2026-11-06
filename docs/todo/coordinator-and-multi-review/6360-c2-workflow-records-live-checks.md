@@ -22,7 +22,7 @@ Analysed 2026-11-05 against main at 41f9eb638, with coordinator batch C2 (Workfl
 **Decisions.**
 
 - **How to check it?**
-  - **On two dev machines, delegate a long task to a worker on the leaf, forget the leaf, and read the coordinator's mail and the Work panel (recommended).**
+  - **On two dev machines, delegate a long task to a worker on the leaf, forget the leaf, and read the coordinator's mail and `list_workflows` (recommended).**
     - Pros: the real hook, the real registry write and the real notice in one run.
     - Cons: costs one provider turn on the leaf, and needs two machines.
   - **Rely on the fake-network tests.**
@@ -71,7 +71,7 @@ Analysed 2026-11-05 against main at 41f9eb638, with coordinator batch C2 (Workfl
 
 **Context.** From coordinator report C2, part `0080`, task 2. Filling the store needs about 1,800 records still in use, which no fixture seeds.
 
-**Investigation.** `CoordinatorWorkflowStoreBanner.test.tsx` covers the three states; `coordinator-workflow-retention.test.ts` covers the snapshot state on a real store; `coordinator-node-release.test.ts` reads `workflowStore` from a real snapshot (`ok`). The banner's place in `CoordinatorWorkArea` above the worker prompts was not seen live.
+**Investigation.** `CoordinatorWorkflowStoreBanner.test.tsx` covers the three states; `coordinator-workflow-retention.test.ts` covers the snapshot state on a real store; `coordinator-node-release.test.ts` reads `workflowStore` from a real snapshot (`ok`). The banner's place in `CoordinatorWorkerPrompts` above the worker prompts was not seen live.
 
 **Decisions.**
 

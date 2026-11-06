@@ -46,6 +46,7 @@ export default defineConfig({
     "container-root-terminal.spec.ts",
     "container-approval-stop.spec.ts",
     "container-claude-terminal-signal.spec.ts",
+    "container-fake-engines.spec.ts",
     "terminal-input-resume.spec.ts",
     "terminal-mobile-panes.spec.ts",
     "sidebar-width-consumers.spec.ts",

@@ -27,6 +27,21 @@ out at 5,526.42 ms. Artifact:
 This occurrence has no isolated pass, so it remains unresolved; it is not excused
 as environmental based on the timeout alone.
 
+## Recurrence 2026-11-06 — coordinator Work panel removal
+
+`mise run test:logged -- --name address-default-suite -- mise run test`
+failed on this unchanged backend test at 5090.23 ms (5,000 ms deadline)
+with four backend workers. Backend totals: 16,356 pass, 126 skip, three failures and two errors;
+web: 12,990 pass, zero failures. The same run also caught two new test type
+errors, corrected in `5f5cb11b1`. Evidence:
+`/tmp/orkestrator-test-run.srVdfm/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+
+The owning file passed unchanged with
+`mise run test:logged -- --name address-measurement-isolated -- bun test --cwd apps/backend ./src/core/change-tracking/measurement-file-cap.test.ts --parallel=1 --only-failures`
+(exit 0, 6.3 s). No assertion, skip, or timeout was changed. The coordinator
+renderer removal does not edit this backend path; initial timeout cause remains
+unconfirmed. A fresh aggregate run follows the test type fix.
+
 ## Interaction-policy review repair validation — 2026-11-06
 
 The exact default aggregate retry (`mise run test:logged -- --name

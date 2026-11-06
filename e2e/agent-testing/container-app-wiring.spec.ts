@@ -489,15 +489,16 @@ test("Docker fixture coordinator view follows delegations and context across swi
     ).length;
   const baselineContainer = openOn(container.id);
   const baseline = baselineContainer + openOn(local.id);
-  // The Work panel counts every open delegation of this coordinator, from any
-  // conversation and to any worker; those this test does not drive stay put.
-  const elsewhere =
-    snapshot.workflows.filter(
+  // Count every open delegation of this coordinator, from any conversation and
+  // to any worker; those this test does not drive stay put.
+  const openDelegations = (current: CoordinatorSnapshot) =>
+    current.workflows.filter(
       (association) =>
-        association.coordinatorId === snapshot.workspace.id &&
+        association.coordinatorId === current.workspace.id &&
         association.kind === "environment" &&
         association.delegation?.state === "running",
-    ).length - baseline;
+    ).length;
+  const elsewhere = openDelegations(snapshot) - baseline;
   const delegate = (environmentId: string, label: string) =>
     invoke<{ opened: boolean }>("open_coordinator_delegation", {
       scope: {
@@ -534,64 +535,62 @@ test("Docker fixture coordinator view follows delegations and context across swi
         exact: true,
       }),
     ).toBeVisible({ timeout: 15_000 });
+    await expect(panel.getByRole("button", { name: "Pause", exact: true })).toBeVisible();
+    await expect(panel.getByRole("complementary", { name: "Work", exact: true })).toHaveCount(0);
+    await expect(panel.getByRole("button", { name: /^(Show|Hide) work$/i })).toHaveCount(0);
+    await expect(panel.locator("[data-coordinator-work]")).toHaveCount(0);
+    await expect(panel.getByText(/next wake/i)).toHaveCount(0);
     return panel;
   };
-  const awaiting = (panel: ReturnType<Page["locator"]>, count: number) =>
-    expect(panel.locator("[data-coordinator-work]")).toHaveAttribute(
-      "data-open-delegations",
-      String(count + elsewhere),
-      { timeout: DELEGATION_SWEEP_BUDGET_MS },
-    );
+  // The coordinator view no longer lists its work, so the delegation count
+  // is read from the backend's coordinator record.
+  const awaiting = (count: number) =>
+    expect
+      .poll(
+        async () =>
+          openDelegations(
+            await invoke<CoordinatorSnapshot>("ensure_project_coordinator", {
+              projectId: container.projectId,
+            }),
+          ),
+        { timeout: DELEGATION_SWEEP_BUDGET_MS },
+      )
+      .toBe(count + elsewhere);
 
   await page.setViewportSize({ width: 1400, height: 900 });
   await login(page, testInfo);
   try {
     let panel = await openCoordinator(page);
-    if (baseline === 0) await awaiting(panel, 0);
+    if (baseline === 0) await awaiting(0);
 
-    await test.step("a delegation opened while another environment is shown appears on return", async () => {
+    await test.step("a delegation survives an environment switch and the coordinator returns without a Work rail", async () => {
       await selectEnvironment(page, containerName);
       await expect(page.locator("#project-panel-coordinator")).toHaveCount(0);
       expect((await delegate(container.id, "container")).opened).toBe(true);
       await page.waitForTimeout(3_000);
       panel = await openCoordinator(page);
-      await awaiting(panel, baseline + 1);
-      // A 1400px window shows the Work panel open, with the worker named.
-      await expect(
-        panel.locator('[data-coordinator-work] [data-work-kind="worker"]', {
-          hasText: containerName,
-        }),
-      ).toBeVisible();
+      await awaiting(baseline + 1);
     });
 
-    await test.step("a delegation opened while the document is hidden appears after return", async () => {
+    await test.step("a delegation survives a hidden document and the coordinator remains usable", async () => {
       await setDocumentHidden(page, true);
       expect((await delegate(local.id, "local")).opened).toBe(true);
       await page.waitForTimeout(6_000);
-      // Event-driven reads wait while hidden.
-      await expect(panel.locator("[data-coordinator-work]")).toHaveAttribute(
-        "data-open-delegations",
-        String(baseline + 1 + elsewhere),
-      );
-      const returned = Date.now();
       await setDocumentHidden(page, false);
-      await awaiting(panel, baseline + 2);
-      testInfo.annotations.push({
-        type: "coordinator-hidden-return",
-        description: `delegation shown ${Date.now() - returned} ms after the document became visible`,
-      });
+      panel = await openCoordinator(page);
+      await awaiting(baseline + 2);
     });
 
-    await test.step("a reload shows both delegations", async () => {
+    await test.step("a reload retains both backend delegations and the coordinator controls", async () => {
       await reloadApp(page, testInfo);
       panel = await openCoordinator(page);
-      await awaiting(panel, baseline + 2);
+      await awaiting(baseline + 2);
     });
 
     const second = await openSecondWindow(page.context(), testInfo);
     const secondPanel = await openCoordinator(second);
     await test.step("a repository context change shows in both windows", async () => {
-      await awaiting(secondPanel, baseline + 2);
+      await awaiting(baseline + 2);
       const before = (
         await invoke<CoordinatorSnapshot>("ensure_project_coordinator", {
           projectId: container.projectId,
@@ -610,17 +609,16 @@ test("Docker fixture coordinator view follows delegations and context across swi
       }
     });
 
-    await test.step("stopped workers' delegations close in both windows", async () => {
+    await test.step("stopped workers' backend delegations close and the second window returns to the coordinator", async () => {
       // The second window watches from an environment while the sweep runs.
       await selectEnvironment(second, localName);
       await invoke("stop_environment", { environmentId: local.id });
       await waitForEnvironmentStatus(localName, "stopped");
-      await awaiting(panel, baselineContainer + 1);
+      await awaiting(baselineContainer + 1);
       await invoke("stop_environment", { environmentId: container.id });
       await waitForEnvironmentStatus(containerName, "stopped");
-      await awaiting(panel, 0);
-      const returnedPanel = await openCoordinator(second);
-      await awaiting(returnedPanel, 0);
+      await awaiting(0);
+      await openCoordinator(second);
       await second.close();
     });
   } finally {

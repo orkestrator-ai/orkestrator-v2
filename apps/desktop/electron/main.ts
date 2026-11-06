@@ -66,6 +66,7 @@ import {
   createRealmRequestAuthInstaller,
   installRemoteGatewayRequestAuth,
 } from "./remote-gateway-request-auth.js";
+import { createWindowRequestAuthorization } from "./window-request-authorization.js";
 import { RealmContexts, refreshWorkspaceRealm } from "./realm-contexts.js";
 import { ensurePinnedToolchains } from "@orkestrator/toolchain/manager";
 import { pinnedArtifactsForPlatforms } from "@orkestrator/toolchain/manifest";
@@ -940,10 +941,11 @@ async function createWindow(connectionId?: string): Promise<void> {
   // one that misbehaves can be left for a new one on the other transport.
   const localGatewayTransport =
     backend !== null && readLocalWindowGatewayTransport(app.getPath("userData"));
-  const localRequestAuthorization = (url: string): string | null =>
-    localGatewayTransport && connectionManager?.getConnectionId(scope) === LOCAL_CONNECTION_ID
-      ? (backend?.directTransportAuthorization(url) ?? null)
-      : null;
+  const requestAuth = createWindowRequestAuthorization(
+    connectionManager,
+    scope,
+    localGatewayTransport ? (url) => backend?.directTransportAuthorization(url) ?? null : null,
+  );
   let registered = false;
   const allocation: { window: BrowserWindow | null } = { window: null };
   try {
@@ -964,12 +966,8 @@ async function createWindow(connectionId?: string): Promise<void> {
           emitToWindow(createdWindow, event, payload);
         installRemoteGatewayRequestAuth(
           createdWindow.webContents.session.webRequest,
-          (url) =>
-            connectionManager?.getRendererRequestAuthorization(url, scope) ??
-            localRequestAuthorization(url),
-          {
-            requestOrigin: (url) => (localRequestAuthorization(url) ? new URL(url).origin : null),
-          },
+          requestAuth.authorization,
+          { requestOrigin: requestAuth.requestOrigin },
         );
         const browserPreviewRuntime = createWindowBrowserPreviews(
           createdWindow,

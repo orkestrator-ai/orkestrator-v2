@@ -2,12 +2,12 @@
 
 ## Task analysis
 
-Analysed 2026-11-05 against `main` at `251f772d6`. Found running `renderer-log-boundary-electron.spec.ts` for E16.
+Analysed 2026-11-05 against `main` at `251f772d6`. Found running `renderer-log-boundary-electron.spec.ts` for E16. Task 1 acted on 2026-11-06 against `main` at `e6c3da899`, for flake 0622 (to-do 0042 task 11).
 
 ### Tasks
 
-1. **Stop the throw when a window closes during a request**: a request still in flight after its window's scope is released should not raise an uncaught exception. Status: open.
-2. **See what happens with a display**: whether a user gets the error dialog, and whether the app then exits cleanly. Status: open.
+1. **Stop the throw when a window closes during a request**: a request still in flight after its window's scope is released should not raise an uncaught exception. Status: done (2026-11-06, `03cbf0191`).
+2. **See what happens with a display**: whether a user gets the error dialog, and whether the app then exits cleanly. Status: open. The throw that led here is gone, so this now concerns any other uncaught exception: whether the sheet with no parent window crashes Electron (SIGTRAP), with and without a display.
 
 ### 1. Stop the throw when a window closes during a request
 
@@ -57,7 +57,38 @@ Two things are not established:
     - Pros: needs no harness.
     - Cons: the timing is hard to hit, so a clean close would prove little.
 
+## Assumptions and decisions
+
+### Task 1: both recommended changes, and the caller confirmed (2026-11-06)
+
+Chose the recommended option, `getRendererRequestAuthorization` returning
+`null` for a released scope, and also the second one: both callbacks of
+`installRemoteGatewayRequestAuth` now always call back, sending a request with
+no credential when the lookup throws. The first removes the known throw in
+that lookup for all four callers; the window hook's local gateway fallback
+also needs the nonthrowing bound-scope lookup, added during review on
+2026-11-06 with composed authorization and origin callback coverage. The
+second keeps any other throw from leaving a request unanswered and now emits
+a debug event naming the hook phase, without request or exception content. The trade-offs are in to-do 0042, decision D22.
+
+The caller is now confirmed. Flake 0622's multi-backend Electron test hit the
+same exception when its second window closed under CPU contention (5 of 10
+runs), with the same `[desktop.dialog] opening source=uncaught-exception
+parent=none` line and SIGTRAP. A temporary probe (not committed) in the window
+hook (`main.ts:965`) and the preview views' hook (`main.ts:729`) fired
+only in the window hook, for Vite renderer modules whose headers arrived 8 ms
+after the window's `closed`. With the fix the same load passed 10 of 10 with
+no `uncaught-exception` line. Tests: `apps/desktop/tests/connection-manager.test.ts`
+and `apps/desktop/tests/remote-gateway-request-auth.test.ts` (the cases named
+0622), both failing without the source change.
+
+Task 2 stays open: SIGTRAP following the sheet is still not explained, and no
+disposable display was available.
+
 ## Related
 
 - [6301](6301-log-controls-live-evidence.md)
 - [Flake 2340](../../tests/flaky-tests/aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md)
+- [Flake 0622](../../tests/flaky-tests/previews-annotations-and-gateway/0622-service-preview-window-close-remote-release.md),
+  [to-do 0042](../previews-and-annotations/0042-service-preview-rollout.md) (task 11, D22),
+  [7060](7060-electron-webrequest-listeners-always-answer.md)

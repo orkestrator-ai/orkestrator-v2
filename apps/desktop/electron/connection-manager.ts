@@ -1028,12 +1028,19 @@ export class ConnectionManager {
    * Bearer for a renderer request, only to the exact current origin of the
    * scope's bound machine and only for gateway paths. Two tunnels on the
    * same loopback host differ by port, so they never share a credential.
+   *
+   * Called from webRequest hooks. A closed window's session can still finish
+   * a request after its scope was released; that request gets no credential.
+   * Throwing instead would leave the request unanswered and raise an uncaught
+   * exception in main (flake 0622).
    */
   getRendererRequestAuthorization(
     urlValue: string,
     scope = DEFAULT_CONNECTION_SCOPE,
   ): string | null {
-    const activeRemote = this.remoteForScope(scope);
+    const connectionId = this.getBoundConnectionId(scope);
+    if (!connectionId || connectionId === LOCAL_CONNECTION_ID) return null;
+    const activeRemote = this.remoteConnections.get(connectionId);
     if (!activeRemote || activeRemote.client.isSuspended) return null;
     try {
       const url = new URL(urlValue);
@@ -1713,10 +1720,16 @@ export class ConnectionManager {
   }
 
   private connectionIdForScope(scope: string): string {
+    const connectionId = this.getBoundConnectionId(scope);
+    if (connectionId !== null) return connectionId;
+    throw new Error("The requesting window is no longer available.");
+  }
+
+  /** The scope's connection, or null once a released scope no longer has one. */
+  getBoundConnectionId(scope: string): string | null {
     const connectionId = this.bindings.get(scope);
     if (connectionId) return connectionId;
-    if (scope === DEFAULT_CONNECTION_SCOPE) return this.catalogue.activeConnectionId;
-    throw new Error("The requesting window is no longer available.");
+    return scope === DEFAULT_CONNECTION_SCOPE ? this.catalogue.activeConnectionId : null;
   }
 
   private captureScopeGeneration(scope: string): number {

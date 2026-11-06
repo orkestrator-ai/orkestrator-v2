@@ -309,3 +309,56 @@ This launch failure is separate from Chromium's network-change failures.
   ([6303](../../../todo/cross-cutting/6303-window-close-during-request-throws.md)).
 - **Change:** the spec launches with the probe off. Its module loads still go through
   Chromium, so other Docker work on the host can still cause this.
+
+## Recurrence: the service-preview Electron specs at review validation (2026-11-06)
+
+- **Run:** review validation of to-do 0042 task 11 (branch
+  `preview-flakes-1bb27c3be3fd-r1`, head `f67ef0666`),
+  `mise run test:logged -- --name agent-electron -- mise run test:agent:electron`,
+  one worker, beside other builds' Docker work. 20 failed, 8 passed, 40 did not
+  run.
+- **Failure:** `service-preview-electron.spec.ts` "the tunnel is advertised and a
+  service loads through its credentialed loopback ingress" (and, the same way,
+  `service-preview-seeded-electron.spec.ts` case 1) failed in `beforeAll` at
+  `launchElectron`'s first title check, before any test body: the window stayed
+  `Orkestrator AI` for 60 s with `[DesktopStartup] renderer-load-failed`,
+  `Failed to fetch dynamically imported module .../src/renderer-entry.tsx` and
+  about 70 `net::ERR_NETWORK_CHANGED` lines. The spec already launches with
+  `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`, so the aborts came from other Docker
+  work on the host, not from its own backend. Serial mode then left the rest of
+  each file unrun. 17 of that run's 20 failures were a first title check
+  (`toHaveTitle`). Several other failing cases' attached
+  `electron-diagnostics.txt` also hold `net::ERR_NETWORK_CHANGED` and
+  `renderer-load-failed` lines, but that buffer spans the worker rather than
+  one test, so they are not attributed here; the review's triage left them
+  undetermined.
+- **Change (`9ef37bfd1`):** the service-preview launcher
+  (`e2e/agent-testing/service-preview-electron-launch.ts`) waits for the title
+  through `waitForRendererStart` (`e2e/agent-testing/electron-startup-recovery.ts`).
+  It reloads the window, at most three times within 90 s, only when the window
+  shows "Orkestrator couldn’t connect" and the console since the last load holds
+  both a failed module import and `net::ERR_NETWORK_CHANGED`; any other startup
+  failure fails as before. Console lines are collected on the application's
+  context straight after launch, because the first load reports its aborts
+  before `firstWindow()` resolves. Every module and request still goes through
+  Chromium and main's request hooks, so the 0622 window-close path keeps its
+  coverage; routing modules through `route.fetch()`, as the browser suite does,
+  would have bypassed those hooks. A reload is recorded in the Electron
+  diagnostics and printed as `[startup-recovery]`, which lands in the run's
+  `results.json`. Unit tests: `e2e/agent-testing/electron-startup-recovery.test.ts`
+  (12), in the root group of `mise run test`.
+- **Runs after the change** (beelink, headless, no private network namespace,
+  load average 10 to 35, other builds running, 2026-11-06 01:58–02:05 UTC):
+  keyboard picker test 10/10 and multi-backend test 10/10 (`--repeat-each=10`),
+  the complete owner without the legacy URL tab case
+  ([7061](../../../todo/previews-and-annotations/7061-legacy-url-tab-back-fails-headless.md))
+  21/21, `service-preview-seeded-electron.spec.ts` 6/6, and the tunnel case in
+  10 separate invocations (10 cold launches) 10/10. No `[startup-recovery]`
+  line was printed in any of them: no network change hit a startup in that
+  window, so the reload itself is proven by the unit tests, not by a live
+  recurrence. This build did not create Docker networks to force one, because
+  that churn would abort other builds' Chromium loads on the same host.
+- Other Electron specs that wait on their first title (`electron-main.spec.ts`,
+  `local-gateway-transport-electron.spec.ts` and the rest of that run's
+  failures) were not changed; extending the helper to them is
+  [to-do 7062](../../../todo/cross-cutting/7062-electron-specs-recover-network-changed-startup.md).

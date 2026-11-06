@@ -17,7 +17,7 @@ import {
   type RuntimeProfile,
 } from "../../apps/desktop/electron/runtime-profile";
 import { closeElectronWithin } from "./design-electron-cleanup";
-import { recordElectronDiagnostics } from "./electron-diagnostics";
+import { recordElectronDiagnostics, recordTestNote } from "./electron-diagnostics";
 import { expect, test } from "./electron-fixtures";
 import {
   ELECTRON_TEST_SWITCHES,
@@ -26,6 +26,12 @@ import {
   withoutDisplay,
 } from "./electron-launch-switches";
 import { dismissStartupDialogs } from "./electron-startup-dialogs";
+import {
+  NETWORK_CHANGED,
+  collectStartupConsole,
+  pageStartupWindow,
+  waitForRendererStart,
+} from "./electron-startup-recovery";
 
 export const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 export const packageRoot = path.join(repositoryRoot, "apps", "desktop");
@@ -40,7 +46,11 @@ export function electronOutputTail(app: ElectronApplication): string {
   return outputTails.get(app)?.() ?? "";
 }
 
-/** Main's recent preview transport warnings (static text, e.g. a failed release). */
+/**
+ * Main's recent preview transport warnings (static text, e.g. a failed
+ * release) and uncaught exceptions, which stop main before it releases
+ * anything (flake 0622).
+ */
 export function electronPreviewOutput(app: ElectronApplication): string[] {
   return previewOutput.get(app)?.() ?? [];
 }
@@ -118,6 +128,7 @@ export async function launchElectron(current: {
     },
   });
   recordElectronDiagnostics(app);
+  const startupConsole = collectStartupConsole(app.context());
   dismissStartupDialogs(app);
   let tail = "";
   let previewLines: string[] = [];
@@ -128,7 +139,9 @@ export async function launchElectron(current: {
       tail = (tail + text).slice(-4_000);
       const lines = (partial + text).split("\n");
       partial = lines.pop()!.slice(-1_000);
-      const matched = lines.filter((line) => line.includes("[preview]"));
+      const matched = lines.filter(
+        (line) => line.includes("[preview]") || line.includes("uncaught-exception"),
+      );
       if (matched.length > 0) previewLines = [...previewLines, ...matched].slice(-20);
     };
   };
@@ -137,9 +150,26 @@ export async function launchElectron(current: {
   outputTails.set(app, () => tail);
   previewOutput.set(app, () => previewLines.map((line) => line.slice(0, 300)));
   const window = await app.firstWindow({ timeout: 90_000 }).catch((error: Error) => {
+    startupConsole.dispose();
     throw new Error(`${error.message}\nElectron output tail:\n${tail}`);
   });
-  await expect(window).toHaveTitle(current.profile.electronTitle, { timeout: 60_000 });
+  // Reloads only after Chromium aborted the renderer's Vite modules with
+  // ERR_NETWORK_CHANGED (flake 2340); any other startup failure still fails.
+  try {
+    const reloads = await waitForRendererStart(
+      pageStartupWindow(window, startupConsole),
+      current.profile.electronTitle,
+      { timeoutMs: 90_000 },
+    );
+    if (reloads > 0) {
+      const note = `renderer start reloaded ${reloads}x after ${NETWORK_CHANGED}`;
+      recordTestNote(note);
+      // Also in the run's results.json, so a passing run shows it recovered.
+      console.log(`[startup-recovery] ${note}`);
+    }
+  } finally {
+    startupConsole.dispose();
+  }
   await waitForApi(window);
   const windowId = await (
     await app.browserWindow(window)

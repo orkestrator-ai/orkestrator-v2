@@ -7,7 +7,8 @@ retention, tunnel liveness, compatibility cases and UI items against
 `00a0cb82` (2026-10-25); the preview flakes (task 11) against `93b99bfba`
 (2026-11-01); the Next.js fixture (task 5) and task 6's metric additions
 against `7b48c23fb` (2026-11-03); the default flip and legacy tab migration
-(tasks 7 and 8) against `4e3caa079` (2026-11-04).
+(tasks 7 and 8) against `4e3caa079` (2026-11-04); the 0622 window-close cause
+(task 11) against `e6c3da899` (2026-11-06).
 
 ## Task analysis
 
@@ -48,10 +49,12 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 10. **Real-window leftovers**: the pane-layout announcement (item 9), node
     retention against a real command node, and the narrow toolbar measured in
     a window (item 11). Status: open.
-11. **Preview flakes 0620 and 0622**: code items 12 and 13. Status: partly done
-    (2026-11-01): 0620 and the 0622 baseline-count race were reproduced and
-    fixed. The original 0622 window-close symptom remains open; see decisions
-    D9 to D11.
+11. **Preview flakes 0620 and 0622**: code items 12 and 13. Status: done
+    (2026-11-06): 0620 and the 0622 baseline-count race were fixed on
+    2026-11-01 (D9 to D11). The 0622 window-close symptom was reproduced under
+    CPU load and fixed (D22, D23); both flakes are resolved. The owning specs'
+    launcher now recovers a startup that lost its modules to
+    `ERR_NETWORK_CHANGED`, which failed them at review validation (D24).
 12. **Partition disk use on a long-lived profile**: the "Needs verification"
     item. Status: partly done (`disk:report` measures it; no long-lived data).
 
@@ -442,6 +445,35 @@ retirement lease. The test now waits for those leases before counting (D10).
 The single 2026-10-21 window-close failure was not reproduced; its check now
 reports the main process's release warnings. Runs are in the evidence log.
 
+**Outcome (2026-11-06, `main` at `e6c3da899`).** The window-close symptom is
+explained and fixed. A window's session outlives the window, so requests it is
+still finishing reach the gateway request hook after `closed` released the
+window's connection scope. `getRendererRequestAuthorization` threw there, and
+main took an uncaught exception. On 2026-10-21 that meant Electron's default
+blocking error box, which stops main before it releases the window's
+attachments (read from the code of that date). Today it opens a sheet, and
+headless Electron exits with SIGTRAP. CPU contention reproduced it in 5 of 10
+runs. A released scope now gets no credential instead of an exception, and both
+hooks always call back (D22). With the fix the same load passed 10 of 10, and
+both flakes are resolved (D23). The audit of main's other webRequest listeners
+is
+[7060](../cross-cutting/7060-electron-webrequest-listeners-always-answer.md).
+
+**Review validation repair (2026-11-06).** The review's `mise run
+test:agent:electron` lost both service-preview specs in `beforeAll`, before any
+test body: Chromium aborted the window's Vite modules with
+`net::ERR_NETWORK_CHANGED` and the window stopped at "Orkestrator couldn’t
+connect" (case
+[2340](../../tests/flaky-tests/aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md),
+other builds' Docker work; the spec's own reachability probe was already off).
+The launcher now reloads such a window, at most three times, only for that
+failure (D24, `9ef37bfd1`). Afterwards, headless without a private network
+namespace: the two owning tests 10 of 10 each, the owner without the
+[7061](7061-legacy-url-tab-back-fails-headless.md) case 21 of 21, the seeded
+spec 6 of 6, and 10 separate cold launches 10 of 10. The other Electron specs'
+first-title waits are
+[7062](../cross-cutting/7062-electron-specs-recover-network-changed-startup.md).
+
 ### 12. Partition disk use on a long-lived profile
 
 **Problem.** Only two snapshots of partition size exist; growth over months is
@@ -651,9 +683,14 @@ partitions, and the evidence log where run results are now recorded.
     backends now skip that probe (D11). The three throttling switches stay in
     `ELECTRON_TEST_SWITCHES`. Natural recurrence was not reproduced on Linux;
     a loaded macOS run with covered windows has not been repeated.
-13. Partly done 2026-11-01: flake
+13. Done 2026-11-06: flake
     [0622](../../tests/flaky-tests/previews-annotations-and-gateway/0622-service-preview-window-close-remote-release.md)
-    remains open for the original window-close symptom. The baseline-count
+    is resolved. The window-close symptom came from an uncaught exception in
+    main: a closed window's last requests reached the gateway request hook
+    after its scope was released, and `getRendererRequestAuthorization` threw
+    (D22). Reproduced 5 of 10 under CPU contention; fixed in
+    `ConnectionManager` and `installRemoteGatewayRequestAuth`, with unit tests,
+    and 10 of 10 after. What follows is the 2026-11-01 state. The baseline-count
     race is fixed: the later failures (2026-10-24 twice and 2026-10-25) all failed
     the attachment-count poll right after the second window attached. The
     test's Local baseline still counted window 1's `svc-b` while its
@@ -664,9 +701,8 @@ partitions, and the evidence log where run results are now recorded.
     (D10). The single 2026-10-21 window-close failure was not reproduced and is
     not explained by the lease, since a closing window releases without one.
     That check now prints main's `[Previews]` lines (such as `Failed to
-    release preview attachment.`) on failure. Keep the original symptom open
-    pending reproduction and an explanation; retain these diagnostics for the
-    next occurrence.
+    release preview attachment.`) on failure. Those diagnostics stay; the 2026-11-06
+    fix above closes the window-close symptom.
 
 ### Qualification
 
@@ -1779,6 +1815,92 @@ separately.
   container through the default-on relay, and anything on macOS. Profiles were
   stopped and reset.
 
+2026-11-06, the 0622 window-close symptom (task 11), branch
+`preview-flakes-1bb27c3be3fd-r1` from `main` at `e6c3da899`, fix `03cbf0191`.
+Linux 7.1.8 (x86_64, Arch, beelink, 16 logical CPUs), Bun 1.4.4, Electron
+45.0.0, Playwright 1.64.0, one worker, other builds running on the host (load
+average 9 to 24); durations are not reference figures. Electron ran headless
+(`ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1`, which strips the display
+variables), so no window reached the desktop. The command was
+`bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts
+service-preview-electron.spec.ts --workers=1`, with `-g` and `--repeat-each`
+as below.
+
+- Host first: without a private network namespace, 3 of 10 runs of each owning
+  test failed at startup with `net::ERR_NETWORK_CHANGED` on Vite modules (the
+  title never appeared), which is
+  [2340](../../tests/flaky-tests/aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md).
+  Every run below used a private loopback-only namespace
+  (`unshare --user --map-root-user --net`, `lo` up, then `unshare --user
+  --map-user` back to the same uid).
+- Before the fix: the keyboard test passed 10 of 10 and the multi-backend test
+  10 of 10 (windows gone 105 to 119 ms after `close()`).
+- Forced slow close (temporary, not committed): a 25-second `beforeunload`
+  busy-wait in window 2. The pre-2026-10-21 step failed with `Expected: 0,
+  Received: 1` after 20 seconds with the window still open; the current step
+  passed, `closedAfterMs` 25939 and the release 380 ms later.
+- Under CPU contention (every process of the run pinned to two cores with
+  `taskset -c 0,1`, beside four busy loops on those cores, all started and
+  stopped by one script by PID): the multi-backend test failed 5 of 10. Each
+  failure was `[desktop] uncaught-exception ... The requesting window is no
+  longer available.` from `getRendererRequestAuthorization` in the window's
+  gateway request hook, then the uncaught-exception sheet and Electron exiting
+  with SIGTRAP. A temporary probe named the requests: Vite renderer modules
+  whose headers arrived 8 ms after the window's `closed`.
+- After the fix: under the same contention the multi-backend test passed 10
+  of 10 with no `uncaught-exception` line (closed 41 to 1896 ms after
+  `close()`, released 24 to 449 ms after that). On the committed code, without
+  contention: the keyboard test 10 of 10, the multi-backend test 10 of 10.
+  The keyboard test under the same contention: 10 of 10.
+- Complete owner, committed code: 3 runs each failed `a legacy URL tab keeps a
+  link and Back through routine re-attaches` (address stays `/app/next`, the
+  2026-11-04 headless failure above), and serial mode then skipped the 6 cases
+  after it; the 15 cases before it passed each time. Without that case
+  (`--grep-invert`), the other 21 passed twice in a row (42 of 42), the
+  multi-backend case included (released 389 and 165 ms after the window was
+  gone). The headless failure is now
+  [7061](7061-legacy-url-tab-back-fails-headless.md).
+- `apps/desktop` tests: `connection-manager.test.ts`,
+  `remote-gateway-request-auth.test.ts`, `window-workspace-target.test.ts` and
+  `connection-manager-federation.test.ts` passed (103); the two new 0622 cases
+  failed with the source change reverted. `bun run --cwd apps/desktop
+  typecheck`, `bun check -p e2e/agent-testing/tsconfig.json`, `oxlint` and
+  `bun fmt --check` on the changed files, `tests/unit/flaky-tests-index.test.ts`,
+  `tests/unit/todo-index.test.ts` and `mise run format:check` passed.
+- Not run: macOS (the platform of the 2026-10-21 failure), a real display, and
+  a full `mise run test:agent:electron` suite.
+- Cleanup: every run's temporary profile root was removed by the spec; no
+  Electron, backend, Vite or busy-loop process of these runs is left. No
+  Docker resources were created. The probe, the slow-close hook and the run
+  scripts were never committed.
+
+2026-11-06, review validation repair (task 11, D24), branch
+`preview-flakes-1bb27c3be3fd-r1` at `9ef37bfd1`. Same host and versions, one
+worker, headless (`ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1`,
+`ORKESTRATOR_HOST_REACHABILITY_CHECK=off`), **without** a private network
+namespace, other builds running (load average 10 to 35), 01:58 to 02:05 UTC.
+Commands were `mise run test:logged -- --name <name> -- bunx playwright test
+--config e2e/agent-testing/playwright.electron.config.ts <spec> --workers=1
+--retries=0` with the options below; counts are from each run's
+`results.json`.
+
+- Keyboard picker test (0620), `--repeat-each=10`: 10 passed.
+- Multi-backend test (0622), `--repeat-each=10`: 10 passed.
+- Complete owner with `--grep-invert` for the 7061 case: 21 passed.
+- `service-preview-seeded-electron.spec.ts`: 6 passed.
+- `the tunnel is advertised and a service loads through its credentialed
+  loopback ingress`, the case the review lost, in 10 separate invocations
+  (10 cold launches): 10 passed.
+- No run printed `[startup-recovery]`, so no startup needed a reload in this
+  window. `e2e/agent-testing/electron-startup-recovery.test.ts` passed 12
+  tests; `bun check -p e2e/agent-testing/tsconfig.json`, `oxlint` and
+  `bun fmt` on the changed files passed.
+- Not run: forced network churn (it would abort other builds' loads on this
+  host; 7062 task 2), and a full `mise run test:agent:electron`.
+- Cleanup: each spec removed its temporary profile root; no Electron,
+  backend or Vite process of these runs is left. No Docker resources were
+  created.
+
 ## Open questions
 
 - How long is the support window for the legacy route and the pre-preview
@@ -2022,6 +2144,53 @@ Recorded 2026-11-03 for task 6's metric additions, on branch
   records, and connect is the client-side view of what the backend's
   `tunnel.open_ms` measures from accept. Cons: an upgrade (WebSocket)
   contributes a connect sample but no first-byte sample.
+
+Recorded 2026-11-06 for task 11 (the 0622 window-close symptom), on branch
+`preview-flakes-1bb27c3be3fd-r1` from `main` at `e6c3da899`.
+
+- **D22. Where a closed window's late requests stop throwing.** Options: (a)
+  `getRendererRequestAuthorization` answers `null` for a released scope; (b)
+  the gateway request hooks catch a throwing lookup and still call back; (c)
+  keep the scope bound until the window's requests drain. Chose (a) and (b),
+  as [6303](../cross-cutting/6303-window-close-during-request-throws.md)
+  recommended (a). Pros: (a) covers every caller of the lookup (the window
+  hook, the preview views' hook, realms and `window-workspace-target.ts`).
+  The window hook's local gateway fallback also uses a nonthrowing bound-scope
+  lookup (review correction, 2026-11-06). No credential is the
+  safe answer for a request with no window; (b) keeps any other throw from
+  leaving a request unanswered and main with an uncaught exception, and fails
+  closed (credentials stripped, response headers untouched). Cons: (b) hides
+  a future bug in a lookup behind a request without a credential; debug
+  diagnostics now identify the failing hook phase without error or request
+  content (review correction, 2026-11-06). The other `connectionIdForScope` callers still throw, which they
+  should, because they act for a window. (c) has no signal from Electron that
+  a session's requests have drained, so a close could wait indefinitely.
+- **D23. Whether 0622 can close.** Options: (a) resolve it now; (b) keep it
+  open until a loaded macOS run. Chose (a). Pros: the throw was reproduced
+  without forcing at the same step (5 of 10 under CPU contention, none in 10
+  runs without it), the fix removed it (10 of 10 under the same load, no
+  `uncaught-exception` line), and unit tests that fail without the fix cover
+  both changes. Cons: the 2026-10-21 macOS output was not kept, so that the
+  blocking default error box held the release then is read from the code of
+  that date rather than observed; a forced slow close gives the same message,
+  and the step has told the two apart since 2026-10-21 (it now also records
+  `releasedAfterMs` and prints main's uncaught exceptions on failure). (b)
+  waits on hardware no run in this to-do has had.
+- **D24. How the service-preview specs survive a startup that lost its
+  modules.** Options: (a) reload the window, at most three times, only when
+  the startup screen failed and that load's console holds both a failed module
+  import and `net::ERR_NETWORK_CHANGED`; (b) route the window's loopback
+  modules through `route.fetch()`, as the browser suite does; (c) run the specs
+  only in a private network namespace. Chose (a). Pros: every request still
+  goes through Chromium and main's webRequest hooks, where 0622's cause was;
+  any other startup failure still fails; a packaged build loads from `file:`,
+  so it cannot hide a user-facing failure; unit tested
+  (`electron-startup-recovery.test.ts`). Cons: a reload adds seconds to a
+  start; a burst of churn longer than three reloads still fails; no live run
+  has shown a reload yet (none was hit after the change). (b) bypasses main's
+  request hooks for exactly the loads that raced in 0622. (c) cannot reach
+  Docker or the network, and `mise run test:agent:electron` does not run that
+  way.
 
 ## Needs verification
 

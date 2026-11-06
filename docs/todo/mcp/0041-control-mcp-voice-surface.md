@@ -4,19 +4,20 @@ Checked against `main` at `9906db30` (2026-10-16). Items 2 to 11 implemented on
 branch `todo-0041-control-mcp-voice-4a2c0ccc548b` (2026-10-24, rebased onto
 `main` at `a5d78cfc`). Remaining work 1(b) (a live command approval) and the
 tooling for 1(a) done on branch `todo-0041-control-mcp-voice-699c0075ce9c`
-(2026-10-25, from `main` at `00a0cb82`).
+(2026-10-25, from `main` at `00a0cb82`). Tasks 4 and 5 done on branch
+`split-mcp-tools-d9dc0536f49e-r1` (2026-11-06, from `main` at `c1724ab7`).
 
 ## Task analysis
 
-Analysed 2026-10-27 against `main` at `863b5782`.
+Analysed 2026-11-06 against `main` at `c1724ab7`.
 
 ### Tasks
 
 1. **Live voice qualification (Remaining work 1(a))**: run the scripted voice session through a real realtime voice runtime and record latency, token counts, misresolved targets and session-handle copy errors. Status: blocked (no realtime voice runtime or credentials on the qualification machine; needs a person speaking).
 2. **`delegate` into a coordinator turn (D13)**: an action that starts a coordinator turn from outside. Status: deferred.
 3. **Stateful MCP session with `list_changed` and subscriptions (D14)**. Status: deferred.
-4. **Over-limit Control MCP files**: `control-mcp-server.test.ts` (left over the limit by D17) and, newly, `control-mcp-tools.ts` exceed the 2,000-line rule. Status: test file done (split 2026-11-03, D23); `control-mcp-tools.ts` open (depends on #1664 merging, D24).
-5. **Stale statements in this file**: D11, the profile size table and the OpenCode conformance note no longer match `main`. Status: open (docs only).
+4. **Over-limit Control MCP files**: `control-mcp-server.test.ts` (left over the limit by D17) and, newly, `control-mcp-tools.ts` exceed the 2,000-line rule. Status: done (test file split 2026-11-03, D23; `control-mcp-tools.ts` split 2026-11-06 after #1664 merged, D25).
+5. **Stale statements in this file**: D11, the profile size table and the OpenCode conformance note no longer match `main`. Status: done (2026-11-06, D26).
 
 ### 1. Live voice qualification (Remaining work 1(a))
 
@@ -109,6 +110,8 @@ Rechecked 2026-11-03 against `main` at `b8862313`: the test file had reached 4,3
     - Pros: no tracking overhead.
     - Cons: that is what D17 assumed, and the test file has grown by 200 lines since.
 
+**Outcome (2026-11-06).** Done. #1664 has merged, and `control-mcp-tools.ts` (2,593 lines on `main` at `c1724ab7`) is split by tool group into six files of 115 to 781 lines (D25). Every tool's name, order, description and input schema and the server instructions are byte-identical before and after, for coordinator and operator credentials alike.
+
 ### 5. Stale statements in this file
 
 **Problem.** Three statements no longer match `main`, which misleads anyone using this file as the record of decisions.
@@ -129,6 +132,8 @@ Rechecked 2026-11-03 against `main` at `b8862313`: the test file had reached 4,3
   - **Re-measure `full` and replace the table.**
     - Pros: accurate numbers.
     - Cons: the figure moves with every new public action and is not a gate (only voice is budgeted), so it would go stale again.
+
+**Outcome (2026-11-06).** Done as recommended, with one addition: the same harness gave current figures cheaply, so the dated note under the size table records them rather than only saying that `full` grew (D26). The OpenCode statement turned out to be fixed differently than this section says: the test no longer pins any OpenCode version.
 
 The goal is to let an external agent, in particular a realtime voice agent,
 do everything the public CLI can do through Control MCP, without loading
@@ -178,7 +183,9 @@ What exists, by part:
   - New handlers: `public-api/actions-attention.ts`, `actions-tickets.ts`,
     `actions-mail.ts`.
   - Control MCP split: `control-mcp-server.ts` (listener, authentication,
-    credentials), `control-mcp-tools.ts` (shared tools),
+    credentials), `control-mcp-tools.ts` (composition; since 2026-11-06 the
+    shared tools are in `control-mcp-environment-tools.ts`,
+    `-launch-tools.ts`, `-ticket-tools.ts` and `-mail-tools.ts`, D25),
     `control-mcp-coordinator-tools.ts` and `control-mcp-tool-support.ts`
     (was one file, 2,824 lines on `main`), plus
     `control-mcp-credentials.ts`, `-confirm.ts`, `-caller.ts`, `-results.ts`,
@@ -207,6 +214,12 @@ Measured on this branch (2026-10-24, `control-mcp-voice.test.ts` harness):
 | `voice` | 12 | 7,095 (budget 8,000) |
 | `read-only` | 40 | 24,073 |
 | `full` (the migrated `default`) | 82 | 76,374 |
+
+Note (2026-11-06, D26): these figures predate #1268 and later public
+actions. Measured again on `main` at `c1724ab7` with the same harness:
+`voice` 12 tools, 7,757 bytes (still within its 8,000-byte budget);
+`read-only` 62 tools, 47,827 bytes; `full` 153 tools, 209,198 bytes. Only
+`voice` is budgeted, so the other two will keep moving.
 
 ## Work items
 
@@ -282,7 +295,7 @@ Measured on this branch (2026-10-24, `control-mcp-voice.test.ts` harness):
 | Check | Status | Where |
 | --- | --- | --- |
 | Exact `tools/list` per profile | Done | `control-mcp-voice.test.ts` "each profile lists exactly its tools"; the original 18 stay first in `full` (`control-mcp-server.test.ts`) |
-| Voice budget ≤ 8,000 bytes; full size reported | Done: 7,095 and 76,374 bytes | `control-mcp-voice.test.ts`; table above |
+| Voice budget ≤ 8,000 bytes; full size reported | Done: 7,095 and 76,374 bytes (7,757 and 209,198 on 2026-11-06, D26) | `control-mcp-voice.test.ts`; table above |
 | Every action has a schema, capability and confirmation class | Done | `packages/protocol/src/public-api-inputs.test.ts`, backend `public-api/public-api-inputs.test.ts` (251 cases, including the new actions) |
 | Every action reachable through `run_action` under `full` and mapped to a CLI command | Done | `control-mcp-voice.test.ts`; `packages/cli/tests/command-actions.test.ts` |
 | Every direct and core tool names its actions | Done | `control-mcp-voice.test.ts` |
@@ -290,7 +303,7 @@ Measured on this branch (2026-10-24, `control-mcp-voice.test.ts` harness):
 | Authority isolation | Done | `public-api-authority.test.ts`, `control-mcp-voice.test.ts` |
 | Portability of every profile | Done | `mcp-tool-schema-portability.test.ts` (full, voice, read-only, custom, coordinator) |
 | Coordinator regression | Done | `control-mcp-server.test.ts`: the coordinator tests pass as they were; nine former operator tests now run under a coordinator credential (the path that keeps those implementations) and two that covered removed operator-only branches moved to `control-mcp-operator-tools.test.ts` |
-| `mise run test` (non-iOS) on the rebased branch | Fails only on unrelated cases | every failure passed alone and is a registered flake (0192, 0632, 0244, 0258, new 0775), except the 14 OpenCode execution-policy conformance cases, which fail on `main` too: #1198 moved the OpenCode pin to 1.19.4 and `conformance-execution-policy.test.ts` still expects 1.19.0 |
+| `mise run test` (non-iOS) on the rebased branch | Fails only on unrelated cases | every failure passed alone and is a registered flake (0192, 0632, 0244, 0258, new 0775), except the 14 OpenCode execution-policy conformance cases, which fail on `main` too: #1198 moved the OpenCode pin to 1.19.4 and `conformance-execution-policy.test.ts` still expects 1.19.0. Fixed since (2026-11-06 note, D26): the test now runs whichever OpenCode CLI `policyQualificationCli` resolves (`tests/conformance/execution-policy/vendor-cli.ts`) and pins no version |
 | `mise run test` (non-iOS), 2026-10-25 branch | Fails only on unrelated cases | three failures, each passed alone: registered flakes 0785 (OpenCode research server) and 0791 (Codex command catalogue), and new flake 0935 (environment-move Cursor read failure, five-second deadline; owner 37/37 alone) |
 | Live: the script over MCP with a real agent; real MCP clients on `full` | Done (no speaking model) | Live evidence |
 | Live: the approval step with a real command approval | Done 2026-10-25 | Live evidence, "Real command approval" |
@@ -478,6 +491,8 @@ Settled on 2026-10-16.
 Settled on 2026-10-24 (details under Assumptions and decisions):
 
 5. **Multi Review and build pipelines** stay coordinator-only (D11).
+   Superseded for Multi Review and pull requests by #1268 (2026-11-06 note,
+   D26); build pipelines are still coordinator-only.
 6. **Hosted voice platforms** use a local relay only; the remote (Tailscale)
    gateway is not opened to MCP (D12).
 7. **`delegate`** into a coordinator turn is deferred (D13).
@@ -638,6 +653,12 @@ the choice, why, and its pros and cons.
   and the operator already has the app's Build and Multi Review buttons.
 - Pros: no half-qualified operator path. Cons: a voice or coding agent cannot
   start them through MCP; a new todo file can add them when someone needs it.
+- Superseded for Multi Review and pull requests (2026-11-06 note, D26):
+  since `32317ae6` (#1268) `review.launch/list/get/open/address/cancel` and
+  `pr.create/resolve` are public actions (`packages/protocol/src/public-api.ts`)
+  with operator tools, and the `full` profile lists the Multi Review tools
+  (`docs/architecture/control-mcp.md`, the profile table). Build pipelines
+  are still coordinator-only, as chosen here.
 
 **D12. Open question 6: hosted voice platforms.**
 - Options: (a) local relay only; (b) expose Control MCP through the remote
@@ -815,7 +836,7 @@ the choice, why, and its pros and cons.
 **D24. Task 4: when and how `control-mcp-tools.ts` is split.**
 - Options: (a) split it now, alongside the tests; (b) wait for #1664, which
   edits it, then split along the D23 boundaries.
-- Chosen: (b). Status open, depends on #1664 merging.
+- Chosen: (b). Done 2026-11-06 after #1664 merged (D25).
 - Boundaries: keep `createControlMcp`'s composition, instructions, the
   listing filter and the shared helpers in `control-mcp-tools.ts`; move the
   launch tools and their launch-base helpers (tested by
@@ -825,6 +846,77 @@ the choice, why, and its pros and cons.
   the way `registerCoordinatorWorkflowTools` already is.
 - Pros: no rebase conflict with #1664; one split per boundary. Cons: the
   file stays at 2,272 lines until then.
+
+**D25. Task 4: how `control-mcp-tools.ts` was split (2026-11-06).**
+- Starting point: 2,593 lines on `main` at `c1724ab7`, almost all of it one
+  function, `createControlMcp`, with every shared tool registered inline.
+- Options for the module boundaries: (a) D24 exactly, with the project,
+  environment, tab, prompt and ticket tools in one module; (b) D24 with the
+  ticket tools in a module of their own.
+- Chosen: (b). The modules:
+  - `control-mcp-tools.ts` (461 lines): the capability map and role
+    helpers, the listing filter, `withoutWakePromise`, and
+    `createControlMcp`: instructions, the node routing closures
+    (`onNode`, `nodeTickets`, `environmentInvoker`) and the calls that
+    register each group. Every existing export stays here, so no importer
+    changed.
+  - `control-mcp-environment-tools.ts` (650): `list_projects`, the
+    environment, tab, agent and transcript reads, and `send_prompt_to_tab`.
+  - `control-mcp-launch-tools.ts` (781): `get_launch_options`,
+    `launch_environment`, `launch_job`, the launch-base and launch-default
+    helpers, and the two former closures `launchOptionsWithDefaults` and
+    `selectionReport`, now built per invoker by `launchSettingsHelpers`.
+  - `control-mcp-ticket-tools.ts` (335): the five ticket tools and their
+    summary helpers.
+  - `control-mcp-mail-tools.ts` (485): the six agent mail tools and the
+    own-mailbox check, still inside their `if (messagingEnabled)`.
+  - `control-mcp-tools-shared.ts` (115): the `ControlMcpToolContext` the
+    modules receive, and the helpers more than one module uses
+    (`MAX_PROMPT_LENGTH`, `COORDINATOR_WORKER_PROMPT_NOTE`,
+    `asyncDelegationResult`, the two delegation openers,
+    `coordinatorNodeRefused`). They cannot stay in `control-mcp-tools.ts`:
+    the modules would then import values from the file that imports them,
+    a runtime cycle the lint rejects.
+- How: each tool's registration moved byte for byte (a script cut the
+  original by line ranges); each module's function destructures the context
+  names its tools use, so the bodies did not change. Registration order is
+  `tools/list` order, which `control-mcp-server-reads.test.ts` pins, so
+  `createControlMcp` calls the register functions in the original order,
+  which is why launch and environment tools each have two entry points.
+  One orphaned doc comment (about a mailbox fingerprint that lives in
+  `control-mcp-poll-guard.ts`) was dropped.
+- Why (b): tickets are their own tool group with their own helpers, and
+  the combined module would have been the largest (about 950 lines).
+- Pros: every file is under 800 lines; each group can change without
+  touching the composition. Cons: `control-mcp-server-reads.test.ts` now
+  covers two modules, not one.
+- Evidence (2026-11-06):
+  - The ten `initialize` and `tools/list` answers (main and side
+    coordinators with messaging and scheduling on, messaging off, and
+    scheduling off; operator `default`, `full`, `read-only` and `voice`)
+    were captured to JSON before and after: identical, SHA-256
+    `eca3097c…e10371` for both. That covers names, order, titles,
+    descriptions, input schemas and the server instructions.
+  - A line-multiset comparison of the original against the six new files
+    leaves only import lines, the five helpers that gained `export`, the
+    new context and register-function scaffolding, and the dropped comment.
+  - `control-mcp-coordinator-schema-size.test.ts` and the other Control MCP
+    and coordinator tests pass unchanged (see the stage's test record).
+
+**D26. Task 5: how the stale statements were corrected (2026-11-06).**
+- Chosen: the recommended option, annotate in place, with the figures
+  re-measured because the harness made it cheap.
+  - D11 and decision 5: marked superseded for Multi Review and pull
+    requests by #1268; build pipelines still coordinator-only.
+  - The profile table: a dated note under it with the current figures
+    (`voice` 7,757 bytes, `read-only` 47,827, `full` 153 tools and 209,198
+    bytes), measured with `controlMcpHarness` from
+    `control-mcp-test-support.ts` on `main` at `c1724ab7`.
+  - The `mise run test` row: marked fixed. The investigation above said the
+    test pinned `opencode: "1.19.4"`; it now pins nothing and runs the CLI
+    `policyQualificationCli` resolves.
+- Pros: history kept, current state visible. Cons: the `read-only` and
+  `full` figures will go stale again; only `voice` is a gate.
 
 **Assumptions.**
 - `capabilities` stays without a CLI command of its own; `connection check`

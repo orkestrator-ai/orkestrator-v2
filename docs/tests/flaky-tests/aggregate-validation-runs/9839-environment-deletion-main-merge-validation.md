@@ -210,7 +210,7 @@ from the remaining DOM scan failures.
 
 Remaining failures and scope:
 
-- DOM scan: `CoordinatorPanel.outcome.test.tsx`, `ProviderMcpSettings.test.tsx`, `ProjectHomeActivity.test.tsx` and `tests/unit/components/EnvironmentItem.test.ts` remain; all four are unchanged by this branch. Preparation triage says `unrelated`, reason `failed-on-target-ci`; the branch-touched fifth file was repaired.
+- DOM scan: `CoordinatorPanel.outcome.test.tsx`, `ProviderMcpSettings.test.tsx`, `ProjectHomeActivity.test.tsx` and `tests/unit/components/EnvironmentItem.test.tsx` remain; all four are unchanged by this branch. Preparation triage says `unrelated`, reason `failed-on-target-ci`; the branch-touched fifth file was repaired.
 - Test ownership: the unchanged `electron-startup-recovery.integration.test.ts` is still unowned. Preparation triage says `unrelated`, reason `failed-on-target-ci`. Neither this file nor the ownership configuration is changed by the branch.
 - Packaged-app path: the test expects `linux-arm64-unpacked`, while the helper defaults to `process.platform` and correctly returns `mac-arm64/...app/Contents/MacOS/OrkestratorV2` on this Darwin host. Both source and test are outside the diff. This is a demonstrated OS expectation mismatch, not a deletion-path failure.
 

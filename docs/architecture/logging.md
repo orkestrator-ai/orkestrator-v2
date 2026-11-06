@@ -287,6 +287,89 @@ also writes `agent.exited` at `warn`, on every session close, so filter on
 `requested=false` to find the exits nothing asked for. Stopping a turn sends
 `session/cancel` and keeps the process, so it writes no such line.
 
+## What ran during a stall
+
+The backend's event loop serves everything at once, so a stall shows as
+timeouts everywhere and, on its own, says nothing about its cause. Three
+records name what ran. All are content-free: names, kinds and times, never SQL
+text, parameters, rows, command arguments or results.
+
+| Area | Event | Level | Written when | Code |
+| --- | --- | --- | --- | --- |
+| `storage` | `operation.slow` | `warn`, essential | A synchronous SQLite call or outermost transaction took 250 ms or more | `storage-slow-operations.ts` |
+| `backend` | `command.slow` | `info`; `warn` when its synchronous part took 250 ms or more | A registered command took 2 s or more to settle | `command-timing.ts` |
+| `event-loop` | `stalled` | as before | The stall line gains the backend's context fields | `event-loop-stall-monitor.ts` |
+| `storage` | `upkeep.finished` | `info` | Every periodic upkeep pass (every five minutes) | `storage-backups.ts` |
+
+What the lines look like (values illustrative, except the second, which a
+migration commit on a loaded Mac wrote during this work's tests):
+
+```text
+[storage] operation.slow database=main op=transaction table=stores store=environments mode=immediate durationMs=9811 beginMs=9811 sqlMs=0 busy=true
+[storage] operation.slow database=ledger op=transaction table=change_ledger_meta mode=exclusive durationMs=374 beginMs=0 sqlMs=1 commitMs=372 busy=false
+[backend] command.slow command=get_projects durationMs=9902 syncMs=0 outcome=ok
+[event-loop] stalled lagMs=9800 endedAt=2026-11-06T09:14:03.120Z intervalMs=500 storageMs=9811 storageDatabase=main storageOp=transaction storageTable=stores storageStore=environments storageLongestMs=9811 storageBusy=true commandsInFlight=3 commands=get_projects,get_environments,create_client_grant
+[storage] upkeep.finished durationMs=1840 optimizeMs=12 releasable=5120 released=4096 left=1024 releaseMs=1828 stop=budget
+```
+
+**`operation.slow`.** `StorageDatabase` instruments its connection when it opens
+(`instrumentSqliteConnection`), so every statement (`query`, `prepare`, `run`,
+`exec`) and outermost transaction on `orkestrator.sqlite` (`database=main`) and
+`change-tracking.sqlite` (`database=ledger`) is timed, including the ledger's
+own raw statements and migrations. `op` is the statement's leading keyword
+(`select`, `insert`, `update`, `delete`, `pragma`, `schema`, `vacuum`, `other`)
+or `transaction`. `table` is parsed from the SQL only for a slow call, and only
+a lowercase name with no digits is kept; for a transaction it is its slowest
+statement's table. The essential log keeps a `table` only when it is one of the
+store schema's tables, a pragma the backend runs or a `change_` ledger table
+(`log-essential-labels.ts`). `store` is the store family a store method named (ids folded
+away, as for [lease families](storage.md)); it is in the normal log, not the
+essential one. A transaction splits its time: `beginMs` is the wait before its
+body ran (the write lock, for `immediate`: a busy wait of up to the 10 s
+`busy_timeout` on the event-loop thread), `sqlMs` its statements, `commitMs`
+the commit and its WAL sync. `beginMs` equal to `durationMs` with `busy=true`
+means another connection held the lock for the whole timeout. Lines are spaced
+per series (`database:op:table`) at one per 10 s, with the ones between folded
+into `folded` and `foldedMaxMs`; a call of 5 s or more is always written. The
+same records, without the spacing, are in `get_database_stats` and
+`database.json` as `slowOperations`: counts, total and longest per series (64
+series at most, then `overflowed`) and the last 32 operations. Below the
+threshold a call costs two `performance.now()` reads:
+`apps/backend/scripts/storage-timing-overhead.ts` measured about 55–80 ns per
+statement and 250–290 ns per transaction on an in-memory database.
+
+**`command.slow`.** The command registry wraps every registered command
+(`createCommandRegistry`'s `register`), so it covers every caller: the
+renderer and CLI through the gateway's `/__orkestrator/invoke`, a node link
+(a remote `create_client_grant`, `get_projects` or `get_environments` arrives
+there), the control MCP and commands calling commands. `durationMs` runs to
+settle, `syncMs` until the handler returned, which is the part that held the
+event loop. One line per command per minute; the rest are folded in. Per-command
+counts and summed durations of gateway invokes were already in
+`/__orkestrator/metrics`.
+
+**The stall line.** The backend registers two stall context sources
+(`addEventLoopStallContext`, in `main.ts`). A source is asked only for a stall
+that is reported, with the window from the last on-time tick to the late one.
+The storage source adds the slow SQLite operations overlapping the window:
+`storageMs` in total and the longest one's `storageDatabase`, `storageOp`,
+`storageTable`, `storageStore`, `storageLongestMs` and `storageBusy`. The command
+source adds `commandsInFlight`, the names of up to three of the most recently
+started (`commands`), and `blockingCommand` with `blockingCommandMs` when a
+command's synchronous part of 250 ms or more overlapped the window. A stall with
+no storage fields was not SQLite holding the loop for 250 ms at a time.
+
+**`upkeep.finished`.** `stop` is `done` (no free pages left), `budget` (1 GiB
+per pass), `busy` (another connection held the database), `no-progress`,
+`not-incremental` (the file has no incremental auto-vacuum), `no-free-pages`
+(nothing to release, so no child ran) or `failed` (beside `upkeep.vacuum-failed`).
+`optimizeMs` is the part on the backend's own connection; `releaseMs` is the
+child's run, which does not hold the event loop.
+
+Thresholds live beside the code that applies them: `SLOW_STORAGE_OPERATION_MS`
+and its spacing constants in `storage-slow-operations.ts`, `SLOW_COMMAND_MS` and
+`SLOW_COMMAND_SYNC_MS` in `command-timing.ts`.
+
 ## The essential event log
 
 With **Save Logs to Disk** off, which is the default, the saved log keeps nothing, so
@@ -403,7 +486,8 @@ along. The `source` a relay adds is kept only as a known provider plus an enviro
 | `storage` | `migration.failed` | `fromVersion`, `toVersion`, `step`, error | The database did not reach this build's schema. |
 | `storage` | `snapshot.failed` | `retryAt`, error | The hourly database snapshot failed. |
 | `storage` | `snapshot.integrity-failed` | none | A snapshot failed its integrity check. |
-| `event-loop` | `stalled` | `lagMs`, `intervalMs` | A stall of 10 seconds or more: only at `error`, not the routine `warn`. |
+| `storage` | `operation.slow` | `database`, `op`, `table`, `mode`, `durationMs`, `beginMs`, `sqlMs`, `commitMs`, `busy`, `folded`, `foldedMaxMs` | A synchronous SQLite call held the event loop for 250 ms or more; see [what ran during a stall](#what-ran-during-a-stall). |
+| `event-loop` | `stalled` | `lagMs`, `intervalMs`, `storageMs`, `storageDatabase`, `storageOp`, `storageTable`, `storageLongestMs`, `storageBusy`, `commandsInFlight`, `blockingCommandMs` | A stall of 10 seconds or more: only at `error`, not the routine `warn`. The `storage*` and command fields are the backend's [stall context](#what-ran-during-a-stall). |
 | `desktop` | `main-thread.stalled` | `lagMs`, `intervalMs` | The same, for the main process. |
 | `backend` | `previous-run` | `outcome`, `ranForMs`, `lastSeenAgoMs` | This start read how the previous run ended, from the [health summary](#health-summary-and-the-clean-exit-marker). |
 | `logging` | `essential.started` | `owner` | This process began writing the file. |
@@ -653,7 +737,7 @@ Export diagnostics** or `orkestrator diagnostics export`. Nothing uploads it. Th
 | `manifest.json` | Every file with its size, SHA-256, description and redaction count; what is absent and why; the notice below |
 | `metrics.json` | What `/__orkestrator/metrics` answers, read in-process |
 | `health-summary.json` | The rows above |
-| `database.json` | Size, free pages, backups, retention and top tables of both databases; lease waits |
+| `database.json` | Size, free pages, backups, retention and top tables of both databases; lease waits; slow SQLite operations (`slowOperations`, see [what ran during a stall](#what-ran-during-a-stall)) |
 | `change-tracking.json`, `progressive-reads.json`, `artifact-metrics.json` | Those services' counters |
 | `log-policy.json` | Whether logs are saved and the levels in force: names and levels only |
 | `log-storage.json` | Log sizes and counts |

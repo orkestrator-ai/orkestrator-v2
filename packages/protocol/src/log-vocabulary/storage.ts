@@ -63,6 +63,26 @@ export const STORAGE_LOG_AREAS = defineLogAreas({
       "scrub.checkpoint-failed":
         "Deleted content could not be scrubbed from the WAL yet because the truncating checkpoint failed or a reader held an older snapshot; it is retried without waiting until it succeeds.",
       "upkeep.vacuum-failed": "Periodic page reclamation failed; the next upkeep pass retries.",
+      "upkeep.finished":
+        "One periodic upkeep pass ended: `optimizeMs` is how long refreshing planner statistics held the event loop, `released` and `left` the free pages returned and still free, `releaseMs` the release child's run and `stop` why it ended (`done`, `budget`, `busy`, `no-progress`, `not-incremental`, `no-free-pages`, `failed`).",
+      "operation.slow": {
+        description:
+          "A synchronous SQLite call or transaction held the event loop for at least 250 ms. `database` is `main` or `ledger`, `op` the statement kind or `transaction`, `table` its table (a transaction's slowest statement's), `durationMs` the whole call; a transaction adds `mode`, `beginMs` (waiting for the write lock), `sqlMs` (its statements) and `commitMs`. `busy` means the busy timeout ran out. Repeats of one series within 10 s are folded into the next line.",
+        essential: true,
+        fields: {
+          database: "label",
+          op: "label",
+          table: "label",
+          mode: "label",
+          durationMs: "number",
+          beginMs: "number",
+          sqlMs: "number",
+          commitMs: "number",
+          busy: "boolean",
+          folded: "number",
+          foldedMaxMs: "number",
+        },
+      },
       "optimize.failed":
         "Refreshing the query planner's statistics failed; queries still run and the next check retries.",
       "ledger.moved":

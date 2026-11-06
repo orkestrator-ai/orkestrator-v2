@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
+  addEventLoopStallContext,
   eventLoopDiagnostics,
   startEventLoopStallMonitor,
   type EventLoopStallMonitor,
@@ -44,9 +45,11 @@ function harness(options: { useDefaultLogger?: boolean } = {}) {
 }
 
 let monitor: EventLoopStallMonitor | null = null;
+const removeContexts: Array<() => void> = [];
 afterEach(() => {
   monitor?.stop();
   monitor = null;
+  for (const remove of removeContexts.splice(0)) remove();
 });
 
 describe("event loop stall monitor", () => {
@@ -96,6 +99,47 @@ describe("event loop stall monitor", () => {
     } finally {
       capture.restore();
     }
+  });
+
+  test("a stall line carries what the context sources say ran in its window", () => {
+    const windows: Array<{ fromMs: number; toMs: number }> = [];
+    removeContexts.push(
+      addEventLoopStallContext((window) => {
+        windows.push(window);
+        return { storageMs: 2_400, storageDatabase: "main" };
+      }),
+      addEventLoopStallContext(() => {
+        throw new Error("ignored");
+      }),
+      addEventLoopStallContext(() => ({ commandsInFlight: 2 })),
+    );
+    const capture = captureLogs();
+    try {
+      const run = harness({ useDefaultLogger: true });
+      monitor = run.monitor;
+      run.tick(0);
+      // Sources are asked only for a reported stall, never on an ordinary tick.
+      expect(windows).toEqual([]);
+      run.tick(2_500);
+      // From the last on-time tick to the late one.
+      expect(windows).toEqual([{ fromMs: 500, toMs: 3_500 }]);
+      expect(capture.records()[0]?.fields).toEqual({
+        lagMs: 2_500,
+        endedAt: "2026-10-28T02:22:58.500Z",
+        intervalMs: 500,
+        storageMs: 2_400,
+        storageDatabase: "main",
+        commandsInFlight: 2,
+      });
+    } finally {
+      capture.restore();
+    }
+    for (const remove of removeContexts.splice(0)) remove();
+    const run = harness();
+    monitor?.stop();
+    monitor = run.monitor;
+    run.tick(2_500);
+    expect(run.logs[0]?.context).toBeUndefined();
   });
 
   test("a stall of 10 seconds or more is written at any configured level, and a shorter one is not", () => {

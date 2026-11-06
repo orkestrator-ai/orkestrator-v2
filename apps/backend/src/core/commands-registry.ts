@@ -96,6 +96,7 @@ import { registerUserCommandCommands } from "./commands-registry-user-commands.j
 import { registerToolingCommands } from "./commands-registry-tools.js";
 import { registerBugReportCommands } from "./commands-registry-bug-reports.js";
 import { refreshHostModelCatalog } from "./host-model-catalog-refresh.js";
+import { commandTimings } from "./command-timing.js";
 
 export type { CommandRegistryOptions } from "./commands-registry-types.js";
 
@@ -107,12 +108,15 @@ export function createCommandRegistry(
   // differs from the generic one (adoption accepts a reviewed pre-label
   // container that no environment references yet).
   const selfVerifyingContainerCommands = new Set(["reattach_container"]);
+  // Every command is timed, whoever calls it (`command-timing.ts`).
   const register: CommandRegistrar = (name, handler) => {
-    if (selfVerifyingContainerCommands.has(name)) {
-      commands.set(name, handler);
-      return;
-    }
-    commands.set(name, (args, context) => {
+    const guarded = selfVerifyingContainerCommands.has(name)
+      ? handler
+      : guardContainerCommand(handler);
+    commands.set(name, (args, context) => commandTimings.time(name, () => guarded(args, context)));
+  };
+  function guardContainerCommand(handler: CommandHandler): CommandHandler {
+    return (args, context) => {
       const containerId = args.containerId;
       const namesContainer = typeof containerId === "string" && containerId.trim().length > 0;
       const bindsGeneration = args.expectedRuntimeGeneration !== undefined;
@@ -134,8 +138,8 @@ export function createCommandRegistry(
         }
         return handler(args, context);
       })();
-    });
-  };
+    };
+  }
 
   const pendingEnvironmentRenameTasks = new Map<string, Promise<void>>();
   const pendingEnvironmentRenameRetryAt = new Map<string, number>();

@@ -59,6 +59,54 @@ aggregate timeout history remains open in flake case
 [0043](../tests/flaky-tests/aggregate-validation-runs/0043-root-suite-5000-ms-timeout-cluster.md);
 focused passes do not establish that the loaded-host flake is resolved.
 
+## Source guards
+
+`tests/unit/source-guards.test.ts`, in the default tier beside the DOM scan,
+refuses new instances of the causes behind most of the flakes fixed on
+2026-11-06. It walks the test sources under `tests/`, `apps/`, `bridges/`,
+`packages/`, `scripts/` and `e2e/` once (test and spec files plus test-support
+modules: files under `tests/` or `testing/` directories and names containing
+`test-harness`, `test-support` or `fixture`), with the DOM scan's exclusions. A
+cheap text prefilter decides which files oxc-parser parses, and each parsed file
+is walked once for all four guards. The guards live in `tests/source-guards/`:
+
+- **`sleep-before-negative-assertion`**: an awaited fixed sleep with a literal
+  delay (`Bun.sleep(50)`, `sleep`, `delay`, `wait`, `pause`, a Promise-wrapped
+  `setTimeout`, `page.waitForTimeout`, `act` around a sleep, or a local helper
+  whose body is one) followed in the same block, before any other await, by a
+  negative or exact-count assertion (`.not.*`, `toBe(0)`, `toBe(false)`,
+  `toHaveLength(0)`, `toEqual([])`, `toHaveBeenCalledTimes`, `toBeNull`,
+  `toBeUndefined`, `toBeFalsy`). Use `installControlledTimeout` or await the
+  event (testing guide, "Controlled time").
+- **`released-port-rebind`**: a helper that binds port 0, reads the port and
+  closes the server before the port is used or returned, and any call to a
+  free-port helper by name (`getFreePort`, `reserveFreePort`,
+  `reserveLoopbackPorts`, the `get-port` package and the like). Bind port 0 in
+  the component itself and read the bound port back, keep the server bound, or
+  retry with `retryOnAddressInUse` (`@orkestrator/protocol/testing/ports`).
+- **`subprocess-without-budget`**: a `*.test.*` file that starts real processes
+  (`Bun.spawn`, Bun shell, `node:child_process`, an imported Git helper) but sets
+  no `setDefaultTimeout` and gives no test or hook an explicit timeout, so
+  Bun's 5 s default kills real work under load.
+- **`small-fake-pid`**: a pid below Linux's `pid_max` (4 194 304, 0 and 1
+  included) given to a fake child process: a `*Child*`/`*Process*` constructor,
+  a `pid` field in a `*Child*`/`*Process*`/`Fake*` class, or an object with
+  child-process members (`kill`, `stdin`, `stdout`, `on`, `exitCode`, …). Use
+  `fakePid(n)` from `@orkestrator/protocol/testing/fake-pids`. Pids that are
+  only data (process tables, log fields, arguments to injected functions) are
+  not flagged.
+
+Existing offenders are tolerated by a ratchet, not fixed in bulk:
+`tests/source-guards/baseline.json` holds a count per guard and file. The test
+fails on a file absent from the baseline that has findings and on a file whose
+count rises, printing each finding's `file:line` and the guard's advice. It also
+fails when an entry is above the file's real count (or names a file that no
+longer offends), so a baseline entry only ever goes down. Regenerate it with
+`bun tests/source-guards/update-baseline.ts`, whose output is sorted and stable,
+after fixing offenders, and never to admit a new one; a rewrite that only moves
+an existing offender between files is the one reason an entry may appear. The
+whole check takes about two seconds on an idle host.
+
 ## What is excluded, and why
 
 `bridges/codex-bridge/src/app-server/generated/**` is excluded from both the

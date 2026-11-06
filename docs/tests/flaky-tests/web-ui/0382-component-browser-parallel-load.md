@@ -372,3 +372,93 @@ Broad failure evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkest
 `e2e/GlobalSettings.spec.ts`, `raised detail without backend expiry metadata does not promise automatic reversion` (mobile-chromium), failed after its second reload: `log-detail-expiry` was absent for the 5 s assertion. Command: `ORKESTRATOR_E2E_PORT=14761 mise run test:logged -- --name e16-settings-browser-final -- bunx playwright test --config e2e/playwright.config.ts e2e/GlobalSettings.spec.ts --workers=2`. Result: 15 passed, 1 failed, 66.8 s. Evidence: `/tmp/orkestrator-test-run.gjU0vq/e16-settings-browser-final.log.gz`.
 
 The complete unchanged owner then passed all 16 cases in 125.0 s with `ORKESTRATOR_E2E_PORT=14761 mise run test:logged -- --name e16-settings-browser-serial -- bunx playwright test --config e2e/playwright.config.ts e2e/GlobalSettings.spec.ts --workers=1`. Passing output was deleted by the logged runner. No assertions, deadlines or retries were changed. A concurrent isolated dev profile was stopped during the serial rerun; a mount/load interaction is a hypothesis, not a demonstrated cause. Both new E16 regression tests passed on both viewports in the failing and passing runs.
+
+
+## Browser churn review fixes — 2026-11-06
+
+The missing task-level validation was attempted with
+`mise run test:logged -- --name fix-browser-task-resumed -- mise run test:browser`
+(eight workers). The wrapper reported a private loopback-only namespace. The
+runner stopped it at its absolute 1,800-second deadline: 1,270 of 1,618 cases
+had started and sixteen failures had been printed. There are no final pass/skip
+counts. The chained public-site suite was not reached. This is an **incomplete,
+non-green qualification**, not a successful task run or an established
+environmental failure. The cause of the overall deadline remains undetermined.
+An earlier attempt was interrupted when the session was paused; its partial log
+is `/tmp/orkestrator-test-run.1dsPKd/fix-browser-task.log`.
+
+The authoritative failed result is `/tmp/orkestrator-test-run.fCYQ6R/summary.json`
+and its evidence is
+`/tmp/orkestrator-test-run.fCYQ6R/fix-browser-task-resumed.log.gz`.
+The original preparation package and its five passing checks were left intact.
+No component owner or product implementation was changed by this branch.
+
+### Failures printed before the task deadline
+
+| Project | Owner and line | Test | Failure |
+| --- | --- | --- | --- |
+| mobile-chromium | `e2e/DesignCanvas.spec.ts:50` | canvas edits, script isolation, missed events, conflict and reload | Test timeout of 45601ms exceeded. |
+| mobile-chromium | `e2e/GlobalSettings.spec.ts:25` | Claude background limit persists across reload and clears when reset to default | Test timeout of 30000ms exceeded. |
+| mobile-chromium | `e2e/GlobalSettings.spec.ts:110` | raised detail without backend expiry metadata does not promise automatic reversion | Test timeout of 30000ms exceeded. |
+| mobile-chromium | `e2e/InteractionSourceLayout.spec.ts:7` | MCP source wraps above the remember panel and survives reload | Test timeout of 30000ms exceeded. |
+| mobile-chromium | `e2e/KeyboardShortcuts.spec.ts:308` | Meta+I focuses the assigned agent composer and leaves the terminal chord usable | Error: expect(locator).toBeEditable() failed; Expected: editable |
+| mobile-chromium | `e2e/MailTiles.spec.ts:92` | find reveals a match below the mail preview and restores the saved expansion choice | Error: expect(received).toBe(expected) // Object.is equality; Expected: true; Received: false |
+| mobile-chromium | `e2e/MultiReviewFlow.spec.ts:961` | a retained clean-review PR notice reflects the current reviewing snapshot after reload | Test timeout of 30000ms exceeded. |
+| mobile-chromium | `e2e/MultiReviewFlow.spec.ts:1079` | divider follows a captured mouse at 100% application CSS zoom | Test timeout of 30000ms exceeded. |
+| mobile-chromium | `e2e/ToolGroupFold.spec.ts:79` | a live group crossing the fold threshold folds into its line with no-preference motion | Error: expect(received).toBeLessThanOrEqual(expected); Expected: <= 2; Received: 8 |
+| mobile-chromium | `e2e/ToolGroupFold.spec.ts:153` | a live group growing below a released reader preserves their place with no-preference motion | Test timeout of 30000ms exceeded. |
+| mobile-chromium | `e2e/TranscriptArrival.spec.ts:293` | an entry entrance settles together with the automatic three-call fold | Error: expect(received).toBeLessThanOrEqual(expected); Expected: <= 1; Received: 92 |
+| mobile-chromium | `e2e/TranscriptPaging.spec.ts:228` | native: paging folds a visible short group during held-place restoration with reduce motion | Error: expect(locator).toHaveAttribute(expected) failed; Expected: "false" |
+| mobile-chromium | `e2e/TranscriptPaging.spec.ts:414` | native: history pages in without a click, opening with a page and paging near the top | Error: expect(received).toBe(expected) // Object.is equality; Expected: 1; Received: 0 |
+| mobile-chromium | `e2e/DataSavingGateway.spec.ts:18` | data saving survives reload, stays client-local and preserves event latency through resume and reconnect | Test timeout of 60000ms exceeded. |
+| desktop-chromium | `e2e/DesignCanvas.spec.ts:50` | canvas edits, script isolation, missed events, conflict and reload | Test timeout of 43137ms exceeded. |
+| desktop-chromium | `e2e/MultiReviewFlow.spec.ts:961` | a retained clean-review PR notice reflects the current ready snapshot after reload | Test timeout of 30000ms exceeded.; Expected: 0 |
+
+### Complete owning-file reruns
+
+Each owner below ran separately through the same namespace wrapper with one
+worker, without changing code, assertions, deadlines, skips or retries. The exact
+command template was (substitute each owner from the table):
+
+```bash
+env -u NODE_ENV PLAYWRIGHT_JSON_OUTPUT_FILE="$PWD/output/review-address/$owner.json" mise run test:logged -- --name "fix-owner-$owner" -- bun scripts/loopback-network.ts -- bunx playwright test --config e2e/playwright.config.ts "e2e/$owner.spec.ts" --workers=1 --reporter=json --output "output/review-address/$owner"
+```
+
+Reports and browser artifacts were moved after completion into
+`output/agent-testing/review-address/` so they remain outside the change set.
+Passing raw logs were deleted by the logged runner.
+
+| Owner | Passed | Failed | Skipped | Browser duration (s) |
+| --- | ---: | ---: | ---: | ---: |
+| `DesignCanvas` | 4 | 0 | 0 | 28.5 |
+| `GlobalSettings` | 16 | 0 | 0 | 52.1 |
+| `InteractionSourceLayout` | 2 | 0 | 0 | 6.3 |
+| `KeyboardShortcuts` | 60 | 0 | 0 | 125.0 |
+| `MailTiles` | 12 | 0 | 0 | 36.1 |
+| `MultiReviewFlow` | 110 | 0 | 4 | 293.4 |
+| `ToolGroupFold` | 35 | 3 | 0 | 169.1 |
+| `TranscriptArrival` | 24 | 0 | 0 | 57.4 |
+| `TranscriptPaging` | 38 | 0 | 0 | 249.8 |
+| `DataSavingGateway` | 2 | 0 | 0 | 40.0 |
+
+Nine complete owners passed. Their original failures are confirmed intermittent;
+shared-host contention is only a hypothesis. **ToolGroupFold remains non-green**:
+35 passed and three failed in its one-worker rerun (169.6 s logged). Both mobile
+and desktop `a live group crossing the fold threshold folds into its line with
+no-preference motion` measured an 8 px gap against a 2 px limit at line 122.
+Desktop `a live group growing above a released reader preserves their place with
+reduce motion` timed out waiting for `scrollend` at line 173 (30 seconds).
+The mobile growing-below/no-preference case from the broad run passed this time.
+Related open cases are [1012](1012-live-tool-fold-threshold-gap.md) and
+[0793](0793-live-tool-group-overscan.md); their existence does not establish the
+cause of these current failures. Evidence:
+`/tmp/orkestrator-test-run.jLlcA8/fix-owner-toolgroupfold.log.gz` and
+`output/agent-testing/review-address/ToolGroupFold.json`.
+These failures and the task deadline are left for verification, not excused as
+an environmental problem or repaired by weakening tests.
+
+The public-site namespace command passed separately (34.2 s logged):
+`mise run test:logged -- --name fix-public-site -- bun scripts/loopback-network.ts -- bunx playwright test --config e2e/public-site/playwright.config.ts`.
+The new login-renewal, four-load orchestration/budget, signal forwarding and
+spawn-error regression tests, focused typechecks, affected-file lint and
+formatting all passed. No isolated app profile was started for this stage.

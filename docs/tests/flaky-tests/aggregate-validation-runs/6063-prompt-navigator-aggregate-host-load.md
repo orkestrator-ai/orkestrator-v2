@@ -77,6 +77,26 @@ Passed with exit 0 in 0.4 s. Passing output was deleted by the logged
 runner, so isolated totals are not inferred. The isolated pass establishes
 intermittence, not a cause or a repair. No assertion, timeout or skip changed.
 
+## Legacy host-mount coverage review — 2026-11-06
+
+- **Commit:** `b8ff1848b` (coverage repair `5279014f9`).
+- **Original command:** `mise run test:logged -- --name review-default-tests -- mise run test`.
+  The backend workspace group used four isolated workers alongside the other
+  packages. `a worker reset or fast-forwarded to a newer target has no changes of its own`
+  in `apps/backend/src/core/diff-baseline.test.ts` timed out at 5,032.69 ms
+  (5,000 ms limit), interrupting a fixture `git fetch origin` with SIGTERM.
+- **Aggregate result:** exit 1 after 1,708.7 s. Backend totals are unavailable:
+  its group was terminated after 300,000 ms without output. Root reported
+  3,746 passed and four failed; desktop reported 1,868 passed, 16 skipped and
+  one failed. The backend also reported two other test timeouts.
+- **Complete unchanged owner:** `mise run test:logged -- --name review-diff-baseline-owner -- bun test --cwd apps/backend ./src/core/diff-baseline.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures`
+  passed with exit 0 in 10.1 s. Passing output was removed, so isolated counts
+  are not inferred.
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.YdSBOn/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`;
+  outer wrapper: `orkestrator-test-run.GlSHmN/review-default-tests.log.gz`
+  under the same temporary root.
+- **Disposition:** open recurrence; cause unconfirmed. Neither this owner nor
+  its implementation changed in the branch. No assertion, timeout or skip changed.
 
 ## Bridge authority review repairs — 2026-11-06
 

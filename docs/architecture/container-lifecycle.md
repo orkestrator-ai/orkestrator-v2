@@ -868,7 +868,10 @@ and the environment's inputs section says to rebuild (`unreadableOnRootless`,
   [Rollout switches and legacy runtimes](#rollout-switches-and-legacy-runtimes)).
   A runtime created from one keeps its read-only home mounts until it is
   rebuilt; `get_environment_inputs` reports that as `host-mounts`, never as
-  narrowed.
+  narrowed. It uses the cleanup review's evidence (`legacy-runtime-shape.ts`):
+  no inputs-revision label *and* a bind at one of the old mount points. A
+  runtime with no label and no such bind is `none`, and a failed inspect is
+  `unknown`, never `host-mounts`.
 - Credentials (staged inputs, the staged Anthropic key, the Cursor key and the
   start-time Claude credential sync) go only to
   providers that are enabled, authorized for agent-test profiles and not

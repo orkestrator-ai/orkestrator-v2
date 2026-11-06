@@ -2706,17 +2706,27 @@ describe("ACP bridge", () => {
       headers,
       body: JSON.stringify({ prompt: "TRIMTOTEXT: empty the message, then speak" }),
     });
-    const session = await waitFor(
+    // Wait on `/activity`, which never bounds the transcript. A session read
+    // does (`boundTranscriptForRead`), and one landing between the two tool
+    // parts resets the write path's byte counter, so the trim waits for the
+    // next read; the chunk then follows an untrimmed tool call and opens a row
+    // of its own, leaving the trimmed message behind it (2410). The scenario
+    // needs the trim the agent's own updates trigger, before the chunk.
+    await waitFor(
       async () =>
-        nativeFetch(`${base}/session/${created.id}`, { headers }).then((response) =>
+        nativeFetch(`${base}/session/${created.id}/activity`, { headers }).then((response) =>
           response.json(),
-        ) as Promise<{
-          status: string;
-          error?: string;
-          messages: Array<{ role: string; content: string; parts: Array<Record<string, unknown>> }>;
-        }>,
-      (value) => value.status === "idle",
+        ) as Promise<{ activity: string }>,
+      (value) => value.activity === "idle",
     );
+    const session = (await nativeFetch(`${base}/session/${created.id}`, { headers }).then(
+      (response) => response.json(),
+    )) as {
+      status: string;
+      error?: string;
+      messages: Array<{ role: string; content: string; parts: Array<Record<string, unknown>> }>;
+    };
+    expect(session.status).toBe("idle");
 
     // The lowered budget evicts whole messages before it trims parts, so the
     // prompt itself is gone and the assistant message is all that is left.

@@ -1,7 +1,7 @@
 # Git fsmonitor scans exceed the aggregate test deadline
 
 - **ID:** 1253
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-28
 - **File:** `apps/backend/src/core/git-fsmonitor.test.ts`
 - **Original command:** `mise run test` during review preparation at `05737aff0133f4d7a377ec30d1cfb37f514b71de`.
@@ -289,3 +289,34 @@ slow scan is still not established, so this stays open. Evidence:
 and `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.sNlZvR/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 
 No assertion, timeout, skip, or unrelated implementation changed.
+
+### Resolution — 2026-11-06
+
+- **Root cause:** the generic five-second budget was too small for real Git
+  and fsmonitor daemon work on a loaded macOS host. The affected cases build
+  a repository with a linked worktree and scan it with real Git, and the
+  project-home cases also start or stop a real `git fsmonitor--daemon`. On
+  macOS the owner took 8.3–18.0 s alone across the recurrences (about 0.3–0.6
+  s a case). The fsmonitor commit `cddc3e004` measured about 1.1 s added to
+  each fsmonitor-enabled Git call there. Each command already carries its own
+  10–30 s deadline, but Bun's generic five-second test deadline cut the case
+  off first ("killed 1 dangling process"). The killed `git status` then
+  rejected through `retryGitWithoutFsmonitorOnTimeout` after the test ended,
+  which is the recorded "Unhandled error between tests" with SIGTERM and
+  `timedOut: false`. On Linux, where no daemon starts, the slowest case takes
+  0.15 s.
+- **Fix:** `apps/backend/src/core/git-fsmonitor.test.ts` sets a 30 s file
+  budget with `setDefaultTimeout`, matching its own per-command Git
+  deadlines. No assertion changed.
+- **Reproduction:** the unchanged file with `--timeout 60` reproduced both
+  recorded signatures: nine "this test timed out" with "killed 1 dangling
+  process", and seven "# Unhandled error between tests". The five-second
+  deadline itself was not reached on Linux.
+- **Verification:** six runs of `mise run test:logged -- --name
+  env-fsmonitor-runN -- bun --cwd=apps/backend test
+  ./src/core/git-fsmonitor.test.ts ./src/core/commands-files-local-scan.test.ts
+  --parallel=2`: all PASS. `--rerun-each` cannot stress this owner: on the
+  second and later iterations `fixture repositories inherit fsmonitor off from
+  the test preload` fails, and it fails identically on the unchanged file
+  (`--rerun-each=2`: 49 pass, 1 fail). It is a rerun artifact of preload
+  state, not this flake.

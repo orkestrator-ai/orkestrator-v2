@@ -1153,8 +1153,23 @@ test("browser grouping delivery uses the current workspace envelope and survives
     frameEnvelope("workspace-1", { type: "grouping", grouping: "repository" }),
     window.location.origin,
   );
+  // The replaced document's late "ready" can arrive as soon as the frame is
+  // given the new grant, before React's passive effects run (on a loaded host,
+  // well before). Deliver one at exactly that point: it must not count as the
+  // new document's readiness (case 1531).
+  let postsAtReplacement = -1;
+  const replacement = new MutationObserver(() => {
+    if (postsAtReplacement >= 0) return;
+    if (new URL(frame.src).searchParams.get("workspace") !== "workspace-2") return;
+    post.mockClear();
+    frameMessage(frame, "workspace-1", { type: "ready" });
+    postsAtReplacement = post.mock.calls.length;
+  });
+  replacement.observe(frame, { attributes: true, attributeFilter: ["src"] });
   act(() => window.dispatchEvent(new Event("online")));
   await waitFor(() => expect(new URL(frame.src).searchParams.get("workspace")).toBe("workspace-2"));
+  replacement.disconnect();
+  expect(postsAtReplacement).toBe(0);
   post.mockClear();
   act(() => {
     useMachineViewStore.getState().setGrouping("project");

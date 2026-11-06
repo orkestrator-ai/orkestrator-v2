@@ -652,13 +652,17 @@ export async function main(argv: readonly string[]): Promise<number> {
   const [mode, ...rest] = argv;
   if (mode === "serve") {
     const server = await startProbeServer(parseServeOptions(rest));
-    process.stdout.write(
-      `${JSON.stringify({ schema: PROBE_SCHEMA, url: server.url, tokenFile: server.tokenFile })}\n`,
-    );
-    await new Promise<void>((resolve) => {
+    // Listen before announcing readiness: a caller may signal as soon as it
+    // reads the line, and an unhandled SIGTERM kills the process (exit 143)
+    // before the server is stopped.
+    const stopRequested = new Promise<void>((resolve) => {
       process.once("SIGINT", resolve);
       process.once("SIGTERM", resolve);
     });
+    process.stdout.write(
+      `${JSON.stringify({ schema: PROBE_SCHEMA, url: server.url, tokenFile: server.tokenFile })}\n`,
+    );
+    await stopRequested;
     await server.stop();
     return 0;
   }

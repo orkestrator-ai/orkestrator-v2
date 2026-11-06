@@ -245,3 +245,19 @@ bun test src/runtime-env.test.ts --preload ../../tests/setup-node.ts --parallel=
 ```
 
 Run from `bridges/codex-bridge`. No root cause is claimed; this case remains open.
+
+## Investigation — 2026-11-06 (not reproduced; still open)
+
+40 fresh-process runs of this owner (with `fake-codex-app-server.test.ts`,
+`--parallel=2`) passed on Linux, both idle and under three extra CPU-bound
+loops at host load average 37 (`br-0093-loop`, `br-0093-loop-load`). The
+timed-out test is the first in the file to spawn a child (`/bin/sh` through
+`execFile`, which has no timeout). Earlier notes record that the owner
+alone timed out at least twice (2026-11-01, 2026-11-02, both macOS), so a
+previous file's state is not required. See the matching note in 0210: both
+cases look like the first child spawn of a fresh test process whose exit is
+never observed. Unconfirmed. Separately, `refreshRuntimeEnvironment` puts no
+bound on that helper. A helper that never exits would stall every app-server
+start that waits on the refresh. That is a product robustness gap worth a
+bounded `execFile` timeout, but adding one would only turn this test's hang
+into an assertion failure, so it was not made as a flake fix.

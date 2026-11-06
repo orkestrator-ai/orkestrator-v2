@@ -52,19 +52,31 @@ function deferred() {
   return { promise, release, fail };
 }
 
-/** A sync that records each call and, for directories, waits on a gate. */
+/**
+ * A sync that records each call and, for directories, waits on a gate.
+ * `directoryEntered` resolves when the first directory sync starts, which is
+ * after the rename: tests await it instead of guessing how long the store's
+ * thread-pool work takes on a loaded host.
+ */
 function recordingSync(directoryGate?: () => Promise<void>) {
   const events: SyncEvent[] = [];
+  const entered = deferred();
   const sync: SyncPath = async (path, kind) => {
     events.push({
       path,
       kind,
       namedAlready: kind === "file" && existsSync(path.replace(/\.[^.]+\.tmp$/, "")),
     });
+    if (kind === "directory") entered.release();
     if (kind === "directory" && directoryGate) await directoryGate();
   };
-  return { events, sync };
+  return { events, sync, directoryEntered: entered.promise };
 }
+
+/** Resolves once `entered` does, or as soon as `promise` settles first. */
+const reached = (entered: Promise<void>, promise: Promise<unknown>) =>
+  Promise.race([entered, promise.then(noop, noop)]);
+const noop = () => {};
 
 const settled = async (promise: Promise<unknown>) => {
   let done = false;
@@ -95,7 +107,7 @@ describe("EvidenceBodyStore.put", () => {
   test("syncs the file before the rename, then the directories, before resolving", async () => {
     const store = root();
     const gate = deferred();
-    const { events, sync } = recordingSync(() => gate.promise);
+    const { events, sync, directoryEntered } = recordingSync(() => gate.promise);
     const bodies = new EvidenceBodyStore(store, true, sync);
     const bytes = encode("first body");
     const id = bodyIdFor(bytes);
@@ -104,6 +116,7 @@ describe("EvidenceBodyStore.put", () => {
     let timerRan = false;
     setTimeout(() => (timerRan = true), 0);
     const put = bodies.put(id, bytes);
+    await reached(directoryEntered, put);
     expect(await settled(put)).toBe(false);
     // The loop kept running while the store waited on the directory sync.
     expect(timerRan).toBe(true);
@@ -247,11 +260,13 @@ describe("EvidenceBodyStore.put", () => {
   test("adopting a body whose directory sync is under way waits for it", async () => {
     const store = root();
     const gate = deferred();
-    const { sync } = recordingSync(() => gate.promise);
+    const { sync, directoryEntered } = recordingSync(() => gate.promise);
     const bodies = new EvidenceBodyStore(store, true, sync);
     const bytes = encode("shared");
     const id = bodyIdFor(bytes);
     const first = bodies.put(id, bytes);
+    // Named and in its directory sync, so adoption must wait rather than miss it.
+    await reached(directoryEntered, first);
     expect(await settled(first)).toBe(false);
     const second = bodies.put(id, bytes);
     const adopted = bodies.reuse(id);
@@ -326,15 +341,20 @@ describe("evidence ingestion", () => {
     const { h, source, acks } = ingestionFixture();
 
     const gate = deferred();
+    const putEntered = deferred();
     const put = h.service.bodies.put.bind(h.service.bodies);
     const putIds: string[] = [];
     const puts = spyOn(h.service.bodies, "put").mockImplementation(async (id, bytes) => {
       putIds.push(id);
+      putEntered.release();
       await gate.promise;
       return put(id, bytes);
     });
+    let pull: Promise<number> | undefined;
     try {
-      const pull = h.service.pullEvidence(source);
+      pull = h.service.pullEvidence(source);
+      // Ingestion fetches the body before it puts it; wait for the put itself.
+      await reached(putEntered.promise, pull);
       expect(await settled(pull)).toBe(false);
       expect(putIds.length).toBeGreaterThan(0);
       // Nothing names the body and nothing is acknowledged while put is pending.
@@ -343,6 +363,9 @@ describe("evidence ingestion", () => {
       gate.release();
       await pull;
     } finally {
+      // A failed assertion must not leave the pull running into harness cleanup.
+      gate.release();
+      await pull?.catch(noop);
       puts.mockRestore();
     }
     for (const id of putIds) expect(h.service.ledger.body(id)?.state).toBe("available");

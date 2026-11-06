@@ -201,21 +201,35 @@ describe("content listener configuration", () => {
   });
 
   test("the runtime listens where configured and serves only the hosted origin's host", async () => {
-    const probe = Bun.serve({ port: 0, fetch: () => new Response("x") });
-    const port = probe.port;
-    probe.stop(true);
-    const runtime = await createTranscriptArtifactRuntime({
-      dataDir: scratch("ork-runtime-bind-"),
-      env: {
-        ORKESTRATOR_ARTIFACT_PREVIEW_ISOLATION: "disabled",
-        ORKESTRATOR_ARTIFACT_CONTENT_ORIGIN: "https://artifacts.example-content.net",
-        ORKESTRATOR_ARTIFACT_CONTENT_PORT: String(port),
-        ORKESTRATOR_ARTIFACT_CONTENT_BIND: "127.0.0.1",
-      },
-      applicationOrigins: ["https://ork.tailnet-name.ts.net"],
-    });
-    cleanups.push(() => runtime.close());
-    expect(runtime.contentServer.origin()).toBe("https://artifacts.example-content.net");
+    // The listener needs a fixed configured port, so one is found by binding
+    // and releasing an ephemeral port. Another process on a busy host can take
+    // it in between; that EADDRINUSE says nothing about the runtime, so try a
+    // fresh port (a bounded number of times) rather than fail.
+    let port: number | undefined;
+    let runtime: Awaited<ReturnType<typeof createTranscriptArtifactRuntime>> | undefined;
+    for (let attempt = 1; runtime === undefined; attempt += 1) {
+      const probe = Bun.serve({ port: 0, fetch: () => new Response("x") });
+      port = probe.port;
+      probe.stop(true);
+      try {
+        runtime = await createTranscriptArtifactRuntime({
+          dataDir: scratch("ork-runtime-bind-"),
+          env: {
+            ORKESTRATOR_ARTIFACT_PREVIEW_ISOLATION: "disabled",
+            ORKESTRATOR_ARTIFACT_CONTENT_ORIGIN: "https://artifacts.example-content.net",
+            ORKESTRATOR_ARTIFACT_CONTENT_PORT: String(port),
+            ORKESTRATOR_ARTIFACT_CONTENT_BIND: "127.0.0.1",
+          },
+          applicationOrigins: ["https://ork.tailnet-name.ts.net"],
+        });
+      } catch (error) {
+        if ((error as { code?: string }).code !== "EADDRINUSE" || attempt >= 5) throw error;
+      }
+    }
+    if (!runtime) throw new Error("unreachable: the loop ends only with a runtime");
+    const started = runtime;
+    cleanups.push(() => started.close());
+    expect(started.contentServer.origin()).toBe("https://artifacts.example-content.net");
     // Bound where configured; a request naming another host is misdirected.
     const wrongHost = await fetch(`http://127.0.0.1:${port}/a/${"x".repeat(43)}`);
     expect(wrongHost.status).toBe(421);

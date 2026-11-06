@@ -35,6 +35,14 @@ afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
 
+/**
+ * The active-tail cases first build several long histories (about 140 real
+ * chunk and directory fsyncs plus SQLite WAL syncs) before measuring one
+ * update. That setup is bound by disk sync latency, which on a loaded host or
+ * a slow volume exceeds Bun's 5 s default; it is not waiting on anything else.
+ */
+const DURABLE_HISTORY_TEST_TIMEOUT_MS = 30_000;
+
 async function dataDirectory(): Promise<string> {
   const directory = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-pipeline-transcripts-"));
   cleanups.push(() => fs.rm(directory, { recursive: true, force: true }));
@@ -176,46 +184,53 @@ describe("BuildPipelineTranscriptStore", () => {
     expect(harness.transcripts.stats().chunkReads - before).toBe(1);
   });
 
-  test("an active tail update writes only the tail chunk and the manifest row", async () => {
-    const dataDir = await dataDirectory();
-    const harness = store(dataDir, { limits: { targetChunkBytes: 8_192 } });
-    for (const session of ["review", "verify"]) {
-      await commit(
-        harness,
-        input(messages(1_000, 300, session), {
-          sessionKey: `pipeline-1:${session}:0:a`,
-          sdkSessionId: `sdk-${session}`,
-        }),
+  test(
+    "an active tail update writes only the tail chunk and the manifest row",
+    async () => {
+      const dataDir = await dataDirectory();
+      const harness = store(dataDir, { limits: { targetChunkBytes: 8_192 } });
+      for (const session of ["review", "verify"]) {
+        await commit(
+          harness,
+          input(messages(1_000, 300, session), {
+            sessionKey: `pipeline-1:${session}:0:a`,
+            sdkSessionId: `sdk-${session}`,
+          }),
+        );
+      }
+      const body = messages(1_000, 300);
+      await commit(harness, input(body));
+      const before = await chunkFiles(harness.directory);
+      const statsBefore = harness.transcripts.stats();
+
+      // The provider streams into the newest entry.
+      const streamed = [
+        ...body.slice(0, -1),
+        { ...(body.at(-1) as object), text: "streamed more" },
+      ];
+      const { reference } = await commit(harness, input(streamed, { revision: 2 }));
+      const stats = harness.transcripts.stats();
+      const after = await chunkFiles(harness.directory);
+
+      const chunkBytes = stats.chunkBytesWritten - statsBefore.chunkBytesWritten;
+      const manifestBytes = stats.manifestBytesWritten - statsBefore.manifestBytesWritten;
+      const historyBytes = 3 * 1_000 * 330;
+      expect(stats.chunkWrites - statsBefore.chunkWrites).toBe(1);
+      // One chunk file plus one directory fsync; the commit is SQLite's one WAL sync.
+      expect(stats.fileSyncs - statsBefore.fileSyncs).toBe(2);
+      expect(chunkBytes).toBeLessThanOrEqual(8_192);
+      expect(chunkBytes + manifestBytes).toBeLessThan(historyBytes / 20);
+      // Sealed chunks are referenced, never rewritten; the replaced tail is unlinked.
+      const rewritten = [...before].filter(
+        ([name, inode]) => after.has(name) && after.get(name) !== inode,
       );
-    }
-    const body = messages(1_000, 300);
-    await commit(harness, input(body));
-    const before = await chunkFiles(harness.directory);
-    const statsBefore = harness.transcripts.stats();
-
-    // The provider streams into the newest entry.
-    const streamed = [...body.slice(0, -1), { ...(body.at(-1) as object), text: "streamed more" }];
-    const { reference } = await commit(harness, input(streamed, { revision: 2 }));
-    const stats = harness.transcripts.stats();
-    const after = await chunkFiles(harness.directory);
-
-    const chunkBytes = stats.chunkBytesWritten - statsBefore.chunkBytesWritten;
-    const manifestBytes = stats.manifestBytesWritten - statsBefore.manifestBytesWritten;
-    const historyBytes = 3 * 1_000 * 330;
-    expect(stats.chunkWrites - statsBefore.chunkWrites).toBe(1);
-    // One chunk file plus one directory fsync; the commit is SQLite's one WAL sync.
-    expect(stats.fileSyncs - statsBefore.fileSyncs).toBe(2);
-    expect(chunkBytes).toBeLessThanOrEqual(8_192);
-    expect(chunkBytes + manifestBytes).toBeLessThan(historyBytes / 20);
-    // Sealed chunks are referenced, never rewritten; the replaced tail is unlinked.
-    const rewritten = [...before].filter(
-      ([name, inode]) => after.has(name) && after.get(name) !== inode,
-    );
-    expect(rewritten).toEqual([]);
-    expect(after.size).toBe(before.size);
-    const read = await harness.transcripts.read("pipeline-1", KEY, reference);
-    expect(read.status === "found" ? read.messages : []).toEqual(streamed);
-  });
+      expect(rewritten).toEqual([]);
+      expect(after.size).toBe(before.size);
+      const read = await harness.transcripts.read("pipeline-1", KEY, reference);
+      expect(read.status === "found" ? read.messages : []).toEqual(streamed);
+    },
+    DURABLE_HISTORY_TEST_TIMEOUT_MS,
+  );
 
   test("an identical commit is idempotent and stages nothing", async () => {
     const harness = store(await dataDirectory());

@@ -112,3 +112,7 @@ Passing output was deleted by the logged runner, so individual passing case
 counts were not retained. This branch changes neither this owner nor its
 implementation. No assertion, timeout or skip changed. The isolated pass
 establishes intermittence; it does not establish the underlying cause.
+
+## Investigation — 2026-11-06
+
+Status stays open. Every recorded recurrence is on macOS (`/var/folders`, `/private/var/folders` temporary roots). On Linux, `mise run test:logged -- --name webkit-stress -- bun test tests/unit/playwright-webkit-host-libs.test.ts -t "concurrent publishers" --rerun-each=50` passed (3.8 s, exit 0). Reading `scripts/playwright-webkit-host-libs.ts`: while the reader loops, the only operation on `private/webkit-1` is `rename(pointer, privateWebkit)`, an atomic replacement of one relative symlink with another. Nothing removes or rewrites a generation directory (prune does not run concurrently, and `linkSharedBrowsers` skips the WebKit name). The `EINVAL` therefore most likely comes from APFS path resolution racing a symlink replaced by `rename`, not from a gap in the publish order. This is unproven without a macOS host. The script exists for Linux distributions that Playwright does not support, so the guarantee matters only on Linux. A fix needs a macOS reproduction, or a decision that the concurrent-reader assertion is Linux-only.

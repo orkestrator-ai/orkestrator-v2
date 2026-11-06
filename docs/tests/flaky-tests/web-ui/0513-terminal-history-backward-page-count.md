@@ -1,7 +1,7 @@
 # Terminal history backward paging misses a request in the aggregate
 
 - **ID:** 0513
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-21
 - **Test:** `TerminalHistoryPanel > keeps the page cache bounded during repeated backward paging`
 - **Owning file:** `apps/web/src/components/terminal/TerminalHistoryPanel.test.tsx`
@@ -26,3 +26,23 @@
 - **Hypothesis:** asynchronous page-request completion may have exceeded the
   assertion's polling window under shared host load; not established.
 - **Changes:** evidence only; no implementation, assertion, timeout or skip changed.
+
+### Resolution — 2026-11-06
+
+**Root cause.** `TerminalHistoryPanel` ignores "Load earlier" while a page is
+loading (the button is disabled and `loadingRef` guards it). For pages 19–5
+the test waited for the page's text before the next press. From page 4 on it
+only waited for the request count, so the next press could arrive while that
+page was still loading. The press was then dropped, and the count stayed one
+short (expected 18, received 17, as reported).
+
+**Reproduction.** A copy of the unchanged owner whose page mock resolves after
+30 ms reproduced the exact failure (expected 18 calls, received 17).
+
+**Fix.** `apps/web/src/components/terminal/TerminalHistoryPanel.test.tsx`:
+before each press, the test waits until "Load earlier" is enabled again (the
+previous page has landed). No assertion changed.
+
+**Verification.** The 30 ms-delay copy passes with the fix. Then
+`mise run test:logged -- --name web-0513-stress -- bun --cwd=apps/web test src/components/terminal/TerminalHistoryPanel.test.tsx --rerun-each=20`
+passed (exit 0).

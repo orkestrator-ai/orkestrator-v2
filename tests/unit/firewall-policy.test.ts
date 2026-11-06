@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,6 +6,7 @@ import {
   fixtureScript,
   policyPath,
   read,
+  SHELL_FIXTURE_TEST_TIMEOUT_MS,
   statusFile,
   withCallerPath,
   writeStub,
@@ -14,6 +15,9 @@ import { gnuToolPath, missingGnuTools, titleWithSkip } from "./gnu-shell-tools";
 
 // Expiry stamps go through GNU `date -d`.
 const NO_GNU_DATE = missingGnuTools("date");
+
+// Most cases run a real firewall script; see SHELL_FIXTURE_TEST_TIMEOUT_MS.
+setDefaultTimeout(SHELL_FIXTURE_TEST_TIMEOUT_MS);
 
 describe("container firewall policy", () => {
   test("installs fail-closed policies before mutating firewall state", () => {

@@ -1,7 +1,7 @@
 # Streamed media in Chromium: the browser-launch hook exceeds five seconds
 
 - **ID:** 1108
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-25 (first, in [0825](../aggregate-validation-runs/0825-dependency-upgrades-0032-validation.md)); owner case added 2026-10-27
 - **Test:** `streamed media in Chromium > (unnamed)` — Bun's name for the suite's `beforeAll` hook, which launches headless Chromium with `chromium.launch`. The suite's one test, `an application page plays and seeks a ranged media capability on the content origin`, then does not run.
 - **Owning file:** `apps/backend/src/core/transcript-artifacts/media-stream.browser.test.ts`
@@ -16,3 +16,10 @@
 - **Next step:** if it recurs, time the `chromium.launch` call in the aggregate; an explicit launch budget like other Chromium suites use would be the fix to weigh, not a skip.
 
 On 2026-11-02, the shared-logger bridge migration saw this fail once in `mise run test:slow` (5002 ms), run alongside the Electron suite. The owner passed alone at load average 55.
+
+### Resolution — 2026-11-06
+
+- **Root cause:** the suite's `beforeAll` launches Chromium under Bun's 5 s default hook timeout. The sibling suites already give their launch 60 s: `content-server.browser.test.ts` and `content-server.engines.test.ts` (0507, `9f49e5851`). This one did not.
+- **Fix:** the `beforeAll` in `media-stream.browser.test.ts` now takes `60_000`, the budget its siblings use. The test is unchanged.
+- **Reproduced:** no.
+- **Verification:** `mise run test:logged -- --name n0507-engines -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/transcript-artifacts/content-server.engines.test.ts ./src/core/transcript-artifacts/media-stream.browser.test.ts --parallel=2` passed 14 tests with 0 failures. The 26 skips are the Firefox and WebKit engines, which are not installed on this host; Chromium ran.

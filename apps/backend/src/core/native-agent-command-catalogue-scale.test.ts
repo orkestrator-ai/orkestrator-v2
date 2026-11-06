@@ -103,6 +103,15 @@ function chargedBytes(snapshot: CommandCatalogueSnapshot): number {
   );
 }
 
+/**
+ * Filling the cache with 256 maximal inventories decodes, validates and signs
+ * about 128 MiB of catalogue JSON: roughly 1 s of CPU on a quiet Linux host and
+ * over 5 s on a loaded one (observed 5.5-6.6 s on macOS under aggregate load).
+ * It is CPU-bound with nothing to wait for, so it gets its own budget instead
+ * of Bun's 5 s default.
+ */
+const MAXIMAL_INVENTORIES_TEST_TIMEOUT_MS = 60_000;
+
 describe("command catalogue under load", () => {
   test("concurrent cold reads and dispatch reads for one key share one provider read", async () => {
     const bridge = fakeCatalogueBridge(PAYLOAD_100);
@@ -306,53 +315,57 @@ describe("command catalogue under load", () => {
     expect(refused.every((snapshot) => snapshot.state.status === "unavailable")).toBe(true);
   });
 
-  test("256 maximal inventories stay within the byte budget with exact accounting and LRU eviction", async () => {
-    const payload = bridgeCataloguePayload(syntheticCommandRows(512, "wire-max"));
-    expect(Buffer.byteLength(payload)).toBeLessThanOrEqual(COMMAND_CATALOGUE_LIMITS.maxWireBytes);
-    const bridge = fakeCatalogueBridge(payload);
-    const { provider, counts } = counted(bridge);
-    const { cache } = harness();
-    const keyFor = (index: number) => commandCatalogueKey("env-1", "claude", `s${index}`);
-    let perEntry = 0;
-    for (let index = 0; index < COMMAND_CATALOGUE_MAX_ENTRIES; index += 1) {
-      const snapshot = await cache.read(keyFor(index), "env-1", provider, `s${index}`);
-      expect(snapshot.commands).toHaveLength(512);
-      perEntry ||= chargedBytes(snapshot);
+  test(
+    "256 maximal inventories stay within the byte budget with exact accounting and LRU eviction",
+    async () => {
+      const payload = bridgeCataloguePayload(syntheticCommandRows(512, "wire-max"));
+      expect(Buffer.byteLength(payload)).toBeLessThanOrEqual(COMMAND_CATALOGUE_LIMITS.maxWireBytes);
+      const bridge = fakeCatalogueBridge(payload);
+      const { provider, counts } = counted(bridge);
+      const { cache } = harness();
+      const keyFor = (index: number) => commandCatalogueKey("env-1", "claude", `s${index}`);
+      let perEntry = 0;
+      for (let index = 0; index < COMMAND_CATALOGUE_MAX_ENTRIES; index += 1) {
+        const snapshot = await cache.read(keyFor(index), "env-1", provider, `s${index}`);
+        expect(snapshot.commands).toHaveLength(512);
+        perEntry ||= chargedBytes(snapshot);
+        expect(cache.retainedBytes).toBeLessThanOrEqual(COMMAND_CATALOGUE_MAX_BYTES);
+      }
+      expect(counts.reads).toBe(COMMAND_CATALOGUE_MAX_ENTRIES);
+      // Charged at roughly twice the wire size: the rows plus their signature.
+      expect(perEntry).toBeGreaterThan(Buffer.byteLength(payload));
+      const fits = Math.floor(COMMAND_CATALOGUE_MAX_BYTES / perEntry);
+      expect(cache.size).toBe(fits);
+      expect(cache.retainedBytes).toBe(fits * perEntry);
+      const retained: number[] = [];
+      let recomputed = 0;
+      for (let index = 0; index < COMMAND_CATALOGUE_MAX_ENTRIES; index += 1) {
+        const snapshot = cache.peek(keyFor(index));
+        if (!snapshot) continue;
+        retained.push(index);
+        recomputed += chargedBytes(snapshot);
+      }
+      expect(recomputed).toBe(cache.retainedBytes);
+      // Least recently used went first: the survivors are the newest keys.
+      expect(retained).toEqual(
+        Array.from({ length: fits }, (_, offset) => COMMAND_CATALOGUE_MAX_ENTRIES - fits + offset),
+      );
+
+      // A read refreshes recency: the oldest survivor outlives the next insert.
+      const oldest = retained[0]!;
+      await cache.read(keyFor(oldest), "env-1", provider, `s${oldest}`);
+      await cache.read(keyFor(1_000), "env-1", provider, "s1000");
+      expect(cache.peek(keyFor(oldest))).toBeDefined();
+      expect(cache.peek(keyFor(retained[1]!))).toBeUndefined();
       expect(cache.retainedBytes).toBeLessThanOrEqual(COMMAND_CATALOGUE_MAX_BYTES);
-    }
-    expect(counts.reads).toBe(COMMAND_CATALOGUE_MAX_ENTRIES);
-    // Charged at roughly twice the wire size: the rows plus their signature.
-    expect(perEntry).toBeGreaterThan(Buffer.byteLength(payload));
-    const fits = Math.floor(COMMAND_CATALOGUE_MAX_BYTES / perEntry);
-    expect(cache.size).toBe(fits);
-    expect(cache.retainedBytes).toBe(fits * perEntry);
-    const retained: number[] = [];
-    let recomputed = 0;
-    for (let index = 0; index < COMMAND_CATALOGUE_MAX_ENTRIES; index += 1) {
-      const snapshot = cache.peek(keyFor(index));
-      if (!snapshot) continue;
-      retained.push(index);
-      recomputed += chargedBytes(snapshot);
-    }
-    expect(recomputed).toBe(cache.retainedBytes);
-    // Least recently used went first: the survivors are the newest keys.
-    expect(retained).toEqual(
-      Array.from({ length: fits }, (_, offset) => COMMAND_CATALOGUE_MAX_ENTRIES - fits + offset),
-    );
 
-    // A read refreshes recency: the oldest survivor outlives the next insert.
-    const oldest = retained[0]!;
-    await cache.read(keyFor(oldest), "env-1", provider, `s${oldest}`);
-    await cache.read(keyFor(1_000), "env-1", provider, "s1000");
-    expect(cache.peek(keyFor(oldest))).toBeDefined();
-    expect(cache.peek(keyFor(retained[1]!))).toBeUndefined();
-    expect(cache.retainedBytes).toBeLessThanOrEqual(COMMAND_CATALOGUE_MAX_BYTES);
-
-    // Forgetting the environment releases every byte.
-    cache.forgetEnvironment("env-1");
-    expect(cache.size).toBe(0);
-    expect(cache.retainedBytes).toBe(0);
-  });
+      // Forgetting the environment releases every byte.
+      cache.forgetEnvironment("env-1");
+      expect(cache.size).toBe(0);
+      expect(cache.retainedBytes).toBe(0);
+    },
+    MAXIMAL_INVENTORIES_TEST_TIMEOUT_MS,
+  );
 
   test("small inventories are bounded by the entry cap instead", async () => {
     const bridge = fakeCatalogueBridge(bridgeCataloguePayload(syntheticCommandRows(10)));

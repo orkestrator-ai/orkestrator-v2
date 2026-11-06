@@ -18,6 +18,13 @@ import {
 } from "./test-support.js";
 
 const frameInput = { name: "Home", x: 0, y: 0, width: 400, height: 300, html: "<h1>Hello</h1>" };
+/**
+ * Filling a canvas to the frame limit is durable work: every frame and record
+ * write is synced to disk. On a quiet Linux host the case takes about 0.6 s on
+ * tmpfs and 1.6 s on a real disk; on a loaded host or slow volume it has
+ * exceeded Bun's 5 s default with nothing else to wait for.
+ */
+const FULL_CANVAS_TEST_TIMEOUT_MS = 30_000;
 
 describe("design operations: prepare, execute, status and cancel", () => {
   let harness: DesignHarness;
@@ -89,40 +96,44 @@ describe("design operations: prepare, execute, status and cancel", () => {
       receipts: DesignOperationStatus[];
     };
 
-  test("concurrent duplicates at the frame limit settle with a capacity receipt", async () => {
-    const frames = Array.from({ length: DESIGN_MAX_FRAMES - 1 }, (_, index) => ({
-      ...frameInput,
-      id: crypto.randomUUID(),
-      name: `Frame ${index}`,
-      revision: 1,
-    }));
-    const imported = await service().create(
-      "env-1",
-      "Full soon",
-      JSON.stringify({
-        format: "orkdes",
-        version: 1,
+  test(
+    "concurrent duplicates at the frame limit settle with a capacity receipt",
+    async () => {
+      const frames = Array.from({ length: DESIGN_MAX_FRAMES - 1 }, (_, index) => ({
+        ...frameInput,
         id: crypto.randomUUID(),
-        environmentId: "env-1",
-        name: "Full soon",
+        name: `Frame ${index}`,
         revision: 1,
-        frames,
-      }),
-      "user",
-    );
-    const descriptor = {
-      canvasId: imported.id,
-      input: { kind: "duplicate_frame" as const, frameId: imported.frames[0]!.id },
-      preconditions: { frameRevision: 1 },
-    };
-    const first = await service().prepare("env-1", "user", descriptor);
-    const second = await service().prepare("env-1", "agent", descriptor);
-    expect((await service().execute("env-1", imported.id, first.token)).state).toBe("committed");
-    const rejected = await service().execute("env-1", imported.id, second.token);
-    expect(rejected).toMatchObject({ state: "rejected", failure: { code: "capacity" } });
-    expect(await service().status("env-1", imported.id, second.token)).toEqual(rejected);
-    expect((await service().get(imported.id, "env-1")).frames).toHaveLength(DESIGN_MAX_FRAMES);
-  });
+      }));
+      const imported = await service().create(
+        "env-1",
+        "Full soon",
+        JSON.stringify({
+          format: "orkdes",
+          version: 1,
+          id: crypto.randomUUID(),
+          environmentId: "env-1",
+          name: "Full soon",
+          revision: 1,
+          frames,
+        }),
+        "user",
+      );
+      const descriptor = {
+        canvasId: imported.id,
+        input: { kind: "duplicate_frame" as const, frameId: imported.frames[0]!.id },
+        preconditions: { frameRevision: 1 },
+      };
+      const first = await service().prepare("env-1", "user", descriptor);
+      const second = await service().prepare("env-1", "agent", descriptor);
+      expect((await service().execute("env-1", imported.id, first.token)).state).toBe("committed");
+      const rejected = await service().execute("env-1", imported.id, second.token);
+      expect(rejected).toMatchObject({ state: "rejected", failure: { code: "capacity" } });
+      expect(await service().status("env-1", imported.id, second.token)).toEqual(rejected);
+      expect((await service().get(imported.id, "env-1")).frames).toHaveLength(DESIGN_MAX_FRAMES);
+    },
+    FULL_CANVAS_TEST_TIMEOUT_MS,
+  );
 
   test("batch create then delete preserves final order and is atomic on error", async () => {
     const { canvasId, frameId } = await setup();

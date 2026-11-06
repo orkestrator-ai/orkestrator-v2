@@ -234,11 +234,17 @@ describe("a batch", () => {
   });
 
   test("flushes at the compressed byte bound below the object-count bound", async () => {
-    const { store, events } = recordingStore();
+    // The production bound is 64 MiB; deflating that much random data took over
+    // five seconds on a loaded host. A lower bound exercises the same check, and
+    // each input stays above the off-loop zlib threshold.
+    const batchMaxBytes = 1024 * 1024;
+    expect(batchMaxBytes).toBeLessThan(BATCH_MAX_BYTES);
+    expect(batchMaxBytes / 4).toBeGreaterThan(OFF_LOOP_ZLIB_BYTES);
+    const { store, events } = recordingStore({ batchMaxBytes });
     const batch = store.batch();
     const ids: string[] = [];
-    // Incompressible inputs cross 64 MiB with four objects, far below 512.
-    const size = BATCH_MAX_BYTES / 4;
+    // Incompressible inputs cross the bound with four objects, far below 512.
+    const size = batchMaxBytes / 4;
     for (let index = 0; index < 3; index++)
       ids.push((await batch.put("blob", randomBytes(size))).id);
     expect(events).toEqual([]);

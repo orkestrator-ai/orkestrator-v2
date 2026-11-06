@@ -1,7 +1,7 @@
 # A put during a long sweep times out under parallel load
 
 - **ID:** 5822
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-11-05
 - **Test:** `a sweep's lock > a capture's write finishes while a long sweep is still walking`
 - **File:** `apps/backend/src/core/change-tracking/retention-store-walks.test.ts`
@@ -37,3 +37,28 @@ mise run test:logged -- --name retention-walks-isolated -- bun --cwd=apps/backen
 Passed with exit 0 in 2.1 s. Passing output was deleted by the logged
 runner, so isolated totals are not inferred. The isolated pass establishes
 intermittence, not a cause or a repair. No assertion, timeout or skip changed.
+
+### Resolution — 2026-11-06
+
+- **Root cause:** the test relied on volume to make the sweep "long". It created
+  and individually aged 1,500 old blobs so that the walk would outlast one put.
+  That setup was most of the cost, so on a loaded host and a slow volume the test
+  crossed Bun's 5 s deadline. The lock behaviour it asserts on was never at fault
+  (the hypothesis above was right).
+- **Fix (test only):** `apps/backend/src/core/change-tracking/retention-store-walks.test.ts`.
+  The test wraps the store's `exclusive` seam, as the neighbouring
+  `beforeFirstHold` helper does. After the sweep's first removal hold has
+  released the lock, the sweep is held mid-walk until the put has finished. The
+  put must still finish first (`["put", "sweep"]`). The test now also asserts
+  that the sweep really was mid-walk: more than half of the old blobs still exist
+  when the put completes, and all are removed at the end. If a sweep held the
+  lock across its walk, the put could not finish first: a 10 s bound releases the
+  gate, and the order assertion fails instead of the test hanging. The setup is
+  128 blobs (checked to span more than one fan-out prefix) instead of 1,500.
+- **Reproduced:** not as a failure. Pinned to one core beside 8 busy loops, the
+  unchanged test averaged about 1.6 s per run (5 runs, 8.2 s) and the new one
+  about 0.15 s (20 runs, 3.3 s).
+- **Verification:** `mise run test:logged -- --name coord-5822-fix -- bun --cwd=apps/backend test ./src/core/change-tracking/retention-store-walks.test.ts -t "a capture's write finishes" --rerun-each=50`:
+  50/50 pass. `coord-5822-fix-load` (`--rerun-each=20`, one-core contention):
+  20/20 pass. `coord-ct-files` (this owner and `measurement-file-cap.test.ts` in
+  full): pass.

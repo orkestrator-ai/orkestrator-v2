@@ -83,3 +83,12 @@ install, also passed this owner in 20 repeats in a three-owner run (680 pass,
 20 fail, all failures in PreviewUpstreamPool). The exact aggregate failure
 has not been reproduced on main by these focused runs. The cause remains
 unproven; no OpenCode implementation, test assertion or timeout changed.
+
+## Investigation — 2026-11-06
+
+Status stays open. The wrong bodies (`{}`, `{"error":"Unauthorized"}`, and `undefined` data in the sibling SDK-client case) look like responses from a different server, so the following were checked on Linux with Bun 1.4.0:
+
+- `Bun.serve({ port: 0 })` listens on the dual-stack wildcard (`*:P` in `ss`). Another process cannot bind `127.0.0.1:P` beside it unless both sockets set `reusePort` (both attempts returned `EADDRINUSE`; with `reusePort` on both, the specific bind wins and answers `{}`). This fixture does not set `reusePort`, so port sharing by bind is ruled out unless another server set it too.
+- An in-process probe ruled out a pooled keep-alive connection to an earlier server on the same port: a fetch after `old.stop()` and a rebind of the port reached the new server.
+
+Not checked: a keep-alive connection to a server in a different process that stops listening but keeps serving open connections, and a sibling file's `HTTP_PROXY`/`http_proxy` (Bun's `fetch` honours them, and `process.env` is per worker process). Next step: when it recurs, record the worker's environment proxy variables and which other files that worker ran.

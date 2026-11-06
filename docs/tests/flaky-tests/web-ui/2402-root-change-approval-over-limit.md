@@ -1,7 +1,7 @@
 # root-change approval handles over-limit and still permits rejection
 
 - **ID:** 2402
-- **Status:** open
+- **Status:** resolved
 - **Test:** `root-change approval handles over-limit and still permits rejection`
 - **File:** `apps/web/src/components/federation/node-action-requests.test.tsx`
 
@@ -90,3 +90,31 @@ mise run test:logged -- --name merge-node-action-owner -- bun test --cwd apps/we
 
 Evidence: `/tmp/orkestrator-test-run.nqin2k/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 No assertion or implementation changed. The cause remains unestablished.
+
+### Resolution — 2026-11-06
+
+**Root cause.** The over-limit case renders 501 rows, each a Radix checkbox,
+three times (listing, Select all, Clear). Instrumented alone at a load average
+of about 26, it took: `findByRole("checkbox", { name: "file-500.ts" })` 2.15 s,
+Select all 1.20 s, Clear 1.06 s, the rest under 0.6 s. The whole case took
+4.998 s, at the default deadline. Each `*ByRole` evaluation computes the
+accessible name and visibility of all 501 checkboxes (about 350 ms per
+`getByRole("checkbox", …)`), so polling `findByRole` alone cost over two
+seconds. Rendering and re-rendering 501 rows is inherent to the over-limit
+scenario.
+
+**Reproduction.** A copy of the unchanged owner with
+`-t over-limit --rerun-each=6` failed one of six at 5708 ms ("this test timed
+out after 5000ms"), at a load average of about 22.
+
+**Fix.** `apps/web/src/components/federation/node-action-requests.test.tsx`:
+the test waits for the last row with `findByLabelText("file-500.ts")`, then
+asserts that element's `role` is `checkbox` (about 1 s cheaper). The
+over-limit case also gets an explicit 30 s budget (`OVER_LIMIT_BUDGET_MS`) for
+its synchronous render work. The other states keep the default budget. No
+assertion was removed.
+
+**Verification.** The owner passed alone (15 pass; the over-limit case took
+4.13 s at load about 20). Then
+`mise run test:logged -- --name web-2402-fixed-stress -- bun --cwd=apps/web test src/components/federation/node-action-requests.test.tsx --rerun-each=6`
+passed (exit 0, 28.1 s) at a load average of about 22.

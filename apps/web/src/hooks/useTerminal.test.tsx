@@ -2201,12 +2201,18 @@ describe("useTerminal reconnect behavior", () => {
       outputHandler?.({ payload: { data: [51], revision: 3, generation: 1 } });
     });
     await waitFor(() => expect(getTerminalOutputSnapshotMock).toHaveBeenCalledTimes(3));
+    // The backend keeps answering an older revision, so a retry is queued every
+    // TERMINAL_RECONCILE_RETRY_MS (100 ms) from here on. A loaded host can let
+    // one fire before the disconnect below (case 0782), so the invariant is the
+    // count at disposal, not the count `waitFor` happened to observe.
+    const readsAtDisposal = getTerminalOutputSnapshotMock.mock.calls.length;
 
     await act(async () => {
       await result.current.disconnect();
+      // Longer than the retry delay: a retry that disposal missed would land here.
       await new Promise((resolve) => setTimeout(resolve, 150));
     });
-    expect(getTerminalOutputSnapshotMock).toHaveBeenCalledTimes(3);
+    expect(getTerminalOutputSnapshotMock).toHaveBeenCalledTimes(readsAtDisposal);
   });
 
   it("drops an overflowing pending buffer and recovers from an authoritative snapshot", async () => {

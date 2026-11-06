@@ -20,6 +20,12 @@ import { BackendRuntime } from "../../../apps/backend/src/core/backend-runtime";
 jest.setTimeout(30_000);
 afterEach(cleanup);
 
+// "Clone project" runs the real add_project handler, which inspects or clones
+// the destination with real Git processes. Testing Library's one-second
+// default for findBy/waitFor is far shorter than those processes can take on a
+// loaded host (case 0352), so waits on that work get most of the test budget.
+const REAL_GIT_WAIT = { timeout: 20_000 };
+
 function CloneDialog({ onOpenChange }: { onOpenChange: (open: boolean) => void }) {
   const projects = useProjects();
   return (
@@ -181,13 +187,13 @@ describe("GitHub picker to project registration", () => {
         fireEvent.change(screen.getByLabelText(/Local path/), { target: { value: localPath } });
         fireEvent.click(screen.getByRole("button", { name: "Clone project" }));
         if (destination === "matching-retry" || willClone) {
-          await waitFor(() => expect(changes).toEqual([false]));
+          await waitFor(() => expect(changes).toEqual([false]), REAL_GIT_WAIT);
           expect(await storage.loadProjects()).toHaveLength(1);
           expect(useProjectStore.getState().projects[0]?.localPath).toBe(localPath);
         } else {
-          expect((await screen.findByRole("alert")).textContent).toContain(
-            "Clone destination is not empty",
-          );
+          expect(
+            (await screen.findByRole("alert", undefined, REAL_GIT_WAIT)).textContent,
+          ).toContain("Clone destination is not empty");
           expect(changes).toEqual([]);
           expect(await storage.loadProjects()).toEqual([]);
           expect(useProjectStore.getState().projects).toEqual([]);

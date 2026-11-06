@@ -1,7 +1,7 @@
 # Restore plan at the real measurement cap times out under parallel load
 
 - **ID:** 5360
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-11-05
 - **Test:** `snapshot measurements past the cap > restore plans at the real cap stay complete and cost no blob reads`
 - **File:** `apps/backend/src/core/change-tracking/measurement-file-cap.test.ts`
@@ -102,3 +102,26 @@ Isolated evidence: `orkestrator-test-run.ShXcQv/merge-restore-plan-alone.log.gz`
 under the same temporary root. The nine-worker component browser suite was
 also running. No isolated pass, new root cause or fix is claimed; no assertion,
 deadline, skip or implementation changed.
+
+### Resolution — 2026-11-06
+
+- **Root cause:** the case is deliberately about the production cap
+  (`measurementFileRowCap` 2,000), so it writes and captures 2,050 files in one
+  turn and plans a 2,050-file restore. On this host that costs about 1 s for the
+  turn and 0.2 s for `restore.prepare` when idle (3.6 s on the first,
+  module-loading run). Its runtime therefore scales with host load, and Bun's
+  5 s default is below it under the aggregate. The closed-database error is a
+  consequence of that: on timeout, `afterEach` runs `harness.cleanup()` under the
+  still-running turn. Earlier diagnostics already showed the case is slow, not
+  stalled (10.3 s at load 37 with a long timeout).
+- **Fix (test only):** `apps/backend/src/core/change-tracking/measurement-file-cap.test.ts`
+  gives this one case a 30 s budget sized to its workload, with a comment saying
+  why. There is no event to synchronise on, only throughput. Shrinking the cap
+  would remove what the case exists to check, and every assertion is unchanged.
+- **Reproduced:** yes. Pinned to one core beside 8 busy loops, the unchanged case
+  failed 3/3 (5.40 to 5.61 s, `this test timed out after 5000ms`), each followed
+  by `turn.finalize-failed ... Cannot use a closed database`.
+- **Verification:** the same contention with the fix
+  (`mise run test:logged -- --name coord-5360-fix-load -- taskset -c 11 bun --cwd=apps/backend test ./src/core/change-tracking/measurement-file-cap.test.ts -t "restore plans at the real cap" --rerun-each=3`):
+  3/3 pass, about 8 s each. Complete owner alone: pass (`coord-ct-files`, with
+  `retention-store-walks.test.ts`).

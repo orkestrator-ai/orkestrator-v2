@@ -70,6 +70,12 @@ export interface DiagnosticsSources {
   json: readonly DiagnosticsJsonSource[];
   /** Things a reader might expect that a bundle does not hold, and why. */
   notCollected: readonly DiagnosticsManifestAbsent[];
+  /**
+   * Debug log bytes kept across files; defaults to
+   * {@link DIAGNOSTICS_DEBUG_LOG_BYTES}. Tests lower it, since redacting the
+   * full budget line by line takes seconds on a loaded host.
+   */
+  debugLogBytes?: number;
 }
 
 interface BuiltEntry {
@@ -193,7 +199,7 @@ async function collectLogs(
     });
     return;
   }
-  let remaining = DIAGNOSTICS_DEBUG_LOG_BYTES;
+  let remaining = sources.debugLogBytes ?? DIAGNOSTICS_DEBUG_LOG_BYTES;
   const debugFiles = await namedFiles(sources.logsDir, DEBUG_LOG_FILE);
   if (debugFiles.length === 0) {
     absent.push({ name: "logs/debug", reason: "Save Logs to Disk is on, but no log file exists." });

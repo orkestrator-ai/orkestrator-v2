@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtemp, mkdir, writeFile, readFile, rm, chmod, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { getPriority, tmpdir } from "node:os";
@@ -21,6 +21,13 @@ import type { Environment } from "./models.js";
 import { createHostTestScheduler } from "@orkestrator/protocol/node/host-test-scheduler";
 import { validationPreparation } from "./review-validation-service.js";
 import { parseReviewPreparationValidation } from "./commands-review.js";
+
+// Every test here spawns a real validation worker plus a Bun control process
+// per start, status or cancel, and its own observation bounds run to 12 s. The
+// 5 s Bun default is shorter than those bounds, so a loaded host timed tests
+// out mid-run; afterEach then cancelled the live run and the still-running
+// body reported "cancelled" (case 0745) or the test simply timed out (0302).
+setDefaultTimeout(30_000);
 
 const fixtures: Array<{ root: string; run: ReviewValidationRun }> = [];
 const extraRoots: string[] = [];
@@ -1439,12 +1446,23 @@ test("coverage aliases cannot introduce dependency cycles or bypass required set
 });
 
 test("cooperative parallel groups do not multiply queue or execution deadlines", async () => {
+  // Each of the two groups queues for GROUP_QUEUE_MS and then runs for
+  // GROUP_RUN_MS, side by side. Summed per group, either total would pass its
+  // deadline (2 x 2200 > 4000); measured as wall time, each stays well under
+  // it. The remaining 1.8 s is headroom for what a loaded host adds inside the
+  // measured windows: spawning the status probe, the admission's 100 ms poll,
+  // and the admitted group's synchronous Git snapshot checks. With 650 ms groups
+  // and 1 s deadlines that headroom was 350 ms, and a slow status probe alone
+  // pushed the queue wait past its deadline (case 0227).
+  const GROUP_QUEUE_MS = 2200;
+  const GROUP_RUN_MS = 2200;
+  const DEADLINE_MS = 4000;
   const { root, run } = await cooperativeFixture(
-    [command("parallel", "bun parallel.ts", { weight: 2, timeoutMs: 1000 })],
+    [command("parallel", "bun parallel.ts", { weight: 2, timeoutMs: DEADLINE_MS })],
     {
       "parallel.ts": `import { createTestAdmission } from __MODULE__;
 const admission = createTestAdmission(import.meta.dir, process.env, console.log);
-const jobs = ["a", "b"].map(name => admission.run({ name, command: "unused", args: [], workers: 1 }, async () => { await Bun.sleep(650); return { status: 0 }; }));
+const jobs = ["a", "b"].map(name => admission.run({ name, command: "unused", args: [], workers: 1 }, async () => { await Bun.sleep(${GROUP_RUN_MS}); return { status: 0 }; }));
 await Bun.write(".orkestrator/enqueued", "ready");
 const results = await Promise.all(jobs);
 admission.close(); process.exitCode = results.some(result => result.status !== 0) ? 1 : 0;
@@ -1458,26 +1476,35 @@ admission.close(); process.exitCode = results.some(result => result.status !== 0
   });
   const blocker = scheduler.enqueue({ owner: "b".repeat(64), workers: 2, memoryMiB: 1 });
   try {
-    await control(root, run, "start", { ORKESTRATOR_TEST_QUEUE_TIMEOUT_MS: "1000" });
+    await control(root, run, "start", { ORKESTRATOR_TEST_QUEUE_TIMEOUT_MS: String(DEADLINE_MS) });
     const deadline = Date.now() + 5000;
     while (!existsSync(path.join(root, ".orkestrator/enqueued")) && Date.now() < deadline)
       await Bun.sleep(20);
     expect(existsSync(path.join(root, ".orkestrator/enqueued"))).toBe(true);
-    await Bun.sleep(650);
+    // Both groups were enqueued before the marker was written.
+    const enqueuedAt = Date.now();
+    await observeUntil(
+      root,
+      run,
+      (next) => next.results[0]?.queueReason?.includes("worker slots") === true,
+      10_000,
+    );
     const waiting = await control(root, run, "status");
     expect(waiting.results[0]!.status).toBe("queued");
     expect(waiting.results[0]!.queueReason).toContain("worker slots");
+    // Release at a fixed point after enqueue, however long the probes took.
+    await Bun.sleep(Math.max(0, enqueuedAt + GROUP_QUEUE_MS - Date.now()));
     scheduler.release(blocker);
     const done = await completed(root, run);
     expect(done.results[0]!.status).toBe("passed");
-    expect(done.results[0]!.durationMs).toBeLessThan(1000);
-    expect(done.results[0]!.queuedMs).toBeLessThan(1000);
+    expect(done.results[0]!.durationMs).toBeLessThan(DEADLINE_MS);
+    expect(done.results[0]!.queuedMs).toBeLessThan(DEADLINE_MS);
     expect(done.results[0]!.queueReason).toBeUndefined();
   } finally {
     scheduler.release(blocker);
     scheduler.close();
   }
-}, 15000);
+}, 30000);
 
 test("legacy cooperative channels are timed by observed state, not summed group totals", async () => {
   const { root, run } = await cooperativeFixture(

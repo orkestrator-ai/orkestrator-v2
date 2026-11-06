@@ -1,7 +1,7 @@
 # Moving a worktree with nested submodules times out in the aggregate
 
 - **ID:** 0621
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-21
 - **Test:** `move_environment > moves a worktree with nested submodules (same disk)`
   in `apps/backend/src/core/environment-move.test.ts`.
@@ -131,3 +131,24 @@ The timed-out Git reset was terminated with SIGTERM and rejected between tests.
 - **Unchanged owner:** `mise run test:logged -- --name environment-move-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/environment-move.test.ts --parallel=1 --only-failures` passed the complete file, exit 0 in 48.3 s.
 - **Evidence:** `orkestrator-test-run.iPZEJ3/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and enclosing `orkestrator-test-run.BxYW3V/repository-tests.log.gz` under the host temporary directory.
 - **Assessment:** another intermittent recurrence; host contention remains a hypothesis. No move implementation, assertion, deadline or skip changed. The aggregate remains failed.
+
+### Resolution — 2026-11-06
+
+- **Status reason:** stale; a later change already fixed it. Every recorded
+  failure of this case is Bun's generic 5,000 ms deadline cutting off real
+  Git, worktree and submodule fixture work, which the owner does in seconds
+  per case on a loaded macOS host. The last observation was on or before
+  2026-10-27. On 2026-10-28 `beb1ec4c8` (#1365) moved
+  `apps/backend/src/core/environment-move.test.ts` to the slow tier and gave
+  it `setDefaultTimeout(30_000)`, which also covers its hooks. No five-second
+  deadline has been recorded for this case since. The follow-on "unhandled
+  error between tests" (a fixture removed under a still-running move) was a
+  consequence of the deadline.
+- **Change in this pass:** none.
+- **Verification:** `mise run test:logged -- --name env-move-stress -- bun
+  --cwd=apps/backend test ./src/core/environment-move.test.ts --parallel=1
+  --rerun-each=2`: PASS in 46.4 s at load average about 22. The original
+  failure was not reproduced.
+- **Not covered:** the separate 2026-11-03 CI `ENOENT` in `cleanup retries
+  preserve a new directory at the source pathname` is not a deadline; it
+  stays open under [1106](1106-environment-move-git-fixtures-under-host-load.md).

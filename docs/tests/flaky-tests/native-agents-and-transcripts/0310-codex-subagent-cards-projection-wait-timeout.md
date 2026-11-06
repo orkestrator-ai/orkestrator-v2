@@ -286,3 +286,7 @@ then passed with exit 0 in 1.4 s. The interrupted aggregate's original raw evide
 is `orkestrator-test-run.20KKVR/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log`
 under the host temporary directory. Contention is a hypothesis; no host load was
 measured. This observation does not establish a fix.
+
+### Investigation — 2026-11-06
+
+- `mise run test:logged -- --name n0310-baseline -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/codex-subagent-cards.test.ts --rerun-each=8 --only-failures` passed all 8 runs (11.8 s) at a load average above 20. The 2026-11-05 15.2 s failure printed no assertion that was retained, and no evidence for it survives under `/tmp`. The earlier `recovering` and partial-hydration variants are already fixed (see above), so the remaining variant cannot be identified. One single-read step is still left: `reopenBackend()` followed by one `projection()`. Its result is compared against the running cards. It is a candidate if a recurrence fails at that line. Status stays open.

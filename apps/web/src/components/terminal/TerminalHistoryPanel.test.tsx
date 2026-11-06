@@ -113,10 +113,16 @@ describe("TerminalHistoryPanel", () => {
       .getByRole("region", { name: "Earlier terminal output" })
       .querySelector(".overflow-auto") as HTMLDivElement;
     Object.defineProperty(scroller, "scrollHeight", { configurable: true, value: 160 });
+    const loadEarlier = () =>
+      screen.getByRole("button", { name: "Load earlier" }) as HTMLButtonElement;
     for (page = 19; page >= 1; page -= 1) {
       const expectedCalls = 21 - page;
       if (page === 4) scroller.scrollTop = 25;
-      fireEvent.click(screen.getByRole("button", { name: "Load earlier" }));
+      // A press while the previous page is still loading is ignored, and from
+      // page 4 on nothing else waits for that page to land: on a loaded host the
+      // next press arrived first and the request was never made (case 0513).
+      await waitFor(() => expect(loadEarlier().disabled).toBe(false));
+      fireEvent.click(loadEarlier());
       await waitFor(() => expect(getTerminalHistoryPage).toHaveBeenCalledTimes(expectedCalls));
       if (page >= 5) expect(await screen.findByText(`page-${page}`)).toBeDefined();
     }

@@ -1,7 +1,7 @@
 # MCP source-store lock setup races its fixed wait under aggregate load
 
 - **ID:** 0932
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-25
 - **Tests:** `McpSourceStore > takes over a lock left by a dead process but not one held by a live process`; `McpSourceStore > a live holder whose identity cannot be verified is never taken over on age`.
 - **File:** `apps/backend/src/core/mcp-management/source-store.test.ts`.
@@ -122,3 +122,10 @@ Further target-branch evidence for the recurrence above, on a detached `origin/m
 - `mise run test:logged -- --name baseline-default-suite -- mise run test` (188.8 s, no capacity queue): backend 13,340 passed, one failed (PreviewUpstreamPool again); web 11,407 passed; every other group passed. Both lock-store cases passed.
 
 The branch's own preparation aggregate at `9940fb04a` (277.6 s) also failed only PreviewUpstreamPool. The lock-store cases have failed only in runs queued behind other worktrees' suites for host capacity (about 638 s on 2026-11-02), as in every earlier recurrence here. The failure has still not been reproduced on the target branch, so it stays open and unexcused. No lock-store code, assertion, timeout or skip changed. Evidence: `output/agent-testing/env-kinds-review-fix/baseline-backend-workspace-r2.log.gz` and `baseline-default-suite-r2.log.gz` in the terminology worktree.
+
+### Resolution — 2026-11-06
+
+- **Root cause (test):** `takes over a lock left by a dead process…` started a holder on a second store instance and then slept a fixed 20 ms before listing the lock directory. Acquisition runs `realpath`, `mkdir`, the `/proc` start-time read and the exclusive `writeFile` on the thread pool. Under load it had not finished, so the directory listing found no lock file (or no directory). The failure threw before `release()` and `await held`, so the holder and the waiting store kept running across cleanup. That is consistent with the following case's `ENOENT`.
+- **Reproduced:** yes. A temporary `spyOn(fs/promises, "mkdir")` adding 40 ms failed the original test at the directory listing (`ENOENT … scandir …/locks`, 22.13 ms). With the same delay, the fixed test passed.
+- **Fix:** the holder's critical section resolves an `entered` promise, and the test awaits it (raced against `held`, so an acquisition failure still reports) before inspecting the lock file. The assertions run in `try`, and `finally` releases the holder and awaits both the holder and the waiter, so a failure cannot leave lock work running into the next test. All assertions are unchanged, including the 100 ms window that checks the waiter has not acquired.
+- **Verification:** `mise run test:logged -- --name mcp-store-stress -- bun test --cwd apps/backend src/core/mcp-management/source-store.test.ts --rerun-each=20 --parallel=2` PASS (9.3 s, exit 0).

@@ -47,7 +47,7 @@ nor the earlier green aggregate establishes a cause. No unrelated hook or
 timeout was changed. The final failed aggregate remains a verifier limitation.
 
 - **ID:** 2711
-- **Status:** open
+- **Status:** resolved
 - **Observed:** 2026-11-02, merging `d7054dace` into logger branch `8f174e4db`.
 - **Test:** `in-page deadlines > (unnamed)` (the suite's `beforeAll` launches Chromium).
 - **File:** `tests/unit/multi-environment-ui-perf.integration.test.ts`.
@@ -211,3 +211,24 @@ Passing output was deleted by the logged runner, so individual passing case
 counts were not retained. This branch changes neither this owner nor its
 implementation. No assertion, timeout or skip changed. The isolated pass
 establishes intermittence; it does not establish the underlying cause.
+
+### Resolution — 2026-11-06
+
+**Root cause.** The failing hook was the `afterAll`, not the `beforeAll`. The
+2026-11-03 change gave `beforeAll` a 60 s budget, but `afterAll(() => browser?.close())`
+had none, and Bun gives a hook without an explicit budget the five-second
+default. Closing Chromium (its pages, the browser process and its profile) can
+pass five seconds on a loaded host, and Bun reports that as the describe
+block's unnamed hook, which matches every recurrence above (5000–5022 ms). A
+probe file confirmed the semantics on Bun 1.4.4: `beforeAll(sleep 6 s, 60_000)`
+passes, `afterAll(sleep 6 s)` fails as `grp > (unnamed)` at 5000.80 ms, and
+`afterAll(sleep 6 s, 60_000)` passes.
+
+**Fix.** `tests/unit/multi-environment-ui-perf.integration.test.ts`: the
+`afterAll` that closes the browser now has the same 60 s budget as the
+`beforeAll`, with a comment. No assertion or case budget changed.
+
+**Verification.** `mise run test:logged -- --name web-ui-perf-afterall -- bun test ./tests/unit/multi-environment-ui-perf.integration.test.ts --parallel=1 --rerun-each=5`
+passed (exit 0, 17.1 s). The browser-close overrun itself was not reproduced
+locally; the hook-timeout mechanism was reproduced with the probe above.
+Case 2882 is the same failure.

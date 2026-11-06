@@ -11,3 +11,10 @@
 - **Isolated rerun:** `mise run test:logged -- --name federation-web -- bun --cwd=apps/web test src/components/federation/WorkspaceRealmHost.test.tsx src/components/federation/federation-ui.test.tsx --parallel=2 --only-failures` passed (2.2 s), after rebasing onto `066fcb497`.
 - **Later aggregate:** `mise run test` on the rebased branch: web 11,124 passed, 0 failed.
 - **Hypothesis:** not established. The isolated rerun and the later aggregate are on the newer base, so a fix in `406f5074b` or `066fcb497` is not ruled out; the owners were not rerun alone on `2d183a53c`. The branch changes nothing under `apps/web`.
+
+## Investigation — 2026-11-06
+
+Still open, no new evidence. On this branch (base c1724ab74),
+`mise run test:logged -- --name web-2395-owners -- bun --cwd=apps/web test src/components/federation/WorkspaceRealmHost.test.tsx src/components/federation/federation-ui.test.tsx --parallel=2 --rerun-each=5`
+passed (exit 0, 13.1 s). There is still only the single 2026-11-01 observation
+on base 2d183a53c, and no cause is established.

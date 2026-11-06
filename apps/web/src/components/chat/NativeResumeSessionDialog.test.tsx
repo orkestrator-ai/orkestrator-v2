@@ -295,6 +295,16 @@ describe("NativeResumeSessionDialog", () => {
     },
   );
 
+  /**
+   * The archived-history case renders more than 512 rows four times (open,
+   * archive, reopen, show archived): about 1 s of happy-dom work per render on
+   * a loaded host and 3.5-6 s in total, all CPU-bound with nothing to await but
+   * the render itself. It gets a budget for that work instead of Bun's 5 s
+   * default and Testing Library's 1 s query default.
+   */
+  const LARGE_LIST_TEST_TIMEOUT_MS = 60_000;
+  const largeListQuery = { timeout: 20_000 };
+
   test.each([512, 513])(
     "keeps archived history restorable after reopening with %s live rows",
     async (liveCount) => {
@@ -318,18 +328,21 @@ describe("NativeResumeSessionDialog", () => {
       const { rerender } = render(<NativeResumeSessionDialog {...props} />);
       fireEvent.click(
         within(
-          (await screen.findByText("Kept history")).closest("div.group") as HTMLElement,
+          (await screen.findByText("Kept history", {}, largeListQuery)).closest(
+            "div.group",
+          ) as HTMLElement,
         ).getByRole("button", { name: "Remove from list" }),
       );
-      await waitFor(() => expect(archived).toBe(true));
+      await waitFor(() => expect(archived).toBe(true), largeListQuery);
       rerender(<NativeResumeSessionDialog {...props} open={false} />);
       rerender(<NativeResumeSessionDialog {...props} />);
-      fireEvent.click(await screen.findByLabelText("Show archived (1)"));
-      fireEvent.click(await screen.findByText("Kept history"));
-      await waitFor(() => expect(props.onResume).toHaveBeenCalledWith("kept"));
+      fireEvent.click(await screen.findByLabelText("Show archived (1)", {}, largeListQuery));
+      fireEvent.click(await screen.findByText("Kept history", {}, largeListQuery));
+      await waitFor(() => expect(props.onResume).toHaveBeenCalledWith("kept"), largeListQuery);
       expect(props.onArchive).toHaveBeenLastCalledWith("kept", false);
       expect(props.fetchSessions).toHaveBeenCalledTimes(2);
     },
+    LARGE_LIST_TEST_TIMEOUT_MS,
   );
 
   test("resumes the clicked session by id", async () => {

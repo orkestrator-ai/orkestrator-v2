@@ -4,7 +4,7 @@
  * `upload-pack` runs a logging `uploadpack.packObjectsHook` whenever it has to
  * send objects, so a test can tell what came from the remote.
  */
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
@@ -20,6 +20,13 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { IMAGE_CAPABILITIES } from "../../packages/protocol/src/image-manifest";
+
+// Each case's setup alone runs about a dozen real Git processes (two inits, a
+// clone and two commit-and-push rounds over `file://`), and each case clones
+// again. On an idle macOS host the owner takes about 3 s a case; a saturated
+// aggregate pushed the setup hook past Bun's generic five seconds (flake case
+// 6081). Bun applies this file-scoped budget to the hooks as well.
+setDefaultTimeout(30_000);
 
 const repoRoot = join(import.meta.dir, "..", "..");
 const setupScript = join(repoRoot, "docker", "workspace-setup.sh");

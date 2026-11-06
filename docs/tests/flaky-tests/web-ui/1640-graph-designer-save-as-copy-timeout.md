@@ -37,3 +37,15 @@ Final aggregate counts: desktop 1,580 pass / 16 skip / 2 fail; backend
 13,138 pass / 97 skip / 3 fail; web 11,230 pass / 10 skip / 7 fail; root
 3,418 pass / 3 fail. Bridges and Codex protocol verification passed.
 The aggregate exited 1 after 1,152.1 seconds; no watchdog or output limit fired.
+
+## Investigation — 2026-11-06
+
+Not fixed, still open. A JUnit-timed run of the unchanged owner alone took
+0.55–0.73 s per case; this case took 0.73 s. The whole file took about 3.3 s at
+a load average of about 20. The case is driven by synchronous `act()` calls on
+mocked backend invokes, with no fixed sleep or timer wait. The late
+`imported[1]` TypeError in the original report came after the timeout, not
+before it. No race was found. Timing out needs about a sevenfold slowdown,
+which matches the 26 s whole-file runs recorded on 2026-11-02. Next step:
+profile `openForEditing` (the React Flow mount) under load before choosing
+between less render work and an explicit budget.

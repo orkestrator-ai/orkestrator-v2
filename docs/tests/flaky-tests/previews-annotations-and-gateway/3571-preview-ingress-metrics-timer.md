@@ -1,7 +1,7 @@
 # Preview ingress metrics timer misses first-byte measurement under aggregate load
 
 - **ID:** 3571
-- **Status:** open
+- **Status:** resolved
 - **Observed:** 2026-11-04 during subagent model review repair.
 - **Owner:** `apps/desktop/tests/preview-transport-manager.test.ts`
 - **Test:** `PreviewTransportManager (desktop tunnel end to end) > buffered ingress metrics are reported on a timer while the window stays open`
@@ -26,3 +26,29 @@ first-byte histogram at 165.65 ms. The unchanged complete owner passed alone:
 apps/desktop ./tests/preview-transport-manager.test.ts --parallel=1 --only-failures`
 (exit 0, 11.2 s). Original evidence remains in the review package's
 `validation-04.stdout.txt`; no assertion or timeout was changed.
+
+### Resolution — 2026-11-06
+
+**Root cause.** An ordering assumption in the test. The manager's report
+timer (`metricsReportMs: 20` here) starts at the first buffered sample, which
+is `desktop.connect_ms` when the tunnel stream opens; `desktop.first_byte_ms`
+is observed later, when the response's first byte arrives. Whenever the first
+byte lands more than one interval after the connect, the samples go out in two
+consecutive reports, and the test, which demanded both histograms in
+`reports[0]`, failed with only `connect_ms`. The product behaviour (two
+bounded reports) is correct.
+
+**Reproduced.** A temporary copy of the unchanged test with
+`metricsReportMs: 1` failed 10 of 10 (`--rerun-each=10`) with the recorded
+signature (missing `desktop.first_byte_ms`).
+
+**Fix.** `apps/desktop/tests/preview-transport-manager.test.ts` waits until
+the first-byte sample has been reported, then asserts exactly one
+`connect_ms` and one `first_byte_ms` sample across the one or two reports,
+and that disposal sends nothing further (a rejected report is still not
+retried).
+
+**Verification.**
+- The 1 ms copy of the fixed test: 20 of 20 passed.
+- `NODE_ENV=test mise run test:logged -- --name ptm-fix-rerun -- bun test --cwd apps/desktop --preload ../../tests/setup-node.ts ./tests/preview-transport-manager.test.ts -t "buffered ingress metrics|hiding does not close" --rerun-each=20`: PASS.
+- Three-file `--parallel=2 --rerun-each=5` run with the external-forward and tunnel-client owners: PASS.

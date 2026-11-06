@@ -5,15 +5,25 @@
  * daemon itself is covered by egress-filter-daemon.test.ts, and a real
  * container run by apps/backend/tests/container-live-egress-filter.test.ts.
  */
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fixtureScript, read, statusFile, writeStub } from "./firewall-test-support";
+import {
+  fixtureScript,
+  read,
+  SHELL_FIXTURE_TEST_TIMEOUT_MS,
+  statusFile,
+  writeStub,
+} from "./firewall-test-support";
 import { gnuToolPath, missingGnuTools, titleWithSkip } from "./gnu-shell-tools";
 
 // Expiry stamps go through GNU `date -d`.
 const NO_GNU_DATE = missingGnuTools("date");
+
+// The boot and edit cases run the real firewall scripts; see
+// SHELL_FIXTURE_TEST_TIMEOUT_MS.
+setDefaultTimeout(SHELL_FIXTURE_TEST_TIMEOUT_MS);
 
 function withDir(body: (dir: string) => void): void {
   const dir = mkdtempSync(join(tmpdir(), "ork-egress-filter-fw-"));
@@ -115,13 +125,20 @@ describe("the names the daemon allows", () => {
 function bootFixture(dir: string, daemon: "ready" | "never") {
   const script = fixtureScript(dir, "init-firewall.sh");
   const filter = join(dir, "egress-filter-stub");
-  // The installed daemon path, and a start bounded for the test.
+  // The installed daemon path. A daemon that never starts would hold the
+  // script in its readiness loop for ten seconds, so that case shortens it;
+  // a ready daemon keeps the real loop, which returns as soon as the stub
+  // writes its file (a three-try loop raced a slow `perl` start under load).
   for (const file of [script, join(dir, "lib", "firewall-domains.sh")]) {
+    const text = readFileSync(file, "utf8").replaceAll(
+      "/usr/local/bin/orkestrator-egress-filter",
+      filter,
+    );
     writeFileSync(
       file,
-      readFileSync(file, "utf8")
-        .replaceAll("/usr/local/bin/orkestrator-egress-filter", filter)
-        .replace("for attempt in $(seq 1 100); do", "for attempt in $(seq 1 3); do"),
+      daemon === "never"
+        ? text.replace("for attempt in $(seq 1 100); do", "for attempt in $(seq 1 3); do")
+        : text,
     );
   }
   writeFileSync(

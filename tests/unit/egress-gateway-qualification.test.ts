@@ -20,49 +20,76 @@ const request = (url: string) =>
 
 const script = join(root, "scripts/qualify-egress-gateway.sh");
 
-test("probe listeners serve only the fixed response, even from a directory containing files", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "ork-egress-listener-"));
-  writeFileSync(join(dir, "sentinel"), "private sentinel");
-  const child = Bun.spawn({
-    cmd: [
-      "python3",
-      join(root, "scripts/egress-probe-server.py"),
-      "--bind",
-      "127.0.0.1",
-      "--ports-file",
-      join(dir, "ports"),
-    ],
-    cwd: dir,
-    stdout: "ignore",
-    stderr: "pipe",
-  });
-  try {
-    let ports: string[] = [];
-    for (let attempt = 0; attempt < 100; attempt++) {
-      try {
-        ports = readFileSync(join(dir, "ports"), "utf8").trim().split(" ");
-        break;
-      } catch {
-        await Bun.sleep(20);
+/** Bounds the Python listener's start-up; a loaded host can take seconds. */
+const LISTENER_START_TIMEOUT_MS = 20_000;
+/** The start-up bound plus ten local HTTP requests and the child's exit. */
+const LISTENER_TEST_TIMEOUT_MS = 30_000;
+
+test(
+  "probe listeners serve only the fixed response, even from a directory containing files",
+  async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ork-egress-listener-"));
+    writeFileSync(join(dir, "sentinel"), "private sentinel");
+    const child = Bun.spawn({
+      cmd: [
+        "python3",
+        join(root, "scripts/egress-probe-server.py"),
+        "--bind",
+        "127.0.0.1",
+        "--ports-file",
+        join(dir, "ports"),
+      ],
+      cwd: dir,
+      stdout: "ignore",
+      stderr: "pipe",
+    });
+    try {
+      // Wait for the listener's own readiness signal: it publishes both ports
+      // with an atomic rename once both sockets listen. A fixed two-second poll
+      // raced Python's start-up on a loaded host (flake case 5961), so wait
+      // until the file appears or the child exits, within a bound well inside
+      // the test's budget, and report the child's stderr if it never started.
+      let ports: string[] = [];
+      let exited = false;
+      void child.exited.then(() => {
+        exited = true;
+      });
+      const deadline = performance.now() + LISTENER_START_TIMEOUT_MS;
+      while (!exited && performance.now() < deadline) {
+        try {
+          ports = readFileSync(join(dir, "ports"), "utf8").trim().split(" ");
+          break;
+        } catch {
+          await Bun.sleep(20);
+        }
       }
-    }
-    expect(ports).toHaveLength(2);
-    expect(ports[0]).not.toBe(ports[1]);
-    for (const port of ports) {
-      const url = `http://127.0.0.1:${port}`;
-      expect((await request(`${url}/probe`)).body).toBe("egress-probe\n");
-      for (const path of ["/", "/sentinel", "/../sentinel", "/%2e%2e/sentinel"]) {
-        const response = await request(`${url}${path}`);
-        expect(response.status).toBe(404);
-        expect(response.body).not.toContain("private sentinel");
+      if (ports.length === 0) {
+        child.kill();
+        await child.exited;
+        const stderr = await new Response(child.stderr).text();
+        throw new Error(
+          `probe listener published no ports (exit ${child.exitCode}, signal ${child.signalCode}): ${stderr.slice(0, 2_000)}`,
+        );
       }
+      expect(ports).toHaveLength(2);
+      expect(ports[0]).not.toBe(ports[1]);
+      for (const port of ports) {
+        const url = `http://127.0.0.1:${port}`;
+        expect((await request(`${url}/probe`)).body).toBe("egress-probe\n");
+        for (const path of ["/", "/sentinel", "/../sentinel", "/%2e%2e/sentinel"]) {
+          const response = await request(`${url}${path}`);
+          expect(response.status).toBe(404);
+          expect(response.body).not.toContain("private sentinel");
+        }
+      }
+    } finally {
+      child.kill();
+      await child.exited;
+      rmSync(dir, { recursive: true, force: true });
     }
-  } finally {
-    child.kill();
-    await child.exited;
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
+  },
+  LISTENER_TEST_TIMEOUT_MS,
+);
 
 test("same-timestamp invocations have unique names and never clean up failed creations", async () => {
   const dir = mkdtempSync(join(tmpdir(), "ork-egress-ownership-"));

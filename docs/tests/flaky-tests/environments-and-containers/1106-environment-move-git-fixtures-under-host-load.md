@@ -198,3 +198,38 @@ Failed in the `Tests (backend)` shard on `main` at
 rest of this case. The owning file passed alone on 2026-11-04 at `a44641cbc` plus
 this change's edits (`bun test --cwd apps/backend ./src/core/environment-move.test.ts --parallel=1 --only-failures`,
 exit zero, 11.3 s). The cause was not investigated.
+
+## Investigation — 2026-11-06
+
+**Deadline failures.** These are superseded. Every five-second failure listed
+above predates `beb1ec4c8` (2026-10-28), which gave the owner
+`setDefaultTimeout(30_000)` and moved it to the slow tier. On 2026-11-06 the
+owner passed with `mise run test:logged -- --name env-move-stress -- bun
+--cwd=apps/backend test ./src/core/environment-move.test.ts --parallel=1
+--rerun-each=2` (PASS, 46.4 s, load average about 22). The registered
+deadline cases 0248, 0291, 0621, 0695, 0866 and 0935 were resolved on the
+same evidence.
+
+**`cleanup retries preserve a new directory at the source pathname`, CI
+`ENOENT` (2026-11-03).** This case stays open, because the failure looks like
+a product bug rather than a test race. The `ENOENT` is the read of
+`sentinel` at line 1158 after `recoverInterruptedEnvironmentMoves`, so
+recovery deleted the new directory the test created at the old pathname.
+`removeOldWorktree` (`environment-move.ts`) decides that the directory at
+`record.from` is still the original only by `sourceIdentity: { dev, ino }`.
+The test removes the original tree and immediately `mkdir`s the same path.
+On ext4, which GitHub's Ubuntu runners use, a freshly created directory often
+reuses the inode number freed a moment earlier, so `dev`/`ino` match and
+recovery removes an unrelated directory. A user's directory at a reused
+pathname would be lost the same way after a crash between removal and the
+`sourceCleaned` write. The fast failure (178–226 ms) fits this; a deadline
+does not.
+
+Not reproduced here: this host's `/tmp` is tmpfs and `/home` is btrfs. Both
+allocate increasing inode numbers (`rmdir` + `mkdir` gave 32584142 →
+32584143), so the reuse cannot happen. Fixing it needs a stronger persisted
+identity than `dev`/`ino`, which is a product change to `WorktreeMoveRecord`
+and its storage validator, `storage-projects.ts`. Candidates are a birth
+time (`statx` btime, where the filesystem has one) or a marker the move
+writes into the source before it removes anything. Left for an owner who can
+qualify it on ext4.

@@ -1,7 +1,7 @@
 # Diagnostics bundle debug-log tail timeout
 
 - **ID:** 6979
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-11-06
 - **Test:** `the manifest is what is written > only the newest debug log bytes are kept, from a line start`
 - **File:** `apps/backend/src/core/diagnostics-bundle.test.ts`
@@ -29,3 +29,11 @@ CI run `42144144681` tested earlier branch commit `f366b85e8`:
 - **bun fmt and oxlint:** format and lint passed; the separate DOM absence scanner failed. Four DOM `toBeNull` assertions introduced in `CoordinatorPanel.test.tsx` contribute a branch-specific offender. The other offenders are inherited.
 
 The complete `tests/unit/test-diagnostic-bounds.test.ts` owner was also compared with `--parallel=1 --only-failures`: main had 15 pass / 1 fail in 4.4 s; the branch had 15 pass / 1 fail in 5.0 s. Main reports seven offending files; the branch reports those same seven plus `CoordinatorPanel.test.tsx`. These are assertion failures, not diagnostics-bundle timeouts. Artifacts: `/tmp/orkestrator-test-run.M82z9r/main-diagnostic-owner.log.gz` and `/tmp/orkestrator-test-run.3UdefE/branch-diagnostic-owner.log.gz`. The scanner findings need a separate code repair; this merge round resolves prose conflicts only.
+
+### Resolution — 2026-11-06
+
+- **Root cause:** the test filled the full production debug budget (`DIAGNOSTICS_DEBUG_LOG_BYTES`, 8 MiB, about 120,000 lines of 70 `m`s). `redactLines` runs every line through `DiagnosticsRedactor.line`. Its shape rules include an opaque-token lookahead and an email pattern that rescan a long letter run from each position, so one such line cost about 49 µs under load. A probe measured 5.9 s for redaction alone at load average 34; the credential check and gzip took about 30 ms each. The test was CPU-bound and over budget whenever the host was busy, alone or in the aggregate.
+- **Reproduced:** yes, alone at load average 39: `bun test src/core/diagnostics-bundle.test.ts -t "only the newest debug"` failed at 5409.44 ms and 5196.00 ms.
+- **Fix:** `DiagnosticsSources.debugLogBytes` (product code, `apps/backend/src/core/diagnostics-bundle.ts`) sets the debug log budget; it defaults to `DIAGNOSTICS_DEBUG_LOG_BYTES`, so production is unchanged (`diagnostics-sources.ts` does not set it). The test sets 64 KiB, asserts that this is below the production constant, and keeps every assertion against the injected budget: the tail ends at `LAST-LINE`, `FIRST-LINE` is gone, the cut is at a line start, the size is within the budget, and the older file is not read.
+- **Verification:** the whole owner then took 394 ms at load average 25 (17 pass, 0 fail); before the fix this one test took 5.2–5.4 s. `mise run test:logged -- --name diag-stress -- bun test --cwd apps/backend src/core/diagnostics-bundle.test.ts --rerun-each=20 --parallel=2` PASS (3.3 s, exit 0).
+- **Note:** an 8 MiB production export spends seconds in redaction, yielding every 2,000 lines. That is not a test problem, but it may be worth a separate look at the per-line cost of the shape rules.

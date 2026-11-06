@@ -1,7 +1,7 @@
 # Claude tmux reactivation reads the scroll call before it arrives
 
 - **ID:** 0482
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-18
 - **Test:** `ClaudeTmuxChatTab > jumps to the bottom when reactivated after an environment switch`
 - **File:** `tests/unit/components/ClaudeTmuxChatTab.test.tsx:999`
@@ -18,3 +18,10 @@
 - `mise run test:logged -- --name merge-tests -- mise run test` reproduced the undefined `scrollTo` call at `tests/unit/components/ClaudeTmuxChatTab.test.tsx:1001` (594.29 ms) with workspace/root/bridges/protocol worker reservations 4/1/2/1. The root group reported 3179 passed, one skipped and one failed across 3181 tests in 151 files (505.03 s). Browser and Electron checks also ran on the shared host.
 - The unchanged owning file passed: `mise run test:logged -- --name merge-tmux-owner -- bun test ./tests/unit/components/ClaudeTmuxChatTab.test.tsx --parallel=1 --only-failures` (exit 0, 10.9 s logged).
 - Evidence: `orkestrator-test-run.4IXzMM/root-and-agent-support-tests.log.gz` in the host temporary directory. Delayed effect or scroll delivery remains a hypothesis. No source, assertion, timeout or skip changed.
+
+### Resolution — 2026-11-06
+
+- **Root cause:** reactivation writes twice. `scrollToIndex` runs at once; the footer `scrollTo({ top: 10_000_000 })` follows on the transcript scroll controller's next animation frame (`TranscriptScrollController.schedule`, then `reconcileLatest`). The test waited only for the first write and then read the second straight away. On a loaded host the frame had not run yet, so `mock.calls.at(-1)` was `undefined`.
+- **Reproduced:** yes. Delaying every `requestAnimationFrame` callback by 300 ms (temporary) failed the unchanged test with the recorded symptom.
+- **Fix:** `ClaudeTmuxChatTab.test.tsx` waits for both writes in one `waitFor`. It now also requires the `scrollTo` call to be new since the environment switch, which is stricter than before.
+- **Verification:** with the 300 ms frame delay (temporary), the fixed test passed. `mise run test:logged -- --name n0482-owner -- bun test ./tests/unit/components/ClaudeTmuxChatTab.test.tsx --rerun-each=5` passed 390 tests with 0 failures.

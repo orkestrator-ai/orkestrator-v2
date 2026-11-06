@@ -17,6 +17,11 @@ import { DOCKER_LABEL_OWNER } from "../src/core/constants.js";
 import { dockerOwnerNamespace } from "../src/core/docker-ownership.js";
 import { runCommand } from "../src/core/shell.js";
 import { StorageService } from "../src/core/storage.js";
+import {
+  cleanupEvidenceResources,
+  removeTrackedResources,
+  startEvidenceListener,
+} from "./agent-tools-peer-evidence-support.js";
 
 /**
  * Live evidence for the agent-tools peer gate (security finding L15), on this
@@ -42,7 +47,6 @@ import { StorageService } from "../src/core/storage.js";
  */
 
 const EVIDENCE_LABEL = "orkestrator-s0170-evidence=1";
-const FORBIDDEN_PORTS = new Set([34121, 34122]);
 
 function exchange(host: string, port: number, path: string): Promise<string> {
   return new Promise((resolve) => {
@@ -105,9 +109,8 @@ const server = new AgentToolsServer(storage, "0.0.0.0", undefined, undefined, {
 const created = { containers: [] as string[], networks: [] as string[] };
 const result: Record<string, unknown> = { dataDirOwner: owner, environmentId };
 try {
-  await server.start();
+  await startEvidenceListener((port) => server.start(port));
   const port = server.servicePort()!;
-  if (FORBIDDEN_PORTS.has(port)) throw new Error(`Refusing to use reserved port ${port}`);
   result.port = port;
   result.dockerServer = await docker([
     "version",
@@ -239,14 +242,21 @@ try {
   result.admittedSubnets = filter.allowedSubnets();
 
   // Removal shrinks the list: the environment network's subnet is dropped.
-  for (const id of created.containers.splice(0)) await docker(["rm", "-f", id]);
+  await removeTrackedResources(created.containers, (id) => docker(["rm", "-f", id]));
   const removal = await removeEnvironmentNetwork({ storage }, environmentId);
   if (removal === "removed") created.networks.splice(created.networks.indexOf(network), 1);
   await filter.reload();
   result.afterEnvironmentNetworkRemoval = { removal, admittedSubnets: filter.allowedSubnets() };
+} catch (error) {
+  result.error = error instanceof Error ? error.message : String(error);
+  process.exitCode = 1;
 } finally {
-  for (const id of created.containers) await docker(["rm", "-f", id]).catch(() => undefined);
-  for (const name of created.networks) await docker(["network", "rm", name]).catch(() => undefined);
+  const unresolved = await cleanupEvidenceResources(created, docker);
+  result.unresolvedCleanup = unresolved;
+  if (unresolved.containers.length || unresolved.networks.length) {
+    process.exitCode = 1;
+    console.error(JSON.stringify({ unresolvedCleanup: unresolved }));
+  }
   await server.stop();
   await rm(dataDir, { recursive: true, force: true });
   result.leftovers = {

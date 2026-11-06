@@ -507,8 +507,45 @@ describe("production peer filter topology", () => {
     expect(calls.map((args) => args[0])).toEqual(["info"]);
   });
 
+  for (const rootless of ["rootless", "name=rootless", "name=rootless,version=1"]) {
+    test(`rootless Linux refuses overlapping LAN subnets: ${rootless}`, async () => {
+      const { run, calls } = daemonRun(() =>
+        JSON.stringify({
+          os: "linux",
+          name: "Ubuntu 26.04",
+          securityOptions: ["name=seccomp,profile=builtin", rootless],
+        }),
+      );
+      const filter = dockerPeerFilter(() => "owner", { platform: "linux", run });
+      expect(await filter.admits("192.168.4.51")).toBe(false);
+      expect(await filter.admits("::ffff:192.168.4.51")).toBe(false);
+      expect(await filter.admits("127.0.0.1")).toBe(true);
+      expect(await filter.admits("::1")).toBe(true);
+      expect(filter.allowedSubnets()).toEqual([]);
+      expect(calls.map((args) => args[0])).toEqual(["info"]);
+    });
+  }
+
+  test("switching native Engine to rootless revokes cached subnet permissions", async () => {
+    let securityOptions = ["name=seccomp,profile=builtin"];
+    const { run } = daemonRun(() =>
+      JSON.stringify({ os: "linux", name: "Ubuntu", securityOptions }),
+    );
+    const filter = dockerPeerFilter(() => "owner", { platform: "linux", run });
+    expect(await filter.admits("192.168.4.51")).toBe(true);
+    securityOptions = ["name=rootless"];
+    filter.networksChanged();
+    expect(await filter.admits("192.168.4.51")).toBe(false);
+    expect(filter.allowedSubnets()).toEqual([]);
+    expect(await filter.admits("127.0.0.1")).toBe(true);
+    securityOptions = [];
+    filter.networksChanged();
+    expect(await filter.admits("192.168.4.51")).toBe(true);
+  });
+
   test("native Engine retains subnet admission and revokes it after switching to Desktop", async () => {
-    let system = '{"os":"linux","name":"Ubuntu 26.04"}';
+    let system =
+      '{"os":"linux","name":"Ubuntu 26.04","securityOptions":["name=seccomp,profile=builtin"]}';
     const { run, calls } = daemonRun(() => system);
     const filter = dockerPeerFilter(() => "owner", { platform: "linux", run });
     expect(await filter.admits("192.168.4.51")).toBe(true);
@@ -525,13 +562,18 @@ describe("production peer filter topology", () => {
     "not json",
     "null",
     "{}",
+    '{"os":"linux","name":"Ubuntu"}',
+    '{"os":"linux","name":"Ubuntu","securityOptions":null}',
+    '{"os":"linux","name":"Ubuntu","securityOptions":"name=rootless"}',
+    '{"os":"linux","name":"Ubuntu","securityOptions":[1]}',
     '{"os":"linux","name":""}',
     '{"os":"windows","name":"Windows"}',
   ]) {
     test(`unusable topology revokes previous permissions: ${invalid}`, async () => {
       const logs = captureLogs();
       try {
-        let system = '{"os":"linux","name":"Ubuntu 26.04"}';
+        let system =
+          '{"os":"linux","name":"Ubuntu 26.04","securityOptions":["name=seccomp,profile=builtin"]}';
         const { run } = daemonRun(() => system);
         const filter = dockerPeerFilter(() => "owner", { platform: "linux", run });
         expect(await filter.admits("192.168.4.51")).toBe(true);
@@ -554,7 +596,7 @@ describe("production peer filter topology", () => {
       let fail = false;
       const { run } = daemonRun(() => {
         if (fail) throw new Error("daemon unavailable");
-        return '{"os":"linux","name":"Ubuntu 26.04"}';
+        return '{"os":"linux","name":"Ubuntu 26.04","securityOptions":["name=seccomp,profile=builtin"]}';
       });
       const filter = dockerPeerFilter(() => "owner", { platform: "linux", run });
       expect(await filter.admits("192.168.4.51")).toBe(true);

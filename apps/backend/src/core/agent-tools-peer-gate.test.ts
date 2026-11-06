@@ -4,6 +4,7 @@ import { connect } from "node:net";
 import { networkInterfaces, tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentToolsServer } from "./agent-tools.js";
+import { startEvidenceListener } from "../../scripts/agent-tools-peer-evidence-support.js";
 import {
   AgentToolsPeerFilter,
   type AgentToolsPeerGate,
@@ -108,6 +109,36 @@ describe("agent-tools peer gate", () => {
     await server.start();
     return server.servicePort()!;
   }
+
+  test("an explicitly selected port never falls back to an ephemeral port", async () => {
+    server = new AgentToolsServer(
+      storage,
+      "127.0.0.1",
+      undefined,
+      undefined,
+      AgentToolsPeerFilter.loopbackOnly(),
+    );
+    const listener = server;
+    await startEvidenceListener((port) => listener.start(port));
+    const port = listener.servicePort()!;
+    expect(await exchange("127.0.0.1", port, GET_MCP)).toStartWith("HTTP/1.1 405");
+    const competing = new AgentToolsServer(
+      storage,
+      "127.0.0.1",
+      undefined,
+      undefined,
+      AgentToolsPeerFilter.loopbackOnly(),
+    );
+    try {
+      await expect(competing.start(port)).rejects.toMatchObject({ code: "EADDRINUSE" });
+      expect(competing.servicePort()).toBeNull();
+      // A failed explicit bind leaves the lifecycle available for a safe retry.
+      await startEvidenceListener((candidate) => competing.start(candidate));
+      expect(competing.servicePort()).not.toBe(port);
+    } finally {
+      await competing.stop();
+    }
+  });
 
   test("a peer refused on accept gets no bytes, whatever it asks for", async () => {
     const { gate, seen } = scriptedGate("refuse", false);

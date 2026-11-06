@@ -138,6 +138,39 @@ peers on either topology, so neither task is marked done. The script and C22
 remain the required live checks; fake-clock and Docker-command tests establish
 refresh timing and failure handling only.
 
+### Tasks 1–4: round 4 cleanup, listener and rootless repair (2026-11-06)
+
+The evidence script now selects an allowed high port before listening, retries
+occupied candidates without using port zero, and retains failed cleanup IDs
+until removal succeeds. Cleanup attempts all containers before networks, retries
+failed container removals during finalization, and reports unresolved resources
+with a failing exit status. Deterministic fault-injection tests cover the first
+of three container removals failing, finalizer retry, network cleanup, permanent
+failures, reserved candidates, bounded attempts and occupied ports.
+
+Rootless daemons now grant no subnet permissions, detected from Docker info's
+`SecurityOptions`. Tests cover overlapping LAN addresses, loopback, rootful to
+rootless transition, restoration to rootful and malformed security options.
+The implemented choice is loopback only rather than excluding host-interface
+overlaps: it does not trust any namespace-local range as a host peer identity.
+A non-loopback rootless peer remains refused until live evidence supports a
+narrow explicit permission; task 2 remains open.
+
+This session observed `uname -s` = `Darwin` and only `default` and
+`desktop-linux` Docker contexts using local sockets. Live Linux Engine,
+RootlessKit, Linux C22 and Desktop for Linux cannot be exercised here. Tasks
+1–4 remain open; Windows remains unsupported. Synthetic tests do not close
+these live coverage gaps. The validated deletion commit remains in history;
+review repairs are subsequent commits, as required by the repair stage.
+
+The repaired script also passed a live Desktop rerun on port 52388: all three
+container sources arrived as `127.0.0.1` with HTTP 405; the environment probe
+and both host-check probes returned reachable/405; LAN and tailnet calls
+closed without bytes; subnet permissions were empty; unresolved cleanup and
+all leftover lists were empty. Evidence is in
+`output/agent-testing/s0170-address-r4/desktop-peer-evidence.json` (git-ignored).
+This run does not establish the outstanding Linux topologies.
+
 ## Current state
 
 Carried from the security report's S-0170 file (finding L15) when it was closed on 2026-11-05. The agent-tools server still listens on `0.0.0.0`, but it now closes every connection whose peer is not loopback or, on native Linux Engine only, inside a subnet of this backend's own Docker networks, before routing ([Who may connect](../../architecture/container-lifecycle.md#who-may-connect)). It was proven in real containers on Docker Desktop for macOS only. What is left needs a Linux host.

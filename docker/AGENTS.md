@@ -287,18 +287,18 @@ whichever container owns the network namespace.
   agent-tools server, at `host.docker.internal:<port>`
   (`host-service-ports`). That server listens on every host interface but
   closes, before reading the request, any connection whose peer is not
-  loopback or, on native Linux Engine only, inside a subnet of this backend's
-  own Docker networks (the default `bridge` and every network carrying its
+  loopback or, on native rootful Linux Engine only, inside a subnet of this
+  backend's own Docker networks (the default `bridge` and every network carrying its
   owner label), so the LAN
   and a tailnet see a port that closes at once and no HTTP answer.
   On Linux Engine, a container on a hand-made network (a live test's, say)
   is refused unless the network carries the owner label; a labelled network
   the backend did not create itself is admitted by the next reload of the
   list, which a refused call triggers at most every 15 s. On Docker Desktop every container arrives from the host's
-  loopback. Desktop and non-Linux hosts use loopback-only admission, so VM
-  subnets overlapping host LAN/VPN ranges cannot admit outside peers. Linux
-  refreshes check daemon topology before reading subnets; unavailable topology
-  clears subnet permissions. Details and the evidence are
+  loopback. Desktop, rootless daemons and non-Linux hosts use loopback-only admission,
+  so VM/RootlessKit subnets overlapping host LAN/VPN ranges cannot admit outside
+  peers. Linux refreshes check daemon topology and security options before
+  reading subnets; unavailable topology clears subnet permissions. Details and the evidence are
   in [`container-lifecycle.md`](../docs/architecture/container-lifecycle.md#who-may-connect).
 
 ## Building

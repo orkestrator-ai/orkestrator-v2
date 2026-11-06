@@ -1320,7 +1320,7 @@ address `host.docker.internal` reaches differs per daemon and per environment
 network. Before anything is routed it decides on the peer address
 (`agent-tools-peer-filter.ts`):
 
-- **Admitted:** loopback (`127.0.0.0/8`, `::1`, mapped forms). On native
+- **Admitted:** loopback (`127.0.0.0/8`, `::1`, mapped forms). On native rootful
   Linux Engine only, also any address inside an IPv4 subnet of the daemon's
   default `bridge` network or of a network labelled `orkestrator-owner=<this data directory's owner>`
   (environment networks and the reachability probe's network).
@@ -1331,10 +1331,13 @@ network. Before anything is routed it decides on the peer address
 
 Non-Linux hosts use loopback-only admission without consulting Docker. On
 Linux, each subnet refresh first reads `docker info`'s `OSType` and
-`OperatingSystem`. Docker Desktop uses loopback only; its VM-internal network
-ranges may overlap host LAN/VPN addresses and cannot identify container peers
-on the host. Unavailable or malformed topology revokes subnet permissions.
-Changing from native Engine to Desktop therefore clears any previous list.
+`OperatingSystem`, and `SecurityOptions`. Docker Desktop and rootless daemons
+use loopback only: VM and RootlessKit namespace ranges may overlap host LAN/VPN
+addresses and cannot identify container peers on the host. Missing or malformed
+security options on a non-Desktop daemon revoke subnet permissions. Changing
+from rootful Engine to Desktop or rootless therefore clears any previous list.
+A rootless peer arriving outside loopback stays refused; record its actual
+identity before adding any explicit topology-specific permission (todo 6820).
 
 The native Engine subnet list is read with `docker network ls --filter
 label=orkestrator-owner=<owner>` and one `docker network inspect` per network

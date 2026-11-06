@@ -1010,7 +1010,7 @@ export class AgentToolsServer {
       peerFilter ?? dockerPeerFilter(() => dockerOwnerNamespace(storage.getDataDir()));
   }
 
-  async start(): Promise<void> {
+  async start(port?: number): Promise<void> {
     const start = this.lifecycle.then(async () => {
       if (this.server) return;
       await this.workflowResults?.initializeCapabilityIdentity();
@@ -1055,11 +1055,18 @@ export class AgentToolsServer {
             resolve();
           });
         });
-      const preferredPort = this.workflowResults?.capabilityPort() ?? 0;
+      const preferredPort = port ?? this.workflowResults?.capabilityPort() ?? 0;
       try {
         await listen(preferredPort);
       } catch (error) {
-        if (preferredPort === 0 || (error as { code?: unknown }).code !== "EADDRINUSE") throw error;
+        // An explicit port is an exact constraint (e.g. isolated evidence must
+        // never fall back to an OS-selected reserved production port).
+        if (
+          port !== undefined ||
+          preferredPort === 0 ||
+          (error as { code?: unknown }).code !== "EADDRINUSE"
+        )
+          throw error;
         await listen(0);
       }
       const address = server.address();

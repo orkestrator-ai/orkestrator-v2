@@ -311,7 +311,11 @@ export function dockerPeerFilter(
       // unavailable or malformed topology must never retain subnet permission.
       const { stdout } = await run(
         "docker",
-        ["info", "--format", '{"os":{{json .OSType}},"name":{{json .OperatingSystem}}}'],
+        [
+          "info",
+          "--format",
+          '{"os":{{json .OSType}},"name":{{json .OperatingSystem}},"securityOptions":{{json .SecurityOptions}}}',
+        ],
         { timeoutMs: DOCKER_TIMEOUT_MS },
       );
       const info: unknown = JSON.parse(stdout);
@@ -326,6 +330,16 @@ export function dockerPeerFilter(
       )
         return null;
       if (/docker desktop/i.test(info.name)) return [];
+      if (
+        !("securityOptions" in info) ||
+        !Array.isArray(info.securityOptions) ||
+        !info.securityOptions.every((option) => typeof option === "string")
+      )
+        return null;
+      // Rootless networks live in another namespace just like Desktop's VM
+      // networks. Their CIDRs cannot identify container peers on the host.
+      if (info.securityOptions.some((option) => /^(?:name=)?rootless(?:,|$)/i.test(option)))
+        return [];
       return loadOwnedDockerSubnets(ownerNamespace(), run);
     },
   });

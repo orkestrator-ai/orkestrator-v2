@@ -167,7 +167,6 @@ historical open status remains; no assertion, timeout or skip was changed.
 Evidence: `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.P117Rf/review-fixes-component-browser.log.gz`
 and `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.wI7nDh/design-accessibility-owner.log.gz`.
 
-
 ## Launch override review recurrence — 2026-11-05
 
 The required browser rerun on repair commit `c63d42e7a` repeated the missing
@@ -200,3 +199,21 @@ cases but emitted no closing component totals; the public-site phase did not
 run. `summary.json` alongside the compressed log records `timeoutReason:
 "absolute"`. The broad check remains incomplete; passing this owner does not
 waive that timeout or establish a green browser suite.
+
+## Coordinator unavailable-platform review — 2026-11-06
+
+The mobile unrendered-frame case could not attach the plans (h2) treeitem within 5 s.
+
+The browser repeat used five workers and a free fixture port. It named nine failures and stopped at the 1800000 ms group deadline after starting 708 of 1596 cases; complete pass totals were not available. Original command: `ORKESTRATOR_E2E_PORT=61386 mise run test:logged -- --name browser -- mise run test:browser`.
+
+The unchanged complete owner passed alone, exit 0, in 179.2 s:
+
+```sh
+ORKESTRATOR_E2E_PORT=61386 mise run test:logged -- --name review-design-browser-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/DesignCanvasAccessibility.spec.ts --workers=1 --output output/agent-testing/review-address-owners/design
+```
+
+Evidence: `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.8yBzhf/browser.log.gz`. Passing
+output was deleted by the logged runner, so individual rerun counts were not
+retained. This establishes intermittence, not its cause. No assertion, timeout
+or implementation was changed to hide the failure; the broad check remains
+non-green.

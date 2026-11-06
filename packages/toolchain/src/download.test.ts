@@ -273,6 +273,33 @@ describe("resumable toolchain downloads", () => {
     expect(calls).toBe(1);
   });
 
+  test("retries a request Chromium aborted on a network change before any bytes", async () => {
+    const { rootDir, archivePath } = await createRoot();
+    const server = rangeServer();
+    let calls = 0;
+    const fetchImpl: FetchLike = async (input, init) => {
+      calls += 1;
+      if (calls <= 2) throw new TypeError("net::ERR_NETWORK_CHANGED");
+      return server.fetchImpl(input, init);
+    };
+    await download(rootDir, archivePath, fetchImpl);
+    expect(calls).toBe(3);
+    expect(await readFile(archivePath)).toEqual(BODY);
+  });
+
+  test("a network change still counts against the attempt limit", async () => {
+    const { rootDir, archivePath } = await createRoot();
+    let calls = 0;
+    const fetchImpl: FetchLike = async () => {
+      calls += 1;
+      throw new Error("fetch failed", { cause: new Error("net::ERR_NETWORK_CHANGED") });
+    };
+    await expect(download(rootDir, archivePath, fetchImpl, { attempts: 3 })).rejects.toThrow(
+      "fetch failed",
+    );
+    expect(calls).toBe(3);
+  });
+
   test("gives up after the attempt limit even while progressing", async () => {
     const { rootDir, archivePath } = await createRoot();
     const server = rangeServer([{ cutAt: 100 }, { cutAt: 100 }, { cutAt: 100 }]);

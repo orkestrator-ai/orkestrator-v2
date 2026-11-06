@@ -264,3 +264,20 @@ unchanged when rerun alone.
   `git diff --name-only origin/main...HEAD`. Known open flake recurrence;
   cause remains unconfirmed. No implementation, assertion or timeout changed.
   The ownership repair passed; the aggregate remains non-green.
+
+## Multi-client backend main merge — 2026-11-06
+
+- Original command: `mise run test:logged -- --name merge-warm-full -- mise run test:full`
+  on `multi-client-backend-fe80afce6c0c-r1`, merging `dafdb26ef` into
+  `e1641446c`. Desktop ran with two workers alongside the other workspace tasks.
+- The successful-start case timed out at 15,016.08 ms against its 15,000 ms
+  deadline. Desktop reported 2,032 pass, 15 skip and one fail. The complete
+  aggregate exited 1 after 1,360.2 s, including a 242.8 s admission wait.
+- Complete unchanged owner rerun:
+  `NODE_ENV=test mise run test:logged -- --name merge-desktop-bridges-isolated -- bun test --cwd apps/desktop ./scripts/dev/bridge-builds.test.ts --parallel=1 --only-failures`
+  passed with exit 0 in 0.7 s. Passing counts were removed by the logged runner.
+- Evidence: `/tmp/orkestrator-test-run.N4koTI/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+  and `/tmp/orkestrator-test-run.Zs7WCC/merge-warm-full.log.gz`.
+- This is another aggregate-only timeout observation; the cause remains
+  unconfirmed. No owning code, timeout, assertion or skip changed. The aggregate
+  also retained unrelated backend timer and missing WebKit-library failures.

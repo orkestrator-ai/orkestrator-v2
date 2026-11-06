@@ -22,7 +22,10 @@
  * vendor's conversation would.
  *
  * Prompts:
- * - containing `HOLD`: the run stays open until it is cancelled, then ends
+ * - with a line `FETCH <url>`: requests the URL from the bridge process and
+ *   answers `Fetch <url>: HTTP <status>` or `Fetch <url>: failed (<code>)`.
+ *   Cancellation aborts the request and suppresses any late reply.
+ * - containing `HOLD` (without a FETCH line): the run stays open until it is cancelled, then ends
  *   `cancelled`. Lets a spec close a tab in the middle of a turn.
  * - anything else: answered `Answer to: <prompt>` (the stripped prompt) and
  *   finished.

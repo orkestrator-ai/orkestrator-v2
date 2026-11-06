@@ -37,7 +37,7 @@ that deleted it and where its outcome and any work it left are recorded.
 | C3 | Sweep and reads | `0110-c3-sweep-and-reads.md` | #1887 (`abc3eea16`) | [Its archived outcome](#c3-archived-outcome); what it left is in [6660](../todo/coordinator-and-multi-review/6660-c3-sweep-and-reads-follow-ups.md). |
 | C4 | Tool surface | `0040-c4-tool-surface.md` | #1809 (`af2e566e5`) | [Status of every finding](#status-of-every-finding); live checks in [4920](../todo/coordinator-and-multi-review/4920-coordinator-tool-surface-live-follow-ups.md). |
 | C5 | Prompt and context | `0030-c5-prompt-and-context.md` | #1782 (`7347e5093`) | [Status of every finding](#status-of-every-finding); what it left is in [4900](../todo/coordinator-and-multi-review/4900-coordinator-over-delegation-and-read-rule.md) and [4901](../todo/coordinator-and-multi-review/4901-coordinator-waiting-on-cache-cost.md). |
-| C6 | Errors and dead ends | `0020-c6-errors-and-dead-ends.md` | #1844 (`a0a6d6206`) | [Status of every finding](#status-of-every-finding); what it left is in [4880](../todo/coordinator-and-multi-review/4880-c6-live-checks.md) and [4881](../todo/coordinator-and-multi-review/4881-unavailable-provider-transcript.md). |
+| C6 | Errors and dead ends | `0020-c6-errors-and-dead-ends.md` | #1844 (`a0a6d6206`) | [Status of every finding](#status-of-every-finding); what it left is in [4880](../todo/coordinator-and-multi-review/4880-c6-live-checks.md) and [6560](../todo/coordinator-and-multi-review/6560-unavailable-platform-live-checks.md). |
 | C7 | Work panel and navigation | `0060-c7-work-panel-and-navigation.md` | #1835 (`cf2ef197a`) | [Status of every finding](#status-of-every-finding); what it left is in [4941](../todo/coordinator-and-multi-review/4941-coordinator-report-desktop-notification.md), [4942](../todo/coordinator-and-multi-review/4942-c7-live-checks.md) and [6580](../todo/coordinator-and-multi-review/6580-launch-override-marker-on-another-node.md). The Work panel itself was removed on 2026-11-05 (#1889). |
 | C8 | Tab strip | `0070-c8-tab-strip.md` | #1813 (`d5294b202`) | [Status of every finding](#status-of-every-finding); its follow-up, to-do 5200, is done and closed. |
 | C9 | Panel split | `0190-c9-panel-split.md` | #1778 (`ce7989a50`) | [Its closing report](2026-11-05-c9-closing-report.md); no to-do. |
@@ -132,7 +132,7 @@ version of its deleted report, which the deletion commit's diff shows in full:
 `git show "$(git log -1 --format=%H --grep='close coordinator batch C6')"`.
 What it left is in to-dos
 [4880](../todo/coordinator-and-multi-review/4880-c6-live-checks.md) and
-[4881](../todo/coordinator-and-multi-review/4881-unavailable-provider-transcript.md).
+[6560](../todo/coordinator-and-multi-review/6560-unavailable-platform-live-checks.md).
 
 Batch C10 (Explanations) is closed. It was built from `main` at `a0a6d6206`. Its
 task-by-task outcome table ends the last version of its deleted report, which

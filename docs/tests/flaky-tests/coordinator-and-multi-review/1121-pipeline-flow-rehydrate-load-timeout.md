@@ -28,3 +28,25 @@ ORKESTRATOR_E2E_PORT=1457 mise run test:logged -- --name pr-review-PipelineFlow-
 The exact aggregate rerun and other owner results are recorded in
 [1254](../aggregate-validation-runs/1254-merge-readiness-review-validation.md).
 No pipeline implementation, assertion, timeout or skip changed.
+
+## Coordinator unavailable-platform review — 2026-11-06
+
+The mobile review-pass rehydration case at line 551 exceeded 30 s during
+`ORKESTRATOR_E2E_PORT=61386 mise run test:logged -- --name browser -- mise run test:browser`.
+It timed out at page.reload (line 568). Five workers were active; the broad
+run stopped at its 1800000 ms deadline after 708/1596 case starts and nine
+named failures. Evidence: `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.8yBzhf/browser.log.gz`.
+
+The complete unchanged owner was rerun with:
+
+```sh
+ORKESTRATOR_E2E_PORT=61386 mise run test:logged -- --name review-pipeline-browser-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/PipelineFlow.spec.ts --workers=1 --output output/agent-testing/review-address-owners/pipeline
+```
+
+It exited 1 in 337.3 s: 84 passed, one skipped and one failed. The original
+rehydration case was not among its failures; the new failure was desktop
+`completion in fullscreen lands in the overlay and then the panel`, with
+the Notes node outside the viewport after exiting fullscreen (line 1134).
+Evidence: `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.yAfPM6/review-pipeline-browser-owner.log.gz`.
+This is not a complete isolated-owner pass or an environmental excuse. No
+assertions, timeouts, skips or implementation were changed.

@@ -319,7 +319,10 @@ const sessionTranscript: ReadActionHandler<{
       order: "oldest-first",
       messages: fitted.kept,
       ...(olderCursor ? { olderCursor } : {}),
-      complete: !olderCursor,
+      // No cursor is not proof of the start: a restarted bridge's first
+      // preview can hold no rows and no cursor for a conversation that has
+      // history. Only the view's own `historyComplete` proves it.
+      complete: !olderCursor && view.historyComplete === true,
       truncated: fitted.truncated || windowTruncated,
       ...(fitted.truncated
         ? { truncation: { reason: "bytes" } }

@@ -1,5 +1,7 @@
+import { installFakeClaudeApiFixture } from "./container-fake-claude-install";
 import { expect, test, type Page, type TestInfo } from "./browser-test";
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { loadAppWithDevRetry } from "./dev-startup-retry";
 import { sidebarActivity } from "./sidebar-activity";
@@ -22,11 +24,22 @@ import { sidebarActivity } from "./sidebar-activity";
  * to the sidebar showing waiting (budget ≤ 3 s). The signal must stay
  * confirmed with no demotion: a demotion means a hook ring was missed.
  *
- * Opt-in on top of the Docker fixture (`ORKESTRATOR_AGENT_TEST_DOCKER=1`):
- * `ORKESTRATOR_AGENT_TEST_LIVE_CLAUDE_TERMINAL=1`, because the turns use the
- * host's Claude login (access-only in the container) and may cost money.
+ * Opt-in on top of the Docker fixture (`ORKESTRATOR_AGENT_TEST_DOCKER=1`),
+ * with one of two model backends:
+ *
+ * - `ORKESTRATOR_AGENT_TEST_LIVE_CLAUDE_TERMINAL=1`: the host's Claude login
+ *   (access-only in the container), against a profile started with
+ *   `--credential-source claude`. Real turns; they may cost money.
+ * - `ORKESTRATOR_AGENT_TEST_FAKE_CLAUDE_API=1`: no login and no provider
+ *   request. The image's own `claude` talks to `container-fake-claude-api.ts`
+ *   on the container's loopback, through `ANTHROPIC_BASE_URL` and a fixture
+ *   `ANTHROPIC_AUTH_TOKEN` merged into `~/.claude/settings.json` for the
+ *   test and restored afterwards. The CLI, its hooks, the ring, the backend
+ *   and the sidebar are all real; only the model is not. Use it with a
+ *   credential-free profile (`--no-agent-credentials --agent-platforms claude`).
+ *
  * Nothing at module scope spawns `mise` or `docker`, so the file stays inert
- * without both opt-ins. The report is content-free: timings and counts only.
+ * without the opt-ins. The report is content-free: timings and counts only.
  */
 
 type Status = { status: string; browserUrl: string };
@@ -59,9 +72,10 @@ const profile = process.env.ORKESTRATOR_AGENT_TEST_PROFILE ?? "codex-qa";
 const containerName =
   process.env.ORKESTRATOR_AGENT_TEST_ROOT_TERMINAL_ENVIRONMENT ?? "fixture-container";
 const localName = "fixture-local";
+const FAKE_API = process.env.ORKESTRATOR_AGENT_TEST_FAKE_CLAUDE_API === "1";
 const ENABLED =
   process.env.ORKESTRATOR_AGENT_TEST_DOCKER === "1" &&
-  process.env.ORKESTRATOR_AGENT_TEST_LIVE_CLAUDE_TERMINAL === "1";
+  (process.env.ORKESTRATOR_AGENT_TEST_LIVE_CLAUDE_TERMINAL === "1" || FAKE_API);
 const ACTIVITY_BUDGET_MS = 4_000;
 const COMPLETION_BUDGET_MS = 3_000;
 const STATE_FILE = "/tmp/.claude-state";
@@ -76,10 +90,54 @@ function profileCommand<T>(command: string): T {
   return JSON.parse(result.stdout) as T;
 }
 
-function docker(args: string[]): string {
-  const result = spawnSync("docker", args, { encoding: "utf8", timeout: 15_000 });
+function docker(args: string[], input?: string): string {
+  const result = spawnSync("docker", args, { encoding: "utf8", timeout: 15_000, input });
   if (result.status !== 0) throw new Error(`docker ${args[0]} failed`);
   return result.stdout.trim();
+}
+
+async function installFakeClaudeApi(containerId: string): Promise<() => void> {
+  return installFakeClaudeApiFixture({
+    asNode: (script, input) =>
+      docker(["exec", "-i", "--user", "node", containerId, "sh", "-c", script], input),
+    startServer: (args) => docker(["exec", "-d", "--user", "node", containerId, ...args]),
+    stopServer: () => {
+      // The bracket pattern cannot match pkill's own command line. Exit 1 is fine.
+      spawnSync(
+        "docker",
+        ["exec", containerId, "pkill", "-f", "orkestrator-qa-fake-claude-ap[i]"],
+        {
+          timeout: 15_000,
+        },
+      );
+    },
+    source: readFileSync(path.join(import.meta.dirname, "container-fake-claude-api.ts"), "utf8"),
+    waitUntilReady: async () => {
+      await expect
+        .poll(
+          () =>
+            spawnSync(
+              "docker",
+              [
+                "exec",
+                containerId,
+                "curl",
+                "-fsS",
+                "-o",
+                "/dev/null",
+                "-X",
+                "POST",
+                "-d",
+                "{}",
+                "http://127.0.0.1:47123/v1/messages/count_tokens",
+              ],
+              { timeout: 5_000 },
+            ).status,
+          { timeout: 15_000 },
+        )
+        .toBe(0);
+    },
+  });
 }
 
 /** Container clock minus host clock, in ms, from the tightest of five reads. */
@@ -94,6 +152,30 @@ function containerClockOffsetMs(containerId: string): number {
     }
   }
   return best.offset;
+}
+
+/**
+ * Whether the container can open a TCP connection to the backend's agent
+ * tools server, the doorbell's only route. Reads just the `url` line of the
+ * installed doorbell config (never its credential header) and reports
+ * `host:port`, or why it could not tell.
+ */
+function doorbellReachability(containerId: string): string {
+  const probe = spawnSync(
+    "docker",
+    [
+      "exec",
+      "--user",
+      "node",
+      containerId,
+      "sh",
+      "-c",
+      // curl's 000 is "no HTTP answer at all"; any status means the port answered.
+      `u=$(sed -n 's/^url = "\\(http:\\/\\/[^/]*\\)\\/.*"$/\\1/p' /tmp/.orkestrator-claude-state-signal 2>/dev/null); [ -n "$u" ] || { echo no-config; exit 0; }; printf '%s ' "\${u#http://}"; curl -s -o /dev/null -w '%{http_code}' --noproxy '*' --connect-timeout 3 --max-time 4 "$u/" || true`,
+    ],
+    { encoding: "utf8", timeout: 15_000 },
+  );
+  return probe.status === 0 ? probe.stdout.trim() : "probe-failed";
 }
 
 /** The Stop/UserPromptSubmit hook's last state-file write, on the host clock. */
@@ -150,6 +232,15 @@ test("Docker fixture live terminal Claude turn rings the state signal within bud
   const status = profileCommand<Status>("dev:status");
   expect(status.status).toBe("ready");
   await page.setViewportSize({ width: 1280, height: 860 });
+  if (FAKE_API) {
+    // The fake-API profile has no host Claude login by design. The container's
+    // CLI gets its fixture token from settings, so the host notice is moot.
+    // A live run keeps the notice: there it means the login is missing.
+    await page.addLocatorHandler(
+      page.getByRole("button", { name: "Continue Without Claude", exact: true }),
+      (button) => button.click(),
+    );
+  }
   const invoke = await login(page, testInfo, status);
 
   let container: Environment | undefined;
@@ -187,6 +278,7 @@ test("Docker fixture live terminal Claude turn rings the state signal within bud
     environmentId: container!.id,
   });
   let sessionId: string | undefined;
+  let undoFakeApi: (() => void) | undefined;
 
   try {
     const expand = page.getByRole("button", { name: /^Expand project / }).first();
@@ -199,10 +291,24 @@ test("Docker fixture live terminal Claude turn rings the state signal within bud
     await containerItem.click();
 
     // The signal is armed per container lineage, before any terminal exists.
-    await expect
-      .poll(async () => (await signal()).states.confirmed, { timeout: 60_000 })
-      .toBeGreaterThanOrEqual(1);
+    try {
+      await expect
+        .poll(async () => (await signal()).states.confirmed, { timeout: 60_000 })
+        .toBeGreaterThanOrEqual(1);
+    } catch (error) {
+      // An armed signal that never rings is almost always the route, not the
+      // hooks: on Linux Engine a host firewall that drops container traffic
+      // to the host (ufw's default-deny input, say) leaves it armed forever.
+      const reach = doorbellReachability(containerId);
+      if (reach.endsWith(" 000")) {
+        throw new Error(
+          `The container cannot reach the backend's agent tools server (${reach.split(" ")[0]}), so the signal can never confirm. Allow the profile's agent tools port from Docker's address ranges in the host firewall.`,
+        );
+      }
+      throw error;
+    }
     const signalBefore = await signal();
+    if (FAKE_API) undoFakeApi = await installFakeClaudeApi(containerId);
 
     const attached = page.waitForResponse(
       (response) => {
@@ -356,6 +462,7 @@ test("Docker fixture live terminal Claude turn rings the state signal within bud
 
     const signalAfter = await signal();
     const report = {
+      api: FAKE_API ? "fake" : "live",
       clockOffsetMs: Math.round(offsetMs),
       turns: turns.map((turn) =>
         Object.fromEntries(
@@ -405,33 +512,41 @@ test("Docker fixture live terminal Claude turn rings the state signal within bud
           expect(await invoke<string[]>("list_terminal_sessions")).not.toContain(sessionId);
         }
       } finally {
-        const current = await invoke<{ revision?: number } | null>("get_pane_layout", {
-          environmentId: container!.id,
-        });
-        if (current) {
-          const restored = originalLayout as {
-            version?: number;
-            containerId?: string | null;
-            activePaneId?: string;
-            root?: unknown;
-          } | null;
-          await (restored?.root
-            ? invoke("save_pane_layout", {
-                environmentId: container!.id,
-                expectedRevision: current.revision ?? 0,
-                layout: {
-                  version: restored.version,
-                  containerId: restored.containerId ?? null,
-                  activePaneId: restored.activePaneId,
-                  root: restored.root,
-                },
-              })
-            : invoke("delete_pane_layout", {
-                environmentId: container!.id,
-                expectedRevision: current.revision ?? 0,
-              }));
+        // Undo the fake API last: Claude must stop before its settings change.
+        try {
+          await restoreLayout();
+        } finally {
+          undoFakeApi?.();
         }
       }
     }
+  }
+
+  async function restoreLayout(): Promise<void> {
+    const current = await invoke<{ revision?: number } | null>("get_pane_layout", {
+      environmentId: container!.id,
+    });
+    if (!current) return;
+    const restored = originalLayout as {
+      version?: number;
+      containerId?: string | null;
+      activePaneId?: string;
+      root?: unknown;
+    } | null;
+    await (restored?.root
+      ? invoke("save_pane_layout", {
+          environmentId: container!.id,
+          expectedRevision: current.revision ?? 0,
+          layout: {
+            version: restored.version,
+            containerId: restored.containerId ?? null,
+            activePaneId: restored.activePaneId,
+            root: restored.root,
+          },
+        })
+      : invoke("delete_pane_layout", {
+          environmentId: container!.id,
+          expectedRevision: current.revision ?? 0,
+        }));
   }
 });

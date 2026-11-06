@@ -2,17 +2,19 @@
 
 ## Task analysis
 
-Analysed 2026-10-27 against `main` at `863b5782`.
+Analysed 2026-10-27 against `main` at `863b5782`. Tasks 2–4 were run on
+2026-11-06 against `main` at `e6c3da899` on beelink, a rootful Linux Engine
+host (Evidence, 2026-11-06).
 
 Checked against `main` at `930189337` (2026-10-26).
 
 ### Tasks
 
 1. **Signals and their diagnostics (Code 1–4)**: Linux Engine exec cost, Claude signal health, the container worktree signal and the revert fetch through the policy. Status: done.
-2. **Linux Engine real stack: terminal Claude spec**: run `container-claude-terminal-signal.spec.ts` on a Linux Engine host. Status: open.
-3. **Linux Engine real stack: profile sample**: run `container-signal-profile-sample.ts` with and without `--demote` on the same profile. Status: open (pairs with 2).
-4. **Auto-mode offer after a restart (noted, unverified)**: whether Claude Code's "make auto mode your default?" offer comes back after a container restart and breaks the Claude CLI tab or the spec. Status: open.
-5. **Retire the file**: what happens to it once tasks 2 and 3 have their evidence. Status: open.
+2. **Linux Engine real stack: terminal Claude spec**: run `container-claude-terminal-signal.spec.ts` on a Linux Engine host. Status: open (depends on [7080](7080-linux-host-firewall-blocks-profile-signals.md) task 1). Run on beelink on 2026-11-06 with a fake Messages API: both turns met both budgets on the fallback poll, but no ring reached the backend because the host firewall drops the profile's agent tools port.
+3. **Linux Engine real stack: profile sample**: run `container-signal-profile-sample.ts` with and without `--demote` on the same profile. Status: open (depends on [7080](7080-linux-host-firewall-blocks-profile-signals.md) task 1). Both runs recorded on 2026-11-06; for the same reason both measure the fallback, not a confirmed signal.
+4. **Auto-mode offer after a restart**: whether Claude Code's "make auto mode your default?" offer comes back after a container restart and breaks the Claude CLI tab or the spec. Status: done (2026-11-06): it comes back on every container start unless the staged host config carries the answer. The spec already answers it; the image fix is [7081](7081-container-claude-cli-tab-leftovers.md) task 2.
+5. **Retire the file**: what happens to it once tasks 2 and 3 have their evidence. Status: open (depends on 2 and 3).
 
 ### 1. Signals and their diagnostics
 
@@ -32,7 +34,9 @@ Checked against `main` at `930189337` (2026-10-26).
 
 **Context.** The file gives the exact procedure: `mise run docker:build:dev`, then a `dev:test` profile with `--fixture-environments local,container --credential-source claude --agent-platforms claude`, then `mise run test:agent:docker` with `ORKESTRATOR_AGENT_TEST_LIVE_CLAUDE_TERMINAL=1`. The budgets are working ≤ 4 s and waiting ≤ 3 s.
 
-**Investigation.** The spec exists (`e2e/agent-testing/container-claude-terminal-signal.spec.ts`) and `docker:build:dev` exists (`mise.toml:371`). The obvious Linux host, omarchy-hp (this machine), is not ready:
+**Investigation (2026-11-06).** Run on beelink with a dev image of `main` and a credential-free profile. The spec gained `ORKESTRATOR_AGENT_TEST_FAKE_CLAUDE_API=1`: the image's real `claude` takes its turns against a fixture Messages API on the container's loopback, so a run needs no login and costs nothing. The hooks fire, but beelink's ufw drops container traffic to the profile's agent tools port, so the signal never confirms. The spec now stops at its first check with that cause named. The run, its numbers and what a passing run needs are in Evidence (2026-11-06) and [7080](7080-linux-host-firewall-blocks-profile-signals.md).
+
+**Investigation (2026-10-27).** The spec exists (`e2e/agent-testing/container-claude-terminal-signal.spec.ts`) and `docker:build:dev` exists (`mise.toml:371`). The obvious Linux host, omarchy-hp (this machine), is not ready:
 - Its root filesystem has 6.2 GB free (98% used), and its newest signal-carrying image is `orkestrator-review-rootless:d03790`, not a `dev-` image of HEAD. A dev image is about 5.6 GB.
 - Its rootful daemon again holds 29 leaked probe networks (see [0241](0241-leaked-reach-probe-networks.md)), which uses up the default address pools, so new environment networks fail.
 
@@ -62,7 +66,7 @@ Checked against `main` at `930189337` (2026-10-26).
 
 **Context.** Runs on the profile from task 2, using `apps/backend/scripts/container-signal-profile-sample.ts` with 120 s windows, with and without `--demote`.
 
-**Investigation.** The script exists. The deterministic harness (`recurring-baseline.ts`, scenario `env50-container-c1-pr-signals`) already pins one scan a minute for a quiet signalled container, whatever the platform.
+**Investigation.** The script exists. The deterministic harness (`recurring-baseline.ts`, scenario `env50-container-c1-pr-signals`) already pins one scan a minute for a quiet signalled container, whatever the platform. On 2026-11-06 both runs were taken on beelink, on the profile from task 2. Neither signal could confirm there, so both runs show the fallback cadence; they agree with the Desktop fallback row (Evidence, 2026-11-06).
 
 **Decisions.**
 
@@ -80,7 +84,9 @@ Checked against `main` at `930189337` (2026-10-26).
 
 **Context.** This is recorded as a con of the "Consent and updater fixed in the image" decision, not as an item.
 
-**Investigation.** The entrypoint writes `skipDangerousModePermissionPrompt` but nothing that records the auto-mode answer. The answer lives in the CLI's own state under `~/.claude`, so whether it survives a restart depends on whether a rebuild or restart keeps that state: provider state is volume-backed on `volume-v1` storage.
+**Investigation (2026-11-06).** Checked with the fake-API harness on a credential-free container: answering "No, keep bypass permissions" makes Claude Code 2.1.314 write `hasSeenAutoDefaultNudge` and `hasResetAutoModeOptInForDefaultOffer` to `~/.claude.json`. After `stop_environment` and `start_environment` the entrypoint had rebuilt the file without them, and the offer was back. The spec's handling of the offer is therefore needed on every run, and users see the dialog in every Claude CLI tab after a start unless their staged host config already carries `hasSeenAutoDefaultNudge`. The fix is [7081](7081-container-claude-cli-tab-leftovers.md) task 2.
+
+**Investigation (2026-10-27).** The entrypoint writes `skipDangerousModePermissionPrompt` but nothing that records the auto-mode answer. The answer lives in the CLI's own state under `~/.claude`, so whether it survives a restart depends on whether a rebuild or restart keeps that state: provider state is volume-backed on `volume-v1` storage.
 
 **Decisions.**
 
@@ -98,7 +104,7 @@ Checked against `main` at `930189337` (2026-10-26).
 
 **Context.** README: delete a file once it is finished, after moving its durable behaviour. `container-lifecycle.md` already documents both signals, and `recurring-work.md` lists their cadences.
 
-**Investigation.** The decisions sections here (transport, cost bounds, grace window, read-only scan) are the rationale that `container-lifecycle.md` would need to keep.
+**Investigation.** The decisions sections here (transport, cost bounds, grace window, read-only scan) are the rationale that `container-lifecycle.md` would need to keep. On 2026-11-06 tasks 2 and 3 still lacked signal-confirmed Linux evidence, so the file was updated rather than retired. Task 4 is done.
 
 **Decisions.**
 
@@ -120,8 +126,11 @@ plus a 60 s safety scan. Both report their health in recurring diagnostics,
 and images without them keep the old timers. Linux Engine numbers and both
 live signal tests now run in the Linux Engine CI workflow, and a real
 terminal Claude turn met both latency budgets on Docker Desktop (2026-10-26).
-What remains is one real-stack run on a Linux Engine host: the profile sample
-and the live terminal Claude spec.
+What remains is one real-stack run on a Linux Engine host whose firewall
+admits the profile's agent tools port: the profile sample and the terminal
+Claude spec, which now runs on a fake Messages API with no login. On beelink
+(2026-11-06) the host firewall kept both signals unconfirmed, so only the
+fallback was measured there ([7080](7080-linux-host-firewall-blocks-profile-signals.md)).
 
 ## Current state
 
@@ -258,6 +267,51 @@ minute; Files panel open, plus 1.5 tree walks a minute; a change announced in
 507–535 ms and visible to a client reading on announcement in 520–554 ms
 (5 runs); both signals still `confirmed`, no demotion.
 
+### Evidence (Linux Engine host, 2026-11-06)
+
+beelink: Arch Linux, kernel 7.1.8, x86_64, rootful Docker Engine 29.9.2
+(overlayfs, cgroup v2), ufw active with a default-deny input policy. Image
+`orkestrator-v2:dev-0de0f31b9b02`, built from `main` at `e6c3da899`
+(`claude-state-signal=3,container-worktree-signal=1`, egress gateway and
+egress filter, network policy 3), Claude Code 2.1.314. Profile `cso-linux`,
+started headless with `--fixture --fixture-environments local,container
+--no-agent-credentials --agent-platforms claude` and
+`ORKESTRATOR_HOST_REACHABILITY_CHECK=off`. The fixture container is
+restricted, behind its egress gateway, on `172.16.240.0/29`: the daemon's
+automatic pools were exhausted by other owners' probe networks
+([3320](3320-leaked-probe-networks-block-docker-fixtures-on-beelink.md)), so
+the profile ran with the isolated runner's `docker-qualification-bin` shim
+first on `PATH`.
+
+**Neither signal confirmed.** Both stayed `armed` with 0 rings for the whole
+session. The egress gateway admits the host alias on the profile's agent
+tools port (37525) and the backend listens on `0.0.0.0`, but a connect from
+the container to `172.16.240.1:37525` or `172.17.0.1:37525` times out: ufw
+admits only DNS and the production installation's agent tools port (45507)
+from `172.16.0.0/12`. Nothing on the host was changed. The numbers below are
+therefore the fallback on Linux Engine, not the signal.
+
+| What | Result | Source |
+| --- | --- | --- |
+| Signal state | Claude state and worktree signals `armed`, 0 rings, no demotions; the worktree signal counted as `fallback` throughout, the Claude signal from the moment a terminal opened | `get_recurring_work_diagnostics` |
+| Idle, no `--demote` | Claude state reads 2, diff scans 4.5, tree walks 0 a minute | `container-signal-profile-sample.ts`, 120 s windows |
+| Files panel open, no `--demote` | Claude reads 1.9, diff scans 11.6, tree walks 5.8 a minute | same |
+| Change to visible, no `--demote` | 249–4,909 ms, median 2,455 ms (5 runs); announced before the client saw it in 2 of 5 (1,813 and 2,437 ms) | same |
+| Idle, `--demote` | Claude reads 2, diff scans 4.5, tree walks 0 a minute | same, `--demote` |
+| Files panel open, `--demote` | Claude reads 1.9, diff scans 12.1, tree walks 5.8 a minute | same |
+| Change to visible, `--demote` | 602–3,708 ms, median 1,331 ms (5 runs); announced first in 3 of 5 (668–3,708 ms) | same |
+| Terminal Claude spec, unmodified | Fails at its first check in 89 s: "The container cannot reach the backend's agent tools server (host.docker.internal:37525), so the signal can never confirm" | `container-claude-terminal-signal.spec.ts`, `ORKESTRATOR_AGENT_TEST_FAKE_CLAUDE_API=1` |
+| Terminal Claude spec, that check relaxed (local run, not committed) | Foreground / background turn: Enter to sidebar working 433 / 442 ms (backend 353 / 375 ms); Stop hook to sidebar waiting 285 / 370 ms (backend 195 / 272 ms); container clock 23 ms ahead. Both within budget on the 1 s fallback poll; then failed on rings (0 of the 4 required), as expected | same |
+
+Both sample runs match Docker Desktop's fallback row (idle 4 scans a minute;
+panel about 11 scans and 6 tree walks; visible in 1.0–6.6 s). Idle Claude
+reads are 2 a minute in both because no terminal was open: a container with
+no demand gets the 30 s read whether or not its signal is confirmed. With
+the rings blocked, `--demote`'s `lost` ring cannot arrive either, so the two
+runs measure the same state. The fake API holds each reply for 3 s, so a
+turn lasts long enough for its `working` edge to be read; an instant reply
+fits between two 1 s polls and the backend never sees `working`.
+
 ## Outstanding work
 
 ### Code
@@ -302,19 +356,24 @@ minute; Files panel open, plus 1.5 tree walks a minute; a change announced in
   2026-10-26). **Linux Engine: the image's own hook commands arm, confirm and
   report `working`/`waiting` through the host-gateway alias on x64 and
   arm64** (CI). **Still open:** the same real-stack spec on a Linux Engine
-  host. It needs a Linux machine with Docker Engine, this checkout, its dev
-  image, Playwright's Chromium and a Claude login the profile can stage:
+  host whose firewall admits the profile's agent tools port from Docker's
+  ranges (beelink's does not; Evidence, 2026-11-06, and
+  [7080](7080-linux-host-firewall-blocks-profile-signals.md)). It needs this
+  checkout, its dev image and Playwright's Chromium; no login:
   `mise run docker:build:dev`, then
-  `mise run dev:test --profile <p> --fixture --fixture-environments local,container --credential-source claude --agent-platforms claude`,
+  `mise run dev:test --profile <p> --fixture --fixture-environments local,container --no-agent-credentials --agent-platforms claude --headless`,
   then
-  `ORKESTRATOR_AGENT_TEST_PROFILE=<p> ORKESTRATOR_AGENT_TEST_LIVE_CLAUDE_TERMINAL=1 mise run test:agent:docker`.
+  `ORKESTRATOR_AGENT_TEST_PROFILE=<p> ORKESTRATOR_AGENT_TEST_FAKE_CLAUDE_API=1 mise run test:agent:docker`.
+  With a real login instead, start the profile with
+  `--credential-source claude` and set
+  `ORKESTRATOR_AGENT_TEST_LIVE_CLAUDE_TERMINAL=1` (billed turns).
 - In an isolated profile, record before and after each change: idle execs
   per container per minute and Files-panel change-to-visible. **Done on
   Docker Desktop**, including the background activity indicator (≤ 4 s) and
-  turn completion (≤ 3 s) from the real turns above (Evidence). **Still
-  open:** a Linux Engine run of
-  `container-signal-profile-sample.ts --profile <p>` (with and without
-  `--demote`) on the profile above.
+  turn completion (≤ 3 s) from the real turns above (Evidence). **Linux
+  Engine:** both runs taken on beelink on 2026-11-06, but with the rings
+  blocked by the host firewall they measure the fallback only. **Still
+  open:** the same two runs with the signal confirmed, on the profile above.
 - ~~Before adopting a watcher, measure its process and memory cost per
   container against the current walk cost.~~ Done: Docker Desktop on
   2026-10-24, Linux Engine x64 and arm64 on 2026-10-26 (520 watches, 7 MB,
@@ -528,6 +587,51 @@ explicit home in 0048 task 19. No qualification is claimed by this pointer repai
 - **Pros:** end-to-end, content-free. **Cons:** upper bounds by up to one
   poll period plus an invoke.
 
+### Linux Engine run: a fake Messages API instead of a login (task 2, 2026-11-06)
+
+- **Options.** (a) Point the image's real `claude` at a fixture Messages API
+  on the container's loopback (`container-fake-claude-api.ts`), through
+  `ANTHROPIC_BASE_URL` and a fixture `ANTHROPIC_AUTH_TOKEN` merged into
+  `~/.claude/settings.json` for the run. (b) Replace `claude` with a fake
+  script that calls the hooks. (c) Skip the run and record what a real login
+  needs.
+- **Chosen:** (a), opt-in as `ORKESTRATOR_AGENT_TEST_FAKE_CLAUDE_API=1`.
+- **Why.** The run had to use no login and no billed turn. (a) keeps every
+  part the signal depends on real: the CLI, its TUI, its hook firing, the
+  ring, the backend and the sidebar. (b) would test a script, not Claude
+  Code. The fake holds each reply for 3 s, because an instant turn fits
+  between two 1 s polls and its `working` edge is never read.
+- **Pros:** free, repeatable on any host, and it found task 4's answer and
+  two defects ([7081](7081-container-claude-cli-tab-leftovers.md)).
+  **Cons:** a Claude Code release that changes its API use can break the
+  fixture; the spec then fails, it does not pass.
+
+### Linux Engine run: no host change, the cause named instead (tasks 2 and 3, 2026-11-06)
+
+- **Options.** (a) Record the fallback numbers and make the spec name an
+  unreachable doorbell. (b) Add a ufw rule for the profile's port. (c) Point
+  the profile at the production port that ufw admits.
+- **Chosen:** (a).
+- **Why.** The run's terms forbade host firewall changes, and 45507 belongs
+  to the running production installation. Before this change the spec
+  failed with "Expected >= 1, received 0" after a 60 s wait; it now probes
+  the doorbell's URL from the container (reading only its `url` line, never
+  the credential) and names the port.
+- **Pros:** honest evidence of what a firewalled Linux desktop gets today;
+  the next run on such a host gets the cause, not a timeout. **Cons:** the
+  signal-confirmed Linux numbers are still missing.
+
+### Defects found that are not specific to Linux (2026-11-06)
+
+- **Options.** (a) Fix them here. (b) Record them in a new to-do.
+- **Chosen:** (b), [7081](7081-container-claude-cli-tab-leftovers.md):
+  closing a container terminal leaves its processes running in the
+  container, and the entrypoint drops the auto-mode answer on every start.
+- **Why.** This work was limited to fixing Linux-only defects; both reproduce
+  from Docker's exec semantics and the entrypoint, the same on Desktop.
+- **Pros:** keeps this change to test and documentation; both have the
+  evidence needed to act on. **Cons:** users keep both until 7081 is done.
+
 ### Open questions answered
 
 - **Git-invisible changes (about 15 s).** With the signal they ring like any
@@ -610,11 +714,17 @@ None; see "Open questions answered" above.
 - ~~A real terminal `claude` turn in a container on Docker Desktop.~~ Done
   2026-10-26 (Evidence).
 - Linux Engine, real stack: `container-signal-profile-sample.ts` and
-  `container-claude-terminal-signal.spec.ts` on a Linux Engine host
-  (commands under Qualification).
+  `container-claude-terminal-signal.spec.ts` on a Linux Engine host whose
+  firewall admits the profile's agent tools port (commands under
+  Qualification). Run on beelink on 2026-11-06, where the host firewall
+  kept the signals unconfirmed ([7080](7080-linux-host-firewall-blocks-profile-signals.md)).
 
 ## Related
 
+- [7080-linux-host-firewall-blocks-profile-signals.md](7080-linux-host-firewall-blocks-profile-signals.md)
+  (the Linux Engine run left open by the host firewall) and
+  [7081-container-claude-cli-tab-leftovers.md](7081-container-claude-cli-tab-leftovers.md)
+  (found during the 2026-11-06 run).
 - [0199-idle-observation-spec-sidebar-probe.md](../transcripts-and-observation/0199-idle-observation-spec-sidebar-probe.md)
   and `0200-dev-test-reused-profile-bind-mount.md` (deleted 2026-11-06;
   completed fix retained in git history)

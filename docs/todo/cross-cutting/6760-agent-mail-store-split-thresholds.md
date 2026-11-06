@@ -2,7 +2,7 @@
 
 ## Task analysis
 
-Analysed 2026-11-05 against `main` at `cbe0f9a5b`. From efficiency report part `0560` (ST-9's rest), which was checked back against the code, measured and deleted; see its [closing check](../../reports/efficiency-logging-database/0000-index.md#closing-check-of-e-0560-agent-mail-store).
+Analysed 2026-11-05 against `main` at `cbe0f9a5b`. From efficiency report part `0560` (ST-9's rest), which was checked back against the code, measured and deleted; see its [closing check](../../reports/2026-11-06-efficiency-logging-database-outcome.md#closing-check-of-e-0560-agent-mail-store).
 
 ### Tasks
 
@@ -123,7 +123,7 @@ Stored-format changes follow the migration rules in `AGENTS.md` ("Storage rules"
 
 - [0741 backend responsiveness under load](0741-backend-responsiveness-under-load.md): tasks 3 (the first real size) and 5 (the read model).
 - [1202 efficiency follow-ups](1202-efficiency-review-follow-ups.md), task 2.
-- [5100 prompt queue row writes](5100-prompt-queue-row-writes.md): the row-write pattern task 2 recommends.
+- 5100 prompt queue row writes (done 2026-11-05, deleted 2026-11-06; see git history): the row-write pattern task 2 recommends.
 - [6144 per-store sizes](6144-per-store-sizes.md).
 - [Efficiency report, E](../../reports/2026-10-27-efficiency.md#e-storage-change-tracking-git-and-files), ST-9.
 

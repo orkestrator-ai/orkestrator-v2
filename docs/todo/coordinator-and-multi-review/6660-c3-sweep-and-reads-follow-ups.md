@@ -62,7 +62,7 @@ C3 made the sweep's mailbox sync and owed-delegation reads run once per pass, ma
 
 ## Related
 
-- [Coordinator review index](../../reports/coordinator/0000-index.md), finding B1 ("list walked long before the cap")
+- [Coordinator batches outcome](../../reports/2026-11-06-coordinator-batches-outcome.md#status-of-every-finding), finding B1 ("list walked long before the cap")
 - [6360-c2-workflow-records-live-checks.md](6360-c2-workflow-records-live-checks.md): the store-full banner on a live stack, which needs the same kind of seeded store
 
 ## Assumptions and decisions

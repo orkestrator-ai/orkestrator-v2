@@ -774,7 +774,7 @@ and the environment's inputs section says to rebuild (`unreadableOnRootless`,
   ext4, tmpfs, a source on another filesystem) the run copies, and after one
   failed clone from a source device it copies the rest from that device. On a 300 MiB plugin fixture on
   btrfs a revision took 162 ms and no new disk, against about 550 ms and 300 MiB
-  copied ([measurements](../reports/efficiency-logging-database/0000-index.md#closing-check-of-e25-container-start)).
+  copied ([measurements](../reports/2026-11-06-efficiency-logging-database-outcome.md#closing-check-of-e25-container-start)).
 - Publication: a revision is written as `.<rev>.partial` and renamed into
   place, mode `0700`/`0600`. Binds use `--mount`, which fails on a missing
   source instead of creating a host directory. The container carries

@@ -51,4 +51,4 @@ Analysed 2026-11-05 against `main` at `e6c3da899`, found while profiling a chang
 ## Related
 
 - [6260](6260-projection-hashing-measurements.md): the profile that led here
-- [Efficiency index, measurement of E11](../../reports/efficiency-logging-database/0000-index.md#measurement-of-e11-to-do-6260)
+- [Efficiency outcome, measurement of E11](../../reports/2026-11-06-efficiency-logging-database-outcome.md#measurement-of-e11-to-do-6260)

@@ -934,7 +934,7 @@ checking reports an unrelated TS2339 at `commands-registry-pr.test.ts:1338`.
   shared prerequisites for remote and iOS runs.
 - `../architecture/event-snapshot-recovery.md` (read coordinator, quiet
   backoff contract).
-- [Efficiency, logging and database index](../../reports/efficiency-logging-database/0000-index.md):
+- [Efficiency, logging and database outcome](../../reports/2026-11-06-efficiency-logging-database-outcome.md#closing-check-of-e-0390-websocket-compression):
   GW-7 and the closing note for report 0390, which task 8 now owns.
 
 ## Replaces

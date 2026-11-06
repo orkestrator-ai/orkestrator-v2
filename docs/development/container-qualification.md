@@ -53,6 +53,7 @@ ignores `apps/backend/tests/**`, so a repository-root path matches no file.
 | Live firewall | same command, `./tests/container-live-firewall.test.ts` | C23 and the policy 3 tuples; on a gateway image also root tampering from the runtime, published ports through the gateway and a gateway restart. Point `ORKESTRATOR_QUALIFICATION_IMAGE` at an image that does not declare `egress-gateway` for the in-container firewall |
 | Live egress conditions | same command, `./tests/container-live-egress-conditions.test.ts` | Gateway IPv6 (the daemon's IPv6 default, or with `ORKESTRATOR_LIVE_IPV6_NETWORK=1` an IPv6 network the test attaches), DNS rotation through a controlled resolver, and with `ORKESTRATOR_LIVE_DAEMON_RESTART_COMMAND` a Docker daemon restart. Point that command only at a disposable daemon. |
 | Live egress name checks (M12) | same command, `./tests/container-live-egress-filter.test.ts`; set `ORKESTRATOR_QUALIFICATION_OLDER_IMAGE` to add an image without `egress-filter` | The gateway's TLS SNI, HTTP Host and DNS checks: an allowed name, a foreign SNI on its address, a Host check on a named port against a local fixture, bodies both ways, a server-first protocol, GitHub SSH, DNS refusals over UDP, TCP and straight to an outside resolver, a live edit, the daemon killed and restarted, a restart, a full-mode runtime, the rollback switch and an older image. Outside traffic only to registry.npmjs.org, nodejs.org and GitHub |
+| Live rootless loopback | same command, `./tests/container-live-rootless-loopback.test.ts`, plus `ORKESTRATOR_LIVE_ROOTLESS_HOST_LOOPBACK=disabled` (printed by the [disposable daemon](#disposable-docker-daemon)); skips unless `docker info` also reports rootless | On a rootless daemon refusing host loopback (RootlessKit's default): host discovery reports `blocked` with the rootless remediation, and a restricted runtime behind its gateway cannot reach a host listener |
 | Live readiness faults | same command, `./tests/container-live-readiness.test.ts` | C09 faults (missing firewall, DNS, permissions, torn status write, restart during launch; on derived images that do not declare `egress-gateway`, so the firewall stays in the runtime), a gateway that cannot apply its firewall, C10, C22 host-service reply, C23 re-run |
 | Live rebuild faults | same command, `./tests/container-live-rebuild-faults.test.ts` | C15: daemon disconnect mid-copy (a `DOCKER_HOST` proxy in the test process), kill just before and after the commit write |
 | Live build pipeline code rewind | same command, `./tests/build-pipeline-code-rewind-docker.test.ts` | "Rewind code to here" on fake providers through `createPipelineEnvironmentGit` and `docker exec`: preview, backup ref, reset, restart and lease push; a paused container refused with a readable reason; a reset journaled before the container stopped finishing once it answers (to-do 0405, task 7) |
@@ -121,6 +122,161 @@ Live tests start runtimes through `tests/container-live-start.ts`
 (`startRuntime`): Docker refuses a runtime whose egress gateway is not
 running, so a bare `docker start` of a restricted runtime fails on a gateway
 image.
+
+### Disposable Docker daemon
+
+Live suites that need free address pools, or that restart the daemon, run on
+a private host rootless daemon that one command starts and one command
+removes (`scripts/disposable-docker-daemon.ts`, to-do
+[4730](../todo/containers-and-environments/4730-disposable-docker-daemon-for-live-suites.md)):
+
+```bash
+mise run docker:disposable -- start --name q1 --image <image>
+eval "$(mise run docker:disposable -- env --name q1)"
+RUN_LIVE_DOCKER_TESTS=1 ORKESTRATOR_QUALIFICATION_IMAGE=<image> \
+  mise run test:logged -- --name <suite> -- bun test --cwd apps/backend \
+  --preload ../../tests/setup-node.ts ./tests/<suite>.test.ts --parallel=1
+mise run docker:disposable -- stop --name q1
+```
+
+`start` prints `DOCKER_HOST`, `ORKESTRATOR_LIVE_ROOTLESS_HOST_LOOPBACK` and
+`ORKESTRATOR_LIVE_DAEMON_RESTART_COMMAND` as `export` lines (`--json` for a
+document); `env` prints them again for a running instance, `status` lists
+instances, and `load-image --name <n> <reference>` copies another image in.
+Options: `--net slirp4netns` (default), `gvisor-tap-vsock`, `pasta` or
+`vpnkit`; `--host-loopback` to let containers reach the host's loopback
+(off by default, as in RootlessKit); `--live-restore`; `--address-pool`
+(default `172.30.0.0/16` as /24s, which exists only in the daemon's own
+namespace).
+
+- **What it runs.** The host's own `dockerd`, `containerd` and `runc` under
+  RootlessKit, through `dockerd-rootless.sh`. RootlessKit and
+  `dockerd-rootless.sh` come from Docker's static rootless extras 29.9.2 and
+  slirp4netns from its 1.3.3 release, downloaded once into
+  `output/disposable-docker/tools/` and checked against pinned SHA-256
+  digests before anything is unpacked or run. Host prerequisites, which
+  `start` checks and names: an unprivileged user, `newuidmap` and
+  `newgidmap`, ranges for the user in `/etc/subuid` and `/etc/subgid`,
+  unprivileged user namespaces, and `/dev/net/tun`.
+- **What it owns.** The instance directory
+  `output/disposable-docker/<name>/` (git-ignored) holds the record, the
+  `daemon.json`, the log, a private `HOME` and the data root. A short
+  runtime directory, `$TMPDIR/ork-ddd-<uid>-<name>/`, holds the socket
+  (mode `0700` directory: access to it is root-equivalent over that daemon),
+  the exec root, the pid file and RootlessKit's state, and is the daemon's
+  `XDG_RUNTIME_DIR`. The caller's `DOCKER_HOST`, `~/.config/docker` and the
+  user's own rootless daemon are never read. The daemon's systemd cgroup
+  driver creates each container's transient scope in the user's own systemd
+  manager over the session bus; those scopes go when the containers stop.
+- **What it never touches.** The host's Docker daemon is only read, by
+  `docker save` of an image the caller names; its tags are left alone, and
+  `orkestrator-v2:latest` is refused. Bridges, iptables rules and pools live
+  in RootlessKit's network namespace, so the host's firewall, routes and
+  interfaces are unchanged. Nothing runs as root.
+- **Images.** `--image` and `load-image` stream `docker save <reference>`
+  from the caller's daemon into `docker load` on the instance and check that
+  the image id matches. A 5.45 GB environment image took about 100 s on
+  beelink.
+- **Restart.** `restart` stops the whole RootlessKit tree and starts it
+  again on the same data root, so the daemon, RootlessKit, its network
+  namespace and slirp4netns are all new: a real rootless daemon restart.
+  It is the command printed as `ORKESTRATOR_LIVE_DAEMON_RESTART_COMMAND`,
+  and it works from a test runner's private `TMPDIR` because the record
+  keeps the runtime directory it started with.
+- **Stop and leftovers.** A process is signalled only after its identity is
+  confirmed: the start time recorded at spawn and an instance marker in its
+  environment that only the launcher sets, which every process the daemon
+  starts inherits. `stop` sends SIGTERM to RootlessKit, then SIGKILL to
+  anything still carrying the marker, and removes the runtime and instance
+  directories; files owned by subordinate ids are removed inside a
+  RootlessKit user namespace. Removal refuses any path outside the instance
+  root or the temporary directory, and any symbolic link. `start` first
+  removes instances whose daemon is no longer running, and nothing else.
+- **Not covered by it.** A rootful daemon: the nested `docker:dind` that
+  the 2026-10-31 and 2026-11-06 rootful runs used is still built by hand
+  ([4730](../todo/containers-and-environments/4730-disposable-docker-daemon-for-live-suites.md)
+  task 1).
+  C22 cases that need the outer host as their service host cannot pass on a
+  daemon that refuses host loopback; start one with `--host-loopback` for
+  those.
+
+`tests/unit/disposable-docker-daemon.test.ts` covers the arguments, the
+private paths and environment, the removal boundaries and a start, restart
+and stop of a stand-in process tree, with no Docker.
+
+## Rootless daemon restart on a disposable daemon (2026-11-06)
+
+To-do [0018](../todo/containers-and-environments/0018-container-network-and-credential-isolation.md)
+task 2's last open check and
+[4730](../todo/containers-and-environments/4730-disposable-docker-daemon-for-live-suites.md)
+tasks 1 to 3, run in worktree `orkestrator-v2-20261106-034211-c21c9a597669`
+(branch at `c1724ab74` plus this change).
+
+- **Host:** beelink (Arch Linux, kernel 7.1.8, x86_64); the host's rootful
+  Engine 29.9.2 was only read, for the image.
+- **Daemon:** `mise run docker:disposable -- start --name q4730`: host
+  rootless Engine 29.9.2 (the host's `dockerd`), RootlessKit 3.3.0,
+  slirp4netns 1.3.3, builtin port driver, host loopback refused,
+  `live-restore` off, systemd cgroup driver on cgroup v2, pool
+  `172.30.0.0/16` as /24s. Started in 4.8 s.
+- **Image:** `orkestrator-v2:dev-f199d298c1eb`
+  (`sha256:ede88bdf598404c055e5dddfbbad05a56d62b7075ce0365cff9b9c76bfa4e6b4`,
+  `2.36.4-beta`, source `381efb5cb`, capabilities including
+  `egress-gateway=1`, `egress-filter=1`, `network-policy=3`), copied in by
+  `load-image` with the id checked (97 s). Its `docker/` sources differ from
+  `c1724ab74` only in `orkestrator-state-signal.sh` and
+  `workspace-setup.sh`; the firewall, gateway and entrypoint scripts are
+  identical.
+
+Each command ran with the three variables from `docker:disposable -- env`,
+`RUN_LIVE_DOCKER_TESTS=1` and `ORKESTRATOR_QUALIFICATION_IMAGE` set to that
+image:
+
+```bash
+mise run test:logged -- --name rootless-daemon-restart -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-live-egress-conditions.test.ts --parallel=1 --test-name-pattern 'Docker daemon restart'
+ORKESTRATOR_LIVE_IPV6_NETWORK=1 mise run test:logged -- --name rootless-egress-conditions -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-live-egress-conditions.test.ts --parallel=1
+mise run test:logged -- --name rootless-default-loopback -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-live-rootless-loopback.test.ts --parallel=1
+```
+
+- **Daemon restart: passed 1/1** (42.6 s), with the same assertions as the
+  2026-10-31 rootful run, `live-restore` off and two restarts through the
+  launcher. A runtime stopped through the backend and one running when the
+  daemon stopped both came back with neither container started by Docker; a
+  bare `docker start` of the runtime was refused while its gateway was
+  stopped; the backend's start path brought both up in order with `CapEff`
+  0, the report `applied`, `-P OUTPUT DROP` with the final REJECT, IPv6 off,
+  `registry.npmjs.org` reachable and `example.com` rejected.
+- **What a rootless restart rebuilds.** Observed across one `restart`: the
+  RootlessKit parent's pid, its network namespace (inode 109970830 to
+  109973543) and the slirp4netns process were all new. The policy is
+  re-applied in the new namespace by the backend's start path, as above.
+- **Whole egress-conditions suite: passed 3/3** (62.2 s), adding IPv6 with
+  `ORKESTRATOR_LIVE_IPV6_NETWORK=1` (the IPv6 network exists only in
+  RootlessKit's namespace) and DNS rotation through the controlled resolver.
+- **Default loopback: passed 1/1** (8.9 s, 7 assertions): host discovery
+  reported `blocked` with `dockerRootless: true`, no host address and the
+  `DOCKERD_ROOTLESS_ROOTLESSKIT_DISABLE_HOST_LOOPBACK=false` remediation;
+  both `host-gateway` probes were refused and both `10.0.2.2` probes
+  unreachable; a restricted runtime behind its own gateway got `refused`
+  for the agent tools URL. The same file skipped 1/1 against the rootful
+  host daemon (read-only `docker info`).
+- **Launcher repairs found by the run.** The systemd cgroup driver could not
+  create container scopes until the daemon's environment kept the session
+  bus address (containers failed with "interactive authentication
+  required"); and the restart command first refused to run from the test
+  runner's private `TMPDIR`, because it recomputed the runtime directory
+  instead of reading the recorded one. Both are fixed and the runs above
+  used the fixed launcher. The failed attempts' labelled containers and
+  network on the disposable daemon were removed one at a time.
+- **Cleanup.** `docker:disposable -- stop` took 7 s; no process carrying the
+  instance marker remained, no `docker-*.scope` user unit was left, and the
+  data root, runtime directory and tools cache were removed.
+- **Not covered:** `live-restore` on (a RootlessKit restart replaces the
+  namespace the containers live in, so the rootful result does not carry
+  over), VPNKit, pasta and gvisor-tap-vsock, arm64, and the firewall,
+  network and readiness suites on this daemon (they passed on the
+  2026-11-04 hand-built rootless daemon). Tracked in
+  [7390](../todo/containers-and-environments/7390-rootless-restart-remaining-settings.md).
 
 ## Egress name checks on rootful Linux Engine (2026-11-06)
 

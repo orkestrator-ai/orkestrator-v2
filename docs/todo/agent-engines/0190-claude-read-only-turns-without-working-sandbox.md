@@ -419,6 +419,25 @@ Made 2026-11-06 while running task 3's container half on beelink.
 - **A17 (task 3). Ubuntu half.** Left open as the ticket asked, with what it
   needs written in task 3. Its "before" (Bash failing in `apply-seccomp`) was
   observed under 0145 on 2026-10-26, so only "after" is needed there.
+- **A18 (task 3). The branch validation's WebKit failure.** `mise run
+  test:full` on beelink failed `executable document policy in webkit >
+  (unnamed)` (`content-server.engines.test.ts`), and the failure triage
+  marked it related only because the file's imports reach
+  `claude-linux-sandbox.ts`. The hook failed in `webkit.launch()` with
+  Playwright's "Host system is missing dependencies" (`libicu74`,
+  `libxml2`, `libflite1`): Arch lacks the Ubuntu 24.04 libraries
+  Playwright's WebKit bundle links against, as `docs/development/testing-guide.md`
+  and `scripts/playwright-webkit-host-libs.ts` already describe. At this
+  branch's head, on 2026-11-06, the webkit cases alone (`-t "in webkit"`)
+  failed the same way against the shared browser cache and passed (13 pass,
+  0 fail, WebKit 27.2) with `PLAYWRIGHT_BROWSERS_PATH` set to the private
+  directory `mise run test:preview:webkit-libs` had already prepared.
+  Options: change the test to skip an engine that cannot launch; leave the
+  test and record the host cause. **Chosen: record it.** Why: the same code
+  passes once the libraries are present, so the failure is the host's, and
+  skipping on a launch error would also hide a real WebKit regression on a
+  supported host. A `test:full` on this host needs that
+  `PLAYWRIGHT_BROWSERS_PATH` for its WebKit cases to run.
 
 ## Open questions
 

@@ -51,6 +51,11 @@ function openNotes(environmentId: string, pipelineId: string): void {
 function reconcile(): void {
   const panes = usePaneLayoutStore.getState();
   for (const [pipelineId, environmentId] of Array.from(pendingNotes)) {
+    const pipeline = useBuildPipelineStore.getState().pipelines.get(pipelineId);
+    if (pipeline?.phase !== "complete" || pipeline.environmentId !== environmentId) {
+      pendingNotes.delete(pipelineId);
+      continue;
+    }
     if (panes.hydration.get(environmentId) !== "done") continue;
     if (!panes.environments.get(environmentId)) continue;
     pendingNotes.delete(pipelineId);
@@ -62,6 +67,12 @@ function reconcile(): void {
 export function startBuildPipelineCompletionNotes(): () => void {
   const offPipelines = useBuildPipelineStore.subscribe((state, previous) => {
     if (state.pipelines === previous.pipelines) return;
+    for (const [pipelineId, environmentId] of Array.from(pendingNotes)) {
+      const pipeline = state.pipelines.get(pipelineId);
+      if (pipeline?.phase !== "complete" || pipeline.environmentId !== environmentId) {
+        pendingNotes.delete(pipelineId);
+      }
+    }
     let added = false;
     for (const [pipelineId, pipeline] of state.pipelines) {
       const before = previous.pipelines.get(pipelineId);

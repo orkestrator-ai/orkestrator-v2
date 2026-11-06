@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { MAX_TABS_PER_ENVIRONMENT } from "@orkestrator/protocol/pane-layout";
+import { mergePersistedPaneLayouts } from "./pane-layout-merge";
+import { PANE_LAYOUT_VERSION, type PersistedPaneLayoutInput } from "@/types/paneLayout";
 import { buildPipelineFixture } from "@/test/build-pipeline-fixture";
 import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
 import { getAllLeaves, usePaneLayoutStore } from "@/stores/paneLayoutStore";
@@ -126,4 +129,118 @@ describe("startBuildPipelineCompletionNotes", () => {
     install(buildPipelineFixture({ phase: "failed", backendRevision: 2 }));
     expect(notesTabs()).toHaveLength(0);
   });
+  test("independent clients completing the same pipeline merge into one notes tab", () => {
+    const snapshot = (): PersistedPaneLayoutInput => ({
+      version: PANE_LAYOUT_VERSION,
+      ...structuredClone(usePaneLayoutStore.getState().environments.get(ENVIRONMENT_ID)!),
+    });
+    const base = snapshot();
+    const complete = () => {
+      install(buildPipelineFixture({ phase: "verifying", backendRevision: 1 }));
+      install(buildPipelineFixture({ phase: "complete", backendRevision: 2 }));
+      return snapshot();
+    };
+    const local = complete();
+    // A second client starts from the common base with a different active pane.
+    seedLayout(structuredClone(base.root), "pane-build");
+    useBuildPipelineStore.setState({ pipelines: new Map() });
+    const remote = complete();
+    for (const [left, right] of [
+      [local, remote],
+      [remote, local],
+    ]) {
+      const merged = mergePersistedPaneLayouts(base, left!, right!);
+      const leaves = getAllLeaves(merged.root);
+      const notes = leaves
+        .flatMap((leaf) => leaf.tabs)
+        .filter((tab) => tab.keyInformationTabData?.view === "notes");
+      expect(notes).toHaveLength(1);
+      expect(merged.activePaneId).toBe("pane-build");
+      expect(leaves.find((leaf) => leaf.id === "pane-build")?.activeTabId).toBe(notes[0]!.id);
+    }
+  });
+
+  test.each(["removed", "restarted", "moved"])(
+    "discards a queued completion when its pipeline is %s before hydration",
+    (change) => {
+      seedLayout(splitLayout(), "pane-chat", false);
+      install(buildPipelineFixture({ phase: "verifying", backendRevision: 1 }));
+      install(buildPipelineFixture({ phase: "complete", backendRevision: 2 }));
+      if (change === "removed") {
+        useBuildPipelineStore.getState().removePipeline("pipeline-1");
+      } else {
+        install(
+          buildPipelineFixture({
+            phase: change === "restarted" ? "verifying" : "complete",
+            environmentId: change === "moved" ? "env-2" : ENVIRONMENT_ID,
+            backendRevision: 3,
+          }),
+        );
+      }
+      usePaneLayoutStore.getState().finishHydration(ENVIRONMENT_ID);
+      expect(notesTabs()).toHaveLength(0);
+      expect(usePaneLayoutStore.getState().getActivePaneId(ENVIRONMENT_ID)).toBe("pane-chat");
+      expect(paneOf("build").activeTabId).toBe("build");
+      expect(paneOf("chat").activeTabId).toBe("chat");
+    },
+  );
+
+  test("uses the environment's active pane when the build tab is absent", () => {
+    seedLayout(
+      { kind: "leaf", id: "pane-chat", tabs: [chatTab], activeTabId: "chat" },
+      "pane-chat",
+    );
+    install(buildPipelineFixture({ phase: "verifying", backendRevision: 1 }));
+    install(buildPipelineFixture({ phase: "complete", backendRevision: 2 }));
+    expect(notesTabs()).toHaveLength(1);
+    expect(paneOf(notesTabs()[0]!.id).id).toBe("pane-chat");
+    expect(paneOf(notesTabs()[0]!.id).activeTabId).toBe(notesTabs()[0]!.id);
+  });
+
+  test("leaves tabs and selections unchanged at the environment tab limit", () => {
+    const root = splitLayout();
+    if (root.kind !== "split" || root.children[1].kind !== "leaf")
+      throw new Error("expected split");
+    root.children[1].tabs.push(
+      ...Array.from({ length: MAX_TABS_PER_ENVIRONMENT - 2 }, (_, i): TabInfo => ({
+        id: `extra-${i}`,
+        type: "plain",
+      })),
+    );
+    seedLayout(root, "pane-chat");
+    const before = structuredClone(usePaneLayoutStore.getState().environments.get(ENVIRONMENT_ID));
+    install(buildPipelineFixture({ phase: "verifying", backendRevision: 1 }));
+    install(buildPipelineFixture({ phase: "complete", backendRevision: 2 }));
+    expect(notesTabs()).toHaveLength(0);
+    expect(usePaneLayoutStore.getState().environments.get(ENVIRONMENT_ID)).toEqual(before);
+  });
+
+  test.each([0, 64])(
+    "bounds pending completions, retaining newest but evicting oldest (intent %s)",
+    (remaining) => {
+      seedLayout(splitLayout(), "pane-chat", false);
+      for (let i = 0; i < 65; i++) {
+        install(
+          buildPipelineFixture({ id: `queued-${i}`, phase: "verifying", backendRevision: 1 }),
+        );
+        install(buildPipelineFixture({ id: `queued-${i}`, phase: "complete", backendRevision: 2 }));
+      }
+      expect(notesTabs()).toHaveLength(0);
+      expect(usePaneLayoutStore.getState().getActivePaneId(ENVIRONMENT_ID)).toBe("pane-chat");
+      // Isolate each end of the queue to prove both eviction and retention.
+      for (let i = 0; i < 65; i++) {
+        if (i !== remaining) useBuildPipelineStore.getState().removePipeline(`queued-${i}`);
+      }
+      usePaneLayoutStore.getState().finishHydration(ENVIRONMENT_ID);
+      if (remaining === 64) {
+        expect(notesTabs()).toHaveLength(1);
+        expect(notesTabs()[0]!.keyInformationTabData?.pipelineId).toBe("queued-64");
+        return;
+      }
+      expect(notesTabs()).toHaveLength(0);
+      expect(usePaneLayoutStore.getState().getActivePaneId(ENVIRONMENT_ID)).toBe("pane-chat");
+      expect(paneOf("build").activeTabId).toBe("build");
+      expect(paneOf("chat").activeTabId).toBe("chat");
+    },
+  );
 });

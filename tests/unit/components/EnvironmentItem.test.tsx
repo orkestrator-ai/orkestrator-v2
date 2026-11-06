@@ -1100,7 +1100,7 @@ describe("EnvironmentItem menu actions and selection", () => {
     expect(view.container.querySelector(".animate-spin")).not.toBeNull();
     act(() => useEnvironmentStore.getState().setDeleting(env.id, false));
     expect(view.container.textContent).toContain("Delete failed");
-    expect(view.container.querySelector(".animate-spin")).toBeNull();
+    expect(view.container.querySelector(".animate-spin") === null).toBe(true);
   });
 
   test("click selection forwards ctrl or meta selection intent", () => {

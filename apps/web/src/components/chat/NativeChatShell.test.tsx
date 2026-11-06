@@ -202,13 +202,13 @@ describe("NativeChatShell", () => {
   test("the footer shows a turn running on its own, with no clock or status label", () => {
     const props = shellProps();
     const { rerender } = render(<NativeChatShell {...props} />);
-    expect(screen.queryByText(/is thinking/)).toBeNull();
+    expect(screen.queryByText(/is thinking/) === null).toBe(true);
 
     rerender(<NativeChatShell {...props} isLoading />);
     expect(screen.getByText(/is thinking/)).toBeTruthy();
 
     rerender(<NativeChatShell {...props} />);
-    expect(screen.queryByText(/is thinking/)).toBeNull();
+    expect(screen.queryByText(/is thinking/) === null).toBe(true);
   });
 
   test("shows a desync warning while already at the bottom without another accessory", () => {

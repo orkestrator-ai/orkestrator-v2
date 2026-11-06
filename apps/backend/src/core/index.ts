@@ -648,8 +648,7 @@ export class OrkestratorBackend {
           dataDir: options.dataDir,
           storage,
           emit: (event, payload) => options.emit(event, payload),
-          refreshEnvironment: (environmentId) =>
-            this.runtime.diffStats.service.refresh(environmentId),
+          diffStats: this.runtime.diffStats,
         }),
       );
     }

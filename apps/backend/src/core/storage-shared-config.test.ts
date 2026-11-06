@@ -116,6 +116,8 @@ describe("defaultConfig", () => {
       agentStopped: true,
       prMerged: true,
       coordinatorReport: true,
+      agentQuestion: true,
+      questionDesktopNotification: true,
     });
   });
 

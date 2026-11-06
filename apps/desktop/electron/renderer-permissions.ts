@@ -7,12 +7,15 @@ const log = createLogger("desktop.permissions");
 
 /**
  * What the app's own document uses. Chromium asks for the clipboard write behind
- * `navigator.clipboard.writeText`, and for fullscreen when a `<video controls>`
- * button is pressed. Clipboard reads and images go through IPC instead.
+ * `navigator.clipboard.writeText`, for fullscreen when a `<video controls>`
+ * button is pressed, and for notifications behind the question alert's
+ * `new Notification(...)` (whether one is shown is the user's setting).
+ * Clipboard reads and images go through IPC instead.
  */
 const GRANTED_PERMISSIONS: ReadonlySet<string> = new Set([
   "clipboard-sanitized-write",
   "fullscreen",
+  "notifications",
 ]);
 
 /**

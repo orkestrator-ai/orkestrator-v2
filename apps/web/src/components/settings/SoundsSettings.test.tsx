@@ -47,6 +47,8 @@ describe("SoundsSettings", () => {
       agentStopped: false,
       prMerged: true,
       coordinatorReport: true,
+      agentQuestion: true,
+      questionDesktopNotification: true,
     });
     expect(
       screen.getByRole("switch", { name: "Pull request merged sound" }).getAttribute("data-state"),
@@ -71,6 +73,8 @@ describe("SoundsSettings", () => {
       agentStopped: false,
       prMerged: false,
       coordinatorReport: true,
+      agentQuestion: true,
+      questionDesktopNotification: true,
     });
     update.mockRestore();
   });
@@ -81,6 +85,8 @@ describe("SoundsSettings", () => {
       agentStopped: true,
       prMerged: false,
       coordinatorReport: true,
+      agentQuestion: true,
+      questionDesktopNotification: true,
     };
     const update = spyOn(backend, "updateNotificationSoundSettings").mockRejectedValue(
       new Error("disk unavailable"),
@@ -135,6 +141,8 @@ describe("SoundsSettings", () => {
       agentStopped: false,
       prMerged: false,
       coordinatorReport: true,
+      agentQuestion: true,
+      questionDesktopNotification: true,
     });
 
     getConfig.mockRestore();
@@ -164,7 +172,13 @@ describe("SoundsSettings", () => {
 
   test("previews the two distinct cues even when their toggles are off", async () => {
     useConfigStore.getState().updateGlobalConfig({
-      notificationSounds: { agentStopped: false, prMerged: false, coordinatorReport: true },
+      notificationSounds: {
+        agentStopped: false,
+        prMerged: false,
+        coordinatorReport: true,
+        agentQuestion: true,
+        questionDesktopNotification: true,
+      },
     });
     const play = spyOn(notificationSounds, "playNotificationSound").mockResolvedValue(true);
 
@@ -172,14 +186,106 @@ describe("SoundsSettings", () => {
     fireEvent.click(screen.getByRole("button", { name: "Preview Agent stopped" }));
     fireEvent.click(screen.getByRole("button", { name: "Preview Pull request merged" }));
     fireEvent.click(screen.getByRole("button", { name: "Preview Coordinator report" }));
+    fireEvent.click(screen.getByRole("button", { name: "Preview Agent question" }));
 
-    await waitFor(() => expect(play).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(play).toHaveBeenCalledTimes(4));
     expect(play.mock.calls.map(([kind]) => kind)).toEqual([
       "agent-stopped",
       "pr-merged",
       "coordinator-report",
+      "agent-question",
     ]);
     play.mockRestore();
+  });
+});
+
+describe("question alerts", () => {
+  const descriptor = Object.getOwnPropertyDescriptor(window, "Notification");
+  let permission: NotificationPermission = "granted";
+  const requestPermission = mock(async (): Promise<NotificationPermission> => {
+    permission = "granted";
+    return permission;
+  });
+
+  beforeEach(() => {
+    permission = "granted";
+    requestPermission.mockClear();
+    function FakeNotification() {}
+    Object.defineProperty(FakeNotification, "permission", { get: () => permission });
+    Object.defineProperty(FakeNotification, "requestPermission", { value: requestPermission });
+    Object.defineProperty(window, "Notification", { configurable: true, value: FakeNotification });
+  });
+
+  afterEach(() => {
+    if (descriptor) Object.defineProperty(window, "Notification", descriptor);
+    else delete (window as unknown as { Notification?: unknown }).Notification;
+  });
+
+  const saving = () =>
+    spyOn(backend, "updateNotificationSoundSettings").mockImplementation(
+      async (notificationSounds) => ({
+        ...useConfigStore.getState().config,
+        global: { ...useConfigStore.getState().config.global, notificationSounds },
+      }),
+    );
+
+  test("the question cue and the desktop notification save independently", async () => {
+    const update = saving();
+    render(<SoundsSettings />);
+    fireEvent.click(screen.getByRole("switch", { name: "Agent question sound" }));
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
+    expect(update.mock.calls[0]?.[0]).toMatchObject({
+      agentQuestion: false,
+      questionDesktopNotification: true,
+    });
+    fireEvent.click(screen.getByRole("switch", { name: "Agent questions desktop notification" }));
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(2));
+    expect(update.mock.calls[1]?.[0]).toMatchObject({
+      agentQuestion: false,
+      questionDesktopNotification: false,
+    });
+    // Already granted: nothing to ask, nothing to warn about.
+    expect(requestPermission).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "Allow notifications" }) === null).toBe(true);
+    update.mockRestore();
+  });
+
+  test("a browser that has not decided is asked from the Allow button", async () => {
+    permission = "default";
+    render(<SoundsSettings />);
+    expect(screen.getByText(/not been allowed to show notifications yet/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Allow notifications" }));
+    await waitFor(() => expect(requestPermission).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Allow notifications" }) === null).toBe(true),
+    );
+    expect(screen.queryByText(/not been allowed/) === null).toBe(true);
+  });
+
+  test("turning the notification on asks an undecided browser", async () => {
+    permission = "default";
+    useConfigStore.getState().updateGlobalConfig({
+      notificationSounds: {
+        agentStopped: true,
+        prMerged: true,
+        coordinatorReport: true,
+        agentQuestion: true,
+        questionDesktopNotification: false,
+      },
+    });
+    const update = saving();
+    render(<SoundsSettings />);
+    fireEvent.click(screen.getByRole("switch", { name: "Agent questions desktop notification" }));
+    await waitFor(() => expect(requestPermission).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
+    update.mockRestore();
+  });
+
+  test("explains a blocked browser", () => {
+    permission = "denied";
+    render(<SoundsSettings />);
+    expect(screen.getByText(/has blocked notifications/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Allow notifications" }) === null).toBe(true);
   });
 });
 
@@ -191,6 +297,8 @@ for (const machine of [null, "other"]) {
       agentStopped: true,
       prMerged: true,
       coordinatorReport: true,
+      agentQuestion: true,
+      questionDesktopNotification: true,
     };
     useConfigStore.setState({ config: leaf });
     const selected = structuredClone(originalConfig);
@@ -198,6 +306,8 @@ for (const machine of [null, "other"]) {
       agentStopped: true,
       prMerged: false,
       coordinatorReport: true,
+      agentQuestion: true,
+      questionDesktopNotification: true,
     };
     const read = spyOn(backend, "getConfig").mockImplementation(async (target) =>
       target === undefined ? leaf : selected,
@@ -226,7 +336,13 @@ for (const machine of [null, "other"]) {
       fireEvent.click(toggle);
       await waitFor(() =>
         expect(update).toHaveBeenCalledWith(
-          { agentStopped: false, prMerged: false, coordinatorReport: true },
+          {
+            agentStopped: false,
+            prMerged: false,
+            coordinatorReport: true,
+            agentQuestion: true,
+            questionDesktopNotification: true,
+          },
           machine,
         ),
       );
@@ -234,6 +350,8 @@ for (const machine of [null, "other"]) {
         agentStopped: true,
         prMerged: true,
         coordinatorReport: true,
+        agentQuestion: true,
+        questionDesktopNotification: true,
       });
       await act(async () => fail(new Error("write failed")));
       await waitFor(() => expect(toggle.getAttribute("data-state")).toBe("checked"));
@@ -242,6 +360,8 @@ for (const machine of [null, "other"]) {
         agentStopped: true,
         prMerged: true,
         coordinatorReport: true,
+        agentQuestion: true,
+        questionDesktopNotification: true,
       });
     } finally {
       cleanup();

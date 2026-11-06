@@ -10,7 +10,13 @@
  * line; the spec writes it to the profile's own Codex `openai_base_url`.
  * Turns follow the same script as the Claude fake (`scriptedStep`): a prompt
  * asking for a shell command gets one command call, and its output ends the
- * turn with the reply. Nothing is logged.
+ * turn with the reply. Codex 0.166 offers its tools once per connection, in
+ * an `additional_tools` input item, and continues later requests with
+ * `previous_response_id`, so the tools are remembered per connection.
+ *
+ * Nothing is logged, except with `IDLEQA_FAKE_CODEX_SHAPES=1`: then each
+ * request's key names, item types and tool names (never content) go to
+ * stderr, which is how the shapes above were found.
  */
 import { scriptedStep, type ScriptedStep } from "./idle-observation-fake-claude";
 

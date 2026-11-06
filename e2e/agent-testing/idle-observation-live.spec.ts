@@ -1653,7 +1653,21 @@ test.describe("live idle observation", () => {
 
         await runCase("detach", async (record) => {
           const before = await projection();
-          record.notes.push(`runtime before: ${before?.runtime?.state ?? "unknown"}`);
+          // The no-touch read, not the projection's cached runtime: a provider
+          // that reports attachment must start the wait attached, or the
+          // detached reading afterwards proves no transition.
+          await expect
+            .poll(runtimeState, { timeout: 40_000, intervals: [500] })
+            .not.toBeUndefined();
+          let stateAtStart = await runtimeState();
+          if (stateAtStart === "detached") {
+            await expect
+              .poll(runtimeState, { timeout: 40_000, intervals: [1_000] })
+              .toBe("attached")
+              .catch(() => undefined);
+            stateAtStart = await runtimeState();
+          }
+          record.notes.push(`no-touch runtime before the wait: ${stateAtStart ?? "unknown"}`);
           const sweepsBefore = await sweepCounters();
           const idleStart = Date.now();
           const commandsBefore = { ...client.readCommands };
@@ -1712,6 +1726,9 @@ test.describe("live idle observation", () => {
                 : "provider exposes no session detach state on its no-touch runtime observation",
             );
           } else {
+            expect(stateAtStart, "the session was attached when the idle wait began").toBe(
+              "attached",
+            );
             await expect.poll(runtimeState, { timeout: 40_000, intervals: [500] }).toBe("detached");
           }
           expect(sawStop, "Stop never shows on an idle tab").toBe(false);

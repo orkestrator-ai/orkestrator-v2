@@ -31,6 +31,7 @@ export default defineConfig({
     "relayed-events-electron.spec.ts",
     "connection-outage-electron.spec.ts",
     "local-gateway-transport-electron.spec.ts",
+    "local-gateway-transport-cpu-electron.spec.ts",
     "renderer-log-boundary-electron.spec.ts",
     "pull-request-pane-electron.spec.ts",
   ],

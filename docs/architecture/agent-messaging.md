@@ -436,6 +436,16 @@ text is untrusted. The payload holds `messageId` before `body`, so a read's
 length cap cuts a long body and never the id. On a `claude-tmux` tab
 `get_tab_transcript` reads the terminal tail, not stored rows.
 
+Backend surfaces meant for a person use the same reader as the tiles,
+`isPeerMailCarrierContent` and `readAgentMailCarriers` in the protocol package.
+The Claude tmux resume dialog skips mail rows when it titles a session
+(`titleFromTranscriptHead`), so the title is the next prompt a person wrote, or
+none: a subject is the sender's choice, and does not name the user's session.
+Voice `read_session` keeps the stored text in `messages`, and its spoken line
+names the sender and subject of the final carrier when a complete newest row is mail;
+a cut row reports that its latest sender and batch size cannot be determined
+([control-mcp-voice.md](control-mcp-voice.md#the-tools)).
+
 **Presence.** Native inject uses `mailInjectPresence` (queue, compose draft,
 pending dispatch, environment readiness, then turn activity). Drain admits
 `idle` and `unknown` (never-prompted tab). The dispatch fence rechecks the
@@ -553,7 +563,7 @@ policy is. Mute, explicit Off, pause, hop budget, and `canInject` still apply.
 | Transcript, sent and read mail | `MailToolPart` (`apps/web/src/components/chat/`) | `send_message`, `reply_message`, `read_message` and a coordinator's `get_message` calls render as mail tiles, not tool rows, and stay out of the collapsed tool group (`agentMailToolCall`, `apps/web/src/lib/chat/agent-mail-tool-call.ts`). A sent tile shows the recipient and its live delivery state from the recipient's mailbox; a read tile is where pull-only mail enters the transcript. Every tile with both participants known opens their conversation |
 | Messages panel | `AgentMailPanel` (`apps/web/src/components/agent-mail/`) | A right-hand sheet. The list is one row per pair that has exchanged mail (`list_agent_mail_conversations`), those needing the person first; a conversation is both directions between two participants, oldest first (`get_agent_mail_conversation`), with retry, resume, deliver-now and discard on the messages that need them. The person composes only in their own conversation with a tab. Opening a conversation marks it seen (`mark_agent_mail_conversation_seen`) |
 | Title-bar button | `AgentMailButton` | Opens the panel. Its badge counts `attentionCount`: failed and budget-held deliveries, unseen external or cross-project mail, and unseen non-system mail waiting for an agent (`agentMailNeedsAttention`), not the agents' own traffic |
-| Per-tab banner | `AgentMailBanner` | Environment tabs and coordinator conversations. Pending, failed, pull-only, waiting for an agent, budget or hourly-limit held; retry / resume / deliver now / discard, and View opens the tab's conversations |
+| Per-tab banner | `AgentMailBanner` | A floating notice (`components/ui/floating-notice.tsx`) at the top right of environment tabs and coordinator conversations: beside the transcript column when there is room, a pill otherwise. Pending, failed, pull-only, waiting for an agent, budget or hourly-limit held; retry / resume / deliver now / discard, and View opens the tab's conversations |
 | Tab menu, Agent info | `DraggableTab`, `AgentInfoButton` | One "Messages…" entry when `canPull`: the panel focused on the tab, with its delivery policy and mutes |
 | Settings | Settings → Messaging | `enabled`, `paused`, `allowCrossProject`, `wakePeers`, `autonomousWakeBudget`, `hourlyWakeLimit`, `coordinatorStatusWakes` (`off` / `settled` / `stages`), `defaultInjectPolicy` (`off` / `idle`), `retentionDays` |
 | Per-mailbox policy | `mute_agent_mail` | `inject`: inherit / off / idle; inbound and outbound mute |
@@ -790,7 +800,7 @@ capability row says so.
 
 | Topic | Path |
 | --- | --- |
-| Protocol, flags, carrier | `packages/protocol/src/agent-mail.ts` |
+| Protocol, flags, carrier (rendering and reading it back) | `packages/protocol/src/agent-mail.ts` |
 | Persist, send, inject policy | `apps/backend/src/core/storage-agent-mail.ts` |
 | Drain, batch, presence cache | `apps/backend/src/core/agent-mail-service.ts` |
 | Native inject / presence | `apps/backend/src/core/native-agent-service.ts` |

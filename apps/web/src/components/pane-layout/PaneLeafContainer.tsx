@@ -29,6 +29,11 @@ import { TabLaunchShimmer, useEnvironmentTabLaunches } from "./TabLaunchShimmer"
 import { DropZoneOverlay } from "./DropZoneOverlay";
 import { AgentMailBanner } from "@/components/agent-mail/AgentMailBanner";
 import {
+  AGENT_TAB_NOTICE_POSITION,
+  FloatingNoticeLayer,
+  TRANSCRIPT_COLUMN_REM,
+} from "@/components/ui/floating-notice";
+import {
   LazyLoadBoundary,
   LazyLoadInlineErrorFallback,
   type LazyLoadErrorDetails,
@@ -436,33 +441,38 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                   must be remounted to avoid carrying banner, error-boundary,
                   or optimistic prompt state into the next environment.
                 */}
-                <AgentMailBanner environmentId={environmentId} tabId={tab.id} />
-                <div className="relative min-h-0 flex-1">
-                  <LazyLoadBoundary
-                    loadingFallback={renderTabFallback(isTabActive && isActive)}
-                    renderError={renderTabError(isTabActive && isActive)}
-                  >
-                    <LazyAgentNativeTab
-                      tabId={tab.id}
-                      data={nativeAgentData}
-                      isActive={isTabActive && isActive}
-                      hiddenByLayout={isTabActive && hiddenByLayout}
-                      ownsGlobalShortcuts={isTabActive && isActive && isPaneFocused}
-                      initialPrompt={tab.initialPrompt}
-                      isReviewTab={tab.isReviewTab}
-                      hideStructuredOutput={tab.hideStructuredOutput}
-                      initialAgentPlatform={tab.initialAgentPlatform}
-                      initialAgentModel={tab.initialAgentModel}
-                      initialReasoningEffort={tab.initialReasoningEffort}
-                      initialConversationMode={tab.initialConversationMode}
-                      initialFastMode={tab.initialFastMode}
-                      initialExecutionProfileId={tab.initialExecutionProfileId}
-                      agentHandoffId={tab.agentHandoffId}
-                      consumedAgentHandoffId={tab.consumedAgentHandoffId}
-                      refreshRequestId={tabRefreshRequestIds.get(tab.id) ?? 0}
-                    />
-                  </LazyLoadBoundary>
-                </div>
+                <FloatingNoticeLayer
+                  columnRem={TRANSCRIPT_COLUMN_REM}
+                  anchorClassName={AGENT_TAB_NOTICE_POSITION}
+                >
+                  <AgentMailBanner environmentId={environmentId} tabId={tab.id} />
+                  <div className="relative min-h-0 flex-1">
+                    <LazyLoadBoundary
+                      loadingFallback={renderTabFallback(isTabActive && isActive)}
+                      renderError={renderTabError(isTabActive && isActive)}
+                    >
+                      <LazyAgentNativeTab
+                        tabId={tab.id}
+                        data={nativeAgentData}
+                        isActive={isTabActive && isActive}
+                        hiddenByLayout={isTabActive && hiddenByLayout}
+                        ownsGlobalShortcuts={isTabActive && isActive && isPaneFocused}
+                        initialPrompt={tab.initialPrompt}
+                        isReviewTab={tab.isReviewTab}
+                        hideStructuredOutput={tab.hideStructuredOutput}
+                        initialAgentPlatform={tab.initialAgentPlatform}
+                        initialAgentModel={tab.initialAgentModel}
+                        initialReasoningEffort={tab.initialReasoningEffort}
+                        initialConversationMode={tab.initialConversationMode}
+                        initialFastMode={tab.initialFastMode}
+                        initialExecutionProfileId={tab.initialExecutionProfileId}
+                        agentHandoffId={tab.agentHandoffId}
+                        consumedAgentHandoffId={tab.consumedAgentHandoffId}
+                        refreshRequestId={tabRefreshRequestIds.get(tab.id) ?? 0}
+                      />
+                    </LazyLoadBoundary>
+                  </div>
+                </FloatingNoticeLayer>
               </div>
             );
           }
@@ -477,26 +487,31 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                   isTabLaidOut ? "z-10 pointer-events-auto" : "hidden",
                 )}
               >
-                <AgentMailBanner environmentId={environmentId} tabId={tab.id} />
-                <div className="relative min-h-0 flex-1">
-                  <LazyLoadBoundary
-                    loadingFallback={renderTabFallback(isTabActive && isActive)}
-                    renderError={renderTabError(isTabActive && isActive)}
-                  >
-                    <LazyClaudeTmuxChatTab
-                      tabId={tab.id}
-                      data={tab.claudeTmuxData}
-                      isActive={isTabActive && isActive}
-                      ownsGlobalShortcuts={isTabActive && isActive && isPaneFocused}
-                      initialPrompt={tab.initialPrompt}
-                      isReviewTab={tab.isReviewTab}
-                      initialAgentModel={tab.initialAgentModel}
-                      initialReasoningEffort={tab.initialReasoningEffort}
-                      initialFastMode={tab.initialFastMode}
-                      refreshRequestId={tabRefreshRequestIds.get(tab.id) ?? 0}
-                    />
-                  </LazyLoadBoundary>
-                </div>
+                <FloatingNoticeLayer
+                  columnRem={TRANSCRIPT_COLUMN_REM}
+                  anchorClassName={AGENT_TAB_NOTICE_POSITION}
+                >
+                  <AgentMailBanner environmentId={environmentId} tabId={tab.id} />
+                  <div className="relative min-h-0 flex-1">
+                    <LazyLoadBoundary
+                      loadingFallback={renderTabFallback(isTabActive && isActive)}
+                      renderError={renderTabError(isTabActive && isActive)}
+                    >
+                      <LazyClaudeTmuxChatTab
+                        tabId={tab.id}
+                        data={tab.claudeTmuxData}
+                        isActive={isTabActive && isActive}
+                        ownsGlobalShortcuts={isTabActive && isActive && isPaneFocused}
+                        initialPrompt={tab.initialPrompt}
+                        isReviewTab={tab.isReviewTab}
+                        initialAgentModel={tab.initialAgentModel}
+                        initialReasoningEffort={tab.initialReasoningEffort}
+                        initialFastMode={tab.initialFastMode}
+                        refreshRequestId={tabRefreshRequestIds.get(tab.id) ?? 0}
+                      />
+                    </LazyLoadBoundary>
+                  </div>
+                </FloatingNoticeLayer>
               </div>
             );
           }

@@ -106,3 +106,86 @@ test("Session titles discloses where a first message goes and persists its choic
   await page.getByRole("option", { name: "Any signed-in login" }).click();
   await expect.poll(stored).toBeNull();
 });
+
+test("raised detail without backend expiry metadata does not promise automatic reversion", async ({
+  page,
+}, testInfo) => {
+  await page.goto("/global-settings?section=debug");
+  await page.getByRole("combobox", { name: "Default log level", exact: true }).click();
+  await page.getByRole("option", { name: "Debug", exact: true }).click();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          JSON.parse(localStorage.getItem("global-settings-config") ?? "{}").global?.logDetail
+            ?.level,
+      ),
+    )
+    .toBe("debug");
+  await page.reload();
+  const notice = page.getByTestId("log-detail-expiry");
+  await expect(notice).toContainText("not confirmed by this backend");
+  await expect(page.getByRole("switch", { name: "Keep raised log detail on" })).toHaveCount(0);
+  await notice.scrollIntoViewIfNeeded();
+  await page.screenshot({
+    path: `output/visual-previews/e16-expiry-compatibility-${testInfo.project.name}.png`,
+  });
+  await page.reload();
+  await expect(notice).toContainText("not confirmed by this backend");
+});
+
+test("keep-raised normalization settles autosave and external changes resync without writes", async ({
+  page,
+}) => {
+  await page.goto("/global-settings?section=debug&expiry-backend");
+  const preset = page.getByRole("combobox", { name: "Log detail preset" });
+  const keep = page.getByRole("switch", { name: "Keep raised log detail on" });
+  const writes = () =>
+    page.evaluate(() => Number(localStorage.getItem("global-settings-patch-count") ?? 0));
+  await preset.click();
+  await page.getByRole("option", { name: "Everything", exact: true }).click();
+  await expect(keep).toBeVisible();
+  await keep.click();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          JSON.parse(localStorage.getItem("global-settings-config")!).global.logDetailKeepRaised,
+      ),
+    )
+    .toBe(true);
+  const beforeExternal = await writes();
+  await page.evaluate(() =>
+    window.dispatchEvent(new CustomEvent("fixture-keep-raised", { detail: false })),
+  );
+  await expect(keep).not.toBeChecked();
+  await page.waitForTimeout(1200);
+  expect(await writes()).toBe(beforeExternal);
+  await keep.click();
+  await expect.poll(writes).toBe(beforeExternal + 1);
+  await preset.click();
+  await page.getByRole("option", { name: "Normal", exact: true }).click();
+  await expect.poll(writes).toBe(beforeExternal + 2);
+  await page.waitForTimeout(1600);
+  expect(await writes()).toBe(beforeExternal + 2);
+  await page.reload();
+  await expect(preset).toHaveText("Normal");
+  await preset.click();
+  await page.getByRole("option", { name: "Everything", exact: true }).click();
+  await expect(keep).not.toBeChecked();
+});
+
+test("first raise waits for expiry confirmation before saving", async ({ page }, testInfo) => {
+  await page.clock.install();
+  await page.goto("/global-settings?section=debug");
+  await page.clock.pauseAt(new Date(Date.now() + 1000));
+  await page.getByRole("combobox", { name: "Log detail preset" }).click();
+  await page.getByRole("option", { name: "Everything", exact: true }).click();
+  const notice = page.getByTestId("log-detail-expiry");
+  await expect(notice).toContainText("Save raised detail to confirm");
+  await expect(notice).not.toContainText("stays on");
+  await notice.scrollIntoViewIfNeeded();
+  await page.screenshot({
+    path: `output/visual-previews/e16-pending-expiry-after-${testInfo.project.name}.png`,
+  });
+});

@@ -35,7 +35,7 @@ leave out project and settings edits, destructive environment actions and
 | --- | --- |
 | `overview` | Counts of projects, environments and sessions, and the top five things needing attention. Answers "what's going on?" in one call. |
 | `resolve_target` | Turns a spoken name ("the auth environment", "the first Codex tab" within an environment) into an ID. One exact match wins; anything else is `ambiguous-target` with up to five candidates to ask about, or `not-found`. It never guesses. |
-| `read_session` | The last 3 messages, about 600 characters each (`detail: "full"`: the last 10). |
+| `read_session` | The last 3 messages, about 600 characters each (`detail: "full"`: the last 10). When the newest is delivered mail, `messages` keeps the stored text and the spoken line names its sender and subject, plus any trailing user text (excluding the structured-prompt transport suffix). A cut transcript reports that the latest sender and batch size cannot be determined. |
 | `prompt_session` | A new prompt to an idle session. A busy session is refused with a hint to use `steer_session`; it never turns into a steer. |
 | `steer_session` | Guidance added to the running turn. |
 | `stop_session` | Stops the running turn, optionally only while `expectedOperationId` is still current. |

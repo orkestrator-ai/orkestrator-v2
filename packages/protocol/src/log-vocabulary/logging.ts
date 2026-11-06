@@ -28,6 +28,10 @@ export const LOGGING_LOG_AREAS = defineLogAreas({
         "Writing the essential log failed. Its entries are counted, and a marker reports them at the next write that works.",
       "policy.changed":
         "The logging settings changed: saving, retention and levels, with no content.",
+      "policy.detail-expired":
+        "Raised log detail reached its expiry, so the backend set its raised levels back to info. Saving is unchanged.",
+      "policy.expiry-failed":
+        "Checking or applying the log detail expiry failed; the next check, a minute later, tries again.",
       "policy.bridge-predates-route":
         "A running bridge has no logging settings route; it applies them at its next start.",
       "policy.push-failed":
@@ -36,6 +40,26 @@ export const LOGGING_LOG_AREAS = defineLogAreas({
       "write.failed": "Appending to the log file failed.",
       "unknown-area": "Code outside the type checker asked for an area that is not listed.",
       ...THROTTLE_LOG_EVENTS,
+    },
+  },
+  "renderer-errors": {
+    description:
+      "Renderer failures a desktop window reported from its error ring: class, boundary, surface, count and fingerprint, never a message or stack.",
+    events: {
+      "error.recorded": {
+        description:
+          "A renderer reported `count` new occurrences of one failure since its last report.",
+        essential: true,
+        fields: {
+          errorClass: "label",
+          boundary: "label",
+          route: "label",
+          fingerprint: "label",
+          count: "number",
+        },
+      },
+      "report.rate-limited":
+        "Renderer error entries arrived faster than the backend records them, so `dropped` were counted and not written.",
     },
   },
 });

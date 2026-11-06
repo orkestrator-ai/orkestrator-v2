@@ -196,8 +196,12 @@ When touching the session catalogue (`session-manager-catalog.ts`):
   `SYSTEM_SUBTYPE_DISPOSITIONS` (`src/types/index.ts`) are `Record`s over the
   SDK's own unions, so an SDK bump that adds a message type or `system`
   subtype fails the typecheck until someone decides whether it is handled,
-  kept as a health notice, or ignored as inventory. Content blocks the parser
-  has no branch for are counted as `block:<type>` drift.
+  kept as a health notice, or ignored as inventory. `system` subtypes the CLI
+  emits but the SDK's union does not name (`session_title_changed`,
+  `vcs_state_changed`, …) get their fate in
+  `INTERNAL_SYSTEM_SUBTYPE_DISPOSITIONS`; any other unnamed subtype is
+  counted as `system:<subtype>` drift. Content blocks the parser has no
+  branch for are counted as `block:<type>` drift.
 - **The native tab never sees SSE.** The backend polls `GET /session/:id` and
   the transcript routes; `session.updated` frames only reach the legacy web
   client. Turn-scoped state the tab must show (activity, thinking estimate,

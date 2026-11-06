@@ -103,7 +103,7 @@ The material risks are concentrated in four themes:
 | M9 | Medium | Container | Legacy images still mount whole host agent homes | Fixed for new containers; existing ones are listed for rebuild (see §4) |
 | M10 | Medium | Mail | Coordinator mail can target the project-home environment (local path) | Potential |
 | M11 | Medium (design) | Mail | Prompt injection can propagate worker → coordinator → other worker | Reported |
-| M12 | Medium (design) | Firewall | IP-based allowlist (shared CDN fronts), allowed APIs accept attacker credentials, DNS tunnelling | Reported |
+| M12 | Medium (design) | Firewall | IP-based allowlist (shared CDN fronts), allowed APIs accept attacker credentials, DNS tunnelling | Partly fixed: the egress gateway checks SNI, Host and DNS names; the default allowlist is unchanged (see §4) |
 | M13 | Medium | Bridges | Codex worker shells inherit `*_TOKEN` env; ACP advertises write/terminal to read-only sessions | Fixed |
 | L1–L18 | Low | Various | See §5 | Mixed |
 | I1–I7 | Info | Various | See §6 | — |
@@ -254,14 +254,14 @@ realpath confinement, instead of bind-mounting them.
 SHA-256 of its token and is non-dumpable, on an image with `bridge-credential=1`
 the token is in a root-only file, and a user's wider policy restarts an idle
 bridge and resumes
-([todo 3930](../todo/containers-and-environments/3930-bridge-credential-out-of-agent-uid.md)).
+(todo 3930).
 The agent's uid can no longer read a token, answer an approval or clear
 `readOnly`. It can still kill the bridge and catch a token on its port, or plant
 code for the next start
 ([todo 4980](../todo/containers-and-environments/4980-agent-uid-process-control.md));
 OpenCode has no bridge, so its plain password is kept from the agent by a plugin
 inside its server
-([todo 4981](../todo/containers-and-environments/4981-opencode-password-readable-by-agent.md));
+(todo 4981);
 and containers on older images keep the old behaviour until rebuilt.
 The rest of this status is the earlier state (2026-11-03). Every bridge now deletes its token from
 `process.env` at startup, so nothing it spawns through `node:child_process` or
@@ -273,14 +273,14 @@ MCP selection) is refused with 403 `policy-widening-refused` and nothing is
 applied (`packages/protocol/src/execution-policy-narrowing.ts`). That covers
 Claude's `/config` and `/session/create` recovery; Codex config, resume and
 prompt; and Pi, Cursor and ACP create, resume and prompt. Still open, in
-[todo 3930](../todo/containers-and-environments/3930-bridge-credential-out-of-agent-uid.md):
+todo 3930:
 the token file and `/proc/<bridge pid>/environ` are still readable by the
 agent's uid, so it can still answer its own approvals, and can kill the bridge
 and race the backend to set a restored session's policy; and a user's own
 widening reaches a live session only after the bridge restarts. A token holder
 can also still clear a session's read-only review boundary, which is not part of
 the policy
-([todo 4210](../todo/containers-and-environments/4210-read-only-boundary-from-a-token-holder.md)).
+(todo 4210).
 **Actor:** A1
 **Severity:** High only for hardened environments (see footnote in §2)
 
@@ -643,7 +643,16 @@ unless the user opts in, and mark delegations that originated from worker mail.
 
 ### M12. Egress firewall limitations (design)
 
-**Status:** Reported
+**Status:** Partly fixed (2026-11-05). On images with `egress-filter=1` the
+egress gateway checks the name each connection asks for (TLS SNI, or the Host
+of plain HTTP on a named port) and answers DNS only for allowlisted names,
+without decrypting anything, and fails closed when its daemon dies; an older
+image's gateway keeps address-only enforcement until it is rebuilt. The
+network settings and the README state that an allowed service still accepts
+whatever it is sent, and what the checks cannot see (an encrypted
+ClientHello, domain fronting, UDP and other protocols). The default allowlist
+still carries the telemetry hosts until a check without them is run
+([todo 6100](../todo/containers-and-environments/6100-default-allowlist-telemetry-hosts.md)).
 
 - **IP-based allowlist.** Domains are resolved into an ipset, with no SNI or Host check (`docker/firewall-domains.sh`). Default hosts on shared fronts (Google front-ends, Azure Blob, Cloudflare-fronted npm/OpenAI) let traffic reach other tenants on the same edge IPs.
 - **Allowed APIs accept attacker credentials.** Examples: `sentry.io` with an attacker DSN, `api.anthropic.com` or `openrouter.ai` with an attacker key, GitHub gists. `init-firewall.sh:21-22` acknowledges this.
@@ -810,7 +819,7 @@ write and terminal calls when the policy denies them.
 - The review validation worker was only spot-checked: commands are passed as argv to `bash -lc`.
 - `tmux-hooks` `find` invocations were not reviewed.
 - Pi's `grep`/`find` tools live in the Pi SDK, outside this repo.
-- The iOS app (`apps/ios`) was not reviewed at the time. It was reviewed on 2026-11-05 against `69a3b4ca5`, by reading the code and running it on simulators: three defects were fixed (a crash from a CSP-sandboxed page calling the native bridge, a status check that accepted an answer from a redirect target, and a sign-in that refused tokens containing `+`), and the rest is in to-dos [5600](../todo/cross-cutting/5600-ios-bridge-user-consent.md), [5601](../todo/cross-cutting/5601-ios-runtime-security-checks.md) (device and signed-build checks) and [5602](../todo/cross-cutting/5602-ios-session-and-privacy-hardening.md).
+- The iOS app (`apps/ios`) was not reviewed at the time. It was reviewed on 2026-11-05 against `69a3b4ca5`, by reading the code and running it on simulators: three defects were fixed (a crash from a CSP-sandboxed page calling the native bridge, a status check that accepted an answer from a redirect target, and a sign-in that refused tokens containing `+`), and the rest is in to-dos [5600](../todo/cross-cutting/5600-ios-bridge-user-consent.md), [5601](../todo/cross-cutting/5601-ios-runtime-security-checks.md) (device and signed-build checks) and 5602.
 - The initial review did no dynamic testing. H2 has since been checked against locally built before/after images with the root-boundary smoke test (see its Status above). H1, M1 and M2 pass in Chromium, Firefox and WebKit (`e2e/preview/gateway-browser-security.spec.ts`) and H3 on Docker Desktop and rootless Linux Engine (`docs/development/container-qualification.md`). Shipping Safari remains ([todo 5500](../todo/previews-and-annotations/5500-shipping-safari-gateway-security-checks.md)).
 
 ## 9. Recommended remediation order

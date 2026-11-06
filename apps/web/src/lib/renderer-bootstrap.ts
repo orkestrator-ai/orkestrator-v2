@@ -1,6 +1,9 @@
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { reportRendererDebugLogging } from "./debug-log";
 import { startDesktopRenderer } from "./desktop-startup";
 import { emitDesktopStartupMarker } from "./desktop-startup-marker";
+import { startRendererDiagnostics } from "./renderer-diagnostics";
+import { recordRendererFailure } from "./renderer-error-ring";
 
 const log = createLogger("web.window");
 
@@ -22,6 +25,7 @@ interface RendererBootstrapTarget {
 }
 
 interface RendererBootstrapOptions {
+  startDiagnostics?: typeof startRendererDiagnostics;
   target?: RendererBootstrapTarget;
   startDesktop?: typeof startDesktopRenderer;
   loadRenderer?: () => Promise<RendererModule>;
@@ -30,18 +34,25 @@ interface RendererBootstrapOptions {
 
 /** Install startup diagnostics before loading any module that can mount the application. */
 export async function bootstrapRenderer({
+  startDiagnostics = startRendererDiagnostics,
   target = window,
   startDesktop = startDesktopRenderer,
   loadRenderer = () => import("../renderer-entry"),
   emitMarker = emitDesktopStartupMarker,
 }: RendererBootstrapOptions = {}): Promise<void> {
+  // Preload IPC is available before the backend connection check. DevTools must
+  // remain reachable when that check fails; uploads still wait for readiness.
+  reportRendererDebugLogging((window.orkestrator ?? window.orkestratorDesktopHost?.api)?.window);
   let startupPending = true;
   const reportStartupError = () => {
     if (startupPending) emitMarker("renderer-error");
   };
 
+  // The error ring is separate from the startup markers: it never writes to the
+  // console and never uses the `desktop.startup` area.
   target.addEventListener("error", (event) => {
     reportStartupError();
+    recordRendererFailure(event.error ?? event.message, "window");
     log.error("error.unhandled", {
       error: formatLogError(event.error ?? event.message),
       file: sourceFile(event.filename),
@@ -51,14 +62,21 @@ export async function bootstrapRenderer({
   });
   target.addEventListener("unhandledrejection", (event) => {
     if (startupPending) emitMarker("unhandled-rejection");
+    recordRendererFailure(event.reason, "rejection");
     log.error("rejection.unhandled", { error: formatLogError(event.reason) });
   });
 
   try {
     await startDesktop({
       start: async () => {
-        const { startRenderer } = await loadRenderer();
-        await startRenderer({ reportStartupError });
+        startDiagnostics();
+        try {
+          const { startRenderer } = await loadRenderer();
+          await startRenderer({ reportStartupError });
+        } catch (error) {
+          recordRendererFailure(error, "window");
+          throw error;
+        }
       },
     });
   } finally {

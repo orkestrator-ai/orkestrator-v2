@@ -42,3 +42,18 @@ On 2026-11-05 the branch was rebased onto `main` at `4f7ca8231` (#1789) and ever
 | packages/cli/tests/cli.test.ts (case 0080), after `bun run --cwd packages/cli build` | `bun --cwd=packages/cli test tests/cli.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures` | exit 0; 13 pass, 0 fail |
 
 None of these owners, nor `commands-container-exec.ts`, `container-readiness.ts` or `docker/entrypoint.sh`, appears in `git diff origin/main...HEAD`, and #1789 did not change them either. Because nothing failed on the branch, no comparison run on `main` was needed. This is still not an aggregate result: the failures were seen only under the concurrent default suite, and their root cause remains unproven.
+
+## 2026-11-06 floating-notice repair recurrence
+
+`mise run test:logged -- --name review-default-suite -- mise run test`
+(backend four workers, aggregate workspace allocation six) failed
+`user skills and commands in containers > withholds nested credentials before staging and import while preserving safe resources`
+in `apps/backend/tests/portable-inputs-user-extensions.test.ts`: child exit was
+`null` instead of `0`, then the test exceeded 5000 ms (5157.37 ms).
+Backend totals were 16367 pass, 134 skip, 3 fail. Evidence is
+`/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.synJsP/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+
+The unchanged owner passed alone with
+`mise run test:logged -- --name portable-inputs-isolated -- bun test --cwd apps/backend tests/portable-inputs-user-extensions.test.ts --parallel=1 --only-failures`
+(exit 0, 5.9 s; passing output deleted, no counts inferred). The aggregate
+failure remains unresolved; no implementation, timeout, assertion or skip was changed.

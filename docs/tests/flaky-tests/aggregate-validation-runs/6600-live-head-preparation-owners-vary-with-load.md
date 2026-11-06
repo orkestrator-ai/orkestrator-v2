@@ -9,7 +9,7 @@
 
 ## Failing tests
 
-These 16 were triaged `related` through the false match described in [to-do 6601](../../../todo/coordinator-and-multi-review/6601-triage-related-from-a-directory-named-in-a-comment.md). Their import closures reach no changed file. The 17th `related` failure, in `packages/cli/tests/service-install.test.ts`, fails every time and is in [to-do 6602](../../../todo/cross-cutting/6602-service-install-and-codex-host-rules-fail-alone.md), so it is not a flake.
+These 16 were triaged `related` because a doc comment naming `apps/web` in `packages/protocol/src/web-annotations.ts`, which their import graphs load, counted as a reference to the changed directory. To-do 6601 fixed that on 2026-11-05: a replay of these failures now gives `undetermined` ([failure triage](../../../architecture/review-preparation.md#failure-triage)). Their import closures reach no changed file. The 17th `related` failure, in `packages/cli/tests/service-install.test.ts`, failed every time on macOS, because it faked Linux and then read the host's `/proc` for a process identity, so it is not a flake. The test now publishes a fixed identity.
 
 | Owner | Tests that failed in the aggregate | Original failure |
 | --- | --- | --- |
@@ -50,8 +50,24 @@ When the host was sampled, headless Chromium processes this work had not started
 
 ## Browser suite
 
-In the same preparation, `scrollbar departure after find stays put when streaming reapplies highlights` (`e2e/StreamingTranscript.spec.ts:361`, case [0767](../native-agents-and-transcripts/0767-streaming-find-convergence-aggregate-timeout.md)) failed on mobile. Run alone at a load of about 43 on both projects, with two workers on a private port, it passed. The whole command then hit its 1,800 s deadline with 1,220 of 1,590 tests reported. `CodexHostRules.spec.ts` failed alone too, so it is in to-do 6602.
+In the same preparation, `scrollbar departure after find stays put when streaming reapplies highlights` (`e2e/StreamingTranscript.spec.ts:361`, case [0767](../native-agents-and-transcripts/0767-streaming-find-convergence-aggregate-timeout.md)) failed on mobile. Run alone at a load of about 43 on both projects, with two workers on a private port, it passed. The whole command then hit its 1,800 s deadline with 1,220 of 1,590 tests reported. `CodexHostRules.spec.ts` failed alone too, so it is not a flake either: it took a `[storage] ledger.moved` log line from its fixture host as the host's address, and now waits for the host's readiness marker instead.
 
 ## Fix
 
 None here. No assertion, deadline or fixture changed, because a longer deadline on this branch would only hide the condition, and the tests belong to other areas.
+
+## Recurrence 2026-11-05 (worktree-probe change)
+
+On arktech-mini at `585cf97d8` plus the uncommitted worktree-probe change,
+`linked skill entries (task 2) > the entrypoint imports a linked skill where
+Claude reads user skills` (`apps/backend/tests/portable-inputs-shared-skills.test.ts`)
+timed out at 5009.67 ms in the four-worker backend aggregate of `mise run test`,
+at a load average of about 31 measured just after the run. The unchanged
+owning file passed alone in 2.2 s:
+
+```sh
+mise run test:logged -- --name linked-skill -- mise exec -- bun --cwd=apps/backend test ./tests/portable-inputs-shared-skills.test.ts --parallel=1
+```
+
+The same run also failed case
+[9834](../environments-and-containers/9834-container-status-excludes-aggregate-timeout.md).

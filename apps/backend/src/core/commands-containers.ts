@@ -112,6 +112,7 @@ import { storageMountArguments } from "./container-storage.js";
 import { readSeedManifest, seedFilesDir } from "./nodes/index.js";
 import {
   gitMirrorContainerArguments,
+  restrictedContainerReachesGitRemote,
   scheduleProjectGitMirrorRefresh,
 } from "./project-git-mirror.js";
 import {
@@ -127,6 +128,7 @@ import {
   DOCKER_LABEL_EGRESS_GATEWAY,
   createEgressGateway,
   egressEnforcement,
+  egressFilterEnvironment,
   egressGatewayName,
   removeRuntimeContainer,
 } from "./egress-gateway.js";
@@ -325,19 +327,35 @@ export async function createDockerContainer(
   }
   const runtimeGeneration = identity.runtimeGeneration ?? 1;
   const runtimeName = dockerContainerRuntimeName(dockerOwner, environment.id, runtimeGeneration);
-  // A runtime that will clone reads the project's Git mirror, read-only, when
-  // its image knows how; an older image never sees the mount or the variable.
-  // A stored local path is no remote a container could clone from.
-  const gitMirrorArguments =
-    !identity.reusesWorkspace &&
-    (imageCapabilitySet["git-mirror"] ?? 0) >= 1 &&
-    (agentTestLocalGitRemote || isGitRemoteUrl(project.gitUrl))
-      ? await gitMirrorContainerArguments(context.storage.getDataDir(), project)
-      : [];
   const networkPolicy = containerNetworkPolicy(
     imageCapabilitySet["network-policy"] ?? 0,
     process.env.ORKESTRATOR_NETWORK_POLICY,
   );
+  // A runtime that will clone reads the project's Git mirror, read-only, when
+  // its image knows how; an older image never sees the mount or the variable.
+  // A stored local path is no remote a container could clone from, and a
+  // restricted container whose firewall would stop it reaching the remote does
+  // not get to read what the remote serves through the mount instead.
+  const mirrorRemoteReachable =
+    agentTestLocalGitRemote ||
+    (isGitRemoteUrl(project.gitUrl) &&
+      (environment.networkAccessMode === "full" ||
+        restrictedContainerReachesGitRemote(
+          project.gitUrl,
+          containerAllowedDomains(environment, config, networkPolicy),
+          networkPolicy,
+        )));
+  const mirrorEligible = !identity.reusesWorkspace && (imageCapabilitySet["git-mirror"] ?? 0) >= 1;
+  if (mirrorEligible && !mirrorRemoteReachable && isGitRemoteUrl(project.gitUrl)) {
+    dockerLog.info("git-mirror.mount-withheld", {
+      projectId: project.id,
+      reason: "remote-unreachable",
+    });
+  }
+  const gitMirrorArguments =
+    mirrorEligible && mirrorRemoteReachable
+      ? await gitMirrorContainerArguments(context.storage.getDataDir(), project)
+      : [];
   // Where the firewall runs: in an egress gateway that owns the namespace
   // (the workload gets no capability), in the workload itself (NET_ADMIN), or
   // nowhere in full mode.
@@ -587,6 +605,7 @@ export async function createDockerContainer(
           NETWORK_MODE: "restricted",
           ALLOWED_DOMAINS: allowedDomainsValue,
           ...policyEnvironment,
+          ...egressFilterEnvironment(),
         },
         limits: {
           memory: capacity.support.memoryLimit === true,

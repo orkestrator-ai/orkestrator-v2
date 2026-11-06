@@ -7,7 +7,8 @@ item, the open questions and the verification items worked through on
 
 ## Task analysis
 
-Analysed 2026-10-27 against `main` at `863b5782`.
+Analysed 2026-11-06 against `main` at `e6c3da89` for tasks 2 and 7; the
+other tasks as analysed 2026-10-27 against `main` at `863b5782`.
 
 Code items 1 to 5, 7, 8, 10, 11 and 13 are done on `main` and are not
 repeated as tasks; their live checks are. The open questions and the
@@ -16,12 +17,12 @@ repeated as tasks; their live checks are. The open questions and the
 ### Tasks
 
 1. **Grok project resources off**: Grok loads a trusted checkout's resources whatever the policy says (item 12). Status: blocked (on xAI: no "never trust" switch in Grok 1.0.67).
-2. **Codex project-resources residual risks**: the three risks left open under item 6. Status: partly done (the slash-catalogue risk is closed).
+2. **Codex project-resources residual risks**: the three risks left open under item 6. Status: done (the hook canary is added, the slash-catalogue risk was already closed, and a skill written during a running turn is kept as residual risk).
 3. **Live Grok pause and approval kinds**: Grok permission and question paused past ten minutes, command/file approval kinds, a pause past the 30-minute turn deadline. Status: open (needs a valid Grok login).
 4. **Live Codex question**: the `codex-question` case of the paused-interactions spec on a real model (item 13). Status: open.
 5. **Live Claude tmux pause**: a paused PermissionRequest outliving Claude Code's 600 s hook limit (item 9). Status: open.
 6. **Live Claude question preview**: whether Claude emits previews and the card shows them verbatim (item 3). Status: open.
-7. **Browser interaction checks**: MCP elicitation rehydration, Claude `ask` and `deny` overrides, a coordinator turn that delegates and asks. Status: open.
+7. **Browser interaction checks**: MCP elicitation rehydration, Claude `ask` and `deny` overrides, a coordinator turn that delegates and asks. Status: done with provider fakes (`e2e/InteractionPolicyChecks.spec.ts`); a coordinator turn on a real model stays with 0024.
 8. **Container cells on Cursor and Pi**: `mise run test:agent:docker` for Cursor and Pi. Status: open (the suite has no Cursor or Pi case).
 9. **Claude provider sandbox on a real CLI**: `allowUnsandboxedCommands: false` and `strictAllowlist` hold. Status: open.
 
@@ -56,21 +57,27 @@ repeated as tasks; their live checks are. The open questions and the
 
 **Context.** Item 6's pin covers config layers, AGENTS.md and MCP; skills need a thread-scoped `skills.config`.
 
-**Investigation.** The catalogue risk is closed: `skillUnavailability` (`bridges/codex-bridge/src/commands/skill-inventory.ts:204-213`) marks every non-user/system/admin skill "disabled because project resources are off for this session", and both catalogue rows and typed dispatch go through it (`bridges/codex-bridge/src/commands/codex-command-catalogue.ts:274,421,444-467,514`), so the bridge refuses the dispatch itself. This landed in #1147 (`649482d8`, 2026-10-22), so item 6's text is out of date on this point. The mid-thread skill gap and the separate hook probe are still open; `live-project-trust.test.ts` exists for extending.
+**Investigation.** The catalogue risk is closed: `skillUnavailability` (`bridges/codex-bridge/src/commands/skill-inventory.ts:204-213`) marks every non-user/system/admin skill "disabled because project resources are off for this session", and both catalogue rows and typed dispatch go through it (`bridges/codex-bridge/src/commands/codex-command-catalogue.ts:274,421,444-467,514`), so the bridge refuses the dispatch itself. This landed in #1147 (`649482d8`, 2026-10-22), so item 6's text is out of date on this point.
+
+The mid-thread skill gap is mostly closed by the same change. `skills/changed` bumps `projectSkillsRevision` (`app-server-runtime-lifecycle.ts:771-776`), and the next prompt on a thread whose revision is older re-reads `skills/list` with `forceReload` and resumes the thread with the new exclusions before `turn/start`, or refuses with 503 when the inventory keeps changing (`app-server-runtime-prompt.ts:431-511`). The unit test "skills changed refreshes exclusions before the next attached turn" (`app-server-runtime-prompt.test.ts`) and the live case "new repository skills are excluded after a skills change and reload" cover it. What is left is a skill written into the checkout while a turn is running, which can reach only the rest of that turn.
+
+Hooks are now probed on their own (2026-11-06). Codex 0.166.0 reads project hooks from `.codex/hooks.json` and from `[hooks]` in `.codex/config.toml`, and runs a non-managed hook only when the user config records its hash (`[hooks.state."<key>"] trusted_hash`), which `hooks/list` reports as `trustStatus`. `live-project-trust.test.ts` now declares `SessionStart` and `UserPromptSubmit` command hooks that write marker files, and its fixture trusts them by hash through `hooks/list`, so only the pin can stop them. Against the pinned 0.166.0 (three runs, 4 of 4 passing each) the control sees both hooks run; the pinned, reloaded and linked-worktree cases see none.
+
+Running the file first showed it was stale on main: its three pinned cases failed because the AGENTS.md canary reached the model. That copy is the bridge's own `repositoryInstructionsBlock`, which `AppServerEngine.developerInstructions` adds on purpose when the pin drops Codex's native load (agent-engines.md, "The repository's AGENTS.md"). The test now counts only copies past the bridge's, and asserts the bridge's copy arrives exactly once. `upgrade-agents.md` did not list the file among the Codex bump gates, which is how this went unnoticed; it does now.
 
 **Decisions.**
 
 - **How to close the mid-thread skill gap?**
-  - **Accept it as residual risk, since the bridge's own dispatch refusal now covers selected and typed skills (recommended).**
-    - Pros: the only remaining path is the model invoking a newly added repo skill by itself mid-thread, which needs a write into the checkout during the turn.
-    - Cons: a skill written by the agent itself could load on the next model call.
-  - **Re-read `skills/list` on each turn start and reload the thread when a new repo skill appears.**
-    - Pros: closes it fully.
-    - Cons: a `skills/list` per turn, and a thread reload (see the `reloadThread` rule in AGENTS.md) on change.
+  - **Accept the within-turn remainder as residual risk; the turn-boundary half is closed by the `skills/changed` reload (recommended, chosen).**
+    - Pros: the only remaining path is the model invoking a repo skill written into the checkout during the same turn, which needs the turn itself (or a process it started) to write it; the next turn drops it.
+    - Cons: such a skill could load on a later model call of that turn.
+  - **Interrupt or reload a running thread on `skills/changed`.**
+    - Pros: closes the remainder.
+    - Cons: a reload mid-turn would abandon the running turn, and app-server applies `skills.config` only on start or resume, so there is no cheaper way.
 - **Probe hooks separately?**
-  - **Add a hook canary to `live-project-trust.test.ts` on the next Codex bump (recommended).**
-    - Pros: cheap; no credentials (loopback endpoint).
-    - Cons: one more live-gated case to maintain.
+  - **Add a hook canary to `live-project-trust.test.ts` (recommended, done 2026-11-06 rather than waiting for the next bump).**
+    - Pros: cheap; no credentials (loopback endpoint); turns the inference into a proof.
+    - Cons: one more live-gated case to maintain; the fixture has to trust each hook by hash, so a change to Codex's hook-trust format breaks the control case first.
   - **Rely on the config-layer canary.**
     - Pros: no work.
     - Cons: an inference, not a proof.
@@ -160,24 +167,33 @@ repeated as tasks; their live checks are. The open questions and the
 
 **Context.** These are the "Browser" qualification bullet. The coordinator half overlaps 0024 (coordinator live conformance).
 
-**Investigation.** No spec under `e2e/` raises an MCP elicitation. The Claude `ask` override is covered by the live pause spec (Claude approval), so only `deny` (refused without a card, question still shown) and elicitation are new.
+**Investigation.** The earlier note was wrong on one point: `e2e/ClaudeInteractions.spec.ts` (since #1009) already raises a Claude MCP form and URL elicitation through the real Claude bridge with a fake SDK, rehydrates it after an inactive environment and a reload from the bridge's `/session/:id/interactions` (through `HttpBridgeInteractionAdapter`), then answers and cancels it. The Claude `ask` override on a real CLI is covered by the live pause spec (Claude approval).
+
+Done 2026-11-06 in the component browser suite (`e2e/playwright.config.ts`, headless Chromium, phone and desktop projects), with provider fakes behind the real bridges: `e2e/InteractionPolicyChecks.spec.ts`.
+
+- Codex MCP form and URL elicitations, raised by the bridge's fake app-server (`FAKE_CODEX_SCRIPT=elicitation`) through the real Codex bridge (`e2e/fixtures/codex-elicitation-host.ts`), rehydrate after an inactive environment and a reload, then answer and cancel; the spec reads what the bridge wrote back to the child.
+- A Claude session overridden to `ask`: a Bash call raises "Approve command" (it survives a reload), an Edit raises "Approve file changes", and approve, deny and cancel turn each reach the SDK's `canUseTool` callback.
+- A Claude session overridden to `deny`: a Bash call is refused with "policy denies approvals" and no card, while an AskUserQuestion still shows and its answer reaches the SDK.
+- A coordinator: the Claude fixture host started with `ORKESTRATOR_BRIDGE_EXECUTION_POLICY=coordinator-read-only` reports `coordinator-read-only`, allows `mcp__orkestrator__*`, lets `launch_environment` through the read-only PreToolUse hook, refuses Write in the hook and in `canUseTool` with no card, and parks a question that survives a reload and is answered.
+
+All 10 cases passed in three consecutive runs at the default worker count, and alongside `ClaudeInteractions.spec.ts` and `CodexHostRules.spec.ts` (18 of 18). No isolated `dev:test` profile was needed: the component suite starts no backend. A real coordinator turn on a live model stays with 0024.
 
 **Decisions.**
 
 - **Split or keep together?**
-  - **Run the Claude `deny` and elicitation checks here and leave the coordinator turn to 0024 (recommended).**
-    - Pros: avoids double-counting coordinator work; the remaining checks fit one Claude profile.
+  - **Cover all three here with provider fakes and leave a coordinator turn on a real model to 0024 (recommended, chosen).**
+    - Pros: the browser bullet is closed without a login or a billed turn; 0024 keeps the live run it already owns, so nothing is counted twice.
+    - Cons: the coordinator check proves the bridge's gate and the card, not that a real model chooses to delegate.
+  - **Run the Claude `deny` and elicitation checks here and leave the whole coordinator turn to 0024.**
+    - Pros: avoids any coordinator work here.
     - Cons: this file then depends on 0024 to call the bullet closed.
-  - **Keep all three here.**
-    - Pros: one owner.
-    - Cons: duplicates 0024's live runs.
-- **Which MCP server raises the elicitation?**
-  - **A small local fixture MCP server that elicits on a tool call (recommended).**
-    - Pros: deterministic; no third-party account.
-    - Cons: a fixture to write.
-  - **A real third-party server.**
-    - Pros: realistic.
-    - Cons: depends on its behaviour and credentials.
+- **Which provider fake raises the elicitation?**
+  - **The bridge's own scripted provider: the Claude SDK double for Claude, the fake `codex` app-server for Codex (recommended, chosen).**
+    - Pros: deterministic, no account, no network; the elicitation crosses the real bridge parking, routes and backend mapping.
+    - Cons: the MCP server itself is not in the loop, so a provider that stops forwarding elicitations would not show here.
+  - **A small local fixture MCP server that elicits on a tool call.**
+    - Pros: puts the MCP hop in the loop.
+    - Cons: needs a real provider CLI to call it, which means a login and a billed turn.
 
 ### 8. Container cells on Cursor and Pi
 
@@ -260,7 +276,7 @@ or a person.
 - Codex answers every server request (`app-server/server-request-router.ts`):
   - exec-policy and network-policy amendments are never offered or sent
     (`app-server/approvals.ts`; removed on 2026-10-27 by
-    [0160](0160-codex-saved-rules-list-and-revoke.md), because the rule each
+    0160, because the rule each
     saves cannot be listed or revoked);
   - `serverRequest/resolved` withdraws a parked request (`event-reducer.ts`);
   - dynamic `item/tool/call` is answered as a failure, with a transcript
@@ -398,7 +414,7 @@ or a person.
    saved rule. Orkestrator cannot list or revoke those, so the read and
    revoke surface (`NativeAgentPermissionRule`, the `permission-rules`
    routes, `listPermissionRules?` / `removePermissionRule?`) moved to
-   [0160-codex-saved-rules-list-and-revoke.md](0160-codex-saved-rules-list-and-revoke.md),
+   `0160-codex-saved-rules-list-and-revoke.md`,
    which dropped the amendment options instead (2026-10-27): no Orkestrator
    approval saves a rule now.
 2. **Grok approval kind.** Done 2026-10-22. The bridge derives the kind from
@@ -474,14 +490,18 @@ or a person.
    turn and after a reload, a pin on a linked worktree wins over a trusted main
    checkout, and the user's `config.toml` is left unchanged. A dotted
    `projects."<path>".trust_level` key in thread config is silently ignored.
-   Left open, as residual risk:
-   - A repo skill added while a thread is loaded is not disabled until the
-     thread next starts or resumes.
-   - The slash-command catalogue (`skill-inventory.ts`) still lists repo
-     skills for a session with project resources off; Codex should refuse a
-     disabled one, but that dispatch was not checked.
-   - Hooks were not probed separately. They live in the same `.codex` layer
-     the pin drops, which the config-layer and MCP canaries prove.
+   The three residual risks first recorded here were worked through by
+   2026-11-06 (task 2):
+   - A repo skill added while a thread is loaded is disabled before the next
+     turn: `skills/changed` makes the next prompt resume the thread with the
+     new exclusions. Kept as residual risk: a skill written during a running
+     turn can reach the rest of that turn.
+   - The slash-command catalogue marks repo skills unavailable for a session
+     with project resources off and the bridge refuses their dispatch
+     (#1147).
+   - Hooks are probed on their own: with the project trusted and each hook
+     trusted by hash, `SessionStart` and `UserPromptSubmit` hooks run; with
+     the pin none do (`live-project-trust.test.ts`, Codex 0.166.0).
 7. **Read-only turns.** Done 2026-10-25. Claude, Cursor and Grok now report
    the read-only policy while it applies, marked with
    `READ_ONLY_TURN_POLICY_NOTE` (`readOnlyTurnReportedPolicy` in
@@ -645,13 +665,16 @@ or a person.
   30 minutes, answer, and check the turn finishes). Needs a valid Grok login
   on the host.
 
-- Browser: raise an MCP elicitation (Codex or Claude), answer it, reload
+- ~~Browser: raise an MCP elicitation (Codex or Claude), answer it, reload
   mid-question, and confirm it rehydrates from `/session/:id/interactions`. On
   a Claude environment overridden to `approvals: "ask"`, confirm a Bash or Edit
   call raises an approval card and that approve, deny and cancel turn reach the
   CLI. On one set to `deny`, confirm a tool outside the allow list is refused
   without a card while a question still appears. Run a real coordinator turn
-  that delegates and asks a question.
+  that delegates and asks a question.~~ Done 2026-11-06 with provider fakes
+  (task 7): `e2e/ClaudeInteractions.spec.ts` and
+  `e2e/InteractionPolicyChecks.spec.ts`. A coordinator turn on a real model
+  is left to 0024.
 - `mise run test:agent:docker` for the container cells on Cursor and Pi
   (needs a `dev:test` profile started with `--fixture-environments
   container`, and Cursor and Pi logins). Not run on 2026-10-25.
@@ -884,7 +907,7 @@ All answered on 2026-10-25; the reasoning is in the decisions below.
   a session, as Cursor refuses `deny`, rather than run it?~~ No (decision 5).
 - ~~Should Orkestrator expose "always allow" at all, given there is no revoke
   UI yet?~~ Not for Claude (decision 1). Codex's amendment options were
-  removed by [0160](0160-codex-saved-rules-list-and-revoke.md) on
+  removed by 0160 on
   2026-10-27.
 - ~~`previewFormat`: plain or html?~~ `markdown`, shown verbatim (decision 2).
 - ~~Claude MCP OAuth: is the parked `mcp-url` card the intended route for
@@ -1027,9 +1050,52 @@ Decisions made on 2026-10-25 while working through the file.
     the host default still loads a trusted checkout's resources, which Agent
     Info states.
 
+Decisions made on 2026-11-06 while working through tasks 2 and 7.
+
+### Task 2: keep a skill written during a running turn as residual risk
+
+Chose to record it rather than reload a running thread. The turn-boundary
+case is already closed and tested; a reload mid-turn would abandon the turn,
+because app-server takes `skills.config` only on start or resume.
+
+### Task 2: trust the canary hooks by hash in the fixture
+
+Codex 0.166.0 skips an untrusted project hook on its own, so a canary that
+never ran would pass the pinned cases by accident. The fixture asks the
+pinned binary's `hooks/list` for each hook's key and hash and records them the
+way Codex's hook review does, which makes the control case prove the hooks
+can run. `bypass_hook_trust` was not used: `hooks/list` still reports such
+hooks as untrusted, so it would not show the trust state the test relies on.
+
+### Task 2: fix the stale AGENTS.md assertion instead of the bridge
+
+The AGENTS.md canary reaching a pinned thread is the documented
+repository-instructions copy, not Codex loading the checkout. The test now
+counts only Codex's own copy, and `upgrade-agents.md` names the file as a
+Codex bump gate.
+
+### Task 7: component browser suite rather than a `dev:test` profile
+
+The checks run in the component browser suite against real bridge code with
+provider fakes (the Claude SDK double, the fake `codex` app-server), like
+`ClaudeInteractions.spec.ts` and `CodexHostRules.spec.ts`. A real-stack
+profile would need a provider CLI pointed at a scripted model for Claude and
+a working Orkestrator MCP server for the coordinator, and would prove no more
+about the cards. Each spec host starts only when a test needs it; starting
+all three in every worker timed out under the default worker count on a cold
+fixture server.
+
+### Task 7: the coordinator check runs in a coordinator bridge process
+
+The fixture host sets `ORKESTRATOR_BRIDGE_EXECUTION_POLICY=coordinator-read-only`
+as the launcher does, so the policy comes from process authority, not the
+session request, and the read-only hook and allow list are the production
+ones. The test SDK stubs MCP loading, so the host reports the Orkestrator
+server as loaded; the address is never contacted.
+
 ## Related
 
-- [0160-codex-saved-rules-list-and-revoke.md](0160-codex-saved-rules-list-and-revoke.md),
+- `0160-codex-saved-rules-list-and-revoke.md` (deleted 2026-11-06),
   [0161-codex-default-mode-question-activity.md](0161-codex-default-mode-question-activity.md)
   (split out on 2026-10-25).
 - [agent-engines.md](../../architecture/agent-engines.md#interaction-deadlines-and-pausing):

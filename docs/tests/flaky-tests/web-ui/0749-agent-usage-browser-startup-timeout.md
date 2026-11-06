@@ -56,6 +56,17 @@ Final evidence is `/tmp/orkestrator-test-run.OKCGVn/browser.log.gz` and
 incomplete/non-green; unrelated browser failures have not been reclassified as
 flakes or repaired by this change.
 
+## Coordinator C3 review fixes — 2026-11-05
+
+Both mobile cases failed again in the two-worker component suite, on separate
+fixture ports from other checkouts. The owner rerun on another dedicated port
+failed all four AgentUsage cases (30-second reload/locator timeouts), while all
+eight ChangeTracking cases passed. The default suite was also running.
+This confirms recurrence, not an isolated pass or a root cause.
+
+Commands, counts and evidence are recorded in
+[6660](6660-change-tracking-image-reload.md). No usage implementation or test changed.
+
 ## Coordinator unavailable-platform review — 2026-11-06
 
 Both mobile compact-usage cases exceeded the 30 s test deadline, at the usage-duration assertion or header focus.

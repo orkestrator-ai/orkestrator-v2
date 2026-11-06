@@ -119,7 +119,7 @@ Analysed 2026-10-28 against `main` at `79f3bc97`.
 ### Qualification
 
 The 29 older leaked probe networks remain untouched
-([0241](0241-leaked-reach-probe-networks.md) task 5). They still block
+([0241](0241-leaked-reach-probe-networks.md) task 1). They still block
 automatic allocation, but explicit unused subnets allowed the live fault
 qualification to complete. CI's "Container live qualification" workflow
 also runs those suites on both architectures when the PR touches its paths.

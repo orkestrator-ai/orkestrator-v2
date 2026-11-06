@@ -16,9 +16,12 @@ test.beforeAll(async () => {
       clearTimeout(timer);
       reject(new Error("host fixture exited"));
     });
-    createInterface({ input: host.stdout! }).once("line", (line) => {
+    // Storage and other production modules in the host log to stdout too; a
+    // log line taken as the origin sends every request to the Vite server.
+    createInterface({ input: host.stdout! }).on("line", (line) => {
+      if (!line.startsWith("CODEX_HOST_RULES_FIXTURE_READY:")) return;
       clearTimeout(timer);
-      resolve(line);
+      resolve(`http://127.0.0.1:${line.split(":")[1]}`);
     });
   });
 });

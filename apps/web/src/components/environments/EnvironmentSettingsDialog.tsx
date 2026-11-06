@@ -77,7 +77,11 @@ import {
   LEGACY_CONTAINER_DISCARD_WARNING,
   parseContainerLifecycleError,
 } from "@orkestrator/protocol/container-lifecycle";
-import { ALLOWLIST_ENTRY_HINT, parseAllowlistEntry } from "@orkestrator/protocol/network-allowlist";
+import {
+  ALLOWLIST_ENTRY_HINT,
+  ALLOWLIST_RESIDUAL_RISK,
+  parseAllowlistEntry,
+} from "@orkestrator/protocol/network-allowlist";
 import {
   SETTINGS_CARD_CLASS,
   SettingsPageLayout,
@@ -1098,6 +1102,7 @@ export function EnvironmentSettingsDialog({
                 <div className="space-y-2">
                   <Label>Allowed Domains</Label>
                   <p className="text-xs text-muted-foreground">{ALLOWLIST_ENTRY_HINT}</p>
+                  <p className="text-xs text-muted-foreground">{ALLOWLIST_RESIDUAL_RISK}</p>
                   <Textarea
                     value={customDomains}
                     onChange={handleDomainsChange}

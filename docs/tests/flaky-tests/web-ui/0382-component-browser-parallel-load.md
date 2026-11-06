@@ -367,6 +367,12 @@ A one-worker rerun of the complete three owners passed all 32 cases (66.3 s, exi
 
 Broad failure evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.XG8r46/browser.log.gz`. The passing logged runner deleted its raw output as designed. The original review package remains untouched.
 
+## E16 address findings — 2026-11-05
+
+`e2e/GlobalSettings.spec.ts`, `raised detail without backend expiry metadata does not promise automatic reversion` (mobile-chromium), failed after its second reload: `log-detail-expiry` was absent for the 5 s assertion. Command: `ORKESTRATOR_E2E_PORT=14761 mise run test:logged -- --name e16-settings-browser-final -- bunx playwright test --config e2e/playwright.config.ts e2e/GlobalSettings.spec.ts --workers=2`. Result: 15 passed, 1 failed, 66.8 s. Evidence: `/tmp/orkestrator-test-run.gjU0vq/e16-settings-browser-final.log.gz`.
+
+The complete unchanged owner then passed all 16 cases in 125.0 s with `ORKESTRATOR_E2E_PORT=14761 mise run test:logged -- --name e16-settings-browser-serial -- bunx playwright test --config e2e/playwright.config.ts e2e/GlobalSettings.spec.ts --workers=1`. Passing output was deleted by the logged runner. No assertions, deadlines or retries were changed. A concurrent isolated dev profile was stopped during the serial rerun; a mount/load interaction is a hypothesis, not a demonstrated cause. Both new E16 regression tests passed on both viewports in the failing and passing runs.
+
 ## Unavailable-platform coordinator review — 2026-11-05
 
 At repair commit `823590c73`, the five-worker component rerun

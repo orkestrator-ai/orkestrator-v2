@@ -556,8 +556,12 @@ session surface. When touching the session catalogue
   `SYSTEM_SUBTYPE_DISPOSITIONS` (`src/types/index.ts`) are `Record`s over the
   SDK's own unions, so an SDK bump that adds a message type or `system`
   subtype fails the typecheck until someone decides whether it is handled,
-  kept as a health notice, or ignored as inventory. Content blocks the parser
-  has no branch for are counted as `block:<type>` drift.
+  kept as a health notice, or ignored as inventory. `system` subtypes the CLI
+  emits but the SDK's union does not name (`session_title_changed`,
+  `vcs_state_changed`, …) get their fate in
+  `INTERNAL_SYSTEM_SUBTYPE_DISPOSITIONS`; any other unnamed subtype is
+  counted as `system:<subtype>` drift. Content blocks the parser has no
+  branch for are counted as `block:<type>` drift.
 - **The native tab never sees SSE.** The backend polls `GET /session/:id` and
   the transcript routes; `session.updated` frames only reach the legacy web
   client. Turn-scoped state the tab must show (activity, thinking estimate,
@@ -1301,6 +1305,17 @@ else is rejected outright. `full` mode skips the firewall entirely.
   terminal (`orkroot`) can change it there. Full-mode containers get
   neither `NET_ADMIN` nor a gateway. Do not describe a runtime with an
   in-container firewall as unable to change it.
+- A gateway from an image with `egress-filter=1` on network policy 3 also
+  checks names (`docker/orkestrator-egress-filter.pl`): a TCP connection to
+  an allowed address must ask for an allowed name in its TLS SNI or HTTP
+  Host, and DNS answers only allowlisted names, so other tenants of a shared
+  address and `<data>.attacker.tld` lookups are refused. It fails closed, is
+  recorded per gateway at its first boot (`ORKESTRATOR_EGRESS_FILTER=off`
+  creates new gateways without it), and the network status reports it as
+  `egressFilter`. It cannot see a name hidden inside TLS (an encrypted
+  ClientHello, domain fronting), and UDP entries and other protocols stay
+  address-only; an allowed service still accepts whatever it is sent. The
+  rules are in [`docker/AGENTS.md`](docker/AGENTS.md).
 
 ## Configuration Storage
 

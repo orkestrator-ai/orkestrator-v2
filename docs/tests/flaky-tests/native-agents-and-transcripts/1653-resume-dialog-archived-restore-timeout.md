@@ -54,6 +54,21 @@ the rows were repaired and the complete index owner passed alone. That rerun
 artifact is `/tmp/orkestrator-test-run.eKA8Rz/validation-test-final.log.gz`.
 A post-repair exact aggregate rerun is recorded separately.
 
+## Work panel merge recurrence — 2026-11-06
+
+`mise run test:logged -- --name merge-tests -- mise run test` failed both
+archived-history cases (6597.13 ms and 6826.07 ms), with late restore assertions.
+The workspace allocation was six workers, the web package two Bun workers;
+other validation ran concurrently. The unchanged complete owner passed alone
+(exit 0, 9.7 s):
+
+```sh
+mise run test:logged -- --name merge-resume-owner -- bun test --cwd apps/web ./src/components/chat/NativeResumeSessionDialog.test.tsx --parallel=1 --only-failures
+```
+
+Evidence: `/tmp/orkestrator-test-run.nqin2k/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+No implementation or assertions changed; cause remains unestablished.
+
 ## Coordinator unavailable-platform review — 2026-11-06
 
 The archived-history restore case exceeded the 5 s budget at 5700.08 ms.

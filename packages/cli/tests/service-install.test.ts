@@ -1,3 +1,4 @@
+import * as processStart from "../src/client/process-start.js";
 import { readLinuxProcessIdentity } from "../src/client/process-start.js";
 import { afterEach, expect, spyOn, test } from "bun:test";
 import * as childProcess from "node:child_process";
@@ -342,88 +343,123 @@ test.each(["SIGINT", "SIGTERM"])(
   },
 );
 
-test("same-version old launcher failures during manager reload do not fail a corrected reinstall", async () => {
-  const f = await fixture({ publish: false });
-  const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
-  Object.defineProperty(process, "platform", { value: "linux" });
-  restores.push(() => Object.defineProperty(process, "platform", platform));
-  await symlink(
-    path.join(f.dataDir, "backend/releases/9.9.9"),
-    path.join(f.dataDir, "backend/current"),
-  );
-  const calls: string[][] = [];
-  f.manager.mockImplementation(((file: string, args: string[]) => {
-    calls.push([file, ...args]);
-    // The old launcher keeps writing its own install generation through enable.
-    writeFileSync(
-      path.join(f.dataDir, "backend/launcher-state.json"),
-      JSON.stringify({
-        version: 1,
-        lastReadyVersion: "9.9.9",
-        bootAttempts: {},
-        bootFailure: {
-          version: "9.9.9",
-          exits: 3,
-          at: new Date().toISOString(),
-          installGeneration: "old-install",
+/**
+ * The Linux identity this file's faked-Linux run publishes and reads back: a
+ * boot id and a `/proc/<pid>/stat` start tick, in `linuxProcessIdentity`'s
+ * format. Fixed, so the run never reads the host's `/proc` (macOS has none);
+ * `client-descriptor-process.test.ts` covers the real reader.
+ */
+const FAKE_LINUX_PROCESS_IDENTITY = "6f0d2a51-3c1e-4b7a-9d42-0e8c5b1f7a36:4242";
+
+// Linux on every host, with a fixed identity; launchd only where it is real.
+const RELOAD_MANAGERS: Array<"linux" | "darwin"> =
+  process.platform === "darwin" ? ["linux", "darwin"] : ["linux"];
+
+test.each(RELOAD_MANAGERS)(
+  "same-version old launcher failures during manager reload do not fail a corrected reinstall (%s)",
+  async (manager) => {
+    const f = await fixture({ publish: false });
+    let processIdentity: string | undefined;
+    const identityReads: number[] = [];
+    if (manager === "linux") {
+      const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+      Object.defineProperty(process, "platform", { value: "linux" });
+      restores.push(() => Object.defineProperty(process, "platform", platform));
+      processIdentity = FAKE_LINUX_PROCESS_IDENTITY;
+      // The descriptor check reads the backend's identity through this export.
+      const identity = spyOn(processStart, "readLinuxProcessIdentity").mockImplementation(
+        async (pid) => {
+          identityReads.push(pid);
+          return pid === process.pid ? FAKE_LINUX_PROCESS_IDENTITY : null;
         },
-      }),
+      );
+      restores.push(() => identity.mockRestore());
+    }
+    await symlink(
+      path.join(f.dataDir, "backend/releases/9.9.9"),
+      path.join(f.dataDir, "backend/current"),
     );
-    return { status: 0, stdout: "", stderr: "", pid: 1, output: [], signal: null };
-  }) as unknown as typeof childProcess.spawnSync);
-  let polls = 0;
-  // Exercise the real observation and failure reader without wall-clock sleeps.
-  const wait = spyOn(connection, "awaitServiceConnection").mockImplementation(
-    (dir, previous, options) =>
-      realAwaitServiceConnection(dir, previous, {
-        ...options,
-        sleep: async () => {
-          polls++;
-          if (polls < 2) return;
-          writeFileSync(
-            path.join(f.dataDir, "backend-instance.json"),
-            JSON.stringify({
-              version: 1,
-              type: "orkestrator-backend-instance",
-              installationId: "install-1",
-              generation: "replacement",
-              pid: process.pid,
-              startedAt: new Date().toISOString(),
-              processIdentity:
-                process.platform === "linux"
-                  ? await readLinuxProcessIdentity(process.pid)
-                  : undefined,
-              url: ADDRESS,
-              endpoints: [],
-              authFile: f.authFile,
-              dataDir: f.dataDir,
-              appVersion: "9.9.9",
-              publicApiSchemaVersion: 1,
-            }),
-            { mode: 0o600 },
-          );
-        },
-      }),
-  );
-  restores.push(() => wait.mockRestore());
-  const result = await f.run([
-    "--timeout",
-    "1h",
-    "--output",
-    "json",
-    "--",
-    "--host",
-    "100.64.0.10",
-  ]);
-  expect(calls.map((call) => call.slice(0, 3))).toEqual([
-    ["systemctl", "--user", "daemon-reload"],
-    ["systemctl", "--user", "enable"],
-    ["systemctl", "--user", "restart"],
-  ]);
-  expect(polls).toBe(2);
-  expect(result.code).toBe(0);
-  expect(JSON.parse(result.out).result.ready).toBe(true);
-});
+    const calls: string[][] = [];
+    f.manager.mockImplementation(((file: string, args: string[]) => {
+      calls.push([file, ...args]);
+      // The old launcher keeps writing its own install generation during reload.
+      writeFileSync(
+        path.join(f.dataDir, "backend/launcher-state.json"),
+        JSON.stringify({
+          version: 1,
+          lastReadyVersion: "9.9.9",
+          bootAttempts: {},
+          bootFailure: {
+            version: "9.9.9",
+            exits: 3,
+            at: new Date().toISOString(),
+            installGeneration: "old-install",
+          },
+        }),
+      );
+      return { status: 0, stdout: "", stderr: "", pid: 1, output: [], signal: null };
+    }) as unknown as typeof childProcess.spawnSync);
+    let polls = 0;
+    // Exercise the real observation and failure reader without wall-clock sleeps.
+    const wait = spyOn(connection, "awaitServiceConnection").mockImplementation(
+      (dir, previous, options) =>
+        realAwaitServiceConnection(dir, previous, {
+          ...options,
+          sleep: async () => {
+            polls++;
+            if (polls < 2) return;
+            writeFileSync(
+              path.join(f.dataDir, "backend-instance.json"),
+              JSON.stringify({
+                version: 1,
+                type: "orkestrator-backend-instance",
+                installationId: "install-1",
+                generation: "replacement",
+                pid: process.pid,
+                startedAt: new Date().toISOString(),
+                processIdentity,
+                url: ADDRESS,
+                endpoints: [],
+                authFile: f.authFile,
+                dataDir: f.dataDir,
+                appVersion: "9.9.9",
+                publicApiSchemaVersion: 1,
+              }),
+              { mode: 0o600 },
+            );
+          },
+        }),
+    );
+    restores.push(() => wait.mockRestore());
+    const result = await f.run([
+      "--timeout",
+      "1h",
+      "--output",
+      "json",
+      "--",
+      "--host",
+      "100.64.0.10",
+    ]);
+    if (manager === "linux") {
+      expect(calls.map((call) => call.slice(0, 3))).toEqual([
+        ["systemctl", "--user", "daemon-reload"],
+        ["systemctl", "--user", "enable"],
+        ["systemctl", "--user", "restart"],
+      ]);
+      // The replacement was confirmed against the fixed identity, not /proc.
+      expect(identityReads.length).toBeGreaterThan(0);
+      expect(new Set(identityReads)).toEqual(new Set([process.pid]));
+    } else {
+      expect(calls.map((call) => call.slice(0, 2))).toEqual([
+        ["launchctl", "bootout"],
+        ["launchctl", "bootstrap"],
+      ]);
+    }
+    expect(polls).toBe(2);
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.out).result.ready).toBe(true);
+  },
+);
 
 test("install waits through exhausted boots until the launcher records rollback", async () => {
   const f = await fixture({ publish: false });

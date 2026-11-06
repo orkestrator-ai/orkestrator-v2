@@ -691,7 +691,9 @@ host-reachability check: each backend is a new Docker owner stopped seconds
 after `ready`, so its Linux probe network would belong to an owner nothing
 reaps. A later on-demand check (a container scenario on a rootless daemon, a
 workflow preflight) still runs. A scenario that needs the boot check passes
-the variable through its own `env`. `service-preview-electron.spec.ts` sets it
+the variable through its own `env`. `renderer-log-boundary-electron.spec.ts`
+sets it because the probe's container can make Chromium abort the window's Vite
+module loads (flake 2340). `service-preview-electron.spec.ts` sets it
 for both of its backends too (agent-test backends keep it, in
 `AGENT_TEST_SAFE_ENV_NAMES`): on a host whose firewall drops Docker traffic the
 check's result dialog opened mid-test and took keyboard focus (flake 0620).
@@ -1342,9 +1344,33 @@ as the `dev:test` launcher a real-stack spec restarts, gets
 when the runner exits, and only a command line, never an environment, keeps it
 (0830). Linux limits a Unix socket path to 108 bytes and Chromium puts its
 `SingletonSocket` in `TMPDIR`, so a test that launches full Chrome under a
-temporary directory of its own keeps that directory's names short. For a leak hunt like 0247's, set
-`ORKESTRATOR_TEST_KEEP_PRIVATE_TMPDIR=1` so each private directory is kept
-for inspection.
+temporary directory of its own keeps that directory's names short. For a leak
+hunt, set `ORKESTRATOR_TEST_KEEP_PRIVATE_TMPDIR=1` so each private directory
+is kept for inspection.
+
+A test removes a temporary directory it made itself, after whatever holds the
+directory open has finished, and awaits the removal so the process cannot exit
+first. Classes that keep writing after their owner returns expose a `settled()`
+that only waits (for example `TerminalHistory`, `McpManagementService`,
+`SharedScanQueue` and `DiffStatsTracking`); await it, or the fixture's `stop()`, before the removal.
+`tests/temp-sweep.ts` is the fallback for prefixes that cannot be removed at
+source: it removes a PID-owned directory only when that PID is dead and the
+directory is past its age limit. Some entries in a shared temporary directory
+are not leaks: `orkestrator-test-run.*` (failure logs, kept 7 days by
+`scripts/test-all.ts`), `orkestrator-test-scheduler-v1-<uid>`,
+`orkestrator-test-timings.*`, `orkestrator-mcp-locks-<uid>`, and other tools'
+own caches. The 2026-10-26 to 2026-10-29 leak hunt that set these rules is
+to-do 0247 in git history.
+
+The Windows process-marker qualification from retired to-do 0247 is explicitly
+deferred under the current [platform support scope](../../README.md#quick-start):
+Windows is unsupported and the backend refuses to start on `win32`. This is a
+scope disposition, not a Windows pass. If Windows support resumes, reopen the
+process-marker regressions and the real-Chromium escaped-browser ownership
+check on Windows before claiming cleanup qualification there. The Chromium
+check belongs to the transcript-artifacts area suite and requires Chromium to
+be available. Linux procps and macOS/Unix `ps` evidence do not establish Windows
+execution.
 
 The runner also keeps Bun timing profiles in a private temporary directory
 keyed by the Git common directory and worktree path. Bun updates these files after each aggregate

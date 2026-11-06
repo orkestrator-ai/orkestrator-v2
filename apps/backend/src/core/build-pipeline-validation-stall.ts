@@ -17,7 +17,7 @@ import type { ValidationFailureSummary } from "@orkestrator/protocol/validation-
 const PAUSE_ACTIONS =
   "Read the verdict and the review package's failure triage, then Resume to run another round anyway, send a message first to steer the fix, or Cancel and open the pull request yourself.";
 
-export const UNRELATED_FAILURES_PAUSE_MESSAGE = `Paused: Verify failed, but every acceptance criterion passed and every failing test in this round's validation is classified unrelated to this branch (it passed on retry, is a known flake, fails on the target branch, or reaches no changed code). Another fix round cannot change that. ${PAUSE_ACTIONS}`;
+export const UNRELATED_FAILURES_PAUSE_MESSAGE = `Paused: Verify failed, but every acceptance criterion passed and every failing test in this round's validation is classified unrelated to this branch (it passed on retry, failed on the target branch or in another pipeline on the same base, or reaches no changed code). Another fix round cannot change that. ${PAUSE_ACTIONS}`;
 
 export const REPEATED_FAILURES_PAUSE_MESSAGE = `Paused: Verify failed again with every acceptance criterion passed, and validation failed exactly the same tests as in the previous round, so the last fix did not change them. ${PAUSE_ACTIONS}`;
 

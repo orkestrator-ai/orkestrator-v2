@@ -180,6 +180,9 @@ const CoordinatorExplanationsFixture = lazy(async () => ({
 const CoordinatorActivityFixture = lazy(async () => ({
   default: (await import("./CoordinatorActivityFixture")).CoordinatorActivityFixture,
 }));
+const TabLaunchOverrideFixture = lazy(async () => ({
+  default: (await import("./TabLaunchOverrideFixture")).TabLaunchOverrideFixture,
+}));
 
 const PipelineWorkerMailFixture = lazy(async () => ({
   default: (await import("./PipelineWorkerMailFixture")).PipelineWorkerMailFixture,
@@ -203,8 +206,14 @@ const SetupRecoveryFixture = lazy(async () => ({
   default: (await import("./SetupRecoveryFixture")).SetupRecoveryFixture,
 }));
 
+const FloatingNoticesFixture = lazy(async () => ({
+  default: (await import("./FloatingNoticesFixture")).FloatingNoticesFixture,
+}));
 const AutoMergeErrorFixture = lazy(async () => ({
   default: (await import("./AutoMergeErrorFixture")).AutoMergeErrorFixture,
+}));
+const EnvironmentNetworkPolicyFixture = lazy(async () => ({
+  default: (await import("./EnvironmentNetworkPolicyFixture")).EnvironmentNetworkPolicyFixture,
 }));
 const EnvironmentSettingsDrawerFixture = lazy(async () => ({
   default: (await import("./EnvironmentSettingsDrawerFixture")).EnvironmentSettingsDrawerFixture,
@@ -1893,6 +1902,13 @@ function fixtureForPath() {
       </Suspense>
     );
   }
+  if (window.location.pathname === "/tab-launch-override") {
+    return (
+      <Suspense fallback={null}>
+        <TabLaunchOverrideFixture />
+      </Suspense>
+    );
+  }
   if (window.location.pathname === "/project-navigation") {
     return (
       <Suspense fallback={null}>
@@ -2010,10 +2026,24 @@ function fixtureForPath() {
       </Suspense>
     );
   }
+  if (window.location.pathname === "/floating-notices") {
+    return (
+      <Suspense fallback={null}>
+        <FloatingNoticesFixture />
+      </Suspense>
+    );
+  }
   if (window.location.pathname === "/auto-merge-error") {
     return (
       <Suspense fallback={null}>
         <AutoMergeErrorFixture />
+      </Suspense>
+    );
+  }
+  if (window.location.pathname === "/environment-network-policy") {
+    return (
+      <Suspense fallback={null}>
+        <EnvironmentNetworkPolicyFixture />
       </Suspense>
     );
   }

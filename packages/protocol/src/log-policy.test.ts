@@ -5,7 +5,13 @@ import {
   effectiveLogLevel,
   formatLogAreaLevels,
   legacyDebugLogDetail,
+  LOG_DETAIL_EXPIRY_MS,
   logDetailAreas,
+  logDetailExpiryAction,
+  logDetailIsRaised,
+  nextLogDetailExpiresAt,
+  parseLogDetailExpiresAt,
+  revertRaisedLogDetail,
   logDetailEnablesBridgeDiagnostics,
   parseBridgeLogPolicy,
   parseLogDetail,
@@ -149,5 +155,100 @@ describe("parseBridgeLogPolicy", () => {
     expect(parseBridgeLogPolicy({ level: "info", seq: -1 })).toBeNull();
     expect(parseBridgeLogPolicy({ level: "info", seq: 1.5 })).toBeNull();
     expect(parseBridgeLogPolicy({ level: "loud", seq: 1 })).toBeNull();
+  });
+});
+
+describe("raised detail and its expiry", () => {
+  const now = Date.parse("2026-11-05T12:00:00.000Z");
+  const inADay = new Date(now + LOG_DETAIL_EXPIRY_MS).toISOString();
+  const bridgeDebug = { level: "info", areaLevels: { bridge: "debug" } } as const;
+
+  test("only a level above info is raised; a quieter area is not", () => {
+    expect(logDetailIsRaised(defaultLogDetail())).toBe(false);
+    expect(logDetailIsRaised({ level: "warn", areaLevels: { updater: "error" } })).toBe(false);
+    expect(logDetailIsRaised({ level: "debug", areaLevels: {} })).toBe(true);
+    expect(logDetailIsRaised(bridgeDebug)).toBe(true);
+  });
+
+  test("reverting lowers raised levels and keeps quieter ones", () => {
+    expect(
+      revertRaisedLogDetail({
+        level: "trace",
+        areaLevels: { bridge: "debug", updater: "warn", desktop: "info" },
+      }),
+    ).toEqual({ level: "info", areaLevels: { desktop: "info", updater: "warn" } });
+    expect(revertRaisedLogDetail({ level: "warn", areaLevels: { git: "trace" } })).toEqual({
+      level: "warn",
+      areaLevels: {},
+    });
+  });
+
+  test("a write that raises detail stores an expiry a day out", () => {
+    expect(nextLogDetailExpiresAt({ logDetail: bridgeDebug }, { logDetail: {} }, now)).toBe(inADay);
+  });
+
+  test("an older client's write (no expiry keys) still gets one", () => {
+    expect(nextLogDetailExpiresAt({ logDetail: bridgeDebug }, null, now)).toBe(inADay);
+  });
+
+  test("detail at info, or kept on, stores none", () => {
+    expect(nextLogDetailExpiresAt({ logDetail: defaultLogDetail() }, null, now)).toBeUndefined();
+    expect(
+      nextLogDetailExpiresAt({ logDetail: bridgeDebug, logDetailKeepRaised: true }, null, now),
+    ).toBeUndefined();
+  });
+
+  test("the same raised levels keep their expiry; changed ones start again", () => {
+    const stored = { logDetail: bridgeDebug, logDetailExpiresAt: "2026-11-05T20:00:00.000Z" };
+    expect(nextLogDetailExpiresAt({ logDetail: bridgeDebug }, stored, now)).toBe(
+      "2026-11-05T20:00:00.000Z",
+    );
+    expect(
+      nextLogDetailExpiresAt({ logDetail: { level: "debug", areaLevels: {} } }, stored, now),
+    ).toBe(inADay);
+    // Turning "keep" off starts a fresh day rather than reverting at once.
+    expect(
+      nextLogDetailExpiresAt(
+        { logDetail: bridgeDebug },
+        { logDetail: bridgeDebug, logDetailKeepRaised: true },
+        now,
+      ),
+    ).toBe(inADay);
+  });
+
+  test("the check stamps, clears and reverts, and is otherwise quiet", () => {
+    expect(logDetailExpiryAction({ logDetail: defaultLogDetail() }, now)).toEqual({ kind: "none" });
+    expect(logDetailExpiryAction({ logDetail: bridgeDebug }, now)).toEqual({
+      kind: "stamp",
+      expiresAt: inADay,
+    });
+    // A config from before the split with saving on maps to bridge detail, so it expires too.
+    expect(logDetailExpiryAction({ debugLogging: true }, now).kind).toBe("stamp");
+    expect(
+      logDetailExpiryAction({ logDetail: defaultLogDetail(), logDetailExpiresAt: inADay }, now),
+    ).toEqual({ kind: "clear" });
+    expect(
+      logDetailExpiryAction(
+        { logDetail: bridgeDebug, logDetailKeepRaised: true, logDetailExpiresAt: inADay },
+        now,
+      ),
+    ).toEqual({ kind: "clear" });
+    expect(
+      logDetailExpiryAction({ logDetail: bridgeDebug, logDetailExpiresAt: inADay }, now),
+    ).toEqual({ kind: "none" });
+    expect(
+      logDetailExpiryAction(
+        { logDetail: bridgeDebug, logDetailExpiresAt: "2026-11-05T12:00:00.000Z" },
+        now,
+      ),
+    ).toEqual({ kind: "revert", detail: defaultLogDetail() });
+  });
+
+  test("an expiry that is not a timestamp counts as none", () => {
+    expect(parseLogDetailExpiresAt("tomorrow")).toBeNull();
+    expect(parseLogDetailExpiresAt(1_793_000_000_000)).toBeNull();
+    expect(
+      logDetailExpiryAction({ logDetail: bridgeDebug, logDetailExpiresAt: "soon" }, now),
+    ).toEqual({ kind: "stamp", expiresAt: inADay });
   });
 });

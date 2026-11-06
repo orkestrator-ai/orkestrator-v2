@@ -124,6 +124,7 @@ import {
   clearPersistedVirtuosoState,
 } from "@/hooks/useVirtuosoScrollState";
 import { useHeldTranscriptPlace, useRestoreHeldPlace } from "@/hooks/useHeldTranscriptPlace";
+import { useRestorePlaceAfterHistoryDrop } from "@/hooks/useRestorePlaceAfterHistoryDrop";
 import { useAutoLoadEarlier } from "./useAutoLoadEarlier";
 import { readTranscriptTail } from "./transcript-tail";
 import {
@@ -1185,6 +1186,26 @@ export function SharedNativeAgentController({
     },
     [loadEarlierMessages, loadEarlierPlace, scrollProps.controller, sessionKey],
   );
+  // History the reader was in can drop under them (a bridge restart renames
+  // the rows it joined to); page it back and return them to their place.
+  const loadEarlierToRestorePlace = useCallback(async () => {
+    const request = { sessionKey };
+    setEarlierRequest(request);
+    try {
+      await loadEarlierMessages();
+    } finally {
+      setEarlierRequest((current) => (current === request ? null : current));
+    }
+  }, [loadEarlierMessages, sessionKey]);
+  const restoringDroppedPlace = useRestorePlaceAfterHistoryDrop({
+    sessionKey,
+    messages,
+    controller: scrollProps.controller,
+    loading: loadingEarlier,
+    canLoadEarlier: canLoadEarlierHistory,
+    loadEarlier: loadEarlierToRestorePlace,
+    scrollToIndex,
+  });
   // Opens with a history page above the live window, and pages on as the
   // reader nears the top, without the button.
   const autoLoadEarlierSentinel = useAutoLoadEarlier({
@@ -1193,7 +1214,7 @@ export function SharedNativeAgentController({
     settled: hasCompletedRead && transcriptAvailability === "current",
     canLoadEarlier: canLoadEarlierHistory,
     headId: projection?.messages[0]?.id,
-    loading: loadingEarlier,
+    loading: loadingEarlier || restoringDroppedPlace,
     available: canLoadEarlierAutomatically,
     load: loadEarlierAutomatically,
   });

@@ -25,6 +25,7 @@ import {
 } from "./NativeMessage.shared";
 import { toolRowPreview } from "./NativeMessage.basic-parts";
 import { pureprependCount } from "@/lib/transcript-scroll/prepend";
+import { INNER_SEEK_EVENT } from "@/lib/transcript-scroll/transcript-scroll-controller";
 import { keepMountedOverscan, useRatchetedOverscan } from "@/lib/transcript-scroll/keep-mounted";
 import {
   LiveArrivalsContext,
@@ -66,6 +67,19 @@ export function toolGroupEntryKey(part: NativeMessagePart, index: number): strin
 }
 
 /** The ceiling in pixels, for the virtualized body that needs an explicit height. */
+/**
+ * The entry a transcript anchor names, by the same id the entry renders as
+ * its `data-transcript-part-id`; -1 when the group does not hold it.
+ */
+export function toolGroupEntryIndex(entries: readonly NativeMessagePart[], partId: string): number {
+  return entries.findIndex(
+    (entry) =>
+      (entry.type === "tool-invocation"
+        ? (entry.toolUseId ?? entry.sourcePartId)
+        : entry.sourcePartId) === partId,
+  );
+}
+
 function useBodyMaxHeightPx(): number {
   const read = () => {
     if (typeof window === "undefined") return 448;
@@ -251,10 +265,12 @@ function VirtualizedToolGroupBody({
     setTracked({ entries, base });
   }
   const baseRef = useRef(INNER_FIRST_ITEM_INDEX_BASE);
+  const entriesRef = useRef(entries);
   const innerScrollerRef = useRef<HTMLElement | null>(null);
   const [following, setFollowing] = useState(initialPlace.atEnd);
   useLayoutEffect(() => {
     baseRef.current = base;
+    entriesRef.current = entries;
   });
   // A selection (or, failing that, focus) inside an entry keeps that entry
   // mounted while it stays near the window, with the transcript's own bound;
@@ -293,6 +309,21 @@ function VirtualizedToolGroupBody({
       host.removeEventListener("focusin", onFocusIn);
       host.removeEventListener("focusout", onFocusOut);
     };
+  }, []);
+  // The transcript asks for a member this list virtualized away (a reader's
+  // held place inside the group); bring it in, and the transcript then holds
+  // it at its offset.
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host) return;
+    const onSeek = (event: Event) => {
+      const partId = (event as CustomEvent<{ partId?: string }>).detail?.partId;
+      const index = partId ? toolGroupEntryIndex(entriesRef.current, partId) : -1;
+      if (index < 0) return;
+      handle.current?.scrollToIndex({ index, align: "start" });
+    };
+    host.addEventListener(INNER_SEEK_EVENT, onSeek);
+    return () => host.removeEventListener(INNER_SEEK_EVENT, onSeek);
   }, []);
   // A selection outranks focus, as in the transcript.
   const protectedIndex = selectedIndex ?? focusedIndex;

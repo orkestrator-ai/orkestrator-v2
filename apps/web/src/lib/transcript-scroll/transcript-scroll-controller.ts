@@ -79,6 +79,16 @@ const REISSUE_AFTER_UNMOUNTED_FRAMES = 8;
 const MAX_INDEX_REISSUES = 2;
 /** Frames a mounted row may lack its target part before falling back to the row. */
 const PART_FALLBACK_FRAMES = 4;
+/** Frames an inner viewport may take to bring a sought member into its window. */
+const INNER_SEEK_FRAMES = 20;
+
+/**
+ * Asks an inner viewport (an open long tool group) to bring a member it has
+ * virtualized away into its window, dispatched on the inner viewport element
+ * with the member's part id as `detail.partId`. The member's offset is then
+ * corrected like a mounted one.
+ */
+export const INNER_SEEK_EVENT = "ork-transcript-inner-seek";
 
 /** A reader's place is recaptured once their scrolling has been idle this long. */
 const READING_ANCHOR_IDLE_MS = 150;
@@ -203,6 +213,8 @@ interface Operation {
   lastScrollHeight: number;
   unmountedFrames: number;
   partMissingFrames: number;
+  /** Frames spent waiting for an inner viewport to mount a sought member. */
+  innerSeekFrames: number;
   reissues: number;
   /** An index navigation has been issued for this operation. */
   indexIssued: boolean;
@@ -934,6 +946,7 @@ export class TranscriptScrollController {
       lastScrollHeight: this.scroller?.scrollHeight ?? 0,
       unmountedFrames: 0,
       partMissingFrames: 0,
+      innerSeekFrames: 0,
       reissues: 0,
       indexIssued: false,
       measuredSinceFrame: false,
@@ -1348,7 +1361,19 @@ export class TranscriptScrollController {
     );
     if (!innerScroller) return false;
     const member = findPart(innerScroller, inner.partId);
-    if (!member) return false;
+    if (!member) {
+      // Virtualized away (a history page re-filled the group in front of it):
+      // ask the inner viewport for it each frame, for a few frames, since the
+      // group may render the member's entry a frame or more after the rows.
+      if (op.innerSeekFrames >= INNER_SEEK_FRAMES) return false;
+      if (phase === "frame") {
+        op.innerSeekFrames += 1;
+        innerScroller
+          .closest("[data-transcript-inner-viewport]")
+          ?.dispatchEvent(new CustomEvent(INNER_SEEK_EVENT, { detail: { partId: inner.partId } }));
+      }
+      return true;
+    }
     const viewportTop = el.getBoundingClientRect().top;
     const error = member.getBoundingClientRect().top - viewportTop - inner.screenOffsetPx;
     const max = Math.max(0, innerScroller.scrollHeight - innerScroller.clientHeight);

@@ -255,7 +255,7 @@ describe("recorded code-mode MCP calls on reload", () => {
     expect(messages.every((message) => message.turnId === FIXTURE_TURN)).toBe(true);
   });
 
-  test("a cell that also ran other recorded work keeps its exec row beside the call", async () => {
+  test("a cell that also ran a recorded command shows both calls, as live, and no exec row", async () => {
     const messages = await hydrate(
       THREAD,
       rollout([
@@ -266,9 +266,11 @@ describe("recorded code-mode MCP calls on reload", () => {
       ]),
     );
 
+    // The MCP call keeps the slot its source reserved when the cell opened, so
+    // it stays ahead of a command recorded later in the same cell.
     expect(toolParts(messages).map((part) => [part.toolName, part.toolUseId])).toEqual([
-      ["exec", "cell-1"],
       ["publish_artifact", "exec-publish-1"],
+      ["bash", "cmd-1"],
     ]);
     expect(publishArtifactCallContract(publishParts(messages)[0]!)).toEqual({
       ...SUCCESSFUL_PUBLISH_CONTRACT,
@@ -395,7 +397,7 @@ describe("exec-cell-only fallback", () => {
     expect(toolParts(messages)).toEqual([]);
   });
 
-  test("an interrupted cell that recorded other work keeps its row without claiming success", async () => {
+  test("an interrupted cell with unrenderable recorded work keeps its row without claiming success", async () => {
     const messages = await hydrate(
       THREAD,
       rollout([

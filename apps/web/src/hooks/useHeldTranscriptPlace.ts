@@ -65,7 +65,8 @@ export function sourceIndexOf(messages: readonly NativeMessage[]): SourceIndex {
   return index;
 }
 
-function toScrollAnchor(anchor: SemanticAnchor): TranscriptScrollAnchor {
+/** A captured place as the list's scroll target. */
+export function toScrollAnchor(anchor: SemanticAnchor): TranscriptScrollAnchor {
   return {
     partId: anchor.partId,
     rowKey: anchor.rowKey,

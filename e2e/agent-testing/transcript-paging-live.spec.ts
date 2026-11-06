@@ -3,7 +3,9 @@
  * `dev:test --fixture` profile.
  *
  * Opt-in only (`ORKESTRATOR_AGENT_TEST_LIVE_TRANSCRIPT_PAGING=1`): both cases
- * run real provider turns on the host's Claude and Codex credentials.
+ * run real provider turns on the host's Claude and Codex credentials, unless
+ * `ORKESTRATOR_AGENT_TEST_PAGING_CODEX_LOOPBACK=1` runs the native case on the
+ * profile's pinned Codex against a loopback model (see below).
  *
  * A transcript only outgrows the live window when an agent answers many
  * times, so each case lays a trail of files in the environment: every file
@@ -27,7 +29,11 @@
  *    returns every row once and in order. In the browser, "Load earlier
  *    messages" brings back the first prompt, keeps the reader's place, and a
  *    tool row from the loaded page expands to its deferred output. The same
- *    holds after a reload.
+ *    holds after a reload. A Codex tab also has its bridge restarted under it
+ *    after the first click, which is the first replay after live streaming and
+ *    renames every row (`replayedRowId`): the backend must still page every
+ *    row once, and the mounted tab must keep the reader's place and show no
+ *    row twice.
  * 2. A Multi Review whose reviewers are told (through an `AGENTS.md` that is
  *    part of the change) to walk a trail before reviewing. While they
  *    run, progress probes must keep moving and no stall may be reported.
@@ -48,18 +54,35 @@
  * `ORKESTRATOR_AGENT_TEST_PAGING_REVIEW_STOPS`. Measurements are recorded as
  * Playwright annotations in `results.json`; prompts and transcript text never
  * reach test output.
+ *
+ * With `ORKESTRATOR_AGENT_TEST_PAGING_CODEX_LOOPBACK=1` only the native case
+ * runs, as Codex, tool calls only, with the profile's own Codex home pointed
+ * at `transcript-paging-codex-model.ts`, which walks the trail itself. Start
+ * the profile with a made-up API key so no real login is copied in:
+ *
+ *   CODEX_HOME=<throwaway dir whose auth.json holds a made-up OPENAI_API_KEY> \
+ *     mise run dev:test --profile <name> --fixture --headless \
+ *     --credential-source codex --agent-platforms codex
  */
 import { expect, test, type Locator, type Page } from "./browser-test";
 import { expectPlaceHeld, holdPosition } from "../transcript-hold";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { promises as fs } from "node:fs";
+import { existsSync, promises as fs, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { createInterface } from "node:readline";
+import { snapshotFixtureFiles } from "./codex-fixture-files";
 import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
 import { DEFAULT_NATIVE_AGENT_LIVE_WINDOW } from "@orkestrator/protocol/native-agent";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 
-type Status = { status: string; profile?: string; browserUrl?: string; testProject?: string };
+type Status = {
+  status: string;
+  profile?: string;
+  browserUrl?: string;
+  testProject?: string;
+  dataDir?: string;
+};
 type Project = { id: string; name: string; localPath: string | null };
 type Environment = { id: string; name: string; worktreePath?: string | null };
 type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
@@ -97,9 +120,16 @@ type ReviewerPage = (MessagePage & { status: "page" }) | { status: "expired"; re
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 const profile = process.env.ORKESTRATOR_AGENT_TEST_PROFILE ?? "codex-qa";
 const LIVE_OPT_IN = process.env.ORKESTRATOR_AGENT_TEST_LIVE_TRANSCRIPT_PAGING === "1";
+/**
+ * The native case on the profile's pinned Codex against a loopback model:
+ * no login and no billed turn. Implies a Codex native case without notes.
+ */
+const CODEX_LOOPBACK = process.env.ORKESTRATOR_AGENT_TEST_PAGING_CODEX_LOOPBACK === "1";
 /** The native case's platform: Claude by default, or Codex. */
 const NATIVE_PLATFORM: "claude" | "codex" =
-  process.env.ORKESTRATOR_AGENT_TEST_PAGING_NATIVE_PLATFORM === "codex" ? "codex" : "claude";
+  CODEX_LOOPBACK || process.env.ORKESTRATOR_AGENT_TEST_PAGING_NATIVE_PLATFORM === "codex"
+    ? "codex"
+    : "claude";
 const NATIVE_LABEL = NATIVE_PLATFORM === "codex" ? "Codex" : "Claude";
 const NATIVE_MODEL = process.env.ORKESTRATOR_AGENT_TEST_PAGING_NATIVE_MODEL;
 const REVIEW_CLAUDE_MODEL =
@@ -117,7 +147,8 @@ const NATIVE_STOPS = Number(process.env.ORKESTRATOR_AGENT_TEST_PAGING_NATIVE_STO
  * run is tool calls only and every row boundary is the bridge's per-response
  * one (`thread/tokenUsage/updated`), not a message after a call.
  */
-const CODEX_STEP_NOTES = process.env.ORKESTRATOR_AGENT_TEST_PAGING_CODEX_NOTES !== "0";
+const CODEX_STEP_NOTES =
+  !CODEX_LOOPBACK && process.env.ORKESTRATOR_AGENT_TEST_PAGING_CODEX_NOTES !== "0";
 const REVIEW_STOPS = Number(process.env.ORKESTRATOR_AGENT_TEST_PAGING_REVIEW_STOPS ?? "130");
 const LIVE_WINDOW = DEFAULT_NATIVE_AGENT_LIVE_WINDOW.messages;
 /** A small page size, so the backend's cursors are followed several times. */
@@ -282,6 +313,22 @@ function rowText(row: Row): string {
     .join("");
 }
 
+/** The ids of every tool call in the rows, oldest first, grouped calls included. */
+function toolCallIds(rows: Row[]): string[] {
+  const ids: string[] = [];
+  const visit = (parts: unknown) => {
+    if (!Array.isArray(parts)) return;
+    for (const part of parts) {
+      if (typeof part !== "object" || part === null) continue;
+      const record = part as { type?: unknown; toolUseId?: unknown; parts?: unknown };
+      if (record.type === "tool-invocation") ids.push(String(record.toolUseId));
+      visit(record.parts);
+    }
+  };
+  for (const row of rows) visit(row.parts);
+  return ids;
+}
+
 /** A deferred body for the oversized fixture stop, from that tool's own arguments. */
 function findDeferredTool(
   trail: Trail,
@@ -357,6 +404,33 @@ async function firstVisibleRow(list: Locator) {
     }
     return null;
   });
+}
+
+/**
+ * The first visible source part that names a trail stop. A folded group's own
+ * header is a source part too, and names none.
+ */
+async function firstVisibleStop(list: Locator, trail: Trail) {
+  const names = trail.files.map((file) => file.replace(".txt", ""));
+  const found = await list.evaluate((element, stopNames) => {
+    const top = element.getBoundingClientRect().top;
+    for (const tool of element.querySelectorAll<HTMLElement>("[data-transcript-part-id]")) {
+      const rect = tool.getBoundingClientRect();
+      if (rect.bottom <= top + 1 || rect.top >= top + element.clientHeight) continue;
+      const text = tool.textContent ?? "";
+      if (!stopNames.some((name) => text.includes(name))) continue;
+      return {
+        text,
+        index: Number(
+          tool.closest<HTMLElement>("[data-chat-message-index]")?.dataset.chatMessageIndex,
+        ),
+        offset: Math.round(rect.top - top),
+        scrollTop: Math.round(element.scrollTop),
+      };
+    }
+    return null;
+  }, names);
+  return found ? { ...found, stop: trail.stopInText(found.text) } : null;
 }
 
 /**
@@ -545,6 +619,129 @@ async function expandStop(list: Locator, trail: Trail, stop: number): Promise<vo
   });
 }
 
+/**
+ * Every row and source part the list renders, scanned top to bottom with the
+ * wheel, content-free: row keys by index, the first trail stop each part
+ * names, and the hidden-call counts folded groups offer. A row shown twice
+ * appears as one stop named by two parts, or as more rows or calls.
+ */
+async function scanRendered(page: Page, list: Locator, trail: Trail) {
+  const names = trail.files.map((file) => file.replace(".txt", ""));
+  const keysByIndex = new Map<number, string>();
+  const stopsByPart = new Map<string, number>();
+  const folded = new Map<string, number>();
+  await oldestRenderedText(page, list);
+  const box = await list.boundingBox();
+  if (!box) throw new Error("the transcript list is not laid out");
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  for (let step = 0; step < 400; step += 1) {
+    const seen = await list.evaluate((element, stopNames) => {
+      const firstStop = (text: string) => {
+        let best: { at: number; stop: number } | undefined;
+        stopNames.forEach((name, index) => {
+          const at = text.indexOf(name);
+          if (at >= 0 && (!best || at < best.at)) best = { at, stop: index + 1 };
+        });
+        return best?.stop;
+      };
+      return {
+        rows: Array.from(element.querySelectorAll<HTMLElement>("[data-chat-message-index]")).map(
+          (row) =>
+            [Number(row.dataset.chatMessageIndex), row.dataset.chatMessageKey ?? ""] as const,
+        ),
+        parts: Array.from(element.querySelectorAll<HTMLElement>("[data-transcript-part-id]")).map(
+          (part) =>
+            [part.dataset.transcriptPartId ?? "", firstStop(part.textContent ?? "")] as const,
+        ),
+        // Hidden calls per folded group, keyed by the row that holds it.
+        folds: Array.from(element.querySelectorAll<HTMLElement>("button")).flatMap((button) => {
+          const label = button.getAttribute("aria-label") ?? button.textContent ?? "";
+          const match = /^Show (\d+) tool calls:/.exec(label);
+          const row = button.closest<HTMLElement>("[data-chat-message-index]");
+          return match && row
+            ? [[row.dataset.chatMessageKey ?? "", Number(match[1])] as const]
+            : [];
+        }),
+        atBottom: element.scrollTop + element.clientHeight >= element.scrollHeight - 2,
+      };
+    }, names);
+    for (const [index, key] of seen.rows) {
+      const known = keysByIndex.get(index);
+      expect(known === undefined || known === key, `row ${index} changed key while scanning`).toBe(
+        true,
+      );
+      keysByIndex.set(index, key);
+    }
+    for (const [part, stop] of seen.parts) {
+      if (stop !== undefined) stopsByPart.set(part, stop);
+    }
+    for (const [row, calls] of seen.folds) folded.set(row, calls);
+    if (seen.atBottom) break;
+    await page.mouse.wheel(0, 500);
+    await page.waitForTimeout(60);
+  }
+  const keys = [...keysByIndex.values()];
+  const partsByStop = new Map<number, string[]>();
+  for (const [part, stop] of stopsByPart) {
+    partsByStop.set(stop, [...(partsByStop.get(stop) ?? []), part]);
+  }
+  return {
+    rows: keysByIndex.size,
+    lastIndex: Math.max(-1, ...keysByIndex.keys()),
+    distinctKeys: new Set(keys).size,
+    keys,
+    stopsRendered: partsByStop.size,
+    stopsRenderedTwice: [...partsByStop]
+      .filter(([, parts]) => parts.length > 1)
+      .map(([stop]) => stop),
+    foldedCalls: [...folded.values()].reduce((sum, calls) => sum + calls, 0),
+  };
+}
+
+/** Starts `transcript-paging-codex-model.ts` and returns its base URL. */
+async function startLoopbackModel(): Promise<{ baseUrl: string; child: ChildProcess }> {
+  const child = spawn("bun", [path.join(import.meta.dirname, "transcript-paging-codex-model.ts")], {
+    stdio: ["ignore", "pipe", "inherit"],
+  });
+  const lines = createInterface({ input: child.stdout! });
+  const baseUrl = await new Promise<string>((resolve, reject) => {
+    lines.once("line", resolve);
+    child.once("exit", () => reject(new Error("the loopback model exited")));
+  });
+  return { baseUrl, child };
+}
+
+/**
+ * Points the profile's own Codex home (never the host's) at the loopback
+ * model, and returns the restore. A top-level key goes before any table.
+ */
+function pointCodexAt(status: Status, baseUrl: string): () => void {
+  expect(status.dataDir, "dev:status reported no data directory").toBeTruthy();
+  const configFile = path.join(status.dataDir!, "agent-credentials", "codex", "config.toml");
+  const restore = snapshotFixtureFiles([configFile]);
+  const earlier = existsSync(configFile)
+    ? readFileSync(configFile, "utf8").replace(/^openai_base_url = .*\n/m, "")
+    : "";
+  writeFileSync(configFile, `openai_base_url = ${JSON.stringify(baseUrl)}\n${earlier}`, {
+    mode: 0o600,
+  });
+  return restore;
+}
+
+/** Stops and starts the environment's Codex bridge, and proves it is a new process. */
+async function restartCodexBridge(invoke: Invoke, environmentId: string) {
+  const before = await invoke<{ pid: number | null }>("get_local_codex_server_status", {
+    environmentId,
+  });
+  expect(before.pid, "no Codex bridge was running").toBeGreaterThan(0);
+  await invoke("stop_local_codex_server_cmd", { environmentId });
+  const restarted = await invoke<{ pid: number }>("start_local_codex_server_cmd", {
+    environmentId,
+  });
+  expect(restarted.pid).toBeGreaterThan(0);
+  expect(restarted.pid, "the bridge was not replaced").not.toBe(before.pid);
+}
+
 async function openApp(page: Page, status: Status, fixture: Project, environmentName: string) {
   await page.goto(status.browserUrl!);
   const expand = page.getByRole("button", { name: `Expand project ${fixture.name}` });
@@ -605,6 +802,10 @@ test.describe("live transcript paging", () => {
     await page.setViewportSize({ width: 1440, height: 1000 });
     const { status, invoke, fixture } = await connect(page);
     const environments: Environment[] = [];
+    // The loopback is in place before the environment's Codex bridge starts.
+    const loopback = CODEX_LOOPBACK ? await startLoopbackModel() : undefined;
+    const restoreCodexConfig = loopback ? pointCodexAt(status, loopback.baseUrl) : undefined;
+    note("native-provider", loopback ? "pinned Codex, loopback model" : "real provider");
     try {
       const environment = await createEnvironment(invoke, fixture, "paging-native");
       environments.push(environment);
@@ -806,31 +1007,153 @@ test.describe("live transcript paging", () => {
 
       // A tab mounted through the whole turn may have retained every row as
       // the live window advanced. Start from a fresh bounded snapshot so the
-      // click actually prepends history instead of just retiring its cursor.
+      // tab actually prepends history instead of just retiring its cursor.
       await page.reload();
       await openApp(page, status, fixture, environment.name);
-      // Browser: Load earlier messages brings the start back and keeps the reader's place.
+      // Browser: earlier history brings the start back and keeps the reader's place.
       const list = scroller(page);
       await expect(list).toBeVisible({ timeout: 30_000 });
       const verifyBrowserPaging = async (label: string) => {
         const control = page.getByRole("button", { name: "Load earlier messages", exact: true });
+        const loading = page.getByRole("button", { name: "Loading…", exact: true });
         const clicks: Awaited<ReturnType<typeof loadEarlierOnce>>[] = [];
         for (let click = 0; click < 10; click += 1) {
           await wheelUp(page, list);
           await page.waitForTimeout(300);
-          if (click > 0 && !(await control.isVisible())) break;
+          await expect(loading).toHaveCount(0, { timeout: 60_000 });
+          // The tab opens with a history page and pages on near the top by
+          // itself (`useAutoLoadEarlier`), so a short history may never offer
+          // the button. Every page it does offer must keep the reader's place.
+          if (!(await control.isVisible())) break;
           clicks.push(await loadEarlierOnce(page, list, trail, `${label}-${click + 1}`));
         }
-        expect(clicks.length).toBeGreaterThan(0);
+        note(`${label}-clicks`, clicks.length);
         for (const measured of clicks) {
           expectPlaceHeld(measured, label);
         }
-        const oldest = await oldestRenderedText(page, list);
-        expect(oldest, `${label}: the first prompt is not the oldest row`).toContain(trail.start);
+        await expect
+          .poll(() => oldestRenderedText(page, list), { timeout: 60_000, intervals: [1_000] })
+          .toContain(trail.start);
         // A tool row from the loaded history expands to its deferred output.
         await expandStop(list, trail, 2);
       };
       await verifyBrowserPaging("native");
+
+      /**
+       * The bridge restarts under the mounted tab while it holds a loaded
+       * history page and the reader is in it. The new bridge's first replay
+       * renames every row the live stream minted (`replayedRowId`), so the tab
+       * must swap them without showing any twice or moving the reader, and the
+       * backend must still page each row once.
+       */
+      if (NATIVE_PLATFORM === "codex") {
+        const rowIds = (rows: Row[]) => rows.map((row) => String(row.id));
+        const idsBefore = rowIds(whole.rows);
+        // `expandStop` opened the folded calls, so the list scrolls.
+        const renderedBefore = await scanRendered(page, list, trail);
+        await oldestRenderedText(page, list);
+        const box = await list.boundingBox();
+        await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2);
+        for (let step = 0; step < 3; step += 1) await page.mouse.wheel(0, 500);
+        await page.waitForTimeout(500);
+        const before = await firstVisibleStop(list, trail);
+        const anchorStop = before?.stop;
+        expect(anchorStop, "restart: no trail stop is on screen").toBeDefined();
+
+        await restartCodexBridge(invoke, environment.id);
+        // The backend sees the replay once the new bridge answers.
+        let replayed: Awaited<ReturnType<typeof wholeTranscript>> | undefined;
+        const backendRekeyed = await expect
+          .poll(
+            async () => {
+              replayed = await wholeTranscript().catch(() => undefined);
+              return replayed !== undefined && rowIds(replayed.rows).join() !== idsBefore.join();
+            },
+            { timeout: 60_000, intervals: [1_000] },
+          )
+          .toBe(true)
+          .then(() => true)
+          .catch(() => false);
+        replayed ??= await wholeTranscript();
+        const idsAfter = rowIds(replayed.rows);
+        const order = trail.verifyOrder(replayed.rows, "native-after-restart");
+        const callsBefore = toolCallIds(whole.rows);
+        const callsAfter = toolCallIds(replayed.rows);
+        const stopsByRow = (rows: Row[]) => rows.map((row) => trail.stopsRead(row).join());
+
+        // The mounted tab adopts the renamed rows: wait for its keys to move.
+        const renderedKeys = () =>
+          list.evaluate((element) =>
+            Array.from(element.querySelectorAll<HTMLElement>("[data-chat-message-index]")).map(
+              (row) => row.dataset.chatMessageKey ?? "",
+            ),
+          );
+        const keysOnScreen = (await renderedKeys()).join();
+        const tabRekeyed = await expect
+          .poll(async () => (await renderedKeys()).join() !== keysOnScreen, {
+            timeout: 30_000,
+            intervals: [500],
+          })
+          .toBe(true)
+          .then(() => true)
+          .catch(() => false);
+        // Let any follow-up poll land before measuring.
+        await page.waitForTimeout(3_000);
+        const anchor = await rowPosition(list, trail, anchorStop!);
+        const held = {
+          anchorStop,
+          anchorIndexBefore: before?.index,
+          anchorAfter: anchor,
+          hold: anchor ? holdPosition(before!, anchor) : null,
+          scrollTopAfter: anchor?.scrollTop,
+        };
+        const renderedAfter = await scanRendered(page, list, trail);
+        note("native-bridge-restart", {
+          backend: {
+            rowsBefore: idsBefore.length,
+            rowsAfter: idsAfter.length,
+            rekeyed: backendRekeyed,
+            keptIds: idsAfter.filter((id) => idsBefore.includes(id)).length,
+            calls: callsAfter.length,
+            keptCallIds: callsAfter.filter((id) => callsBefore.includes(id)).length,
+            ...order,
+          },
+          tab: {
+            rekeyed: tabRekeyed,
+            before: { ...renderedBefore, keys: undefined },
+            after: { ...renderedAfter, keys: undefined },
+            keptKeys: renderedAfter.keys.filter((key) => renderedBefore.keys.includes(key)).length,
+          },
+          anchorInHistoryPage: anchorStop! < firstStopInTail,
+          held,
+        });
+        expect(order.highest, "restart: the replay lost trail stops").toBe(trail.stops);
+        expect(replayed.complete, "restart: paging no longer reaches the prompt").toBe(true);
+        expect(idsAfter.length, "restart: the backend's row count changed").toBe(idsBefore.length);
+        // Rows are renamed by design; the calls in them keep the live ids, which
+        // is what a reader's opened group and held place are keyed by.
+        expect(callsAfter, "restart: the replay renamed tool calls").toEqual(callsBefore);
+        expect(
+          stopsByRow(replayed.rows),
+          "restart: the replay moved a stop to another row",
+        ).toEqual(stopsByRow(whole.rows));
+        expectPlaceHeld(held, "native-after-restart");
+        expect(renderedAfter.distinctKeys, "restart: a row key is rendered twice").toBe(
+          renderedAfter.rows,
+        );
+        expect(renderedAfter.stopsRenderedTwice, "restart: a trail stop is rendered twice").toEqual(
+          [],
+        );
+        expect(renderedAfter.rows, "restart: the tab's row count changed").toBe(
+          renderedBefore.rows,
+        );
+        expect(renderedAfter.stopsRendered, "restart: the tab lost trail stops").toBe(
+          renderedBefore.stopsRendered,
+        );
+        expect(renderedAfter.foldedCalls, "restart: the folded call count changed").toBe(
+          renderedBefore.foldedCalls,
+        );
+      }
 
       await page.reload();
       await openApp(page, status, fixture, environment.name);
@@ -838,10 +1161,13 @@ test.describe("live transcript paging", () => {
       await verifyBrowserPaging("native-after-reload");
     } finally {
       await removeEnvironments(invoke, environments);
+      restoreCodexConfig?.();
+      loopback?.child.kill();
     }
   });
 
   test("Multi Review reviewers page back past the live window", async ({ page }) => {
+    test.skip(CODEX_LOOPBACK, "the loopback model drives only the native Codex case");
     test.setTimeout(TURN_TIMEOUT_MS + 15 * 60_000);
     page.setDefaultTimeout(15_000);
     await page.setViewportSize({ width: 1440, height: 1000 });

@@ -405,7 +405,7 @@ describe("live benchmark lifecycle", () => {
     const result = await runArm(options(), "candidate", 1, "/stub", undefined, "live", h.runtime);
     expect(result.error).toContain("Owned profile stop failed");
     expect(mise).toHaveBeenCalledTimes(1);
-    expect(mise).toHaveBeenCalledWith(["dev:stop", "--profile", result.profile]);
+    expect(mise).toHaveBeenCalledWith(["dev:stop", "--profile", result.profile], undefined);
   });
 
   test("probe results include unusable counts and percentiles", async () => {

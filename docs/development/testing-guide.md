@@ -937,6 +937,78 @@ mise exec -- bun scripts/recurring-live-ab.ts --arms candidate --repeats 1 \
   --out output/benchmarks/recurring-long-soak.json
 ```
 
+##### Before and after across commits
+
+`--checkout DIR` runs the profile from another checkout: its launcher,
+`dev:status`, `dev:stop`, `dev:reset` and CLI all run there, while the
+sampling, freshness probes and summary stay this checkout's. Put a detached
+worktree of the older commit under the git-ignored `output/benchmarks/`, run
+`bun install --frozen-lockfile` in it (and in its `bridges/claude-bridge`),
+and give each side a `--label`. mise is trusted for that checkout in the
+child processes only (`MISE_TRUSTED_CONFIG_PATHS`). Remove the worktree with
+`git worktree remove` when done: a checkout left under `output/` is collected
+by a bare `bun test` path filter.
+
+`--window hidden|visible|launcher-default` decides the Electron window.
+`hidden` (the default) passes `--headless`; a launcher older than that flag
+(before #1738, 2026-11-04) rejects it and always shows its window, so compare
+such a commit with `--window launcher-default` on its side and
+`--window visible` (`--no-headless`) on the newer side. Then the renderer is
+a visible client on both sides, which matters because a hidden window's
+renderer polls less.
+
+A backend older than its `AGENT_TEST_SAFE_ENV_NAMES` entry (2026-11-01, after `0bd214ee`) for
+`ORKESTRATOR_HOST_REACHABILITY_CHECK` drops the switch and runs the boot
+probe, which creates Docker networks. Add that one entry to the scratch
+checkout's `apps/desktop/electron/backend-process.ts` and record it with the
+results. 1202 task 1 used this for `0bd214ee` against `main`:
+
+```bash
+git worktree add --detach output/benchmarks/task1-checkouts/base-0bd214ee 0bd214ee
+mise exec -- bun scripts/recurring-live-ab.ts --arms candidate --repeats 1 \
+  --fixture-environments local --agent-platforms codex \
+  --checkout "$PWD/output/benchmarks/task1-checkouts/base-0bd214ee" --label base \
+  --window launcher-default --profile-prefix t1-base --out output/benchmarks/task1/idle-base-1.json
+```
+
+Counters are named by what they count on the commit that ran: a store that
+was still a file on an older commit is charged as `storage-stat` there and as
+`storage-read` once it moved into SQLite, so compare work units only where
+both sides define them the same way.
+
+#### Mail into a real claude-tmux tab
+
+`scripts/tmux-mail-inject-live.ts` delivers agent mail to a real claude-tmux
+tab on a running, credential-free profile and counts what each delivery
+costs (BG-15 in to-do 1202). It serves a loopback Anthropic Messages endpoint
+(`e2e/agent-testing/fake-anthropic-model.ts`), points the profile's own
+isolated Claude directory (`<dataDir>/agent-credentials/claude`, never a real
+home) at it with a fixture token and marks the CLI's first-run screens as
+seen there, so the real Claude CLI runs in tmux with no login and no billed
+turn. It opens a claude-tmux tab on the fixture's local environment, turns
+mail injection on for it, primes the queue and draft stores with one queued
+prompt and one saved-then-cleared draft, reads the `mail-injection` counters
+over a quiet window, then sends messages one at a time and checks each is
+typed once and reaches the model once. Last it checks that mail is held while
+a draft is saved and delivered once the draft is gone. It stops the tab and
+restores the two Claude files on the way out. Start a fresh profile for each
+pass: what earlier passes left in the stores changes the counts.
+
+```bash
+mise run dev:test --profile bg15 --fixture --fixture-environments local \
+  --no-agent-credentials --agent-platforms claude --headless
+mise exec -- bun scripts/tmux-mail-inject-live.ts --profile bg15 --deliveries 5 \
+  --out output/benchmarks/bg15.json
+mise run dev:stop --profile bg15 && mise run dev:reset --profile bg15
+```
+
+`--checkout DIR` runs `dev:status` in the checkout that started the profile.
+Before 2026-11-06 a claude-tmux tab in an agent-test profile with no added
+Claude account ran the CLI with the host tmux server's environment, which
+reads the host's `~/.claude`; on an older commit, cherry-pick that fix
+(`tmuxLocalClaudeConfigDirectory` in `commands-servers.ts`) into the scratch
+checkout before running this.
+
 For transcript, projection and storage cost, use the
 [efficiency harness](efficiency-harness.md) (`mise run efficiency:baseline`).
 

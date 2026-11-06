@@ -256,7 +256,14 @@ Failed at first, and not caused by the bump: on this Linux host `live-contract.t
 
 Container image: `docker build … -t orkestrator-v2-upgrade-check:20261106` (a throwaway tag; never `orkestrator-v2:latest`) passed, including the Grok and Pi `sha256sum` checks and every managed CLI's build-time run, and `docker/tests/final-image-smoke.sh` passed against it. Inside it, as `node`: Claude 2.1.319, Codex 0.167.0, OpenCode 1.19.5, Pi 1.5.0, Grok 1.0.77.
 
-Not run: `scripts/qualify-opencode-seeded-data.sh` (OpenCode did not move); the macOS sandbox live test; the Linux Claude sandbox probe; the billed coordinator-skills probe; `claude-host-login-refresh.ts`; every signed-in session (streaming, questions, abort, resume, model and effort switch, background task, compaction, sub-agent cards, the inactive-environment path) on every provider; `mise run test:agent:goals`.
+Signed in, in the disposable profile `qa-1031-upgrade` (`dev:test --fixture --headless`, host credentials for every platform; stopped and reset afterwards), with the new pins:
+
+- `idle-observation-live.spec.ts` (hidden, reconnect, background; codex=`gpt-6.1-sol`, opencode=`opencode-go/deepseek-v4.1-flash`, others default): passed, 401.7 s. Claude passed all three cases, background included (it failed this case at 1020). Codex, Cursor and OpenCode passed hidden and reconnect; their background cases were `not-exercised`, as at 1020.
+- `paused-interactions-live.spec.ts` with a 1 s hold (raise, pause, rehydrate, answer, continue; not a ten-minute hold): the combined Claude, Codex and OpenCode run failed on a Codex card (flake [9851](../../tests/flaky-tests/native-agents-and-transcripts/9851-live-paused-interactions-codex-in-combined-run.md)). Re-run: Claude and OpenCode, all four cases passed (41.1 s); Codex alone, the question passed and the approval stayed incomplete after its answer; the Codex approval alone passed (43.4 s).
+- `close-retention-live.spec.ts` (Cursor, OpenCode): blocked before any agent work. This host's `ufw` drops Docker traffic to the agent-tools port, so the app's "Docker containers can't reach Orkestrator" dialog covered the page and the environment click timed out. A host firewall rule, not the upgrade; rerun once the rule in that dialog is applied.
+- Pi and Grok: no signed-in run. The host's Pi `auth.json` holds no login, and its Grok login has expired, so the profile could not seed either.
+
+Not run: `scripts/qualify-opencode-seeded-data.sh` (OpenCode did not move); the macOS sandbox live test; the Linux Claude sandbox probe; the billed coordinator-skills probe; `claude-host-login-refresh.ts`; signed-in sessions for Pi and Grok (no host login) and Cursor/OpenCode close and resume (host firewall); model and effort switches, compaction and sub-agent cards on every provider; `mise run test:agent:goals`.
 
 **Decisions.**
 

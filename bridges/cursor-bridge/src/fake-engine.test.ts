@@ -111,3 +111,51 @@ test("create records the bridge's options without the key or server definitions"
   });
   await agent[Symbol.asyncDispose]();
 });
+
+test("cancelling a pending FETCH keeps live and resumed history cancelled", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "cursor-fake-cancel-"));
+  directories.push(directory);
+  const storePath = join(directory, "vendor.json");
+  const api = createFakeCursorAgentApi({ storePath });
+  const agent = await api.create({ name: "Orkestrator" });
+  const started = Promise.withResolvers<void>();
+  const response = Promise.withResolvers<void>();
+  const served = Promise.withResolvers<void>();
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch() {
+      started.resolve();
+      await response.promise;
+      served.resolve();
+      return new Response("late reply");
+    },
+  });
+  const deltas: unknown[] = [];
+  try {
+    const run = await agent.send(
+      { text: `FETCH http://127.0.0.1:${server.port}/delayed` },
+      { onDelta: ({ update }) => deltas.push(update) },
+    );
+    await started.promise;
+    const waiting = run.wait();
+    await run.cancel();
+    await expect(waiting).resolves.toMatchObject({ status: "cancelled", result: undefined });
+    response.resolve();
+    await served.promise;
+    // Let the response/abort callbacks run before inspecting the persisted truth.
+    await Bun.sleep(30);
+    await run.cancel(); // Repeated cancellation cannot create a new transition.
+    expect(deltas).toEqual([]);
+    await expect(run.wait()).resolves.toMatchObject({ status: "cancelled", result: undefined });
+    const restarted = createFakeCursorAgentApi({ storePath });
+    const [stored] = (await restarted.listRuns(agent.agentId)).items;
+    expect(stored?.status).toBe("cancelled");
+    await expect(stored!.wait()).resolves.toMatchObject({ status: "cancelled", result: undefined });
+    await expect(stored!.conversation()).resolves.toMatchObject([{ turn: { steps: [] } }]);
+  } finally {
+    response.resolve();
+    await server.stop(true);
+    await agent[Symbol.asyncDispose]();
+  }
+});

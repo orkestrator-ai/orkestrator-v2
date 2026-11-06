@@ -289,6 +289,7 @@ async function openCell(
   page: Page,
   testInfo: TestInfo,
   platform: Platform,
+  afterInstall?: (containerId: string) => Promise<void>,
 ): Promise<{ environment: Environment; containerId: string; cleanup: () => Promise<void> }> {
   test.skip(process.env.ORKESTRATOR_AGENT_TEST_DOCKER !== "1", "Docker fixture profile required");
   const enabled = await enabledPlatforms();
@@ -308,36 +309,79 @@ async function openCell(
       environmentId: environment.id,
     }).then((stored) => stored.agentSettings)) ?? null;
   const args = { containerId };
+  // Register rollback before installation: even a partially written fake entry
+  // must be restored if installation, navigation or login fails.
+  const cleanup = async () => {
+    try {
+      await page.goto("about:blank").catch(() => undefined);
+      await restoreLayout(environment, containerId, previousLayout);
+      await invoke("update_environment_agent_settings", {
+        environmentId: environment.id,
+        agentSettings: previousSettings,
+      });
+    } finally {
+      try {
+        await invoke(`stop_${platform}_server`, args);
+      } finally {
+        restoreRealBridge(containerId, platform);
+        await invoke(`stop_${platform}_server`, args);
+      }
+    }
+  };
   // A real bridge left running by an earlier case would be reused as is.
   await invoke(`stop_${platform}_server`, args);
-  installFakeBridge(containerId, platform, bundle);
-  await page.setViewportSize({ width: 1400, height: 900 });
-  await login(page, testInfo);
-  return {
-    environment,
-    containerId,
-    cleanup: async () => {
-      try {
-        // A mounted tab would start the bridge again, from the fake entry,
-        // between the stop and the restore below.
-        await page.goto("about:blank").catch(() => undefined);
-        await restoreLayout(environment, containerId, previousLayout);
-        await invoke("update_environment_agent_settings", {
-          environmentId: environment.id,
-          agentSettings: previousSettings,
-        });
-      } finally {
-        try {
-          await invoke(`stop_${platform}_server`, args);
-        } finally {
-          restoreRealBridge(containerId, platform);
-          // Anything that still raced the first stop ran the fake; the next
-          // start runs the image's own bridge.
-          await invoke(`stop_${platform}_server`, args);
-        }
-      }
-    },
-  };
+  try {
+    installFakeBridge(containerId, platform, bundle);
+    await afterInstall?.(containerId);
+    await page.setViewportSize({ width: 1400, height: 900 });
+    await login(page, testInfo);
+    return { environment, containerId, cleanup };
+  } catch (error) {
+    try {
+      await cleanup();
+    } catch (cleanupError) {
+      throw new AggregateError([error, cleanupError], "Cell setup and rollback failed");
+    }
+    throw error;
+  }
+}
+
+for (const platform of ["cursor", "pi"] as const) {
+  test(`Docker fixture ${platform} setup failure restores the bridge and permits reuse`, async ({
+    page,
+  }, testInfo) => {
+    test.setTimeout(4 * 60_000);
+    let original = "";
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await expect(
+        openCell(page, testInfo, platform, async (containerId) => {
+          const dist = entryDirectory(platform);
+          const checksum = inContainer(containerId, `sha256sum ${dist}/index.js.qa-real`).split(
+            " ",
+          )[0]!;
+          if (original) expect(checksum).toBe(original);
+          original = checksum;
+          await invoke(`start_${platform}_server`, { containerId });
+          throw new Error("Injected post-install setup failure");
+        }),
+      ).rejects.toThrow("Injected post-install setup failure");
+      const environment = await fixtureEnvironment(containerName);
+      const containerId = environment.containerId!;
+      const dist = entryDirectory(platform);
+      expect(inContainer(containerId, `sha256sum ${dist}/index.js`).split(" ")[0]).toBe(original);
+      expect(
+        inContainer(containerId, `test ! -e ${dist}/index.js.qa-real && echo restored`),
+      ).toContain("restored");
+      // Read process command lines without signalling anything. The fake runs
+      // at exactly the same entry path as the original bridge.
+      const processes = inContainer(
+        containerId,
+        'for f in /proc/[0-9]*/cmdline; do cat "$f" 2>/dev/null; echo; done',
+        { user: "root" },
+      );
+      expect(processes).not.toContain(`${dist}/index.js`);
+    }
+  });
 }
 
 test("Docker fixture Cursor cell runs the container bridge under the container policy and firewall", async ({

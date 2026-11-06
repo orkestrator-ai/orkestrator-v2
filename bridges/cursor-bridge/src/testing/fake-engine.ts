@@ -107,11 +107,11 @@ export function createFakeCursorAgentApi({
     save(store);
   }
 
-  async function fetchReply(url: string): Promise<string> {
+  async function fetchReply(url: string, signal: AbortSignal): Promise<string> {
     try {
       const response = await fetch(url, {
         redirect: "manual",
-        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+        signal: AbortSignal.any([signal, AbortSignal.timeout(FETCH_TIMEOUT_MS)]),
       });
       await response.body?.cancel();
       return `Fetch ${url}: HTTP ${response.status}`;
@@ -188,13 +188,15 @@ export function createFakeCursorAgentApi({
         };
         let release!: () => void;
         const released = new Promise<void>((resolve) => (release = resolve));
+        const controller = new AbortController();
         const finish = (reply: string) => {
+          if (turn.status !== "running") return;
           options.onDelta?.({ update: { type: "text-delta", text: reply } });
           settle("finished", reply);
           release();
         };
         const fetchUrl = FETCH_LINE.exec(prompt)?.[1];
-        if (fetchUrl) void fetchReply(fetchUrl).then(finish);
+        if (fetchUrl) void fetchReply(fetchUrl, controller.signal).then(finish);
         else if (!prompt.includes("HOLD")) finish(`Answer to: ${prompt}`);
         return {
           id: turn.runId,
@@ -212,7 +214,10 @@ export function createFakeCursorAgentApi({
             return { id: turn.runId, status: turn.status, result: turn.reply };
           },
           cancel: async () => {
-            if (turn.status === "running") settle("cancelled");
+            if (turn.status === "running") {
+              settle("cancelled");
+              controller.abort();
+            }
             release();
           },
           // Accepted into the running turn, as the SDK's live steer is. Only a

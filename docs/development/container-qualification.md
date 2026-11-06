@@ -209,7 +209,8 @@ variables clear Docker context and TLS selection so the private socket wins.
 
 `tests/unit/disposable-docker-daemon.test.ts` covers the arguments, the
 private paths and environment, the removal boundaries and a start, restart
-and stop of a stand-in process tree, with no Docker.
+and stop of a stand-in process tree, with no Docker. The cases that spawn or
+inspect processes read `/proc`, so they run only on Linux and skip elsewhere.
 
 ## Agent CLIs without telemetry hosts on rootful Linux Engine (2026-11-06)
 

@@ -45,6 +45,11 @@ import {
   type LauncherOptions,
 } from "../../scripts/disposable-docker-daemon";
 
+// The launcher drives a Linux rootless daemon and identifies its processes
+// through /proc (start time, environment marker). Cases that spawn or inspect
+// processes run only where /proc exists; the pure cases run everywhere.
+const linuxTest = test.skipIf(process.platform !== "linux");
+
 let scratch = "";
 let root = "";
 let runtimeBase = "";
@@ -242,7 +247,7 @@ describe("removal boundaries", () => {
 });
 
 describe("process identity", () => {
-  test("a live process without the instance marker is not owned", () => {
+  linuxTest("a live process without the instance marker is not owned", () => {
     const self = { pid: process.pid, startTime: readStartTime(process.pid)! };
     expect(self.startTime).not.toBeNull();
     expect(isOwnedProcess(self, "not-this-marker")).toBe(false);
@@ -251,37 +256,40 @@ describe("process identity", () => {
 });
 
 describe("lifecycle", () => {
-  test("start, restart and stop own exactly the instance's processes and directories", async () => {
-    const started = await startInstance("unit", {}, options());
-    expect(isRunning(started)).toBe(true);
-    // The parent and the child it started both carry the marker.
-    expect(markedProcesses(started.marker).length).toBe(2);
-    expect(existsSync(started.paths.config)).toBe(true);
-    expect(readRecord(root, "unit")?.process).toEqual(started.process);
-    await expect(startInstance("unit", {}, options())).rejects.toThrow("already running");
+  linuxTest(
+    "start, restart and stop own exactly the instance's processes and directories",
+    async () => {
+      const started = await startInstance("unit", {}, options());
+      expect(isRunning(started)).toBe(true);
+      // The parent and the child it started both carry the marker.
+      expect(markedProcesses(started.marker).length).toBe(2);
+      expect(existsSync(started.paths.config)).toBe(true);
+      expect(readRecord(root, "unit")?.process).toEqual(started.process);
+      await expect(startInstance("unit", {}, options())).rejects.toThrow("already running");
 
-    // A restart replaces the whole tree and keeps the data root.
-    writeFileSync(path.join(started.paths.dataRoot, "kept"), "image layers");
-    const before = started.process!;
-    const restarted = await restartInstance(
-      "unit",
-      options({ runtimeBase: path.join(scratch, "different") }),
-    );
-    expect(restarted.process!.pid).not.toBe(before.pid);
-    expect(isOwnedProcess(before, started.marker)).toBe(false);
-    expect(isRunning(restarted)).toBe(true);
-    expect(existsSync(path.join(started.paths.dataRoot, "kept"))).toBe(true);
+      // A restart replaces the whole tree and keeps the data root.
+      writeFileSync(path.join(started.paths.dataRoot, "kept"), "image layers");
+      const before = started.process!;
+      const restarted = await restartInstance(
+        "unit",
+        options({ runtimeBase: path.join(scratch, "different") }),
+      );
+      expect(restarted.process!.pid).not.toBe(before.pid);
+      expect(isOwnedProcess(before, started.marker)).toBe(false);
+      expect(isRunning(restarted)).toBe(true);
+      expect(existsSync(path.join(started.paths.dataRoot, "kept"))).toBe(true);
 
-    expect(
-      await stopInstance("unit", options({ runtimeBase: path.join(scratch, "different") })),
-    ).toBe(true);
-    expect(markedProcesses(started.marker)).toEqual([]);
-    expect(existsSync(started.paths.instanceDir)).toBe(false);
-    expect(existsSync(started.paths.runtimeDir)).toBe(false);
-    expect(await stopInstance("unit", options())).toBe(false);
-  });
+      expect(
+        await stopInstance("unit", options({ runtimeBase: path.join(scratch, "different") })),
+      ).toBe(true);
+      expect(markedProcesses(started.marker)).toEqual([]);
+      expect(existsSync(started.paths.instanceDir)).toBe(false);
+      expect(existsSync(started.paths.runtimeDir)).toBe(false);
+      expect(await stopInstance("unit", options())).toBe(false);
+    },
+  );
 
-  test("a daemon that never answers is stopped and removed", async () => {
+  linuxTest("a daemon that never answers is stopped and removed", async () => {
     await expect(
       startInstance("dead", {}, options({ ready: async () => false, readyTimeoutMs: 300 })),
     ).rejects.toThrow("did not answer");
@@ -289,22 +297,25 @@ describe("lifecycle", () => {
     expect(existsSync(instancePaths(root, runtimeBase, "dead").runtimeDir)).toBe(false);
   });
 
-  test("start reaps an instance whose daemon died and leaves a running one alone", async () => {
-    const running = await startInstance("alive", {}, options());
-    const stale = await startInstance("stale", {}, options());
-    for (const identity of markedProcesses(stale.marker)) process.kill(identity.pid, "SIGKILL");
-    expect(await reapStale(options())).toEqual(["stale"]);
-    expect(existsSync(stale.paths.instanceDir)).toBe(false);
-    expect(isRunning(running)).toBe(true);
-    // Something that is not a record is never touched.
-    mkdirSync(path.join(root, "notes"));
-    expect(await reapStale(options())).toEqual([]);
-    expect(existsSync(path.join(root, "notes"))).toBe(true);
-  });
+  linuxTest(
+    "start reaps an instance whose daemon died and leaves a running one alone",
+    async () => {
+      const running = await startInstance("alive", {}, options());
+      const stale = await startInstance("stale", {}, options());
+      for (const identity of markedProcesses(stale.marker)) process.kill(identity.pid, "SIGKILL");
+      expect(await reapStale(options())).toEqual(["stale"]);
+      expect(existsSync(stale.paths.instanceDir)).toBe(false);
+      expect(isRunning(running)).toBe(true);
+      // Something that is not a record is never touched.
+      mkdirSync(path.join(root, "notes"));
+      expect(await reapStale(options())).toEqual([]);
+      expect(existsSync(path.join(root, "notes"))).toBe(true);
+    },
+  );
 });
 
 describe("review regressions", () => {
-  test("concurrent start and restart cannot reap an in-flight launch", async () => {
+  linuxTest("concurrent start and restart cannot reap an in-flight launch", async () => {
     let release!: () => void;
     let entered!: () => void;
     const gate = new Promise<void>((resolve) => {
@@ -414,46 +425,49 @@ else if (args[0] === "save") {
 }
 
 describe("Docker subprocesses", () => {
-  test("successful copy preserves source context and forces the private destination", async () => {
-    const restore = fakeDocker("success");
-    try {
-      const started = await startInstance("copy", {}, options());
-      await expect(transferImage(started, "fixture:dev")).resolves.toEqual({
-        reference: "fixture:dev",
-        id: "sha256:expected",
-      });
-      writeFileSync(started.paths.socket, "stand-in socket");
-      expect(await dockerAnswers(started, 500)).toBe(true);
-      const calls = readFileSync(process.env.FAKE_DOCKER_LOG!, "utf8")
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line));
-      expect(
-        calls
-          .filter((call) => call.args[0] !== "--host")
-          .every((call) => call.context === "production-context"),
-      ).toBe(true);
-      const destinations = calls.filter((call) => call.args[0] === "--host");
-      expect(destinations.length).toBe(3);
-      expect(
-        destinations.every(
-          (call) =>
-            call.args[1] === `unix://${started.paths.socket}` &&
-            call.context === "" &&
-            call.tls === "",
-        ),
-      ).toBe(true);
-      expect(suiteEnvironment(started).DOCKER_CONTEXT).toBe("");
-      expect(readRecord(root, "copy")?.images).toEqual([
-        { reference: "fixture:dev", id: "sha256:expected" },
-      ]);
-    } finally {
-      restore();
-    }
-  });
+  linuxTest(
+    "successful copy preserves source context and forces the private destination",
+    async () => {
+      const restore = fakeDocker("success");
+      try {
+        const started = await startInstance("copy", {}, options());
+        await expect(transferImage(started, "fixture:dev")).resolves.toEqual({
+          reference: "fixture:dev",
+          id: "sha256:expected",
+        });
+        writeFileSync(started.paths.socket, "stand-in socket");
+        expect(await dockerAnswers(started, 500)).toBe(true);
+        const calls = readFileSync(process.env.FAKE_DOCKER_LOG!, "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line));
+        expect(
+          calls
+            .filter((call) => call.args[0] !== "--host")
+            .every((call) => call.context === "production-context"),
+        ).toBe(true);
+        const destinations = calls.filter((call) => call.args[0] === "--host");
+        expect(destinations.length).toBe(3);
+        expect(
+          destinations.every(
+            (call) =>
+              call.args[1] === `unix://${started.paths.socket}` &&
+              call.context === "" &&
+              call.tls === "",
+          ),
+        ).toBe(true);
+        expect(suiteEnvironment(started).DOCKER_CONTEXT).toBe("");
+        expect(readRecord(root, "copy")?.images).toEqual([
+          { reference: "fixture:dev", id: "sha256:expected" },
+        ]);
+      } finally {
+        restore();
+      }
+    },
+  );
 
   for (const mode of ["load-fail", "save-fail", "mismatch"]) {
-    test(`copy failure (${mode}) rejects normally so startup cleanup can run`, async () => {
+    linuxTest(`copy failure (${mode}) rejects normally so startup cleanup can run`, async () => {
       const restore = fakeDocker(mode);
       try {
         await expect(startWithImages("copy", {}, ["fixture:dev"], options())).rejects.toThrow();
@@ -471,7 +485,7 @@ describe("Docker subprocesses", () => {
     });
   }
 
-  test("hung info is bounded by the startup deadline and cleans up", async () => {
+  linuxTest("hung info is bounded by the startup deadline and cleans up", async () => {
     const restore = fakeDocker("hang");
     try {
       const before = Date.now();

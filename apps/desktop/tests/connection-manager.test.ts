@@ -1,3 +1,4 @@
+import { createWindowRequestAuthorization } from "../electron/window-request-authorization";
 import { afterEach, describe, expect, jest, mock, test } from "bun:test";
 import type { StoredDesktopConnections } from "@orkestrator/protocol/connections";
 import type { BackendHttpClient } from "../electron/backend-process";
@@ -740,6 +741,55 @@ describe("Electron connection manager", () => {
         ?.nickname,
     ).toBe("Studio");
     manager.release("surviving-window");
+  });
+
+  test("a released window's late renderer requests get no credential instead of an exception (0622)", async () => {
+    const local = localBackendHarness();
+    installHealthyRemoteFetch();
+    const manager = new ConnectionManager({
+      localBackend: local.backend,
+      secureStorage: secureStorage(),
+      onEvent: mock(() => undefined),
+    });
+    await manager.initialize();
+    const url = "https://desk.example/__orkestrator/invoke";
+    await manager.bind("closing-window", "local");
+    const localAuthorization = mock(() => "Bearer local-test");
+    const auth = createWindowRequestAuthorization(manager, "closing-window", localAuthorization);
+    expect(auth.authorization(url)).toBe("Bearer local-test");
+    expect(auth.requestOrigin(url)).toBe("https://desk.example");
+    const list = await manager.connect(
+      { address: "https://desk.example", token },
+      "closing-window",
+    );
+    await manager.bind("surviving-window", list.activeConnectionId);
+    expect(manager.getRendererRequestAuthorization(url, "closing-window")).toBe(`Bearer ${token}`);
+
+    expect(auth.authorization(url)).toBe(`Bearer ${token}`);
+    expect(auth.requestOrigin(url)).toBeNull();
+    await manager.bind("local-window", "local");
+    const localAuth = createWindowRequestAuthorization(manager, "local-window", localAuthorization);
+    expect(localAuth.authorization(url)).toBe("Bearer local-test");
+    const relayAuth = createWindowRequestAuthorization(manager, "local-window", null);
+    expect(relayAuth.authorization(url)).toBeNull();
+    expect(relayAuth.requestOrigin(url)).toBeNull();
+    manager.release("local-window");
+    localAuthorization.mockClear();
+    expect(localAuth.authorization(url)).toBeNull();
+    expect(localAuth.requestOrigin(url)).toBeNull();
+    // Its session still finishes requests after the window's `closed` released the scope.
+    manager.release("closing-window");
+    expect(auth.authorization(url)).toBeNull();
+    expect(auth.requestOrigin(url)).toBeNull();
+    expect(localAuthorization).not.toHaveBeenCalled();
+    expect(manager.getRendererRequestAuthorization(url, "closing-window")).toBeNull();
+    expect(manager.getRendererRequestAuthorization(url, "surviving-window")).toBe(
+      `Bearer ${token}`,
+    );
+    manager.release("surviving-window");
+    expect(manager.getRendererRequestAuthorization(url, "surviving-window")).toBeNull();
+    // Other callers still learn that the window is gone.
+    expect(() => manager.getList("closing-window")).toThrow("window is no longer available");
   });
 
   test("sets a nickname on connect and keeps it when reconnecting to the same address", async () => {

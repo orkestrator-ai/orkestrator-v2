@@ -462,3 +462,113 @@ The public-site namespace command passed separately (34.2 s logged):
 The new login-renewal, four-load orchestration/budget, signal forwarding and
 spawn-error regression tests, focused typechecks, affected-file lint and
 formatting all passed. No isolated app profile was started for this stage.
+
+## Unavailable-platform coordinator review — 2026-11-05
+
+At repair commit `823590c73`, the five-worker component rerun
+`mise run test:logged -- --name address-browser -- env ORKESTRATOR_E2E_PORT=24371 mise run test:browser`
+reached case 610 of 1,590 before the logged runner's 1,800,000 ms absolute
+deadline. It named 18 failures and produced no closing test summary; the public
+site suite was not reached. Evidence is preserved separately from preparation
+at `.orkestrator/review-artifacts/address-findings-403b728a/address-browser.log.gz`.
+
+Three mobile failures were in these complete owners:
+
+- `e2e/NativeComposeBar.spec.ts`: `non-steerable head actions can be reached and activated by keyboard`.
+- `e2e/NativeHeldSend.spec.ts`: `a device code survives browser-open failure, environment switching and renderer reload without another login`.
+- `e2e/NativeHeldSend.spec.ts`: `a held send survives switching environments, dispatches once on return and stays settled after reload`.
+
+Both complete owners passed with one worker, exit 0, in 194.6 s:
+
+```sh
+mise run test:logged -- --name address-native-browser -- env ORKESTRATOR_E2E_PORT=24372 bunx playwright test --config e2e/playwright.config.ts e2e/NativeHeldSend.spec.ts e2e/NativeComposeBar.spec.ts --workers=1
+```
+
+The run selected 20 viewport cases; the existing desktop skip for the
+mobile-only compose layout remained. Neither owner, assertion, timeout nor skip
+was changed. Navigation or reload exceeded the 30-second deadline in each of the three
+cases; the passing owner rerun establishes intermittence for them, without establishing a cause. The broad command's other 15 failures and
+its absolute deadline remain unresolved, not classified by this observation.
+
+## Coordinator unavailable-platform review — 2026-11-06
+
+The repeat used a free fixture port, resolving the original HTTP 403 ownership
+failure without stopping another checkout. It ran five browser workers, named
+nine failures, and hit the 1800000 ms group deadline after starting 708/1596
+cases. Complete broad-suite pass totals were not available.
+
+Original command:
+
+```sh
+ORKESTRATOR_E2E_PORT=61386 mise run test:logged -- --name browser -- mise run test:browser
+```
+
+Named failures were both AgentUsage compact-usage cases; the unrendered-frame
+layer-tree case; Claude background-limit settings reload; both mobile Meta+I
+composer cases; Markdown diagram arrow entry; attachment reload; and pipeline
+review-pass rehydration. Broad evidence: `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.8yBzhf/browser.log.gz`.
+
+Complete owners were rerun individually with one worker and separate output
+paths, preserving the broad-run traces:
+
+| Owner | Result | Duration |
+| --- | --- | --- |
+| e2e/AgentUsage.spec.ts | passed | 31.6 s |
+| e2e/DesignCanvasAccessibility.spec.ts | passed | 179.2 s |
+| e2e/GlobalSettings.spec.ts | passed | 53.9 s |
+| e2e/KeyboardShortcuts.spec.ts | passed | 301.1 s |
+| e2e/MarkdownEditorDiagram.spec.ts | passed | 59.2 s |
+| e2e/NativeAttachments.spec.ts | passed | 28.5 s |
+| e2e/PipelineFlow.spec.ts | 84 passed, 1 skipped, 1 failed | 337.3 s |
+
+Exact rerun commands:
+
+```sh
+ORKESTRATOR_E2E_PORT=61386 mise run test:logged -- --name review-agent-usage-browser-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/AgentUsage.spec.ts --workers=1 --output output/agent-testing/review-address-owners/usage
+ORKESTRATOR_E2E_PORT=61386 mise run test:logged -- --name review-design-browser-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/DesignCanvasAccessibility.spec.ts --workers=1 --output output/agent-testing/review-address-owners/design
+ORKESTRATOR_E2E_PORT=61386 mise run test:logged -- --name review-settings-browser-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/GlobalSettings.spec.ts --workers=1 --output output/agent-testing/review-address-owners/settings
+ORKESTRATOR_E2E_PORT=61386 mise run test:logged -- --name review-shortcuts-browser-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/KeyboardShortcuts.spec.ts --workers=1 --output output/agent-testing/review-address-owners/shortcuts
+ORKESTRATOR_E2E_PORT=61386 mise run test:logged -- --name review-diagram-browser-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/MarkdownEditorDiagram.spec.ts --workers=1 --output output/agent-testing/review-address-owners/diagram
+ORKESTRATOR_E2E_PORT=61386 mise run test:logged -- --name review-attachments-browser-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/NativeAttachments.spec.ts --workers=1 --output output/agent-testing/review-address-owners/attachments
+ORKESTRATOR_E2E_PORT=61386 mise run test:logged -- --name review-pipeline-browser-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/PipelineFlow.spec.ts --workers=1 --output output/agent-testing/review-address-owners/pipeline
+```
+
+The PipelineFlow owner retained a different desktop failure, `completion in
+fullscreen lands in the overlay and then the panel`: the Notes node was not
+on screen after exiting fullscreen (line 1134). Its evidence is
+`/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.yAfPM6/review-pipeline-browser-owner.log.gz`.
+The original rehydration case was not among its failures. The owner remains
+non-green, and the fullscreen failure is not classified as a flake or excused
+as environmental.
+
+Passing output was deleted by the logged runner; per-case passing counts for
+those six owners were not retained. Existing cases 0749, 1249, 1902, 2392 and
+1121 retain their focused history. No assertions, timeouts, skips or product
+implementation were changed to hide these failures. Broad validation remains
+incomplete and non-green.
+
+
+## Unavailable-platform merge notice-owner recurrence — 2026-11-06
+
+The resumed `merge-browser-owners` run selected 42 cases from AgentUsage,
+BackgroundTaskOutcome and FloatingNotices with one worker. Its saved desktop
+error context for `128px panes contain long-label pills and their opened cards`
+(`e2e/FloatingNotices.spec.ts:111`) records a 30-second timeout while waiting
+for `getByTestId("constrained-pane").boundingBox()`. The retained log stops at
+case 39/42 without closing totals or a final exit status. The original shell
+invocation was not retained; its log is
+`/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.2PtUJj/merge-browser-owners.log`,
+and the error context and trace are under
+`output/agent-testing/merge-unavailable-ff79/browser-owners/FloatingNotices-128px-pane-a4e21-ills-and-their-opened-cards-desktop-chromium/`.
+
+The complete unchanged FloatingNotices owner then passed alone with one worker,
+exit 0, in 77.8 seconds, on the final merged tree:
+
+```sh
+ORKESTRATOR_E2E_PORT=51587 mise run test:logged -- --name merge-final-notices-browser -- bunx playwright test --config e2e/playwright.config.ts e2e/FloatingNotices.spec.ts --workers=1 --output output/agent-testing/merge-unavailable-ff79/final-notices
+```
+
+Passing output was deleted by the logged runner; per-case totals were not
+retained. No product code, assertion, timeout or skip changed between these
+runs. This shows intermittence for this notice case, without establishing its
+cause or excusing the other owners' failures or incomplete broad validation.

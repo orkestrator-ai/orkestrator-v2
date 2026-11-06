@@ -246,3 +246,38 @@ bridge-startup owner passed; workspace instead failed the unrelated preview
 metrics (3571) and zsh completion (1250) cases. Root, bridges and protocol
 passed. The aggregate remains non-green; both newly failing owners passed
 unchanged when rerun alone.
+
+## Agent-mail ownership repair validation — 2026-11-05
+
+- Aggregate: `mise run test:logged -- --name address-findings-default-tests -- mise run test`
+  at `54f06a272`, exit 1 after 332.0 s. Workspace/root/bridges/protocol
+  reservations: 6/1/2/1 slots; desktop used two parallel workers.
+- The successful-start case timed out at 15,010.84 ms (limit 15,000 ms).
+  Desktop totals were not retained in the aggregate output.
+- Complete unchanged owner:
+  `mise run test:logged -- --name bridge-builds-preloaded-rerun -- bun test --cwd apps/desktop ./scripts/dev/bridge-builds.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures`
+  passed (exit 0, 0.7 s; passing counts removed by the logger).
+  An earlier focused run without the explicit preload also passed in 0.6 s.
+- Evidence: `/tmp/orkestrator-test-run.XXv3u7/address-findings-default-tests.log.gz`
+  and `/tmp/orkestrator-test-run.QiwA36/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- Neither this owner nor its exercised implementation appears in
+  `git diff --name-only origin/main...HEAD`. Known open flake recurrence;
+  cause remains unconfirmed. No implementation, assertion or timeout changed.
+  The ownership repair passed; the aggregate remains non-green.
+
+## Multi-client backend main merge — 2026-11-06
+
+- Original command: `mise run test:logged -- --name merge-warm-full -- mise run test:full`
+  on `multi-client-backend-fe80afce6c0c-r1`, merging `dafdb26ef` into
+  `e1641446c`. Desktop ran with two workers alongside the other workspace tasks.
+- The successful-start case timed out at 15,016.08 ms against its 15,000 ms
+  deadline. Desktop reported 2,032 pass, 15 skip and one fail. The complete
+  aggregate exited 1 after 1,360.2 s, including a 242.8 s admission wait.
+- Complete unchanged owner rerun:
+  `NODE_ENV=test mise run test:logged -- --name merge-desktop-bridges-isolated -- bun test --cwd apps/desktop ./scripts/dev/bridge-builds.test.ts --parallel=1 --only-failures`
+  passed with exit 0 in 0.7 s. Passing counts were removed by the logged runner.
+- Evidence: `/tmp/orkestrator-test-run.N4koTI/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+  and `/tmp/orkestrator-test-run.Zs7WCC/merge-warm-full.log.gz`.
+- This is another aggregate-only timeout observation; the cause remains
+  unconfirmed. No owning code, timeout, assertion or skip changed. The aggregate
+  also retained unrelated backend timer and missing WebKit-library failures.

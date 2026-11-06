@@ -14,6 +14,11 @@ import { AgentMailBanner } from "@/components/agent-mail/AgentMailBanner";
 import { LazyLoadBoundary, LazyLoadInlineErrorFallback } from "@/components/LazyLoadBoundary";
 import { LazyAgentNativeTab } from "@/components/native-agent/LazyAgentNativeTab";
 import { Button } from "@/components/ui/button";
+import {
+  FLOATING_NOTICE_ACTION,
+  FloatingNoticeLayer,
+  TRANSCRIPT_COLUMN_REM,
+} from "@/components/ui/floating-notice";
 import { requestGlobalSettings } from "@/lib/settings-navigation";
 import { useConfigStore } from "@/stores";
 import type { AgentPlatformBadge } from "@/components/chat/AgentModelPicker";
@@ -64,7 +69,14 @@ interface CoordinatorConversationPaneProps {
 function sendingHeldReason(
   snapshot: CoordinatorSnapshot,
   conversation: CoordinatorConversation,
+  platformOff: boolean,
 ): string | undefined {
+  const agent = conversation.agent;
+  if (agent && !snapshot.providerAvailability[agent]?.available) {
+    return platformOff
+      ? `${AGENT_PLATFORM_LABELS[agent]} is turned off. Turn it on to send.`
+      : `${AGENT_PLATFORM_LABELS[agent]} is below the coordinator safety level. Change it to send.`;
+  }
   if (snapshot.workspace.lifecycleState === "paused") {
     return "Coordination is paused. Resume to send.";
   }
@@ -174,102 +186,113 @@ export function CoordinatorConversationPane({
   // conversation stays readable while its platform is unavailable.
   const providerUnavailable = Boolean(conversation.agent && !providerState?.available);
   const side = conversation.role === "side";
-  const heldReason = sendingHeldReason(snapshot, conversation);
   // A platform turned off is Platforms' to fix; anything else here is the safety level.
   const platformOff = Boolean(
     conversation.agent && !normalizeAgentPlatforms(enabledPlatforms).includes(conversation.agent),
   );
+  const heldReason = sendingHeldReason(snapshot, conversation, platformOff);
   return (
-    <div key={conversation.id} className="flex h-full min-h-0 flex-col">
-      {conversation.startupError ? (
-        <CoordinatorStartupFailure
-          title={conversation.title}
-          error={conversation.startupError}
-          busy={conversationBusy}
-          onRetry={() => onRetryConversation(conversation.id)}
-          onClose={() => onCloseConversation(conversation.id)}
-        />
-      ) : null}
-      {providerUnavailable && conversation.agent ? (
-        <CoordinatorBanner
-          tone="warning"
-          action={
-            <div className="flex shrink-0 flex-wrap items-center gap-1.5">
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => requestGlobalSettings(platformOff ? "platforms" : "coordinator")}
-              >
-                <Settings2 className="size-3.5" />
-                {platformOff ? "Platform settings" : "Coordinator settings"}
-              </Button>
-              <Button size="sm" variant="outline" onClick={onRetry}>
-                <RotateCcw className="size-3.5" />
-                Retry
-              </Button>
-            </div>
-          }
-        >
-          <span className="font-medium">
-            {AGENT_PLATFORM_LABELS[conversation.agent]} is unavailable for Coordinator.
-          </span>{" "}
-          <span className="text-muted-foreground">{providerState?.reason}</span>
-        </CoordinatorBanner>
-      ) : null}
-      <AgentMailBanner
-        environmentId={data.environmentId}
-        tabId={conversation.tabId}
-        agentAvailable={availablePlatforms.length > 0}
-      />
-      <div className="relative min-h-0 flex-1">
-        <LazyLoadBoundary
-          loadingFallback={
-            <div role="status" className="grid h-full place-items-center">
-              <Loader2 className="size-6 animate-spin text-muted-foreground" aria-hidden="true" />
-              <span className="sr-only">Loading conversation</span>
-            </div>
-          }
-          renderError={(details) => <LazyLoadInlineErrorFallback {...details} />}
-        >
-          <LazyAgentNativeTab
-            tabId={conversation.tabId}
-            data={data}
-            isActive
-            ownsGlobalShortcuts={paneFocused}
-            executionPolicy="coordinator-read-only"
-            coordinatorProjectId={projectId}
-            coordinatorWorkspacePath={snapshot.projectPath}
-            availablePlatforms={availablePlatforms}
-            platformNotes={platformNotes}
-            platformBadges={platformBadges}
-            // A side agent launches nothing, so it is not asked what to get
-            // done, and its hint says what it is for.
-            composerPlaceholder={
-              side ? COORDINATOR_SIDE_COMPOSER_PLACEHOLDER : COORDINATOR_COMPOSER_PLACEHOLDER
-            }
-            composerHint={side ? SIDE_COMPOSER_HINT : COORDINATOR_COMMAND_HINT}
-            connectionEnabled={providerState?.available !== false}
-            {...(heldReason ? { sendingHeldReason: heldReason } : {})}
-            // Only the main coordinator delegates, so only it is offered work
-            // that has to run in a pipeline or environment.
-            {...(conversation.role === "main" ? MAIN_UNASSIGNED : {})}
-            emptyPlatformsMessage="No agent platform meets this coordinator's read-only requirement on this machine. Enable a qualified platform, or lower the coordinator safety level in Settings."
-            emptyPlatformsAction={EMPTY_PLATFORMS_ACTION}
-            onAssignPlatform={conversation.agent ? undefined : onAssignPlatform}
-            beforeSend={side ? undefined : beforeSend}
-            {...(launch
-              ? {
-                  initialPrompt: launch.prompt,
-                  initialAgentModel: launch.modelId,
-                  initialReasoningEffort: launch.reasoningId,
-                  initialConversationMode: launch.mode,
-                  initialFastMode: launch.fastMode,
-                  initialExecutionProfileId: launch.executionProfileId,
-                }
-              : {})}
+    <div key={conversation.id} className="relative flex h-full min-h-0 min-w-0 flex-col">
+      {/* Conversation notices stay inside this pane, including when it is hidden. */}
+      <FloatingNoticeLayer independent columnRem={TRANSCRIPT_COLUMN_REM}>
+        {conversation.startupError ? (
+          <CoordinatorStartupFailure
+            title={conversation.title}
+            error={conversation.startupError}
+            busy={conversationBusy}
+            onRetry={() => onRetryConversation(conversation.id)}
+            onClose={() => onCloseConversation(conversation.id)}
           />
-        </LazyLoadBoundary>
-      </div>
+        ) : null}
+        {providerUnavailable && conversation.agent ? (
+          <CoordinatorBanner
+            tone="warning"
+            label="Agent unavailable"
+            summary={`${AGENT_PLATFORM_LABELS[conversation.agent]} is unavailable for Coordinator.`}
+            action={
+              <>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  className={FLOATING_NOTICE_ACTION}
+                  onClick={() => requestGlobalSettings(platformOff ? "platforms" : "coordinator")}
+                >
+                  <Settings2 className="size-3" />
+                  {platformOff ? "Platform settings" : "Coordinator settings"}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className={FLOATING_NOTICE_ACTION}
+                  onClick={onRetry}
+                >
+                  <RotateCcw className="size-3" />
+                  Retry
+                </Button>
+              </>
+            }
+          >
+            <span className="font-medium">
+              {AGENT_PLATFORM_LABELS[conversation.agent]} is unavailable for Coordinator.
+            </span>{" "}
+            <span className="text-muted-foreground">{providerState?.reason}</span>
+          </CoordinatorBanner>
+        ) : null}
+        <AgentMailBanner
+          environmentId={data.environmentId}
+          tabId={conversation.tabId}
+          agentAvailable={conversation.agent ? !providerUnavailable : availablePlatforms.length > 0}
+          deliveryHeldReason={heldReason}
+        />
+        <div className="relative min-h-0 flex-1">
+          <LazyLoadBoundary
+            loadingFallback={
+              <div role="status" className="grid h-full place-items-center">
+                <Loader2 className="size-6 animate-spin text-muted-foreground" aria-hidden="true" />
+                <span className="sr-only">Loading conversation</span>
+              </div>
+            }
+            renderError={(details) => <LazyLoadInlineErrorFallback {...details} />}
+          >
+            <LazyAgentNativeTab
+              tabId={conversation.tabId}
+              data={data}
+              isActive
+              ownsGlobalShortcuts={paneFocused}
+              executionPolicy="coordinator-read-only"
+              coordinatorProjectId={projectId}
+              coordinatorWorkspacePath={snapshot.projectPath}
+              availablePlatforms={availablePlatforms}
+              platformNotes={platformNotes}
+              platformBadges={platformBadges}
+              // A side agent launches nothing, so it is not asked what to get
+              // done, and its hint says what it is for.
+              composerPlaceholder={
+                side ? COORDINATOR_SIDE_COMPOSER_PLACEHOLDER : COORDINATOR_COMPOSER_PLACEHOLDER
+              }
+              composerHint={side ? SIDE_COMPOSER_HINT : COORDINATOR_COMMAND_HINT}
+              {...(heldReason ? { sendingHeldReason: heldReason } : {})}
+              // Only the main coordinator delegates, so only it is offered work
+              // that has to run in a pipeline or environment.
+              {...(conversation.role === "main" ? MAIN_UNASSIGNED : {})}
+              emptyPlatformsMessage="No agent platform meets this coordinator's read-only requirement on this machine. Enable a qualified platform, or lower the coordinator safety level in Settings."
+              emptyPlatformsAction={EMPTY_PLATFORMS_ACTION}
+              onAssignPlatform={conversation.agent ? undefined : onAssignPlatform}
+              beforeSend={side ? undefined : beforeSend}
+              {...(launch
+                ? {
+                    initialPrompt: launch.prompt,
+                    initialAgentModel: launch.modelId,
+                    initialReasoningEffort: launch.reasoningId,
+                    initialConversationMode: launch.mode,
+                    initialFastMode: launch.fastMode,
+                    initialExecutionProfileId: launch.executionProfileId,
+                  }
+                : {})}
+            />
+          </LazyLoadBoundary>
+        </div>
+      </FloatingNoticeLayer>
     </div>
   );
 }

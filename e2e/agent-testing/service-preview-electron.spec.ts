@@ -2843,7 +2843,13 @@ test("windows on different backends never share previews, and switches release o
         `${error.message}\n${JSON.stringify({ closedAfterMs: closedAfter, sinceCloseMs: Date.now() - closeStarted, local: await accessStats(), previews: electronPreviewOutput(s().app) })}`,
       );
     });
-  record(testInfo, "window-close", JSON.stringify({ closedAfterMs: closedAfter }));
+  // Both halves, so a passing run also shows a slow close apart from a slow release.
+  const releasedAfter = Date.now() - closeStarted - closedAfter;
+  record(
+    testInfo,
+    "window-close",
+    JSON.stringify({ closedAfterMs: closedAfter, releasedAfterMs: releasedAfter }),
+  );
   await expect
     .poll(() =>
       rawIngress(origin("r")).then(

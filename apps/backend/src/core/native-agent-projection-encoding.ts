@@ -46,17 +46,6 @@ export function encodedArrayBytes(values: readonly unknown[]): number {
   return bytes;
 }
 
-/** Feed each value's memoized encoding into a digest, separated unambiguously. */
-export function updateHashWithValues(hash: Hash, values: readonly unknown[]): Hash {
-  hash.update(String(values.length));
-  for (const value of values) {
-    const { json } = encodedValue(value);
-    hash.update(`\0${json.length}\0`);
-    hash.update(json);
-  }
-  return hash;
-}
-
 /** Whether two projected values encode identically; identity short-circuits. */
 export function sameEncoding(left: unknown, right: unknown): boolean {
   return left === right || encodedValue(left).json === encodedValue(right).json;
@@ -175,14 +164,20 @@ export function encodedBytesWithMessages<
   return bytes;
 }
 
-/** Digest of an object with a `messages` array, hashing messages through the memo. */
+/**
+ * Digest of an object with a `messages` array, for equality checks only. Each
+ * message enters as its memoized fingerprint, so a read that changed one row
+ * hashes that row's JSON once and a short string for every other row. Feeding
+ * every row's JSON instead made the legacy commit's changed read slower than
+ * the whole-projection `JSON.stringify` comparison it replaced (to-do 6260).
+ */
 export function digestWithMessages<T extends { messages: readonly unknown[] }>(
   prefix: string,
   value: T,
 ): string {
   const { messages, ...rest } = value;
   const hash = createHash("sha256").update(prefix).update("\0").update(JSON.stringify(rest));
-  return updateHashWithValues(hash, messages).digest("base64url").slice(0, 43);
+  return updateHashWithFingerprints(hash, messages).digest("base64url").slice(0, 43);
 }
 
 /** Containers deeper than this are serialized whole rather than walked. */

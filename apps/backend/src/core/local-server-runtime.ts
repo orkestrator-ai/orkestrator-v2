@@ -1,7 +1,7 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { lowPriorityCommand } from "./process-priority.js";
 import { spawnCommand } from "./shell.js";
-import { terminateProcessTree } from "./process-tree.js";
+import { reapProcessGroup, terminateProcessTree } from "./process-tree.js";
 import {
   OpenCodeAgentToolsReconciler,
   type OpenCodeAgentToolsTuning,
@@ -60,6 +60,8 @@ export const BRIDGE_TOKEN_PATTERN = /^(?:okb_)?[A-Za-z0-9_-]{43}$/;
 // group before escalating the bridge itself.
 export const LOCAL_SERVER_SHUTDOWN_GRACE_MS = 8_000;
 export const LOCAL_SERVER_KILL_WAIT_MS = 1_000;
+/** How long an orphaned agent CLI gets to leave on SIGTERM after its bridge died. */
+export const LOCAL_SERVER_ORPHAN_GRACE_MS = 2_000;
 
 /** When an owned bridge process was first seen failing its reuse health check. */
 export type LocalServerUnresponsiveMarker = {
@@ -94,6 +96,11 @@ export type LocalServerRuntimeOptions = {
   spawn?: typeof spawnCommand;
   /** Stops a bridge's whole process tree; tests substitute a recorder. */
   terminateProcessTree?: typeof terminateProcessTree;
+  /**
+   * Stops what a bridge that died on its own left in its group. Off when
+   * `spawn` is substituted, unless a reaper is given too.
+   */
+  reapProcessGroup?: typeof reapProcessGroup;
   openCodeAgentTools?: OpenCodeAgentToolsTuning;
   /** Waits before each retry of a host OpenCode start that lost the database. */
   openCodeLockedStartRetryDelaysMs?: readonly number[];
@@ -126,6 +133,7 @@ export class LocalServerRuntime {
   readonly openCodeProviderLogin = new OpenCodeProviderLoginSlot();
 
   private readonly terminateTree: typeof terminateProcessTree;
+  private readonly reapGroup: typeof reapProcessGroup;
   private readonly processes = new Map<string, ChildProcessWithoutNullStreams>();
   /** Children the backend asked to stop, so their exit is not reported as a surprise. */
   private readonly stopRequests = new WeakSet<ChildProcessWithoutNullStreams>();
@@ -160,6 +168,10 @@ export class LocalServerRuntime {
   constructor(options: LocalServerRuntimeOptions = {}) {
     this.spawn = options.spawn ?? spawnLowPriority;
     this.terminateTree = options.terminateProcessTree ?? terminateProcessTree;
+    // A substituted spawn hands out fake children whose pids name nobody's
+    // group; signalling `-pid` for one could reach a real process on the host.
+    this.reapGroup =
+      options.reapProcessGroup ?? (options.spawn ? async () => "empty" : reapProcessGroup);
     this.openCodeAgentTools = new OpenCodeAgentToolsReconciler(options.openCodeAgentTools);
     this.openCodeHostStart = new OpenCodeHostStartGate(options.openCodeLockedStartRetryDelaysMs);
     this.piCatalog = new PiCatalogProbes(options.piCatalog);
@@ -292,6 +304,32 @@ export class LocalServerRuntime {
       signal,
       requested,
     });
+  }
+
+  /**
+   * Stops what a bridge that exited on its own left behind. Its agent CLI is
+   * a child in the bridge's process group (spawned `detached`, so the group is
+   * this backend's), and outlives a bridge that crashes or is killed: it goes
+   * on with the interrupted turn, against the provider and into the same
+   * conversation the next bridge resumes. Found live in todo 0048 task 11. A
+   * stop the backend asked for already went through `terminate`, which reached
+   * the tree while the bridge was alive.
+   */
+  reapAfterUnrequestedExit(key: string, child: ChildProcessWithoutNullStreams): Promise<void> {
+    if (this.stopRequests.has(child)) return Promise.resolve();
+    return this.reapGroup(child.pid, {
+      graceMs: LOCAL_SERVER_ORPHAN_GRACE_MS,
+      killWaitMs: LOCAL_SERVER_KILL_WAIT_MS,
+    })
+      .then((result) => {
+        if (result === "empty") return;
+        log[result === "stopped" ? "warn" : "error"]("bridge.orphans-reaped", {
+          key,
+          pid: child.pid ?? null,
+          result,
+        });
+      })
+      .catch(() => undefined);
   }
 
   // Renderer credentials

@@ -63,6 +63,24 @@ cadence, and demotions by reason) and native session invalidations
 `get_recurring_work_diagnostics` command and the `recurringWork` block of the
 gateway's `/__orkestrator/metrics`.
 
+`caches` reports the in-memory caches nothing else counts, so a soak can tell
+a cache that tracks live environments and sessions from one that grows with
+every one ever seen. Owners register a source with `addCacheSource(name,
+source)` while they live, and the registry sums sources of one name:
+
+| Name | Owner | Gauges |
+| --- | --- | --- |
+| `storage-row-cache` | each open `StorageDatabase` connection (`openBackendDatabase`, the change ledger) | `connections`, `stores`, `rows`, `bytes` (serialized length) |
+| `worktree-snapshots` | `DiffStatsTracking` | diff-stats entries, file-tree lineages and retained bodies, ad hoc reads, and the tracker's per-environment maps |
+| `local-git-scan` | `DiffStatsTracking` (the module cache) | `worktrees`, `counts` |
+| `native-projection` | `NativeAgentService` | the size of every per-session map of the transcript projection, and the bytes its bounded caches charge |
+| `change-tracking` | `ChangeTrackingService` | worktree owners, evidence sources, pending pulls and deleted-environment fences |
+
+Field names are compiled-in identifiers: the registry drops any field that is
+not a short lowercase identifier or not a finite, non-negative number, keeps
+at most 64 fields per name and 32 sources per name, and counts a throwing
+source in `faultedSources`. Reading a gauge walks memory only.
+
 ## Scheduling primitives
 
 Scheduler mechanics stay separate from domain decisions. A scheduler knows

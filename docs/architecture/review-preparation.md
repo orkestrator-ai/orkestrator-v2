@@ -216,7 +216,21 @@ one self-contained function. It reads:
   `Bun.resolveSync`, which follow tsconfig paths and workspace packages; every
   bunfig `preload` counts as each Bun test's own import). A test that is
   changed, imports a changed file, or whose test or helper files name a changed
-  path or a changed directory is `related`. A change to configuration every
+  path or a changed directory is `related`. Helpers are the files the test
+  reaches through its own imports that live under a `tests`, `testing`,
+  `fixtures`, `mocks` or `e2e` directory, are test files, or carry a test,
+  spec, fixture, mock, stub or fake part in their name (`*-test-support.ts`);
+  a preload is not one test's own helper. Any other module in the import graph
+  counts only when its code names a changed file's full path, as a module that
+  reads that file at run time does; a directory or a bare file name there does
+  not. Comments never count: each file is read without them (Bun's
+  transpiler). A directory match reports that directory as `changedPath`.
+  Before this rule, a doc comment naming `apps/web` in a protocol module that
+  most backend tests load made a web-only branch's backend failures `related`.
+  An import counts at any depth, so a change to a widely shared module still
+  makes most tests `related`; [to-do 6920](../todo/coordinator-and-multi-review/6920-triage-related-through-a-widely-shared-import.md)
+  measures that and proposes narrowing it.
+  A change to configuration every
   test loads (manifests, lockfiles, tsconfig, bunfig, mise, test setup) leaves
   an untouched test `undetermined`, as does an unresolvable local import.
   Playwright and pytest failures are `undetermined` unless other evidence below
@@ -224,8 +238,11 @@ one self-contained function. It reads:
 - **The runner's retry verdict.** A Playwright test that passed on retry is
   `unrelated`.
 - **The repository's flake registry.** An open row in
-  `docs/tests/flaky-tests/**/0000-index.md` naming the test makes it
-  `unrelated`. Repositories without that layout skip this source.
+  `docs/tests/flaky-tests/**/0000-index.md` naming the test adds the reason
+  `known-flaky` and never changes the verdict: a registry row cannot excuse a
+  real regression in code the branch changed, so a known flake in untouched
+  code reaches the verifier as whatever its other evidence makes it.
+  Repositories without that layout skip this source.
 - **The target branch's CI on the merge-base**, read with `gh` only while a
   failure is still `related` or `undetermined`: the merge-base commit's check
   runs, then the tail of each failed GitHub Actions job's log, parsed the same

@@ -301,6 +301,17 @@ gateway itself instead:
   filtered one, for what relay windows and realms listen to
   ([command-nodes.md](command-nodes.md)).
 
+Measured on macOS with nothing attached over the DevTools protocol (2026-11-06,
+`local-gateway-transport-cpu-electron.spec.ts`), a direct window costs Electron
+main less than a relay window: a 1.29 MB terminal burst shown in two windows
+cost main 4–7 ms against 46–54 ms. The pages parse their own streams instead,
+so the renderers spend more (137–178 ms against 81–85 ms). The `webRequest`
+hook adds no measurable JavaScript time: it runs once per request, and a
+stream's chunks do not pass through it. A page driven over the DevTools
+protocol reverses the result: each load and stream chunk becomes a DevTools
+event that main forwards, which the relay's IPC delivery does not produce
+([agent-testing.md](../development/agent-testing.md#measuring-electron-mains-cpu)).
+
 The default became `on` on 2026-11-01, after a live probe through Tailscale
 Serve showed no held frames and no re-encoding. `--compression body` is the
 rollback. The terminal transport default has not changed. The evidence and the

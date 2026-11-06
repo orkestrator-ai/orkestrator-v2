@@ -618,6 +618,7 @@ mock.module("@/stores", () => ({
       selector?: (state: {
         environments: Environment[];
         deletingEnvironments: Set<string>;
+        deletingStartedAt: Map<string, string>;
         getEnvironmentById: (environmentId: string) => Environment | undefined;
         updateEnvironment: (environmentId: string, environment: Environment) => void;
         setEnvironmentPR: () => void;
@@ -641,6 +642,7 @@ mock.module("@/stores", () => ({
               : environment,
           ),
           deletingEnvironments: currentDeletingEnvironments,
+          deletingStartedAt: new Map<string, string>(),
           isDeleting: (id: string) => currentDeletingEnvironments.has(id),
           getEnvironmentById: (environmentId: string) =>
             environmentId === currentEnvironment.id
@@ -8638,6 +8640,22 @@ describe("ActionBar merge completion", () => {
     await Promise.resolve();
     expect(deleteEnvironmentMock).not.toHaveBeenCalled();
     expect(setEnvironmentPrBackendMock).not.toHaveBeenCalled();
+  });
+
+  test("an ordinary delete failure keeps cleanup retry enabled", () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      deletionError: "ordinary deletion failed",
+      deletionRequestedAt: "2026-11-05T12:00:00Z",
+      lifecycleOperation: "deleting",
+    };
+    render(<ActionBar />);
+    const button = screen.getByRole("button", { name: "Clean Up" }) as HTMLButtonElement;
+    expect(button.disabled).toBe(false);
+    fireEvent.click(button);
+    expect(
+      (screen.getByRole("button", { name: "Delete Environment" }) as HTMLButtonElement).disabled,
+    ).toBe(false);
   });
 
   test("disables a newly visible cleanup action while backend merge cleanup is active", async () => {

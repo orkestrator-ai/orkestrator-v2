@@ -1,12 +1,15 @@
 import { readStoredValue, seedStore } from "./storage-test-support.js";
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
-import { promises as fs } from "node:fs";
+import { existsSync, promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createCommandRegistry, type CommandContext } from "./commands.js";
 import type { Environment } from "./models.js";
 import { StorageService } from "./storage.js";
-import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
+import {
+  EnvironmentLifecycleTaskTracker,
+  reconcileInterruptedEnvironmentLifecycleTasks,
+} from "./environment-lifecycle-tasks.js";
 import {
   closeEnvironmentCleanupStorage,
   ENVIRONMENT_CLEANUP_LEDGER_STORE,
@@ -79,6 +82,8 @@ async function withDeleteCommand<T>(
   try {
     return await run(invokeDelete, storage, context);
   } finally {
+    context.runtime.shutdown();
+    await context.runtime.diffStats.settled();
     await fs.chmod(worktreeDir, 0o700).catch(() => undefined);
     await fs.rm(dataDir, { recursive: true, force: true });
   }
@@ -144,16 +149,194 @@ describe("delete_environment host cleanup", () => {
           environment({ branch: "feature", worktreePath, createdFromCommit: base }),
         );
       },
-      async (invokeDelete, storage) => {
+      async (invokeDelete, storage, context) => {
         await invokeDelete();
         expect(await exists(worktreePath)).toBe(false);
         await expect(
           runCommand("git", ["-C", projectPath, "show-ref", "--verify", "refs/heads/feature"]),
         ).rejects.toThrow();
         expect(await environmentCleanupLedger(storage.getDataDir()).list()).toEqual([]);
+        const service = context.runtime.diffStats.service;
+        await expect(service.readTree({ lookup: { worktreePath } })).rejects.toThrow(
+          "being removed",
+        );
+        expect(await exists(worktreePath)).toBe(false);
+        // The same project and branch allocate exactly the retired physical path.
+        await runCommand("git", [
+          "-C",
+          projectPath,
+          "worktree",
+          "add",
+          "-b",
+          "feature",
+          worktreePath,
+          "main",
+        ]);
+        await storage.addEnvironment(
+          environment({ id: "replacement", branch: "feature", worktreePath }),
+        );
+        await createCommandRegistry().get("start_environment")!(
+          { environmentId: "replacement" },
+          context,
+        );
+        expect((await storage.getEnvironment("replacement"))?.status).toBe("running");
+        await storage.addEnvironment(
+          environment({ id: "later", projectHome: true, worktreePath: projectPath }),
+        );
+        await context.runtime.diffStats.sync(context);
+        expect(service.isTracked("replacement")).toBe(true);
+        await service.readFileList({
+          lookup: { worktreePath },
+          comparisonRef: "HEAD",
+          includeUncommitted: true,
+        });
+        await service.readTree({ lookup: { worktreePath } });
+        // A later environment still reconciles; replacement tracking did not abort sync.
+        expect(service.isTracked("later")).toBe(true);
       },
     );
   });
+
+  test("deleting and re-ensuring a home leaves the retained checkout and its other owner readable", async () => {
+    let checkout = "";
+    await withDeleteCommand(
+      async (storage) => {
+        checkout = path.join(storage.getDataDir(), "checkout");
+        await runCommand("git", ["init", "-b", "main", checkout]);
+        await runCommand("git", ["-C", checkout, "config", "user.name", "Test"]);
+        await runCommand("git", ["-C", checkout, "config", "user.email", "test@example.invalid"]);
+        await fs.writeFile(path.join(checkout, "readme"), "fixture");
+        await runCommand("git", ["-C", checkout, "add", "."]);
+        await runCommand("git", ["-C", checkout, "commit", "-m", "fixture"]);
+        await storage.addProject({
+          id: "p1",
+          name: "Project",
+          gitUrl: "https://example.invalid/p1.git",
+          localPath: checkout,
+          addedAt: new Date(0).toISOString(),
+          order: 0,
+        });
+        await storage.addEnvironment(environment({ projectHome: true, worktreePath: checkout }));
+        await storage.addEnvironment(
+          environment({ id: "other-owner", projectHome: true, worktreePath: checkout }),
+        );
+      },
+      async (invokeDelete, storage, context) => {
+        const tracking = context.runtime.diffStats;
+        await tracking.sync(context);
+        await invokeDelete();
+        expect(await exists(checkout)).toBe(true);
+        await tracking.service.readTree({ lookup: { worktreePath: checkout } });
+        await tracking.service.readFileList({
+          lookup: { worktreePath: checkout },
+          comparisonRef: "HEAD",
+          includeUncommitted: true,
+        });
+        expect(tracking.service.isTracked("other-owner")).toBe(true);
+        // Remove only the second record, so ensure creates a fresh home at the retained root.
+        await storage.removeEnvironment("other-owner");
+        const home = (await createCommandRegistry().get("ensure_project_home_environment")!(
+          { projectId: "p1" },
+          context,
+        )) as Environment;
+        expect(home.worktreePath).toBe(checkout);
+        expect(tracking.service.isTracked(home.id)).toBe(true);
+        await tracking.sync(context);
+        await tracking.service.readTree({ lookup: { worktreePath: checkout } });
+      },
+    );
+  });
+
+  test("a retained non-home checkout stays readable during deletion, failure, retry and ledger recovery", async () => {
+    let worktreePath = "";
+    let thirdPath = "";
+    await withDeleteCommand(
+      async (storage) => {
+        worktreePath = await seedWorktree(storage);
+        thirdPath = path.join(storage.getDataDir(), "third");
+        for (const root of [worktreePath, thirdPath]) {
+          await runCommand("git", ["init", "-b", "main", root]);
+          await fs.writeFile(path.join(root, "file"), "fixture");
+          await runCommand("git", ["-C", root, "add", "."]);
+          await runCommand("git", [
+            "-C",
+            root,
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=t@e.invalid",
+            "commit",
+            "-m",
+            "fixture",
+          ]);
+        }
+        await storage.addEnvironment(environment({ id: "owner", worktreePath }));
+        await storage.addEnvironment(environment({ id: "third", worktreePath: thirdPath }));
+      },
+      async (invokeDelete, storage, context) => {
+        const tracking = context.runtime.diffStats;
+        await tracking.sync(context);
+        const reached = Promise.withResolvers<void>();
+        const release = Promise.withResolvers<void>();
+        const cleanup = spyOn(
+          storage,
+          "deleteMultiReviewWorkflowsByEnvironment",
+        ).mockImplementationOnce(async () => {
+          reached.resolve();
+          await release.promise;
+          throw new Error("cleanup interrupted");
+        });
+        const deleting = invokeDelete();
+        const outcome = deleting.then(
+          () => null,
+          (error: unknown) => error,
+        );
+        const assertSurvivors = async () => {
+          await tracking.sync(context);
+          expect(tracking.service.isWatching("owner")).toBe(true);
+          expect(tracking.service.isWatching("third")).toBe(true);
+          await tracking.service.readTree({ lookup: { worktreePath } });
+          await tracking.service.readFileList({
+            lookup: { worktreePath },
+            comparisonRef: "HEAD",
+            includeUncommitted: true,
+          });
+          expect(await exists(worktreePath)).toBe(true);
+        };
+        try {
+          await reached.promise;
+          await assertSurvivors();
+        } finally {
+          release.resolve();
+          const failure = await outcome;
+          cleanup.mockRestore();
+          expect(failure).toMatchObject({ message: "cleanup interrupted" });
+        }
+        const ledger = environmentCleanupLedger(storage.getDataDir());
+        expect(await ledger.get("e1")).toMatchObject({ pending: ["state-dirs"] });
+        await assertSurvivors();
+        // Fail a later ledger step without changing the retained worktree.
+        const finish = ledger.complete.bind(ledger);
+        const complete = spyOn(ledger, "complete").mockImplementation(async (id, step) => {
+          if (step === "state-dirs") throw new Error("ledger unavailable");
+          await finish(id, step);
+        });
+        try {
+          await invokeDelete();
+        } finally {
+          complete.mockRestore();
+        }
+        expect(await storage.getEnvironment("e1")).toBeNull();
+        expect(await ledger.get("e1")).toMatchObject({ pending: ["state-dirs"] });
+        await assertSurvivors();
+        await reconcileEnvironmentCleanup(context, {
+          now: () => new Date(Date.now() + 60 * 60_000),
+        });
+        expect(await ledger.get("e1")).toBeNull();
+        await assertSurvivors();
+      },
+    );
+  }, 30_000);
 
   test("runs the verified container step during deletion", async () => {
     await withDeleteCommand(
@@ -211,18 +394,236 @@ describe("delete_environment host cleanup", () => {
         try {
           await expect(invokeDelete()).rejects.toThrow("Terminal process trees are still running");
           expect(await exists(worktreePath)).toBe(true);
-          expect(await storage.getEnvironment("e1")).toMatchObject({
+          // It says why, and keeps the tombstone a restart recovers from.
+          const failed = await storage.getEnvironment("e1");
+          expect(failed).toMatchObject({
             lifecycleOperation: "deleting",
+            deletionRequestedAt: expect.any(String),
+            deletionError: expect.stringContaining("Terminal process trees are still running"),
           });
           expect(await environmentCleanupLedger(storage.getDataDir()).get("e1")).toMatchObject({
             pending: ["worktree", "state-dirs"],
           });
+          // A restart finds it and re-admits the same delete.
+          expect(await reconcileInterruptedEnvironmentLifecycleTasks(storage)).toMatchObject({
+            deletionRecoveryEnvironmentIds: ["e1"],
+          });
           await fs.writeFile(path.join(worktreePath, "late-write"), "late");
           exited = true;
+          // A retry clears the reason before it does anything else.
+          let reasonDuringRetry: string | null | undefined = "unset";
+          const stopServers = context.runtime.terminals.terminateSessionsForEnvironment.bind(
+            context.runtime.terminals,
+          );
+          spyOn(context.runtime.terminals, "terminateSessionsForEnvironment").mockImplementation(
+            async (environmentId) => {
+              reasonDuringRetry = (await storage.getEnvironment("e1"))?.deletionError;
+              return stopServers(environmentId);
+            },
+          );
           await invokeDelete();
+          expect(reasonDuringRetry ?? null).toBeNull();
           expect(await exists(worktreePath)).toBe(false);
+          expect(await storage.getEnvironment("e1")).toBeNull();
           expect(await environmentCleanupLedger(storage.getDataDir()).list()).toEqual([]);
         } finally {
+          context.runtime.terminals.explicitlyCloseSession(id);
+        }
+      },
+    );
+  });
+
+  test("stops watching and scanning the worktree before it removes it", async () => {
+    let worktreePath = "";
+    await withDeleteCommand(
+      async (storage) => {
+        worktreePath = await seedWorktree(storage);
+      },
+      async (invokeDelete, _storage, context) => {
+        const service = context.runtime.diffStats.service;
+        let worktreeAtPause = null as boolean | null;
+        const pause = service.pause.bind(service);
+        spyOn(service, "pause").mockImplementation((environmentId) => {
+          if (environmentId === "e1") {
+            worktreeAtPause = existsSync(worktreePath);
+          }
+          pause(environmentId);
+        });
+        await invokeDelete();
+        expect(worktreeAtPause).toBe(true);
+        expect(await exists(worktreePath)).toBe(false);
+        expect(service.isTracked("e1")).toBe(false);
+      },
+    );
+  });
+
+  test("nothing re-creates the worktree after it is removed", async () => {
+    let worktreePath = "";
+    await withDeleteCommand(
+      async (storage) => {
+        worktreePath = await seedWorktree(storage);
+        await fs.mkdir(path.join(worktreePath, "node_modules", "pkg"), { recursive: true });
+        await fs.writeFile(path.join(worktreePath, "node_modules", "pkg", "index.js"), "");
+      },
+      async (invokeDelete, _storage, context) => {
+        const tracking = context.runtime.diffStats;
+        await tracking.sync(context);
+        await invokeDelete();
+        expect(await exists(worktreePath)).toBe(false);
+        // A reconciliation or scan that arrives late has nothing left to act on.
+        await tracking.sync(context);
+        tracking.service.pause("e1");
+        await Bun.sleep(20);
+        expect(tracking.service.isTracked("e1")).toBe(false);
+        expect(await exists(worktreePath)).toBe(false);
+      },
+    );
+  });
+
+  test.each(["tracked", "committed", "alternate-ref"] as const)(
+    "waits for a %s read's exclude write before removing its worktree",
+    async (mode) => {
+      let worktreePath = "";
+      await withDeleteCommand(
+        async (storage) => {
+          worktreePath = await seedWorktree(storage);
+          await runCommand("git", ["init", worktreePath]);
+        },
+        async (invokeDelete, _storage, context) => {
+          let reached!: () => void;
+          const atWrite = new Promise<void>((resolve) => {
+            reached = resolve;
+          });
+          let release!: () => void;
+          const gate = new Promise<void>((resolve) => {
+            release = resolve;
+          });
+          const mkdir = fs.mkdir.bind(fs);
+          const intercepted = spyOn(fs, "mkdir").mockImplementation((async (
+            ...args: Parameters<typeof fs.mkdir>
+          ) => {
+            if (String(args[0]) === path.join(worktreePath, ".git", "info")) {
+              reached();
+              await gate;
+            }
+            return mkdir(...args);
+          }) as typeof fs.mkdir);
+          const tracking = context.runtime.diffStats;
+          let deleting: Promise<void> | undefined;
+          let read: Promise<unknown> | undefined;
+          try {
+            if (mode === "tracked") {
+              tracking.service.track({
+                environmentId: "e1",
+                kind: "local",
+                worktreePath,
+                comparisonRef: "HEAD",
+              });
+            } else {
+              read = tracking.service.readFileList({
+                lookup: { worktreePath },
+                comparisonRef: mode === "alternate-ref" ? "other" : "HEAD",
+                includeUncommitted: mode !== "committed",
+              });
+              // The empty Git fixture has no valid comparison; only the exclude write matters.
+              void read.catch(() => undefined);
+            }
+            await atWrite;
+            let paused!: () => void;
+            const atPause = new Promise<void>((resolve) => {
+              paused = resolve;
+            });
+            const pause = tracking.service.pause.bind(tracking.service);
+            const pauseSpy = spyOn(tracking.service, "pause").mockImplementation((id) => {
+              pause(id);
+              paused();
+            });
+            try {
+              deleting = invokeDelete();
+              await atPause;
+              await expect(
+                tracking.service.readFileList({
+                  lookup: { worktreePath },
+                  comparisonRef: "HEAD",
+                  includeUncommitted: false,
+                }),
+              ).rejects.toThrow("being removed");
+              await expect(tracking.service.readTree({ lookup: { worktreePath } })).rejects.toThrow(
+                "being removed",
+              );
+              // Pause cannot cancel mkdir/write work already admitted. Removal must wait.
+              expect(await exists(worktreePath)).toBe(true);
+              release();
+              await deleting;
+              await tracking.settled();
+              expect(await exists(worktreePath)).toBe(false);
+            } finally {
+              pauseSpy.mockRestore();
+            }
+          } finally {
+            release();
+            await deleting;
+            await read?.catch(() => undefined);
+            tracking.shutdown();
+            await tracking.settled();
+            intercepted.mockRestore();
+          }
+        },
+      );
+    },
+  );
+
+  test("a delete that is stuck does not hold up another environment's", async () => {
+    let stuckPath = "";
+    let otherPath = "";
+    await withDeleteCommand(
+      async (storage) => {
+        stuckPath = await seedWorktree(storage);
+        otherPath = path.join(storage.getDataDir(), "workspaces", "project-e2");
+        await fs.mkdir(otherPath, { recursive: true });
+        await storage.addEnvironment(environment({ id: "e2", worktreePath: otherPath }));
+      },
+      async (invokeDelete, storage, context) => {
+        let release!: () => void;
+        const released = new Promise<boolean>((resolve) => {
+          release = () => resolve(true);
+        });
+        let terminating!: () => void;
+        const reachedTerminal = new Promise<void>((resolve) => {
+          terminating = resolve;
+        });
+        const process = {
+          pid: 1,
+          onData: () => ({ dispose: () => undefined }),
+          onExit: () => ({ dispose: () => undefined }),
+          write: () => undefined,
+          resize: () => undefined,
+          kill: () => undefined,
+          terminate: () => {
+            terminating();
+            return released;
+          },
+        } satisfies PtyProcess;
+        const id = setupTerminalSessionId("e1");
+        context.runtime.terminals.registerProcess(id, process);
+        try {
+          const stuck = invokeDelete();
+          await reachedTerminal;
+          const command = createCommandRegistry().get("delete_environment");
+          await command?.({ environmentId: "e2" }, context);
+          expect(await storage.getEnvironment("e2")).toBeNull();
+          expect(await exists(otherPath)).toBe(false);
+          // The stuck one is still there, tombstoned, with its worktree.
+          expect(await storage.getEnvironment("e1")).toMatchObject({
+            lifecycleOperation: "deleting",
+          });
+          expect(await exists(stuckPath)).toBe(true);
+          release();
+          await stuck;
+          expect(await storage.getEnvironment("e1")).toBeNull();
+          expect(await exists(stuckPath)).toBe(false);
+        } finally {
+          release();
           context.runtime.terminals.explicitlyCloseSession(id);
         }
       },
@@ -268,12 +669,30 @@ describe("delete_environment host cleanup", () => {
         expect(await exists(worktreePath)).toBe(true);
         const ledger = environmentCleanupLedger(storage.getDataDir());
         expect(await ledger.get("e1")).toMatchObject({ pending: ["worktree"] });
+        const service = context.runtime.diffStats.service;
+        const target = {
+          environmentId: "replacement",
+          kind: "local" as const,
+          worktreePath,
+          comparisonRef: "HEAD",
+        };
+        expect(() => service.track(target)).toThrow("being removed");
+        await expect(service.readTree({ lookup: { worktreePath } })).rejects.toThrow(
+          "being removed",
+        );
 
         await fs.chmod(workspaces, 0o700);
         const later = new Date(Date.now() + 60 * 60_000);
         await reconcileEnvironmentCleanup(context, { now: () => later });
         expect(await exists(worktreePath)).toBe(false);
         expect(await ledger.get("e1")).toBeNull();
+        await expect(service.readTree({ lookup: { worktreePath } })).rejects.toThrow(
+          "being removed",
+        );
+        await fs.mkdir(worktreePath);
+        await runCommand("git", ["init", worktreePath]);
+        service.track(target);
+        await service.readTree({ lookup: { worktreePath } });
       },
     );
   });
@@ -391,6 +810,32 @@ describe("delete_environment durable child-state cleanup", () => {
           context.runtime.changeTracking = null;
           warning.mockRestore();
         }
+      },
+    );
+  });
+
+  test("releases the native projection caches of its sessions after their records go", async () => {
+    await withDeleteCommand(
+      async (storage) => storage.addEnvironment(environment()).then(() => undefined),
+      async (invokeDelete, storage, context) => {
+        const order: string[] = [];
+        const deleteSessions = storage.deleteNativeAgentSessionsByEnvironment.bind(storage);
+        storage.deleteNativeAgentSessionsByEnvironment = async (environmentId: string) => {
+          order.push("session-records");
+          return deleteSessions(environmentId);
+        };
+        const forgetEnvironmentProjections = mock((_environmentId: string) => {
+          order.push("projection-caches");
+        });
+        context.nativeAgents = {
+          forgetEnvironmentCommandCatalogues: () => undefined,
+          forgetEnvironmentProjections,
+        } as unknown as NonNullable<typeof context.nativeAgents>;
+
+        await invokeDelete();
+        expect(forgetEnvironmentProjections).toHaveBeenCalledWith("e1");
+        expect(order).toEqual(["session-records", "projection-caches"]);
+        expect(await storage.getEnvironment("e1")).toBeNull();
       },
     );
   });

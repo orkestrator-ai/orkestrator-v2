@@ -1,4 +1,5 @@
 import { isValidTimeZone } from "@orkestrator/protocol/schedule-time";
+import { recurringDiagnosticsRegistry } from "./recurring-diagnostics.js";
 import type { TurnFailureKind } from "@orkestrator/protocol/agent-usage-limits";
 import { turnOutcomeFailureKind } from "./agent-usage-limits.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
@@ -133,6 +134,7 @@ import {
 import {
   coordinatorRuntimeUnavailableMessage,
   resolveCoordinatorRuntime,
+  heldCoordinatorConversation,
   coordinatorRuntimeEnvironment,
 } from "./coordinator-runtime.js";
 import type { NativeAgentProviderEnvironment } from "./native-agent-provider.js";
@@ -538,6 +540,8 @@ export class NativeAgentService {
    */
   private readonly observations: NativeAgentObservationBroker;
   private unsubscribeObservationWakeups: (() => void) | null = null;
+  /** Unregisters the projection's cache gauges; called once on shutdown. */
+  private removeProjectionCacheGauges: () => void = () => undefined;
   /**
    * Automatic continuation of incomplete turns, for platforms with a recovery
    * strategy, and the manual-prompt claims that keep it from racing the user.
@@ -702,6 +706,8 @@ export class NativeAgentService {
       options,
       ...(this.permissionRules ? { permissionRules: this.permissionRules } : {}),
       catalogs: this.catalogs,
+      cachedProvider: (input) =>
+        this.providerRegistry.cached(providerCacheKey(input.environmentId, input.agent)),
       observedActivity: (sessionKey) => this.launches.observedActivity(sessionKey),
       providerGeneration: (input) =>
         this.providerRegistry.connectionIdentity(
@@ -719,6 +725,10 @@ export class NativeAgentService {
       scheduleAmbiguousSteerSettle: (input, key, requestId, provider) =>
         this.promptQueues.scheduleAmbiguousSteerSettle(input, key, requestId, provider),
     });
+    this.removeProjectionCacheGauges = recurringDiagnosticsRegistry.addCacheSource(
+      "native-projection",
+      this.projections,
+    );
     this.promptQueues = new NativeAgentPromptQueueDispatcher({
       storage,
       isStopped: () => this.stopped,
@@ -868,7 +878,7 @@ export class NativeAgentService {
       ...(this.permissionRules ? { permissionRules: this.permissionRules } : {}),
       now: () => this.now(),
       assertProjectionInput: (input) => this.assertProjectionInput(input),
-      resolveProjectionSession: (input) => this.resolveProjectionSession(input),
+      resolveProjectionSession: (input, stopping) => this.resolveProjectionSession(input, stopping),
       provider: (input) => this.provider(input),
       replaceBridgeForWiderPolicy: (input) => this.replaceBridgeForWiderPolicy(input),
       observeProvider: (input) => this.observeProvider(input),
@@ -1884,6 +1894,15 @@ export class NativeAgentService {
     return { ...result, projection: await this.projections.refreshProjection(input, true) };
   }
 
+  /**
+   * Called when an environment is deleted, after its session records went;
+   * never on tab close, unmount or switch. Drops the projection caches of its
+   * sessions, which nothing can read again.
+   */
+  forgetEnvironmentProjections(environmentId: string): void {
+    this.projections.forgetEnvironment(environmentId);
+  }
+
   /** Called when an environment is deleted; never on tab unmount or switch. */
   forgetEnvironmentCommandCatalogues(environmentId: string): void {
     this.catalogs.forgetEnvironmentCommands(environmentId);
@@ -2739,6 +2758,7 @@ export class NativeAgentService {
 
   private async resolveProjectionSession(
     input: NativeAgentProjectionInput,
+    stopping = false,
   ): Promise<ResolvedProjectionSession | null> {
     this.assertProjectionInput(input);
     const key = nativeAgentSessionStorageKey(
@@ -2749,7 +2769,20 @@ export class NativeAgentService {
     const session = await this.storage.getNativeAgentSession(key);
     if (!session) return null;
     this.assertSessionIdentity(session, input, key);
-    const provider = await this.provider(input);
+    // Stop may reach work already running behind a hold. Never start a bridge
+    // or reopen a provider session just to stop one.
+    const held = stopping && (await heldCoordinatorConversation(this.storage, input.environmentId));
+    if (
+      held &&
+      (held.conversation.agent !== input.agent ||
+        held.conversation.logicalSessionKey !== input.logicalSessionKey)
+    ) {
+      throw new Error("Native agent session key collision");
+    }
+    const provider = held
+      ? this.providerRegistry.cached(providerCacheKey(input.environmentId, input.agent))
+      : await this.provider(input);
+    if (!provider) return null;
     provider.registerSession?.(session.providerSessionId, {
       origin: session.origin,
       interactionPolicy: session.interactionPolicy,
@@ -4203,6 +4236,7 @@ export class NativeAgentService {
     this.usageLimitResend.clear();
     this.catalogs.clear();
     this.projections.clear();
+    this.removeProjectionCacheGauges();
   }
 
   /**

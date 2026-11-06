@@ -1,6 +1,58 @@
-/** File-backed fake Cursor SDK used by the close-retention fixture. */
+/**
+ * File-backed fake Cursor SDK used by the close-retention fixture and the
+ * Docker fixture's container cells.
+ *
+ * A prompt with a line `FETCH <url>` makes the fake request that URL from this
+ * process before it answers `Fetch <url>: HTTP <status>` or
+ * `Fetch <url>: failed (<code>)`. The real SDK's local agent runs its tools
+ * from the bridge process, so this is the reach a Cursor turn has from where
+ * the bridge runs (in a container, behind its firewall).
+ */
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { stripSystemInstructions } from "@orkestrator/protocol/review-evidence-frames";
+
+const FETCH_LINE = /^FETCH (\S+)$/m;
+const FETCH_TIMEOUT_MS = 10_000;
+
+/** The parts of `Agent.create`'s options a spec reads back. */
+interface AgentCreateOptions {
+  mode?: string;
+  local?: {
+    cwd?: string;
+    settingSources?: unknown;
+    sandboxOptions?: unknown;
+    autoReview?: boolean;
+  };
+  tools?: unknown;
+  disallowedTools?: unknown;
+  mcpServers?: Record<string, unknown>;
+}
+
+export interface CreatedOptions {
+  mode?: string;
+  cwd?: string;
+  settingSources?: unknown;
+  sandboxOptions?: unknown;
+  autoReview?: boolean;
+  tools?: unknown;
+  disallowedTools?: unknown;
+  /** Names only: a server entry carries its bearer token. */
+  mcpServerNames: string[];
+}
+
+/** A credential-free copy: no API key, no MCP server definitions. */
+function createdOptions(options: AgentCreateOptions): CreatedOptions {
+  return {
+    mode: options.mode,
+    cwd: options.local?.cwd,
+    settingSources: options.local?.settingSources,
+    sandboxOptions: options.local?.sandboxOptions,
+    autoReview: options.local?.autoReview,
+    tools: options.tools,
+    disallowedTools: options.disallowedTools,
+    mcpServerNames: Object.keys(options.mcpServers ?? {}),
+  };
+}
 
 export function createFakeCursorAgentApi({
   storePath,
@@ -26,6 +78,8 @@ export function createFakeCursorAgentApi({
     /** The name the bridge created the agent with. */
     name: string;
     createdAt: number;
+    /** What the bridge asked the SDK for; see {@link createdOptions}. */
+    options?: CreatedOptions;
     turns: StoredTurn[];
   }
   type Store = { agents: Record<string, StoredAgent> };
@@ -51,6 +105,21 @@ export function createFakeCursorAgentApi({
     const store = load();
     change(store);
     save(store);
+  }
+
+  async function fetchReply(url: string, signal: AbortSignal): Promise<string> {
+    try {
+      const response = await fetch(url, {
+        redirect: "manual",
+        signal: AbortSignal.any([signal, AbortSignal.timeout(FETCH_TIMEOUT_MS)]),
+      });
+      await response.body?.cancel();
+      return `Fetch ${url}: HTTP ${response.status}`;
+    } catch (error) {
+      const code =
+        (error as { code?: unknown }).code ?? (error as { name?: unknown }).name ?? "error";
+      return `Fetch ${url}: failed (${String(code)})`;
+    }
   }
 
   let sequence = Date.now();
@@ -119,12 +188,16 @@ export function createFakeCursorAgentApi({
         };
         let release!: () => void;
         const released = new Promise<void>((resolve) => (release = resolve));
-        if (!prompt.includes("HOLD")) {
-          const reply = `Answer to: ${prompt}`;
+        const controller = new AbortController();
+        const finish = (reply: string) => {
+          if (turn.status !== "running") return;
           options.onDelta?.({ update: { type: "text-delta", text: reply } });
           settle("finished", reply);
           release();
-        }
+        };
+        const fetchUrl = FETCH_LINE.exec(prompt)?.[1];
+        if (fetchUrl) void fetchReply(fetchUrl, controller.signal).then(finish);
+        else if (!prompt.includes("HOLD")) finish(`Answer to: ${prompt}`);
         return {
           id: turn.runId,
           agentId,
@@ -141,7 +214,10 @@ export function createFakeCursorAgentApi({
             return { id: turn.runId, status: turn.status, result: turn.reply };
           },
           cancel: async () => {
-            if (turn.status === "running") settle("cancelled");
+            if (turn.status === "running") {
+              settle("cancelled");
+              controller.abort();
+            }
             release();
           },
           // Accepted into the running turn, as the SDK's live steer is. Only a
@@ -165,10 +241,15 @@ export function createFakeCursorAgentApi({
   }
 
   return {
-    async create(options: { name?: string } = {}) {
+    async create(options: { name?: string } & AgentCreateOptions = {}) {
       const agentId = nextId("cursor-agent");
       mutate((store) => {
-        store.agents[agentId] = { name: options.name ?? "", createdAt: Date.now(), turns: [] };
+        store.agents[agentId] = {
+          name: options.name ?? "",
+          createdAt: Date.now(),
+          options: createdOptions(options),
+          turns: [],
+        };
       });
       await gateOpen();
       record("create", agentId);

@@ -15,8 +15,10 @@ import type { NativeAgentSessionProjection } from "@orkestrator/protocol/native-
 import * as realBackend from "@/lib/backend";
 import * as realNativeAgent from "@/components/native-agent";
 import * as clipboard from "@/lib/native/clipboard";
+import { dispatchResourceChange } from "@/lib/resource-sync";
 import { onGlobalSettingsRequest } from "@/lib/settings-navigation";
 import { useAppDialogStore } from "@/stores/appDialogStore";
+import { useAgentMailStore } from "@/stores/agentMailStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useNativeComposeStore } from "@/stores/nativeComposeStore";
 import { useProjectStore } from "@/stores/projectStore";
@@ -261,9 +263,93 @@ const unassigned = (conversation: CoordinatorConversation) => ({
   agent: undefined,
 });
 
+function installPendingMail(): void {
+  const environmentId = coordinatorRuntimeId("coordinator-1", mainConversation.id);
+  const mailboxId = `${environmentId}\0${mainConversation.tabId}`;
+  useAgentMailStore.setState({
+    summary: new Map([
+      [
+        mailboxId,
+        {
+          mailboxId,
+          projectId: "project-1",
+          environmentId,
+          tabId: mainConversation.tabId,
+          unreadCount: 1,
+          userUnseenCount: 1,
+          agentUnackedCount: 1,
+          pendingInjectCount: 1,
+          failedInjectCount: 0,
+          revision: 1,
+        },
+      ],
+    ]),
+    mailboxes: new Map([
+      [
+        mailboxId,
+        {
+          descriptor: {
+            mailboxId,
+            incarnationId: "incarnation-1",
+            projectId: "project-1",
+            projectName: "Project",
+            environmentId,
+            environmentName: "Coordinator",
+            environmentStatus: "running",
+            tabId: mainConversation.tabId,
+            tabType: "agent-native",
+            title: "Coordinator",
+            displayName: "Coordinator",
+            tabOrdinal: 1,
+            agent: "codex",
+            kind: "native",
+            presence: "idle",
+            injectPolicy: "idle",
+            injectOverride: "idle",
+            mutedInbound: false,
+            mutedOutbound: false,
+            unreadCount: 1,
+            userUnseenCount: 1,
+            agentUnackedCount: 1,
+            pendingInjectCount: 1,
+            failedInjectCount: 0,
+            capabilities: { canPull: true, canSend: true, canInject: true },
+          },
+          messages: [
+            {
+              version: 1,
+              id: "pending-mail",
+              threadId: "thread-1",
+              requestId: "mail-request-1",
+              createdAt: new Date(0).toISOString(),
+              from: { kind: "user" },
+              toEnvironmentId: environmentId,
+              toTabId: mainConversation.tabId,
+              toIncarnationId: "incarnation-1",
+              bodyBytes: 5,
+              trust: "user",
+              injectDepth: 0,
+              threadDepth: 0,
+              placement: "pending-inject",
+              revision: 1,
+            },
+          ],
+          total: 1,
+          offset: 0,
+          limit: 100,
+          revision: 1,
+        },
+      ],
+    ]),
+    refreshSummary: async () => undefined,
+    refreshMailbox: async () => undefined,
+  });
+}
+
 describe("CoordinatorPanel outcome-first wording and banners", () => {
   beforeEach(() => {
     useRealAgentTab = false;
+    useAgentMailStore.setState(useAgentMailStore.getInitialState());
     useUIStore.setState({ coordinatorIntroDismissed: false });
     resetNativeAgentSyncCapabilityForTests();
     useConfigStore.setState({ config: initialConfig });
@@ -607,6 +693,33 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
     expect(details.textContent).toContain("a tool that does not ask is not stopped");
   });
 
+  test.each([
+    ["paused", "Coordination is paused. Resume to send."],
+    ["error", "The coordinator could not start. Retry to send."],
+    ["startup-failed", "This conversation could not start. Retry to send."],
+  ] as const)("a %s pane holds mail across remount until recovery", async (hold, reason) => {
+    ensuredSnapshot = withWorkspace(
+      hold === "startup-failed"
+        ? { conversations: [{ ...mainConversation, startupError: "bridge failed" }] }
+        : { lifecycleState: hold },
+    );
+    installPendingMail();
+    const mounted = render(<CoordinatorPanel projectId="project-1" />);
+    expect(await screen.findByText(`Delivery waiting: ${reason}`)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Deliver now" }) === null).toBe(true);
+    mounted.unmount();
+    const remounted = render(<CoordinatorPanel projectId="project-1" />);
+    expect(await screen.findByText(`Delivery waiting: ${reason}`)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Deliver now" }) === null).toBe(true);
+    expect(screen.getByRole("button", { name: "View" })).toBeTruthy();
+
+    remounted.unmount();
+    ensuredSnapshot = baseSnapshot;
+    render(<CoordinatorPanel projectId="project-1" />);
+    expect(await screen.findByRole("button", { name: "Deliver now" })).toBeTruthy();
+    expect(screen.queryByText(`Delivery waiting: ${reason}`) === null).toBe(true);
+  });
+
   test("paused coordination keeps the transcript and resumes from the banner", async () => {
     ensuredSnapshot = withWorkspace({ lifecycleState: "paused" });
     resume.mockImplementationOnce(async () => withWorkspace({ lifecycleState: "ready" }));
@@ -832,6 +945,195 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
       expect(await screen.findByText("Coordination is paused. Resume to send.")).toBeTruthy();
       expect(dispatchIntent).not.toHaveBeenCalled();
       expect(ensureSession).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("reads while its platform is unavailable", () => {
+    const unavailableCodex = (reason: string) =>
+      withWorkspace(
+        {},
+        {
+          providerAvailability: {
+            codex: { tier: "advisory", available: false, reason, delegation: true },
+            claude: { tier: "enforced", available: true, delegation: true },
+          },
+        },
+      );
+    const savedTranscriptShown = () =>
+      waitFor(() =>
+        expect(
+          useNativeAgentProjectionStore
+            .getState()
+            .projections.get(sessionKey)
+            ?.messages.map((item) => (item as { id: string }).id),
+        ).toEqual(["saved"]),
+      );
+    const placeholder = (input: HTMLElement) =>
+      input.getAttribute("data-placeholder") ?? input.getAttribute("placeholder");
+
+    test.each([
+      {
+        cause: "turned off",
+        enabled: ["claude"] as const,
+        reason: "Codex is turned off. Turn it on to send.",
+        action: "Platform settings",
+      },
+      {
+        cause: "below the safety level",
+        enabled: ["codex", "claude"] as const,
+        reason: "Codex is below the coordinator safety level. Change it to send.",
+        action: "Coordinator settings",
+      },
+    ])(
+      "$cause: loads the saved transcript after a reload, establishing nothing and sending nothing",
+      async ({ enabled, reason, action }) => {
+        useRealAgentTab = true;
+        useConfigStore.getState().updateGlobalConfig({ enabledAgentPlatforms: [...enabled] });
+        ensuredSnapshot = unavailableCodex("Why it is unavailable.");
+        agentProjection = projection([
+          { id: "saved", role: "assistant", content: "Saved answer", parts: [] },
+        ]);
+        render(<CoordinatorPanel projectId="project-1" />);
+        await screen.findByText(/Codex is unavailable for Coordinator/);
+        expect(screen.getByRole("button", { name: action })).toBeTruthy();
+        await savedTranscriptShown();
+        const input = await screen.findByRole("textbox");
+        expect(placeholder(input)).toBe(reason);
+
+        // Enter says why, keeps the draft and sends nothing.
+        fireEvent.input(input, { target: { textContent: "Review this branch" } });
+        fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
+        expect(await screen.findByText(reason)).toBeTruthy();
+        expect(dispatchIntent).not.toHaveBeenCalled();
+        expect(ensureSession).not.toHaveBeenCalled();
+      },
+    );
+
+    test("turning the platform back on connects the same pane and sends", async () => {
+      useRealAgentTab = true;
+      useConfigStore.getState().updateGlobalConfig({ enabledAgentPlatforms: ["claude"] });
+      ensuredSnapshot = unavailableCodex("This agent platform is turned off in settings.");
+      agentProjection = projection([
+        { id: "saved", role: "assistant", content: "Saved answer", parts: [] },
+      ]);
+      render(<CoordinatorPanel projectId="project-1" />);
+      await screen.findByText(/Codex is unavailable for Coordinator/);
+      await savedTranscriptShown();
+      expect(ensureSession).not.toHaveBeenCalled();
+
+      // What saving the setting does: the panel learns from the config change.
+      useConfigStore.getState().updateGlobalConfig({ enabledAgentPlatforms: ["codex", "claude"] });
+      ensuredSnapshot = baseSnapshot;
+      act(() => {
+        dispatchResourceChange({ resource: "config", id: "app", revision: 2 });
+      });
+
+      await waitFor(() =>
+        expect(screen.queryByText(/Codex is unavailable for Coordinator/) === null).toBe(true),
+      );
+      await waitFor(() => expect(ensureSession).toHaveBeenCalled());
+      await waitFor(() =>
+        expect(
+          useNativeAgentProjectionStore.getState().projections.get(sessionKey)?.connection,
+        ).toBe("connected"),
+      );
+      const input = await screen.findByRole("textbox");
+      expect(placeholder(input)).toBe("What would you like to get done?");
+      fireEvent.input(input, { target: { textContent: "Review this branch" } });
+      fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
+      await waitFor(() => expect(dispatchIntent).toHaveBeenCalled());
+    });
+
+    test("an assigned platform missing from an older snapshot holds sending too", async () => {
+      useRealAgentTab = true;
+      useConfigStore.getState().updateGlobalConfig({ enabledAgentPlatforms: ["codex", "claude"] });
+      ensuredSnapshot = withWorkspace({}, { providerAvailability: {} });
+      render(<CoordinatorPanel projectId="project-1" />);
+      await screen.findByText(/Codex is unavailable for Coordinator/);
+      expect(placeholder(await screen.findByRole("textbox"))).toBe(
+        "Codex is below the coordinator safety level. Change it to send.",
+      );
+      expect(ensureSession).not.toHaveBeenCalled();
+    });
+
+    test("mail on a platform-held pane waits for settings even with another platform available", async () => {
+      ensuredSnapshot = unavailableCodex("Off.");
+      useConfigStore.getState().updateGlobalConfig({ enabledAgentPlatforms: ["claude"] });
+      const environmentId = "coordinator:coordinator-1:conversation-1";
+      const mailboxId = `${environmentId}\0coordinator-tab`;
+      useAgentMailStore.setState({
+        summary: new Map([
+          [
+            mailboxId,
+            {
+              mailboxId,
+              projectId: "project-1",
+              environmentId,
+              tabId: "coordinator-tab",
+              unreadCount: 1,
+              userUnseenCount: 1,
+              agentUnackedCount: 1,
+              pendingInjectCount: 1,
+              failedInjectCount: 0,
+              revision: 1,
+            },
+          ],
+        ]),
+        refreshSummary: async () => undefined,
+        refreshMailbox: async () => undefined,
+      });
+      render(<CoordinatorPanel projectId="project-1" />);
+      expect(
+        await screen.findByText("Delivery waiting: Codex is turned off. Turn it on to send."),
+      ).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Deliver now" })).toBeNull();
+      expect(screen.getByRole("button", { name: "View" })).toBeTruthy();
+    });
+
+    test.each(["running", "blocked"] as const)(
+      "a held pane keeps Stop available for an existing %s turn after remount",
+      async (phase) => {
+        useRealAgentTab = true;
+        ensuredSnapshot = unavailableCodex("Off.");
+        useConfigStore.getState().updateGlobalConfig({ enabledAgentPlatforms: ["claude"] });
+        agentProjection = { ...projection(), turn: { phase } };
+        const stop = spyOn(realBackend, "stopNativeAgentSession").mockImplementation(async <
+          TMessage,
+        >() => {
+          agentProjection = { ...agentProjection, turn: { phase: "idle" } };
+          return agentProjection as NativeAgentSessionProjection<TMessage>;
+        });
+        const mounted = render(<CoordinatorPanel projectId="project-1" />);
+        await screen.findByTitle("Stop current query");
+        mounted.unmount();
+        render(<CoordinatorPanel projectId="project-1" />);
+        fireEvent.click(await screen.findByTitle("Stop current query"));
+        await waitFor(() => expect(stop).toHaveBeenCalledTimes(1));
+        expect(ensureSession).not.toHaveBeenCalled();
+        stop.mockRestore();
+      },
+    );
+
+    test("an unavailable platform takes precedence over pause until settings allow it", async () => {
+      useRealAgentTab = true;
+      useConfigStore.getState().updateGlobalConfig({ enabledAgentPlatforms: ["claude"] });
+      ensuredSnapshot = withWorkspace(
+        { lifecycleState: "paused" },
+        { providerAvailability: unavailableCodex("Off.").providerAvailability },
+      );
+      render(<CoordinatorPanel projectId="project-1" />);
+      await screen.findByText(/Coordination is paused/);
+      expect(placeholder(await screen.findByRole("textbox"))).toBe(
+        "Codex is turned off. Turn it on to send.",
+      );
+      ensuredSnapshot = withWorkspace({ lifecycleState: "paused" });
+      useConfigStore.getState().updateGlobalConfig({ enabledAgentPlatforms: ["codex", "claude"] });
+      act(() => dispatchResourceChange({ resource: "config", id: "app", revision: 2 }));
+      await waitFor(() =>
+        expect(placeholder(screen.getByRole("textbox"))).toBe(
+          "Coordination is paused. Resume to send.",
+        ),
+      );
     });
   });
 

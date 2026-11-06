@@ -282,7 +282,7 @@ describe("operator tools over public actions", () => {
     });
 
     for (const persisted of [false, true]) {
-      test(`paused tab reads retain earlier messages without a provider (persisted=${persisted})`, async () => {
+      test(`paused tab reads retain earlier messages without provider history reads or starts (persisted=${persisted})`, async () => {
         const { harness, environmentId, tabId } = await withCoordinator();
         harness.stub.messages.push({
           id: "earlier",
@@ -308,14 +308,19 @@ describe("operator tools over public actions", () => {
           (current) => ({ ...current!, lifecycleState: "paused" }),
         );
         let reads = 0;
+        let statusReads = 0;
+        const forbiddenRead = async () => {
+          reads++;
+          throw new Error("No paused history reads or session starts");
+        };
         Object.assign(harness.stub.provider, {
-          messages: async () => {
-            reads++;
-            throw new Error("No paused provider reads");
-          },
+          messages: forbiddenRead,
+          createSession: forbiddenRead,
+          // Both operator reads observe activity through the existing cached
+          // provider, while transcript hydration and session startup stay held.
           status: async () => {
-            reads++;
-            throw new Error("No paused status reads");
+            statusReads++;
+            return "idle" as const;
           },
         });
         const state = await harness.call(harness.defaultToken, "get_tab_state", {
@@ -324,7 +329,10 @@ describe("operator tools over public actions", () => {
         });
         expect(state.isError).not.toBe(true);
         expect(state.structuredContent).toMatchObject({
-          state: { connection: "error", turn: { error: expect.stringContaining("paused") } },
+          state: {
+            connection: "error",
+            turn: { phase: "idle", error: expect.stringContaining("paused") },
+          },
         });
         const transcript = await harness.call(harness.defaultToken, "get_tab_transcript", {
           environmentId,
@@ -336,6 +344,7 @@ describe("operator tools over public actions", () => {
           error: expect.stringContaining("paused"),
         });
         expect(reads).toBe(0);
+        expect(statusReads).toBe(2);
         expect(
           (await harness.harness.storage.coordinators.getCoordinatorWorkspace(harness.projectId))
             ?.lifecycleState,

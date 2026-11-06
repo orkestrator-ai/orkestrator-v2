@@ -18,6 +18,7 @@ import {
   coordinatorIdFromRuntimeId,
 } from "@orkestrator/protocol/coordinator";
 import { randomUUID } from "node:crypto";
+import { coordinatorPlatformAllowed } from "./coordinator-runtime.js";
 import type { NativeAgentService } from "./native-agent-service.js";
 import type { MailSteerDispatchOutcome } from "./native-agent-service-shared.js";
 import type { StorageService } from "./storage.js";
@@ -776,7 +777,10 @@ export class AgentMailService {
         if (
           !workspace ||
           workspace.lifecycleState !== "ready" ||
-          (recipient && !coordinatorConversationRunnable(workspace, recipient))
+          (recipient && !coordinatorConversationRunnable(workspace, recipient)) ||
+          // Likewise a platform that is off or below the safety level: the
+          // dispatch would be refused, and only after fetching the checkout.
+          (recipient?.agent && !(await coordinatorPlatformAllowed(this.storage, recipient.agent)))
         ) {
           await this.recordPresence(mailbox.mailboxId, "environment_unready");
           this.noteSkip(message, mailbox, "environment_unready");

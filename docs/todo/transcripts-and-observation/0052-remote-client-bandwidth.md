@@ -14,7 +14,7 @@ Analysed 2026-10-27 against `main` at `863b5782`; tasks 1, 3 and 9 updated
 1. **Confirm the remote route**: decide which supported route the matrix targets, and whether Tailscale Serve buffers or re-encodes SSE. Status: done (route decided; the live run on 2026-11-01 found no buffering or re-encoding, see "Live probe" under Measurements).
 2. **Baseline matrix**: Phase 2 of `plans/stream-efficience.md` through that route: `body`, `on` and the opt-in terminal WebSocket, at normal and constrained bandwidth, including encoded transcript-patch and multi-client bytes. Status: open (no longer blocks the compression default, see D14; it still decides the terminal transport and the wider-matrix questions).
 3. **`on`-mode streaming check**: prove that SSE gzip streams incrementally, directly and through the proxy, across reconnect, keepalives, idle, disconnect, non-gzip clients, and `Vary` and `Content-Encoding`. Status: done (proved directly, through test proxies, in real browsers and through real Serve; two proxied-stream bugs fixed).
-4. **Phase 1 exit-criteria audit**: confirm that the owning suites prove no leaked leases, sockets, channels, timers or queued bytes after close, failure, gateway stop and credential rotation. Status: done (2026-11-03: every criterion mapped to its owning test, and the missing gauges-to-zero test after rotation and stop added; one gap found and filed as [3900](3900-terminal-operations-after-credential-rotation.md)).
+4. **Phase 1 exit-criteria audit**: confirm that the owning suites prove no leaked leases, sockets, channels, timers or queued bytes after close, failure, gateway stop and credential rotation. Status: done (2026-11-03: every criterion mapped to its owning test, and the missing gauges-to-zero test after rotation and stop added; one gap found and filed as 3900).
 5. **One default change**: compression mode or terminal transport. Status: done for compression (`on` since 2026-11-01, D14); terminal transport unchanged.
 6. **Data-saving preference**: a client-local preference feeding `read-coordinator.ts`, a trial active cadence, wider quiet backoff and the approval budget. Status: built, and left as it is (see task 6's recommendation); its real-browser byte measurement is owed with task 2.
 7. **Hidden terminal subscriptions**: reduce or detach hidden terminal presentation subscriptions where exact recovery exists. Status: deferred (waits on task 2).
@@ -139,7 +139,7 @@ Before this work, compressor release after rotation and stop was asserted (`gate
 
 Each revocation must then leave every gauge at zero: compressor leases, event clients and their queued bytes, open and connecting streams, proxy requests, terminal sockets, upgrades and channels (state and metrics), queued terminal bytes, and the operation count, bytes and sessions. The per-socket authentication, credential-expiry and close timers must be cleared on the socket states the test held, and after stop the keepalive interval must be cleared too. The original test passed 25 consecutive runs. Review found that token persistence could yield to a normal terminal flush before rotation. The corrected test holds the flush scheduler latch, confirms real bytes remain after an event-loop turn, and passes the full gateway-events owner file. A rotation-specific negative control that removed the disposal byte reset failed with 8,208 retained bytes. Two original deliberate breaks made it fail: keeping a terminal socket's queued bytes on dispose, and not destroying event clients on rotation.
 
-The operation queue is the exception, and the test pins it. A terminal write the backend has already accepted is not cancelled by revocation: its bytes are released when the backend settles the write, not when the socket goes. That is bounded (`TERMINAL_WEBSOCKET_MAX_PENDING_OPERATION_BYTES`). While checking it, I found that a write queued *behind* that accepted write is also delivered to the backend after the rotation, because revocation does not clear the socket's `authenticated` flag. Filed as [3900](3900-terminal-operations-after-credential-rotation.md).
+The operation queue is the exception, and the test pins it. A terminal write the backend has already accepted is not cancelled by revocation: its bytes are released when the backend settles the write, not when the socket goes. That is bounded (`TERMINAL_WEBSOCKET_MAX_PENDING_OPERATION_BYTES`). While checking it, I found that a write queued *behind* that accepted write is also delivered to the backend after the rotation, because revocation does not clear the socket's `authenticated` flag. Filed as 3900.
 
 | Exit criterion | Owning tests |
 | --- | --- |
@@ -864,7 +864,7 @@ Decisions made on 2026-11-01 for tasks 1, 3 and 9.
   settles it. The test asserts exactly that, then that the bytes drain. The
   related bug (a write queued behind it still runs after rotation) is outside
   this task's files, so it is filed as
-  [3900](3900-terminal-operations-after-credential-rotation.md) instead of
+  3900 instead of
   being changed here.
 - **Keep the new test in `gateway-events.test.ts`.** It covers terminal
   sockets as well as SSE, and the ticket names that file.
@@ -924,7 +924,7 @@ checking reports an unrelated TS2339 at `commands-registry-pr.test.ts:1338`.
 
 - [0049-native-agent-idle-observation.md](0049-native-agent-idle-observation.md):
   qualifying Claude and Codex for quiet backoff.
-- [0051-client-reconnect-and-freshness.md](0051-client-reconnect-and-freshness.md):
+- `0051-client-reconnect-and-freshness.md` (deleted 2026-11-06):
   transport disconnect signals and jittered reconnect.
 - [0050-transcript-history-efficiency.md](0050-transcript-history-efficiency.md): source
   work and decoded byte reductions.
@@ -934,7 +934,7 @@ checking reports an unrelated TS2339 at `commands-registry-pr.test.ts:1338`.
   shared prerequisites for remote and iOS runs.
 - `../architecture/event-snapshot-recovery.md` (read coordinator, quiet
   backoff contract).
-- [Efficiency, logging and database index](../../reports/efficiency-logging-database/0000-index.md):
+- [Efficiency, logging and database outcome](../../reports/2026-11-06-efficiency-logging-database-outcome.md#closing-check-of-e-0390-websocket-compression):
   GW-7 and the closing note for report 0390, which task 8 now owns.
 
 ## Replaces

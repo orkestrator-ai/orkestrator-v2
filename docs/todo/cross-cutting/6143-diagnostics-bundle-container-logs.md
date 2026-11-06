@@ -51,4 +51,4 @@ Analysed 2026-11-05 against `main` at `ecff91f74`. From E15 parts `0780` and `07
 ## Related
 
 - [The diagnostics bundle](../../architecture/logging.md#the-diagnostics-bundle)
-- [Closing check of E14](../../reports/efficiency-logging-database/0000-index.md#closing-check-of-e14-docker-logs)
+- [Closing check of E14](../../reports/2026-11-06-efficiency-logging-database-outcome.md#closing-check-of-e14-docker-logs)

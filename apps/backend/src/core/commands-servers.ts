@@ -1319,6 +1319,7 @@ async function startLocalServerAttempt(
   forwardBridgeOutput(child, `${kind}:${environmentId}`);
   child.once("exit", (code, signal) => {
     localServers.reportBridgeExit(key, child, code, signal);
+    void localServers.reapAfterUnrequestedExit(key, child);
     // An unhealthy child may exit after its replacement has already claimed the
     // key. Only the process that still owns the entry may remove it.
     if (!localServers.releaseOwnership(key, child)) return;
@@ -1565,6 +1566,7 @@ export async function deleteEnvironment(
       await storage.updateEnvironment(environmentId, {
         deletionRequestedAt: new Date().toISOString(),
         cleanupAfterMergeError: null,
+        deletionError: null,
         lifecycleOperation: "deleting",
         lifecycleOperationStartedAt: new Date().toISOString(),
       });
@@ -1685,14 +1687,25 @@ export async function deleteEnvironment(
         await runEnvironmentCleanupStep(cleanup, "network", context);
       }
       await stopLocalServersForEnvironmentUnlocked(environmentId, context);
+      let worktreeFenced = false;
       if (cleanup?.worktreePath) {
-        const worktreeRemoved = await runEnvironmentCleanupStep(cleanup, "worktree", context);
+        const worktreeRemoved = await runEnvironmentCleanupStep(cleanup, "worktree", context, {
+          // The ownership check may retain the checkout. Fence its physical
+          // readers only when the step will actually remove it.
+          beforeWorktreeRemoval: () => {
+            worktreeFenced = true;
+            return context.runtime.diffStats.pauseForRemoval(environmentId, cleanup.worktreePath);
+          },
+        });
         // A branch still checked out in a surviving worktree cannot be judged or
         // deleted; the reconciler retries it after the worktree step succeeds.
         if (worktreeRemoved && cleanup.branch) {
           await runEnvironmentCleanupStep(cleanup, "branch", context);
         }
       }
+      // Retained checkouts and project homes only retire this environment's
+      // watcher; their other owners keep scanning. The tombstone prevents re-entry.
+      if (!worktreeFenced) await context.runtime.diffStats.pauseForRemoval(environmentId);
       // Damaged session metadata must not strand deletion after resources are gone.
       await storage.removeSessionsByEnvironment(environmentId).catch(() => {
         environmentLog.warn("cleanup.sessions-failed", { environmentId });
@@ -1741,6 +1754,7 @@ export async function deleteEnvironment(
         await removeOpenCodeCommandChangeJournals(storage.getDataDir(), environmentId);
       }
       context.nativeAgents?.forgetEnvironmentCommandCatalogues?.(environmentId);
+      context.nativeAgents?.forgetEnvironmentProjections?.(environmentId);
       await storage.deleteComposeDraftsByEnvironment(environmentId);
       await storage.deleteFileDraftsByEnvironment(environmentId);
       await storage.deleteAgentHandoffsByEnvironment(environmentId);
@@ -1848,6 +1862,14 @@ export async function deleteEnvironment(
       // discarding is right: the worktree they described is gone.
       context.runtime.diffStats.invalidatePendingSync();
       context.runtime.diffStats.service.untrack(environmentId);
+      // Reuse is admitted by a new tracking registration, never by a late read.
+      // Keep failed ledger work fenced until the reconciler finishes it.
+      if (
+        cleanup?.worktreePath &&
+        !(await environmentCleanupLedger(storage.getDataDir()).get(environmentId))
+      ) {
+        context.runtime.diffStats.service.completeRemoval({ worktreePath: cleanup.worktreePath });
+      }
       // The PR belonged to a branch whose environment is gone; polling it would
       // resurrect state for an id no client can display.
       context.runtime.prMonitor.invalidatePendingSync();
@@ -1863,10 +1885,14 @@ export async function deleteEnvironment(
     scheduleEnvironmentCleanupReconcile(context);
   } catch (error) {
     const environment = await context.storage.getEnvironment(environmentId).catch(() => null);
-    if (environment?.cleanupAfterMergeRequestedAt) {
+    const message = cleanupErrorMessage(error);
+    // A failed delete keeps its tombstone and its `deleting` marker, because a
+    // restart recovers from them. The reason is what tells a client it stopped.
+    if (environment?.cleanupAfterMergeRequestedAt || environment?.deletionRequestedAt) {
       await context.storage
         .updateEnvironment(environmentId, {
-          cleanupAfterMergeError: cleanupErrorMessage(error),
+          ...(environment.cleanupAfterMergeRequestedAt ? { cleanupAfterMergeError: message } : {}),
+          ...(environment.deletionRequestedAt ? { deletionError: message } : {}),
         })
         .catch(() => undefined);
     }
@@ -1928,11 +1954,22 @@ export async function tmuxLocalClaudeConfigDirectory(
  * The PR monitor observes merges but cannot import this module (it would be a
  * cycle), so the backend passes this function to `BackendRuntime` as
  * `prMonitor.scheduleMergeCleanup` (`index.ts`, `tests/command-fixtures.ts`).
+ *
+ * Recovery is for work no one is doing. A merge or delete running in this
+ * process owns the outcome and records any failure itself, so this stands aside
+ * rather than failing against its guard. Those guards live in memory, so after a
+ * restart they are clear and the delete resumes.
  */
 export function scheduleMergeCleanupRecovery(environmentId: string, context: CommandContext): void {
-  context.runtime.environments.scheduleMergeCleanupRecovery(environmentId, () =>
+  const environments = context.runtime.environments;
+  const owned = () =>
+    environments.isMerging(environmentId) || environments.isDeleting(environmentId);
+  if (owned()) return;
+  environments.scheduleMergeCleanupRecovery(environmentId, () =>
     (async () => {
       const environment = await context.storage.getEnvironment(environmentId);
+      // Either may have started while storage was read.
+      if (owned()) return;
       if (
         !environment?.cleanupAfterMergeRequestedAt ||
         environment.cleanupAfterMergeError ||

@@ -4,12 +4,13 @@ Found on 2026-11-05 while qualifying the egress gateway's name checks (S-0100) o
 
 ## Task analysis
 
-Analysed 2026-11-05 against `main` at `704809a20`.
+Analysed 2026-11-05 against `main` at `704809a20`. Task 2 acted on 2026-11-06
+against `main` at `e6c3da899`.
 
 ### Tasks
 
 1. **C22 fails on Docker Desktop before it creates anything**: the host reachability check answers `not-applicable`. Status: open.
-2. **DNS rotation cannot start its resolver in the gateway**: `node` is not on the gateway's root PATH. Status: open.
+2. **DNS rotation cannot start its resolver in the gateway**: `node` is not on the gateway's root PATH. Status: done (2026-11-06; a second defect behind it fixed too).
 
 ### 1. C22 fails on Docker Desktop before it creates anything
 
@@ -37,6 +38,15 @@ Analysed 2026-11-05 against `main` at `704809a20`.
 
 **Investigation.** Failed the same way with both images above. CI's container workflow runs this case on every pull request that changes its paths, so it may already be red there.
 
+It was: CI run 42128741746 (S-0100's PR, 2026-11-05) failed it with this
+error on `ubuntu-24.04` and `ubuntu-24.04-arm`. On 2026-11-06, on a
+disposable rootful Linux Engine on beelink, fixing only the PATH exposed a
+second defect. The case's TCP probes sent a bare word (`probe`, `first`) as
+their first write, and on an `egress-filter=1` gateway the name checks hold a
+newline-less printable write, which could still become an HTTP request line,
+so the first probe got no echo (`:464`). The firewall suite's policy 3 tuple
+case had the same probe and failed in that CI run too (`:555`).
+
 **Decisions.**
 
 - **How to fix the test?**
@@ -47,7 +57,22 @@ Analysed 2026-11-05 against `main` at `704809a20`.
     - Pros: the script stays unchanged.
     - Cons: reintroduces the pattern H2 removed, even if only in a test.
 
+## Assumptions and decisions
+
+### Task 2: absolute path, and whole-line probes
+
+Took the recommended option: the resolver runs as `/usr/local/bin/node`, so
+the gateway keeps H2's fixed root PATH. The probes' first writes in this case
+and in the firewall tuple case now end in `\n`. The alternative was to change
+the daemon to relay a bare word sooner, which would loosen a security
+check for a test's sake; that question is recorded as
+[7000](7000-name-checks-hold-newline-less-first-writes.md). Result: DNS rotation
+passed (with the IPv6 and daemon-restart cases, 3/3), and the tuple case
+passed where its unfixed copy failed. Task 1 (C22 on Docker Desktop) was not
+touched.
+
 ## Related
 
 - [6101](6101-egress-name-checks-platform-coverage.md)
+- [7000](7000-name-checks-hold-newline-less-first-writes.md)
 - [Container qualification](../../development/container-qualification.md#egress-name-checks-on-docker-desktop-2026-11-05)

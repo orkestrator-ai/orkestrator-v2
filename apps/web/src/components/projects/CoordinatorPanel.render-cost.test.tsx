@@ -1,17 +1,17 @@
 /**
  * What an app-wide store write renders in the coordinator panel.
  *
- * The Work panel and the workers' prompts banner read environments, build
- * pipelines and Multi Reviews, which change for every environment on the host.
- * Those subscriptions live in `CoordinatorWorkArea`, with the conversations as
- * its children, so a write there renders the Work area and not the transcript
- * in each group. The agent tab is memoized, and the pane gives it props that
- * keep their identity, so a panel render that changes none of a conversation's
- * inputs does not render it either. Coordinator report 0390 measured both.
+ * The workers' prompts banner reads environments and nodes, which change for
+ * every environment on the host. Those subscriptions live in
+ * `CoordinatorWorkerPrompts`, a sibling of the conversations, so a write there
+ * renders the banner and not the transcript in each group. The agent tab is
+ * memoized, and the pane gives it props that keep their identity, so a panel
+ * render that changes none of a conversation's inputs does not render it
+ * either. Coordinator report 0390 measured both.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { memo } from "react";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import type {
   CoordinatorConversation,
   CoordinatorSnapshot,
@@ -283,24 +283,6 @@ describe("CoordinatorPanel render cost", () => {
         projects: state.projects.map((item) => ({ ...item })),
       })),
     );
-    expect(counts()).toEqual(settled);
-  });
-
-  test("the Work panel still follows a write to its worker's environment", async () => {
-    const settled = await renderPanel();
-    fireEvent.click(screen.getByRole("button", { name: /^Show work/ }));
-    const panel = screen.getByRole("complementary", { name: "Work" });
-    expect(within(panel).getByText("api-fix")).toBeTruthy();
-
-    act(() =>
-      useEnvironmentStore.setState((state) => ({
-        environments: state.environments.map((item) =>
-          item.id === worker.id ? { ...item, name: "parser-fix" } : item,
-        ),
-      })),
-    );
-    expect(within(panel).getByText("parser-fix")).toBeTruthy();
-    expect(within(panel).queryByText("api-fix") === null).toBe(true);
     expect(counts()).toEqual(settled);
   });
 

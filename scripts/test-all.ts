@@ -883,9 +883,13 @@ const ROOT_TEST_PATHS = [
   "./e2e/agent-testing/packaged-electron-app.test.ts",
   "./e2e/agent-testing/process-tree.test.ts",
   "./e2e/agent-testing/network-churn-report.test.ts",
+  "./e2e/agent-testing/electron-startup-recovery.test.ts",
   "./e2e/agent-testing/browser-test.test.ts",
   "./e2e/agent-testing/artifact-sanitizing-reporter.test.ts",
   "./e2e/agent-testing/electron-display-setup.test.ts",
+  "./e2e/agent-testing/fake-anthropic-model.test.ts",
+  "./e2e/agent-testing/container-fake-claude-api.test.ts",
+  "./e2e/agent-testing/container-fake-claude-install.test.ts",
   "./scripts/opencode-live-compatibility-probe.test.ts",
   "./test-fixtures/agent-project/server.test.ts",
 ];

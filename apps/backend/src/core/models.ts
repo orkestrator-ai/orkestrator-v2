@@ -302,6 +302,12 @@ export interface Environment {
   /** Last backend cleanup failure retained for rehydration and manual retry. */
   cleanupAfterMergeError?: string;
   /**
+   * Why the last delete of this tombstoned environment failed. The tombstone
+   * stays, so a restart still retries; this is what stops it reading as running.
+   * Cleared when a delete starts.
+   */
+  deletionError?: string;
+  /**
    * Durable container lifecycle record: runtime/storage identity, the one
    * unresolved operation and recent outcomes. Backend-private; clients receive
    * `ContainerLifecycleSnapshot`. Always read through `parseContainerLifecycle`

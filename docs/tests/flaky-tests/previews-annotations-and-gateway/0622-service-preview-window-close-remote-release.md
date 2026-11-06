@@ -1,7 +1,7 @@
 # Remote preview attachment still held 20 s after its window closed
 
 - **ID:** 0622
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-21
 - **Test:** `windows on different backends never share previews, and switches
   release on the issuing backend` in
@@ -115,3 +115,91 @@ namespace. Durations are not reference figures.
   from a slow close. Keep this case open and capture those diagnostics if it
   fails again with the window gone.
 
+## Window-close symptom: cause found and fixed (to-do 0042 task 11), 2026-11-06
+
+Resolved. Run on Linux (beelink, 16 logical CPUs), branch
+`preview-flakes-1bb27c3be3fd-r1` from `main` at `e6c3da899`, fix commit
+`03cbf0191`. Electron 45.0.0 headless (`ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1`)
+inside a private loopback-only network namespace (`unshare --user --net`, see
+[2340](../aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md)),
+one worker, other builds running on the host (load average 9 to 24).
+Durations are not reference figures.
+
+- **Cause.** A window's session outlives the window. A request it is still
+  finishing when the window's `closed` handler releases its connection scope
+  reaches the gateway request hooks (`installRemoteGatewayRequestAuth`, called
+  from `main.ts`). There `getRendererRequestAuthorization` threw
+  `The requesting window is no longer available.` (from
+  `connectionIdForScope`), and a webRequest listener that throws never calls
+  back, so main took an uncaught exception. Under load the closing renderer
+  still has requests in flight, so it happens only on slow runs.
+- **Reproduced naturally, under load.** The multi-backend test pinned with
+  every process it starts to two cores beside four busy loops on those cores
+  (`taskset -c 0,1`) failed 5 of 10 on unchanged code. Each failure had, in
+  this order: `[desktop] uncaught-exception error.message="The requesting
+  window is no longer available."` with the stack
+  `connectionIdForScope` ← `remoteForScope` ← `getRendererRequestAuthorization`
+  ← the request hook, `[desktop.dialog] opening source=uncaught-exception
+  parent=none`, and Electron exiting with SIGTRAP. The test then failed at the
+  window-close step's first poll (`electronApplication.evaluate: Target page,
+  context or browser has been closed`, line 2849). A temporary probe (not
+  committed) in both request hooks named the requests: Vite renderer modules
+  (`/src/components/layout/PullRequestCheckStatus.tsx`,
+  `/src/lib/chat/artifact-download.ts`) whose headers arrived 8 ms after
+  `closed`.
+- **Why the 2026-10-21 run showed a held attachment.** At that time
+  (`448800c66`) the same hook called the same throwing path, and main had no
+  `uncaughtException` listener: `installUncaughtExceptionDialog` arrived on
+  2026-10-31 (`d86ebf976`). Electron's default handler shows the error in a
+  blocking box and logs nothing (the comment on that function). A blocked
+  main never sends the window's `release_preview_attachment`, while the step
+  read the count from the remote backend directly, so it saw 1 for its whole
+  20-second poll. This link is read from the code at that commit; the
+  original macOS output was not kept, and the blocking box was not shown here
+  (no disposable display). Here the same throw ends in SIGTRAP instead.
+- **Slow close, the earlier hypothesis.** Also reproduced, by force: a
+  temporary `beforeunload` busy-wait of 25 seconds in window 2 made the
+  pre-2026-10-21 step (20-second release poll started at `close()`) fail with
+  `Expected: 0, Received: 1` while the window was still open. The current
+  step (wait for the window, then poll) passed the same run with
+  `closedAfterMs` 25939 and the release 380 ms later. So both mechanisms give
+  the recorded message; only the throw was seen without forcing.
+- **Fix** (`03cbf0191`):
+  - `getRendererRequestAuthorization` gives a released scope no credential
+    (`null`) instead of throwing; other `connectionIdForScope` callers still
+    throw.
+  - Both gateway request hooks always call back: a lookup that throws sends
+    the request without credentials and leaves response headers alone.
+  - Tests: `apps/desktop/tests/connection-manager.test.ts` ("a released
+    window's late renderer requests get no credential instead of an exception
+    (0622)") and `apps/desktop/tests/remote-gateway-request-auth.test.ts`
+    ("a throwing credential lookup still answers both hooks, with no
+    credential (0622)"). Both failed with the source change reverted
+    (`The requesting window is no longer available.`) and pass with it.
+  - The window-close step now also records `releasedAfterMs`, and its
+    failure output includes main's `uncaught-exception` lines beside the
+    `[preview]` warnings. No timeout was raised and nothing was skipped.
+- **After the fix**, same load: 10 of 10, with no `uncaught-exception` line;
+  windows were gone 41 to 1896 ms after `close()` and released 24 to 449 ms
+  after that. Without the added contention, on the committed fix: 10 of 10
+  alone, and 2 of 2 in owner order after every earlier case except the legacy
+  URL tab case, which fails every headless run
+  ([7061](../../../todo/previews-and-annotations/7061-legacy-url-tab-back-fails-headless.md)).
+  Before the fix and without contention it had passed 10 of 10.
+- Also closes the throw in
+  [to-do 6303](../../../todo/cross-cutting/6303-window-close-during-request-throws.md)
+  task 1, which saw the same exception when a window closed while starting.
+
+
+## Review validation, 2026-11-06: lost at startup, not a recurrence
+
+The review's `mise run test:agent:electron` (head `f67ef0666`) never reached
+this test: the spec's `beforeAll` window stopped at "Orkestrator couldn’t
+connect" after Chromium aborted its Vite modules with
+`net::ERR_NETWORK_CHANGED`
+([2340](../aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md)).
+The launcher now reloads a window only for that startup failure (`9ef37bfd1`,
+to-do 0042 D24). Afterwards, headless and without a private network namespace,
+this test passed 10 of 10 (`--repeat-each=10`) and the owner without the
+[7061](../../../todo/previews-and-annotations/7061-legacy-url-tab-back-fails-headless.md)
+case 21 of 21.

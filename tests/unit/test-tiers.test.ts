@@ -47,12 +47,20 @@ describe("test tier selection", () => {
     for (const [pkg, file] of [
       ["apps/backend", "tests/gateway-proxy-idle-timers.test.ts"],
       ["packages/protocol", "src/node/preview-forward.test.ts"],
+      ["packages/protocol", "src/node/command-capture-reap.integration.test.ts"],
     ]) {
       expect(tierArguments("slow", repositoryRoot, pkg!, ["."])).toContain(`./${file}`);
       expect(tierArguments("default", repositoryRoot, pkg!, ["."])).toContain(
         `--path-ignore-patterns=${file}`,
       );
     }
+  });
+
+  test("the DOM scan runs by default while diagnostic subprocess canaries stay slow", () => {
+    const args = tierArguments("default", repositoryRoot, ".", ["./tests"])!;
+    expect(args).not.toContain("--path-ignore-patterns=tests/unit/dom-absence-scan.test.ts");
+    expect(args).toContain("--path-ignore-patterns=tests/unit/test-diagnostic-bounds.test.ts");
+    expect(slowTestFiles(repositoryRoot, ".")).not.toContain("tests/unit/dom-absence-scan.test.ts");
   });
 
   test("slow discovery is sorted, deduplicated and excludes dependency directories", () => {

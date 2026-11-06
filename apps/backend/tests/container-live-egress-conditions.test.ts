@@ -187,7 +187,12 @@ async function peerAddress(peer: string, family: 4 | 6, network: string): Promis
   ]);
 }
 
-/** 0 when a TCP echo through `address:port` answered, 1 otherwise. */
+/**
+ * 0 when a TCP echo through `address:port` answered, 1 otherwise. Every first
+ * write is a whole line: the gateway's name checks (`egress-filter=1`) hold a
+ * partial printable line, which could still be an HTTP request, until its
+ * newline arrives, so a bare word would never reach the peer.
+ */
 async function tcpProbe(
   containerId: string,
   address: string,
@@ -196,8 +201,8 @@ async function tcpProbe(
 ): Promise<number> {
   const script = `
     const socket = require("node:net").connect({ host: ${JSON.stringify(address)}, port: ${port} });
-    socket.on("connect", () => socket.write("probe"));
-    socket.on("data", data => process.exit(data.toString() === "probe" ? 0 : 2));
+    socket.on("connect", () => socket.write("probe\\n"));
+    socket.on("data", data => process.exit(data.toString() === "probe\\n" ? 0 : 2));
     socket.on("error", () => process.exit(1));
     setTimeout(() => process.exit(1), 2000);
   `;
@@ -221,7 +226,7 @@ async function heldConnection(
     let first = true;
     const finish = result => { fs.writeFileSync("/tmp/${tag}.second", result); process.exit(0); };
     socket.on("error", () => finish("closed"));
-    socket.on("connect", () => socket.write("first"));
+    socket.on("connect", () => socket.write("first\\n"));
     socket.on("data", data => {
       if (first) { first = false; fs.writeFileSync("/tmp/${tag}.first", data); }
       else finish(data.toString());
@@ -229,7 +234,7 @@ async function heldConnection(
     const poll = setInterval(() => {
       if (!fs.existsSync("/tmp/${tag}.go")) return;
       clearInterval(poll);
-      socket.write("second");
+      socket.write("second\\n");
       setTimeout(() => finish("timeout"), 3000);
     }, 50);
     setTimeout(() => finish("expired"), 120000);
@@ -443,7 +448,18 @@ describe("DNS rotation", () => {
         "-ec",
         `awk '$1 == "nameserver" { print $2; exit }' ${trusted} > /tmp/rotate-upstream; cp ${trusted} /tmp/resolv.trusted.before; printf '%s 30\\n' ${first} > /tmp/rotate-answers`,
       );
-      await docker(["exec", "-d", "-u", "root", gateway, "node", "-e", ROTATING_DNS]);
+      // By absolute path: root execs in the gateway get a fixed PATH without
+      // /usr/local/bin (security H2), where the image's node lives.
+      await docker([
+        "exec",
+        "-d",
+        "-u",
+        "root",
+        gateway,
+        "/usr/local/bin/node",
+        "-e",
+        ROTATING_DNS,
+      ]);
       for (let attempt = 0; attempt < 50; attempt++) {
         if ((await dockerStatus(["exec", gateway, "test", "-f", "/tmp/rotate-dns-ready"])) === 0)
           break;

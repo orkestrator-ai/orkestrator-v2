@@ -672,3 +672,57 @@ test("diff tracking migrates app worktrees while preserving a linked project hom
     }
   }
 });
+
+test("a tombstoned environment is not tracked: nothing watches a tree being removed", async () => {
+  const { h, tracking } = await harness();
+  const stored = await h.storage.loadEnvironments();
+  const load = spyOn(h.storage, "loadEnvironments").mockResolvedValue([
+    {
+      ...stored[0],
+      id: "being-deleted",
+      projectId: "p",
+      environmentType: "local",
+      worktreePath: "/never/watched",
+      deletionRequestedAt: "2026-11-05T12:00:00.000Z",
+    } as never,
+  ]);
+  try {
+    await tracking.sync(h.context);
+    expect(tracking.service.isTracked("being-deleted")).toBe(false);
+  } finally {
+    load.mockRestore();
+  }
+});
+
+test("an incomplete removal fence pauses only its target and does not abort reconciliation", async () => {
+  const { h, tracking } = await harness();
+  const { projectPath } = await h.createRepository("fenced");
+  const { projectPath: otherPath } = await h.createRepository("unrelated");
+  const target = {
+    environmentId: "blocked",
+    kind: "local" as const,
+    worktreePath: projectPath,
+    comparisonRef: "HEAD",
+  };
+  await h.storage.addEnvironment({
+    ...createEnvironment("project", { environmentType: "local" }),
+    id: "blocked",
+    worktreePath: projectPath,
+  });
+  await h.storage.addEnvironment({
+    ...createEnvironment("project", { environmentType: "local" }),
+    id: "later",
+    worktreePath: otherPath,
+  });
+  tracking.service.track(target);
+  tracking.service.track({ ...target, environmentId: "deleted", worktreePath: otherPath });
+  await tracking.pauseForRemoval("blocked", projectPath);
+  await tracking.sync(h.context);
+  expect(tracking.service.isWatching("blocked")).toBe(false);
+  expect(tracking.service.isWatching("later")).toBe(true);
+  expect(tracking.service.isTracked("deleted")).toBe(false);
+  expect(() => tracking.service.track(target)).toThrow("being removed");
+  tracking.service.completeRemoval(target);
+  await tracking.sync(h.context);
+  expect(tracking.service.isWatching("blocked")).toBe(true);
+});

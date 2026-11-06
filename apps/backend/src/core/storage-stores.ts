@@ -7,6 +7,7 @@ import {
   moveChangeLedgerMigration,
 } from "./change-tracking/ledger-schema.js";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
+import { recurringDiagnosticsRegistry } from "./recurring-diagnostics.js";
 import { snapshotBeforeMigration } from "./storage-backups.js";
 import {
   buildPipelineReviewReportUpgradeMigration,
@@ -662,18 +663,20 @@ const RECURRING_STORAGE_OBSERVERS: Required<
 
 /**
  * Opens the backend database for `dataDir`, importing legacy JSON once. Every
- * connection reports its reads to {@link recurringWorkMetrics} unless the
- * caller passes its own observers.
+ * connection reports its reads to {@link recurringWorkMetrics}, and its row
+ * cache's size to recurring diagnostics while open, unless the caller passes
+ * its own observers.
  */
 export function openBackendDatabase(
   dataDir: string,
-  options: Pick<StorageDatabaseOptions, "observe" | "observeFetch"> = {},
+  options: Pick<StorageDatabaseOptions, "observe" | "observeFetch" | "cacheGaugeRegistry"> = {},
 ): StorageDatabase {
   const database = new StorageDatabase(dataDir, {
     layoutFor: storeLayout,
     migrations: STORAGE_MIGRATIONS,
     beforeMigrate: (opened, from) => snapshotBeforeMigration(opened, dataDir, from),
     ...RECURRING_STORAGE_OBSERVERS,
+    cacheGaugeRegistry: recurringDiagnosticsRegistry,
     ...options,
   });
   try {

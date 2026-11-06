@@ -1,3 +1,5 @@
+import { configureLogger } from "@orkestrator/protocol/logger";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { describe, expect, mock, test } from "bun:test";
 import {
   createRealmRequestAuthInstaller,
@@ -623,4 +625,46 @@ test("reopened realms share one session auth listener and use only live renderer
   scopes.delete(11);
   listener({ ...details, webContentsId: 11 } as never, callback);
   expect(callback).toHaveBeenLastCalledWith({ requestHeaders: {} });
+});
+
+test("a throwing credential lookup still answers both hooks, with no credential (0622)", () => {
+  type Listener = (details: any, callback: (response: any) => void) => void;
+  const listeners: Partial<Record<"before" | "received", Listener>> = {};
+  const webRequest = {
+    onBeforeSendHeaders: (_filter: unknown, listener: Listener) =>
+      void (listeners.before = listener),
+    onHeadersReceived: (_filter: unknown, listener: Listener) =>
+      void (listeners.received = listener),
+  };
+  const capture = captureLogs();
+  try {
+    configureLogger({ areaLevels: { gateway: "debug" } });
+    // A closed window's session finishing a request after its scope was released.
+    installRemoteGatewayRequestAuth(webRequest as never, () => {
+      throw new Error("The requesting window is no longer available.");
+    });
+    const before = mock((_response: unknown) => undefined);
+    listeners.before!(
+      {
+        url: "https://desk.example/__orkestrator/invoke",
+        resourceType: "xhr",
+        requestHeaders: { Authorization: "Bearer stale", Cookie: "a=b", Accept: "*/*" },
+      },
+      before,
+    );
+    expect(before).toHaveBeenCalledWith({ requestHeaders: { Accept: "*/*" } });
+    const received = mock((_response: unknown) => undefined);
+    const responseHeaders = { "Access-Control-Allow-Origin": ["https://desk.example"] };
+    listeners.received!(
+      { url: "https://desk.example/__orkestrator/invoke", resourceType: "xhr", responseHeaders },
+      received,
+    );
+    expect(received).toHaveBeenCalledWith({ responseHeaders });
+    expect(capture.outputs.map(({ method, line }) => [method, line])).toEqual([
+      ["debug", "[gateway] request-auth.fallback phase=request"],
+      ["debug", "[gateway] request-auth.fallback phase=response"],
+    ]);
+  } finally {
+    capture.restore();
+  }
 });

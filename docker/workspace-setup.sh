@@ -429,8 +429,9 @@ report_git_mirror_outcome() {
 #
 # No --filter: --dissociate then drops whatever the mirror held, and a mirror
 # behind the remote leaves a partial clone that fetches from the remote again.
-# --reference rather than --reference-if-able, so a mirror removed between the
-# check and the clone fails here instead of downloading the full history.
+# --reference-if-able, so a mirror removed between the check and the clone
+# still leaves a working clone. That clone took its history from the remote, so
+# the mirror is checked again afterwards and the outcome says so (vanished).
 clone_from_git_mirror() {
     local clone_url="$1"
     local clone_dest="$2"
@@ -445,8 +446,13 @@ clone_from_git_mirror() {
     problem="$(git_mirror_problem "$mirror")"
     if [ -z "$problem" ]; then
         echo "Cloning from the project's Git mirror..."
-        if git clone --no-tags --reference "$mirror" --dissociate "$clone_url" "$clone_dest"; then
+        if git clone --no-tags --reference-if-able "$mirror" --dissociate "$clone_url" "$clone_dest"; then
             if [ ! -e "$clone_dest/.git/objects/info/alternates" ]; then
+                if [ -n "$(git_mirror_problem "$mirror")" ]; then
+                    echo -e "${YELLOW}Git mirror went away during the clone; its history came from the remote.${NC}"
+                    report_git_mirror_outcome vanished
+                    return 0
+                fi
                 report_git_mirror_outcome used
                 return 0
             fi

@@ -24,6 +24,7 @@ Paths below are relative to `apps/backend/src/core/`.
 | `environment-cleanup-reconciler.ts` | Reconciler, retry scheduling and every orphan sweep |
 | `environment-state-paths.ts` | The per-environment data-directory roots and their key scheme |
 | `commands-terminal.ts`, `pty.ts` | `terminateTerminalSessionsForEnvironment` and the PTY handle's `terminate()` |
+| `watch-host.ts` | Directory watches on macOS, held in a helper process so they cannot block the event loop |
 
 Container removal, recovery copies, storage volumes and the environment
 network are described from the container side in
@@ -127,10 +128,23 @@ Inside the local-server queue:
    and worktree still exist.
 8. Containers: drain a running container's processes, then run the
    `container`, `volumes` and `network` steps.
-9. Stop local servers, then run the `worktree` step and, only if it
-   succeeded, the `branch` step. The `worktree` step first stops the
-   worktree's git fsmonitor daemon, if any
+9. Stop local servers, then stop watching and scanning the worktree
+   (`diffStats.pauseForRemoval`), fence new file-list and tree reads across aliases,
+   and wait for already-admitted reads and physical scans of that worktree
+   (including ad hoc committed-only and alternate-ref reads). Reader ownership
+   survives cache invalidation. Only then run the `worktree` step and, if
+   it succeeded, the `branch` step. The tombstone keeps a later diff tracking
+   reconciliation from tracking the environment again, so nothing watches a
+   tree while it is removed. The `worktree` step first stops the worktree's
+   git fsmonitor daemon, if any
    ([git-scan-caches.md](git-scan-caches.md#stopping-daemons)).
+   A project home has no worktree scheduled for removal: only its own tracking
+   pauses, leaving the retained checkout and other owners readable. A removal
+   fence stays closed after physical removal, including while ledger steps are
+   pending. Once both deletion and its ledger finish, tracking a replacement
+   environment at that path retires the fence. Late file/tree reads alone
+   cannot reopen it or recreate the retired directory. Reconciler completion
+   grants the same replacement admission after failed cleanup is retried.
 10. Delete environment-keyed records (graph runs together with their artifact
     rows), design canvases and web annotations;
     delete the schedules its agents own and pause other owners' schedules
@@ -140,7 +154,7 @@ Inside the local-server queue:
 11. Remove the environment record, then run the `state-dirs` step (bridges are
     already stopped, so nothing is writing there) and delete the pane layout.
 12. Close any terminal that became visible during deletion and release
-    watchers and monitors.
+    what is left of its monitors and tracking.
 
 A successful deletion then schedules a reconcile pass for whatever earlier
 deletions left pending.
@@ -148,6 +162,166 @@ deletions left pending.
 The tombstone survives a crash. At startup, after orphaned local servers and
 claude-tmux runtimes are reaped, every environment still marked `deleting` is
 re-admitted to the ordinary delete path, which is idempotent.
+
+Deletes of different environments run side by side: the lifecycle and
+local-server queues are per environment, and a stuck delete holds up only its
+own.
+
+### When a delete fails or is slow
+
+A delete that throws keeps its tombstone and `lifecycleOperation: "deleting"`,
+because restart recovery starts from them, and records its reason in
+`deletionError` (and in `cleanupAfterMergeError` for a merge cleanup). The
+tombstone alone therefore does not mean a delete is running. Clients ask
+`environmentDeletionFailure` (`@orkestrator/protocol/node-summaries`): with a
+reason recorded the row stops spinning, shows the reason and offers **Retry**,
+which is the ordinary delete. A delete clears `deletionError` before it does
+anything else, and a restart still retries it. Node summaries carry this as
+`deleting: true` for every tombstone, including failed deletes, so availability
+filters keep fencing them. `deleteFailure` is a fixed, content-free message; raw
+errors stay on the owning machine. Rows suppress the spinner when that field is
+present. The bound machine view uses the same failure and tombstone helpers.
+
+A delete with no failure past two minutes says so under its name ("Still
+deleting after N min", from `lifecycleOperationStartedAt`, relayed as
+`deletingSince`). Which step it is on is not shown; see
+[6120](../todo/containers-and-environments/6120-environment-delete-follow-ups.md).
+
+`scheduleMergeCleanupRecovery`, called by the PR monitor on every poll, stands
+aside while a merge or delete in this process holds the environment: the owner
+records any failure itself. Those guards live in memory, so after a restart
+they are clear and recovery finishes the delete. A recorded
+`cleanupAfterMergeError` still waits for a manual retry.
+
+### Watches and the event loop
+
+Bun keeps every directory watch of a process in one FSEvents stream. Each
+`fs.watch` or `close()` makes its FSEvents thread rebuild that stream, holding a
+lock across calls into `fseventsd`, and the next call on the JavaScript thread
+waits for the lock. With `fseventsd` busy, as it is on a Mac where agents rewrite
+thousands of files, one call blocks for seconds, and the rebuild covers every
+other environment's watches too. Every timer, request and child-exit callback
+waits with it, so the deletes queued behind appear stuck.
+
+A standalone Bun process starting and closing 40 recursive watches on its own
+empty directories, in the conditions below, spent 109 s in the starts (up to
+9.4 s each) and 11.9 s in the closes (up to 4.3 s each). A `sample` during the
+starts had the main thread in `_os_unfair_lock_lock_slow` and the `CFThreadLoop`
+thread in `FSEventStreamStart`, `register_with_server`, `f2d_register_rpc`, in
+every one of its samples.
+
+On macOS the watches therefore live in one helper process (`watch-host.ts`,
+started with `bun -e`). The backend only exchanges messages with it, so a start
+or close returns at once and events arrive as bounded batches. A watch reports
+`established` once the helper's `fs.watch` has returned; until then its watcher
+is not `qualified` and its owner keeps polling. A lost helper fails every open
+watch, whose owner falls back to polling and retries; the next start spawns a new
+helper. Linux keeps `fs.watch` in the backend: inotify has no shared stream to
+rebuild.
+
+The helper takes the blocking out of the backend; it does not make `fseventsd`
+any faster. With it at 100% of a core, independent Bun and Node processes writing
+one new file a second each saw their first event 72 s in, and about 44 events for
+the first 107 files, so `established` does not prove that a later change will be
+reported ([6120](../todo/containers-and-environments/6120-environment-delete-follow-ups.md),
+task 5). Events stay hints, and the owner's safety scan covers what they miss.
+`watch-host-events.live.test.ts` proves delivery through the real helper by
+repeating each change until an event names it.
+
+Measured on an 18-core Mac (macOS 26.6.2, 128 GB) with `fseventsd` at about 100%
+of a core throughout, on an isolated `dev:test` profile with 130 idle local
+environments. Each deleted environment was a fixture worktree plus an APFS clone
+of this repository's `node_modules`, 75,608 files in all. Deletes went through
+the CLI, and lag comes from the backend's `/__orkestrator/metrics`.
+
+| | Before | After |
+| --- | --- | --- |
+| Six deletes at once, total | 72.2 s | 15.9 s |
+| Six deletes at once, each | 32.0 s for three, 72.1 s for three | 15.9 s for all six |
+| Event-loop stalls during those | 16.2, 24.7 and 14.5 s | None over 100 ms |
+| Slowest metrics request during those | 25.0 s | 54 ms |
+| One delete | 5.2 s | 3.8 s |
+| Event-loop stalls during it | 1.7 s | None over 100 ms |
+| Longest stall since the backend started | 662.6 s | 251 ms |
+
+That last row covers startup, when the backend starts a watcher for each of the
+130 worktrees: before the fix it could not answer the CLI for several minutes
+after it reported ready.
+
+Before is the same benchmark with the four backend source files that hold the
+watches and the delete order restored to their previous state. An earlier run of
+the same six deletes, with timing added to each step, separated the costs:
+`git worktree remove` took 17.2 s in child processes without stalling the
+loop, and the six `untrack` calls that followed ran one after another as a single
+54 s stall, their individual `close()` calls taking up to 18.1 s. The worktree
+removal is still the bulk of what remains, and it does not hold the loop.
+
+### The work a delete does besides watches
+
+`scripts/benchmark-delete-store-work.ts` runs the real `delete_environment`
+command in a temporary data directory with no watches, bridges or project
+checkout. Every storage call is timed, store-row writes are counted, and a 5 ms
+timer records event-loop gaps. Its store is heavy on purpose: 136 environments,
+10 terminal sessions each, 2,000 native sessions with 200 dispatched request ids
+each, 64 display tails of 1 MiB, and 200 mailboxes of 50 2 KiB messages (about
+20 MiB of agent mail's 32 MiB limit). On the same Mac at a load average of
+20-29, over five runs:
+
+| | One delete | Five at once |
+| --- | --- | --- |
+| Duration | 0.48-0.51 s | 1.5-1.6 s each |
+| Longest event-loop gap | 0.28-0.31 s | 0.61-1.10 s |
+| Store rows written | 279 | 1,380 |
+
+Earlier runs, with the host's 5- and 15-minute load averages near 67, gave gaps
+of 1.1-1.3 s for one delete (two runs) and 4.4-5.2 s for five (three runs).
+
+Two calls account for nearly all of it. `deleteNativeAgentSessionsByEnvironment`
+takes 160-176 ms, 146-161 ms of it before it first yields, parsing every native
+session to find one environment's. `deleteAgentMailByEnvironment` takes
+116-131 ms to load and rewrite the whole agent-mail document. A CPU profile puts
+that time in `readStore` and in `saveSensitiveJson`. SQLite calls are
+synchronous, so neither call gives timers a turn, concurrent deletes run their
+store tails as one block, and the gap grows with the number of deletes. Every other store call took under 10 ms per delete.
+
+What the ticket's leads came to:
+
+- **A recursive watch still open while `node_modules` is removed.** The order
+  was wrong, but the events were not the cost. Before the fix,
+  `git worktree remove` ran with its watch still open and did not stall the
+  loop. The stall came from closing the watch afterwards, which the helper now
+  does off the backend's thread.
+- **`git worktree remove --force` on a large worktree.** It is slow, 17.2 s for
+  six, and is most of what a delete still takes. It runs in a child process and
+  does not stall the loop.
+- **Store rewrites.** Partly. The environment store did not hold: its seven
+  record writes per delete took 5-10 ms in all, and each cleanup-ledger write
+  under 2 ms. The agent-mail document did hold: it is rewritten whole on each
+  delete. Its cost depends on the size of
+  the mail store, and is a fraction of a second where the watch stalls were tens
+  of seconds.
+- **Session and transcript stores.** Partly. Terminal sessions did not hold:
+  their removal takes under 5 ms. Display tails did not hold either: their
+  removal is part of the native-session call, which spends about 15 ms after its
+  parse. The native-session store did hold, through the whole-store parse
+  above. Transcript artifacts and media pins were empty in the benchmark, so it
+  does not measure them.
+- **Reconcile loops.** Did not hold. A cleanup-reconciler pass with nothing
+  pending took 0.1 ms; with entries pending it runs the same cleanup steps as a
+  delete. The activity sweep skips environments with `deletionRequestedAt`, and
+  its snapshot reads took up to 101 ms, with a longest gap of 99 ms. So the
+  `activity.reconcile-failed` batches in the reported logs were about other
+  environments' bridge reads. They are logged without a message, so the logs do
+  not say why those reads failed, and that was not established here.
+- **Later deletes waiting before their bridges stopped.** The lifecycle and
+  local-server queues are per environment, and a stuck delete holds up only its
+  own (`commands-environment-cleanup.test.ts`). The wait was the stalled loop:
+  before the fix three of six concurrent deletes took 72.1 s against 32.0 s;
+  after it all six took 15.9 s.
+
+The remaining store cost is
+[6120](../todo/containers-and-environments/6120-environment-delete-follow-ups.md)
+task 6.
 
 ## Cleanup ledger
 

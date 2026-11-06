@@ -8,6 +8,8 @@ Analysed 2026-11-01 against `main` at `93b99bfba`. Acted on 2026-11-03 against
 ### Tasks
 
 1. **A headless mode for agent-test Electron**: an agent run of `dev:test` on a Linux desktop puts a window on the user's live session. Status: open (implementation done 2026-11-03; real-display Electron and macOS/Windows qualification remain open).
+2. **Home terminal on a host without systemd OSC context**: qualify the repaired exact-line assertion outside beelink. Moved from 4741 (deleted 2026-11-06). Status: open.
+3. **Audit other terminal snapshot line comparisons**: check for the same OSC-sensitive assertion elsewhere. Moved from 4741 (deleted 2026-11-06). Status: open.
 
 ### 1. A headless mode for agent-test Electron
 
@@ -27,7 +29,51 @@ Analysed 2026-11-01 against `main` at `93b99bfba`. Acted on 2026-11-03 against
     - Pros: no code.
     - Cons: every agent has to rediscover it, and a missed step opens the window anyway.
 
+### 2. Home terminal on a host without systemd OSC context
+
+**Problem.** The repaired Home terminal assertion has only run on beelink,
+whose login shell loads `/etc/profile.d/80-systemd-osc-context.sh`.
+
+**Context.** Retired 4741's Needs verification explicitly owed a host without
+that script. Its beelink pass does not establish this second host path.
+
+**Investigation.** On such a host, start a unique `dev:test --fixture` profile,
+confirm the login shell does not load that systemd script, and run the
+`project Home retains background work and unread attention beneath the board`
+case in `e2e/agent-testing/browser-gateway.spec.ts` through the logged runner.
+Confirm the background operation completes while away from Home, the exact
+visible output line is found, and attention survives returning and reloading.
+Record host/shell, commit and result without terminal contents; stop and reset
+the profile afterwards.
+
+**Decisions.** Use another host (recommended): preserves the real login-shell
+path, but requires that host. Disabling beelink's profile script is easier but
+does not qualify a different host.
+
+### 3. Audit other terminal snapshot line comparisons
+
+**Problem.** Other specs may compare complete raw terminal snapshot lines and
+fail when the host shell emits OSC sequences; 4741 did not audit them.
+
+**Context.** `get_terminal_output_snapshot` includes control sequences. Matching
+text anywhere is insufficient because the echoed command can contain the marker.
+
+**Investigation.** Search the specs for `get_terminal_output_snapshot` and follow
+each whole-line comparison. Record which already use `visibleText` or equivalent,
+and which need a code-allowed repair. Keep exact-line assertions after stripping
+control sequences, then run each affected owner on an OSC-emitting host and the
+task 2 host. Do not change shell startup to hide the issue.
+
+**Decisions.** Audit callers and use the established visible-text helper
+(recommended): retains completion semantics, but needs an owner-by-owner check.
+Substring matching costs less but can pass on the echoed command.
+
 ## Assumptions and decisions
+
+### Tasks 2 and 3: retain 4741's unrun checks (2026-11-06)
+
+Keep both qualifications open here, beside the run that found the defect.
+No new host run or spec audit is claimed by moving the work.
 
 ### Task 1: review repair and qualification status
 
@@ -188,8 +234,8 @@ launcher's child. The four failures:
 | `cli-ui.spec.ts`, `a CLI-initialized project…` | Flake [0901](../../tests/flaky-tests/web-ui/0901-cli-ui-fixture-project-hydration.md): a blank page after a second navigation. | Fixed; 10 of 10 across both cases that share the helper |
 | `terminal-input-resume.spec.ts`, `a lost terminal write…` | The host has no `vim`. | Fixed 2026-11-04; see to-do 4222 (done; deleted 2026-11-06) |
 
-`project Home retains…` ([4741](4741-project-home-terminal-check-vs-shell-osc-context.md))
-and the design canvas cases ([4221](4221-design-canvas-spec-reachability-dialog.md))
+`project Home retains…` (4741)
+and the design canvas cases (4221)
 passed. So did `capped file tree…`, in 71 s; flake
 [2930](../../tests/flaky-tests/previews-annotations-and-gateway/2930-capped-file-tree-exceeds-test-budget.md)
 stays open, since one pass does not settle it. The suite was not rerun in full after
@@ -250,4 +296,4 @@ branch to anything they load. To-do 4222 (done; deleted 2026-11-06) found the fi
 ## Related
 
 - [0048](../transcripts-and-observation/0048-recurring-work-qualification.md), where this was found.
-- [4741](4741-project-home-terminal-check-vs-shell-osc-context.md), [4221](4221-design-canvas-spec-reachability-dialog.md) and 4222 (done; deleted 2026-11-06), found while qualifying this. To-do 4223, also found here, is done.
+- 4741 and 4221 (both deleted 2026-11-06) and 4222 (done; deleted 2026-11-06), found while qualifying this. To-do 4223, also found here, is done.

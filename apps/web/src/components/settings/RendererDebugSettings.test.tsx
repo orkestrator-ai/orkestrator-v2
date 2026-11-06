@@ -29,7 +29,7 @@ test("on shows the state in force, and turning it off clears the key and reloads
   const toggle = screen.getByRole("switch", { name: "Renderer debug logging for this window" });
   expect(toggle.getAttribute("aria-checked")).toBe("true");
   expect(screen.getByText("On in this window")).toBeTruthy();
-  expect(screen.queryByText(/Help → Open Developer Tools/)).toBeNull();
+  expect(screen.queryByText(/Help → Open Developer Tools/) === null).toBe(true);
   fireEvent.click(toggle);
   expect(localStorage.getItem(DEBUG_LOG_STORAGE_KEY)).toBeNull();
   expect(reload).toHaveBeenCalledTimes(1);

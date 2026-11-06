@@ -1893,9 +1893,15 @@ test("agent mail rehydrates after an inactive recipient is opened and the page r
 
     await dismissSidebarTooltip(page, fixture!.name);
     await page.getByText(recipient.name, { exact: true }).first().click();
-    await expect(page.getByText("1 message in inbox · pull only")).toBeVisible({
-      timeout: 15_000,
+    const mailPill = page.getByRole("button", {
+      name: "Agent mail: 1 message in inbox · pull only",
+      exact: true,
     });
+    await expect(mailPill).toBeVisible({ timeout: 15_000 });
+    await mailPill.click();
+    await expect(page.getByRole("region", { name: "Agent mail", exact: true })).toContainText(
+      "Inactive recipient",
+    );
     await expect(
       page.getByRole("button", { name: /^Agent messages(?:, \d+ needs? you)?$/ }),
     ).toBeVisible();
@@ -1904,9 +1910,11 @@ test("agent mail rehydrates after an inactive recipient is opened and the page r
     await ensureProjectExpanded(page, fixture!.name);
     await dismissSidebarTooltip(page, fixture!.name);
     await page.getByText(recipient.name, { exact: true }).first().click();
-    await expect(page.getByText("1 message in inbox · pull only")).toBeVisible({
-      timeout: 15_000,
-    });
+    await expect(mailPill).toBeVisible({ timeout: 15_000 });
+    await mailPill.click();
+    await expect(page.getByRole("region", { name: "Agent mail", exact: true })).toContainText(
+      "Inactive recipient",
+    );
     await expect(
       page.getByRole("button", { name: /^Agent messages(?:, \d+ needs? you)?$/ }),
     ).toBeVisible();
@@ -1970,6 +1978,12 @@ test("agent mail rehydrates after an inactive recipient is opened and the page r
     );
     await page.unroute("**/__orkestrator/invoke");
     await panel.getByRole("button", { name: "Close", exact: true }).click();
+    await page
+      .getByRole("button", {
+        name: "Agent mail: 2 messages in inbox · pull only",
+        exact: true,
+      })
+      .click();
     const deliverNow = page.getByRole("button", { name: "Deliver now", exact: true });
     await expect(deliverNow).toBeVisible();
     const bounds = await deliverNow.boundingBox();

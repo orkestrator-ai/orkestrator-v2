@@ -825,7 +825,8 @@ or the `recurringWork` block of `/__orkestrator/metrics`.
 `scripts/recurring-live-ab.ts` is the committed form of the live idle A/B.
 Per arm and repeat it starts a disposable credential-free profile
 (`dev:test --fixture --fixture-environments local,container
---no-agent-credentials`), waits for `ready`, settles for 60 s, and then samples
+--no-agent-credentials --headless`, with `DISPLAY` and `WAYLAND_DISPLAY`
+unset and `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`), waits for `ready`, settles for 60 s, and then samples
 `recurringWork` plus the backend and Electron processes' CPU time and RSS
 every 30 s over a 6-minute window (longer than the 5-minute container fetch
 cooldown). It then times edit-to-detection: it appends to a tracked file in
@@ -880,6 +881,37 @@ a guard line.
 mise exec -- bun scripts/recurring-live-ab.ts --arms candidate --repeats 1 \
   --window-ms 60000 --freshness-probes 0 --soak-cycles 20 \
   --soak-environments local,container --out output/benchmarks/recurring-soak.json
+```
+
+After every cycle the soak also reads one trend sample: the footprint, the
+cache gauges from `recurringWork.caches` (row cache, worktree snapshots,
+local scan cache, native projection and change tracking; content-free counts)
+and backend RSS. The summary prints each cache gauge's first, last, minimum
+and maximum, and lists the gauges still rising: the lowest reading of the
+last third of the samples is above the highest of the first third and the
+middle third's median. A cache that warms up and plateaus, or tracks the
+environments a cycle opens and closes, is not rising. Rising gauges are
+reported, not failed: each needs reading against its bound (todo
+[0048](../todo/transcripts-and-observation/0048-recurring-work-qualification.md)
+task 10).
+
+- `--soak-cycle-gap-ms MS` idles between cycles, so a soak can span an hour.
+- `--soak-sessions N` (at most 8) keeps real Pi sessions open on a fake model:
+  a loopback OpenAI-compatible endpoint the script serves
+  (`scripts/recurring-live-ab-fake-model.ts`), named in the new profile's own
+  Pi `models.json` under its isolated HOME. N sessions on the fixture's local
+  environment stay open for the whole soak and get one prompt per cycle, and
+  every cycle's local environment gets its own session before it is deleted.
+  No credential, login or provider is involved.
+- `--agent-platforms LIST` is passed to `dev:test`. `pi` alone needs no
+  toolchain download; a profile whose start-up download fails exits.
+
+```bash
+mise exec -- bun scripts/recurring-live-ab.ts --arms candidate --repeats 1 \
+  --window-ms 60000 --freshness-probes 0 --fixture-environments local \
+  --agent-platforms pi --soak-cycles 60 --soak-environments local \
+  --soak-cycle-gap-ms 45000 --soak-sessions 2 \
+  --out output/benchmarks/recurring-long-soak.json
 ```
 
 For transcript, projection and storage cost, use the
@@ -1348,9 +1380,33 @@ as the `dev:test` launcher a real-stack spec restarts, gets
 when the runner exits, and only a command line, never an environment, keeps it
 (0830). Linux limits a Unix socket path to 108 bytes and Chromium puts its
 `SingletonSocket` in `TMPDIR`, so a test that launches full Chrome under a
-temporary directory of its own keeps that directory's names short. For a leak hunt like 0247's, set
-`ORKESTRATOR_TEST_KEEP_PRIVATE_TMPDIR=1` so each private directory is kept
-for inspection.
+temporary directory of its own keeps that directory's names short. For a leak
+hunt, set `ORKESTRATOR_TEST_KEEP_PRIVATE_TMPDIR=1` so each private directory
+is kept for inspection.
+
+A test removes a temporary directory it made itself, after whatever holds the
+directory open has finished, and awaits the removal so the process cannot exit
+first. Classes that keep writing after their owner returns expose a `settled()`
+that only waits (for example `TerminalHistory`, `McpManagementService`,
+`SharedScanQueue` and `DiffStatsTracking`); await it, or the fixture's `stop()`, before the removal.
+`tests/temp-sweep.ts` is the fallback for prefixes that cannot be removed at
+source: it removes a PID-owned directory only when that PID is dead and the
+directory is past its age limit. Some entries in a shared temporary directory
+are not leaks: `orkestrator-test-run.*` (failure logs, kept 7 days by
+`scripts/test-all.ts`), `orkestrator-test-scheduler-v1-<uid>`,
+`orkestrator-test-timings.*`, `orkestrator-mcp-locks-<uid>`, and other tools'
+own caches. The 2026-10-26 to 2026-10-29 leak hunt that set these rules is
+to-do 0247 in git history.
+
+The Windows process-marker qualification from retired to-do 0247 is explicitly
+deferred under the current [platform support scope](../../README.md#quick-start):
+Windows is unsupported and the backend refuses to start on `win32`. This is a
+scope disposition, not a Windows pass. If Windows support resumes, reopen the
+process-marker regressions and the real-Chromium escaped-browser ownership
+check on Windows before claiming cleanup qualification there. The Chromium
+check belongs to the transcript-artifacts area suite and requires Chromium to
+be available. Linux procps and macOS/Unix `ps` evidence do not establish Windows
+execution.
 
 The runner also keeps Bun timing profiles in a private temporary directory
 keyed by the Git common directory and worktree path. Bun updates these files after each aggregate

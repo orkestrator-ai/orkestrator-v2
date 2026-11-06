@@ -22,6 +22,7 @@ import {
   atomicWriteJson,
   initializeProfile,
   liveness,
+  prefetchAgentToolchains,
   processMatches,
   processStartTime,
   readProfile,
@@ -353,6 +354,7 @@ export type ProfileSeedDependencies = {
   seedModelCatalogCaches?: typeof seedInstalledModelCatalogCaches;
   seedProviderCredentials?: typeof seedAgentTestProviderCredentials;
   seedAgentToolchains?: typeof seedInstalledAgentToolchains;
+  prefetchAgentToolchains?: typeof prefetchAgentToolchains;
   log?: (message: string) => void;
   warn?: (message: string) => void;
 };
@@ -387,9 +389,26 @@ export async function seedAgentTestProfileState(
   if (toolchains.failed.length > 0) {
     warn(`Could not seed from the host install: ${toolchains.failed.join(", ")}`);
   }
-  const pending = profile.agentPlatforms.filter(
+  let pending = profile.agentPlatforms.filter(
     (platform) => !toolchains.seeded.some((entry) => entry.startsWith(`${platform}@`)),
   );
+  if (pending.length > 0) {
+    // Chromium aborts downloads whenever Docker changes a host interface; see
+    // `prefetchAgentToolchains`. Whatever this cannot fetch, Electron still does.
+    const prefetched = await (dependencies.prefetchAgentToolchains ?? prefetchAgentToolchains)(
+      profile,
+      pending,
+    );
+    if (prefetched.downloaded.length > 0) {
+      log(`Downloaded managed toolchains before Electron: ${prefetched.downloaded.join(", ")}`);
+    }
+    if (prefetched.error) {
+      warn(`Could not download managed toolchains before Electron: ${prefetched.error}`);
+    }
+    pending = pending.filter(
+      (platform) => !prefetched.downloaded.some((entry) => entry.startsWith(`${platform}@`)),
+    );
+  }
   if (pending.length > 0) {
     // Attributes a long or hung startup before Electron is even launched.
     log(`Electron will download managed toolchains for: ${pending.join(", ")}`);

@@ -27,6 +27,8 @@ export const GATEWAY_LOG_AREAS = defineLogAreas({
       "port.fallback": "The preferred port was taken, so a nearby one is used.",
       "port.fallback-distant":
         "The preferred port and those nearby were taken, so another is used.",
+      "request-auth.fallback":
+        "A desktop request-auth hook failed closed. Phase only; no request or error content.",
       "request.failed": "A gateway request failed. Throttled: repeats are counted, not written.",
       "websocket.upgrade-failed": "A WebSocket upgrade failed.",
       "events.client-dropped":

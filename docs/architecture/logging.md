@@ -267,8 +267,10 @@ and no site logs a stderr tail.
 | `storage` | `migration.failed` | `error` | The database could not reach this build's schema and did not open, with `fromVersion`, `toVersion` and `step` (`snapshot` for the safety copy, `migrate`). |
 | `process` | `rejection.unhandled` | `error`, throttled | A rejection reached the fatal rejection guard, beside the guard's own line. |
 | `process` | `uncaught-exception` | `error` | An exception reached the top of the backend, which then dies. See [the handler](#the-uncaught-exception-handler). |
+| `process` | `child.reaped`, `child.reap-abandoned`, `child.reap-unavailable` | `info`, `warn`, `warn` | macOS under Bun: a child whose exit Bun lost was reaped after its command settled, with `pid` and `waitedMs`; or was left a zombie, with `reason` (`not-a-zombie`, `capacity`, `waitpid-failed`); or `waitpid` could not be loaded. See [to-do 4260](../todo/cross-cutting/4260-bun-loses-child-process-events.md#6-reap-children-whose-exit-bun-lost). |
 | `docker` | `writer-lease.not-acquired` | `info` | A backend starts without the lease, with `reason` (`busy`, `schema-incompatible`). A second backend on one directory is normal. |
 | `local-server` | `bridge.exited` | `warn`, or `info` if the backend asked | Every exit of a local bridge, with `code`, `signal` and `requested`. A clean exit 0 nothing asked for warns. Read it with `server.stopping`. |
+| `local-server` | `bridge.orphans-reaped` | `warn`, or `error` if one survived | A bridge that exited on its own left processes in its group (its agent CLI, mid-turn), and the backend stopped them. `result` is `stopped` or `survived`. |
 | `bridge.pi`, `bridge.cursor` | `session.resume-fell-back` | `warn` | A saved conversation could not be resumed and a new one started. |
 | `bridge.pi`, `bridge.cursor` | `turn.failed` | `warn` | A turn ended in failure. A turn someone stopped stays out, even if stopping it made the run reject. |
 | `bridge.pi` | `turn.startup-timed-out`, `turn.refused` | `warn` | Pi did not start a turn in time, or refused it before any run. |
@@ -391,6 +393,7 @@ along. The `source` a relay adds is kept only as a known provider plus an enviro
 | `desktop` | `uncaught-exception` | error | The main process hit an uncaught exception. |
 | `local-server` | `bridge.started` | `key`, `pid` | A local bridge was spawned. `key` is `kind:environmentId`. |
 | `local-server` | `bridge.exited` | `key`, `pid`, `code`, `signal`, `requested` | A local bridge exited. |
+| `local-server` | `bridge.orphans-reaped` | `key`, `pid`, `result` | What a bridge left in its group after exiting on its own was stopped. |
 | `docker` | `bridge.launched` | `provider`, `containerPort` | A bridge was launched in a container, for the first time there or as a relaunch. |
 | `docker` | `writer-lease.lost` | `reason` | This backend lost the registry writer lease. |
 | `docker` | `writer-lease.regained` | `staleForMs` | This backend took it over from a holder that stopped refreshing it. |

@@ -20,7 +20,11 @@ import {
 import { ManualTime, deferred, flushMicrotasks, type Deferred } from "./recurring-test-support.js";
 import { RecurringWorkMetrics } from "./recurring-work-metrics.js";
 import { WorkAdmissionPool } from "./work-admission.js";
-import type { WorktreeChangeHint, WorktreeWatcherOptions } from "./worktree-watcher.js";
+import {
+  startWorktreeWatcher,
+  type WorktreeChangeHint,
+  type WorktreeWatcherOptions,
+} from "./worktree-watcher.js";
 
 /**
  * The shared worktree snapshot owner: scan identity, joined reads, epoch
@@ -245,6 +249,34 @@ describe("scan identity and joined reads", () => {
     await settleScan(owner, 0, result([change("b.ts")]));
     for (const read of await Promise.all(reads)) {
       expect(read.changes).toEqual([change("b.ts")]);
+    }
+  });
+
+  test("removal owns invalidated ad hoc reads and refuses later reads", async () => {
+    const gate = deferred<{ changes: unknown[]; truncated: boolean }>();
+    const owner = createOwner({ overrides: { readFiles: () => gate.promise } });
+    const read = readList(owner, localLookup, { includeUncommitted: false });
+    await flushMicrotasks();
+    // Cache invalidation drops the ad hoc join entry, but not the read's owner.
+    owner.service.invalidateChanges(localLookup);
+    let drained = false;
+    const drain = owner.service.pauseForRemoval("missing", localLookup).then(() => {
+      drained = true;
+    });
+    try {
+      await flushMicrotasks();
+      expect(drained).toBe(false);
+      await expect(readList(owner, localLookup, { includeUncommitted: false })).rejects.toThrow(
+        "being removed",
+      );
+      gate.resolve({ changes: [], truncated: false });
+      await drain;
+      expect(drained).toBe(true);
+      expect((await read).changes).toEqual([]);
+    } finally {
+      gate.resolve({ changes: [], truncated: false });
+      await Promise.allSettled([read, drain]);
+      owner.service.shutdown();
     }
   });
 
@@ -1187,4 +1219,54 @@ describe("minimum scan gap", () => {
     await flushMicrotasks();
     expect(world.scans()).toBe(2);
   });
+});
+
+test("asynchronous readiness rescans an uncovered edit and invalidates the cached tree", async () => {
+  const ready = deferred<void>();
+  let start!: () => void;
+  const owner = createOwner({
+    overrides: {
+      startWatcher: (options) =>
+        startWorktreeWatcher({
+          ...options,
+          settleMs: 0,
+          plan: null,
+          resolveGitPaths: async () => ({
+            linked: false,
+            gitDir: "/work/env-local/.git",
+            commonDir: "/work/env-local/.git",
+          }),
+          startWatch: () => {
+            start = () => ready.resolve();
+            const handle = { established: ready.promise, on: () => handle, close: () => undefined };
+            return handle;
+          },
+        }),
+    },
+  });
+  let changes: ReturnType<typeof change>[] = [];
+  let tree: unknown[] = [];
+  let scans = 0;
+  owner.autoScan(() => {
+    scans += 1;
+    return result(changes);
+  });
+  owner.autoWalk(() => tree);
+  try {
+    track(owner, local());
+    await flushMicrotasks();
+    expect(scans).toBe(1);
+    expect((await owner.service.readTree({ lookup: localLookup })).tree).toEqual([]);
+    // No event is delivered: this edit predates the actual watch.
+    changes = [change("new.txt", 7)];
+    tree = [{ name: "new.txt", path: "new.txt", isDirectory: false }];
+    start();
+    for (let attempt = 0; attempt < 100 && scans === 1; attempt += 1) await Bun.sleep(1);
+    await flushMicrotasks();
+    expect(scans).toBe(2);
+    expect(owner.service.snapshot()[0]?.stats.additions).toBe(7);
+    expect((await owner.service.readTree({ lookup: localLookup })).tree).toEqual(tree);
+  } finally {
+    owner.service.shutdown();
+  }
 });

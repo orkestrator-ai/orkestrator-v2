@@ -273,7 +273,7 @@ run = "bun packages/cli/scripts/run-scenarios.ts"
 [tasks."test:agent:docker:isolated"]
 description = "Build and smoke the image, run its live image qualifications, run the credential-free Docker fixture, and reset its disposable profile"
 depends = ["playwright:install"]
-run = "bun apps/desktop/scripts/test-agent-browser-isolated.ts --docker --no-agent-credentials --agent-platforms codex,grok,opencode"
+run = "bun apps/desktop/scripts/test-agent-browser-isolated.ts --docker --no-agent-credentials --agent-platforms codex,grok,opencode,cursor,pi"
 
 [tasks."test:agent:docker"]
 description = "Run the Docker agent browser fixture"

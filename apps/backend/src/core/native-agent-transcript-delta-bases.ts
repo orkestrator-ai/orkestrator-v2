@@ -146,6 +146,16 @@ export class TranscriptDeltaBases {
     this.bytes = 0;
   }
 
+  /** Keys holding a ring, for cache gauges. */
+  get size(): number {
+    return this.rings.size;
+  }
+
+  /** What the rings charge in total, for cache gauges. */
+  get retainedBytes(): number {
+    return this.bytes;
+  }
+
   /** Test-only: what the ring holds and charges, for the bounds it promises. */
   forTesting() {
     return {

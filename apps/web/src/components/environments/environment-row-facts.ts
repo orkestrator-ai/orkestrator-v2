@@ -5,7 +5,11 @@
  * `environmentRowModel`, and `environment-row-model.parity.test.ts` checks
  * that the same environment produces the same row either way.
  */
-import type { AgentActivity } from "@orkestrator/protocol/node-summaries";
+import {
+  environmentDeletionFailure,
+  environmentHasDeletionTombstone,
+  type AgentActivity,
+} from "@orkestrator/protocol/node-summaries";
 import { machineStatusText } from "@/components/federation/MachineDot";
 import type { MachineView } from "@/lib/federation/aggregate";
 import type { FederatedEnvironment } from "@/lib/federation/summaries";
@@ -18,6 +22,8 @@ import type { EnvironmentTooltipDetails } from "./EnvironmentTooltipBody";
 export interface LocalEnvironmentRowInputs {
   /** `useEnvironmentStore.isDeleting`: in flight here, or marked on the record. */
   deleting: boolean;
+  /** An attempt started in this window, before the backend updates its snapshot. */
+  deletingStartedAt?: string;
   /** `isLocalDeletionRetryable`: a failed merge cleanup nothing here is retrying. */
   deletionRetryable: boolean;
   /** `useEnvironmentDisplayActivity`: runtime activity, `working` during a build. */
@@ -37,13 +43,20 @@ export function localEnvironmentRowFacts(
   environment: Environment,
   inputs: LocalEnvironmentRowInputs,
 ): EnvironmentRowFacts {
+  const failure = environmentDeletionFailure(environment);
+  const deleting = inputs.deleting && (Boolean(inputs.deletingStartedAt) || !failure);
   return {
     environmentId: environment.id,
     name: environment.name,
     projectHome: environment.projectHome === true,
     environmentType: environment.environmentType,
     status: environment.status,
-    deleting: inputs.deleting,
+    deletionPending: inputs.deleting || environmentHasDeletionTombstone(environment),
+    deleting,
+    deleteFailure: deleting ? null : failure,
+    deletingSince: deleting
+      ? (inputs.deletingStartedAt ?? environment.lifecycleOperationStartedAt ?? null)
+      : null,
     deletionRetryable: inputs.deletionRetryable,
     buildPipeline: inputs.buildPipeline,
     prState: environment.prState ?? null,
@@ -88,7 +101,13 @@ export function nodeEnvironmentRowFacts(
     projectHome: environment.isProjectHome,
     environmentType: environment.environmentType,
     status: environment.status,
-    deleting: environment.deleting,
+    deleting: environment.deleting && !environment.deleteFailure,
+    deletionPending: environment.deleting,
+    deleteFailure: environment.deleteFailure ?? null,
+    deletingSince:
+      environment.deleting && !environment.deleteFailure
+        ? (environment.deletingSince ?? null)
+        : null,
     deletionRetryable: environment.deletionRetryable === true,
     buildPipeline: environment.buildPipeline === true,
     prState: environment.prState ?? null,

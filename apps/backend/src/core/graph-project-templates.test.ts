@@ -1,10 +1,11 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test, spyOn } from "bun:test";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { graphTemplateDigest } from "@orkestrator/protocol/graphs/compile";
 import { GRAPH_LIBRARY_BOUNDS } from "@orkestrator/protocol/graphs/library";
 import { GraphProjectTemplates } from "./graph-project-templates.js";
+import * as watchHost from "./watch-host.js";
 import { GraphTemplateError } from "./graph-template-errors.js";
 import {
   FakeGraphProjectWatch,
@@ -127,6 +128,92 @@ describe("reading .orkestrator/graphs", () => {
 });
 
 describe("watching", () => {
+  test.each([false, true])(
+    "reconciles startup-gap edits (directory initially missing: %s)",
+    async (missing) => {
+      reader.close();
+      if (!missing) await write("a.graph.json", sampleGraphTemplate("a"));
+      let ready!: () => void;
+      const established = new Promise<void>((resolve) => {
+        ready = resolve;
+      });
+      const targets: string[] = [];
+      reader = new GraphProjectTemplates({
+        checkoutOf: async () => checkout,
+        onChange: (id) => changes.push(id),
+        settleMs: 0,
+        startWatch: (target) => {
+          targets.push(target);
+          return { established, close() {} };
+        },
+      });
+      await reader.scan("p1");
+      await waitForGraphCondition(() => targets.length === 1);
+      await write("a.graph.json", { ...sampleGraphTemplate("a"), name: "Startup edit" });
+      expect(changes).toEqual([]);
+      ready();
+      await waitForGraphCondition(() => changes.length === 1);
+      expect((await reader.scan("p1")).files[0]?.template.name).toBe("Startup edit");
+      await waitForGraphCondition(() => targets.at(-1) === graphs);
+      expect(changes).toEqual(["p1"]);
+    },
+  );
+
+  test("readiness from a retired watch cannot rescan or rearm it", async () => {
+    reader.close();
+    let ready!: () => void;
+    const established = new Promise<void>((resolve) => {
+      ready = resolve;
+    });
+    let reads = 0;
+    reader = new GraphProjectTemplates({
+      checkoutOf: async () => {
+        reads++;
+        return checkout;
+      },
+      onChange: (id) => changes.push(id),
+      startWatch: () => ({ established, close() {} }),
+      settleMs: 0,
+    });
+    await reader.scan("p1");
+    await waitForGraphCondition(() => reader.watchedProjects().length === 1);
+    reader.forget("p1");
+    await write("a.graph.json", sampleGraphTemplate("a"));
+    ready();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(reads).toBe(1);
+    expect(changes).toEqual([]);
+    expect(reader.watchedProjects()).toEqual([]);
+  });
+
+  test("closing before readiness settles without retiring a replacement graph watch", async () => {
+    reader.close();
+    const registrations: Array<ReturnType<typeof Promise.withResolvers<void>>> = [];
+    reader = new GraphProjectTemplates({
+      checkoutOf: async () => checkout,
+      onChange: (id) => changes.push(id),
+      settleMs: 0,
+      startWatch: () => {
+        const ready = Promise.withResolvers<void>();
+        registrations.push(ready);
+        return { established: ready.promise, close: () => ready.reject(new Error("closed")) };
+      },
+    });
+    await reader.scan("p1");
+    await waitForGraphCondition(() => registrations.length === 1);
+    reader.forget("p1");
+    await reader.scan("p1");
+    await waitForGraphCondition(() => registrations.length === 2);
+    expect(reader.watchedProjects()).toEqual(["p1"]);
+    await write("a.graph.json", sampleGraphTemplate("a"));
+    registrations[1]!.resolve();
+    await waitForGraphCondition(() => changes.length === 1);
+    expect((await reader.scan("p1")).files[0]?.template.id).toBe("a");
+    reader.close();
+    await Promise.resolve();
+    expect(reader.watchedProjects()).toEqual([]);
+  });
+
   test("watches the template directory without recursion and re-reads on an event", async () => {
     await write("a.graph.json", sampleGraphTemplate("a"));
     await reader.scan("p1");
@@ -156,6 +243,40 @@ describe("watching", () => {
     await waitForGraphCondition(() => watch.open()[0] === graphs);
     expect(watch.open()).toEqual([graphs]);
     expect(watch.closed).toBe(1);
+  });
+
+  test("an asynchronously refused watch is dropped and the next scan retries", async () => {
+    reader.close();
+    let fail: ((error: Error) => void) | undefined;
+    let starts = 0;
+    let closes = 0;
+    const start = spyOn(watchHost, "watchDirectory").mockImplementation(() => {
+      starts += 1;
+      const handle = {
+        on: (_event: "error", listener: (error: Error) => void) => {
+          fail = listener;
+          return handle;
+        },
+        close: () => {
+          closes += 1;
+        },
+      };
+      return handle;
+    });
+    reader = new GraphProjectTemplates({ checkoutOf: async () => checkout });
+    try {
+      await reader.scan("p1");
+      await waitForGraphCondition(() => starts === 1);
+      expect(reader.watchedProjects()).toEqual(["p1"]);
+      fail!(Object.assign(new Error("refused"), { code: "ENOENT" }));
+      expect(reader.watchedProjects()).toEqual([]);
+      expect(closes).toBe(1);
+      await write("new.graph.json", sampleGraphTemplate("new"));
+      expect((await reader.scan("p1")).files).toHaveLength(1);
+      await waitForGraphCondition(() => starts === 2);
+    } finally {
+      start.mockRestore();
+    }
   });
 
   test("stops watching on close and evicts the least recently scanned project", async () => {

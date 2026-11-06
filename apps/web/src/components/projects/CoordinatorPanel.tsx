@@ -1,6 +1,5 @@
 import { flushSync } from "react-dom";
 import { useEffect, useMemo, useState } from "react";
-import { toast } from "sonner";
 import { AlertCircle, GitBranch, Loader2, Pause, Play, Plus, RotateCcw } from "lucide-react";
 import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
 import { useCoordinatorActions } from "./useCoordinatorActions";
@@ -11,8 +10,7 @@ import { useCoordinatorSelection } from "./useCoordinatorSelection";
 import { useCoordinatorPanelData } from "./useCoordinatorPanelData";
 import { CoordinatorConversationPane } from "./CoordinatorConversationPane";
 import { CoordinatorToolbar } from "./CoordinatorToolbar";
-import { CoordinatorWorkArea } from "./CoordinatorWorkArea";
-import type { CoordinatorWorkStop } from "@/lib/coordinator-work-items";
+import { CoordinatorWorkerPrompts } from "./CoordinatorWorkerPrompts";
 import { useCoordinatorPaneLayoutStore } from "@/stores/coordinatorPaneLayoutStore";
 import {
   COORDINATOR_SIDE_AGENT_EXPLANATION,
@@ -43,6 +41,11 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import {
+  FLOATING_NOTICE_ACTION,
+  FloatingNoticeAnchor,
+  FloatingNoticeLayer,
+} from "@/components/ui/floating-notice";
 import * as backend from "@/lib/backend";
 import { useAppDialogStore } from "@/stores/appDialogStore";
 import { createSessionKey } from "@/lib/utils";
@@ -426,46 +429,6 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
       { failureMessage: "Could not retry conversation" },
     );
   };
-  const clearFinishedWork = (associationIds: string[]) => {
-    setError(null);
-    return backend
-      .hideCoordinatorWork(projectId, associationIds)
-      .then(setSnapshot)
-      .catch((cause) =>
-        setError(cause instanceof Error ? cause.message : "Could not clear finished work"),
-      );
-  };
-  // Any open conversation can carry the stop; the backend checks it belongs here.
-  const stopConversation = conversations[0];
-  const stopWorker = async (stop: CoordinatorWorkStop) => {
-    if (!stopConversation) return;
-    setError(null);
-    const scope = {
-      projectId,
-      coordinatorId: snapshot.workspace.id,
-      conversationId: stopConversation.id,
-    };
-    try {
-      const results = await Promise.all(
-        stop.tabIds.map((tabId) =>
-          backend.stopCoordinatorWorkerTurn(scope, {
-            // A new click is a new request: it stops whatever turn is running then.
-            requestId: `work-panel-stop:${crypto.randomUUID()}`,
-            environmentId: stop.environmentId,
-            tabId,
-            ...(stop.nodeId ? { nodeId: stop.nodeId } : {}),
-          }),
-        ),
-      );
-      if (!results.some((result) => result.stopped === true)) {
-        toast.info("That worker has no running turn to stop");
-      }
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Could not stop the worker");
-    } finally {
-      invalidateView();
-    }
-  };
   // Keep action failures announced even when the repository retains the same error.
   const actionAlert = error;
 
@@ -493,74 +456,78 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
           onPause={() => setPaused(true)}
         />
 
-        {actionAlert ? (
-          <CoordinatorActionAlert
-            message={actionAlert}
-            onDismiss={() => {
-              setError(null);
-              clearLoadError();
-            }}
-          />
-        ) : null}
-        {/* Only from a backend that predates per-conversation startup errors,
+        {/* Panel-wide notices use a collapsible stack; conversations own their stacks. */}
+        <FloatingNoticeLayer anchor={false}>
+          {actionAlert ? (
+            <CoordinatorActionAlert
+              message={actionAlert}
+              onDismiss={() => {
+                setError(null);
+                clearLoadError();
+              }}
+            />
+          ) : null}
+          {/* Only from a backend that predates per-conversation startup errors,
         or a record one stored (version-compatibility.md). */}
-        {snapshot.workspace.lifecycleState === "error" ? (
-          <CoordinatorBanner
-            tone="error"
-            action={
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={conversationBusy}
-                onClick={() =>
-                  void runAction("conversation", load, {
-                    failureMessage: "Could not open Coordinator",
-                  })
-                }
-              >
-                <RotateCcw className="size-3.5" />
-                Retry
-              </Button>
-            }
-          >
-            <span className="font-medium">Coordinator startup failed.</span>{" "}
-            <span className="text-red-200/80">
-              {snapshot.workspace.lastStartupError ?? "The coordinator could not be started."}
-            </span>
-          </CoordinatorBanner>
-        ) : null}
-        {paused ? (
-          <CoordinatorBanner
-            tone="info"
-            icon={<Pause className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
-            action={
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={conversationBusy}
-                onClick={() => setPaused(false)}
-              >
-                <Play className="size-3.5" />
-                Resume
-              </Button>
-            }
-          >
-            Coordination is paused. Mail and new turns wait until you resume; conversations stay
-            readable.
-          </CoordinatorBanner>
-        ) : null}
+          {snapshot.workspace.lifecycleState === "error" ? (
+            <CoordinatorBanner
+              tone="error"
+              label="Startup failed"
+              summary="Coordinator startup failed."
+              action={
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  className={FLOATING_NOTICE_ACTION}
+                  disabled={conversationBusy}
+                  onClick={() =>
+                    void runAction("conversation", load, {
+                      failureMessage: "Could not open Coordinator",
+                    })
+                  }
+                >
+                  <RotateCcw className="size-3" />
+                  Retry
+                </Button>
+              }
+            >
+              <span className="font-medium">Coordinator startup failed.</span>{" "}
+              <span className="text-muted-foreground">
+                {snapshot.workspace.lastStartupError ?? "The coordinator could not be started."}
+              </span>
+            </CoordinatorBanner>
+          ) : null}
+          {paused ? (
+            <CoordinatorBanner
+              tone="info"
+              label="Paused"
+              summary="Coordination is paused."
+              icon={Pause}
+              action={
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  className={FLOATING_NOTICE_ACTION}
+                  disabled={conversationBusy}
+                  onClick={() => setPaused(false)}
+                >
+                  <Play className="size-3" />
+                  Resume
+                </Button>
+              }
+            >
+              Coordination is paused. Mail and new turns wait until you resume; conversations stay
+              readable.
+            </CoordinatorBanner>
+          ) : null}
 
-        {/* The Work area owns the app-wide subscriptions; the conversations are
-        its children, so a write it alone reads does not render them again. */}
-        <CoordinatorWorkArea
-          snapshot={snapshot}
-          quiet={paused || selectedTurnActive}
-          {...(snapshot.workspace.lifecycleState === "ready" && stopConversation
-            ? { onStop: stopWorker }
-            : {})}
-          onClearFinished={clearFinishedWork}
-        >
+          {/* The prompts banner owns the app-wide subscriptions; it sits beside
+        the conversations, so a write it alone reads does not render them. */}
+          <CoordinatorWorkerPrompts snapshot={snapshot} />
+
           <div className="relative min-h-0 min-w-0 flex-1">
+            {/* The area has no shared transcript gutter when conversations split. */}
+            <FloatingNoticeAnchor className="top-12 right-3" />
             {layout ? (
               <CoordinatorPaneTree
                 layout={layout}
@@ -658,7 +625,8 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
               />
             ) : null}
           </div>
-        </CoordinatorWorkArea>
+        </FloatingNoticeLayer>
+
         <div className="shrink-0 border-t border-border/60 px-3 py-1 text-center text-[11px] text-muted-foreground">
           The coordinator hands code changes, builds and fixes to build pipelines and prompt
           environments.

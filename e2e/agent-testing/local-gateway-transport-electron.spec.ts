@@ -1,21 +1,28 @@
 import type { OrkestratorElectronApi } from "../../apps/desktop/electron/preload-api";
 import type { ElectronApplication, Page } from "playwright";
 import { _electron as electron } from "playwright";
-import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { spawnSync, type ChildProcess } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 
-import { resolveRuntimeProfile } from "../../apps/desktop/electron/runtime-profile";
-import { prepareFixtureRepository } from "../../apps/desktop/scripts/dev/fixture";
-import { initializeProfile, reserveLoopbackPorts } from "../../apps/desktop/scripts/dev/profile-io";
-import { ownProcessGroup, stopProcessGroup } from "../process-cleanup";
+import { stopProcessGroup } from "../process-cleanup";
 import { closeElectronWithin } from "./design-electron-cleanup";
-import { recordElectronDiagnostics, recordProcessOutput } from "./electron-diagnostics";
+import { recordElectronDiagnostics } from "./electron-diagnostics";
 import { expect, test } from "./electron-fixtures";
 import { ELECTRON_TEST_SWITCHES } from "./electron-launch-switches";
 import { dismissStartupDialogs } from "./electron-startup-dialogs";
+import {
+  countsDir,
+  electronExecutable,
+  electronMain,
+  packageRoot,
+  repositoryRoot,
+  startTransportStack,
+  visibleText,
+  webRoot,
+} from "./local-gateway-transport-stack";
 
 /**
  * The `localWindowGatewayTransport` setting in a real Electron window, off and
@@ -26,6 +33,12 @@ import { dismissStartupDialogs } from "./electron-startup-dialogs";
  * pauses, which is the main-process baseline the E26 report asked for. Ends of
  * the loads are detected from the page's own terminal listener, so the waiting
  * adds no command through main.
+ *
+ * Playwright drives these windows over the DevTools protocol, and with the
+ * direct transport every stream chunk the page receives becomes a DevTools
+ * network event that main forwards to it (to-do 5760). So main's figures
+ * here overstate the direct transport; `local-gateway-transport-cpu-electron.spec.ts`
+ * measures main with no DevTools client attached.
  */
 
 type RendererWindow = Window & {
@@ -72,33 +85,10 @@ type Counts = {
   terminalFramesDelivered: number;
 };
 
-const repositoryRoot = path.resolve(import.meta.dirname, "../..");
-const packageRoot = path.join(repositoryRoot, "apps", "desktop");
-const webRoot = path.join(repositoryRoot, "apps", "web");
-const electronExecutable = path.join(packageRoot, "node_modules", ".bin", "electron");
 const previewDir = path.join(repositoryRoot, "output", "visual-previews");
-const countsDir = path.join(repositoryRoot, "output", "agent-testing", "local-transport-counts");
 const LINE_COUNT = 300;
 const BURST_LINES = 200_000;
 const IDLE_MS = 5_000;
-
-const visibleText = (output: string): string =>
-  output
-    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
-    .replace(/\x1b\[[0-9;?<>=]*[ -/]*[@-~]/g, "")
-    .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "");
-
-async function waitForUrl(url: string): Promise<void> {
-  await expect
-    .poll(
-      async () =>
-        fetch(url)
-          .then((response) => response.ok)
-          .catch(() => false),
-      { timeout: 30_000 },
-    )
-    .toBe(true);
-}
 
 /** Counts what main sends a window and what it asks of the backend. */
 async function instrumentMain(app: ElectronApplication): Promise<void> {
@@ -145,6 +135,101 @@ async function sampleCpu(app: ElectronApplication): Promise<CpuSample> {
   });
 }
 
+/**
+ * With `ORKESTRATOR_LOCAL_TRANSPORT_PROFILE=1` the two-window burst is also
+ * profiled (to-do 5760): a V8 CPU profile of main's JavaScript (`.cpuprofile`,
+ * summarised in `.summary.json`) and a Chromium trace (`.perfetto-trace`,
+ * Perfetto protobuf: read it with Perfetto's `trace_processor`), whose
+ * `toplevel` tasks carry each thread's own CPU time and whose `mojom` slices
+ * name the interface each task served. The profiled run's CPU figures include
+ * the profilers' overhead, so measure without it.
+ */
+const PROFILE = process.env.ORKESTRATOR_LOCAL_TRANSPORT_PROFILE === "1";
+const TRACE_CATEGORIES = ["toplevel", "toplevel.flow", "mojom", "ipc", "net", "loading"];
+
+async function startProfiling(app: ElectronApplication): Promise<void> {
+  await app.evaluate(async ({ contentTracing }, categories) => {
+    const inspector = process.getBuiltinModule("node:inspector");
+    const session = new inspector.Session();
+    session.connect();
+    const post = (method: string, params?: object) =>
+      new Promise<unknown>((resolve, reject) =>
+        session.post(method, params, (error, result) => (error ? reject(error) : resolve(result))),
+      );
+    (globalThis as typeof globalThis & { __profiler?: typeof post }).__profiler = post;
+    await post("Profiler.enable");
+    await post("Profiler.setSamplingInterval", { interval: 200 });
+    await contentTracing.startRecording({
+      included_categories: categories,
+      excluded_categories: ["*"],
+      trace_buffer_size_in_kb: 256 * 1024,
+    });
+    await post("Profiler.start");
+  }, TRACE_CATEGORIES);
+}
+
+async function stopProfiling(app: ElectronApplication, base: string): Promise<void> {
+  const profile = await app.evaluate(async ({ contentTracing }, tracePath) => {
+    const post = (
+      globalThis as typeof globalThis & {
+        __profiler: (method: string, params?: object) => Promise<{ profile: unknown }>;
+      }
+    ).__profiler;
+    const { profile } = await post("Profiler.stop");
+    await contentTracing.stopRecording(tracePath);
+    return JSON.stringify(profile);
+  }, `${base}.perfetto-trace`);
+  await writeFile(`${base}.cpuprofile`, profile);
+  await writeFile(
+    `${base}.summary.json`,
+    `${JSON.stringify(summariseCpuProfile(JSON.parse(profile)), null, 2)}\n`,
+  );
+}
+
+type ProfileNode = {
+  id: number;
+  callFrame: { functionName: string; url: string; lineNumber: number };
+  children?: number[];
+};
+
+/** Self and inclusive time per JavaScript function in main. */
+function summariseCpuProfile(profile: {
+  nodes: ProfileNode[];
+  samples: number[];
+  timeDeltas: number[];
+}) {
+  const nodes = new Map(profile.nodes.map((node) => [node.id, node]));
+  const parents = new Map<number, number>();
+  for (const node of profile.nodes) {
+    for (const child of node.children ?? []) parents.set(child, node.id);
+  }
+  const label = (node: ProfileNode) =>
+    `${node.callFrame.functionName || "(anonymous)"} ${path.basename(node.callFrame.url)}:${node.callFrame.lineNumber + 1}`;
+  const self = new Map<string, number>();
+  const inclusive = new Map<string, number>();
+  let busy = 0;
+  profile.samples.forEach((id, index) => {
+    const micros = profile.timeDeltas[index] ?? 0;
+    const node = nodes.get(id)!;
+    if (node.callFrame.functionName === "(idle)") return;
+    busy += micros;
+    self.set(label(node), (self.get(label(node)) ?? 0) + micros);
+    const seen = new Set<string>();
+    for (let at: number | undefined = id; at !== undefined; at = parents.get(at)) {
+      const key = label(nodes.get(at)!);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      inclusive.set(key, (inclusive.get(key) ?? 0) + micros);
+    }
+  });
+  const top = (map: Map<string, number>) =>
+    [...map.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 30)
+      .map(([fn, micros]) => ({ fn, ms: Math.round(micros / 100) / 10 }));
+  return { busyMs: Math.round(busy / 100) / 10, topSelf: top(self), topInclusive: top(inclusive) };
+}
+
 function cpuWindow(start: CpuSample, end: CpuSample): CpuWindow {
   return {
     wallMs: end.at - start.at,
@@ -178,6 +263,27 @@ async function countRelay(app: ElectronApplication): Promise<void> {
       };
     }
   });
+}
+
+/**
+ * A development window opens a detached DevTools window (`window.ts`), which
+ * records every network load and stream chunk of its page and costs main a
+ * DevTools message for each. A shipped window has none, so the measured loads
+ * run without them (to-do 5760).
+ */
+async function closeDevTools(app: ElectronApplication): Promise<void> {
+  await app.evaluate(({ BrowserWindow }) => {
+    for (const browserWindow of BrowserWindow.getAllWindows()) {
+      if (browserWindow.webContents.isDevToolsOpened()) browserWindow.webContents.closeDevTools();
+    }
+  });
+  await expect
+    .poll(() =>
+      app.evaluate(({ BrowserWindow }) =>
+        BrowserWindow.getAllWindows().some((window) => window.webContents.isDevToolsOpened()),
+      ),
+    )
+    .toBe(false);
 }
 
 async function clickNewWindow(app: ElectronApplication): Promise<void> {
@@ -234,61 +340,15 @@ async function runScenario(mode: Counts["mode"], temporaryRoot: string): Promise
   const root = path.join(temporaryRoot, mode);
   let vite: ChildProcess | null = null;
   let app: ElectronApplication | null = null;
-  const [rendererPort, gatewayPort] = (await reserveLoopbackPorts(2)) as [number, number];
-  const profile = resolveRuntimeProfile({
-    repositoryRoot,
-    requestedId: `electron-transport-${mode}`,
-    flavor: "agent-test",
-    rendererPort,
-    gatewayPort,
-    roots: {
-      developmentRoot: path.join(root, "dev"),
-      productionDataDir: path.join(root, "production"),
-      homeDir: root,
-    },
-  });
-  const profilePath = await initializeProfile(profile);
-  const projectPath = await prepareFixtureRepository(
-    profile,
-    path.join(repositoryRoot, "test-fixtures", "agent-project"),
-  );
-  // The relay run starts from no config at all: off is the default.
-  if (mode === "gateway") {
-    await mkdir(profile.dataDir, { recursive: true });
-    await writeFile(
-      path.join(profile.dataDir, "config.json"),
-      JSON.stringify({ repositories: {}, global: { localWindowGatewayTransport: true } }),
-    );
-  }
-  const rendererUrl = `http://127.0.0.1:${rendererPort}`;
   try {
-    vite = spawn("bun", ["run", "dev"], {
-      cwd: webRoot,
-      detached: true,
-      stdio: ["ignore", "pipe", "pipe"],
-      env: {
-        ...process.env,
-        VITE_DEV_HOST: "127.0.0.1",
-        VITE_DEV_PORT: String(rendererPort),
-        VITE_ORKESTRATOR_PROFILE: profile.id,
-      },
-    });
-    ownProcessGroup(vite);
-    recordProcessOutput("vite", vite);
-    await waitForUrl(rendererUrl);
+    const stack = await startTransportStack(mode, root, `electron-transport-${mode}`);
+    vite = stack.vite;
+    const { profile, profilePath, projectPath, rendererUrl } = stack;
     app = await electron.launch({
       executablePath: electronExecutable,
-      args: [
-        ...ELECTRON_TEST_SWITCHES,
-        path.join(repositoryRoot, "apps", "desktop", "dist", "electron", "main.js"),
-      ],
+      args: [...ELECTRON_TEST_SWITCHES, electronMain],
       cwd: repositoryRoot,
-      env: {
-        ...process.env,
-        ELECTRON_DEV: "1",
-        VITE_DEV_SERVER_URL: rendererUrl,
-        ORKESTRATOR_RUNTIME_PROFILE_FILE: profilePath,
-      },
+      env: stack.electronEnv,
     });
     recordElectronDiagnostics(app);
     const electronApp = app;
@@ -384,13 +444,23 @@ async function runScenario(mode: Counts["mode"], temporaryRoot: string): Promise
      * the command's output and not the typing: main is Chromium's browser
      * process, which handles every synthetic key.
      */
-    const measureInTerminal = async (line: string, marker: string): Promise<CpuWindow> => {
+    const measureInTerminal = async (
+      line: string,
+      marker: string,
+      profileAs?: string,
+    ): Promise<CpuWindow> => {
       await focusTerminal();
       await window.keyboard.type(line, { delay: 15 });
+      if (profileAs) await startProfiling(electronApp);
       const start = await sampleCpu(electronApp);
       await window.keyboard.press("Enter");
       await expect.poll(() => reached(marker), { timeout: 120_000, intervals: [50] }).toBe(true);
-      return cpuWindow(start, await sampleCpu(electronApp));
+      const measured = cpuWindow(start, await sampleCpu(electronApp));
+      if (profileAs) {
+        await mkdir(countsDir, { recursive: true });
+        await stopProfiling(electronApp, path.join(countsDir, profileAs));
+      }
+      return measured;
     };
 
     const renderedOutput = () =>
@@ -412,6 +482,7 @@ async function runScenario(mode: Counts["mode"], temporaryRoot: string): Promise
         { environmentId: target.id },
       );
     await openEnvironment(target.name);
+    await closeDevTools(electronApp);
     await runInTerminal("echo READY-$((40+2))");
     const mainState = () =>
       electronApp.evaluate(
@@ -514,6 +585,7 @@ async function runScenario(mode: Counts["mode"], temporaryRoot: string): Promise
     expect(await extra.evaluate(() => "orkestratorDesktopHost" in window)).toBe(mode === "gateway");
     await openEnvironment(target.name, extra);
     await expect(extra.locator(".xterm:visible").first()).toBeVisible({ timeout: 60_000 });
+    await closeDevTools(electronApp);
     await countRelay(electronApp);
     await window.bringToFront();
     const twoLoad = await measureInTerminal(
@@ -523,6 +595,7 @@ async function runScenario(mode: Counts["mode"], temporaryRoot: string): Promise
     const twoBurst = await measureInTerminal(
       `seq 1 ${BURST_LINES}; echo TWO-BURST-$((40+2))`,
       "TWO-BURST-42",
+      PROFILE ? `${mode}-two-window-burst` : undefined,
     );
     const twoWindows = {
       load: twoLoad,

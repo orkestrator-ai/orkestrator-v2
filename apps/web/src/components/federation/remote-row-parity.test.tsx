@@ -1,3 +1,4 @@
+import { toNodeEnvironmentSummary } from "@orkestrator/protocol/node-summaries";
 /**
  * What another machine's rows and project headers show now that they share
  * this window's components: agent-mail badges, the project home's activity,
@@ -101,6 +102,35 @@ function renderWithFederation(node: ReactNode) {
   return render(<FederationProvider>{node}</FederationProvider>);
 }
 
+test("a row whose delete failed says why and offers a retry instead of spinning", () => {
+  const row = environment("feature", {
+    deleting: true,
+    deleteFailure: "Terminal process trees are running",
+  });
+  const { container } = render(
+    <RemoteEnvironmentItem machine={machineView([row])} environment={row} />,
+  );
+  expect(screen.getByText("Delete failed: Terminal process trees are running")).toBeTruthy();
+  expect(container.querySelector(".animate-spin")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+  expect(screen.getByRole("alertdialog")).toBeTruthy();
+});
+
+test("a delete past two minutes says how long it has been running", () => {
+  const started = new Date(Date.now() - 5 * 60_000).toISOString();
+  const slow = environment("slow", { deleting: true, deletingSince: started });
+  const { container } = render(
+    <RemoteEnvironmentItem machine={machineView([slow])} environment={slow} />,
+  );
+  expect(screen.getByText("Still deleting after 5 min")).toBeTruthy();
+  expect(container.querySelector(".animate-spin")).toBeTruthy();
+  cleanup();
+
+  const fresh = environment("fresh", { deleting: true, deletingSince: new Date().toISOString() });
+  render(<RemoteEnvironmentItem machine={machineView([fresh])} environment={fresh} />);
+  expect(screen.queryByText(/Still deleting/)).toBeNull();
+});
+
 test("another machine's row shows its unread agent mail and a failed delivery", () => {
   const row = environment("feature", { agentMailUnread: 120, agentMailFailed: true });
   render(<RemoteEnvironmentItem machine={machineView([row])} environment={row} />);
@@ -144,6 +174,32 @@ test("another machine's project header sums its mail and shows its home's activi
       boardTab: "home",
     }),
   );
+});
+
+test("a failed tombstoned remote home cannot be selected", async () => {
+  const home = toNodeEnvironmentSummary("a" as BackendId, {
+    id: "home",
+    projectId: "project-1",
+    name: "project-home",
+    projectHome: true,
+    agentActivityState: "waiting",
+    deletionRequestedAt: "2026-11-05",
+    deletionError: "private failure",
+  })!;
+  const machine = machineView([home]);
+  renderWithFederation(
+    <RemoteProjectGroup
+      machine={machine}
+      project={machine.projects[0]!}
+      environments={[]}
+      isCollapsed={false}
+      onToggleCollapse={() => {}}
+      sortable={false}
+      grouping="machine"
+    />,
+  );
+  await waitFor(() => expect(portalStore.getState().loaded).toBe(true));
+  expect(screen.queryByRole("button", { name: /Home (working|needs attention)/ })).toBeNull();
 });
 
 test("a quiet home shows nothing in its project header", async () => {

@@ -27,6 +27,66 @@ describe("Orkestrator control MCP server", () => {
     expect(names).not.toContain("send_message");
   });
 
+  test("a coordinator reads and acknowledges only its own conversation's mailbox", async () => {
+    const credential = coordinatorCredential(["discovery", "mail"]);
+    overrides.set("get_project_coordinator", () => ({
+      workspace: {
+        id: "coordinator-1",
+        lifecycleState: "ready",
+        conversations: [
+          { id: "conversation-1", tabId: "coordinator-tab", mailboxIncarnationId: "incarnation-1" },
+          { id: "conversation-2", tabId: "other-tab", mailboxIncarnationId: "incarnation-2" },
+        ],
+      },
+    }));
+    overrides.set("get_agent_mail_mailbox", () => ({ messages: [], total: 0 }));
+    overrides.set("get_agent_mail_message", () => ({ id: "message-1", body: "hello" }));
+    overrides.set("ack_agent_mail", () => ({ id: "message-1", body: "hello" }));
+    const own = {
+      environmentId: "coordinator:coordinator-1:conversation-1",
+      tabId: "coordinator-tab",
+    };
+    const other = { environmentId: "coordinator:coordinator-1:conversation-2", tabId: "other-tab" };
+    const call = (name: string, args: Record<string, unknown>) =>
+      rpc(credential.url, credential.token, "tools/call", { name, arguments: args });
+    const reached = () =>
+      invocations.filter(({ command }) =>
+        ["get_agent_mail_mailbox", "get_agent_mail_message", "ack_agent_mail"].includes(command),
+      ).length;
+
+    const refusals: Array<[string, Record<string, unknown>, string]> = [
+      ["read_messages", other, "Coordinator credential may only read its own mailbox"],
+      ["read_messages", { ...own, tabId: "other-tab" }, "may only read its own mailbox"],
+      ["get_message", { ...other, messageId: "message-1" }, "may only read its own mailbox"],
+      [
+        "ack_message",
+        { ...other, messageId: "message-1" },
+        "Coordinator credential may only acknowledge its own mailbox",
+      ],
+      [
+        "ack_message",
+        { ...own, environmentId: "env-1", messageId: "message-1" },
+        "may only acknowledge its own mailbox",
+      ],
+    ];
+    for (const [name, args, text] of refusals) {
+      const refused = await call(name, args);
+      expect(refused.body.result?.isError).toBe(true);
+      expect(JSON.stringify(refused.body.result)).toContain(text);
+    }
+    expect(reached()).toBe(0);
+
+    for (const [name, args] of [
+      ["read_messages", own],
+      ["get_message", { ...own, messageId: "message-1" }],
+      ["ack_message", { ...own, messageId: "message-1" }],
+    ] as const) {
+      const allowed = await call(name, args);
+      expect(allowed.body.result?.isError).not.toBe(true);
+    }
+    expect(reached()).toBe(3);
+  });
+
   test("coordinator delegation tools promise a wake and refuse a poll loop", async () => {
     overrides.set("get_project_coordinator", () => ({
       workspace: {

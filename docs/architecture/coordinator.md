@@ -664,6 +664,21 @@ wake a fresh coordinator after a restart. See
 [Who hears a notice](#who-hears-a-notice). With no main open, the toolbar action
 reads **Start coordinator**.
 
+Reading a coordinator (`CoordinatorService.get`, so `get_project_coordinator`,
+the panel's view and every coordinator `read_messages`) repairs nothing and
+writes nothing. The work and mail closed conversations leave behind move to the
+main at three points instead (`coordinator-closed-conversations.ts`): when a main
+opens, when a conversation closes, and on the 60-second `coordinator-repair`
+sweep. Every path that opens a main goes through `ensureMainConversation`: mail,
+wakes and notices directly, and a new coordinator in `ensure` and
+`createConversation` with no main open through its `opened` form, which keeps
+the new main unassigned and leaves open side conversations their own work. The
+sweep syncs mailboxes and reads the owed delegations once for every coordinator,
+not once each, and re-reads the open delegations only after the store has
+changed (`coordinator-open-delegations.ts`). A main that appears any other way
+(a legacy record given a role on read, a restored store) takes the mail over on
+that sweep, up to a minute later.
+
 An open main that has never run has no agent until its first prompt, so it can
 neither read mail nor be woken for it. Mail from an agent in its own project, or
 a delegation wake, assigns it the default agent the same way, and mail already
@@ -2049,6 +2064,16 @@ creating and assigning on the project's queue. A slow mail send does not hold
 that queue. Wake-kind selection shares the project queue with close: it checks
 the main is open, looks up held reports, and persists the kind together, so a
 closed mailbox cannot make a real report look missing.
+
+A delegation the backend closes (`closeOnDecision`) records its wake kind in the
+same write when a main is open, chosen under the coordinator store lock so the
+main cannot close in between. Retained closed mains do not prevent this batching
+unless one still holds this worker's report. With no main open, or with a report
+waiting for closed-main repair, the wake pass chooses and writes the kind
+separately as above. Otherwise a wake is two coordinator writes, close with kind and then
+`wokenAt`, with the mail write between them and one change announcement after
+the last. A wake that stops short of `wokenAt` (it failed, or is held) announces
+the close once after its attempt.
 
 A wake that fails 10 passes across at least 10 minutes is given up on. Passes also
 run on turn ends, so the time bound stops a short fault retiring every wake owed.

@@ -1,4 +1,4 @@
-import type { RuntimeProfile } from "../../electron/runtime-profile.js";
+import { agentToolsPortProblem, type RuntimeProfile } from "../../electron/runtime-profile.js";
 import { AGENT_PLATFORMS, isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 
 export type DevArguments = {
@@ -32,6 +32,13 @@ export type DevArguments = {
    * neither flag changes anything.
    */
   headless?: boolean;
+  /**
+   * `dev:test` only (`--agent-tools-port <n>`): the exact port of the
+   * profile's agent tools server, recorded in the profile so later starts keep
+   * it. Never 34121, 34122 or 45507; a busy port refuses the start instead of
+   * falling back to a random one (`assertAgentToolsPortFree`).
+   */
+  agentToolsPort?: number;
 };
 
 const ALL_AGENT_CREDENTIAL_SOURCES: RuntimeProfile["credentialSources"] = [...AGENT_PLATFORMS];
@@ -95,6 +102,15 @@ function parseArguments(args: string[], options: ParseOptions): DevArguments {
         throw new Error("--headless cannot be combined with --no-headless");
       }
       result.headless = headless;
+    } else if (argument === "--agent-tools-port") {
+      if (!options.agentTest) {
+        throw new Error("--agent-tools-port is only supported by mise run dev:test");
+      }
+      const value = valueAfter(index++, argument);
+      const port = /^\d+$/.test(value) ? Number(value) : Number.NaN;
+      const problem = agentToolsPortProblem(port);
+      if (problem) throw new Error(`--agent-tools-port ${problem}`);
+      result.agentToolsPort = port;
     } else if (argument === "--fixture-environments") {
       const values = valueAfter(index++, argument).split(",").filter(Boolean);
       if (values.some((value) => value !== "local" && value !== "container")) {

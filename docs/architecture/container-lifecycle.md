@@ -1649,12 +1649,22 @@ Without this, every container that never ran terminal Claude stayed on the
 1 s poll with a confirmed doorbell (seen in a 2026-10-24 profile run).
 
 `ClaudeStatePollManager.status()` reports the signal's health, per state
-(`unarmed`, `arming`, `armed`, `confirmed`, `demoted`, `unsupported`), how
-many containers run the 1 s poll (`fallback`), lifetime demotions by reason
-(`missed-change`, `rang-too-often`, `arm-failed`) and accepted rings, in the
-`signals` block of recurring diagnostics (`claude-state-signal`). It is
-content-free: no container id. The demotion log line still names the
-container.
+(`unarmed`, `arming`, `armed`, `unconfirmed`, `confirmed`, `demoted`,
+`unsupported`), how many containers run the 1 s poll (`fallback`), lifetime
+demotions by reason (`missed-change`, `rang-too-often`, `arm-failed`) and
+accepted rings, in the `signals` block of recurring diagnostics
+(`claude-state-signal`). It is content-free: no container id. The demotion log
+line still names the container.
+
+`unconfirmed` is a lineage that has stayed `armed` for a whole retry window
+(5 min) since its first install with no ring, so its rings cannot reach the
+backend: typically a host firewall that drops container traffic to the agent
+tools port. The install's probe ring is fire-and-forget (the hook path must
+never wait on the network), so this is the only place the backend can see it;
+it cannot say why. A re-arm on the window keeps the lineage `unconfirmed`; a
+ring confirms it and a demotion starts a new `armed` stretch. The worktree
+signal and the claude-tmux hook doorbell report the same state the same way
+(to-do 7080).
 
 A poll is adopted for every running container, but it runs the 1 s cadence
 only while the container can run terminal Claude: a terminal shell in it or a

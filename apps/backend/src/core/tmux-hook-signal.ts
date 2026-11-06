@@ -1,6 +1,7 @@
 import type { StateSignalCredential } from "./agent-tools.js";
 import type { CommandContext } from "./commands-context.js";
 import {
+  armedSignalHealth,
   emptySignalHealthStates,
   type SignalDemotionReason,
   type SignalHealthState,
@@ -71,6 +72,8 @@ type ContainerDoorbell = {
   unsupported: boolean;
   demoted: boolean;
   lastAttemptAt?: number;
+  /** When an install first finished with no ring since; cleared by a ring or a demotion. */
+  armedAt?: number;
   rings: number;
 };
 
@@ -192,7 +195,9 @@ export class TmuxHookSignalManager {
   private healthOf(doorbell: ContainerDoorbell): SignalHealthState {
     if (doorbell.unsupported) return "unsupported";
     if (doorbell.confirmed) return "confirmed";
-    if (doorbell.credential) return "armed";
+    if (doorbell.credential) {
+      return armedSignalHealth(doorbell.armedAt, this.nowMs(), TMUX_HOOK_SIGNAL_RETRY_MS);
+    }
     if (doorbell.arming) return "arming";
     if (doorbell.demoted) return "demoted";
     return "unarmed";
@@ -230,11 +235,15 @@ export class TmuxHookSignalManager {
       if (!credential) return;
       doorbell.credential = credential;
       await installer.install(containerId, credential, doorbell.context, current);
+      if (current() && doorbell.credential === credential && !doorbell.confirmed) {
+        doorbell.armedAt ??= this.nowMs();
+      }
     })()
       .catch((error: unknown) => {
         if (current()) {
           doorbell.confirmed = false;
           doorbell.demoted = true;
+          doorbell.armedAt = undefined;
           this.countDemotion("arm-failed");
         }
         this.revoke(doorbell);
@@ -254,6 +263,7 @@ export class TmuxHookSignalManager {
     this.acceptedRings += 1;
     doorbell.confirmed = true;
     doorbell.demoted = false;
+    doorbell.armedAt = undefined;
     for (const listener of Array.from(doorbell.listeners)) listener();
   }
 
@@ -264,6 +274,7 @@ export class TmuxHookSignalManager {
   ): void {
     doorbell.confirmed = false;
     doorbell.demoted = true;
+    doorbell.armedAt = undefined;
     doorbell.lastAttemptAt = this.nowMs();
     this.countDemotion(reason);
     this.revoke(doorbell);

@@ -78,8 +78,10 @@ sequentially.
 
 To work around a host-specific problem without hand-assembling a profile, pass
 `dev:test` profile flags through: `--credential-source <name>` (repeatable),
-`--agent-platforms <list>`, `--no-agent-credentials` and
-`--use-dev-worktree-folder`. A credential or platform flag replaces the
+`--agent-platforms <list>`, `--no-agent-credentials`,
+`--use-dev-worktree-folder` and `--agent-tools-port <n>` (see
+[Containers behind a host firewall](#containers-behind-a-host-firewall---agent-tools-port)).
+A credential or platform flag replaces the
 matching default, for example:
 
 ```bash
@@ -605,6 +607,56 @@ it is missing. Rebuild it explicitly without touching `orkestrator-v2:latest`:
 ```bash
 mise run docker:build:dev --profile container-qa
 ```
+
+### Containers behind a host firewall: `--agent-tools-port`
+
+A profile's containers reach its backend's agent tools server (signal rings,
+the Orkestrator Agent MCP) through the host-gateway alias. Each installation
+keeps its own agent tools port, and a new profile gets a random one, so on a
+Linux host whose input firewall drops traffic by default (ufw's
+`DEFAULT_INPUT_POLICY="DROP"`) an allowance for the installed app's port does
+not admit any profile. Rings then never arrive: recurring diagnostics show the
+signals `unconfirmed` and the containers stay on their fallback timers.
+
+`dev:test --agent-tools-port <n>` gives the profile an exact port instead:
+
+```bash
+mise run dev:test --profile container-qa --fixture --fixture-environments local,container \
+  --agent-tools-port 31500
+```
+
+- The port is recorded in the profile (`agentToolsPort` in `profile.json`), so
+  a restart without the flag keeps it; a later flag replaces it and
+  `dev:reset` forgets it.
+- A port something already listens on stops the start before anything is
+  launched or recorded. The profile never falls back to a random port, which
+  would quietly put it outside the firewall rule. Two live profiles therefore
+  need two ports.
+- 34121, 34122 and 45507 are refused (the installed app's gateway and control
+  ports, and the installed app's agent tools port on the Linux qualification
+  host), as is anything below 1024.
+- The flag belongs to `dev:test`; `mise run dev` rejects it.
+
+Use the range **31500–31509**: ten profiles, one firewall rule. It is below
+Linux's ephemeral range (32768–60999) and macOS's (49152–65535), so the OS
+never hands one of those ports to another socket.
+
+The one rule, admitting TCP from Docker's 172.16.0.0/12 pools (the default
+bridge, the default address pools and the qualification `/29` shim) to the
+range, is:
+
+```bash
+sudo ufw allow proto tcp from 172.16.0.0/12 to any port 31500:31509 comment 'Orkestrator agent-test agent tools'
+```
+
+Changing the host firewall is the host owner's decision; agents never run it.
+A profile whose environment network was allocated from a `192.168.0.0/16` pool
+needs that network's subnet admitted as well (`docker network inspect` shows
+it), as the installed app's own rule on such a host does. The rule is removed
+with the same arguments after `sudo ufw delete allow`. The agent tools server's
+own peer filter still refuses any peer outside loopback and the profile's own
+Docker networks, and every call needs a credential, so the rule widens the
+route, not who may use it.
 
 Never add the live Orkestrator source checkout as the project under test. Use the
 copied `testProject` only.

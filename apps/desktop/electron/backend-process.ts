@@ -973,6 +973,8 @@ export class BackendProcess {
     strictDockerOwner?: boolean;
     strictGatewayPort?: boolean;
     credentialSources?: AgentPlatform[];
+    /** Exact agent tools port (`--agent-tools-port`); agent-test profiles only. */
+    agentToolsPort?: number;
     /** False when no window will need terminal output from this client's stream. */
     relayTerminalOutput?: boolean;
     onEvent: (event: string, payload: unknown) => void;
@@ -1010,6 +1012,8 @@ export class BackendProcess {
     strictDockerOwner?: boolean;
     strictGatewayPort?: boolean;
     credentialSources?: AgentPlatform[];
+    /** Exact agent tools port (`--agent-tools-port`); agent-test profiles only. */
+    agentToolsPort?: number;
     /** False when no window will need terminal output from this client's stream. */
     relayTerminalOutput?: boolean;
     onEvent: (event: string, payload: unknown) => void;
@@ -1070,6 +1074,8 @@ export class BackendProcess {
     if (options.strictGatewayPort) args.push("--strict-gateway-port");
     if (options.credentialSources?.length)
       args.push("--credential-source", options.credentialSources.join(","));
+    if (options.agentToolsPort !== undefined)
+      args.push("--agent-tools-port", String(options.agentToolsPort));
 
     // Isolate desktop startup from any remote-service configuration in the parent shell.
     const isolatedCredentialRoot = path.join(options.dataDir, "agent-credentials");

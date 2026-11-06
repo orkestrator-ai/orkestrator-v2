@@ -1,6 +1,7 @@
 import type { StateSignalCredential, WorktreeSignalReason } from "./agent-tools.js";
 import type { CommandContext } from "./commands-context.js";
 import {
+  armedSignalHealth,
   emptySignalHealthStates,
   type SignalDemotionReason,
   type SignalHealthState,
@@ -124,6 +125,8 @@ type Lineage = {
   arming: boolean;
   abort: AbortController;
   credential?: StateSignalCredential;
+  /** When an install first finished with no ring since; cleared by a ring or a demotion. */
+  armedAt?: number;
   options: ContainerWorktreeWatcherOptions;
   rings: number;
   ringWindowStartedAt?: number;
@@ -214,7 +217,9 @@ export class ContainerWorktreeSignals {
   private healthOf(lineage: Lineage): SignalHealthState {
     if (lineage.unsupported) return "unsupported";
     if (lineage.qualified) return "confirmed";
-    if (lineage.credential) return "armed";
+    if (lineage.credential) {
+      return armedSignalHealth(lineage.armedAt, this.nowMs(), CONTAINER_WORKTREE_SIGNAL_RETRY_MS);
+    }
     if (lineage.arming) return "arming";
     if (lineage.demoted) return "demoted";
     return "unarmed";
@@ -260,6 +265,9 @@ export class ContainerWorktreeSignals {
       }
       lineage.credential = credential;
       await installer.install(containerId, credential, context, current, lineage.abort.signal);
+      if (current() && lineage.credential === credential && !lineage.qualified) {
+        lineage.armedAt ??= this.nowMs();
+      }
       // A watcher whose `ready` ring never arrives (a firewall, a missing host
       // alias) is re-armed after the window; a confirmed one ignores this.
       this.scheduleRetry(lineage);
@@ -302,6 +310,7 @@ export class ContainerWorktreeSignals {
     if (!lineage.qualified) {
       lineage.qualified = true;
       lineage.demoted = false;
+      lineage.armedAt = undefined;
       // Coverage first, so the rescan this ring asks for is a qualified one:
       // events before confirmation were never announced.
       lineage.options.onCoverageChange?.();
@@ -358,6 +367,7 @@ export class ContainerWorktreeSignals {
     const wasQualified = lineage.qualified;
     lineage.qualified = false;
     lineage.demoted = true;
+    lineage.armedAt = undefined;
     this.demotions[reason] = (this.demotions[reason] ?? 0) + 1;
     this.revoke(lineage);
     if (this.onWarning) {

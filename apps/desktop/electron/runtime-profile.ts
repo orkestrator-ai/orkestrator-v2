@@ -47,7 +47,43 @@ export type RuntimeProfile = {
    * bridge is packaged independently of the managed toolchain.
    */
   agentPlatforms: AgentPlatform[];
+  /**
+   * `dev:test --agent-tools-port`: the exact port this profile's agent tools
+   * server listens on, so one host firewall rule for
+   * {@link AGENT_TEST_AGENT_TOOLS_PORT_RANGE} can admit every profile's
+   * containers. Absent keeps the backend's own choice (its recorded port, or a
+   * random one). Only `agent-test` profiles carry it.
+   */
+  agentToolsPort?: number;
 };
+
+/**
+ * Ports an agent-test profile's agent tools server must never take: the
+ * installed app's fixed gateway and control ports (34121, 34122), and 45507,
+ * the agent tools port of the production installation on the Linux
+ * qualification host (to-do 7080). A profile there that took it would collide
+ * with the user's running app, not fall back.
+ */
+export const RESERVED_AGENT_TOOLS_PORTS: readonly number[] = Object.freeze([34121, 34122, 45507]);
+
+/**
+ * The documented range for `dev:test --agent-tools-port`: ten profiles, one
+ * firewall rule. Below Linux's ephemeral range (32768-60999) and macOS's
+ * (49152-65535), so the OS never hands one of them to another socket.
+ * Advisory: the flag accepts any unreserved port from 1024.
+ */
+export const AGENT_TEST_AGENT_TOOLS_PORT_RANGE = Object.freeze({ first: 31500, last: 31509 });
+
+/** Why `port` cannot be an agent-test profile's agent tools port, or null when it can. */
+export function agentToolsPortProblem(port: unknown): string | null {
+  if (typeof port !== "number" || !Number.isInteger(port) || port < 1024 || port > 65535) {
+    return "must be a whole number from 1024 to 65535";
+  }
+  if (RESERVED_AGENT_TOOLS_PORTS.includes(port)) {
+    return `${port} is reserved for the installed Orkestrator (${RESERVED_AGENT_TOOLS_PORTS.join(", ")})`;
+  }
+  return null;
+}
 
 export {
   defaultRuntimeProfileRoots,
@@ -123,6 +159,7 @@ export function resolveRuntimeProfile(options: {
   roots?: RuntimeProfileRoots;
   credentialSources?: RuntimeProfile["credentialSources"];
   agentPlatforms?: RuntimeProfile["agentPlatforms"];
+  agentToolsPort?: number;
   /**
    * A folder to keep this profile's worktrees in, as `<root>/<id>`, instead
    * of `worktrees/` inside the profile (the dev worktree location setting).
@@ -168,6 +205,7 @@ export function resolveRuntimeProfile(options: {
     electronTitle: runtimeProfileElectronTitle(id),
     credentialSources: [...new Set(options.credentialSources ?? [])],
     agentPlatforms: [...new Set(options.agentPlatforms ?? [])],
+    ...(options.agentToolsPort === undefined ? {} : { agentToolsPort: options.agentToolsPort }),
   });
 }
 
@@ -245,6 +283,13 @@ export function parseRuntimeProfile(value: unknown): RuntimeProfile {
     candidate.agentPlatforms.some((entry) => !isAgentPlatform(entry))
   ) {
     throw new Error("Runtime profile agentPlatforms is invalid");
+  }
+  if (candidate.agentToolsPort !== undefined) {
+    const problem = agentToolsPortProblem(candidate.agentToolsPort);
+    if (problem) throw new Error(`Runtime profile agentToolsPort ${problem}`);
+    if (candidate.flavor !== "agent-test") {
+      throw new Error("Runtime profile agentToolsPort is only supported by agent-test profiles");
+    }
   }
   const parsed = candidate as RuntimeProfile;
   assertProfileIsolatedFromProduction(

@@ -14,7 +14,12 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { pathToFileURL } from "node:url";
 import { gzip } from "node:zlib";
 import {
+  admitNodeBridgeRequest,
+  takeAdmittedBody,
+} from "@orkestrator/protocol/node/bridge-authority";
+import {
   authenticate,
+  bridgeAuthority,
   MAX_BODY_BYTES,
   MAX_PROMPT_REQUEST_ID_BYTES,
   MAX_STEER_ID_BYTES,
@@ -191,6 +196,10 @@ export async function route(
   ) {
     return json(response, 401, { error: "Unauthorized" });
   }
+  // What changes an agent's authority also needs the backend's signature,
+  // which a token caught in flight does not carry (bridge-authority.ts).
+  const refused = await admitNodeBridgeRequest(bridgeAuthority, request, MAX_BODY_BYTES);
+  if (refused) return json(response, refused.status, refused.body);
 
   try {
     // The batched form of `/session/:id/activity`, from the same no-touch
@@ -1530,9 +1539,10 @@ function readBoundedString(value: unknown, limit: number, field: string): string
 }
 
 async function readJson(request: IncomingMessage): Promise<JsonObject> {
-  const chunks: Buffer[] = [];
-  let total = 0;
-  for await (const chunk of request) {
+  const admitted = takeAdmittedBody(request);
+  const chunks: Buffer[] = admitted ? [admitted] : [];
+  let total = admitted?.length ?? 0;
+  for await (const chunk of admitted ? [] : request) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     total += buffer.length;
     // Checked as it arrives rather than after: buffering an unbounded body to

@@ -191,3 +191,23 @@ The unchanged complete owner passed alone, exit 0, in 37.6 s:
 Both viewports ran with the config's default worker allocation. Passing output
 was deleted by the logged runner. No assertion, timeout, skip or gateway code
 changed; the cause remains unconfirmed.
+
+## Bridge authority review repairs — 2026-11-06
+
+At `451fccdf1`, the nine-worker command
+`mise run test:logged -- --name repair-browser -- mise run test:browser`
+reported 1,513 passed, 135 skipped and six failed (1,654 cases; 1,225.3 s).
+Evidence: host temporary artifact
+`orkestrator-test-run.C3ovaT/repair-browser.log.gz`. The browser implementation
+and this test are unchanged by the bridge-authority branch.
+
+The mobile case exceeded its 60 s deadline and cleanup reported a closed
+browser context at line 170. The complete unchanged owner passed both viewports
+alone (exit 0, 45.8 s):
+
+```sh
+mise run test:logged -- --name isolate-data-saving -- bunx playwright test --config e2e/playwright.config.ts e2e/DataSavingGateway.spec.ts --workers=1 --output output/agent-testing/address-browser-reruns/data-saving
+```
+
+The isolated pass confirms intermittence; the cause remains unconfirmed. Status
+stays open. No assertion, timeout or skip changed.

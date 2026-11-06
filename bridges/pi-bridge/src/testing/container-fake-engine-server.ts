@@ -10,6 +10,7 @@
  * and Pi SDK over the faux model. This only supplies the fake's call log,
  * under `FAKE_PI_ROOT` (default `/tmp/orkestrator-qa-fake-pi`).
  */
+import "@orkestrator/protocol/node/bridge-launch-environment";
 import { mkdirSync } from "node:fs";
 
 const root = process.env.FAKE_PI_ROOT ?? "/tmp/orkestrator-qa-fake-pi";

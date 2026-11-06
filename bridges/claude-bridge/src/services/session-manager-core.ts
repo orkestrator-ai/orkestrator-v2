@@ -13,6 +13,7 @@ import type {
   ClaudeCumulativeUsage,
   SessionRateLimitWindow,
 } from "../types/index.js";
+import { CLAUDE_COST_SOURCE } from "../types/index.js";
 import { AGENT_INTERACTION_DEFAULT_TIMEOUT_MS } from "@orkestrator/protocol/agent-interactions";
 import type {
   NativeAgentContextCategory,
@@ -1159,6 +1160,7 @@ export async function buildClaudeUsageSnapshot(
     // time rather than whenever a later read republished it.
     at: updatedAt,
     costUsd: totals.cost,
+    costSource: CLAUDE_COST_SOURCE,
     inputTokens: totals.input,
     outputTokens: totals.output,
     cacheReadTokens: totals.cacheRead,
@@ -1213,6 +1215,7 @@ export async function buildClaudeUsageSnapshot(
     lastTurnTokens,
     sessionTokens: (previous?.sessionTokens ?? 0) + lastTurnTokens,
     costUsd: (previous?.costUsd ?? 0) + totals.cost,
+    costSource: CLAUDE_COST_SOURCE,
     durationMs: (previous?.durationMs ?? 0) + (result.duration_ms ?? 0),
     apiDurationMs: (previous?.apiDurationMs ?? 0) + (result.duration_api_ms ?? 0),
     ...(previous?.linesAdded !== undefined ? { linesAdded: previous.linesAdded } : {}),

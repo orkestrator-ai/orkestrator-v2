@@ -16,6 +16,7 @@ import type { InteractionDeadline } from "@orkestrator/protocol/agent-interactio
 import type { AgentInteractionToolHints } from "@orkestrator/protocol/agent-interactions";
 import type {
   NativeAgentComposerState,
+  NativeAgentCostSource,
   NativeAgentSlashCommand,
   NativeAgentTurnUsage,
 } from "@orkestrator/protocol/native-agent";
@@ -259,6 +260,14 @@ export interface PersistedUsage {
   /** Time the last turn spent waiting on model responses; same scope as `durationMs`. */
   apiDurationMs?: number;
   costUsd?: number;
+  /** Whether `costUsd` is billed or a catalogue estimate (`cost-source.ts`). */
+  costSource?: NativeAgentCostSource;
+  /**
+   * Priced session entries and the billed ones among them, when the turn was
+   * recorded: the baseline the next turn's source is derived from.
+   */
+  sessionCostParts?: number;
+  sessionProviderCostParts?: number;
   /** Whole-session context occupancy, which Pi reports directly. */
   contextTokens?: number;
   contextWindow?: number;

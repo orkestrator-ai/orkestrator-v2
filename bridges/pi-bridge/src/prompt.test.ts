@@ -48,6 +48,8 @@ function stubSession(
     lastAssistantUsage?: Record<string, unknown>;
     lastAssistantText?: string;
     sessionStats?: Record<string, unknown>;
+    /** What `sessionManager.getEntries()` lists; absent models an SDK without it. */
+    entries?: unknown[];
   } = {},
 ): StubSession {
   let settleRun: () => void = () => undefined;
@@ -88,6 +90,7 @@ function stubSession(
     getSessionStats: () => options.sessionStats ?? { cost: 0 },
     getLastAssistantText: () => options.lastAssistantText,
     sessionManager: {
+      ...(options.entries ? { getEntries: () => options.entries } : {}),
       getBranch: () =>
         options.lastAssistantUsage
           ? [
@@ -867,6 +870,97 @@ describe("context usage", () => {
           costUsd: 0.02,
         },
       ],
+    });
+  });
+
+  describe("cost source", () => {
+    const priced = (total: number, totalFromProvider?: boolean) => ({
+      type: "message",
+      message: {
+        role: "assistant",
+        usage: {
+          input: 10,
+          output: 5,
+          totalTokens: 15,
+          cost: { total, ...(totalFromProvider === undefined ? {} : { totalFromProvider }) },
+        },
+      },
+    });
+
+    async function turnAfter(options: {
+      previous?: Partial<NonNullable<SessionState["usage"]>>;
+      entries?: unknown[];
+      sessionCost: number;
+    }) {
+      const state = runningState();
+      if (options.previous) {
+        state.usage = {
+          turn: { inputTokens: 1 },
+          updatedAt: "2026-11-06T00:00:00.000Z",
+          ...options.previous,
+        };
+      }
+      const stub = stubSession({
+        lastAssistantUsage: { input: 10, output: 5, totalTokens: 15, cost: { total: 0.01 } },
+        sessionStats: { cost: options.sessionCost, toolCalls: 0, tokens: { total: 15 } },
+        ...(options.entries ? { entries: options.entries } : {}),
+      });
+      state.session = stub.session;
+      const handle = await dispatchPrompt(state, stub.session, input({ requestId: "cost-1" }));
+      stub.finish();
+      await handle.completion;
+      return { state, usage: publicContextUsage(state) };
+    }
+
+    test("an OpenRouter-billed turn is the provider's amount", async () => {
+      const { state, usage } = await turnAfter({
+        entries: [priced(0.01, true), priced(0.02, true)],
+        sessionCost: 0.03,
+      });
+      expect(usage).toMatchObject({ costUsd: 0.03, costSource: "provider" });
+      expect(usage?.turns?.at(-1)).toMatchObject({ costUsd: 0.03, costSource: "provider" });
+      // The counts are kept as the next turn's baseline.
+      expect(state.usage).toMatchObject({ sessionCostParts: 2, sessionProviderCostParts: 2 });
+    });
+
+    test("one catalogue-priced response makes the turn an estimate", async () => {
+      const { usage } = await turnAfter({
+        previous: { costUsd: 0.01, sessionCostParts: 1, sessionProviderCostParts: 1 },
+        entries: [priced(0.01, true), priced(0.02, true), priced(0.005, false)],
+        sessionCost: 0.035,
+      });
+      expect(usage?.turns?.at(-1)?.costUsd).toBeCloseTo(0.025);
+      expect(usage?.turns?.at(-1)?.costSource).toBe("estimate");
+      expect(usage).toMatchObject({ costUsd: 0.035, costSource: "estimate" });
+    });
+
+    test("a billed turn after estimated ones is billed; the session total is not", async () => {
+      const { usage } = await turnAfter({
+        previous: { costUsd: 0.01, sessionCostParts: 1, sessionProviderCostParts: 0 },
+        entries: [priced(0.01), priced(0.02, true)],
+        sessionCost: 0.03,
+      });
+      expect(usage?.turns?.at(-1)?.costUsd).toBeCloseTo(0.02);
+      expect(usage?.turns?.at(-1)?.costSource).toBe("provider");
+      expect(usage).toMatchObject({ costUsd: 0.03, costSource: "estimate" });
+    });
+
+    test("state saved without counts leaves a mixed session's turn unknown", async () => {
+      const { usage } = await turnAfter({
+        previous: { costUsd: 0.01 },
+        entries: [priced(0.01), priced(0.02, true)],
+        sessionCost: 0.03,
+      });
+      expect(usage?.turns?.at(-1)?.costUsd).toBeCloseTo(0.02);
+      expect(usage?.turns?.at(-1)).not.toHaveProperty("costSource");
+      expect(usage).toMatchObject({ costSource: "estimate" });
+    });
+
+    test("an SDK that cannot list entries reports no source", async () => {
+      const { usage } = await turnAfter({ sessionCost: 0.01 });
+      expect(usage?.costUsd).toBe(0.01);
+      expect(usage).not.toHaveProperty("costSource");
+      expect(usage?.turns?.at(-1)).not.toHaveProperty("costSource");
     });
   });
 

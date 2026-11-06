@@ -336,7 +336,7 @@ describe("continued attempt accounting and lifecycle", () => {
       expect(turn.state.usage).toMatchObject({
         sessionTokens: 92,
         lastTurnTokens: 42,
-        turns: [{ totalTokens: 42, costUsd: 0.3 }],
+        turns: [{ totalTokens: 42, costUsd: 0.3, costSource: "provider" }],
       });
 
       // The HTTP handler ends the turn; a late carrier repeats the last

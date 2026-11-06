@@ -158,6 +158,7 @@ export function inProgressClaudeUsage(
     lastTurnTokens: liveTokens,
     sessionTokens: (previous?.sessionTokens ?? 0) + liveTokens,
     ...(previous?.costUsd !== undefined ? { costUsd: previous.costUsd } : {}),
+    ...(previous?.costSource !== undefined ? { costSource: previous.costSource } : {}),
     ...(previous?.durationMs !== undefined ? { durationMs: previous.durationMs } : {}),
     ...(previous?.apiDurationMs !== undefined ? { apiDurationMs: previous.apiDurationMs } : {}),
     ...(previous?.permissionDenials !== undefined

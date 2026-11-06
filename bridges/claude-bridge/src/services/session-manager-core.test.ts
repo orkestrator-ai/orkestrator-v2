@@ -1779,6 +1779,8 @@ describe("claude usage snapshot", () => {
       lastTurnTokens: 100,
       sessionTokens: 200,
       costUsd: 1,
+      // The SDK documents every Claude dollar figure as an estimate.
+      costSource: "estimate",
       durationMs: 200,
       apiDurationMs: 160,
       permissionDenials: 2,
@@ -1786,6 +1788,7 @@ describe("claude usage snapshot", () => {
     expect(getSession(session.id)?.usage?.turns).toHaveLength(2);
     expect(getSession(session.id)?.usage?.turns?.at(-1)).toMatchObject({
       costUsd: 0.5,
+      costSource: "estimate",
       inputTokens: 10,
       outputTokens: 20,
       cacheReadTokens: 70,

@@ -2251,6 +2251,37 @@ describe("AgentInfoButton usage panel", () => {
     expect(metricValue("Cost")).toBe(expected);
   });
 
+  // The source comes from the snapshot, never from the platform: the same
+  // provider-neutral field marks an estimate on any of them.
+  test.each([
+    ["claude", "estimate", "~$1.25, estimated", "Estimated from token counts"],
+    ["cursor", "provider", "$1.25", null],
+    ["pi", "provider", "$1.25", null],
+    ["opencode", undefined, "$1.25", null],
+  ] as const)(
+    "marks a %s session cost from its %s source",
+    (platform, costSource, expected, title) => {
+      seedUsage(
+        usage({ costUsd: 1.25, ...(costSource ? { costSource } : {}), source: platform }),
+        platform,
+      );
+      const tab = claudeTab({
+        nativeAgentData: {
+          platform,
+          environmentId: ENVIRONMENT_ID,
+          sessionId: `${platform}-session-1`,
+        },
+      } as Partial<TabInfo>);
+      render(<AgentInfoButton activeTab={tab} />);
+      open();
+      expect(metricValue("Cost")).toBe(expected);
+      const amount = screen
+        .getByText("Cost")
+        .parentElement?.querySelector("[data-cost-source], div.font-mono > span");
+      expect(amount?.getAttribute("title") ?? null).toBe(title);
+    },
+  );
+
   test.each([
     [420, "420ms"],
     [999.4, "999ms"],

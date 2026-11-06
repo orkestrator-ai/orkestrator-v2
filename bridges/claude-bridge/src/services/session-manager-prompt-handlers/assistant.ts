@@ -6,7 +6,7 @@ import type {
 import { isRootAssistantRecord, normalizeBackendModelId } from "@orkestrator/protocol/model-id";
 import { claudePlanWindowFromKind } from "@orkestrator/protocol/plan-usage";
 import type { SdkMessageBase, SessionState, SessionUsageSnapshot } from "../../types/index.js";
-import { sessionHealth } from "../../types/index.js";
+import { CLAUDE_COST_SOURCE, sessionHealth } from "../../types/index.js";
 import {
   noteClaudeAuthenticationFailure,
   noteClaudeAuthenticationWorked,
@@ -67,6 +67,7 @@ export function applyClaudeUsageReport(
       updatedAt: new Date().toISOString(),
     }),
     costUsd: report.session.total_cost_usd,
+    costSource: CLAUDE_COST_SOURCE,
     durationMs: report.session.total_duration_ms,
     apiDurationMs: report.session.total_api_duration_ms,
     linesAdded: report.session.total_lines_added,

@@ -124,6 +124,68 @@ test("the cost view reports money without asking the backend again", async () =>
   expect(history).toHaveBeenCalledTimes(1);
 });
 
+test("spend that includes an estimate is marked as one everywhere it is shown", async () => {
+  const estimate = { costSource: "estimate" as const };
+  const provider = { costSource: "provider" as const };
+  history.mockResolvedValue(
+    report({
+      totals: totals(estimate),
+      platforms: [
+        { platform: "claude", totals: totals({ costUsd: 3, ...estimate }), sessions: 2 },
+        { platform: "cursor", totals: totals({ costUsd: 1, ...provider }), sessions: 1 },
+      ],
+      models: [
+        {
+          modelId: "claude-opus-5-5",
+          platform: "claude",
+          totals: totals({ costUsd: 3, ...estimate }),
+          sessions: 2,
+        },
+        {
+          modelId: "cursor-1",
+          platform: "cursor",
+          totals: totals({ costUsd: 1, ...provider }),
+          sessions: 1,
+        },
+      ],
+    }),
+  );
+  render(<UsageSettings />);
+  await headline();
+  fireEvent.click(screen.getByRole("button", { name: "Cost" }));
+
+  const total = await screen.findByTestId("usage-total");
+  await waitFor(() => expect(total.textContent).toBe("~$4.00, estimated"));
+  expect(total.querySelector("[title='Estimated from token counts']")).toBeTruthy();
+
+  // The provider-billed model row is plain; the estimated one is marked.
+  const row = (name: string) =>
+    within(screen.getByRole("cell", { name }).closest("tr") as HTMLElement);
+  expect(row("claude-opus-5-5").getByTitle("Estimated from token counts").textContent).toBe(
+    "~$3.00, estimated",
+  );
+  expect(row("cursor-1").getByText("$1.00").getAttribute("title")).toBeNull();
+
+  // The platform list follows the same rule.
+  const platforms = within(screen.getByRole("region", { name: "Platforms" }));
+  expect(platforms.getByTitle("Estimated from token counts").textContent).toBe("~$3.00, estimated");
+  expect(platforms.getByText("$1.00").getAttribute("data-cost-source")).toBe("provider");
+
+  // The spend tile does too, whatever the metric on screen.
+  fireEvent.click(screen.getByRole("button", { name: "Tokens" }));
+  await waitFor(() => expect(total.textContent).toBe("10.0K"));
+  expect(screen.getByText("Spend").parentElement?.textContent).toContain("~$4.00");
+});
+
+test("spend with no stated source reads as it always has", async () => {
+  render(<UsageSettings />);
+  await headline();
+  fireEvent.click(screen.getByRole("button", { name: "Cost" }));
+  const total = await screen.findByTestId("usage-total");
+  await waitFor(() => expect(total.textContent).toBe("$4.00"));
+  expect(total.querySelector("[title]")).toBeNull();
+});
+
 test("changing the range re-reads and keeps the last report on screen", async () => {
   render(<UsageSettings />);
   await headline();

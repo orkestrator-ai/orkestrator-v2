@@ -28,6 +28,7 @@ import {
 } from "./session-config.js";
 import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
 import {
+  ACP_COST_SOURCE,
   acpUsageTokenCount,
   accumulateAttemptUsage,
   parseAcpTurnUsage,
@@ -2461,7 +2462,7 @@ export function finalizeTurnUsage(state: SessionState): void {
       // `finalizeTurnUsage` commits one completed turn exactly once, so this
       // is the turn's own time.
       at: new Date().toISOString(),
-      ...(turn.costUsd === undefined ? {} : { costUsd: turn.costUsd }),
+      ...(turn.costUsd === undefined ? {} : { costUsd: turn.costUsd, costSource: ACP_COST_SOURCE }),
       ...(turn.inputTokens === undefined ? {} : { inputTokens: turn.inputTokens }),
       ...(turn.outputTokens === undefined ? {} : { outputTokens: turn.outputTokens }),
       ...(turn.cacheReadTokens === undefined ? {} : { cacheReadTokens: turn.cacheReadTokens }),

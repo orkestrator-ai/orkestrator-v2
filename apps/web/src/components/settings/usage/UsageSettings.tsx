@@ -41,6 +41,7 @@ import {
   type UsageMetric,
 } from "./usage-format";
 import { SETTINGS_CARD_CLASS, SettingsPageLayout } from "../SettingsPageLayout";
+import { CostAmount } from "@/components/usage/CostAmount";
 import { cn } from "@/lib/utils";
 
 /**
@@ -299,9 +300,11 @@ export function UsageSettings() {
                     data-testid="usage-total"
                     className="text-2xl font-semibold tabular-nums text-foreground"
                   >
-                    {metric === "cost"
-                      ? formatCost(totals.costUsd)
-                      : formatTokens(totals.totalTokens)}
+                    {metric === "cost" ? (
+                      <CostAmount amount={formatCost(totals.costUsd)} source={totals.costSource} />
+                    ) : (
+                      formatTokens(totals.totalTokens)
+                    )}
                   </p>
                   <p className="text-xs text-muted-foreground">
                     {metric === "cost" ? "spent" : "tokens processed"} ·{" "}

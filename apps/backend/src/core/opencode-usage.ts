@@ -1,4 +1,7 @@
-import type { NativeAgentContextUsage } from "@orkestrator/protocol/native-agent";
+import type {
+  NativeAgentContextUsage,
+  NativeAgentCostSource,
+} from "@orkestrator/protocol/native-agent";
 import { asRecord, nonEmptyString } from "./agent-provider-runtime.js";
 
 export const MAX_LEDGER_MESSAGES = 8_192;
@@ -13,6 +16,11 @@ export type OpenCodeUsageContribution = {
   cacheReadTokens: number;
   cacheWriteTokens: number;
   costUsd: number;
+  /**
+   * Messages whose `cost` is OpenCode's catalogue estimate (one per message,
+   * so the ledger's sum counts them); see {@link openCodeCostSource}.
+   */
+  estimatedCostParts: number;
   durationMs: number;
 };
 
@@ -41,6 +49,7 @@ const emptyContribution = (): OpenCodeUsageContribution => ({
   cacheReadTokens: 0,
   cacheWriteTokens: 0,
   costUsd: 0,
+  estimatedCostParts: 0,
   durationMs: 0,
 });
 
@@ -73,6 +82,28 @@ function optionalNonNegative(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
+/**
+ * Where an OpenCode message's or step's `cost` came from.
+ *
+ * OpenCode 1.19.5 prices every response itself, in its session processor:
+ * tokens times the model's models.dev catalogue rate (`model.cost`, its
+ * context tiers and `experimentalOver200K`), summed with decimal arithmetic.
+ * The one exception is GitHub Copilot, whose response metadata may carry
+ * `copilot.totalNanoAiu`, which OpenCode converts and reports instead (read
+ * from the pinned binary, 2026-11-06; the SDK types document only
+ * `cost: number`). A Copilot message cannot say which branch priced it, so its
+ * source is left unknown rather than called either.
+ */
+function openCodeCostSource(
+  providerId: string | null | undefined,
+): NativeAgentCostSource | undefined {
+  return providerId?.startsWith("github-copilot") ? undefined : "estimate";
+}
+
+function totalsCostSource(totals: OpenCodeUsageContribution): NativeAgentCostSource | undefined {
+  return totals.estimatedCostParts > 0 ? "estimate" : undefined;
+}
+
 function contributionTotal(usage: OpenCodeUsageContribution): number {
   return (
     usage.inputTokens +
@@ -94,6 +125,7 @@ function addContribution(
     cacheReadTokens: left.cacheReadTokens + right.cacheReadTokens,
     cacheWriteTokens: left.cacheWriteTokens + right.cacheWriteTokens,
     costUsd: left.costUsd + right.costUsd,
+    estimatedCostParts: left.estimatedCostParts + right.estimatedCostParts,
     durationMs: left.durationMs + right.durationMs,
   };
 }
@@ -109,6 +141,7 @@ function subtractContribution(
     cacheReadTokens: left.cacheReadTokens - right.cacheReadTokens,
     cacheWriteTokens: left.cacheWriteTokens - right.cacheWriteTokens,
     costUsd: left.costUsd - right.costUsd,
+    estimatedCostParts: left.estimatedCostParts - right.estimatedCostParts,
     durationMs: left.durationMs - right.durationMs,
   };
 }
@@ -124,6 +157,7 @@ function maxContribution(
     cacheReadTokens: Math.max(left.cacheReadTokens, right.cacheReadTokens),
     cacheWriteTokens: Math.max(left.cacheWriteTokens, right.cacheWriteTokens),
     costUsd: Math.max(left.costUsd, right.costUsd),
+    estimatedCostParts: Math.max(left.estimatedCostParts, right.estimatedCostParts),
     durationMs: Math.max(left.durationMs, right.durationMs),
   };
 }
@@ -158,6 +192,7 @@ function extractOpenCodeMessageUsage(message: unknown): OpenCodeMessageUsage | u
     cacheReadTokens,
     cacheWriteTokens,
     costUsd: nonNegative(info?.cost),
+    estimatedCostParts: openCodeCostSource(providerId) === "estimate" ? 1 : 0,
     durationMs:
       created !== undefined && completed !== undefined && completed >= created
         ? completed - created
@@ -255,12 +290,13 @@ function stepFinishTurns(rawMessages: readonly unknown[]): NativeAgentContextUsa
                 (outputTokens ?? 0) +
                 (cacheReadTokens ?? 0) +
                 (cacheWriteTokens ?? 0);
+          const costUsd = optionalNonNegative(part.cost);
+          const costSource = costUsd === undefined ? undefined : openCodeCostSource(providerId);
           return [
             {
               turnId,
-              ...(optionalNonNegative(part.cost) === undefined
-                ? {}
-                : { costUsd: optionalNonNegative(part.cost) }),
+              ...(costUsd === undefined ? {} : { costUsd }),
+              ...(costSource ? { costSource } : {}),
               ...(inputTokens === undefined ? {} : { inputTokens }),
               ...(outputTokens === undefined ? {} : { outputTokens }),
               ...(reasoningTokens === undefined ? {} : { reasoningTokens }),
@@ -282,6 +318,7 @@ function usageFromTotals(
   turns: NativeAgentContextUsage["turns"],
 ): NativeAgentContextUsage {
   const updatedAt = isoFromTimestamp(latest?.timestamp);
+  const costSource = totalsCostSource(totals);
   return {
     usedTokens: latest?.usedTokens ?? 0,
     lastTurnTokens: latest?.usedTokens,
@@ -293,6 +330,7 @@ function usageFromTotals(
     sessionTokens:
       totals.inputTokens + totals.outputTokens + totals.cacheReadTokens + totals.cacheWriteTokens,
     costUsd: totals.costUsd,
+    ...(costSource ? { costSource } : {}),
     durationMs: totals.durationMs,
     estimated: false,
     source: "opencode",
@@ -336,6 +374,9 @@ export function openCodeContextUsage(
   if (!latestTurn) return undefined;
   const turns = stepFinishTurns(rawMessages);
   const updatedAt = isoFromTimestamp(latestTurn.timestamp);
+  const costSource = usageTurns.some((turn) => turn.estimatedCostParts > 0)
+    ? "estimate"
+    : undefined;
   return usageTurns.reduce<NativeAgentContextUsage>(
     (usage, turn) => ({
       ...usage,
@@ -357,6 +398,7 @@ export function openCodeContextUsage(
       usedTokens: latestTurn.usedTokens,
       lastTurnTokens: latestTurn.usedTokens,
       ...(latestTurn.modelId ? { modelId: latestTurn.modelId } : {}),
+      ...(costSource ? { costSource } : {}),
       estimated: false,
       source: "opencode",
       // Derived from the transcript, never from the wall clock. A fresh

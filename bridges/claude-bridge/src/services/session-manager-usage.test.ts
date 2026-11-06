@@ -76,6 +76,8 @@ describe("Claude streamed usage", () => {
       cacheWriteTokens: 0,
       lastTurnTokens: 80,
       sessionTokens: 80,
+      costUsd: 0.4,
+      costSource: "estimate",
       source: "claude",
       updatedAt: new Date(0).toISOString(),
     };
@@ -95,6 +97,9 @@ describe("Claude streamed usage", () => {
       cacheReadTokens: 165,
       lastTurnTokens: 130,
       sessionTokens: 210,
+      // The last exact cost is carried, and with it what kind of figure it is.
+      costUsd: 0.4,
+      costSource: "estimate",
       estimated: true,
       source: "claude",
     });
@@ -139,6 +144,7 @@ describe("Claude streamed usage", () => {
       lastTurnTokens: 0,
       sessionTokens: 80,
       costUsd: 1.25,
+      costSource: "estimate" as const,
       source: "claude" as const,
       updatedAt: new Date(1).toISOString(),
     };
@@ -166,6 +172,7 @@ describe("Claude streamed usage", () => {
       lastTurnTokens: 130,
       sessionTokens: 210,
       costUsd: 1.25,
+      costSource: "estimate",
       estimated: true,
     });
   });

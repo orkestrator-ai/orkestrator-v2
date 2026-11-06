@@ -7,7 +7,10 @@ import type { TranscriptWindowMetadata } from "@orkestrator/protocol/node/transc
 import type { TaskListSnapshot, TaskRegistry } from "@orkestrator/protocol/task-list";
 import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
 import type { AgentInteractionHold } from "@orkestrator/protocol/agent-interactions";
-import type { NativeAgentContextCategory } from "@orkestrator/protocol/native-agent";
+import type {
+  NativeAgentContextCategory,
+  NativeAgentCostSource,
+} from "@orkestrator/protocol/native-agent";
 
 export type {
   JsonSchema,
@@ -926,6 +929,18 @@ export interface ClaudeCumulativeUsage {
   cost: number;
 }
 
+/**
+ * Every Claude dollar figure is the CLI's own estimate, never a bill. The Agent
+ * SDK says so of each carrier the bridge reads (sdk.d.ts, 0.3.319):
+ * `total_cost_usd` on a result is "Cumulative estimated cost in USD … An
+ * estimate, not a billing statement", `modelUsage` (whose `costUSD` it sums)
+ * is to be treated "as an estimate, not a billing statement", and the managed
+ * `modelPricing` setting notes that the SDK `total_cost_usd` and `/cost`
+ * "remain USD estimates, not an invoice". The `/usage` report's
+ * `session.total_cost_usd` is that same running total.
+ */
+export const CLAUDE_COST_SOURCE: NativeAgentCostSource = "estimate";
+
 export interface SessionUsageSnapshot {
   usedTokens: number;
   /** Context-window capacity, when Claude reports it. */
@@ -941,6 +956,8 @@ export interface SessionUsageSnapshot {
   lastTurnTokens?: number;
   sessionTokens?: number;
   costUsd?: number;
+  /** Always `estimate` when set; see {@link CLAUDE_COST_SOURCE}. */
+  costSource?: NativeAgentCostSource;
   durationMs?: number;
   apiDurationMs?: number;
   linesAdded?: number;
@@ -963,6 +980,7 @@ export interface SessionUsageSnapshot {
     /** When this turn was finalized, ISO-8601; what dates recorded usage. */
     at?: string;
     costUsd?: number;
+    costSource?: NativeAgentCostSource;
     inputTokens?: number;
     outputTokens?: number;
     cacheReadTokens?: number;

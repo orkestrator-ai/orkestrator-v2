@@ -26,10 +26,12 @@ import type {
   NativeAgentSteerRejectedOutcome,
 } from "./native-agent-steer-rejection.js";
 import type { TranscriptMediaSnapshot } from "./transcript-media-pins.js";
+import type { NativeAgentCostSource } from "./native-agent-cost-source.js";
 
 export * from "./native-agent-steer-rejection.js";
 export * from "./native-agent-policy-effects.js";
 export * from "./native-agent-capabilities.js";
+export * from "./native-agent-cost-source.js";
 
 /** Provider-neutral identity for one native-agent tab. */
 export interface NativeAgentTabData {
@@ -1463,6 +1465,11 @@ export interface NativeAgentContextUsage {
   lastTurnTokens?: number;
   sessionTokens?: number;
   costUsd?: number;
+  /**
+   * Whether `costUsd` is a provider bill or an estimate from token counts;
+   * absent when unknown. Unrelated to `estimated`, which is about tokens.
+   */
+  costSource?: NativeAgentCostSource;
   durationMs?: number;
   apiDurationMs?: number;
   estimated?: boolean;
@@ -1508,6 +1515,8 @@ export interface NativeAgentTurnUsage {
    */
   at?: string;
   costUsd?: number;
+  /** Whether `costUsd` is a provider bill or an estimate; absent when unknown. */
+  costSource?: NativeAgentCostSource;
   /** Cursor's undiscounted price, retained separately from charged cost. */
   rawCostUsd?: number;
   inputTokens?: number;

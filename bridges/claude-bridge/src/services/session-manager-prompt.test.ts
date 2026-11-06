@@ -745,6 +745,7 @@ describe("sendPrompt", () => {
 
     expect(session.usage).toMatchObject({
       costUsd: 1.25,
+      costSource: "estimate",
       durationMs: 3_000,
       apiDurationMs: 2_000,
       linesAdded: 42,
@@ -4945,6 +4946,7 @@ describe("sendPrompt", () => {
         lastTurnTokens: 15,
         sessionTokens: 15,
         costUsd: 0,
+        costSource: "estimate",
         durationMs: 0,
         apiDurationMs: 0,
         permissionDenials: 0,
@@ -4954,6 +4956,7 @@ describe("sendPrompt", () => {
             // When the turn was finalized; what dates recorded usage.
             at: expect.any(String),
             costUsd: 0,
+            costSource: "estimate",
             inputTokens: 12,
             outputTokens: 3,
             cacheReadTokens: 0,
@@ -4980,6 +4983,7 @@ describe("sendPrompt", () => {
         "cacheReadTokens",
         "cacheWriteTokens",
         "contextCategories",
+        "costSource",
         "costUsd",
         "durationMs",
         "estimated",

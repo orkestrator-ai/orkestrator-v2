@@ -226,6 +226,12 @@ export function mergeContextUsageTurns(
       const value = maxDefined(previous[key], current[key]);
       if (value !== undefined) merged[key] = value;
     }
+    // The source travels with the amount it describes: a retained larger
+    // previous total keeps saying what it was.
+    const costSource =
+      merged.costUsd === current.costUsd ? current.costSource : previous.costSource;
+    if (costSource) merged.costSource = costSource;
+    else delete merged.costSource;
   }
   return merged;
 }

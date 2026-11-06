@@ -8,7 +8,10 @@ import {
   usageDayKey,
   type UsageTotals,
 } from "@orkestrator/protocol/usage-history";
-import type { NativeAgentTurnUsage } from "@orkestrator/protocol/native-agent";
+import {
+  isNativeAgentCostSource,
+  type NativeAgentTurnUsage,
+} from "@orkestrator/protocol/native-agent";
 
 /**
  * The persisted shape of one session's usage, and the turn-to-bucket
@@ -124,6 +127,9 @@ function readTotals(value: unknown): UsageTotals | null {
   totals.reasoningTokens = usageCount(value.reasoningTokens);
   totals.totalTokens = usageCount(value.totalTokens);
   totals.costUsd = usageCount(value.costUsd);
+  if (totals.costUsd > 0 && isNativeAgentCostSource(value.costSource)) {
+    totals.costSource = value.costSource;
+  }
   totals.unpricedTokens = usageCount(value.unpricedTokens);
   totals.turns = usageCount(value.turns);
   return totals;
@@ -217,6 +223,9 @@ export function usageTotalsFromTurn(turn: NativeAgentTurnUsage): UsageTotals {
   totals.totalTokens =
     totals.inputTokens + totals.outputTokens + totals.cacheReadTokens + totals.cacheWriteTokens;
   totals.costUsd = usageCount(turn.costUsd);
+  if (totals.costUsd > 0 && isNativeAgentCostSource(turn.costSource)) {
+    totals.costSource = turn.costSource;
+  }
   totals.unpricedTokens = totals.costUsd > 0 ? 0 : totals.totalTokens;
   totals.turns = 1;
   return totals;

@@ -1,7 +1,4 @@
 import { promises as fs } from "node:fs";
-import { dirname } from "node:path";
-import { randomBytes } from "node:crypto";
-import { boundTranscriptResponse } from "@orkestrator/protocol/node/transcript-window";
 import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
 import {
   hasMeasuredChanges,
@@ -9,6 +6,7 @@ import {
 } from "@orkestrator/protocol/node/command-change-journal";
 import { effectiveExecutionPolicy } from "./acp-policy.js";
 import {
+  isNativeAgentCostSource,
   isNativeAgentExecutionPolicy,
   type NativeAgentComposerState,
   type NativeAgentExecutionPolicy,
@@ -21,22 +19,18 @@ import {
   parsePersistedComposerState,
   type AcpNormalizedSessionConfig,
 } from "./session-config.js";
-import { parseAcpTurnUsage, type AcpTurnUsage } from "./usage.js";
+import { parseAcpTurnUsage } from "./usage.js";
 import {
   AcpProcess,
   MAX_MESSAGE_TEXT_BYTES,
   MAX_MESSAGES,
   MAX_PARTS_PER_MESSAGE,
   MAX_PROMPT_JOURNAL,
-  MAX_PERSISTED_PROMPT_JOURNAL_BYTES,
   MAX_PERSISTED_GROK_INTERJECTION_BYTES,
-  MAX_PERSISTED_SESSION_CONFIG_BYTES,
-  MAX_PERSISTED_STRUCTURED_BYTES,
   MAX_SESSIONS,
   MAX_STATE_FILE_BYTES,
   MAX_STRUCTURED_RESULT_BYTES,
   MAX_STRUCTURED_RESULTS,
-  MAX_TOOL_ARGUMENT_BYTES,
   MAX_TOOL_DIFF_BYTES,
   MAX_TOOL_ID_BYTES,
   MAX_TOOL_INLINE_FILE_BYTES,
@@ -44,32 +38,22 @@ import {
   MAX_TOOL_OUTPUT_BYTES,
   MAX_TOOL_PATH_BYTES,
   MAX_TOOL_TITLE_BYTES,
-  PERSISTED_WINDOW_METADATA_RESERVE_BYTES,
   RPC_TIMEOUT_MS,
   catalogCache,
   catalogProbe,
   clientSessionKeys,
   configuredAcpMcpServers,
   isObject,
-  persistenceScheduled,
-  persistenceTail,
   provider,
   rememberCatalog,
   setCatalogProbe,
-  setPersistenceScheduled,
-  setPersistenceTail,
   sessions,
   stateFile,
   workingDirectory,
-  type BridgeFilePart,
   type BridgeMessage,
   type BridgeMessagePart,
-  type BridgeTextPart,
   type BridgeToolDiff,
-  type BridgeToolPart,
   type JsonObject,
-  type PersistedSession,
-  type PersistedState,
   type PersistedUsage,
   type PromptJournalEntry,
   type SessionState,
@@ -207,6 +191,9 @@ export function restorePersistedUsage(value: unknown): PersistedUsage | null {
               if (typeof number === "number" && Number.isFinite(number) && number >= 0) {
                 entry[key] = number;
               }
+            }
+            if (entry.costUsd !== undefined && isNativeAgentCostSource(candidate.costSource)) {
+              entry.costSource = candidate.costSource;
             }
             if (typeof candidate.requestId === "string") {
               entry.requestId = candidate.requestId.slice(0, 256);

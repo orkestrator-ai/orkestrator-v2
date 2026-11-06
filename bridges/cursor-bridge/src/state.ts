@@ -11,6 +11,7 @@ import type { AgentOptions, Run, SDKAgent, SDKCustomTool } from "@cursor/sdk";
 import type {
   NativeAgentAccountUsageWindow,
   NativeAgentComposerState,
+  NativeAgentCostSource,
   NativeAgentTurnUsage,
 } from "@orkestrator/protocol/native-agent";
 import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
@@ -18,6 +19,17 @@ import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
 
 export type JsonObject = Record<string, unknown>;
 export type SessionStatus = "idle" | "running" | "error";
+
+/**
+ * Every Cursor dollar figure is a bill. The only cost this bridge reads is
+ * `getUsage()`'s `UsageCost.chargedCents`, which @cursor/sdk 1.3.1 documents
+ * as the "Dollar cost of billed usage … Server-derived" and the "Amount
+ * actually charged, with discounts and the Cursor Token Fee included"
+ * (`agent/usage-types.d.ts`). It is eventually consistent, not estimated: a
+ * late figure is a later bill, not a guess. `rawCostCents` (the undiscounted
+ * price) is kept apart as `rawCostUsd` and is not what `costUsd` holds.
+ */
+export const CURSOR_COST_SOURCE: NativeAgentCostSource = "provider";
 
 export const TODO_STATUSES = ["pending", "in_progress", "completed", "cancelled"] as const;
 export type TodoStatus = (typeof TODO_STATUSES)[number];
@@ -231,7 +243,10 @@ export interface PersistedUsage {
    * use the greater of the two.
    */
   sessionTokenFloor?: number;
-  /** Amount actually charged by Cursor, including discounts, in US dollars. */
+  /**
+   * Amount actually charged by Cursor, including discounts, in US dollars.
+   * Always billed ({@link CURSOR_COST_SOURCE}).
+   */
   costUsd?: number;
   /** Provider-reported per-run usage, newest last and bounded to twenty. */
   turns?: NativeAgentTurnUsage[];

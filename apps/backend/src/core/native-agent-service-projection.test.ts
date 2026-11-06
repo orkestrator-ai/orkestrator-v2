@@ -145,6 +145,38 @@ describe("usage projection history", () => {
     },
   );
 
+  test("a retained cumulative cost keeps its own source", () => {
+    const previous = {
+      usedTokens: 10,
+      costUsd: 4.2,
+      costSource: "estimate" as const,
+      source: "claude" as const,
+    };
+    // A tail-only snapshot does not relabel the larger lifetime total it loses to.
+    expect(
+      mergeContextUsageTurns(previous, {
+        usedTokens: 12,
+        costUsd: 1.1,
+        costSource: "provider",
+        source: "claude",
+      }),
+    ).toMatchObject({ costUsd: 4.2, costSource: "estimate" });
+    // A newer, larger total brings its own.
+    expect(
+      mergeContextUsageTurns(previous, {
+        usedTokens: 12,
+        costUsd: 5,
+        costSource: "provider",
+        source: "claude",
+      }),
+    ).toMatchObject({ costUsd: 5, costSource: "provider" });
+    // A current snapshot that says nothing does not inherit a source for a
+    // total it supplied itself.
+    expect(
+      mergeContextUsageTurns(previous, { usedTokens: 12, costUsd: 5, source: "claude" }),
+    ).not.toHaveProperty("costSource");
+  });
+
   test("fills the context window a provider omitted", () => {
     expect(withProviderContextWindow({ usedTokens: 50_000 }, 200_000)).toEqual({
       usedTokens: 50_000,

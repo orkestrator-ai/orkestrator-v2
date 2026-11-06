@@ -1,7 +1,15 @@
 import type { WorkspaceConnectionPath } from "@/lib/portal/workspaces";
-import { useEffect, useId, useState, type ComponentType, type SVGProps } from "react";
+import {
+  useEffect,
+  useId,
+  useState,
+  type ComponentType,
+  type ReactNode,
+  type SVGProps,
+} from "react";
 import { ChevronRight, CircuitBoard, Cpu, HardDrive, MemoryStick } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
+import { CostAmount } from "@/components/usage/CostAmount";
 import type { SystemUsageSnapshot } from "@/lib/backend";
 import { formatSampleTime, SYSTEM_USAGE_STALE_AFTER_MS } from "@/hooks/useSystemUsage";
 import {
@@ -305,7 +313,7 @@ export function Metric({
   detail,
 }: {
   label: string;
-  value: string;
+  value: ReactNode;
   detail?: string;
 }) {
   return (
@@ -1258,7 +1266,10 @@ export function UsagePanel({
           <Metric label="Session" value={formatTokenCount(usage.sessionTokens)} />
         ) : null}
         {usage.costUsd !== undefined ? (
-          <Metric label="Cost" value={formatUsd(usage.costUsd)} />
+          <Metric
+            label="Cost"
+            value={<CostAmount amount={formatUsd(usage.costUsd)} source={usage.costSource} />}
+          />
         ) : null}
         {usage.durationMs !== undefined ? (
           <Metric label="Elapsed" value={formatDuration(usage.durationMs)} />

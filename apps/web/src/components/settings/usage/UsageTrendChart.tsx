@@ -3,7 +3,9 @@ import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
 import type { UsageDayPoint } from "@/lib/backend";
 import { AgentPlatformIcon, PLATFORM_ICON_CLASS } from "@/components/icons/AgentIcons";
+import { spokenCostText } from "@/lib/cost-source";
 import { smoothAreaPath, smoothLinePath } from "./usage-chart-path";
+import { UsageMetricAmount } from "./UsageMetricAmount";
 import { formatDayLabel, formatMetric, metricValue, type UsageMetric } from "./usage-format";
 
 /**
@@ -235,7 +237,11 @@ export function UsageTrendChart({ days, platforms, metric }: UsageTrendChartProp
 
       <div aria-live="polite" className="sr-only">
         {active
-          ? `${formatDayLabel(active.day, { year: true })}: ${formatMetric(activeTotal, metric)}`
+          ? `${formatDayLabel(active.day, { year: true })}: ${
+              metric === "cost"
+                ? spokenCostText(formatMetric(activeTotal, metric), active.totals.costSource)
+                : formatMetric(activeTotal, metric)
+            }`
           : ""}
       </div>
 
@@ -258,7 +264,7 @@ export function UsageTrendChart({ days, platforms, metric }: UsageTrendChartProp
                     {AGENT_PLATFORM_LABELS[entry.platform]}
                   </span>
                   <span className="tabular-nums text-foreground">
-                    {formatMetric(metricValue(entry.totals, metric), metric)}
+                    <UsageMetricAmount totals={entry.totals} metric={metric} />
                   </span>
                 </li>
               ))
@@ -268,7 +274,7 @@ export function UsageTrendChart({ days, platforms, metric }: UsageTrendChartProp
             <p className="mt-1.5 flex items-center justify-between border-t border-border/60 pt-1.5 text-muted-foreground">
               <span>Total</span>
               <span className="tabular-nums text-foreground">
-                {formatMetric(activeTotal, metric)}
+                <UsageMetricAmount totals={active.totals} metric={metric} value={activeTotal} />
               </span>
             </p>
           ) : null}

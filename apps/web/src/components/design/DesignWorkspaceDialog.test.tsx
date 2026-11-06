@@ -16,7 +16,7 @@ import { nativeComposeDraft, useNativeComposeStore } from "@/stores/nativeCompos
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { Environment } from "@/types";
 import type { CreatableTabType, CreateTabOptions } from "@/contexts/TerminalContext";
-import type { DesignReadinessView } from "./design-launch";
+import { loadDesignReadiness, type DesignReadinessView } from "./design-launch";
 import { DesignWorkspaceDialog } from "./DesignWorkspaceDialog";
 import {
   deferred,
@@ -39,13 +39,49 @@ const canvas = {
   frames: [],
 } satisfies DesignCanvas;
 
-const legacyReady: DesignReadinessView = {
+const capabilities: DesignCapabilities = {
+  protocolVersion: 2,
+  responseVersion: 2,
+  snapshot: true,
+  operations: true,
+  sync: true,
+  save: true,
+  history: true,
+  lifecycle: true,
+  rendererHealth: true,
+  library: true,
+  batch: true,
+  sessions: true,
+  validation: true,
+  hierarchyPaging: true,
+};
+
+/** A ready backend without design sessions, so no agent link is attempted. */
+const ready: DesignReadinessView = {
   backend: { state: "connected" },
-  protocol: "v1",
-  capabilities: null,
-  storage: { state: "unknown" },
+  protocol: "v2",
+  capabilities: { ...capabilities, sessions: false },
+  storage: { state: "available" },
   renderer: { state: "ready", ready: true, message: "" },
 };
+
+/** Answers the prepare/execute pair a rollback's `delete_canvas` lifecycle runs. */
+function lifecycleCommand(command: string): unknown {
+  if (command === "design_prepare")
+    return {
+      ok: true,
+      value: { token: "t-1", canvasId: canvas.id, state: "prepared", expiresAt: "" },
+    };
+  if (command === "design_execute") return { ok: true, value: { state: "committed" } };
+  return undefined;
+}
+
+/** Commands in call order, with `design_action` calls named by their action. */
+function commandNames(): string[] {
+  return invokeMock.mock.calls.map(([command, args]) =>
+    command === "design_action" ? String((args as { action?: string }).action) : command,
+  );
+}
 
 const originalConfig = useConfigStore.getState().config;
 
@@ -72,7 +108,8 @@ beforeEach(() => {
     if (command === "get_compose_draft") return null;
     const action = (args as { action?: string } | undefined)?.action;
     if (command === "design_action" && action === "create_canvas") return canvas;
-    if (command === "design_action" && action === "delete_canvas") return { deleted: true };
+    const lifecycle = lifecycleCommand(command);
+    if (lifecycle) return lifecycle;
     throw new Error(`Unexpected command: ${command}`);
   });
 });
@@ -88,7 +125,7 @@ afterEach(() => {
 
 function mount(createTab: (type: CreatableTabType, options?: CreateTabOptions) => boolean) {
   const onOpenChange = mock((_open: boolean) => {});
-  const loadReadiness = mock(async (_probe: boolean) => legacyReady);
+  const loadReadiness = mock(async (_probe: boolean) => ready);
   render(
     <DesignWorkspaceDialog
       open
@@ -134,7 +171,8 @@ describe("DesignWorkspaceDialog", () => {
       const request = args as { action?: string; filePath?: string };
       if (command === "write_local_file") return write ?? `/tmp/wt/${request.filePath}`;
       if (request.action === "create_canvas") return canvas;
-      if (request.action === "delete_canvas") return { deleted: true };
+      const lifecycle = lifecycleCommand(command);
+      if (lifecycle) return lifecycle;
       throw new Error(`Unexpected command: ${command}`);
     });
     return restore;
@@ -257,7 +295,7 @@ describe("DesignWorkspaceDialog", () => {
 
   test("clears staged images and discards a pending completion when environment changes", async () => {
     const restore = supportPaste();
-    const loadReadiness = async () => legacyReady;
+    const loadReadiness = async () => ready;
     const props = {
       open: true,
       onOpenChange: mock(),
@@ -405,7 +443,7 @@ describe("DesignWorkspaceDialog", () => {
           open: true,
           onOpenChange: mock(() => {}),
           createTab,
-          loadReadiness: async () => legacyReady,
+          loadReadiness: async () => ready,
         };
         const rendered = render(<DesignWorkspaceDialog {...props} environmentId="env-1" />);
         await flush();
@@ -441,9 +479,34 @@ describe("DesignWorkspaceDialog", () => {
   }
 
   test("Saved designs is reachable and reopens a closed private canvas", async () => {
-    invokeMock.mockImplementation(async (_command, args) => {
-      if ((args as { action?: string }).action === "list_canvases")
-        return [{ id: canvas.id, name: canvas.name, revision: canvas.revision }];
+    invokeMock.mockImplementation(async (command) => {
+      if (command === "design_library")
+        return {
+          ok: true,
+          value: {
+            entries: [
+              {
+                id: canvas.id,
+                name: canvas.name,
+                revision: canvas.revision,
+                modifiedAt: "",
+                createdAt: "",
+                frameCount: 0,
+                state: "live",
+                validation: { invalid: 0, unvalidated: 0 },
+              },
+            ],
+            total: 1,
+            quota: {
+              live: 1,
+              liveLimit: 256,
+              deleted: 0,
+              deletedLimit: 0,
+              deletedBytes: 0,
+              deletedBytesLimit: 0,
+            },
+          },
+        };
       throw new Error("Unexpected library command");
     });
     const createTab = mock(() => true);
@@ -478,10 +541,11 @@ describe("DesignWorkspaceDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create design workspace" }));
     await flush();
     expect(createTab.mock.calls.map((call) => call[0])).toEqual(["design-canvas"]);
-    expect(invokeMock.mock.calls.map((call) => (call[1] as { action?: string }).action)).toEqual([
-      "create_canvas",
-      "delete_canvas",
-    ]);
+    // The rollback deletes through the lifecycle operation, never a v1 `delete_canvas` action.
+    expect(commandNames()).toEqual(["create_canvas", "design_prepare", "design_execute"]);
+    expect(
+      invokeMock.mock.calls.find(([command]) => command === "design_prepare")?.[1],
+    ).toMatchObject({ descriptor: { canvasId: canvas.id, input: { kind: "delete_canvas" } } });
     expect(screen.getByRole("alert").textContent).toContain("Could not open a tab");
     expect(screen.queryByRole("button", { name: "Open design" }) === null).toBe(true);
     expect(brief().value).toBe("Keep me");
@@ -506,11 +570,7 @@ describe("DesignWorkspaceDialog", () => {
       displayTitle: "Design",
     });
     expect(agentCall?.[1]?.initialPrompt).toContain(canvas.id);
-    expect(
-      invokeMock.mock.calls.some(
-        (call) => (call[1] as { action?: string }).action === "delete_canvas",
-      ),
-    ).toBe(false);
+    expect(commandNames()).not.toContain("design_prepare");
     expect(screen.getByRole("alert").textContent).toContain("Your design was created");
     fireEvent.click(screen.getByRole("button", { name: "Open design" }));
     expect(createTab.mock.calls.at(-1)).toEqual([
@@ -790,23 +850,6 @@ describe("DesignWorkspaceDialog", () => {
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
-  const capabilities: DesignCapabilities = {
-    protocolVersion: 2,
-    responseVersion: 2,
-    snapshot: true,
-    operations: true,
-    sync: true,
-    save: true,
-    history: true,
-    lifecycle: true,
-    rendererHealth: true,
-    library: true,
-    batch: true,
-    sessions: true,
-    validation: true,
-    hierarchyPaging: true,
-  };
-
   function installLaunchCommands(capabilityRead: () => Promise<unknown>) {
     invokeMock.mockImplementation(async (command, args) => {
       if (command === "enqueue_prompt_queue_message") return {};
@@ -840,11 +883,6 @@ describe("DesignWorkspaceDialog", () => {
         return true;
       });
       const onOpenChange = mock();
-      const ready: DesignReadinessView = {
-        ...legacyReady,
-        protocol: "v2",
-        capabilities: { ...capabilities, sessions: false },
-      };
       render(
         <DesignWorkspaceDialog
           open
@@ -971,7 +1009,7 @@ describe("DesignWorkspaceDialog", () => {
 
   // The readiness probe waits on the renderer, so Create can be pressed while it
   // is still loading. Found by the live design cycle: the agent was never linked.
-  for (const backend of ["v2", "v1"] as const) {
+  for (const backend of ["v2", "pre-capabilities"] as const) {
     test(`links the design agent on a ${backend} backend only, even before readiness loads`, async () => {
       resetCapabilities();
       const warning = spyOn(toast, "warning");
@@ -979,7 +1017,8 @@ describe("DesignWorkspaceDialog", () => {
         if (command === "enqueue_prompt_queue_message") return {};
         if (command === "get_compose_draft") return null;
         if (command === "design_capabilities") {
-          if (backend === "v1") throw new Error("Unknown backend command: design_capabilities");
+          if (backend === "pre-capabilities")
+            throw new Error("Unknown backend command: design_capabilities");
           return { ok: true, value: { protocolVersion: 2, sessions: true } };
         }
         if (command === "design_session_link")
@@ -1043,6 +1082,50 @@ describe("DesignWorkspaceDialog", () => {
     expect(createTab).not.toHaveBeenCalled();
   });
 
+  test("an old backend shows upgrade guidance and Check again recovers after upgrade", async () => {
+    let upgraded = false;
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === "design_capabilities") {
+        if (!upgraded) throw new Error("Unknown backend command: design_capabilities");
+        return { ok: true, value: capabilities };
+      }
+      if (command === "design_readiness")
+        return {
+          ok: true,
+          value: { storage: { available: true }, renderer: ready.renderer },
+        };
+      throw new Error(`Unexpected command: ${command}`);
+    });
+    render(
+      <DesignWorkspaceDialog
+        open
+        onOpenChange={() => {}}
+        environmentId="env-1"
+        createTab={() => true}
+        loadReadiness={loadDesignReadiness}
+      />,
+    );
+    await flush();
+    const create = screen.getByRole("button", {
+      name: "Create design workspace",
+    }) as HTMLButtonElement;
+    expect(create.disabled).toBe(true);
+    expect(screen.getByText(/too old.*[Uu]pdate/)).toBeTruthy();
+    expect(screen.queryByText(/Reconnect to the backend/) === null).toBe(true);
+    expect(commandNames()).toEqual(["design_capabilities"]);
+
+    upgraded = true;
+    fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+    await flush();
+    expect(create.disabled).toBe(false);
+    expect(screen.queryByText(/too old/) === null).toBe(true);
+    expect(commandNames()).toEqual([
+      "design_capabilities",
+      "design_capabilities",
+      "design_readiness",
+    ]);
+  });
+
   test("an unavailable renderer blocks creation but not opening", async () => {
     const onOpenChange = mock(() => {});
     render(
@@ -1052,7 +1135,7 @@ describe("DesignWorkspaceDialog", () => {
         environmentId="env-1"
         createTab={() => true}
         loadReadiness={async () => ({
-          ...legacyReady,
+          ...ready,
           renderer: {
             state: "missing-executable",
             ready: false,

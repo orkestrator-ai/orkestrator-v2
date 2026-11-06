@@ -84,3 +84,45 @@ test("pasted image removal stays visible without hover at desktop and touch view
   }
   await expect(page.getByRole("list", { name: "Attached images" })).toHaveCount(0);
 });
+
+test("old backends show upgrade guidance and recover with Check again", async ({
+  page,
+}, testInfo) => {
+  await page.goto("/design-launch");
+  await page.evaluate(() => {
+    const original = window.orkestrator!.invoke;
+    window.orkestrator!.invoke = async (command, args) => {
+      if (command === "design_capabilities")
+        throw new Error("Unknown backend command: design_capabilities");
+      return original(command, args);
+    };
+    Object.assign(window, {
+      restoreDesignBackend: () => {
+        window.orkestrator!.invoke = original;
+      },
+    });
+  });
+  await page.getByRole("button", { name: "New design workspace" }).click();
+  const dialog = page.getByRole("dialog", { name: "Design workspace" });
+  const create = dialog.getByRole("button", { name: "Create design workspace" });
+  await expect(
+    dialog.getByText("This backend is too old for the design canvas. Update it to continue."),
+  ).toBeVisible();
+  await expect(dialog.getByText(/Reconnect to the backend/)).toHaveCount(0);
+  await expect(create).toBeDisabled();
+  await page.screenshot({
+    path: `output/visual-previews/design-upgrade-${testInfo.project.name}.png`,
+  });
+  await page.evaluate(() => {
+    (window as unknown as { restoreDesignBackend: () => void }).restoreDesignBackend();
+  });
+  await dialog.getByRole("button", { name: "Check again" }).click();
+  await expect(create).toBeEnabled();
+  await expect(dialog.getByText(/too old/)).toHaveCount(0);
+  await page.screenshot({
+    path: `output/visual-previews/design-upgraded-${testInfo.project.name}.png`,
+  });
+  await page.reload();
+  await page.getByRole("button", { name: "New design workspace" }).click();
+  await expect(create).toBeEnabled();
+});

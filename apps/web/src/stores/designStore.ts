@@ -62,7 +62,6 @@ export interface DesignProjection {
   intents: DesignIntent[];
   /** Read/sync failure, separate from per-operation failures. */
   readError?: DesignFailure;
-  legacy: boolean;
   lastSyncedAt?: number;
   busy: { export: boolean; import: boolean; history: boolean };
   notice?: { id: number; text: string; tone: "info" | "success" | "warning" };
@@ -84,7 +83,6 @@ export function emptyProjection(
     revision: 0,
     statusVersion: -1,
     intents: [],
-    legacy: false,
     busy: { export: false, import: false, history: false },
   };
 }

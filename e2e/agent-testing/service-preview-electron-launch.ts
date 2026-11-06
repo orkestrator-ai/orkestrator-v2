@@ -40,7 +40,11 @@ export function electronOutputTail(app: ElectronApplication): string {
   return outputTails.get(app)?.() ?? "";
 }
 
-/** Main's recent preview transport warnings (static text, e.g. a failed release). */
+/**
+ * Main's recent preview transport warnings (static text, e.g. a failed
+ * release) and uncaught exceptions, which stop main before it releases
+ * anything (flake 0622).
+ */
 export function electronPreviewOutput(app: ElectronApplication): string[] {
   return previewOutput.get(app)?.() ?? [];
 }
@@ -128,7 +132,9 @@ export async function launchElectron(current: {
       tail = (tail + text).slice(-4_000);
       const lines = (partial + text).split("\n");
       partial = lines.pop()!.slice(-1_000);
-      const matched = lines.filter((line) => line.includes("[preview]"));
+      const matched = lines.filter(
+        (line) => line.includes("[preview]") || line.includes("uncaught-exception"),
+      );
       if (matched.length > 0) previewLines = [...previewLines, ...matched].slice(-20);
     };
   };

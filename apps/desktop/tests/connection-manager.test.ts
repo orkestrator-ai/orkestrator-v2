@@ -742,6 +742,36 @@ describe("Electron connection manager", () => {
     manager.release("surviving-window");
   });
 
+  test("a released window's late renderer requests get no credential instead of an exception (0622)", async () => {
+    const local = localBackendHarness();
+    installHealthyRemoteFetch();
+    const manager = new ConnectionManager({
+      localBackend: local.backend,
+      secureStorage: secureStorage(),
+      onEvent: mock(() => undefined),
+    });
+    await manager.initialize();
+    const url = "https://desk.example/__orkestrator/invoke";
+    await manager.bind("closing-window", "local");
+    const list = await manager.connect(
+      { address: "https://desk.example", token },
+      "closing-window",
+    );
+    await manager.bind("surviving-window", list.activeConnectionId);
+    expect(manager.getRendererRequestAuthorization(url, "closing-window")).toBe(`Bearer ${token}`);
+
+    // Its session still finishes requests after the window's `closed` released the scope.
+    manager.release("closing-window");
+    expect(manager.getRendererRequestAuthorization(url, "closing-window")).toBeNull();
+    expect(manager.getRendererRequestAuthorization(url, "surviving-window")).toBe(
+      `Bearer ${token}`,
+    );
+    manager.release("surviving-window");
+    expect(manager.getRendererRequestAuthorization(url, "surviving-window")).toBeNull();
+    // Other callers still learn that the window is gone.
+    expect(() => manager.getList("closing-window")).toThrow("window is no longer available");
+  });
+
   test("sets a nickname on connect and keeps it when reconnecting to the same address", async () => {
     const local = localBackendHarness();
     installHealthyRemoteFetch();

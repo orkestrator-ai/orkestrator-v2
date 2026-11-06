@@ -117,6 +117,58 @@ function withoutPreviewEnvironment(headers: Record<string, string>): Record<stri
   );
 }
 
+/** The headers a gateway request is sent with: its credential, or none. */
+function gatewayRequestHeaders(
+  details: OnBeforeSendHeadersListenerDetails,
+  getAuthorization: (url: string, webContentsId?: number) => string | null,
+  options: RemoteGatewayRequestAuthOptions,
+): Record<string, string> {
+  const authorization = getAuthorization(details.url, details.webContentsId);
+  if (!authorization) return withoutPreviewEnvironment(details.requestHeaders);
+  if (!canAttachGatewayAuthorization(details, options))
+    return withoutAmbientGatewayCredentials(details.requestHeaders);
+  const requestHeaders = Object.fromEntries(
+    Object.entries(withoutPreviewEnvironment(details.requestHeaders)).filter(([name]) => {
+      const normalized = name.toLowerCase();
+      return normalized !== "authorization" && normalized !== "origin";
+    }),
+  );
+  const environmentId =
+    options.browserPreviewOnly === true
+      ? options.previewViewEnvironment?.(details.webContentsId)
+      : null;
+  return {
+    ...requestHeaders,
+    Authorization: authorization,
+    Origin: options.requestOrigin?.(details.url) ?? "https://orkestrator.dev",
+    ...(environmentId ? { [BROWSER_PREVIEW_ENVIRONMENT_HEADER]: environmentId } : {}),
+  };
+}
+
+/** The response headers an authorized gateway response is read with. */
+function gatewayResponseHeaders(
+  details: OnHeadersReceivedListenerDetails,
+  getAuthorization: (url: string, webContentsId?: number) => string | null,
+  options: RemoteGatewayRequestAuthOptions,
+): Record<string, string[]> | undefined {
+  const authorization = getAuthorization(details.url, details.webContentsId);
+  if (!authorization || !canAttachGatewayAuthorization(details, options))
+    return details.responseHeaders;
+  const responseHeaders = Object.fromEntries(
+    Object.entries(details.responseHeaders ?? {}).filter(
+      ([name]) => name.toLowerCase() !== "access-control-allow-origin",
+    ),
+  );
+  return { ...responseHeaders, "Access-Control-Allow-Origin": ["*"] };
+}
+
+/**
+ * Both listeners always call back. A listener that throws never does: its
+ * request stays unanswered and main gets an uncaught exception. A session
+ * outlives its window, so a closed window's last requests reach these hooks
+ * after its connection was released (flake 0622). A failed lookup sends the
+ * request with no credential.
+ */
 export function installRemoteGatewayRequestAuth(
   webRequest: Pick<WebRequest, "onBeforeSendHeaders" | "onHeadersReceived">,
   getAuthorization: (url: string, webContentsId?: number) => string | null,
@@ -124,51 +176,22 @@ export function installRemoteGatewayRequestAuth(
 ): void {
   const filter = { urls: ["http://*/*", "https://*/*"] };
   webRequest.onBeforeSendHeaders(filter, (details, callback) => {
-    const authorization = getAuthorization(details.url, details.webContentsId);
-    if (!authorization) {
-      callback({ requestHeaders: withoutPreviewEnvironment(details.requestHeaders) });
-      return;
+    let requestHeaders: Record<string, string>;
+    try {
+      requestHeaders = gatewayRequestHeaders(details, getAuthorization, options);
+    } catch {
+      requestHeaders = withoutAmbientGatewayCredentials(details.requestHeaders);
     }
-    if (!canAttachGatewayAuthorization(details, options)) {
-      callback({ requestHeaders: withoutAmbientGatewayCredentials(details.requestHeaders) });
-      return;
-    }
-    const requestHeaders = Object.fromEntries(
-      Object.entries(withoutPreviewEnvironment(details.requestHeaders)).filter(([name]) => {
-        const normalized = name.toLowerCase();
-        return normalized !== "authorization" && normalized !== "origin";
-      }),
-    );
-    const environmentId =
-      options.browserPreviewOnly === true
-        ? options.previewViewEnvironment?.(details.webContentsId)
-        : null;
-    callback({
-      requestHeaders: {
-        ...requestHeaders,
-        Authorization: authorization,
-        Origin: options.requestOrigin?.(details.url) ?? "https://orkestrator.dev",
-        ...(environmentId ? { [BROWSER_PREVIEW_ENVIRONMENT_HEADER]: environmentId } : {}),
-      },
-    });
+    callback({ requestHeaders });
   });
   webRequest.onHeadersReceived(filter, (details, callback) => {
-    const authorization = getAuthorization(details.url, details.webContentsId);
-    if (!authorization || !canAttachGatewayAuthorization(details, options)) {
-      callback({ responseHeaders: details.responseHeaders });
-      return;
+    let responseHeaders: Record<string, string[]> | undefined;
+    try {
+      responseHeaders = gatewayResponseHeaders(details, getAuthorization, options);
+    } catch {
+      responseHeaders = details.responseHeaders;
     }
-    const responseHeaders = Object.fromEntries(
-      Object.entries(details.responseHeaders ?? {}).filter(
-        ([name]) => name.toLowerCase() !== "access-control-allow-origin",
-      ),
-    );
-    callback({
-      responseHeaders: {
-        ...responseHeaders,
-        "Access-Control-Allow-Origin": ["*"],
-      },
-    });
+    callback({ responseHeaders });
   });
 }
 

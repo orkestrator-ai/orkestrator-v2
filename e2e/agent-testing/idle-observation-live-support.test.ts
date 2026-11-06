@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  requireRecoveredBackoff,
   IDLE_OBSERVATION_CASES,
   backgroundOutputEvidence,
   completedTaskOutputFiles,
@@ -176,4 +177,10 @@ describe("idle observation live support", () => {
     // An unreadable file is no evidence.
     expect(backgroundOutputEvidence(false, ["/tmp/missing"], read, "IDLEQA-BGOUT-1")).toBe("none");
   });
+});
+
+test("restart qualification rejects a lost stream despite fallback turn completion", () => {
+  expect(() => requireRecoveredBackoff(null)).toThrow("did not recover backoff");
+  expect(requireRecoveredBackoff(0)).toBe(0);
+  expect(requireRecoveredBackoff(12000)).toBe(12000);
 });

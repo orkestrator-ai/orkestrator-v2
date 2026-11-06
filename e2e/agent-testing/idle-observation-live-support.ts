@@ -254,3 +254,10 @@ export function backgroundOutputEvidence(
   }
   return "none";
 }
+
+/** Fallback polling can finish a turn even when the observation stream never recovers. */
+export function requireRecoveredBackoff(backoffMs: number | null): number {
+  if (backoffMs === null)
+    throw new Error("observation stream did not recover backoff after the turn");
+  return backoffMs;
+}

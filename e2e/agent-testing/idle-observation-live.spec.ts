@@ -79,10 +79,12 @@ import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import {
   installContainerFakeClaude,
   readContainerFile,
+  withFakeModelCleanup,
   startLocalFakeModel,
   type FakeModelHandle,
 } from "./idle-observation-fake-models";
 import {
+  requireRecoveredBackoff,
   backgroundOutputEvidence,
   completedTaskOutputFiles,
   failedCases,
@@ -509,110 +511,113 @@ test.describe("live idle observation", () => {
       const logicalSessionKey = () => `env-${environmentId}:${tabId}`;
       let client = await openClient(browser, status, "__pending__");
       progress("signed in");
-      const bootstrapInvoke = client.invoke;
-      const config = await bootstrapInvoke<{
-        global?: { enabledAgentPlatforms?: string[] };
-      }>("get_config").catch(() => null);
-      const enabled = config?.global?.enabledAgentPlatforms;
-      test.skip(
-        Array.isArray(enabled) && !enabled.includes(platform),
-        `${label} is not enabled in profile "${profile}" (dev:test --agent-platforms)`,
-      );
-      const fixture = (await bootstrapInvoke<Project[]>("get_projects")).find(
-        (project) => project.localPath === status.testProject,
-      );
-      expect(fixture, `the ${profile} fixture project is missing`).toBeTruthy();
-      if (FAKE_MODELS && !IN_CONTAINER) {
-        expect(status.dataDir, "dev:status names no data directory").toBeTruthy();
-        const fake = await startLocalFakeModel(platform as "claude" | "codex", status.dataDir!);
-        fakeModels.push(fake);
-        summary.fakeModelOrigin = fake.origin;
-        progress("loopback model started");
-      }
-      const environment = await bootstrapInvoke<Environment>("create_environment", {
-        projectId: fixture!.id,
-        name: `idle-live-${platform}-${Date.now()}`,
-        networkAccessMode: "restricted",
-        environmentType: IN_CONTAINER ? "containerized" : "local",
-      });
-      environmentId = environment.id;
-      environmentName = environment.name;
-      progress("environment created");
-      summary.environment = environment.name;
-      // Reopen with the read counter keyed to this session.
-      await client.context.close();
-      client = await openClient(browser, status, logicalSessionKey());
-      const identity = () => ({
-        environmentId,
-        agent: platform,
-        logicalSessionKey: logicalSessionKey(),
-      });
-      const projection = () =>
-        client.invoke<Projection | null>("get_native_agent_projection", {
-          ...identity(),
-          messageLimit: 200,
+      try {
+        const bootstrapInvoke = client.invoke;
+        const config = await bootstrapInvoke<{
+          global?: { enabledAgentPlatforms?: string[] };
+        }>("get_config").catch(() => null);
+        const enabled = config?.global?.enabledAgentPlatforms;
+        test.skip(
+          Array.isArray(enabled) && !enabled.includes(platform),
+          `${label} is not enabled in profile "${profile}" (dev:test --agent-platforms)`,
+        );
+        const fixture = (await bootstrapInvoke<Project[]>("get_projects")).find(
+          (project) => project.localPath === status.testProject,
+        );
+        expect(fixture, `the ${profile} fixture project is missing`).toBeTruthy();
+        if (FAKE_MODELS && !IN_CONTAINER) {
+          expect(status.dataDir, "dev:status names no data directory").toBeTruthy();
+          const fake = await startLocalFakeModel(platform as "claude" | "codex", status.dataDir!);
+          fakeModels.push(fake);
+          summary.fakeModelOrigin = fake.origin;
+          progress("loopback model started");
+        }
+        const environment = await bootstrapInvoke<Environment>("create_environment", {
+          projectId: fixture!.id,
+          name: `idle-live-${platform}-${Date.now()}`,
+          networkAccessMode: "restricted",
+          environmentType: IN_CONTAINER ? "containerized" : "local",
         });
+        environmentId = environment.id;
+        environmentName = environment.name;
+        progress("environment created");
+        summary.environment = environment.name;
+        // Reopen with the read counter keyed to this session.
+        await client.context.close();
+        client = await openClient(browser, status, logicalSessionKey());
+        const identity = () => ({
+          environmentId,
+          agent: platform,
+          logicalSessionKey: logicalSessionKey(),
+        });
+        const projection = () =>
+          client.invoke<Projection | null>("get_native_agent_projection", {
+            ...identity(),
+            messageLimit: 200,
+          });
 
-      const model = MODELS.get(platform);
-      if (model) summary.model = model;
-      /** Start the current environment with one native tab and its session. */
-      const prepareEnvironment = async () => {
-        await client.invoke("start_environment", { environmentId });
-        if (IN_CONTAINER) {
-          const started = await client.invoke<Environment | null>("get_environment", {
+        const model = MODELS.get(platform);
+        if (model) summary.model = model;
+        /** Start the current environment with one native tab and its session. */
+        const prepareEnvironment = async () => {
+          await client.invoke("start_environment", { environmentId });
+          if (IN_CONTAINER) {
+            const started = await client.invoke<Environment | null>("get_environment", {
+              environmentId,
+            });
+            containerId = started?.containerId ?? null;
+            expect(
+              containerId,
+              "the container environment started without a container",
+            ).toBeTruthy();
+            if (FAKE_MODELS) {
+              const fake = await installContainerFakeClaude(containerId!);
+              fakeModels.push(fake);
+              summary.fakeModelOrigin = fake.origin;
+            }
+          }
+          const layout = await client.invoke<{ revision?: number } | null>("get_pane_layout", {
             environmentId,
           });
-          containerId = started?.containerId ?? null;
-          expect(containerId, "the container environment started without a container").toBeTruthy();
-          if (FAKE_MODELS) {
-            const fake = await installContainerFakeClaude(containerId!);
-            fakeModels.push(fake);
-            summary.fakeModelOrigin = fake.origin;
-          }
-        }
-        const layout = await client.invoke<{ revision?: number } | null>("get_pane_layout", {
-          environmentId,
-        });
-        await client.invoke("save_pane_layout", {
-          environmentId,
-          expectedRevision: layout?.revision ?? 0,
-          layout: {
-            version: PANE_LAYOUT_VERSION,
-            containerId,
-            activePaneId: "pane-idle-live",
-            root: {
-              kind: "leaf",
-              id: "pane-idle-live",
-              activeTabId: tabId,
-              tabs: [
-                {
-                  id: tabId,
-                  type: "agent-native",
-                  displayTitle: `${label} idle observation`,
-                  nativeAgentData: { environmentId, platform, isLocal: !IN_CONTAINER },
-                  ...(model ? { initialAgentModel: model } : {}),
-                },
-              ],
+          await client.invoke("save_pane_layout", {
+            environmentId,
+            expectedRevision: layout?.revision ?? 0,
+            layout: {
+              version: PANE_LAYOUT_VERSION,
+              containerId,
+              activePaneId: "pane-idle-live",
+              root: {
+                kind: "leaf",
+                id: "pane-idle-live",
+                activeTabId: tabId,
+                tabs: [
+                  {
+                    id: tabId,
+                    type: "agent-native",
+                    displayTitle: `${label} idle observation`,
+                    nativeAgentData: { environmentId, platform, isLocal: !IN_CONTAINER },
+                    ...(model ? { initialAgentModel: model } : {}),
+                  },
+                ],
+              },
             },
-          },
-        });
-        try {
-          // The tab's `initialAgentModel` belongs to the launcher; pin the model here.
-          await client.invoke("ensure_native_agent_session", {
-            ...identity(),
-            ...(model ? { model } : {}),
           });
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          if (signedOut(message)) {
-            summary.skipped = `${label} is not signed in: ${message.slice(0, 300)}`;
-            testInfo.skip(true, summary.skipped as string);
+          try {
+            // The tab's `initialAgentModel` belongs to the launcher; pin the model here.
+            await client.invoke("ensure_native_agent_session", {
+              ...identity(),
+              ...(model ? { model } : {}),
+            });
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            if (signedOut(message)) {
+              summary.skipped = `${label} is not signed in: ${message.slice(0, 300)}`;
+              testInfo.skip(true, summary.skipped as string);
+            }
+            throw error;
           }
-          throw error;
-        }
-      };
+        };
 
-      try {
         await prepareEnvironment();
         progress("session ready");
         const auth = await client
@@ -668,7 +673,10 @@ test.describe("live idle observation", () => {
           progress("opening the page");
           // The app's `load` event can wait on a long-lived request; the
           // sidebar and composer checks below are what say it is ready.
-          await page().goto(status.browserUrl!, { waitUntil: "domcontentloaded", timeout: 60_000 });
+          await page().goto(status.browserUrl!, {
+            waitUntil: "domcontentloaded",
+            timeout: 60_000,
+          });
           await openEnvironment(page(), fixture!.name, environmentName);
           progress("environment selected");
           await expect(composer()).toBeVisible({ timeout: 90_000 });
@@ -1214,7 +1222,9 @@ test.describe("live idle observation", () => {
           noteBudget(record, "uiLagMs", settled.uiLagMs, COMPLETION_BUDGET_MS);
           expectWithin(record, "sidebarLagMs", settled.sidebarLagMs, SIDEBAR_BOUND_MS);
           // And the stream backs the group off again afterwards.
-          record.timings.backoffAfterTurnMs = await waitForGroupBackoff(60_000);
+          record.timings.backoffAfterTurnMs = requireRecoveredBackoff(
+            await waitForGroupBackoff(60_000),
+          );
         });
 
         await runCase("approval", async (record) => {
@@ -1764,11 +1774,14 @@ test.describe("live idle observation", () => {
         });
         expect(failures, "every live idle-observation case settled").toEqual([]);
       } finally {
-        writeSummary();
-        await client.invoke("stop_environment", { environmentId }).catch(() => undefined);
-        await client.invoke("delete_environment", { environmentId }).catch(() => undefined);
-        await client.context.close().catch(() => undefined);
-        for (const fake of fakeModels.splice(0)) await fake.stop().catch(() => undefined);
+        await withFakeModelCleanup(fakeModels, async () => {
+          writeSummary();
+          if (environmentId) {
+            await client.invoke("stop_environment", { environmentId }).catch(() => undefined);
+            await client.invoke("delete_environment", { environmentId }).catch(() => undefined);
+          }
+          await client.context.close().catch(() => undefined);
+        });
       }
     });
   }

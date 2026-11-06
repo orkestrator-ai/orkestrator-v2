@@ -19,24 +19,77 @@ export interface FakeModelHandle {
   stop(): Promise<void>;
 }
 
+/** Keep fake acquisition and all later setup inside the same cleanup scope. */
+export async function withFakeModelCleanup<T>(
+  handles: FakeModelHandle[],
+  run: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await run();
+  } finally {
+    await stopFakeModels(handles);
+  }
+}
+
+async function stopFakeModels(handles: FakeModelHandle[]): Promise<void> {
+  const results = await Promise.allSettled(handles.splice(0).map((handle) => handle.stop()));
+  const errors = results.filter((result) => result.status === "rejected");
+  if (errors.length)
+    throw new AggregateError(
+      errors.map((result) => result.reason),
+      "fake cleanup failed",
+    );
+}
+
 const FAKE_CLAUDE = path.join(import.meta.dirname, "idle-observation-fake-claude.ts");
 const FAKE_CODEX = path.join(import.meta.dirname, "idle-observation-fake-codex.ts");
 /** The port `installFakeClaudeApiFixture` serves on inside a container. */
 const CONTAINER_FAKE_PORT = 47_123;
 
 /** Spawn a fake under the host's Bun and read the address it prints. */
-async function startModel(script: string): Promise<{ origin: string; child: ChildProcess }> {
-  const child = spawn("bun", [script], { stdio: ["ignore", "pipe", "inherit"] });
-  const lines = createInterface({ input: child.stdout! });
-  const origin = await new Promise<string>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("the loopback model never started")), 30_000);
-    lines.once("line", (line) => {
-      clearTimeout(timer);
-      resolve(line.trim());
-    });
-    child.once("exit", () => reject(new Error("the loopback model exited")));
+export async function startModel(
+  script: string,
+  options: { spawnModel?: typeof spawn; timeoutMs?: number } = {},
+): Promise<{ origin: string; child: ChildProcess }> {
+  const child = (options.spawnModel ?? spawn)("bun", [script], {
+    stdio: ["ignore", "pipe", "inherit"],
   });
-  return { origin, child };
+  const lines = createInterface({ input: child.stdout! });
+  try {
+    const origin = await new Promise<string>((resolve, reject) => {
+      const cleanup = () => {
+        clearTimeout(timer);
+        lines.off("line", onLine);
+        child.off("exit", onExit);
+        child.off("error", onError);
+        lines.close();
+      };
+      const onLine = (line: string) => {
+        cleanup();
+        resolve(line.trim());
+      };
+      const onExit = () => {
+        cleanup();
+        reject(new Error("the loopback model exited"));
+      };
+      const onError = (error: Error) => {
+        cleanup();
+        reject(error);
+      };
+      const timer = setTimeout(() => {
+        cleanup();
+        reject(new Error("the loopback model never started"));
+      }, options.timeoutMs ?? 30_000);
+      lines.once("line", onLine);
+      child.once("exit", onExit);
+      child.once("error", onError);
+    });
+    return { origin, child };
+  } catch (error) {
+    // A failed spawn has no PID and will never emit exit.
+    if (child.pid !== undefined) await stopChild(child);
+    throw error;
+  }
 }
 
 /** Stops only the child this module spawned, through its own handle. */
@@ -55,12 +108,13 @@ function stopChild(child: ChildProcess): Promise<void> {
 export async function startLocalFakeModel(
   platform: "claude" | "codex",
   dataDir: string,
+  options: Parameters<typeof startModel>[1] = {},
 ): Promise<FakeModelHandle> {
   const home = path.join(dataDir, "agent-credentials", platform);
   mkdirSync(home, { recursive: true });
   const file = path.join(home, platform === "claude" ? "settings.json" : "config.toml");
   const restore = snapshotFixtureFiles([file]);
-  const model = await startModel(platform === "claude" ? FAKE_CLAUDE : FAKE_CODEX);
+  const model = await startModel(platform === "claude" ? FAKE_CLAUDE : FAKE_CODEX, options);
   try {
     if (platform === "claude") {
       const earlier = existsSync(file)
@@ -85,15 +139,21 @@ export async function startLocalFakeModel(
       });
     }
   } catch (error) {
-    restore();
-    await stopChild(model.child);
+    try {
+      restore();
+    } finally {
+      await stopChild(model.child);
+    }
     throw error;
   }
   return {
     origin: model.origin,
     stop: async () => {
-      restore();
-      await stopChild(model.child);
+      try {
+        restore();
+      } finally {
+        await stopChild(model.child);
+      }
     },
   };
 }

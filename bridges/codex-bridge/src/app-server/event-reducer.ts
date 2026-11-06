@@ -163,6 +163,9 @@ const IGNORED_METHODS = new Set([
   "thread/goal/cleared",
   "thread/environment/connected",
   "thread/environment/disconnected",
+  // Thread sections are decided out (0007); 0.167.0 sends this only after a
+  // `thread/section/move`, which the bridge never calls.
+  "thread/section/changed",
   "hook/started",
   "hook/completed",
   "item/autoApprovalReview/started",

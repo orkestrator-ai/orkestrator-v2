@@ -5,7 +5,7 @@
  */
 export const PINNED_TOOLCHAIN_VERSIONS = {
   claude: "2.1.319",
-  codex: "0.166.0",
+  codex: "0.167.0",
   grok: "1.0.70",
   opencode: "1.19.5",
   pi: "1.4.0",
@@ -220,27 +220,27 @@ export const PINNED_TOOLCHAIN_ARTIFACTS: readonly ToolchainArtifact[] = [
       format: "tar.gz",
       url: `${CODEX_RELEASE_BASE}/codex-aarch64-apple-darwin.tar.gz`,
       entryPath: "codex-aarch64-apple-darwin",
-      size: 107_610_108,
-      sha256: "c48824462fc57681eafb0925d97b11b589010475613904f570b42fea53e240d5",
+      size: 108_379_331,
+      sha256: "4b22a2a971be2791c3e31f912f3e77a88ebd64a65812a7289ccba65dd6425fe9",
       allowedHosts: GITHUB_RELEASE_HOSTS,
     },
     companions: [
       codexCodeModeHost(
         "aarch64-apple-darwin",
         {
-          size: 24_769_716,
-          sha256: "7abd50fe5f033495a7b693c45fb82dc57093a18f1c4ba3e8043577de46c5c7c5",
+          size: 25_262_553,
+          sha256: "876a3e263348ef0edaeae5cf5bc52a5c121141cefd15157ab0eeca305f3eb563",
         },
         {
-          size: 69_182_864,
-          sha256: "fd37051bfdce0b65cf22a7077e265720a7bd6709d5e400dcbc26197f3041400a",
+          size: 70_259_040,
+          sha256: "5cc29d144fc05e3563f5f90c36adc95bdc287e2297b48ecf0bf4abdf1892d3ab",
         },
       ),
     ],
     executable: {
       fileName: "codex",
-      size: 268_972_064,
-      sha256: "39acf979729dd290f9a24ee38b2914e036c91b65952872e28ae2a6b88a7db7c1",
+      size: 270_815_376,
+      sha256: "030316ecfbb41f4e7946e584b0063ef333b7a36cd312ba349f2f6869e39b62cc",
     },
   },
   {
@@ -252,27 +252,27 @@ export const PINNED_TOOLCHAIN_ARTIFACTS: readonly ToolchainArtifact[] = [
       format: "tar.gz",
       url: `${CODEX_RELEASE_BASE}/codex-x86_64-apple-darwin.tar.gz`,
       entryPath: "codex-x86_64-apple-darwin",
-      size: 117_027_024,
-      sha256: "db0c38713c36199b12e7c8d1629386c35a4ce8f99e1c9ce72f1725a74df67b57",
+      size: 117_941_240,
+      sha256: "d8eb4a865a0b17319cde10347523e5bab0978d01725b39f4a639f40905e01221",
       allowedHosts: GITHUB_RELEASE_HOSTS,
     },
     companions: [
       codexCodeModeHost(
         "x86_64-apple-darwin",
         {
-          size: 26_748_407,
-          sha256: "b35c775d5e5f8d60d05e0de7154e5bbbf320b6d0e28a3237d42cc8a742ccaf65",
+          size: 27_285_629,
+          sha256: "612d0dc2c7316fbf05ee922796f4d740a285b76a55d4c78e1b946ba621bdcc91",
         },
         {
-          size: 73_183_424,
-          sha256: "9d96de017ecec30ec3f8689f489584151c167c255a787dc6e297b6edc9ebe08c",
+          size: 74_373_824,
+          sha256: "5b007ad8735633f955c0b7b801d02858b3c75f0f5f2cf5864f12da96ca422e69",
         },
       ),
     ],
     executable: {
       fileName: "codex",
-      size: 289_445_104,
-      sha256: "1361e18268866b7f9f5e8703fabcea0a2a990a439eedcce03940abb4ba9eaaeb",
+      size: 290_491_520,
+      sha256: "a3b4df639ed5808100fe9d3dacdb324c9fb50b2804d72d5ab59def67bb2d6ab6",
     },
   },
   {
@@ -284,27 +284,27 @@ export const PINNED_TOOLCHAIN_ARTIFACTS: readonly ToolchainArtifact[] = [
       format: "tar.gz",
       url: `${CODEX_RELEASE_BASE}/codex-aarch64-unknown-linux-musl.tar.gz`,
       entryPath: "codex-aarch64-unknown-linux-musl",
-      size: 113_382_496,
-      sha256: "94eb707605ec2646b2e05b7edf7c4e7b3ccf02b16237c34ae9beb8cfb7f810a9",
+      size: 114_300_898,
+      sha256: "843489acb4d4b1079745c36b03c5963b887b83155af208fd53584e33ee8eb281",
       allowedHosts: GITHUB_RELEASE_HOSTS,
     },
     companions: [
       codexCodeModeHost(
         "aarch64-unknown-linux-musl",
         {
-          size: 27_023_046,
-          sha256: "ac98d1f878e353a16cba711fd47bfef2f6c814109bdd819ee2b6b6d6a19701e7",
+          size: 27_500_578,
+          sha256: "6e99948fa20ca816a01f222a56afa261b321e00cbed611d76bb92c765fd11ec6",
         },
         {
-          size: 70_838_624,
-          sha256: "587436a943a59c18cabdbe83f07800d237b60ddd2e0f54d05b23d8b37a0b36f4",
+          size: 71_821_664,
+          sha256: "e7b772ff332c16ca2df587e99fe87f217e3ab3432a63846fb1ca1bccbaa24409",
         },
       ),
     ],
     executable: {
       fileName: "codex",
-      size: 277_549_176,
-      sha256: "f2e6c980c937e734644bed1b4a9a018d3e63a0ccbe71aafc85c86a8c6e4b462a",
+      size: 278_794_648,
+      sha256: "2fe94d848540ff2a6868c7ebcc494126a974aa409711676d14fa0379e49e6143",
     },
   },
   {
@@ -316,27 +316,27 @@ export const PINNED_TOOLCHAIN_ARTIFACTS: readonly ToolchainArtifact[] = [
       format: "tar.gz",
       url: `${CODEX_RELEASE_BASE}/codex-x86_64-unknown-linux-musl.tar.gz`,
       entryPath: "codex-x86_64-unknown-linux-musl",
-      size: 121_764_138,
-      sha256: "a0bf572d2f93f056c6712a6da348e96078dc84f3885fd7be67807ef389cb3978",
+      size: 122_587_028,
+      sha256: "9d64836106d5b374e90ee4454c7ebcde7ca7106558bd7e41a34b9f26ebda251a",
       allowedHosts: GITHUB_RELEASE_HOSTS,
     },
     companions: [
       codexCodeModeHost(
         "x86_64-unknown-linux-musl",
         {
-          size: 28_565_521,
-          sha256: "7588334fd47bc4003d970b70dfd4d1e4578491b1e9baa72976a4c2d7e97590da",
+          size: 29_079_293,
+          sha256: "b5074d5dd64643b2c073927e494a588eff31c1f5a27f12c1e2c45f9a6cf07dd4",
         },
         {
-          size: 77_997_328,
-          sha256: "657f4e902726e05867c937b583049d5997e057f8cd0ab40450633c9c9ef8d630",
+          size: 79_209_744,
+          sha256: "83f3e174c2da2f1ca8655cce686e302509640d34c0f4407c1155056f64536e0f",
         },
       ),
     ],
     executable: {
       fileName: "codex",
-      size: 319_346_888,
-      sha256: "b8a11fedf24b2dfb59a70c9e52b030f9a508dcd49cd2dd0d41956f4c785156b8",
+      size: 320_575_976,
+      sha256: "cdcb45aaa01d0f14e298985e09465aebccd47f64ecd298aea44814af7b62bbda",
     },
   },
   {

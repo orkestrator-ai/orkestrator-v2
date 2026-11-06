@@ -8,7 +8,7 @@ used by Orkestrator. These integrations do not share one upgrade mechanism:
 | Agent | SDK integration | CLI integration | Current pins |
 | --- | --- | --- | --- |
 | Claude | `@anthropic-ai/claude-agent-sdk` drives native sessions; `@anthropic-ai/sdk` supplies message content types | The Agent SDK is pointed at Orkestrator's separately managed `claude` executable | Agent SDK `0.3.319`, Anthropic SDK `1.6.0`, CLI `2.1.319` (npm `latest`, verified 2026-11-06) |
-| Codex | No runtime `@openai/codex-sdk` dependency. The bridge speaks JSON-RPC to `codex app-server` using generated types | The pinned `codex` executable is the app-server and is also used by isolated `codex exec` helpers | CLI and generated protocol `0.166.0` |
+| Codex | No runtime `@openai/codex-sdk` dependency. The bridge speaks JSON-RPC to `codex app-server` using generated types | The pinned `codex` executable is the app-server and is also used by isolated `codex exec` helpers | CLI and generated protocol `0.167.0` |
 | OpenCode | `@opencode-ai/sdk/v2/client` is used only by the backend (native chat and build pipelines) | The pinned `opencode` executable runs `opencode serve` | SDK and CLI `1.19.5` |
 | Cursor | `cursor-bridge` drives `@cursor/sdk` in process | No CLI; Cursor is SDK-only | SDK `1.2.0` (npm `latest`, verified 2026-10-31) |
 | Grok | The ACP bridge spawns the CLI and speaks ACP over its stdio; `@agentclientprotocol/sdk` supplies the protocol types | The pinned `grok` executable runs `grok … agent stdio` | CLI `1.0.70` (stable channel; verified 2026-10-30), ACP SDK `2.1.0` |
@@ -452,7 +452,7 @@ window (Pi refreshes five minutes early, OpenCode's xAI two) still fits inside
 On every Codex bump, run `bun scripts/codex-access-only-auth-probe.ts --codex
 <pinned binary>`. It hands the pinned Codex the access-only `auth.json` a
 coordinator home or container receives, built from a synthetic login against
-a local server, and reports every refresh attempt. On 0.164.0 and 0.166.0
+a local server, and reports every refresh attempt. On 0.164.0, 0.166.0 and 0.167.0
 alike: no refresh for an access token more than five minutes from its `exp`,
 whatever `last_refresh` says; inside those five minutes a few attempts (four
 in the probe's run) and after a 401 one, each with the blank refresh token,
@@ -1135,6 +1135,27 @@ the pinned binary's parser over the production argument shape.
 
    Every `features.*` the bridge depends on kept its 0.164.0 stage and
    default (`codex features list` in a temporary `CODEX_HOME`).
+
+   Codex 0.167.0 changed nothing the bridge relies on. The stable protocol
+   gained one notification, `thread/section/changed` (ignored: thread sections
+   are decided out), the `humanCommand` command-approval kind and
+   `InitializeCapabilities.requiredHumanApproval` (both need `experimentalApi`,
+   which the bridge does not send), and audio `fileId` inputs the bridge never
+   sends. `features.deferred_tool_world_state` became stable and on: deferred
+   MCP namespaces are now described in the world-state developer context
+   checkpointed into history, much as `incremental_tools` did. The
+   project-trust (including after a reload), network-lock and resume-context
+   loopback tests pass with it on, so the bridge does not turn it off. Every
+   other `features.*` the bridge depends on kept its 0.166.0 stage and default.
+
+   On Linux, `live-contract.test.ts`'s "coordinator research MCP survives a
+   thread-scoped Orkestrator replacement" and two cases in
+   `live-refused-calls.test.ts` fail on 0.166.0 and 0.167.0 alike: Codex's
+   bubblewrap filesystem helper cannot bind the test's `/tmp/ork-test-tmp-*`
+   path (`Can't create file …: Read-only file system`), and a refused shell
+   write reads `Read-only file system` where macOS says `Operation not
+   permitted`. They pass on macOS, where they were last qualified; see
+   [1030](../todo/agent-engines/1030-provider-upgrade-2026-11-06.md) task 9.
 
    Codex 0.153.3 defaults new durable threads to paginated history and eagerly
    writes their rollout header, but `thread/read(includeTurns=true)` returns

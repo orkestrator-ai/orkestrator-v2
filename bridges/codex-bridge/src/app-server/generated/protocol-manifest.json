@@ -1,9 +1,9 @@
 {
-  "codexVersion": "0.166.0",
-  "typescriptDigest": "sha256:70291b0473240e2833faafbb225bbe731cb9b6fced76df6e5126875a9b9a2254",
-  "schemaDigest": "sha256:9b67711a457a87f11d8dd6ba387b16850bbc167273d1d78af510c3f31a62436e",
-  "typescriptFileCount": 760,
-  "schemaFileCount": 321,
+  "codexVersion": "0.167.0",
+  "typescriptDigest": "sha256:123274aef2ec8132a76b01bb9b9c2d978124ca48bba6be7bc812e79402a7d4a9",
+  "schemaDigest": "sha256:4ececfaf79ae54f3f29d6b89a42618665aa54d5e0356d5809480f3b28d9ef46a",
+  "typescriptFileCount": 761,
+  "schemaFileCount": 322,
   "clientRequestMethods": [
     "account/gatewayOAuth/cancel",
     "account/gatewayOAuth/login",
@@ -190,6 +190,7 @@
     "thread/realtime/transcript/delta",
     "thread/realtime/transcript/done",
     "thread/reverted",
+    "thread/section/changed",
     "thread/settings/updated",
     "thread/started",
     "thread/status/changed",

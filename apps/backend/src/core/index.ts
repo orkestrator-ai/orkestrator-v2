@@ -1,5 +1,6 @@
 import { findCoordinatorCheckoutTurn } from "./coordinator-checkout-turn.js";
 import { agentTestTerminalSurvival } from "./agent-test-fixtures.js";
+import { closeContainerTerminalShell } from "./container-terminal-shell.js";
 import { combineWorkerMailPorts } from "./build-pipeline-worker-mail.js";
 import { usageLimitAccountRouting } from "./coordinator-usage-limit-account-routing.js";
 import { stopProjectGitMirrorRefreshes } from "./project-git-mirror.js";
@@ -625,7 +626,13 @@ export class OrkestratorBackend {
           process.env.NODE_ENV === "test" ? undefined : containerWorktreeSignalInstaller,
         prMonitor: { scheduleMergeCleanup: scheduleMergeCleanupRecovery },
         // Agent-test profiles only: lets a browser spec stage a delete failure.
-        terminals: { survivesTermination: agentTestTerminalSurvival(options.dataDir) },
+        terminals: {
+          survivesTermination: agentTestTerminalSurvival(options.dataDir),
+          // Docker-backed: unit tests' container terminals name no real container.
+          ...(process.env.NODE_ENV === "test"
+            ? {}
+            : { closeContainerShell: closeContainerTerminalShell }),
+        },
         // Docker-backed, like the worktree signal: summary reads in unit tests
         // relay only what a `check_docker` answered.
         ...(process.env.NODE_ENV === "test"

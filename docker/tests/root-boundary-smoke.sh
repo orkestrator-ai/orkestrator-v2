@@ -132,7 +132,24 @@ root_exec() { docker exec --env PATH="$ROOT_PATH" --user root "$RUN" "$@"; }
 # its rc files and renders its prompt in /workspace before reading commands.
 TERMINAL_COMMAND='source /usr/local/bin/orkestrator-runtime-env.sh 2>/dev/null || true
 orkestrator_source_runtime_env 2>/dev/null || true
+if [ -n "${ORKESTRATOR_TERMINAL_SESSION:-}" ]; then
+  orkestrator_terminal_dir="/tmp/orkestrator-terminals-$(id -u)"
+  mkdir -p -m 700 "$orkestrator_terminal_dir" 2>/dev/null
+  if [ -d "$orkestrator_terminal_dir" ] && [ ! -L "$orkestrator_terminal_dir" ] && [ -O "$orkestrator_terminal_dir" ]; then
+    for orkestrator_terminal_file in "$orkestrator_terminal_dir"/*.pid; do
+      [ -f "$orkestrator_terminal_file" ] || continue
+      orkestrator_terminal_token="${orkestrator_terminal_file##*/}"
+      orkestrator_terminal_pid=""
+      read -r orkestrator_terminal_pid orkestrator_terminal_sid < "$orkestrator_terminal_file" 2>/dev/null
+      grep -qzxF "ORKESTRATOR_TERMINAL_SESSION=${orkestrator_terminal_token%.pid}" "/proc/${orkestrator_terminal_pid:-0}/environ" 2>/dev/null || rm -f "$orkestrator_terminal_file"
+    done
+    echo "$$ $(ps -o sid= -p $$)" > "$orkestrator_terminal_dir/${ORKESTRATOR_TERMINAL_SESSION}.pid"
+  fi
+  unset orkestrator_terminal_dir orkestrator_terminal_file orkestrator_terminal_token orkestrator_terminal_pid orkestrator_terminal_sid
+fi
 exec zsh -l'
+# A token, as the backend passes one, so the shell records its PID too.
+TERMINAL_TOKEN=00000000-0000-4000-8000-000000000000
 TERMINAL_INPUT='cd /workspace
 awk 1 </dev/null; cat </dev/null; date >/dev/null; id >/dev/null
 mise env >/dev/null 2>&1 </dev/null
@@ -143,11 +160,49 @@ bash -c true
 exit'
 { sleep 3; printf '%s\n' "$TERMINAL_INPUT"; sleep 3; } |
     docker exec -i --env PATH="$ROOT_PATH" --env TERMINAL_COMMAND="$TERMINAL_COMMAND" \
-        --user orkroot "$RUN" /usr/bin/script -qec 'bash -lc "$TERMINAL_COMMAND"' /dev/null \
+        --env ORKESTRATOR_TERMINAL_SESSION="$TERMINAL_TOKEN" --user orkroot "$RUN" /usr/bin/script -qec 'bash -lc "$TERMINAL_COMMAND"' /dev/null \
         >/dev/null 2>&1 || true
 harness test -s /root/root-boundary/terminal-path \
     || fail "the root terminal did not run its commands"
 echo "ran  root terminal (orkroot)"
+
+# Closing that terminal: the backend's exact close script
+# (container-scripts.ts, CONTAINER_TERMINAL_CLOSE_SCRIPT), as the terminal's
+# own user, removes the record the shell left.
+CLOSE_SCRIPT='token="$1"
+case "$token" in ""|*[!0-9a-f-]*) exit 0 ;; esac
+marker="ORKESTRATOR_TERMINAL_SESSION=$token"
+dir="/tmp/orkestrator-terminals-$(id -u)"
+file="$dir/$token.pid"
+pid=""
+sid=""
+if [ -d "$dir" ] && [ ! -L "$dir" ] && [ -O "$dir" ] && [ -f "$file" ] && [ ! -L "$file" ]; then
+  read -r pid sid < "$file" 2>/dev/null
+  rm -f "$file"
+fi
+case "$sid" in ""|*[!0-9]*) sid="" ;; esac
+case "$pid" in
+  ""|*[!0-9]*) ;;
+  *) if grep -qzxF "$marker" "/proc/$pid/environ" 2>/dev/null; then
+       [ -n "$sid" ] || sid=$(ps -o sid= -p "$pid" 2>/dev/null | tr -d " ")
+       kill -s HUP -- "-$pid" 2>/dev/null || kill -s HUP "$pid" 2>/dev/null
+     fi ;;
+esac
+[ -n "$sid" ] || exit 0
+for environ in /proc/[0-9]*/environ; do
+  candidate="${environ#/proc/}"
+  candidate="${candidate%/environ}"
+  [ "$candidate" = "$$" ] && continue
+  grep -qzxF "$marker" "$environ" 2>/dev/null || continue
+  candidate_sid=$(ps -o sid= -p "$candidate" 2>/dev/null | tr -d " ")
+  [ "$candidate_sid" = "$sid" ] && kill -s HUP "$candidate" 2>/dev/null
+done
+exit 0'
+docker exec --env PATH="$ROOT_PATH" --user orkroot "$RUN" sh -c "$CLOSE_SCRIPT" orkestrator-terminal-close "$TERMINAL_TOKEN" \
+    || fail "the root terminal close script failed"
+harness test ! -e "/tmp/orkestrator-terminals-0/$TERMINAL_TOKEN.pid" \
+    || fail "the root terminal close left its record"
+echo "ran  root terminal close (orkroot)"
 
 # The other root shells the backend runs (commands-environment.ts host
 # repair, commands-files.ts project-files access, portable-input-status.ts

@@ -259,9 +259,20 @@ describe("docker/entrypoint.sh .claude.json import", () => {
     expect(JSON.stringify(config)).not.toContain("SENTINEL-PROJECT");
   });
 
+  test("records the auto-mode answer even when the host never saw the offer", async () => {
+    // The file is rebuilt on every start, so the answer Claude Code wrote in
+    // the container is gone after a restart; without this the offer returns.
+    const { hasSeenAutoDefaultNudge: seen, ...unanswered } = hostConfig();
+    expect(seen).toBe(true);
+    const config = await runImport(JSON.stringify(unanswered));
+    expect(config.hasSeenAutoDefaultNudge).toBe(true);
+    expect(config.bypassPermissionsModeAccepted).toBe(true);
+  });
+
   test("treats an emptied or missing input as no host config", async () => {
     const minimal = {
       bypassPermissionsModeAccepted: true,
+      hasSeenAutoDefaultNudge: true,
       hasCompletedOnboarding: true,
       theme: "dark",
       projects: {

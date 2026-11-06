@@ -33,6 +33,11 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { expect, test, type Page } from "./browser-test";
 import {
+  assertLatencyBudgets,
+  latencySummary as summary,
+  type LatencySeries,
+} from "./latency-budget";
+import {
   containerName,
   fixtureEnvironment,
   inContainer,
@@ -78,27 +83,12 @@ test.beforeEach(() => {
 });
 test.afterEach(() => clearInterval(progress));
 
-type Series = { label: string; budgetMs?: number; samples: number[] };
-const evidence: { series: Series[]; notes: Record<string, unknown> } = { series: [], notes: {} };
+const evidence: { series: LatencySeries[]; notes: Record<string, unknown> } = {
+  series: [],
+  notes: {},
+};
 
-function percentile(values: readonly number[], fraction: number): number {
-  const sorted = [...values].sort((a, b) => a - b);
-  return sorted[Math.min(sorted.length - 1, Math.max(0, Math.ceil(fraction * sorted.length) - 1))]!;
-}
-
-function summary(series: Series) {
-  return {
-    label: series.label,
-    count: series.samples.length,
-    p50Ms: percentile(series.samples, 0.5),
-    p95Ms: percentile(series.samples, 0.95),
-    maxMs: Math.max(...series.samples),
-    budgetMs: series.budgetMs ?? null,
-    samplesMs: series.samples,
-  };
-}
-
-function seriesFor(label: string, budgetMs?: number): Series {
+function seriesFor(label: string, budgetMs?: number): LatencySeries {
   let series = evidence.series.find((entry) => entry.label === label);
   if (!series) {
     series = { label, budgetMs, samples: [] };
@@ -276,6 +266,7 @@ test("watched local worktree: badge, Changes row and All files entry", async ({
   for (const series of evidence.series.filter((entry) => entry.label.startsWith("local"))) {
     testInfo.annotations.push({ type: series.label, description: JSON.stringify(summary(series)) });
   }
+  assertLatencyBudgets(evidence.series.filter((entry) => entry.label.startsWith("local")));
 });
 
 test("container: badge, Changes row, All files entry and explicit refresh", async ({
@@ -346,6 +337,7 @@ test("container: badge, Changes row, All files entry and explicit refresh", asyn
   for (const series of evidence.series.filter((entry) => entry.label.startsWith("container"))) {
     testInfo.annotations.push({ type: series.label, description: JSON.stringify(summary(series)) });
   }
+  assertLatencyBudgets(evidence.series.filter((entry) => entry.label.startsWith("container")));
 });
 
 test("watched local worktree: bursts past the watcher's overflow reach the badge", async ({

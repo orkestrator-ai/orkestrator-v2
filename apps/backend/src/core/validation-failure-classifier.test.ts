@@ -488,6 +488,58 @@ describe("paths named outside a test and its helpers", () => {
     });
   });
 
+  for (const location of ["test", "helper"] as const) {
+    for (const slash of ["/[a-z]/", "10 / 2"]) {
+      test(`a longer path prefix with ${slash} in a ${location} stays unrelated`, () => {
+        const testFile = "apps/backend/tests/container-readiness.test.ts";
+        const file = location === "test" ? testFile : "apps/backend/tests/readiness-helper.ts";
+        const testBody =
+          'test("a pending shell probe is clipped to the remaining overall deadline", () => {});';
+        const root = tree({
+          [testFile]: `import "./readiness-helper";\n${testBody}`,
+          [file]: [
+            'export const directory = "apps/website/src/hooks";',
+            'export const glob = "family/*";',
+            'export const url = "https://example.test";',
+            `export const value = ${slash};`,
+            ...(location === "test" ? [testBody] : []),
+          ].join("\n"),
+        });
+        const failure = failures(
+          classify(root, { output: OUTPUT, changedFiles: CHANGED_4520 }),
+        )[0]!;
+        expect(failure).toMatchObject({
+          verdict: "unrelated",
+          reasons: ["no-changed-dependency"],
+        });
+        expect(failure.changedPath).toBeUndefined();
+      });
+    }
+  }
+
+  for (const [directory, verdict] of [
+    ["apps/web", "undetermined"],
+    ["apps/website", "unrelated"],
+  ] as const) {
+    test(`an imported JSON fixture naming ${directory} is ${verdict}`, () => {
+      const root = tree({
+        "apps/backend/tests/container-readiness.test.ts": [
+          'import data from "./readiness-fixture.json";',
+          'test("a pending shell probe is clipped to the remaining overall deadline", () => data);',
+        ].join("\n"),
+        "apps/backend/tests/readiness-fixture.json": JSON.stringify({ directory }),
+      });
+      const failure = failures(classify(root, { output: OUTPUT, changedFiles: CHANGED_4520 }))[0]!;
+      expect(failure).toMatchObject({
+        verdict,
+        reasons: [
+          verdict === "undetermined" ? "dependency-graph-incomplete" : "no-changed-dependency",
+        ],
+      });
+      expect(failure.changedPath).toBeUndefined();
+    });
+  }
+
   for (const [basename, verdict] of [
     ["agent-test-cursor-credential.ts", "related"],
     ["agent-contest-cursor-credential.ts", "unrelated"],

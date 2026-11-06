@@ -795,7 +795,12 @@ export function classifyValidationFailures(input: ValidationFailureClassifierInp
       // parsed to drop their comments.
       const code = candidates.length > 0 ? codeOf(file, text) : "";
       if (code === null) {
-        unavailableReferences.add(file);
+        // A substring can be only a prefix of a longer path. Failed analysis
+        // leaves uncertainty only when a complete raw pattern could match;
+        // raw text still never supplies positive path evidence.
+        if (candidates.some(([, token]) => token.pattern.test(text))) {
+          unavailableReferences.add(file);
+        }
         referenceCache.set(cacheKey, null);
         return null;
       }

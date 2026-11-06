@@ -8,7 +8,7 @@
  * and a new fact must be supplied by both or the code does not compile.
  * `environment-row-model.parity.test.ts` checks the two adapters agree.
  */
-import type { AgentActivity } from "@orkestrator/protocol/node-summaries";
+import { NODE_DELETE_FAILURE, type AgentActivity } from "@orkestrator/protocol/node-summaries";
 import type { PrState } from "@orkestrator/protocol/pr-monitor";
 import type { EnvironmentTooltipMachine } from "./EnvironmentTooltipBody";
 import { environmentNameSignal, type EnvironmentNameSignal } from "@/lib/environment-name-signal";
@@ -146,7 +146,11 @@ export function environmentRowModel(facts: EnvironmentRowFacts): EnvironmentRowM
     dimmed: facts.deleting || isStopping,
     spinner: facts.deleting ? "deleting" : isTransitioning || facts.busy ? "transition" : null,
     deleteFailureText:
-      !facts.deleting && facts.deleteFailure ? `Delete failed: ${facts.deleteFailure}` : null,
+      !facts.deleting && facts.deleteFailure
+        ? facts.deleteFailure === NODE_DELETE_FAILURE
+          ? facts.deleteFailure
+          : `Delete failed: ${facts.deleteFailure}`
+        : null,
     activityText,
     accessibleLabel: machine ? `${displayName}, on ${machine.name}, ${activityText}` : undefined,
     markerMachine: machine

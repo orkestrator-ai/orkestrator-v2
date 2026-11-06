@@ -16,6 +16,11 @@ export class WorktreeRemovalReads {
     if (this.removing.has(this.key(lookup))) throw new Error("The worktree is being removed");
   }
 
+  canTrack(lookup: WorktreeLookup): boolean {
+    const key = this.key(lookup);
+    return !this.removing.has(key) || this.completed.has(key);
+  }
+
   /** Only authoritative tracking of a replacement may retire a completed fence. */
   track(lookup: WorktreeLookup): void {
     const key = this.key(lookup);

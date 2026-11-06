@@ -96,16 +96,21 @@ describe("WatchHost", () => {
   test("a close returns at once, tells the helper, and silences late events", async () => {
     const { host, helpers } = hostWith();
     const seen: Array<string | null> = [];
+    const errors: Error[] = [];
     const handle = host.watch("/a", (_type, name) => seen.push(name), { recursive: true });
+    handle.on("error", (error) => errors.push(error));
     handle.close();
     handle.close();
+    await expect(handle.established).rejects.toMatchObject({ code: "ECANCELED" });
     await tick();
     expect(helpers[0]!.sent.filter((message) => message.op === "close")).toEqual([
       { op: "close", id: 1 },
     ]);
     helpers[0]!.say({ type: "events", batches: [[1, [["rename", "late"]], false]] });
+    helpers[0]!.say({ type: "ready", id: 1 });
     await tick();
     expect(seen).toEqual([]);
+    expect(errors).toEqual([]);
     expect(host.openWatches).toBe(0);
   });
 

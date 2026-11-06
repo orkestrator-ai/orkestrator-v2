@@ -542,6 +542,11 @@ export class DiffStatsService {
     });
   }
 
+  /** Reconciliation may pause an unfinished removal without aborting other targets. */
+  canTrack(target: DiffStatsTarget): boolean {
+    return this.removalReads.canTrack(target);
+  }
+
   /**
    * Begins tracking an environment, or retargets one already tracked.
    *

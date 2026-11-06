@@ -147,7 +147,14 @@ export async function reconcileEnvironmentCleanup(
           // The branch cannot be judged while a worktree may still have it
           // checked out.
           if (step === "branch" && !worktreeDone) continue;
-          const done = await runEnvironmentCleanupStep(current, step, context, options);
+          const done = await runEnvironmentCleanupStep(current, step, context, {
+            ...options,
+            beforeWorktreeRemoval: () =>
+              context.runtime.diffStats.pauseForRemoval(
+                current.environmentId,
+                current.worktreePath,
+              ),
+          });
           if (step === "worktree") worktreeDone = done;
         }
       });

@@ -34,6 +34,7 @@ export interface WatchHandle {
    * the `error` listener. `fseventsd` can start delivering well after that, and
    * can lose events at any time, so it is not proof that a later change will be
    * reported: that remains the owner's safety scan's job.
+   * Closing before readiness rejects with ECANCELED without emitting an error.
    */
   established?: Promise<void>;
 }
@@ -180,6 +181,7 @@ class HostedWatch implements WatchHandle {
   }
 
   close(): void {
+    this.settle.reject(hostFailure("ECANCELED"));
     this.onClose(this);
   }
 

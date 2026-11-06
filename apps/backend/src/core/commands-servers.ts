@@ -1675,17 +1675,25 @@ export async function deleteEnvironment(
         await runEnvironmentCleanupStep(cleanup, "network", context);
       }
       await stopLocalServersForEnvironmentUnlocked(environmentId, context);
-      // Nothing should scan or watch a tree while it is being removed. The
-      // tombstone keeps later reconciliations from tracking it again.
-      await context.runtime.diffStats.pauseForRemoval(environmentId, cleanup?.worktreePath);
+      let worktreeFenced = false;
       if (cleanup?.worktreePath) {
-        const worktreeRemoved = await runEnvironmentCleanupStep(cleanup, "worktree", context);
+        const worktreeRemoved = await runEnvironmentCleanupStep(cleanup, "worktree", context, {
+          // The ownership check may retain the checkout. Fence its physical
+          // readers only when the step will actually remove it.
+          beforeWorktreeRemoval: () => {
+            worktreeFenced = true;
+            return context.runtime.diffStats.pauseForRemoval(environmentId, cleanup.worktreePath);
+          },
+        });
         // A branch still checked out in a surviving worktree cannot be judged or
         // deleted; the reconciler retries it after the worktree step succeeds.
         if (worktreeRemoved && cleanup.branch) {
           await runEnvironmentCleanupStep(cleanup, "branch", context);
         }
       }
+      // Retained checkouts and project homes only retire this environment's
+      // watcher; their other owners keep scanning. The tombstone prevents re-entry.
+      if (!worktreeFenced) await context.runtime.diffStats.pauseForRemoval(environmentId);
       // Damaged session metadata must not strand deletion after resources are gone.
       await storage.removeSessionsByEnvironment(environmentId).catch(() => {
         environmentLog.warn("cleanup.sessions-failed", { environmentId });

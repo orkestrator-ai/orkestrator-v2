@@ -647,3 +647,58 @@ test("a watch that fails after the call returns closes the watcher through onErr
   expect(errors).toEqual([failure]);
   expect(watcher.watching).toBe(false);
 });
+
+test("retiring an unready split watch does not leave replacement coverage pending", async () => {
+  const context = standardTree();
+  const registrations: Array<{
+    target: string;
+    ready: () => void;
+    settled: boolean;
+    closed: boolean;
+  }> = [];
+  const { watcher, errors } = split(context, {
+    startWatch: (target, listener, options) => {
+      const handle = context.start(target, listener, options);
+      const ready = Promise.withResolvers<void>();
+      const registration = {
+        target,
+        ready: () => {
+          registration.settled = true;
+          ready.resolve();
+        },
+        settled: false,
+        closed: false,
+      };
+      registrations.push(registration);
+      return {
+        on: handle.on.bind(handle),
+        established: ready.promise,
+        close: () => {
+          registration.closed = true;
+          handle.close();
+          ready.reject(Object.assign(new Error("closed"), { code: "ECANCELED" }));
+        },
+      };
+    },
+  });
+  await until(() => context.live().includes("recursive /wt/src"));
+  // All but src are ready. A replan replaces src before its helper answers.
+  for (const registration of registrations)
+    if (registration.target !== "/wt/src") registration.ready();
+  expect(watcher.qualified).toBe(false);
+  const retired = registrations.find((registration) => registration.target === "/wt/src")!;
+  context.replaceDirectory("src");
+  context.watchOn("/wt").emit("rename", "src");
+  await until(
+    () =>
+      retired.closed &&
+      registrations.filter((registration) => registration.target === "/wt/src").length === 2,
+  );
+  for (const registration of registrations)
+    if (!registration.closed && !registration.settled) registration.ready();
+  await until(() => watcher.qualified === true);
+  expect(errors).toEqual([]);
+  watcher.close();
+  await Promise.resolve();
+  expect(watcher.qualified).toBe(false);
+});

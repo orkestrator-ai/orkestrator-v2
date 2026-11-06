@@ -1,14 +1,10 @@
-import { environmentDeletionFailure } from "@orkestrator/protocol/node-summaries";
+import {
+  environmentDeletionFailure,
+  environmentHasDeletionTombstone,
+} from "@orkestrator/protocol/node-summaries";
 import type { Environment } from "@/types";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useUIStore } from "@/stores/uiStore";
-
-function isBackendDeletionTombstone(environment: {
-  lifecycleOperation?: string;
-  deletionRequestedAt?: string;
-}): boolean {
-  return environment.lifecycleOperation === "deleting" || Boolean(environment.deletionRequestedAt);
-}
 
 /**
  * Leave a tearing-down environment so the project workspace is shown instead
@@ -102,8 +98,8 @@ export function startEnvironmentCleanupSelectionSync(): () => void {
     if (
       environment &&
       !environmentDeletionFailure(environment) &&
-      isBackendDeletionTombstone(environment) &&
-      (!previousEnvironment || !isBackendDeletionTombstone(previousEnvironment))
+      environmentHasDeletionTombstone(environment) &&
+      (!previousEnvironment || !environmentHasDeletionTombstone(previousEnvironment))
     ) {
       activateProjectForEnvironmentCleanup(selectedEnvironmentId);
     }

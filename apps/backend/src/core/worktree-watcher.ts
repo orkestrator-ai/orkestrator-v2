@@ -302,8 +302,12 @@ export function startWorktreeWatcher(options: WorktreeWatcherOptions): WorktreeW
           schedule({ fileList: true, tree: true }, null);
           announceCoverage();
         },
-        // Its `error` event closes this watcher, which ends coverage for good.
-        () => undefined,
+        () => {
+          // A plan can retire a watch before readiness while its replacement
+          // stays live. A real failure also emits `error` and closes the owner.
+          unestablished -= 1;
+          announceCoverage();
+        },
       );
     }
     return handle;

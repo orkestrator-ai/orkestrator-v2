@@ -342,7 +342,11 @@ test.each(["deletionError", "cleanupAfterMergeError"] as const)(
     const environment = { ...base, deletionRequestedAt: "2026-11-05T12:00:00Z", [field]: "failed" };
     for (const value of [localRow(environment, {}), nodeRow(environment, {})]) {
       expect(value.facts.deletionPending).toBe(true);
-      expect(value.model.deleteFailureText).toContain("Delete failed");
+      expect(value.model.deleteFailureText).toBe(
+        value.facts.machine?.isThisWindow === false
+          ? "Deletion failed. Retry on the owning machine."
+          : "Delete failed: failed",
+      );
       expect(value.model.spinner).toBeNull();
       expect(value.model.menu.deleteDisabled).toBe(false);
       expect(value.model.menu.forkLocalDisabled).toBe(true);

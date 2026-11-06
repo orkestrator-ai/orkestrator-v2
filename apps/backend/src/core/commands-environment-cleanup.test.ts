@@ -247,6 +247,97 @@ describe("delete_environment host cleanup", () => {
     );
   });
 
+  test("a retained non-home checkout stays readable during deletion, failure, retry and ledger recovery", async () => {
+    let worktreePath = "";
+    let thirdPath = "";
+    await withDeleteCommand(
+      async (storage) => {
+        worktreePath = await seedWorktree(storage);
+        thirdPath = path.join(storage.getDataDir(), "third");
+        for (const root of [worktreePath, thirdPath]) {
+          await runCommand("git", ["init", "-b", "main", root]);
+          await fs.writeFile(path.join(root, "file"), "fixture");
+          await runCommand("git", ["-C", root, "add", "."]);
+          await runCommand("git", [
+            "-C",
+            root,
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=t@e.invalid",
+            "commit",
+            "-m",
+            "fixture",
+          ]);
+        }
+        await storage.addEnvironment(environment({ id: "owner", worktreePath }));
+        await storage.addEnvironment(environment({ id: "third", worktreePath: thirdPath }));
+      },
+      async (invokeDelete, storage, context) => {
+        const tracking = context.runtime.diffStats;
+        await tracking.sync(context);
+        const reached = Promise.withResolvers<void>();
+        const release = Promise.withResolvers<void>();
+        const cleanup = spyOn(
+          storage,
+          "deleteMultiReviewWorkflowsByEnvironment",
+        ).mockImplementationOnce(async () => {
+          reached.resolve();
+          await release.promise;
+          throw new Error("cleanup interrupted");
+        });
+        const deleting = invokeDelete();
+        const outcome = deleting.then(
+          () => null,
+          (error: unknown) => error,
+        );
+        const assertSurvivors = async () => {
+          await tracking.sync(context);
+          expect(tracking.service.isWatching("owner")).toBe(true);
+          expect(tracking.service.isWatching("third")).toBe(true);
+          await tracking.service.readTree({ lookup: { worktreePath } });
+          await tracking.service.readFileList({
+            lookup: { worktreePath },
+            comparisonRef: "HEAD",
+            includeUncommitted: true,
+          });
+          expect(await exists(worktreePath)).toBe(true);
+        };
+        try {
+          await reached.promise;
+          await assertSurvivors();
+        } finally {
+          release.resolve();
+          const failure = await outcome;
+          cleanup.mockRestore();
+          expect(failure).toMatchObject({ message: "cleanup interrupted" });
+        }
+        const ledger = environmentCleanupLedger(storage.getDataDir());
+        expect(await ledger.get("e1")).toMatchObject({ pending: ["state-dirs"] });
+        await assertSurvivors();
+        // Fail a later ledger step without changing the retained worktree.
+        const finish = ledger.complete.bind(ledger);
+        const complete = spyOn(ledger, "complete").mockImplementation(async (id, step) => {
+          if (step === "state-dirs") throw new Error("ledger unavailable");
+          await finish(id, step);
+        });
+        try {
+          await invokeDelete();
+        } finally {
+          complete.mockRestore();
+        }
+        expect(await storage.getEnvironment("e1")).toBeNull();
+        expect(await ledger.get("e1")).toMatchObject({ pending: ["state-dirs"] });
+        await assertSurvivors();
+        await reconcileEnvironmentCleanup(context, {
+          now: () => new Date(Date.now() + 60 * 60_000),
+        });
+        expect(await ledger.get("e1")).toBeNull();
+        await assertSurvivors();
+      },
+    );
+  }, 30_000);
+
   test("runs the verified container step during deletion", async () => {
     await withDeleteCommand(
       async (storage) =>

@@ -428,7 +428,7 @@ export class DiffStatsTracking {
           // Readable now: scan it. Not readable but still an environment: hold the
           // last counts and stop scanning, rather than discarding a reading that
           // described work which is still on disk.
-          if (target) this.service.track(target);
+          if (target && this.service.canTrack(target)) this.service.track(target);
           else this.service.pause(environment.id);
         }
 

@@ -186,6 +186,34 @@ describe("watching", () => {
     expect(reader.watchedProjects()).toEqual([]);
   });
 
+  test("closing before readiness settles without retiring a replacement graph watch", async () => {
+    reader.close();
+    const registrations: Array<ReturnType<typeof Promise.withResolvers<void>>> = [];
+    reader = new GraphProjectTemplates({
+      checkoutOf: async () => checkout,
+      onChange: (id) => changes.push(id),
+      settleMs: 0,
+      startWatch: () => {
+        const ready = Promise.withResolvers<void>();
+        registrations.push(ready);
+        return { established: ready.promise, close: () => ready.reject(new Error("closed")) };
+      },
+    });
+    await reader.scan("p1");
+    await waitForGraphCondition(() => registrations.length === 1);
+    reader.forget("p1");
+    await reader.scan("p1");
+    await waitForGraphCondition(() => registrations.length === 2);
+    expect(reader.watchedProjects()).toEqual(["p1"]);
+    await write("a.graph.json", sampleGraphTemplate("a"));
+    registrations[1]!.resolve();
+    await waitForGraphCondition(() => changes.length === 1);
+    expect((await reader.scan("p1")).files[0]?.template.id).toBe("a");
+    reader.close();
+    await Promise.resolve();
+    expect(reader.watchedProjects()).toEqual([]);
+  });
+
   test("watches the template directory without recursion and re-reads on an event", async () => {
     await write("a.graph.json", sampleGraphTemplate("a"));
     await reader.scan("p1");

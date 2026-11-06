@@ -75,7 +75,12 @@ import {
   bridgeTokenVerifierEnv,
   mintBridgeToken,
 } from "@orkestrator/protocol/node/bridge-credential";
+import {
+  bridgeAuthorityKeyEnv,
+  mintBridgeAuthorityKeyPair,
+} from "@orkestrator/protocol/node/bridge-authority";
 import { readContainerBridgeToken } from "./container-bridge-credential.js";
+import { rememberBridgeAuthorityKey } from "./bridge-authority-keys.js";
 import {
   applyClaudeHostCredentialEnvironment,
   applyPiHostCredentialEnvironment,
@@ -1231,20 +1236,22 @@ async function startLocalServerAttempt(
     env.OPENCODE_SERVER_USERNAME = "opencode";
   } else {
     // A local bridge is this backend's own child and build, so it always takes
-    // a verifier; the token stays in this process.
-    env[
-      bridgeTokenVerifierEnv(
-        kind === "codex"
-          ? "CODEX_BRIDGE_TOKEN"
-          : kind === "claude"
-            ? "CLAUDE_BRIDGE_TOKEN"
-            : kind === "pi"
-              ? "PI_BRIDGE_TOKEN"
-              : kind === "cursor"
-                ? "CURSOR_BRIDGE_TOKEN"
-                : "ACP_BRIDGE_TOKEN",
-      )
-    ] = bridgeTokenVerifier(bridgeToken);
+    // a verifier and an authority key; the token and the key's private half
+    // stay in this process.
+    const tokenEnv =
+      kind === "codex"
+        ? "CODEX_BRIDGE_TOKEN"
+        : kind === "claude"
+          ? "CLAUDE_BRIDGE_TOKEN"
+          : kind === "pi"
+            ? "PI_BRIDGE_TOKEN"
+            : kind === "cursor"
+              ? "CURSOR_BRIDGE_TOKEN"
+              : "ACP_BRIDGE_TOKEN";
+    const authority = mintBridgeAuthorityKeyPair();
+    env[bridgeTokenVerifierEnv(tokenEnv)] = bridgeTokenVerifier(bridgeToken);
+    env[bridgeAuthorityKeyEnv(tokenEnv)] = authority.publicKey;
+    rememberBridgeAuthorityKey(bridgeToken, authority.privateKey);
   }
   localServers.recordBridgeToken(kind, environmentId, bridgeToken);
 

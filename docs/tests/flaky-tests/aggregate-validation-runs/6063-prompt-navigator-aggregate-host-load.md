@@ -78,6 +78,26 @@ runner, so isolated totals are not inferred. The isolated pass establishes
 intermittence, not a cause or a repair. No assertion, timeout or skip changed.
 
 
+## Bridge authority review repairs — 2026-11-06
+
+At `451fccdf1`, `mise run test:logged -- --name repair-default -- mise run test`
+reported `activity sweep bridge ownership > readiness timeout reaps the child
+and removes copied credentials (ignores TERM: %s)` failing after 135.78 ms:
+cleanup's process-group signal at line 111 returned `EPERM`. The root group
+used one Bun worker. The outer run ended at its 30-minute deadline after an
+approximately 23-minute host-lease wait, so final aggregate totals are unknown.
+
+The complete unchanged owner passed alone (exit 0, 1.1 s):
+
+```sh
+mise run test:logged -- --name isolate-activity-bridge -- bun test ./tests/unit/activity-sweep-bridge.test.ts --parallel=1 --only-failures
+```
+
+Evidence: host temporary artifacts `orkestrator-test-run.HNKlxf/root-and-agent-support-tests.log`
+and `orkestrator-test-run.Iu6GYp/repair-default.log.gz`. This confirms
+intermittence; the cause remains unconfirmed. No assertion, timeout or skip
+changed.
+
 ## Environment-deletion follow-up review recurrence — 2026-11-06
 
 Preparation at `228561646` ran `mise run test:logged -- --name

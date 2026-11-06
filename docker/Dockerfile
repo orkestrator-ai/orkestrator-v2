@@ -505,12 +505,14 @@ COPY docker/orkestrator-log-writer.sh /usr/local/bin/orkestrator-log-writer
 COPY docker/orkestrator-state-signal.sh /usr/local/bin/orkestrator-state-signal
 COPY docker/orkestrator-worktree-signal.sh /usr/local/bin/orkestrator-worktree-signal
 COPY docker/orkestrator-git-credential.sh /usr/local/bin/orkestrator-git-credential
+COPY docker/orkestrator-bridge-launch.sh /usr/local/bin/orkestrator-bridge-launch
 # Per-boot status and process registration. Owned by node because the
 # entrypoint runs as node after the network policy is fixed; the records are
 # orchestration evidence, not a security boundary against the same user.
 RUN install -d -o root -g root -m 0700 /run/orkestrator-bridge \
  && install -d -o node -g node -m 0755 /run/orkestrator /run/orkestrator/processes \
- && chmod 0755 /usr/local/bin/orkestrator-drain.sh /usr/local/bin/orkestrator-storage.sh /usr/local/bin/orkestrator-migrate.sh /usr/local/bin/orkestrator-log-writer /usr/local/bin/orkestrator-state-signal /usr/local/bin/orkestrator-worktree-signal /usr/local/bin/orkestrator-git-credential
+ && chmod 0755 /usr/local/bin/orkestrator-drain.sh /usr/local/bin/orkestrator-storage.sh /usr/local/bin/orkestrator-migrate.sh /usr/local/bin/orkestrator-log-writer /usr/local/bin/orkestrator-state-signal /usr/local/bin/orkestrator-worktree-signal /usr/local/bin/orkestrator-git-credential /usr/local/bin/orkestrator-bridge-launch \
+ && chown root:root /usr/local/bin/orkestrator-bridge-launch
 # Exercise the installed writer as its runtime user, including actual Perl
 # startup, rotation errors, signals, /dev/full and the no-Perl drain fallback.
 COPY docker/tests/log-writer-test.sh /tmp/orkestrator-log-writer-test.sh

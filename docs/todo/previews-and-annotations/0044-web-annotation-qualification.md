@@ -4,7 +4,8 @@
 
 Analysed 2026-10-27 against `main` at `863b5782`.
 
-Checked against `main` at `ba7cc8d4` (2026-10-25).
+Checked against `main` at `ba7cc8d4` (2026-10-25). Tasks 5, 7 and 8 were run
+against `main` at `c1724ab7` on 2026-11-06 (Linux, beelink).
 
 ### Tasks
 
@@ -21,18 +22,18 @@ Checked against `main` at `ba7cc8d4` (2026-10-25).
    focus, and Accept and resolve by keyboard. Status: blocked (on a frontmost
    host and a request in `awaiting-review` inside the Electron spec).
 5. **Linux re-run after #969 and #983**: the first "Needs verification" item.
-   Status: open.
+   Status: done (2026-11-06, headless; see "Runs on 2026-11-06").
 6. **Quiet-host baselines and targets**: repeat the baselines and decide
    whether to set targets. Status: open.
 7. **Gateway synthetic-capture parity**: the second "Needs verification" item.
-   Status: partly done (real PNG staged since 2026-10-25; target and evidence
-   fields still synthetic).
+   Status: done (2026-11-06: the gateway replays recorded desktop captures,
+   which the Electron spec checks on every run).
 8. **Source-hint capture off macOS and on a real dev server**: the Electron and
    gateway source-hint cases on Linux, a real Vite dev-pipeline capture, and
    disposition of other Babel integrations. Windows remains unqualified and
    outside the current platform scope (0042 D18). Moved from to-do 0950
    (deleted 2026-11-06).
-   Status: open.
+   Status: done (2026-11-06).
 9. **Electron OS-focus assertions on a frontmost host**: the gated `nativeFocus`,
    `getFocusedWebContents()` and `isFocused()` polls run and pass when Electron
    is really frontmost. Moved from to-do 1170 (deleted 2026-11-06).
@@ -190,6 +191,18 @@ Linux, so the run needs no extra hardware.
     - Pros: less work.
     - Cons: Linux is a supported desktop; leaves the matrix row unproved.
 
+**Outcome (2026-11-06).** Run on beelink (Linux 7.1.8, x86_64). The Electron
+spec ran headless, because this host has no disposable display and its real
+one is the user's desktop: the spec gained the
+`ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1` opt-in the design and preview
+specs already had. It then passed in full (16 passed, 2 container opt-ins
+skipped) inside a loopback-only network namespace, after a harness fix (the
+startup-dialog handler). `mise run test:agent:browser:isolated`: every
+annotation case passed; its three failures were two 2340 cases and one
+unrelated CLI case (to-do 7431). Headless means no Wayland or X11 window was exercised;
+OS-level focus stays task 9's. Details and decisions under "Runs on
+2026-11-06" and "Assumptions and decisions".
+
 ### 6. Quiet-host baselines and targets
 
 **Problem.** The baselines were taken at load ~45, so no target can be set.
@@ -235,6 +248,20 @@ the protocol validator is the common contract both paths pass through.
   - **Rely on the shared validator and close the item.**
     - Pros: no work.
     - Cons: validation checks shape, not that values match a real capture.
+
+**Outcome (2026-11-06).** Done as recommended.
+`e2e/agent-testing/web-annotations-native-captures.json` holds real Electron
+captures of the three `/pricing` buttons the gateway annotates
+(`NATIVE_CAPTURE_TARGETS`), recorded on Linux. The gateway's `captureFrom`
+replays their target, evidence, redaction and view geometry, and keeps only
+its own page identity and staged image. The Electron case `desktop captures of
+the gateway spec's targets match the recording it replays` captures the same
+buttons on every run and fails on drift, ignoring only font- and
+display-dependent values (the element rect, computed `width`/`height`, the
+pixel ratio). `ORKESTRATOR_AGENT_TEST_UPDATE_NATIVE_CAPTURES=1` rewrites the
+file. The synthetic record had drifted: it gave the button `role: null`, no
+`type` attribute, empty styles, hierarchy and ancestors, an empty text prefix
+and attribute-free HTML, where the real capture has all of them.
 
 ### 8. Source-hint capture off macOS and on a real dev server
 
@@ -284,6 +311,18 @@ deferral, not a Windows pass.
   - **Alone.**
     - Pros: smaller run.
     - Cons: a second Linux desktop session.
+
+**Outcome (2026-11-06).** Step 1: the Electron case passes on Linux, locally
+and in a container environment (`[verified, not verified]` both times). Step 2:
+the gateway's Docker case passes on Linux (`[true, false, false]`). Step 3: a
+new Electron case serves an app built from the documented Vite 8 snippets with
+the real Vite CLI, captures its button through the desktop app and stores both
+candidates `verified: true` (`annotation-vite/web/src/ViteSave.tsx:2` and
+`ViteLayout.tsx:5`), locally and in a container environment. Step 4: other Babel
+integrations (webpack, Next.js with a Babel config, and the rest) are
+documented as unqualified in
+[source-hint-emitter.md](../../development/source-hint-emitter.md#other-babel-build-setups-are-unqualified),
+with the two checks a user must make.
 
 ### 9. Electron OS-focus assertions on a frontmost host
 
@@ -398,6 +437,13 @@ that names what was actually tested.
   histograms. Capture-to-saved is measured at the client by the Electron
   spec's baseline case (selection → spool, spool → backend commit); see
   "Baselines" under "Runs on 2026-10-25".
+- Since 2026-11-06 the Electron spec (18 tests) runs headless on Linux with
+  `ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1` through
+  `playwright.electron-headless.config.ts`. It has a real Vite 8 dev-server
+  source-hint case (local, and container behind
+  `ORKESTRATOR_AGENT_TEST_ELECTRON_CONTAINER=1`) and a case that checks the
+  recorded desktop captures the gateway spec replays
+  (`web-annotations-native-captures.json`, task 7).
 
 ## Outstanding work
 
@@ -516,6 +562,10 @@ Test code the runs below depend on.
   malformed container check, `outside-workspace` on the real stack with a
   symlink).
 - Done 2026-10-25: baselines recorded (below). No target is set yet.
+- Done 2026-11-06 on Linux (see "Runs on 2026-11-06"): the Electron spec
+  (headless) and the isolated browser suite after #969 and #983, the gateway's
+  Docker cases, the Electron container cases, and source hints from a real
+  Vite dev server.
 - Sign-off: records for milestones A, B and C are below ("Sign-off records,
   2026-10-25"), written by a worker agent and awaiting human review; the
   client capability matrix in
@@ -634,6 +684,84 @@ Capability matrix and known limitations: as milestone A
 Migration and rollback verification: not run
 Reviewer / date: Claude (worker agent), 2026-10-25; awaiting human review
 ```
+
+### Runs on 2026-11-06 (Linux, beelink)
+
+Linux 7.1.8 (Arch, x86_64, 16 logical CPUs), Docker Engine 29.9.2, Electron
+45.0.0, Playwright 1.64.0, Bun 1.4.4; branch
+`web-annotation-qualification-a80b5e3582bd-r1` from `main` at `c1724ab74`.
+Other pipelines were running throughout (load average 8–80) and starting and
+stopping containers. No display was used: every Electron run was headless
+(`ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1`, display variables removed) and
+the browser profiles ran `--headless`. No provider turn ran and no host
+credential was used (credential-free Codex profiles only). Every command ran
+through `mise run test:logged`. Profiles `q0044-docker` and `q0044-cli` and the
+isolated runner's own profile were stopped and reset afterwards; the worktree's
+development image was built for the container runs and removed again.
+
+```text
+Milestone / PR / commit: Linux re-run after #969 and #983, gateway capture
+  parity, source hints on Linux and a real Vite dev server (tasks 5, 7, 8);
+  not a milestone sign-off
+Implemented scope and remaining deferrals: headless opt-in for the Electron
+  spec; startup-dialog handler fix; recorded desktop captures for the gateway;
+  Vite dev-server source-hint cases; startup recovery in the spec's launcher.
+  Deferred: a Linux Wayland/X11 window and OS focus (task 9)
+Platforms, providers, and client versions exercised: Linux headless Electron
+  45.0.0; gateway Chromium (Playwright 1.64.0); Docker Engine 29.9.2; no
+  provider turns
+Logged commands and results: table below
+Real workflow and inactive-environment evidence: capture without an agent tab
+  across renderer reload and backend restart (Electron spec, Linux)
+Fault-injection boundaries exercised: none new
+Capability matrix and known limitations: web-page-annotations.md, updated
+Migration and rollback verification: not run
+Reviewer / date: Claude (worker agent), 2026-11-06; awaiting human review
+```
+
+| Command (abbreviated) | Result |
+| --- | --- |
+| `web-annotations-electron.spec.ts`, headless, host namespace (before any change here except the opt-in) | Fail in `beforeAll`: title stayed `Orkestrator AI`, `net::ERR_NETWORK_CHANGED` in the diagnostics (2340) |
+| Same, in a loopback-only namespace | Fail in `beforeAll`: the "Continue Without GitHub CLI" handler's click waited 30 s for a button no longer in the role tree (fixed, below) |
+| Same, after the handler fix | Pass: 14 passed, 1 skipped (container opt-in), 175 s |
+| Same, with this branch's new cases | Pass: 16 passed, 2 skipped (container opt-ins), 105 s. Two earlier attempts failed on the new parity case and, once that was fixed, on the case after it (it had left the preview on `/pricing`; fixed) |
+| The two container cases, host namespace, pool shim on `PATH`, before the startup recovery | Fail twice in `beforeAll` (2340: 60–120 `ERR_NETWORK_CHANGED` lines); inside the namespace the environment could not be created (`resource-exhausted`: no free Docker address pool) |
+| The two container cases, host namespace, with the startup recovery | Pass: 2 passed, 50 s; each start reloaded once after `ERR_NETWORK_CHANGED`. Stored flags `[true, false]` (fixture HTML) and `[true, true]` (Vite app) |
+| Whole spec with the container opt-in, host namespace | Fail twice: once a descendant outlived a graceful quit (new flake [7432](../../tests/flaky-tests/previews-annotations-and-gateway/7432-annotation-restart-electron-child-outlives-quit.md), no `ERR_NETWORK_CHANGED`); once 2340 after a recovered startup (72 lines, 6 failed lazy imports when Kanban loaded) |
+| `mise run test:agent:browser:isolated` | 49 passed, 3 failed, 111 skipped (opt-in live, Docker and container cases), 1,057 s. Every annotation gateway case that runs there passed: overlapping batches, the count bound, evidence in the local worktree, web review of a desktop capture, the metrics baseline. Failures, none in annotation code: both `host maintenance rehydrates task completion while Settings is closed` cases (2340: 17 and 139 `ERR_NETWORK_CHANGED`; both passed rerun alone, 3.6 and 3.7 s) and `a CLI-initialized project and its cascade removal reach an open renderer` (failed again alone, deterministic: [to-do 7431](../cross-cutting/7431-cli-ui-cascade-removal-collapse-button.md)) |
+| `test:agent:docker` selection of `web-annotations-gateway.spec.ts`, profile `q0044-docker` (`--fixture-environments local,container`, credential-free, pool shim on `PATH`) | Pass: 2 passed, 1 skipped (live), 257 s. Evidence written as `node` at `/workspace/.orkestrator/annotations/<request>-<digest>.png`; container checks `exists,exists,missing,outside-workspace`; evidence removed 240 s after settlement; source hints `[true, false, false]` |
+| Focused unit tests | `web-annotations-native-captures.test.ts` 4 passed; `electron-startup-dialogs.test.ts` 2 passed, and fails against the old handler (negative control); `packaged-electron-app.test.ts` and `electron-display-setup.test.ts` pass; `source-hint-emitter-doc`, `source-hint-emitter-vite.integration` and `browser-preview-source-hints` pass |
+
+Electron, Linux headless (from the 16-passed run):
+
+| Check | Result |
+| --- | --- |
+| Gateway targets (three `/pricing` buttons) | Match the recording, which was taken in an earlier run of the same case |
+| Vite 8 dev server (documented config, real CLI) | Stamp `annotation-vite/web/src/ViteSave.tsx:2:<col>`; stored candidates `ViteSave.tsx:2 · ViteSave` and `ViteLayout.tsx:5 · ViteLayout`, both `verified: true` |
+| Fixture-HTML source hints | `[verified, not verified]`, shown in the thread as "path found in workspace at capture" and "path not confirmed" |
+| Keyboard create and send | Pass. `window-focused true` and `preview-focused-while-selecting true`: headless Ozone reports focus, so the gated OS-focus checks ran, but this is not evidence of real OS focus (task 9) |
+| Capture alignment | Natural scale factor 1, then forced DPR 1 and 2: every combination within the existing bounds |
+| Baselines (loaded host; no targets) | Selection → spool median 145 ms, p90 224 ms, max 291 ms (18); spool → saved median 46 ms, p90 77 ms, max 96 ms (17); backend `command_ms` create mean 2 / max 10 ms, asset stage 3 / 9 ms |
+
+Findings (fixed on this branch unless stated):
+
+- **The Electron spec could not run without a display (fixed).** It now
+  honours the headless opt-in and is in `HEADLESS_CAPABLE_ELECTRON_SPECS`;
+  the preflight still refuses a no-display run that includes any other spec.
+- **The startup-dialog handler could fail the action that triggered it
+  (fixed).** Its unbounded click waited out the action's timeout when the
+  button left the role tree under it. The click is now bounded (5 s) and its
+  failure ignored. After the handler resolves, Playwright waits for the button
+  to become hidden; a still-visible button can time out the triggering action.
+- **The gateway's capture had drifted from the desktop's (fixed, task 7).**
+  Compared with a real capture of the same button, the hand-built record had
+  `role: null` instead of `button`, no `type` attribute, empty styles,
+  hierarchy and ancestors, an empty text prefix, and HTML without attributes.
+- **Docker churn on this host aborts the Vite-served renderer (2340).** The
+  local cases run in a loopback-only namespace; the container cases run in the
+  host namespace with the startup recovery.
+- **The CLI cascade-removal browser case fails deterministically here** (to-do
+  7431; not investigated).
 
 ### Runs on 2026-10-25 (macOS, arktech-mini)
 
@@ -1219,6 +1347,84 @@ Partial evidence only; no milestone was signed off. Linux (Wayland, display
 
 ## Assumptions and decisions
 
+### Task 5: run the Electron spec headless, in a loopback-only namespace (2026-11-06)
+
+This host has no disposable display (the ticket forbids installing Xvfb) and
+its real display is the user's desktop. Options: run on the desktop (refused
+outright); record Linux as blocked; give the spec the headless opt-in four
+other Electron specs already honour. Chose the opt-in, and added the spec to
+`HEADLESS_CAPABLE_ELECTRON_SPECS` so the no-display preflight admits it. Pros:
+no window opens anywhere and every case runs. Cons: headless Ozone is not a
+Wayland or X11 window, and it reports the window focused, so the keyboard case's
+gated OS-focus checks ran but prove nothing about real focus (task 9). The
+first headless run then lost its renderer to Docker churn (2340), so the
+local cases run in a loopback-only network namespace. A one-level `unshare -rn`
+would make Electron uid 0, which Chromium refuses without `--no-sandbox`; the
+nested `unshare --user --map-user` keeps the invoking uid.
+
+### Task 5: bound the startup-dialog click (2026-11-06)
+
+In the namespace run the `beforeAll` failed on the locator handler for
+"Continue Without GitHub CLI": the handler saw the button, then its click waited
+30 s for a button no longer in the role tree, failing the title check that
+triggered it. The run's trace showed only that wait, not why the button left;
+the dialog's label changes with the CLI status ("Not Now" once it is signed
+out rather than missing), and a later modal hides it from role queries. Options: an
+unbounded click (as before); a bounded click whose failure is ignored. After
+the handler resolves, Playwright waits for the button to become hidden, so a
+still-visible button can time out the triggering action. Chose the bounded
+click (5 s). `electron-startup-dialogs.test.ts` covers it and fails
+against the old handler. The next run passed.
+
+### Task 7: replay recorded desktop captures in the gateway spec (2026-11-06)
+
+The recommended option. The comparison ignores the element rect, computed
+`width`/`height` and the pixel ratio, because fonts and displays differ between
+the Linux recording and a macOS run; everything else must match. A run that
+changes what a capture records fails until the file is rewritten with
+`ORKESTRATOR_AGENT_TEST_UPDATE_NATIVE_CAPTURES=1`, which makes the change
+visible in review. The gateway keeps its own page identity (its fixture port)
+and its own staged screenshot, with the pixel ratio set to 1 to match that
+screenshot. The recording is taken at scroll 0, as the gateway's screenshot
+is, and the case leaves the preview on `/settings` so the next case's
+navigation to `/pricing` loads a fresh document (it failed without that).
+
+### Task 8: a real Vite dev server, through the Vite CLI with linked packages (2026-11-06)
+
+Options: start Vite programmatically in the test process; run the Vite CLI in
+the environment's worktree with the documented config. Chose the CLI, so the
+config file, plugin loading and module graph are exactly a developer's. The app
+(`source-hint-emitter-vite-app.ts`) is committed to the fixture repository in
+`beforeAll`, so a container environment clones it too, and its
+`node_modules` links to this repository's installed Vite 8, plugin-react 6,
+`@rolldown/plugin-babel` and `@babel/core` (the integration test's versions),
+so no install runs. The server gets `NODE_ENV=development`, as an unset value
+would be read; this host's build shells export `production`, which turns the
+plugin's own gate off. The capture uses the direct preview rather than the
+Notes column: the renderer path is already covered by the fixture-HTML case,
+and what this step adds is the dev pipeline.
+
+### Task 8: other Babel integrations are documented as unqualified (2026-11-06)
+
+Options: qualify webpack and Next.js in isolated projects with desktop
+captures; document them as unqualified. Chose the second. No user or ticket
+asks for them, and qualifying each needs its own project, production-exclusion
+check and capture. The doc names the two checks that differ by tool (the
+development gate and the root).
+
+### Task 8: run the Electron container cases in the host namespace with startup recovery (2026-11-06)
+
+The container cases cannot use the loopback-only namespace: Docker publishes
+container ports in the host's, and the pool-exhaustion shim needs a default
+route. In the host namespace they first failed twice at startup on 2340.
+Options: record them as blocked in a new to-do; adopt the existing
+`waitForRendererStart` recovery in this spec's launcher, which to-do 7062 task 1
+already proposes for it. Chose the recovery. Pros: the existing, unit-tested
+helper reloads only after a network-change module failure, so any other
+startup failure still fails. Cons: it covers startup only; a full host-namespace
+run still lost a later lazy load once, so the local cases stay in the namespace
+on this host. With it both container cases passed, each after one reload.
+
 ### Task 8: complete 0950's verification disposition (2026-11-06)
 
 Keep Linux and real dev-pipeline captures open and require an explicit outcome
@@ -1314,12 +1520,9 @@ Made on 2026-10-25 without the user, to be validated.
 
 ## Needs verification
 
-- Whether the 2026-09-25 runs still pass after #969 and #983. The Electron
-  and isolated browser suites do (2026-10-17 and 2026-10-25, macOS); the bench
-  and full suite were re-run too. Linux was not re-run.
-- Whether the gateway spec's synthetic capture still matches what the Electron
-  capture path produces. Since 2026-10-25 it carries a real staged PNG and
-  geometry image; target and evidence fields remain synthetic.
+- Linux with a real window. The 2026-11-06 Linux runs were headless (Ozone
+  headless, GPU off), so Wayland and X11 window behaviour and OS focus are
+  unverified there (task 9).
 - The baselines were taken on a host at load ~45; repeat them on a quiet host
   before setting targets.
 

@@ -69,7 +69,10 @@ and, tracked again, re-renders only the items that changed. The turn's end also 
 again every row let go while a card could still read as running. A publish
 tick renders only the rows that moved, and a row whose sub-agents have all
 finished (a failed spawn waits for none) is probed again only on new lifecycle
-evidence.
+evidence. A child's progress reaches only its own rollout, so while any card of
+a running turn is unsettled each publish arms one follow-up publish a probe
+interval later (`scheduleSubagentProbe`); never make a card's hydration wait on
+the next parent event, which may not come until the turn ends.
 
 A steer goes above every row whose items all followed it — the next response
 can open its row while `turn/steer` is in flight — and never freezes an empty

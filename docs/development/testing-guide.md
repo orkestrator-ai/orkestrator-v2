@@ -137,7 +137,11 @@ feature validation still follow the normal requirements.
 ### Public-site smoke tests
 
 `mise run test:browser` also runs `e2e/public-site/` against a fresh production
-build of the public client. To run only that smoke flow:
+build of the public client. On Linux both suites run in a private loopback-only
+network namespace (`scripts/loopback-network.ts`), so other builds' Docker
+networks cannot abort their page loads (flake
+[2340](../tests/flaky-tests/aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md));
+set `ORKESTRATOR_E2E_HOST_NETWORK=1` to keep them on the host network. To run only that smoke flow:
 
 ```bash
 mise run test:logged -- --name public-browser -- \

@@ -9,7 +9,8 @@ review validation of to-do 0042 task 11.
 ### Tasks
 
 1. **Use the startup recovery in the other Electron specs**: every spec that
-   waits for a development window's first title. Status: open.
+   waits for a development window's first title. Status: open
+   (`web-annotations-electron.spec.ts` adopted it on 2026-11-06, to-do 0044).
 2. **Measure it under forced network churn**: show a real reload recovering a
    startup. Status: open (depends on 1); shared recovery helper qualified below.
 
@@ -36,8 +37,12 @@ the failure screen whatever the cause, and routes modules through
 (`:299`, `:360`, `:513`, `:681`), `renderer-log-boundary-electron.spec.ts`,
 `pull-request-pane-electron.spec.ts`, `terminal-input-resume-electron.spec.ts`,
 `connection-outage-electron.spec.ts`, `relayed-events-electron.spec.ts`,
-`artifact-host-electron.spec.ts`, `web-annotations-electron.spec.ts:170` and
-`design-canvas-electron-journey.ts:96`.
+`artifact-host-electron.spec.ts` and
+`design-canvas-electron-journey.ts:96`. `web-annotations-electron.spec.ts`
+uses it since 2026-11-06 (to-do 0044 task 8); on beelink its container cases
+then passed after one reload each, but a whole-spec run in the host namespace
+still lost a later lazy load (the Kanban view) to the same abort, which startup
+recovery does not cover.
 
 **Investigation.** Several of that run's other failures have
 `net::ERR_NETWORK_CHANGED` and `renderer-load-failed` lines in their attached

@@ -371,24 +371,29 @@ describe("design canvas controller", () => {
     release();
   });
 
-  test("a v1 backend falls back to legacy snapshots, never an empty document", async () => {
-    invokeMock.mockImplementation(async (command: string) => {
-      if (command === "design_capabilities")
+  test("a backend without design_capabilities gets a typed read error, not a v1 canvas", async () => {
+    const commands: string[] = [];
+    invokeMock.mockImplementation(async (command: string, args: Record<string, unknown>) => {
+      commands.push(command);
+      if (command === "design_capabilities" && commands.length === 1)
         throw new Error("Unknown backend command: design_capabilities");
-      if (command === "design_changes")
-        return { generation: "legacy", revision: 1, reset: true, events: [] };
-      if (command === "design_action")
-        return {
-          canvas: backend.canvas(),
-          history: { revision: 1, undoCount: 0, redoCount: 0, canUndo: false, canRedo: false },
-        };
-      throw new Error(`unexpected ${command}`);
+      return backend.handle(command, args ?? {});
     });
     const controller = designController("env-1", canvasId);
     const release = controller.acquire();
+    await until(() => controller.projection.readError !== undefined);
+    expect(controller.projection.readError).toMatchObject({ code: "unsupported", retry: "never" });
+    expect(controller.projection.readError?.message).toMatch(/too old for the design canvas/);
+    expect(controller.projection.canvas).toBeNull();
+    // The retired v1 path read `design_changes` and `design_action` snapshots.
+    expect(commands).toEqual(["design_capabilities"]);
+
+    // The failure is not cached: once the backend answers, a retry loads the canvas.
     await controller.refresh();
-    expect(controller.projection.legacy).toBe(true);
+    expect(controller.projection.readError).toBeUndefined();
     expect(controller.projection.canvas?.frames).toHaveLength(2);
+    expect(commands).not.toContain("design_changes");
+    expect(commands).not.toContain("design_action");
     release();
   });
 

@@ -60,6 +60,16 @@ function install() {
                 deletionError: "fixture cleanup refused",
               }
             : {}),
+          // `?delete-slow`: "b" has been deleting for five minutes;
+          // `?delete-slow=<step>` adds the step its machine reports.
+          ...(id === "b" && new URLSearchParams(location.search).has("delete-slow")
+            ? {
+                lifecycleOperation: "deleting",
+                deletionRequestedAt: new Date(Date.now() - 5 * 60_000).toISOString(),
+                lifecycleOperationStartedAt: new Date(Date.now() - 5 * 60_000).toISOString(),
+                deletionStep: new URLSearchParams(location.search).get("delete-slow") || undefined,
+              }
+            : {}),
           ...(id === "b" && new URLSearchParams(location.search).has("accessible-state")
             ? { hasUnreadWork: true, agentMailUnread: 2, prState: "open" }
             : {}),

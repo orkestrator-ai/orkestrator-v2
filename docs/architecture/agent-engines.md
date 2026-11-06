@@ -428,9 +428,10 @@ processed and retryable instead of parking the prompt as outcome unknown;
 nothing was written and the claim is rolled back, so the prompt did not run.
 The change-evidence spool claim and the turn-in-flight restart mark use the
 same owner rule. Tests: `process-identity.test.ts`, `session-preferences.test.ts`,
-`session-manager-lifecycle.test.ts` (the 503 refusal) and `routes/session.test.ts`
-([0726](../todo/agent-engines/0726-claude-preference-lock-reused-pid.md)
-tracks the remaining live container qualification).
+`session-manager-lifecycle.test.ts` (the 503 refusal) and `routes/session.test.ts`.
+It was qualified live in a container, including a restart that left a lock
+naming a reused pid, on 2026-11-06
+([container-qualification.md](../development/container-qualification.md#claude-preference-lock-with-a-reused-pid-docker-desktop-2026-11-06)).
 
 Claude also has a second, unrelated execution mode: `apps/backend/src/core/tmux.ts`
 drives the Claude Code CLI inside a tmux session and observes its terminal

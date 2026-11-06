@@ -7,8 +7,9 @@ item, the open questions and the verification items worked through on
 
 ## Task analysis
 
-Analysed 2026-11-06 against `main` at `e6c3da89` for tasks 2 and 7; the
-other tasks as analysed 2026-10-27 against `main` at `863b5782`.
+Analysed 2026-11-06 against `main` at `e6c3da89` for tasks 2 and 7, and
+against `main` at `c1724ab7` for task 9; the other tasks as analysed
+2026-10-27 against `main` at `863b5782`.
 
 Code items 1 to 5, 7, 8, 10, 11 and 13 are done on `main` and are not
 repeated as tasks; their live checks are. The open questions and the
@@ -24,7 +25,7 @@ repeated as tasks; their live checks are. The open questions and the
 6. **Live Claude question preview**: whether Claude emits previews and the card shows them verbatim (item 3). Status: open.
 7. **Browser interaction checks**: MCP elicitation rehydration, Claude `ask` and `deny` overrides, a coordinator turn that delegates and asks. Status: done with provider fakes (`e2e/InteractionPolicyChecks.spec.ts`); a coordinator turn on a real model stays with 0024.
 8. **Container cells on Cursor and Pi**: `mise run test:agent:docker` for Cursor and Pi. Status: done (2026-11-06, fake engines; live-provider runs are [7040](7040-container-cells-on-real-cursor-and-pi.md)).
-9. **Claude provider sandbox on a real CLI**: `allowUnsandboxedCommands: false` and `strictAllowlist` hold. Status: open.
+9. **Claude provider sandbox on a real CLI**: `allowUnsandboxedCommands: false` and `strictAllowlist` hold. Status: macOS half done (2026-11-06, `mise run verify:claude:sandbox-live`, no defect found); Linux (bubblewrap) half open.
 
 ### 1. Grok project resources off
 
@@ -229,9 +230,29 @@ Two earlier runs of the same task that day show what reaching that result took:
 
 **Problem.** The conformance suite proves the sandbox options are set, not that the CLI enforces them.
 
-**Context.** `claudeExecutionSandbox` sets `allowUnsandboxedCommands` from whether the policy asks for approval and `strictAllowlist` when the network is restricted (`bridges/claude-bridge/src/services/claude-execution-sandbox.ts:31-52`). On Linux without bubblewrap and socat the sandbox cannot run at all.
+**Context.** `claudeExecutionSandbox` sets `allowUnsandboxedCommands` from whether the policy asks for approval and `strictAllowlist` when the network is restricted (`bridges/claude-bridge/src/services/claude-execution-sandbox.ts`, the provider branch at the end of `claudeExecutionSandbox`). On Linux without bubblewrap and socat the sandbox cannot run at all.
 
-**Investigation.** No live test exists. The pinned CLI is `2.1.309`.
+**Investigation.** `src/conformance-execution-policy-live.test.ts` already drove the pinned CLI through the SDK with this sandbox block, but under `bypassPermissions` with its own options, a write inside the working directory blocked by an added `denyWrite`, and a loopback request. It checks neither a write outside the workspace nor whether a card is raised. Its loopback request never reaches the sandbox proxy either: the sandbox's `NO_PROXY` names loopback and the private ranges, so such a request connects directly and only Seatbelt's network rule refuses it. `strictAllowlist` is decided in the proxy.
+
+macOS half done on 2026-11-06 on this Mac (Darwin 27.2.0, arm64), against pinned CLI `2.1.314` (the SDK's bundled binary at Agent SDK `0.3.314`, the same version as the managed toolchain). `bridges/claude-bridge/src/services/claude-provider-sandbox.live.test.ts` runs the whole bridge in a clean process through its own routes (`app.request`, no port bound): session create with an execution policy, prompt, interactions, activity and close. HOME and `CLAUDE_CONFIG_DIR` are a temporary directory the test creates and removes, the API key is a fixture string, and the model is a scripted loopback endpoint that asks for one Bash call per turn. The bridge builds the options itself, so the permission mode, `canUseTool` and the sandbox block are the production ones. The write target is a scratch `outside` directory beside the scratch workspace. The unlisted host is a loopback server the probe starts. No `dev:test` profile, backend or app was started. Results, all asserted by the test:
+
+| Turn | Policy | What the command did | Approval cards |
+| --- | --- | --- | --- |
+| `write-outside` | provider sandbox, auto-approve, restricted | `printf > outside/…` failed: `operation not permitted`; no file | none |
+| `write-outside-escape` | same, with `dangerouslyDisableSandbox: true` | failed the same way; no file | none |
+| `write-outside-escape-ask-accept` | provider sandbox, ask, restricted, escape requested | no file before answering; accepting allowed the outside write | Bash |
+| `write-outside-escape-ask-decline` | same | no file before answering; declining returned a tool error and no file was written | Bash |
+| `network-direct` (and `-escape`) | same | `curl` to the loopback server: `Couldn't connect` (Seatbelt); 0 requests arrived | none |
+| `network-proxy` (and `-escape`) | same | `curl --noproxy ''` through the sandbox proxy: 403, `host is not on the allow list`; 0 requests arrived | none |
+| `network-proxy-ask` | provider sandbox, ask, restricted | the Bash card approved; the request refused as above; 0 arrived | the Bash card only |
+| `control-unsandboxed` | no sandbox, auto-approve, full | wrote `outside/…` and reached the server | none |
+| `control-workspace-write` | provider sandbox, auto-approve, restricted | wrote inside the workspace | none |
+| `control-direct-full`, `control-proxy-full` | provider sandbox, auto-approve, full | reached the server, directly and through the proxy | none |
+| `control-proxy-full-ask` | provider sandbox, ask, full | reached the server after a second card | Bash, then `SandboxNetworkAccess` |
+
+The controls are what make the refusals mean something. The same commands work unsandboxed, and a sandboxed command can still write its workspace. With `strictAllowlist` off, the same proxied request is granted unseen under auto-approve, or raises a `SandboxNetworkAccess` card under `ask`, which is the behaviour the option exists to prevent. No defect was found, so no production bridge code changed. The review follow-up added accepted and declined ask-policy escape turns, proving the write waits for approval. The expanded 14-turn check passed on 2026-11-06 in 23.1 s. It is opt-in: `mise run verify:claude:sandbox-live`, and the slow tier (`*.live.test.ts`). It skips on every platform but macOS. `docs/development/upgrade-agents.md` now runs it on a Claude bump.
+
+Still open: the Linux (bubblewrap) half. It needs a Linux host whose bubblewrap can nest the CLI's user namespace (see "Claude's sandbox on Linux" in `docs/architecture/coordinator.md`). The probe should carry over: lift the platform gate when `claudeLinuxSandboxStatus()` reports the sandbox available, and loosen the refusal-text assertions, which quote Seatbelt and may read differently under bubblewrap.
 
 **Decisions.**
 
@@ -242,6 +263,7 @@ Two earlier runs of the same task that day show what reaching that result took:
   - **macOS only.**
     - Pros: one run.
     - Cons: the Linux sandbox, which has more failure modes, stays unproven.
+  - The macOS half was done first (2026-11-06); the recommended option still stands, with the Linux half open.
 - **What counts as a pass?**
   - **A command that writes outside the workspace fails, and a request to a domain off the allowlist fails, with no approval card (recommended).**
     - Pros: covers both options directly.
@@ -1059,7 +1081,29 @@ Decisions made on 2026-10-25 while working through the file.
     the host default still loads a trusted checkout's resources, which Agent
     Info states.
 
-Decisions made on 2026-11-06 while working through tasks 2 and 7.
+Decisions made on 2026-11-06 while working through tasks 2, 7 and 9.
+
+### Task 9: drive the whole bridge, not the SDK with hand-written options (2026-11-06)
+
+Task 9. Chose to run the real bridge's routes in a probe process (as the MCP sync and first-turn live tests do) instead of extending `conformance-execution-policy-live.test.ts`, which calls the SDK with options of its own. Pros: the sandbox block, permission mode and `canUseTool` are the ones the bridge sends, and "no approval card" is read from the bridge's own `/interactions`, which is what the tab shows. Cons: about 17 s per run, and the probe needs a clean process because the session-manager suites mock the SDK. The existing conformance test is kept: it also covers the unavailable-sandbox refusal.
+
+### Task 9: route one request through the sandbox proxy
+
+Task 9. Chose to send the unlisted request both directly and with `curl --noproxy ''`. The sandbox's `NO_PROXY` covers loopback, so a plain loopback request never reaches the proxy, where `strictAllowlist` is decided. A public domain would reach the proxy without the flag, but the ticket prefers a loopback server, and a public host makes the run depend on the network. The `networkAccess: "full"` controls show that the proxied request is reached, or asked about, once `strictAllowlist` is off. That makes the refusal evidence of the option, not of a broken route.
+
+### Task 9: cover both answers to an ask-policy escape (2026-11-06)
+
+Chose two separate outside-write turns with `dangerouslyDisableSandbox: true`,
+one accepted and one declined through the real bridge interactions route.
+Both assert that the file is absent before the approval is answered. This
+closes the review's ask-policy coverage gap and proves both actual escape
+after acceptance and no write after denial; checking the card alone would
+not establish either outcome. The existing auto-approve cases still prove
+that unattended requests cannot escape.
+
+### Task 9: the CLI under test is the SDK's bundled binary
+
+Task 9. Chose the CLI the SDK bundles, the one a bridge runs when `CLAUDE_CLI_PATH` is unset, over the managed toolchain under the real data directory, which test fixtures must not use. At SDK `0.3.314` it is `2.1.314`, the pinned toolchain version. The test fails if the two drift apart. `ORKESTRATOR_POLICY_CLAUDE_PATH` names another binary.
 
 ### Task 2: keep a skill written during a running turn as residual risk
 

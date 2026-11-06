@@ -39,8 +39,6 @@ export interface DesignInspectorProps {
   meta?: DesignFrameMeta;
   /** Live iframe runtime for local preview; absent while the frame is culled. */
   bridge?: DesignFrameBridge;
-  /** v1 backend: no structure identity. */
-  legacy: boolean;
   status: DesignInspectorStatus;
   /** Returns the intent id, or undefined when the shell refused the edit. */
   onApply: (styles: Record<string, string | null>) => string | undefined;
@@ -106,7 +104,6 @@ function InspectorBody({
   frame,
   meta,
   bridge,
-  legacy,
   status,
   onApply,
   onReselect,
@@ -475,11 +472,6 @@ function InspectorBody({
           <p className="mt-1 text-[11px] text-muted-foreground">
             SVG element: some CSS properties behave differently, and presentation attributes are not
             edited here.
-          </p>
-        )}
-        {legacy && (
-          <p className="mt-1 text-[11px] text-muted-foreground">
-            This backend does not track element structure; any frame change requires reselecting.
           </p>
         )}
       </div>

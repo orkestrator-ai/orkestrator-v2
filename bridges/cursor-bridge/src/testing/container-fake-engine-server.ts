@@ -10,6 +10,7 @@
  * over the fake SDK. This only supplies the fake's own files, under
  * `FAKE_CURSOR_ROOT` (default `/tmp/orkestrator-qa-fake-cursor`).
  */
+import "@orkestrator/protocol/node/bridge-launch-environment";
 import { mkdirSync } from "node:fs";
 
 const root = process.env.FAKE_CURSOR_ROOT ?? "/tmp/orkestrator-qa-fake-cursor";

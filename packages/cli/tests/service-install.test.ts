@@ -40,6 +40,7 @@ async function fixture(
     credentialFailure?: boolean;
     defaultDir?: boolean;
     endpoints?: Array<{ role: string; url: string }>;
+    url?: string;
   } = {},
 ) {
   const box = await createSandbox();
@@ -71,7 +72,7 @@ async function fixture(
           pid: process.pid,
           startedAt: new Date().toISOString(),
           processIdentity,
-          url: ADDRESS,
+          url: options.url ?? ADDRESS,
           endpoints: options.endpoints ?? [],
           authFile,
           dataDir,
@@ -224,6 +225,39 @@ test.each(["human", "json"])("%s output names the local listeners", async (outpu
     expect(result.out).toContain(local);
     expect(result.out).not.toContain("45002");
   }
+});
+
+test("a loopback-only service is not reported as having no browser listener", async () => {
+  // `-- --host 127.0.0.1`: the gateway is the primary URL and the client endpoint.
+  const local = "http://127.0.0.1:45003/";
+  const f = await fixture({ url: local, endpoints: [{ role: "client", url: local }] });
+  const result = await f.run(["--timeout", "10s"]);
+  expect(result.code).toBe(0);
+  expect(result.out).toMatch(
+    /address\s+\(no remote browser listener; see local listeners and the log\)/,
+  );
+  expect(result.out).toMatch(/local listeners\s+http:\/\/127\.0\.0\.1:45003\//);
+  expect(result.out).not.toContain("no browser listener");
+});
+
+test("a degraded remote browser listener keeps the log hint alongside local listeners", async () => {
+  const local = "http://127.0.0.1:45004/";
+  const control = "http://127.0.0.1:45005/";
+  const f = await fixture({
+    url: control,
+    endpoints: [
+      { role: "control", url: control },
+      { role: "client", url: local },
+    ],
+  });
+  const result = await f.run(["--timeout", "10s"]);
+  expect(result.code).toBe(0);
+  expect(result.out).toMatch(
+    /address\s+\(no remote browser listener; see local listeners and the log\)/,
+  );
+  expect(result.out).toMatch(/local listeners\s+http:\/\/127\.0\.0\.1:45004\//);
+  expect(result.out).not.toContain("loopback only");
+  expect(result.out).not.toContain("45005");
 });
 
 /** A launcher that has already given up by the time the install starts waiting. */

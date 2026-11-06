@@ -126,6 +126,8 @@ export const DOCKER_LOG_AREAS = defineLogAreas({
       "peers.refused":
         "The agent tools server closed connections from addresses outside loopback and this backend's Docker networks (at most one entry a minute, with a count).",
       "peers.subnets-loaded": "The Docker subnets the agent tools server admits were reloaded.",
+      "port.loopback-taken":
+        "The agent tools server gave up a port because another process holds it on 127.0.0.1, where host agents call; it moves to a free port.",
       "peers.subnets-load-failed":
         "The Docker subnets the agent tools server admits could not be read; cached permissions are cleared and only loopback is admitted until a successful retry.",
     },

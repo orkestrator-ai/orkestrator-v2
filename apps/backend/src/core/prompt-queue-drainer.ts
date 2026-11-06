@@ -112,10 +112,24 @@ export class PromptQueueDrainer {
     return sweep;
   }
 
+  /**
+   * Types agent mail into an idle tab. The session's liveness is always probed
+   * afresh (`claude_tmux_status` without a reuse age), so mail never reaches a
+   * dead session on an answer the poll loop gave seconds ago, and the
+   * environment, queue and draft are read again after that probe, then the
+   * draft once more inside the queue boundary.
+   *
+   * `presence` is what {@link mailInjectPresence} answered for this tab in the
+   * same pass. When it is `idle` those reads have just been made, so the
+   * gate does not repeat them before the probe (to-do 1202 task 8, BG-15).
+   * Without it they run first, so an unchecked caller still stops at a held
+   * queue or draft before spending a probe.
+   */
   async dispatchMailInject(input: {
     environmentId: string;
     tabId: string;
     text: string;
+    presence?: Awaited<ReturnType<PromptQueueDrainer["mailInjectPresence"]>>;
   }): Promise<
     | { outcome: "accepted" }
     | { outcome: "held"; reason: "queue" | "draft" | "busy" | "environment-unready" }
@@ -124,47 +138,18 @@ export class PromptQueueDrainer {
     const stateKey = createClaudeTmuxStateKey(input.environmentId, input.tabId);
     const queueKey = `${TMUX_AGENT}\0${stateKey}`;
     const draftKey = `${TMUX_AGENT}:${input.environmentId}:${encodeURIComponent(stateKey)}`;
-    const [environment, queue, draft] = await Promise.all([
-      this.storage.getEnvironment(input.environmentId),
-      this.storage.getPromptQueue(queueKey),
-      this.storage.getComposeDraft(draftKey),
-    ]);
-    if (
-      !environment ||
-      environment.deletionRequestedAt ||
-      !isEnvironmentReadyForAgents(environment)
-    ) {
-      return { outcome: "held", reason: "environment-unready" };
+    if (input.presence !== "idle") {
+      const held = await this.mailInjectHold(input.environmentId, queueKey, draftKey);
+      if (held) return held;
     }
-    if (
-      queue &&
-      (queue.outstandingClaim !== undefined ||
-        queue.inFlight !== undefined ||
-        queue.messages.length > 0)
-    ) {
-      return { outcome: "held", reason: "queue" };
-    }
-    if (this.composeDraftHoldsQueue(draft?.value)) return { outcome: "held", reason: "draft" };
     const status = await this.invoke<TmuxStatusSnapshot | null>("claude_tmux_status", {
       environmentId: input.environmentId,
       tabId: input.tabId,
     });
     // Mail is not user work and must never resurrect a stopped session.
     if (!status?.running || status.busy === true) return { outcome: "held", reason: "busy" };
-    const [latestQueue, latestDraft] = await Promise.all([
-      this.storage.getPromptQueue(queueKey),
-      this.storage.getComposeDraft(draftKey),
-    ]);
-    if (
-      latestQueue &&
-      (latestQueue.outstandingClaim !== undefined ||
-        latestQueue.inFlight !== undefined ||
-        latestQueue.messages.length > 0)
-    ) {
-      return { outcome: "held", reason: "queue" };
-    }
-    if (this.composeDraftHoldsQueue(latestDraft?.value))
-      return { outcome: "held", reason: "draft" };
+    const held = await this.mailInjectHold(input.environmentId, queueKey, draftKey);
+    if (held) return held;
     const boundary = await this.storage.withEmptyPromptQueueForMail(
       queueKey,
       input.environmentId,
@@ -186,6 +171,36 @@ export class PromptQueueDrainer {
       },
     );
     return boundary.empty ? boundary.value : { outcome: "held", reason: "queue" };
+  }
+
+  /** Why mail must wait for this tab's environment, queue or draft, or `null`. */
+  private async mailInjectHold(
+    environmentId: string,
+    queueKey: string,
+    draftKey: string,
+  ): Promise<{ outcome: "held"; reason: "queue" | "draft" | "environment-unready" } | null> {
+    const [environment, queue, draft] = await Promise.all([
+      this.storage.getEnvironment(environmentId),
+      this.storage.getPromptQueue(queueKey),
+      this.storage.getComposeDraft(draftKey),
+    ]);
+    if (
+      !environment ||
+      environment.deletionRequestedAt ||
+      !isEnvironmentReadyForAgents(environment)
+    ) {
+      return { outcome: "held", reason: "environment-unready" };
+    }
+    if (
+      queue &&
+      (queue.outstandingClaim !== undefined ||
+        queue.inFlight !== undefined ||
+        queue.messages.length > 0)
+    ) {
+      return { outcome: "held", reason: "queue" };
+    }
+    if (this.composeDraftHoldsQueue(draft?.value)) return { outcome: "held", reason: "draft" };
+    return null;
   }
 
   /** Read-only gate used by agent mail before it claims a durable message. */

@@ -179,6 +179,20 @@ jobs:
         if: ${{ !cancelled() }}
         run: bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-live-egress-filter.test.ts --parallel=1
 
+      # Claude Code, Codex, OpenCode, Pi and Grok finish fake-provider turns with the
+      # telemetry hosts refused (6100); Cursor remains unqualified (7420).
+      - name: Live agent CLIs without telemetry hosts
+        if: ${{ !cancelled() }}
+        run: bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-live-telemetry-hosts.test.ts --parallel=1
+
+      # Host loopback refused on a default rootless daemon (to-do 4730 task 2).
+      # It skips on these rootful runners: it needs a rootless daemon declared
+      # with ORKESTRATOR_LIVE_ROOTLESS_HOST_LOOPBACK=disabled, which
+      # `mise run docker:disposable -- start` prints for a manual run.
+      - name: Live rootless default loopback
+        if: ${{ !cancelled() }}
+        run: bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-live-rootless-loopback.test.ts --parallel=1
+
       - name: Live readiness faults (C09, C10, C22, C23)
         if: ${{ !cancelled() }}
         run: bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-live-readiness.test.ts --parallel=1

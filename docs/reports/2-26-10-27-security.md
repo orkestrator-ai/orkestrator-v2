@@ -256,9 +256,15 @@ the token is in a root-only file, and a user's wider policy restarts an idle
 bridge and resumes
 (todo 3930).
 The agent's uid can no longer read a token, answer an approval or clear
-`readOnly`. It can still kill the bridge and catch a token on its port, or plant
-code for the next start
-([todo 4980](../todo/containers-and-environments/4980-agent-uid-process-control.md));
+`readOnly`. On a `bridge-launch=1` image (2026-11-06) a token it catches on the
+bridge's port answers nothing, because what changes an agent's authority carries
+the backend's signature, and the bridge starts from a root-owned launcher that
+reads nothing the agent can write
+([agent-approvals.md](../architecture/agent-approvals.md)). It can still replace
+the bridge with one it runs
+([todo 7250](../todo/containers-and-environments/7250-bridge-replaced-by-an-agent-process.md))
+and load code into Pi's bridge through project extensions
+([todo 7251](../todo/containers-and-environments/7251-pi-project-extensions-in-the-bridge-process.md));
 OpenCode has no bridge, so its plain password is kept from the agent by a plugin
 inside its server
 (todo 4981);
@@ -650,9 +656,13 @@ without decrypting anything, and fails closed when its daemon dies; an older
 image's gateway keeps address-only enforcement until it is rebuilt. The
 network settings and the README state that an allowed service still accepts
 whatever it is sent, and what the checks cannot see (an encrypted
-ClientHello, domain fronting, UDP and other protocols). The default allowlist
-still carries the telemetry hosts until a check without them is run
-([todo 6100](../todo/containers-and-environments/6100-default-allowlist-telemetry-hosts.md)).
+ClientHello, domain fronting, UDP and other protocols). On 2026-11-06 the
+default allowlist dropped the telemetry hosts (`sentry.io`,
+`statsig.anthropic.com`, `statsig.com`) after Claude Code, Codex, OpenCode
+and Pi finished fake-provider turns without them (to-do 6100;
+[qualification](../development/container-qualification.md#agent-clis-without-telemetry-hosts-on-rootful-linux-engine-2026-11-06));
+Grok, Cursor and the release note are
+[todo 7420](../todo/containers-and-environments/7420-telemetry-hosts-grok-and-cursor-turns.md).
 
 - **IP-based allowlist.** Domains are resolved into an ipset, with no SNI or Host check (`docker/firewall-domains.sh`). Default hosts on shared fronts (Google front-ends, Azure Blob, Cloudflare-fronted npm/OpenAI) let traffic reach other tenants on the same edge IPs.
 - **Allowed APIs accept attacker credentials.** Examples: `sentry.io` with an attacker DSN, `api.anthropic.com` or `openrouter.ai` with an attacker key, GitHub gists. `init-firewall.sh:21-22` acknowledges this.

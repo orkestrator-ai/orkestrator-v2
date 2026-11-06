@@ -669,6 +669,24 @@ union, so a bump that adds a row id fails the typecheck until it is placed.
    `docs/todo/agent-engines/0005-mid-turn-steer-and-interrupt.md` is worth
    reopening, not that the bridge is broken.
 
+   On macOS, re-prove that the CLI enforces the provider sandbox
+   `claudeExecutionSandbox` sets: a command cannot write outside the
+   workspace or reach an unlisted host under auto-approve, even when it asks
+   to run unsandboxed, and neither raises an approval card. Under `ask`, an
+   escape request must raise a Bash approval card: the file is absent while
+   pending, acceptance allows the outside write, and decline prevents it.
+   This runs the real bridge and CLI in
+   a temporary home, with no credentials and a scripted model:
+
+   ```bash
+   mise run verify:claude:sandbox-live
+   ```
+
+   Its controls also pin what the sandbox proxy does without
+   `strictAllowlist` (an unlisted host is granted unseen, or asked about in a
+   second card); if one of them starts failing, the CLI changed its network
+   model and `claude-execution-sandbox.ts` needs another look.
+
    Re-check the Linux command sandbox on a Linux host. The probe in
    `packages/protocol/src/node/claude-linux-sandbox.ts` models how the CLI
    runs a command (bubblewrap, then its `apply-seccomp` helper nesting a user

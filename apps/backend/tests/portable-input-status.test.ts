@@ -53,7 +53,7 @@ case "$1" in
   info) echo '{"OSType":"linux","SecurityOptions":${scenario === "rootful" ? "[]" : '["name=rootless"]'}}' ;;
   inspect)
     case "$3" in
-      *Labels*) echo '${staged.revision}' ;;
+      *Labels*) printf '%s\\t3\\t%s\\n' '${staged.revision}' '[{"Type":"bind","Source":"/private/staged-inputs","Destination":"/claude-config"}]' ;;
       *) ${scenario === "inspect-failed" ? "exit 1" : "echo sha256:fixture"} ;;
     esac ;;
   *) exit 1 ;;
@@ -62,6 +62,11 @@ esac
           async () => {
             const status = await environmentInputStatus(environment.id, context);
             expect(status.mode).toBe("staged");
+            expect(status.revision).toBe(staged.revision);
+            expect(status.stagedAt).toBe(staged.stagedAt);
+            expect(status.providers).toEqual(staged.providers);
+            expect(status.missingProviders).toEqual([]);
+            expect(JSON.stringify(status)).not.toContain("/private/staged-inputs");
             expect(status.unreadableOnRootless ?? false).toBe(scenario === "old-image");
             expect(capabilities).toHaveBeenCalledTimes(
               scenario === "rootful" || scenario === "inspect-failed" ? 0 : 1,

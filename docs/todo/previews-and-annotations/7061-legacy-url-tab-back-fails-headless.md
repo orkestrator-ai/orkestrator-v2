@@ -35,7 +35,12 @@ same message (`Expected: "http://localhost:44475/"`, `Received:
 does not touch preview navigation. Run without it
 (`--grep-invert "keeps a link and Back through routine"`), the other 21 cases
 passed twice in a row (42 of 42). It was not run on a display: beelink has no
-disposable one, and runs must not use the signed-in desktop. Not recorded as a
+disposable one, and runs must not use the signed-in desktop. On 2026-11-06 it also
+failed 2 of 2 complete-owner runs on macOS 27.2 arm64 with hidden windows (no
+shell attached), at `ee2cc8423` with and without to-do 0042's task 10 cases,
+at the same check (now `:2335`) with the same message; the other 23 cases
+passed with it left out (0042 evidence log, 2026-11-06). So it is not
+Linux-only; a run with a shown window is still missing. Not recorded as a
 flake, because it has never passed here.
 
 **Decisions.**

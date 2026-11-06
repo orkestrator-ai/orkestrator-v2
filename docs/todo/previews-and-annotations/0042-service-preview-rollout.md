@@ -8,7 +8,8 @@ retention, tunnel liveness, compatibility cases and UI items against
 (2026-11-01); the Next.js fixture (task 5) and task 6's metric additions
 against `7b48c23fb` (2026-11-03); the default flip and legacy tab migration
 (tasks 7 and 8) against `4e3caa079` (2026-11-04); the 0622 window-close cause
-(task 11) against `e6c3da899` (2026-11-06).
+(task 11) against `e6c3da899` (2026-11-06); the task 10 Electron cases
+against `ee2cc8423` (2026-11-06).
 
 ## Task analysis
 
@@ -18,23 +19,31 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 1. **Two-machine tailnet run**: the runbook run with a decoy, real-latency
    baselines, a throttled link, network loss and publication from the second
-   machine. Status: blocked (on a second machine).
+   machine. Status: blocked (on a second machine): one host cannot be two
+   machines on a tailnet, and no second machine was available on 2026-11-06.
 2. **Real private DNS and certificates**: one support row per deployment type,
    with and without Tailscale Serve (`publicPort`). Status: blocked (on a real
-   private zone and wildcard certificate).
+   private zone and wildcard certificate, with a second machine to reach it
+   from): a throwaway CA and a browser-local proxy cannot show renewal, expiry
+   or real resolution.
 3. **Shipping Safari and iOS, top-level**: Safari with real certificate trust,
    the hostile-worker case there, and the iOS handoff on a device or
-   simulator. Status: blocked (on macOS Safari and iOS hardware).
+   simulator. Status: blocked (on macOS Safari and iOS hardware): WebKit in
+   Playwright is not shipping Safari, and no device or simulator session has
+   been available to these runs.
 4. **Docker Desktop on Windows**: binding inspection, Auto ports, recreation
    and the exec relay. Status: not needed (2026-11-04): the maintainer put
    Windows out of scope, so no default waits on it (D18).
 5. **Remaining compatibility cases**: a streaming or router framework fixture
    and real-provider OAuth. Status: partly done (2026-11-03): the Next.js
    16.4.3 app-router fixture and its spec pass in Chromium and Firefox (WebKit
-   not run on beelink, 2680). Real-provider OAuth is still deferred (D13).
+   not run on beelink, 2680). Real-provider OAuth is still deferred (D13): it
+   needs a real sign-in with a provider account, which isolated runs must not
+   make.
 6. **Performance thresholds and missing metrics**: set thresholds from task
    1's baseline; add HMR, reconnect and desktop-ingress measurements. Status:
-   blocked (thresholds on task 1); metric additions done (2026-11-03:
+   blocked (thresholds on task 1, whose two-machine baseline they are set
+   from); metric additions done (2026-11-03:
    desktop reconnect counts and ingress connect and first-byte series; HMR
    delivery stays with the latency script).
 7. **Flip defaults and cohort sign-off**: tunnel and relay defaults, the
@@ -43,12 +52,17 @@ Analysed 2026-10-27 against `main` at `863b5782`.
    Tasks 1 and 6 did not run first and stay open as evidence for that flip.
 8. **Retire the legacy route and compatibility mode**: code item 6 and the
    support-window and legacy-tab annotation questions. Status: blocked (on the
-   support window). Stored tabs that match one service now migrate (D21).
+   support-window decision, a maintainer call in Open questions). Stored tabs
+   that match one service now migrate (D21).
 9. **Shared legacy partition retention**: the remaining half of code item 4.
-   Status: blocked (on task 8).
+   Status: blocked (on task 8, so on the same support-window decision): the
+   shared partitions serve legacy URL tabs until that route is retired.
 10. **Real-window leftovers**: the pane-layout announcement (item 9), node
     retention against a real command node, and the narrow toolbar measured in
-    a window (item 11). Status: open.
+    a window (item 11). Status: done (2026-11-06): two Electron spec cases
+    show another client's layout save reaching the open window (also while
+    its environment is not shown) and measure the toolbar at a 519 px pane;
+    node retention stays at unit level, as recommended (D27).
 11. **Preview flakes 0620 and 0622**: code items 12 and 13. Status: done
     (2026-11-06): 0620 and the 0622 baseline-count race were fixed on
     2026-11-01 (D9 to D11). The 0622 window-close symptom was reproduced under
@@ -57,6 +71,9 @@ Analysed 2026-10-27 against `main` at `863b5782`.
     `ERR_NETWORK_CHANGED`, which failed them at review validation (D24).
 12. **Partition disk use on a long-lived profile**: the "Needs verification"
     item. Status: partly done (`disk:report` measures it; no long-lived data).
+    The rest needs a long-lived real profile with many services over months;
+    a disposable test profile cannot stand in for one, and runs must not read
+    the user's data directory.
 
 Done and on `main` (`f47398fd`, #1280, 2026-10-25): code items 1 to 3, 5, 7,
 8 and 10, node-partition retention, the real-window retention pass, Reset site
@@ -406,6 +423,26 @@ spec has no case for any of the three.
     - Pros: real evidence for little extra time.
     - Cons: lengthens an already long run.
 
+**Outcome (2026-11-06, `main` at `ee2cc8423`).** Both recommended directions
+taken. `service-preview-electron.spec.ts` has two new cases:
+
+- `at a 519 px pane the address takes its own full-width row in service and
+  URL tabs`: the window at its 800×600 minimum and 100 % zoom gives a pane of
+  exactly 519 CSS px. In a service tab and a legacy URL tab the address form
+  sits below the button row and spans the toolbar's 503 px content width;
+  the input is 369.7 px (service) and 365.3 px (URL), against 92 px before
+  code item 11. The case holds the input to at least two thirds of the row
+  rather than a pixel count (D26).
+- `another client's layout save reaches the open window, also while its
+  environment is not shown`: a second client on the window's own backend
+  (the gateway over HTTP, D25) adds a third service tab while the
+  environment is shown, then reorders the tabs and drops that one while no
+  environment is selected. The window adopted both revisions without a
+  reload, showed the reordered strip on return, and wrote nothing back.
+
+The 2026-10-21 miss did not reproduce, so code item 9 is closed as verified.
+Node retention stays at unit level (D27). Runs are in the evidence log.
+
 ### 11. Preview flakes 0620 and 0622
 
 **Problem.** Two Electron preview flakes stay open and can fail
@@ -570,10 +607,11 @@ partitions, and the evidence log where run results are now recorded.
   `e2e/agent-testing/service-preview-electron.spec.ts` (in
   `mise run test:agent:electron`, so not in CI either) opens worktree
   services in the real Electron window with `ORKESTRATOR_PREVIEW_TRANSPORT=1`
-  on a disposable agent-test profile: 17 tests since 2026-10-25, including a
+  on a disposable agent-test profile: 24 tests since 2026-11-06, including a
   Vite application, a second window on a second, disposable standalone
   backend, a retention pass, Reset site data with a hostile worker and legacy
-  URL tab history. Agent-test backends keep that variable
+  URL tab history, the toolbar at a 519 px pane and another client's layout
+  save. Agent-test backends keep that variable
   and `ORKESTRATOR_PREVIEW_RELAY` (`AGENT_TEST_SAFE_ENV_NAMES` in
   `apps/desktop/electron/backend-process.ts`); before 2026-10-18 they were
   stripped, so the override silently did nothing in an isolated profile.
@@ -654,9 +692,11 @@ partitions, and the evidence log where run results are now recorded.
    (change announcement, re-read, adopt), and new tests show it does in both
    a browser client and an Electron-style window. Re-selecting an environment
    never re-reads the layout (hydration is once per renderer), so it could not
-   have recovered a missed update. Still open: the 2026-10-21 miss did not
-   reproduce at unit level; check in a real Electron window whether that
-   announcement reaches it.
+   have recovered a missed update. Verified in a real Electron window
+   2026-11-06 (task 10): another client's save reached the open window both
+   while its environment was shown and while none was selected, with no
+   reload and no write-back. The 2026-10-21 miss did not reproduce there
+   either.
 10. Done 2026-10-22: service tabs are named "<service label> N" once their
     environment's service list is loaded (`DraggableTab.tsx`); other browser
     tabs stay "Browser N". The Electron spec now finds service tabs by that
@@ -667,8 +707,9 @@ partitions, and the evidence log where run results are now recorded.
     picker shrinks first (shared classes in `browser-tab-hooks.ts`, used by
     `ServiceBrowserTab.tsx` and `BrowserTab.tsx`). Worked out from the classes,
     a 519 px pane gives the address about 358 px in a service tab and 371 px in
-    a URL tab (was 92 and about 144). Class-contract tests only; not measured
-    in a real window.
+    a URL tab (was 92 and about 144). Measured in a real window 2026-11-06
+    (task 10): 369.7 px and 365.3 px of a 503 px address row, which sits
+    below the buttons in both tab kinds.
 12. Done 2026-11-01: flake
     [0620](../../tests/flaky-tests/previews-annotations-and-gateway/0620-service-preview-keyboard-picker-register-item.md)
     is resolved. Delaying the renderer's zero-delay timers, as Chromium's
@@ -1686,6 +1727,48 @@ No dev server process was left running after the runs. The spec removes its
 temporary root in `afterAll`; its private temporary directory was not inspected
 separately.
 
+2026-11-06, task 10 Electron cases, branch
+`electron-spec-cases-39d169043933-r1` from `main` at `ee2cc8423`. macOS 27.2
+arm64, Bun 1.4.4, Electron 45.0.0, Playwright 1.64.0. The spec's own
+disposable agent-test profile under a private temporary root, with
+`ORKESTRATOR_PREVIEW_TRANSPORT=1` and `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`
+as the launcher sets them; no shell was attached, so Electron ran with hidden
+windows. No provider turn, login or container. Commands, each through
+`mise run test:logged` with `ORKESTRATOR_AGENT_TEST_RUN_ID` set to the run's
+name:
+
+| Run | Command (after `bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts e2e/agent-testing/service-preview-electron.spec.ts`) | Passed | Failed | Not run |
+| --- | --- | --- | --- | --- |
+| `svc0042-task10-new` | `--grep "519 px pane\|another client's layout save"` | 2 | 0 | 0 |
+| `svc0042-task10-owner` | none (complete owner) | 16 | 1 (legacy URL tab Back, [7061](7061-legacy-url-tab-back-fails-headless.md)) | 7 (serial, after the failure) |
+| `svc0042-task10-without` | `--grep-invert` the two new cases | 15 | 1 (the same case and message) | 6 |
+| `svc0042-task10-owner2` | `--grep-invert "keeps a link and Back through routine"` | 23 | 0 | 0 |
+
+- The new cases passed on their own (12.1 s with startup) and inside the
+  complete owner (338 s for 23 cases), so they neither depend on earlier
+  cases nor disturb the ones after them.
+- Toolbar at a 519 px pane: the window's minimum size needed no widening
+  (`shortfall` 0). Service tab: pane 519, toolbar content 503, address form
+  503 wide at y 161 below the buttons (y 123 to 155), input 369.7. URL tab:
+  the same row, input 365.3. The rest of the row is the route chip (service
+  label or "Backend") and **Go**. Screenshots:
+  `output/visual-previews/toolbar-519-service.png` and `toolbar-519-url.png`.
+- Cross-client layout save (a `BackendHttpClient` on the profile's gateway
+  with its token, never printed): the window adopted the added tab at
+  revision 34, and the reorder made while no environment was selected at
+  revision 35, before it was selected again; the strip then read `svc-b 1`,
+  `svc-a 2`. A marker set in the renderer survived, so no reload was
+  involved, and 1.5 s later the stored revision was still 35. In the
+  two-case run the revisions were 4 and 5.
+- The legacy URL tab Back case failed at `:2335` with the address left on
+  `/app/next`, with or without the new cases: to-do 7061's symptom, here on
+  macOS hidden windows rather than Linux headless. It is not caused by this
+  change.
+- Cleanup: the spec stopped Electron, its backend, the second backend and
+  every fixture, and removed its temporary root; no Electron or backend
+  process from these runs was left. Evidence:
+  `output/agent-testing/svc0042-task10*`.
+
 ## Constraints and rationale
 
 - The threat boundaries, the credential and data path, and the resource-owner
@@ -2191,6 +2274,31 @@ Recorded 2026-11-06 for task 11 (the 0622 window-close symptom), on branch
   request hooks for exactly the loads that raced in 0622. (c) cannot reach
   Docker or the network, and `mise run test:agent:electron` does not run that
   way.
+- **D25. Where the other client's layout save comes from (task 10).**
+  Options: (a) a `BackendHttpClient` on the main window's own backend, through
+  its gateway with the profile's token; (b) `save_pane_layout` through the
+  window's own `invoke`, as `showTabs` does; (c) a second Electron window.
+  Chose (a). Pros: it is a separate client by transport and identity, as a
+  browser tab or the CLI is, and the spec already uses that client for the
+  second backend. Cons: it does not exercise a second Electron window's
+  writer. (b) is the same renderer's IPC path, so it says nothing about
+  another client; (c) costs a second window and its own pane state for no
+  extra coverage of the announcement path.
+- **D26. How the 519 px toolbar case asserts the address width (task 10).**
+  Options: (a) the measured pixel width with a small tolerance; (b) the
+  layout structure plus the input holding at least two thirds of its row.
+  Chose (b). Pros: the route chip and **Go** share the row and their width
+  follows label text and platform fonts, so (a) would fail on a host with
+  other fonts while (b) still fails on the old one-row layout (92 px, about
+  18 %). Cons: a regression that shrinks the input by less than a few
+  percent passes. The measured widths are recorded in the case's annotations
+  and the evidence log.
+- **D27. Node retention against a real command node (task 10).** Options:
+  (a) leave it at unit level; (b) add it to task 1's two-machine session.
+  Chose (a), the recommendation. Pros: ten unit tests cover the voucher
+  logic, and a real multi-node setup needs the hardware task 1 waits on.
+  Cons: the 30-minute registry read path is not seen end to end; task 1's
+  session can still pick it up.
 
 ## Needs verification
 

@@ -1,6 +1,6 @@
 # Firewall name-check fixture timeouts
 
-- **ID:** 9834
+- **ID:** 9837
 - **Status:** open
 - **Date observed:** 2026-11-06
 - **Tests:** `init-firewall.sh with name checks > redirects TCP to allowed tuples and every DNS query to the daemon, and lets only marked traffic leave`; `update-firewall.sh --set-domains with name checks > stages DNS lookups while preserving current connection permissions until commit`

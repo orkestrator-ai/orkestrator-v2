@@ -54,7 +54,7 @@ So 1,400 finished records cost 5 to 8 ms on a sweep that runs every 60 s and abo
 
 ## Current state
 
-C3 made the sweep's mailbox sync and owed-delegation reads run once per pass, made coordinator reads write nothing, and cut a delegation wake to two coordinator writes and one announcement. Its outcome table is in the last version of the deleted report: `git show b0fbe4ee1^:docs/reports/coordinator/0110-c3-sweep-and-reads.md`.
+C3 made the sweep's mailbox sync and owed-delegation reads run once per pass, made coordinator reads write nothing, and cut a delegation wake to two coordinator writes and one announcement. Its measurement, task-by-task outcome table and main-opening paths are preserved in [C3: archived outcome](../../reports/2026-11-06-coordinator-batches-outcome.md#c3-archived-outcome).
 
 ## Needs verification
 
@@ -62,7 +62,7 @@ C3 made the sweep's mailbox sync and owed-delegation reads run once per pass, ma
 
 ## Related
 
-- [Coordinator review index](../../reports/coordinator/0000-index.md), finding B1 ("list walked long before the cap")
+- [Coordinator batches outcome](../../reports/2026-11-06-coordinator-batches-outcome.md#status-of-every-finding), finding B1 ("list walked long before the cap")
 - [6360-c2-workflow-records-live-checks.md](6360-c2-workflow-records-live-checks.md): the store-full banner on a live stack, which needs the same kind of seeded store
 
 ## Assumptions and decisions
@@ -75,5 +75,12 @@ successful replacement; a held report still waits for repair. Keeping the blanke
 history guard would preserve three writes even when repair has finished. This does
 not remove the per-wake repair or replace task 2's measurement.
 
-The recovery command uses the final deletion's parent so it includes the corrected
-main-opening path list, rather than finding the earlier deletion by its subject.
+### Tasks 1 and 2: preserve the detailed C3 outcome
+
+Copy the branch report's outcome, including the measurement, task table and
+corrected main-opening path list, into the coordinator outcome report and link
+there. The parent of the squash merge `abc3eea16` contains only the pre-build
+report. Restoring `b0fbe4ee1^` would retrieve the outcome locally but would still
+depend on unmerged branch history; linking only to the batch record would omit
+the detail. The archived copy keeps that detail available with the living docs
+and supersedes the earlier merged-history recovery decision.

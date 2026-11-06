@@ -23,7 +23,7 @@ Each rerun used `mise run test:logged`, one explicit owning file and `--parallel
 
 The isolated passes establish intermittence. Host scheduling pressure is a hypothesis, not an established cause.
 
-Known recurrences are recorded in their existing cases: [0210](../agent-bridges/0210-fake-codex-process-timeout.md), [6193](../backend-services-and-tooling/6193-webkit-generation-reader-einval.md), [4843](4843-e8-recorded-backend-failures.md) and [9838](../environments-and-containers/9838-container-status-excludes-aggregate-timeout.md).
+Known recurrences are recorded in their existing cases: [0210](../agent-bridges/0210-fake-codex-process-timeout.md), [6193](../backend-services-and-tooling/6193-webkit-generation-reader-einval.md), [4843](4843-e8-recorded-backend-failures.md) and [6603](../environments-and-containers/6603-container-status-excludes-aggregate-timeout.md).
 
 ## Other validation results
 
@@ -48,3 +48,53 @@ Static checks and the resolved storage, protocol and row owners passed. The aggr
 `mise run test:logged -- --name merge-tab-launch-alone -- bunx playwright test --config e2e/playwright.config.ts e2e/TabLaunchOverride.spec.ts --workers=1` reproduced both failures in the complete owner (four pass, two fail; 20.5 s). The owner and fixture match the target parent exactly. Isolated evidence: `orkestrator-test-run.j7kxnl/merge-tab-launch-alone.log.gz` under the same temporary root. This persistent failure is not classified as a flake.
 
 Electron, Docker and iOS scenario suites were not run: the conflict resolutions do not change those execution paths. The disposable real-stack profile `merge-delete-0bf060` was stopped and reset; its deletion failure screenshot is `output/visual-previews/delete-retry-real-failure.png`.
+
+## Second merge pass
+
+The post-push fetch found six new target commits, ending at `df3037e291c4e230ab38dc22b689f368715b877f`.
+The second merge conflicted only in the evidence catalogs, case prose and the
+container todo index, including both endpoints of two evidence-case renames.
+Main had independently repaired the case-number collision: its canonical files
+are `6602-firewall-egress-filter-startup-timeout.md`,
+`6603-container-status-excludes-aggregate-timeout.md` and
+`9837-firewall-name-check-fixture-timeouts.md`. The resolution uses those names,
+retains both branches' recurrence evidence, updates references and keeps the
+environment-deletion follow-up alongside main's new todo entries.
+
+The evidence catalogs are consumed by the registry consistency test, so this
+pass validates that owner and repository static checks. Source, configuration
+and tests from main merged without manual resolution; they do not widen this
+pass's conflict-validation scope. The earlier aggregate and browser results
+remain non-green as recorded above; this pass does not claim to repair them.
+
+Second-pass validation: `mise run test:logged -- --name merge-pass2-static -- mise run check` passed (3.8 s); `mise run test:logged -- --name merge-pass2-registry -- bun test ./tests/unit/flaky-tests-index.test.ts --parallel=1 --only-failures` passed (0.3 s).
+
+## Original conflict inventories
+
+### Pass 1
+
+- `apps/backend/src/core/storage-projects.ts`
+- `apps/web/src/components/environments/EnvironmentItem.tsx`
+- `apps/web/src/components/environments/environment-row-facts.ts`
+- `apps/web/src/components/environments/environment-row-model.ts`
+- `apps/web/src/components/federation/useMachineViews.ts`
+- `docs/tests/flaky-tests/aggregate-validation-runs/0000-index.md`
+- `docs/tests/flaky-tests/environments-and-containers/0000-index.md`
+- `docs/tests/flaky-tests/native-agents-and-transcripts/0000-index.md`
+- `docs/tests/flaky-tests/native-agents-and-transcripts/1102-claude-hook-concurrent-counter-snapshot.md`
+- `docs/todo/containers-and-environments/0000-index.md`
+- `packages/protocol/src/node-summaries.ts`
+
+### Pass 2
+
+- `docs/tests/flaky-tests/aggregate-validation-runs/6600-live-head-preparation-owners-vary-with-load.md`
+- `docs/tests/flaky-tests/backend-services-and-tooling/0000-index.md`
+- `docs/tests/flaky-tests/backend-services-and-tooling/6193-webkit-generation-reader-einval.md`
+- `docs/tests/flaky-tests/environments-and-containers/0000-index.md`
+- `docs/tests/flaky-tests/environments-and-containers/6602-firewall-egress-filter-startup-timeout.md`
+- `docs/tests/flaky-tests/environments-and-containers/6603-container-status-excludes-aggregate-timeout.md`
+- `docs/tests/flaky-tests/environments-and-containers/9834-container-status-excludes-aggregate-timeout.md`
+- `docs/tests/flaky-tests/environments-and-containers/9834-firewall-egress-filter-startup-timeout.md`
+- `docs/tests/flaky-tests/environments-and-containers/9837-firewall-egress-filter-startup-timeout.md`
+- `docs/tests/flaky-tests/environments-and-containers/9838-container-status-excludes-aggregate-timeout.md`
+- `docs/todo/containers-and-environments/0000-index.md`

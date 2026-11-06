@@ -122,14 +122,14 @@ describe("launch override marker on the tab strip", () => {
     renderTabs([agentTab("startup-agent")]);
     await waitFor(() => expect(settledReads).toEqual(["answered"]));
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(screen.queryByTestId("tab-launch-override")).toBeNull();
+    expect(screen.queryByTestId("tab-launch-override") === null).toBe(true);
   });
 
   test("an agent tab with no delegation shows nothing and its one shared read does not fail", async () => {
     renderTabs([agentTab("user-tab")]);
     await waitFor(() => expect(settledReads).toEqual(["answered"]));
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(screen.queryByTestId("tab-launch-override")).toBeNull();
+    expect(screen.queryByTestId("tab-launch-override") === null).toBe(true);
     expect(settledReads).not.toContain("failed");
     // No coordinator read is named after the tab's project or environment.
     expect(overrideReads()).toEqual([[COORDINATOR_LAUNCH_OVERRIDES_COMMAND]]);
@@ -148,7 +148,7 @@ describe("launch override marker on the tab strip", () => {
     ]);
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(overrideReads()).toHaveLength(0);
-    expect(screen.queryByTestId("tab-launch-override")).toBeNull();
+    expect(screen.queryByTestId("tab-launch-override") === null).toBe(true);
   });
 
   test("many tabs across panes make one read, however many are workers", async () => {
@@ -184,7 +184,7 @@ describe("launch override marker on the tab strip", () => {
     renderTabs([agentTab("startup-agent")]);
     await waitFor(() => expect(settledReads).toEqual(["failed"]));
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(screen.queryByTestId("tab-launch-override")).toBeNull();
+    expect(screen.queryByTestId("tab-launch-override") === null).toBe(true);
     expect(screen.getByText("Claude 1")).toBeTruthy();
   });
 });

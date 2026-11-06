@@ -258,6 +258,23 @@ describe("backend previous-run", () => {
   });
 });
 
+describe("local-server bridge.orphans-reaped", () => {
+  test("keeps its result, and refuses any other value", () => {
+    const entry = (result: string) =>
+      record("local-server", "bridge.orphans-reaped", "warn", {
+        key: "claude:6e0a6a7e-1111-4e95-817f-084f44d18e8f",
+        pid: 4242,
+        result,
+      });
+    expect(projectEssentialRecord(entry("stopped"), TS)?.fields).toEqual({
+      key: "claude:6e0a6a7e-1111-4e95-817f-084f44d18e8f",
+      pid: 4242,
+      result: "stopped",
+    });
+    expect(projectEssentialRecord(entry("/home/someone"), TS)?.fields?.result).toBeUndefined();
+  });
+});
+
 describe("renderer error entries", () => {
   const fields = {
     errorClass: "TypeError",

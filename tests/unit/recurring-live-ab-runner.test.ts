@@ -117,6 +117,10 @@ describe("live benchmark lifecycle", () => {
       ORKESTRATOR_NATIVE_OBSERVATION_SHARING: "0",
     });
     expect(start[3].ORKESTRATOR_RECURRING_METRICS).toBeUndefined();
+    // Never a window on the host's desktop, and no reachability probe networks.
+    expect(start[3].DISPLAY).toBeUndefined();
+    expect(start[3].WAYLAND_DISPLAY).toBeUndefined();
+    expect(start[3].ORKESTRATOR_HOST_REACHABILITY_CHECK).toBe("off");
     expect(h.commands).toEqual([
       ["dev:stop", "--profile", result.profile],
       ["dev:reset", "--profile", result.profile],
@@ -359,6 +363,39 @@ describe("live benchmark lifecycle", () => {
     expect(result.error).toBeUndefined();
     expect(h.commands.map((args) => args[0])).toEqual(["dev:stop", "dev:reset"]);
     expect(existsSync(resources)).toBe(false);
+  });
+
+  test("a stop that gives up while the launcher is still exiting waits for it, then resets", async () => {
+    const h = harness();
+    let sleepsAfterStop: number | null = null;
+    const sleep = h.runtime.sleep;
+    h.runtime.sleep = (async (ms: number, signal?: AbortSignal) => {
+      if (sleepsAfterStop !== null && ++sleepsAfterStop === 3) {
+        // The launcher finishes its own shutdown a few seconds after dev:stop.
+        h.setStatus({
+          status: "stopped",
+          startedAt: "2026-01-01",
+          processStartTimes: { launcher: 100 },
+          pids: { launcher: h.child.pid },
+          live: { launcher: false },
+          logDir: "/stub/logs",
+        });
+        h.child.emit("exit", 0);
+      }
+      return sleep(ms, signal);
+    }) as typeof sleep;
+    h.runtime.mise = ((args: string[]) => {
+      h.commands.push(args);
+      if (args[0] === "dev:stop") {
+        sleepsAfterStop = 0;
+        return { status: 1 };
+      }
+      return { status: 0 };
+    }) as typeof h.runtime.mise;
+    const result = await runArm(options(), "candidate", 1, "/stub", undefined, "slow", h.runtime);
+    expect(result.error).toBeUndefined();
+    expect(sleepsAfterStop).toBeGreaterThanOrEqual(3);
+    expect(h.commands.map((args) => args[0])).toEqual(["dev:stop", "dev:reset"]);
   });
 
   test("a failed stop for a live profile prevents reset", async () => {
@@ -877,6 +914,11 @@ describe("soak", () => {
       final: {},
       leaks: [],
       backendRssKiB: { baseline: null, final: null },
+      trend: [],
+      growing: [],
+      cacheTrends: [],
+      rssTrend: null,
+      sessions: { requested: 0, opened: 0, cycleSessions: 0, prompts: 0, modelRequests: 0 },
     }));
     const h = harness({
       measureSoak: soak,

@@ -68,3 +68,21 @@ mise run test:logged -- --name merge-resume-owner -- bun test --cwd apps/web ./s
 
 Evidence: `/tmp/orkestrator-test-run.nqin2k/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 No implementation or assertions changed; cause remains unestablished.
+
+## Coordinator unavailable-platform review — 2026-11-06
+
+The archived-history restore case exceeded the 5 s budget at 5700.08 ms.
+
+The default aggregate used two web workers. Web totals: 13,051 passed, 10 skipped, five failed and one error across 13,066 cases in 860 files (874.91 s). Original command: `mise run test:logged -- --name review-default-tests -- mise run test`.
+
+The unchanged complete owner passed alone, exit 0, in 6.2 s:
+
+```sh
+mise run test:logged -- --name review-native-resume-owner -- bun --cwd=apps/web test src/components/chat/NativeResumeSessionDialog.test.tsx --parallel=1 --only-failures
+```
+
+Evidence: `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.Mv0c3i/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`. Passing
+output was deleted by the logged runner, so individual rerun counts were not
+retained. This establishes intermittence, not its cause. No assertion, timeout
+or implementation was changed to hide the failure; the broad check remains
+non-green.

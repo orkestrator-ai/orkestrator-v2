@@ -127,5 +127,5 @@ passed.
 
 - [1202 efficiency follow-ups](1202-efficiency-review-follow-ups.md), task 12.
 - [Measuring Electron main's CPU](../../development/agent-testing.md#measuring-electron-mains-cpu), the method behind the figures in task 2.
-- [Closing check of E26](../../reports/efficiency-logging-database/0000-index.md#closing-check-of-e26-local-desktop-transport), the outcome of efficiency report parts `0400` and `0860`.
+- [Closing check of E26](../../reports/2026-11-06-efficiency-logging-database-outcome.md#closing-check-of-e26-local-desktop-transport), the outcome of efficiency report parts `0400` and `0860`.
 - [Remote gateway](../../architecture/remote-gateway.md).

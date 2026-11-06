@@ -78,6 +78,44 @@ export function emptySignalHealthStates(): Record<SignalHealthState, number> {
   return { unarmed: 0, arming: 0, armed: 0, confirmed: 0, demoted: 0, unsupported: 0 };
 }
 
+/**
+ * Finite names for cache gauge sources: in-memory caches the soak footprint
+ * cannot see through schedulers, pools or subscribers (todo 0048 task 10).
+ *
+ * - `storage-row-cache`: each `StorageDatabase` connection's revision-validated
+ *   store cache.
+ * - `worktree-snapshots`: the diff-stats service's tracked entries, its file
+ *   tree lineages and retained bodies, and its ad hoc file-list and tree reads.
+ * - `local-git-scan`: the process-wide per-worktree line-count cache.
+ * - `native-projection`: the native agent transcript projection's per-session
+ *   maps (views, sync revisions, history, tool details, progressive reads).
+ * - `change-tracking`: the change-tracking service's evidence sources and its
+ *   deleted-environment fences.
+ */
+export type CacheGaugeName =
+  | "storage-row-cache"
+  | "worktree-snapshots"
+  | "local-git-scan"
+  | "native-projection"
+  | "change-tracking";
+
+/**
+ * One cache source's gauges: compiled-in field names to counts (entries,
+ * bytes, in-flight reads). Never a key, target, path or identifier.
+ */
+export type CacheGauges = Readonly<Record<string, number>>;
+
+/** A cache source: reading it walks memory only and never performs I/O. */
+export type CacheGaugeSource = { cacheGauges(): CacheGauges };
+
+/**
+ * Field names a cache source may report: a short lowercase identifier, so a
+ * name can never carry a key or a path into diagnostics.
+ */
+const CACHE_GAUGE_FIELD = /^[a-z][A-Za-z0-9]{0,47}$/;
+/** Fields kept per cache name; owners report a handful. */
+export const MAX_CACHE_GAUGE_FIELDS = 64;
+
 /** A scheduler that re-times its due work after the host slept. */
 export type SuspensionListener = { compensateSuspension(suspendedMs: number): void };
 
@@ -102,6 +140,13 @@ export interface RecurringWorkDiagnostics {
    * keeps waking an idle view. Profile-wide, like `metrics`.
    */
   sessionInvalidations: NativeSessionInvalidationSnapshot;
+  /**
+   * Cache gauges by cache name, summed over that name's live sources (one per
+   * open database connection, say), with how many sources reported. Content-
+   * free counts only; a field that is not a finite, non-negative number is
+   * dropped.
+   */
+  caches: { name: CacheGaugeName; sources: number; gauges: Record<string, number> }[];
   /** Registrations refused because the source table was full. */
   droppedSources: number;
   /** Sources whose `status()` threw; they are skipped, never propagated. */
@@ -116,6 +161,7 @@ export class RecurringDiagnosticsRegistry {
     StatusSource<ContainerGitFetchStatus>
   >();
   private readonly signals = new Map<SignalSourceName, Set<StatusSource<SignalHealthStatus>>>();
+  private readonly caches = new Map<CacheGaugeName, Set<CacheGaugeSource>>();
   private readonly suspensionListeners = new Set<SuspensionListener>();
   private droppedSources = 0;
 
@@ -148,6 +194,25 @@ export class RecurringDiagnosticsRegistry {
     return () => {
       sources.delete(source);
       if (sources.size === 0 && this.signals.get(name) === sources) this.signals.delete(name);
+    };
+  }
+
+  /**
+   * Registers a cache gauge source under its name; several sources of one name
+   * are summed. Bounded per name by {@link MAX_DIAGNOSTIC_SOURCES}: a refused
+   * registration counts as dropped. Unregister removes only this source.
+   */
+  addCacheSource(name: CacheGaugeName, source: CacheGaugeSource): () => void {
+    const sources = this.caches.get(name) ?? new Set<CacheGaugeSource>();
+    if (!sources.has(source) && sources.size >= MAX_DIAGNOSTIC_SOURCES) {
+      this.droppedSources += 1;
+      return () => undefined;
+    }
+    sources.add(source);
+    this.caches.set(name, sources);
+    return () => {
+      sources.delete(source);
+      if (sources.size === 0 && this.caches.get(name) === sources) this.caches.delete(name);
     };
   }
 
@@ -234,6 +299,28 @@ export class RecurringDiagnosticsRegistry {
       }
       signals.push({ name, status });
     }
+    const caches: RecurringWorkDiagnostics["caches"] = [];
+    for (const [name, sources] of this.caches) {
+      const gauges: Record<string, number> = {};
+      let reported = 0;
+      for (const source of sources) {
+        let current: CacheGauges;
+        try {
+          current = source.cacheGauges();
+        } catch {
+          faultedSources += 1;
+          continue;
+        }
+        reported += 1;
+        for (const [field, value] of Object.entries(current)) {
+          if (!CACHE_GAUGE_FIELD.test(field)) continue;
+          if (typeof value !== "number" || !Number.isFinite(value) || value < 0) continue;
+          if (!(field in gauges) && Object.keys(gauges).length >= MAX_CACHE_GAUGE_FIELDS) continue;
+          gauges[field] = (gauges[field] ?? 0) + value;
+        }
+      }
+      if (reported > 0) caches.push({ name, sources: reported, gauges });
+    }
     return {
       metrics: metrics.snapshot(),
       schedulers,
@@ -241,6 +328,7 @@ export class RecurringDiagnosticsRegistry {
       fetchPolicies,
       signals,
       sessionInvalidations: invalidations.snapshot(),
+      caches,
       droppedSources: this.droppedSources,
       faultedSources,
     };

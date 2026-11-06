@@ -76,8 +76,6 @@ export interface AgentNativeTabProps {
   unassignedPlaceholder?: string;
   /** Composer copy shared by assigned and unassigned conversations. */
   composerPlaceholder?: string;
-  /** Keep presentation mounted while the owning runtime cannot accept connections. */
-  connectionEnabled?: boolean;
   /**
    * Why this conversation cannot send right now. The transcript still loads, and
    * nothing that could start a provider runs while this is set.

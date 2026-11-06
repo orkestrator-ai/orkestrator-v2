@@ -20,14 +20,24 @@ import {
   percentile,
   pickKindCounters,
   processTreeTotals,
+  gaugeTrends,
+  soakCacheGauges,
   soakFootprint,
   soakLeaks,
   summarizeWindow,
+  type GaugeTrend,
   type LiveSample,
   type ProcessSample,
   type SoakLeak,
+  type SoakTrendSample,
   type WindowSummary,
 } from "./recurring-live-ab-summary";
+import {
+  FAKE_PI_MODEL_REF,
+  startFakeModelServer,
+  writeFakePiModels,
+  type FakeModelServer,
+} from "./recurring-live-ab-fake-model";
 
 /**
  * Live idle A/B for recurring work
@@ -47,7 +57,18 @@ import {
  * every `--soak-environments` kind through the CLI. It compares the live
  * footprint (scheduler keys, admission leases, fetch and signal records,
  * running jobs, event-stream and terminal subscribers) before and after, and
- * the profile's guard lines are counted after the soak.
+ * the profile's guard lines are counted after the soak. After every cycle it
+ * also reads one trend sample (footprint, cache gauges and backend RSS), and
+ * reports which gauges kept rising over the soak (`gaugeTrends`).
+ * `--soak-cycle-gap-ms` idles between cycles, so a soak can span an hour.
+ *
+ * With `--soak-sessions N` the soak keeps real Pi agent sessions open on a
+ * fake model (`recurring-live-ab-fake-model.ts`): a loopback OpenAI-compatible
+ * endpoint this process serves, named in the new profile's own Pi
+ * `models.json`. N sessions on the fixture's local environment stay open for
+ * the whole soak and get one prompt per cycle, and every cycle's local
+ * environment gets a session of its own before it is deleted. No credential
+ * or provider is involved.
  *
  * Arms: `candidate` (defaults), `rollback`
  * (`ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK=all`,
@@ -92,6 +113,15 @@ export type Options = {
   keepProfiles: boolean;
   soakCycles: number;
   soakEnvironments: Array<"local" | "container">;
+  /** Idle time after each soak cycle. */
+  soakCycleGapMs: number;
+  /** Fake-model Pi sessions kept open on the fixture's local environment. */
+  soakSessions: number;
+  /**
+   * `dev:test --agent-platforms`: the managed toolchains a profile prepares.
+   * Unset keeps the profile default (every platform, some downloaded at start).
+   */
+  agentPlatforms?: string;
 };
 
 export function parseOptions(argv: string[]): Options {
@@ -109,6 +139,8 @@ export function parseOptions(argv: string[]): Options {
     keepProfiles: false,
     soakCycles: 0,
     soakEnvironments: ["local"],
+    soakCycleGapMs: 0,
+    soakSessions: 0,
   };
   const value = (index: number, name: string) => {
     const next = argv[index + 1];
@@ -139,7 +171,16 @@ export function parseOptions(argv: string[]): Options {
     else if (name === "--out") options.out = value(index++, name);
     else if (name === "--keep-profiles") options.keepProfiles = true;
     else if (name === "--soak-cycles") options.soakCycles = positive(value(index++, name), name);
-    else if (name === "--soak-environments") {
+    else if (name === "--soak-cycle-gap-ms")
+      options.soakCycleGapMs = positive(value(index++, name), name);
+    else if (name === "--soak-sessions")
+      options.soakSessions = positive(value(index++, name), name);
+    else if (name === "--agent-platforms") {
+      const platforms = value(index++, name);
+      if (!/^[a-z]+(,[a-z]+)*$/.test(platforms))
+        throw new Error("--agent-platforms takes a comma list of platform names");
+      options.agentPlatforms = platforms;
+    } else if (name === "--soak-environments") {
       const kinds = value(index++, name).split(",").filter(Boolean);
       if (kinds.length === 0 || kinds.some((kind) => kind !== "local" && kind !== "container"))
         throw new Error("--soak-environments accepts local,container");
@@ -147,6 +188,8 @@ export function parseOptions(argv: string[]): Options {
     } else throw new Error(`Unknown option ${name}`);
   }
   if (!Number.isInteger(options.soakCycles)) throw new Error("--soak-cycles must be an integer");
+  if (!Number.isInteger(options.soakSessions) || options.soakSessions > 8)
+    throw new Error("--soak-sessions must be an integer from 0 to 8");
   if (!/^[a-z0-9-]+$/.test(options.profilePrefix)) {
     throw new Error("--profile-prefix accepts lowercase letters, digits and dashes");
   }
@@ -160,6 +203,7 @@ const log = (message: string) => console.error(`[recurring-live-ab] ${message}`)
 
 export type Status = {
   startedAt?: string;
+  dataDir?: string;
   processStartTimes?: { launcher?: number };
   status?: string;
   browserUrl?: string;
@@ -456,7 +500,7 @@ export async function measureFreshness(
   return results;
 }
 
-type SoakStep = "create" | "start" | "stop" | "restart" | "delete";
+type SoakStep = "create" | "start" | "stop" | "restart" | "delete" | "session" | "prompt";
 
 export type SoakResult = {
   cyclesRequested: number;
@@ -470,6 +514,26 @@ export type SoakResult = {
   final: Record<string, number> | null;
   leaks: SoakLeak[];
   backendRssKiB: { baseline: number | null; final: number | null };
+  /** One sample after every cycle: footprint, cache gauges and backend RSS. */
+  trend: SoakTrendSample[];
+  /** Footprint and cache gauges still rising over the cycles (`gaugeTrends`). */
+  growing: GaugeTrend[];
+  /** Every cache gauge's trend, for the record. */
+  cacheTrends: GaugeTrend[];
+  /** Backend RSS over the trend samples, as a gauge. */
+  rssTrend: GaugeTrend | null;
+  /** Fake-model agent sessions, when `--soak-sessions` asked for them. */
+  sessions: {
+    requested: number;
+    /** Long-lived sessions opened on the fixture's local environment. */
+    opened: number;
+    /** Sessions opened in a cycle's own local environment. */
+    cycleSessions: number;
+    /** Follow-up prompts the long-lived sessions answered. */
+    prompts: number;
+    /** Chat completions the fake model answered. */
+    modelRequests: number;
+  };
 };
 
 /** Samples per footprint, and the gap between them. */
@@ -498,16 +562,56 @@ async function fixtureProjectId(cli: AsyncCli, signal?: AbortSignal): Promise<st
   return null;
 }
 
+/** A ready local environment of the fixture, for long-lived soak sessions. */
+async function fixtureLocalEnvironmentId(
+  cli: AsyncCli,
+  signal?: AbortSignal,
+): Promise<string | null> {
+  const listed = cliJson(await cli(["environment", "list", "--json"], signal)) as {
+    items?: unknown[];
+  } | null;
+  for (const raw of listed?.items ?? []) {
+    const entry = raw as Record<string, unknown>;
+    if (entry.environmentType === "local" && entry.ready === true && typeof entry.id === "string")
+      return entry.id;
+  }
+  return null;
+}
+
 const soakRuntime = {
   fixtureProjectId,
+  fixtureLocalEnvironmentId,
+  startFakeModel: (): FakeModelServer => startFakeModelServer(),
+  writeFakePiModels,
   now: () => performance.now(),
   sleep,
 };
 
+/** Exit 7 is `run-unknown`: Pi runs cannot report completion, so it is the normal end. */
+const PI_RUN_ENDED = new Set([0, 7]);
+
+/** The session a `session start` named, from its result or (Pi) its receipt. */
+function startedSessionId(result: CliResult): string | null {
+  try {
+    const envelope = JSON.parse(result.stdout) as {
+      result?: { sessionId?: unknown };
+      receipt?: { resources?: { sessionId?: unknown } };
+    };
+    const id = envelope.result?.sessionId ?? envelope.receipt?.resources?.sessionId;
+    return typeof id === "string" && id ? id : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function measureSoak(
   gateway: ReturnType<typeof gatewayFor>,
   cli: AsyncCli,
-  options: Pick<Options, "soakCycles" | "soakEnvironments" | "settleMs">,
+  options: Pick<Options, "soakCycles" | "soakEnvironments" | "settleMs"> &
+    Partial<Pick<Options, "soakCycleGapMs" | "soakSessions">> & {
+      /** The profile's data directory; needed only for `soakSessions`. */
+      dataDir?: string;
+    },
   backendRssKiB: () => number | null,
   signal?: AbortSignal,
   runtime = soakRuntime,
@@ -522,15 +626,27 @@ export async function measureSoak(
     }
     return samples;
   };
+  const sessionCount = options.soakSessions ?? 0;
   const result: SoakResult = {
     cyclesRequested: options.soakCycles,
     cyclesCompleted: 0,
     durationMs: 0,
     failures: [],
-    baseline: combineFootprints(await footprints(), "max"),
+    baseline: null,
     final: null,
     leaks: [],
-    backendRssKiB: { baseline: backendRssKiB(), final: null },
+    backendRssKiB: { baseline: null, final: null },
+    trend: [],
+    growing: [],
+    cacheTrends: [],
+    rssTrend: null,
+    sessions: {
+      requested: sessionCount,
+      opened: 0,
+      cycleSessions: 0,
+      prompts: 0,
+      modelRequests: 0,
+    },
   };
   const projectId = await runtime.fixtureProjectId(cli, signal);
   if (!projectId) throw new Error("Soak found no fixture project");
@@ -540,54 +656,141 @@ export async function measureSoak(
     signal?.throwIfAborted();
     return value;
   };
-  for (let cycle = 1; cycle <= options.soakCycles; cycle += 1) {
-    for (const kind of options.soakEnvironments) {
-      signal?.throwIfAborted();
-      const created = cliJson(
-        await cli(
-          [
-            "environment",
-            "create",
-            "--project",
-            projectId,
-            "--type",
-            kind,
-            "--name",
-            `soak-${kind}-${cycle}`,
-            "--json",
-          ],
-          signal,
-        ),
-      ) as { environment?: { id?: unknown } } | null;
-      const id = created?.environment?.id;
-      if (typeof id !== "string" || !id) {
-        result.failures.push({ cycle, kind, step: "create" });
-        continue;
+  let fakeModel: FakeModelServer | null = null;
+  /** A turn counts only when it ended and the fake model answered a request for it. */
+  const turn = async (args: string[]): Promise<CliResult | null> => {
+    const before = fakeModel?.counts().completions ?? 0;
+    const value = await step([...args, "--wait"]);
+    const answered = (fakeModel?.counts().completions ?? 0) > before;
+    return value.status !== null && PI_RUN_ENDED.has(value.status) && answered ? value : null;
+  };
+  const openSession = async (environmentId: string, prompt: string) => {
+    const started = await turn([
+      "session",
+      "start",
+      "--environment",
+      environmentId,
+      "--agent",
+      "pi",
+      "--model",
+      FAKE_PI_MODEL_REF,
+      "--prompt",
+      prompt,
+    ]);
+    return started ? startedSessionId(started) : null;
+  };
+  const longLived: string[] = [];
+  try {
+    if (sessionCount > 0) {
+      if (!options.dataDir) throw new Error("Soak sessions need the profile's data directory");
+      fakeModel = runtime.startFakeModel();
+      runtime.writeFakePiModels(options.dataDir, fakeModel.baseUrl);
+      const fixtureEnvironment = await runtime.fixtureLocalEnvironmentId(cli, signal);
+      if (!fixtureEnvironment) throw new Error("Soak sessions need a ready local environment");
+      // The catalogue was read before the fake provider existed. `agent
+      // options` takes no `--timeout`, so it is not a `step`.
+      const refreshed = await cli(
+        ["agent", "options", "--environment", fixtureEnvironment, "--refresh", "--json"],
+        signal,
+      );
+      if (refreshed.status !== 0 || !refreshed.stdout.includes(FAKE_PI_MODEL_REF))
+        throw new Error("The Pi catalogue did not list the fake model after a refresh");
+      for (let index = 1; index <= sessionCount; index += 1) {
+        const id = await openSession(fixtureEnvironment, `Soak session ${index}: reply briefly.`);
+        if (!id) throw new Error("A soak session did not answer on the fake model");
+        longLived.push(id);
       }
-      const lifecycle: Array<[SoakStep, string[]]> = [
-        ["start", ["environment", "start", id, "--wait", "ready"]],
-        ["stop", ["environment", "stop", id, "--wait", "stopped"]],
-        ["restart", ["environment", "start", id, "--wait", "running"]],
-      ];
-      for (const [name, args] of lifecycle) {
+      result.sessions.opened = longLived.length;
+    }
+    // The baseline includes the long-lived sessions: they stay open throughout.
+    result.baseline = combineFootprints(await footprints(), "max");
+    result.backendRssKiB.baseline = backendRssKiB();
+    for (let cycle = 1; cycle <= options.soakCycles; cycle += 1) {
+      for (const kind of options.soakEnvironments) {
         signal?.throwIfAborted();
-        if ((await step(args)).status !== 0) {
-          result.failures.push({ cycle, kind, step: name });
-          break;
+        const created = cliJson(
+          await cli(
+            [
+              "environment",
+              "create",
+              "--project",
+              projectId,
+              "--type",
+              kind,
+              "--name",
+              `soak-${kind}-${cycle}`,
+              "--json",
+            ],
+            signal,
+          ),
+        ) as { environment?: { id?: unknown } } | null;
+        const id = created?.environment?.id;
+        if (typeof id !== "string" || !id) {
+          result.failures.push({ cycle, kind, step: "create" });
+          continue;
+        }
+        const lifecycle: Array<[SoakStep, string[]]> = [
+          ["start", ["environment", "start", id, "--wait", "ready"]],
+          ["stop", ["environment", "stop", id, "--wait", "stopped"]],
+          ["restart", ["environment", "start", id, "--wait", "running"]],
+        ];
+        for (const [name, args] of lifecycle) {
+          signal?.throwIfAborted();
+          if ((await step(args)).status !== 0) {
+            result.failures.push({ cycle, kind, step: name });
+            break;
+          }
+          // The cycle's own session opens on the ready environment and is
+          // still open when the environment is stopped and deleted.
+          if (name === "start" && kind === "local" && sessionCount > 0) {
+            if (await openSession(id, `Soak cycle ${cycle}: reply briefly.`))
+              result.sessions.cycleSessions += 1;
+            else result.failures.push({ cycle, kind, step: "session" });
+          }
+        }
+        // Always delete, so one failed step does not leave the soak's
+        // environment behind to read as a leak.
+        if ((await step(["environment", "delete", id, "--wait", "deleted"])).status !== 0) {
+          result.failures.push({ cycle, kind, step: "delete" });
         }
       }
-      // Always delete, so one failed step does not leave the soak's
-      // environment behind to read as a leak.
-      if ((await step(["environment", "delete", id, "--wait", "deleted"])).status !== 0) {
-        result.failures.push({ cycle, kind, step: "delete" });
+      for (const session of longLived) {
+        if (await turn(["session", "prompt", session, "--prompt", `Cycle ${cycle}.`]))
+          result.sessions.prompts += 1;
+        else result.failures.push({ cycle, kind: "local", step: "prompt" });
       }
+      result.cyclesCompleted = cycle;
+      signal?.throwIfAborted();
+      const metrics = await gateway.metrics();
+      result.trend.push({
+        cycle,
+        atMs: Math.round(runtime.now() - startedAt),
+        backendRssKiB: backendRssKiB(),
+        footprint: soakFootprint(metrics),
+        caches: soakCacheGauges(metrics),
+      });
+      const gap = options.soakCycleGapMs ?? 0;
+      if (gap > 0 && cycle < options.soakCycles) await runtime.sleep(gap, signal);
     }
-    result.cyclesCompleted = cycle;
+    await runtime.sleep(options.settleMs, signal);
+    result.final = combineFootprints(await footprints(), "min");
+    result.backendRssKiB.final = backendRssKiB();
+  } finally {
+    result.sessions.modelRequests = fakeModel?.counts().completions ?? 0;
+    await fakeModel?.stop();
   }
-  await runtime.sleep(options.settleMs, signal);
-  result.final = combineFootprints(await footprints(), "min");
-  result.backendRssKiB.final = backendRssKiB();
   result.leaks = result.baseline && result.final ? soakLeaks(result.baseline, result.final) : [];
+  result.cacheTrends = gaugeTrends(result.trend.map((sample) => sample.caches));
+  result.growing = [
+    ...gaugeTrends(result.trend.map((sample) => sample.footprint)),
+    ...result.cacheTrends,
+  ].filter((trend) => trend.growing);
+  result.rssTrend =
+    gaugeTrends(
+      result.trend.map((sample) =>
+        sample.backendRssKiB === null ? null : { "backend:rssKiB": sample.backendRssKiB },
+      ),
+    )[0] ?? null;
   result.durationMs = Math.round(runtime.now() - startedAt);
   return result;
 }
@@ -622,6 +825,22 @@ export function countGuardLines(logDir: string | undefined): number | null {
     .reduce((total, count) => total + count, 0);
 }
 
+/** The launcher's arguments for one profile. */
+export function profileArguments(profile: string, options: Options): string[] {
+  return [
+    "apps/desktop/scripts/dev-test.ts",
+    "--profile",
+    profile,
+    "--fixture",
+    "--fixture-environments",
+    options.fixtureEnvironments,
+    "--no-agent-credentials",
+    // Never open a window on the host's desktop; the gateway serves the app.
+    "--headless",
+    ...(options.agentPlatforms ? ["--agent-platforms", options.agentPlatforms] : []),
+  ];
+}
+
 function startProfile(
   profile: string,
   options: Options,
@@ -632,19 +851,10 @@ function startProfile(
   try {
     // Spawn the launcher directly so its manifest PID is the child we own,
     // rather than a descendant of an opaque mise wrapper.
-    return spawn(
-      "bun",
-      [
-        "apps/desktop/scripts/dev-test.ts",
-        "--profile",
-        profile,
-        "--fixture",
-        "--fixture-environments",
-        options.fixtureEnvironments,
-        "--no-agent-credentials",
-      ],
-      { env, stdio: ["ignore", output, output] },
-    );
+    return spawn("bun", profileArguments(profile, options), {
+      env,
+      stdio: ["ignore", output, output],
+    });
   } finally {
     closeSync(output);
   }
@@ -682,6 +892,11 @@ export async function runArm(
   const env: NodeJS.ProcessEnv = { ...process.env };
   for (const name of POLICY_SWITCHES) delete env[name];
   Object.assign(env, ARM_ENV[arm]);
+  // Headless Electron, and no display for anything the profile spawns.
+  delete env.DISPLAY;
+  delete env.WAYLAND_DISPLAY;
+  // The host reachability probe creates Docker networks; a soak counts its own.
+  env.ORKESTRATOR_HOST_REACHABILITY_CHECK = "off";
   const result: RunResult = {
     arm,
     repeat,
@@ -733,8 +948,13 @@ export async function runArm(
           owner ??= current;
           log(`${profile}: stopping`);
           if (runtime.mise(["dev:stop", "--profile", profile]).status !== 0) {
-            // Stop may report failure for an already stopped profile. Reset
-            // still owns its resources, but only after verifying it is stopped.
+            // Stop may report failure for an already stopped profile, and
+            // gives up after a few seconds while the launcher is still
+            // shutting down, before it records `stopped`. Wait for our own
+            // launcher to exit first. Reset still owns the profile's
+            // resources, but only after verifying it is stopped.
+            for (let waited = 0; !exited && waited < 60_000; waited += 1_000)
+              await runtime.sleep(1_000);
             const stopped = checkedStatus();
             if (stopped.status !== "stopped" || stopped.live?.launcher !== false)
               throw new Error("Owned profile stop failed");
@@ -829,7 +1049,7 @@ export async function runArm(
       result.soak = await runtime.measureSoak(
         gateway,
         runtime.asyncCliRunner(profile, cliConfig()),
-        options,
+        { ...options, ...(status.dataDir ? { dataDir: status.dataDir } : {}) },
         () => runtime.processSamples(checkedStatus().pids).backend?.rssKiB ?? null,
         signal,
       );
@@ -937,6 +1157,46 @@ function printSummary(results: RunResult[]): void {
         } | ${mib(soak.backendRssKiB.baseline)}/${mib(soak.backendRssKiB.final)} |`,
       );
     }
+  }
+  for (const run of soaks) {
+    const soak = run.soak!;
+    if (soak.trend.length === 0) continue;
+    const mib = (kib: number) => Math.round(kib / 1024);
+    lines.push(
+      "",
+      `Soak trend, ${run.arm} repeat ${run.repeat}: ${soak.trend.length} samples over ${Math.round(
+        soak.durationMs / 60_000,
+      )} min; sessions ${soak.sessions.opened}/${soak.sessions.requested} long-lived, ${
+        soak.sessions.cycleSessions
+      } per-cycle, ${soak.sessions.prompts} prompts, ${soak.sessions.modelRequests} model requests.`,
+    );
+    if (soak.rssTrend) {
+      const rss = soak.rssTrend;
+      lines.push(
+        `Backend RSS MiB: first ${mib(rss.first)}, last ${mib(rss.last)}, min ${mib(rss.min)}, max ${mib(
+          rss.max,
+        )}, first-third max ${mib(rss.earlyMax)}, last-third min ${mib(rss.lateMin)}${
+          rss.growing ? " (still rising)" : ""
+        }.`,
+      );
+    }
+    lines.push(
+      "",
+      "| Cache gauge | First | Last | Min | Max | First-third max | Last-third min | Rising |",
+      "| --- | --- | --- | --- | --- | --- | --- | --- |",
+    );
+    for (const trend of soak.cacheTrends) {
+      if (trend.max === 0) continue;
+      lines.push(
+        `| ${trend.gauge} | ${trend.first} | ${trend.last} | ${trend.min} | ${trend.max} | ${
+          trend.earlyMax
+        } | ${trend.lateMin} | ${trend.growing ? "yes" : ""} |`,
+      );
+    }
+    lines.push(
+      "",
+      `Rising gauges: ${soak.growing.map((trend) => `${trend.gauge} ${trend.first}→${trend.last}`).join(", ") || "none"}`,
+    );
   }
   console.log(lines.join("\n"));
 }

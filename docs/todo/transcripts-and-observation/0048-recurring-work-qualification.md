@@ -11,6 +11,8 @@ against `main` at `93b99bfba` (2026-11-01). Live evidence from macOS on
 [Live soak](#live-soak-2026-10-25-macos),
 [Container fetch policy and app wiring](#container-fetch-policy-and-app-wiring-2026-11-01-linux)
 and [its follow-up](#container-app-wiring-follow-up-2026-11-01-linux).
+Task 10 rechecked against `main` at `281de1a17` (2026-11-06), with live
+evidence from Linux that day; see [Long soak](#long-soak-2026-11-06-linux).
 
 ### Tasks
 
@@ -23,8 +25,8 @@ and [its follow-up](#container-app-wiring-follow-up-2026-11-01-linux).
 7. **macOS watcher paths**: packaged Electron app, plus the burst-overflow and failure-to-polling paths. Status: partly done (the `dev:test` save-detection run passed).
 8. **iOS hidden pause and resume**: the read coordinator across backgrounding and screen lock in the `apps/ios` wrapper. Status: open.
 9. **Real host suspend and resume**: `HostSuspendDetector` against a real sleep. Status: open.
-10. **Long soak and cache gauges**: 50 or more cycles over an hour or more with agent sessions open, and gauges for caches the footprint cannot see. Status: partly done (driver and a 10-cycle soak exist).
-11. **Multi-client, restarts and an older backend**: two clients with one disconnected, backend and bridge restarts at durable transition boundaries, an older backend. Status: open.
+10. **Long soak and cache gauges**: 50 or more cycles over an hour or more with agent sessions open, and gauges for caches the footprint cannot see. Status: done (2026-11-06: cache gauges in recurring diagnostics, a 60-cycle local soak over more than an hour with fake-model Pi sessions open, and a fix for the one unbounded growth it found, decisions 24 to 28; container lifecycle, a browser reader and three projection maps without eviction moved to [7100](7100-long-soak-follow-ups.md)).
+11. **Multi-client, restarts and an older backend**: two clients with one disconnected, backend and bridge restarts at durable transition boundaries, an older backend. Status: done (2026-11-06: all qualified on Linux with a fake model, `multi-client-restarts-live.spec.ts`, against v2.21.0 for the older backend; two defects fixed, decisions T11.1 and T11.2; what needs a decision is in [7120](7120-multi-client-restart-follow-ups.md)).
 12. **Measured candidates**: 12 cadence and limit candidates to decide from live data. Status: blocked (on tasks 1, 5 and 10); the feature-planning row read is done, and the container fetch failure ladder is decided (keep 5 to 30 min, decision 11).
 13. **Remove the rollback drivers**: `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` and its whole-store drivers, `WorkflowDueScheduler`, and `ORKESTRATOR_NATIVE_OBSERVATION_SHARING`, updating the catalogue. Status: blocked (on tasks 1, 5 and 10).
 14. **Metrics switch decision**: keep `ORKESTRATOR_RECURRING_METRICS` as a permanent kill switch. Status: done (one stale comment left).
@@ -274,6 +276,22 @@ lost the selection to a seeded terminal; fixed (decision 23). See
     - Pros: free and repeatable.
     - Cons: misses the provider observation footprint.
 
+**Outcome (2026-11-06).** Rechecked on `281de1a17`: the references above
+hold. Both recommendations were taken, the second in a changed form: the
+sessions are real Pi sessions on a fake model rather than credentialed
+Claude ones (decision 25), because this run must make no billed provider
+turn. Recurring diagnostics gained a `caches` block (decision 24): the
+storage row cache, the worktree snapshot caches, the local scan cache, the
+native projection's per-session maps and change tracking's fences. The soak
+samples them after every cycle and reports what is still rising. A 60-cycle
+local soak on the build before the fix found the native projection keeping
+every deleted environment's session views (fixed, decision 26), and a
+60-cycle soak over more than an hour on the fixed build kept those gauges
+flat; see [Long soak](#long-soak-2026-11-06-linux). Containers could not be
+soaked on this host (decision 27). The `dev:stop` failure recurred and is
+fixed in the driver (decision 28), so the note about a `dev:stop` todo is
+closed.
+
 ### 11. Multi-client, restarts and an older backend
 
 **Problem.** Two clients with one disconnected, restarts at durable transition boundaries and a mixed-version backend are unproved, so a restart mid-dispatch could duplicate or lose a turn.
@@ -291,6 +309,23 @@ lost the selection to a seeded terminal; fixed (decision 23). See
   - **Add a test-only crash hook at each boundary.**
     - Pros: exact boundaries.
     - Cons: new backend surface that must never ship enabled.
+
+**Outcome (2026-11-06).** Done on Linux without a billed turn or a backend
+hook: the recommended option with a fake model as the boundary control. The
+profile's real Claude CLI talks to a loopback Anthropic endpoint
+(`e2e/agent-testing/fake-anthropic-model.ts`) that parks any prompt marked
+`[hold:<id>]`, so "a dispatch journaled, the provider working" is held for as
+long as a restart takes, and every call is counted.
+`e2e/agent-testing/multi-client-restarts-live.spec.ts` drives two headless
+clients through a disconnect, a queued prompt, a backend crash and a graceful
+restart with a turn held and a prompt queued, a bridge `SIGKILL` mid-turn and
+idle, and today's renderer against v2.21.0, the oldest supported release in
+the register. Results are in
+[Multi-client, restarts and an older backend](#multi-client-restarts-and-an-older-backend-2026-11-06-linux).
+Two defects were fixed (decisions T11.1 and T11.2). The bearer-client concern
+above did not arise: each client signs in again with a fresh `dev:login` link
+after a restart. Follow-ups needing a decision are in
+[7120](7120-multi-client-restart-follow-ups.md).
 
 ### 12. Measured candidates
 
@@ -631,6 +666,20 @@ and the decisions below were recorded.
   subscribers) before and after, counts guard lines, and exits 1 on a failed
   step, a leaked gauge or a guard line (`soakFootprint`, `soakLeaks` in
   `recurring-live-ab-summary.ts`).
+- Cache gauges (2026-11-06): the `caches` block of recurring diagnostics
+  (`addCacheSource`, `recurring-diagnostics.ts`; table in
+  [recurring-work.md](../../architecture/recurring-work.md)) counts the
+  caches the footprint cannot see: each open connection's row cache, the
+  diff-stats tracker's tree lineages, bodies, ad hoc reads and
+  per-environment maps, the local scan cache, every per-session map of the
+  native projection, and change tracking's owners and deletion fences. The
+  soak reads them after every cycle (`soakCacheGauges`) and lists gauges
+  still rising (`gaugeTrends`). `--soak-sessions N` keeps real Pi sessions
+  open on a loopback fake model (`recurring-live-ab-fake-model.ts`),
+  `--soak-cycle-gap-ms` spaces cycles out, and `--agent-platforms` narrows
+  the profile's toolchains.
+- Environment deletion releases the native projection's caches for that
+  environment's sessions (`forgetEnvironmentProjections`, 2026-11-06).
 - Rollback switches, each read once at startup and let through the desktop
   environment allowlist in `apps/desktop/electron/backend-process.ts`:
   - `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` (`KEYED_SCHEDULING_ROLLBACK_ENV`,
@@ -915,6 +964,135 @@ checked. The merge state reaches the view through environment events, which
 the inactive and second-window steps cover. The output dialog polls only
 while a command is queued or running, and these runs had finished.
 
+### Long soak (2026-11-06, Linux)
+
+Host: beelink, Linux 7.1.8 x86_64, Docker Engine 29.9.2 on a shared host, Bun
+1.4.4, headless `dev:test` profiles of this branch with the reachability
+check off. Each run was a fresh profile with one local fixture environment,
+no agent credentials and only the Pi toolchain (seeded from the host).
+Command of the acceptance run:
+
+```bash
+env -u DISPLAY -u WAYLAND_DISPLAY ORKESTRATOR_HOST_REACHABILITY_CHECK=off \
+  mise exec -- bun scripts/recurring-live-ab.ts --arms candidate --repeats 1 \
+  --settle-ms 60000 --window-ms 60000 --sample-ms 30000 --freshness-probes 0 \
+  --fixture-environments local --agent-platforms pi --soak-cycles 60 \
+  --soak-environments local --soak-cycle-gap-ms 65000 --soak-sessions 2 \
+  --profile-prefix rw-fixsoak --out output/benchmarks/recurring-long-soak-fixed-2026-11-06.json
+```
+
+Every cycle created, started to `ready`, stopped, restarted and deleted one
+local environment, opened a Pi session in it on the fake model before the
+stop, and sent one prompt to each of two Pi sessions kept open on the
+fixture environment for the whole soak. Two runs, both with exit 0:
+
+| Run | Build | Cycles | Duration | Failed steps | Turns (model requests) | Leaked footprint gauges | Guard lines | Backend RSS MiB, first/last/max |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Before the fix (45 s gap) | `7e3ee6a80` | 60/60 | 54 min | none | 182 | none | 0 | 250/406/481 |
+| Acceptance (65 s gap) | `5755afef7` | 60/60 | 74 min | none | 182 | none | 0 | 243/302/413 |
+
+Both started and reset their profile through the script; nothing was left
+running. The footprint (9 schedulers, 3 pools, scheduler keys per kind, no
+lease, fetch or signal record, one event stream) returned to its baseline
+exactly in both.
+
+Cache gauges, first and last of the 60 trend samples (one after each
+cycle). Every gauge not listed was flat (worktree snapshot entries, tree
+targets and watched worktrees at 1; owned and scan-cache worktrees at 2;
+change tracking's owners and sources at 1; 10 row-cache connections):
+
+| Gauge | Before the fix | Acceptance | Reading |
+| --- | --- | --- | --- |
+| `native-projection:projections`, `projectionRevisions`, `projectedMessageSessions` | 3 → 62 | 2 → 2 | One per deleted environment's session, kept until LRU churn (bug, fixed, decision 26). Flat at the two open sessions after the fix. |
+| `native-projection:projectionEpochs` | 1 → 60 | 0 → 0 | The same, fixed. |
+| `native-projection:projectedMessages` / `projectedMessageBytes` | 10 → 362 / 10 KB → 371 KB | 8 → 244 / 8 KB → 247 KB | After the fix, the two open sessions' own rows: two per prompt over 120 prompts. Bounded per session (4,096 rows) and in total (8,192 rows, 48 MiB). |
+| `change-tracking:deletedEnvironments` | 1 → 60 | 1 → 50 | One fence per deleted environment until its purge finishes, after the 1 h orphan grace. The acceptance run levelled at 49 to 50 from about an hour in, as purges finished; bounded by an hour of deletions. |
+| `storage-row-cache:rows` / `bytes` | 12 → 67 / 209 KB → 843 KB | 12 → 70 / 209 KB → 845 KB | The connection's cache of stores read whole, following durable data: the CLI's operation records, usage history, artifact grants and deletion tombstones, each with its own retention (tombstones are permanent by design and a few bytes each). Not a cache leak. |
+| `native-projection` progressive and snapshot maps | 0 | 0 | Never filled: no client read a transcript ([7100](7100-long-soak-follow-ups.md) tasks 3 and 4). |
+
+The trend check flagged the last three as rising, as designed: their floor
+in the last third of the samples was above their peak in the first. Each
+was read against its bound above. Backend RSS rose over the first run and
+ended lower than its peak in the second; under Bun it is still not a leak
+gauge, and the counts above are the evidence.
+
+Not covered: containers (the daemon had no free address pool, decision 27;
+[7100](7100-long-soak-follow-ups.md) task 2), a browser reader (7100 task
+4), and providers other than Pi.
+
+### Multi-client, restarts and an older backend (2026-11-06, Linux)
+
+Host: Linux (Arch, kernel 7.1.8), Bun 1.4.4, a `dev:test` build of this
+branch on a credential-free profile
+(`--fixture --no-agent-credentials --agent-platforms claude --headless`,
+`ORKESTRATOR_HOST_REACHABILITY_CHECK=off`), headless Chromium clients, and the
+profile's managed Claude CLI 2.1.314 sent to the fake model through the
+profile's isolated `CLAUDE_CONFIG_DIR`. One full run of
+`multi-client-restarts-live.spec.ts` with 10 rounds passed all six cases.
+Times are wall-clock in the test process, from the action to the client
+showing the result.
+
+| Scenario | Measure | Result | Budget (p95) |
+| --- | --- | --- | --- |
+| Two clients, connected client A (10 rounds) | turn completion visible | p50 175 ms, p95 375 ms | ≤ 3 s |
+| | activity indicator working / idle | p95 2.3 s / 2.7 s | ≤ 4 s |
+| | diff badge after a save (watched local) | p50 452 ms, p95 514 ms | ≤ 2 s |
+| Two clients, client B cut off 4 to 5 s by the outage link | answer, idle and badge after the link returns | p50 6.3 s, p95 13.1 s | none; reconnect ladder ([7120](7120-multi-client-restart-follow-ups.md) task 2) |
+| Queued prompt (10 rounds) | dispatched after the running turn ends | p50 1.36 s, p95 1.81 s | ≤ 3 s |
+| | shown on both clients | p95 1.92 s | ≤ 3 s |
+| Backend crash / graceful restart, turn held, prompt queued | restart to `ready` | 3.1 s / 3.1 s | none |
+| | both clients after sign-in: rows and settled state | ≤ 14 ms after the tab opened | none |
+| | interrupted prompt sent again / queued prompt delivered | 0 / exactly once, after the next turn | at most once |
+| | follow-up turn on the same conversation | 817 ms / 827 ms | ≤ 3 s |
+| Bridge `SIGKILL` mid-turn | both clients settled | 107 ms / 113 ms | ≤ 4 s |
+| | follow-up on the same conversation | 877 ms | ≤ 3 s |
+| Bridge `SIGKILL` idle | next prompt shown on both clients | 826 ms / 831 ms | ≤ 3 s |
+| Older backend v2.21.0, today's renderer, two clients | turn completion A / B | 269 ms / 2.07 s | ≤ 3 s |
+| | activity idle A / B; diff badge A / B | 2.06 s / 2.07 s; 427 ms / 429 ms | ≤ 4 s; ≤ 2 s |
+
+- **Two clients, one disconnected.** B sits behind the outage link from
+  `client-outage-support.ts` in `reset` mode. Before its link returned B had
+  seen neither the answer nor the badge; after it, each client showed the
+  prompt and the answer once, and the model saw the prompt once. B's
+  convergence time is its reconnect rung, not backend work (task 2 of 7120).
+- **Backend restarts.** A backend crash ends the whole `dev:test` profile and
+  the local bridge with it (the parent-bound wrapper), so the held call is
+  aborted and the turn settles as failed with "Claude restarted before this
+  turn finished"; nothing re-sends the prompt. The first public
+  `session.transcript` read after the restart was `current`, 50 rows,
+  `complete: false` (an older-page cursor). An earlier attempt read a
+  restarted bridge's empty preview as `complete: true`; fixed (T11.1). The
+  queued prompt is held while the interrupted turn reads as failed and goes
+  out after the user's next turn ends: delivered once, but after a prompt
+  typed later (7120 task 1).
+- **Bridge restarts.** The first run left the killed bridge's Claude CLI
+  running as an orphan, still waiting on the parked model call; fixed (T11.2).
+  After the fix the held call is aborted and no Claude process of the profile
+  outlives its bridge; the backend logs `bridge.orphans-reaped` for each kill.
+  The next prompt resumes the same conversation (its call carries every
+  earlier prompt).
+- **Older backend.** v2.21.0 was built from its tag in this worktree
+  (`git archive v2.21.0`, `bun install --frozen-lockfile --ignore-scripts`,
+  `bun run --cwd bridges/claude-bridge build` in the archived checkout) and started with
+  `--data-dir`, `HOME` and `CLAUDE_CONFIG_DIR` of its own under `output/`,
+  `--port <free> --control-port 0`, `ORKESTRATOR_CONTROL_MCP_PORT=0` and
+  `--renderer-dev-server-url` set to the profile's current renderer, so the
+  browser ran today's renderer against it. It was given the profile's Claude
+  2.1.314 (it pins 2.1.296). v2.21.0 has no
+  `ORKESTRATOR_HOST_REACHABILITY_CHECK` switch: its first start ran the boot
+  probe (its network create failed, the probe container was ephemeral and
+  nothing of it remained), so later starts set `DOCKER_HOST` to an absent
+  socket. Today's renderer worked: sidebar, turn, legacy diff badge, no page
+  errors; twelve newer commands answered 500 and their fallbacks held. It
+  shows a misleading "has been updated" notice (7120 task 4). Today's CLI ran
+  project, environment and session commands against it over `--url`; its
+  `--data-dir` connection is refused on Linux (7120 task 3).
+- **Harness notes.** The fake key is not a Claude login, so the app's "Claude
+  Code Is Not Logged In" notice opens and the spec dismisses it; a 30 s
+  default click timeout once let a reopening notice outlast the wait, so
+  clicks are bounded at 5 s. The renderer URL changes on every profile
+  restart, so the older-backend case runs first.
+
 ## Outstanding work
 
 ### Qualification
@@ -960,12 +1138,17 @@ credentials or a platform CI lacks are batched in
   profile lifecycles of 2026-10-22 had zero guard lines each; that is not a
   soak. 2026-10-25: the driver exists (`--soak-cycles`, see Current state)
   and a first 10-cycle local and container soak ran (see
-  [Live soak](#live-soak-2026-10-25-macos)). Still owed: a long soak (at least
-  50 cycles over an hour or more, with agent sessions open), and cache
-  counts the footprint cannot see yet (worktree snapshot and row caches have
-  no diagnostics gauge).
-- Two clients with one disconnected; backend and bridge restarts at durable
-  transition boundaries; an older backend.
+  [Live soak](#live-soak-2026-10-25-macos)). ~~Still owed: a long soak (at
+  least 50 cycles over an hour or more, with agent sessions open), and cache
+  counts the footprint cannot see yet.~~ Done 2026-11-06 on Linux for local
+  environments with fake-model Pi sessions, with cache gauges (see
+  [Long soak](#long-soak-2026-11-06-linux)). Still owed, in
+  [7100](7100-long-soak-follow-ups.md): the same soak with containers, and
+  one with a browser reader.
+- ~~Two clients with one disconnected; backend and bridge restarts at durable
+  transition boundaries; an older backend~~. Done 2026-11-06 on Linux (see
+  [Multi-client, restarts and an older backend](#multi-client-restarts-and-an-older-backend-2026-11-06-linux));
+  follow-ups in [7120](7120-multi-client-restart-follow-ups.md).
 - ~~Real-browser QA of the Files panel, the coordinator view, validation
   output and hidden-document reconcile~~. Done 2026-11-01
   (`container-files-wiring.spec.ts` and `container-app-wiring.spec.ts`; see
@@ -1022,8 +1205,9 @@ Removal not started; its preparation is done (2026-10-25: `stableJitterMs`
 moved, the metrics switch decided). The idle A/B on macOS shows the keyed
 drivers starting no more often than the rollback drivers, with the same
 freshness and no guard lines, and a 10-cycle lifecycle soak left no leaked
-footprint. But the busy profile, live GitHub, providers and a long soak have
-not run, so the rollback drivers stay.
+footprint, and on 2026-11-06 a 60-cycle local soak over more than an hour
+with fake-model sessions open left none either. But the busy profile, live
+GitHub and providers have not run, so the rollback drivers stay.
 
 - Remove `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` and the whole-store drivers
   domain by domain, with the desktop allowlist entry. Remove the
@@ -1448,8 +1632,176 @@ Recorded 2026-11-01 by the worker that closed task 4's remaining cases.
     case of `container-app-wiring.spec.ts`, which starts from no persisted
     layout and checks the persisted selection.
 
+### Task 10: long soak and cache gauges (2026-11-06)
+
+24. **What the cache gauges count, and where they live.** Options: entry
+    counts for the worktree snapshot and row caches only, as task 10
+    proposed; every cache an owner keeps per environment or per session,
+    reported through one registry; or heap snapshots during the soak.
+    Chosen: the registry (`addCacheSource` in `recurring-diagnostics.ts`),
+    with five sources: `storage-row-cache`, `worktree-snapshots`,
+    `local-git-scan`, `native-projection` and `change-tracking`. Why: the
+    soak is meant to find a map that grows with every session or
+    environment ever seen, and the projection and change-tracking maps are
+    where those live; heap snapshots name no owner and contain content.
+    Pros: content-free by construction (the registry drops any field that
+    is not a short identifier or a finite count, and bounds sources and
+    fields); owners register and unregister with their own lifetime, so a
+    leaked owner shows as an extra source. Cons: a cache nobody registers
+    stays invisible; the row cache's `bytes` is serialized length, not heap.
+    Tests: `recurring-diagnostics-caches.test.ts`,
+    `storage-database-cache-gauges.test.ts`,
+    `native-agent-projection-cache-gauges.test.ts`,
+    `change-tracking/service-cache-gauges.test.ts`, and the worktree case
+    in `public-api/test-support.test.ts`.
+25. **Agent sessions without a billed turn.** Options: credentialed Claude
+    sessions, as task 10 recommended; a credential-free profile with
+    sessions that never get a turn; or real Pi sessions whose model is a
+    fake endpoint. Chosen: Pi on a fake model. The driver serves an
+    OpenAI-compatible endpoint on 127.0.0.1 and writes it into the new
+    profile's own Pi `models.json` under the profile's isolated HOME, so the
+    real Pi bridge, SDK session files, backend projection and observation
+    run, and only the model is fake. Why: this run must make no billed turn
+    and touch no real login, and a session that never runs a turn leaves
+    the projection and turn paths idle. Pros: free and repeatable, and each
+    cycle runs real turns (182 model requests in the first run). Cons: Pi
+    alone, so Claude's and Codex's own observation paths are not soaked
+    (0049 owns those); Pi runs end `run-unknown` (exit 7), so the driver
+    counts a turn only when the fake model answered it.
+26. **The deleted-environment projection growth (bug, fixed).** The first
+    run found `projections`, `projectionRevisions`,
+    `projectedMessageSessions` and `projectionEpochs` rising by one per
+    deleted environment, to 62 after 60 cycles. Options: release them at
+    environment deletion; or add a byte bound to the projection cache.
+    Chosen: release at deletion (`forgetEnvironmentProjections`, called by
+    `deleteEnvironment` after the session records go, and
+    `NativeAgentTranscriptProjection.forgetEnvironment`). Why: nothing can
+    read a deleted environment's sessions again, and the count-only bounds
+    (1,024 projections of up to 16 MiB each) would otherwise hold them
+    until churn. Pros: reuses `invalidateProjection` and its epoch fence.
+    Cons: sessions are found through the cached projections' inputs (the
+    key is a hash), so one read only through the progressive path is left
+    to that path's own bounds. Tests: the release case in
+    `native-agent-projection-cache-gauges.test.ts` and the ordering case in
+    `commands-environment-cleanup.test.ts`; live, the fixed run kept them at
+    the two long-lived sessions (see Long soak). Three other projection
+    maps have no eviction at all but stayed at zero without a browser
+    reader; they are [7100](7100-long-soak-follow-ups.md) task 3.
+27. **Containers left out of the long soak.** Options: free the host's
+    Docker address pools first; run on another host; or soak local
+    environments only and record why. Chosen: local only. Why: 29 of the
+    daemon's 34 networks were unattached reach-probe networks from other
+    backends (created 2026-10-31 to 2026-11-02), `dev:test` with a
+    container fixture failed with `resource-exhausted`, and this work may
+    neither prune networks nor remove what it did not create (0241 task 5
+    leaves that sweep to the user). Pros: the acceptance soak still ran.
+    Cons: container lifecycle, signal and fetch records were not soaked for
+    an hour; that is [7100](7100-long-soak-follow-ups.md) task 2.
+28. **The driver's own failures on this host.** Three attempts stopped
+    early, each fixed with a test, none a product bug: the container
+    fixture above; a toolchain download that failed with
+    `ERR_NETWORK_CHANGED` (an agent-test profile exits when it cannot
+    prepare its toolchains), answered by `--agent-platforms pi`, since Pi is
+    seeded from the host; and `agent options` refusing the `--timeout` the
+    soak appended, so the fake model was never listed. The 2026-10-25
+    `dev:stop` failure also recurred: `dev:stop` gives up about seven
+    seconds into the launcher's shutdown, before the launcher records
+    `stopped`, so the driver skipped the reset. It now waits for its own
+    launcher to exit before judging the stop (`recurring-live-ab-runner.test.ts`,
+    "a stop that gives up while the launcher is still exiting waits for it,
+    then resets").
+
+### Task 11 (2026-11-06)
+
+Recorded by the worker that ran task 11. Numbered T11.n so they do not collide
+with other tasks' decisions.
+
+- **T11.1 Public transcript `complete` on a restart preview (bug, fixed).**
+  The first `session.transcript` read after a backend restart answered
+  `messages: []`, `freshness: "cached"`, `truncated: true` and
+  `complete: true` for a conversation with three rows: a restarted Claude
+  bridge's first preview holds no rows and no history cursor, and the action
+  derived `complete` from the missing cursor alone. Options: report
+  `complete` only when the view's own `historyComplete` says so; or hide the
+  preview and wait for the hydrated view. Chosen: the former
+  (`actions-transcript.ts`). Why: the contract says `complete` means no older
+  history exists, and the view already states that; waiting would hold a read
+  open on a bridge. Pros: one condition; a cached empty page now reads as
+  incomplete. Cons: a reader that treated `complete` as "nothing more to
+  fetch" re-reads once. Test: `public-api-launch.test.ts` ("a restart preview
+  with no rows and no cursor is not complete", which fails without the fix).
+- **T11.2 Agent CLIs outliving a bridge that died (bug, fixed).** A bridge
+  killed or crashed mid-turn left its Claude CLI running, still on the turn
+  the user was told had stopped: against a real provider it would finish (and
+  bill) that turn and write into the conversation the next bridge resumes.
+  `terminateProcessTree` finds descendants by parent pid, which only works
+  while the bridge is alive, and the exit handler only logged. Options: reap
+  the dead bridge's process group on an exit nobody asked for; make each
+  bridge bind its CLI to its own lifetime; or both. Chosen: the group reap,
+  for every local bridge kind (`reapProcessGroup` in `process-tree.ts`,
+  `reapAfterUnrequestedExit` in `local-server-runtime.ts`, called from the
+  bridge exit handler in `commands-servers.ts`). Why: the backend spawns each
+  bridge `detached`, so the group is its own to signal (AGENTS.md), and one
+  place covers all five bridges and OpenCode. SIGTERM, 2 s, then SIGKILL; an
+  empty group answers ESRCH, and Linux does not reuse a pid that still names
+  a live group. It is off when a test substitutes `spawn`, so a fake child's
+  pid is never signalled as a group. New essential event
+  `bridge.orphans-reaped` (`warn`, `error` if one survived). Pros: no bridge
+  change, works for a bridge of any age. Cons: a CLI that leaves the group
+  (none does today) is not reached. Tests: `process-tree.test.ts` (unit cases
+  and a real SIGKILLed detached leader whose child is stopped),
+  `local-server-runtime.test.ts`, `log-essential.test.ts`; live, the bridge
+  case now sees the held call aborted.
+- **T11.3 Fake model rather than real providers.** Options: a loopback
+  Anthropic endpoint behind the real Claude CLI; the bridges' in-process fake
+  engines (Pi, Cursor); real providers. Chosen: the loopback endpoint. Why:
+  the ticket forbids billed turns, and the in-process engines need a test
+  host rather than a `dev:test` profile, while the CLI path keeps the real
+  bridge, CLI, journal and resume. Cons: Claude only; Codex and OpenCode
+  restarts stay with 0049 and the cold-restart spec.
+- **T11.4 Older backend from source.** Options: build v2.21.0 from its tag in
+  this worktree; install the published npm package; record it as not run.
+  Chosen: the tag, under `output/` (git-ignored), with its own data and home
+  and Docker unreachable. Why: no external download beyond the frozen
+  lockfile's packages, and the tag is the release. Cons: it ran the current
+  Claude CLI rather than its pinned one; the launcher is not committed (7120
+  task 5).
+- **T11.5 What counts as a durable boundary here.** Local bridges die with
+  their backend, so "restart mid-dispatch" for a local environment is always
+  "turn interrupted": the boundaries qualified are the dispatch accepted with
+  the provider working (held call), the prompt queued durably, and the result
+  arriving after the restart (the follow-up and the queued prompt). Review
+  added a separate result-accepted case for both backend crash and bridge
+  restart: wait for the answer and settled turn, restart, recover the answer
+  after opening and reloading, continue with the earlier prompt in context,
+  and require exactly one original provider dispatch. This qualifies recovery
+  of an already settled result; it does not inject a crash between accepting
+  a provider result and publishing the settled turn.
+  A container bridge outlives a backend restart and is not covered here; it
+  belongs with the Docker runs in 0031.
+- **T11.6 Review coverage.** The restart cases now await held-call abortion
+  before continuing and assert the earlier prompt is present in the next
+  provider request's context. Context stays in memory and is not written to
+  evidence. The command integration tests inject a reaper to check the actual
+  exit callback and verify replacement-start termination bypasses it. The
+  public transcript regression pages to the start of an incomplete window
+  without a history cursor and requires every page to remain incomplete.
+  Targeted validation on credential-free profile `q48-fix-fe80`: both backend
+  held-turn restart cases passed; the bridge case initially failed because
+  it killed the bridge after rendering an answer without waiting for idle.
+  After adding the idle-state barrier, the bridge case and both new
+  result-accepted cases passed (3/3). The profile was stopped and reset.
+  Focused command-exit and public transcript tests passed (18/18), as did
+  fake-model tests (9/9), the documentation task-surface guard and Playwright
+  spec loading. Earlier review-wide failures remain separately recorded.
+
 ## Related
 
+- [7100-long-soak-follow-ups.md](7100-long-soak-follow-ups.md): what task 10's
+  long soak left (containers, a browser reader, three projection maps
+  without eviction).
+- [7120-multi-client-restart-follow-ups.md](7120-multi-client-restart-follow-ups.md):
+  what task 11's run left for a decision.
 - [0049-native-agent-idle-observation.md](0049-native-agent-idle-observation.md),
   retired `0051-client-reconnect-and-freshness.md` (deleted 2026-11-06;
   remaining checks are tasks 16–20 here) and

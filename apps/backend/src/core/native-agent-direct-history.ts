@@ -160,6 +160,16 @@ export class DirectHistoryPageCache<V> {
     return this.totalBytes;
   }
 
+  /** Sessions whose provider epoch is recorded, for cache gauges. */
+  get observedSessions(): number {
+    return this.observed.size;
+  }
+
+  /** Page reads in flight, for cache gauges. */
+  get pendingReads(): number {
+    return this.reads.size;
+  }
+
   /** Record the provider's current epoch for a session; any change drops its pages. */
   observeEpoch(sessionKey: string, providerSessionId: string, epoch: string): void {
     const current = this.observed.get(sessionKey);

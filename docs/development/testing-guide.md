@@ -821,7 +821,8 @@ or the `recurringWork` block of `/__orkestrator/metrics`.
 `scripts/recurring-live-ab.ts` is the committed form of the live idle A/B.
 Per arm and repeat it starts a disposable credential-free profile
 (`dev:test --fixture --fixture-environments local,container
---no-agent-credentials`), waits for `ready`, settles for 60 s, and then samples
+--no-agent-credentials --headless`, with `DISPLAY` and `WAYLAND_DISPLAY`
+unset and `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`), waits for `ready`, settles for 60 s, and then samples
 `recurringWork` plus the backend and Electron processes' CPU time and RSS
 every 30 s over a 6-minute window (longer than the 5-minute container fetch
 cooldown). It then times edit-to-detection: it appends to a tracked file in
@@ -876,6 +877,37 @@ a guard line.
 mise exec -- bun scripts/recurring-live-ab.ts --arms candidate --repeats 1 \
   --window-ms 60000 --freshness-probes 0 --soak-cycles 20 \
   --soak-environments local,container --out output/benchmarks/recurring-soak.json
+```
+
+After every cycle the soak also reads one trend sample: the footprint, the
+cache gauges from `recurringWork.caches` (row cache, worktree snapshots,
+local scan cache, native projection and change tracking; content-free counts)
+and backend RSS. The summary prints each cache gauge's first, last, minimum
+and maximum, and lists the gauges still rising: the lowest reading of the
+last third of the samples is above the highest of the first third and the
+middle third's median. A cache that warms up and plateaus, or tracks the
+environments a cycle opens and closes, is not rising. Rising gauges are
+reported, not failed: each needs reading against its bound (todo
+[0048](../todo/transcripts-and-observation/0048-recurring-work-qualification.md)
+task 10).
+
+- `--soak-cycle-gap-ms MS` idles between cycles, so a soak can span an hour.
+- `--soak-sessions N` (at most 8) keeps real Pi sessions open on a fake model:
+  a loopback OpenAI-compatible endpoint the script serves
+  (`scripts/recurring-live-ab-fake-model.ts`), named in the new profile's own
+  Pi `models.json` under its isolated HOME. N sessions on the fixture's local
+  environment stay open for the whole soak and get one prompt per cycle, and
+  every cycle's local environment gets its own session before it is deleted.
+  No credential, login or provider is involved.
+- `--agent-platforms LIST` is passed to `dev:test`. `pi` alone needs no
+  toolchain download; a profile whose start-up download fails exits.
+
+```bash
+mise exec -- bun scripts/recurring-live-ab.ts --arms candidate --repeats 1 \
+  --window-ms 60000 --freshness-probes 0 --fixture-environments local \
+  --agent-platforms pi --soak-cycles 60 --soak-environments local \
+  --soak-cycle-gap-ms 45000 --soak-sessions 2 \
+  --out output/benchmarks/recurring-long-soak.json
 ```
 
 For transcript, projection and storage cost, use the

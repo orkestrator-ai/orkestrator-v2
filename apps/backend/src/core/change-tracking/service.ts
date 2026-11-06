@@ -29,6 +29,7 @@ import {
 import type { DiffScanEvent } from "../diff-stats-service.js";
 import type { NativeAgentChangeTrackingHooks } from "../native-agent-service-shared.js";
 import type { StorageDatabase } from "../storage-database.js";
+import { recurringDiagnosticsRegistry } from "../recurring-diagnostics.js";
 import { encodePath } from "./capture.js";
 import { ChangeLedger } from "./change-ledger.js";
 import { DiffBodyService } from "./diff-bodies.js";
@@ -239,6 +240,23 @@ export class ChangeTrackingService {
         if (environmentId) options.requestEnvironmentRefresh?.(environmentId);
       },
     });
+    this.closeListeners.push(recurringDiagnosticsRegistry.addCacheSource("change-tracking", this));
+  }
+
+  /**
+   * Cache gauges for recurring diagnostics (`change-tracking`): live worktree
+   * owners and the per-environment maps that a deletion or purge must empty.
+   * Memory only; ledger counts stay in {@link diagnostics}.
+   */
+  cacheGauges(): Record<string, number> {
+    return {
+      worktreeOwners: this.registry.activeOwners(),
+      evidenceSources: this.sources.size,
+      unsupportedSources: this.unsupported.size,
+      pendingPulls: this.pulls.size,
+      turnFinalizations: this.turnFinalizations.size,
+      deletedEnvironments: this.deletedEnvironments.size,
+    };
   }
 
   /** Startup reconciliation, outbox recovery and the retention timer. */

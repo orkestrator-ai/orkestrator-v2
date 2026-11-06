@@ -14,3 +14,22 @@ ORKESTRATOR_E2E_PORT=15488 mise run test:logged -- --name fix-browser-owners -- 
 ```
 
 The cause remains unknown. No diagram code, assertion, timeout or skip changed.
+
+## Coordinator unavailable-platform review — 2026-11-06
+
+The mobile diagram arrow-entry assertion kept data-state=collapsed instead of open for 5 s.
+The five-worker browser repeat named nine failures and hit the 1800000 ms
+group deadline after starting 708/1596 cases; complete pass totals are not
+available. The command was
+`ORKESTRATOR_E2E_PORT=61386 mise run test:logged -- --name browser -- mise run test:browser`.
+
+The unchanged complete owner passed alone, exit 0, in 59.2 s:
+
+```sh
+ORKESTRATOR_E2E_PORT=61386 mise run test:logged -- --name review-diagram-browser-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/MarkdownEditorDiagram.spec.ts --workers=1 --output output/agent-testing/review-address-owners/diagram
+```
+
+Evidence: `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.8yBzhf/browser.log.gz`.
+Passing output was deleted by the logged runner; individual passing counts
+were not retained. This establishes intermittence, not a cause or an overall
+browser pass. No assertion, timeout, skip or implementation was changed.

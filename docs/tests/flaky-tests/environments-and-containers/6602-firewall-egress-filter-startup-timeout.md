@@ -1,6 +1,6 @@
 # Firewall name-check setup times out in the default aggregate
 
-- **ID:** 9837
+- **ID:** 6602
 - **Status:** open
 - **Date observed:** 2026-11-06
 - **Test:** `init-firewall.sh with name checks > redirects TCP to allowed tuples and every DNS query to the daemon, and lets only marked traffic leave`

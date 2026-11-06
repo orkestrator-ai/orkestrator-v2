@@ -18,6 +18,10 @@
  * - Within one call an interrupted transfer is retried, with the same checks,
  *   while each attempt makes progress, up to `attempts`. An attempt that makes
  *   no progress fails at once; the partial is kept for the next launch or retry.
+ *   The exception is a request Chromium aborted with `ERR_NETWORK_CHANGED`
+ *   (Electron's `net.fetch`): a host interface appeared or disappeared, which
+ *   Docker does for every container and network it creates, so the attempt says
+ *   nothing about the server and is retried within the same `attempts`.
  *
  * Integrity failures (an untrusted host, a size mismatch, an oversized body)
  * delete the partial, since its bytes can no longer be trusted to belong to the
@@ -78,6 +82,21 @@ function failure(message: string, kind: "untrusted" | "restart" | "transient"): 
   if (kind === "untrusted") error.untrusted = true;
   if (kind === "restart") error.restart = true;
   return error;
+}
+
+const NETWORK_CHANGED = "ERR_NETWORK_CHANGED";
+
+/** Chromium aborted the request because a host network interface changed. */
+function isNetworkChangeAbort(error: unknown): boolean {
+  for (let current = error, depth = 0; current && depth < 4; depth += 1) {
+    if (current instanceof Error) {
+      if (current.message.includes(NETWORK_CHANGED)) return true;
+      current = current.cause;
+    } else {
+      return typeof current === "string" && current.includes(NETWORK_CHANGED);
+    }
+  }
+  return false;
 }
 
 function delay(milliseconds: number): Promise<void> {
@@ -289,7 +308,7 @@ export async function downloadArchive(options: DownloadArchiveOptions): Promise<
         await rm(partialPath, { force: true });
       }
       if (attemptFailure.untrusted || attempt >= attempts) throw error;
-      if (!attemptFailure.restart) {
+      if (!attemptFailure.restart && !isNetworkChangeAbort(error)) {
         const endSize = (await lstat(partialPath).catch(() => null))?.size ?? 0;
         if (endSize <= startSize) throw error;
       }

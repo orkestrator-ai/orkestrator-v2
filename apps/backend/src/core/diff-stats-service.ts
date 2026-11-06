@@ -918,6 +918,29 @@ export class DiffStatsService {
     };
   }
 
+  /**
+   * {@link status} flattened into cache gauges for recurring diagnostics
+   * (`worktree-snapshots`): tracked entries, tree lineages and their retained
+   * bodies, and ad hoc reads. Counts and sizes only.
+   */
+  cacheGauges(): Record<string, number> {
+    const status = this.status();
+    return {
+      entries: status.entries,
+      active: status.active,
+      watched: status.watched,
+      inFlight: status.inFlight,
+      retryTimers: status.retryTimers,
+      treeTargets: status.tree.entries,
+      treeBodies: status.tree.bodies,
+      treeBytes: status.tree.bytes,
+      treeInFlight: status.tree.inFlight,
+      adhocPending: status.adhocPending,
+      adhocTrees: status.adhocTrees.entries,
+      adhocTreeBytes: status.adhocTrees.bytes,
+    };
+  }
+
   private findEntry(lookup: WorktreeLookup): DiffStatsEntry | undefined {
     let key: string;
     try {

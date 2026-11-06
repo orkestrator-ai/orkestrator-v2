@@ -814,6 +814,32 @@ describe("delete_environment durable child-state cleanup", () => {
     );
   });
 
+  test("releases the native projection caches of its sessions after their records go", async () => {
+    await withDeleteCommand(
+      async (storage) => storage.addEnvironment(environment()).then(() => undefined),
+      async (invokeDelete, storage, context) => {
+        const order: string[] = [];
+        const deleteSessions = storage.deleteNativeAgentSessionsByEnvironment.bind(storage);
+        storage.deleteNativeAgentSessionsByEnvironment = async (environmentId: string) => {
+          order.push("session-records");
+          return deleteSessions(environmentId);
+        };
+        const forgetEnvironmentProjections = mock((_environmentId: string) => {
+          order.push("projection-caches");
+        });
+        context.nativeAgents = {
+          forgetEnvironmentCommandCatalogues: () => undefined,
+          forgetEnvironmentProjections,
+        } as unknown as NonNullable<typeof context.nativeAgents>;
+
+        await invokeDelete();
+        expect(forgetEnvironmentProjections).toHaveBeenCalledWith("e1");
+        expect(order).toEqual(["session-records", "projection-caches"]);
+        expect(await storage.getEnvironment("e1")).toBeNull();
+      },
+    );
+  });
+
   test("purges agent mail before removing the environment", async () => {
     await withDeleteCommand(
       async (storage) => storage.addEnvironment(environment()).then(() => undefined),

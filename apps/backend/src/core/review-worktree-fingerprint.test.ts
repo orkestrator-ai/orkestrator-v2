@@ -249,14 +249,16 @@ for (const interpreter of INTERPRETERS) {
   );
 
   test.skipIf(process.platform === "win32")(
-    `stops a blocked git at its budget instead of orphaning it (${interpreter})`,
+    `stops a blocked git and its descendant at its budget (${interpreter})`,
     async () => {
       const root = await fixture();
       const pidFile = path.join(root, ".git", "status-pid");
-      // Status stands in for a walk stuck on a stalled disk.
+      // Keep the fake Git alive as the group leader, with a separate long-lived
+      // child. Killing just Git must fail this regression test. Both processes
+      // are bounded even if cleanup regresses.
       const bin = await fakeGitBin(
         root,
-        `case " $* " in *" status "*) echo $$ > '${pidFile}'; exec sleep 30;; esac\nexec "$REAL_GIT" "$@"`,
+        `case " $* " in *" status "*) sleep 30 & child=$!; printf '%s\\n' "$$" "$child" > '${pidFile}'; wait "$child"; exit;; esac\nexec "$REAL_GIT" "$@"`,
       );
       const started = Date.now();
       const error = await runCommand(
@@ -277,13 +279,39 @@ for (const interpreter of INTERPRETERS) {
       expect(reviewWorktreeProbeReasonCode(String((error as CommandFailedError).stderr))).toBe(
         "timeout",
       );
-      const pid = (await fs.readFile(pidFile, "utf8")).trim();
-      // A zombie has exited; init may not have reaped it yet.
-      const state = await runCommand("ps", ["-p", pid, "-o", "stat="]).then(
-        (result) => result.stdout.trim(),
-        () => "",
-      );
-      expect(state === "" || state.startsWith("Z")).toBe(true);
+      const pids = (await fs.readFile(pidFile, "utf8")).trim().split("\n");
+      expect(pids).toHaveLength(2);
+      expect(new Set(pids).size).toBe(2);
+      for (const pid of pids) {
+        expect(pid).toMatch(/^[1-9][0-9]*$/);
+        // A zombie has exited; init may not have reaped it yet. Give a child
+        // scheduled after its parent a bounded interval to observe SIGKILL.
+        const deadline = Date.now() + 1_000;
+        let state: string;
+        do {
+          state = await runCommand("ps", ["-p", pid, "-o", "stat="], {
+            timeoutMs: 1_000,
+          }).then(
+            (result) => result.stdout.trim(),
+            (failure: unknown) => {
+              if (
+                failure instanceof CommandFailedError &&
+                failure.exitCode === 1 &&
+                !failure.timedOut &&
+                failure.stderr.trim() === ""
+              )
+                return "";
+              throw failure;
+            },
+          );
+          if (state === "" || state.startsWith("Z")) break;
+          await Bun.sleep(20);
+        } while (Date.now() < deadline);
+        expect({ pid, stopped: state === "" || state.startsWith("Z") }).toEqual({
+          pid,
+          stopped: true,
+        });
+      }
     },
     15_000,
   );

@@ -113,10 +113,11 @@ export function detectPlatform(): Platform {
  * short spins, so it exits on its own once the deadline passes or the runner
  * that spawned it is gone (it has been reparented).
  */
-export function burnerSource(deadlineSeconds: number): string {
+export function burnerSource(deadlineSeconds: number, runnerPid = process.pid): string {
   return [
     `const end = Date.now() + ${deadlineSeconds * 1000};`,
-    "const parent = process.ppid;",
+    `const parent = ${runnerPid};`,
+    "if (process.ppid !== parent) process.exit(0);",
     "for (;;) {",
     "  for (let i = 0; i < 2e6; i += 1);",
     "  if (Date.now() >= end || process.ppid !== parent) process.exit(0);",

@@ -10,6 +10,7 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import {
   ANNOUNCE_ENV,
+  burnerSource,
   detectPlatform,
   runUnderContention,
 } from "../../scripts/test-under-contention";
@@ -45,6 +46,31 @@ async function expectGone(pids: number[]) {
 }
 
 describe("test-under-contention burner cleanup", () => {
+  test("exits before spinning when startup already has a different parent", async () => {
+    // The shell/runner could have died before evaluation. Supply a deliberately
+    // different expected parent while executing the actual burner source.
+    const child = Bun.spawn(
+      [
+        process.execPath,
+        "-e",
+        burnerSource(60, process.pid + 1).replace(
+          "for (;;) {",
+          'throw new Error("entered busy loop"); for (;;) {',
+        ),
+      ],
+      {
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    try {
+      expect(await child.exited).toBe(0);
+    } finally {
+      if (child.exitCode === null) child.kill("SIGKILL");
+      await child.exited;
+    }
+  });
+
   test("propagates a passing command's status and stops its burners", async () => {
     const lines: string[] = [];
     const result = await runUnderContention(

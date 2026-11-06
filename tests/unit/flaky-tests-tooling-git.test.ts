@@ -127,6 +127,20 @@ beforeAll(() => {
   );
   commit("fix", "2026-09-10T12:00:00Z");
 
+  // An actual fix can predate retrospective closure of its registry entry.
+  caseFile("h", "0008", "retrospective", "open", "- **Date observed:** 2026-09-01");
+  commit("before-retrospective-fix", "2026-09-11T12:00:00Z");
+  write("tests/retrospective.test.ts", "fixed\n");
+  commit("earlier-fix", "2026-09-12T12:00:00Z");
+  caseFile(
+    "h",
+    "0008",
+    "retrospective",
+    "resolved",
+    `## Resolution\n\nFixed by \`${commits["earlier-fix"]}\`.`,
+  );
+  commit("retrospective-closure", "2026-09-13T12:00:00Z");
+
   // Later work: one owner changes, another is deleted, a case cites an old commit.
   write("tests/a.test.ts", "a changed\n");
   rmSync(path.join(repo, "tests/gone.test.ts"));
@@ -151,6 +165,27 @@ afterAll(() => {
 });
 
 describe("recurrence check", () => {
+  test("uses the earlier fix without requiring retrospective registry closure", async () => {
+    const after = await checkRecurrence({ query: "0008", base: commits["earlier-fix"]!, repo });
+    expect(after.cases[0]!.statusFlip).toEqual({
+      commit: commits["retrospective-closure"]!,
+      inBase: false,
+    });
+    expect(after.cases[0]!.verdict).toEqual({
+      kind: "real-recurrence",
+      fixes: [commits["earlier-fix"]!],
+    });
+    const before = await checkRecurrence({
+      query: "0008",
+      base: commits["before-retrospective-fix"]!,
+      repo,
+    });
+    expect(before.cases[0]!.verdict).toEqual({
+      kind: "base-predates-fix",
+      missing: [commits["earlier-fix"]!],
+    });
+  });
+
   test("a base that contains the fix makes it a real recurrence", async () => {
     const report = await checkRecurrence({ query: "2", base: "HEAD", repo });
     const [entry] = report.cases;

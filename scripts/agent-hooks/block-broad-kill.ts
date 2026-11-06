@@ -15,8 +15,8 @@
  *
  * `kill <pid>` and `kill $VAR` stay allowed: signalling a pid you recorded at
  * spawn time is exactly what the rules ask for. Text inside quotes is ignored
- * unless it is run as a command (`sh -c '…'`, `eval '…'`), and heredoc bodies
- * are ignored, so a commit message that mentions `pkill` is not refused.
+ * unless it is run as a command (`sh -c '…'`, `eval '…'`), and literal heredoc bodies
+ * are ignored. Executable heredocs and expanding substitutions are checked.
  *
  * Exit 2 with a reason on stderr blocks the tool call; exit 0 allows it. Any
  * failure to read or parse the hook input allows the call: this is a guard
@@ -44,24 +44,87 @@ const REASON =
 
 type Segment = { words: string[] };
 
-/** Removes heredoc bodies: their text is data, not commands. */
-function stripHeredocs(source: string): string {
-  const lines = source.split("\n");
-  const kept: string[] = [];
-  const pending: { delimiter: string; tabs: boolean }[] = [];
-  for (const line of lines) {
-    const current = pending[0];
-    if (current) {
-      const candidate = current.tabs ? line.replace(/^\t+/, "") : line;
-      if (candidate === current.delimiter) pending.shift();
+/** Keep heredoc scripts and expansions, but not literal documentation. */
+function stripHeredocs(source: string, nested: string[]): string {
+  let kept = "";
+  let quote = "";
+  let header = "";
+  const pending: { delimiter: string; tabs: boolean; quoted: boolean }[] = [];
+  for (let i = 0; i < source.length; i += 1) {
+    const char = source[i]!;
+    kept += char;
+    header += char;
+    if (char === "\\" && quote !== "'" && i + 1 < source.length) {
+      kept += source[++i];
+      header += source[i];
       continue;
     }
-    kept.push(line);
-    for (const match of line.matchAll(/<<(-?)\s*(['"]?)([A-Za-z_][\w.-]*)\2/g)) {
-      pending.push({ delimiter: match[3]!, tabs: match[1] === "-" });
+    if (char === quote) quote = "";
+    else if (!quote && (char === "'" || char === '"')) quote = char;
+    else if (!quote && char === "#" && (i === 0 || /\s/.test(source[i - 1]!))) {
+      const end = source.indexOf("\n", i);
+      i = end < 0 ? source.length : end - 1;
+    } else if (
+      !quote &&
+      source.startsWith("<<", i) &&
+      source[i + 2] !== "<" &&
+      source[i - 1] !== "<"
+    ) {
+      const match = /^<<(-?)\s*((?:'[^']*'|"[^"]*"|\\.|[\w.-])+)/.exec(source.slice(i));
+      if (match) {
+        const raw = match[2]!;
+        pending.push({
+          delimiter: raw.replace(/['"]/g, "").replace(/\\(.)/g, "$1"),
+          tabs: match[1] === "-",
+          quoted: /['"\\]/.test(raw),
+        });
+        kept += match[0].slice(1);
+        header += match[0].slice(1);
+        i += match[0].length - 1;
+      }
+    }
+    if (char !== "\n" || quote) continue;
+    // A shell reading stdin executes even a quoted heredoc. Ordinary commands
+    // only expand substitutions in an unquoted heredoc (quotes in its body are data).
+    const executable = tokenize(header, []).some((segment) => {
+      const { program } = commandPosition(segment.words);
+      return SHELLS.has(program);
+    });
+    for (const doc of pending) {
+      const body: string[] = [];
+      while (i + 1 < source.length) {
+        const start = i + 1;
+        const end = source.indexOf("\n", start);
+        const stop = end < 0 ? source.length : end;
+        const line = source.slice(start, stop);
+        i = end < 0 ? source.length : end;
+        if ((doc.tabs ? line.replace(/^\t+/, "") : line) === doc.delimiter) break;
+        body.push(line);
+      }
+      const text = body.join("\n");
+      if (executable) nested.push(text);
+      if (!doc.quoted) heredocExpansions(text, nested);
+    }
+    pending.length = 0;
+    header = "";
+  }
+  return kept;
+}
+
+function heredocExpansions(source: string, nested: string[]): void {
+  for (let i = 0; i < source.length; i += 1) {
+    if (source[i] === "\\" && /[$`\\]/.test(source[i + 1] ?? "")) i += 1;
+    else if (source.startsWith("$(", i)) {
+      const end = matchingParen(source, i + 1);
+      nested.push(source.slice(i + 2, end));
+      i = end;
+    } else if (source[i] === "`") {
+      const end = source.indexOf("`", i + 1);
+      const stop = end < 0 ? source.length : end;
+      nested.push(source.slice(i + 1, stop));
+      i = stop;
     }
   }
-  return kept.join("\n");
 }
 
 /**
@@ -140,7 +203,10 @@ function tokenize(source: string, nested: string[]): Segment[] {
     } else if (char === "#" && !inWord) {
       const end = source.indexOf("\n", index);
       index = end === -1 ? source.length : end;
-    } else if (";&|\n(){}".includes(char)) {
+    } else if (
+      ";&|\n()".includes(char) ||
+      ((char === "{" || char === "}") && !inWord && /[\s;]|^$/.test(source[index + 1] ?? ""))
+    ) {
       endSegment();
       index += 1;
     } else if (char === " " || char === "\t") {
@@ -188,40 +254,112 @@ function isBroadKillTarget(words: readonly string[]): boolean {
     first = plain[0] === "-s" || plain[0] === "-n" ? 2 : 1;
   }
   if (plain[first] === "--") first += 1;
-  return plain.slice(first).some((target) => target === "0" || target === "-1");
+  return plain
+    .slice(first)
+    .some((target) => /^[+-]?\d+$/.test(target) && (Number(target) === 0 || Number(target) === -1));
+}
+
+// Options with a separate operand; attached short values and --option=value
+// are consumed as one word. Keep this per wrapper: -n means different things.
+const WRAPPER_VALUES: Record<string, string[]> = {
+  sudo: [
+    "u",
+    "g",
+    "h",
+    "p",
+    "C",
+    "T",
+    "R",
+    "D",
+    "r",
+    "t",
+    "--user",
+    "--group",
+    "--host",
+    "--prompt",
+    "--chdir",
+    "--chroot",
+    "--role",
+    "--type",
+    "--command-timeout",
+    "--close-from",
+  ],
+  doas: ["u", "C"],
+  nice: ["n", "--adjustment"],
+  timeout: ["s", "k", "--signal", "--kill-after"],
+  xargs: [
+    "n",
+    "P",
+    "s",
+    "I",
+    "L",
+    "E",
+    "a",
+    "d",
+    "--max-args",
+    "--max-procs",
+    "--max-chars",
+    "--replace",
+    "--max-lines",
+    "--eof",
+    "--arg-file",
+    "--delimiter",
+  ],
+  env: ["u", "C", "S", "--unset", "--chdir", "--split-string"],
+  time: ["f", "o", "--format", "--output"],
+};
+const COMMAND_PREFIXES = new Set(["if", "then", "elif", "else", "while", "until", "do", "!"]);
+
+function commandPosition(words: string[]): { index: number; program: string; viaXargs: boolean } {
+  let index = 0;
+  let viaXargs = false;
+  while (index < words.length) {
+    const raw = words[index]!;
+    const word = unquote(raw).split("/").pop()!;
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(raw) || COMMAND_PREFIXES.has(raw)) {
+      index += 1;
+    } else if (WRAPPERS.has(word) || word === "timeout" || word === "xargs") {
+      viaXargs ||= word === "xargs";
+      index += 1;
+      while (index < words.length) {
+        const option = unquote(words[index]!);
+        if (!option.startsWith("-")) break;
+        index += 1;
+        if (option === "--") break;
+        const values = WRAPPER_VALUES[word] ?? [];
+        if (option.startsWith("--")) {
+          if (values.includes(option)) index += 1;
+        } else {
+          for (let cursor = 1; cursor < option.length; cursor += 1) {
+            if (!values.includes(option[cursor]!)) continue;
+            if (cursor === option.length - 1) index += 1;
+            break;
+          }
+        }
+      }
+      if (word === "timeout") index += 1; // duration
+    } else break;
+  }
+  return {
+    index,
+    program:
+      unquote(words[index] ?? "")
+        .split("/")
+        .pop() ?? "",
+    viaXargs,
+  };
 }
 
 function checkSegment(segment: Segment, depth: number): string | null {
   const words = segment.words;
-  let index = 0;
-  let viaXargs = false;
-  while (index < words.length) {
-    const word = unquote(words[index]!);
-    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(word)) {
-      index += 1;
-    } else if (WRAPPERS.has(word)) {
-      index += 1;
-      while (index < words.length && unquote(words[index]!).startsWith("-")) index += 1;
-    } else if (word === "timeout") {
-      index += 1;
-      while (index < words.length && unquote(words[index]!).startsWith("-")) index += 1;
-      index += 1; // the duration
-    } else if (word === "xargs") {
-      viaXargs = true;
-      index += 1;
-      while (index < words.length && unquote(words[index]!).startsWith("-")) index += 1;
-    } else {
-      break;
-    }
-  }
-  const program =
-    unquote(words[index] ?? "")
-      .split("/")
-      .pop() ?? "";
+  const { index, program, viaXargs } = commandPosition(words);
   const args = words.slice(index + 1);
 
   if (program === "pkill" || program === "killall") return program;
-  if (program === "fuser" && args.some((arg) => /^-[A-Za-z]*k/.test(unquote(arg))))
+  if (
+    program === "fuser" &&
+    args.some((arg) => unquote(arg) === "--kill" || /^-[A-Za-z]*k/.test(unquote(arg)))
+  )
     return "fuser -k";
   if (program === "kill" && (viaXargs || isBroadKillTarget(args))) return "kill";
   if (SHELLS.has(program) || program === "eval") {
@@ -240,7 +378,7 @@ function checkSegment(segment: Segment, depth: number): string | null {
 export function findBroadKill(source: string, depth = 0): string | null {
   if (depth > 8) return null;
   const nested: string[] = [];
-  for (const segment of tokenize(stripHeredocs(source), nested)) {
+  for (const segment of tokenize(stripHeredocs(source, nested), nested)) {
     const found = checkSegment(segment, depth);
     if (found) return found;
   }

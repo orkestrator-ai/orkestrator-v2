@@ -10,9 +10,11 @@
  * the working tree, which is how a branch whose own copy of the registry
  * predates a resolution still learns about it.
  *
- * A resolved case's fix commits are the commit that set its status to
- * `resolved` on the registry ref, plus the commits its Resolution sections
- * cite that are reachable from that ref. A cited commit that is not reachable
+ * A resolved case's fix commits are the commits its Resolution sections
+ * cite that are reachable from the registry ref. If none are reachable, use
+ * the commit that set its status to `resolved` as a fallback. Retrospective
+ * registry closure is not an additional prerequisite for an earlier fix.
+ * A cited commit that is not reachable
  * (a branch commit later squash-merged) cannot say anything about the base and
  * is listed but not used.
  */
@@ -138,9 +140,11 @@ async function assessCase(
   const flip = await statusFlipCommit(repo, registryCommit, record.relativePath);
   if (flip) report.statusFlip = { commit: flip, inBase: await isAncestor(repo, flip, baseCommit) };
   const fixes = new Map<string, boolean>();
-  if (report.statusFlip) fixes.set(report.statusFlip.commit, report.statusFlip.inBase);
   for (const entry of cited) {
     if (entry.inResolution && entry.onRegistryRef) fixes.set(entry.commit, entry.inBase);
+  }
+  if (fixes.size === 0 && report.statusFlip) {
+    fixes.set(report.statusFlip.commit, report.statusFlip.inBase);
   }
   if (fixes.size === 0) {
     report.verdict = { kind: "resolved-fix-unknown" };

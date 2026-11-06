@@ -57,6 +57,11 @@ export function markTestStart(title: string): void {
   record("test", `--- ${title} ---`);
 }
 
+/** A harness event worth reading beside the processes' output, such as a startup reload. */
+export function recordTestNote(text: string): void {
+  record("test", text);
+}
+
 /** Saves complete diagnostics; the line reporter prints the attachment path. */
 export async function attachElectronDiagnostics(testInfo: TestInfo): Promise<void> {
   if (lines.length === 0) return;

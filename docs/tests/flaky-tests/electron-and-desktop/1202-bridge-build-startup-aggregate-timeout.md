@@ -281,3 +281,21 @@ unchanged when rerun alone.
 - This is another aggregate-only timeout observation; the cause remains
   unconfirmed. No owning code, timeout, assertion or skip changed. The aggregate
   also retained unrelated backend timer and missing WebKit-library failures.
+
+## Legacy host-mount coverage review — 2026-11-06
+
+- **Commit:** `b8ff1848b` (coverage repair `5279014f9`).
+- **Original command:** `mise run test:logged -- --name review-default-tests -- mise run test`.
+  Desktop used two isolated workers alongside the other workspace packages.
+  The successful-start case timed out at 15,006.59 ms (15,000 ms limit).
+  Desktop totals: 1,868 passed, 16 skipped, one failed across 1,885 tests.
+  The aggregate exited 1 after 1,708.7 s; its workspace group was incomplete
+  after the backend stopped producing output for 300,000 ms.
+- **Complete unchanged owner:** `mise run test:logged -- --name review-desktop-bridge-owner -- bun test --cwd apps/desktop ./scripts/dev/bridge-builds.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures`
+  passed with exit 0 in 1.7 s. Passing output was removed, so isolated case
+  counts are not inferred.
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.YdSBOn/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`;
+  outer wrapper: `orkestrator-test-run.GlSHmN/review-default-tests.log.gz`
+  under the same temporary root.
+- **Disposition:** open recurrence; cause unconfirmed. Neither this owner nor
+  its implementation changed in the branch. No assertion, timeout or skip changed.

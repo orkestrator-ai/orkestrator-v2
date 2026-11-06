@@ -1023,6 +1023,32 @@ reads the host's `~/.claude`; on an older commit, cherry-pick that fix
 (`tmuxLocalClaudeConfigDirectory` in `commands-servers.ts`) into the scratch
 checkout before running this.
 
+#### Image and layer sizes
+
+`scripts/docker-image-layers.ts` measures an image on whatever Docker the host
+has (1202 task 14, DK-7 to DK-9). `report` prints the uncompressed size, each
+layer with the instruction that made it, and `du -sxk` of each `--du` path in
+a throwaway `--network none` container; `changed` sums the layers of a probe
+image that the base image does not hold, which is what a client holding the
+base would pull. Build each side from a detached worktree under the
+git-ignored `output/benchmarks/` with a tag of its own, and remove the tags
+and worktrees when done:
+
+```bash
+git worktree add --detach output/benchmarks/img-before <commit>
+(cd output/benchmarks/img-before && \
+  docker build $(bun scripts/docker-image-build-args.ts) \
+  -t orkestrator-v2:img-before -f docker/Dockerfile .)
+mise exec -- bun scripts/docker-image-layers.ts report orkestrator-v2:img-before \
+  --du /home/node/.npm --du /usr/local/share/mise/installs/bun
+# Re-pull probe: append a line to every bridges/*/src/index.ts in the worktree,
+# rebuild as orkestrator-v2:img-before-probe with the same build arguments, then
+mise exec -- bun scripts/docker-image-layers.ts changed \
+  orkestrator-v2:img-before orkestrator-v2:img-before-probe
+docker image rm orkestrator-v2:img-before orkestrator-v2:img-before-probe
+git worktree remove --force output/benchmarks/img-before
+```
+
 For transcript, projection and storage cost, use the
 [efficiency harness](efficiency-harness.md) (`mise run efficiency:baseline`).
 

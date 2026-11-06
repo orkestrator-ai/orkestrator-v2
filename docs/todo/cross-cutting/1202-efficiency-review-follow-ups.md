@@ -28,7 +28,7 @@ governs, marked "Decided".
 
 ### Tasks
 
-1. **Baseline and before-and-after numbers**: capture the report's measurements for the work already done and before each structural task. Status: open (macOS done 2026-11-06: ST-13 and BG-15's baselines, ST-13 live on `dev:test` profiles, BG-15 live on a real claude-tmux tab with a loopback fake model, the idle recurring work of `0bd214ee` against `main`, and the change-tracking and diff-scan benchmarks; open because what is left cannot be measured on an isolated macOS profile: `gh-spawn` per hour needs a real PR and `gh` login, a cold-cache launch needs root, WEB-3's per-transition RPC count needs a fake-model native turn on base that was not built, and the per-item counts of tasks 2 and 10, and BG-1, BG-2 and BG-8 with a tab open in a container, need a busier profile than an idle fixture; see the table in task 1).
+1. **Baseline and before-and-after numbers**: capture the report's measurements for the work already done and before each structural task. Status: open (macOS done 2026-11-06: ST-13 and BG-15's baselines, ST-13 live on `dev:test` profiles, BG-15 live on a real claude-tmux tab with a loopback fake model, the idle recurring work of `0bd214ee` against `main`, the change-tracking and diff-scan benchmarks, and DK-7 to DK-9's image sizes on linux/arm64 under Docker Desktop; open because what is left cannot be measured on an isolated macOS profile: `gh-spawn` per hour needs a real PR and `gh` login, a cold-cache launch needs root, WEB-3's per-transition RPC count needs a fake-model native turn on base that was not built, and the per-item counts of tasks 2 and 10, and BG-1, BG-2 and BG-8 with a tab open in a container, need a busier profile than an idle fixture; see the table in task 1).
 2. **Storage keyed reads and writes**: the lease-held native session mutations, one shared decoded snapshot, the agent mail remainder, keyed-array row writes and the position index (TX-4 rest, BG-5, ST-9 rest, ST-10, ST-11). Status: done 2026-11-05, with what is left in to-dos (ST-7, ST-8, BG-5, ST-11 and ST-10 done, TX-4's rest done 2026-11-04; ST-9's rest measured 2026-11-05 and not built, thresholds in [6760](6760-agent-mail-store-split-thresholds.md); the prompt-queue reads a steer made were 5100, done 2026-11-05; live store sizes and write rates are [5101](5101-store-size-and-write-rate-live.md)).
 3. **Renderer re-renders and refetches**: WEB-6, WEB-7, WEB-9 to WEB-14 and WEB-16 to WEB-19, plus WEB-2's narrower subscriptions. Status: done (2026-11-04; WEB-2, WEB-3, WEB-4, WEB-5, WEB-8, WEB-15 and GW-13 earlier; WEB-7 and WEB-17 on 2026-11-03; WEB-2's third fix, WEB-6, WEB-9, WEB-10 and WEB-11, then WEB-12 to WEB-14, WEB-16, WEB-18 and WEB-19 on 2026-11-04; a React Profiler run stays with task 1). E12 (WEB-2's third fix, WEB-6 and WEB-14) was checked back on 2026-11-05 and its batch file deleted: all three were built, and its two-tab Profiler run found no difference in commits; see the [closing check of E12](../../reports/2026-11-06-efficiency-logging-database-outcome.md#closing-check-of-e12-renderer-store).
 4. **Live agent view requests**: discovery out of the 500 ms round, a combined read, then bridge state ETags and transcript deltas (WEB-1, GW-1, GW-3, TX-5, TX-6). Status: open, waiting on the maintainer's choice of push or long-poll (decided 2026-11-01 to choose only if the numbers still justify it; the numbers are in task 4 and nothing else is left to build) (WEB-1 and GW-1 done 2026-11-04, a visible running tab from 3 requests per round to 1.04; GW-3 done 2026-11-05; TX-5 and TX-6 measured in E10 on a `dev:test` profile (2026-11-06, a real Claude bridge streaming against a loopback model, no billed turn) and with a fake bridge, and not built: on the real stack the bridge spends under 0.25 ms on a state read and about 1 ms on a transcript read; the figures and decisions are [6680](../transcripts-and-observation/6680-conditional-reads-and-deltas-measured.md), and the outcome is the [closing check of E10](../../reports/2026-11-06-efficiency-logging-database-outcome.md#closing-check-of-e10-conditional-reads-and-deltas)).
@@ -231,6 +231,42 @@ The counts match Linux (there the base, `a8bdce444`, spawned 7). The time did
 not improve on macOS: against a commit base after was about 9 ms slower at
 p50 on this host.
 
+**Image size on macOS (DK-7 to DK-9).** Task 14's own pair, rebuilt natively
+on this host: Docker Desktop 29.9.2, its linux/arm64 VM (18 CPUs, 7.7 GiB),
+containerd image store, load average about 40 from other builds. **Before**
+is `d6040915c`, `main` just before the change merged; **after** is
+`fd679c0e2`, the merge of the change (#1623). Each side was a detached
+worktree under `output/benchmarks/`, built with `docker build $(bun
+scripts/docker-image-build-args.ts) -f docker/Dockerfile .` under a tag of
+its own; both builds passed the Chromium launch check as uid 0 and uid 1000.
+Sizes are uncompressed bytes from `scripts/docker-image-layers.ts report`
+(`docker image inspect`, `docker history --human=false` and `du -sxk` in a
+`--network none` container). The re-pull row is the same probe as on Linux:
+a line appended to all five `bridges/*/src/index.ts`, each side rebuilt with
+the same builder and build arguments, and `scripts/docker-image-layers.ts
+changed` summing the probe image's layers the unprobed image does not hold.
+The four tags and both worktrees were removed afterwards; Docker's build
+cache was left alone. How to repeat it is in
+[the testing guide](../../development/testing-guide.md#image-and-layer-sizes).
+
+| linux/arm64, Docker Desktop on macOS | Before `d6040915c` | After `fd679c0e2` |
+| --- | --- | --- |
+| Image size | 6,299,627,181 bytes (69 layers) | 5,356,714,300 bytes (72 layers): −942,912,881, −15.0% |
+| `/home/node/.npm` | 365.0 MB | 41 KB |
+| Second Bun (`/usr/local/share/mise/installs/bun`) | 107.4 MB, plus 51.7 MB in `/root/.cache/mise` | 4 KB, plus 8 KB of symlinks in `/opt/bun`; 20 KB in `/root/.cache/mise` |
+| mise layer | 302.0 MB | 142.9 MB |
+| Claude Code npm layer | 442.0 MB | 300.1 MB |
+| Codex npm layer | 592.1 MB | 408.9 MB |
+| Playwright npm layer | 59.2 MB | 19.4 MB |
+| Re-pulled when all five bridges change | 883.2 MB (40 of 69 layers) | 24.2 MB (38 of 72 layers: the five bundles, 3.0 to 9.1 MB, and small script layers) |
+
+The same savings as linux/amd64 (6,411 → 5,452 MB, re-pull 895 → 22.8 MB),
+within a few per cent per row; the arm64 base and CLI builds are a little
+smaller. The vendored SDK layers (claude 302 MB, pi 193 MB, cursor 51 MB)
+kept their digests across the probe rebuild here too. Not run on these
+images: `docker/tests/final-image-smoke.sh` and the Docker agent suite, so
+this is a size measurement, not an arm64 qualification (task 14).
+
 **What else the report asked for, and where it stands.**
 
 | Measurement | Items | Status |
@@ -242,7 +278,7 @@ p50 on this host.
 | React Profiler, two tabs idle and streaming | WEB-2, WEB-5, WEB-7 | Answered 2026-11-05 by E12 (see Needs verification); production React not measured. |
 | Backend RPCs per environment activity transition | WEB-3 | Not run. It needs a browser client on the gateway, whose `/invoke` calls the gateway counts per command (the Electron window's IPC is not counted there), and a working-to-idle transition with no credentials. On base the only safe source of one is a native tab on a loopback model, because a claude-tmux tab there would use the host's Claude home (the isolation fix postdates it). Measurable on macOS; not built this round. |
 | Launch to ready, warm and cold page cache | DK-3 (task 13) | Warm measured 2026-11-03 (task 13). Cold not possible here: dropping the page cache on macOS needs `sudo purge`, and this session has no root. |
-| `docker history` and `du` in the image | DK-7 to DK-9 (task 14) | Measured 2026-11-02 on linux/amd64 (task 14); not repeated on macOS. |
+| `docker history` and `du` in the image | DK-7 to DK-9 (task 14) | Measured 2026-11-02 on linux/amd64 (task 14) and 2026-11-06 on macOS, linux/arm64 under Docker Desktop (above): −15% on both, re-pull 883 → 24.2 MB on arm64. |
 | Gateway SSE and WebSocket bytes | GW-2, GW-6, GW-7 | Owned by [0052](../transcripts-and-observation/0052-remote-client-bandwidth.md). |
 | Snapshot rate and bytes per send | TX-1, TX-2 (task 5) | TX-1 measured live in E10 ([6680](../transcripts-and-observation/6680-conditional-reads-and-deltas-measured.md)); TX-2 with a provider fake in E9, live bytes per send in [5340](../transcripts-and-observation/5340-transcript-reads-live-evidence.md) task 1. |
 
@@ -1645,6 +1681,11 @@ Tests changed: `tests/unit/monorepo-scripts.test.ts` (layer order, npm cache), `
 
 The re-pull row comes from a probe: a runtime line appended to all five `bridges/*/src/index.ts`, both Dockerfiles rebuilt on the same builder, and changed layer digests (`RootFS.Layers`) compared against each unprobed image. The vendored SDK layers kept their digests across the rebuild. CI builds with `cache-from`/`cache-to: type=gha,mode=max` (`publish-container.yml`), so they reuse layers the same way. `bash docker/tests/final-image-smoke.sh` passed on the after image.
 
+The same pair rebuilt on macOS (linux/arm64 under Docker Desktop, 2026-11-06)
+measured 6,299,627,181 → 5,356,714,300 bytes (−15.0%) and a re-pull of
+883.2 MB → 24.2 MB, with the cache and mise savings reproduced; the figures
+and method are in task 1, "Image size on macOS".
+
 `mise run test:agent:docker` ran on the after image, in a disposable profile (`--fixture-environments local,container --no-agent-credentials --agent-platforms codex,grok,opencode --headless-electron`). Load average was about 46 because about ten builds were sharing the host. Result: 17 passed, 4 skipped, 3 failed, and the same three failed again when rerun alone. The causes were not all established; these failures remain qualification blockers:
 
 - `web-annotations-gateway.spec.ts:958`: the "Docker containers can't reach Orkestrator" dialog covered the page. The host's ufw drops traffic from Docker networks to the agent tools port.
@@ -1709,8 +1750,11 @@ against the committed snapshot.
 
 Native arm64 qualification remains open: an emulated build failed at the
 existing Chromium verifier after 273.2 seconds (GPU launch error 1002,
-QEMU target signal 5). No arm64 final image or smoke result exists; a native
-runner is needed. The Chromium check was preserved. DK-10 remains outside
+QEMU target signal 5). On 2026-11-06 the change's own pair (`d6040915c` and
+`fd679c0e2`) built natively on linux/arm64 under Docker Desktop on macOS,
+Chromium verifier included, for task 1's size measurement; neither image was
+smoked or run through the Docker suite, so no arm64 qualification result
+exists yet. The Chromium check was preserved. DK-10 remains outside
 this completed subset.
 
 DK-10 is still open. The SDK's `claude-agent-sdk-linux-x64/claude` (0.3.314) and the CLI's `claude-code/bin/claude.exe` (2.1.314) are the same file today: SHA-256 `4487042b…5f84594`, 298 MB each. [`upgrade-agents.md`](../../development/upgrade-agents.md) says the SDK deliberately does not track the CLI, so they can diverge. Moved on 2026-11-05 to [6780](../containers-and-environments/6780-second-claude-binary-in-the-image.md), which re-verified both architectures at the same pins, found that the container bridge never runs the SDK's copy, and now recommends dropping it; the decision below is kept as it was recorded.
@@ -2855,3 +2899,19 @@ the backend's own `CLAUDE_CONFIG_DIR` in an agent-test profile with no added
 account; production is unchanged (covered in
 `backend-runtime-wiring.test.ts`). To-do 7211, which asked for this live
 check, was folded into task 1 and deleted.
+
+### Task 1: DK-7 to DK-9 on macOS use task 14's own pair (2026-11-06)
+
+The image figures were rebuilt from `d6040915c` and `fd679c0e2`, the parent
+and the merge of the change, not from `0bd214ee` and `main`: five later
+commits changed `docker/Dockerfile` (bridge credentials, the egress gateway,
+security hardening), so a composite pair would mix their bytes into DK-7 to
+DK-9's. This follows the earlier entry, where items with a pair of their own
+keep it. The sizes come from a committed script,
+`scripts/docker-image-layers.ts`, rather than a throwaway one, so the next
+pass (another host, or the arm64 qualification task 14 still lacks) can
+repeat them; it pairs `docker history` rows with `RootFS.Layers` and refuses
+to guess when the counts disagree. Docker Desktop reports uncompressed sizes
+from its containerd store, the same basis as the Linux figures. No smoke or
+suite ran on these images, because the measurement needs neither and the
+ticket asked for numbers, not qualification.

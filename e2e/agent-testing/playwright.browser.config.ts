@@ -65,6 +65,7 @@ export default defineConfig({
     "slash-command-inactive.spec.ts",
     "slash-command-picker.spec.ts",
     "mcp-apply-inactive.spec.ts",
+    "mcp-apply-inactive-codex.spec.ts",
     "multi-review-live.spec.ts",
     "transcript-paging-live.spec.ts",
     "cold-restart-live.spec.ts",

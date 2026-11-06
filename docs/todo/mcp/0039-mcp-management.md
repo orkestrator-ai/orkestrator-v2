@@ -22,22 +22,27 @@ Tasks 14 and 11 closed and task 5's harness half done on 2026-11-06 from
 `c1724ab7` (branch `mcp-management-0c257de34897-r1`; follow-ups
 7220 (closed 2026-11-06; see [Port selection and the loopback address](../../architecture/container-lifecycle.md#port-selection-and-the-loopback-address-agent-tools-listents))
 and [7221](7221-live-panel-stale-after-probe-reconnect.md)).
+Tasks 5, 6 (Claude, Codex and Pi), 7, 9 and 13 worked on 2026-11-06 from
+`ee2cc842` (branch `mcp-management-3b93ef501ce9-r1`) with **fake-model runs
+only**: the pinned CLIs, app-server and SDK against a scripted loopback model,
+no login and no billed turn (see
+[Fake-model live record](#fake-model-live-record-2026-11-06)).
 
 ### Tasks
 
-1. **Replaced Claude server processes linger (code item 8)**: `setMcpServers` replacing a server under the same name leaves the old process alive. Status: blocked (upstream Claude Code; canary in place, report not filed).
+1. **Replaced Claude server processes linger (code item 8)**: `setMcpServers` replacing a server under the same name leaves the old process alive. Status: blocked (upstream Claude Code; canary in place, report not filed: filing with Anthropic is outward-facing and left to a maintainer, so the 2026-11-06 work did not do it).
 2. **Re-derive Grok rules at 1.0.70**: trust rule, source and precedence table were derived at 1.0.52; the pin is now 1.0.70. Status: done (2026-10-31; trust rule unchanged, three catalogue gaps fixed).
 3. **Parity guards for Codex and Grok**: the mirrored rules for these two have no test that fails when the pinned provider moves. Status: done (2026-10-31; `verify:codex:mcp-live`, `verify:grok:mcp-live`).
-4. **Grok live probes and the untrusted-project check**: run the live apply spec for Grok and confirm that an untrusted session skips project MCP servers. Status: blocked (no current Grok login on the host; `grok mcp doctor` now shows the gate credential-free, a live session is still unrun).
-5. **Pi user-scope failure and rerun**: find out whether a user-scope Pi rebuild offers the tool, then rerun Pi. Status: open (harness half done 2026-11-06: every failed probe now records the session's inventory and a diagnosis; the Pi rerun needs a Pi login).
-6. **Corrected live probes and completion matrix**: rerun busy-turn, negative, Claude warm SSE, OpenCode in-place reload, Codex `applied` and OpenCode rename checks under the corrected harness. Status: open.
-7. **Inactive environment, full mode and process-wide variant**: rerun the Claude inactive spec with model checks, and add a two-session Codex or OpenCode variant. Status: open.
+4. **Grok live probes and the untrusted-project check**: run the live apply spec for Grok and confirm that an untrusted session skips project MCP servers. Status: blocked (no current Grok login on the host; `grok mcp doctor` now shows the gate credential-free, a live session is still unrun; the 2026-11-06 fake-model work covered only Claude, Codex and Pi and used no login, so Grok stays open).
+5. **Pi user-scope failure and rerun**: find out whether a user-scope Pi rebuild offers the tool, then rerun Pi. Status: done (2026-11-06, fake model: at Pi 1.4.0 every user-scope rebuild offered the server and every probe passed, so the 2026-10-22 failures were not a bridge that rebuilt without the tool; whether a real model looks is not claimed).
+6. **Corrected live probes and completion matrix**: rerun busy-turn, negative, Claude warm SSE, OpenCode in-place reload, Codex `applied` and OpenCode rename checks under the corrected harness. Status: partly done (2026-11-06, fake model: Claude, Codex and Pi passed every scope, busy and negative check, Claude's warm SSE hook and Codex `applied`; OpenCode's in-place reload and rename are open because this ticket covered only Claude, Codex and Pi and no OpenCode fake was built; Cursor stays out because it needs a login).
+7. **Inactive environment, full mode and process-wide variant**: rerun the Claude inactive spec with model checks, and add a two-session Codex or OpenCode variant. Status: done (2026-11-06, fake model: the Claude spec passed in full mode, and the new Codex process-wide spec `mcp-apply-inactive-codex.spec.ts` passed; the optional pre-marker bridge step is retired, see the task).
 8. **Real-browser UI matrix remainder**: conflict recovery and secret replacement at desktop and narrow widths; a healthy plus failing Claude server with reconnect and reload. Status: done (2026-10-31, credential-free spec; reconnect on a running CLI unexercised, follow-up 1163, deleted 2026-11-06; its live check is task 13; its reconnect case has failed since 2026-11-06 with the panel left stale, follow-up 7221).
-9. **Containers and remote**: container catalogue through the Docker suite and a remote-browser check. Status: partly done (container behaviour superseded by 0040).
-10. **Release decision on the all-on default**: keep or narrow the rollout once the matrix is filled. Status: blocked (on tasks 4 to 7).
+9. **Containers and remote**: container catalogue through the Docker suite and a remote-browser check. Status: done (2026-11-06, doc only: container behaviour superseded by 0040; the remote check of host-target rows moved into [0040](0040-mcp-environment-delivery.md) task 3).
+10. **Release decision on the all-on default**: keep or narrow the rollout once the matrix is filled. Status: blocked (a release decision for a maintainer; the 2026-11-06 runs are fake-model evidence of the runtime side only, and Grok, Cursor and OpenCode cells remain).
 11. **OpenCode user-file apply and sign-in follow-ups**: whether to offer an explicit idle-gated restart for user files (open question), and whether `mcp.auth.authenticate` could be driven from the panel (needs verification). Status: done (2026-11-06; both recommended options kept: no restart button, the CLI sign-in route, and the `mcp.auth.authenticate` verification item dropped).
 12. **Agent-account homes**: when a running Claude account session sees an editor write, a UI note that account-home servers are overwritten, and stale-server reporting for account-only servers. Status: done (2026-10-31; a live account session with a real login is unrun).
-13. **Claude MCP reconnect on a running CLI**: with a real Claude login, a reconnect on a warm CLI and on a probe after the CLI exits gives the right list and layers, and survives a reload. Moved from to-do 1163 (deleted 2026-11-06). Status: open (needs a Claude login).
+13. **Claude MCP reconnect on a running CLI**: with a real Claude login, a reconnect on a warm CLI and on a probe after the CLI exits gives the right list and layers, and survives a reload. Moved from to-do 1163 (deleted 2026-11-06). Status: done (2026-11-06, fake model instead of a real login: the list, layers and reload are right on both paths; the panel's live refresh after the reconnect is 7221's).
 14. **Claude MCP rows read `unknown` after a refused CLI exits**: on a real browser, rows left `connecting` by a CLI that exited show `unknown` and still offer reconnect. Moved from to-do 1240 (deleted 2026-11-06). Status: done (2026-11-06; credential-free case in `mcp-ui-matrix.spec.ts`).
 
 ### 1. Replaced Claude server processes linger (code item 8)
@@ -60,6 +65,10 @@ and [7221](7221-live-panel-stale-after-probe-reconnect.md)).
   - **Work around it in the bridge (restart the CLI when a same-name server's config changes).**
     - Pros: no lingering process, independent of upstream.
     - Cons: a CLI restart costs a process spawn and drops in-process state; the bridge deliberately keeps one runtime per session (#950).
+
+**Not done (2026-11-06).** Still the recommended option, still for a
+maintainer: filing the report is an outward-facing action this work was not
+allowed to take. The canary is unchanged.
 
 ### 2. Re-derive Grok rules at 1.0.70
 
@@ -142,6 +151,10 @@ and [7221](7221-live-panel-stale-after-probe-reconnect.md)).
     - Pros: no login needed.
     - Cons: if Grok loads untrusted project servers, the editor understates what runs, a security-relevant mismatch.
 
+**Not done (2026-11-06).** The fake-model work ran only Claude, Codex and
+Pi and used no login; the host's Grok login is still expired, so the live
+session check stays open as above.
+
 ### 5. Pi user-scope failure and rerun
 
 **Problem.** On 2026-10-22 four user-scope Pi probes failed with the runtime reporting `applied` while the model answered "unavailable" without a tool call. Either the Pi bridge rebuilt without offering the server (a real bug that would make `applied` false) or the model did not look.
@@ -214,6 +227,27 @@ turns):
   passes. `turn-failed` needs a successful rerun before attributing non-use
   to the model.
 
+**Outcome (2026-11-06): Pi rerun on a fake model.** Not the real-login
+rerun described above: the ticket allowed no login or billed turn. Pi 1.4.0
+SDK and bridge ran against the scripted loopback model
+(`e2e/agent-testing/mcp-fake-model.ts`, an OpenAI chat-completions provider
+written into the profile's own Pi `models.json`), which calls a probed tool
+whenever the session offers it. Run `mcp0039-fake-pi`, 1 passed, 292 s; the
+command and table are in the
+[fake-model record](#fake-model-live-record-2026-11-06).
+
+- **User scope: every probe passed**, add, edit with tab A busy (the busy
+  turn finished normally), rename new and old, restart and restore, remove
+  on both tabs, with each probed tab `applied` and the server's own log
+  showing the call. The offered tool list carried `mcp_mqu0_alpha_probe`
+  after the add and edit and dropped it after the rename and removal.
+- So the user-scope rebuild does offer the server at Pi 1.4.0: no probe read
+  `not-offered`, and the 2026-10-22 failures were not a bridge that rebuilt
+  without the tool. What this does not prove is whether a real model calls
+  it; the fake always does. If a real-login Pi run repeats "unavailable"
+  with `offered-not-called`, that is the model.
+- Project scope passed the same way.
+
 ### 6. Corrected live probes and completion matrix
 
 **Problem.** The matrix holds observations from the original harness. Busy-turn cells are all unverified, the Claude warm SSE stale-server hook was never exercised without a restart, and the 2026-10-25 behaviours (OpenCode project scope `applied` without restart, Codex `applied` after the next turn, OpenCode rename absence by inventory) have never met a model. These outcomes are on by default for every provider.
@@ -239,6 +273,39 @@ turns):
     - Pros: one edit later.
     - Cons: the next reader may believe the run still needs manual credential handling.
 
+**Outcome (2026-11-06): Claude, Codex and Pi on a fake model.** One fresh
+profile (`mcp0039-fake`), one provider per run, through the corrected spec
+with the new fake-model mode (`ORKESTRATOR_AGENT_TEST_MCP_FAKE_MODEL=1`).
+Hand-seeding is no longer needed (the isolation note under the 2026-10-18
+method now says so), and the
+[fake-model record](#fake-model-live-record-2026-11-06) has the commands and
+the full matrix.
+
+- **Claude** (CLI 2.1.314, Agent SDK 0.3.314): user, private local and
+  project scopes passed every step, busy edit included (the shell `sleep 45`
+  was observed running before the save and the turn finished `BUSY-DONE`).
+  The warm SSE case passed on the warm CLI: the bridge and session stayed
+  the same, the removed server's call was refused by the hook and never
+  reached it, and the warm runtime read `restart-required` after that turn.
+  The first run failed only that last check, because the spec required
+  `restart-required` before the turn; evidence rule 5 can only see a stale
+  server at the turn's sync, so the check now runs after the probe turn
+  (decision below). Rerun `mcp0039-fake-claude-sse`: passed.
+- **Codex** (0.166.0): user and project scopes passed, busy edit included;
+  every save was `queued`, then `pending-next-turn` after the reload, and
+  each probed thread `applied` after its own next turn (the spec asserts
+  it). The fake reached the tools from a code cell (Codex code mode offers
+  only `exec`; MCP tools are on `tools.*` and in `ALL_TOOLS`), so a probe
+  that must fail found no `ALL_TOOLS` entry.
+- **Pi** (1.4.0): both scopes passed (task 5).
+- **Left open, with reasons:** OpenCode's in-place project reload and its
+  rename-by-inventory check (this ticket covered Claude, Codex and Pi only;
+  an OpenCode fake could reuse the chat-completions route as a custom
+  provider, but none was built), Cursor (needs a login) and Grok (task 4).
+- These are fake-model observations. They prove what each runtime offered
+  and what the probe servers logged, and that the apply outcomes followed;
+  they are not evidence of how a real model behaves.
+
 ### 7. Inactive environment, full mode and process-wide variant
 
 **Problem.** The Claude inactive-environment scenario passed only in apply-only mode; the model's tool calls after an edit, a removal, an older bridge and a shared save are unproven. The process-wide variant (two Codex or two OpenCode sessions sharing one process) has never run.
@@ -263,6 +330,39 @@ turns):
   - **Wait until task 6's Claude run, and combine.**
     - Pros: one Claude profile.
     - Cons: the two specs have different setups (two environments, older bridge), so combining saves little.
+
+**Outcome (2026-11-06): both parts, on a fake model.**
+
+- **Claude full mode.** `mcp-apply-inactive.spec.ts` with
+  `ORKESTRATOR_AGENT_TEST_MCP_FAKE_MODEL=1` on a profile without a Claude
+  login: 1 passed, 165.9 s (`mcp0039-fake-inactive`). Every model check ran:
+  the busy turn kept running through the save and the switch (the fake holds
+  that reply 30 s) and stayed `pending-next-turn` after it; the inactive turn
+  with the stream cut was `applied` on the planned generation and the tool
+  answered; the reload showed the reply and the live panel's `mcpqa`; after a
+  bridge restart only the v2 server answered (`applied` on a newer
+  generation); the removed tool was not called; and both environments called
+  the shared user-file server. The marker file read `call mcpqa 1`,
+  `call mcpqa 2` once each and `call mcpqu 1` twice.
+- **Pre-marker bridge step: retired, not run.** A first attempt with the
+  bridge rebuilt from `65077337` started it, but the backend's requests to it
+  failed (`policy.push-failed reason=http-401`, activity reads refused), so
+  the outcome kept the current bridge's reason. Every published release from
+  v2.21.0 (the support floor) has the `mcpConfigReporting` marker, so a
+  pre-marker bridge is a source build below the floor, and since the bridge
+  credential verifier (2026-11-04) it cannot authenticate with today's
+  backend. The step stays optional in the spec; the backend's pre-marker
+  path is now unreachable from any supported bridge (see the decision).
+- **Codex process-wide variant (new spec).**
+  `e2e/agent-testing/mcp-apply-inactive-codex.spec.ts`: environment A with
+  two Codex threads on one bridge, the browser on environment B. 1 passed,
+  53.1 s (`mcp0039-fake-inactive-codex`): one save planned both A threads
+  (`queued`, each with its own generation) and none in B; one reload left
+  both `pending-next-turn` on the same bridge pid; A1's turn with the page
+  offline and the stream cut made A1 `applied` while A2 stayed
+  `pending-next-turn` 25 s later; A2's own turn made it `applied`, bridge
+  pid unchanged; after a hard reload the card read "Saved and loaded"; a
+  removal was proven per thread the same way with no further call.
 
 ### 8. Real-browser UI matrix remainder
 
@@ -309,6 +409,18 @@ turns):
     - Pros: this file stays self-contained.
     - Cons: duplicates 0040's work and runs.
 
+**Outcome (2026-11-06): closed here, doc only.** The recommended option.
+The container half described read-only behaviour that no longer exists and
+is [0040](0040-mcp-environment-delivery.md)'s (live container sessions, task
+1; the overlay UI, task 2, done). The remote-browser half was compared with
+0040's task 3, which checks the URL location hint, the container sign-in
+reason and that no callback is offered, but not host-target rows. So the
+backend-host part, "correct backend paths and operation recovery" for a
+host target, was added to 0040's task 3 as a second check of the same
+two-machine run, so it is not dropped. The stale "every container target
+(read-only by design)" line under the completion matrix and the
+"Containers and remote" qualification bullet now point there.
+
 ### 10. Release decision on the all-on default
 
 **Problem.** MCP editing and apply ship enabled for every provider (`DEFAULT_MCP_MANAGEMENT_ROLLOUT` with `enabled: true` and all platforms for write and apply, `packages/protocol/src/mcp-management.ts:1683-1687`) while Grok has never run live and Pi is unqualified.
@@ -329,6 +441,12 @@ turns):
   - **Keep all-on for everyone and close the item.**
     - Pros: no change.
     - Cons: ignores the file's own release gate.
+
+**Not done (2026-11-06).** A release decision belongs to a maintainer. New
+input for it: Claude, Codex and Pi now pass every probe cell on a fake model
+(task 6), which shows each runtime offers, applies and drops servers as its
+outcome says; it says nothing about real-model behaviour. Grok (task 4),
+Cursor and OpenCode's model-facing cells are still unrun.
 
 ### 11. OpenCode user-file apply and sign-in follow-ups
 
@@ -425,7 +543,51 @@ hold-open hook are in `e2e/agent-testing/mcp-ui-matrix.spec.ts`.
     - Pros: smaller run.
     - Cons: a second billed setup.
 
-### 14. Claude MCP rows read `unknown` after a refused CLI exits
+**Outcome (2026-11-06): run with a fake key and a loopback model.** Not with
+a real Claude login: the ticket allowed none. A fourth case in
+`mcp-ui-matrix.spec.ts`, "live panel: reconnect on a running CLI, then
+through the probe after it exits (fake model)", opt-in with
+`ORKESTRATOR_AGENT_TEST_MCP_UI=1` and `ORKESTRATOR_AGENT_TEST_MCP_FAKE_MODEL=1`
+and skipped on a profile with a Claude credential. It points the profile's
+Claude settings at the scripted model for the case alone, so the turn
+succeeds and the CLI stays warm. Run `mcp0039-fake-t13`: 1 passed, 619 s, at
+1440×1000 (command in the
+[fake-model record](#fake-model-live-record-2026-11-06)).
+
+- **Warm CLI.** After one answered turn: `mcpui-ok` connected, `mcpui-late`
+  failed, `orkestrator` connected, layers `project`, `project`,
+  `orkestrator`; the panel read "1 down". The failing script was then
+  created and the row clicked: reconnect 200, `mcpui-late` connected, and
+  the probe log shows only `mcpui-late` started again while `mcpui-ok` kept
+  its process, so the reconnect went through the live control, not a probe
+  CLI. The whole list stayed the session's own, `orkestrator` kept, layers
+  unchanged.
+- **Panel live refresh: stale.** The open panel still read "1 down" with
+  the row failed 30 s after the backend read `connected`. That is the 7221
+  symptom on the live-control path too, not only after a probe; the case
+  records it (annotation `panel-after-warm-reconnect`) and checks the panel
+  after a hard reload instead, where it matched the backend. Added to
+  [7221](7221-live-panel-stale-after-probe-reconnect.md).
+- **After the CLI exits.** The bridge released the idle CLI 10 minutes
+  after the turn (both servers logged their exit). The session kept its
+  last list (all three rows `connected`). A reconnect of `mcpui-late` then
+  ran through the probe: the probe CLI started both servers once more, the
+  answer changed no other row and kept `orkestrator`.
+- **Next turn and reload.** The next turn's new CLI started both servers
+  and its report replaced the list (same three rows, `connected`, same
+  layers); after a hard reload the panel showed "3 servers", no "down", and
+  each row's tool count as the backend.
+- **Found on the way.** A bridge restart, which the step list allowed as a
+  way to end the CLI, leaves the session with no live list at all, so a
+  probe reconnect then has no row to keep and the panel nothing to click;
+  the case waits for the idle release instead. The profile was restarted
+  with `CLAUDE_BRIDGE_RUNTIME_IDLE_MS=90000` for this run, but the CLI was
+  still released only after the default 10 minutes; why the variable did not
+  shorten it was not investigated (the case waits up to 12 minutes).
+  After the release the retained rows read `connected` with no CLI running;
+  task 14 only covers rows left `connecting`.
+
+### 14. Claude MCP rows read unknown after a refused CLI exits
 
 **Problem.** When a Claude CLI exits before any status read reaches it, the
 bridge now serves its retained `connecting` rows as `unknown`, on the session,
@@ -547,8 +709,9 @@ collects the live evidence the shipped behaviour has never had.
   mechanism is proven on the pinned binary (`mise run
   verify:opencode:mcp-live`), not yet with a model in a live session. Pi's
   strategy was seen live on 2026-10-22 (`pending-next-turn`, then `applied`
-  per probed tab), but its user-scope probes failed, so it is not qualified;
-  Grok is unrun.
+  per probed tab), but its user-scope probes failed; a fake-model rerun on
+  2026-11-06 passed both scopes, so the runtime side is shown, not a real
+  model's. Grok is unrun.
 - Apply-path guards (see "Runtime application" in
   [`mcp-management.md`](../../architecture/mcp-management.md)): every outcome
   names the runtime generation (bridge pid plus provider session) it was
@@ -594,8 +757,10 @@ collects the live evidence the shipped behaviour has never had.
   `e2e/agent-testing/mcp-probe-server.mjs`; the verdict rules have unit tests
   in `mcp-apply-live-support.test.ts`. Since 2026-11-06 every failed probe
   records the session's live inventory and a diagnosis (`diagnoseProbe`,
-  task 5). How to run it is under "Live apply
-  record" below.
+  task 5). `ORKESTRATOR_AGENT_TEST_MCP_FAKE_MODEL=1` runs it, the inactive
+  specs and task 13's UI case against the scripted loopback model
+  `mcp-fake-model.ts` (Claude, Codex, Pi; no login). How to run it is under
+  "Live apply record" and the fake-model record below.
 - Outside edits for waiting runtimes no pass polls (OpenCode or container
   `restart-required`, sessions with nothing to poll) are re-checked by
   `external-edit-watch.ts`: once a minute per operation, four per tick, inside
@@ -757,9 +922,10 @@ Use temporary homes and harmless fixture servers; never the operator's files.
   2026-10-22 (see [the Pi record](#live-apply-record-pi-2026-10-22)): the
   project scope passed every probe; the user scope failed four, with the
   runtime `applied` while the model answered "unavailable" without a tool
-  call. Rerun Pi with a Pi login; since 2026-11-06 each failed probe's
-  `diagnosis` says whether the rebuild offered the tool (task 5). Claude, Codex, OpenCode and Cursor have historical observations,
-  with the corrected-check gaps below.
+  call. On 2026-11-06 a fake-model rerun at Pi 1.4.0 passed every probe in
+  both scopes, so the rebuild offers the tool (task 5); a real-login rerun
+  would only add model behaviour. Claude, Codex, OpenCode and Cursor have
+  historical observations, with the corrected-check gaps below.
 - **Corrected live probes and completion matrix.** Rerun the busy-turn and
   negative tool-call checks, including Claude's warm SSE stale-server hook,
   under the corrected harness. The 2026-10-25 changes also need their first
@@ -767,10 +933,12 @@ Use temporary homes and harmless fixture servers; never the operator's files.
   with no restart (`applied` after the in-place reload) while the user scope
   keeps `restart-required`; Codex runtimes should turn `applied` after each
   tab's next turn; and the OpenCode rename's "old fails" probe should pass on
-  the inventory when the model substitutes the new name. Not run here: they
-  need provider logins seeded into a disposable profile by hand (see the
-  isolation note in the 2026-10-18 method), which this worker did not do with
-  the operator's credentials. The [completion matrix](#completion-matrix)
+  the inventory when the model substitutes the new name. Claude, Codex and
+  Pi ran on 2026-11-06 on a fake model and passed every cell, busy, negative,
+  Claude's warm SSE hook and Codex `applied` included (task 6,
+  [fake-model record](#fake-model-live-record-2026-11-06)); OpenCode, Cursor
+  and Grok are still to run. Hand-seeding logins is no longer needed (see the
+  isolation note in the 2026-10-18 method). The [completion matrix](#completion-matrix)
   retains the original observations and names the cells still unverified;
   provider errors, silence and substituted tools do not prove removal.
 - **Inactive environment.** Claude's apply evidence and recovery checks passed
@@ -778,7 +946,8 @@ Use temporary homes and harmless fixture servers; never the operator's files.
   [the record](#qualification-record-inactive-environment-2026-10-18)): busy
   save, a cut event stream, reload, a bridge restart (newer generation), a
   removal, a pre-marker bridge and a shared user file. Full model-facing
-  qualification remains open. Two parts remain:
+  qualification remains open. Both parts below ran on 2026-11-06 on a fake
+  model and passed (task 7); a real-model full run is still unrun.
   - Rerun the spec in full mode (without `ORKESTRATOR_AGENT_TEST_MCP_APPLY_ONLY`)
     once the seeded Claude login is not rate limited. That proves the model's
     tool calls after the edit, the removal, the older bridge and the shared
@@ -799,9 +968,11 @@ Use temporary homes and harmless fixture servers; never the operator's files.
   refused-CLI `unknown` case (task 14, passing), and task 8's reconnect case
   went red with the panel left stale
   ([7221](7221-live-panel-stale-after-probe-reconnect.md)).
-- **Containers and remote.** The read-only container catalogue (ok, absent,
-  oversized, offline) through `mise run test:agent:docker`, and a remote
-  browser showing correct backend paths and operation recovery.
+- **Containers and remote.** Moved to
+  [0040](0040-mcp-environment-delivery.md) on 2026-11-06 (task 9): container
+  targets are writable now and 0040 owns their qualification, and the remote
+  browser check of host-target paths and operation recovery is part of
+  0040's task 3.
 - **Release decision.** Keep or narrow the all-on rollout default once the
   matrix is filled.
 
@@ -836,6 +1007,93 @@ and calls `MCP.finishAuth`, which stores the tokens in OpenCode's
 state nobody waits for with "Invalid or expired state parameter", so a
 sign-in begun with `startAuth` alone cannot complete; the waiter times out
 after 5 minutes.
+
+## Fake-model live record (2026-11-06)
+
+**Every run here is a fake-model run.** The pinned Claude CLI 2.1.314 (Agent
+SDK 0.3.314), Codex 0.166.0 app-server and Pi 1.4.0 SDK, their bridges, the
+backend, the browser UI and the probe servers ran for real; the model was
+`e2e/agent-testing/mcp-fake-model.ts`, one Bun process on 127.0.0.1 serving
+Anthropic Messages (Claude), the Responses WebSocket (Codex) and chat
+completions (Pi). No login was used and no provider was called. The fake
+calls a probed tool whenever the runtime offers it (Codex: from a code cell,
+looking it up in `ALL_TOOLS`) and answers "unavailable" otherwise, so these
+results show what each runtime offered, what the servers logged and what
+apply reported. They are not evidence of how a real model behaves.
+
+Host: macOS 27.2 (arm64), Bun 1.4.4, branch `mcp-management-3b93ef501ce9-r1`
+from `ee2cc842`. One disposable profile, `mcp0039-fake`, with no Claude login
+and a made-up Codex API key from a throwaway `CODEX_HOME` (git-ignored under
+`output/agent-testing/`), so the profile received no real login; Pi used a
+`models.json` provider whose key is a literal placeholder. The spec writes
+the fake's address into the profile's own Claude `settings.json`, Codex
+`config.toml` or Pi `models.json` before the environment starts and restores
+them afterwards.
+
+```bash
+ORKESTRATOR_HOST_REACHABILITY_CHECK=off CODEX_HOME=<throwaway dir with a made-up API key> \
+  mise run dev:test --profile mcp0039-fake --fixture --credential-source codex \
+  --agent-platforms claude,codex,pi --headless
+# Task 6 and 5, one provider per run:
+ORKESTRATOR_AGENT_TEST_PROFILE=mcp0039-fake ORKESTRATOR_AGENT_TEST_RUN_ID=mcp0039-fake-<p> \
+  ORKESTRATOR_AGENT_TEST_LIVE_MCP=1 ORKESTRATOR_AGENT_TEST_MCP_FAKE_MODEL=1 \
+  ORKESTRATOR_AGENT_TEST_MCP_PROVIDERS=<p> \
+  ORKESTRATOR_TEST_NO_PROGRESS_TIMEOUT_MS=1800000 ORKESTRATOR_TEST_GROUP_TIMEOUT_MS=3600000 \
+  mise run test:logged -- --name mcp-fake-live-<p> -- bunx playwright test \
+  --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/mcp-apply-live.spec.ts --workers=1
+# Task 7 (add --trace off: a failed run's trace can exceed the 64 MiB sanitizer bound):
+ORKESTRATOR_AGENT_TEST_PROFILE=mcp0039-fake ORKESTRATOR_AGENT_TEST_LIVE_MCP=1 \
+  ORKESTRATOR_AGENT_TEST_MCP_FAKE_MODEL=1 mise run test:logged -- --name mcp-fake-inactive-<x> -- \
+  bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts \
+  e2e/agent-testing/mcp-apply-inactive[-codex].spec.ts --workers=1 --trace off
+# Task 13 (profile restarted with CLAUDE_BRIDGE_RUNTIME_IDLE_MS=90000):
+ORKESTRATOR_AGENT_TEST_PROFILE=mcp0039-fake ORKESTRATOR_AGENT_TEST_MCP_UI=1 \
+  ORKESTRATOR_AGENT_TEST_MCP_FAKE_MODEL=1 mise run test:logged -- --name mcp-fake-t13 -- \
+  bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts \
+  e2e/agent-testing/mcp-ui-matrix.spec.ts --grep "running CLI" --workers=1 --trace off
+```
+
+### Runs
+
+| Task | Run | Result | Time |
+| --- | --- | --- | --- |
+| 6 Claude | `mcp0039-fake-claude`: user, private local, project, SSE | failed one check: warm SSE runtime `pending-next-turn` at save, `restart-required` after the probe turn (spec checked too early; corrected) | 490 s |
+| 6 Claude | `mcp0039-fake-claude-sse`: SSE only, corrected check | 1 passed | 60 s |
+| 6 Codex | `mcp0039-fake-codex`: user, project | 1 passed | 259 s |
+| 5, 6 Pi | `mcp0039-fake-pi`: user, project | 1 passed | 292 s |
+| 7 Claude | `mcp0039-fake-inactive`, full mode, pre-marker step attempted | failed at that step: the 65077337 bridge could not authenticate (401), see task 7 | 174 s |
+| 7 Claude | `mcp0039-fake-inactive`, full mode, without the pre-marker step | 1 passed | 166 s |
+| 7 Codex | `mcp0039-fake-inactive-codex`, new process-wide spec | 1 passed | 54 s |
+| 13 | `mcp0039-fake-t13`, first attempts: panel check before the reload; then a bridge restart to end the CLI | failed: panel stale (7221); after a bridge restart the session listed no servers, so a probe reconnect had nothing to keep | 6 min each |
+| 13 | `mcp0039-fake-t13`, final case (idle release instead of a restart) | 1 passed | 619 s |
+
+Earlier attempts failed for harness reasons fixed before the runs above:
+the fake model first missed Codex's tools (offered on a prewarm frame) and
+then did not know Codex's code mode, and the inactive spec clicked under a
+late "Claude Code Is Not Logged In" notice (a locator handler now closes it).
+
+### Matrix (fake model)
+
+Every probe below passed; "reached" means the probe server logged the call
+with the probe's nonce, "fails" means it logged none and the turn replied
+unavailable. Apply outcomes are per tab A, B.
+
+| Provider · scope | Add | Edit (A, B) | Rename (new / old) | Remove (A, B) | Busy | Restart and restore | Apply outcome |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Claude · user `~/.claude.json` | reached | reached v2 both | answers / fails | fails both | passed: `sleep 45` seen running, turn ended `BUSY-DONE` | reached after bridge restart | `pending-next-turn`, then `applied` per tab after its turn |
+| Claude · private local | reached | reached v2 both | answers / fails | fails both | — | — | same |
+| Claude · project `.mcp.json` | reached | reached v2 both | answers / fails | fails both | — | — | same |
+| Claude · SSE in `.mcp.json` (outside the editor) | reached after a bridge restart | — | — | fails on the warm CLI: hook refused the call, server logged none, same bridge and session | — | — | warm tab `pending-next-turn` at save, `restart-required` after that turn; idle tab `pending-next-turn` |
+| Codex · user `config.toml` | reached | reached v2 both | answers / fails | fails both | passed | reached after bridge restart | `queued`, `pending-next-turn` after the reload, `applied` per thread after its turn |
+| Codex · project `.codex/config.toml` (trusted) | reached | reached v2 both | answers / fails | fails both | — | — | same |
+| Pi · user `~/.pi/agent/mcp.json` (profile home) | reached | reached v2 both | answers / fails | fails both | passed | reached after bridge restart | `pending-next-turn`, then `applied` per tab after its turn |
+| Pi · project `.pi/mcp.json` | reached | reached v2 both | answers / fails | fails both | — | — | same |
+| OpenCode, Cursor, Grok | not run: no fake model built for OpenCode in this ticket; Cursor and Grok need a login | | | | | | |
+
+Evidence: `output/agent-testing/mcp0039-fake-*/mcp-apply-live/<provider>.json`
+and the runs' Playwright reports, in this worktree (git-ignored). The
+profile was stopped and reset afterwards, and every environment the runs
+created was deleted by the specs.
 
 ## Qualification record: inactive environment (2026-10-18)
 
@@ -1018,7 +1276,11 @@ never a direct file write, except the Claude SSE case below.
 
 ### Method
 
-- **Isolation.** An agent-test profile points `CODEX_HOME` and the XDG
+- **Isolation.** Superseded since `d4171748` (#1116, 2026-10-21): every
+  agent-test profile has its own `CLAUDE_CONFIG_DIR`, `CODEX_HOME` and XDG
+  directories and receives only a restricted snapshot of an authorised login,
+  so no hand-seeding is needed; the 2026-11-06 fake-model runs used no login
+  at all. As it was on 2026-10-18: an agent-test profile pointed `CODEX_HOME` and the XDG
   directories at the host's real provider homes when it authorizes the Codex
   or OpenCode credential source, so an editor write there would change the
   host's own files. The profile was therefore started with
@@ -1116,8 +1378,9 @@ qualification, not renewed evidence for the SSE cell.
 
 Not writable on these targets, so not probed: Codex system and managed
 files, OpenCode inline, managed and `OPENCODE_CONFIG` layers (none present),
-injected `orkestrator` servers, and every container target (read-only by
-design). Cursor's project scope without the policy override stays excluded
+injected `orkestrator` servers, and every container target (read-only at the
+time; container targets are writable since 0040, which owns their
+qualification). Cursor's project scope without the policy override stays excluded
 and was not probed.
 
 Auth limitation per provider, from the target capabilities: Claude has no
@@ -1300,6 +1563,150 @@ directory and were deleted with it.
   session on a real signed-in account is still unrun.
 
 ## Assumptions and decisions
+
+### 2026-11-06 review repairs: tasks 7, 13 and qualification harness
+
+**Task 7: count actual reload requests.** The Codex inactive scenario now
+wraps only the disposable profile's activation symlinks with a stdio tap
+that forwards requests to the real pinned app-server. It records only the
+working directory of `config/mcpServer/reload` requests, never request bodies.
+The add and removal each require exactly one request, both after apply settles
+and after the two thread turns. Counting bridge PIDs would miss repeated
+reloads within that bridge. The original activation links are restored during
+cleanup, after the fixture environments stop.
+
+**Task 13: distinguish retained inventory from a fresh report.** While the
+Claude CLI is stopped, the case saves removal of `mcpui-ok` without applying
+it. The probe reconnect must retain that row while changing only its target.
+The next real CLI report must remove `mcpui-ok`; the backend and reloaded panel
+must then show two servers. The original recorded run earlier in this document had three identical
+rows before and after the next turn; it established continuity but did not
+prove replacement. This stricter case addresses that coverage gap. The idle-release poll emits
+a content-free progress line every 30 seconds: the initial logged rerun was
+killed by the runner's five-minute silence watchdog while waiting for the
+real ten-minute idle window. The wait retains its existing deadline.
+
+**Tasks 5, 6, 7 and 13: harness coverage.** Direct loopback tests cover Messages and chat SSE tool
+arguments, stop reasons and final replies, plus Responses WebSocket prewarm,
+remembered tool offers, continuations and replacement offers. Profile wiring
+tests cover all three providers, exact restoration of existing bytes and modes,
+removal of newly created files, refusal of unrelated Pi providers, invalid
+configuration cleanup and the inside-profile path guard. These complement the
+opt-in real-runtime cases without requiring a login or billed request.
+
+**Task 14 record.** Restored the missing task heading before its Problem
+paragraph; the task status and existing evidence are unchanged.
+
+**Review validation.** The direct suite has 27 passing tests (13 added). The
+strengthened Codex inactive scenario passed on profile `mcp-review-fixes`
+(80.8 s including the task runner); its marker recorded two reload RPCs in
+all, and both profile activation links were restored. The strengthened Claude
+reconnect scenario then passed with the distinct inventories (655.8 s including
+the task runner), after adding progress output and rerunning the exact command
+that first hit the silence watchdog. Focused e2e typechecking,
+lint and formatting passed. The original preparation's broad red checks were
+not rerun: the source-guard failure has target-branch CI evidence; the other
+full-suite and browser failures remain undetermined in the captured triage
+and are left to the verifier, rather than attributed to the test-only diff.
+
+### 2026-11-06: tasks 5, 6, 7, 9 and 13 with fake models
+
+Made without stopping to ask. The ticket allowed no login and no billed
+turn, so every live run used a fake model; that is the one assumption all of
+these share.
+
+#### Tasks 5, 6, 7 and 13: one MCP-aware fake for three protocols
+
+Options: (a) extend the idle-observation fakes (Claude and Codex) and the
+soak's Pi fake separately; (b) one scripted model that serves Anthropic
+Messages, the Responses WebSocket and chat completions from one process,
+reusing those fakes' framing helpers. Chose (b), `mcp-fake-model.ts` with its
+pure script in `mcp-fake-model-script.ts` and profile wiring in
+`mcp-fake-model-wiring.ts`: the probe logic (find the probed server's tool,
+call it, answer from its result, else "unavailable") is the same for every
+provider, so it is written and unit-tested once (`mcp-fake-model.test.ts`).
+Cost: one more fake to keep in step with three wire formats.
+
+#### Tasks 5 and 6: the fake always calls an offered tool
+
+Options: (a) a fake that sometimes does not look, to resemble a model;
+(b) one that always calls an offered tool. Chose (b): it turns a probe into
+a test of the runtime (was the tool offered, did the server log the call,
+did apply say so), which is the half a fake can prove. It cannot show a
+model ignoring a tool, so every run is labelled a fake-model run and task 5
+claims only the runtime half.
+
+#### Task 6: Codex code mode through `ALL_TOOLS`
+
+Codex 0.166 offers only `exec` (code mode); MCP tools are on `tools.*`, and
+its own description says to find nested tools in `ALL_TOOLS`. The fake's code
+cell looks the probed name up there and prints `MCPQ-NO-TOOL` when it is
+missing, so a removed server is never called. Alternative: call
+`tools.<name>` and treat an exception as absence; rejected, because a
+thrown error could also be a failing server.
+
+#### Task 6: when the warm SSE runtime must say `restart-required`
+
+The spec required it right after the save; it appears only after the next
+turn, because the bridge learns a server is stale at that turn's sync
+(evidence rule 5 in `evidence.ts`). Options: (a) treat the run as a product
+failure; (b) judge it after the probe turn. Chose (b), keeping the expected
+state: before the turn the runtime must not claim `applied`, after it
+`restart-required`. The warm-CLI checks (same bridge pid and session, call
+refused by the hook, server logged nothing) are unchanged.
+
+#### Task 7: the pre-marker bridge step
+
+Options: (a) keep trying to run it with a bridge from `65077337`; (b) record
+it as no longer runnable. Chose (b): every published release since the
+v2.21.0 floor has the `mcpConfigReporting` marker, and a source build that
+predates it cannot authenticate with today's backend (401 since the
+2026-11-04 bridge credential verifier), so the step tests a peer outside the
+support window. The optional step stays in the spec; removing the backend's
+pre-marker handling falls under the
+[support window](../../architecture/version-compatibility.md#the-support-window)
+rules and was not done here (product code outside this ticket).
+
+#### Task 7: a separate Codex spec
+
+Options: (a) a parameterised mode of the Claude inactive spec (the
+recommendation); (b) its own spec sharing the fixture server. Chose (b),
+`mcp-apply-inactive-codex.spec.ts` with `FIXTURE_SERVER` moved to
+`mcp-apply-inactive-support.ts`: the Claude spec is built around Claude
+(its composer, the private local scope, the pre-marker bridge, a bridge
+restart), while the process-wide case needs two threads on one bridge and
+the per-thread evidence. Sharing the fixture keeps the call markers
+comparable. Cost: two specs to keep in step.
+
+#### Task 13: ending the CLI by idle release, not a bridge restart
+
+The step list allowed either. A bridge restart leaves the session with no
+live list, so a probe reconnect has no row to keep and the panel nothing to
+click. Chose to wait for the bridge's idle release (seen from the probe
+servers' own exit lines), which takes the default 10 minutes. Cost: a
+10-minute case, opt-in.
+
+#### Task 13: the panel's live refresh is recorded, not asserted
+
+The open panel stayed stale after the live-control reconnect, as in 7221.
+Options: (a) assert it, leaving this case red like task 8's; (b) record it
+and assert the panel after a reload. Chose (b): the case's own claims (whole
+list from the live control, `orkestrator` kept, layers, the probe path, the
+next turn's report, the reload) all hold, and the stale panel is already
+tracked and kept red in task 8's case; 7221 now has this case as evidence
+and the note to tighten it once fixed.
+
+#### Task 9: where the remote host-target check lives
+
+Chose the recommended option: close it here and move the part 0040's task 3
+did not cover (host-target paths and operation recovery from a remote
+browser) into that task as a second check of the same two-machine run.
+
+#### Tasks 1, 4, 10 and the rest of 6: left open
+
+Task 1 needs an outward-facing report, task 4 a Grok login, task 10 a
+release decision; Cursor needs a login, and no OpenCode fake was built
+because the ticket covered Claude, Codex and Pi.
 
 ### Task 13: retirement pointer (2026-11-06)
 

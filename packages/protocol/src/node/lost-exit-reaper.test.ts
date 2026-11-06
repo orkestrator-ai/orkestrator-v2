@@ -1,9 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   createLostExitReaper,
+  createDarwinLostExitReaper,
   type LostExitReaper,
   type LostExitReaperSystem,
 } from "./lost-exit-reaper.js";
+
+import { configureLogger, resetLogger } from "../logger.js";
 
 const SELF = 4242;
 
@@ -31,7 +34,10 @@ const settle = (ms = 40) => Bun.sleep(ms);
 
 describe("createLostExitReaper", () => {
   let reaper: LostExitReaper | undefined;
-  afterEach(() => reaper?.stop());
+  afterEach(() => {
+    reaper?.stop();
+    resetLogger();
+  });
 
   const fastReaper = (system: LostExitReaperSystem, options = {}) =>
     (reaper = createLostExitReaper({
@@ -162,4 +168,88 @@ describe("createLostExitReaper", () => {
     await settle();
     expect(waited).toEqual([100]);
   });
+  test("abandons a failed waitpid without waiting again on a released PID", async () => {
+    const { system, waited } = fakeSystem(new Map([[100, { ppid: SELF, state: "Z" }]]));
+    system.waitNoHang = (pid) => {
+      waited.push(pid);
+      return -1;
+    };
+    const events: string[] = [];
+    configureLogger({
+      sink: (output) => {
+        events.push(output.line);
+      },
+    });
+    const reaper = fastReaper(system);
+    reaper.reap(100, () => false);
+    await settle();
+    expect(waited).toEqual([100]);
+    expect(reaper.stats()).toEqual({ pending: 0, reaped: 0, abandoned: 1 });
+    expect(events.some((line) => line.includes("reason=waitpid-failed"))).toBe(true);
+  });
+
+  for (const operation of ["inspect", "waitNoHang"] as const) {
+    test(`retries after ${operation} throws, then reaps once`, async () => {
+      const { system, waited } = fakeSystem(new Map([[100, { ppid: SELF, state: "Z" }]]));
+      let calls = 0;
+      const failOnce = () => {
+        if (++calls === 1) throw new Error("temporary kernel failure");
+      };
+      if (operation === "inspect") {
+        const original = system.inspect;
+        system.inspect = (pid) => {
+          failOnce();
+          return original(pid);
+        };
+      } else {
+        const original = system.waitNoHang;
+        system.waitNoHang = (pid) => {
+          failOnce();
+          return original(pid);
+        };
+      }
+      const reaper = fastReaper(system);
+      reaper.reap(100, () => false);
+      await settle();
+      expect(calls).toBe(2);
+      expect(waited).toEqual([100]);
+      expect(reaper.stats()).toEqual({ pending: 0, reaped: 1, abandoned: 0 });
+    });
+
+    test(`bounds retries when ${operation} keeps throwing`, async () => {
+      const { system } = fakeSystem(new Map([[100, { ppid: SELF, state: "Z" }]]));
+      let calls = 0;
+      system[operation] = () => {
+        calls++;
+        throw new Error("persistent failure");
+      };
+      const reaper = fastReaper(system);
+      reaper.reap(100, () => false);
+      await settle(80);
+      expect(calls).toBe(4);
+      expect(reaper.stats()).toEqual({ pending: 0, reaped: 0, abandoned: 1 });
+    });
+  }
+
+  for (const stage of ["require", "dlopen"] as const) {
+    test(`logs unavailable and disables reaping when ${stage} fails`, () => {
+      const events: string[] = [];
+      configureLogger({
+        sink: (output) => {
+          events.push(output.line);
+        },
+      });
+      const load = () => {
+        if (stage === "require") throw new Error("no bun:ffi");
+        return {
+          FFIType: { i32: 1, ptr: 2 },
+          dlopen: () => {
+            throw new Error("no libSystem");
+          },
+        };
+      };
+      expect(createDarwinLostExitReaper(load)).toBeNull();
+      expect(events).toEqual(["[process] child.reap-unavailable"]);
+    });
+  }
 });

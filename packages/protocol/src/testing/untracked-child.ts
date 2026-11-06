@@ -11,6 +11,10 @@ import { dlopen, FFIType, ptr } from "bun:ffi";
 
 const libSystem = () =>
   dlopen("/usr/lib/libSystem.B.dylib", {
+    posix_spawnattr_init: { args: [FFIType.ptr], returns: FFIType.i32 },
+    posix_spawnattr_destroy: { args: [FFIType.ptr], returns: FFIType.i32 },
+    posix_spawnattr_setflags: { args: [FFIType.ptr, FFIType.i16], returns: FFIType.i32 },
+    posix_spawnattr_setpgroup: { args: [FFIType.ptr, FFIType.i32], returns: FFIType.i32 },
     posix_spawnp: {
       args: [FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr],
       returns: FFIType.i32,
@@ -54,11 +58,23 @@ export function spawnUntrackedChild(
   // posix_spawn_file_actions_t is one pointer on macOS.
   const actions = new BigUint64Array(1);
   if (symbols.posix_spawn_file_actions_init(actions) !== 0) throw new Error("file actions init");
+  const attributes = new BigUint64Array(1);
+  if (symbols.posix_spawnattr_init(attributes) !== 0) {
+    symbols.posix_spawn_file_actions_destroy(actions);
+    throw new Error("spawn attributes init");
+  }
   const devNull = cString("/dev/null");
   try {
     symbols.posix_spawn_file_actions_addopen(actions, 0, devNull, 0, 0);
     if (stdoutFd !== undefined) symbols.posix_spawn_file_actions_adddup2(actions, stdoutFd, 1);
     if (stderrFd !== undefined) symbols.posix_spawn_file_actions_adddup2(actions, stderrFd, 2);
+    // POSIX_SPAWN_SETPGROUP: group 0 makes the child its own group leader,
+    // matching detached command capture so forced termination reaches it.
+    if (
+      symbols.posix_spawnattr_setpgroup(attributes, 0) !== 0 ||
+      symbols.posix_spawnattr_setflags(attributes, 2) !== 0
+    )
+      throw new Error("spawn group");
     const args = argv.map(cString);
     const env = [cString(`PATH=${process.env.PATH ?? "/usr/bin:/bin"}`)];
     const pid = new Int32Array(1);
@@ -67,13 +83,14 @@ export function spawnUntrackedChild(
       pid,
       file,
       actions,
-      null,
+      attributes,
       cStringArray(args),
       cStringArray(env),
     );
     if (result !== 0) throw new Error(`posix_spawnp failed: ${result}`);
     return pid[0]!;
   } finally {
+    symbols.posix_spawnattr_destroy(attributes);
     symbols.posix_spawn_file_actions_destroy(actions);
   }
 }
@@ -96,15 +113,29 @@ export async function untilZombie(pid: number, timeoutMs = 5_000): Promise<void>
   }
 }
 
-/** Kills and reaps an untracked child the test still owns. Safe after it was reaped. */
-export function cleanUpUntrackedChild(pid: number): void {
-  try {
-    process.kill(pid, "SIGKILL");
-  } catch {
-    // Already gone, or already a zombie.
-  }
-  // Blocking, but SIGKILL has just been sent; -1 means it was already reaped.
-  lib().waitpid(pid, new Int32Array(1), 0);
+/** Synchronous kernel operations; injectable so PID reuse needs no real signals. */
+export type UntrackedChildCleanupSystem = {
+  wait(pid: number, noHang: boolean): number;
+  kill(pid: number): void;
+};
+
+/**
+ * Only signal a child waitpid still identifies as our running, unreaped child.
+ * No await separates that check from the signal: neither the JS reaper nor Bun
+ * can release this untracked child in between. A successful wait or ECHILD ends
+ * ownership immediately, including when the PID now belongs to another parent.
+ */
+export function cleanUpUntrackedChild(
+  pid: number,
+  system: UntrackedChildCleanupSystem = {
+    wait: (child, noHang) => lib().waitpid(child, new Int32Array(1), noHang ? 1 : 0),
+    kill: (child) => process.kill(child, "SIGKILL"),
+  },
+): void {
+  if (!Number.isSafeInteger(pid) || pid <= 1 || pid === process.pid) return;
+  if (system.wait(pid, true) !== 0) return;
+  system.kill(pid);
+  system.wait(pid, false);
 }
 
 type FakeSubprocess = {
@@ -124,11 +155,22 @@ type FakeSubprocess = {
  */
 export function loseBunExitsEntirely({
   lateEchildMs,
+  errorMs,
 }: {
   /** Then reject `exited` with ECHILD, as Bun does when it handles the exit after someone reaped the child. */
   lateEchildMs?: number;
+  /** Simulate a runtime transport error while the child is still running. */
+  errorMs?: number;
 } = {}): { pids: number[]; restore(): void } {
   const pids: number[] = [];
+  const timers = new Set<ReturnType<typeof setTimeout>>();
+  const later = (callback: () => void, ms: number) => {
+    const timer = setTimeout(() => {
+      timers.delete(timer);
+      callback();
+    }, ms);
+    timers.add(timer);
+  };
   const spy = spyOn(Bun, "spawn").mockImplementation(((
     argv: string[],
     options: { stdout?: unknown; stderr?: unknown } = {},
@@ -142,8 +184,15 @@ export function loseBunExitsEntirely({
       pid,
       stdin: { end: () => undefined },
       exited: new Promise((_resolve, reject) => {
+        if (errorMs !== undefined) {
+          later(() => {
+            process.kill(pid, "SIGKILL");
+            reject(new Error("fixture runtime error"));
+          }, errorMs);
+          return;
+        }
         if (lateEchildMs === undefined) return;
-        setTimeout(() => reject(new Error("ECHILD: unknown error, waitpid")), lateEchildMs);
+        later(() => reject(new Error("ECHILD: unknown error, waitpid")), lateEchildMs);
       }),
       exitCode: null,
       signalCode: null,
@@ -151,5 +200,12 @@ export function loseBunExitsEntirely({
     };
     return child;
   }) as unknown as typeof Bun.spawn);
-  return { pids, restore: () => spy.mockRestore() };
+  return {
+    pids,
+    restore: () => {
+      for (const timer of timers) clearTimeout(timer);
+      timers.clear();
+      spy.mockRestore();
+    },
+  };
 }

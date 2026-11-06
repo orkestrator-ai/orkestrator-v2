@@ -63,7 +63,18 @@ describe.skipIf(process.platform !== "darwin")("lost-exit reaper against the ker
     reaper.reap(pid, () => false);
     await until(() => reaper.stats().reaped === 1);
     expect(waited).toEqual([pid]);
+    owned.splice(owned.indexOf(pid), 1);
     expect(processState(pid)).toBeUndefined();
+  });
+
+  test("cleanup kills and reaps a running child and safely ignores another cleanup", () => {
+    const pid = spawnUntrackedChild(["sleep", "30"]);
+    owned.push(pid);
+    cleanUpUntrackedChild(pid);
+    owned.splice(owned.indexOf(pid), 1);
+    expect(processState(pid)).toBeUndefined();
+    expect(darwinReaperSystem()!.waitNoHang(pid)).toBe(-1);
+    cleanUpUntrackedChild(pid);
   });
 
   test("leaves a child of this process that is still running", async () => {

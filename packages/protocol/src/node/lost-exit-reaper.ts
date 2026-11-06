@@ -176,8 +176,8 @@ function loadDarwinWaitpid(
 }
 
 /** The real kernel, on macOS under Bun. Undefined where `waitpid` cannot load. */
-export function darwinReaperSystem(): LostExitReaperSystem | undefined {
-  const waitNoHang = loadDarwinWaitpid();
+export function darwinReaperSystem(loadFfi?: () => unknown): LostExitReaperSystem | undefined {
+  const waitNoHang = loadDarwinWaitpid(loadFfi);
   if (!waitNoHang) return undefined;
   return {
     selfPid: process.pid,
@@ -199,11 +199,16 @@ export function darwinReaperSystem(): LostExitReaperSystem | undefined {
 
 let defaultReaper: LostExitReaper | null | undefined;
 
+/** Lazy native loading has one failure path, also exercised without loading FFI. */
+export function createDarwinLostExitReaper(loadFfi?: () => unknown): LostExitReaper | null {
+  const system = darwinReaperSystem(loadFfi);
+  if (!system) log.warn("child.reap-unavailable");
+  return system ? createLostExitReaper({ system }) : null;
+}
+
 function sharedReaper(): LostExitReaper | undefined {
   if (defaultReaper === undefined) {
-    const system = darwinReaperSystem();
-    if (!system) log.warn("child.reap-unavailable");
-    defaultReaper = system ? createLostExitReaper({ system }) : null;
+    defaultReaper = createDarwinLostExitReaper();
   }
   return defaultReaper ?? undefined;
 }

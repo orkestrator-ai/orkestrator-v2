@@ -225,3 +225,23 @@ timeout, skip or implementation changed.
 - **Result:** 2 of 4 failed on the branch and 1 of 4 failed on the base commit, each with `lastOutcome` `unresolved` rather than `converged`. So it reproduces alone, without an aggregate suite, on code without the branch's change. Four runs each are too few to compare the two rates.
 - **Disposition:** stays open; no assertion, timeout, skip or implementation changed.
 
+
+
+## Bridge authority review repairs — 2026-11-06
+
+At `451fccdf1`, the nine-worker command
+`mise run test:logged -- --name repair-browser -- mise run test:browser`
+reported 1,513 passed, 135 skipped and six failed (1,654 cases; 1,225.3 s).
+Evidence: host temporary artifact
+`orkestrator-test-run.C3ovaT/repair-browser.log.gz`. The browser implementation
+and this test are unchanged by the bridge-authority branch.
+
+The mobile find case again reported `unresolved` instead of `converged` at
+line 371. The complete unchanged owner passed alone (exit 0, 84.2 s):
+
+```sh
+mise run test:logged -- --name isolate-streaming -- bunx playwright test --config e2e/playwright.config.ts e2e/StreamingTranscript.spec.ts --workers=1 --output output/agent-testing/address-browser-reruns/streaming
+```
+
+The isolated pass confirms intermittence; the cause remains unconfirmed. Status
+stays open. No assertion, timeout or skip changed.

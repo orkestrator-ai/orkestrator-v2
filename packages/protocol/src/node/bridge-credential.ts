@@ -6,13 +6,15 @@
  * read too. So the bridge keeps no secret at all: the backend gives it the
  * SHA-256 of the token ({@link bridgeTokenVerifierEnv}) and holds the token
  * itself. An agent that reads the verifier cannot answer an approval with it,
- * because a 256-bit preimage cannot be recovered.
+ * because a 256-bit preimage cannot be recovered. A backend that also gives it
+ * an authority key (`<TOKEN_ENV>_AUTHORITY_KEY`) makes every request that
+ * changes an agent's authority carry a signature too (`bridge-authority.ts`),
+ * so a token caught in flight answers nothing.
  *
  * The token still crosses the bridge's memory on each request, so a bridge that
  * takes a verifier also marks itself non-dumpable: the kernel then gives
  * `/proc/<pid>/{environ,mem,fd}` to root and refuses a same-uid ptrace. What
- * that leaves is in
- * docs/todo/containers-and-environments/4980-agent-uid-process-control.md.
+ * the agent's uid can still do is in docs/architecture/agent-approvals.md.
  *
  * A plain token env var stays accepted for a bridge started by a backend that
  * predates the verifier, and for test harnesses.
@@ -20,6 +22,7 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { createRequire } from "node:module";
 import { createLogger } from "../logger.js";
+import { loadBridgeAuthority, type BridgeAuthority } from "./bridge-authority.js";
 
 export const BRIDGE_TOKEN_PREFIX = "okb_";
 export const AGENT_TOOLS_TOKEN_PREFIX = "oka_";
@@ -57,15 +60,22 @@ export interface BridgeCredential {
    * test harnesses read it: a bridge started by a current backend has none.
    */
   readonly plainToken: string | undefined;
+  /**
+   * The signatures this bridge requires on what changes an agent's authority
+   * (`bridge-authority.ts`). Unenforced when the backend gave it no key.
+   */
+  readonly authority: BridgeAuthority;
 }
 
 function credentialFromVerifier(
   verifier: string,
   plainToken: string | undefined,
+  authority: BridgeAuthority = UNENFORCED_AUTHORITY,
 ): BridgeCredential {
   const expected = Buffer.from(verifier, "hex");
   return {
     plainToken,
+    authority,
     matches(candidate) {
       if (!candidate) return false;
       return timingSafeEqual(expected, createHash("sha256").update(candidate).digest());
@@ -73,9 +83,14 @@ function credentialFromVerifier(
   };
 }
 
+const UNENFORCED_AUTHORITY = loadBridgeAuthority("", { env: {} });
+
 /** A credential over a known token: a plain token env var, a fallback or a test's. */
-export function bridgeCredentialFromToken(token: string): BridgeCredential {
-  return credentialFromVerifier(bridgeTokenVerifier(token), token);
+export function bridgeCredentialFromToken(
+  token: string,
+  authority: BridgeAuthority = UNENFORCED_AUTHORITY,
+): BridgeCredential {
+  return credentialFromVerifier(bridgeTokenVerifier(token), token, authority);
 }
 
 /**
@@ -137,11 +152,12 @@ export function loadBridgeCredential(
   const token = env[tokenEnv]?.trim();
   delete env[verifierEnv];
   delete env[tokenEnv];
+  const authority = loadBridgeAuthority(tokenEnv, { env });
   if (verifier) {
     (options.harden ?? markProcessNonDumpable)();
     return VERIFIER_PATTERN.test(verifier)
-      ? credentialFromVerifier(verifier, undefined)
-      : bridgeCredentialFromToken(mintBridgeToken());
+      ? credentialFromVerifier(verifier, undefined, authority)
+      : bridgeCredentialFromToken(mintBridgeToken(), authority);
   }
-  return bridgeCredentialFromToken(token || mintBridgeToken());
+  return bridgeCredentialFromToken(token || mintBridgeToken(), authority);
 }

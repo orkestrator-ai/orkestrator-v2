@@ -892,15 +892,7 @@ export function registerTerminalCommands(
   });
   register("refresh_environment_diff_stats", async ({ environmentId }, context) => {
     await context.runtime.diffStats.sync(context);
-    const id = asString(environmentId, "environmentId");
-    const environment = await context.storage.getEnvironment(id).catch(() => null);
-    if (environment && environment.environmentType !== "local" && environment.containerId) {
-      context.runtime.diffStats.containerGitFetchPolicy.invalidate(
-        { containerId: environment.containerId },
-        "explicit",
-      );
-    }
-    context.runtime.diffStats.service.refresh(id);
+    context.runtime.diffStats.refreshExplicitly(asString(environmentId, "environmentId"));
   });
   /**
    * File-list and tree revisions of every tracked environment

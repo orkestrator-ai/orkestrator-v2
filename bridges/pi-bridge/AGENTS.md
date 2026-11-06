@@ -146,6 +146,22 @@ none. A retried response that a later answer replaces adds nothing.
   await: new prompts get 409, one still preparing settles as cancelled, and
   `/close` keeps the session registered until its removal is published (503
   pending otherwise).
+- A compaction is stoppable work (`src/compaction-controls.ts`). While one
+  runs, `/status` and `/session/:id` report `running` with
+  `activity: "compacting"`, so the tab shows Stop for a manual compaction
+  too, which owns no prompt claim. A turn's own compaction stops with the
+  turn (`abort()` aborts it). With no claim, the cancel routes stop the manual
+  compaction with `abortCompaction()`, re-applied on `compaction_start`
+  because Pi creates its abort controller only after `compact()`'s own
+  `abort()`; they answer `cancelled: true` once the compact route settles, and
+  that route answers 409 `cancelled: true`. Only an abort the route was asked
+  for counts as stopped; any other rejection is still a failure.
+- Auto-compaction is a per-session toggle published as the `autoCompaction`
+  model parameter on every model, defaulting to Pi's own `compaction.enabled`.
+  Never call `setAutoCompactionEnabled`: it writes the account-wide
+  `settings.json`. The choice overrides the session's `SettingsManager`
+  instance (`getCompactionEnabled`, read live, so it survives the manager's own
+  `save()`) and is persisted in `state.json`.
 - The prompt journal is written to `state.json` and awaited before any prompt
   with a request id reaches Pi, on the idle and the follow-up path alike, and
   in the same synchronous step as the duplicate check, so one id can never be

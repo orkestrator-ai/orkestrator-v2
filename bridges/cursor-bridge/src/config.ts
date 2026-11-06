@@ -19,6 +19,8 @@ export const workingDirectory = resolve(process.env.CWD?.trim() || process.cwd()
 const bridgeCredential = loadBridgeCredential("CURSOR_BRIDGE_TOKEN");
 /** The token, when given one rather than its verifier: only test harnesses read it. */
 export const authToken = bridgeCredential.plainToken ?? "";
+/** The signatures this bridge requires on what changes an agent's authority. */
+export const bridgeAuthority = bridgeCredential.authority;
 
 /**
  * Pin `process.cwd()` to the workspace so Shell calls that omit

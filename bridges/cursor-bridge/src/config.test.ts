@@ -84,8 +84,8 @@ describe("applyWorkingDirectory", () => {
 
 /**
  * `index.ts` is what orders the real process, not the import list of whichever
- * module happens to pull the SDK in. Exporting this file first is the whole
- * guarantee that `@cursor/sdk` is evaluated with the process already in the
+ * module happens to pull the SDK in. Restoring the launch environment and then
+ * exporting config before any SDK importer is the whole guarantee that `@cursor/sdk` is evaluated with the process already in the
  * workspace, so it is worth failing loudly if an import sort moves it.
  */
 describe("the bridge entrypoint", () => {
@@ -95,7 +95,10 @@ describe("the bridge entrypoint", () => {
       source.matchAll(/^(?:import|export)\b[^\n]*?["']([^"']+)["'];?$/gm),
       (match) => match[1],
     );
-    expect(specifiers[0]).toBe("./config.js");
+    expect(specifiers.slice(0, 2)).toEqual([
+      "@orkestrator/protocol/node/bridge-launch-environment",
+      "./config.js",
+    ]);
   });
 });
 

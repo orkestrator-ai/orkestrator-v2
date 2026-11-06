@@ -47,7 +47,19 @@ export async function compactBridgeSession(input: {
     },
     input.fetchImpl,
   );
-  await assertOkWithErrorDetail(response, `${input.agent} session compaction`);
+  // A compaction someone stopped (Pi answers 409 `cancelled: true`) is shown
+  // in the bridge's own words: it did not run, and saying it "failed" with a
+  // status code would read as something to report rather than retry.
+  const stopped =
+    response.status === 409 &&
+    asRecord(
+      await boundedJson(response.clone(), `${input.agent} session compaction`, {
+        remaining: COMPACT_ANSWER_MAX_BYTES,
+      }).catch(() => undefined),
+    )?.cancelled === true;
+  await assertOkWithErrorDetail(response, `${input.agent} session compaction`, {
+    detailAlone: stopped,
+  });
   if (!instructions) {
     await response.body?.cancel().catch(() => undefined);
     return { outcome: "applied" };

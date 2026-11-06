@@ -7,7 +7,8 @@ measurement run, against `main` at `930189337` (2026-10-26).
 
 ## Task analysis
 
-Analysed 2026-10-27 against `main` at `863b5782`.
+Analysed 2026-11-06 against `main` at `c1724ab7` (task 5 run and closed; the
+other tasks re-read, unchanged since 2026-10-27).
 
 ### Tasks
 
@@ -17,8 +18,8 @@ Code items 1, 2 and 4 to 9 are done or closed and still match HEAD. Item 3's joi
 2. **Inactive Cursor run at a lowered trim threshold**: reach the producer trim while the environment is inactive, then check the bounded window, pages, sub-agent card and controls. Status: open (the pass-through is in place; no Cursor live spec exists).
 3. **Pre-acceptance dispatch window live**: kill the backend while a build-pipeline prompt is journaled but not yet accepted, and prove the same-id retry. Status: blocked (on a bridge fault hook that does not exist).
 4. **Electron and Docker with real providers**: the transcript paths in the Electron window and in container environments; iOS only where the wrapper changes. Status: open.
-5. **Mounted tab across a bridge-only restart**: no duplicate rows, and the reader's place kept, through the one remaining Codex re-key. Status: open.
-6. **Open questions and verification items**: all answered; one sentence is stale. Status: done (wording only).
+5. **Mounted tab across a bridge-only restart**: no duplicate rows, and the reader's place kept, through the one remaining Codex re-key. Status: done (2026-11-06; two defects found and fixed, see the results section).
+6. **Open questions and verification items**: all answered; one sentence was stale. Status: done (the sentence corrected 2026-11-06).
 
 ### 1. Retire the `/messages` fallback
 
@@ -115,7 +116,9 @@ Code items 1, 2 and 4 to 9 are done or closed and still match HEAD. Item 3's joi
 
 **Context.** Item 5 and decision 3 (replayed row ids).
 
-**Investigation.** The re-key is still there by design (`replayedRowId`). A bridge restart is already scripted in other live specs: `e2e/agent-testing/design-resume-clients-live.spec.ts:219` stops and starts the local Codex server (`stop_local_codex_server_cmd`, `start_local_codex_server_cmd`). `transcript-paging-live.spec.ts` can run a native Codex tab (`ORKESTRATOR_AGENT_TEST_PAGING_NATIVE_PLATFORM=codex`) but has no restart step.
+**Investigation.** The re-key is still there by design (`replayedRowId`). A bridge restart is already scripted in other live specs: `e2e/agent-testing/design-resume-clients-live.spec.ts:219` stops and starts the local Codex server (`stop_local_codex_server_cmd`, `start_local_codex_server_cmd`). `transcript-paging-live.spec.ts` can run a native Codex tab (`ORKESTRATOR_AGENT_TEST_PAGING_NATIVE_PLATFORM=codex`) but had no restart step.
+
+Done on 2026-11-06 (see [Qualification results (2026-11-06)](#qualification-results-2026-11-06-mounted-codex-tab-across-a-bridge-restart)). The Codex native case now restarts the bridge under the mounted tab after its history is loaded, and checks the backend's rows and the rendered list. With `ORKESTRATOR_AGENT_TEST_PAGING_CODEX_LOOPBACK=1` it runs on the profile's pinned Codex (0.166.0) against `e2e/agent-testing/transcript-paging-codex-model.ts`, a loopback model, with no login and no billed turn. The run found two defects, both fixed with tests: a reload renamed every command a code-mode cell ran, and the tab dropped the history the reader was in and lost their place. No duplicate rows or calls were rendered, before or after the fixes.
 
 **Decisions.**
 
@@ -167,8 +170,9 @@ joined `sync-v1` history itself. The Claude bridge now loads those sessions on
 path moved to [0232](0232-direct-history-cursor-minting.md). The hidden
 browser document is measured. What remains is real-stack qualification not
 run here: a long inactive Cursor run (now reachable in a short run), the
-pre-acceptance pipeline dispatch window, Electron and Docker with real
-providers, and a mounted tab across a bridge-only restart.
+pre-acceptance pipeline dispatch window, and Electron and Docker with real
+providers. The mounted tab across a bridge-only restart ran on 2026-11-06 and
+found two defects, both fixed.
 
 ## Current state
 
@@ -248,7 +252,13 @@ providers, and a mounted tab across a bridge-only restart.
   `scripts/activity-sweep-live.ts` repeat the live parent-death and sweep runs.
 - Codex rows. A row opens per model response, using app-server's
   per-response usage report as well as reasoning or messages after a call.
-  Replayed rows keep their ids across replays (`replayedRowId`). Every bridge
+  Replayed rows keep their ids across replays (`replayedRowId`), and since
+  2026-11-06 a reload renders the commands a code-mode cell ran under their
+  live ids (`history/code-mode-commands.ts`), so calls keep their ids across
+  the first replay after live streaming even though rows do not. A tab whose
+  loaded history drops under the reader (that replay, or any epoch change)
+  pages it back and restores their place
+  (`apps/web/src/hooks/useRestorePlaceAfterHistoryDrop.ts`). Every bridge
   checks its parent backend once a second (`PARENT_WATCH_INTERVAL_MS`), and
   the Codex bridge stops a dead backend's turns as a restart mid-turn.
 - The pipeline as a whole is described in
@@ -382,8 +392,8 @@ providers, and a mounted tab across a bridge-only restart.
    which also re-keyed every row before, not only a bridge restart. The first
    replay after live streaming still re-keys rows once: live rows are minted
    at dispatch, before app-server names their turn, so no replay can
-   reproduce them. The mounted-tab qualification below covers that one
-   transition. Covered by `replayed row ids` in `history/rollout-rows.test.ts`
+   reproduce them. The mounted-tab qualification covers that one
+   transition (done 2026-11-06, results below). Covered by `replayed row ids` in `history/rollout-rows.test.ts`
    (identical across replays, unique, and earlier ids unchanged when the
    rollout grows).
 6. **Done (2026-10-24): a Codex turn stops within a second of its backend's
@@ -496,9 +506,96 @@ Still open:
   dispatch route is its own change.
 - Electron window and Docker environments with real providers; native iOS
   only where the wrapper changes.
-- A mounted tab with retained history across a bridge-only restart (Code
-  item 5): no duplicate rows and the reader's place kept, through the one
-  re-key that remains.
+
+Done on 2026-11-06 (results below): a mounted Codex tab with loaded history
+across a bridge-only restart (task 5), on the pinned Codex against a
+loopback model.
+
+## Qualification results (2026-11-06): mounted Codex tab across a bridge restart
+
+Task 5. Worktree at `main` `c1724ab7` plus this change, in the isolated
+profile `qa-7270-codex-restart` (headless, `--credential-source codex
+--agent-platforms codex`, with `CODEX_HOME` pointed at a throwaway directory
+whose `auth.json` held a made-up API key, so no real login was copied in).
+The profile's own Codex `config.toml` was pointed at the loopback model for
+the run and restored afterwards. Command:
+
+```bash
+ORKESTRATOR_AGENT_TEST_PROFILE=qa-7270-codex-restart \
+ORKESTRATOR_AGENT_TEST_RUN_ID=qa-7270-codex-restart \
+ORKESTRATOR_AGENT_TEST_LIVE_TRANSCRIPT_PAGING=1 \
+ORKESTRATOR_AGENT_TEST_PAGING_CODEX_LOOPBACK=1 \
+  mise run test:logged -- --name transcript-paging-live -- \
+  mise run test:agent:browser -- e2e/agent-testing/transcript-paging-live.spec.ts
+```
+
+The trail had 150 stops, one code-mode `exec` cell running one `cat` per
+response: 152 rows, a 100-row tail and 52 rows in history pages. In the
+browser all 150 calls coalesce into one open tool group, which scrolls inside
+its own viewport. The reader stood on stop 1, at the top of the loaded history
+page; the step then stopped and started the environment's Codex bridge
+(`stop_local_codex_server_cmd`, `start_local_codex_server_cmd`) and checked a
+new process answered.
+
+**Defect 1: a reload renamed the commands a cell ran.** Live, app-server
+reports each command a code-mode cell runs as a `commandExecution` item and
+never the cell. A reload rendered the cell's `exec` row instead, so after the
+restart every one of the 150 calls had a new id, as well as every row. A
+reader's opened group and held place are keyed by call id. Fixed in the Codex
+bridge: the rollout keeps each command as an `item_completed`
+`CommandExecution` record carrying the live item's id, and a reload now
+renders it through the live renderer under that id
+(`history/code-mode-commands.ts`, wired in `history/rollout.ts`), dropping the
+cell's own row as live does. Anything it cannot pin to exactly one open cell
+keeps the old reload. Covered by `rollout-code-mode-commands.test.ts`. After
+the fix: 152 rows before and after, every row renamed (by design), all 150
+call ids kept, every stop in the same row as before, and paging still
+complete to the prompt.
+
+**Defect 2: the tab dropped the history the reader was in.** A bridge restart
+is a new history epoch (the transcript generation includes a per-process id),
+and the renamed tail joins nothing the tab holds, so `useNativeAgentSession`
+falls back to the bare live tail. That is the safe answer, since the tab
+cannot tell a replay from a rewritten history. But the reader, on stop 1 in
+the loaded page, was left on stop 49 with the history gone (`lost the
+reader's place`, three runs). Fixed in the renderer:
+
+- `useRestorePlaceAfterHistoryDrop` (used by `AgentNativeTab.controller.tsx`)
+  sees a commit that drops the reader's source part from the front while they
+  are not following, pages history back in until that part (the call id, now
+  stable) reappears, and scrolls to it at its old offset. It gives up after 8
+  pages that bring rows but not the part, 12 empty pages retried 750 ms apart
+  (right after a restart the bridge is still re-reading its rollout and
+  answers early pages empty), when history runs out, or when the reader starts
+  following. Automatic paging stands aside meanwhile.
+- The reader's place inside an open long tool group names a member the
+  group's own viewport may have virtualized away once the page re-fills it.
+  The scroll controller now asks that viewport for the member
+  (`INNER_SEEK_EVENT`, answered in `NativeMessage.tool-group.tsx`) for up to
+  20 frames, then holds it at its offset as before.
+
+Results after both fixes, four consecutive runs (64 to 70 s each on a loaded
+host):
+
+| Check | Result |
+| --- | --- |
+| Backend rows before / after | 152 / 152, all renamed, 150 of 150 call ids kept |
+| Stops per row before / after | identical |
+| Paging after the restart | complete to the prompt, every stop once and in order |
+| Rendered rows before / after | 3 / 3, distinct keys |
+| Stops rendered twice | none |
+| Reader's place (stop 1, offset 228 px) | held, `errorPx` 0, not clamped |
+
+Before the inner-viewport seek and the empty-page retry, the run failed the
+held-place check (one of three runs still did, with 8 empty pages in two
+seconds). The reload part of the spec (`native-after-reload`) passed in every
+run. Screenshots (not committed) were taken at the reader's place before the
+restart and after it, with and without the renderer fix.
+
+Not shown by this run: one call's own expanded output (stop 2, opened by the
+spec before the restart) is folded again after the rename, while the group
+stays open. Tracked in
+[7270](7270-call-expansion-across-codex-row-rename.md).
 
 ## Qualification results (2026-10-26): hidden document at 8 MiB
 
@@ -1185,7 +1282,66 @@ measurement.
     with real providers, and the mounted tab across a bridge-only restart
     stay open with the steps above. None was run on 2026-10-26: each needs a
     paid provider turn or a platform run that 0031 batches, and the dispatch
-    window also needs the hook first.
+    window also needs the hook first. The mounted-tab run was done on
+    2026-11-06 (decisions 17 to 21).
+17. **Task 5: a loopback model instead of a real Codex turn.**
+    - Options: the host's Codex login with a real model (the 2026-10-24
+      method); the pinned Codex CLI against a loopback stand-in for the
+      Responses WebSocket; the fake app-server used by bridge tests.
+    - Chosen: the pinned Codex against a loopback model
+      (`transcript-paging-codex-model.ts`, opt-in through
+      `ORKESTRATOR_AGENT_TEST_PAGING_CODEX_LOOPBACK=1`).
+    - Why: the ticket rules out real logins and billed turns. The real
+      app-server writes the real rollout, which is what a bridge restart
+      replays; a fake app-server would replay a rollout this repository
+      wrote, so it could not find a rollout/live mismatch, and defect 1 was
+      exactly that.
+    - Pros: free, about a minute per run, repeatable; real app-server, rollout
+      and bridge.
+    - Cons: the model is scripted (one call per response, no prose), so
+      other response shapes still rely on the 2026-10-24 paid run.
+18. **Task 5: the restart step's pass criteria.**
+    - Options: as recommended in task 5 (no duplicates, held place within
+      8 px); also require the calls to keep their ids and each stop to stay
+      in its row.
+    - Chosen: both. Rows are renamed by design, so duplicates are checked
+      by rendered row key, by stop (a stop named by two rendered parts) and
+      by row and folded-call counts, and the backend must page every row
+      once with call ids and stop placement unchanged.
+    - Why: a reader's opened group and held place are keyed by call id, so a
+      renamed call is a lost place even when nothing is duplicated.
+19. **Task 5, defect 1: render recorded commands rather than the cell.**
+    - Options: keep the cell's `exec` row on reload (the old behaviour);
+      render the rollout's `CommandExecution` records under their live ids;
+      persist a live-to-replayed id map in the bridge.
+    - Chosen: render the records, through the live adapter and renderer.
+    - Why: the record carries the live id, so a reload reproduces the live
+      rows without new state; the same path already served MCP calls.
+    - Pros: live and reload show the same calls; nothing persisted.
+    - Cons: a command it cannot pin to one cell (two cells open at once)
+      keeps the old reload.
+20. **Task 5, defect 2: restore the place in the renderer.**
+    - Options: keep the dropped history on screen across an epoch change;
+      defer the collapse until the history is re-read; collapse, then page
+      back to the reader's call and restore it.
+    - Chosen: the last.
+    - Why: the collapse is the documented safe answer to an epoch change
+      (the tab cannot tell a replay from a rewrite), and it stays. Restoring
+      afterwards needs no change to the session hook's update path, and any
+      drop that takes the reader's call (a retention collapse too) gets the
+      same help.
+    - Pros: contained in one hook plus the inner-viewport seek; bounded.
+    - Cons: the reader sees the tail for the moment the pages take (about a
+      second here); a call that really was removed is given up only after
+      the page bounds.
+21. **Task 5: the empty-page retry.**
+    - Options: a fixed page cap (first version, 8); count only pages that
+      bring rows and retry empty pages after a pause; retry on every poll.
+    - Chosen: count pages that bring rows (8) separately from empty pages
+      (12, 750 ms apart).
+    - Why: right after a restart the bridge answered up to eight early pages
+      empty within two seconds, which used up the fixed cap in one run of
+      three. Retrying per poll would tie the cadence to the poll interval.
 
 ## Constraints and rationale
 
@@ -1247,7 +1403,8 @@ measurement.
 - Answered (2026-10-24): do items 7, 8 and 9 justify their complexity once
   profiling exists? None of them do: items 8 and 9 on the backend
   measurements, item 7 on the 8 MiB browser gate for a visible document. A
-  hidden document is still unmeasured (Qualification).
+  hidden document was measured on 2026-10-26 (Qualification results) and
+  confirmed the visible-document answer.
 
 ## Needs verification
 

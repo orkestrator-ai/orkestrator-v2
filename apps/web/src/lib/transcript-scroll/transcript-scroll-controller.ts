@@ -79,6 +79,16 @@ const REISSUE_AFTER_UNMOUNTED_FRAMES = 8;
 const MAX_INDEX_REISSUES = 2;
 /** Frames a mounted row may lack its target part before falling back to the row. */
 const PART_FALLBACK_FRAMES = 4;
+/** Frames an inner viewport may take to bring a sought member into its window. */
+const INNER_SEEK_FRAMES = 20;
+
+/**
+ * Asks an inner viewport (an open long tool group) to bring a member it has
+ * virtualized away into its window, dispatched on the inner viewport element
+ * with the member's part id as `detail.partId`. The member's offset is then
+ * corrected like a mounted one.
+ */
+export const INNER_SEEK_EVENT = "ork-transcript-inner-seek";
 
 /** A reader's place is recaptured once their scrolling has been idle this long. */
 const READING_ANCHOR_IDLE_MS = 150;
@@ -203,6 +213,8 @@ interface Operation {
   lastScrollHeight: number;
   unmountedFrames: number;
   partMissingFrames: number;
+  /** Frames spent waiting for an inner viewport to mount a sought member. */
+  innerSeekFrames: number;
   reissues: number;
   /** An index navigation has been issued for this operation. */
   indexIssued: boolean;
@@ -219,6 +231,10 @@ interface Operation {
 }
 
 export interface ScrollViewState {
+  /** Async readers retire work on every reader input or newer navigation. */
+  generation: number;
+  hasScroller: boolean;
+  waitingForHistory: boolean;
   /**
    * At the true end, or kept there by following or a latest journey that has
    * reached it (UI affordances: the return-to-latest button). Growth reaches
@@ -247,6 +263,7 @@ export const SCROLL_DIAGNOSTICS_PROPERTY = "orkTranscriptScrollDiagnostics";
 export interface TranscriptScrollControllerOptions {
   initialWantsFollow?: boolean;
   initialActive?: boolean;
+  initialReadingAnchor?: SemanticAnchor | null;
   budget?: OperationBudget;
 }
 
@@ -307,6 +324,7 @@ export class TranscriptScrollController {
   private growthFrame: number | null = null;
   private anchorTimer: ReturnType<typeof setTimeout> | null = null;
   private lastReadingAnchor: SemanticAnchor | null = null;
+  private historyRecoveryPending = false;
   /** The scroller's last laid-out width; 0 until known (or while hidden). */
   private lastWidth = 0;
 
@@ -344,6 +362,7 @@ export class TranscriptScrollController {
       options.initialWantsFollow ?? true,
       options.initialActive ?? true,
     );
+    this.lastReadingAnchor = options.initialReadingAnchor ?? null;
     this.budget = options.budget ?? DEFAULT_OPERATION_BUDGET;
     this.snapshot = this.computeSnapshot();
     this.isAtBottomRef.current = this.snapshot.isAtBottom;
@@ -382,6 +401,17 @@ export class TranscriptScrollController {
 
   get hasScroller(): boolean {
     return this.scroller !== null;
+  }
+
+  get waitingForHistory(): boolean {
+    return this.historyRecoveryPending;
+  }
+
+  /** Semantic recovery owns activation until its missing history is back. */
+  setWaitingForHistory(waiting: boolean): void {
+    if (this.historyRecoveryPending === waiting) return;
+    this.historyRecoveryPending = waiting;
+    this.publish();
   }
 
   get currentOwner(): NavigationOwner | null {
@@ -452,6 +482,9 @@ export class TranscriptScrollController {
     const target = this.op?.target;
     const following = followAllowed(this.state);
     return {
+      generation: this.state.generation,
+      hasScroller: this.scroller !== null,
+      waitingForHistory: this.historyRecoveryPending,
       // A follower is pinned to the end on every resize delivery, and a
       // latest journey that has reached it is converging there. Between a
       // commit and that pin (a scroll event reading the new height first, or
@@ -471,6 +504,9 @@ export class TranscriptScrollController {
     const next = this.computeSnapshot();
     const previous = this.snapshot;
     if (
+      next.generation === previous.generation &&
+      next.hasScroller === previous.hasScroller &&
+      next.waitingForHistory === previous.waitingForHistory &&
       next.isAtBottom === previous.isAtBottom &&
       next.followAllowed === previous.followAllowed &&
       next.mode === previous.mode &&
@@ -520,6 +556,7 @@ export class TranscriptScrollController {
     this.detachScroller?.();
     this.detachScroller = null;
     this.scroller = element;
+    this.publish();
     if (this.op) {
       this.counters.scrollerRetirements += 1;
       this.dispatch({ type: "user-navigation" }, "cancelled");
@@ -934,6 +971,7 @@ export class TranscriptScrollController {
       lastScrollHeight: this.scroller?.scrollHeight ?? 0,
       unmountedFrames: 0,
       partMissingFrames: 0,
+      innerSeekFrames: 0,
       reissues: 0,
       indexIssued: false,
       measuredSinceFrame: false,
@@ -1348,7 +1386,19 @@ export class TranscriptScrollController {
     );
     if (!innerScroller) return false;
     const member = findPart(innerScroller, inner.partId);
-    if (!member) return false;
+    if (!member) {
+      // Virtualized away (a history page re-filled the group in front of it):
+      // ask the inner viewport for it each frame, for a few frames, since the
+      // group may render the member's entry a frame or more after the rows.
+      if (op.innerSeekFrames >= INNER_SEEK_FRAMES) return false;
+      if (phase === "frame") {
+        op.innerSeekFrames += 1;
+        innerScroller
+          .closest("[data-transcript-inner-viewport]")
+          ?.dispatchEvent(new CustomEvent(INNER_SEEK_EVENT, { detail: { partId: inner.partId } }));
+      }
+      return true;
+    }
     const viewportTop = el.getBoundingClientRect().top;
     const error = member.getBoundingClientRect().top - viewportTop - inner.screenOffsetPx;
     const max = Math.max(0, innerScroller.scrollHeight - innerScroller.clientHeight);

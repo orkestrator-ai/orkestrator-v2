@@ -79,8 +79,10 @@ The exact recorded command, `mise run test:logged -- --name review-default-tests
 recurred on the storage/mail branch (`023c7a2ce`, followed by the unchanged-test
 classification rename `ee92c4741`). The workspace reserved six slots; backend
 used four isolated workers alongside two web workers and the root group.
-The workspace group had not finished when this observation was recorded, so
-complete workspace case totals were not available.
+The completed backend totals were 16,613 pass, 138 skip, 4 fail and 2 errors
+across 16,755 tests in 1,109 files (670.51 s execution). The full command
+finished with exit 1 in 1,499.6 s; workspace and root failed, while bridges
+and the protocol lockfile passed.
 
 Evidence: `workspace-web-backend-desktop-web-public-cli-protocol-toolchain` in
 `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.KcOGqn`;
@@ -101,3 +103,8 @@ mise run test:logged -- --name findings-shared-skills -- bun test --cwd apps/bac
 Passing logs were removed; isolated case counts are not inferred. No portable
 input code, assertion, deadline or skip changed. This records intermittence;
 load was not measured and no cause was established.
+
+The two backend errors between tests were the same null-exit-code assertions
+from these two timed-out `runEntrypoint` calls, not additional failing owners.
+Their contexts were inspected in the compressed workspace artifact after the
+aggregate completed.

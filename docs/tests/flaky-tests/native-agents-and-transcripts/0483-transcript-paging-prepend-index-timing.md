@@ -83,3 +83,16 @@ The complete unchanged paging owner passed alone, exit 0, in 210.1 s:
 `ORKESTRATOR_E2E_PORT=14861 mise run test:logged -- --name repair-paging-alone -- bunx playwright test --config e2e/playwright.config.ts --output output/playwright/repair-paging-alone e2e/TranscriptPaging.spec.ts --workers=1`.
 Passing output was deleted by the logged runner. No paging assertion, timeout
 or skip changed; no cause is established.
+
+## Transcript list re-render rework — 2026-11-06
+
+On the `transcript-list-rerender` branch (to-do 6280 plus the tool-group
+follow fix for 0747),
+`mise run test:logged -- --name paging22 -- bunx playwright test --config e2e/playwright.config.ts e2e/TranscriptPaging.spec.ts:22 --repeat-each=10 --workers=3 --retries=0`
+failed 8 of 100: six kept prepend index 1 at `:102`, one byte-bounded case
+kept a load button at `:85`, and one same-minute case failed the offset check
+at `:119`. That is close to the 4 of 57 rate recorded above on detached
+`origin/main`. The earlier three-spec run (`TranscriptListRenders`,
+`TranscriptPaging`, `StreamingTranscript`, three workers) failed only the
+mobile byte-bounded index case, 79 passed. No assertion, skip or timeout
+changed; root cause remains unconfirmed.

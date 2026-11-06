@@ -124,12 +124,14 @@ describe("MermaidBlock", () => {
     }));
     const first = render(<MermaidBlock source={SOURCE} closed blockKey="m4" />);
     expect(await screen.findByText("Diagram syntax error")).toBeTruthy();
+    expect(screen.getByRole("note").getAttribute("data-rich-notice-tone")).toBe("error");
     expect(screen.getAllByText(/line 2, column 5/).length).toBeGreaterThan(0);
     expect(searchRootText(first.container)).toBe(SOURCE);
     expect(screen.queryByRole("button", { name: "Retry rendering" }) === null).toBe(true);
     first.unmount();
     render(<MermaidBlock source={SOURCE} closed blockKey="m4" />);
     expect(await screen.findByText("Diagram syntax error")).toBeTruthy();
+    expect(screen.getByRole("note").getAttribute("data-rich-notice-tone")).toBe("error");
     expect(renderer).toHaveBeenCalledTimes(1);
   });
 
@@ -143,8 +145,10 @@ describe("MermaidBlock", () => {
         }),
       );
     });
-    render(<MermaidBlock source={SOURCE} closed blockKey="m5" />);
+    const { container } = render(<MermaidBlock source={SOURCE} closed blockKey="m5" />);
     expect(await screen.findByText("Diagram renderer unavailable")).toBeTruthy();
+    expect(screen.getByRole("note").getAttribute("data-rich-notice-tone")).toBe("warning");
+    expect(searchRootText(container)).toBe(SOURCE);
     expect(renderer).toHaveBeenCalledTimes(1);
     renderer.mockImplementation(async () => ok());
     fireEvent.click(screen.getByRole("button", { name: "Retry rendering" }));

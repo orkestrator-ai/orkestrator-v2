@@ -121,6 +121,51 @@ async function probePackedBridge(directory: string, name: string): Promise<void>
   }
 }
 
+/** Render through the installed worker so its bundle paths and dependencies are exercised together. */
+async function probePackedPreview(installedRoot: string): Promise<void> {
+  const probe = path.join(installedRoot, "preview-probe.mjs");
+  await writeFile(
+    probe,
+    `
+    import { existsSync } from "node:fs";
+    import { chromium } from "playwright-core";
+    const executablePath = [
+      process.env.ORKESTRATOR_DESIGN_CHROMIUM_PATH,
+      chromium.executablePath(),
+      "/usr/bin/chromium", "/usr/bin/chromium-browser",
+      "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    ].find((candidate) => candidate && existsSync(candidate));
+    if (!executablePath) throw new Error("Packed preview smoke requires Chromium");
+    const child = Bun.spawn([process.execPath, "./dist/artifact-runtime/preview-worker.js"], {
+      cwd: import.meta.dirname,
+      stdin: "pipe", stdout: "pipe", stderr: "pipe",
+    });
+    child.stdin.write(JSON.stringify({
+      v: 1,
+      job: { kind: "mermaid", source: 'flowchart LR\\n A[PackedAgent] --> B[PreviewWorker]', theme: "light" },
+      executablePath,
+      limits: { readinessMs: 10000, mermaidRenderMs: 10000, probeStepMs: 1000, workerWallMs: 30000 },
+    }));
+    child.stdin.end();
+    const [code, stdout, stderr] = await Promise.all([
+      child.exited, new Response(child.stdout).text(), new Response(child.stderr).text(),
+    ]);
+    if (code !== 0) throw new Error("Installed preview worker failed: " + stderr.slice(-2000));
+    const events = stdout.trim().split("\\n").map((line) => JSON.parse(line));
+    const result = events.find((event) => event.t === "result")?.result;
+    if (!result?.ok || result.kind !== "mermaid" ||
+        !result.svg?.includes("<svg") || !result.svg.includes("PackedAgent") ||
+        !result.svg.includes("PreviewWorker") || !(result.svgElements > 0) ||
+        /<script\\b|<foreignObject\\b|\\son[a-z]+\\s*=/i.test(result.svg)) {
+      throw new Error("Installed Mermaid preview did not return sanitized SVG: " +
+        JSON.stringify(result?.failure ?? { ok: result?.ok }));
+    }
+    console.log("installed preview worker rendered sanitized Mermaid SVG");
+  `,
+  );
+  await run([process.execPath, probe], installedRoot);
+}
+
 // Tracked outside the try so the cleanup below can never delete the installed
 // package and its data directory out from under a still-running child.
 let backend: Bun.Subprocess | undefined;
@@ -166,6 +211,8 @@ try {
       );
     }
   }
+
+  await probePackedPreview(installedRoot);
 
   // On-demand bridges install their SDKs on first use. Do what the backend does
   // (`apps/backend/src/core/bridge-runtime-install.ts`) from the installed

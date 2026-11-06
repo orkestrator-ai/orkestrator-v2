@@ -1,3 +1,4 @@
+import { artifactError } from "@orkestrator/protocol/transcript-artifacts";
 import { MermaidBlock } from "../../apps/web/src/components/chat/rich/MermaidBlock";
 import { setMermaidRenderer } from "../../apps/web/src/lib/chat/rich-markdown/mermaid-render";
 
@@ -8,18 +9,17 @@ setMermaidRenderer(async ({ source }) =>
     ? {
         ok: false,
         error: {
-          code: "validation_failed",
-          message: "Parse error: expecting 'SQE', got 'PS'",
+          ...artifactError("validation_failed", "Parse error: expecting 'SQE', got 'PS'"),
           line: 2,
           column: 14,
         },
       }
     : {
         ok: false,
-        error: {
-          code: "renderer_unavailable",
-          message: "Diagram rendering is unavailable on this host",
-        },
+        error: artifactError(
+          "renderer_unavailable",
+          "Diagram rendering is unavailable on this host",
+        ),
       },
 );
 
